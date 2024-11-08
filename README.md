@@ -2,7 +2,6 @@
 ![Future City](images/hookprobe-future-ram-cine.png)
 
 
-
 "Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"
 
 In the year 2035, the digital landscape had evolved into a complex, interconnected web where threats lurked around every corner. Cyberattacks were no longer the domain of isolated hackers; they had become sophisticated operations executed by highly organized groups. Governments, corporations, and individuals alike were under constant siege from these digital marauders, who exploited every vulnerability to steal data, disrupt services, and wreak havoc.
@@ -38,3 +37,6 @@ The image should depict a futuristic battlefield where small, powerful SBCs and 
 4. **Victory Symbols**: Use glowing lines or pulses emanating from SBCs and SOCs, converging to create a protective barrier against threats, signifying their winning position in the cybersecurity battle.
 
 By combining these elements, the image will vividly represent the strength and effectiveness of SBCs and SOCs in overcoming cybersecurity challenges. 
+
+
+![hookprobe budget](images/hookprobe-r&d.png)
