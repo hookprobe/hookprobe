@@ -39,4 +39,4 @@ The image should depict a futuristic battlefield where small, powerful SBCs and 
 By combining these elements, the image will vividly represent the strength and effectiveness of SBCs and SOCs in overcoming cybersecurity challenges. 
 
 
-![hookprobe budget](images/hookprobe-r&d.png)
+[![hookprobe budget](images/hookprobe-r&d.png)](hookprobe-r&d.md)
