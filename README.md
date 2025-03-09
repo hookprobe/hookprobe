@@ -40,3 +40,5 @@ By combining these elements, the image will vividly represent the strength and e
 
 
 [![hookprobe budget](images/hookprobe-r&d.png)](hookprobe-r&d.md)
+
+[![hookprobe budget](images/xSOC-HLD-v1.2.png)](/Documents/SecurityMitigationPlan.md)
