@@ -177,3 +177,5 @@ echo "Cloudflared is active and forwarding traffic from Cloudflare to your Nginx
   A Cloudflared container is set up to establish a secure tunnel from Cloudflare to your Nginx container. A sample configuration (`cloudflared/config.yml`) is created—you must replace placeholder values (like `YOUR_TUNNEL_ID` and `your.domain.com`) with your actual Cloudflare Tunnel ID and domain, and place your Cloudflare credentials JSON file in the `cloudflared` directory.
 
 This comprehensive setup leverages Podman to run each service in its own container while ensuring they can communicate via a custom network. Adjust configurations as needed for your environment.
+
+[![hookprobe budget](../images/xSOC-HLD-v1.3.png)](/Documents/SecurityMitigationPlan.md)
