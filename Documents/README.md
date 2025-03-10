@@ -245,8 +245,8 @@ echo "---------------------------------------------------------"
 
 This skeleton script should help you **automate** the initial deployment of the key components (Podman, OVS, FRR, VRFs, VXLAN, and syslog). Tailor it further to match all the pods and services shown in your diagram (AI modules, advanced logging, additional container pods, etc.).
 
-## Next Steps / Low Level Design
+## Next Steps / Low Level Design // Security Mitigation Plan
 
 Please come back and check the updates, here for the long run.
 
-[![hookprobe budget](images/xSOC-HLD-v1.2.png)](/Documents/SecurityMitigationPlan.md)
+[![hookprobe budget](../images/xSOC-HLD-v1.3.png)](/Documents/SecurityMitigationPlan.md)
