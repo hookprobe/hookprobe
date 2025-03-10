@@ -249,4 +249,8 @@ This skeleton script should help you **automate** the initial deployment of the 
 
 Please come back and check the updates, here for the long run.
 
-[![hookprobe budget](../images/xSOC-HLD-v1.3.png)](/Documents/SecurityMitigationPlan.md)
+[![hookprobe Security Mitigation Plan](../images/xSOC-HLD-v1.3.png)](/Documents/SecurityMitigationPlan.md)
+
+Please come back and check the updates, here for the long run.
+
+[![Python Web APP]](/Documents/PythonScriptWebApp.md)
