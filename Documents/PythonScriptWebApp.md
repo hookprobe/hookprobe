@@ -261,7 +261,7 @@ For a more “OS container” style approach, you can combine:
 
 ## Conclusion
 
-This script should give you a **starting point** to replicate the high-level design from your diagram:
+This script should give you a **starting point** to replicate the high-level design of the xSOC diagram:
 
 - **Multiple network namespaces**  
 - **VXLAN overlay**  
