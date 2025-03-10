@@ -1,4 +1,6 @@
-## Python Script to automate web app deployment --- TEST ONLY not read
+## Python Script to automate web app deployment --- TEST ONLY not ready
+
+[![hookprobe budget](../images/xSOC-HLD-v1.3.png)](/Documents/SecurityMitigationPlan.md)
 
 Below is an **illustrative** Python script that demonstrates how you might:
 
