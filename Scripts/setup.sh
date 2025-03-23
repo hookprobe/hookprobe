@@ -14,73 +14,8 @@ podman image pull postgres:alpine
 podman image pull python:3.12-slim
 podman image pull nginx:alpine
 
-# --- Create an APP NAME Bridge & app for your application --- #PSQL_KEY = 4bit , NETWORK_NAME = should be none to use nsenter. custom build to use NAT and PAT for security increase
-APP_NAME="your_app"
-NETWORK_NAME="none" 
+source network-config.sh
 
-# --- alocate IP variables for OpenVirtual Switch & IP vor vxlan
-VXLAN_IP=192.168.0.1
-PSQL_KEY=1111
-APP_PSK="password_for_vxlan"
-PSQL_OVS=psql-ovs
-PSQL_NETNS=psql-netns
-DJANGO_OVS=django-ovs
-DJANGO_NETNS=django-netns
-NGINX_OVS=nginx-ovs
-NGINX_NETNS=nginx-netns
-CFL_OVS=cfl-ovs
-CFL_NETNS=cfl-netns
-
-# --- alocate IP variables for all Containers
-CT_DEF_GW=10.20.30.1
-PSQL_IP=10.20.30.255
-DJANGO_IP=10.20.30.254
-NGINX_IP=10.20.30.253
-CFL_IP=10.20.30.252
-
-# --- Container Names variables
-
-DB_CONTAINER_NAME="your_app_psql"
-DJANGO_CT_NAME="django"
-NGINX_CT_NAME="nginx"
-CLOUDFLARED_CT_NAME="cloudflared"
-
-# --- Database Variabales for PSQL Container
-DB_USER="your_user"
-DB_PASSWORD="your_secret_password"
-DB_NAME="database"
-DB_APP=your_DB_volume
-
-#Flush all created components
-echo "Flushing existing setup from system"
-
-podman container stop ${DB_CONTAINER_NAME}
-podman container rm ${DB_CONTAINER_NAME}
-
-podman container stop ${DJANGO_CT_NAME}
-podman container rm ${DJANGO_CT_NAME}
-
-podman container stop ${NGINX_CT_NAME}
-podman container rm ${NGINX_CT_NAME}
-
-podman container stop ${CLOUDFLARED_CT_NAME}
-podman container rm ${CLOUDFLARED_CT_NAME}
-
-sudo ip addr flush dev ${APP_NAME}
-sudo ip addr flush dev app-gatewayhost
-
-sudo ovs-vsctl del-br ${APP_NAME}
-sudo ip netns delete ${APP_NAME}
-podman volume rm ${DB_APP} 
-podman app rm ${APP_NAME}
-
-sudo ip link delete dev app-gatewayhost
-sudo ip link delete dev app-gatewayovs
-rm -r web_app
-rm -r nginx_conf
-rm -r cloudflared
-
-echo "Flush Complete...."
 #---------------------
 echo "Setup Application. Please wait ...."
 
