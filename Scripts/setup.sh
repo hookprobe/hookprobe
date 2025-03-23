@@ -2,17 +2,17 @@
 # -- version 1.0 hookprobe.com --- Ubuntu 24.10
 set -e
 
-# --- Update system and install appman & OpenVirtualSwitch ---
-echo "Updating package lists and installing appman..."
+# --- Update system and install podman & OpenVirtualSwitch ---
+echo "Updating package lists and installing podman..."
 sudo apt-get update
-sudo apt-get install -y appman
+sudo apt-get install -y podman
 
 sudo apt-get install -y openvswitch-switch
 
-# --- appman images for the web app containers ---
-appman image pull postgres:alpine
-appman image pull python:3.12-slim
-appman image pull nginx:alpine
+# --- podman images for the web app containers ---
+podman image pull postgres:alpine
+podman image pull python:3.12-slim
+podman image pull nginx:alpine
 
 # --- Create an APP NAME Bridge & app for your application --- #PSQL_KEY = 4bit , NETWORK_NAME = should be none to use nsenter. custom build to use NAT and PAT for security increase
 APP_NAME="your_app"
@@ -54,22 +54,26 @@ DB_APP=your_DB_volume
 #Flush all created components
 echo "Flushing existing setup from system"
 
-appman container stop ${DB_CONTAINER_NAME}
-appman container rm ${DB_CONTAINER_NAME}
+podman container stop ${DB_CONTAINER_NAME}
+podman container rm ${DB_CONTAINER_NAME}
 
-appman container stop ${DJANGO_CT_NAME}
-appman container rm ${DJANGO_CT_NAME}
+podman container stop ${DJANGO_CT_NAME}
+podman container rm ${DJANGO_CT_NAME}
 
-appman container stop ${NGINX_CT_NAME}
-appman container rm ${NGINX_CT_NAME}
+podman container stop ${NGINX_CT_NAME}
+podman container rm ${NGINX_CT_NAME}
 
-appman container stop ${CLOUDFLARED_CT_NAME}
-appman container rm ${CLOUDFLARED_CT_NAME}
+podman container stop ${CLOUDFLARED_CT_NAME}
+podman container rm ${CLOUDFLARED_CT_NAME}
+
+sudo ip addr flush dev ${APP_NAME}
+sudo ip addr flush dev app-gatewayhost
 
 sudo ovs-vsctl del-br ${APP_NAME}
 sudo ip netns delete ${APP_NAME}
-appman volume rm ${DB_APP} 
-appman app rm ${APP_NAME}
+podman volume rm ${DB_APP} 
+podman app rm ${APP_NAME}
+
 sudo ip link delete dev app-gatewayhost
 sudo ip link delete dev app-gatewayovs
 rm -r web_app
@@ -81,13 +85,13 @@ echo "Flush Complete...."
 echo "Setup Application. Please wait ...."
 
 # --- Begin by starting fresh a new network ap from here ---
-appman app create ${APP_NAME}
-appman volume create ${DB_APP}
+podman app create ${APP_NAME}
+podman volume create ${DB_APP}
 
-# --- Create a appman network for inter-container communication with ROOT containers ^change --net to ${NETWORK_NAME} ---
+# --- Create a podman network for inter-container communication with ROOT containers ^change --net to ${NETWORK_NAME} ---
 #NETWORK_NAME="mynetwork"
-#echo "Creating appman network '${NETWORK_NAME}'..."
-#sudo appman network create ${NETWORK_NAME} || echo "Network '${NETWORK_NAME}' already exists."
+#echo "Creating podman network '${NETWORK_NAME}'..."
+#sudo podman network create ${NETWORK_NAME} || echo "Network '${NETWORK_NAME}' already exists."
 #      ${NETWORK_NAME}
 
 # --- Create a OVS Bridge ---
@@ -101,7 +105,7 @@ sudo ip link set ovs-system up
 
 # --- Run PostgreSQL container ---
 echo "Starting PostgreSQL container..."
-appman run -d \
+podman run -d \
   --name ${DB_CONTAINER_NAME} \
   --app=${APP_NAME} \
   --net=${NETWORK_NAME} \
@@ -111,8 +115,8 @@ appman run -d \
   -v ${DB_APP}:/var/lib/pgsql/data:Z \
   postgres:alpine
 
-# Get the container's PID using appman inspect.
-CONT_PERSISTENT_PID=$(appman inspect --format '{{.State.Pid}}' "${DB_CONTAINER_NAME}")
+# Get the container's PID using podman inspect.
+CONT_PERSISTENT_PID=$(podman inspect --format '{{.State.Pid}}' "${DB_CONTAINER_NAME}")
 
 
 # Use nsenter to add a virtual Ethernet interface pair in the container's network namespace.
@@ -182,11 +186,11 @@ EOF
 # Build the Django container image.
 IMAGE_NAME="django-app"
 echo "Building Django image '${IMAGE_NAME}'..."
-appman build -t ${IMAGE_NAME} .
+podman build -t ${IMAGE_NAME} .
 
 # Run the Django container.
 echo "Starting Django container..."
-appman run -d \
+podman run -d \
   --name ${DJANGO_CT_NAME} \
   --net=${NETWORK_NAME} \
   --app=${APP_NAME} \
@@ -197,7 +201,7 @@ appman run -d \
   ${IMAGE_NAME}
 
 cd ..
-CONT_DJANGO_PID=$(appman inspect --format '{{.State.Pid}}' "${DJANGO_CT_NAME}")
+CONT_DJANGO_PID=$(podman inspect --format '{{.State.Pid}}' "${DJANGO_CT_NAME}")
 # Use nsenter to add a virtual Ethernet interface pair in the container's network namespace.
 sudo ip link add dev ${DJANGO_OVS} type veth peer name ${DJANGO_NETNS}
 sudo ip link set ${DJANGO_OVS} up
@@ -230,7 +234,7 @@ server {
 EOF
 
 echo "Starting Nginx container..."
-appman run -d \
+podman run -d \
   --name ${NGINX_CT_NAME} \
   --app=${APP_NAME} \
   --net=${NETWORK_NAME} \
@@ -238,7 +242,7 @@ appman run -d \
   nginx:alpine
 
 
-CONT_NGINX_PID=$(appman inspect --format '{{.State.Pid}}' "${NGINX_CT_NAME}")
+CONT_NGINX_PID=$(podman inspect --format '{{.State.Pid}}' "${NGINX_CT_NAME}")
 # Use nsenter to add a virtual Ethernet interface pair in the container's network namespace.
 sudo ip link add dev ${NGINX_OVS} type veth peer name ${NGINX_NETNS}
 sudo ip link set ${NGINX_OVS} up
@@ -268,14 +272,14 @@ EOF
 
 echo "Please place your Cloudflare credentials JSON file in the '${CLOUDFLARED_DIR}' directory as 'credentials.json'."
 echo "Starting Cloudflared container..."
-appman run -d \
+podman run -d \
   --name ${CLOUDFLARED_CT_NAME} \
   --app=${APP_NAME} \
   --net=${NETWORK_NAME} \
   -v "$(pwd)/${CLOUDFLARED_DIR}":/etc/cloudflared \
   cloudflare/cloudflared:alpine tunnel --config /etc/cloudflared/config.yml run
 
-CONT_CLOUDFLARED_PID=$(appman inspect --format '{{.State.Pid}}' "${CLOUDFLARED_CT_NAME}")
+CONT_CLOUDFLARED_PID=$(podman inspect --format '{{.State.Pid}}' "${CLOUDFLARED_CT_NAME}")
 
 # Use nsenter to add a virtual Ethernet interface pair in the container's network namespace.
 sudo ip link add dev ${CFL_OVS} type veth peer name ${CLF_NETNS}
