@@ -91,6 +91,14 @@ services:
     image: docker.io/google/cadvisor:latest
     ports:
       - "8080:8080"
+
+  django-webapp:
+    image: docker.io/python:3
+    ports:
+      - "8000:8000"
+    volumes:
+      - /opt/xsoc/webapp/django:/app
+    command: bash -c "pip install django gunicorn psycopg2 && cd /app && gunicorn xsocweb.wsgi:application --bind 0.0.0.0:8000"
 EOF
 
 ############################
@@ -139,6 +147,76 @@ def detect():
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
 EOF
+
+############################
+# Scaffold Django Web App
+############################
+echo "[INFO] Creating Django App..."
+cd /opt/xsoc/webapp/django
+python3 -m venv venv
+source venv/bin/activate
+pip install django psycopg2 gunicorn
+
+django-admin startproject xsocweb .
+
+sed -i "s/ALLOWED_HOSTS = \[\]/ALLOWED_HOSTS = ['*']/" xsocweb/settings.py
+sed -i "s/'ENGINE': 'django.db.backends.sqlite3'/'ENGINE': 'django.db.backends.postgresql'/" xsocweb/settings.py
+sed -i "s/'NAME': BASE_DIR / 'db.sqlite3'/'NAME': 'xsocdb', 'USER': 'postgres', 'PASSWORD': '', 'HOST': 'localhost', 'PORT': '5432'/" xsocweb/settings.py
+
+# Create system dashboard app
+python manage.py startapp dashboard
+
+cat <<EOF > dashboard/views.py
+from django.shortcuts import render
+import psutil
+
+def home(request):
+    cpu = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory().percent
+    disk = psutil.disk_usage('/').percent
+    context = {'cpu': cpu, 'memory': memory, 'disk': disk}
+    return render(request, 'dashboard/home.html', context)
+EOF
+
+mkdir -p dashboard/templates/dashboard
+
+cat <<EOF > dashboard/templates/dashboard/home.html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>xSOC Dashboard</title>
+    <script>
+      setInterval(function() { window.location.reload(); }, 5000);
+    </script>
+</head>
+<body>
+    <h1>System Dashboard (Auto-Refresh Every 5s)</h1>
+    <ul>
+        <li>CPU Usage: {{ cpu }}%</li>
+        <li>Memory Usage: {{ memory }}%</li>
+        <li>Disk Usage: {{ disk }}%</li>
+    </ul>
+</body>
+</html>
+EOF
+
+# Add dashboard to settings.py
+sed -i "/INSTALLED_APPS = \[/a \\    'dashboard'," xsocweb/settings.py
+
+# Update urls.py
+cat <<EOF > xsocweb/urls.py
+from django.contrib import admin
+from django.urls import path
+from dashboard.views import home
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('', home, name='home'),
+]
+EOF
+
+python manage.py migrate
+python manage.py collectstatic --noinput
 
 ############################
 # Systemd Service Setup
@@ -227,7 +305,7 @@ echo "  sudo bash /opt/xsoc/uninstall-xsoc.sh  # to remove everything"
 echo "Access Points:"
 echo "- Web Cockpit Podman GUI: https://LAN-IP:9090"
 echo "- AI Packet Analyzer API: http://LAN-IP:5000/detect"
+echo "- Django WebApp Dashboard: http://LAN-IP:8000"
 echo "- cAdvisor Monitoring: http://LAN-IP:8080"
-echo "- WebApp: (coming soon with Django App)"
 
 exit 0
