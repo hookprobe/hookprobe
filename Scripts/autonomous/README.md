@@ -123,4 +123,4 @@ Built for DIY Home Security & Edge AI Enthusiasts.
 
 > "Secure the Edge, Empower the Future." ⚡
 >
-[![hookprobe budget](images/xSOC-HLD-v1.3.png)](/Documents/SecurityMitigationPlan.md)
+![hookprobe budget](../../images/xSOC-HLD-v1.3.png)
