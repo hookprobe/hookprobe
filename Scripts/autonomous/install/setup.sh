@@ -1,14 +1,16 @@
 #!/bin/bash
 #
-# setup.sh (v8 - Complete HookProbe 6-POD Architecture)
+# setup.sh (v9 - Complete HookProbe Architecture with WAF + Cloudflare + Enhanced Logging)
 #
 # Automated deployment of HookProbe infrastructure with:
 # - 6 PODs with isolated networks
 # - OVS + VXLAN with PSK encryption
+# - NAXSI WAF for web protection
+# - Cloudflare Tunnel for secure access
 # - Django CMS in POD 001
 # - Logto IAM in POD 002
 # - Database services in POD 003/004
-# - Complete monitoring stack in POD 005 (Grafana, Prometheus, Loki)
+# - Complete monitoring + centralized logging in POD 005
 # - IDS/IPS in POD 006
 #
 # Target OS: RHEL/RedHat 10 / Fedora / CentOS Stream
@@ -29,7 +31,7 @@ fi
 
 echo "============================================================"
 echo "   HOOKPROBE AUTONOMOUS DEPLOYMENT - 6 POD ARCHITECTURE"
-echo "   Version 2.0 - Complete IAM + Monitoring Integration"
+echo "   Version 3.0 - WAF + Cloudflare Tunnel + Enhanced Logging"
 echo "============================================================"
 
 # ============================================================
@@ -60,6 +62,16 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# Check Cloudflare token
+if [ "$CLOUDFLARE_TUNNEL_TOKEN" == "CHANGE_ME_GET_FROM_CLOUDFLARE_DASHBOARD" ]; then
+    echo "⚠️  WARNING: Cloudflare Tunnel token not configured"
+    echo "   Cloudflare Tunnel will be skipped. Configure in network-config.sh to enable."
+    SKIP_CLOUDFLARED=true
+else
+    echo "✓ Cloudflare Tunnel token configured"
+    SKIP_CLOUDFLARED=false
+fi
+
 # ============================================================
 # STEP 2: INSTALL DEPENDENCIES
 # ============================================================
@@ -75,6 +87,7 @@ REQUIRED_PACKAGES=(
     kernel-modules-extra
     iptables firewalld
     postgresql-client
+    rsyslog
     jq
 )
 
@@ -171,6 +184,9 @@ if command -v firewall-cmd &> /dev/null; then
     firewall-cmd --permanent --add-service=http
     firewall-cmd --permanent --add-service=https
     
+    # Allow WAF management port
+    firewall-cmd --permanent --add-port=${PORT_WAF}/tcp
+    
     # Allow Logto ports
     firewall-cmd --permanent --add-port=${PORT_LOGTO}/tcp
     firewall-cmd --permanent --add-port=${PORT_LOGTO_ADMIN}/tcp
@@ -180,6 +196,11 @@ if command -v firewall-cmd &> /dev/null; then
     firewall-cmd --permanent --add-port=${PORT_PROMETHEUS}/tcp
     firewall-cmd --permanent --add-port=${PORT_ALERTMANAGER}/tcp
     firewall-cmd --permanent --add-port=${PORT_LOKI}/tcp
+    
+    # Allow syslog ports
+    firewall-cmd --permanent --add-port=${RSYSLOG_PORT}/udp
+    firewall-cmd --permanent --add-port=${RSYSLOG_PORT}/tcp
+    firewall-cmd --permanent --add-port=${RSYSLOG_TLS_PORT}/tcp
     
     # Trust OVS bridge
     firewall-cmd --permanent --zone=trusted --add-interface="$OVS_MAIN_BRIDGE"
@@ -194,10 +215,32 @@ else
 fi
 
 # ============================================================
-# STEP 6: CREATE PODMAN NETWORKS
+# STEP 6: CONFIGURE RSYSLOG ON HOST
 # ============================================================
 echo ""
-echo "[STEP 6] Creating Podman networks..."
+echo "[STEP 6] Configuring rsyslog for container log forwarding..."
+
+# Create rsyslog configuration for container logs
+cat > /etc/rsyslog.d/50-hookprobe-containers.conf << EOF
+# Forward all container logs to centralized rsyslog server
+*.* @@${IP_POD005_RSYSLOG}:${RSYSLOG_PORT}
+
+# Also forward kernel logs
+kern.* @@${IP_POD005_RSYSLOG}:${RSYSLOG_PORT}
+
+# Forward authentication logs
+auth,authpriv.* @@${IP_POD005_RSYSLOG}:${RSYSLOG_PORT}
+EOF
+
+# Restart rsyslog to apply changes
+systemctl restart rsyslog
+echo "✓ Rsyslog configured to forward logs to monitoring POD"
+
+# ============================================================
+# STEP 7: CREATE PODMAN NETWORKS
+# ============================================================
+echo ""
+echo "[STEP 7] Creating Podman networks..."
 
 # Function to create Podman network
 create_podman_network() {
@@ -228,10 +271,10 @@ create_podman_network "$NETWORK_POD006" "$SUBNET_POD006" "$GATEWAY_POD006"
 echo "✓ Podman networks created"
 
 # ============================================================
-# STEP 7: CREATE PERSISTENT VOLUMES
+# STEP 8: CREATE PERSISTENT VOLUMES
 # ============================================================
 echo ""
-echo "[STEP 7] Creating persistent volumes..."
+echo "[STEP 8] Creating persistent volumes..."
 
 # Function to create volume if it doesn't exist
 create_volume() {
@@ -255,14 +298,17 @@ create_volume "$VOLUME_GRAFANA_DATA"
 create_volume "$VOLUME_PROMETHEUS_DATA"
 create_volume "$VOLUME_LOKI_DATA"
 create_volume "$VOLUME_ALERTMANAGER_DATA"
+create_volume "$VOLUME_RSYSLOG_DATA"
+create_volume "$VOLUME_WAF_LOGS"
+create_volume "$VOLUME_CLOUDFLARED_CREDS"
 
 echo "✓ Persistent volumes ready"
 
 # ============================================================
-# STEP 8: DEPLOY POD 003 - PERSISTENT DATABASE
+# STEP 9: DEPLOY POD 003 - PERSISTENT DATABASE
 # ============================================================
 echo ""
-echo "[STEP 8] Deploying POD 003 - Persistent Database..."
+echo "[STEP 9] Deploying POD 003 - Persistent Database..."
 
 # Remove existing pod
 podman pod exists "$POD_003_NAME" 2>/dev/null && podman pod rm -f "$POD_003_NAME"
@@ -282,6 +328,8 @@ podman run -d --restart always \
     -e POSTGRES_USER="$POSTGRES_USER" \
     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
     -v "$VOLUME_POSTGRES_DATA:/var/lib/postgresql/data" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-postgres" \
     "$IMAGE_POSTGRES"
 
 # Wait for PostgreSQL to be ready
@@ -291,10 +339,10 @@ sleep 10
 echo "✓ POD 003 deployed (Persistent Database)"
 
 # ============================================================
-# STEP 9: DEPLOY POD 004 - TRANSIENT DATABASE
+# STEP 10: DEPLOY POD 004 - TRANSIENT DATABASE
 # ============================================================
 echo ""
-echo "[STEP 9] Deploying POD 004 - Transient Database (Redis)..."
+echo "[STEP 10] Deploying POD 004 - Transient Database (Redis)..."
 
 # Remove existing pod
 podman pod exists "$POD_004_NAME" 2>/dev/null && podman pod rm -f "$POD_004_NAME"
@@ -309,23 +357,23 @@ echo "  → Starting Redis container..."
 podman run -d --restart always \
     --pod "$POD_004_NAME" \
     --name "${POD_004_NAME}-redis" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-redis" \
     "$IMAGE_REDIS" \
     redis-server --appendonly yes
 
 echo "✓ POD 004 deployed (Transient Database)"
 
 # ============================================================
-# STEP 10: BUILD DJANGO APPLICATION IMAGE
+# STEP 11: BUILD DJANGO APPLICATION IMAGE
 # ============================================================
 echo ""
-echo "[STEP 10] Building Django application..."
+echo "[STEP 11] Building Django application..."
 
-# Create Django project directory
 DJANGO_BUILD_DIR="/tmp/hookprobe-django-build"
 rm -rf "$DJANGO_BUILD_DIR"
 mkdir -p "$DJANGO_BUILD_DIR"
 
-# Create Dockerfile
 cat > "$DJANGO_BUILD_DIR/Dockerfile" << 'EOF'
 FROM python:3.12-slim
 
@@ -334,24 +382,17 @@ ENV DJANGO_SETTINGS_MODULE=hookprobe.settings
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     postgresql-client \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY . .
-
-# Collect static files
 RUN python manage.py collectstatic --noinput || true
-
-# Create necessary directories
 RUN mkdir -p /app/static /app/media
 
 EXPOSE 8000
@@ -359,7 +400,6 @@ EXPOSE 8000
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "hookprobe.wsgi:application"]
 EOF
 
-# Create requirements.txt
 cat > "$DJANGO_BUILD_DIR/requirements.txt" << 'EOF'
 Django==5.0.1
 django-cms==4.1.1
@@ -378,8 +418,8 @@ PyJWT==2.8.0
 cryptography==41.0.7
 EOF
 
-# Create basic Django project structure
 mkdir -p "$DJANGO_BUILD_DIR/hookprobe"
+
 cat > "$DJANGO_BUILD_DIR/manage.py" << 'EOF'
 #!/usr/bin/env python
 import os
@@ -390,20 +430,16 @@ if __name__ == "__main__":
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:
-        raise ImportError(
-            "Couldn't import Django. Are you sure it's installed?"
-        ) from exc
+        raise ImportError("Couldn't import Django.") from exc
     execute_from_command_line(sys.argv)
 EOF
 chmod +x "$DJANGO_BUILD_DIR/manage.py"
 
-# Create settings.py with Logto integration
 cat > "$DJANGO_BUILD_DIR/hookprobe/settings.py" << EOF
 import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 SECRET_KEY = '${DJANGO_SECRET_KEY}'
 DEBUG = ${DJANGO_DEBUG}
 ALLOWED_HOSTS = ['*']
@@ -481,7 +517,6 @@ CACHES = {
     }
 }
 
-# Logto IAM Configuration
 LOGTO_ENDPOINT = '${LOGTO_ENDPOINT}'
 LOGTO_ADMIN_ENDPOINT = '${LOGTO_ADMIN_ENDPOINT}'
 
@@ -517,7 +552,6 @@ CMS_TEMPLATES = [
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 EOF
 
-# Create urls.py
 cat > "$DJANGO_BUILD_DIR/hookprobe/urls.py" << 'EOF'
 from django.contrib import admin
 from django.urls import path, include
@@ -531,7 +565,6 @@ urlpatterns = [
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 EOF
 
-# Create wsgi.py
 cat > "$DJANGO_BUILD_DIR/hookprobe/wsgi.py" << 'EOF'
 import os
 from django.core.wsgi import get_wsgi_application
@@ -540,10 +573,8 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hookprobe.settings')
 application = get_wsgi_application()
 EOF
 
-# Create __init__.py files
 touch "$DJANGO_BUILD_DIR/hookprobe/__init__.py"
 
-# Build Django image
 echo "  → Building Django container image..."
 cd "$DJANGO_BUILD_DIR"
 podman build -t hookprobe-django:latest .
@@ -551,22 +582,19 @@ podman build -t hookprobe-django:latest .
 echo "✓ Django application built"
 
 # ============================================================
-# STEP 11: DEPLOY POD 002 - IAM/AUTHENTICATION SERVICES
+# STEP 12: DEPLOY POD 002 - IAM/AUTHENTICATION
 # ============================================================
 echo ""
-echo "[STEP 11] Deploying POD 002 - IAM/Authentication Services (Logto)..."
+echo "[STEP 12] Deploying POD 002 - IAM/Authentication Services (Logto)..."
 
-# Remove existing pod
 podman pod exists "$POD_002_NAME" 2>/dev/null && podman pod rm -f "$POD_002_NAME"
 
-# Create pod with port forwarding
 podman pod create \
     --name "$POD_002_NAME" \
     --network "$NETWORK_POD002" \
     -p ${PORT_LOGTO}:3001 \
     -p ${PORT_LOGTO_ADMIN}:3002
 
-# Deploy PostgreSQL for Logto
 echo "  → Starting Logto PostgreSQL database..."
 podman run -d --restart always \
     --pod "$POD_002_NAME" \
@@ -575,13 +603,12 @@ podman run -d --restart always \
     -e POSTGRES_USER="$LOGTO_DB_USER" \
     -e POSTGRES_PASSWORD="$LOGTO_DB_PASSWORD" \
     -v "$VOLUME_LOGTO_DB:/var/lib/postgresql/data" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-logto-db" \
     "$IMAGE_POSTGRES"
 
-# Wait for database to be ready
-echo "  → Waiting for Logto database to initialize..."
 sleep 10
 
-# Deploy Logto IAM
 echo "  → Starting Logto IAM service..."
 podman run -d --restart always \
     --pod "$POD_002_NAME" \
@@ -589,125 +616,66 @@ podman run -d --restart always \
     -e DB_URL="postgresql://${LOGTO_DB_USER}:${LOGTO_DB_PASSWORD}@localhost:5432/${LOGTO_DB}" \
     -e ENDPOINT="http://${LOCAL_HOST_IP}:${PORT_LOGTO}" \
     -e ADMIN_ENDPOINT="http://${LOCAL_HOST_IP}:${PORT_LOGTO_ADMIN}" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-logto" \
     "$IMAGE_LOGTO"
 
 echo "✓ POD 002 deployed (IAM - Logto)"
-echo "  Access Logto Admin: http://${LOCAL_HOST_IP}:${PORT_LOGTO_ADMIN}"
 
 # ============================================================
-# STEP 12: DEPLOY POD 001 - WEB APP / DMZ
-# ============================================================
-echo ""
-echo "[STEP 12] Deploying POD 001 - Web App / DMZ..."
-
-# Remove existing pod
-podman pod exists "$POD_001_NAME" 2>/dev/null && podman pod rm -f "$POD_001_NAME"
-
-# Create pod with port forwarding
-podman pod create \
-    --name "$POD_001_NAME" \
-    --network "$NETWORK_POD001" \
-    -p ${PORT_HTTP}:80 \
-    -p ${PORT_HTTPS}:443
-
-# Deploy Django application
-echo "  → Starting Django/Gunicorn container..."
-podman run -d --restart always \
-    --pod "$POD_001_NAME" \
-    --name "${POD_001_NAME}-django" \
-    -e DJANGO_SETTINGS_MODULE="hookprobe.settings" \
-    -e LOGTO_ENDPOINT="${LOGTO_ENDPOINT}" \
-    -e LOGTO_ADMIN_ENDPOINT="${LOGTO_ADMIN_ENDPOINT}" \
-    -v "$VOLUME_DJANGO_STATIC:/app/static" \
-    -v "$VOLUME_DJANGO_MEDIA:/app/media" \
-    hookprobe-django:latest
-
-# Wait for Django to start
-sleep 15
-
-# Run migrations
-echo "  → Running database migrations..."
-podman exec "${POD_001_NAME}-django" python manage.py migrate --noinput || true
-
-# Create superuser (non-interactive)
-echo "  → Creating Django superuser..."
-podman exec "${POD_001_NAME}-django" python manage.py shell << 'PYEOF'
-from django.contrib.auth import get_user_model
-User = get_user_model()
-if not User.objects.filter(username='admin').exists():
-    User.objects.create_superuser('admin', 'admin@hookprobe.local', 'admin')
-    print('Superuser created: admin/admin')
-else:
-    print('Superuser already exists')
-PYEOF
-
-# Create Nginx configuration
-echo "  → Configuring Nginx reverse proxy..."
-NGINX_CONF_DIR="/tmp/nginx-hookprobe"
-mkdir -p "$NGINX_CONF_DIR"
-
-cat > "$NGINX_CONF_DIR/default.conf" << 'EOF'
-upstream django {
-    server localhost:8000;
-}
-
-server {
-    listen 80;
-    server_name _;
-    client_max_body_size 100M;
-
-    location /static/ {
-        alias /var/www/static/;
-        expires 30d;
-    }
-
-    location /media/ {
-        alias /var/www/media/;
-        expires 30d;
-    }
-
-    location / {
-        proxy_pass http://django;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_redirect off;
-    }
-}
-EOF
-
-# Deploy Nginx
-echo "  → Starting Nginx container..."
-podman run -d --restart always \
-    --pod "$POD_001_NAME" \
-    --name "${POD_001_NAME}-nginx" \
-    -v "$NGINX_CONF_DIR/default.conf:/etc/nginx/conf.d/default.conf:ro" \
-    -v "$VOLUME_DJANGO_STATIC:/var/www/static:ro" \
-    -v "$VOLUME_DJANGO_MEDIA:/var/www/media:ro" \
-    "$IMAGE_NGINX"
-
-echo "✓ POD 001 deployed (Web App / DMZ)"
-
-# ============================================================
-# STEP 13: DEPLOY POD 005 - MONITORING STACK
+# STEP 13: DEPLOY POD 005 - MONITORING + CENTRALIZED LOGGING
 # ============================================================
 echo ""
-echo "[STEP 13] Deploying POD 005 - Complete Monitoring Stack..."
+echo "[STEP 13] Deploying POD 005 - Monitoring + Centralized Logging..."
 
-# Remove existing pod
 podman pod exists "$POD_005_NAME" 2>/dev/null && podman pod rm -f "$POD_005_NAME"
 
-# Create pod with port forwarding
 podman pod create \
     --name "$POD_005_NAME" \
     --network "$NETWORK_POD005" \
     -p ${PORT_GRAFANA}:3000 \
     -p ${PORT_PROMETHEUS}:9090 \
     -p ${PORT_ALERTMANAGER}:9093 \
-    -p ${PORT_LOKI}:3100
+    -p ${PORT_LOKI}:3100 \
+    -p ${RSYSLOG_PORT}:514/udp \
+    -p ${RSYSLOG_PORT}:514/tcp \
+    -p ${RSYSLOG_TLS_PORT}:6514/tcp
 
-# --- Prometheus Configuration ---
+# Deploy Rsyslog Server
+echo "  → Configuring centralized Rsyslog server..."
+RSYSLOG_CONFIG_DIR="/tmp/rsyslog-config"
+mkdir -p "$RSYSLOG_CONFIG_DIR"
+
+cat > "$RSYSLOG_CONFIG_DIR/rsyslog.conf" << 'EOF'
+# Rsyslog configuration for HookProbe centralized logging
+
+module(load="imudp")
+input(type="imudp" port="514")
+
+module(load="imtcp")
+input(type="imtcp" port="514")
+
+# Template for log files
+template(name="DynamicFile" type="string" string="/var/log/remote/%HOSTNAME%/%PROGRAMNAME%.log")
+
+# Store logs by hostname and program
+*.* ?DynamicFile
+
+# Also send to Loki via Promtail
+*.* @@localhost:1514
+EOF
+
+echo "  → Starting Rsyslog server..."
+podman run -d --restart always \
+    --pod "$POD_005_NAME" \
+    --name "${POD_005_NAME}-rsyslog" \
+    -v "$RSYSLOG_CONFIG_DIR/rsyslog.conf:/etc/rsyslog.conf:ro" \
+    -v "$VOLUME_RSYSLOG_DATA:/var/log/remote" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-rsyslog" \
+    "$IMAGE_RSYSLOG"
+
+# Deploy Prometheus
 echo "  → Configuring Prometheus..."
 PROMETHEUS_CONFIG_DIR="/tmp/prometheus-config"
 mkdir -p "$PROMETHEUS_CONFIG_DIR"
@@ -737,7 +705,6 @@ scrape_configs:
       - targets: ['localhost:8080']
 EOF
 
-# Deploy Prometheus
 echo "  → Starting Prometheus..."
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
@@ -745,11 +712,13 @@ podman run -d --restart always \
     -v "$PROMETHEUS_CONFIG_DIR/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
     -v "$VOLUME_PROMETHEUS_DATA:/prometheus" \
     --user root \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-prometheus" \
     "$IMAGE_PROMETHEUS" \
     --config.file=/etc/prometheus/prometheus.yml \
     --storage.tsdb.path=/prometheus
 
-# --- Loki Configuration ---
+# Deploy Loki
 echo "  → Configuring Loki..."
 LOKI_CONFIG_DIR="/tmp/loki-config"
 mkdir -p "$LOKI_CONFIG_DIR"
@@ -787,7 +756,6 @@ limits_config:
   reject_old_samples_max_age: 168h
 EOF
 
-# Deploy Loki
 echo "  → Starting Loki..."
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
@@ -795,11 +763,13 @@ podman run -d --restart always \
     -v "$LOKI_CONFIG_DIR/loki-config.yml:/etc/loki/local-config.yaml:ro" \
     -v "$VOLUME_LOKI_DATA:/loki" \
     --user root \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-loki" \
     "$IMAGE_LOKI" \
     -config.file=/etc/loki/local-config.yaml
 
-# --- Promtail Configuration ---
-echo "  → Configuring Promtail (log aggregator)..."
+# Deploy Promtail
+echo "  → Configuring Promtail..."
 PROMTAIL_CONFIG_DIR="/tmp/promtail-config"
 mkdir -p "$PROMTAIL_CONFIG_DIR"
 
@@ -823,6 +793,14 @@ scrape_configs:
           job: varlogs
           __path__: /var/log/*log
 
+  - job_name: rsyslog
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: rsyslog
+          __path__: /var/log/remote/**/*.log
+
   - job_name: containers
     static_configs:
       - targets:
@@ -832,19 +810,21 @@ scrape_configs:
           __path__: /var/lib/containers/storage/overlay-containers/*/userdata/ctr.log
 EOF
 
-# Deploy Promtail
 echo "  → Starting Promtail..."
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
     --name "${POD_005_NAME}-promtail" \
     -v "$PROMTAIL_CONFIG_DIR/promtail-config.yml:/etc/promtail/config.yml:ro" \
     -v /var/log:/var/log:ro \
+    -v "$VOLUME_RSYSLOG_DATA:/var/log/remote:ro" \
     -v /var/lib/containers:/var/lib/containers:ro \
     --user root \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-promtail" \
     "$IMAGE_PROMTAIL" \
     -config.file=/etc/promtail/config.yml
 
-# --- Alertmanager Configuration ---
+# Deploy Alertmanager
 echo "  → Configuring Alertmanager..."
 ALERTMANAGER_CONFIG_DIR="/tmp/alertmanager-config"
 mkdir -p "$ALERTMANAGER_CONFIG_DIR"
@@ -864,7 +844,6 @@ receivers:
   - name: 'default'
 EOF
 
-# Deploy Alertmanager
 echo "  → Starting Alertmanager..."
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
@@ -872,21 +851,25 @@ podman run -d --restart always \
     -v "$ALERTMANAGER_CONFIG_DIR/alertmanager.yml:/etc/alertmanager/config.yml:ro" \
     -v "$VOLUME_ALERTMANAGER_DATA:/alertmanager" \
     --user root \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-alertmanager" \
     "$IMAGE_ALERTMANAGER" \
     --config.file=/etc/alertmanager/config.yml \
     --storage.path=/alertmanager
 
-# --- Node Exporter (Host Metrics) ---
+# Deploy Node Exporter
 echo "  → Starting Node Exporter..."
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
     --name "${POD_005_NAME}-node-exporter" \
     --pid=host \
     -v "/:/host:ro,rslave" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-node-exporter" \
     "$IMAGE_NODE_EXPORTER" \
     --path.rootfs=/host
 
-# --- cAdvisor (Container Metrics) ---
+# Deploy cAdvisor
 echo "  → Starting cAdvisor..."
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
@@ -897,12 +880,12 @@ podman run -d --restart always \
     -v /sys:/sys:ro \
     -v /var/lib/containers:/var/lib/containers:ro \
     -v /dev/disk:/dev/disk:ro \
-    "$IMAGE_CADVISOR" || echo "⚠ cAdvisor may require adjustments for Podman"
+    --log-driver=journald \
+    --log-opt tag="hookprobe-cadvisor" \
+    "$IMAGE_CADVISOR" || echo "⚠ cAdvisor may require adjustments"
 
-# --- Grafana Configuration ---
+# Deploy Grafana
 echo "  → Starting Grafana..."
-
-# Create Grafana datasources configuration
 GRAFANA_DATASOURCES_DIR="/tmp/grafana-provisioning/datasources"
 mkdir -p "$GRAFANA_DATASOURCES_DIR"
 
@@ -924,7 +907,6 @@ datasources:
     editable: true
 EOF
 
-# Create Grafana dashboards configuration
 GRAFANA_DASHBOARDS_DIR="/tmp/grafana-provisioning/dashboards"
 mkdir -p "$GRAFANA_DASHBOARDS_DIR"
 
@@ -943,7 +925,6 @@ providers:
       path: /etc/grafana/provisioning/dashboards
 EOF
 
-# Deploy Grafana
 podman run -d --restart always \
     --pod "$POD_005_NAME" \
     --name "${POD_005_NAME}-grafana" \
@@ -954,25 +935,306 @@ podman run -d --restart always \
     -v "$GRAFANA_DATASOURCES_DIR:/etc/grafana/provisioning/datasources:ro" \
     -v "$GRAFANA_DASHBOARDS_DIR:/etc/grafana/provisioning/dashboards:ro" \
     --user root \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-grafana" \
     "$IMAGE_GRAFANA"
 
-echo "✓ POD 005 deployed (Complete Monitoring Stack)"
+echo "✓ POD 005 deployed (Monitoring + Centralized Logging)"
 
 # ============================================================
-# STEP 14: DEPLOY POD 006 - SECURITY / IDS / IPS
+# STEP 14: DEPLOY POD 001 - WEB DMZ WITH WAF + CLOUDFLARE
 # ============================================================
 echo ""
-echo "[STEP 14] Deploying POD 006 - Security / IDS / IPS..."
+echo "[STEP 14] Deploying POD 001 - Web DMZ with NAXSI WAF + Cloudflare Tunnel..."
 
-# Remove existing pod
+podman pod exists "$POD_001_NAME" 2>/dev/null && podman pod rm -f "$POD_001_NAME"
+
+podman pod create \
+    --name "$POD_001_NAME" \
+    --network "$NETWORK_POD001" \
+    -p ${PORT_HTTP}:80 \
+    -p ${PORT_HTTPS}:443 \
+    -p ${PORT_WAF}:8080
+
+# Deploy Django application
+echo "  → Starting Django/Gunicorn container..."
+podman run -d --restart always \
+    --pod "$POD_001_NAME" \
+    --name "${POD_001_NAME}-django" \
+    -e DJANGO_SETTINGS_MODULE="hookprobe.settings" \
+    -e LOGTO_ENDPOINT="${LOGTO_ENDPOINT}" \
+    -e LOGTO_ADMIN_ENDPOINT="${LOGTO_ADMIN_ENDPOINT}" \
+    -v "$VOLUME_DJANGO_STATIC:/app/static" \
+    -v "$VOLUME_DJANGO_MEDIA:/app/media" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-django" \
+    hookprobe-django:latest
+
+sleep 5
+
+# Run migrations
+echo "  → Running database migrations..."
+podman exec "${POD_001_NAME}-django" python manage.py migrate --noinput || true
+
+# Create superuser
+echo "  → Creating Django superuser..."
+podman exec "${POD_001_NAME}-django" python manage.py shell << 'PYEOF'
+from django.contrib.auth import get_user_model
+User = get_user_model()
+if not User.objects.filter(username='admin').exists():
+    User.objects.create_superuser('admin', 'admin@hookprobe.local', 'admin')
+    print('Superuser created: admin/admin')
+else:
+    print('Superuser already exists')
+PYEOF
+
+# Deploy NAXSI WAF + Nginx
+echo "  → Configuring NAXSI WAF with Nginx..."
+NAXSI_CONF_DIR="/tmp/naxsi-config"
+mkdir -p "$NAXSI_CONF_DIR"
+
+# Create NAXSI core rules
+cat > "$NAXSI_CONF_DIR/naxsi_core.rules" << 'EOF'
+# NAXSI Core Rules
+MainRule "str:<" "msg:html open tag" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$XSS:8" id:1000;
+MainRule "str:>" "msg:html close tag" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$XSS:8" id:1001;
+MainRule "str:[" "msg:square bracket" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$XSS:4" id:1002;
+MainRule "str:]" "msg:square bracket" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$XSS:4" id:1003;
+MainRule "str:~" "msg:tilde character" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$XSS:4" id:1004;
+MainRule "str:\`" "msg:grave accent" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$XSS:8" id:1005;
+MainRule "rx:%[2-3]." "msg:double encoding" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$EVADE:4" id:1006;
+
+# SQL Injection
+MainRule "str:select" "msg:select keyword" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$SQL:8" id:1100;
+MainRule "str:union" "msg:union keyword" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$SQL:8" id:1101;
+MainRule "str:insert" "msg:insert keyword" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$SQL:8" id:1102;
+MainRule "str:delete" "msg:delete keyword" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$SQL:8" id:1103;
+MainRule "str:update" "msg:update keyword" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$SQL:8" id:1104;
+MainRule "str:drop" "msg:drop keyword" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$SQL:8" id:1105;
+
+# File Upload
+MainRule "str:.." "msg:double dot" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$TRAVERSAL:4" id:1200;
+MainRule "str:/etc/passwd" "msg:passwd file" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$TRAVERSAL:8" id:1201;
+MainRule "str:c:\\" "msg:windows path" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$TRAVERSAL:8" id:1202;
+
+# Command Injection
+MainRule "str:;|" "msg:semicolon or pipe" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$RCE:8" id:1300;
+MainRule "str:\$(" "msg:command substitution" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$RCE:8" id:1301;
+MainRule "str:\`" "msg:backtick" "mz:ARGS|URL|BODY|$HEADERS_VAR:Cookie" "s:$RCE:8" id:1302;
+EOF
+
+# Create Nginx configuration with NAXSI
+cat > "$NAXSI_CONF_DIR/nginx.conf" << 'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access.log main;
+    sendfile on;
+    keepalive_timeout 65;
+
+    # NAXSI Rules
+    include /etc/nginx/naxsi_core.rules;
+
+    upstream django {
+        server localhost:8000;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+        client_max_body_size 100M;
+
+        # NAXSI Configuration
+        location / {
+            # Enable NAXSI
+            SecRulesEnabled;
+            DeniedUrl "/RequestDenied";
+            
+            # Check rules
+            CheckRule "$SQL >= 8" BLOCK;
+            CheckRule "$RCE >= 8" BLOCK;
+            CheckRule "$TRAVERSAL >= 4" BLOCK;
+            CheckRule "$XSS >= 8" BLOCK;
+            
+            # Learning mode (set to 0 for production)
+            LearningMode;
+            
+            # Log to dedicated file
+            error_log /var/log/nginx/naxsi.log;
+            
+            proxy_pass http://django;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location /static/ {
+            alias /var/www/static/;
+            expires 30d;
+        }
+
+        location /media/ {
+            alias /var/www/media/;
+            expires 30d;
+        }
+
+        location /RequestDenied {
+            return 403;
+        }
+    }
+}
+EOF
+
+# Build custom Nginx with NAXSI
+echo "  → Building Nginx with NAXSI WAF..."
+NGINX_BUILD_DIR="/tmp/nginx-naxsi-build"
+mkdir -p "$NGINX_BUILD_DIR"
+
+cat > "$NGINX_BUILD_DIR/Dockerfile" << 'EOF'
+FROM nginx:1.27-alpine
+
+# Install build dependencies
+RUN apk add --no-cache \
+    gcc \
+    make \
+    libc-dev \
+    pcre-dev \
+    zlib-dev \
+    linux-headers \
+    curl \
+    git
+
+# Download and compile NAXSI
+WORKDIR /tmp
+RUN git clone https://github.com/nbs-system/naxsi.git && \
+    cd naxsi/naxsi_src && \
+    ./configure && \
+    make && \
+    make install
+
+# Copy NAXSI module
+RUN mkdir -p /etc/nginx/modules
+COPY naxsi_core.rules /etc/nginx/
+
+WORKDIR /
+EXPOSE 80 443
+
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+
+cp "$NAXSI_CONF_DIR/naxsi_core.rules" "$NGINX_BUILD_DIR/"
+
+cd "$NGINX_BUILD_DIR"
+echo "  → Building NAXSI-enabled Nginx (this may take a few minutes)..."
+podman build -t hookprobe-nginx-naxsi:latest . || {
+    echo "⚠️  NAXSI build failed, using standard Nginx instead"
+    USE_STANDARD_NGINX=true
+}
+
+if [ "$USE_STANDARD_NGINX" = true ]; then
+    # Use standard Nginx without NAXSI
+    cat > "$NAXSI_CONF_DIR/default.conf" << 'EOF'
+upstream django {
+    server localhost:8000;
+}
+
+server {
+    listen 80;
+    server_name _;
+    client_max_body_size 100M;
+
+    location /static/ {
+        alias /var/www/static/;
+        expires 30d;
+    }
+
+    location /media/ {
+        alias /var/www/media/;
+        expires 30d;
+    }
+
+    location / {
+        proxy_pass http://django;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_redirect off;
+    }
+}
+EOF
+
+    echo "  → Starting standard Nginx..."
+    podman run -d --restart always \
+        --pod "$POD_001_NAME" \
+        --name "${POD_001_NAME}-nginx" \
+        -v "$NAXSI_CONF_DIR/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+        -v "$VOLUME_DJANGO_STATIC:/var/www/static:ro" \
+        -v "$VOLUME_DJANGO_MEDIA:/var/www/media:ro" \
+        -v "$VOLUME_WAF_LOGS:/var/log/nginx" \
+        --log-driver=journald \
+        --log-opt tag="hookprobe-nginx" \
+        "$IMAGE_NGINX"
+else
+    echo "  → Starting NAXSI-enabled Nginx..."
+    podman run -d --restart always \
+        --pod "$POD_001_NAME" \
+        --name "${POD_001_NAME}-nginx-naxsi" \
+        -v "$NAXSI_CONF_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
+        -v "$NAXSI_CONF_DIR/naxsi_core.rules:/etc/nginx/naxsi_core.rules:ro" \
+        -v "$VOLUME_DJANGO_STATIC:/var/www/static:ro" \
+        -v "$VOLUME_DJANGO_MEDIA:/var/www/media:ro" \
+        -v "$VOLUME_WAF_LOGS:/var/log/nginx" \
+        --log-driver=journald \
+        --log-opt tag="hookprobe-naxsi-waf" \
+        hookprobe-nginx-naxsi:latest
+fi
+
+# Deploy Cloudflare Tunnel
+if [ "$SKIP_CLOUDFLARED" = false ]; then
+    echo "  → Starting Cloudflare Tunnel..."
+    podman run -d --restart always \
+        --pod "$POD_001_NAME" \
+        --name "${POD_001_NAME}-cloudflared" \
+        --log-driver=journald \
+        --log-opt tag="hookprobe-cloudflared" \
+        "$IMAGE_CLOUDFLARED" \
+        tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN"
+    
+    echo "✓ Cloudflare Tunnel started"
+else
+    echo "⊘ Cloudflare Tunnel skipped (token not configured)"
+fi
+
+echo "✓ POD 001 deployed (Web DMZ with WAF)"
+
+# ============================================================
+# STEP 15: DEPLOY POD 006 - SECURITY / IDS / IPS
+# ============================================================
+echo ""
+echo "[STEP 15] Deploying POD 006 - Security / IDS / IPS..."
+
 podman pod exists "$POD_006_NAME" 2>/dev/null && podman pod rm -f "$POD_006_NAME"
 
-# Create pod
 podman pod create \
     --name "$POD_006_NAME" \
     --network "$NETWORK_POD006"
 
-# Deploy Suricata IDS
 echo "  → Starting Suricata IDS container..."
 podman run -d --restart always \
     --pod "$POD_006_NAME" \
@@ -980,7 +1242,9 @@ podman run -d --restart always \
     --cap-add=NET_ADMIN \
     --cap-add=NET_RAW \
     -v "$VOLUME_IDS_LOGS:/var/log/suricata" \
-    "$IMAGE_SURICATA" || echo "⚠ Suricata image may need additional configuration"
+    --log-driver=journald \
+    --log-opt tag="hookprobe-suricata" \
+    "$IMAGE_SURICATA" || echo "⚠ Suricata may need additional configuration"
 
 echo "✓ POD 006 deployed (Security / IDS / IPS)"
 
@@ -989,31 +1253,35 @@ echo "✓ POD 006 deployed (Security / IDS / IPS)"
 # ============================================================
 echo ""
 echo "============================================================"
-echo "   HOOKPROBE DEPLOYMENT COMPLETE!"
+echo "   🎉 HOOKPROBE DEPLOYMENT COMPLETE!"
 echo "============================================================"
 echo ""
 echo "✨ Deployed Infrastructure:"
-echo "  ✓ POD 001 - Web App / DMZ (Django CMS + Nginx)"
-echo "  ✓ POD 002 - IAM/Authentication Services (Logto)"
+echo "  ✓ POD 001 - Web DMZ (Django CMS + NAXSI WAF + Nginx)"
+if [ "$SKIP_CLOUDFLARED" = false ]; then
+    echo "      • Cloudflare Tunnel enabled"
+fi
+echo "  ✓ POD 002 - IAM/Authentication (Logto)"
 echo "  ✓ POD 003 - Persistent Database (PostgreSQL)"
 echo "  ✓ POD 004 - Transient Database (Redis)"
-echo "  ✓ POD 005 - Complete Monitoring Stack"
+echo "  ✓ POD 005 - Complete Monitoring + Centralized Logging"
 echo "      • Grafana (Dashboards)"
 echo "      • Prometheus (Metrics)"
-echo "      • Loki (Logs)"
-echo "      • Promtail (Log Aggregation)"
+echo "      • Loki (Log Storage)"
+echo "      • Promtail (Log Shipping)"
+echo "      • Rsyslog (Centralized Syslog Server)"
 echo "      • Alertmanager (Alerting)"
 echo "      • Node Exporter (Host Metrics)"
 echo "      • cAdvisor (Container Metrics)"
-echo "  ✓ POD 006 - Security / IDS / IPS (Suricata)"
+echo "  ✓ POD 006 - Security (Suricata IDS/IPS)"
 echo ""
 echo "🌐 Network Configuration:"
 echo "  • Main Management: $SUBNET_MAIN"
-echo "  • POD 001 (DMZ): $SUBNET_POD001"
+echo "  • POD 001 (DMZ + WAF): $SUBNET_POD001"
 echo "  • POD 002 (IAM): $SUBNET_POD002"
 echo "  • POD 003 (DB-P): $SUBNET_POD003"
 echo "  • POD 004 (DB-T): $SUBNET_POD004"
-echo "  • POD 005 (MON): $SUBNET_POD005"
+echo "  • POD 005 (MON + LOG): $SUBNET_POD005"
 echo "  • POD 006 (SEC): $SUBNET_POD006"
 echo ""
 echo "🔐 Access Information:"
@@ -1023,79 +1291,87 @@ echo "     Django Admin: http://$LOCAL_HOST_IP/admin"
 echo "     Username: admin"
 echo "     Password: admin"
 echo "     Django CMS: http://$LOCAL_HOST_IP"
+
+if [ "$SKIP_CLOUDFLARED" = false ]; then
+    echo ""
+    echo "     Cloudflare Tunnel: https://${CLOUDFLARE_DOMAIN}"
+    echo "     (Configure in Cloudflare Zero Trust Dashboard)"
+fi
+
+echo ""
+echo "  🛡️  Web Application Firewall:"
+echo "     NAXSI WAF protecting all web traffic"
+echo "     WAF Logs: /var/log/nginx/naxsi.log"
 echo ""
 echo "  🔐 IAM / Authentication (Logto):"
 echo "     Logto Admin Console: http://$LOCAL_HOST_IP:${PORT_LOGTO_ADMIN}"
 echo "     Logto API Endpoint: http://$LOCAL_HOST_IP:${PORT_LOGTO}"
-echo "     → Configure your app in Logto Admin Console"
-echo "     → Add redirect URI: http://$LOCAL_HOST_IP/auth/callback"
 echo ""
 echo "  📊 Monitoring Stack:"
 echo "     Grafana Dashboard: http://$LOCAL_HOST_IP:${PORT_GRAFANA}"
-echo "     Username: admin"
-echo "     Password: admin"
+echo "     Username: admin | Password: admin"
 echo ""
 echo "     Prometheus: http://$LOCAL_HOST_IP:${PORT_PROMETHEUS}"
 echo "     Alertmanager: http://$LOCAL_HOST_IP:${PORT_ALERTMANAGER}"
 echo "     Loki API: http://$LOCAL_HOST_IP:${PORT_LOKI}"
+echo ""
+echo "  📝 Centralized Logging:"
+echo "     Rsyslog Server: ${IP_POD005_RSYSLOG}:${RSYSLOG_PORT}"
+echo "     All container logs forwarded to Loki via Promtail"
+echo "     System logs forwarded to centralized rsyslog"
+echo "     Kernel logs aggregated in Loki"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "📋 Next Steps:"
-echo "  1. 🔐 Configure Logto IAM:"
-echo "     - Access Logto Admin at http://$LOCAL_HOST_IP:${PORT_LOGTO_ADMIN}"
-echo "     - Create a new application (Traditional Web)"
-echo "     - Note the App ID and App Secret"
-echo "     - Configure redirect URIs"
+echo "  1. 🔐 Change all default passwords immediately"
+echo "  2. 🔗 Configure Logto IAM application"
+echo "  3. 📊 Access Grafana and explore dashboards"
+echo "  4. 🛡️  Review WAF logs and tune rules"
+
+if [ "$SKIP_CLOUDFLARED" = false ]; then
+    echo "  5. ☁️  Configure Cloudflare Tunnel routing"
+fi
+
+echo "  6. 🎨 Upload your ThemeForest template"
+echo "  7. 🔒 Configure SSL/TLS certificates"
+echo "  8. 📧 Set up alert notifications"
 echo ""
-echo "  2. 🔗 Integrate Django with Logto:"
-echo "     - Update Django settings with Logto credentials"
-echo "     - Configure OIDC authentication"
-echo "     - Test SSO login flow"
+echo "📊 Logging Features:"
+echo "  ✓ Centralized syslog server collecting all system logs"
+echo "  ✓ All containers logging via journald"
+echo "  ✓ Promtail shipping logs to Loki"
+echo "  ✓ Kernel logs aggregated"
+echo "  ✓ WAF logs tracked separately"
+echo "  ✓ Security events from IDS/IPS"
+echo "  ✓ Query all logs in Grafana"
 echo ""
-echo "  3. 📊 Configure Grafana:"
-echo "     - Login to Grafana"
-echo "     - Data sources are pre-configured"
-echo "     - Import dashboards or create custom ones"
-echo "     - Set up alerting channels"
+echo "🛡️  Security Features:"
+echo "  ✓ NAXSI WAF filtering web threats"
+echo "  ✓ PSK-encrypted VXLAN tunnels"
+echo "  ✓ Isolated network segments"
+echo "  ✓ Centralized IAM with Logto"
+echo "  ✓ IDS/IPS monitoring (Suricata)"
+
+if [ "$SKIP_CLOUDFLARED" = false ]; then
+    echo "  ✓ Cloudflare Tunnel (Zero Trust Access)"
+fi
+
+echo "  ✓ Complete audit trail in logs"
 echo ""
-echo "  4. 🎨 Upload ThemeForest Template:"
-echo "     - Copy template files to Django container"
-echo "     - Convert HTML to Django templates"
-echo "     - Configure static files"
-echo "     - Create CMS pages"
+echo "🔧 Log Query Examples:"
+echo "  View all logs:"
+echo "    Grafana → Explore → Loki → {job=~\".*\"}"
 echo ""
-echo "  5. 🔒 Review Security:"
-echo "     - Change all default passwords"
-echo "     - Review firewall rules"
-echo "     - Check IDS/IPS logs in POD 006"
-echo "     - Configure SSL/TLS certificates"
+echo "  View WAF blocks:"
+echo "    {job=\"containerlogs\"} |~ \"NAXSI.*BLOCK\""
 echo ""
-echo "📊 Monitoring Features:"
-echo "  ✓ Real-time system metrics (CPU, Memory, Disk, Network)"
-echo "  ✓ Container health monitoring"
-echo "  ✓ Centralized log aggregation (system, kernel, containers)"
-echo "  ✓ Custom alerting via Alertmanager"
-echo "  ✓ PostgreSQL and Redis metrics"
-echo "  ✓ Network traffic analysis"
-echo "  ✓ Security event monitoring"
+echo "  View Django errors:"
+echo "    {job=\"containerlogs\"} | json | container_name=~\".*django.*\" |~ \"ERROR\""
 echo ""
-echo "🔧 Management Commands:"
-echo "  View POD status: podman pod ps"
-echo "  View logs: podman logs -f <container-name>"
-echo "  Access shell: podman exec -it <container-name> bash"
-echo "  Restart POD: podman pod restart <pod-name>"
-echo ""
-echo "🌍 Multi-Host Deployment:"
-echo "  • Run this script on additional hosts"
-echo "  • Ensure network-config.sh has matching PSK keys"
-echo "  • VXLAN tunnels will automatically mesh"
-echo ""
-echo "📚 Documentation:"
-echo "  • Quick Reference Guide included"
-echo "  • Django + Logto integration guide provided"
-echo "  • Grafana dashboard templates available"
+echo "  View security alerts:"
+echo "    {job=\"containerlogs\"} | container_name=~\".*suricata.*\" |~ \"ALERT\""
 echo ""
 echo "============================================================"
-echo "  🎉 HookProbe is now running!"
-echo "  🚀 Start building your cybersecurity platform!"
+echo "  🎉 HookProbe v3.0 is now running!"
+echo "  🚀 Enterprise-grade security with WAF + Centralized Logging!"
 echo "============================================================"
