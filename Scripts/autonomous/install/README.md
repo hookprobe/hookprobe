@@ -14,6 +14,60 @@
 | **POD 006** | Security | 10.106.0.0/24 | Suricata IDS/IPS |
 
 ---
+# Pre-Deployment Checklist
+
+### System Requirements
+- [ ] Hardware: Intel N100 or equivalent x86_64 processor
+- [ ] RAM: Minimum 16GB (recommended)
+- [ ] Storage: Minimum 500GB SSD
+- [ ] OS: RHEL 10, Fedora, or CentOS Stream installed
+- [ ] Root access available
+- [ ] Internet connectivity for downloading images
+
+### Network Configuration
+- [ ] Physical network interface identified (e.g., eth0, enp0s3)
+- [ ] Host IP address noted
+- [ ] Gateway IP address noted
+- [ ] Remote peer IP (if multi-host) noted
+- [ ] No IP conflicts with 10.100.0.0/16 range
+- [ ] Firewall allows required ports (or will be configured)
+
+---
+
+## Configuration Phase
+
+### 1. Edit network-config.sh
+- [ ] Set `HOST_A_IP` to your physical IP
+- [ ] Set `HOST_B_IP` (if multi-host deployment)
+- [ ] Set `PHYSICAL_HOST_INTERFACE` (verify with `ip a`)
+- [ ] Set `INTERNET_GATEWAY`
+- [ ] Change all PSK keys (minimum 32 characters)
+  - [ ] `OVS_PSK_MAIN`
+  - [ ] `OVS_PSK_DMZ`
+  - [ ] `OVS_PSK_INTERNAL`
+- [ ] Change database passwords
+  - [ ] `POSTGRES_PASSWORD`
+  - [ ] `LOGTO_DB_PASSWORD`
+- [ ] Change Django secret key
+  - [ ] `DJANGO_SECRET_KEY` (generate with: `openssl rand -base64 50`)
+- [ ] Update `DJANGO_ALLOWED_HOSTS` for production
+
+### 2. Review Port Mappings
+- [ ] Port 80 (HTTP) - Available
+- [ ] Port 443 (HTTPS) - Available
+- [ ] Port 3000 (Grafana) - Available
+- [ ] Port 3001 (Logto) - Available
+- [ ] Port 3002 (Logto Admin) - Available
+- [ ] Port 5432 (PostgreSQL) - Available (optional external access)
+- [ ] Port 9090 (Prometheus) - Available
+- [ ] Port 9093 (Alertmanager) - Available
+
+### 3. Make Scripts Executable
+```bash
+chmod +x network-config.sh setup.sh uninstall.sh
+```
+
+---
 
 ## 🚀 Quick Start Commands
 
