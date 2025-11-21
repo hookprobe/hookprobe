@@ -216,6 +216,20 @@ QSECBIT_CHECK_INTERVAL=30              # Seconds between Qsecbit calculations
 KALI_AUTO_RESPONSE=true                # Enable automated countermeasures
 KALI_REQUIRE_APPROVAL=false            # Require human approval for responses
 
+# Kali Linux On-Demand Configuration
+KALI_ON_DEMAND=true                    # Spin up Kali only when needed
+KALI_SPIN_UP_THRESHOLD="AMBER"         # Spin up on AMBER or RED
+KALI_COOLDOWN_MINUTES=30               # Keep Kali running for X minutes after last alert
+KALI_AUTO_SHUTDOWN=true                # Automatically shutdown after cooldown
+
+# Attack Response Configuration
+ENABLE_ANTI_XSS=true                   # Enable XSS attack mitigation
+ENABLE_ANTI_SQLI=true                  # Enable SQL injection mitigation
+ENABLE_MEMORY_PROTECTION=true          # Enable memory attack protection
+AUTO_UPDATE_WAF_RULES=true             # Automatically update WAF rules
+AUTO_BLOCK_ATTACKER_IP=true            # Automatically block attacker IPs
+CREATE_DB_SNAPSHOTS=true               # Create DB snapshots before mitigation
+
 # API Configuration
 QSECBIT_API_PORT=8888                  # API port for Django integration
 
