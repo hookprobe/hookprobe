@@ -1,663 +1,656 @@
-# HookProbe Infrastructure - Quick Reference Guide
+# HookProbe v4.0 - AI-Powered Cybersecurity Platform
+
+**Complete 7-POD infrastructure with automated threat response**
+
+## 🎯 Overview
+
+HookProbe is an enterprise-grade, AI-powered cybersecurity platform featuring:
+- **Automated Threat Detection**: Qsecbit AI analysis engine
+- **Intelligent Response**: On-demand Kali Linux with anti-XSS/SQL injection
+- **Complete Monitoring**: Grafana + Prometheus + Loki + Rsyslog
+- **Web Application Firewall**: NAXSI WAF with auto-updating rules
+- **Zero Trust Access**: Optional Cloudflare Tunnel integration
+- **Encrypted Networks**: PSK-encrypted VXLAN tunnels between all PODs
+
+## 📋 Table of Contents
+
+1. [System Requirements](#system-requirements)
+2. [Quick Start](#quick-start)
+3. [Configuration Guide](#configuration-guide)
+4. [Architecture Overview](#architecture-overview)
+5. [Security Features](#security-features)
+6. [Troubleshooting](#troubleshooting)
+
+---
+
+## 💻 System Requirements
+
+### Hardware
+- **CPU**: Intel N100 or equivalent x86_64 processor (4+ cores recommended)
+- **RAM**: Minimum 16GB (32GB recommended for production)
+- **Storage**: 500GB SSD minimum (1TB recommended)
+- **Network**: 1Gbps NIC
+
+### Software
+- **OS**: RHEL 10, Fedora 38+, or CentOS Stream 9
+- **Root Access**: Required for installation
+- **Internet**: Required for downloading container images
+
+### Network
+- **Subnet**: 10.100.0.0/16 must be available (not in use)
+- **Ports**: See [Port Mappings](#port-mappings) section
+
+---
+
+## 🚀 Quick Start
+
+### 1. Download Scripts
+
+```bash
+# Download all three scripts
+wget https://your-repo/network-config.sh
+wget https://your-repo/setup.sh
+wget https://your-repo/uninstall.sh
+
+# Make executable
+chmod +x network-config.sh setup.sh uninstall.sh
+```
+
+### 2. Edit Configuration
+
+```bash
+nano network-config.sh
+```
+
+**Minimum required changes:**
+- `HOST_A_IP` - Your server's IP address
+- `PHYSICAL_HOST_INTERFACE` - Your network interface (e.g., eth0)
+- `OVS_PSK_MAIN` - Change all three PSK keys (generate with: `openssl rand -base64 32`)
+- `POSTGRES_PASSWORD` - Strong database password
+- `DJANGO_SECRET_KEY` - Django secret (generate with: `openssl rand -base64 50`)
+
+### 3. Deploy
+
+```bash
+sudo ./setup.sh
+```
+
+Installation takes **15-20 minutes**. Monitor progress and ensure all steps complete successfully.
+
+### 4. Access Services
+
+- **Web Application**: http://YOUR_IP
+- **Django Admin**: http://YOUR_IP/admin (admin/admin)
+- **Grafana**: http://YOUR_IP:3000 (admin/admin)
+- **Logto Admin**: http://YOUR_IP:3002
+- **Qsecbit API**: http://YOUR_IP:8888
+
+---
+
+## ⚙️ Configuration Guide
+
+### 🔐 Critical Security Settings
+
+#### 1. Physical Host Configuration
+
+```bash
+# Edit in network-config.sh
+
+HOST_A_IP="192.168.1.100"                    # ⚠️ CHANGE THIS
+HOST_B_IP="192.168.1.101"                    # Optional: for multi-host
+PHYSICAL_HOST_INTERFACE="eth0"               # ⚠️ CHANGE THIS
+INTERNET_GATEWAY="192.168.1.1"               # Your gateway
+```
+
+**How to find your values:**
+```bash
+# Find your IP and interface
+ip addr show
+
+# Find your gateway
+ip route | grep default
+```
+
+#### 2. VXLAN Encryption Keys (PSK)
+
+```bash
+# ⚠️ CRITICAL: Change all three keys
+
+OVS_PSK_MAIN="HookProbe_Main_VXLAN_Key_2025_CHANGE_ME"
+OVS_PSK_DMZ="HookProbe_DMZ_VXLAN_Key_2025_CHANGE_ME"
+OVS_PSK_INTERNAL="HookProbe_Internal_VXLAN_Key_2025_CHANGE_ME"
+```
+
+**Generate strong keys:**
+```bash
+openssl rand -base64 32
+openssl rand -base64 32
+openssl rand -base64 32
+```
+
+#### 3. Database Credentials
+
+```bash
+# Main PostgreSQL Database
+POSTGRES_DB="hookprobe_db"
+POSTGRES_USER="hookprobe_admin"
+POSTGRES_PASSWORD="CHANGE_ME_STRONG_PASSWORD_123"    # ⚠️ CHANGE THIS
+
+# Logto IAM Database
+LOGTO_DB="logto_db"
+LOGTO_DB_USER="logto_admin"
+LOGTO_DB_PASSWORD="CHANGE_ME_LOGTO_DB_PASSWORD"      # ⚠️ CHANGE THIS
+```
+
+**Generate strong passwords:**
+```bash
+openssl rand -base64 24
+openssl rand -base64 24
+```
+
+#### 4. Django Configuration
+
+```bash
+DJANGO_SECRET_KEY="CHANGE_ME_DJANGO_SECRET_KEY_LONG_RANDOM_STRING"  # ⚠️ CHANGE THIS
+DJANGO_DEBUG="False"                         # Keep False for production
+DJANGO_ALLOWED_HOSTS="*"                     # Change to your domain in production
+```
+
+**Generate Django secret key:**
+```bash
+openssl rand -base64 50
+```
+
+---
+
+### ☁️ Optional: Cloudflare Tunnel
+
+If you want secure external access without opening ports:
+
+#### 1. Get Cloudflare Tunnel Token
+
+1. Go to [Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/)
+2. Navigate to **Access** → **Tunnels**
+3. Click **Create a tunnel**
+4. Name it: `hookprobe-tunnel`
+5. Copy the token
+
+#### 2. Configure in network-config.sh
+
+```bash
+CLOUDFLARE_TUNNEL_TOKEN="eyJhIjoiYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoiLCJ0IjoiMTIzNDU2Nzg5MCIsInMiOiJhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5eiJ9"  # Your token
+CLOUDFLARE_TUNNEL_NAME="hookprobe-tunnel"
+CLOUDFLARE_DOMAIN="your-domain.com"          # Your Cloudflare domain
+```
+
+If you skip this, set:
+```bash
+CLOUDFLARE_TUNNEL_TOKEN="CHANGE_ME_GET_FROM_CLOUDFLARE_DASHBOARD"
+```
+The script will automatically skip Cloudflare setup.
+
+---
+
+### 🤖 Qsecbit AI Configuration
+
+#### Threat Detection Thresholds
+
+```bash
+QSECBIT_AMBER_THRESHOLD=0.45    # Warning level (0.0 - 1.0)
+QSECBIT_RED_THRESHOLD=0.70      # Critical level (0.0 - 1.0)
+```
+
+**Recommended values:**
+- **Strict**: AMBER=0.35, RED=0.60
+- **Balanced**: AMBER=0.45, RED=0.70 (default)
+- **Relaxed**: AMBER=0.55, RED=0.80
+
+#### Automated Response Settings
+
+```bash
+# Kali Linux On-Demand Configuration
+KALI_ON_DEMAND=true                         # Spin up only when needed (recommended)
+KALI_SPIN_UP_THRESHOLD="AMBER"              # Trigger: AMBER or RED
+KALI_COOLDOWN_MINUTES=30                    # Keep running after alert
+KALI_AUTO_SHUTDOWN=true                     # Auto-shutdown after cooldown
+
+# Attack Mitigation Features
+ENABLE_ANTI_XSS=true                        # XSS attack mitigation
+ENABLE_ANTI_SQLI=true                       # SQL injection mitigation
+ENABLE_MEMORY_PROTECTION=true               # Memory overflow protection
+AUTO_UPDATE_WAF_RULES=true                  # Auto-update NAXSI rules
+AUTO_BLOCK_ATTACKER_IP=true                 # Auto-block via iptables
+CREATE_DB_SNAPSHOTS=true                    # Snapshot before mitigation
+```
+
+#### Component Weights
+
+```bash
+QSECBIT_ALPHA=0.30      # System drift weight
+QSECBIT_BETA=0.30       # Attack probability weight
+QSECBIT_GAMMA=0.20      # Classifier decay weight
+QSECBIT_DELTA=0.20      # Quantum drift weight
+```
+
+These must sum to 1.0. Default balanced weights work well for most environments.
+
+---
+
+### 🛡️ WAF Configuration
+
+```bash
+NAXSI_LEARNING_MODE="0"     # 0=blocking, 1=learning
+NAXSI_EXTENSIVE_LOG="1"     # Detailed logging
+```
+
+**Initial Setup:**
+1. Start with `NAXSI_LEARNING_MODE="1"` for first week
+2. Review logs in `/var/log/nginx/naxsi.log`
+3. Tune rules, then switch to `NAXSI_LEARNING_MODE="0"`
+
+---
 
 ## 🏗️ Architecture Overview
 
 ### POD Structure
 
-| POD | Purpose | Network | Key Services |
+| POD | Network | Purpose | Key Services |
 |-----|---------|---------|--------------|
-| **POD 001** | Web DMZ | 10.101.0.0/24 | Django CMS, Nginx |
-| **POD 002** | IAM/Auth | 10.102.0.0/24 | Logto, PostgreSQL |
-| **POD 003** | Persistent DB | 10.103.0.0/24 | PostgreSQL, NFS, RADIUS |
-| **POD 004** | Transient DB | 10.104.0.0/24 | Redis Cache |
-| **POD 005** | Monitoring | 10.105.0.0/24 | Grafana, Prometheus, Loki, Promtail, Alertmanager |
-| **POD 006** | Security | 10.106.0.0/24 | Suricata IDS/IPS |
+| **001** | 10.101.0.0/24 | Web DMZ | Django, NAXSI WAF, Nginx, Cloudflare |
+| **002** | 10.102.0.0/24 | IAM/Auth | Logto, PostgreSQL |
+| **003** | 10.103.0.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
+| **004** | 10.104.0.0/24 | Transient DB | Redis |
+| **005** | 10.105.0.0/24 | Monitoring | Grafana, Prometheus, Loki, Rsyslog |
+| **006** | 10.106.0.0/24 | Security | Suricata IDS/IPS |
+| **007** | 10.107.0.0/24 | AI Response | Qsecbit, Kali Linux (on-demand) |
 
----
-# Pre-Deployment Checklist
+### Network Isolation
 
-### System Requirements
-- [ ] Hardware: Intel N100 or equivalent x86_64 processor
-- [ ] RAM: Minimum 16GB (recommended)
-- [ ] Storage: Minimum 500GB SSD
-- [ ] OS: RHEL 10, Fedora, or CentOS Stream installed
-- [ ] Root access available
-- [ ] Internet connectivity for downloading images
+Each POD runs on its own encrypted VXLAN with unique VNI:
+- VNI 100: Management
+- VNI 101-107: Individual POD networks
 
-### Network Configuration
-- [ ] Physical network interface identified (e.g., eth0, enp0s3)
-- [ ] Host IP address noted
-- [ ] Gateway IP address noted
-- [ ] Remote peer IP (if multi-host) noted
-- [ ] No IP conflicts with 10.100.0.0/16 range
-- [ ] Firewall allows required ports (or will be configured)
+All traffic between PODs is PSK-encrypted at the network layer.
 
 ---
 
-## Configuration Phase
+## 🔒 Security Features
 
-### 1. Edit network-config.sh
-- [ ] Set `HOST_A_IP` to your physical IP
-- [ ] Set `HOST_B_IP` (if multi-host deployment)
-- [ ] Set `PHYSICAL_HOST_INTERFACE` (verify with `ip a`)
-- [ ] Set `INTERNET_GATEWAY`
-- [ ] Change all PSK keys (minimum 32 characters)
-  - [ ] `OVS_PSK_MAIN`
-  - [ ] `OVS_PSK_DMZ`
-  - [ ] `OVS_PSK_INTERNAL`
-- [ ] Change database passwords
-  - [ ] `POSTGRES_PASSWORD`
-  - [ ] `LOGTO_DB_PASSWORD`
-- [ ] Change Django secret key
-  - [ ] `DJANGO_SECRET_KEY` (generate with: `openssl rand -base64 50`)
-- [ ] Update `DJANGO_ALLOWED_HOSTS` for production
+### Automated Threat Response
 
-### 2. Review Port Mappings
-- [ ] Port 80 (HTTP) - Available
-- [ ] Port 443 (HTTPS) - Available
-- [ ] Port 3000 (Grafana) - Available
-- [ ] Port 3001 (Logto) - Available
-- [ ] Port 3002 (Logto Admin) - Available
-- [ ] Port 5432 (PostgreSQL) - Available (optional external access)
-- [ ] Port 9090 (Prometheus) - Available
-- [ ] Port 9093 (Alertmanager) - Available
+When Qsecbit detects threats, the system automatically:
 
-### 3. Make Scripts Executable
-```bash
-chmod +x network-config.sh setup.sh uninstall.sh
+#### XSS Injection Response
+1. ✅ Updates NAXSI WAF rules to block pattern
+2. ✅ Blocks attacker IP in firewall
+3. ✅ Scans attacker infrastructure
+4. ✅ Generates detailed incident report
+5. ✅ Provides remediation recommendations
+
+#### SQL Injection Response
+1. ✅ Creates emergency database snapshot
+2. ✅ Updates WAF with SQL injection rules
+3. ✅ Blocks attacker IP
+4. ✅ Enables detailed PostgreSQL logging
+5. ✅ Runs database integrity check
+6. ✅ Scans for additional injection points
+
+#### Memory Overflow Response
+1. ✅ Captures memory diagnostics
+2. ✅ Reduces container memory limits
+3. ✅ Clears caches
+4. ✅ Resets connections
+5. ✅ Generates safe restart script
+
+### Defense in Depth
+
 ```
+Internet
+  ↓
+Cloudflare Tunnel (Optional - Zero Trust)
+  ↓
+NAXSI WAF (Auto-updating rules)
+  ↓
+Nginx Reverse Proxy
+  ↓
+Django Application
+  ↓
+PostgreSQL (With snapshots)
 
----
-
-## 🚀 Quick Start Commands
-
-### Installation
-```bash
-# 1. Edit configuration
-nano network-config.sh
-
-# 2. Make scripts executable
-chmod +x network-config.sh setup.sh uninstall.sh
-
-# 3. Run installation (as root)
-sudo ./setup.sh
-
-# Installation takes ~10-15 minutes
-```
-
-### Uninstall
-```bash
-# Complete cleanup
-sudo ./uninstall.sh
-
-# Follow prompts to preserve or delete data
+---Monitoring Everything---
+Qsecbit AI (Real-time analysis)
+  ↓
+Kali Linux (On-demand response)
 ```
 
 ---
 
-## 🔗 Access URLs
+## 📊 Port Mappings
 
-### Main Services
-- **Web Application**: http://YOUR_IP
-- **Django Admin**: http://YOUR_IP/admin (admin/admin)
+### External Ports (Exposed on Host)
 
-### IAM/Authentication
-- **Logto Admin Console**: http://YOUR_IP:3002
-- **Logto API**: http://YOUR_IP:3001
+| Port | Service | Access |
+|------|---------|--------|
+| 80 | HTTP | Public |
+| 443 | HTTPS | Public |
+| 3000 | Grafana | Admin only |
+| 3001 | Logto API | Internal/API |
+| 3002 | Logto Admin | Admin only |
+| 5432 | PostgreSQL | Optional |
+| 8888 | Qsecbit API | Internal/Django |
+| 9090 | Prometheus | Admin only |
 
-### Monitoring
-- **Grafana**: http://YOUR_IP:3000 (admin/admin)
-- **Prometheus**: http://YOUR_IP:9090
-- **Alertmanager**: http://YOUR_IP:9093
-- **Loki API**: http://YOUR_IP:3100
+### Firewall Recommendations
 
----
-
-## 📊 Podman Management
-
-### List All PODs
 ```bash
-podman pod ls
-```
+# Allow only necessary ports
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
 
-### Check POD Status
-```bash
-podman pod ps -a
-```
+# Restrict admin interfaces to specific IPs
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="YOUR_ADMIN_IP" port port="3000" protocol="tcp" accept'
 
-### View Containers in a POD
-```bash
-podman ps --pod --filter pod=hookprobe-pod-001-web-dmz
-```
-
-### POD Logs
-```bash
-# All containers in POD 001
-podman pod logs hookprobe-pod-001-web-dmz
-
-# Specific container
-podman logs hookprobe-pod-001-web-dmz-django
-
-# Follow logs in real-time
-podman logs -f hookprobe-pod-001-web-dmz-django
-```
-
-### Restart Services
-```bash
-# Restart entire POD
-podman pod restart hookprobe-pod-001-web-dmz
-
-# Restart specific container
-podman restart hookprobe-pod-001-web-dmz-django
-```
-
-### Enter Container Shell
-```bash
-# Django container
-podman exec -it hookprobe-pod-001-web-dmz-django bash
-
-# PostgreSQL container
-podman exec -it hookprobe-pod-003-db-persistent-postgres psql -U hookprobe_admin -d hookprobe_db
-
-# Redis container
-podman exec -it hookprobe-pod-004-db-transient-redis redis-cli
-```
-
----
-
-## 🗄️ Database Management
-
-### PostgreSQL (POD 003)
-```bash
-# Connect to database
-podman exec -it hookprobe-pod-003-db-persistent-postgres psql -U hookprobe_admin -d hookprobe_db
-
-# Backup database
-podman exec hookprobe-pod-003-db-persistent-postgres pg_dump -U hookprobe_admin hookprobe_db > backup.sql
-
-# Restore database
-cat backup.sql | podman exec -i hookprobe-pod-003-db-persistent-postgres psql -U hookprobe_admin -d hookprobe_db
-```
-
-### Redis (POD 004)
-```bash
-# Check Redis status
-podman exec -it hookprobe-pod-004-db-transient-redis redis-cli ping
-
-# Monitor Redis
-podman exec -it hookprobe-pod-004-db-transient-redis redis-cli monitor
-
-# Get Redis info
-podman exec -it hookprobe-pod-004-db-transient-redis redis-cli info
-```
-
----
-
-## 🌐 Network Management
-
-### View OVS Configuration
-```bash
-# List bridges
-ovs-vsctl show
-
-# List VXLAN tunnels
-ovs-vsctl list interface | grep -A 10 vxlan
-
-# Check bridge status
-ovs-vsctl list-br
-ip addr show ovs-br0
-```
-
-### Network Troubleshooting
-```bash
-# Test connectivity between PODs
-podman exec hookprobe-pod-001-web-dmz-django ping 10.103.0.10
-
-# Check routing
-ip route show
-
-# Monitor network traffic
-tcpdump -i ovs-br0
-```
-
-### Firewall Management
-```bash
-# Check firewall status
-firewall-cmd --list-all
-
-# View open ports
-firewall-cmd --list-ports
-
-# Reload firewall
 firewall-cmd --reload
 ```
 
 ---
 
-## 📈 Monitoring & Logs
+## 🔍 Monitoring & Logs
 
-### Grafana Dashboard Access
-1. Navigate to http://YOUR_IP:3000
-2. Login: admin/admin
-3. Browse dashboards: Dashboards → Browse
-4. Import custom dashboards: Dashboards → Import
+### Access Grafana Dashboards
 
-### Prometheus Queries
-```bash
-# Query from command line
-curl 'http://localhost:9090/api/v1/query?query=up'
+1. **Navigate to**: http://YOUR_IP:3000
+2. **Login**: admin / admin (change immediately!)
+3. **Dashboards** → **Browse** → **HookProbe**
 
-# Check targets
-curl 'http://localhost:9090/api/v1/targets'
+### Key Dashboards
+
+- **System Overview**: All PODs health and metrics
+- **Qsecbit Analysis**: Real-time threat scores
+- **WAF Activity**: Blocked attacks and patterns
+- **Database Performance**: Query times and connections
+- **Security Events**: IDS/IPS alerts
+
+### Query Logs in Loki
+
 ```
+# All logs
+{job=~".*"}
 
-### Loki Log Queries
-```bash
-# Query logs via API
-curl -G -s 'http://localhost:3100/loki/api/v1/query' \
-  --data-urlencode 'query={job="varlogs"}' | jq
+# Security events
+{job="containerlogs"} |~ "ALERT|BLOCK|ATTACK"
 
-# Stream logs
-curl -G -s 'http://localhost:3100/loki/api/v1/tail' \
-  --data-urlencode 'query={job="containerlogs"}' --data-urlencode 'follow=true'
-```
+# WAF blocks
+{job="containerlogs"} | container_name=~".*naxsi.*" |= "BLOCK"
 
-### System Logs
-```bash
-# View aggregated logs
-journalctl -u openvswitch
-journalctl -u podman
+# Qsecbit alerts
+{job="containerlogs"} | container_name=~".*qsecbit.*" |~ "RED|AMBER"
 
-# Follow container logs
-podman logs -f --tail 100 hookprobe-pod-005-monitoring-grafana
+# Database errors
+{job="containerlogs"} | container_name=~".*postgres.*" |~ "ERROR"
 ```
 
 ---
 
-## 🔐 Security & IAM
+## 🔗 Django Integration
 
-### Logto Configuration
-1. Access: http://YOUR_IP:3002
-2. Create Application → Traditional Web
-3. Configure redirect URIs
-4. Note App ID and Secret
-5. Update Django settings with credentials
+### Fetch Qsecbit Data
 
-### View Security Alerts (Suricata)
-```bash
-# View IDS logs
-podman logs hookprobe-pod-006-security-suricata
+Add to your Django views:
 
-# Check alerts
-podman exec hookprobe-pod-006-security-suricata cat /var/log/suricata/fast.log
+```python
+import requests
 
-# Real-time monitoring
-podman logs -f hookprobe-pod-006-security-suricata
+QSECBIT_API = 'http://10.107.0.10:8888'
+
+def get_threat_status():
+    """Get current threat level"""
+    response = requests.get(f'{QSECBIT_API}/api/qsecbit/latest')
+    return response.json()
+
+def get_kali_responses():
+    """Get recent attack responses"""
+    response = requests.get(f'{QSECBIT_API}/api/kali/responses')
+    return response.json()
 ```
 
----
+### Display in Template
 
-## 🔧 Django Management
+```django
+{% load static %}
 
-### Django Admin Commands
-```bash
-# Run migrations
-podman exec hookprobe-pod-001-web-dmz-django python manage.py migrate
-
-# Create superuser
-podman exec -it hookprobe-pod-001-web-dmz-django python manage.py createsuperuser
-
-# Collect static files
-podman exec hookprobe-pod-001-web-dmz-django python manage.py collectstatic --noinput
-
-# Django shell
-podman exec -it hookprobe-pod-001-web-dmz-django python manage.py shell
-```
-
-### Update Django Application
-```bash
-# Rebuild Django image
-cd /tmp/hookprobe-django-build
-podman build -t hookprobe-django:latest .
-
-# Restart Django container
-podman restart hookprobe-pod-001-web-dmz-django
-```
-
----
-
-## 🔄 Backup & Recovery
-
-### Full System Backup
-```bash
-# Create backup directory
-mkdir -p /backup/hookprobe/$(date +%Y%m%d)
-
-# Backup volumes
-podman volume export hookprobe-postgres-data > /backup/hookprobe/$(date +%Y%m%d)/postgres.tar
-podman volume export hookprobe-grafana-data > /backup/hookprobe/$(date +%Y%m%d)/grafana.tar
-podman volume export hookprobe-django-static > /backup/hookprobe/$(date +%Y%m%d)/django-static.tar
-
-# Backup configurations
-cp network-config.sh /backup/hookprobe/$(date +%Y%m%d)/
-ovs-vsctl show > /backup/hookprobe/$(date +%Y%m%d)/ovs-config.txt
-```
-
-### Restore from Backup
-```bash
-# Stop services
-./uninstall.sh
-
-# Restore volumes
-podman volume create hookprobe-postgres-data
-cat /backup/hookprobe/20250101/postgres.tar | podman volume import hookprobe-postgres-data -
-
-# Re-run setup
-./setup.sh
+<div class="threat-dashboard">
+    <h2>Security Status</h2>
+    
+    <div class="status-badge {{ qsecbit.rag_status|lower }}">
+        {{ qsecbit.rag_status }}
+    </div>
+    
+    <div class="metrics">
+        <p>Threat Score: {{ qsecbit.score|floatformat:3 }}</p>
+        <p>Attack Probability: {{ qsecbit.components.attack_probability|floatformat:2 }}%</p>
+    </div>
+    
+    {% if qsecbit.rag_status == 'RED' or qsecbit.rag_status == 'AMBER' %}
+    <div class="alert alert-warning">
+        <h3>Active Threats Detected</h3>
+        <p>Kali Linux response system engaged.</p>
+    </div>
+    {% endif %}
+    
+    <h3>Recent Responses</h3>
+    <ul>
+    {% for response in kali_responses %}
+        <li>
+            <strong>{{ response.timestamp }}</strong>: 
+            {{ response.attack_type }}
+            <ul>
+            {% for action in response.recommended_actions %}
+                <li>{{ action }}</li>
+            {% endfor %}
+            </ul>
+        </li>
+    {% endfor %}
+    </ul>
+</div>
 ```
 
 ---
 
 ## 🐛 Troubleshooting
 
-### Container Won't Start
+### Check POD Status
+
 ```bash
-# Check container logs
-podman logs <container-name>
+# List all PODs
+podman pod ps
 
-# Check pod status
-podman pod ps -a
+# Check specific POD
+podman pod ps --filter name=hookprobe-pod-007
 
-# Inspect container
-podman inspect <container-name>
-
-# Check resource limits
-podman stats
+# View POD logs
+podman pod logs hookprobe-pod-007-ai-response
 ```
 
-### Network Issues
+### Kali Container Not Starting
+
 ```bash
-# Verify OVS is running
-systemctl status openvswitch
+# Check if Qsecbit triggered it
+podman logs hookprobe-pod-007-ai-response-qsecbit | grep -i "kali"
 
-# Check VXLAN tunnels
-ovs-vsctl list interface | grep type=vxlan
+# Manually start Kali
+podman start hookprobe-pod-007-ai-response-kali
 
-# Test connectivity
-ping 10.101.0.10  # POD 001
-ping 10.102.0.10  # POD 002
-ping 10.103.0.10  # POD 003
+# Check Kali logs
+podman logs hookprobe-pod-007-ai-response-kali
+```
+
+### WAF Blocking Legitimate Traffic
+
+1. Check NAXSI logs:
+```bash
+podman logs hookprobe-pod-001-web-dmz-nginx-naxsi | grep BLOCK
+```
+
+2. Switch to learning mode temporarily:
+```bash
+# Edit network-config.sh
+NAXSI_LEARNING_MODE="1"
+
+# Restart Nginx
+podman restart hookprobe-pod-001-web-dmz-nginx-naxsi
+```
+
+3. Review and whitelist:
+```bash
+# Add whitelist rule to /tmp/naxsi-config/naxsi_whitelist.rules
+BasicRule wl:1000 "mz:$URL:/your-endpoint";
 ```
 
 ### Database Connection Failed
+
 ```bash
-# Check PostgreSQL is running
+# Check PostgreSQL
 podman exec hookprobe-pod-003-db-persistent-postgres pg_isready
 
-# Verify credentials in network-config.sh
-cat network-config.sh | grep POSTGRES
-
-# Test connection from Django
+# Test connection
 podman exec hookprobe-pod-001-web-dmz-django python manage.py dbshell
+
+# Check credentials
+grep POSTGRES network-config.sh
 ```
 
-### High Resource Usage
+### High Memory Usage
+
 ```bash
-# Check container resource usage
+# Check container stats
 podman stats
 
-# Identify high CPU containers
-podman stats --no-stream | sort -k3 -rh
+# View Qsecbit analysis
+curl http://localhost:8888/api/qsecbit/latest | jq
 
-# Check disk usage
-df -h
-podman system df
+# Check for memory attack
+podman logs hookprobe-pod-007-ai-response-kali | grep -i memory
 ```
 
 ---
 
-## 📦 Expanding PODs
+## 📦 Backup & Recovery
 
-### Adding New Container to Existing POD
+### Create Backup
 
 ```bash
-# Example: Adding a new service to POD 002
-podman run -d --restart always \
-  --pod hookprobe-pod-002-app \
-  --name hookprobe-pod-002-new-service \
-  -e ENV_VAR="value" \
-  docker.io/library/your-image:latest
+# Backup script is auto-created at:
+/usr/local/bin/hookprobe-backup.sh
+
+# Run manually
+sudo /usr/local/bin/hookprobe-backup.sh
+
+# Backups stored in:
+/backup/hookprobe/YYYYMMDD-HHMMSS/
 ```
 
-### Reserved IP Addresses
-Each POD has reserved IPs for expansion:
-- **POD 001**: 10.101.0.20-21
-- **POD 002**: 10.102.0.20-22
-- **POD 003**: 10.103.0.20-21
-- **POD 004**: 10.104.0.20-21
-- **POD 005**: 10.105.0.30-31
-- **POD 006**: 10.106.0.20-21
+### Restore from Backup
 
----
-
-## 🔍 Useful Queries
-
-### Check System Health
-```bash
-# Overall system status
-podman pod ps && echo "---" && ovs-vsctl show && echo "---" && systemctl status openvswitch
-
-# Disk space
-df -h | grep -E '(Filesystem|/dev/mapper|/var)'
-
-# Memory usage
-free -h
-
-# CPU load
-uptime
-```
-
-### Performance Monitoring
-```bash
-# Real-time container stats
-podman stats
-
-# Network throughput
-iftop -i ovs-br0
-
-# Disk I/O
-iostat -x 1
-```
-
----
-
-## 📝 Configuration Files
-
-### Important Paths
-- **Network Config**: `./network-config.sh`
-- **Setup Script**: `./setup.sh`
-- **Uninstall Script**: `./uninstall.sh`
-- **Grafana Data**: `/var/lib/containers/storage/volumes/hookprobe-grafana-data`
-- **Prometheus Data**: `/var/lib/containers/storage/volumes/hookprobe-prometheus-data`
-- **PostgreSQL Data**: `/var/lib/containers/storage/volumes/hookprobe-postgres-data`
-- **OVS Config**: `/etc/openvswitch/`
-- **Podman Config**: `/etc/containers/`
-
----
-
-## 🆘 Emergency Procedures
-
-### Complete System Restart
 ```bash
 # Stop all PODs
 for pod in $(podman pod ls -q); do podman pod stop $pod; done
 
-# Restart OVS
-systemctl restart openvswitch
+# Restore volumes
+podman volume import hookprobe-postgres-data < /backup/hookprobe/YYYYMMDD/postgres.tar
 
-# Start all PODs
-for pod in $(podman pod ls -aq); do podman pod start $pod; done
+# Restart
+./setup.sh
 ```
 
-### Reset to Clean State
+---
+
+## 🔄 Updating
+
+### Update Container Images
+
 ```bash
-# WARNING: This will delete ALL data!
-sudo ./uninstall.sh
-# Answer 'yes' to all prompts
+# Pull latest images
+podman pull docker.io/library/postgres:16-alpine
+podman pull docker.io/grafana/grafana:latest
+# ... etc
 
-# Fresh install
-sudo ./setup.sh
+# Restart containers
+podman restart hookprobe-pod-003-db-persistent-postgres
+```
+
+### Update Qsecbit Thresholds
+
+```bash
+# Edit configuration
+nano network-config.sh
+
+# Restart Qsecbit
+podman restart hookprobe-pod-007-ai-response-qsecbit
 ```
 
 ---
 
-## 📚 Additional Resources
+## 📞 Support
 
-- **Podman Docs**: https://docs.podman.io/
-- **Open vSwitch**: https://www.openvswitch.org/support/
-- **Django CMS**: https://docs.django-cms.org/
-- **Logto**: https://docs.logto.io/
-- **Grafana**: https://grafana.com/docs/
-- **Prometheus**: https://prometheus.io/docs/
+### Logs Location
 
----
+- **Container Logs**: `podman logs <container-name>`
+- **System Logs**: `/var/log/messages`
+- **Qsecbit Reports**: Inside Qsecbit container at `/data/`
+- **Kali Reports**: Inside Kali container at `/reports/`
 
-## 💡 Tips & Best Practices
+### Export Kali Reports
 
-1. **Regular Backups**: Schedule automated backups of volumes
-2. **Monitor Resources**: Check Grafana dashboards daily
-3. **Update Images**: Regularly update container images for security
-4. **Log Rotation**: Implement log rotation to save disk space
-5. **Security**: Change default passwords immediately
-6. **Testing**: Test changes in development before production
-7. **Documentation**: Document any custom modifications
-8. **Monitoring Alerts**: Configure Alertmanager notifications
+```bash
+# Copy reports from Kali container
+podman cp hookprobe-pod-007-ai-response-kali:/reports ./kali-reports/
 
----
-
-**Last Updated**: 2025
-**Version**: 1.0
-**Maintainer**: HookProbe Team
-
-```mermaid
-graph TB
-    subgraph Internet["🌐 Internet"]
-        EXT[External Users]
-    end
-    
-    subgraph PhysicalHost["Physical Host - x86_64 Intel N100<br/>RHEL 10 / 16GB RAM / 500GB SSD"]
-        subgraph OVS["Open vSwitch Layer<br/>PSK-Encrypted VXLAN Tunnels"]
-            BRIDGE[ovs-br0<br/>Main Bridge<br/>10.100.0.1/24]
-            VXLAN1[VXLAN Tunnel<br/>VNI: 101<br/>DMZ Network]
-            VXLAN2[VXLAN Tunnel<br/>VNI: 102<br/>IAM Network]
-            VXLAN3[VXLAN Tunnel<br/>VNI: 103<br/>DB Persistent]
-            VXLAN4[VXLAN Tunnel<br/>VNI: 104<br/>DB Transient]
-            VXLAN5[VXLAN Tunnel<br/>VNI: 105<br/>Monitoring]
-            VXLAN6[VXLAN Tunnel<br/>VNI: 106<br/>Security]
-        end
-        
-        subgraph POD001["POD 001 - WEB DMZ<br/>10.101.0.0/24"]
-            NGINX[Nginx<br/>:80/:443<br/>10.101.0.11]
-            DJANGO[Django CMS<br/>Gunicorn :8000<br/>10.101.0.10]
-            RES001[Reserved<br/>10.101.0.20-21]
-        end
-        
-        subgraph POD002["POD 002 - IAM/AUTH<br/>10.102.0.0/24"]
-            LOGTO[Logto IAM<br/>:3001/:3002<br/>10.102.0.10]
-            LOGTODB[PostgreSQL<br/>Logto DB<br/>10.102.0.11]
-            KEYCLOAK[Keycloak<br/>Alternative<br/>10.102.0.12]
-            RES002[Reserved<br/>10.102.0.20-22]
-        end
-        
-        subgraph POD003["POD 003 - PERSISTENT DB<br/>10.103.0.0/24"]
-            POSTGRES[PostgreSQL<br/>Main DB :5432<br/>10.103.0.10]
-            NFS[NFS Server<br/>10.103.0.11]
-            RADIUS[RADIUS<br/>802.1x Auth<br/>10.103.0.12]
-            RES003[Reserved<br/>10.103.0.20-21]
-        end
-        
-        subgraph POD004["POD 004 - TRANSIENT DB<br/>10.104.0.0/24"]
-            REDIS[Redis Cache<br/>:6379<br/>10.104.0.10]
-            TRANSIENT[Transient DB<br/>10.104.0.11]
-            RES004[Reserved<br/>10.104.0.20-21]
-        end
-        
-        subgraph POD005["POD 005 - MONITORING<br/>10.105.0.0/24"]
-            GRAFANA[Grafana<br/>:3000<br/>10.105.0.10]
-            PROMETHEUS[Prometheus<br/>:9090<br/>10.105.0.11]
-            LOKI[Loki<br/>:3100<br/>10.105.0.12]
-            PROMTAIL[Promtail<br/>Log Aggregator<br/>10.105.0.13]
-            ALERTMGR[Alertmanager<br/>:9093<br/>10.105.0.14]
-            NODE_EXP[Node Exporter<br/>10.105.0.15]
-            CADVISOR[cAdvisor<br/>10.105.0.16]
-            RES005[Reserved<br/>10.105.0.30-31]
-        end
-        
-        subgraph POD006["POD 006 - SECURITY<br/>10.106.0.0/24"]
-            IDS[Suricata IDS<br/>10.106.0.10]
-            IPS[IPS Engine<br/>10.106.0.11]
-            FW[Advanced FW<br/>10.106.0.12]
-            RES006[Reserved<br/>10.106.0.20-21]
-        end
-    end
-    
-    %% Internet Connections
-    EXT -->|HTTP/HTTPS<br/>:80/:443| NGINX
-    
-    %% OVS Connections
-    BRIDGE -.->|Encrypted| VXLAN1
-    BRIDGE -.->|Encrypted| VXLAN2
-    BRIDGE -.->|Encrypted| VXLAN3
-    BRIDGE -.->|Encrypted| VXLAN4
-    BRIDGE -.->|Encrypted| VXLAN5
-    BRIDGE -.->|Encrypted| VXLAN6
-    
-    VXLAN1 --- POD001
-    VXLAN2 --- POD002
-    VXLAN3 --- POD003
-    VXLAN4 --- POD004
-    VXLAN5 --- POD005
-    VXLAN6 --- POD006
-    
-    %% Application Flow
-    NGINX -->|Reverse Proxy| DJANGO
-    DJANGO -->|Auth| LOGTO
-    DJANGO -->|DB Queries| POSTGRES
-    DJANGO -->|Cache| REDIS
-    LOGTO -->|User Store| LOGTODB
-    
-    %% Monitoring Flow
-    PROMETHEUS -->|Scrape Metrics| DJANGO
-    PROMETHEUS -->|Scrape Metrics| POSTGRES
-    PROMETHEUS -->|Scrape Metrics| REDIS
-    PROMETHEUS -->|Scrape Metrics| NODE_EXP
-    PROMETHEUS -->|Container Stats| CADVISOR
-    GRAFANA -->|Query| PROMETHEUS
-    GRAFANA -->|Query Logs| LOKI
-    PROMTAIL -->|Ship Logs| LOKI
-    PROMETHEUS -->|Send Alerts| ALERTMGR
-    
-    %% Security Flow
-    IDS -->|Monitor| VXLAN1
-    IDS -->|Alerts| LOKI
-    IPS -->|Block Threats| FW
-    
-    %% Styling
-    classDef dmz fill:#ff6b6b,stroke:#c92a2a,color:#fff
-    classDef iam fill:#4c6ef5,stroke:#364fc7,color:#fff
-    classDef database fill:#51cf66,stroke:#2b8a3e,color:#fff
-    classDef cache fill:#ffd43b,stroke:#f08c00,color:#000
-    classDef monitoring fill:#9775fa,stroke:#6741d9,color:#fff
-    classDef security fill:#ff922b,stroke:#e8590c,color:#fff
-    classDef network fill:#20c997,stroke:#087f5b,color:#fff
-    classDef reserved fill:#ced4da,stroke:#868e96,color:#000
-    
-    class POD001,NGINX,DJANGO dmz
-    class POD002,LOGTO,LOGTODB,KEYCLOAK iam
-    class POD003,POSTGRES,NFS,RADIUS database
-    class POD004,REDIS,TRANSIENT cache
-    class POD005,GRAFANA,PROMETHEUS,LOKI,PROMTAIL,ALERTMGR,NODE_EXP,CADVISOR monitoring
-    class POD006,IDS,IPS,FW security
-    class OVS,BRIDGE,VXLAN1,VXLAN2,VXLAN3,VXLAN4,VXLAN5,VXLAN6 network
-    class RES001,RES002,RES003,RES004,RES005,RES006 reserved
+# View recent incidents
+ls -lt ./kali-reports/ | head -20
 ```
+
+---
+
+## 📄 License
+
+MIT License - See LICENSE file
+
+## 🙏 Credits
+
+- **Qsecbit Algorithm**: Andrei Toma
+- **HookProbe Platform**: HookProbe Team
+- **Community Contributors**: See CONTRIBUTORS.md
+
+---
+
+## 🎯 Quick Reference Card
+
+```
+┌─────────────────────────────────────────┐
+│  HOOKPROBE v4.0 QUICK REFERENCE         │
+├─────────────────────────────────────────┤
+│  Web App:    http://YOUR_IP             │
+│  Admin:      http://YOUR_IP/admin       │
+│  Grafana:    http://YOUR_IP:3000        │
+│  Qsecbit:    http://YOUR_IP:8888        │
+│                                          │
+│  Deploy:     sudo ./setup.sh            │
+│  Remove:     sudo ./uninstall.sh        │
+│  Logs:       podman pod logs POD_NAME   │
+│                                          │
+│  Threat Status:                         │
+│    GREEN  = Normal (< 0.45)             │
+│    AMBER  = Warning (0.45-0.70)         │
+│    RED    = Critical (> 0.70)           │
+│                                          │
+│  Auto-Response: Kali spins up on AMBER  │
+│  Reports: /reports/ in Kali container   │
+└─────────────────────────────────────────┘
+```
+
+---
+
+**Version**: 4.0  
+**Last Updated**: 2025  
+**Status**: Production Ready 🚀
