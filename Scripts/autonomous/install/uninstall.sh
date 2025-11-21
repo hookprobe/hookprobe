@@ -23,6 +23,7 @@ else
     POD_004_NAME="hookprobe-pod-004-db-transient"
     POD_005_NAME="hookprobe-pod-005-monitoring"
     POD_006_NAME="hookprobe-pod-006-security"
+    POD_007_NAME="hookprobe-pod-007-ai-response"
     
     NETWORK_POD001="pod001-dmz-net"
     NETWORK_POD002="pod002-iam-net"
@@ -30,6 +31,7 @@ else
     NETWORK_POD004="pod004-db-transient-net"
     NETWORK_POD005="pod005-monitoring-net"
     NETWORK_POD006="pod006-security-net"
+    NETWORK_POD007="pod007-ai-response-net"
     
     OVS_MAIN_BRIDGE="ovs-br0"
     OVS_DMZ_BRIDGE="ovs-br-dmz"
@@ -76,6 +78,8 @@ echo "  • Loki log archives"
 echo "  • Rsyslog centralized logs"
 echo "  • IDS/IPS logs and alerts"
 echo "  • WAF logs and statistics"
+echo "  • Qsecbit analysis history and ML models"
+echo "  • Kali Linux response reports"
 echo ""
 read -p "⚠️  Are you ABSOLUTELY sure you want to continue? (yes/no): " confirm
 
@@ -101,6 +105,7 @@ POD_NAMES=(
     "$POD_004_NAME"
     "$POD_005_NAME"
     "$POD_006_NAME"
+    "$POD_007_NAME"
 )
 
 for pod in "${POD_NAMES[@]}"; do
@@ -132,6 +137,7 @@ NETWORK_NAMES=(
     "$NETWORK_POD004"
     "$NETWORK_POD005"
     "$NETWORK_POD006"
+    "$NETWORK_POD007"
 )
 
 for network in "${NETWORK_NAMES[@]}"; do
@@ -164,6 +170,8 @@ echo "  📝 Loki logs"
 echo "  🔐 Logto user data"
 echo "  📋 Rsyslog centralized logs"
 echo "  🛡️  WAF logs and statistics"
+echo "  🤖 Qsecbit AI analysis data"
+echo "  🐧 Kali Linux response reports"
 echo ""
 read -p "Do you want to PERMANENTLY DELETE all volumes and data? (yes/no): " remove_volumes
 
@@ -424,7 +432,7 @@ echo "   HOOKPROBE CLEANUP COMPLETE!"
 echo "============================================================"
 echo ""
 echo "✅ Removed Components:"
-echo "  ✓ All 6 PODs and containers"
+echo "  ✓ All 7 PODs and containers"
 echo "  ✓ All Podman networks"
 
 if [ "$remove_volumes" == "yes" ]; then
@@ -439,7 +447,7 @@ echo "  ✓ Rsyslog forwarding configuration"
 echo "  ✓ Temporary build directories"
 
 if [ "$remove_images" == "yes" ]; then
-    echo "  ✓ Container images (including NAXSI WAF)"
+    echo "  ✓ Container images (including NAXSI WAF, Qsecbit, Kali)"
 else
     echo "  ⊘ Container images preserved"
 fi
@@ -475,10 +483,11 @@ echo "  • Remaining containers: $(podman ps -a | wc -l)"
 echo "  • Remaining volumes: $(podman volume ls -q | wc -l)"
 echo "  • Remaining networks: $(podman network ls -q | wc -l)"
 echo ""
-echo "To reinstall HookProbe v3.0:"
+echo "To reinstall HookProbe v4.0:"
 echo "  1. Review and update network-config.sh"
 echo "  2. Configure Cloudflare Tunnel token (optional)"
-echo "  3. Run: sudo ./setup.sh"
+echo "  3. Configure Qsecbit thresholds if needed"
+echo "  4. Run: sudo ./setup.sh"
 echo ""
 echo "============================================================"
 echo "  🎉 Cleanup completed successfully!"
