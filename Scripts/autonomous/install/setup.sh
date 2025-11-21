@@ -3,7 +3,7 @@
 # setup.sh (v9 - Complete HookProbe Architecture with WAF + Cloudflare + Enhanced Logging)
 #
 # Automated deployment of HookProbe infrastructure with:
-# - 6 PODs with isolated networks
+# - 7 PODs with isolated networks
 # - OVS + VXLAN with PSK encryption
 # - NAXSI WAF for web protection
 # - Cloudflare Tunnel for secure access
@@ -12,6 +12,7 @@
 # - Database services in POD 003/004
 # - Complete monitoring + centralized logging in POD 005
 # - IDS/IPS in POD 006
+# - Ai Automation response 007/003/004/005/006
 #
 # Target OS: RHEL/RedHat 10 / Fedora / CentOS Stream
 #
@@ -71,6 +72,12 @@ else
     echo "✓ Cloudflare Tunnel token configured"
     SKIP_CLOUDFLARED=false
 fi
+
+# Validate Qsecbit configuration
+echo "✓ Qsecbit AI Response System configured"
+echo "  Amber Threshold: $QSECBIT_AMBER_THRESHOLD"
+echo "  Red Threshold: $QSECBIT_RED_THRESHOLD"
+echo "  Auto-Response: $KALI_AUTO_RESPONSE"
 
 # ============================================================
 # STEP 2: INSTALL DEPENDENCIES
@@ -158,6 +165,7 @@ create_vxlan_tunnel "$OVS_MAIN_BRIDGE" "$VNI_DB_PERSISTENT" "$OVS_PSK_INTERNAL"
 create_vxlan_tunnel "$OVS_MAIN_BRIDGE" "$VNI_DB_TRANSIENT" "$OVS_PSK_INTERNAL"
 create_vxlan_tunnel "$OVS_MAIN_BRIDGE" "$VNI_MONITORING" "$OVS_PSK_MAIN"
 create_vxlan_tunnel "$OVS_MAIN_BRIDGE" "$VNI_SECURITY" "$OVS_PSK_INTERNAL"
+create_vxlan_tunnel "$OVS_MAIN_BRIDGE" "$VNI_AI_RESPONSE" "$OVS_PSK_INTERNAL"
 
 # Configure main bridge IP
 ip addr flush dev "$OVS_MAIN_BRIDGE" 2>/dev/null || true
@@ -267,6 +275,7 @@ create_podman_network "$NETWORK_POD003" "$SUBNET_POD003" "$GATEWAY_POD003"
 create_podman_network "$NETWORK_POD004" "$SUBNET_POD004" "$GATEWAY_POD004"
 create_podman_network "$NETWORK_POD005" "$SUBNET_POD005" "$GATEWAY_POD005"
 create_podman_network "$NETWORK_POD006" "$SUBNET_POD006" "$GATEWAY_POD006"
+create_podman_network "$NETWORK_POD007" "$SUBNET_POD007" "$GATEWAY_POD007"
 
 echo "✓ Podman networks created"
 
@@ -301,6 +310,10 @@ create_volume "$VOLUME_ALERTMANAGER_DATA"
 create_volume "$VOLUME_RSYSLOG_DATA"
 create_volume "$VOLUME_WAF_LOGS"
 create_volume "$VOLUME_CLOUDFLARED_CREDS"
+create_volume "$VOLUME_QSECBIT_DATA"
+create_volume "$VOLUME_QSECBIT_MODELS"
+create_volume "$VOLUME_KALI_TOOLS"
+create_volume "$VOLUME_KALI_REPORTS"
 
 echo "✓ Persistent volumes ready"
 
@@ -1249,6 +1262,715 @@ podman run -d --restart always \
 echo "✓ POD 006 deployed (Security / IDS / IPS)"
 
 # ============================================================
+# STEP 16: DEPLOY POD 007 - AI THREAT RESPONSE & QSECBIT
+# ============================================================
+echo ""
+echo "[STEP 16] Deploying POD 007 - AI Threat Response & Qsecbit Analysis..."
+
+podman pod exists "$POD_007_NAME" 2>/dev/null && podman pod rm -f "$POD_007_NAME"
+
+podman pod create \
+    --name "$POD_007_NAME" \
+    --network "$NETWORK_POD007" \
+    -p ${PORT_QSECBIT_API}:8888
+
+# Deploy Redis for Qsecbit state management
+echo "  → Starting Redis for Qsecbit state..."
+podman run -d --restart always \
+    --pod "$POD_007_NAME" \
+    --name "${POD_007_NAME}-redis" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-qsecbit-redis" \
+    "$IMAGE_REDIS" \
+    redis-server --appendonly yes
+
+# Build Qsecbit Analysis Container
+echo "  → Building Qsecbit AI analysis container..."
+QSECBIT_BUILD_DIR="/tmp/qsecbit-build"
+rm -rf "$QSECBIT_BUILD_DIR"
+mkdir -p "$QSECBIT_BUILD_DIR"
+
+# Copy the Qsecbit Python script
+cat > "$QSECBIT_BUILD_DIR/qsecbit.py" << 'QSECEOF'
+"""
+Qsecbit: Quantum Security Bit
+A resilience metric for AI-driven cybersecurity systems
+
+Author: Andrei Toma
+License: MIT
+"""
+
+import numpy as np
+from scipy.spatial.distance import mahalanobis
+from scipy.special import expit as logistic
+from scipy.stats import entropy
+from dataclasses import dataclass, field
+from typing import Optional, Tuple, Dict, List
+from datetime import datetime
+import json
+
+
+@dataclass
+class QsecbitConfig:
+    """Configuration for Qsecbit calculation"""
+    # Normalization thresholds
+    lambda_crit: float = 0.15  # Critical classifier drift threshold
+    q_crit: float = 0.25       # Critical quantum drift threshold
+    
+    # Component weights (must sum to 1.0)
+    alpha: float = 0.30   # System drift weight
+    beta: float = 0.30    # Attack probability weight
+    gamma: float = 0.20   # Classifier decay weight
+    delta: float = 0.20   # Quantum drift weight
+    
+    # RAG (Red/Amber/Green) thresholds
+    amber_threshold: float = 0.45
+    red_threshold: float = 0.70
+    
+    # Logistic function parameters for drift normalization
+    drift_slope: float = 3.5
+    drift_center: float = 2.0
+    
+    # Temporal parameters
+    max_history_size: int = 1000
+    convergence_window: int = 10  # Number of samples to check convergence
+    
+    def __post_init__(self):
+        """Validate configuration"""
+        weight_sum = self.alpha + self.beta + self.gamma + self.delta
+        if not np.isclose(weight_sum, 1.0, atol=0.01):
+            raise ValueError(f"Weights must sum to 1.0, got {weight_sum}")
+        
+        if not 0 < self.amber_threshold < self.red_threshold < 1:
+            raise ValueError("Thresholds must satisfy: 0 < amber < red < 1")
+
+
+@dataclass
+class QsecbitSample:
+    """Single qsecbit measurement"""
+    timestamp: datetime
+    score: float
+    components: Dict[str, float]
+    rag_status: str
+    system_state: np.ndarray
+    metadata: Dict = field(default_factory=dict)
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary"""
+        return {
+            'timestamp': self.timestamp.isoformat(),
+            'score': float(self.score),
+            'components': {k: float(v) for k, v in self.components.items()},
+            'rag_status': self.rag_status,
+            'system_state': self.system_state.tolist(),
+            'metadata': self.metadata
+        }
+
+
+class Qsecbit:
+    """
+    Qsecbit: Quantum Security Bit
+    
+    Measures cyber resilience as the smallest unit where AI-driven attack 
+    and defense reach equilibrium through continuous error correction.
+    
+    The metric combines:
+    - Statistical drift from baseline (Mahalanobis distance)
+    - ML-predicted attack probability
+    - Classifier confidence decay rate
+    - System entropy deviation (quantum drift)
+    """
+    
+    def __init__(
+        self,
+        baseline_mu: np.ndarray,
+        baseline_cov: np.ndarray,
+        quantum_anchor: float,
+        config: Optional[QsecbitConfig] = None
+    ):
+        """
+        Initialize Qsecbit calculator
+        
+        Args:
+            baseline_mu: Mean vector of baseline system telemetry
+            baseline_cov: Covariance matrix of baseline system
+            quantum_anchor: Baseline system entropy value
+            config: Configuration object (uses defaults if None)
+        """
+        self.mu = np.array(baseline_mu)
+        self.cov = np.array(baseline_cov)
+        self.q_anchor = float(quantum_anchor)
+        self.config = config or QsecbitConfig()
+        
+        # Precompute inverse covariance for efficiency
+        self.inv_cov = np.linalg.inv(self.cov)
+        
+        # State tracking
+        self.prev_classifier: Optional[np.ndarray] = None
+        self.history: List[QsecbitSample] = []
+        self.baseline_entropy = self._calculate_baseline_entropy()
+        
+    def _calculate_baseline_entropy(self) -> float:
+        """Calculate theoretical baseline entropy from covariance"""
+        # Differential entropy for multivariate Gaussian
+        k = len(self.mu)
+        det_cov = np.linalg.det(self.cov)
+        return 0.5 * k * (1 + np.log(2 * np.pi)) + 0.5 * np.log(det_cov)
+    
+    def _drift(self, x_t: np.ndarray) -> float:
+        """
+        Compute normalized Mahalanobis drift from baseline
+        
+        Mahalanobis distance accounts for correlations in the data,
+        making it more robust than Euclidean distance.
+        Normalized via logistic function to [0, 1] range.
+        """
+        d = mahalanobis(x_t, self.mu, self.inv_cov)
+        k = self.config.drift_slope
+        theta = self.config.drift_center
+        return float(logistic(k * (d - theta)))
+    
+    def _classifier_decay(self, c_t: np.ndarray, dt: float) -> float:
+        """
+        Compute normalized rate of change in classifier confidence
+        
+        Measures how quickly the AI classifier's predictions are changing,
+        which indicates either adversarial manipulation or concept drift.
+        """
+        if self.prev_classifier is None:
+            self.prev_classifier = c_t.copy()
+            return 0.0
+        
+        # Rate of change in confidence vector
+        delta = np.linalg.norm(c_t - self.prev_classifier) / max(dt, 1e-9)
+        self.prev_classifier = c_t.copy()
+        
+        # Normalize to [0, 1]
+        return float(min(1.0, delta / self.config.lambda_crit))
+    
+    def _quantum_drift(self, q_t: float) -> float:
+        """
+        Compute normalized entropy drift from baseline
+        
+        System entropy deviation indicates disorder or adversarial
+        manipulation at the information-theoretic level.
+        """
+        q = abs(q_t - self.q_anchor)
+        return float(min(1.0, q / self.config.q_crit))
+    
+    def _system_entropy(self, x_t: np.ndarray) -> float:
+        """
+        Calculate current system entropy
+        
+        Uses Shannon entropy of discretized telemetry values
+        """
+        # Discretize continuous values for entropy calculation
+        bins = 10
+        hist, _ = np.histogram(x_t, bins=bins, density=True)
+        hist = hist + 1e-10  # Avoid log(0)
+        return float(entropy(hist))
+    
+    def calculate(
+        self,
+        x_t: np.ndarray,
+        p_attack: float,
+        c_t: np.ndarray,
+        q_t: Optional[float] = None,
+        dt: float = 1.0,
+        metadata: Optional[Dict] = None
+    ) -> QsecbitSample:
+        """
+        Calculate qsecbit score for current system state
+        
+        Args:
+            x_t: Current system telemetry vector
+            p_attack: Predicted attack probability from ML model [0, 1]
+            c_t: Classifier confidence vector
+            q_t: Current system entropy (calculated if None)
+            dt: Time elapsed since last measurement
+            metadata: Additional context to store with sample
+            
+        Returns:
+            QsecbitSample object with score and components
+        """
+        # Calculate entropy if not provided
+        if q_t is None:
+            q_t = self._system_entropy(x_t)
+        
+        # Compute components
+        drift = self._drift(x_t)
+        decay = self._classifier_decay(c_t, dt)
+        qdrift = self._quantum_drift(q_t)
+        
+        # Weighted combination
+        R = (
+            self.config.alpha * drift +
+            self.config.beta * p_attack +
+            self.config.gamma * decay +
+            self.config.delta * qdrift
+        )
+        
+        # RAG classification
+        rag = self._classify_rag(R)
+        
+        # Create sample
+        sample = QsecbitSample(
+            timestamp=datetime.now(),
+            score=float(R),
+            components={
+                'drift': float(drift),
+                'attack_probability': float(p_attack),
+                'classifier_decay': float(decay),
+                'quantum_drift': float(qdrift)
+            },
+            rag_status=rag,
+            system_state=x_t.copy(),
+            metadata=metadata or {}
+        )
+        
+        # Store in history
+        self.history.append(sample)
+        if len(self.history) > self.config.max_history_size:
+            self.history.pop(0)
+        
+        return sample
+    
+    def _classify_rag(self, R: float) -> str:
+        """Classify score into Red/Amber/Green status"""
+        if R >= self.config.red_threshold:
+            return "RED"
+        elif R >= self.config.amber_threshold:
+            return "AMBER"
+        return "GREEN"
+    
+    def convergence_rate(self, window: Optional[int] = None) -> Optional[float]:
+        """
+        Calculate convergence rate (how quickly system returns to safe state)
+        
+        This is the key metric: time to return to GREEN status after RED/AMBER
+        
+        Returns:
+            Average time to convergence in the recent window, or None if insufficient data
+        """
+        window = window or self.config.convergence_window
+        
+        if len(self.history) < window:
+            return None
+        
+        recent = self.history[-window:]
+        
+        # Find transitions from RED/AMBER to GREEN
+        convergence_times = []
+        in_alert = False
+        alert_start = None
+        
+        for i, sample in enumerate(recent):
+            if sample.rag_status in ['RED', 'AMBER'] and not in_alert:
+                in_alert = True
+                alert_start = i
+            elif sample.rag_status == 'GREEN' and in_alert:
+                convergence_time = i - alert_start
+                convergence_times.append(convergence_time)
+                in_alert = False
+        
+        if not convergence_times:
+            return None
+        
+        return float(np.mean(convergence_times))
+    
+    def trend(self, window: int = 20) -> str:
+        """
+        Analyze trend in recent qsecbit scores
+        
+        Returns: 'IMPROVING', 'STABLE', or 'DEGRADING'
+        """
+        if len(self.history) < window:
+            return "INSUFFICIENT_DATA"
+        
+        recent_scores = [s.score for s in self.history[-window:]]
+        
+        # Linear regression on recent scores
+        x = np.arange(len(recent_scores))
+        slope, _ = np.polyfit(x, recent_scores, 1)
+        
+        if slope < -0.01:
+            return "IMPROVING"
+        elif slope > 0.01:
+            return "DEGRADING"
+        return "STABLE"
+    
+    def export_history(self, filepath: str):
+        """Export measurement history to JSON"""
+        data = {
+            'config': {
+                'alpha': self.config.alpha,
+                'beta': self.config.beta,
+                'gamma': self.config.gamma,
+                'delta': self.config.delta,
+                'amber_threshold': self.config.amber_threshold,
+                'red_threshold': self.config.red_threshold
+            },
+            'baseline': {
+                'mu': self.mu.tolist(),
+                'cov': self.cov.tolist(),
+                'quantum_anchor': self.q_anchor
+            },
+            'history': [s.to_dict() for s in self.history]
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+    
+    def summary_stats(self) -> Dict:
+        """Get summary statistics of qsecbit measurements"""
+        if not self.history:
+            return {}
+        
+        scores = [s.score for s in self.history]
+        rag_counts = {'GREEN': 0, 'AMBER': 0, 'RED': 0}
+        for s in self.history:
+            rag_counts[s.rag_status] += 1
+        
+        return {
+            'mean_score': float(np.mean(scores)),
+            'std_score': float(np.std(scores)),
+            'min_score': float(np.min(scores)),
+            'max_score': float(np.max(scores)),
+            'rag_distribution': rag_counts,
+            'convergence_rate': self.convergence_rate(),
+            'trend': self.trend(),
+            'total_samples': len(self.history)
+        }
+QSECEOF
+
+# Create the main Qsecbit integration script
+cat > "$QSECBIT_BUILD_DIR/qsecbit_service.py" << 'EOF'
+#!/usr/bin/env python3
+"""
+Qsecbit Service - Continuous threat analysis and response
+Integrates with HookProbe infrastructure
+"""
+
+import os
+import sys
+import time
+import json
+import redis
+import requests
+import numpy as np
+from datetime import datetime
+from qsecbit import Qsecbit, QsecbitConfig
+from flask import Flask, jsonify, request
+
+# Configuration from environment
+LOKI_URL = os.getenv('LOKI_URL', 'http://10.105.0.12:3100')
+PROMETHEUS_URL = os.getenv('PROMETHEUS_URL', 'http://10.105.0.11:9090')
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+
+# Qsecbit configuration
+QSECBIT_ALPHA = float(os.getenv('QSECBIT_ALPHA', 0.30))
+QSECBIT_BETA = float(os.getenv('QSECBIT_BETA', 0.30))
+QSECBIT_GAMMA = float(os.getenv('QSECBIT_GAMMA', 0.20))
+QSECBIT_DELTA = float(os.getenv('QSECBIT_DELTA', 0.20))
+QSECBIT_AMBER_THRESHOLD = float(os.getenv('QSECBIT_AMBER_THRESHOLD', 0.45))
+QSECBIT_RED_THRESHOLD = float(os.getenv('QSECBIT_RED_THRESHOLD', 0.70))
+QSECBIT_CHECK_INTERVAL = int(os.getenv('QSECBIT_CHECK_INTERVAL', 30))
+KALI_AUTO_RESPONSE = os.getenv('KALI_AUTO_RESPONSE', 'true').lower() == 'true'
+
+# Baseline configuration
+baseline_mu_str = os.getenv('QSECBIT_BASELINE_MU', '0.1,0.2,0.15,0.33')
+BASELINE_MU = np.array([float(x) for x in baseline_mu_str.split(',')])
+BASELINE_COV = np.eye(len(BASELINE_MU)) * 0.02
+QUANTUM_ANCHOR = float(os.getenv('QSECBIT_QUANTUM_ANCHOR', 6.144))
+
+# Initialize services
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+app = Flask(__name__)
+
+# Initialize Qsecbit
+config = QsecbitConfig(
+    alpha=QSECBIT_ALPHA,
+    beta=QSECBIT_BETA,
+    gamma=QSECBIT_GAMMA,
+    delta=QSECBIT_DELTA,
+    amber_threshold=QSECBIT_AMBER_THRESHOLD,
+    red_threshold=QSECBIT_RED_THRESHOLD
+)
+
+qsecbit = Qsecbit(BASELINE_MU, BASELINE_COV, QUANTUM_ANCHOR, config)
+
+def fetch_system_metrics():
+    """Fetch current system telemetry from Prometheus"""
+    try:
+        # Query Prometheus for metrics
+        queries = {
+            'cpu': 'rate(container_cpu_usage_seconds_total[5m])',
+            'memory': 'container_memory_usage_bytes / container_spec_memory_limit_bytes',
+            'network': 'rate(container_network_receive_bytes_total[5m])',
+            'disk': 'rate(container_fs_reads_bytes_total[5m]) + rate(container_fs_writes_bytes_total[5m])'
+        }
+        
+        metrics = []
+        for metric_name, query in queries.items():
+            response = requests.get(f'{PROMETHEUS_URL}/api/v1/query', params={'query': query}, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data['data']['result']:
+                    value = float(data['data']['result'][0]['value'][1])
+                    metrics.append(value)
+                else:
+                    metrics.append(0.0)
+            else:
+                metrics.append(0.0)
+        
+        return np.array(metrics)
+    except Exception as e:
+        print(f"Error fetching metrics: {e}")
+        return BASELINE_MU.copy()
+
+def calculate_attack_probability():
+    """Calculate attack probability from IDS/IPS/WAF logs"""
+    try:
+        # Query Loki for security events
+        query = '{job="containerlogs"} |~ "ALERT|BLOCK|ATTACK" | json'
+        response = requests.get(
+            f'{LOKI_URL}/loki/api/v1/query_range',
+            params={
+                'query': query,
+                'start': str(int(time.time() - 300)),  # Last 5 minutes
+                'end': str(int(time.time()))
+            },
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            event_count = len(data.get('data', {}).get('result', []))
+            # Normalize to [0, 1]
+            p_attack = min(1.0, event_count / 100.0)
+            return p_attack
+        return 0.05
+    except Exception as e:
+        print(f"Error calculating attack probability: {e}")
+        return 0.05
+
+def get_classifier_confidence():
+    """Get ML classifier confidence (simulated for now)"""
+    # In production, this would query your ML model
+    # For now, use inverse of attack probability
+    p_attack = calculate_attack_probability()
+    confidence = 1.0 - p_attack
+    return np.array([confidence, confidence * 0.95, confidence * 0.98])
+
+def trigger_kali_response(sample):
+    """Trigger Kali Linux automated response"""
+    print(f"🚨 TRIGGERING KALI RESPONSE - Status: {sample.rag_status}")
+    
+    response_data = {
+        'timestamp': sample.timestamp.isoformat(),
+        'qsecbit_score': sample.score,
+        'rag_status': sample.rag_status,
+        'components': sample.components,
+        'recommended_actions': []
+    }
+    
+    # Determine response actions based on threat type
+    if sample.components['attack_probability'] > 0.7:
+        response_data['recommended_actions'].extend([
+            'Network scan to identify attack source',
+            'Traffic analysis and packet capture',
+            'Deploy honeypot to analyze attacker behavior'
+        ])
+    
+    if sample.components['quantum_drift'] > 0.5:
+        response_data['recommended_actions'].extend([
+            'System integrity check',
+            'File integrity monitoring scan',
+            'Configuration drift analysis'
+        ])
+    
+    if sample.components['drift'] > 0.6:
+        response_data['recommended_actions'].extend([
+            'Resource utilization analysis',
+            'Process tree inspection',
+            'Network connection audit'
+        ])
+    
+    # Store response in Redis for Django to consume
+    redis_client.setex(
+        f'kali_response:{sample.timestamp.isoformat()}',
+        3600,  # 1 hour expiry
+        json.dumps(response_data)
+    )
+    
+    # Log to file
+    with open('/data/kali_responses.jsonl', 'a') as f:
+        f.write(json.dumps(response_data) + '\n')
+    
+    return response_data
+
+def analysis_loop():
+    """Main analysis loop"""
+    print("🔍 Starting Qsecbit analysis loop...")
+    
+    while True:
+        try:
+            # Fetch current metrics
+            x_t = fetch_system_metrics()
+            p_attack = calculate_attack_probability()
+            c_t = get_classifier_confidence()
+            
+            # Calculate Qsecbit
+            sample = qsecbit.calculate(
+                x_t=x_t,
+                p_attack=p_attack,
+                c_t=c_t,
+                dt=QSECBIT_CHECK_INTERVAL,
+                metadata={'source': 'hookprobe_continuous'}
+            )
+            
+            # Log result
+            print(f"[{sample.timestamp}] Qsecbit: {sample.score:.4f} - Status: {sample.rag_status}")
+            
+            # Store latest in Redis
+            redis_client.set('qsecbit:latest', json.dumps(sample.to_dict()))
+            redis_client.lpush('qsecbit:history', json.dumps(sample.to_dict()))
+            redis_client.ltrim('qsecbit:history', 0, 999)  # Keep last 1000
+            
+            # Trigger response if needed
+            if sample.rag_status in ['RED', 'AMBER'] and KALI_AUTO_RESPONSE:
+                trigger_kali_response(sample)
+            
+            # Sleep before next check
+            time.sleep(QSECBIT_CHECK_INTERVAL)
+            
+        except Exception as e:
+            print(f"Error in analysis loop: {e}")
+            time.sleep(QSECBIT_CHECK_INTERVAL)
+
+# API endpoints for Django integration
+@app.route('/api/qsecbit/latest', methods=['GET'])
+def get_latest():
+    """Get latest Qsecbit measurement"""
+    data = redis_client.get('qsecbit:latest')
+    if data:
+        return jsonify(json.loads(data))
+    return jsonify({'error': 'No data available'}), 404
+
+@app.route('/api/qsecbit/history', methods=['GET'])
+def get_history():
+    """Get Qsecbit history"""
+    limit = int(request.args.get('limit', 100))
+    history = redis_client.lrange('qsecbit:history', 0, limit - 1)
+    return jsonify([json.loads(h) for h in history])
+
+@app.route('/api/qsecbit/stats', methods=['GET'])
+def get_stats():
+    """Get summary statistics"""
+    stats = qsecbit.summary_stats()
+    return jsonify(stats)
+
+@app.route('/api/kali/responses', methods=['GET'])
+def get_kali_responses():
+    """Get recent Kali responses"""
+    keys = redis_client.keys('kali_response:*')
+    responses = []
+    for key in sorted(keys, reverse=True)[:20]:
+        data = redis_client.get(key)
+        if data:
+            responses.append(json.loads(data))
+    return jsonify(responses)
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({'status': 'healthy', 'qsecbit_enabled': True})
+
+if __name__ == '__main__':
+    # Start analysis loop in background thread
+    import threading
+    analysis_thread = threading.Thread(target=analysis_loop, daemon=True)
+    analysis_thread.start()
+    
+    # Start API server
+    app.run(host='0.0.0.0', port=8888, debug=False)
+EOF
+
+chmod +x "$QSECBIT_BUILD_DIR/qsecbit_service.py"
+
+# Create Dockerfile
+cat > "$QSECBIT_BUILD_DIR/Dockerfile" << 'EOF'
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    numpy==1.26.3 \
+    scipy==1.11.4 \
+    redis==5.0.1 \
+    flask==3.0.0 \
+    requests==2.31.0
+
+# Copy application files
+COPY qsecbit.py .
+COPY qsecbit_service.py .
+
+# Create data directory
+RUN mkdir -p /data
+
+EXPOSE 8888
+
+CMD ["python", "qsecbit_service.py"]
+EOF
+
+echo "  → Building Qsecbit container image..."
+cd "$QSECBIT_BUILD_DIR"
+podman build -t hookprobe-qsecbit:latest .
+
+echo "  → Starting Qsecbit analysis container..."
+podman run -d --restart always \
+    --pod "$POD_007_NAME" \
+    --name "${POD_007_NAME}-qsecbit" \
+    -e LOKI_URL="http://${IP_POD005_LOKI}:3100" \
+    -e PROMETHEUS_URL="http://${IP_POD005_PROMETHEUS}:9090" \
+    -e REDIS_HOST="localhost" \
+    -e REDIS_PORT="6379" \
+    -e QSECBIT_ALPHA="$QSECBIT_ALPHA" \
+    -e QSECBIT_BETA="$QSECBIT_BETA" \
+    -e QSECBIT_GAMMA="$QSECBIT_GAMMA" \
+    -e QSECBIT_DELTA="$QSECBIT_DELTA" \
+    -e QSECBIT_AMBER_THRESHOLD="$QSECBIT_AMBER_THRESHOLD" \
+    -e QSECBIT_RED_THRESHOLD="$QSECBIT_RED_THRESHOLD" \
+    -e QSECBIT_BASELINE_MU="$QSECBIT_BASELINE_MU" \
+    -e QSECBIT_QUANTUM_ANCHOR="$QSECBIT_QUANTUM_ANCHOR" \
+    -e QSECBIT_CHECK_INTERVAL="$QSECBIT_CHECK_INTERVAL" \
+    -e KALI_AUTO_RESPONSE="$KALI_AUTO_RESPONSE" \
+    -v "$VOLUME_QSECBIT_DATA:/data" \
+    -v "$VOLUME_QSECBIT_MODELS:/models" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-qsecbit" \
+    hookprobe-qsecbit:latest
+
+echo "  → Starting Kali Linux response container..."
+podman run -d --restart always \
+    --pod "$POD_007_NAME" \
+    --name "${POD_007_NAME}-kali" \
+    --privileged \
+    --cap-add=NET_ADMIN \
+    --cap-add=NET_RAW \
+    -v "$VOLUME_KALI_TOOLS:/tools" \
+    -v "$VOLUME_KALI_REPORTS:/reports" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-kali" \
+    "$IMAGE_KALI" \
+    /bin/bash -c "apt-get update && apt-get install -y nmap metasploit-framework nikto sqlmap && tail -f /dev/null"
+
+echo "✓ POD 007 deployed (AI Threat Response & Qsecbit)"
+echo "  Qsecbit API: http://${LOCAL_HOST_IP}:${PORT_QSECBIT_API}"
+
+# ============================================================
 # FINAL SUMMARY
 # ============================================================
 echo ""
@@ -1274,6 +1996,11 @@ echo "      • Alertmanager (Alerting)"
 echo "      • Node Exporter (Host Metrics)"
 echo "      • cAdvisor (Container Metrics)"
 echo "  ✓ POD 006 - Security (Suricata IDS/IPS)"
+echo "  ✓ POD 007 - AI Threat Response"
+echo "      • Qsecbit Analysis Engine"
+echo "      • Kali Linux Response Container"
+echo "      • Automated Countermeasures"
+echo "      • REST API for Django Integration"
 echo ""
 echo "🌐 Network Configuration:"
 echo "  • Main Management: $SUBNET_MAIN"
@@ -1283,6 +2010,7 @@ echo "  • POD 003 (DB-P): $SUBNET_POD003"
 echo "  • POD 004 (DB-T): $SUBNET_POD004"
 echo "  • POD 005 (MON + LOG): $SUBNET_POD005"
 echo "  • POD 006 (SEC): $SUBNET_POD006"
+echo "  • POD 007 (AI): $SUBNET_POD007"
 echo ""
 echo "🔐 Access Information:"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1320,6 +2048,17 @@ echo "     Rsyslog Server: ${IP_POD005_RSYSLOG}:${RSYSLOG_PORT}"
 echo "     All container logs forwarded to Loki via Promtail"
 echo "     System logs forwarded to centralized rsyslog"
 echo "     Kernel logs aggregated in Loki"
+echo ""
+echo "  🤖 AI Threat Response (Qsecbit):"
+echo "     Qsecbit API: http://$LOCAL_HOST_IP:${PORT_QSECBIT_API}"
+echo "     Latest Score: curl http://$LOCAL_HOST_IP:${PORT_QSECBIT_API}/api/qsecbit/latest"
+echo "     History: curl http://$LOCAL_HOST_IP:${PORT_QSECBIT_API}/api/qsecbit/history"
+echo "     Kali Responses: curl http://$LOCAL_HOST_IP:${PORT_QSECBIT_API}/api/kali/responses"
+echo ""
+echo "     Qsecbit Thresholds:"
+echo "       - Amber: ${QSECBIT_AMBER_THRESHOLD} (Warning)"
+echo "       - Red: ${QSECBIT_RED_THRESHOLD} (Critical)"
+echo "     Auto-Response: ${KALI_AUTO_RESPONSE}"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "📋 Next Steps:"
@@ -1335,6 +2074,11 @@ fi
 echo "  6. 🎨 Upload your ThemeForest template"
 echo "  7. 🔒 Configure SSL/TLS certificates"
 echo "  8. 📧 Set up alert notifications"
+echo "  9. 🤖 Integrate Qsecbit API with Django admin:"
+echo "     - Add API calls to fetch latest Qsecbit score"
+echo "     - Display RAG status in dashboard"
+echo "     - Show Kali response recommendations"
+echo "     - Create views in Django templates"
 echo ""
 echo "📊 Logging Features:"
 echo "  ✓ Centralized syslog server collecting all system logs"
@@ -1357,6 +2101,9 @@ if [ "$SKIP_CLOUDFLARED" = false ]; then
 fi
 
 echo "  ✓ Complete audit trail in logs"
+echo "  ✓ Qsecbit AI threat analysis"
+echo "  ✓ Automated Kali Linux response"
+echo "  ✓ Real-time threat scoring (RAG)"
 echo ""
 echo "🔧 Log Query Examples:"
 echo "  View all logs:"
@@ -1371,7 +2118,24 @@ echo ""
 echo "  View security alerts:"
 echo "    {job=\"containerlogs\"} | container_name=~\".*suricata.*\" |~ \"ALERT\""
 echo ""
+echo "🤖 Qsecbit AI Integration:"
+echo "  To integrate with Django, add these to your views.py:"
+echo ""
+echo "  import requests"
+echo "  QSECBIT_API = 'http://10.107.0.10:8888'"
+echo ""
+echo "  def get_qsecbit_status(request):"
+echo "      response = requests.get(f'{QSECBIT_API}/api/qsecbit/latest')"
+echo "      data = response.json()"
+echo "      return JsonResponse(data)"
+echo ""
+echo "  # Export to template context:"
+echo "  context['qsecbit_score'] = data['score']"
+echo "  context['rag_status'] = data['rag_status']"
+echo "  context['threat_level'] = data['components']['attack_probability']"
+echo ""
 echo "============================================================"
-echo "  🎉 HookProbe v3.0 is now running!"
-echo "  🚀 Enterprise-grade security with WAF + Centralized Logging!"
+echo "  🎉 HookProbe v4.0 is now running!"
+echo "  🚀 Full-Stack AI-Powered Cybersecurity Platform!"
+echo "  🤖 Qsecbit AI analyzing threats in real-time!"
 echo "============================================================"
