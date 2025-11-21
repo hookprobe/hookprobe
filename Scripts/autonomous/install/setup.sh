@@ -31,7 +31,7 @@ else
 fi
 
 echo "============================================================"
-echo "   HOOKPROBE AUTONOMOUS DEPLOYMENT - 6 POD ARCHITECTURE"
+echo "   HOOKPROBE AUTONOMOUS DEPLOYMENT - 7 POD ARCHITECTURE"
 echo "   Version 3.0 - WAF + Cloudflare Tunnel + Enhanced Logging"
 echo "============================================================"
 
