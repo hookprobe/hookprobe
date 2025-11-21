@@ -1,9 +1,10 @@
 #!/bin/bash
 #
-# uninstall.sh - HookProbe Infrastructure Cleanup
-# Version: 4.0 - Complete removal of 7-POD architecture
+# uninstall.sh - HookProbe v5.0 Complete Removal
+# GPL-FREE Edition
+# Version: 5.0.0
 #
-# This script safely removes all HookProbe components
+# This script safely removes all HookProbe v5.0 components
 # Use with caution - this will destroy all data!
 #
 
@@ -16,44 +17,30 @@ if [ -f "$SCRIPT_DIR/network-config.sh" ]; then
     source "$SCRIPT_DIR/network-config.sh"
 else
     echo "WARNING: network-config.sh not found, using defaults..."
-    POD_001_NAME="hookprobe-pod-001-web-dmz"
-    POD_002_NAME="hookprobe-pod-002-iam"
-    POD_003_NAME="hookprobe-pod-003-db-persistent"
-    POD_004_NAME="hookprobe-pod-004-db-transient"
-    POD_005_NAME="hookprobe-pod-005-monitoring"
-    POD_006_NAME="hookprobe-pod-006-security"
-    POD_007_NAME="hookprobe-pod-007-ai-response"
-    
-    NETWORK_POD001="pod001-dmz-net"
-    NETWORK_POD002="pod002-iam-net"
-    NETWORK_POD003="pod003-db-persistent-net"
-    NETWORK_POD004="pod004-db-transient-net"
-    NETWORK_POD005="pod005-monitoring-net"
-    NETWORK_POD006="pod006-security-net"
-    NETWORK_POD007="pod007-ai-response-net"
-    
-    OVS_MAIN_BRIDGE="ovs-br0"
-    RSYSLOG_PORT=514
-    PORT_WAF=8080
+    QSEC_BRIDGE="qsec-bridge"
+    POD_WEB="hookprobe-web-dmz"
+    POD_IAM="hookprobe-iam"
+    POD_DATABASE="hookprobe-database"
+    POD_CACHE="hookprobe-cache"
+    POD_MONITORING="hookprobe-monitoring"
+    POD_SECURITY="hookprobe-security"
+    POD_HONEYPOT="hookprobe-honeypot"
 fi
 
 echo "============================================================"
-echo "   HOOKPROBE INFRASTRUCTURE CLEANUP v4.0"
+echo "   HOOKPROBE v5.0 INFRASTRUCTURE CLEANUP"
 echo "============================================================"
 echo ""
-echo "⚠️  WARNING: This will DESTROY all HookProbe infrastructure!"
+echo "⚠️  WARNING: This will DESTROY all HookProbe v5.0 infrastructure!"
 echo ""
 echo "Components to be removed:"
-echo "  ❌ All 7 PODs and containers"
-echo "  ❌ All volumes (databases, logs, models)"
+echo "  ❌ All PODs and containers"
+echo "  ❌ All volumes (databases, logs, data)"
 echo "  ❌ All Podman networks"
-echo "  ❌ All OVS bridges and VXLAN tunnels"
-echo "  ❌ Firewall rules"
-echo "  ❌ NAXSI WAF configuration"
-echo "  ❌ Cloudflare Tunnel"
-echo "  ❌ Rsyslog forwarding"
-echo "  ❌ Qsecbit AI models and data"
-echo "  ❌ Kali Linux tools and reports"
+echo "  ❌ OVS bridge and VXLAN tunnels"
+echo "  ❌ Firewall rules (nftables)"
+echo "  ❌ XDP DDoS mitigation program"
+echo "  ❌ Kernel configuration"
 echo ""
 read -p "Are you ABSOLUTELY sure? (yes/no): " confirm
 
@@ -73,13 +60,13 @@ echo ""
 echo "[STEP 1] Removing PODs..."
 
 POD_NAMES=(
-    "$POD_001_NAME"
-    "$POD_002_NAME"
-    "$POD_003_NAME"
-    "$POD_004_NAME"
-    "$POD_005_NAME"
-    "$POD_006_NAME"
-    "$POD_007_NAME"
+    "$POD_WEB"
+    "$POD_IAM"
+    "$POD_DATABASE"
+    "$POD_CACHE"
+    "$POD_MONITORING"
+    "$POD_SECURITY"
+    "$POD_HONEYPOT"
 )
 
 for pod in "${POD_NAMES[@]}"; do
@@ -90,6 +77,7 @@ for pod in "${POD_NAMES[@]}"; do
     fi
 done
 
+# Remove any remaining containers
 podman container prune -f || true
 echo "✓ All PODs removed"
 
@@ -100,13 +88,13 @@ echo ""
 echo "[STEP 2] Removing networks..."
 
 NETWORK_NAMES=(
-    "$NETWORK_POD001"
-    "$NETWORK_POD002"
-    "$NETWORK_POD003"
-    "$NETWORK_POD004"
-    "$NETWORK_POD005"
-    "$NETWORK_POD006"
-    "$NETWORK_POD007"
+    "web-dmz-net"
+    "iam-net"
+    "database-net"
+    "cache-net"
+    "monitoring-net"
+    "security-net"
+    "honeypot-net"
 )
 
 for network in "${NETWORK_NAMES[@]}"; do
@@ -144,79 +132,91 @@ else
 fi
 
 # ============================================================
-# STEP 4: REMOVE OVS CONFIGURATION
+# STEP 4: REMOVE XDP PROGRAM
 # ============================================================
 echo ""
-echo "[STEP 4] Removing OVS configuration..."
+echo "[STEP 4] Removing XDP DDoS mitigation..."
 
-if ovs-vsctl br-exists "$OVS_MAIN_BRIDGE" 2>/dev/null; then
-    VXLAN_PORTS=$(ovs-vsctl list-ports "$OVS_MAIN_BRIDGE" 2>/dev/null | grep -i vxlan || true)
+if [ -n "$PHYSICAL_HOST_INTERFACE" ]; then
+    # Remove XDP program from interface
+    ip link set dev "$PHYSICAL_HOST_INTERFACE" xdp off 2>/dev/null || true
+    echo "✓ XDP program removed from $PHYSICAL_HOST_INTERFACE"
+fi
+
+# Remove XDP files
+if [ -d /opt/hookprobe/xdp ]; then
+    rm -rf /opt/hookprobe/xdp
+    echo "✓ XDP files removed"
+fi
+
+# ============================================================
+# STEP 5: REMOVE OVS CONFIGURATION
+# ============================================================
+echo ""
+echo "[STEP 5] Removing OVS configuration..."
+
+if ovs-vsctl br-exists "$QSEC_BRIDGE" 2>/dev/null; then
+    VXLAN_PORTS=$(ovs-vsctl list-ports "$QSEC_BRIDGE" 2>/dev/null | grep -i vxlan || true)
     
     if [ -n "$VXLAN_PORTS" ]; then
         echo "$VXLAN_PORTS" | while read port; do
             echo "  → Removing VXLAN: $port"
-            ovs-vsctl --if-exists del-port "$OVS_MAIN_BRIDGE" "$port"
+            ovs-vsctl --if-exists del-port "$QSEC_BRIDGE" "$port"
         done
     fi
     
-    echo "  → Removing bridge: $OVS_MAIN_BRIDGE"
-    ovs-vsctl --if-exists del-br "$OVS_MAIN_BRIDGE"
+    echo "  → Removing bridge: $QSEC_BRIDGE"
+    ovs-vsctl --if-exists del-br "$QSEC_BRIDGE"
 fi
 
 echo "✓ OVS configuration removed"
 
 # ============================================================
-# STEP 5: CLEAN FIREWALL
+# STEP 6: CLEAN FIREWALL (NFTABLES)
 # ============================================================
 echo ""
-echo "[STEP 5] Cleaning firewall..."
+echo "[STEP 6] Cleaning firewall..."
 
-if command -v firewall-cmd &> /dev/null; then
-    firewall-cmd --permanent --remove-port=4789/udp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=500/udp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=4500/udp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=${PORT_WAF}/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=3001/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=3002/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=3000/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=9090/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=${RSYSLOG_PORT}/udp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=${RSYSLOG_PORT}/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-port=8888/tcp 2>/dev/null || true
-    firewall-cmd --permanent --remove-rich-rule='rule family="ipv4" source address="10.100.0.0/16" accept' 2>/dev/null || true
-    firewall-cmd --reload
-    echo "✓ Firewall cleaned"
+if [ -f /etc/nftables/hookprobe-v5.nft ]; then
+    rm -f /etc/nftables/hookprobe-v5.nft
+    echo "✓ nftables configuration removed"
+fi
+
+# Flush all nftables rules
+nft flush ruleset 2>/dev/null || true
+
+echo "✓ Firewall cleaned"
+
+# ============================================================
+# STEP 7: REMOVE KERNEL CONFIGURATION
+# ============================================================
+echo ""
+echo "[STEP 7] Removing kernel configuration..."
+
+if [ -f /etc/sysctl.d/99-hookprobe-v5.conf ]; then
+    rm -f /etc/sysctl.d/99-hookprobe-v5.conf
+    echo "✓ Kernel sysctl configuration removed"
+fi
+
+if [ -f /etc/modules-load.d/hookprobe-v5.conf ]; then
+    rm -f /etc/modules-load.d/hookprobe-v5.conf
+    echo "✓ Kernel modules configuration removed"
 fi
 
 # ============================================================
-# STEP 6: REMOVE RSYSLOG CONFIG
+# STEP 8: REMOVE BUILD DIRECTORIES
 # ============================================================
 echo ""
-echo "[STEP 6] Removing rsyslog configuration..."
-
-if [ -f /etc/rsyslog.d/50-hookprobe-containers.conf ]; then
-    rm -f /etc/rsyslog.d/50-hookprobe-containers.conf
-    systemctl restart rsyslog 2>/dev/null || true
-    echo "✓ Rsyslog configuration removed"
-fi
-
-# ============================================================
-# STEP 7: REMOVE BUILD DIRECTORIES
-# ============================================================
-echo ""
-echo "[STEP 7] Removing build directories..."
+echo "[STEP 8] Removing build directories..."
 
 BUILD_DIRS=(
     "/tmp/hookprobe-django-build"
-    "/tmp/naxsi-config"
-    "/tmp/nginx-naxsi-build"
-    "/tmp/prometheus-config"
-    "/tmp/loki-config"
-    "/tmp/promtail-config"
-    "/tmp/alertmanager-config"
+    "/tmp/modsecurity-config"
+    "/tmp/victoriametrics-config"
+    "/tmp/victorialogs-config"
     "/tmp/grafana-provisioning"
-    "/tmp/rsyslog-config"
-    "/tmp/qsecbit-build"
+    "/tmp/keycloak-config"
+    "/opt/hookprobe"
 )
 
 for dir in "${BUILD_DIRS[@]}"; do
@@ -228,15 +228,15 @@ done
 echo "✓ Build directories removed"
 
 # ============================================================
-# STEP 8: REMOVE IMAGES
+# STEP 9: REMOVE IMAGES (OPTIONAL)
 # ============================================================
 echo ""
 read -p "Remove HookProbe container images? (yes/no): " remove_images
 
 if [ "$remove_images" == "yes" ]; then
-    echo "[STEP 8] Removing images..."
+    echo "[STEP 9] Removing images..."
     
-    IMAGES=$(podman images -q | xargs podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "hookprobe|naxsi|qsecbit" 2>/dev/null || true)
+    IMAGES=$(podman images -q | xargs podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "hookprobe|modsecurity|zeek|victoriametrics|victorialogs" 2>/dev/null || true)
     
     if [ -n "$IMAGES" ]; then
         echo "$IMAGES" | while read image; do
@@ -249,7 +249,7 @@ if [ "$remove_images" == "yes" ]; then
 fi
 
 # ============================================================
-# STEP 9: STOP OVS
+# STEP 10: STOP OVS (OPTIONAL)
 # ============================================================
 echo ""
 read -p "Stop OVS service? (yes/no): " stop_ovs
@@ -258,19 +258,6 @@ if [ "$stop_ovs" == "yes" ]; then
     systemctl stop openvswitch 2>/dev/null || true
     systemctl disable openvswitch 2>/dev/null || true
     echo "✓ OVS stopped"
-fi
-
-# ============================================================
-# STEP 10: REMOVE KERNEL CONFIG
-# ============================================================
-echo ""
-read -p "Remove kernel module configuration? (yes/no): " remove_modules
-
-if [ "$remove_modules" == "yes" ]; then
-    if [ -f /etc/modules-load.d/hookprobe.conf ]; then
-        rm -f /etc/modules-load.d/hookprobe.conf
-        echo "✓ Kernel config removed"
-    fi
 fi
 
 # ============================================================
@@ -292,7 +279,7 @@ echo "✓ System cleanup complete"
 # ============================================================
 echo ""
 echo "============================================================"
-echo "   HOOKPROBE CLEANUP COMPLETE!"
+echo "   HOOKPROBE v5.0 CLEANUP COMPLETE!"
 echo "============================================================"
 echo ""
 echo "✅ Removed:"
@@ -302,9 +289,10 @@ if [ "$remove_volumes" == "yes" ]; then
 else
     echo "  ⊘ Volumes preserved"
 fi
-echo "  ✓ Networks and OVS"
-echo "  ✓ Firewall rules"
-echo "  ✓ Rsyslog config"
+echo "  ✓ Networks and OVS bridge"
+echo "  ✓ Firewall rules (nftables)"
+echo "  ✓ XDP DDoS mitigation"
+echo "  ✓ Kernel configuration"
 if [ "$remove_images" == "yes" ]; then
     echo "  ✓ Container images"
 fi
