@@ -1,0 +1,27 @@
+<!-- In your Django template -->
+<div class="qsecbit-status">
+    <h2>Threat Status</h2>
+    <div class="status-badge {{ rag_status|lower }}">
+        {{ rag_status }}
+    </div>
+    <p>Score: {{ qsecbit_score|floatformat:4 }}</p>
+    <p>Attack Probability: {{ threat_level|floatformat:2 }}%</p>
+    
+    {% if rag_status == 'RED' or rag_status == 'AMBER' %}
+    <div class="kali-responses">
+        <h3>Automated Response Actions:</h3>
+        <ul>
+        {% for response in kali_responses %}
+            <li>
+                <strong>{{ response.timestamp }}</strong>
+                <ul>
+                {% for action in response.recommended_actions %}
+                    <li>{{ action }}</li>
+                {% endfor %}
+                </ul>
+            </li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
