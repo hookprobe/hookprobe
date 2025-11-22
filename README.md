@@ -362,7 +362,7 @@ nmcli device show wwan0
 - Recommended: Unlimited or >100GB/month for primary use
 - Failover: 10-20GB/month typically sufficient
 
-**Documentation**: See [LTE/README.md](blob/main/n8n/README.md) for detailed setup
+**Documentation**: See [LTE/README.md](../main/LTE/README.md) for detailed setup
 
 ---
 
