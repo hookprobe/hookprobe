@@ -70,19 +70,19 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
 
 | POD | Network | Purpose | Key Components |
 |-----|---------|---------|----------------|
-| **001** | 10.101.0.0/24 | Web DMZ | Django CMS, NAXSI WAF, Nginx, Cloudflare Tunnel |
-| **002** | 10.102.0.0/24 | IAM/Auth | Logto, Keycloak, LDAP |
-| **003** | 10.103.0.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
-| **004** | 10.104.0.0/24 | Transient DB | Redis |
-| **005** | 10.105.0.0/24 | Monitoring | Grafana, Prometheus, Loki, VictoriaMetrics, Rsyslog |
-| **006** | 10.106.0.0/24 | Security | Suricata, Zeek, Snort 3, ModSecurity |
-| **007** | 10.107.0.0/24 | AI Response | Qsecbit Analysis, Kali Linux (on-demand) |
+| **001** | 10.200.1.0/24 | Web DMZ | Django CMS, NAXSI WAF, Nginx, Cloudflare Tunnel |
+| **002** | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
+| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
+| **004** | 10.200.4.0/24 | Transient DB | Redis, Valkey |
+| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, VictoriaLogs, Vector, node_exporter |
+| **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit |
+| **007** | 10.200.7.0/24 | AI Response | Honeypots, Kali Linux, Mitigation Engine |
 
 ### Optional POD (008)
 
 | POD | Network | Purpose | Key Components |
 |-----|---------|---------|----------------|
-| **008** | 10.108.0.0/24 | Automation | n8n, PostgreSQL, Redis, Chromium, MCP Server |
+| **008** | 10.200.8.0/24 | Automation | n8n, PostgreSQL, Redis, MCP Server |
 
 ### Network Topology
 
@@ -428,17 +428,17 @@ Layer 6: AI Response (Qsecbit + Kali)
 
 **Per-VNI L2 Security:**
 ```bash
-# Anti-spoofing (example for VNI 101)
-ovs-ofctl add-flow ovs-br0 \
-  "table=0,priority=100,tun_id=101,ip,nw_src=10.101.0.0/24,actions=normal"
+# Anti-spoofing (example for VNI 201 - Web DMZ)
+ovs-ofctl add-flow qsec-bridge \
+  "table=0,priority=100,tun_id=201,ip,nw_src=10.200.1.0/24,actions=normal"
 
 # Drop spoofed traffic
-ovs-ofctl add-flow ovs-br0 \
-  "table=0,priority=50,tun_id=101,actions=drop"
+ovs-ofctl add-flow qsec-bridge \
+  "table=0,priority=50,tun_id=201,actions=drop"
 
 # ARP protection
-ovs-ofctl add-flow ovs-br0 \
-  "table=0,priority=100,tun_id=101,arp,arp_spa=10.101.0.0/24,actions=normal"
+ovs-ofctl add-flow qsec-bridge \
+  "table=0,priority=100,tun_id=201,arp,arp_spa=10.200.1.0/24,actions=normal"
 ```
 
 **Firewall (nftables):**
@@ -446,8 +446,8 @@ ovs-ofctl add-flow ovs-br0 \
 # Default deny
 nft 'add chain inet filter forward { type filter hook forward priority 0; policy drop; }'
 
-# Allow specific service
-nft add rule inet filter forward ip saddr 10.105.0.0/24 ip daddr 10.101.0.0/24 tcp dport 9100 ct state new,established accept
+# Allow specific service (Monitoring POD → Web DMZ for metrics)
+nft add rule inet filter forward ip saddr 10.200.5.0/24 ip daddr 10.200.1.0/24 tcp dport 9100 ct state new,established accept
 ```
 
 ---
@@ -534,14 +534,14 @@ ovs-vsctl show
 **Network connectivity issues:**
 ```bash
 # Verify VXLAN
-ovs-vsctl list-ports ovs-br0
+ovs-vsctl list-ports qsec-bridge
 
 # Check OpenFlow rules
-ovs-ofctl dump-flows ovs-br0
+ovs-ofctl dump-flows qsec-bridge
 
 # Test connectivity
-ping 10.101.0.10  # Django
-ping 10.107.0.10  # Qsecbit
+ping 10.200.1.12  # Django
+ping 10.200.6.12  # Qsecbit
 ```
 
 **Qsecbit not responding:**
