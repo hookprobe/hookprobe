@@ -59,8 +59,8 @@ echo ""
 echo "[STEP 2] Creating VXLAN tunnel for Automation POD..."
 
 # Check if main HookProbe is deployed
-if ! ovs-vsctl br-exists "$OVS_MAIN_BRIDGE" 2>/dev/null; then
-    echo "ERROR: Main OVS bridge $OVS_MAIN_BRIDGE not found"
+if ! ovs-vsctl br-exists "$QSEC_BRIDGE" 2>/dev/null; then
+    echo "ERROR: Main OVS bridge $QSEC_BRIDGE not found"
     echo "Please run main setup.sh first to deploy PODs 001-007"
     exit 1
 fi
@@ -77,13 +77,13 @@ done
 
 # Create VXLAN tunnel for VNI 108 (uses INTERNAL PSK like POD 007)
 echo "  → Creating VXLAN tunnel: VNI=$VNI_AUTOMATION"
-ovs-vsctl --may-exist add-port "$OVS_MAIN_BRIDGE" "vxlan-${VNI_AUTOMATION}" -- \
+ovs-vsctl --may-exist add-port "$QSEC_BRIDGE" "vxlan-${VNI_AUTOMATION}" -- \
     set interface "vxlan-${VNI_AUTOMATION}" type=vxlan \
     options:key="$VNI_AUTOMATION" \
     options:remote_ip="$REMOTE_HOST_IP" \
     options:local_ip="$LOCAL_HOST_IP" \
     options:dst_port="$VXLAN_PORT" \
-    options:psk="$OVS_PSK_INTERNAL"
+    options:psk="$VXLAN_PSK"
 
 echo "✓ VXLAN tunnel created (encrypted with INTERNAL PSK)"
 
@@ -104,19 +104,19 @@ if [ "$VXLAN_PORT_NUM" != "-1" ] && [ -n "$VXLAN_PORT_NUM" ]; then
     
     # Anti-spoofing: Only allow traffic from POD 008 subnet
     echo "  → Adding anti-spoof rules for VNI $VNI_AUTOMATION"
-    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+    ovs-ofctl add-flow "$QSEC_BRIDGE" \
         "table=0,priority=100,tun_id=${VNI_AUTOMATION},in_port=${VXLAN_PORT_NUM},ip,nw_src=${SUBNET_POD008},actions=normal"
     
     # Drop any spoofed traffic
-    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+    ovs-ofctl add-flow "$QSEC_BRIDGE" \
         "table=0,priority=50,tun_id=${VNI_AUTOMATION},in_port=${VXLAN_PORT_NUM},actions=drop"
     
     # ARP protection: Only allow ARP from valid subnet
-    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+    ovs-ofctl add-flow "$QSEC_BRIDGE" \
         "table=0,priority=100,tun_id=${VNI_AUTOMATION},arp,arp_spa=${SUBNET_POD008},actions=normal"
     
     # Drop malformed ARP
-    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+    ovs-ofctl add-flow "$QSEC_BRIDGE" \
         "table=0,priority=50,tun_id=${VNI_AUTOMATION},arp,actions=drop"
     
     echo "✓ L2 hardening applied (anti-spoof + ARP protection)"
@@ -719,7 +719,7 @@ echo ""
 echo "🌐 Network Configuration:"
 echo "  • POD 008 Network: $SUBNET_POD008"
 echo "  • VNI: $VNI_AUTOMATION (Internal)"
-echo "  • VXLAN: PSK-encrypted with OVS_PSK_INTERNAL"
+echo "  • VXLAN: PSK-encrypted with VXLAN_PSK"
 echo "  • L2 Hardening: Anti-spoof + ARP protection"
 echo ""
 echo "🔒 Security Controls Applied:"
