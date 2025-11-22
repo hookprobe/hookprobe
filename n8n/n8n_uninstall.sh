@@ -17,7 +17,7 @@ else
     echo "WARNING: n8n_network-config.sh not found, using defaults..."
     POD_008_NAME="hookprobe-pod-008-automation"
     NETWORK_POD008="pod008-automation-net"
-    OVS_MAIN_BRIDGE="ovs-br0"
+    QSEC_BRIDGE="qsec-bridge"
     VNI_AUTOMATION=208
     PORT_N8N=5678
     PORT_MCP=8889
@@ -123,12 +123,12 @@ podman volume prune -f || true
 echo ""
 echo "[STEP 4] Removing VXLAN tunnel..."
 
-if ovs-vsctl br-exists "$OVS_MAIN_BRIDGE" 2>/dev/null; then
+if ovs-vsctl br-exists "$QSEC_BRIDGE" 2>/dev/null; then
     VXLAN_PORT="vxlan-${VNI_AUTOMATION}"
     
-    if ovs-vsctl list-ports "$OVS_MAIN_BRIDGE" | grep -q "$VXLAN_PORT"; then
+    if ovs-vsctl list-ports "$QSEC_BRIDGE" | grep -q "$VXLAN_PORT"; then
         echo "  → Removing VXLAN port: $VXLAN_PORT"
-        ovs-vsctl --if-exists del-port "$OVS_MAIN_BRIDGE" "$VXLAN_PORT"
+        ovs-vsctl --if-exists del-port "$QSEC_BRIDGE" "$VXLAN_PORT"
         echo "✓ VXLAN tunnel removed"
     else
         echo "  → VXLAN tunnel not found"
