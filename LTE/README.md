@@ -358,7 +358,7 @@ http {
         use_temp_path=off;
     
     upstream django {
-        server 10.101.0.10:8000;
+        server 10.200.1.10:8000;
         keepalive 32;
     }
     

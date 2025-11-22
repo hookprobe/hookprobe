@@ -135,7 +135,7 @@ This workflow creates a fully autonomous blogging system for HookProbe that:
 {
   "type": "n8n-nodes-base.httpRequest",
   "parameters": {
-    "url": "http://10.108.0.15:8889/api/qsecbit/status",
+    "url": "http://10.200.8.0.15:8889/api/qsecbit/status",
     "method": "GET"
   }
 }
@@ -242,7 +242,7 @@ return items;
 {
   "type": "n8n-nodes-base.httpRequest",
   "parameters": {
-    "url": "http://10.108.0.15:8889/api/content/generate",
+    "url": "http://10.200.8.0.15:8889/api/content/generate",
     "method": "POST",
     "bodyParametersJson": `{
   "topic": "{{ $json.title }}",
@@ -301,7 +301,7 @@ return items;
 {
   "type": "n8n-nodes-base.httpRequest",
   "parameters": {
-    "url": "http://10.108.0.15:8889/api/content/generate",
+    "url": "http://10.200.8.0.15:8889/api/content/generate",
     "method": "POST",
     "bodyParametersJson": `{
   "topic": "{{ $json.topic }}",
@@ -443,7 +443,7 @@ View draft: http://hookprobe.local/admin/drafts/{{ $json.draft_id }}`
 {
   "type": "n8n-nodes-base.httpRequest",
   "parameters": {
-    "url": "http://10.108.0.15:8889/api/cms/publish",
+    "url": "http://10.200.8.0.15:8889/api/cms/publish",
     "method": "POST",
     "bodyParametersJson": `{
   "title": "{{ $json.title }}",
@@ -500,7 +500,7 @@ Read more: {{ $json.canonical_url }}
 {
   "type": "n8n-nodes-base.httpRequest",
   "parameters": {
-    "url": "http://10.108.0.15:8889/api/analytics/log",
+    "url": "http://10.200.8.0.15:8889/api/analytics/log",
     "method": "POST",
     "bodyParametersJson": `{
   "post_id": "{{ $json.post_id }}",
@@ -528,7 +528,7 @@ Read more: {{ $json.canonical_url }}
 ### 2. Set Credentials
 
 **Required Credentials**:
-- MCP Server (http://10.108.0.15:8889)
+- MCP Server (http://10.200.8.0.15:8889)
 - Django CMS API
 - OpenAI API (for image generation)
 - LinkedIn API
@@ -601,7 +601,7 @@ Adjust thresholds in Quality Gate node:
 Check Django CMS:
 ```bash
 # Test CMS API
-curl http://10.101.0.10:8000/api/posts/
+curl http://10.200.1.12:8000/api/posts/
 
 # Check logs
 podman logs hookprobe-pod-001-web-dmz-django

@@ -219,13 +219,13 @@ NOTIFICATION_EMAIL="qsecbit@hookprobe.com"
 ENABLE_EMAIL_NOTIFICATIONS=true
 
 # Qsecbit integration
-QSECBIT_API="http://10.107.0.10:8888"
+QSECBIT_API="http://10.200.6.12:8888"
 ACTIVATE_ON_AMBER=true
 ACTIVATE_ON_RED=true
 
 # Honeypot behavior
 ENABLE_HONEYPOT=true
-HONEYPOT_IP="10.108.0.10"
+HONEYPOT_IP="10.200.7.10"
 
 # Mitigation actions
 CRITICAL_ACTION="block"      # Block immediately
@@ -365,7 +365,7 @@ sed -i '/203.0.113.100/d' /var/lib/hookprobe/mitigation/blocked_ips.txt
 
 # Redirect to honeypot manually
 sudo iptables -t nat -A PREROUTING -s 203.0.113.100 -p tcp --dport 22 \
-    -j DNAT --to-destination 10.108.0.10:2222
+    -j DNAT --to-destination 10.200.7.10:2222
 ```
 
 ### Custom Attack Patterns
