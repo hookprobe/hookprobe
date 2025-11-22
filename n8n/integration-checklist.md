@@ -59,11 +59,11 @@ curl http://localhost:8889/health            # MCP healthy
   
 - [ ] Qsecbit API credential
   - Type: Generic
-  - URL: http://10.107.0.10:8888
+  - URL: http://10.200.6.12:8888
   
 - [ ] MCP Server credential
   - Type: Generic
-  - URL: http://10.108.0.15:8889
+  - URL: http://10.200.8.0.15:8889
 
 ### Workflow Import
 - [ ] Imported `daily-blog-post.json`
@@ -100,7 +100,7 @@ curl -X POST http://localhost:8889/api/qsecbit/status
 ### Web Scraping Test
 ```bash
 # Test Chromium
-curl http://10.108.0.13:3000
+curl http://10.200.8.0.13:3000
 ```
 
 - [ ] Chromium service responds
@@ -205,8 +205,8 @@ podman pod restart hookprobe-pod-008-automation
 podman exec hookprobe-pod-008-automation-mcp env | grep API_KEY
 
 # Test connectivity
-curl http://10.101.0.10:8000  # Django
-curl http://10.107.0.10:8888  # Qsecbit
+curl http://10.200.1.12:8000  # Django
+curl http://10.200.6.12:8888  # Qsecbit
 
 # Restart service
 podman restart hookprobe-pod-008-automation-mcp

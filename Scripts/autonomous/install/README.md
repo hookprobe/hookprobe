@@ -37,7 +37,7 @@ HookProbe is an enterprise-grade, AI-powered cybersecurity platform featuring:
 - **Internet**: Required for downloading container images
 
 ### Network
-- **Subnet**: 10.100.0.0/16 must be available (not in use)
+- **Subnet**: 10.200.0.0/16 must be available (not in use)
 - **Ports**: See [Port Mappings](#port-mappings) section
 
 ---
@@ -256,13 +256,13 @@ NAXSI_EXTENSIVE_LOG="1"     # Detailed logging
 
 | POD | Network | Purpose | Key Services |
 |-----|---------|---------|--------------|
-| **001** | 10.101.0.0/24 | Web DMZ | Django, NAXSI WAF, Nginx, Cloudflare |
-| **002** | 10.102.0.0/24 | IAM/Auth | Logto, PostgreSQL |
-| **003** | 10.103.0.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
-| **004** | 10.104.0.0/24 | Transient DB | Redis |
-| **005** | 10.105.0.0/24 | Monitoring | Grafana, Prometheus, Loki, Rsyslog |
-| **006** | 10.106.0.0/24 | Security | Suricata IDS/IPS |
-| **007** | 10.107.0.0/24 | AI Response | Qsecbit, Kali Linux (on-demand) |
+| **001** | 10.200.1.0/24 | Web DMZ | Django, NAXSI WAF, Nginx, Cloudflare |
+| **002** | 10.200.2.0/24 | IAM/Auth | Logto, PostgreSQL |
+| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
+| **004** | 10.200.4.0/24 | Transient DB | Redis |
+| **005** | 10.200.5.0/24 | Monitoring | Grafana, Prometheus, Loki, Rsyslog |
+| **006** | 10.200.6.0/24 | Security | Suricata IDS/IPS |
+| **007** | 10.200.7.0/24 | AI Response | Qsecbit, Kali Linux (on-demand) |
 
 ### Network Isolation
 
@@ -401,7 +401,7 @@ Add to your Django views:
 ```python
 import requests
 
-QSECBIT_API = 'http://10.107.0.10:8888'
+QSECBIT_API = 'http://10.200.7.10:8888'
 
 def get_threat_status():
     """Get current threat level"""
