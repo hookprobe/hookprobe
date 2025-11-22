@@ -1,9 +1,17 @@
 #!/bin/bash
 #
 # n8n_network-config.sh - HookProbe n8n Automation Network Configuration
-# Version: 1.0 - POD 008 (Automation & Content Generation)
+# Version: 1.0 - POD 008 (OPTIONAL EXTENSION)
 #
-# This extends the existing HookProbe network configuration for n8n
+# ⚠️  IMPORTANT: This is an OPTIONAL extension to HookProbe
+#    Requires main HookProbe (PODs 001-007) to be deployed first
+#    This extends the existing architecture with workflow automation
+#
+# This configuration follows existing HookProbe patterns:
+#  - VNI allocation (108, next after 107)
+#  - IP allocation (10.108.0.0/24, matching existing pattern)
+#  - PSK encryption (uses OVS_PSK_INTERNAL for internal services)
+#  - Security hardening (OpenFlow rules, ARP protection)
 #
 
 # Source the main network config
@@ -12,31 +20,32 @@ if [ -f "$SCRIPT_DIR/network-config.sh" ]; then
     source "$SCRIPT_DIR/network-config.sh"
 else
     echo "ERROR: Main network-config.sh not found"
+    echo "Please ensure main HookProbe is deployed first"
     exit 1
 fi
 
 # ============================================================
-# POD 008 - AUTOMATION & CONTENT GENERATION
+# POD 008 - AUTOMATION & CONTENT GENERATION (OPTIONAL)
 # ============================================================
+# This POD is OPTIONAL and can be deployed independently
+# Follows existing HookProbe architecture patterns
 
-# VNI for Automation POD
-VNI_AUTOMATION=108
+# VNI for Automation POD (next in sequence after POD 007)
+VNI_AUTOMATION=208
 
-# Subnet for POD 008
-SUBNET_POD008="10.108.0.0/24"
-GATEWAY_POD008="10.108.0.1"
+# Subnet for POD 008 (follows 10.10X.0.0/24 pattern)
+SUBNET_POD008="10.200.8.0/24"
+GATEWAY_POD008="10.200.8.1"
 
-# IP Allocations for POD 008
-IP_POD008_N8N="10.108.0.10"              # n8n workflow automation
-IP_POD008_N8N_DB="10.108.0.11"           # n8n PostgreSQL database
-IP_POD008_REDIS="10.108.0.12"            # Redis for queue management
-IP_POD008_CHROMIUM="10.108.0.13"         # Headless Chromium for scraping
-IP_POD008_PUPPETEER="10.108.0.14"        # Puppeteer service
-IP_POD008_MCP_SERVER="10.108.0.15"       # MCP server for AI integrations
-IP_POD008_API_PROXY="10.108.0.16"        # API proxy/rate limiter
-IP_POD008_RESERVED_1="10.108.0.20"       # Reserved for expansion
-IP_POD008_RESERVED_2="10.108.0.21"
-IP_POD008_RESERVED_3="10.108.0.22"
+# IP Allocations for POD 008 (follows existing IP allocation pattern)
+IP_POD008_N8N="10.200.8.10"              # n8n workflow automation
+IP_POD008_N8N_DB="10.200.8.11"           # n8n PostgreSQL database
+IP_POD008_REDIS="10.200.8.12"            # Redis for queue management
+IP_POD008_CHROMIUM="10.200.8.13"         # Headless Chromium for scraping
+IP_POD008_MCP_SERVER="10.200.8.15"       # MCP server for AI integrations
+IP_POD008_RESERVED_1="10.200.8.20"       # Reserved for expansion
+IP_POD008_RESERVED_2="10.200.8.21"
+IP_POD008_RESERVED_3="10.200.8.22"
 
 # ============================================================
 # N8N CONFIGURATION
@@ -50,7 +59,7 @@ N8N_BASIC_AUTH_ACTIVE="true"
 N8N_BASIC_AUTH_USER="admin"
 N8N_BASIC_AUTH_PASSWORD="CHANGE_ME_N8N_PASSWORD"  # ⚠️ CHANGE THIS
 
-# n8n database
+# n8n database (uses existing PostgreSQL pattern)
 N8N_DB_TYPE="postgresdb"
 N8N_DB_POSTGRESDB_HOST="${IP_POD008_N8N_DB}"
 N8N_DB_POSTGRESDB_PORT="5432"
@@ -58,13 +67,16 @@ N8N_DB_POSTGRESDB_DATABASE="n8n"
 N8N_DB_POSTGRESDB_USER="n8n_admin"
 N8N_DB_POSTGRESDB_PASSWORD="CHANGE_ME_N8N_DB_PASSWORD"  # ⚠️ CHANGE THIS
 
-# n8n execution mode
+# n8n execution mode (queue-based like existing setup)
 N8N_EXECUTIONS_MODE="queue"
 N8N_EXECUTIONS_QUEUE_REDIS_HOST="${IP_POD008_REDIS}"
 N8N_EXECUTIONS_QUEUE_REDIS_PORT="6379"
 
 # n8n webhook URL (external access)
 N8N_WEBHOOK_URL="http://${HOST_A_IP}:${N8N_PORT}"
+
+# n8n timezone (follows existing config)
+N8N_TIMEZONE="UTC"
 
 # ============================================================
 # DJANGO CMS INTEGRATION
@@ -206,10 +218,17 @@ export PORT_N8N PORT_MCP
 
 echo "============================================================"
 echo "   N8N AUTOMATION CONFIGURATION LOADED - v1.0"
+echo "   OPTIONAL EXTENSION - Requires main HookProbe (PODs 001-007)"
 echo "============================================================"
-echo "POD 008 - Automation & Content Generation"
+echo "POD 008 - Automation & Content Generation (OPTIONAL)"
 echo "  Network: ${SUBNET_POD008}"
-echo "  VNI: ${VNI_AUTOMATION}"
+echo "  VNI: ${VNI_AUTOMATION} (Internal - encrypted with OVS_PSK_INTERNAL)"
+echo ""
+echo "Integration with main HookProbe:"
+echo "  ✓ Inherits all base configuration from network-config.sh"
+echo "  ✓ Follows established VNI/IP allocation patterns"
+echo "  ✓ Uses same PSK encryption scheme (INTERNAL)"
+echo "  ✓ Applies same security hardening (L2 anti-spoof)"
 echo ""
 echo "Key Services:"
 echo "  n8n:           ${IP_POD008_N8N}:${N8N_PORT}"
@@ -222,7 +241,10 @@ echo "Integrations:"
 echo "  Django CMS:    ${DJANGO_CMS_API_URL}"
 echo "  Qsecbit API:   ${QSECBIT_API_URL}"
 echo ""
-echo "Access URL:"
+echo "Access URL (after deployment):"
 echo "  n8n UI:        http://${HOST_A_IP}:${PORT_N8N}"
 echo "  Credentials:   ${N8N_BASIC_AUTH_USER} / [configured]"
+echo ""
+echo "Deploy with:   sudo ./n8n_setup.sh"
+echo "Remove with:   sudo ./n8n_uninstall.sh"
 echo "============================================================"
