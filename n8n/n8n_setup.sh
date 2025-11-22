@@ -554,7 +554,7 @@ cat > "$WORKFLOW_DIR/daily-blog-post.json" << 'EOF'
     },
     {
       "parameters": {
-        "url": "http://10.108.0.15:8889/api/content/generate",
+        "url": "http://10.200.8.0.15:8889/api/content/generate",
         "method": "POST",
         "jsonParameters": true,
         "options": {},
@@ -566,7 +566,7 @@ cat > "$WORKFLOW_DIR/daily-blog-post.json" << 'EOF'
     },
     {
       "parameters": {
-        "url": "http://10.101.0.10:8000/api/posts/",
+        "url": "http://10.200.1.12:8000/api/posts/",
         "method": "POST",
         "jsonParameters": true,
         "options": {},
@@ -626,7 +626,7 @@ cat > "$WORKFLOW_DIR/qsecbit-monitor.json" << 'EOF'
     },
     {
       "parameters": {
-        "url": "http://10.107.0.10:8888/api/qsecbit/latest",
+        "url": "http://10.200.6.12:8888/api/qsecbit/latest",
         "method": "GET"
       },
       "name": "Get Qsecbit Status",
@@ -650,7 +650,7 @@ cat > "$WORKFLOW_DIR/qsecbit-monitor.json" << 'EOF'
     },
     {
       "parameters": {
-        "url": "http://10.108.0.15:8889/api/cms/publish",
+        "url": "http://10.200.8.0.15:8889/api/cms/publish",
         "method": "POST",
         "jsonParameters": true,
         "bodyParametersJson": "{\n  \"title\": \"Security Alert: {{ $json.timestamp }}\",\n  \"content\": \"Threat detected with score {{ $json.score }}\",\n  \"category\": \"Alerts\",\n  \"status\": \"published\"\n}"

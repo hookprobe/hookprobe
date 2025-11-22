@@ -68,9 +68,9 @@ sudo nano mitigation-config.conf
 NOTIFICATION_EMAIL="qsecbit@hookprobe.com"
 
 # API endpoints (verify these match your setup)
-QSECBIT_API="http://10.107.0.10:8888"
-VICTORIAMETRICS_URL="http://10.105.0.11:9090"
-VICTORIALOGS_URL="http://10.105.0.12:9428"
+QSECBIT_API="http://10.200.6.12:8888"
+VICTORIAMETRICS_URL="http://10.200.5.11:9090"
+VICTORIALOGS_URL="http://10.200.5.12:9428"
 
 # Log file paths (adjust based on your installation)
 SNORT3_ALERT_FILE="/var/log/snort/alert_fast.txt"
@@ -82,9 +82,10 @@ ZEEK_NOTICE_LOG="/opt/zeek/logs/current/notice.log"
 ```bash
 # Copy to system directories
 sudo cp attack-mitigation-orchestrator.sh /usr/local/bin/
-sudo cp honeypot-manager.sh /usr/local/bin/
+# Note: honeypot-manager.sh is planned for future release
+# sudo cp honeypot-manager.sh /usr/local/bin/
 sudo cp mitigation-maintenance.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/{attack-mitigation-orchestrator,honeypot-manager,mitigation-maintenance}.sh
+sudo chmod +x /usr/local/bin/{attack-mitigation-orchestrator,# honeypot-manager,  # Plannedmitigation-maintenance}.sh
 
 # Copy configuration
 sudo mkdir -p /etc/hookprobe
@@ -101,10 +102,10 @@ sudo mkdir -p /var/lib/hookprobe/reports
 
 ```bash
 # Deploy all honeypots
-sudo honeypot-manager.sh deploy
+# sudo honeypot-manager.sh  # Planned feature deploy
 
 # Verify deployment
-sudo honeypot-manager.sh stats
+# sudo honeypot-manager.sh  # Planned feature stats
 ```
 
 Expected output:
@@ -225,8 +226,8 @@ HONEYPOT_TELNET_PORT=2223   # Telnet honeypot
 HONEYPOT_HTTP_PORT=8080     # Web honeypot
 
 # Redeploy
-sudo honeypot-manager.sh remove
-sudo honeypot-manager.sh deploy
+# sudo honeypot-manager.sh  # Planned feature remove
+# sudo honeypot-manager.sh  # Planned feature deploy
 ```
 
 ### IP Whitelisting
@@ -237,7 +238,7 @@ sudo honeypot-manager.sh deploy
 IP_WHITELIST=(
     "127.0.0.1"
     "::1"
-    "10.100.0.0/16"             # Internal HookProbe
+    "10.200.0.0/16"             # Internal HookProbe
     "192.168.1.0/24"            # Your office network
     "203.0.113.10"              # Trusted partner IP
 )
@@ -278,13 +279,13 @@ ls -lt /var/lib/hookprobe/reports/attack_report_*.json | head -5
 
 ```bash
 # Show honeypot statistics
-sudo honeypot-manager.sh stats
+# sudo honeypot-manager.sh  # Planned feature stats
 
 # Analyze specific attacker
-sudo honeypot-manager.sh analyze 192.168.1.100
+# sudo honeypot-manager.sh  # Planned feature analyze 192.168.1.100
 
 # Export all honeypot logs
-sudo honeypot-manager.sh export
+# sudo honeypot-manager.sh  # Planned feature export
 ```
 
 ### Manual Operations
@@ -346,15 +347,15 @@ When an IP is redirected to honeypot:
 ```bash
 # SSH traffic (port 22) → Honeypot SSH (2222)
 iptables -t nat -A PREROUTING -s <ATTACKER_IP> -p tcp --dport 22 \
-    -j DNAT --to-destination 10.108.0.10:2222
+    -j DNAT --to-destination 10.200.7.10:2222
 
 # HTTP traffic (port 80) → Honeypot Web (8080)
 iptables -t nat -A PREROUTING -s <ATTACKER_IP> -p tcp --dport 80 \
-    -j DNAT --to-destination 10.108.0.10:8080
+    -j DNAT --to-destination 10.200.7.10:8080
 
 # HTTPS traffic (port 443) → Honeypot Web (8080)
 iptables -t nat -A PREROUTING -s <ATTACKER_IP> -p tcp --dport 443 \
-    -j DNAT --to-destination 10.108.0.10:8080
+    -j DNAT --to-destination 10.200.7.10:8080
 ```
 
 **Result**: Attacker thinks they're attacking real system, but all traffic goes to honeypot for analysis.
@@ -380,7 +381,7 @@ sudo journalctl -u hookprobe-mitigation.service --since "1 hour ago"
 
 ```bash
 # Test connectivity
-curl http://10.107.0.10:8888/health
+curl http://10.200.6.12:8888/health
 
 # If fails, check Qsecbit container
 podman ps | grep qsecbit
@@ -527,7 +528,7 @@ sudo systemctl stop hookprobe-mitigation.timer
 sudo systemctl disable hookprobe-mitigation.timer
 
 # Remove honeypots
-sudo honeypot-manager.sh remove
+# sudo honeypot-manager.sh  # Planned feature remove
 
 # Remove files
 sudo rm -f /usr/local/bin/attack-mitigation-orchestrator.sh

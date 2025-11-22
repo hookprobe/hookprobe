@@ -16,7 +16,7 @@
 - [ ] Host IP address noted
 - [ ] Gateway IP address noted
 - [ ] Remote peer IP (if multi-host) noted
-- [ ] No IP conflicts with 10.100.0.0/16 range
+- [ ] No IP conflicts with 10.200.0.0/16 range
 - [ ] Firewall allows required ports (or will be configured)
 
 ### Cloudflare Tunnel Setup (Optional but Recommended)
@@ -128,10 +128,10 @@ podman ps -a
 ovs-vsctl show
 
 # Test network connectivity
-ping 10.101.0.10  # Django
-ping 10.102.0.10  # Logto
-ping 10.103.0.10  # PostgreSQL
-ping 10.105.0.17  # Rsyslog
+ping 10.200.1.10  # Django
+ping 10.200.2.10  # Logto
+ping 10.200.3.10  # PostgreSQL
+ping 10.200.5.17  # Rsyslog
 
 # Check rsyslog forwarding
 logger -t hookprobe-test "Test message from host"
@@ -515,7 +515,7 @@ crontab -e
 - [ ] Host IP address noted
 - [ ] Gateway IP address noted
 - [ ] Remote peer IP (if multi-host) noted
-- [ ] No IP conflicts with 10.100.0.0/16 range
+- [ ] No IP conflicts with 10.200.0.0/16 range
 - [ ] Firewall allows required ports (or will be configured)
 
 ---
@@ -598,9 +598,9 @@ podman ps -a
 ovs-vsctl show
 
 # Test network connectivity
-ping 10.101.0.10  # Django
-ping 10.102.0.10  # Logto
-ping 10.103.0.10  # PostgreSQL
+ping 10.200.1.10  # Django
+ping 10.200.2.10  # Logto
+ping 10.200.3.10  # PostgreSQL
 ```
 
 - [ ] All 6 PODs showing as "Running"
