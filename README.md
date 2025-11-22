@@ -503,10 +503,10 @@ nft add rule inet filter forward ip saddr 10.105.0.0/24 ip daddr 10.101.0.0/24 t
 - **[Deployment Checklist](Scripts/autonomous/install/checklist.md)** - Pre/post deployment tasks
 
 ### Optional Feature Documentation
-- **[n8n Integration](../main/blob/n8n/README.md)** - Workflow automation setup
-- **[n8n Checklist](../main/blob/n8n/integration-checklist.md)** - N8N Integration validation
-- **[Autonomous Blog Workflow](../main/blob/n8n/AI-blogging-workflow.md)** - Advanced content pipeline
-- **[LTE/5G Setup](../main/blob/LTE/README.md)** - Cellular connectivity guide
+- **[n8n Integration](../main/n8n/README.md)** - Workflow automation setup
+- **[n8n Checklist](../main/n8n/integration-checklist.md)** - N8N Integration validation
+- **[Autonomous Blog Workflow](../main/n8n/AI-blogging-workflow.md)** - Advanced content pipeline
+- **[LTE/5G Setup](../main/LTE/README.md)** - Cellular connectivity guide
 
 ### Configuration Files
 - **[network-config.sh](Scripts/autonomous/install/network-config.sh)** - Main network configuration
