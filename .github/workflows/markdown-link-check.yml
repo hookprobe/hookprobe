@@ -1,0 +1,45 @@
+name: Markdown Link Check
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - '**.md'
+      - '.github/workflows/markdown-link-check.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - '**.md'
+      - '.github/workflows/markdown-link-check.yml'
+  schedule:
+    # Run weekly on Monday at 00:00 UTC to catch broken external links
+    - cron: '0 0 * * 1'
+
+jobs:
+  markdown-link-check:
+    name: Check Markdown Links
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check links in markdown files
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          use-verbose-mode: 'no'
+          config-file: '.github/markdown-link-check-config.json'
+          check-modified-files-only: 'no'
+
+      - name: Comment on PR (if broken links found)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '⚠️ Broken links detected in markdown files. Please review the logs and fix the links before merging.'
+            })

@@ -470,10 +470,10 @@ Screenshots, mockups, examples, etc.
 
 Contributors are recognized in:
 
-1. **CONTRIBUTORS.md** - All contributors listed
-2. **Release Notes** - Mentioned in changelogs
-3. **Git History** - Permanent record
-4. **Social Media** - Highlighted (with permission)
+1. **CHANGELOG.md** - All contributors mentioned in release notes
+2. **Git History** - Permanent record of all contributions
+3. **Social Media** - Highlighted (with permission)
+4. **GitHub Contributors** - Automatically tracked by GitHub
 
 ---
 

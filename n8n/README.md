@@ -22,8 +22,8 @@ This integration adds n8n workflow automation to HookProbe, enabling:
 - **MCP Server**: AI content generation API
 
 ### Network Details
-- **VNI**: 108 (isolated automation network)
-- **Subnet**: 10.108.0.0/24
+- **VNI**: 208 (isolated automation network)
+- **Subnet**: 10.200.8.0/24
 - **Encryption**: PSK-encrypted VXLAN
 - **Integration**: Full access to PODs 001-007
 
@@ -90,25 +90,25 @@ Internet
   ↓
 HookProbe Host
   ↓
-OVS Bridge (ovs-br0)
-  ├─ VNI 101: POD 001 (Django CMS)
-  ├─ VNI 107: POD 007 (Qsecbit AI)
-  └─ VNI 108: POD 008 (n8n Automation) ← NEW
-       ├─ n8n (10.108.0.10:5678)
-       ├─ PostgreSQL (10.108.0.11)
-       ├─ Redis (10.108.0.12)
-       ├─ Chromium (10.108.0.13)
-       └─ MCP Server (10.108.0.15:8889)
+OVS Bridge (qsec-bridge)
+  ├─ VNI 201: POD 001 (Web DMZ)
+  ├─ VNI 206: POD 006 (Security)
+  └─ VNI 208: POD 008 (n8n Automation) ← NEW
+       ├─ n8n (10.200.8.10:5678)
+       ├─ PostgreSQL (10.200.8.11)
+       ├─ Redis (10.200.8.12)
+       ├─ Chromium (10.200.8.13)
+       └─ MCP Server (10.200.8.15:8889)
 ```
 
 ### Service URLs
 
 | Service | Internal IP | External URL | Purpose |
 |---------|-------------|--------------|---------|
-| n8n | 10.108.0.10 | http://HOST:5678 | Workflow UI |
-| MCP Server | 10.108.0.15 | http://HOST:8889 | AI API |
-| Django CMS | 10.101.0.10 | http://HOST:80 | Content target |
-| Qsecbit | 10.107.0.10 | http://HOST:8888 | Security data |
+| n8n | 10.200.8.10 | http://HOST:5678 | Workflow UI |
+| MCP Server | 10.200.8.15 | http://HOST:8889 | AI API |
+| Django CMS | 10.200.1.12 | http://HOST:80 | Content target |
+| Qsecbit | 10.200.6.12 | http://HOST:8888 | Security data |
 
 ### AI API Configuration
 
@@ -219,7 +219,7 @@ If Relevant →
 
 ## 🔌 MCP Server API Reference
 
-Base URL: `http://10.108.0.15:8889`
+Base URL: `http://10.200.8.15:8889`
 
 ### Health Check
 ```bash
@@ -460,7 +460,7 @@ limiter = Limiter(
 
 ### 3. Network Isolation
 
-n8n runs in isolated VNI 108:
+n8n runs in isolated VNI 208:
 - No direct internet access (proxied)
 - Can only reach specified PODs
 - All traffic encrypted via VXLAN
@@ -519,7 +519,7 @@ curl http://localhost:8889/health
 grep "API_KEY" n8n_network-config.sh
 
 # 2. Can't reach Django CMS
-curl http://10.101.0.10:8000/api/
+curl http://10.200.1.12:8000/api/
 
 # 3. Restart MCP
 podman restart hookprobe-pod-008-automation-mcp
@@ -547,7 +547,7 @@ podman exec hookprobe-pod-008-automation-redis redis-cli ping
 podman logs hookprobe-pod-008-automation-chromium
 
 # Test Chromium endpoint
-curl http://10.108.0.13:3000
+curl http://10.200.8.13:3000
 
 # Common issues:
 # 1. Memory limit reached (increase with --shm-size)
@@ -588,11 +588,11 @@ Add to existing monitoring (POD 005):
 scrape_configs:
   - job_name: 'n8n'
     static_configs:
-      - targets: ['10.108.0.10:5678']
-  
+      - targets: ['10.200.8.10:5678']
+
   - job_name: 'mcp-server'
     static_configs:
-      - targets: ['10.108.0.15:8889']
+      - targets: ['10.200.8.15:8889']
 ```
 
 ---
@@ -740,7 +740,7 @@ podman logs hookprobe-pod-008-automation-mcp
 │  Logs:       podman pod logs POD_008    │
 │                                          │
 │  POD 008: Automation & Content Gen      │
-│  VNI: 108 | Subnet: 10.108.0.0/24       │
+│  VNI: 208 | Subnet: 10.200.8.0/24       │
 └─────────────────────────────────────────┘
 ```
 

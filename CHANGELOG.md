@@ -25,8 +25,8 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 #### Attack Mitigation System
 - `attack-mitigation-orchestrator.sh` - Main attack detection and response engine
 - `mitigation-config.conf` - Centralized configuration for mitigation system
-- `honeypot-manager.sh` - Honeypot deployment and management
 - `mitigation-maintenance.sh` - Automated cleanup and optimization
+- `kali-response-scripts.sh` - Automated threat response functions
 - Systemd integration for automated mitigation (30-second intervals)
 
 #### Honeypot Infrastructure
@@ -46,10 +46,10 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 
 #### Documentation
 - `SECURITY.md` - Comprehensive security policy
-- `MIGRATION_GUIDE_v4_to_v5.md` - Upgrade instructions
-- `RELEASE_NOTES_v5.0.md` - Full release documentation
-- `CHANGELOG.md` - This file
+- `CLAUDE.md` - AI assistant guide for codebase
+- `CHANGELOG.md` - This file (version history)
 - Enhanced installation guides
+- Comprehensive troubleshooting documentation
 
 #### Network Architecture
 - Simplified single OVS bridge (`qsec-bridge`)

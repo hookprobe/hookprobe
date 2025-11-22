@@ -1,0 +1,42 @@
+# ShellCheck configuration for HookProbe
+# See: https://github.com/koalaman/shellcheck/wiki/Directive
+
+# Exclude specific checks
+# SC1090: Can't follow non-constant source
+disable=SC1090
+
+# SC1091: Not following sourced files
+disable=SC1091
+
+# SC2148: Tips about adding shebang (we have them)
+# Only disable if you're sure all scripts have shebangs
+# disable=SC2148
+
+# SC2034: Variable appears unused
+# Sometimes we have variables for documentation or future use
+# disable=SC2034
+
+# SC2086: Double quote to prevent globbing
+# We're careful about this, but sometimes we want word splitting
+# disable=SC2086
+
+# SC2155: Declare and assign separately to avoid masking return values
+# This is a style preference
+# disable=SC2155
+
+# Severity level (error, warning, info, style)
+# Only show errors and warnings by default
+# severity=warning
+
+# Shell dialect
+# Specify bash explicitly for all scripts
+shell=bash
+
+# Enable optional checks
+# SC2250: Prefer putting braces around variable references
+enable=check-unassigned-uppercase
+
+# Additional optional checks
+enable=quote-safe-variables
+enable=avoid-nullary-conditions
+enable=require-variable-braces
