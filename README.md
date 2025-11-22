@@ -503,20 +503,15 @@ nft add rule inet filter forward ip saddr 10.105.0.0/24 ip daddr 10.101.0.0/24 t
 - **[Deployment Checklist](Scripts/autonomous/install/checklist.md)** - Pre/post deployment tasks
 
 ### Optional Feature Documentation
-- **[n8n Integration](Scripts/autonomous/install/N8N_README.md)** - Workflow automation setup
-- **[n8n Checklist](Scripts/autonomous/install/N8N_INTEGRATION_CHECKLIST.md)** - Integration validation
-- **[Autonomous Blog Workflow](Scripts/autonomous/install/AUTONOMOUS_BLOG_WORKFLOW.md)** - Advanced content pipeline
-- **[LTE/5G Setup](LTE/README.md)** - Cellular connectivity guide
+- **[n8n Integration](../main/blob/n8n/README.md)** - Workflow automation setup
+- **[n8n Checklist](../main/blob/n8n/integration-checklist.md)** - N8N Integration validation
+- **[Autonomous Blog Workflow](../main/blob/n8n/AI-blogging-workflow.md)** - Advanced content pipeline
+- **[LTE/5G Setup](../main/blob/LTE/README.md)** - Cellular connectivity guide
 
 ### Configuration Files
 - **[network-config.sh](Scripts/autonomous/install/network-config.sh)** - Main network configuration
 - **[n8n_network-config.sh](Scripts/autonomous/install/n8n_network-config.sh)** - n8n network settings
 - **[Qsecbit Algorithm](Scripts/autonomous/qsecbit.py)** - Threat analysis implementation
-
-### Workflow Examples
-- **[daily-blog-post.json](Scripts/autonomous/install/n8n-workflows/)** - Automated content generation
-- **[qsecbit-monitor.json](Scripts/autonomous/install/n8n-workflows/)** - Security monitoring
-- **[Kali Response Scripts](Scripts/autonomous/install/kali-response-scripts.sh)** - Attack mitigation
 
 ---
 
@@ -677,8 +672,3 @@ See [LICENSE](LICENSE) for details.
 **Built with ❤️ for the security community**
 
 *HookProbe - Leading the Charge in Cybersecurity*
-
-
-[![hookprobe budget](images/hookprobe-r&d.png)](hookprobe-r&d.md)
-
-[![hookprobe budget](images/xSOC-HLD-v1.2.png)](/Documents/SecurityMitigationPlan.md)
