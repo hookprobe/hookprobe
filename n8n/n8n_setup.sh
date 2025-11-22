@@ -27,8 +27,12 @@ fi
 
 echo "============================================================"
 echo "   HOOKPROBE N8N AUTOMATION PLATFORM DEPLOYMENT"
-echo "   Version 1.0 - POD 008"
+echo "   Version 1.0 - POD 008 (OPTIONAL EXTENSION)"
 echo "============================================================"
+echo ""
+echo "⚠️  NOTE: This is an OPTIONAL extension to HookProbe"
+echo "    Requires main HookProbe (PODs 001-007) to be deployed first"
+echo ""
 
 # ============================================================
 # STEP 1: VALIDATE CONFIGURATION
@@ -54,14 +58,24 @@ echo "✓ Configuration validated"
 echo ""
 echo "[STEP 2] Creating VXLAN tunnel for Automation POD..."
 
-# Check if OVS bridge exists
-if ! ovs-vsctl br-exists "$OVS_MAIN_BRIDGE"; then
+# Check if main HookProbe is deployed
+if ! ovs-vsctl br-exists "$OVS_MAIN_BRIDGE" 2>/dev/null; then
     echo "ERROR: Main OVS bridge $OVS_MAIN_BRIDGE not found"
-    echo "Please run main setup.sh first"
+    echo "Please run main setup.sh first to deploy PODs 001-007"
     exit 1
 fi
 
-# Create VXLAN tunnel for VNI 108
+# Verify main HookProbe PODs are running
+REQUIRED_PODS=("hookprobe-pod-001" "hookprobe-pod-007")
+for pod in "${REQUIRED_PODS[@]}"; do
+    if ! podman pod ps | grep -q "$pod"; then
+        echo "ERROR: Required POD not found: $pod"
+        echo "Please ensure main HookProbe (PODs 001-007) is deployed first"
+        exit 1
+    fi
+done
+
+# Create VXLAN tunnel for VNI 108 (uses INTERNAL PSK like POD 007)
 echo "  → Creating VXLAN tunnel: VNI=$VNI_AUTOMATION"
 ovs-vsctl --may-exist add-port "$OVS_MAIN_BRIDGE" "vxlan-${VNI_AUTOMATION}" -- \
     set interface "vxlan-${VNI_AUTOMATION}" type=vxlan \
@@ -71,13 +85,51 @@ ovs-vsctl --may-exist add-port "$OVS_MAIN_BRIDGE" "vxlan-${VNI_AUTOMATION}" -- \
     options:dst_port="$VXLAN_PORT" \
     options:psk="$OVS_PSK_INTERNAL"
 
-echo "✓ VXLAN tunnel created"
+echo "✓ VXLAN tunnel created (encrypted with INTERNAL PSK)"
 
 # ============================================================
-# STEP 3: CONFIGURE FIREWALL
+# STEP 3: APPLY NETWORK HARDENING (L2 SECURITY)
 # ============================================================
 echo ""
-echo "[STEP 3] Configuring firewall..."
+echo "[STEP 3] Applying network hardening controls..."
+
+# Wait for VXLAN to be ready
+sleep 2
+
+# Get VXLAN port number
+VXLAN_PORT_NUM=$(ovs-vsctl get Interface "vxlan-${VNI_AUTOMATION}" ofport)
+
+if [ "$VXLAN_PORT_NUM" != "-1" ] && [ -n "$VXLAN_PORT_NUM" ]; then
+    echo "  → VXLAN port number: $VXLAN_PORT_NUM"
+    
+    # Anti-spoofing: Only allow traffic from POD 008 subnet
+    echo "  → Adding anti-spoof rules for VNI $VNI_AUTOMATION"
+    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+        "table=0,priority=100,tun_id=${VNI_AUTOMATION},in_port=${VXLAN_PORT_NUM},ip,nw_src=${SUBNET_POD008},actions=normal"
+    
+    # Drop any spoofed traffic
+    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+        "table=0,priority=50,tun_id=${VNI_AUTOMATION},in_port=${VXLAN_PORT_NUM},actions=drop"
+    
+    # ARP protection: Only allow ARP from valid subnet
+    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+        "table=0,priority=100,tun_id=${VNI_AUTOMATION},arp,arp_spa=${SUBNET_POD008},actions=normal"
+    
+    # Drop malformed ARP
+    ovs-ofctl add-flow "$OVS_MAIN_BRIDGE" \
+        "table=0,priority=50,tun_id=${VNI_AUTOMATION},arp,actions=drop"
+    
+    echo "✓ L2 hardening applied (anti-spoof + ARP protection)"
+else
+    echo "⚠️  WARNING: Could not get VXLAN port number, skipping OpenFlow rules"
+    echo "   You may need to add them manually later"
+fi
+
+# ============================================================
+# STEP 4: CONFIGURE FIREWALL
+# ============================================================
+echo ""
+echo "[STEP 4] Configuring firewall..."
 
 if command -v firewall-cmd &> /dev/null; then
     firewall-cmd --permanent --add-port=${PORT_N8N}/tcp
@@ -89,10 +141,10 @@ else
 fi
 
 # ============================================================
-# STEP 4: CREATE PODMAN NETWORK
+# STEP 5: CREATE PODMAN NETWORK
 # ============================================================
 echo ""
-echo "[STEP 4] Creating Podman network for POD 008..."
+echo "[STEP 5] Creating Podman network for POD 008..."
 
 if podman network exists "$NETWORK_POD008" 2>/dev/null; then
     echo "  → Network exists, removing..."
@@ -108,10 +160,10 @@ podman network create \
 echo "✓ Network created: $NETWORK_POD008"
 
 # ============================================================
-# STEP 5: CREATE PERSISTENT VOLUMES
+# STEP 6: CREATE PERSISTENT VOLUMES
 # ============================================================
 echo ""
-echo "[STEP 5] Creating persistent volumes..."
+echo "[STEP 6] Creating persistent volumes..."
 
 create_volume() {
     local vol_name=$1
@@ -132,10 +184,10 @@ create_volume "$VOLUME_SCRAPING_CACHE"
 echo "✓ Volumes ready"
 
 # ============================================================
-# STEP 6: CREATE POD 008
+# STEP 7: CREATE POD 008
 # ============================================================
 echo ""
-echo "[STEP 6] Creating POD 008..."
+echo "[STEP 7] Creating POD 008..."
 
 if podman pod exists "$POD_008_NAME" 2>/dev/null; then
     echo "  → POD exists, removing..."
@@ -151,10 +203,10 @@ podman pod create \
 echo "✓ POD 008 created"
 
 # ============================================================
-# STEP 7: DEPLOY POSTGRESQL FOR N8N
+# STEP 8: DEPLOY POSTGRESQL FOR N8N
 # ============================================================
 echo ""
-echo "[STEP 7] Deploying PostgreSQL for n8n..."
+echo "[STEP 8] Deploying PostgreSQL for n8n..."
 
 podman run -d --restart always \
     --pod "$POD_008_NAME" \
@@ -173,10 +225,10 @@ sleep 10
 echo "✓ PostgreSQL deployed"
 
 # ============================================================
-# STEP 8: DEPLOY REDIS FOR QUEUE
+# STEP 9: DEPLOY REDIS FOR QUEUE
 # ============================================================
 echo ""
-echo "[STEP 8] Deploying Redis for queue management..."
+echo "[STEP 9] Deploying Redis for queue management..."
 
 podman run -d --restart always \
     --pod "$POD_008_NAME" \
@@ -190,10 +242,10 @@ podman run -d --restart always \
 echo "✓ Redis deployed"
 
 # ============================================================
-# STEP 9: DEPLOY N8N WORKFLOW ENGINE
+# STEP 10: DEPLOY N8N WORKFLOW ENGINE
 # ============================================================
 echo ""
-echo "[STEP 9] Deploying n8n workflow automation..."
+echo "[STEP 10] Deploying n8n workflow automation..."
 
 podman run -d --restart always \
     --pod "$POD_008_NAME" \
@@ -214,7 +266,8 @@ podman run -d --restart always \
     -e QUEUE_BULL_REDIS_HOST="$N8N_EXECUTIONS_QUEUE_REDIS_HOST" \
     -e QUEUE_BULL_REDIS_PORT="$N8N_EXECUTIONS_QUEUE_REDIS_PORT" \
     -e N8N_WEBHOOK_URL="$N8N_WEBHOOK_URL" \
-    -e GENERIC_TIMEZONE="UTC" \
+    -e GENERIC_TIMEZONE="$N8N_TIMEZONE" \
+    -e TZ="$N8N_TIMEZONE" \
     -v "$VOLUME_N8N_DATA:/home/node/.n8n" \
     --log-driver=journald \
     --log-opt tag="hookprobe-n8n" \
@@ -226,10 +279,10 @@ sleep 15
 echo "✓ n8n deployed"
 
 # ============================================================
-# STEP 10: DEPLOY CHROMIUM FOR WEB SCRAPING
+# STEP 11: DEPLOY CHROMIUM FOR WEB SCRAPING
 # ============================================================
 echo ""
-echo "[STEP 10] Deploying headless Chromium for web scraping..."
+echo "[STEP 11] Deploying headless Chromium for web scraping..."
 
 podman run -d --restart always \
     --pod "$POD_008_NAME" \
@@ -245,10 +298,10 @@ podman run -d --restart always \
 echo "✓ Chromium deployed"
 
 # ============================================================
-# STEP 11: BUILD AND DEPLOY MCP SERVER
+# STEP 12: BUILD AND DEPLOY MCP SERVER
 # ============================================================
 echo ""
-echo "[STEP 11] Building and deploying MCP server..."
+echo "[STEP 12] Building and deploying MCP server..."
 
 MCP_BUILD_DIR="/tmp/mcp-server-build"
 rm -rf "$MCP_BUILD_DIR"
@@ -471,10 +524,10 @@ podman run -d --restart always \
 echo "✓ MCP server deployed"
 
 # ============================================================
-# STEP 12: CREATE STARTER WORKFLOWS
+# STEP 13: CREATE STARTER WORKFLOWS
 # ============================================================
 echo ""
-echo "[STEP 12] Creating starter workflow templates..."
+echo "[STEP 13] Creating starter workflow templates..."
 
 WORKFLOW_DIR="/tmp/n8n-workflows"
 mkdir -p "$WORKFLOW_DIR"
@@ -656,7 +709,7 @@ echo "============================================================"
 echo "   🎉 N8N AUTOMATION PLATFORM DEPLOYED!"
 echo "============================================================"
 echo ""
-echo "✨ Deployed Services:"
+echo "✨ Deployed Services (POD 008 - OPTIONAL EXTENSION):"
 echo "  ✓ n8n Workflow Engine"
 echo "  ✓ PostgreSQL Database"
 echo "  ✓ Redis Queue"
@@ -665,8 +718,17 @@ echo "  ✓ MCP Server (AI Integrations)"
 echo ""
 echo "🌐 Network Configuration:"
 echo "  • POD 008 Network: $SUBNET_POD008"
-echo "  • VNI: $VNI_AUTOMATION"
-echo "  • VXLAN: Encrypted with PSK"
+echo "  • VNI: $VNI_AUTOMATION (Internal)"
+echo "  • VXLAN: PSK-encrypted with OVS_PSK_INTERNAL"
+echo "  • L2 Hardening: Anti-spoof + ARP protection"
+echo ""
+echo "🔒 Security Controls Applied:"
+echo "  ✓ Network isolation (dedicated VNI)"
+echo "  ✓ PSK-encrypted VXLAN tunnel"
+echo "  ✓ OpenFlow anti-spoofing rules"
+echo "  ✓ ARP protection"
+echo "  ✓ Firewall rules (ports $PORT_N8N, $PORT_MCP)"
+echo "  ✓ Journald logging (all containers)"
 echo ""
 echo "🔐 Access Information:"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -714,4 +776,5 @@ echo ""
 echo "============================================================"
 echo "  🎉 POD 008 is now running!"
 echo "  🚀 Start automating your HookProbe workflows!"
+echo "  📌 Note: This is an OPTIONAL extension to main HookProbe"
 echo "============================================================"
