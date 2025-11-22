@@ -3,29 +3,76 @@
 # kali-response-scripts.sh
 # Automated attack mitigation scripts for Kali Linux container
 #
+# License: MIT
+#
+
+set -e  # Exit on error
+set -u  # Exit on undefined variable
+set -o pipefail  # Exit on pipe failure
+
+# ============================================================
+# INPUT VALIDATION
+# ============================================================
+
+validate_ip() {
+    local ip=$1
+    # Validate IPv4 address format
+    if [[ ! $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "ERROR: Invalid IP address: $ip" >&2
+        return 1
+    fi
+    return 0
+}
+
+sanitize_pattern() {
+    local pattern=$1
+    # Remove potentially dangerous characters
+    echo "$pattern" | tr -cd '[:alnum:][:space:]._-'
+}
 
 # ============================================================
 # ANTI-XSS INJECTION RESPONSE
 # ============================================================
 
 anti_xss_response() {
-    local ATTACK_IP=$1
-    local ATTACK_PATTERN=$2
+    local ATTACK_IP=${1:-}
+    local ATTACK_PATTERN=${2:-}
     local TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    
+
+    # Validate inputs
+    if [ -z "$ATTACK_IP" ] || [ -z "$ATTACK_PATTERN" ]; then
+        echo "ERROR: Missing required parameters" >&2
+        echo "Usage: anti_xss_response <ATTACK_IP> <ATTACK_PATTERN>" >&2
+        return 1
+    fi
+
+    if ! validate_ip "$ATTACK_IP"; then
+        echo "ERROR: Invalid IP address: $ATTACK_IP" >&2
+        return 1
+    fi
+
+    # Sanitize attack pattern
+    ATTACK_PATTERN=$(sanitize_pattern "$ATTACK_PATTERN")
+
     echo "🛡️  [XSS DEFENSE] Initiating anti-XSS countermeasures..."
     echo "Attack IP: $ATTACK_IP"
     echo "Pattern: $ATTACK_PATTERN"
-    
+
     # 1. Update NAXSI WAF rules
-    cat >> /reports/naxsi_custom_rules_${TIMESTAMP}.rules << EOF
+    if ! cat >> /reports/naxsi_custom_rules_${TIMESTAMP}.rules << EOF; then
+        echo "ERROR: Failed to create WAF rules" >&2
+        return 1
+    fi
 # Auto-generated XSS blocking rule - ${TIMESTAMP}
 MainRule "str:${ATTACK_PATTERN}" "msg:XSS attack blocked" "mz:\$ARGS|\$BODY" "s:\$XSS:8" id:9${TIMESTAMP:0:6};
 EOF
     
     # 2. Add firewall rule to block attacker IP
     echo "Blocking IP: $ATTACK_IP"
-    iptables -I INPUT -s $ATTACK_IP -j DROP
+    if ! iptables -I INPUT -s "$ATTACK_IP" -j DROP; then
+        echo "WARNING: Failed to block IP in firewall" >&2
+        # Continue anyway
+    fi
     
     # 3. Scan attacker for vulnerabilities
     echo "Scanning attacker infrastructure..."
