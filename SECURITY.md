@@ -190,7 +190,7 @@ HookProbe includes multiple layers of security:
 **Design**: Several internal APIs exposed for system communication.
 
 **Mitigation**:
-- APIs only accessible within 10.100.0.0/16 network
+- APIs only accessible within 10.200.0.0/16 network
 - No authentication required for internal APIs (trust model)
 - Use firewall rules to restrict external access
 - Consider adding API authentication for production
