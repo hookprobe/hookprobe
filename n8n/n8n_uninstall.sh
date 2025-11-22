@@ -18,7 +18,7 @@ else
     POD_008_NAME="hookprobe-pod-008-automation"
     NETWORK_POD008="pod008-automation-net"
     OVS_MAIN_BRIDGE="ovs-br0"
-    VNI_AUTOMATION=108
+    VNI_AUTOMATION=208
     PORT_N8N=5678
     PORT_MCP=8889
 fi
