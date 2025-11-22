@@ -7,6 +7,10 @@
 
 ---
 
+![Hookprobe Cloud Orchestrator](images/hookprobe-cloud-orchestrator.png)
+
+---
+
 ## Executive Summary
 
 This document provides research on mini data center platforms and a detailed Kubernetes implementation plan for HookProbe's centralized backend. The goal is to create a one-stop control panel for complex AI/ML tasks, GPU-accelerated workloads, and scalable autonomous operations that complement the edge SBC deployments.
