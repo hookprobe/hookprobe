@@ -1,4 +1,4 @@
-# HookProbe v4.0 - AI-Powered Cybersecurity Platform
+# HookProbe v5.0 - AI-Powered Cybersecurity Platform
 
 **Complete 7-POD infrastructure with automated threat response**
 
