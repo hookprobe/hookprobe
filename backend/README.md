@@ -43,6 +43,7 @@ This document provides research on mini data center platforms and a detailed Kub
 - Native clustering (HA, live migration)
 
 **Strengths:**
+
 ✅ **Zero licensing cost** - No per-core or per-VM fees  
 ✅ **Full-featured** - HA, clustering, backup, snapshots included  
 ✅ **Kubernetes-friendly** - Excellent VM provisioning for K8s nodes  
@@ -53,18 +54,21 @@ This document provides research on mini data center platforms and a detailed Kub
 ✅ **Active community** - Rapid growth, 5,339+ companies using it
 
 **Weaknesses:**
+
 ⚠️ **Less polished UI** - More manual configuration than VMware  
 ⚠️ **Storage setup complexity** - Ceph/ZFS requires planning  
 ⚠️ **Learning curve** - Less "wizardized" than VMware  
 ⚠️ **Fewer integrations** - Not as many third-party tools
 
 **Best For:**
+
 - Cost-sensitive deployments
 - Homelab to production scaling
 - Organizations valuing open source
 - **HookProbe backend** (perfect fit!)
 
 **Cost Analysis:**
+
 - Base software: **$0**
 - Optional enterprise repo: ~€90/year per node (updates, support)
 - Total 3-node cluster: ~€270/year vs. VMware's $15,000-$50,000+
@@ -74,12 +78,14 @@ This document provides research on mini data center platforms and a detailed Kub
 #### B. **VMware vSphere/ESXi**
 
 **Architecture:**
+
 - Type-1 bare-metal hypervisor (ESXi)
 - vCenter for management
 - vSAN for storage (optional)
 - NSX for networking (optional)
 
 **Strengths:**
+
 ✅ Mature, enterprise-grade  
 ✅ Best-in-class ecosystem  
 ✅ Excellent third-party integrations  
@@ -87,12 +93,14 @@ This document provides research on mini data center platforms and a detailed Kub
 ✅ Strong certification/compliance support
 
 **Weaknesses:**
+
 ❌ **Extreme cost increase** - 2x to 5x post-Broadcom acquisition  
 ❌ **72-core minimum licensing** - Excessive for small deployments  
 ❌ **No free version** - ESXi Free discontinued  
 ❌ **Vendor lock-in** - Proprietary stack
 
 **Best For:**
+
 - Large enterprises with existing VMware investments
 - Regulated industries requiring vendor support
 - **NOT recommended for HookProbe** due to cost
@@ -102,22 +110,26 @@ This document provides research on mini data center platforms and a detailed Kub
 #### C. **Microsoft Hyper-V**
 
 **Architecture:**
+
 - Type-1 hypervisor on Windows Server
 - System Center for management
 - Failover clustering built-in
 
 **Strengths:**
+
 ✅ Included with Windows Server licenses  
 ✅ Excellent Windows VM performance  
 ✅ Good integration with Microsoft stack  
 ✅ Familiar to Windows admins
 
 **Weaknesses:**
+
 ⚠️ Windows Server licensing required  
 ⚠️ Less flexible than Proxmox for Linux workloads  
 ⚠️ Limited storage options vs. Proxmox
 
 **Best For:**
+
 - Windows-heavy environments
 - Organizations with existing Microsoft EAs
 
@@ -126,6 +138,7 @@ This document provides research on mini data center platforms and a detailed Kub
 #### D. **Nutanix AHV**
 
 **Strengths:**
+
 ✅ Hyper-converged infrastructure (HCI)  
 ✅ Excellent management (Prism)  
 ✅ Good performance
@@ -203,10 +216,12 @@ This document provides research on mini data center platforms and a detailed Kub
 ```
 
 **Advantages:**
+
 - ✅ Lower resource overhead
 - ✅ Faster startup
 
 **Disadvantages:**
+
 - ❌ Fragile (kernel module issues)
 - ❌ Persistent storage problems (Longhorn, Rook don't work well)
 - ❌ Requires manual configuration (AppArmor, mounts)
@@ -221,10 +236,12 @@ This document provides research on mini data center platforms and a detailed Kub
 Kubernetes installed directly on Proxmox hosts (running alongside Proxmox).
 
 **Advantages:**
+
 - ✅ Maximum performance (no VM overhead)
 - ✅ Direct hardware access
 
 **Disadvantages:**
+
 - ❌ Complex etcd quorum management
 - ❌ Risk to Proxmox if K8s fails
 - ❌ Harder to manage
