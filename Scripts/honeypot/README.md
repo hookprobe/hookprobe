@@ -1,30 +1,31 @@
 # 🛡️ HookProbe Stage 3: Attack Mitigation System
 
-### 📦 Core Scripts (5 Files)
+### 📦 Core Scripts (3 Current + 2 Planned)
 
-1. **attack-mitigation-orchestrator.sh** (Main Engine)
+1. **attack-mitigation-orchestrator.sh** ✅ (Main Engine)
    - Multi-source attack detection
    - Automated mitigation decisions
    - Email notifications
    - Qsecbit integration
    - **Lines**: ~600
 
-2. **mitigation-config.conf** (Configuration)
+2. **mitigation-config.conf** ✅ (Configuration)
    - All system settings
    - Customizable thresholds
    - API endpoints
    - Attack patterns
    - **Lines**: ~200
 
-3. **honeypot-manager.sh** (Honeypot Control)
-   - Deploy/manage honeypots
+3. **honeypot-manager.sh** 🚧 (Planned - Honeypot Control)
+   - **Status**: Planned for future release
+   - Will deploy/manage honeypots
    - Cowrie (SSH/Telnet)
    - Dionaea (Multi-protocol)
    - Web honeypot
    - Attacker behavior analysis
-   - **Lines**: ~400
+   - **Note**: Currently honeypots are managed via POD 007 deployment
 
-4. **mitigation-maintenance.sh** (System Maintenance)
+4. **mitigation-maintenance.sh** ✅ (System Maintenance)
    - Cleanup old data
    - Optimize iptables
    - Health checks
@@ -112,13 +113,14 @@ cd /opt/hookprobe/mitigation
 
 # Install
 sudo cp attack-mitigation-orchestrator.sh /usr/local/bin/
-sudo cp honeypot-manager.sh /usr/local/bin/
+# Note: honeypot-manager.sh is planned for future release
+# sudo cp honeypot-manager.sh /usr/local/bin/
 sudo cp mitigation-maintenance.sh /usr/local/bin/
 sudo cp mitigation-config.conf /etc/hookprobe/
-sudo chmod +x /usr/local/bin/{attack-mitigation-orchestrator,honeypot-manager,mitigation-maintenance}.sh
+sudo chmod +x /usr/local/bin/{attack-mitigation-orchestrator,# honeypot-manager,  # Plannedmitigation-maintenance}.sh
 
 # Deploy honeypots
-sudo honeypot-manager.sh deploy
+# sudo honeypot-manager.sh  # Planned feature deploy
 
 # Enable automation
 sudo systemctl enable --now hookprobe-mitigation.timer
@@ -342,10 +344,10 @@ QSECBIT_AMBER_THRESHOLD=0.55  # Less sensitive
 
 ```bash
 # Analyze specific attacker
-sudo honeypot-manager.sh analyze 203.0.113.100
+# sudo honeypot-manager.sh  # Planned feature analyze 203.0.113.100
 
 # Export all logs
-sudo honeypot-manager.sh export
+# sudo honeypot-manager.sh  # Planned feature export
 # Creates: /tmp/hookprobe-honeypot-export-TIMESTAMP.tar.gz
 
 # View Cowrie sessions

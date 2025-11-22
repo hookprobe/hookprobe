@@ -1,0 +1,283 @@
+# HookProbe .gitignore
+# Prevents committing sensitive data, temporary files, and build artifacts
+
+# ============================================================
+# CRITICAL: SECRETS AND CREDENTIALS
+# ============================================================
+# Never commit files with actual credentials
+*CHANGE_ME*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.secret
+
+# SSH keys
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.ppk
+
+# ============================================================
+# PYTHON
+# ============================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.hypothesis/
+.pytest_cache/
+test-results/
+junit.xml
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ============================================================
+# EDITORS AND IDEs
+# ============================================================
+# VSCode
+.vscode/
+*.code-workspace
+.history/
+
+# IntelliJ / PyCharm
+.idea/
+*.iml
+*.iws
+out/
+
+# Vim
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+Session.vim
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================
+# OPERATING SYSTEMS
+# ============================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+.nfs*
+
+# ============================================================
+# HOOKPROBE SPECIFIC
+# ============================================================
+# Deployment artifacts
+/var/log/hookprobe/
+/var/lib/hookprobe/
+/opt/hookprobe/
+/tmp/hookprobe-*
+/tmp/n8n-workflows/
+/tmp/mcp-server-build/
+
+# Container volumes and data
+*.tar
+*.tar.gz
+*-backup.tar
+*-backup.tar.gz
+hookprobe-backup-*/
+n8n-data-backup.tar
+n8n-db-backup.tar
+grafana-data/
+postgres-data/
+victoriametrics-data/
+redis-data/
+
+# OVS and network configs (if generated)
+ovs-db-backup/
+network-state-*.json
+
+# Logs
+*.log
+logs/
+*.out
+*.err
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Generated documentation
+docs/_build/
+site/
+
+# Test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+test-output/
+bandit-report.json
+shellcheck-report.txt
+
+# ============================================================
+# PACKAGE MANAGERS AND DEPENDENCIES
+# ============================================================
+# Node.js (if used for n8n development)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ============================================================
+# SECURITY AND CERTIFICATES
+# ============================================================
+# SSL/TLS certificates (except examples)
+*.csr
+*.der
+!example.crt
+!example.key
+
+# GPG
+*.gpg
+*.asc
+!*.asc.example
+
+# ============================================================
+# MISC
+# ============================================================
+# Archives
+*.zip
+*.gz
+*.bz2
+*.7z
+*.rar
+*.iso
+*.dmg
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Core dumps
+core
+core.*
+*.core
+
+# Local configuration overrides
+local.conf
+*.local
+config.local.sh
+
+# IDE-specific debugging
+.vscode/launch.json
+.idea/workspace.xml
+
+# Git merge artifacts
+*.orig
+
+# MacOS network storage
+._.DS_Store

@@ -82,9 +82,10 @@ ZEEK_NOTICE_LOG="/opt/zeek/logs/current/notice.log"
 ```bash
 # Copy to system directories
 sudo cp attack-mitigation-orchestrator.sh /usr/local/bin/
-sudo cp honeypot-manager.sh /usr/local/bin/
+# Note: honeypot-manager.sh is planned for future release
+# sudo cp honeypot-manager.sh /usr/local/bin/
 sudo cp mitigation-maintenance.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/{attack-mitigation-orchestrator,honeypot-manager,mitigation-maintenance}.sh
+sudo chmod +x /usr/local/bin/{attack-mitigation-orchestrator,# honeypot-manager,  # Plannedmitigation-maintenance}.sh
 
 # Copy configuration
 sudo mkdir -p /etc/hookprobe
@@ -101,10 +102,10 @@ sudo mkdir -p /var/lib/hookprobe/reports
 
 ```bash
 # Deploy all honeypots
-sudo honeypot-manager.sh deploy
+# sudo honeypot-manager.sh  # Planned feature deploy
 
 # Verify deployment
-sudo honeypot-manager.sh stats
+# sudo honeypot-manager.sh  # Planned feature stats
 ```
 
 Expected output:
@@ -225,8 +226,8 @@ HONEYPOT_TELNET_PORT=2223   # Telnet honeypot
 HONEYPOT_HTTP_PORT=8080     # Web honeypot
 
 # Redeploy
-sudo honeypot-manager.sh remove
-sudo honeypot-manager.sh deploy
+# sudo honeypot-manager.sh  # Planned feature remove
+# sudo honeypot-manager.sh  # Planned feature deploy
 ```
 
 ### IP Whitelisting
@@ -278,13 +279,13 @@ ls -lt /var/lib/hookprobe/reports/attack_report_*.json | head -5
 
 ```bash
 # Show honeypot statistics
-sudo honeypot-manager.sh stats
+# sudo honeypot-manager.sh  # Planned feature stats
 
 # Analyze specific attacker
-sudo honeypot-manager.sh analyze 192.168.1.100
+# sudo honeypot-manager.sh  # Planned feature analyze 192.168.1.100
 
 # Export all honeypot logs
-sudo honeypot-manager.sh export
+# sudo honeypot-manager.sh  # Planned feature export
 ```
 
 ### Manual Operations
@@ -527,7 +528,7 @@ sudo systemctl stop hookprobe-mitigation.timer
 sudo systemctl disable hookprobe-mitigation.timer
 
 # Remove honeypots
-sudo honeypot-manager.sh remove
+# sudo honeypot-manager.sh  # Planned feature remove
 
 # Remove files
 sudo rm -f /usr/local/bin/attack-mitigation-orchestrator.sh
