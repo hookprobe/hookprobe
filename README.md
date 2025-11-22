@@ -232,7 +232,7 @@ sudo ./n8n_setup.sh
 - **n8n UI**: http://YOUR_IP:5678
 - **MCP API**: http://YOUR_IP:8889
 
-**Documentation**: See [N8N_README.md](../n8n/README.md) for complete guide
+**Documentation**: See [N8N_README.md](../main/n8n/README.md) for complete guide
 
 #### n8n Use Cases
 
