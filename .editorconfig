@@ -1,0 +1,56 @@
+# EditorConfig for HookProbe
+# https://editorconfig.org
+
+# Top-level EditorConfig file
+root = true
+
+# All files - basic settings
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Bash scripts
+[*.sh]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# Python files
+[*.py]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# Markdown files
+[*.md]
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = false
+max_line_length = 100
+
+# YAML files
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# JSON files
+[*.json]
+indent_style = space
+indent_size = 2
+
+# Configuration files
+[*.{conf,config,cfg}]
+indent_style = space
+indent_size = 4
+
+# Makefiles require tabs
+[Makefile]
+indent_style = tab
+indent_size = 4
+
+# Git files
+[.git*]
+indent_style = space
+indent_size = 2
