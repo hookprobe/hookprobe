@@ -1,371 +1,250 @@
 #!/bin/bash
 #
-# network-config.sh - HookProbe v5.0 Network Configuration
-# GPL-FREE - All components use MIT/Apache/BSD licenses
-# Version: 5.0 - Single bridge architecture with OpenFlow ACLs
+# n8n_network-config.sh - HookProbe n8n Automation Network Configuration
+# Version: 1.0 - POD 008 (OPTIONAL EXTENSION)
 #
-# This file contains all network and service configuration for HookProbe v5.0
+# ⚠️  IMPORTANT: This is an OPTIONAL extension to HookProbe
+#    Requires main HookProbe (PODs 001-007) to be deployed first
+#    This extends the existing architecture with workflow automation
+#
+# This configuration follows existing HookProbe patterns:
+#  - VNI allocation (108, next after 107)
+#  - IP allocation (10.108.0.0/24, matching existing pattern)
+#  - PSK encryption (uses OVS_PSK_INTERNAL for internal services)
+#  - Security hardening (OpenFlow rules, ARP protection)
 #
 
-# ============================================================
-# PHYSICAL HOST CONFIGURATION
-# ============================================================
-# (!!!) EDIT THESE TO MATCH YOUR ENVIRONMENT (!!!)
-HOST_A_IP="192.168.1.100"              # Physical IP of Host A
-HOST_B_IP="192.168.1.101"              # Physical IP of Host B (if multi-host)
-PHYSICAL_HOST_INTERFACE="eth0"         # Physical network interface (use 'ip a' to find)
-INTERNET_GATEWAY="192.168.1.1"         # Default gateway to internet
+# Source the main network config
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/network-config.sh" ]; then
+    source "$SCRIPT_DIR/network-config.sh"
+else
+    echo "ERROR: Main network-config.sh not found"
+    echo "Please ensure main HookProbe is deployed first"
+    exit 1
+fi
 
 # ============================================================
-# OVS BRIDGE CONFIGURATION (SIMPLIFIED)
+# POD 008 - AUTOMATION & CONTENT GENERATION (OPTIONAL)
 # ============================================================
-QSEC_BRIDGE="qsec-bridge"              # Single unified bridge for all VNIs
-QSEC_BRIDGE_IP="10.200.0.1/16"         # Bridge management IP
+# This POD is OPTIONAL and can be deployed independently
+# Follows existing HookProbe architecture patterns
+
+# VNI for Automation POD (next in sequence after POD 007)
+VNI_AUTOMATION=108
+
+# Subnet for POD 008 (follows 10.10X.0.0/24 pattern)
+SUBNET_POD008="10.108.0.0/24"
+GATEWAY_POD008="10.108.0.1"
+
+# IP Allocations for POD 008 (follows existing IP allocation pattern)
+IP_POD008_N8N="10.108.0.10"              # n8n workflow automation
+IP_POD008_N8N_DB="10.108.0.11"           # n8n PostgreSQL database
+IP_POD008_REDIS="10.108.0.12"            # Redis for queue management
+IP_POD008_CHROMIUM="10.108.0.13"         # Headless Chromium for scraping
+IP_POD008_MCP_SERVER="10.108.0.15"       # MCP server for AI integrations
+IP_POD008_RESERVED_1="10.108.0.20"       # Reserved for expansion
+IP_POD008_RESERVED_2="10.108.0.21"
+IP_POD008_RESERVED_3="10.108.0.22"
 
 # ============================================================
-# VXLAN ENCRYPTION (PSK) - CHANGE THESE!
+# N8N CONFIGURATION
 # ============================================================
-# CRITICAL: Must be identical on all hosts in cluster
-# Generate strong keys: openssl rand -base64 32
-VXLAN_PSK="HookProbe_VXLAN_Master_Key_2025_CHANGE_ME_NOW"
+
+# n8n basic settings
+N8N_PROTOCOL="http"
+N8N_HOST="${IP_POD008_N8N}"
+N8N_PORT="5678"
+N8N_BASIC_AUTH_ACTIVE="true"
+N8N_BASIC_AUTH_USER="admin"
+N8N_BASIC_AUTH_PASSWORD="CHANGE_ME_N8N_PASSWORD"  # ⚠️ CHANGE THIS
+
+# n8n database (uses existing PostgreSQL pattern)
+N8N_DB_TYPE="postgresdb"
+N8N_DB_POSTGRESDB_HOST="${IP_POD008_N8N_DB}"
+N8N_DB_POSTGRESDB_PORT="5432"
+N8N_DB_POSTGRESDB_DATABASE="n8n"
+N8N_DB_POSTGRESDB_USER="n8n_admin"
+N8N_DB_POSTGRESDB_PASSWORD="CHANGE_ME_N8N_DB_PASSWORD"  # ⚠️ CHANGE THIS
+
+# n8n execution mode (queue-based like existing setup)
+N8N_EXECUTIONS_MODE="queue"
+N8N_EXECUTIONS_QUEUE_REDIS_HOST="${IP_POD008_REDIS}"
+N8N_EXECUTIONS_QUEUE_REDIS_PORT="6379"
+
+# n8n webhook URL (external access)
+N8N_WEBHOOK_URL="http://${HOST_A_IP}:${N8N_PORT}"
+
+# n8n timezone (follows existing config)
+N8N_TIMEZONE="UTC"
 
 # ============================================================
-# VXLAN NETWORK IDENTIFIERS (VNI)
+# DJANGO CMS INTEGRATION
 # ============================================================
-VNI_MANAGEMENT=200                     # Management network
-VNI_WEB_DMZ=201                        # Web application zone
-VNI_IAM=202                            # Identity & Access Management
-VNI_DATABASE=203                       # Database tier
-VNI_CACHE=204                          # Caching layer
-VNI_MONITORING=205                     # Monitoring & logging
-VNI_SECURITY=206                       # Security services (IDS/IPS)
-VNI_HONEYPOT=207                       # Honeypot & deception
 
-VXLAN_PORT=4789                        # Standard VXLAN port
+# Django CMS API endpoint (from POD 001)
+DJANGO_CMS_API_URL="http://${IP_POD001_DJANGO}:8000/api"
+DJANGO_CMS_ADMIN_URL="http://${IP_POD001_DJANGO}:8000/admin"
+DJANGO_CMS_USERNAME="admin"  # Use Django superuser
+DJANGO_CMS_PASSWORD="${DJANGO_SECRET_KEY:0:20}"  # Derived from Django secret
 
 # ============================================================
-# IP SUBNET ALLOCATION (10.200.0.0/16 = 65,536 IPs)
+# QSECBIT API INTEGRATION
 # ============================================================
-# Management Network (VNI 200)
-SUBNET_MANAGEMENT="10.200.0.0/24"
-GATEWAY_MANAGEMENT="10.200.0.1"
 
-# Web DMZ Network (VNI 201) - ModSecurity WAF + Nginx + Django
-SUBNET_WEB_DMZ="10.200.1.0/24"
-GATEWAY_WEB_DMZ="10.200.1.1"
-IP_MODSECURITY="10.200.1.10"           # ModSecurity WAF
-IP_NGINX="10.200.1.11"                 # Nginx reverse proxy
-IP_DJANGO="10.200.1.12"                # Django application
-IP_CLOUDFLARED="10.200.1.13"           # Cloudflare Tunnel (optional)
-
-# IAM Network (VNI 202) - Keycloak (Apache License)
-SUBNET_IAM="10.200.2.0/24"
-GATEWAY_IAM="10.200.2.1"
-IP_KEYCLOAK="10.200.2.10"              # Keycloak IAM
-IP_KEYCLOAK_DB="10.200.2.11"           # Keycloak PostgreSQL
-
-# Database Network (VNI 203) - PostgreSQL (PostgreSQL License - permissive)
-SUBNET_DATABASE="10.200.3.0/24"
-GATEWAY_DATABASE="10.200.3.1"
-IP_POSTGRES_MAIN="10.200.3.10"         # Main PostgreSQL
-IP_NFS="10.200.3.11"                   # NFS server (optional)
-
-# Cache Network (VNI 204) - Redis (BSD License)
-SUBNET_CACHE="10.200.4.0/24"
-GATEWAY_CACHE="10.200.4.1"
-IP_REDIS="10.200.4.10"                 # Redis cache
-IP_VALKEY="10.200.4.11"                # Valkey (Redis fork, BSD)
-
-# Monitoring Network (VNI 205) - VictoriaMetrics, VictoriaLogs, Grafana
-SUBNET_MONITORING="10.200.5.0/24"
-GATEWAY_MONITORING="10.200.5.1"
-IP_VICTORIAMETRICS="10.200.5.10"       # VictoriaMetrics (Apache 2.0)
-IP_VICTORIALOGS="10.200.5.11"          # VictoriaLogs (Apache 2.0)
-IP_GRAFANA="10.200.5.12"               # Grafana (AGPL but service use is OK)
-IP_VECTOR="10.200.5.13"                # Vector log aggregator (Apache 2.0)
-IP_NODE_EXPORTER="10.200.5.14"         # Prometheus node exporter (Apache 2.0)
-
-# Security Network (VNI 206) - Zeek + Snort 3
-SUBNET_SECURITY="10.200.6.0/24"
-GATEWAY_SECURITY="10.200.6.1"
-IP_ZEEK="10.200.6.10"                  # Zeek IDS (BSD)
-IP_SNORT="10.200.6.11"                 # Snort 3 IDS/IPS (Cisco, GPL-2 with exceptions - checking)
-IP_QSECBIT="10.200.6.12"               # Qsecbit analysis engine (MIT)
-
-# Honeypot Network (VNI 207) - Custom scripts
-SUBNET_HONEYPOT="10.200.7.0/24"
-GATEWAY_HONEYPOT="10.200.7.1"
-IP_HONEYPOT_WEB="10.200.7.10"          # Web honeypot
-IP_HONEYPOT_SSH="10.200.7.11"          # SSH honeypot
-IP_HONEYPOT_DB="10.200.7.12"           # Database honeypot
-IP_MITIGATION_ENGINE="10.200.7.20"     # Attack mitigation orchestrator
+# Qsecbit API (from POD 007)
+QSECBIT_API_URL="http://${IP_POD007_QSECBIT}:${PORT_QSECBIT_API}"
 
 # ============================================================
-# CONTAINER IMAGES (GPL-FREE ALTERNATIVES)
+# WEB SCRAPING CONFIGURATION
 # ============================================================
-IMAGE_NGINX="docker.io/library/nginx:1.27-alpine"                    # Nginx (BSD-2-Clause)
-IMAGE_POSTGRES="docker.io/library/postgres:16-alpine"                # PostgreSQL License
-IMAGE_REDIS="docker.io/library/redis:7-alpine"                       # BSD-3-Clause
-IMAGE_VALKEY="docker.io/valkey/valkey:8.0-alpine"                    # BSD-3-Clause
-IMAGE_KEYCLOAK="quay.io/keycloak/keycloak:26.0"                      # Apache 2.0
-IMAGE_GRAFANA="docker.io/grafana/grafana:11.4.0"                     # AGPL-3 (OK for service)
-IMAGE_VICTORIAMETRICS="docker.io/victoriametrics/victoria-metrics:latest"  # Apache 2.0
-IMAGE_VICTORIALOGS="docker.io/victoriametrics/victoria-logs:latest"        # Apache 2.0
-IMAGE_VECTOR="docker.io/timberio/vector:latest-alpine"               # Apache 2.0
-IMAGE_NODE_EXPORTER="quay.io/prometheus/node-exporter:latest"        # Apache 2.0
-IMAGE_ZEEK="docker.io/zeek/zeek:latest"                              # BSD-3-Clause
-IMAGE_SNORT="docker.io/ciscotalos/snort3:latest"                     # GPL-2 with linking exception
-IMAGE_MODSECURITY="docker.io/owasp/modsecurity-nginx:latest"         # Apache 2.0
-IMAGE_PYTHON="docker.io/library/python:3.12-slim"                    # PSF License
-IMAGE_ALPINE="docker.io/library/alpine:3.21"                         # MIT/Apache mix
-IMAGE_CLOUDFLARED="docker.io/cloudflare/cloudflared:latest"          # Apache 2.0
+
+# Chromium/Puppeteer settings
+CHROMIUM_EXTRA_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD="false"
+PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium-browser"
+
+# Scraping rate limits
+SCRAPING_MAX_CONCURRENT="3"
+SCRAPING_DELAY_MS="2000"
 
 # ============================================================
-# DATABASE CREDENTIALS - CHANGE THESE!
+# MCP (Model Context Protocol) SERVER
 # ============================================================
-POSTGRES_DB="hookprobe_db"
-POSTGRES_USER="hookprobe_admin"
-POSTGRES_PASSWORD="CHANGE_ME_STRONG_PASSWORD_123"
 
-# Keycloak Database
-KEYCLOAK_DB="keycloak_db"
-KEYCLOAK_DB_USER="keycloak_admin"
-KEYCLOAK_DB_PASSWORD="CHANGE_ME_KEYCLOAK_DB_PASSWORD"
+# MCP server for AI integrations
+MCP_SERVER_PORT="8889"
+MCP_SERVER_URL="http://${IP_POD008_MCP_SERVER}:${MCP_SERVER_PORT}"
 
-# ============================================================
-# DJANGO CONFIGURATION
-# ============================================================
-DJANGO_SECRET_KEY="CHANGE_ME_DJANGO_SECRET_KEY_LONG_RANDOM_STRING"
-DJANGO_DEBUG="False"
-DJANGO_ALLOWED_HOSTS="*"  # Change in production
+# AI API keys (store in Vault in production)
+OPENAI_API_KEY="CHANGE_ME_OPENAI_KEY"  # ⚠️ CHANGE THIS
+ANTHROPIC_API_KEY="CHANGE_ME_ANTHROPIC_KEY"  # ⚠️ CHANGE THIS
 
 # ============================================================
-# KEYCLOAK IAM CONFIGURATION
+# CONTENT GENERATION SETTINGS
 # ============================================================
-KEYCLOAK_ADMIN="admin"
-KEYCLOAK_ADMIN_PASSWORD="CHANGE_ME_KEYCLOAK_ADMIN_PASSWORD"
-KEYCLOAK_HOSTNAME="keycloak.hookprobe.local"
+
+# Blog posting schedule
+BLOG_POST_SCHEDULE_CRON="0 9 * * *"  # Daily at 9 AM
+BLOG_POST_CATEGORIES="Threat Intelligence,SBC Security,DevSecOps,Tutorials"
+
+# Content quality thresholds
+MIN_WORD_COUNT="800"
+MAX_WORD_COUNT="2500"
+MIN_SEO_SCORE="70"
 
 # ============================================================
-# CLOUDFLARE TUNNEL CONFIGURATION (OPTIONAL)
+# CONTAINER IMAGES
 # ============================================================
-CLOUDFLARE_TUNNEL_TOKEN="CHANGE_ME_GET_FROM_CLOUDFLARE_DASHBOARD"
-CLOUDFLARE_TUNNEL_NAME="hookprobe-tunnel"
-CLOUDFLARE_DOMAIN="your-domain.com"
 
-# ============================================================
-# MODSECURITY WAF CONFIGURATION
-# ============================================================
-MODSECURITY_PARANOIA_LEVEL=1           # 1=basic, 4=paranoid
-MODSECURITY_ANOMALY_THRESHOLD=5        # Lower = stricter
-MODSECURITY_AUDIT_LOG=1                # Enable detailed logging
-
-# ============================================================
-# QSECBIT AI CONFIGURATION
-# ============================================================
-QSECBIT_ALPHA=0.30                     # System drift weight
-QSECBIT_BETA=0.30                      # Attack probability weight
-QSECBIT_GAMMA=0.20                     # Classifier decay weight
-QSECBIT_DELTA=0.20                     # Quantum drift weight
-QSECBIT_AMBER_THRESHOLD=0.45           # Warning threshold
-QSECBIT_RED_THRESHOLD=0.70             # Critical threshold
-QSECBIT_CHECK_INTERVAL=30              # Seconds between checks
-
-# Baseline system metrics (adjust for your environment)
-QSECBIT_BASELINE_MU="0.1,0.2,0.15,0.33"  # CPU, Memory, Network, Disk I/O
-QSECBIT_QUANTUM_ANCHOR=6.144             # Baseline entropy
-
-# ============================================================
-# HONEYPOT & MITIGATION CONFIGURATION
-# ============================================================
-HONEYPOT_AUTO_REDIRECT=true            # Auto-redirect detected attackers
-HONEYPOT_SNAT_ENABLED=true             # Use SNAT for transparent redirect
-HONEYPOT_NOTIFY_EMAIL="qsecbit@hookprobe.com"
-HONEYPOT_LOG_RETENTION_DAYS=90         # Keep honeypot logs for 90 days
-
-# Attack response thresholds
-ATTACK_AUTO_BLOCK_THRESHOLD=0.70       # Qsecbit score to trigger auto-block
-ATTACK_HONEYPOT_THRESHOLD=0.45         # Score to redirect to honeypot
-ATTACK_NOTIFICATION_THRESHOLD=0.60     # Score to send email notification
-
-# ============================================================
-# OPENFLOW PRIORITY LEVELS
-# ============================================================
-PRIORITY_ALLOW_ESTABLISHED=1000        # Allow established connections
-PRIORITY_DENY_DEFAULT=100              # Default deny
-PRIORITY_ALLOW_SPECIFIC=500            # Specific allow rules
-PRIORITY_RATE_LIMIT=600                # Rate limiting rules
-PRIORITY_ANTI_SPOOF=800                # Anti-spoofing rules
-PRIORITY_HONEYPOT_REDIRECT=900         # Honeypot redirection
-
-# ============================================================
-# RATE LIMITING (packets per second)
-# ============================================================
-RATE_LIMIT_ICMP=10                     # ICMP echo requests
-RATE_LIMIT_SYN=100                     # TCP SYN packets
-RATE_LIMIT_UDP_GENERIC=200             # Generic UDP traffic
-RATE_LIMIT_DNS=50                      # DNS queries per source
-RATE_LIMIT_HTTP=1000                   # HTTP requests per source
-
-# ============================================================
-# DDoS MITIGATION (XDP/eBPF)
-# ============================================================
-ENABLE_XDP_DDOS=true                   # Enable XDP-based DDoS mitigation
-XDP_SYN_COOKIE=true                    # SYN cookie protection
-XDP_RATE_LIMIT=true                    # Rate limiting at kernel level
+IMAGE_N8N="docker.io/n8nio/n8n:latest"
+IMAGE_N8N_POSTGRES="docker.io/library/postgres:16-alpine"
+IMAGE_N8N_REDIS="docker.io/library/redis:7-alpine"
+IMAGE_CHROMIUM="docker.io/browserless/chrome:latest"
+IMAGE_MCP_SERVER="docker.io/library/python:3.12-slim"
 
 # ============================================================
 # VOLUME NAMES
 # ============================================================
-VOLUME_POSTGRES_DATA="hookprobe-postgres-v5"
-VOLUME_DJANGO_STATIC="hookprobe-django-static-v5"
-VOLUME_DJANGO_MEDIA="hookprobe-django-media-v5"
-VOLUME_KEYCLOAK_DATA="hookprobe-keycloak-v5"
-VOLUME_VICTORIAMETRICS_DATA="hookprobe-victoriametrics-v5"
-VOLUME_VICTORIALOGS_DATA="hookprobe-victorialogs-v5"
-VOLUME_GRAFANA_DATA="hookprobe-grafana-v5"
-VOLUME_ZEEK_LOGS="hookprobe-zeek-logs-v5"
-VOLUME_SNORT_LOGS="hookprobe-snort-logs-v5"
-VOLUME_MODSECURITY_LOGS="hookprobe-modsecurity-logs-v5"
-VOLUME_QSECBIT_DATA="hookprobe-qsecbit-v5"
-VOLUME_HONEYPOT_DATA="hookprobe-honeypot-v5"
+
+VOLUME_N8N_DATA="hookprobe-n8n-data"
+VOLUME_N8N_DB="hookprobe-n8n-db"
+VOLUME_N8N_REDIS="hookprobe-n8n-redis"
+VOLUME_MCP_DATA="hookprobe-mcp-data"
+VOLUME_SCRAPING_CACHE="hookprobe-scraping-cache"
 
 # ============================================================
-# POD NAMES
+# POD & NETWORK NAMES
 # ============================================================
-POD_WEB="hookprobe-web-dmz"
-POD_IAM="hookprobe-iam"
-POD_DATABASE="hookprobe-database"
-POD_CACHE="hookprobe-cache"
-POD_MONITORING="hookprobe-monitoring"
-POD_SECURITY="hookprobe-security"
-POD_HONEYPOT="hookprobe-honeypot"
+
+POD_008_NAME="hookprobe-pod-008-automation"
+NETWORK_POD008="pod008-automation-net"
 
 # ============================================================
-# NETWORK NAMES (PODMAN)
+# PORT MAPPINGS
 # ============================================================
-NETWORK_WEB="web-dmz-net"
-NETWORK_IAM="iam-net"
-NETWORK_DATABASE="database-net"
-NETWORK_CACHE="cache-net"
-NETWORK_MONITORING="monitoring-net"
-NETWORK_SECURITY="security-net"
-NETWORK_HONEYPOT="honeypot-net"
 
-# ============================================================
-# PORT MAPPINGS (Host -> Container)
-# ============================================================
-PORT_HTTP=80
-PORT_HTTPS=443
-PORT_KEYCLOAK=8080
-PORT_KEYCLOAK_ADMIN=9000
-PORT_POSTGRES=5432
-PORT_GRAFANA=3000
-PORT_VICTORIAMETRICS=8428
-PORT_VICTORIALOGS=9428
-PORT_QSECBIT_API=8888
-
-# ============================================================
-# SECURITY HARDENING FLAGS
-# ============================================================
-ENABLE_MAC_IP_BINDING=true             # Strict MAC/IP binding per port
-ENABLE_ARP_PROTECTION=true             # Anti-ARP poisoning
-ENABLE_DHCP_SNOOPING=false             # DHCP snooping (if needed)
-ENABLE_ND_PROTECTION=true              # IPv6 Neighbor Discovery protection
-ENABLE_PORT_SECURITY=true              # Port security on OVS
-
-# Key rotation schedule (days)
-VXLAN_KEY_ROTATION_DAYS=90
-CERT_ROTATION_DAYS=365
-
-# ============================================================
-# LOGGING & AUDIT
-# ============================================================
-AUDIT_LOG_RETENTION_DAYS=365           # Keep audit logs for 1 year
-ENABLE_FLOW_LOGGING=true               # NetFlow/sFlow export
-ENABLE_OPENFLOW_LOGGING=true           # Log OpenFlow drops
-ENABLE_NFTABLES_LOGGING=true           # Log firewall drops
+PORT_N8N=5678           # n8n web interface
+PORT_MCP=8889           # MCP server
 
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
-# Function to validate IP address
-validate_ip() {
-    local ip=$1
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        return 0
-    else
-        echo "ERROR: Invalid IP address format: $ip"
-        return 1
+validate_n8n_config() {
+    local errors=0
+    
+    if [ "$N8N_BASIC_AUTH_PASSWORD" == "CHANGE_ME_N8N_PASSWORD" ]; then
+        echo "ERROR: Please change N8N_BASIC_AUTH_PASSWORD"
+        errors=$((errors + 1))
     fi
-}
-
-# Function to validate subnet
-validate_subnet() {
-    local subnet=$1
-    if [[ $subnet =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        return 0
-    else
-        echo "ERROR: Invalid subnet format: $subnet"
-        return 1
+    
+    if [ "$N8N_DB_POSTGRESDB_PASSWORD" == "CHANGE_ME_N8N_DB_PASSWORD" ]; then
+        echo "ERROR: Please change N8N_DB_POSTGRESDB_PASSWORD"
+        errors=$((errors + 1))
     fi
+    
+    if [ "$OPENAI_API_KEY" == "CHANGE_ME_OPENAI_KEY" ]; then
+        echo "WARNING: OPENAI_API_KEY not configured (AI features will be limited)"
+    fi
+    
+    if [ "$ANTHROPIC_API_KEY" == "CHANGE_ME_ANTHROPIC_KEY" ]; then
+        echo "WARNING: ANTHROPIC_API_KEY not configured (AI features will be limited)"
+    fi
+    
+    return $errors
 }
 
 # Export all variables
-export HOST_A_IP HOST_B_IP PHYSICAL_HOST_INTERFACE INTERNET_GATEWAY
-export QSEC_BRIDGE QSEC_BRIDGE_IP
-export VXLAN_PSK VXLAN_PORT
-export VNI_MANAGEMENT VNI_WEB_DMZ VNI_IAM VNI_DATABASE VNI_CACHE VNI_MONITORING VNI_SECURITY VNI_HONEYPOT
-export SUBNET_MANAGEMENT GATEWAY_MANAGEMENT
-export SUBNET_WEB_DMZ GATEWAY_WEB_DMZ IP_MODSECURITY IP_NGINX IP_DJANGO IP_CLOUDFLARED
-export SUBNET_IAM GATEWAY_IAM IP_KEYCLOAK IP_KEYCLOAK_DB
-export SUBNET_DATABASE GATEWAY_DATABASE IP_POSTGRES_MAIN IP_NFS
-export SUBNET_CACHE GATEWAY_CACHE IP_REDIS IP_VALKEY
-export SUBNET_MONITORING GATEWAY_MONITORING IP_VICTORIAMETRICS IP_VICTORIALOGS IP_GRAFANA IP_VECTOR IP_NODE_EXPORTER
-export SUBNET_SECURITY GATEWAY_SECURITY IP_ZEEK IP_SNORT IP_QSECBIT
-export SUBNET_HONEYPOT GATEWAY_HONEYPOT IP_HONEYPOT_WEB IP_HONEYPOT_SSH IP_HONEYPOT_DB IP_MITIGATION_ENGINE
-export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
-export KEYCLOAK_DB KEYCLOAK_DB_USER KEYCLOAK_DB_PASSWORD KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD
-export DJANGO_SECRET_KEY DJANGO_DEBUG DJANGO_ALLOWED_HOSTS
-export QSECBIT_ALPHA QSECBIT_BETA QSECBIT_GAMMA QSECBIT_DELTA
-export QSECBIT_AMBER_THRESHOLD QSECBIT_RED_THRESHOLD QSECBIT_CHECK_INTERVAL
-export HONEYPOT_AUTO_REDIRECT HONEYPOT_SNAT_ENABLED HONEYPOT_NOTIFY_EMAIL
+export VNI_AUTOMATION
+export SUBNET_POD008 GATEWAY_POD008
+export IP_POD008_N8N IP_POD008_N8N_DB IP_POD008_REDIS IP_POD008_CHROMIUM IP_POD008_PUPPETEER IP_POD008_MCP_SERVER IP_POD008_API_PROXY
+export N8N_PROTOCOL N8N_HOST N8N_PORT N8N_BASIC_AUTH_ACTIVE N8N_BASIC_AUTH_USER N8N_BASIC_AUTH_PASSWORD
+export N8N_DB_TYPE N8N_DB_POSTGRESDB_HOST N8N_DB_POSTGRESDB_PORT N8N_DB_POSTGRESDB_DATABASE N8N_DB_POSTGRESDB_USER N8N_DB_POSTGRESDB_PASSWORD
+export N8N_EXECUTIONS_MODE N8N_EXECUTIONS_QUEUE_REDIS_HOST N8N_EXECUTIONS_QUEUE_REDIS_PORT
+export N8N_WEBHOOK_URL
+export DJANGO_CMS_API_URL DJANGO_CMS_ADMIN_URL DJANGO_CMS_USERNAME DJANGO_CMS_PASSWORD
+export QSECBIT_API_URL
+export CHROMIUM_EXTRA_ARGS PUPPETEER_SKIP_CHROMIUM_DOWNLOAD PUPPETEER_EXECUTABLE_PATH
+export SCRAPING_MAX_CONCURRENT SCRAPING_DELAY_MS
+export MCP_SERVER_PORT MCP_SERVER_URL
+export OPENAI_API_KEY ANTHROPIC_API_KEY
+export BLOG_POST_SCHEDULE_CRON BLOG_POST_CATEGORIES
+export MIN_WORD_COUNT MAX_WORD_COUNT MIN_SEO_SCORE
+export IMAGE_N8N IMAGE_N8N_POSTGRES IMAGE_N8N_REDIS IMAGE_CHROMIUM IMAGE_MCP_SERVER
+export VOLUME_N8N_DATA VOLUME_N8N_DB VOLUME_N8N_REDIS VOLUME_MCP_DATA VOLUME_SCRAPING_CACHE
+export POD_008_NAME NETWORK_POD008
+export PORT_N8N PORT_MCP
 
 echo "============================================================"
-echo "   HOOKPROBE v5.0 NETWORK CONFIGURATION LOADED"
-echo "   GPL-FREE Edition - All Permissive Licenses"
+echo "   N8N AUTOMATION CONFIGURATION LOADED - v1.0"
+echo "   OPTIONAL EXTENSION - Requires main HookProbe (PODs 001-007)"
 echo "============================================================"
-echo "Network Architecture:"
-echo "  Bridge: $QSEC_BRIDGE ($QSEC_BRIDGE_IP)"
-echo "  VNIs: 200-207 (8 isolated networks)"
+echo "POD 008 - Automation & Content Generation (OPTIONAL)"
+echo "  Network: ${SUBNET_POD008}"
+echo "  VNI: ${VNI_AUTOMATION} (Internal - encrypted with OVS_PSK_INTERNAL)"
 echo ""
-echo "IP Allocation (10.200.0.0/16):"
-echo "  Management:   $SUBNET_MANAGEMENT"
-echo "  Web DMZ:      $SUBNET_WEB_DMZ"
-echo "  IAM:          $SUBNET_IAM"
-echo "  Database:     $SUBNET_DATABASE"
-echo "  Cache:        $SUBNET_CACHE"
-echo "  Monitoring:   $SUBNET_MONITORING"
-echo "  Security:     $SUBNET_SECURITY"
-echo "  Honeypot:     $SUBNET_HONEYPOT"
+echo "Integration with main HookProbe:"
+echo "  ✓ Inherits all base configuration from network-config.sh"
+echo "  ✓ Follows established VNI/IP allocation patterns"
+echo "  ✓ Uses same PSK encryption scheme (INTERNAL)"
+echo "  ✓ Applies same security hardening (L2 anti-spoof)"
 echo ""
-echo "Security Components (All GPL-Free):"
-echo "  ✓ ModSecurity WAF (Apache 2.0)"
-echo "  ✓ Zeek IDS (BSD-3-Clause)"
-echo "  ✓ Snort 3 IDS/IPS (GPL-2 w/ exception)"
-echo "  ✓ VictoriaMetrics (Apache 2.0)"
-echo "  ✓ VictoriaLogs (Apache 2.0)"
-echo "  ✓ Keycloak IAM (Apache 2.0)"
-echo "  ✓ Custom Honeypots (MIT)"
-echo "  ✓ Qsecbit AI (MIT)"
+echo "Key Services:"
+echo "  n8n:           ${IP_POD008_N8N}:${N8N_PORT}"
+echo "  MCP Server:    ${IP_POD008_MCP_SERVER}:${MCP_SERVER_PORT}"
+echo "  PostgreSQL:    ${IP_POD008_N8N_DB}"
+echo "  Redis Queue:   ${IP_POD008_REDIS}"
+echo "  Chromium:      ${IP_POD008_CHROMIUM}"
 echo ""
-echo "Advanced Features:"
-echo "  ✓ OpenFlow ACLs per VNI"
-echo "  ✓ XDP/eBPF DDoS mitigation"
-echo "  ✓ MAC/IP binding"
-echo "  ✓ ARP/ND protection"
-echo "  ✓ Rate limiting"
-echo "  ✓ Honeypot auto-redirect"
-echo "  ✓ PSK-encrypted VXLAN"
+echo "Integrations:"
+echo "  Django CMS:    ${DJANGO_CMS_API_URL}"
+echo "  Qsecbit API:   ${QSECBIT_API_URL}"
+echo ""
+echo "Access URL (after deployment):"
+echo "  n8n UI:        http://${HOST_A_IP}:${PORT_N8N}"
+echo "  Credentials:   ${N8N_BASIC_AUTH_USER} / [configured]"
+echo ""
+echo "Deploy with:   sudo ./n8n_setup.sh"
+echo "Remove with:   sudo ./n8n_uninstall.sh"
 echo "============================================================"
