@@ -222,16 +222,3 @@ Trade-offs:
 * **Data overload / storage cost** — mitigate with sampling, downsampling, TTLs, and artifact lifecycle policies.
 * **SBC compromise** — assume breach model; authenticate and authorize every action, limit what SBCs can do via scopes.
 * **Operational complexity** — start with a small POC; automate provisioning via Terraform/Helm; use managed k8s if possible.
-
----
-
-# 15. Next steps / deliverables I can produce
-
-* Detailed architecture diagram (PNG/SVG)
-* Kubernetes manifests & Helm values for backend components
-* Ingest API spec (OpenAPI) + example client library (Python)
-* n8n playbooks for automated response & Velociraptor integration
-* Security plan: cert management + RBAC + network policy templates
-* Cost estimate template for cloud deployment (AWS/GCP/Azure)
-
-Tell me which of the above you want me to generate first and I’ll create it right away.
