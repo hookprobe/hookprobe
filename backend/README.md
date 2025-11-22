@@ -7,7 +7,7 @@
 
 ---
 
-![Hookprobe Cloud Orchestrator](images/hookprobe-cloud-orchestrator.png)
+![Hookprobe Cloud Orchestrator](../images/hookprobe-cloud-orchestrator.png)
 
 ---
 
