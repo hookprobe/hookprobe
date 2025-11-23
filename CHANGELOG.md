@@ -65,6 +65,22 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 - Automated behavior analysis and logging
 
 #### Qsecbit Enhancements
+- **XDP/eBPF DDoS Mitigation** - Kernel-level packet filtering with automatic NIC detection
+  - Auto-detects NIC capabilities (Raspberry Pi, Intel N100/I211/I226, Intel X710/E810, Mellanox ConnectX)
+  - Intelligent mode selection: XDP-DRV (driver mode) for supported NICs, XDP-SKB (generic mode) fallback
+  - **Intel I211/I226 Full XDP-DRV Support**: Entry-level Intel NICs now support native driver mode (1-2.5 Gbps line rate)
+  - Comprehensive NIC capability matrix covering 12+ driver types
+  - Real-time statistics: total packets, dropped (blocked/rate-limited/malformed), protocol floods
+  - Rate limiting: 1000 packets/sec per source IP
+  - Dynamic IP blocking/unblocking at XDP layer
+  - Integration with ClickHouse/Doris for XDP metrics storage
+  - Supports Broadcom (RPi - SKB only), Realtek (SKB only), Intel (igb/igc - DRV, i40e/ice - DRV), Mellanox (mlx4/mlx5 - DRV) drivers
+  - Qsecbit module reorganized: `Scripts/autonomous/qsecbit/` with comprehensive documentation
+- **Dual-Database Support in Qsecbit**:
+  - Auto-detects edge vs cloud deployment via DEPLOYMENT_TYPE environment variable
+  - Edge: ClickHouse integration for single-tenant fast analytics
+  - Cloud: Apache Doris integration for multi-tenant MSSP aggregation
+  - Automatic tenant_id injection for multi-tenancy
 - Anti-XSS automated response
 - Anti-SQL injection automated response
 - Memory overflow protection
@@ -82,7 +98,6 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 #### Network Architecture
 - Simplified single OVS bridge (`qsec-bridge`)
 - OpenFlow ACL support
-- XDP/eBPF DDoS mitigation
 - L2 hardening (MAC anti-spoof, ARP protection)
 
 #### Monitoring & Logging
