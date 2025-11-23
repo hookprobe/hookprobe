@@ -89,7 +89,7 @@ qsecbit/
 | Module | Purpose | Key Classes |
 |--------|---------|-------------|
 | `qsecbit.py` | **Main orchestrator** - Resilience metric calculation, database integration, reporting | `Qsecbit`, `QsecbitConfig`, `QsecbitSample` |
-| `energy_monitor.py` | Energy consumption monitoring and anomaly detection | `EnergyMonitor`, `SystemEnergySnapshot`, `PIDEnergyStats` |
+| `energy_monitor.py` | Energy consumption monitoring and network direction-aware anomaly detection | `EnergyMonitor`, `SystemEnergySnapshot`, `PIDEnergyStats`, `NetworkEnergyStats`, `DeploymentRole` |
 | `xdp_manager.py` | XDP/eBPF program lifecycle and DDoS mitigation | `XDPManager`, `XDPStats` |
 | `nic_detector.py` | NIC hardware capability detection and XDP mode selection | `NICDetector`, `NICCapability`, `XDPMode` |
 
@@ -294,6 +294,109 @@ During Attack:
   - bpf_prog (XDP): 4.2W (Z-score: 5.1 → SPIKE)
   - xdp_spike: True
   - qsecbit energy_anomaly: 0.51 → RAG: AMBER
+```
+
+### Network Direction-Aware Energy Efficiency (NEW v5.0)
+
+**Qsecbit v5.0** introduces **network direction-aware energy efficiency analysis** to detect:
+- **Compromised endpoints** sending spam/DDoS traffic (OUT spike on USER_ENDPOINT)
+- **Servers under attack** (IN spike on PUBLIC_SERVER)
+- **Data exfiltration** (abnormal OUT traffic pattern)
+- **Cryptomining + network activity** correlation (high EPP + traffic anomalies)
+
+**Key Metrics**:
+
+| Metric | Description | Detection Use Case |
+|--------|-------------|-------------------|
+| **EPP** (Energy-Per-Packet) | Energy consumed per network packet (mJ/packet) | High EPP (>5 mJ) suggests inefficient processing or cryptomining |
+| **OUT/IN Ratio** | Traffic direction ratio (packets_sent / packets_recv) | Role-based anomaly detection |
+| **Packet Burst** | Packets in current interval | DDoS or data exfiltration detection |
+
+**Deployment Roles**:
+
+| Role | Expected Traffic Pattern | Anomaly Condition |
+|------|-------------------------|-------------------|
+| **PUBLIC_SERVER** | IN > OUT (ratio < 1) | OUT > IN suggests data exfiltration or C2 communication |
+| **USER_ENDPOINT** | OUT > IN (ratio > 1) | IN > OUT suggests botnet command reception or reverse shell |
+
+**Detection Examples**:
+
+**Scenario 4: Compromised User Endpoint (Spam/DDoS)**
+```
+Normal State:
+  - OUT/IN ratio: 1.8 (typical client behavior)
+  - EPP: 2.1 mJ/packet
+  - Packets: 320/sec
+
+During Attack:
+  - OUT/IN ratio: 8.5 (massive outbound traffic)
+  - EPP: 6.2 mJ/packet (inefficient processing)
+  - Packets: 4200/sec
+  - Deployment Role: USER_ENDPOINT
+  - Network Anomaly Score: 87/100 → CRITICAL
+  - RAG: RED
+```
+
+**Scenario 5: Public Server Under DDoS**
+```
+Normal State:
+  - OUT/IN ratio: 0.6 (typical server behavior)
+  - EPP: 1.8 mJ/packet
+  - Packets: 850/sec
+
+During Attack:
+  - OUT/IN ratio: 0.2 (flooded with inbound traffic)
+  - EPP: 4.3 mJ/packet (CPU exhaustion)
+  - Packets: 8900/sec
+  - Deployment Role: PUBLIC_SERVER
+  - Network Anomaly Score: 78/100 → CRITICAL
+  - RAG: RED
+```
+
+**Scenario 6: Data Exfiltration from Server**
+```
+Normal State:
+  - OUT/IN ratio: 0.6
+  - EPP: 1.8 mJ/packet
+
+During Exfiltration:
+  - OUT/IN ratio: 2.4 (abnormal outbound spike)
+  - EPP: 3.2 mJ/packet (compression/encryption overhead)
+  - Deployment Role: PUBLIC_SERVER
+  - Network Anomaly Score: 65/100 → WARNING
+  - RAG: AMBER
+```
+
+**Configuration**:
+```python
+from qsecbit import EnergyMonitor, DeploymentRole
+
+# Public server configuration
+monitor = EnergyMonitor(
+    network_interface="eth0",  # Auto-detect if None
+    deployment_role=DeploymentRole.PUBLIC_SERVER,
+    network_monitoring_enabled=True
+)
+
+# User endpoint configuration
+monitor = EnergyMonitor(
+    network_interface="wlan0",
+    deployment_role=DeploymentRole.USER_ENDPOINT,
+    network_monitoring_enabled=True
+)
+```
+
+**Network Stats Output**:
+```python
+snapshot = monitor.capture_snapshot()
+
+if snapshot.network_stats:
+    net = snapshot.network_stats
+    print(f"Interface: {net.interface}")
+    print(f"EPP: {net.epp:.2f} mJ/packet")
+    print(f"OUT/IN Ratio: {net.out_in_ratio:.2f}")
+    print(f"Total Packets: {net.total_packets}")
+    print(f"Anomaly Score: {net.anomaly_score:.1f}/100")
 ```
 
 ### Hardware Requirements
