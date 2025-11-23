@@ -30,7 +30,10 @@ HookProbe is a **containerized cybersecurity platform** built for Single Board C
 **Project Type**: Infrastructure-as-Code / Security Operations Platform
 **Primary Language**: Bash (deployment scripts), Python (AI/security logic)
 **Deployment**: Podman containers with OVS networking
-**Target OS**: RHEL 10, Fedora 40+, CentOS Stream 9+
+**Supported OS**:
+- **RHEL-based**: RHEL 10, Fedora 40+, CentOS Stream 9+, Rocky Linux, AlmaLinux
+- **Debian-based**: Debian 12+, Ubuntu 22.04+/24.04+
+**Architectures**: x86_64 (Intel/AMD), ARM64 (Raspberry Pi, Rockchip SBCs)
 **License**: MIT (v5.0+), transitioning from GPL
 
 ### Key Capabilities
@@ -51,6 +54,32 @@ HookProbe is a **containerized cybersecurity platform** built for Single Board C
 - Container orchestration setup
 
 **DO NOT** treat this like a web app, API service, or typical software project.
+
+### Platform Detection and Compatibility
+
+**HookProbe v5.0** automatically detects and configures itself based on:
+
+1. **Operating System**: RHEL-based (dnf) vs Debian-based (apt)
+2. **Architecture**: x86_64 vs ARM64
+3. **Hardware Platform**: Intel N100, Raspberry Pi, Generic SBC, Virtual Machine
+4. **NIC Capabilities**: XDP-hw, XDP-drv, or XDP-skb mode selection
+
+**Deployment Script** (`setup.sh`) performs comprehensive detection at startup:
+- OS family detection (via `/etc/os-release`)
+- Hardware platform identification (CPU model, SBC detection)
+- Virtualization detection (KVM, VMware, LXC, Docker, etc.)
+- NIC driver detection and XDP capability assessment
+- Platform-specific package installation (dnf vs apt)
+
+**Supported Deployment Targets**:
+- **Physical Hardware**: Intel N100 Mini PCs, Raspberry Pi 4/5, Rockchip SBCs, x86_64 desktops
+- **Virtual Machines**: KVM, VMware, VirtualBox, Proxmox VMs
+- **Cloud**: AWS, Azure, GCP (with appropriate OS)
+
+**Unsupported**:
+- ARMv7 (32-bit ARM) - Use ARM64 (ARMv8) instead
+- Docker containers (networking conflicts with OVS)
+- LXC containers (networking limitations)
 
 ---
 
@@ -218,6 +247,21 @@ HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for au
 
 **Qsecbit v5.0** includes kernel-level DDoS mitigation via XDP (eXpress Data Path):
 
+**XDP Modes and Layers**:
+
+XDP operates at different layers of the network stack, providing varying levels of performance:
+
+| **Mode** | **Where it runs** | **Kernel bypass** | **Layer** | **Performance** | **Notes** |
+|----------|------------------|-------------------|-----------|-----------------|-----------|
+| **XDP-hw** | NIC hardware ASIC | Full | Layer 0 | Ultra-fast | Rare; requires programmable NICs (Mellanox SmartNIC, Intel IPU) |
+| **XDP-drv** | NIC driver | Full | Layer 1 | Fastest practical | Native driver mode, requires driver support |
+| **XDP-skb** | Generic SKB layer | Partial | Layer 1.5 | Moderate | Universal fallback, works on all NICs |
+
+**Key Differences**:
+- **XDP-hw (Layer 0)**: Packet processing happens directly in NIC hardware ASIC before reaching CPU. Extremely rare, requires specialized SmartNICs.
+- **XDP-drv (Layer 1)**: Packet processing in NIC driver before Linux kernel network stack. Full kernel bypass. Requires XDP-capable driver.
+- **XDP-skb (Layer 1.5)**: Packet processing after kernel allocates socket buffers (SKBs). Partial bypass. Universal compatibility.
+
 **Features**:
 - **Automatic NIC Detection**: Detects primary interface and driver capabilities
 - **Intelligent Mode Selection**: XDP-DRV (native) for capable NICs, XDP-SKB (generic) fallback
@@ -233,30 +277,40 @@ export XDP_ENABLED=true
 ```
 
 **Supported NICs** (See NIC Compatibility Matrix below for complete list):
-- **Full XDP-DRV**: Intel I211/I226, X710, E810, Mellanox ConnectX-3/4/5/6/7
-- **XDP-SKB only**: Raspberry Pi (bcmgenet), Realtek (r8152, r8169)
+- **XDP-DRV (Layer 1)**: Intel I211/I226, X710, E810, Mellanox ConnectX-4/5/6/7
+- **XDP-SKB (Layer 1.5)**: Raspberry Pi (bcmgenet), Realtek (r8152, r8169), Intel X520
+- **XDP-HW (Layer 0)**: Mellanox ConnectX-5/6/7, BlueField-2/3 SmartNICs
 
 ### NIC Compatibility Matrix
 
 **Hardware Requirements for Optimal XDP Performance**:
 
-| **Platform** | **NIC Model** | **Driver** | **XDP** | **eBPF** | **XDP-DRV** | **Max Throughput** | **Recommended** |
-|-------------|---------------|------------|---------|----------|-------------|-------------------|----------------|
+| **Platform** | **NIC Model** | **Driver** | **XDP-SKB** | **XDP-DRV** | **XDP-HW** | **Max Throughput** | **Recommended** |
+|-------------|---------------|------------|-------------|-------------|------------|-------------------|----------------|
 | **Raspberry Pi 4/5** | Broadcom SoC | bcmgenet | ✅ | ❌ | ❌ | 1 Gbps | ⚠️ Development only |
 | **Raspberry Pi** | Realtek USB | r8152 | ✅ | ❌ | ❌ | 1 Gbps | ⚠️ Limited performance |
 | **Desktop** | Realtek PCIe | r8169 | ✅ | ❌ | ❌ | 2.5 Gbps | ⚠️ Not for production |
-| **Intel N100** | **I211** | **igb** | ✅ | ✅ | ✅ | **1 Gbps** | ✅ **Entry-level edge** |
-| **Intel N100** | **I226** | **igc** | ✅ | ✅ | ✅ | **2.5 Gbps** | ✅ **Best value edge** |
-| **Intel Server** | X520 (82599) | ixgbe | ✅ | ✅ | ❌ | 10 Gbps | ⚠️ AF_XDP only |
-| **Intel Server** | **X710** | **i40e** | ✅ | ✅ | ✅ | **40 Gbps** | ✅ **Cloud backend** |
-| **Intel Server** | **E810** | **ice** | ✅ | ✅ | ✅ | **100 Gbps** | ✅ **Enterprise** |
-| **Mellanox** | **ConnectX-3** | **mlx4_en** | ✅ | ✅ | ✅ | **40 Gbps** | ✅ **Cloud backend** |
+| **Intel N100** | **I211** | **igb** | ✅ | ✅ | ❌ | **1 Gbps** | ✅ **Entry-level edge** |
+| **Intel N100** | **I226** | **igc** | ✅ | ✅ | ❌ | **2.5 Gbps** | ✅ **Best value edge** |
+| **Intel Server** | X520 (82599) | ixgbe | ✅ | ❌ | ❌ | 10 Gbps | ⚠️ AF_XDP only |
+| **Intel Server** | **X710** | **i40e** | ✅ | ✅ | ❌ | **40 Gbps** | ✅ **Cloud backend** |
+| **Intel Server** | **E810** | **ice** | ✅ | ✅ | ❌ | **100 Gbps** | ✅ **Enterprise** |
+| **Mellanox** | **ConnectX-3** | **mlx4_en** | ✅ | ❌ | ❌ | **40 Gbps** | ✅ **Cloud backend** |
 | **Mellanox** | **ConnectX-4/5/6/7** | **mlx5_core** | ✅ | ✅ | ✅ | **200 Gbps** | ✅ **Gold standard** |
+| **Mellanox SmartNIC** | **BlueField-2/3** | **mlx5_core** | ✅ | ✅ | ✅ | **400 Gbps** | ✅ **Enterprise** |
 
 **Legend**:
 - ✅ **Supported** / **Recommended**
 - ❌ **Not supported**
 - ⚠️ **Limited** (SKB mode only, higher CPU usage)
+
+**XDP-HW Note**: Hardware offload (XDP-hw) is extremely rare and only supported by:
+- Mellanox ConnectX-5/6/7 (limited offload capabilities)
+- Mellanox BlueField-2/3 SmartNICs (full programmable pipeline)
+- Intel IPU (Infrastructure Processing Unit)
+- Netronome Agilio SmartNICs
+
+For 99% of deployments, **XDP-drv (Layer 1)** is the fastest practical mode.
 
 **Hardware Recommendations**:
 
