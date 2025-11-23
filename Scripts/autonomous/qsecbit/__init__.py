@@ -30,7 +30,9 @@ from .xdp_manager import (
 from .energy_monitor import (
     EnergyMonitor,
     SystemEnergySnapshot,
-    PIDEnergyStats
+    PIDEnergyStats,
+    NetworkEnergyStats,
+    DeploymentRole
 )
 
 __version__ = "5.0.0"
@@ -58,4 +60,6 @@ __all__ = [
     "EnergyMonitor",
     "SystemEnergySnapshot",
     "PIDEnergyStats",
+    "NetworkEnergyStats",
+    "DeploymentRole",
 ]
