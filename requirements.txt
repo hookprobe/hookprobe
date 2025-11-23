@@ -5,8 +5,9 @@
 numpy>=1.24.0,<2.0.0
 scipy>=1.10.0,<2.0.0
 
-# ClickHouse integration for historical analytics
-clickhouse-driver>=0.2.6,<1.0.0
+# Database integrations
+clickhouse-driver>=0.2.6,<1.0.0    # ClickHouse for edge deployments
+pymysql>=1.1.0,<2.0.0               # Doris (MySQL protocol) for cloud backend
 
 # Optional: For enhanced functionality
 # Uncomment if you need these features

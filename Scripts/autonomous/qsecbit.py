@@ -17,12 +17,19 @@ import json
 import os
 import socket
 
-# Optional ClickHouse integration
+# Optional ClickHouse integration (for edge deployments)
 try:
-    from clickhouse_driver import Client
+    from clickhouse_driver import Client as ClickHouseClient
     CLICKHOUSE_AVAILABLE = True
 except ImportError:
     CLICKHOUSE_AVAILABLE = False
+
+# Optional Doris integration (for cloud backend)
+try:
+    import pymysql
+    DORIS_AVAILABLE = True
+except ImportError:
+    DORIS_AVAILABLE = False
 
 
 @dataclass
@@ -125,12 +132,21 @@ class Qsecbit:
         self.history: List[QsecbitSample] = []
         self.baseline_entropy = self._calculate_baseline_entropy()
 
-        # ClickHouse integration (optional)
-        self.ch_enabled = False
-        self.ch_client = None
-        if CLICKHOUSE_AVAILABLE and os.getenv('CLICKHOUSE_ENABLED', 'true').lower() == 'true':
+        # System metadata
+        self.hostname = socket.gethostname()
+        self.pod_name = os.getenv('POD_NAME', 'unknown')
+        self.tenant_id = os.getenv('TENANT_ID', 'default')  # For MSSP multi-tenancy
+        self.deployment_type = os.getenv('DEPLOYMENT_TYPE', 'edge')  # 'edge' or 'cloud-backend'
+
+        # Database integration (auto-detect edge vs cloud)
+        self.db_enabled = False
+        self.db_type = None
+        self.db_client = None
+
+        # ClickHouse integration (for edge deployments)
+        if self.deployment_type == 'edge' and CLICKHOUSE_AVAILABLE and os.getenv('CLICKHOUSE_ENABLED', 'true').lower() == 'true':
             try:
-                self.ch_client = Client(
+                self.db_client = ClickHouseClient(
                     host=os.getenv('CLICKHOUSE_HOST', '10.200.5.11'),
                     port=int(os.getenv('CLICKHOUSE_PORT', '9001')),
                     database=os.getenv('CLICKHOUSE_DB', 'security'),
@@ -138,16 +154,34 @@ class Qsecbit:
                     password=os.getenv('CLICKHOUSE_PASSWORD', '')
                 )
                 # Test connection
-                self.ch_client.execute('SELECT 1')
-                self.ch_enabled = True
-                print("✓ ClickHouse integration enabled")
+                self.db_client.execute('SELECT 1')
+                self.db_enabled = True
+                self.db_type = 'clickhouse'
+                print("✓ ClickHouse integration enabled (edge deployment)")
             except Exception as e:
                 print(f"Warning: ClickHouse not available: {e}")
-                self.ch_enabled = False
+                self.db_enabled = False
 
-        # System metadata for ClickHouse
-        self.hostname = socket.gethostname()
-        self.pod_name = os.getenv('POD_NAME', 'unknown')
+        # Doris integration (for cloud backend MSSP deployments)
+        elif self.deployment_type == 'cloud-backend' and DORIS_AVAILABLE and os.getenv('DORIS_ENABLED', 'true').lower() == 'true':
+            try:
+                self.db_client = pymysql.connect(
+                    host=os.getenv('DORIS_HOST', '10.100.1.10'),
+                    port=int(os.getenv('DORIS_PORT', '9030')),
+                    user=os.getenv('DORIS_USER', 'root'),
+                    password=os.getenv('DORIS_PASSWORD', ''),
+                    database=os.getenv('DORIS_DB', 'security'),
+                    autocommit=True
+                )
+                # Test connection
+                with self.db_client.cursor() as cursor:
+                    cursor.execute('SELECT 1')
+                self.db_enabled = True
+                self.db_type = 'doris'
+                print(f"✓ Doris integration enabled (cloud backend, tenant: {self.tenant_id})")
+            except Exception as e:
+                print(f"Warning: Doris not available: {e}")
+                self.db_enabled = False
         
     def _calculate_baseline_entropy(self) -> float:
         """Calculate theoretical baseline entropy from covariance"""
@@ -209,15 +243,15 @@ class Qsecbit:
         hist = hist + 1e-10  # Avoid log(0)
         return float(entropy(hist))
 
-    def _save_to_clickhouse(self, sample: QsecbitSample, x_t: np.ndarray):
+    def _save_to_database(self, sample: QsecbitSample, x_t: np.ndarray):
         """
-        Save qsecbit sample to ClickHouse database
+        Save qsecbit sample to database (ClickHouse for edge, Doris for cloud)
 
         Args:
             sample: QsecbitSample object to save
             x_t: System telemetry vector (CPU, Memory, Network, Disk)
         """
-        if not self.ch_enabled:
+        if not self.db_enabled:
             return
 
         try:
@@ -227,31 +261,60 @@ class Qsecbit:
             network_traffic = float(x_t[2]) if len(x_t) > 2 else 0.0
             disk_io = float(x_t[3]) if len(x_t) > 3 else 0.0
 
-            # Prepare data for insertion
-            data = [{
-                'timestamp': sample.timestamp,
-                'score': float(sample.score),
-                'rag_status': sample.rag_status,
-                'drift': float(sample.components['drift']),
-                'attack_probability': float(sample.components['attack_probability']),
-                'classifier_decay': float(sample.components['classifier_decay']),
-                'quantum_drift': float(sample.components['quantum_drift']),
-                'cpu_usage': cpu_usage,
-                'memory_usage': memory_usage,
-                'network_traffic': network_traffic,
-                'disk_io': disk_io,
-                'host': self.hostname,
-                'pod': self.pod_name
-            }]
+            if self.db_type == 'clickhouse':
+                # ClickHouse insertion (edge deployment)
+                data = [{
+                    'timestamp': sample.timestamp,
+                    'score': float(sample.score),
+                    'rag_status': sample.rag_status,
+                    'drift': float(sample.components['drift']),
+                    'attack_probability': float(sample.components['attack_probability']),
+                    'classifier_decay': float(sample.components['classifier_decay']),
+                    'quantum_drift': float(sample.components['quantum_drift']),
+                    'cpu_usage': cpu_usage,
+                    'memory_usage': memory_usage,
+                    'network_traffic': network_traffic,
+                    'disk_io': disk_io,
+                    'host': self.hostname,
+                    'pod': self.pod_name
+                }]
 
-            # Insert into ClickHouse
-            self.ch_client.execute(
-                'INSERT INTO qsecbit_scores VALUES',
-                data
-            )
+                self.db_client.execute(
+                    'INSERT INTO qsecbit_scores VALUES',
+                    data
+                )
+
+            elif self.db_type == 'doris':
+                # Doris insertion (cloud backend with multi-tenancy)
+                with self.db_client.cursor() as cursor:
+                    sql = """
+                    INSERT INTO qsecbit_scores (
+                        tenant_id, timestamp, score, rag_status,
+                        drift, attack_probability, classifier_decay, quantum_drift,
+                        cpu_usage, memory_usage, network_traffic, disk_io,
+                        host, pod
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    cursor.execute(sql, (
+                        self.tenant_id,
+                        sample.timestamp,
+                        float(sample.score),
+                        sample.rag_status,
+                        float(sample.components['drift']),
+                        float(sample.components['attack_probability']),
+                        float(sample.components['classifier_decay']),
+                        float(sample.components['quantum_drift']),
+                        cpu_usage,
+                        memory_usage,
+                        network_traffic,
+                        disk_io,
+                        self.hostname,
+                        self.pod_name
+                    ))
+
         except Exception as e:
-            # Don't fail if ClickHouse is unavailable
-            print(f"Warning: Failed to save to ClickHouse: {e}")
+            # Don't fail if database is unavailable
+            print(f"Warning: Failed to save to {self.db_type}: {e}")
 
     def calculate(
         self,
@@ -311,8 +374,8 @@ class Qsecbit:
             metadata=metadata or {}
         )
 
-        # Save to ClickHouse (if enabled)
-        self._save_to_clickhouse(sample, x_t)
+        # Save to database (ClickHouse for edge, Doris for cloud)
+        self._save_to_database(sample, x_t)
 
         # Store in history
         self.history.append(sample)
