@@ -588,18 +588,40 @@ Layer 6: AI Response (Qsecbit + Kali)
 
 ### Qsecbit AI Threat Analysis
 
-**Quantum Security Bit (Qsecbit)** - A resilience metric measuring the smallest unit where AI-driven attack and defense reach equilibrium.
+**Quantum Security Bit (Qsecbit)** - A cyber resilience metric measuring the smallest unit where AI-driven attack and defense reach equilibrium through continuous error correction.
 
-**Components:**
+**v5.0 Features:**
+- **Modular Architecture**: Clean separation of concerns (qsecbit.py, energy_monitor.py, xdp_manager.py, nic_detector.py)
+- **XDP/eBPF DDoS Mitigation**: Kernel-level packet filtering with automatic NIC detection
+- **Energy Monitoring**: RAPL + per-PID power tracking with anomaly detection
+- **Network Direction-Aware Analysis**: Role-based traffic pattern detection (NEW in v5.0)
+- **Dual-Database Support**: ClickHouse (edge) and Apache Doris (cloud)
+
+**Algorithm Components:**
+
+**Without Energy Monitoring** (default):
 - **System Drift** (30%): Mahalanobis distance from baseline telemetry
 - **Attack Probability** (30%): ML-predicted threat level
 - **Classifier Decay** (20%): Rate of change in ML confidence
 - **Quantum Drift** (20%): System entropy deviation
 
-**Thresholds:**
-- **GREEN** (< 0.45): Normal operation
-- **AMBER** (0.45-0.70): Warning - Kali Linux spins up
-- **RED** (> 0.70): Critical - Automated response engaged
+**With Energy Monitoring** (Intel CPUs with RAPL):
+- **System Drift** (25%): Mahalanobis distance from baseline telemetry
+- **Attack Probability** (25%): ML-predicted threat level
+- **Classifier Decay** (20%): Rate of change in ML confidence
+- **Quantum Drift** (15%): System entropy deviation
+- **Energy Anomaly** (15%): Power consumption + network direction anomaly score
+
+**RAG Thresholds:**
+- **GREEN** (< 0.45): Normal operation - system resilient
+- **AMBER** (0.45-0.70): Warning - Kali Linux spins up, defensive capacity declining
+- **RED** (> 0.70): Critical - Automated response engaged, system under stress
+
+**Network Direction-Aware Detection** (NEW v5.0):
+- **Compromised Endpoints**: USER_ENDPOINT with abnormal outbound traffic (spam, DDoS)
+- **Servers Under Attack**: PUBLIC_SERVER with inbound flood
+- **Data Exfiltration**: PUBLIC_SERVER with abnormal outbound spike
+- **Cryptomining + Network**: High energy-per-packet correlated with network activity
 
 **Automated Response Actions:**
 
