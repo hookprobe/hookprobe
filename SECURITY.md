@@ -17,7 +17,7 @@ We actively support the following versions with security updates:
 | 3.x     | ❌ Not supported   | 2025-06-30     |
 | < 2.0   | ❌ Not supported   | 2024-12-31     |
 
-**Current stable version**: 4.0
+**Current stable version**: 5.0
 
 ---
 
@@ -122,12 +122,16 @@ HookProbe includes multiple layers of security:
 - ✅ **Session Management**: Secure session handling
 - ✅ **Password Hashing**: Industry-standard bcrypt
 
-### 🤖 AI-Driven Security
-- ✅ **Qsecbit Analysis**: Real-time threat scoring (RAG status)
-- ✅ **Automated Response**: Kali Linux countermeasures
+### 🤖 AI-Driven Security (Qsecbit v5.0)
+- ✅ **Cyber Resilience Metric**: Real-time threat scoring (RAG status) measuring attack-defense equilibrium
+- ✅ **XDP/eBPF DDoS Mitigation**: Kernel-level packet filtering with automatic NIC detection
+- ✅ **Energy Monitoring**: RAPL + per-PID power tracking for anomaly detection
+- ✅ **Network Direction-Aware Analysis**: Role-based traffic pattern detection (PUBLIC_SERVER vs USER_ENDPOINT)
+- ✅ **Automated Response**: Kali Linux countermeasures triggered on AMBER/RED status
 - ✅ **Behavioral Analysis**: Zeek, Snort3, Suricata IDS/IPS
 - ✅ **Honeypot System**: Attacker intelligence gathering
 - ✅ **Attack Mitigation**: Automated blocking and redirection
+- ✅ **Dual-Database Support**: ClickHouse (edge) and Apache Doris (cloud) for security analytics
 
 ### 📊 Monitoring & Logging
 - ✅ **Centralized Logging**: Rsyslog + Loki aggregation
