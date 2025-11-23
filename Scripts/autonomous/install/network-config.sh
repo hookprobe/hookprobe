@@ -4,6 +4,7 @@
 # GPL-FREE - All components use MIT/Apache/BSD licenses
 # Version: 5.0 - Single bridge architecture with OpenFlow ACLs
 #
+set -e
 # This file contains all network and service configuration for HookProbe v5.0
 #
 # NOTE: This file is sourced by other scripts, so we don't use 'set -e'
