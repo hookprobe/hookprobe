@@ -121,11 +121,76 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
               └─────────┘
 ```
 
+### 🌐 Dual Deployment Architecture (v5.0)
+
+HookProbe now supports **two deployment models**:
+
+#### 1. **Edge Deployment** (Single-Tenant SBC)
+```
+Customer Site
+┌──────────────────────┐
+│ HookProbe SBC        │
+│ Intel N100 (8-16GB)  │
+│                      │
+│ PODs 001-007:        │
+│ - ClickHouse (local) │
+│ - Qsecbit AI         │
+│ - 0-90 day analytics │
+│ - Complete isolation │
+└──────────────────────┘
+```
+
+**Use Cases:**
+- Home users
+- Small businesses
+- Branch offices
+- Standalone security
+
+#### 2. **MSSP Cloud Backend** (Multi-Tenant)
+```
+Cloud Infrastructure
+┌────────────────────────────────────┐
+│ Apache Doris Cluster (MSSP)       │
+│                                    │
+│ ┌────────────┐  ┌──────────────┐ │
+│ │Frontend (3)│  │Backend (3+)  │ │
+│ │Coordinators│  │Storage+Compute│ │
+│ └────────────┘  └──────────────┘ │
+│                                    │
+│ Features:                          │
+│ - Multi-tenant isolation           │
+│ - 1000+ customer capacity          │
+│ - Cross-customer threat intel      │
+│ - GPU ML training (optional)       │
+│ - 365+ day retention               │
+└────────────────────────────────────┘
+         ▲
+         │ TLS Encrypted Streams
+         │
+    ┌────┴─────┬─────────┐
+    │          │         │
+┌───┴───┐  ┌───┴───┐ ┌──┴────┐
+│Edge A │  │Edge B │ │Edge C │ ...
+└───────┘  └───────┘ └───────┘
+```
+
+**Use Cases:**
+- MSSP providers
+- Enterprise multi-site
+- Security research labs
+- SOC operations
+
+**See:** [Backend Deployment Guide](Scripts/backend/install/README.md)
+
+---
+
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
+Choose your deployment model:
+
+### 📍 Option 1: Edge Deployment (Single-Tenant SBC)
 
 **Hardware Requirements:**
 - **CPU**: Intel N100 or equivalent x86_64 (4+ cores)
@@ -138,39 +203,91 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
 
-### Quick Installation
-
-1. **Download Installation Scripts**
+**Installation:**
 
 ```bash
+# 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe/Scripts/autonomous/install/
-```
 
-2. **Configure Network Settings**
-
-```bash
+# 2. Configure
 nano network-config.sh
+# Change: HOST_A_IP, passwords, PSK keys
+
+# 3. Deploy
+sudo ./setup.sh
+
+# 4. Access Grafana
+# http://YOUR_IP:3000 (admin/admin - change immediately!)
 ```
 
-**Critical settings to change:**
+**See:** [Edge Deployment Checklist](Scripts/autonomous/install/checklist.md)
+
+---
+
+### ☁️ Option 2: MSSP Cloud Backend (Multi-Tenant)
+
+**Hardware Requirements:**
+- **CPU**: 32+ cores per node (128+ recommended for production)
+- **RAM**: 128GB minimum (256GB+ recommended for production)
+- **Storage**: 1TB NVMe SSD minimum (8TB+ recommended)
+- **Network**: 10Gbps+ NIC
+- **Cluster**: 3 Frontend + 3+ Backend nodes
+
+**Software Requirements:**
+- **OS**: RHEL 9+, Ubuntu 22.04+, Fedora 40+, Proxmox
+- **Root Access**: Required
+- **Podman**: 4.x+
+
+**Installation:**
+
 ```bash
-HOST_A_IP="192.168.1.100"              # Your server IP
-PHYSICAL_HOST_INTERFACE="eth0"         # Your NIC
-INTERNET_GATEWAY="192.168.1.1"         # Your gateway
+# 1. Clone repository
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe/Scripts/backend/install/
 
-# Change all PSK keys (generate with: openssl rand -base64 32)
-OVS_PSK_MAIN="..."
-OVS_PSK_DMZ="..."
-OVS_PSK_INTERNAL="..."
+# 2. Configure
+nano backend-network-config.sh
+# Change: DORIS_ADMIN_PASSWORD, DORIS_BE_STORAGE, etc.
 
-# Database passwords
-POSTGRES_PASSWORD="..."
-LOGTO_DB_PASSWORD="..."
+# 3. Deploy
+sudo ./backend-setup.sh
 
-# Django secret key
-DJANGO_SECRET_KEY="..."
+# 4. Initialize Doris cluster
+mysql -h 10.100.1.10 -P 9030 -uroot < /tmp/doris-init.sql
+
+# 5. Create multi-tenant schemas
+# (See Scripts/backend/install/README.md)
 ```
+
+**See:** [Backend Deployment Guide](Scripts/backend/install/README.md)
+
+---
+
+### 🔗 Hybrid: Edge + Cloud (Recommended for MSSP)
+
+Deploy edge devices at customer sites + centralized cloud backend:
+
+1. **Deploy cloud backend** (as above)
+2. **Deploy edge devices** at each customer site
+3. **Configure edge → cloud streaming**:
+   ```bash
+   # On edge device
+   export DEPLOYMENT_TYPE="edge"
+   export TENANT_ID="customer_acme"
+   export KAFKA_BOOTSTRAP_SERVERS="mssp.example.com:9092"
+   ```
+
+---
+
+### 🔐 Critical Security Steps (Both Deployments)
+
+**Before going to production:**
+```bash
+# Generate strong PSK keys
+openssl rand -base64 32
+
+# Change all default passwords:
 
 3. **Deploy HookProbe**
 
