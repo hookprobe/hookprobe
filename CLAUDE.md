@@ -219,29 +219,53 @@ HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for au
 5. **Layer 5 (Detection)**: IDS/IPS (Zeek/Snort3/Suricata)
 6. **Layer 6 (AI Response)**: Qsecbit + Kali Linux automation
 
-### Qsecbit AI Threat Analysis
+### Qsecbit: Cyber Resilience Metric
 
-**Qsecbit (Quantum Security Bit)** is the core AI threat detection engine.
+**Qsecbit (Quantum Security Bit)** is HookProbe's **cyber resilience metric** - not just a threat detector.
 
-**Location**: `Scripts/autonomous/qsecbit/qsecbit.py`
+**Location**: `Scripts/autonomous/qsecbit/` (modular package in v5.0)
 
-**Algorithm Components**:
+**What is Qsecbit?**
+
+Qsecbit measures the **smallest unit where AI-driven attack and defense reach equilibrium** through continuous error correction. It quantifies how well your system absorbs and recovers from threats.
+
+**Algorithm Components** (v5.0):
+
+**Without Energy Monitoring** (default):
 - **System Drift** (30%): Mahalanobis distance from baseline telemetry
 - **Attack Probability** (30%): ML-predicted threat level
 - **Classifier Decay** (20%): Rate of change in ML confidence
 - **Quantum Drift** (20%): System entropy deviation
 
+**With Energy Monitoring** (Intel CPUs with RAPL):
+- **System Drift** (25%): Mahalanobis distance from baseline telemetry
+- **Attack Probability** (25%): ML-predicted threat level
+- **Classifier Decay** (20%): Rate of change in ML confidence
+- **Quantum Drift** (15%): System entropy deviation
+- **Energy Anomaly** (15%): Power consumption anomaly score (NEW in v5.0)
+
 **RAG Status (Red/Amber/Green)**:
-- **GREEN** (< 0.45): Normal operation
-- **AMBER** (0.45-0.70): Warning - Kali Linux spins up
-- **RED** (> 0.70): Critical - Automated response engaged
+- **GREEN** (< 0.45): Normal operation - system resilient
+- **AMBER** (0.45-0.70): Warning - Kali Linux spins up, defensive capacity declining
+- **RED** (> 0.70): Critical - Automated response engaged, system under stress
+
+**Resilience Metrics**:
+- **Convergence Rate**: How quickly system returns to GREEN after RED/AMBER
+- **Trend Analysis**: IMPROVING, STABLE, or DEGRADING
+- **Attack-Defense Equilibrium**: Balance point between offense and defense
 
 **Automated Actions**:
 - Update WAF rules
-- Block attacker IPs
+- Block attacker IPs at kernel level (XDP/eBPF)
 - Capture forensics
 - Generate incident reports
 - Email alerts to qsecbit@hookprobe.com
+
+**v5.0 Modular Architecture**:
+- `qsecbit.py` - Main orchestrator (resilience metric calculation)
+- `energy_monitor.py` - RAPL + per-PID power tracking
+- `xdp_manager.py` - XDP/eBPF DDoS mitigation
+- `nic_detector.py` - NIC capability detection
 
 ### XDP/eBPF DDoS Mitigation
 
