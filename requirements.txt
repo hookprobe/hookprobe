@@ -9,6 +9,12 @@ scipy>=1.10.0,<2.0.0
 clickhouse-driver>=0.2.6,<1.0.0    # ClickHouse for edge deployments
 pymysql>=1.1.0,<2.0.0               # Doris (MySQL protocol) for cloud backend
 
+# XDP/eBPF support (for edge deployments with kernel-level DDoS mitigation)
+# NOTE: BCC must be installed via system packages first:
+#   RHEL/Fedora: dnf install bcc python3-bcc
+#   Ubuntu/Debian: apt-get install bpfcc-tools python3-bpfcc
+# The Python bindings are typically installed with the system package, not via pip.
+
 # Optional: For enhanced functionality
 # Uncomment if you need these features
 
