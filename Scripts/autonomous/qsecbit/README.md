@@ -70,46 +70,78 @@ R = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
 
 ## 🏗️ Architecture
 
+### V5.0 Modular Design
+
+**Qsecbit v5.0** features a **clean, modular architecture** for production deployment:
+
+```
+qsecbit/
+├── __init__.py              # Package exports
+├── qsecbit.py               # Core orchestrator (resilience metric calculation)
+├── energy_monitor.py        # RAPL + per-PID power tracking
+├── xdp_manager.py           # XDP/eBPF DDoS mitigation
+├── nic_detector.py          # NIC capability detection
+└── README.md                # This documentation
+```
+
+**Modular Components**:
+
+| Module | Purpose | Key Classes |
+|--------|---------|-------------|
+| `qsecbit.py` | **Main orchestrator** - Resilience metric calculation, database integration, reporting | `Qsecbit`, `QsecbitConfig`, `QsecbitSample` |
+| `energy_monitor.py` | Energy consumption monitoring and anomaly detection | `EnergyMonitor`, `SystemEnergySnapshot`, `PIDEnergyStats` |
+| `xdp_manager.py` | XDP/eBPF program lifecycle and DDoS mitigation | `XDPManager`, `XDPStats` |
+| `nic_detector.py` | NIC hardware capability detection and XDP mode selection | `NICDetector`, `NICCapability`, `XDPMode` |
+
+**Design Philosophy**:
+- **Separation of Concerns**: Each module has a single, well-defined responsibility
+- **Clean Imports**: Main orchestrator imports from submodules
+- **Easy Navigation**: Find code quickly - XDP logic in `xdp_manager.py`, energy in `energy_monitor.py`
+- **Production Ready**: Modular design supports unit testing, independent updates, and maintainability
+
 ### Deployment Models
 
 **Edge Deployment** (Single-Tenant):
 ```
-┌────────────────────────────────────┐
-│   Intel N100 / Raspberry Pi SBC   │
-│   ┌──────────┐    ┌─────────────┐ │
-│   │ Qsecbit  │───→│ ClickHouse  │ │
-│   │  + XDP   │    │  (0-90 days)│ │
-│   └──────────┘    └─────────────┘ │
-└────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│   Intel N100 / Raspberry Pi SBC            │
+│   ┌──────────────┐    ┌─────────────────┐  │
+│   │  Qsecbit     │───→│  ClickHouse     │  │
+│   │  + XDP       │    │  (0-90 days)    │  │
+│   │  + Energy    │    │                 │  │
+│   └──────────────┘    └─────────────────┘  │
+│        ↓                                    │
+│   ┌──────────────┐                          │
+│   │ XDP Layer 1  │  Kernel-level DDoS      │
+│   │ (NIC Driver) │  mitigation             │
+│   └──────────────┘                          │
+└─────────────────────────────────────────────┘
 ```
 
 **Cloud Backend** (Multi-Tenant MSSP):
 ```
-┌──────────────────────────────────────────┐
-│  Proxmox / RHEL / Ubuntu Server          │
-│  ┌──────────┐    ┌────────────────────┐ │
-│  │ Qsecbit  │───→│ Apache Doris       │ │
-│  │ (N-Pods) │    │ (1000+ tenants)    │ │
-│  └──────────┘    │ (365+ days)        │ │
-│                  └────────────────────┘ │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  Proxmox / RHEL / Ubuntu Server              │
+│  ┌──────────────┐    ┌──────────────────┐   │
+│  │  Qsecbit     │───→│  Apache Doris    │   │
+│  │  (N-Pods)    │    │  (1000+ tenants) │   │
+│  │              │    │  (365+ days)     │   │
+│  └──────────────┘    └──────────────────┘   │
+│                                              │
+│  Multi-tenant isolation via tenant_id        │
+└──────────────────────────────────────────────┘
 ```
 
-### Component Overview
+### Qsecbit as a Resilience Metric
 
-```
-qsecbit/
-├── qsecbit.py          # Main module
-├── README.md           # This file
-└── __init__.py         # Package initializer (future)
-```
+**Qsecbit is fundamentally a resilience metric**, not just a threat detector. It measures:
 
-**Main Classes**:
-- `Qsecbit`: Core threat analysis engine
-- `XDPManager`: XDP/eBPF program lifecycle management
-- `NICDetector`: Hardware capability detection
-- `QsecbitConfig`: Configuration dataclass
-- `QsecbitSample`: Individual measurement
+1. **Attack-Defense Equilibrium**: The smallest unit where AI-driven attack and defense balance
+2. **Convergence Rate**: How quickly the system returns to GREEN status after threats
+3. **System Stability**: Trend analysis (IMPROVING, STABLE, DEGRADING)
+4. **Adaptive Capacity**: Energy consumption patterns indicating system stress
+
+**Key Insight**: Qsecbit doesn't just detect attacks - it **quantifies how well your system absorbs and recovers from threats**. A high convergence rate indicates robust resilience; a degrading trend signals declining defensive capacity before catastrophic failure.
 
 ---
 
