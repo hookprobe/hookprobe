@@ -16,7 +16,15 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 ### Added
 
 #### Core Components
-- **VictoriaLogs** (Apache 2.0) - Replaced Loki for log aggregation
+- **ClickHouse** (Apache 2.0) - OLAP database for security analytics, replacing VictoriaLogs
+  - 100-1000x faster analytical queries for security event analysis
+  - 90% storage reduction with ZSTD compression
+  - Unified log aggregation from Vector, Filebeat, ModSecurity, Zeek
+  - Historical Qsecbit analysis with 1-year retention
+  - Real-time attack correlation across multiple sources
+  - Comprehensive schemas: security_events, qsecbit_scores, network_flows, waf_events, system_logs, honeypot_attacks
+  - Materialized views for attack trends and top attackers
+- **Filebeat** (Elastic License 2.0) - Zeek log ingestion to ClickHouse
 - **Snort 3** (GPL 2.0) - Added for network-based intrusion detection
 - **Zeek** (BSD) - Added for behavioral analysis and protocol detection
 - **ModSecurity** (Apache 2.0) - Replaced NAXSI for web application firewall

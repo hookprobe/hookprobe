@@ -604,7 +604,8 @@ create_volume "$VOLUME_DJANGO_STATIC"
 create_volume "$VOLUME_DJANGO_MEDIA"
 create_volume "$VOLUME_KEYCLOAK_DATA"
 create_volume "$VOLUME_VICTORIAMETRICS_DATA"
-create_volume "$VOLUME_VICTORIALOGS_DATA"
+create_volume "$VOLUME_CLICKHOUSE_DATA"
+create_volume "$VOLUME_CLICKHOUSE_LOGS"
 create_volume "$VOLUME_GRAFANA_DATA"
 create_volume "$VOLUME_ZEEK_LOGS"
 create_volume "$VOLUME_SNORT_LOGS"
@@ -716,10 +717,10 @@ podman run -d --restart always \
 echo "✓ POD_IAM deployed (Keycloak)"
 
 # ============================================================
-# STEP 15: DEPLOY POD_MONITORING - VICTORIAMETRICS, VICTORIALOGS, GRAFANA
+# STEP 15: DEPLOY POD_MONITORING - VICTORIAMETRICS, CLICKHOUSE, GRAFANA
 # ============================================================
 echo ""
-echo "[STEP 15] Deploying POD_MONITORING - Observability Stack..."
+echo "[STEP 15] Deploying POD_MONITORING - Observability & Analytics Stack..."
 
 podman pod exists "$POD_MONITORING" 2>/dev/null && podman pod rm -f "$POD_MONITORING"
 
@@ -728,7 +729,8 @@ podman pod create \
     --network "$NETWORK_MONITORING" \
     -p ${PORT_GRAFANA}:3000 \
     -p ${PORT_VICTORIAMETRICS}:8428 \
-    -p ${PORT_VICTORIALOGS}:9428
+    -p ${PORT_CLICKHOUSE_HTTP}:8123 \
+    -p ${PORT_CLICKHOUSE_NATIVE}:9001
 
 echo "  → Starting VictoriaMetrics..."
 podman run -d --restart always \
@@ -741,16 +743,210 @@ podman run -d --restart always \
     -storageDataPath=/victoria-metrics-data \
     -retentionPeriod=90d
 
-echo "  → Starting VictoriaLogs..."
+echo "  → Starting ClickHouse OLAP database..."
+mkdir -p /tmp/clickhouse-config
+
+cat > /tmp/clickhouse-config/users.xml << 'CLICKHOUSEUSERS'
+<yandex>
+    <profiles>
+        <default>
+            <max_memory_usage>8000000000</max_memory_usage>
+            <use_uncompressed_cache>0</use_uncompressed_cache>
+            <load_balancing>random</load_balancing>
+        </default>
+    </profiles>
+    <users>
+        <${CLICKHOUSE_USER}>
+            <password>${CLICKHOUSE_PASSWORD}</password>
+            <networks><ip>::/0</ip></networks>
+            <profile>default</profile>
+            <quota>default</quota>
+        </${CLICKHOUSE_USER}>
+    </users>
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+            </interval>
+        </default>
+    </quotas>
+</yandex>
+CLICKHOUSEUSERS
+
 podman run -d --restart always \
     --pod "$POD_MONITORING" \
-    --name "${POD_MONITORING}-victorialogs" \
-    -v "$VOLUME_VICTORIALOGS_DATA:/victoria-logs-data" \
+    --name "${POD_MONITORING}-clickhouse" \
+    -v "$VOLUME_CLICKHOUSE_DATA:/var/lib/clickhouse" \
+    -v "$VOLUME_CLICKHOUSE_LOGS:/var/log/clickhouse-server" \
+    -v /tmp/clickhouse-config/users.xml:/etc/clickhouse-server/users.d/custom.xml:ro \
+    --ulimit nofile=262144:262144 \
     --log-driver=journald \
-    --log-opt tag="hookprobe-victorialogs" \
-    "$IMAGE_VICTORIALOGS" \
-    -storageDataPath=/victoria-logs-data \
-    -retentionPeriod=90d
+    --log-opt tag="hookprobe-clickhouse" \
+    "$IMAGE_CLICKHOUSE"
+
+echo "  → Waiting for ClickHouse to start..."
+sleep 15
+
+echo "  → Initializing ClickHouse database schemas..."
+podman exec "${POD_MONITORING}-clickhouse" clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${CLICKHOUSE_DB}"
+
+podman exec "${POD_MONITORING}-clickhouse" clickhouse-client --database="${CLICKHOUSE_DB}" --multiquery << 'CLICKHOUSESCHEMA'
+-- Main security events table (unified from all sources)
+CREATE TABLE IF NOT EXISTS security_events (
+    timestamp DateTime64(3),
+    event_id UUID DEFAULT generateUUIDv4(),
+    source_type LowCardinality(String),
+    host String,
+    src_ip IPv4,
+    dst_ip IPv4,
+    src_port UInt16,
+    dst_port UInt16,
+    protocol LowCardinality(String),
+    attack_type LowCardinality(String),
+    severity LowCardinality(String),
+    blocked UInt8,
+    raw_event String CODEC(ZSTD(3)),
+    geoip_country LowCardinality(String),
+    user_agent String,
+    uri String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(timestamp)
+ORDER BY (timestamp, src_ip, attack_type)
+TTL timestamp + INTERVAL ${CLICKHOUSE_RETENTION_DAYS} DAY
+SETTINGS index_granularity = 8192;
+
+-- Qsecbit historical analysis table
+CREATE TABLE IF NOT EXISTS qsecbit_scores (
+    timestamp DateTime64(3),
+    score Float32,
+    rag_status LowCardinality(String),
+    drift Float32,
+    attack_probability Float32,
+    classifier_decay Float32,
+    quantum_drift Float32,
+    cpu_usage Float32,
+    memory_usage Float32,
+    network_traffic Float32,
+    disk_io Float32,
+    host String,
+    pod String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY timestamp
+TTL timestamp + INTERVAL ${CLICKHOUSE_QSECBIT_RETENTION_DAYS} DAY
+SETTINGS index_granularity = 8192;
+
+-- Network flows table (Zeek data)
+CREATE TABLE IF NOT EXISTS network_flows (
+    timestamp DateTime64(3),
+    src_ip IPv4,
+    dst_ip IPv4,
+    src_port UInt16,
+    dst_port UInt16,
+    protocol LowCardinality(String),
+    bytes_sent UInt64,
+    bytes_received UInt64,
+    packets_sent UInt32,
+    packets_received UInt32,
+    duration Float32,
+    service LowCardinality(String),
+    conn_state LowCardinality(String),
+    zeek_uid String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(timestamp)
+ORDER BY (timestamp, src_ip, dst_ip)
+TTL timestamp + INTERVAL ${CLICKHOUSE_FLOWS_RETENTION_DAYS} DAY
+SETTINGS index_granularity = 8192;
+
+-- WAF events table (ModSecurity)
+CREATE TABLE IF NOT EXISTS waf_events (
+    timestamp DateTime64(3),
+    src_ip IPv4,
+    request_uri String,
+    request_method LowCardinality(String),
+    rule_id UInt32,
+    rule_message String,
+    attack_category LowCardinality(String),
+    severity LowCardinality(String),
+    blocked UInt8,
+    user_agent String,
+    referer String,
+    request_body String CODEC(ZSTD(3)),
+    response_status UInt16,
+    response_time Float32
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(timestamp)
+ORDER BY (timestamp, src_ip, attack_category)
+TTL timestamp + INTERVAL ${CLICKHOUSE_RETENTION_DAYS} DAY
+SETTINGS index_granularity = 8192;
+
+-- System logs table (journald, syslog)
+CREATE TABLE IF NOT EXISTS system_logs (
+    timestamp DateTime64(3),
+    hostname String,
+    severity LowCardinality(String),
+    facility LowCardinality(String),
+    tag String,
+    message String,
+    container_name String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(timestamp)
+ORDER BY (timestamp, hostname, severity)
+TTL timestamp + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192;
+
+-- Honeypot attacks table
+CREATE TABLE IF NOT EXISTS honeypot_attacks (
+    timestamp DateTime64(3),
+    src_ip IPv4,
+    honeypot_type LowCardinality(String),
+    username String,
+    password String,
+    command String,
+    payload String CODEC(ZSTD(3)),
+    attack_classification LowCardinality(String),
+    credential_in_db UInt8,
+    geoip_country LowCardinality(String),
+    geoip_city String,
+    asn UInt32
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(timestamp)
+ORDER BY (timestamp, src_ip)
+TTL timestamp + INTERVAL 180 DAY
+SETTINGS index_granularity = 8192;
+
+-- Materialized view: Attacks per hour
+CREATE MATERIALIZED VIEW IF NOT EXISTS attacks_per_hour_mv
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, attack_type, src_ip)
+AS SELECT
+    toStartOfHour(timestamp) AS hour,
+    attack_type,
+    src_ip,
+    count() AS attack_count,
+    countIf(blocked = 1) AS blocked_count
+FROM security_events
+GROUP BY hour, attack_type, src_ip;
+
+-- Materialized view: Top attackers per day
+CREATE MATERIALIZED VIEW IF NOT EXISTS top_attackers_mv
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, src_ip)
+AS SELECT
+    toDate(timestamp) AS day,
+    src_ip,
+    count() AS total_attacks,
+    uniq(attack_type) AS attack_types,
+    countIf(severity = 'critical') AS critical_attacks
+FROM security_events
+GROUP BY day, src_ip;
+CLICKHOUSESCHEMA
+
+echo "✓ ClickHouse deployed and initialized"
 
 echo "  → Starting Vector log aggregator..."
 mkdir -p /tmp/vector-config
@@ -764,19 +960,64 @@ include_units = ["podman"]
 type = "file"
 include = ["/var/log/messages", "/var/log/secure"]
 
-[transforms.parse_logs]
+[sources.modsec_logs]
+type = "file"
+include = ["/var/lib/containers/storage/volumes/hookprobe-modsecurity-logs-v5/_data/*.log"]
+data_dir = "/var/lib/vector/modsec"
+
+[transforms.parse_journald]
 type = "remap"
-inputs = ["journald", "host_logs"]
+inputs = ["journald"]
 source = '''
   .timestamp = now()
   .hostname = get_hostname!()
+  .container_name = .CONTAINER_NAME
+  .severity = .PRIORITY
+  .message = .MESSAGE
 '''
 
-[sinks.victorialogs]
-type = "http"
-inputs = ["parse_logs"]
-uri = "http://localhost:9428/insert/jsonline?_stream_fields=hostname,container_name"
-encoding.codec = "json"
+[transforms.parse_host_logs]
+type = "remap"
+inputs = ["host_logs"]
+source = '''
+  parsed = parse_syslog!(.message)
+  .timestamp = parsed.timestamp
+  .hostname = parsed.hostname
+  .severity = parsed.severity
+  .facility = parsed.facility
+  .tag = parsed.appname
+  .message = parsed.message
+'''
+
+[transforms.parse_modsec]
+type = "remap"
+inputs = ["modsec_logs"]
+source = '''
+  parsed = parse_json!(.message)
+  .timestamp = to_timestamp!(parsed.transaction.time_stamp)
+  .src_ip = parsed.transaction.client_ip
+  .request_uri = parsed.transaction.request.uri
+  .request_method = parsed.transaction.request.method
+  .attack_category = parsed.transaction.messages[0].details.ruleId
+  .severity = parsed.transaction.messages[0].details.severity
+  .blocked = if parsed.transaction.producer.connector == "ModSecurity" { 1 } else { 0 }
+'''
+
+[sinks.clickhouse_system_logs]
+type = "clickhouse"
+inputs = ["parse_journald", "parse_host_logs"]
+endpoint = "http://localhost:8123"
+database = "security"
+table = "system_logs"
+compression = "gzip"
+
+[sinks.clickhouse_waf]
+type = "clickhouse"
+inputs = ["parse_modsec"]
+endpoint = "http://localhost:8123"
+database = "security"
+table = "waf_events"
+compression = "gzip"
 VECTOREOF
 
 podman run -d --restart always \
@@ -785,10 +1026,46 @@ podman run -d --restart always \
     -v /tmp/vector-config:/etc/vector:ro \
     -v /var/log:/var/log:ro \
     -v /run/log/journal:/run/log/journal:ro \
+    -v /var/lib/containers/storage/volumes:/var/lib/containers/storage/volumes:ro \
     --log-driver=journald \
     --log-opt tag="hookprobe-vector" \
     "$IMAGE_VECTOR" \
     --config /etc/vector/vector.toml
+
+echo "  → Starting Filebeat for Zeek log ingestion..."
+mkdir -p /tmp/filebeat-config
+
+cat > /tmp/filebeat-config/filebeat.yml << 'FILEBEATEOF'
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /zeek-logs/current/conn.log
+    - /zeek-logs/current/dns.log
+    - /zeek-logs/current/http.log
+  json.keys_under_root: true
+  json.add_error_key: true
+  fields:
+    source_type: zeek
+
+output.http:
+  hosts: ["http://localhost:8123"]
+  index: "network_flows"
+  parameters:
+    database: security
+    table: network_flows
+  compression_level: 3
+FILEBEATEOF
+
+podman run -d --restart always \
+    --pod "$POD_MONITORING" \
+    --name "${POD_MONITORING}-filebeat" \
+    -v /tmp/filebeat-config/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro \
+    -v "$VOLUME_ZEEK_LOGS:/zeek-logs:ro" \
+    --user root \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-filebeat" \
+    "$IMAGE_FILEBEAT"
 
 echo "  → Starting Node Exporter..."
 podman run -d --restart always \
@@ -815,12 +1092,14 @@ datasources:
     isDefault: true
     editable: true
 
-  - name: VictoriaLogs
-    type: loki
+  - name: ClickHouse
+    type: vertamedia-clickhouse-datasource
     access: proxy
-    url: http://localhost:9428
+    url: http://localhost:8123
     jsonData:
-      maxLines: 1000
+      defaultDatabase: security
+      addCorsHeader: true
+      usePOST: false
     editable: true
 EOF
 
@@ -830,7 +1109,7 @@ podman run -d --restart always \
     -e GF_SECURITY_ADMIN_USER=admin \
     -e GF_SECURITY_ADMIN_PASSWORD=admin \
     -e GF_USERS_ALLOW_SIGN_UP=false \
-    -e GF_INSTALL_PLUGINS=grafana-piechart-panel \
+    -e GF_INSTALL_PLUGINS=grafana-piechart-panel,vertamedia-clickhouse-datasource \
     -v "$VOLUME_GRAFANA_DATA:/var/lib/grafana" \
     -v "/tmp/grafana-provisioning/datasources:/etc/grafana/provisioning/datasources:ro" \
     --user root \
@@ -838,7 +1117,7 @@ podman run -d --restart always \
     --log-opt tag="hookprobe-grafana" \
     "$IMAGE_GRAFANA"
 
-echo "✓ POD_MONITORING deployed"
+echo "✓ POD_MONITORING deployed (VictoriaMetrics + ClickHouse + Grafana)"
 
 # ============================================================
 # STEP 16: BUILD AND DEPLOY DJANGO APPLICATION
@@ -1394,7 +1673,7 @@ echo "✅ All Services Deployed:"
 echo "  ✓ POD_DATABASE - PostgreSQL (${IP_POSTGRES_MAIN})"
 echo "  ✓ POD_CACHE - Redis (${IP_REDIS})"
 echo "  ✓ POD_IAM - Keycloak (${IP_KEYCLOAK})"
-echo "  ✓ POD_MONITORING - VictoriaMetrics, VictoriaLogs, Grafana"
+echo "  ✓ POD_MONITORING - VictoriaMetrics, ClickHouse, Grafana"
 echo "  ✓ POD_WEB - Django + ModSecurity WAF + Nginx"
 if [ "$CLOUDFLARE_TUNNEL_TOKEN" != "CHANGE_ME_GET_FROM_CLOUDFLARE_DASHBOARD" ]; then
     echo "    • Cloudflare Tunnel: Active"
@@ -1427,11 +1706,12 @@ echo "     Admin Console: http://$LOCAL_HOST_IP:${PORT_KEYCLOAK_ADMIN}"
 echo "     Username: $KEYCLOAK_ADMIN"
 echo "     Password: (set in config - CHANGE IT)"
 echo ""
-echo "  📊 Monitoring:"
+echo "  📊 Monitoring & Analytics:"
 echo "     Grafana: http://$LOCAL_HOST_IP:${PORT_GRAFANA}"
 echo "     Username: admin | Password: admin"
 echo "     VictoriaMetrics: http://$LOCAL_HOST_IP:${PORT_VICTORIAMETRICS}"
-echo "     VictoriaLogs: http://$LOCAL_HOST_IP:${PORT_VICTORIALOGS}"
+echo "     ClickHouse HTTP: http://$LOCAL_HOST_IP:${PORT_CLICKHOUSE_HTTP}"
+echo "     ClickHouse Native: tcp://$LOCAL_HOST_IP:${PORT_CLICKHOUSE_NATIVE}"
 echo ""
 echo "  🤖 Qsecbit AI:"
 echo "     API: http://$LOCAL_HOST_IP:${PORT_QSECBIT_API}/api/qsecbit/latest"
