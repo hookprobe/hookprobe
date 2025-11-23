@@ -312,6 +312,25 @@ ENABLE_OPENFLOW_LOGGING=true           # Log OpenFlow drops
 ENABLE_NFTABLES_LOGGING=true           # Log firewall drops
 
 # ============================================================
+# GDPR COMPLIANCE
+# ============================================================
+# GDPR configuration is managed in gdpr-config.sh
+# Source it for privacy and data protection settings
+GDPR_CONFIG_FILE="$(dirname "${BASH_SOURCE[0]}")/gdpr-config.sh"
+
+# Key GDPR settings (see gdpr-config.sh for full configuration):
+# - IP/MAC anonymization enabled by default
+# - Data retention limits (30-365 days depending on data type)
+# - Data subject rights (access, erasure, portability)
+# - Automated data retention cleanup
+# - Privacy-preserving security analysis
+#
+# For detailed GDPR compliance information, see:
+# - /opt/hookprobe/GDPR.md - Comprehensive compliance guide
+# - /opt/hookprobe/scripts/gdpr-config.sh - Configuration settings
+# - /opt/hookprobe/scripts/gdpr-retention.sh - Automated retention
+
+# ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
