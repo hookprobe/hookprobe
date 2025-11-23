@@ -65,6 +65,34 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 - Automated behavior analysis and logging
 
 #### Qsecbit Enhancements
+- **Modular Architecture (v5.0)** - Clean separation of concerns for production deployment
+  - `qsecbit.py` - Main orchestrator (resilience metric calculation)
+  - `energy_monitor.py` - RAPL + per-PID power tracking + network direction-aware analysis
+  - `xdp_manager.py` - XDP/eBPF DDoS mitigation
+  - `nic_detector.py` - NIC capability detection
+  - `__init__.py` - Clean package exports for easy integration
+- **Energy Monitoring** - RAPL-based power consumption tracking with anomaly detection (Intel CPUs)
+  - Per-PID power consumption estimation via CPU time tracking
+  - EWMA (Exponentially Weighted Moving Average) smoothing for baseline calculation
+  - Z-score anomaly detection (configurable threshold, default 2.5σ)
+  - NIC and XDP process power tracking for DDoS correlation
+  - Baseline deviation alerts (flag if NIC power increases >50%)
+  - Integration with qsecbit algorithm (15% weight contribution)
+  - Detection scenarios: DDoS attacks, cryptomining, XDP/eBPF exploitation
+- **Network Direction-Aware Energy Efficiency** (NEW in v5.0)
+  - **Energy-Per-Packet (EPP)**: Tracks energy consumed per network packet (mJ/packet)
+  - **OUT/IN Ratio**: Analyzes traffic direction based on deployment role
+  - **Deployment Roles**: PUBLIC_SERVER (expects IN > OUT) vs USER_ENDPOINT (expects OUT > IN)
+  - **Role-Based Anomaly Detection**: 0-100 scale with weighted components (50% EPP, 30% ratio, 20% burst)
+  - **Detection Capabilities**:
+    - Compromised endpoints sending spam/DDoS traffic (OUT spike on USER_ENDPOINT)
+    - Public servers under DDoS attack (IN spike on PUBLIC_SERVER)
+    - Data exfiltration from servers (abnormal OUT traffic pattern)
+    - Cryptomining + network activity correlation (high EPP + traffic anomalies)
+    - Botnet C2 communication (abnormal IN traffic to USER_ENDPOINT)
+    - Reverse shell detection (IN > OUT on USER_ENDPOINT)
+  - Auto-detects primary network interface via psutil
+  - Graceful degradation if RAPL unavailable
 - **XDP/eBPF DDoS Mitigation** - Kernel-level packet filtering with automatic NIC detection
   - Auto-detects NIC capabilities (Raspberry Pi, Intel N100/I211/I226, Intel X710/E810, Mellanox ConnectX)
   - Intelligent mode selection: XDP-DRV (driver mode) for supported NICs, XDP-SKB (generic mode) fallback
