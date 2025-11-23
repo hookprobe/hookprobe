@@ -24,6 +24,9 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 
 - [Background Story](#background-story)
 - [Architecture](#architecture)
+- [Hardware Compatibility](#hardware-compatibility)
+  - [NIC Requirements for XDP/eBPF](#nic-requirements-for-xdpebpf-ddos-mitigation)
+  - [Recommended Configurations](#recommended-hardware-configurations)
 - [Getting Started](#getting-started)
 - [Optional Features](#optional-features)
   - [n8n Workflow Automation](#n8n-workflow-automation-pod-008)
@@ -184,6 +187,64 @@ Cloud Infrastructure
 
 ---
 
+## 🖥️ Hardware Compatibility
+
+### NIC Requirements for XDP/eBPF DDoS Mitigation
+
+HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data Path). Performance depends on NIC capabilities and XDP mode:
+
+**XDP Modes**:
+- **XDP-hw** (Layer 0): NIC hardware ASIC - Ultra-fast, rare
+- **XDP-drv** (Layer 1): NIC driver - Fastest practical mode
+- **XDP-skb** (Layer 1.5): Generic kernel - Universal fallback
+
+| **Platform** | **NIC Model** | **Driver** | **XDP Mode** | **Max Throughput** | **Recommendation** |
+|-------------|---------------|------------|--------------|-------------------|-------------------|
+| **Raspberry Pi 4/5** | Broadcom SoC | bcmgenet | Layer 1.5 (SKB) | 1 Gbps | ⚠️ Dev/Lab only |
+| **Raspberry Pi** | Realtek USB | r8152 | Layer 1.5 (SKB) | 1 Gbps | ⚠️ Limited perf |
+| **Desktop** | Realtek PCIe | r8169 | Layer 1.5 (SKB) | 2.5 Gbps | ⚠️ Not production |
+| **Intel N100** | **I211** | **igb** | **Layer 1 (DRV)** | **1 Gbps** | ✅ **Entry-level** |
+| **Intel N100** | **I226** | **igc** | **Layer 1 (DRV)** | **2.5 Gbps** | ✅ **Best value** |
+| **Server** | **X710** | **i40e** | **Layer 1 (DRV)** | **40 Gbps** | ✅ **Cloud backend** |
+| **Server** | **E810** | **ice** | **Layer 1 (DRV)** | **100 Gbps** | ✅ **Enterprise** |
+| **Mellanox** | **ConnectX-5/6/7** | **mlx5_core** | **Layer 0/1 (HW/DRV)** | **200 Gbps** | ✅ **Gold standard** |
+
+**Legend**:
+- **Layer 0 (XDP-hw)**: Hardware offload in NIC ASIC - Extremely rare, only Mellanox SmartNICs
+- **Layer 1 (XDP-drv)**: Native driver mode - Full kernel bypass, < 1µs latency
+- **Layer 1.5 (XDP-skb)**: Generic software mode - Partial bypass, 5-10µs latency, higher CPU
+
+### Recommended Hardware Configurations
+
+#### 💰 Budget Edge (< $300)
+- **SBC**: Intel N100 (8GB RAM, ~$150)
+- **NIC**: Intel I226-V (built-in, 2.5Gbps)
+- **XDP**: Native DRV mode ✅
+- **Performance**: 2.5 Gbps line rate DDoS filtering
+- **Use Case**: Home lab, small office, development
+
+#### 🏢 Production Edge ($300-$1000)
+- **SBC**: Mini PC with Intel I211 or I226
+- **NIC**: Intel I226-V (2.5Gbps)
+- **XDP**: Native DRV mode ✅
+- **Performance**: 1-2.5 Gbps sustained
+- **Use Case**: Branch office, edge security appliance
+
+#### ☁️ MSSP Cloud Backend ($2000+)
+- **Server**: Dell R650/HP DL360 Gen11
+- **NIC**: Intel X710 (40Gbps) or Mellanox ConnectX-5 (100Gbps)
+- **XDP**: Native DRV + Hardware Offload ✅
+- **Performance**: 40-100 Gbps aggregate
+- **Use Case**: Multi-tenant MSSP, 100-1000 customers
+
+### ⚠️ Important Notes
+
+**Raspberry Pi Limitation**: Raspberry Pi 4/5 only supports XDP in generic (SKB) mode, which has higher CPU overhead and limited throughput. For production DDoS mitigation, use Intel N100 with I226 NIC for native XDP-DRV support.
+
+**Intel N100 Advantage**: Best price/performance for edge deployment. Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead.
+
+**See Complete Guide**: [Qsecbit XDP/eBPF Documentation](Scripts/autonomous/qsecbit/README.md)
+
 ---
 
 ## 🚀 Getting Started
@@ -199,7 +260,10 @@ Choose your deployment model:
 - **Network**: 1Gbps NIC
 
 **Software Requirements:**
-- **OS**: RHEL 10, Fedora 38+, or CentOS Stream 9
+- **OS** (automatically detected):
+  - **RHEL-based**: RHEL 10, Fedora 40+, CentOS Stream 9+, Rocky Linux, AlmaLinux
+  - **Debian-based**: Debian 12+, Ubuntu 22.04+/24.04+
+- **Architecture**: x86_64 or ARM64 (ARMv8)
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
 
@@ -235,7 +299,11 @@ sudo ./setup.sh
 - **Cluster**: 3 Frontend + 3+ Backend nodes
 
 **Software Requirements:**
-- **OS**: RHEL 9+, Ubuntu 22.04+, Fedora 40+, Proxmox
+- **OS** (automatically detected):
+  - **RHEL-based**: RHEL 10, Fedora 40+, CentOS Stream 9+, Rocky Linux, AlmaLinux
+  - **Debian-based**: Debian 12+, Ubuntu 22.04+/24.04+
+  - **Virtualization**: Proxmox VE 8.x+
+- **Architecture**: x86_64 only (cloud backend requires Intel Xeon/AMD EPYC)
 - **Root Access**: Required
 - **Podman**: 4.x+
 

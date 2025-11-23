@@ -27,16 +27,206 @@ echo "   Single Bridge + OpenFlow ACLs + L2 Hardening"
 echo "============================================================"
 
 # ============================================================
-# STEP 1: VALIDATE ENVIRONMENT
+# STEP 1: DETECT PLATFORM AND HARDWARE
 # ============================================================
 echo ""
-echo "[STEP 1] Validating environment..."
+echo "[STEP 1] Detecting platform and hardware..."
 
 # Check for root
 if [[ $EUID -ne 0 ]]; then
    echo "ERROR: This script must be run as root"
    exit 1
 fi
+
+# ===== OS Platform Detection =====
+PLATFORM_OS="unknown"
+PLATFORM_FAMILY="unknown"
+PKG_MANAGER="unknown"
+
+if [ -f /etc/os-release ]; then
+    source /etc/os-release
+
+    case "$ID" in
+        rhel|centos|fedora|rocky|almalinux)
+            PLATFORM_FAMILY="rhel"
+            PKG_MANAGER="dnf"
+            ;;
+        debian|ubuntu|pop|linuxmint)
+            PLATFORM_FAMILY="debian"
+            PKG_MANAGER="apt"
+            ;;
+        *)
+            echo "ERROR: Unsupported OS: $ID"
+            echo "HookProbe v5.0 currently supports:"
+            echo "  - RHEL-based: RHEL 10, Fedora 40+, CentOS Stream 9+, Rocky Linux, AlmaLinux"
+            echo "  - Debian-based: Debian 12+, Ubuntu 22.04+/24.04+"
+            exit 1
+            ;;
+    esac
+
+    PLATFORM_OS="$NAME"
+    echo "✓ OS Detected: $NAME ($VERSION)"
+    echo "✓ Platform Family: $PLATFORM_FAMILY"
+else
+    echo "ERROR: Cannot detect OS (missing /etc/os-release)"
+    exit 1
+fi
+
+# ===== Hardware Architecture Detection =====
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64|amd64)
+        ARCH_TYPE="x86_64"
+        ;;
+    aarch64|arm64)
+        ARCH_TYPE="arm64"
+        ;;
+    armv7l)
+        echo "ERROR: ARMv7 (32-bit) is not supported. Use ARMv8/ARM64."
+        exit 1
+        ;;
+    *)
+        echo "ERROR: Unsupported architecture: $ARCH"
+        exit 1
+        ;;
+esac
+echo "✓ Architecture: $ARCH_TYPE"
+
+# ===== Hardware Platform Detection =====
+HARDWARE_PLATFORM="unknown"
+CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
+
+# Check for virtualization
+IS_VIRTUAL=false
+if systemd-detect-virt --quiet; then
+    VIRT_TYPE=$(systemd-detect-virt)
+    IS_VIRTUAL=true
+    echo "✓ Virtualization Detected: $VIRT_TYPE"
+    HARDWARE_PLATFORM="virtual-$VIRT_TYPE"
+fi
+
+# Detect specific hardware (physical only)
+if [ "$IS_VIRTUAL" = false ]; then
+    if [ "$ARCH_TYPE" = "arm64" ]; then
+        # ARM64 SBC detection
+        if grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null || grep -qi "raspberry pi" /sys/firmware/devicetree/base/model 2>/dev/null; then
+            RPI_MODEL=$(cat /proc/device-tree/model 2>/dev/null || cat /sys/firmware/devicetree/base/model 2>/dev/null)
+            if echo "$RPI_MODEL" | grep -qi "raspberry pi 5"; then
+                HARDWARE_PLATFORM="raspberry-pi-5"
+                echo "✓ Hardware: Raspberry Pi 5"
+            elif echo "$RPI_MODEL" | grep -qi "raspberry pi 4"; then
+                HARDWARE_PLATFORM="raspberry-pi-4"
+                echo "✓ Hardware: Raspberry Pi 4"
+            else
+                HARDWARE_PLATFORM="raspberry-pi-other"
+                echo "✓ Hardware: Raspberry Pi (older model)"
+                echo "⚠️  WARNING: Raspberry Pi 4/5 recommended for optimal performance"
+            fi
+        elif grep -qi "rockchip" /proc/cpuinfo; then
+            HARDWARE_PLATFORM="rockchip-sbc"
+            echo "✓ Hardware: Rockchip-based SBC (Rock Pi, Orange Pi, etc.)"
+        else
+            HARDWARE_PLATFORM="arm64-generic"
+            echo "✓ Hardware: ARM64 Generic SBC"
+        fi
+    elif [ "$ARCH_TYPE" = "x86_64" ]; then
+        # x86_64 detection
+        if echo "$CPU_MODEL" | grep -qi "Intel.*N100"; then
+            HARDWARE_PLATFORM="intel-n100"
+            echo "✓ Hardware: Intel N100 Mini PC (Recommended)"
+        elif echo "$CPU_MODEL" | grep -qi "Intel.*Celeron.*N[0-9]"; then
+            HARDWARE_PLATFORM="intel-celeron-n-series"
+            echo "✓ Hardware: Intel Celeron N-series"
+        elif echo "$CPU_MODEL" | grep -qi "Intel.*Xeon"; then
+            HARDWARE_PLATFORM="intel-xeon-server"
+            echo "✓ Hardware: Intel Xeon Server"
+        elif echo "$CPU_MODEL" | grep -qi "AMD.*EPYC"; then
+            HARDWARE_PLATFORM="amd-epyc-server"
+            echo "✓ Hardware: AMD EPYC Server"
+        else
+            HARDWARE_PLATFORM="x86_64-generic"
+            echo "✓ Hardware: Generic x86_64 system"
+        fi
+    fi
+else
+    echo "✓ Hardware: Virtual Machine ($VIRT_TYPE)"
+fi
+
+# ===== NIC Detection (for XDP capabilities) =====
+PRIMARY_NIC=$(ip route show default | grep -oP '(?<=dev )[^ ]+' | head -1)
+if [ -n "$PRIMARY_NIC" ]; then
+    NIC_DRIVER=$(ethtool -i "$PRIMARY_NIC" 2>/dev/null | grep "^driver:" | awk '{print $2}')
+    if [ -n "$NIC_DRIVER" ]; then
+        echo "✓ Primary NIC: $PRIMARY_NIC (driver: $NIC_DRIVER)"
+
+        # Check XDP capability
+        case "$NIC_DRIVER" in
+            igb|igc)
+                echo "  ✓ XDP Mode: XDP-DRV (Layer 1 - Full kernel bypass)"
+                echo "  ✓ Intel NIC with native XDP support detected"
+                ;;
+            i40e|ice)
+                echo "  ✓ XDP Mode: XDP-DRV (Layer 1 - Full kernel bypass)"
+                echo "  ✓ Intel Server NIC with native XDP support detected"
+                ;;
+            mlx5_core)
+                echo "  ✓ XDP Mode: XDP-DRV/XDP-HW (Layer 1/0 - Best performance)"
+                echo "  ✓ Mellanox ConnectX with XDP hardware offload support detected"
+                ;;
+            mlx4_en)
+                echo "  ✓ XDP Mode: XDP-SKB (Layer 1.5 - Software mode)"
+                echo "  ⚠️  Mellanox ConnectX-3: AF_XDP supported but no XDP-DRV"
+                ;;
+            bcmgenet|r8152|r8169)
+                echo "  ✓ XDP Mode: XDP-SKB (Layer 1.5 - Software mode)"
+                echo "  ⚠️  Consumer/SBC NIC: XDP-SKB only (higher CPU usage)"
+                ;;
+            ixgbe)
+                echo "  ✓ XDP Mode: XDP-SKB (Layer 1.5 - Software mode)"
+                echo "  ⚠️  Intel X520: AF_XDP supported but no XDP-DRV mode"
+                ;;
+            *)
+                echo "  ✓ XDP Mode: XDP-SKB (Layer 1.5 - Universal fallback)"
+                echo "  ℹ️  Unknown NIC: XDP-SKB will be used"
+                ;;
+        esac
+    else
+        echo "✓ Primary NIC: $PRIMARY_NIC (driver unknown)"
+    fi
+else
+    echo "⚠️  WARNING: Could not detect primary network interface"
+fi
+
+# ===== Platform Summary =====
+echo ""
+echo "=========================================="
+echo "  PLATFORM SUMMARY"
+echo "=========================================="
+echo "OS Family:    $PLATFORM_FAMILY"
+echo "OS:           $PLATFORM_OS"
+echo "Architecture: $ARCH_TYPE"
+echo "Hardware:     $HARDWARE_PLATFORM"
+echo "Virtualized:  $IS_VIRTUAL"
+echo "Package Mgr:  $PKG_MANAGER"
+if [ -n "$PRIMARY_NIC" ]; then
+    echo "Primary NIC:  $PRIMARY_NIC ($NIC_DRIVER)"
+fi
+echo "=========================================="
+echo ""
+
+# ===== Platform-Specific Warnings =====
+if [ "$HARDWARE_PLATFORM" = "raspberry-pi-4" ] || [ "$HARDWARE_PLATFORM" = "raspberry-pi-5" ]; then
+    echo "ℹ️  Raspberry Pi detected:"
+    echo "   - XDP will run in SKB mode (software, higher CPU usage)"
+    echo "   - For production DDoS mitigation, consider Intel N100 with I226 NIC"
+    echo ""
+fi
+
+# ============================================================
+# STEP 2: VALIDATE ENVIRONMENT
+# ============================================================
+echo ""
+echo "[STEP 2] Validating environment..."
 
 # Detect local host IP
 LOCAL_HOST_IP=$(ip -4 addr show "$PHYSICAL_HOST_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
@@ -65,42 +255,92 @@ if [ "$VXLAN_PSK" == "HookProbe_VXLAN_Master_Key_2025_CHANGE_ME_NOW" ]; then
 fi
 
 # ============================================================
-# STEP 2: INSTALL DEPENDENCIES
+# STEP 3: INSTALL DEPENDENCIES
 # ============================================================
 echo ""
-echo "[STEP 2] Installing required packages..."
+echo "[STEP 3] Installing required packages..."
 
-REQUIRED_PACKAGES=(
-    git curl wget unzip tar
-    podman buildah skopeo
-    openvswitch openvswitch-ipsec
-    python3 python3-pip
-    net-tools iproute bridge-utils ethtool
-    kernel-modules-extra
-    iptables nftables firewalld
-    postgresql-client
-    jq yq
-    bcc-tools bpftool
-    libbpf libbpf-devel
-)
+if [ "$PLATFORM_FAMILY" = "rhel" ]; then
+    echo "Installing packages for RHEL-based system..."
 
-dnf update -y
-dnf install -y epel-release
-dnf install -y "${REQUIRED_PACKAGES[@]}"
+    # Update package database
+    dnf update -y
 
-# Install XDP tools for DDoS mitigation
-if [ "$ENABLE_XDP_DDOS" = true ]; then
-    echo "Installing XDP tools..."
-    dnf install -y xdp-tools libxdp-devel
+    # Enable EPEL repository
+    dnf install -y epel-release
+
+    # Required packages (RHEL/Fedora)
+    REQUIRED_PACKAGES=(
+        git curl wget unzip tar
+        podman buildah skopeo
+        openvswitch openvswitch-ipsec
+        python3 python3-pip
+        net-tools iproute bridge-utils ethtool
+        iptables nftables firewalld
+        postgresql
+        jq yq
+        bcc-tools bpftool
+        libbpf libbpf-devel
+    )
+
+    # Add kernel-modules-extra if not in a container
+    if [ "$IS_VIRTUAL" = false ] || [ "$VIRT_TYPE" = "kvm" ]; then
+        REQUIRED_PACKAGES+=(kernel-modules-extra)
+    fi
+
+    dnf install -y "${REQUIRED_PACKAGES[@]}"
+
+    # Install XDP tools for DDoS mitigation
+    if [ "$ENABLE_XDP_DDOS" = true ]; then
+        echo "Installing XDP tools..."
+        dnf install -y xdp-tools libxdp-devel
+    fi
+
+elif [ "$PLATFORM_FAMILY" = "debian" ]; then
+    echo "Installing packages for Debian-based system..."
+
+    # Update package database
+    apt-get update
+
+    # Required packages (Debian/Ubuntu)
+    REQUIRED_PACKAGES=(
+        git curl wget unzip tar
+        podman buildah
+        openvswitch-switch
+        python3 python3-pip
+        net-tools iproute2 bridge-utils ethtool
+        iptables nftables
+        postgresql-client
+        jq
+        bpfcc-tools bpftrace
+        libbpf-dev
+    )
+
+    # Add linux-headers if not in a container
+    if [ "$IS_VIRTUAL" = false ] || [ "$VIRT_TYPE" = "kvm" ]; then
+        REQUIRED_PACKAGES+=("linux-headers-$(uname -r)")
+    fi
+
+    apt-get install -y "${REQUIRED_PACKAGES[@]}"
+
+    # Install XDP tools for DDoS mitigation
+    if [ "$ENABLE_XDP_DDOS" = true ]; then
+        echo "Installing XDP tools..."
+        apt-get install -y xdp-tools libxdp-dev
+    fi
+
+else
+    echo "ERROR: Unknown platform family: $PLATFORM_FAMILY"
+    exit 1
 fi
 
-echo "✓ All dependencies installed"
+echo "✓ All dependencies installed for $PLATFORM_FAMILY"
 
 # ============================================================
-# STEP 3: CONFIGURE KERNEL MODULES & PARAMETERS
+# STEP 4: CONFIGURE KERNEL MODULES & PARAMETERS
 # ============================================================
 echo ""
-echo "[STEP 3] Configuring kernel..."
+echo "[STEP 4] Configuring kernel..."
 
 # Load kernel modules
 modprobe openvswitch
@@ -175,10 +415,10 @@ sysctl -p /etc/sysctl.d/99-hookprobe-v5.conf
 echo "✓ Kernel configured for security and performance"
 
 # ============================================================
-# STEP 4: CREATE SINGLE OVS BRIDGE WITH VXLAN TUNNELS
+# STEP 5: CREATE SINGLE OVS BRIDGE WITH VXLAN TUNNELS
 # ============================================================
 echo ""
-echo "[STEP 4] Creating Open vSwitch infrastructure..."
+echo "[STEP 5] Creating Open vSwitch infrastructure..."
 
 # Start OVS
 systemctl enable --now openvswitch
