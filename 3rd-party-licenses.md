@@ -218,8 +218,16 @@ This document lists all third-party components used by HookProbe v5.0 and their 
 - **Version**: 24.11+
 - **License**: Apache License 2.0
 - **Source**: https://clickhouse.com/
-- **Usage**: OLAP database for security analytics and log aggregation
+- **Usage**: OLAP database for edge security analytics (local deployment)
 - **Commercial Use**: ✅ Yes
+
+**Apache Doris**
+- **Version**: 2.1.0+
+- **License**: Apache License 2.0
+- **Source**: https://doris.apache.org/
+- **Usage**: Multi-tenant OLAP database for MSSP cloud backend
+- **Commercial Use**: ✅ Yes
+- **Key Features**: Row-level security, MySQL protocol compatibility, federated queries
 
 **Vector**
 - **Version**: Latest
@@ -227,6 +235,13 @@ This document lists all third-party components used by HookProbe v5.0 and their 
 - **Source**: https://vector.dev/
 - **Usage**: Log collection and forwarding
 - **Note**: MPL-2.0 is file-level copyleft (permissive for service use)
+- **Commercial Use**: ✅ Yes
+
+**Kafka (Bitnami)**
+- **Version**: 3.6+
+- **License**: Apache License 2.0
+- **Source**: https://kafka.apache.org/
+- **Usage**: High-throughput message queue for edge→cloud data streaming (MSSP backend)
 - **Commercial Use**: ✅ Yes
 
 ---
@@ -332,6 +347,8 @@ All Python packages use permissive licenses:
 | numpy | 1.26+ | BSD-3-Clause |
 | scipy | 1.11+ | BSD-3-Clause |
 | flask | 3.0+ | BSD-3-Clause |
+| clickhouse-driver | 0.2.6+ | MIT |
+| pymysql | 1.1.0+ | MIT |
 
 ---
 
@@ -485,6 +502,8 @@ We thank all the open-source projects and their maintainers for making HookProbe
 
 - The Grafana Labs team (VictoriaMetrics, Grafana)
 - The ClickHouse team (Yandex/ClickHouse, Inc.)
+- The Apache Doris community
+- The Apache Kafka community
 - The Zeek project community
 - The OWASP ModSecurity team
 - The PostgreSQL Global Development Group
