@@ -180,7 +180,7 @@ Cloud Infrastructure
 - Security research labs
 - SOC operations
 
-**See:** [Backend Deployment Guide](Scripts/backend/install/README.md)
+**See:** [Backend Deployment Guide](Documents/backend/README.md)
 
 ---
 
@@ -257,10 +257,10 @@ sudo ./backend-setup.sh
 mysql -h 10.100.1.10 -P 9030 -uroot < /tmp/doris-init.sql
 
 # 5. Create multi-tenant schemas
-# (See Scripts/backend/install/README.md)
+# (See Documents/backend/README.md)
 ```
 
-**See:** [Backend Deployment Guide](Scripts/backend/install/README.md)
+**See:** [Backend Deployment Guide](Documents/backend/README.md)
 
 ---
 
