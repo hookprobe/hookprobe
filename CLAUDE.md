@@ -263,9 +263,31 @@ Qsecbit measures the **smallest unit where AI-driven attack and defense reach eq
 
 **v5.0 Modular Architecture**:
 - `qsecbit.py` - Main orchestrator (resilience metric calculation)
-- `energy_monitor.py` - RAPL + per-PID power tracking
+- `energy_monitor.py` - RAPL + per-PID power tracking + network direction-aware energy efficiency
 - `xdp_manager.py` - XDP/eBPF DDoS mitigation
 - `nic_detector.py` - NIC capability detection
+
+### Network Direction-Aware Energy Efficiency (NEW v5.0)
+
+Qsecbit v5.0 introduces **deployment role-based network analysis** for enhanced threat detection:
+
+**Key Insight**: Network traffic patterns differ based on deployment role (server vs endpoint). Analyzing energy consumption **per packet** combined with **traffic direction** enables detection of:
+
+- **Compromised Endpoints**: USER_ENDPOINT with abnormal outbound traffic (spam, DDoS)
+- **Servers Under Attack**: PUBLIC_SERVER with inbound flood (DDoS)
+- **Data Exfiltration**: PUBLIC_SERVER with abnormal outbound spike
+- **Cryptomining + Network**: High energy-per-packet correlated with network activity
+
+**Metrics**:
+- **EPP (Energy-Per-Packet)**: mJ/packet - High EPP (>5 mJ) indicates inefficient processing
+- **OUT/IN Ratio**: Traffic direction - Role-aware anomaly detection
+- **Packet Burst**: Packets/interval - DDoS or exfiltration detection
+
+**Deployment Roles**:
+- `DeploymentRole.PUBLIC_SERVER`: Expects IN > OUT (web servers, APIs)
+- `DeploymentRole.USER_ENDPOINT`: Expects OUT > IN (clients, workstations)
+
+**See**: `Scripts/autonomous/qsecbit/README.md` for complete documentation with detection scenarios.
 
 ### XDP/eBPF DDoS Mitigation
 
