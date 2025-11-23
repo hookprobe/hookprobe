@@ -1,0 +1,483 @@
+#!/bin/bash
+#
+# hookprobe-ctl - HookProbe Management CLI
+# Version: 5.0
+# License: MIT
+#
+# Unified command-line interface for managing HookProbe installation
+#
+
+set -e
+set -u
+
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+readonly VERSION="5.0"
+readonly SYSTEMD_DIR="/etc/systemd/system"
+readonly BASE_DIR="/opt/hookprobe"
+
+# Colors
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+print_header() {
+    echo -e "${BOLD}$*${NC}"
+}
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $*"
+}
+
+print_success() {
+    echo -e "${GREEN}[OK]${NC} $*"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $*"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $*"
+}
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        print_error "This command requires root privileges"
+        echo "Please run with sudo: sudo hookprobe-ctl $*"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# STATUS COMMAND
+# ============================================================================
+
+cmd_status() {
+    print_header "HookProbe Status"
+    echo
+
+    # Services
+    echo "Services:"
+    printf "  %-35s %-10s %-10s\n" "NAME" "STATUS" "ENABLED"
+    echo "  ─────────────────────────────────────────────────────────"
+
+    local services=(
+        "hookprobe-provision.service"
+        "hookprobe-agent.service"
+    )
+
+    for service in "${services[@]}"; do
+        local status=$(systemctl is-active "$service" 2>/dev/null || echo "inactive")
+        local enabled=$(systemctl is-enabled "$service" 2>/dev/null || echo "disabled")
+
+        # Color code status
+        local status_color="$RED"
+        [ "$status" = "active" ] && status_color="$GREEN"
+
+        printf "  %-35s ${status_color}%-10s${NC} %-10s\n" "$service" "$status" "$enabled"
+    done
+
+    echo
+
+    # Timer
+    echo "Auto-update Timer:"
+    local timer="hookprobe-update.timer"
+    local timer_status=$(systemctl is-active "$timer" 2>/dev/null || echo "inactive")
+    local timer_enabled=$(systemctl is-enabled "$timer" 2>/dev/null || echo "disabled")
+    local status_color="$RED"
+    [ "$timer_status" = "active" ] && status_color="$GREEN"
+
+    printf "  %-35s ${status_color}%-10s${NC} %-10s\n" "$timer" "$timer_status" "$timer_enabled"
+
+    # Next update time
+    if [ "$timer_status" = "active" ]; then
+        local next_run=$(systemctl status "$timer" 2>/dev/null | grep "Trigger:" | awk '{print $2, $3, $4}')
+        echo "  Next update: $next_run"
+    fi
+
+    echo
+
+    # Health check
+    echo "Health:"
+    if curl -sf http://localhost:8888/health >/dev/null 2>&1; then
+        print_success "Agent is healthy (http://localhost:8888/health)"
+    else
+        print_warning "Agent health check failed"
+    fi
+
+    echo
+
+    # Installation info
+    if [ -d "$BASE_DIR" ]; then
+        echo "Installation:"
+        echo "  Base directory:   $BASE_DIR"
+        echo "  Config directory: /etc/hookprobe"
+        echo "  Log directory:    /var/log/hookprobe"
+    else
+        print_warning "HookProbe does not appear to be installed"
+    fi
+
+    echo
+}
+
+# ============================================================================
+# START/STOP/RESTART COMMANDS
+# ============================================================================
+
+cmd_start() {
+    check_root
+
+    print_info "Starting HookProbe services..."
+
+    systemctl start hookprobe-provision.service
+    systemctl start hookprobe-agent.service
+
+    sleep 2
+
+    if systemctl is-active hookprobe-agent.service >/dev/null 2>&1; then
+        print_success "HookProbe started"
+    else
+        print_error "Failed to start HookProbe"
+        echo "Check logs: journalctl -u hookprobe-agent.service"
+        exit 1
+    fi
+}
+
+cmd_stop() {
+    check_root
+
+    print_info "Stopping HookProbe services..."
+
+    systemctl stop hookprobe-agent.service
+    systemctl stop hookprobe-provision.service
+
+    print_success "HookProbe stopped"
+}
+
+cmd_restart() {
+    check_root
+
+    print_info "Restarting HookProbe services..."
+
+    systemctl restart hookprobe-provision.service
+    systemctl restart hookprobe-agent.service
+
+    sleep 2
+
+    if systemctl is-active hookprobe-agent.service >/dev/null 2>&1; then
+        print_success "HookProbe restarted"
+    else
+        print_error "Failed to restart HookProbe"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# ENABLE/DISABLE COMMANDS
+# ============================================================================
+
+cmd_enable() {
+    check_root
+
+    print_info "Enabling HookProbe services..."
+
+    systemctl enable hookprobe-provision.service
+    systemctl enable hookprobe-agent.service
+
+    print_success "HookProbe enabled (will start on boot)"
+}
+
+cmd_disable() {
+    check_root
+
+    print_info "Disabling HookProbe services..."
+
+    systemctl disable hookprobe-agent.service
+    systemctl disable hookprobe-provision.service
+
+    print_success "HookProbe disabled (will not start on boot)"
+}
+
+# ============================================================================
+# LOGS COMMAND
+# ============================================================================
+
+cmd_logs() {
+    local service="${1:-hookprobe-agent.service}"
+    local follow="${2:-}"
+
+    if [ "$follow" = "-f" ] || [ "$follow" = "--follow" ]; then
+        print_info "Following logs for $service (Ctrl+C to stop)..."
+        journalctl -u "$service" -f
+    else
+        print_info "Showing logs for $service (use -f to follow)..."
+        journalctl -u "$service" --no-pager -n 50
+    fi
+}
+
+# ============================================================================
+# UPDATE COMMANDS
+# ============================================================================
+
+cmd_update() {
+    check_root
+
+    print_info "Running manual update..."
+
+    systemctl start hookprobe-update.service
+
+    print_info "Update in progress. Monitor with: journalctl -u hookprobe-update.service -f"
+}
+
+cmd_enable_autoupdate() {
+    check_root
+
+    print_info "Enabling auto-updates..."
+
+    systemctl enable --now hookprobe-update.timer
+
+    print_success "Auto-updates enabled (weekly on Sundays at 3:00 AM)"
+}
+
+cmd_disable_autoupdate() {
+    check_root
+
+    print_info "Disabling auto-updates..."
+
+    systemctl disable --now hookprobe-update.timer
+
+    print_success "Auto-updates disabled"
+}
+
+# ============================================================================
+# UNINSTALL COMMAND
+# ============================================================================
+
+cmd_uninstall() {
+    check_root
+
+    echo
+    print_warning "This will completely remove HookProbe from your system!"
+    echo
+    read -p "Are you sure? Type 'yes' to confirm: " -r
+    echo
+
+    if [ "$REPLY" != "yes" ]; then
+        print_info "Uninstall cancelled"
+        exit 0
+    fi
+
+    print_info "Uninstalling HookProbe..."
+
+    # Run cleanup script
+    if [ -f "$BASE_DIR/scripts/cleanup.sh" ]; then
+        "$BASE_DIR/scripts/cleanup.sh"
+    else
+        print_error "Cleanup script not found"
+        exit 1
+    fi
+
+    print_success "HookProbe uninstalled"
+}
+
+# ============================================================================
+# METRICS COMMAND
+# ============================================================================
+
+cmd_metrics() {
+    print_header "HookProbe Metrics"
+    echo
+
+    if curl -sf http://localhost:8888/metrics 2>/dev/null; then
+        # Pretty print JSON if jq is available
+        if command -v jq >/dev/null 2>&1; then
+            curl -s http://localhost:8888/metrics | jq .
+        else
+            curl -s http://localhost:8888/metrics
+        fi
+    else
+        print_error "Failed to fetch metrics from agent"
+        print_info "Ensure the agent is running: hookprobe-ctl status"
+        exit 1
+    fi
+
+    echo
+}
+
+# ============================================================================
+# HELP COMMAND
+# ============================================================================
+
+cmd_help() {
+    cat <<EOF
+${BOLD}HookProbe Management CLI v$VERSION${NC}
+
+${BOLD}USAGE:${NC}
+    hookprobe-ctl <command> [options]
+
+${BOLD}COMMANDS:${NC}
+
+  ${BOLD}Service Management:${NC}
+    status              Show service status
+    start               Start HookProbe services
+    stop                Stop HookProbe services
+    restart             Restart HookProbe services
+    enable              Enable services (start on boot)
+    disable             Disable services
+
+  ${BOLD}Logs:${NC}
+    logs [service] [-f] View logs (use -f to follow)
+                        Default service: hookprobe-agent.service
+
+  ${BOLD}Updates:${NC}
+    update              Run manual update
+    enable-autoupdate   Enable weekly auto-updates
+    disable-autoupdate  Disable auto-updates
+
+  ${BOLD}Monitoring:${NC}
+    metrics             Show current metrics
+    health              Check agent health
+
+  ${BOLD}System:${NC}
+    uninstall           Completely remove HookProbe
+    version             Show version information
+    help                Show this help message
+
+${BOLD}EXAMPLES:${NC}
+
+    # Check status
+    hookprobe-ctl status
+
+    # Start services
+    sudo hookprobe-ctl start
+
+    # View live logs
+    hookprobe-ctl logs -f
+
+    # View provision logs
+    hookprobe-ctl logs hookprobe-provision.service
+
+    # Enable auto-updates
+    sudo hookprobe-ctl enable-autoupdate
+
+    # View metrics
+    hookprobe-ctl metrics
+
+${BOLD}FILES:${NC}
+    /opt/hookprobe              Installation directory
+    /etc/hookprobe              Configuration directory
+    /var/log/hookprobe          Log directory
+    /etc/systemd/system         Service unit files
+
+${BOLD}DOCUMENTATION:${NC}
+    https://github.com/hookprobe/hookprobe
+
+EOF
+}
+
+# ============================================================================
+# VERSION COMMAND
+# ============================================================================
+
+cmd_version() {
+    echo "HookProbe Management CLI v$VERSION"
+    echo "https://github.com/hookprobe/hookprobe"
+}
+
+# ============================================================================
+# HEALTH COMMAND
+# ============================================================================
+
+cmd_health() {
+    print_info "Checking agent health..."
+
+    if curl -sf http://localhost:8888/health >/dev/null 2>&1; then
+        print_success "Agent is healthy"
+
+        # Pretty print health status
+        if command -v jq >/dev/null 2>&1; then
+            curl -s http://localhost:8888/health | jq .
+        else
+            curl -s http://localhost:8888/health
+        fi
+    else
+        print_error "Agent health check failed"
+        print_info "Check if agent is running: hookprobe-ctl status"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+main() {
+    local command="${1:-help}"
+
+    case "$command" in
+        status)
+            cmd_status
+            ;;
+        start)
+            cmd_start
+            ;;
+        stop)
+            cmd_stop
+            ;;
+        restart)
+            cmd_restart
+            ;;
+        enable)
+            cmd_enable
+            ;;
+        disable)
+            cmd_disable
+            ;;
+        logs)
+            shift
+            cmd_logs "$@"
+            ;;
+        update)
+            cmd_update
+            ;;
+        enable-autoupdate)
+            cmd_enable_autoupdate
+            ;;
+        disable-autoupdate)
+            cmd_disable_autoupdate
+            ;;
+        uninstall)
+            cmd_uninstall
+            ;;
+        metrics)
+            cmd_metrics
+            ;;
+        health)
+            cmd_health
+            ;;
+        version)
+            cmd_version
+            ;;
+        help|--help|-h)
+            cmd_help
+            ;;
+        *)
+            print_error "Unknown command: $command"
+            echo "Run 'hookprobe-ctl help' for usage information"
+            exit 1
+            ;;
+    esac
+}
+
+# Run main
+main "$@"

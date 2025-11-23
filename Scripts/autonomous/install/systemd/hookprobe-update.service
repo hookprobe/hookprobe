@@ -1,0 +1,35 @@
+[Unit]
+Description=HookProbe Auto-Update Service
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HOOKPROBE_BASE=/opt/hookprobe"
+Environment="GIT_BRANCH=main"
+
+# Update script
+ExecStart=/opt/hookprobe/scripts/update.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hookprobe-update
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=no
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe /var/log/hookprobe /etc/hookprobe
+
+# Resource limits
+TimeoutStartSec=600
+CPUQuota=100%
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
