@@ -12,7 +12,7 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 
 - **🤖 AI-Powered Threat Detection**: Qsecbit algorithm for real-time security analysis
 - **🛡️ Automated Response**: Kali Linux on-demand threat mitigation
-- **📊 Complete Monitoring**: Grafana + Prometheus + Loki + VictoriaMetrics
+- **📊 Complete Monitoring**: Grafana + ClickHouse + VictoriaMetrics + Vector
 - **🔒 Zero Trust Architecture**: PSK-encrypted VXLAN, OpenFlow ACLs, L2 hardening
 - **🌐 Web Application Firewall**: NAXSI/ModSecurity with auto-updating rules
 - **☁️ Optional Cloud Integration**: Cloudflare Tunnel for secure remote access
@@ -74,7 +74,7 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
 | **002** | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
 | **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
 | **004** | 10.200.4.0/24 | Transient DB | Redis, Valkey |
-| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, VictoriaLogs, Vector, node_exporter |
+| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse, Vector, Filebeat, node_exporter |
 | **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit |
 | **007** | 10.200.7.0/24 | AI Response | Honeypots, Kali Linux, Mitigation Engine |
 
@@ -458,38 +458,56 @@ nft add rule inet filter forward ip saddr 10.200.5.0/24 ip daddr 10.200.1.0/24 t
 
 **Components:**
 - **Grafana**: Dashboards and visualization
-- **Prometheus**: Metrics collection and storage
-- **Loki**: Log aggregation
-- **VictoriaMetrics**: Long-term metrics storage
-- **Rsyslog**: Centralized syslog server
-- **Alertmanager**: Alert routing and notification
+- **VictoriaMetrics**: Time-series metrics storage
+- **ClickHouse**: OLAP database for security analytics and log aggregation
+- **Vector**: Log and metrics routing and transformation
+- **Filebeat**: Zeek log ingestion
+- **node_exporter**: Host metrics collection
 
 **Key Dashboards:**
 - **System Overview**: All PODs health and resource usage
-- **Qsecbit Analysis**: Real-time threat scores and trends
+- **Qsecbit Analysis**: Real-time threat scores and historical trends
 - **WAF Activity**: Blocked attacks and patterns
 - **Network Traffic**: Flow analysis and top talkers
 - **Security Events**: IDS/IPS alerts and incidents
+- **Attack Correlation**: Multi-source threat intelligence
 - **LTE Status**: Signal strength, data usage (if enabled)
 
 **Access:**
 - **Grafana**: http://YOUR_IP:3000
-- **Prometheus**: http://YOUR_IP:9090
-- **Alertmanager**: http://YOUR_IP:9093
+- **VictoriaMetrics**: http://YOUR_IP:8428
+- **ClickHouse HTTP**: http://YOUR_IP:8123
 
-**Log Queries (Loki):**
-```
-# All security events
-{job="containerlogs"} |~ "ALERT|BLOCK|ATTACK"
+**Example ClickHouse Queries:**
+```sql
+-- All security events (last 24h)
+SELECT timestamp, source_type, src_ip, attack_type, severity
+FROM security.security_events
+WHERE timestamp >= now() - INTERVAL 24 HOUR
+ORDER BY timestamp DESC
+LIMIT 100;
 
-# WAF blocks
-{job="containerlogs"} | container_name=~".*naxsi.*" |= "BLOCK"
+-- WAF blocks
+SELECT src_ip, count() AS blocks, groupArray(attack_category)
+FROM security.waf_events
+WHERE blocked = 1 AND timestamp >= now() - INTERVAL 1 HOUR
+GROUP BY src_ip
+ORDER BY blocks DESC;
 
-# Qsecbit alerts
-{job="containerlogs"} | container_name=~".*qsecbit.*" |~ "RED|AMBER"
+-- Qsecbit RED/AMBER alerts
+SELECT timestamp, rag_status, score, drift, attack_probability
+FROM security.qsecbit_scores
+WHERE rag_status IN ('RED', 'AMBER')
+  AND timestamp >= now() - INTERVAL 7 DAY
+ORDER BY timestamp DESC;
 
-# Database errors
-{job="containerlogs"} | container_name=~".*postgres.*" |~ "ERROR"
+-- Top attackers
+SELECT src_ip, count() AS attacks, uniq(attack_type) AS attack_types
+FROM security.security_events
+WHERE timestamp >= now() - INTERVAL 24 HOUR
+GROUP BY src_ip
+ORDER BY attacks DESC
+LIMIT 10;
 ```
 
 ---

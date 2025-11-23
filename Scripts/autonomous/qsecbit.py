@@ -14,6 +14,15 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, List
 from datetime import datetime
 import json
+import os
+import socket
+
+# Optional ClickHouse integration
+try:
+    from clickhouse_driver import Client
+    CLICKHOUSE_AVAILABLE = True
+except ImportError:
+    CLICKHOUSE_AVAILABLE = False
 
 
 @dataclass
@@ -96,7 +105,7 @@ class Qsecbit:
     ):
         """
         Initialize Qsecbit calculator
-        
+
         Args:
             baseline_mu: Mean vector of baseline system telemetry
             baseline_cov: Covariance matrix of baseline system
@@ -107,14 +116,38 @@ class Qsecbit:
         self.cov = np.array(baseline_cov)
         self.q_anchor = float(quantum_anchor)
         self.config = config or QsecbitConfig()
-        
+
         # Precompute inverse covariance for efficiency
         self.inv_cov = np.linalg.inv(self.cov)
-        
+
         # State tracking
         self.prev_classifier: Optional[np.ndarray] = None
         self.history: List[QsecbitSample] = []
         self.baseline_entropy = self._calculate_baseline_entropy()
+
+        # ClickHouse integration (optional)
+        self.ch_enabled = False
+        self.ch_client = None
+        if CLICKHOUSE_AVAILABLE and os.getenv('CLICKHOUSE_ENABLED', 'true').lower() == 'true':
+            try:
+                self.ch_client = Client(
+                    host=os.getenv('CLICKHOUSE_HOST', '10.200.5.11'),
+                    port=int(os.getenv('CLICKHOUSE_PORT', '9001')),
+                    database=os.getenv('CLICKHOUSE_DB', 'security'),
+                    user=os.getenv('CLICKHOUSE_USER', 'hookprobe'),
+                    password=os.getenv('CLICKHOUSE_PASSWORD', '')
+                )
+                # Test connection
+                self.ch_client.execute('SELECT 1')
+                self.ch_enabled = True
+                print("✓ ClickHouse integration enabled")
+            except Exception as e:
+                print(f"Warning: ClickHouse not available: {e}")
+                self.ch_enabled = False
+
+        # System metadata for ClickHouse
+        self.hostname = socket.gethostname()
+        self.pod_name = os.getenv('POD_NAME', 'unknown')
         
     def _calculate_baseline_entropy(self) -> float:
         """Calculate theoretical baseline entropy from covariance"""
@@ -167,7 +200,7 @@ class Qsecbit:
     def _system_entropy(self, x_t: np.ndarray) -> float:
         """
         Calculate current system entropy
-        
+
         Uses Shannon entropy of discretized telemetry values
         """
         # Discretize continuous values for entropy calculation
@@ -175,7 +208,51 @@ class Qsecbit:
         hist, _ = np.histogram(x_t, bins=bins, density=True)
         hist = hist + 1e-10  # Avoid log(0)
         return float(entropy(hist))
-    
+
+    def _save_to_clickhouse(self, sample: QsecbitSample, x_t: np.ndarray):
+        """
+        Save qsecbit sample to ClickHouse database
+
+        Args:
+            sample: QsecbitSample object to save
+            x_t: System telemetry vector (CPU, Memory, Network, Disk)
+        """
+        if not self.ch_enabled:
+            return
+
+        try:
+            # Extract telemetry values (assume 4-element vector: CPU, Memory, Network, Disk)
+            cpu_usage = float(x_t[0]) if len(x_t) > 0 else 0.0
+            memory_usage = float(x_t[1]) if len(x_t) > 1 else 0.0
+            network_traffic = float(x_t[2]) if len(x_t) > 2 else 0.0
+            disk_io = float(x_t[3]) if len(x_t) > 3 else 0.0
+
+            # Prepare data for insertion
+            data = [{
+                'timestamp': sample.timestamp,
+                'score': float(sample.score),
+                'rag_status': sample.rag_status,
+                'drift': float(sample.components['drift']),
+                'attack_probability': float(sample.components['attack_probability']),
+                'classifier_decay': float(sample.components['classifier_decay']),
+                'quantum_drift': float(sample.components['quantum_drift']),
+                'cpu_usage': cpu_usage,
+                'memory_usage': memory_usage,
+                'network_traffic': network_traffic,
+                'disk_io': disk_io,
+                'host': self.hostname,
+                'pod': self.pod_name
+            }]
+
+            # Insert into ClickHouse
+            self.ch_client.execute(
+                'INSERT INTO qsecbit_scores VALUES',
+                data
+            )
+        except Exception as e:
+            # Don't fail if ClickHouse is unavailable
+            print(f"Warning: Failed to save to ClickHouse: {e}")
+
     def calculate(
         self,
         x_t: np.ndarray,
@@ -233,12 +310,15 @@ class Qsecbit:
             system_state=x_t.copy(),
             metadata=metadata or {}
         )
-        
+
+        # Save to ClickHouse (if enabled)
+        self._save_to_clickhouse(sample, x_t)
+
         # Store in history
         self.history.append(sample)
         if len(self.history) > self.config.max_history_size:
             self.history.pop(0)
-        
+
         return sample
     
     def _classify_rag(self, R: float) -> str:
