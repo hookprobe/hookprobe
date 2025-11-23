@@ -33,6 +33,7 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
   - [LTE/5G Connectivity](#lte5g-connectivity)
 - [Security Features](#security-features)
 - [Monitoring & Analytics](#monitoring--analytics)
+- [GDPR Compliance](#gdpr-compliance)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [License](#license)
@@ -719,10 +720,213 @@ LIMIT 10;
 
 ---
 
+## 🔒 GDPR Compliance
+
+**HookProbe v5.0 is GDPR-compliant by design and by default.**
+
+### Privacy-Preserving Security
+
+As a network security platform, HookProbe processes personal data (IP addresses, MAC addresses, network metadata) for legitimate security purposes. We've implemented comprehensive technical and organizational measures to ensure GDPR compliance while maintaining effective threat detection.
+
+### Key Compliance Features
+
+✅ **Privacy by Design** - Anonymization and pseudonymization built-in
+✅ **Privacy by Default** - Minimal data collection, strict retention limits
+✅ **Data Minimization** - Only collect what's necessary for security
+✅ **Automated Retention** - Automatic deletion after retention period (30-365 days)
+✅ **Data Subject Rights** - Access, erasure, portability, rectification
+✅ **Security Measures** - Encryption, access controls, audit logging
+✅ **Breach Detection** - Automated breach notification procedures
+
+### What Personal Data is Processed?
+
+| Data Type | Retention | Anonymization |
+|-----------|-----------|---------------|
+| **IP Addresses** | 30-90 days | ✅ Last octet masked (192.168.1.0) |
+| **MAC Addresses** | 30 days | ✅ Device ID masked (keeps vendor OUI) |
+| **User Accounts** | 2 years (active) | ❌ Required for authentication |
+| **Network Flows** | 30 days | ✅ Anonymized at ingestion |
+| **Security Logs** | 90 days | ✅ Anonymized after 90 days |
+
+**NOT Collected:** Packet payloads, browsing history, geolocation, biometric data
+
+### Legal Basis for Processing
+
+**Legitimate Interests** (GDPR Article 6(1)(f)):
+- Network security and fraud prevention
+- Service delivery and infrastructure protection
+- Security incident response
+
+### Quick Start: GDPR Configuration
+
+```bash
+# 1. Review GDPR configuration
+nano /opt/hookprobe/scripts/gdpr-config.sh
+
+# Key settings (defaults are GDPR-compliant):
+GDPR_ENABLED=true
+ANONYMIZE_IP_ADDRESSES=true
+ANONYMIZE_MAC_ADDRESSES=true
+COLLECT_FULL_PAYLOAD=false  # NEVER enable (privacy violation)
+RETENTION_NETWORK_FLOWS_DAYS=30
+
+# 2. Enable automated data retention cleanup
+sudo crontab -e
+# Add: 0 2 * * * /opt/hookprobe/scripts/gdpr-retention.sh
+
+# 3. Generate compliance report
+sudo /opt/hookprobe/scripts/gdpr-retention.sh
+cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).txt
+```
+
+### Privacy-Preserving Threat Detection
+
+**Qsecbit detects threats using patterns, not identities:**
+
+```python
+# IP anonymization preserves security analysis capability
+from qsecbit.gdpr_privacy import anonymize_ip
+
+src_ip = anonymize_ip("192.168.1.123")  # → "192.168.1.0"
+
+# Threat detection still works:
+# - DDoS from 192.168.1.0/24 subnet → detectable
+# - Port scan from 10.0.0.0/24 → detectable
+# - Protocol anomalies → no PII needed
+```
+
+**Privacy Benefits:**
+- Subnet-level analysis (more private than individual IPs)
+- No behavioral profiling of individuals
+- No geolocation tracking
+- No payload inspection (headers only)
+
+### Data Subject Rights
+
+Users can exercise their GDPR rights:
+
+| Right | Implementation | Timeline |
+|-------|----------------|----------|
+| **Access (Article 15)** | Data export in JSON format | Within 30 days |
+| **Erasure (Article 17)** | Account deletion + log anonymization | 7-day grace period |
+| **Portability (Article 20)** | Machine-readable export (JSON) | Within 30 days |
+| **Rectification (Article 16)** | Profile data correction | Immediate |
+| **Object (Article 21)** | Account deletion (opt-out) | Immediate |
+
+**Request Process:**
+1. Submit request via web interface or email to DPO
+2. Identity verification (prevent unauthorized access)
+3. Processing within GDPR timelines (30 days max)
+4. Secure delivery of data export or deletion confirmation
+
+### Automated Data Retention
+
+**Retention Periods (configurable):**
+
+```bash
+# Network data (minimize retention)
+RETENTION_NETWORK_FLOWS_DAYS=30       # Default: 1 month
+RETENTION_DNS_LOGS_DAYS=30
+RETENTION_HTTP_LOGS_DAYS=30
+
+# Security logs (balance security vs. privacy)
+RETENTION_SECURITY_LOGS_DAYS=90       # Default: 3 months
+RETENTION_IDS_ALERTS_DAYS=365         # Critical incidents: 1 year
+
+# User accounts
+RETENTION_INACTIVE_ACCOUNTS_DAYS=365  # Delete after 1 year inactivity
+```
+
+**What Gets Deleted:**
+- Zeek network flows → File deletion + ClickHouse DELETE
+- Snort3 alerts → File deletion + ClickHouse DELETE
+- ModSecurity WAF logs → File deletion + ClickHouse DELETE
+- Qsecbit scores → ClickHouse DELETE
+- Inactive user accounts → PostgreSQL soft delete → permanent deletion
+
+**Verification:**
+
+```bash
+# Check retention cleanup logs
+tail -f /var/log/hookprobe/gdpr-retention.log
+
+# View compliance report
+cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).txt
+```
+
+### Breach Notification
+
+**Automated Detection & Notification:**
+
+```bash
+BREACH_DETECTION_ENABLED=true
+BREACH_NOTIFICATION_DEADLINE_HOURS=72  # GDPR requirement
+BREACH_NOTIFICATION_EMAIL="dpo@hookprobe.com"
+```
+
+**Response Timeline:**
+- **T+0 hours**: Breach detected (automated alert)
+- **T+1 hour**: DPO notified
+- **T+24 hours**: Preliminary assessment
+- **T+72 hours**: Supervisory authority notified (if required)
+
+### Complete GDPR Documentation
+
+**📖 [GDPR.md](GDPR.md) - Comprehensive Compliance Guide**
+
+Includes:
+- Detailed data inventory (what PII is collected)
+- Legal basis justification
+- Privacy by design implementation
+- Data subject rights procedures
+- Breach notification process
+- DPIA (Data Protection Impact Assessment) template
+- Compliance checklist (pre/post deployment)
+- FAQ (legal and technical questions)
+
+### Pre-Deployment GDPR Checklist
+
+- [ ] Review `gdpr-config.sh` and set retention periods
+- [ ] Verify IP/MAC anonymization is enabled
+- [ ] Confirm payload collection is disabled (`COLLECT_FULL_PAYLOAD=false`)
+- [ ] Configure DPO contact email (`BREACH_NOTIFICATION_EMAIL`)
+- [ ] Set up automated retention cleanup (cron job)
+- [ ] Prepare privacy notice for users
+- [ ] Complete DPIA (if required)
+- [ ] Identify supervisory authority (for EU deployments)
+
+### Post-Deployment GDPR Verification
+
+```bash
+# 1. Verify anonymization is working
+tail /opt/zeek/logs/conn.log | grep "\.0$"  # Should see .0 IPs
+
+# 2. Test data retention cleanup
+sudo /opt/hookprobe/scripts/gdpr-retention.sh
+
+# 3. Generate compliance report
+cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).txt
+
+# 4. Monitor GDPR audit log
+tail -f /var/log/hookprobe/gdpr-audit.log
+```
+
+### Support & Contact
+
+- **GDPR Documentation**: [GDPR.md](GDPR.md)
+- **Data Protection Officer**: dpo@hookprobe.com
+- **Security Contact**: qsecbit@hookprobe.com
+- **GitHub Issues**: https://github.com/hookprobe/hookprobe/issues
+
+**Disclaimer**: This documentation provides technical guidance on GDPR compliance for HookProbe. It is not legal advice. Consult a qualified data protection lawyer for legal compliance assessment specific to your jurisdiction and use case.
+
+---
+
 ## 📚 Documentation
 
 ### Core Documentation
 - **[README.md](README.md)** - This file (overview and quick start)
+- **[GDPR.md](GDPR.md)** - GDPR compliance guide (privacy and data protection)
 - **[setup.sh Documentation](Scripts/autonomous/install/README.md)** - Main deployment guide
 - **[Security Mitigation Plan](Documents/SecurityMitigationPlan.md)** - Detailed security analysis
 - **[Deployment Checklist](Scripts/autonomous/install/checklist.md)** - Pre/post deployment tasks
