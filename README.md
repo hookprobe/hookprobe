@@ -24,6 +24,9 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 
 - [Background Story](#background-story)
 - [Architecture](#architecture)
+- [Hardware Compatibility](#hardware-compatibility)
+  - [NIC Requirements for XDP/eBPF](#nic-requirements-for-xdpebpf-ddos-mitigation)
+  - [Recommended Configurations](#recommended-hardware-configurations)
 - [Getting Started](#getting-started)
 - [Optional Features](#optional-features)
   - [n8n Workflow Automation](#n8n-workflow-automation-pod-008)
@@ -183,6 +186,58 @@ Cloud Infrastructure
 **See:** [Backend Deployment Guide](Documents/backend/README.md)
 
 ---
+
+## 🖥️ Hardware Compatibility
+
+### NIC Requirements for XDP/eBPF DDoS Mitigation
+
+HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data Path). Performance depends on NIC capabilities:
+
+| **Platform** | **NIC Model** | **Driver** | **XDP-DRV** | **Max Throughput** | **Recommendation** |
+|-------------|---------------|------------|-------------|-------------------|-------------------|
+| **Raspberry Pi 4/5** | Broadcom SoC | bcmgenet | ❌ | 1 Gbps | ⚠️ Dev/Lab only |
+| **Raspberry Pi** | Realtek USB | r8152 | ❌ | 1 Gbps | ⚠️ Limited perf |
+| **Desktop** | Realtek PCIe | r8169 | ❌ | 2.5 Gbps | ⚠️ Not production |
+| **Intel N100** | **I211** | **igb** | ✅ | **1 Gbps** | ✅ **Entry-level** |
+| **Intel N100** | **I226** | **igc** | ✅ | **2.5 Gbps** | ✅ **Best value** |
+| **Server** | **X710** | **i40e** | ✅ | **40 Gbps** | ✅ **Cloud backend** |
+| **Server** | **E810** | **ice** | ✅ | **100 Gbps** | ✅ **Enterprise** |
+| **Mellanox** | **ConnectX-5/6/7** | **mlx5_core** | ✅ | **200 Gbps** | ✅ **Gold standard** |
+
+**Legend**:
+- ✅ **XDP-DRV**: Native driver mode (line rate, < 1µs latency)
+- ❌ **XDP-SKB only**: Generic software mode (higher CPU, 5-10µs latency)
+
+### Recommended Hardware Configurations
+
+#### 💰 Budget Edge (< $300)
+- **SBC**: Intel N100 (8GB RAM, ~$150)
+- **NIC**: Intel I226-V (built-in, 2.5Gbps)
+- **XDP**: Native DRV mode ✅
+- **Performance**: 2.5 Gbps line rate DDoS filtering
+- **Use Case**: Home lab, small office, development
+
+#### 🏢 Production Edge ($300-$1000)
+- **SBC**: Mini PC with Intel I211 or I226
+- **NIC**: Intel I226-V (2.5Gbps)
+- **XDP**: Native DRV mode ✅
+- **Performance**: 1-2.5 Gbps sustained
+- **Use Case**: Branch office, edge security appliance
+
+#### ☁️ MSSP Cloud Backend ($2000+)
+- **Server**: Dell R650/HP DL360 Gen11
+- **NIC**: Intel X710 (40Gbps) or Mellanox ConnectX-5 (100Gbps)
+- **XDP**: Native DRV + Hardware Offload ✅
+- **Performance**: 40-100 Gbps aggregate
+- **Use Case**: Multi-tenant MSSP, 100-1000 customers
+
+### ⚠️ Important Notes
+
+**Raspberry Pi Limitation**: Raspberry Pi 4/5 only supports XDP in generic (SKB) mode, which has higher CPU overhead and limited throughput. For production DDoS mitigation, use Intel N100 with I226 NIC for native XDP-DRV support.
+
+**Intel N100 Advantage**: Best price/performance for edge deployment. Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead.
+
+**See Complete Guide**: [Qsecbit XDP/eBPF Documentation](Scripts/autonomous/qsecbit/README.md)
 
 ---
 

@@ -108,28 +108,28 @@ NIC_CAPABILITY_MATRIX = {
         notes="Consumer NIC. SKB mode only. Not suitable for high-speed XDP."
     ),
 
-    # Intel Entry-Level NICs (1Gbps - SKB only)
+    # Intel Entry-Level NICs (1Gbps - Full eBPF Support)
     "igb": NICCapability(
         vendor="Intel",
         model="I211/I219",
         driver="igb",
         xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=False,
+        xdp_drv=True,
+        af_xdp=True,
         hw_offload=False,
         max_throughput="1Gbps",
-        notes="Entry-level Intel. No DRV support."
+        notes="Entry-level Intel with full XDP-DRV support."
     ),
     "igc": NICCapability(
         vendor="Intel",
         model="I225/I226",
         driver="igc",
         xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=False,
+        xdp_drv=True,
+        af_xdp=True,
         hw_offload=False,
         max_throughput="2.5Gbps",
-        notes="Intel N100 typical NIC. SKB mode only."
+        notes="Intel N100 typical NIC. Full XDP-DRV support."
     ),
 
     # Intel Server NICs (10Gbps+ - Full XDP Support)
