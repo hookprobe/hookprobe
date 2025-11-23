@@ -81,6 +81,8 @@ hookprobe/
 │           └── qsecbit.html
 ├── Documents/
 │   ├── SecurityMitigationPlan.md     # Detailed security architecture
+│   ├── ClickHouse-Integration-Analysis.md  # OLAP database integration guide
+│   ├── ClickHouse-Quick-Start.md     # Quick deployment guide
 │   └── autonomous/
 │       └── ai-business.md            # AI/automation context
 ├── n8n/
@@ -675,6 +677,142 @@ podman run -d \
 # 4. Verify
 curl http://localhost:3000
 ```
+
+### Task 7: Integrate ClickHouse for High-Performance Analytics
+
+**Why**: ClickHouse provides 100-1000x faster queries for security event analysis compared to PostgreSQL or file-based logs. It's essential for:
+- Real-time threat hunting
+- Historical Qsecbit analysis
+- Attack correlation across multiple sources
+- Forensics investigations
+
+**See Complete Guide**: `Documents/ClickHouse-Integration-Analysis.md`
+**Quick Start**: `Documents/ClickHouse-Quick-Start.md`
+
+**Quick Deployment** (30 minutes):
+
+```bash
+# 1. Update network-config.sh
+nano Scripts/autonomous/install/network-config.sh
+
+# Add ClickHouse configuration:
+IP_CLICKHOUSE="10.200.5.15"
+IMAGE_CLICKHOUSE="docker.io/clickhouse/clickhouse-server:24.11"
+VOLUME_CLICKHOUSE_DATA="hookprobe-clickhouse-v5"
+CLICKHOUSE_PASSWORD="STRONG_PASSWORD_HERE"
+
+# 2. Deploy ClickHouse container (see Quick-Start guide)
+# 3. Create database schemas
+# 4. Integrate with Qsecbit
+# 5. Add Grafana datasource
+# 6. Create security dashboards
+
+# Verify deployment:
+curl http://10.200.5.15:8123/ping
+podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "SELECT version()"
+
+# Test query:
+podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
+SELECT count() FROM security.security_events
+"
+```
+
+**Benefits**:
+- **100-1000x faster** analytical queries
+- **90% storage reduction** (10-20x compression)
+- **Unified security platform** - all events queryable in one system
+- **Sub-second forensics** on billions of events
+- **Better Grafana dashboards** with complex visualizations
+
+**Data Sources to Migrate**:
+1. Zeek IDS logs → ClickHouse network_flows table
+2. Snort3 alerts → ClickHouse security_events table
+3. ModSecurity WAF → ClickHouse waf_events table
+4. Qsecbit scores → ClickHouse qsecbit_scores table
+5. Honeypot data → ClickHouse honeypot_attacks table
+
+**Common Queries**:
+
+```sql
+-- Top attacking IPs (last 24h)
+SELECT
+    src_ip,
+    count() AS attacks,
+    countIf(blocked=1) AS blocked
+FROM security.security_events
+WHERE timestamp >= now() - INTERVAL 24 HOUR
+GROUP BY src_ip
+ORDER BY attacks DESC
+LIMIT 10;
+
+-- Qsecbit RAG status trend (last 7 days)
+SELECT
+    toDate(timestamp) AS day,
+    rag_status,
+    count() AS samples,
+    avg(score) AS avg_score
+FROM security.qsecbit_scores
+WHERE timestamp >= now() - INTERVAL 7 DAY
+GROUP BY day, rag_status
+ORDER BY day DESC;
+
+-- Multi-vector attack correlation
+SELECT
+    src_ip,
+    uniq(source_type) AS attack_vectors,
+    groupArray(attack_type) AS attack_types,
+    count() AS total_events
+FROM security.security_events
+WHERE timestamp >= now() - INTERVAL 1 HOUR
+GROUP BY src_ip
+HAVING attack_vectors >= 3
+ORDER BY total_events DESC;
+```
+
+**Performance Comparison**:
+
+| Query Type | PostgreSQL/Files | ClickHouse | Improvement |
+|------------|------------------|------------|-------------|
+| Count (24h, 10M rows) | 15-30 sec | 0.1 sec | **150-300x** |
+| Top attackers (30d, 1B rows) | Timeout | 2-5 sec | **∞** |
+| Attack correlation | Manual (hours) | 2-5 sec | **1000x+** |
+| Qsecbit trends (90d) | Not possible | 0.5 sec | **∞** |
+
+**Monitoring ClickHouse**:
+
+```bash
+# Check health
+podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "SELECT 1"
+
+# Database size
+podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
+SELECT
+    database,
+    formatReadableSize(sum(bytes_on_disk)) AS size,
+    sum(rows) AS rows
+FROM system.parts
+GROUP BY database
+"
+
+# Slow queries
+podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
+SELECT
+    query,
+    query_duration_ms
+FROM system.query_log
+WHERE query_duration_ms > 1000
+ORDER BY event_time DESC
+LIMIT 10
+"
+```
+
+**Important Notes**:
+- ClickHouse is columnar OLAP database - NOT a replacement for PostgreSQL (keep for Django/Keycloak)
+- Keep VictoriaMetrics for metrics (it's excellent at that)
+- ClickHouse complements existing stack, doesn't replace it
+- Compression is automatic - 10-20x better than gzip
+- TTL handles old data deletion automatically
+- Partitioning by date is critical for performance
 
 ---
 
