@@ -114,13 +114,20 @@ Qsecbit includes **kernel-level packet filtering** via XDP (eXpress Data Path) f
 
 ### XDP Modes
 
-| Mode | Description | Performance | NIC Requirement |
-|------|-------------|-------------|-----------------|
-| **XDP-DRV** | Native driver mode | Highest (line rate) | Driver support required |
-| **XDP-SKB** | Generic software mode | Moderate | Works on all NICs |
-| **XDP-HW** | Hardware offload | Best | Advanced NICs only |
+XDP (eXpress Data Path) operates at different layers of the network stack, providing varying levels of performance:
 
-Qsecbit **automatically detects** your NIC capabilities and selects the optimal mode.
+| **Mode** | **Where it runs** | **Kernel bypass** | **Layer** | **Performance** | **Notes** |
+|----------|------------------|-------------------|-----------|-----------------|-----------|
+| **XDP-hw** | NIC hardware ASIC | Full | Layer 0 | Ultra-fast | Rare; requires programmable NICs (Mellanox SmartNIC, Intel IPU) |
+| **XDP-drv** | NIC driver | Full | Layer 1 | Fastest practical | Native driver mode, requires driver support |
+| **XDP-skb** | Generic SKB layer | Partial | Layer 1.5 | Moderate | Universal fallback, works on all NICs |
+
+**Key Differences:**
+- **XDP-hw**: Packet processing happens directly in NIC hardware before it reaches the CPU. Requires specialized NICs.
+- **XDP-drv**: Packet processing happens in the NIC driver before the Linux kernel network stack. Requires XDP-capable driver.
+- **XDP-skb**: Packet processing happens after the kernel allocates socket buffers (SKBs). Significantly slower but universal.
+
+Qsecbit **automatically detects** your NIC capabilities and selects the optimal mode (preferring XDP-drv, falling back to XDP-skb).
 
 ### XDP Features
 
@@ -148,22 +155,31 @@ print(f"TCP SYN floods: {stats.tcp_syn_flood}")
 
 ### XDP-Ready NIC Comparison
 
-| **Platform** | **NIC Model** | **Driver** | **XDP** | **eBPF** | **XDP-DRV** | **Max Throughput** |
-|-------------|---------------|------------|---------|----------|-------------|-------------------|
+| **Platform** | **NIC Model** | **Driver** | **XDP-SKB** | **XDP-DRV** | **XDP-HW** | **Max Throughput** |
+|-------------|---------------|------------|-------------|-------------|------------|-------------------|
 | **Raspberry Pi 4/5** | Broadcom SoC | bcmgenet | ✅ | ❌ | ❌ | 1 Gbps |
 | **Raspberry Pi** | Realtek USB | r8152 | ✅ | ❌ | ❌ | 1 Gbps |
 | **Desktop** | Realtek PCIe | r8169 | ✅ | ❌ | ❌ | 2.5 Gbps |
-| **Intel N100** | **I211** | **igb** | ✅ | ✅ | ✅ | **1 Gbps** |
-| **Intel N100** | **I226** | **igc** | ✅ | ✅ | ✅ | **2.5 Gbps** |
-| **Intel Server** | X520 (82599) | ixgbe | ✅ | ✅ | ❌ | 10 Gbps |
-| **Intel Server** | **X710** | **i40e** | ✅ | ✅ | ✅ | **40 Gbps** |
-| **Intel Server** | **E810** | **ice** | ✅ | ✅ | ✅ | **100 Gbps** |
-| **Mellanox** | **ConnectX-3** | **mlx4_en** | ✅ | ✅ | ✅ | **40 Gbps** |
+| **Intel N100** | **I211** | **igb** | ✅ | ✅ | ❌ | **1 Gbps** |
+| **Intel N100** | **I226** | **igc** | ✅ | ✅ | ❌ | **2.5 Gbps** |
+| **Intel Server** | X520 (82599) | ixgbe | ✅ | ❌ | ❌ | 10 Gbps |
+| **Intel Server** | **X710** | **i40e** | ✅ | ✅ | ❌ | **40 Gbps** |
+| **Intel Server** | **E810** | **ice** | ✅ | ✅ | ❌ | **100 Gbps** |
+| **Mellanox** | **ConnectX-3** | **mlx4_en** | ✅ | ❌ | ❌ | **40 Gbps** |
 | **Mellanox** | **ConnectX-4/5/6/7** | **mlx5_core** | ✅ | ✅ | ✅ | **200 Gbps** |
+| **Mellanox SmartNIC** | **BlueField-2/3** | **mlx5_core** | ✅ | ✅ | ✅ | **400 Gbps** |
 
 **Legend**:
 - ✅ **Supported**
 - ❌ **Not supported**
+
+**XDP-HW Note**: Hardware offload (XDP-hw) is extremely rare and only supported by:
+- Mellanox ConnectX-5/6/7 (limited offload capabilities)
+- Mellanox BlueField-2/3 SmartNICs (full programmable pipeline)
+- Intel IPU (Infrastructure Processing Unit)
+- Netronome Agilio SmartNICs
+
+For 99% of deployments, **XDP-drv** is the fastest practical mode.
 
 ### Recommended Hardware
 

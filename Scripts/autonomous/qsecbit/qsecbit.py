@@ -48,11 +48,15 @@ except ImportError:
 # ===============================================================================
 
 class XDPMode(Enum):
-    """XDP attachment modes"""
+    """
+    XDP attachment modes with different layers of operation
+
+    Performance hierarchy: XDP-hw (Layer 0) > XDP-drv (Layer 1) > XDP-skb (Layer 1.5)
+    """
     DISABLED = "disabled"
-    SKB = "xdp-skb"      # Generic XDP (software mode, works on all NICs)
-    DRV = "xdp-drv"      # Native XDP (driver mode, requires NIC support)
-    HW = "xdp-hw"        # Hardware offload (requires advanced NICs)
+    SKB = "xdp-skb"      # Generic XDP (Layer 1.5 - after SKB allocation, works on all NICs, partial bypass)
+    DRV = "xdp-drv"      # Native XDP (Layer 1 - in NIC driver, requires driver support, full kernel bypass)
+    HW = "xdp-hw"        # Hardware offload (Layer 0 - in NIC hardware ASIC, requires programmable NICs, ultra-fast)
 
 
 @dataclass
