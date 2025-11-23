@@ -69,7 +69,14 @@ hookprobe/
 │   │   │   ├── n8n_network-config.sh # n8n configuration
 │   │   │   ├── README.md             # Deployment guide
 │   │   │   └── checklist.md          # Pre/post deployment checklist
-│   │   └── qsecbit.py                # AI THREAT ANALYSIS ENGINE
+│   │   └── qsecbit/
+│   │       ├── qsecbit.py            # AI THREAT ANALYSIS ENGINE + XDP/eBPF
+│   │       └── README.md             # Qsecbit documentation
+│   ├── backend/
+│   │   └── install/
+│   │       ├── backend-setup.sh      # MSSP cloud backend deployment
+│   │       ├── backend-network-config.sh  # Multi-tenant configuration
+│   │       └── backend-uninstall.sh  # Cloud backend cleanup
 │   ├── honeypot/
 │   │   ├── attack-mitigation-orchestrator.sh
 │   │   ├── mitigation-maintenance.sh
@@ -80,6 +87,8 @@ hookprobe/
 │           ├── qsecbit.py            # Web interface version
 │           └── qsecbit.html
 ├── Documents/
+│   ├── backend/
+│   │   └── README.md                 # MSSP cloud backend guide
 │   ├── SecurityMitigationPlan.md     # Detailed security architecture
 │   ├── ClickHouse-Integration-Analysis.md  # OLAP database integration guide
 │   ├── ClickHouse-Quick-Start.md     # Quick deployment guide
@@ -99,8 +108,10 @@ hookprobe/
 ├── README.md                         # MAIN DOCUMENTATION
 ├── CONTRIBUTING.md                   # Contribution guidelines
 ├── SECURITY.md                       # Security policy
+├── CLAUDE.md                         # AI ASSISTANT GUIDE (this file)
 ├── CHANGELOG.md                      # Version history
 ├── LICENSE                           # MIT License
+├── requirements.txt                  # Python dependencies
 ├── 3rd-party-licenses.md            # Dependency licenses
 └── hookprobe-r&d.md                 # R&D roadmap
 
@@ -183,7 +194,7 @@ HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for au
 
 **Qsecbit (Quantum Security Bit)** is the core AI threat detection engine.
 
-**Location**: `Scripts/autonomous/qsecbit.py`
+**Location**: `Scripts/autonomous/qsecbit/qsecbit.py`
 
 **Algorithm Components**:
 - **System Drift** (30%): Mahalanobis distance from baseline telemetry
@@ -203,6 +214,75 @@ HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for au
 - Generate incident reports
 - Email alerts to qsecbit@hookprobe.com
 
+### XDP/eBPF DDoS Mitigation
+
+**Qsecbit v5.0** includes kernel-level DDoS mitigation via XDP (eXpress Data Path):
+
+**Features**:
+- **Automatic NIC Detection**: Detects primary interface and driver capabilities
+- **Intelligent Mode Selection**: XDP-DRV (native) for capable NICs, XDP-SKB (generic) fallback
+- **Rate Limiting**: 1000 packets/sec per source IP
+- **Dynamic IP Blocking**: Real-time attacker blacklisting at kernel level
+- **Protocol Flood Detection**: TCP SYN, UDP, ICMP monitoring
+- **Malformed Packet Filtering**: Automatic drop of invalid packets
+- **Real-Time Statistics**: Total packets, drops, floods tracked and stored
+
+**Enable XDP** (environment variable):
+```bash
+export XDP_ENABLED=true
+```
+
+**Supported NICs** (See NIC Compatibility Matrix below for complete list):
+- **Full XDP-DRV**: Intel I211/I226, X710, E810, Mellanox ConnectX-3/4/5/6/7
+- **XDP-SKB only**: Raspberry Pi (bcmgenet), Realtek (r8152, r8169)
+
+### NIC Compatibility Matrix
+
+**Hardware Requirements for Optimal XDP Performance**:
+
+| **Platform** | **NIC Model** | **Driver** | **XDP** | **eBPF** | **XDP-DRV** | **Max Throughput** | **Recommended** |
+|-------------|---------------|------------|---------|----------|-------------|-------------------|----------------|
+| **Raspberry Pi 4/5** | Broadcom SoC | bcmgenet | ✅ | ❌ | ❌ | 1 Gbps | ⚠️ Development only |
+| **Raspberry Pi** | Realtek USB | r8152 | ✅ | ❌ | ❌ | 1 Gbps | ⚠️ Limited performance |
+| **Desktop** | Realtek PCIe | r8169 | ✅ | ❌ | ❌ | 2.5 Gbps | ⚠️ Not for production |
+| **Intel N100** | **I211** | **igb** | ✅ | ✅ | ✅ | **1 Gbps** | ✅ **Entry-level edge** |
+| **Intel N100** | **I226** | **igc** | ✅ | ✅ | ✅ | **2.5 Gbps** | ✅ **Best value edge** |
+| **Intel Server** | X520 (82599) | ixgbe | ✅ | ✅ | ❌ | 10 Gbps | ⚠️ AF_XDP only |
+| **Intel Server** | **X710** | **i40e** | ✅ | ✅ | ✅ | **40 Gbps** | ✅ **Cloud backend** |
+| **Intel Server** | **E810** | **ice** | ✅ | ✅ | ✅ | **100 Gbps** | ✅ **Enterprise** |
+| **Mellanox** | **ConnectX-3** | **mlx4_en** | ✅ | ✅ | ✅ | **40 Gbps** | ✅ **Cloud backend** |
+| **Mellanox** | **ConnectX-4/5/6/7** | **mlx5_core** | ✅ | ✅ | ✅ | **200 Gbps** | ✅ **Gold standard** |
+
+**Legend**:
+- ✅ **Supported** / **Recommended**
+- ❌ **Not supported**
+- ⚠️ **Limited** (SKB mode only, higher CPU usage)
+
+**Hardware Recommendations**:
+
+1. **Budget Edge Deployment** (< $300):
+   - **SBC**: Intel N100 (8GB RAM)
+   - **NIC**: Intel I226-V (built-in, 2.5Gbps)
+   - **XDP Mode**: XDP-DRV ✅
+   - **Performance**: 2.5 Gbps line rate filtering
+
+2. **Production Edge** ($300-$1000):
+   - **Option A**: Mini PC with Intel I211/I226
+   - **Option B**: Raspberry Pi 5 + USB adapter (⚠️ SKB only)
+   - **XDP Mode**: XDP-DRV ✅ (Option A), XDP-SKB (Option B)
+
+3. **Cloud Backend** ($2000+):
+   - **Server**: Dell/HP with Intel X710 or Mellanox ConnectX-5
+   - **XDP Mode**: XDP-DRV ✅ + Hardware Offload
+   - **Performance**: 40-100 Gbps line rate
+
+⚠️ **Important Notes**:
+- **Raspberry Pi**: Only supports XDP-SKB (software mode). For production DDoS mitigation at scale, use Intel N100 with I226 NIC.
+- **Intel N100**: Best value for edge deployment. Built-in I226 NIC supports full XDP-DRV mode.
+- **Mellanox ConnectX**: Enterprise-grade. Full XDP-DRV, AF_XDP, and hardware offload for maximum performance.
+
+**See**: `Scripts/autonomous/qsecbit/README.md` for complete XDP/eBPF documentation.
+
 ---
 
 ## 🔧 Development Workflows
@@ -214,7 +294,7 @@ HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for au
 1. **Network Configuration** (`network-config.sh`)
 2. **Deployment Logic** (`setup.sh`)
 3. **Security Rules** (OpenFlow, nftables, WAF)
-4. **AI Logic** (`qsecbit.py`)
+4. **AI Logic** (`qsecbit/qsecbit.py`)
 5. **Response Scripts** (`kali-response-scripts.sh`)
 6. **Documentation** (Markdown files)
 
@@ -254,19 +334,20 @@ ovs-vsctl show # Should show minimal config
 
 ### Making Changes to Qsecbit Algorithm
 
-**Location**: `Scripts/autonomous/qsecbit.py`
+**Location**: `Scripts/autonomous/qsecbit/qsecbit.py`
 
 **Testing Workflow**:
 
 ```bash
 # 1. Modify qsecbit.py
-nano Scripts/autonomous/qsecbit.py
+nano Scripts/autonomous/qsecbit/qsecbit.py
 
 # 2. Run unit tests (if available)
+cd Scripts/autonomous/qsecbit/
 python3 -m pytest tests/
 
 # 3. Test with synthetic data
-python3 Scripts/autonomous/qsecbit.py --test
+python3 qsecbit.py --test
 
 # 4. Deploy and test in container
 podman build -t qsecbit:test -f Containerfile.qsecbit .
@@ -276,6 +357,7 @@ podman run --rm qsecbit:test
 # - Check Grafana "Qsecbit Analysis" dashboard
 # - Review alerts in Loki logs
 # - Verify RAG status accuracy
+# - Monitor XDP statistics (if enabled)
 ```
 
 ### Making Documentation Changes
@@ -530,7 +612,7 @@ podman run -d \
 
 ```bash
 # Edit qsecbit.py configuration
-nano Scripts/autonomous/qsecbit.py
+nano Scripts/autonomous/qsecbit/qsecbit.py
 
 # Modify QsecbitConfig dataclass:
 @dataclass
@@ -1052,7 +1134,8 @@ done
 |------|---------|--------------|
 | `Scripts/autonomous/install/network-config.sh` | **MAIN CONFIGURATION** - All network, IPs, credentials, images | Every deployment |
 | `Scripts/autonomous/install/setup.sh` | **MAIN DEPLOYMENT SCRIPT** - Creates all PODs, containers, networks | Adding services, changing deployment logic |
-| `Scripts/autonomous/qsecbit.py` | **AI THREAT ENGINE** - Qsecbit algorithm implementation | Adjusting thresholds, changing analysis logic |
+| `Scripts/autonomous/qsecbit/qsecbit.py` | **AI THREAT ENGINE** - Qsecbit algorithm + XDP/eBPF DDoS mitigation | Adjusting thresholds, changing analysis logic, XDP configuration |
+| `Scripts/autonomous/qsecbit/README.md` | **QSECBIT DOCUMENTATION** - Complete guide to qsecbit module | Understanding qsecbit architecture, NIC compatibility |
 | `Scripts/autonomous/install/kali-response-scripts.sh` | **AUTOMATED RESPONSE** - Kali Linux mitigation scripts | Adding new attack responses |
 
 ### Optional Feature Configuration
