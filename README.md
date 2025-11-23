@@ -12,7 +12,7 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 
 - **🤖 AI-Powered Threat Detection**: Qsecbit algorithm for real-time security analysis
 - **🛡️ Automated Response**: Kali Linux on-demand threat mitigation
-- **📊 Complete Monitoring**: Grafana + Prometheus + Loki + VictoriaMetrics
+- **📊 Complete Monitoring**: Grafana + ClickHouse + VictoriaMetrics + Vector
 - **🔒 Zero Trust Architecture**: PSK-encrypted VXLAN, OpenFlow ACLs, L2 hardening
 - **🌐 Web Application Firewall**: NAXSI/ModSecurity with auto-updating rules
 - **☁️ Optional Cloud Integration**: Cloudflare Tunnel for secure remote access
@@ -74,7 +74,7 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
 | **002** | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
 | **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
 | **004** | 10.200.4.0/24 | Transient DB | Redis, Valkey |
-| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, VictoriaLogs, Vector, node_exporter |
+| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse, Vector, Filebeat, node_exporter |
 | **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit |
 | **007** | 10.200.7.0/24 | AI Response | Honeypots, Kali Linux, Mitigation Engine |
 
@@ -121,11 +121,76 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
               └─────────┘
 ```
 
+### 🌐 Dual Deployment Architecture (v5.0)
+
+HookProbe now supports **two deployment models**:
+
+#### 1. **Edge Deployment** (Single-Tenant SBC)
+```
+Customer Site
+┌──────────────────────┐
+│ HookProbe SBC        │
+│ Intel N100 (8-16GB)  │
+│                      │
+│ PODs 001-007:        │
+│ - ClickHouse (local) │
+│ - Qsecbit AI         │
+│ - 0-90 day analytics │
+│ - Complete isolation │
+└──────────────────────┘
+```
+
+**Use Cases:**
+- Home users
+- Small businesses
+- Branch offices
+- Standalone security
+
+#### 2. **MSSP Cloud Backend** (Multi-Tenant)
+```
+Cloud Infrastructure
+┌────────────────────────────────────┐
+│ Apache Doris Cluster (MSSP)       │
+│                                    │
+│ ┌────────────┐  ┌──────────────┐ │
+│ │Frontend (3)│  │Backend (3+)  │ │
+│ │Coordinators│  │Storage+Compute│ │
+│ └────────────┘  └──────────────┘ │
+│                                    │
+│ Features:                          │
+│ - Multi-tenant isolation           │
+│ - 1000+ customer capacity          │
+│ - Cross-customer threat intel      │
+│ - GPU ML training (optional)       │
+│ - 365+ day retention               │
+└────────────────────────────────────┘
+         ▲
+         │ TLS Encrypted Streams
+         │
+    ┌────┴─────┬─────────┐
+    │          │         │
+┌───┴───┐  ┌───┴───┐ ┌──┴────┐
+│Edge A │  │Edge B │ │Edge C │ ...
+└───────┘  └───────┘ └───────┘
+```
+
+**Use Cases:**
+- MSSP providers
+- Enterprise multi-site
+- Security research labs
+- SOC operations
+
+**See:** [Backend Deployment Guide](Scripts/backend/install/README.md)
+
+---
+
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
+Choose your deployment model:
+
+### 📍 Option 1: Edge Deployment (Single-Tenant SBC)
 
 **Hardware Requirements:**
 - **CPU**: Intel N100 or equivalent x86_64 (4+ cores)
@@ -138,39 +203,91 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
 
-### Quick Installation
-
-1. **Download Installation Scripts**
+**Installation:**
 
 ```bash
+# 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe/Scripts/autonomous/install/
-```
 
-2. **Configure Network Settings**
-
-```bash
+# 2. Configure
 nano network-config.sh
+# Change: HOST_A_IP, passwords, PSK keys
+
+# 3. Deploy
+sudo ./setup.sh
+
+# 4. Access Grafana
+# http://YOUR_IP:3000 (admin/admin - change immediately!)
 ```
 
-**Critical settings to change:**
+**See:** [Edge Deployment Checklist](Scripts/autonomous/install/checklist.md)
+
+---
+
+### ☁️ Option 2: MSSP Cloud Backend (Multi-Tenant)
+
+**Hardware Requirements:**
+- **CPU**: 32+ cores per node (128+ recommended for production)
+- **RAM**: 128GB minimum (256GB+ recommended for production)
+- **Storage**: 1TB NVMe SSD minimum (8TB+ recommended)
+- **Network**: 10Gbps+ NIC
+- **Cluster**: 3 Frontend + 3+ Backend nodes
+
+**Software Requirements:**
+- **OS**: RHEL 9+, Ubuntu 22.04+, Fedora 40+, Proxmox
+- **Root Access**: Required
+- **Podman**: 4.x+
+
+**Installation:**
+
 ```bash
-HOST_A_IP="192.168.1.100"              # Your server IP
-PHYSICAL_HOST_INTERFACE="eth0"         # Your NIC
-INTERNET_GATEWAY="192.168.1.1"         # Your gateway
+# 1. Clone repository
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe/Scripts/backend/install/
 
-# Change all PSK keys (generate with: openssl rand -base64 32)
-OVS_PSK_MAIN="..."
-OVS_PSK_DMZ="..."
-OVS_PSK_INTERNAL="..."
+# 2. Configure
+nano backend-network-config.sh
+# Change: DORIS_ADMIN_PASSWORD, DORIS_BE_STORAGE, etc.
 
-# Database passwords
-POSTGRES_PASSWORD="..."
-LOGTO_DB_PASSWORD="..."
+# 3. Deploy
+sudo ./backend-setup.sh
 
-# Django secret key
-DJANGO_SECRET_KEY="..."
+# 4. Initialize Doris cluster
+mysql -h 10.100.1.10 -P 9030 -uroot < /tmp/doris-init.sql
+
+# 5. Create multi-tenant schemas
+# (See Scripts/backend/install/README.md)
 ```
+
+**See:** [Backend Deployment Guide](Scripts/backend/install/README.md)
+
+---
+
+### 🔗 Hybrid: Edge + Cloud (Recommended for MSSP)
+
+Deploy edge devices at customer sites + centralized cloud backend:
+
+1. **Deploy cloud backend** (as above)
+2. **Deploy edge devices** at each customer site
+3. **Configure edge → cloud streaming**:
+   ```bash
+   # On edge device
+   export DEPLOYMENT_TYPE="edge"
+   export TENANT_ID="customer_acme"
+   export KAFKA_BOOTSTRAP_SERVERS="mssp.example.com:9092"
+   ```
+
+---
+
+### 🔐 Critical Security Steps (Both Deployments)
+
+**Before going to production:**
+```bash
+# Generate strong PSK keys
+openssl rand -base64 32
+
+# Change all default passwords:
 
 3. **Deploy HookProbe**
 
@@ -458,38 +575,56 @@ nft add rule inet filter forward ip saddr 10.200.5.0/24 ip daddr 10.200.1.0/24 t
 
 **Components:**
 - **Grafana**: Dashboards and visualization
-- **Prometheus**: Metrics collection and storage
-- **Loki**: Log aggregation
-- **VictoriaMetrics**: Long-term metrics storage
-- **Rsyslog**: Centralized syslog server
-- **Alertmanager**: Alert routing and notification
+- **VictoriaMetrics**: Time-series metrics storage
+- **ClickHouse**: OLAP database for security analytics and log aggregation
+- **Vector**: Log and metrics routing and transformation
+- **Filebeat**: Zeek log ingestion
+- **node_exporter**: Host metrics collection
 
 **Key Dashboards:**
 - **System Overview**: All PODs health and resource usage
-- **Qsecbit Analysis**: Real-time threat scores and trends
+- **Qsecbit Analysis**: Real-time threat scores and historical trends
 - **WAF Activity**: Blocked attacks and patterns
 - **Network Traffic**: Flow analysis and top talkers
 - **Security Events**: IDS/IPS alerts and incidents
+- **Attack Correlation**: Multi-source threat intelligence
 - **LTE Status**: Signal strength, data usage (if enabled)
 
 **Access:**
 - **Grafana**: http://YOUR_IP:3000
-- **Prometheus**: http://YOUR_IP:9090
-- **Alertmanager**: http://YOUR_IP:9093
+- **VictoriaMetrics**: http://YOUR_IP:8428
+- **ClickHouse HTTP**: http://YOUR_IP:8123
 
-**Log Queries (Loki):**
-```
-# All security events
-{job="containerlogs"} |~ "ALERT|BLOCK|ATTACK"
+**Example ClickHouse Queries:**
+```sql
+-- All security events (last 24h)
+SELECT timestamp, source_type, src_ip, attack_type, severity
+FROM security.security_events
+WHERE timestamp >= now() - INTERVAL 24 HOUR
+ORDER BY timestamp DESC
+LIMIT 100;
 
-# WAF blocks
-{job="containerlogs"} | container_name=~".*naxsi.*" |= "BLOCK"
+-- WAF blocks
+SELECT src_ip, count() AS blocks, groupArray(attack_category)
+FROM security.waf_events
+WHERE blocked = 1 AND timestamp >= now() - INTERVAL 1 HOUR
+GROUP BY src_ip
+ORDER BY blocks DESC;
 
-# Qsecbit alerts
-{job="containerlogs"} | container_name=~".*qsecbit.*" |~ "RED|AMBER"
+-- Qsecbit RED/AMBER alerts
+SELECT timestamp, rag_status, score, drift, attack_probability
+FROM security.qsecbit_scores
+WHERE rag_status IN ('RED', 'AMBER')
+  AND timestamp >= now() - INTERVAL 7 DAY
+ORDER BY timestamp DESC;
 
-# Database errors
-{job="containerlogs"} | container_name=~".*postgres.*" |~ "ERROR"
+-- Top attackers
+SELECT src_ip, count() AS attacks, uniq(attack_type) AS attack_types
+FROM security.security_events
+WHERE timestamp >= now() - INTERVAL 24 HOUR
+GROUP BY src_ip
+ORDER BY attacks DESC
+LIMIT 10;
 ```
 
 ---
