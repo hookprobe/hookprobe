@@ -48,7 +48,7 @@ This is a **major architectural transformation** moving from GPL-licensed compon
   - `backend-setup.sh` - Cross-platform (RHEL/Ubuntu/Fedora/Proxmox)
   - `backend-network-config.sh` - Multi-tenant configuration
   - `backend-uninstall.sh` - Clean removal
-  - Complete documentation in `Scripts/backend/install/README.md`
+  - Complete documentation in `Documents/backend/README.md`
 
 #### Attack Mitigation System
 - `attack-mitigation-orchestrator.sh` - Main attack detection and response engine
