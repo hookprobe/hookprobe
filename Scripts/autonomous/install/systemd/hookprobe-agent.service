@@ -1,0 +1,61 @@
+[Unit]
+Description=HookProbe Agent - Qsecbit Monitoring and Threat Detection
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target hookprobe-provision.service
+Requires=hookprobe-provision.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HOOKPROBE_BASE=/opt/hookprobe"
+Environment="HOOKPROBE_CONFIG=/etc/hookprobe"
+Environment="PYTHONUNBUFFERED=1"
+
+# XDP enable (set to true to enable XDP/eBPF DDoS mitigation)
+Environment="XDP_ENABLED=false"
+
+# Working directory
+WorkingDirectory=/opt/hookprobe/agent
+
+# Main agent process
+ExecStart=/usr/bin/python3 /opt/hookprobe/agent/qsecbit-agent.py
+
+# Health check
+ExecStartPost=/bin/sleep 5
+ExecStartPost=/usr/bin/curl -f http://localhost:8888/health || true
+
+# Graceful shutdown
+ExecStop=/usr/bin/pkill -TERM -f qsecbit-agent.py
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hookprobe-agent
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/hookprobe /var/log/hookprobe /etc/hookprobe
+
+# Capabilities (required for XDP and network operations)
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_BPF
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_BPF
+
+# Resource limits
+CPUQuota=150%
+MemoryMax=1G
+TasksMax=100
+
+# Watchdog (restart if unresponsive for 60s)
+WatchdogSec=60
+
+[Install]
+WantedBy=multi-user.target

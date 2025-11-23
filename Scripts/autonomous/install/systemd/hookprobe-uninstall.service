@@ -1,0 +1,28 @@
+[Unit]
+Description=HookProbe Uninstall Service - Complete System Cleanup
+Documentation=https://github.com/hookprobe/hookprobe
+
+[Service]
+Type=oneshot
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HOOKPROBE_BASE=/opt/hookprobe"
+
+# Uninstall script
+ExecStart=/opt/hookprobe/scripts/cleanup.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hookprobe-uninstall
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=no
+
+# Resource limits
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
