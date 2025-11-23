@@ -914,7 +914,7 @@ tail -f /var/log/hookprobe/gdpr-audit.log
 ### Support & Contact
 
 - **GDPR Documentation**: [GDPR.md](GDPR.md)
-- **Data Protection Officer**: dpo@hookprobe.com
+- **Data Protection Officer**: qsecbit@hookprobe.com
 - **Security Contact**: qsecbit@hookprobe.com
 - **GitHub Issues**: https://github.com/hookprobe/hookprobe/issues
 
