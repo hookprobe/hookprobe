@@ -6,6 +6,10 @@
 
 ---
 
+![Hookprobe Cloud Orchestrator](../images/hookprobe-cloud-orchestrator.png)
+
+---
+
 ## 📋 Overview
 
 The HookProbe backend is a centralized cloud infrastructure for managing security data from hundreds or thousands of edge HookProbe deployments. It provides:
