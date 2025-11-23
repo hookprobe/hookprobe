@@ -78,14 +78,15 @@ GATEWAY_CACHE="10.200.4.1"
 IP_REDIS="10.200.4.10"                 # Redis cache
 IP_VALKEY="10.200.4.11"                # Valkey (Redis fork, BSD)
 
-# Monitoring Network (VNI 205) - VictoriaMetrics, VictoriaLogs, Grafana
+# Monitoring Network (VNI 205) - VictoriaMetrics, ClickHouse, Grafana
 SUBNET_MONITORING="10.200.5.0/24"
 GATEWAY_MONITORING="10.200.5.1"
 IP_VICTORIAMETRICS="10.200.5.10"       # VictoriaMetrics (Apache 2.0)
-IP_VICTORIALOGS="10.200.5.11"          # VictoriaLogs (Apache 2.0)
+IP_CLICKHOUSE="10.200.5.11"            # ClickHouse OLAP database (Apache 2.0)
 IP_GRAFANA="10.200.5.12"               # Grafana (AGPL but service use is OK)
 IP_VECTOR="10.200.5.13"                # Vector log aggregator (Apache 2.0)
 IP_NODE_EXPORTER="10.200.5.14"         # Prometheus node exporter (Apache 2.0)
+IP_FILEBEAT="10.200.5.15"              # Filebeat log shipper (Elastic License 2.0)
 
 # Security Network (VNI 206) - Zeek + Snort 3
 SUBNET_SECURITY="10.200.6.0/24"
@@ -112,9 +113,10 @@ IMAGE_VALKEY="docker.io/valkey/valkey:8.0-alpine"                    # BSD-3-Cla
 IMAGE_KEYCLOAK="quay.io/keycloak/keycloak:26.0"                      # Apache 2.0
 IMAGE_GRAFANA="docker.io/grafana/grafana:11.4.0"                     # AGPL-3 (OK for service)
 IMAGE_VICTORIAMETRICS="docker.io/victoriametrics/victoria-metrics:latest"  # Apache 2.0
-IMAGE_VICTORIALOGS="docker.io/victoriametrics/victoria-logs:latest"        # Apache 2.0
+IMAGE_CLICKHOUSE="docker.io/clickhouse/clickhouse-server:24.11"      # Apache 2.0
 IMAGE_VECTOR="docker.io/timberio/vector:latest-alpine"               # Apache 2.0
 IMAGE_NODE_EXPORTER="quay.io/prometheus/node-exporter:latest"        # Apache 2.0
+IMAGE_FILEBEAT="docker.io/elastic/filebeat:8.11.0"                   # Elastic License 2.0
 IMAGE_ZEEK="docker.io/zeek/zeek:latest"                              # BSD-3-Clause
 IMAGE_SNORT="docker.io/ciscotalos/snort3:latest"                     # GPL-2 with linking exception
 IMAGE_MODSECURITY="docker.io/owasp/modsecurity-nginx:latest"         # Apache 2.0
@@ -178,6 +180,24 @@ QSECBIT_BASELINE_MU="0.1,0.2,0.15,0.33"  # CPU, Memory, Network, Disk I/O
 QSECBIT_QUANTUM_ANCHOR=6.144             # Baseline entropy
 
 # ============================================================
+# CLICKHOUSE ANALYTICS CONFIGURATION
+# ============================================================
+CLICKHOUSE_DB="security"                                    # Main database for security analytics
+CLICKHOUSE_USER="hookprobe"                                 # ClickHouse username
+CLICKHOUSE_PASSWORD="CHANGE_ME_CLICKHOUSE_STRONG_PASSWORD"  # CHANGE THIS!
+CLICKHOUSE_MAX_MEMORY_GB=8                                  # Max RAM for ClickHouse (adjust for your system)
+CLICKHOUSE_MAX_CONCURRENT_QUERIES=100                       # Max simultaneous queries
+CLICKHOUSE_RETENTION_DAYS=90                                # Default data retention (security events)
+CLICKHOUSE_QSECBIT_RETENTION_DAYS=365                       # Qsecbit historical data (1 year)
+CLICKHOUSE_FLOWS_RETENTION_DAYS=30                          # Network flows (shorter retention)
+CLICKHOUSE_COMPRESSION_LEVEL=3                              # ZSTD compression (1-9, 3=balanced)
+
+# ClickHouse feature flags
+CLICKHOUSE_ENABLE_QUERY_LOG=true                            # Log slow queries for optimization
+CLICKHOUSE_ENABLE_PART_LOG=true                             # Log data part merges
+CLICKHOUSE_ENABLE_METRIC_LOG=true                           # Log internal metrics
+
+# ============================================================
 # HONEYPOT & MITIGATION CONFIGURATION
 # ============================================================
 HONEYPOT_AUTO_REDIRECT=true            # Auto-redirect detected attackers
@@ -224,7 +244,8 @@ VOLUME_DJANGO_STATIC="hookprobe-django-static-v5"
 VOLUME_DJANGO_MEDIA="hookprobe-django-media-v5"
 VOLUME_KEYCLOAK_DATA="hookprobe-keycloak-v5"
 VOLUME_VICTORIAMETRICS_DATA="hookprobe-victoriametrics-v5"
-VOLUME_VICTORIALOGS_DATA="hookprobe-victorialogs-v5"
+VOLUME_CLICKHOUSE_DATA="hookprobe-clickhouse-v5"
+VOLUME_CLICKHOUSE_LOGS="hookprobe-clickhouse-logs-v5"
 VOLUME_GRAFANA_DATA="hookprobe-grafana-v5"
 VOLUME_ZEEK_LOGS="hookprobe-zeek-logs-v5"
 VOLUME_SNORT_LOGS="hookprobe-snort-logs-v5"
@@ -264,7 +285,8 @@ PORT_KEYCLOAK_ADMIN=9000
 PORT_POSTGRES=5432
 PORT_GRAFANA=3000
 PORT_VICTORIAMETRICS=8428
-PORT_VICTORIALOGS=9428
+PORT_CLICKHOUSE_HTTP=8123
+PORT_CLICKHOUSE_NATIVE=9001
 PORT_QSECBIT_API=8888
 
 # ============================================================
@@ -324,12 +346,14 @@ export SUBNET_WEB_DMZ GATEWAY_WEB_DMZ IP_MODSECURITY IP_NGINX IP_DJANGO IP_CLOUD
 export SUBNET_IAM GATEWAY_IAM IP_KEYCLOAK IP_KEYCLOAK_DB
 export SUBNET_DATABASE GATEWAY_DATABASE IP_POSTGRES_MAIN IP_NFS
 export SUBNET_CACHE GATEWAY_CACHE IP_REDIS IP_VALKEY
-export SUBNET_MONITORING GATEWAY_MONITORING IP_VICTORIAMETRICS IP_VICTORIALOGS IP_GRAFANA IP_VECTOR IP_NODE_EXPORTER
+export SUBNET_MONITORING GATEWAY_MONITORING IP_VICTORIAMETRICS IP_CLICKHOUSE IP_GRAFANA IP_VECTOR IP_NODE_EXPORTER IP_FILEBEAT
 export SUBNET_SECURITY GATEWAY_SECURITY IP_ZEEK IP_SNORT IP_QSECBIT
 export SUBNET_HONEYPOT GATEWAY_HONEYPOT IP_HONEYPOT_WEB IP_HONEYPOT_SSH IP_HONEYPOT_DB IP_MITIGATION_ENGINE
 export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
 export KEYCLOAK_DB KEYCLOAK_DB_USER KEYCLOAK_DB_PASSWORD KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD
 export DJANGO_SECRET_KEY DJANGO_DEBUG DJANGO_ALLOWED_HOSTS
+export CLICKHOUSE_DB CLICKHOUSE_USER CLICKHOUSE_PASSWORD CLICKHOUSE_MAX_MEMORY_GB CLICKHOUSE_MAX_CONCURRENT_QUERIES
+export CLICKHOUSE_RETENTION_DAYS CLICKHOUSE_QSECBIT_RETENTION_DAYS CLICKHOUSE_FLOWS_RETENTION_DAYS CLICKHOUSE_COMPRESSION_LEVEL
 export QSECBIT_ALPHA QSECBIT_BETA QSECBIT_GAMMA QSECBIT_DELTA
 export QSECBIT_AMBER_THRESHOLD QSECBIT_RED_THRESHOLD QSECBIT_CHECK_INTERVAL
 export HONEYPOT_AUTO_REDIRECT HONEYPOT_SNAT_ENABLED HONEYPOT_NOTIFY_EMAIL
@@ -357,7 +381,7 @@ echo "  ✓ ModSecurity WAF (Apache 2.0)"
 echo "  ✓ Zeek IDS (BSD-3-Clause)"
 echo "  ✓ Snort 3 IDS/IPS (GPL-2 w/ exception)"
 echo "  ✓ VictoriaMetrics (Apache 2.0)"
-echo "  ✓ VictoriaLogs (Apache 2.0)"
+echo "  ✓ ClickHouse OLAP (Apache 2.0)"
 echo "  ✓ Keycloak IAM (Apache 2.0)"
 echo "  ✓ Custom Honeypots (MIT)"
 echo "  ✓ Qsecbit AI (MIT)"

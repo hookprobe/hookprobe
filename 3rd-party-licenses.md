@@ -214,11 +214,11 @@ This document lists all third-party components used by HookProbe v5.0 and their 
 - **Usage**: Time-series database for metrics
 - **Commercial Use**: ✅ Yes
 
-**VictoriaLogs**
-- **Version**: Latest
+**ClickHouse**
+- **Version**: 24.11+
 - **License**: Apache License 2.0
-- **Source**: https://docs.victoriametrics.com/victorialogs/
-- **Usage**: Log aggregation and storage
+- **Source**: https://clickhouse.com/
+- **Usage**: OLAP database for security analytics and log aggregation
 - **Commercial Use**: ✅ Yes
 
 **Vector**
@@ -483,7 +483,8 @@ This document is updated with each release to reflect:
 
 We thank all the open-source projects and their maintainers for making HookProbe possible:
 
-- The Grafana Labs team (VictoriaMetrics, VictoriaLogs, Grafana)
+- The Grafana Labs team (VictoriaMetrics, Grafana)
+- The ClickHouse team (Yandex/ClickHouse, Inc.)
 - The Zeek project community
 - The OWASP ModSecurity team
 - The PostgreSQL Global Development Group

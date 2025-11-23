@@ -3,7 +3,7 @@
 # attack-mitigation-orchestrator.sh
 # HookProbe Attack Detection & Mitigation Orchestrator
 #
-# Integrates: Qsecbit, VictoriaMetrics, VictoriaLogs, Snort3, Zeek, ModSecurity
+# Integrates: Qsecbit, VictoriaMetrics, ClickHouse, Snort3, Zeek, ModSecurity
 # Actions: Honeypot redirection, SNAT rules, Email alerts
 #
 # Author: HookProbe Team
@@ -86,13 +86,11 @@ should_activate_mitigation() {
 # ============================================================
 # LOG AGGREGATION FROM MULTIPLE SOURCES
 # ============================================================
-query_victorialogs() {
+query_clickhouse() {
     local query="$1"
-    local time_range="${2:-5m}"
-    
-    curl -s "${VICTORIALOGS_URL}/select/logsql/query" \
-        -d "query=$query" \
-        -d "time=$time_range" | jq -c '.hits[]' || echo ""
+
+    # Execute ClickHouse query and return JSON results
+    curl -s "${CLICKHOUSE_URL}/?query=$(echo "$query" | jq -sRr @uri)&default_format=JSONEachRow" || echo ""
 }
 
 query_victoriametrics() {
@@ -187,20 +185,20 @@ detect_attacks() {
         done <<< "$modsec_alerts"
     fi
     
-    # 4. Check VictoriaLogs for application-level attacks
-    log "Checking VictoriaLogs for attack patterns..."
-    local vlog_query='(XSS OR "SQL injection" OR "command injection" OR "path traversal") AND level:error'
-    local vlog_results=$(query_victorialogs "$vlog_query" "5m")
-    if [ -n "$vlog_results" ]; then
+    # 4. Check ClickHouse for application-level attacks
+    log "Checking ClickHouse for attack patterns..."
+    local ch_query="SELECT src_ip, attack_type, severity FROM security.security_events WHERE timestamp >= now() - INTERVAL 5 MINUTE AND (attack_type IN ('xss', 'sqli', 'cmd_injection', 'path_traversal') OR severity IN ('high', 'critical'))"
+    local ch_results=$(query_clickhouse "$ch_query")
+    if [ -n "$ch_results" ]; then
         while IFS= read -r result; do
-            local src_ip=$(echo "$result" | jq -r '.remote_addr // .client_ip // empty')
+            local src_ip=$(echo "$result" | jq -r '.src_ip // empty')
             if [ -n "$src_ip" ]; then
-                echo "    {\"source\": \"victorialogs\", \"ip\": \"$src_ip\", \"log\": $result}," >> "$attack_report"
-                log "VictoriaLogs attack pattern from IP: $src_ip"
+                echo "    {\"source\": \"clickhouse\", \"ip\": \"$src_ip\", \"event\": $result}," >> "$attack_report"
+                log "ClickHouse attack pattern from IP: $src_ip"
                 attacks_detected=$((attacks_detected + 1))
                 echo "$src_ip" >> "${STATE_DIR}/temp_ips.txt"
             fi
-        done <<< "$vlog_results"
+        done <<< "$ch_results"
     fi
     
     echo "    {}" >> "$attack_report"
