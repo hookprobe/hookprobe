@@ -1,9 +1,12 @@
 """
-Qsecbit: Quantum Security Bit
-A resilience metric for AI-driven cybersecurity systems
+Qsecbit: Quantum Security Bit - Cyber Resilience Metric
+
+A resilience metric that measures the smallest unit where AI-driven attack
+and defense reach equilibrium through continuous error correction.
 
 Author: Andrei Toma
 License: MIT
+Version: 5.0
 """
 
 import numpy as np
@@ -16,10 +19,11 @@ from datetime import datetime
 import json
 import os
 import socket
-import subprocess
-import re
-from pathlib import Path
-from enum import Enum
+
+# Import qsecbit submodules
+from .nic_detector import NICDetector, NICCapability, XDPMode
+from .xdp_manager import XDPManager, XDPStats
+from .energy_monitor import EnergyMonitor, SystemEnergySnapshot, PIDEnergyStats
 
 # Optional ClickHouse integration (for edge deployments)
 try:
@@ -34,987 +38,6 @@ try:
     DORIS_AVAILABLE = True
 except ImportError:
     DORIS_AVAILABLE = False
-
-# Optional BCC/eBPF integration for XDP (for edge deployments)
-try:
-    from bcc import BPF
-    BCC_AVAILABLE = True
-except ImportError:
-    BCC_AVAILABLE = False
-
-
-# ===============================================================================
-# XDP/eBPF NIC DETECTION AND CAPABILITY MANAGEMENT
-# ===============================================================================
-
-class XDPMode(Enum):
-    """
-    XDP attachment modes with different layers of operation
-
-    Performance hierarchy: XDP-hw (Layer 0) > XDP-drv (Layer 1) > XDP-skb (Layer 1.5)
-    """
-    DISABLED = "disabled"
-    SKB = "xdp-skb"      # Generic XDP (Layer 1.5 - after SKB allocation, works on all NICs, partial bypass)
-    DRV = "xdp-drv"      # Native XDP (Layer 1 - in NIC driver, requires driver support, full kernel bypass)
-    HW = "xdp-hw"        # Hardware offload (Layer 0 - in NIC hardware ASIC, requires programmable NICs, ultra-fast)
-
-
-@dataclass
-class NICCapability:
-    """NIC XDP/eBPF capability profile"""
-    vendor: str
-    model: str
-    driver: str
-    xdp_skb: bool = True   # All NICs support generic XDP
-    xdp_drv: bool = False  # Native driver mode
-    af_xdp: bool = False   # AF_XDP zero-copy sockets
-    hw_offload: bool = False  # Hardware offload
-    max_throughput: str = "1Gbps"
-    notes: str = ""
-
-
-# ✅ NIC Capability Matrix for XDP/eBPF Support
-NIC_CAPABILITY_MATRIX = {
-    # Raspberry Pi NICs (SKB only)
-    "bcmgenet": NICCapability(
-        vendor="Broadcom",
-        model="RPi 4/5 SoC NIC",
-        driver="bcmgenet",
-        xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=False,
-        hw_offload=False,
-        max_throughput="1Gbps",
-        notes="Raspberry Pi internal NIC. SKB mode only."
-    ),
-    "r8152": NICCapability(
-        vendor="Realtek",
-        model="RTL8152/RTL8153 USB",
-        driver="r8152",
-        xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=False,
-        hw_offload=False,
-        max_throughput="1Gbps",
-        notes="USB NIC. Cannot use DRV mode. Limited throughput."
-    ),
-
-    # Realtek PCIe NICs (SKB only)
-    "r8169": NICCapability(
-        vendor="Realtek",
-        model="RTL8111/8168/8125",
-        driver="r8169",
-        xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=False,
-        hw_offload=False,
-        max_throughput="2.5Gbps",
-        notes="Consumer NIC. SKB mode only. Not suitable for high-speed XDP."
-    ),
-
-    # Intel Entry-Level NICs (1Gbps - Full eBPF Support)
-    "igb": NICCapability(
-        vendor="Intel",
-        model="I211/I219",
-        driver="igb",
-        xdp_skb=True,
-        xdp_drv=True,
-        af_xdp=True,
-        hw_offload=False,
-        max_throughput="1Gbps",
-        notes="Entry-level Intel with full XDP-DRV support."
-    ),
-    "igc": NICCapability(
-        vendor="Intel",
-        model="I225/I226",
-        driver="igc",
-        xdp_skb=True,
-        xdp_drv=True,
-        af_xdp=True,
-        hw_offload=False,
-        max_throughput="2.5Gbps",
-        notes="Intel N100 typical NIC. Full XDP-DRV support."
-    ),
-
-    # Intel Server NICs (10Gbps+ - Full XDP Support)
-    "ixgbe": NICCapability(
-        vendor="Intel",
-        model="82599/X520 10GbE",
-        driver="ixgbe",
-        xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=True,
-        hw_offload=False,
-        max_throughput="10Gbps",
-        notes="Older 10G. AF_XDP supported but no DRV mode."
-    ),
-    "i40e": NICCapability(
-        vendor="Intel",
-        model="X710/XL710",
-        driver="i40e",
-        xdp_skb=True,
-        xdp_drv=True,
-        af_xdp=True,
-        hw_offload=True,
-        max_throughput="40Gbps",
-        notes="Full XDP support. First Intel NIC with DRV mode."
-    ),
-    "ice": NICCapability(
-        vendor="Intel",
-        model="E810",
-        driver="ice",
-        xdp_skb=True,
-        xdp_drv=True,
-        af_xdp=True,
-        hw_offload=True,
-        max_throughput="100Gbps",
-        notes="Modern Intel NIC. Best XDP performance."
-    ),
-
-    # Mellanox/NVIDIA ConnectX (Best XDP Support)
-    "mlx4_en": NICCapability(
-        vendor="Mellanox",
-        model="ConnectX-3",
-        driver="mlx4_en",
-        xdp_skb=True,
-        xdp_drv=False,
-        af_xdp=True,
-        hw_offload=False,
-        max_throughput="40Gbps",
-        notes="Older Mellanox. AF_XDP only."
-    ),
-    "mlx5_core": NICCapability(
-        vendor="Mellanox",
-        model="ConnectX-4/5/6/7",
-        driver="mlx5_core",
-        xdp_skb=True,
-        xdp_drv=True,
-        af_xdp=True,
-        hw_offload=True,
-        max_throughput="200Gbps",
-        notes="Gold standard for XDP. Programmable pipelines."
-    ),
-}
-
-
-class NICDetector:
-    """Detect NIC hardware and XDP capabilities"""
-
-    @staticmethod
-    def get_primary_interface() -> Optional[str]:
-        """Get primary network interface (non-loopback, has IP)"""
-        try:
-            # Get default route interface
-            result = subprocess.run(
-                ["ip", "route", "show", "default"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                match = re.search(r'dev\s+(\S+)', result.stdout)
-                if match:
-                    return match.group(1)
-
-            # Fallback: first non-loopback interface with IP
-            result = subprocess.run(
-                ["ip", "-o", "-4", "addr", "show"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if 'lo' not in line:
-                        match = re.search(r'^\d+:\s+(\S+)', line)
-                        if match:
-                            return match.group(1)
-        except Exception as e:
-            print(f"Warning: Failed to detect primary interface: {e}")
-
-        return None
-
-    @staticmethod
-    def get_driver(interface: str) -> Optional[str]:
-        """Get NIC driver name for interface"""
-        try:
-            driver_path = Path(f"/sys/class/net/{interface}/device/driver")
-            if driver_path.exists():
-                driver_link = driver_path.resolve()
-                return driver_link.name
-        except Exception as e:
-            print(f"Warning: Failed to detect driver for {interface}: {e}")
-
-        return None
-
-    @staticmethod
-    def get_nic_info(interface: str) -> Dict[str, str]:
-        """Get detailed NIC information"""
-        info = {
-            'interface': interface,
-            'driver': None,
-            'vendor': 'Unknown',
-            'model': 'Unknown'
-        }
-
-        # Get driver
-        info['driver'] = NICDetector.get_driver(interface)
-
-        # Try to get vendor/model from ethtool
-        try:
-            result = subprocess.run(
-                ["ethtool", "-i", interface],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if line.startswith("driver:"):
-                        info['driver'] = line.split(":", 1)[1].strip()
-                    elif line.startswith("bus-info:"):
-                        info['model'] = line.split(":", 1)[1].strip()
-        except Exception:
-            pass
-
-        return info
-
-    @staticmethod
-    def detect_capability(interface: str) -> NICCapability:
-        """Detect XDP capability for interface"""
-        nic_info = NICDetector.get_nic_info(interface)
-        driver = nic_info.get('driver')
-
-        if driver and driver in NIC_CAPABILITY_MATRIX:
-            return NIC_CAPABILITY_MATRIX[driver]
-
-        # Unknown NIC - assume SKB only
-        return NICCapability(
-            vendor="Unknown",
-            model=nic_info.get('model', 'Unknown'),
-            driver=driver or "unknown",
-            xdp_skb=True,
-            xdp_drv=False,
-            af_xdp=False,
-            hw_offload=False,
-            max_throughput="Unknown",
-            notes=f"Unknown NIC. Defaulting to SKB mode only."
-        )
-
-    @staticmethod
-    def select_xdp_mode(capability: NICCapability, prefer_drv: bool = True) -> XDPMode:
-        """Select best XDP mode for NIC capability"""
-        if prefer_drv and capability.xdp_drv:
-            return XDPMode.DRV
-        elif capability.xdp_skb:
-            return XDPMode.SKB
-        else:
-            return XDPMode.DISABLED
-
-
-# eBPF/XDP Program for DDoS Mitigation
-XDP_DDOS_PROGRAM = """
-#include <uapi/linux/bpf.h>
-#include <linux/in.h>
-#include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
-#include <linux/icmp.h>
-
-// Rate limiting map: source IP -> packet count
-BPF_HASH(rate_limit, u32, u64, 65536);
-
-// Blocked IPs map
-BPF_HASH(blocked_ips, u32, u8, 65536);
-
-// Statistics counters
-BPF_ARRAY(stats, u64, 8);
-
-// Statistics indices
-enum {
-    STAT_TOTAL_PACKETS = 0,
-    STAT_DROPPED_BLOCKED = 1,
-    STAT_DROPPED_RATE_LIMIT = 2,
-    STAT_DROPPED_MALFORMED = 3,
-    STAT_PASSED = 4,
-    STAT_TCP_SYN_FLOOD = 5,
-    STAT_UDP_FLOOD = 6,
-    STAT_ICMP_FLOOD = 7,
-};
-
-// Configuration (packets per second per IP)
-#define RATE_LIMIT_PPS 1000
-#define RATE_WINDOW_NS 1000000000ULL  // 1 second
-
-// XDP main function
-int xdp_ddos_filter(struct xdp_md *ctx) {
-    void *data_end = (void *)(long)ctx->data_end;
-    void *data = (void *)(long)ctx->data;
-
-    // Statistics
-    u64 *total_packets = stats.lookup(&(u32){STAT_TOTAL_PACKETS});
-    if (total_packets) {
-        __sync_fetch_and_add(total_packets, 1);
-    }
-
-    // Parse Ethernet header
-    struct ethhdr *eth = data;
-    if ((void *)(eth + 1) > data_end) {
-        u64 *malformed = stats.lookup(&(u32){STAT_DROPPED_MALFORMED});
-        if (malformed) __sync_fetch_and_add(malformed, 1);
-        return XDP_DROP;
-    }
-
-    // Only process IPv4
-    if (eth->h_proto != __constant_htons(ETH_P_IP)) {
-        return XDP_PASS;
-    }
-
-    // Parse IP header
-    struct iphdr *ip = data + sizeof(*eth);
-    if ((void *)(ip + 1) > data_end) {
-        u64 *malformed = stats.lookup(&(u32){STAT_DROPPED_MALFORMED});
-        if (malformed) __sync_fetch_and_add(malformed, 1);
-        return XDP_DROP;
-    }
-
-    u32 src_ip = ip->saddr;
-
-    // Check if IP is blocked
-    u8 *blocked = blocked_ips.lookup(&src_ip);
-    if (blocked && *blocked == 1) {
-        u64 *dropped_blocked = stats.lookup(&(u32){STAT_DROPPED_BLOCKED});
-        if (dropped_blocked) __sync_fetch_and_add(dropped_blocked, 1);
-        return XDP_DROP;
-    }
-
-    // Rate limiting
-    u64 now = bpf_ktime_get_ns();
-    u64 *last_time = rate_limit.lookup(&src_ip);
-
-    if (last_time) {
-        u64 elapsed = now - *last_time;
-
-        // Reset counter every second
-        if (elapsed > RATE_WINDOW_NS) {
-            rate_limit.update(&src_ip, &now);
-        } else {
-            // Count packets in current window
-            u64 count = 1;
-            u64 *pkt_count = rate_limit.lookup(&src_ip);
-            if (pkt_count) {
-                count = *pkt_count + 1;
-            }
-
-            if (count > RATE_LIMIT_PPS) {
-                // Rate limit exceeded - drop packet
-                u64 *dropped_rate = stats.lookup(&(u32){STAT_DROPPED_RATE_LIMIT});
-                if (dropped_rate) __sync_fetch_and_add(dropped_rate, 1);
-                return XDP_DROP;
-            }
-
-            rate_limit.update(&src_ip, &count);
-        }
-    } else {
-        // First packet from this IP
-        rate_limit.update(&src_ip, &now);
-    }
-
-    // Protocol-specific flood detection
-    u8 protocol = ip->protocol;
-
-    if (protocol == IPPROTO_TCP) {
-        struct tcphdr *tcp = (void *)ip + sizeof(*ip);
-        if ((void *)(tcp + 1) > data_end) {
-            return XDP_DROP;
-        }
-
-        // Detect SYN flood
-        if (tcp->syn && !tcp->ack) {
-            u64 *syn_flood = stats.lookup(&(u32){STAT_TCP_SYN_FLOOD});
-            if (syn_flood) __sync_fetch_and_add(syn_flood, 1);
-
-            // Could implement SYN cookie logic here
-        }
-    } else if (protocol == IPPROTO_UDP) {
-        u64 *udp_flood = stats.lookup(&(u32){STAT_UDP_FLOOD});
-        if (udp_flood) __sync_fetch_and_add(udp_flood, 1);
-
-    } else if (protocol == IPPROTO_ICMP) {
-        u64 *icmp_flood = stats.lookup(&(u32){STAT_ICMP_FLOOD});
-        if (icmp_flood) __sync_fetch_and_add(icmp_flood, 1);
-    }
-
-    // Packet passed all filters
-    u64 *passed = stats.lookup(&(u32){STAT_PASSED});
-    if (passed) __sync_fetch_and_add(passed, 1);
-
-    return XDP_PASS;
-}
-"""
-
-
-# ===============================================================================
-# ENERGY MONITORING AND ANOMALY DETECTION
-# ===============================================================================
-
-@dataclass
-class PIDEnergyStats:
-    """Per-PID energy consumption statistics"""
-    pid: int
-    name: str
-    cpu_time: float  # Total CPU time in seconds
-    cpu_share: float  # CPU usage percentage
-    estimated_watts: float  # Estimated power consumption
-    is_nic_related: bool = False  # NIC interrupt handler or driver
-    is_xdp_related: bool = False  # XDP/eBPF related process
-    timestamp: datetime = field(default_factory=datetime.now)
-
-
-@dataclass
-class SystemEnergySnapshot:
-    """System-wide energy snapshot"""
-    timestamp: datetime
-    total_cpu_time: float
-    rapl_energy_uj: int  # RAPL energy in microjoules
-    package_watts: float  # Estimated package wattage
-    pid_stats: List[PIDEnergyStats]
-    nic_processes_watts: float = 0.0  # Total power from NIC-related processes
-    xdp_processes_watts: float = 0.0  # Total power from XDP-related processes
-
-
-class EnergyMonitor:
-    """
-    Monitor system energy consumption via RAPL and per-PID CPU tracking.
-
-    Provides early warning system by detecting anomalous power consumption patterns,
-    especially useful for DDoS detection and cryptomining malware.
-
-    Algorithm:
-    1. Read RAPL energy counters (Intel CPUs)
-    2. Track per-PID CPU time from /proc/[pid]/stat
-    3. Calculate power share per PID based on CPU usage
-    4. Build time-series of PID power consumption
-    5. Detect anomalies using EWMA + Z-score
-    6. Alert on spikes correlated with NIC/XDP processes
-    """
-
-    def __init__(
-        self,
-        ewma_alpha: float = 0.3,
-        spike_threshold: float = 2.5,
-        baseline_window: int = 100
-    ):
-        """
-        Initialize energy monitor
-
-        Args:
-            ewma_alpha: EWMA smoothing factor (0-1, lower = more smoothing)
-            spike_threshold: Z-score threshold for spike detection
-            baseline_window: Number of samples for baseline calculation
-        """
-        self.ewma_alpha = ewma_alpha
-        self.spike_threshold = spike_threshold
-        self.baseline_window = baseline_window
-
-        # State tracking
-        self.prev_snapshot: Optional[SystemEnergySnapshot] = None
-        self.history: List[SystemEnergySnapshot] = []
-        self.pid_power_history: Dict[int, List[float]] = {}  # PID -> [watts over time]
-        self.pid_ewma: Dict[int, float] = {}  # PID -> EWMA of power
-        self.pid_baseline_mean: Dict[int, float] = {}
-        self.pid_baseline_std: Dict[int, float] = {}
-
-        # RAPL availability
-        self.rapl_available = False
-        self.rapl_package_path: Optional[Path] = None
-        self._detect_rapl()
-
-        # NIC and XDP process patterns
-        self.nic_process_patterns = [
-            'irq/',  # Interrupt handlers
-            'ksoftirqd',  # Soft IRQ daemon
-            'napi/',  # NAPI polling threads
-        ]
-        self.xdp_process_patterns = [
-            'xdp',
-            'bpf',
-            'ebpf',
-        ]
-
-    def _detect_rapl(self):
-        """Detect RAPL (Running Average Power Limit) support"""
-        rapl_base = Path("/sys/class/powercap/intel-rapl")
-        if not rapl_base.exists():
-            print("Warning: RAPL not available (Intel CPU required)")
-            return
-
-        # Find package energy counter (usually intel-rapl:0)
-        for rapl_dir in rapl_base.glob("intel-rapl:*"):
-            name_file = rapl_dir / "name"
-            if name_file.exists():
-                name = name_file.read_text().strip()
-                if name == "package-0":  # Primary CPU package
-                    energy_file = rapl_dir / "energy_uj"
-                    if energy_file.exists():
-                        self.rapl_package_path = energy_file
-                        self.rapl_available = True
-                        print(f"✓ RAPL energy monitoring enabled: {rapl_dir}")
-                        return
-
-        print("Warning: RAPL package energy counter not found")
-
-    def _read_rapl_energy(self) -> int:
-        """Read RAPL energy counter in microjoules"""
-        if not self.rapl_available or not self.rapl_package_path:
-            return 0
-
-        try:
-            return int(self.rapl_package_path.read_text().strip())
-        except Exception as e:
-            print(f"Warning: Failed to read RAPL energy: {e}")
-            return 0
-
-    def _get_total_cpu_time(self) -> float:
-        """Get total CPU time from /proc/stat"""
-        try:
-            with open('/proc/stat', 'r') as f:
-                line = f.readline()  # First line is total CPU stats
-                fields = line.split()[1:]  # Skip 'cpu' label
-                # Sum all CPU time fields (user, nice, system, idle, iowait, irq, softirq, ...)
-                return sum(float(x) for x in fields) / os.sysconf(os.sysconf_names['SC_CLK_TCK'])
-        except Exception as e:
-            print(f"Warning: Failed to read /proc/stat: {e}")
-            return 0.0
-
-    def _get_pid_stats(self) -> List[PIDEnergyStats]:
-        """Get CPU usage stats for all processes"""
-        pid_stats = []
-
-        try:
-            for pid_dir in Path('/proc').glob('[0-9]*'):
-                try:
-                    pid = int(pid_dir.name)
-                    stat_file = pid_dir / 'stat'
-
-                    if not stat_file.exists():
-                        continue
-
-                    stat_content = stat_file.read_text()
-                    # Parse /proc/[pid]/stat format
-                    # Fields: pid (comm) state ppid ... utime stime ...
-                    # Extract process name and CPU times
-                    parts = stat_content.split(')')
-                    if len(parts) < 2:
-                        continue
-
-                    comm = stat_content.split('(')[1].split(')')[0]
-                    fields = parts[1].split()
-
-                    # utime is at index 11 (0-indexed after removing comm)
-                    # stime is at index 12
-                    if len(fields) < 13:
-                        continue
-
-                    utime = int(fields[11])  # User mode CPU time
-                    stime = int(fields[12])  # Kernel mode CPU time
-                    total_time = (utime + stime) / os.sysconf(os.sysconf_names['SC_CLK_TCK'])
-
-                    # Check if NIC or XDP related
-                    is_nic_related = any(pattern in comm for pattern in self.nic_process_patterns)
-                    is_xdp_related = any(pattern in comm.lower() for pattern in self.xdp_process_patterns)
-
-                    pid_stats.append(PIDEnergyStats(
-                        pid=pid,
-                        name=comm,
-                        cpu_time=total_time,
-                        cpu_share=0.0,  # Calculated later
-                        estimated_watts=0.0,  # Calculated later
-                        is_nic_related=is_nic_related,
-                        is_xdp_related=is_xdp_related
-                    ))
-
-                except (ValueError, FileNotFoundError, PermissionError):
-                    continue
-
-        except Exception as e:
-            print(f"Warning: Failed to read process stats: {e}")
-
-        return pid_stats
-
-    def capture_snapshot(self) -> Optional[SystemEnergySnapshot]:
-        """
-        Capture current system energy snapshot
-
-        Returns:
-            SystemEnergySnapshot with RAPL and per-PID power estimates
-        """
-        now = datetime.now()
-        rapl_energy = self._read_rapl_energy()
-        total_cpu_time = self._get_total_cpu_time()
-        pid_stats = self._get_pid_stats()
-
-        snapshot = SystemEnergySnapshot(
-            timestamp=now,
-            total_cpu_time=total_cpu_time,
-            rapl_energy_uj=rapl_energy,
-            package_watts=0.0,  # Calculated below
-            pid_stats=pid_stats
-        )
-
-        # Calculate deltas from previous snapshot
-        if self.prev_snapshot:
-            dt = (now - self.prev_snapshot.timestamp).total_seconds()
-            if dt > 0:
-                # Calculate package wattage from RAPL
-                energy_delta_uj = rapl_energy - self.prev_snapshot.rapl_energy_uj
-                # Handle RAPL counter overflow (typically 32-bit or 64-bit)
-                if energy_delta_uj < 0:
-                    # Assume 64-bit counter overflow
-                    energy_delta_uj += 2**64
-
-                energy_delta_j = energy_delta_uj / 1_000_000  # Convert µJ to J
-                package_watts = energy_delta_j / dt
-                snapshot.package_watts = package_watts
-
-                # Calculate per-PID CPU share and power estimate
-                total_cpu_delta = total_cpu_time - self.prev_snapshot.total_cpu_time
-
-                if total_cpu_delta > 0:
-                    nic_total_watts = 0.0
-                    xdp_total_watts = 0.0
-
-                    for current_stat in pid_stats:
-                        # Find previous stat for this PID
-                        prev_stat = next(
-                            (s for s in self.prev_snapshot.pid_stats if s.pid == current_stat.pid),
-                            None
-                        )
-
-                        if prev_stat:
-                            cpu_time_delta = current_stat.cpu_time - prev_stat.cpu_time
-                            cpu_share = (cpu_time_delta / total_cpu_delta) * 100  # Percentage
-                            estimated_watts = (cpu_time_delta / total_cpu_delta) * package_watts
-
-                            current_stat.cpu_share = cpu_share
-                            current_stat.estimated_watts = estimated_watts
-
-                            # Track NIC and XDP process power
-                            if current_stat.is_nic_related:
-                                nic_total_watts += estimated_watts
-                            if current_stat.is_xdp_related:
-                                xdp_total_watts += estimated_watts
-
-                            # Update PID power history
-                            if current_stat.pid not in self.pid_power_history:
-                                self.pid_power_history[current_stat.pid] = []
-                            self.pid_power_history[current_stat.pid].append(estimated_watts)
-
-                            # Keep history bounded
-                            if len(self.pid_power_history[current_stat.pid]) > 1000:
-                                self.pid_power_history[current_stat.pid].pop(0)
-
-                    snapshot.nic_processes_watts = nic_total_watts
-                    snapshot.xdp_processes_watts = xdp_total_watts
-
-        self.prev_snapshot = snapshot
-        self.history.append(snapshot)
-
-        # Keep history bounded
-        if len(self.history) > 1000:
-            self.history.pop(0)
-
-        return snapshot
-
-    def update_baselines(self):
-        """Update baseline statistics for all tracked PIDs"""
-        for pid, power_history in self.pid_power_history.items():
-            if len(power_history) >= self.baseline_window:
-                recent = power_history[-self.baseline_window:]
-                self.pid_baseline_mean[pid] = np.mean(recent)
-                self.pid_baseline_std[pid] = np.std(recent)
-
-    def detect_anomalies(self, snapshot: SystemEnergySnapshot) -> Dict[str, any]:
-        """
-        Detect power consumption anomalies using EWMA and Z-score
-
-        Returns:
-            Dictionary with anomaly detection results
-        """
-        anomalies = {
-            'has_anomaly': False,
-            'anomaly_score': 0.0,  # Normalized 0-1
-            'spike_pids': [],
-            'nic_spike': False,
-            'xdp_spike': False,
-            'baseline_deviation': 0.0
-        }
-
-        # Update EWMA for all current PIDs
-        for stat in snapshot.pid_stats:
-            pid = stat.pid
-            watts = stat.estimated_watts
-
-            if pid not in self.pid_ewma:
-                self.pid_ewma[pid] = watts
-            else:
-                # Exponentially weighted moving average
-                self.pid_ewma[pid] = self.ewma_alpha * watts + (1 - self.ewma_alpha) * self.pid_ewma[pid]
-
-        # Update baselines periodically
-        self.update_baselines()
-
-        # Detect spikes using Z-score
-        spike_scores = []
-        for stat in snapshot.pid_stats:
-            pid = stat.pid
-
-            if pid in self.pid_baseline_mean and pid in self.pid_baseline_std:
-                mean = self.pid_baseline_mean[pid]
-                std = self.pid_baseline_std[pid]
-
-                if std > 0:
-                    z_score = (stat.estimated_watts - mean) / std
-
-                    if z_score > self.spike_threshold:
-                        anomalies['spike_pids'].append({
-                            'pid': pid,
-                            'name': stat.name,
-                            'watts': stat.estimated_watts,
-                            'baseline': mean,
-                            'z_score': z_score,
-                            'is_nic_related': stat.is_nic_related,
-                            'is_xdp_related': stat.is_xdp_related
-                        })
-                        spike_scores.append(z_score)
-
-                        if stat.is_nic_related:
-                            anomalies['nic_spike'] = True
-                        if stat.is_xdp_related:
-                            anomalies['xdp_spike'] = True
-
-        # Calculate overall anomaly score (normalized)
-        if spike_scores:
-            anomalies['has_anomaly'] = True
-            # Max Z-score normalized to 0-1 (cap at 10 sigma)
-            anomalies['anomaly_score'] = min(1.0, max(spike_scores) / 10.0)
-
-        # Check for baseline deviation in NIC/XDP processes
-        if len(self.history) >= 2:
-            prev_nic_watts = self.history[-2].nic_processes_watts
-            curr_nic_watts = snapshot.nic_processes_watts
-
-            if prev_nic_watts > 0:
-                nic_deviation = (curr_nic_watts - prev_nic_watts) / prev_nic_watts
-                anomalies['baseline_deviation'] = nic_deviation
-
-                # Flag if NIC power increased by >50%
-                if nic_deviation > 0.5:
-                    anomalies['nic_spike'] = True
-                    anomalies['has_anomaly'] = True
-
-        return anomalies
-
-
-@dataclass
-class XDPStats:
-    """XDP statistics"""
-    total_packets: int = 0
-    dropped_blocked: int = 0
-    dropped_rate_limit: int = 0
-    dropped_malformed: int = 0
-    passed: int = 0
-    tcp_syn_flood: int = 0
-    udp_flood: int = 0
-    icmp_flood: int = 0
-    timestamp: datetime = field(default_factory=datetime.now)
-
-
-class XDPManager:
-    """Manage XDP/eBPF programs for DDoS mitigation"""
-
-    def __init__(self, interface: Optional[str] = None, auto_detect: bool = True):
-        """
-        Initialize XDP manager
-
-        Args:
-            interface: Network interface to attach XDP (auto-detected if None)
-            auto_detect: Automatically detect NIC capabilities
-        """
-        self.interface = interface
-        self.capability: Optional[NICCapability] = None
-        self.xdp_mode: XDPMode = XDPMode.DISABLED
-        self.bpf: Optional[BPF] = None
-        self.enabled = False
-        self.stats_history: List[XDPStats] = []
-
-        if not BCC_AVAILABLE:
-            print("Warning: BCC not available. XDP/eBPF support disabled.")
-            print("Install with: pip install bcc")
-            return
-
-        # Auto-detect interface if not provided
-        if not self.interface and auto_detect:
-            self.interface = NICDetector.get_primary_interface()
-            if not self.interface:
-                print("Warning: Could not detect primary network interface")
-                return
-
-        # Detect NIC capabilities
-        if auto_detect and self.interface:
-            self.capability = NICDetector.detect_capability(self.interface)
-            self.xdp_mode = NICDetector.select_xdp_mode(self.capability)
-
-            print(f"✓ NIC Detected: {self.capability.vendor} {self.capability.model}")
-            print(f"  - Interface: {self.interface}")
-            print(f"  - Driver: {self.capability.driver}")
-            print(f"  - XDP Mode: {self.xdp_mode.value}")
-            print(f"  - Max Throughput: {self.capability.max_throughput}")
-            if self.capability.notes:
-                print(f"  - Notes: {self.capability.notes}")
-
-    def load_program(self, program_code: Optional[str] = None) -> bool:
-        """
-        Load XDP/eBPF program
-
-        Args:
-            program_code: eBPF C code (uses default DDoS program if None)
-
-        Returns:
-            True if loaded successfully
-        """
-        if not BCC_AVAILABLE:
-            print("Error: BCC not available")
-            return False
-
-        if not self.interface:
-            print("Error: No network interface specified")
-            return False
-
-        if self.xdp_mode == XDPMode.DISABLED:
-            print("Error: XDP not supported on this NIC")
-            return False
-
-        try:
-            # Use default DDoS mitigation program if not provided
-            code = program_code or XDP_DDOS_PROGRAM
-
-            # Compile and load BPF program
-            self.bpf = BPF(text=code)
-
-            # Get main function
-            fn = self.bpf.load_func("xdp_ddos_filter", BPF.XDP)
-
-            # Attach to interface
-            flags = 0
-            if self.xdp_mode == XDPMode.SKB:
-                flags = 1 << 1  # XDP_FLAGS_SKB_MODE
-            elif self.xdp_mode == XDPMode.DRV:
-                flags = 1 << 2  # XDP_FLAGS_DRV_MODE
-
-            self.bpf.attach_xdp(self.interface, fn, flags)
-
-            self.enabled = True
-            print(f"✓ XDP program loaded on {self.interface} ({self.xdp_mode.value})")
-            return True
-
-        except Exception as e:
-            print(f"Error loading XDP program: {e}")
-            return False
-
-    def unload_program(self) -> bool:
-        """Unload XDP program from interface"""
-        if not self.bpf or not self.interface:
-            return False
-
-        try:
-            self.bpf.remove_xdp(self.interface)
-            self.enabled = False
-            print(f"✓ XDP program unloaded from {self.interface}")
-            return True
-        except Exception as e:
-            print(f"Error unloading XDP program: {e}")
-            return False
-
-    def get_stats(self) -> Optional[XDPStats]:
-        """Get current XDP statistics"""
-        if not self.enabled or not self.bpf:
-            return None
-
-        try:
-            stats_map = self.bpf["stats"]
-
-            stats = XDPStats(
-                total_packets=stats_map[0].value if 0 in stats_map else 0,
-                dropped_blocked=stats_map[1].value if 1 in stats_map else 0,
-                dropped_rate_limit=stats_map[2].value if 2 in stats_map else 0,
-                dropped_malformed=stats_map[3].value if 3 in stats_map else 0,
-                passed=stats_map[4].value if 4 in stats_map else 0,
-                tcp_syn_flood=stats_map[5].value if 5 in stats_map else 0,
-                udp_flood=stats_map[6].value if 6 in stats_map else 0,
-                icmp_flood=stats_map[7].value if 7 in stats_map else 0,
-                timestamp=datetime.now()
-            )
-
-            self.stats_history.append(stats)
-            if len(self.stats_history) > 1000:
-                self.stats_history.pop(0)
-
-            return stats
-
-        except Exception as e:
-            print(f"Error getting XDP stats: {e}")
-            return None
-
-    def block_ip(self, ip_address: str) -> bool:
-        """Block an IP address at XDP layer"""
-        if not self.enabled or not self.bpf:
-            return False
-
-        try:
-            import socket
-            import struct
-
-            # Convert IP string to integer
-            ip_int = struct.unpack("!I", socket.inet_aton(ip_address))[0]
-
-            # Update blocked_ips map
-            blocked_map = self.bpf["blocked_ips"]
-            blocked_map[blocked_map.Key(ip_int)] = blocked_map.Leaf(1)
-
-            print(f"✓ Blocked IP {ip_address} at XDP layer")
-            return True
-
-        except Exception as e:
-            print(f"Error blocking IP {ip_address}: {e}")
-            return False
-
-    def unblock_ip(self, ip_address: str) -> bool:
-        """Unblock an IP address"""
-        if not self.enabled or not self.bpf:
-            return False
-
-        try:
-            import socket
-            import struct
-
-            ip_int = struct.unpack("!I", socket.inet_aton(ip_address))[0]
-
-            blocked_map = self.bpf["blocked_ips"]
-            del blocked_map[blocked_map.Key(ip_int)]
-
-            print(f"✓ Unblocked IP {ip_address}")
-            return True
-
-        except Exception as e:
-            print(f"Error unblocking IP {ip_address}: {e}")
-            return False
-
-    def __del__(self):
-        """Cleanup: unload XDP program on deletion"""
-        if self.enabled:
-            self.unload_program()
 
 
 @dataclass
@@ -1077,7 +100,7 @@ class QsecbitSample:
     rag_status: str
     system_state: np.ndarray
     metadata: Dict = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict:
         """Serialize to dictionary"""
         return {
@@ -1092,18 +115,19 @@ class QsecbitSample:
 
 class Qsecbit:
     """
-    Qsecbit: Quantum Security Bit
-    
-    Measures cyber resilience as the smallest unit where AI-driven attack 
+    Qsecbit: Quantum Security Bit - Cyber Resilience Metric
+
+    Measures cyber resilience as the smallest unit where AI-driven attack
     and defense reach equilibrium through continuous error correction.
-    
+
     The metric combines:
     - Statistical drift from baseline (Mahalanobis distance)
     - ML-predicted attack probability
     - Classifier confidence decay rate
     - System entropy deviation (quantum drift)
+    - Energy consumption anomalies (optional)
     """
-    
+
     def __init__(
         self,
         baseline_mu: np.ndarray,
@@ -1219,18 +243,18 @@ class Qsecbit:
             except Exception as e:
                 print(f"Warning: Doris not available: {e}")
                 self.db_enabled = False
-        
+
     def _calculate_baseline_entropy(self) -> float:
         """Calculate theoretical baseline entropy from covariance"""
         # Differential entropy for multivariate Gaussian
         k = len(self.mu)
         det_cov = np.linalg.det(self.cov)
         return 0.5 * k * (1 + np.log(2 * np.pi)) + 0.5 * np.log(det_cov)
-    
+
     def _drift(self, x_t: np.ndarray) -> float:
         """
         Compute normalized Mahalanobis drift from baseline
-        
+
         Mahalanobis distance accounts for correlations in the data,
         making it more robust than Euclidean distance.
         Normalized via logistic function to [0, 1] range.
@@ -1239,35 +263,35 @@ class Qsecbit:
         k = self.config.drift_slope
         theta = self.config.drift_center
         return float(logistic(k * (d - theta)))
-    
+
     def _classifier_decay(self, c_t: np.ndarray, dt: float) -> float:
         """
         Compute normalized rate of change in classifier confidence
-        
+
         Measures how quickly the AI classifier's predictions are changing,
         which indicates either adversarial manipulation or concept drift.
         """
         if self.prev_classifier is None:
             self.prev_classifier = c_t.copy()
             return 0.0
-        
+
         # Rate of change in confidence vector
         delta = np.linalg.norm(c_t - self.prev_classifier) / max(dt, 1e-9)
         self.prev_classifier = c_t.copy()
-        
+
         # Normalize to [0, 1]
         return float(min(1.0, delta / self.config.lambda_crit))
-    
+
     def _quantum_drift(self, q_t: float) -> float:
         """
         Compute normalized entropy drift from baseline
-        
+
         System entropy deviation indicates disorder or adversarial
         manipulation at the information-theoretic level.
         """
         q = abs(q_t - self.q_anchor)
         return float(min(1.0, q / self.config.q_crit))
-    
+
     def _system_entropy(self, x_t: np.ndarray) -> float:
         """
         Calculate current system entropy
@@ -1528,7 +552,7 @@ class Qsecbit:
             self.history.pop(0)
 
         return sample
-    
+
     def _classify_rag(self, R: float) -> str:
         """Classify score into Red/Amber/Green status"""
         if R >= self.config.red_threshold:
@@ -1536,28 +560,28 @@ class Qsecbit:
         elif R >= self.config.amber_threshold:
             return "AMBER"
         return "GREEN"
-    
+
     def convergence_rate(self, window: Optional[int] = None) -> Optional[float]:
         """
         Calculate convergence rate (how quickly system returns to safe state)
-        
+
         This is the key metric: time to return to GREEN status after RED/AMBER
-        
+
         Returns:
             Average time to convergence in the recent window, or None if insufficient data
         """
         window = window or self.config.convergence_window
-        
+
         if len(self.history) < window:
             return None
-        
+
         recent = self.history[-window:]
-        
+
         # Find transitions from RED/AMBER to GREEN
         convergence_times = []
         in_alert = False
         alert_start = None
-        
+
         for i, sample in enumerate(recent):
             if sample.rag_status in ['RED', 'AMBER'] and not in_alert:
                 in_alert = True
@@ -1566,33 +590,33 @@ class Qsecbit:
                 convergence_time = i - alert_start
                 convergence_times.append(convergence_time)
                 in_alert = False
-        
+
         if not convergence_times:
             return None
-        
+
         return float(np.mean(convergence_times))
-    
+
     def trend(self, window: int = 20) -> str:
         """
         Analyze trend in recent qsecbit scores
-        
+
         Returns: 'IMPROVING', 'STABLE', or 'DEGRADING'
         """
         if len(self.history) < window:
             return "INSUFFICIENT_DATA"
-        
+
         recent_scores = [s.score for s in self.history[-window:]]
-        
+
         # Linear regression on recent scores
         x = np.arange(len(recent_scores))
         slope, _ = np.polyfit(x, recent_scores, 1)
-        
+
         if slope < -0.01:
             return "IMPROVING"
         elif slope > 0.01:
             return "DEGRADING"
         return "STABLE"
-    
+
     def export_history(self, filepath: str):
         """Export measurement history to JSON"""
         data = {
@@ -1611,20 +635,20 @@ class Qsecbit:
             },
             'history': [s.to_dict() for s in self.history]
         }
-        
+
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
-    
+
     def summary_stats(self) -> Dict:
         """Get summary statistics of qsecbit measurements"""
         if not self.history:
             return {}
-        
+
         scores = [s.score for s in self.history]
         rag_counts = {'GREEN': 0, 'AMBER': 0, 'RED': 0}
         for s in self.history:
             rag_counts[s.rag_status] += 1
-        
+
         return {
             'mean_score': float(np.mean(scores)),
             'std_score': float(np.std(scores)),
@@ -1646,12 +670,12 @@ if __name__ == "__main__":
     print("QSECBIT DEMONSTRATION")
     print("Quantum Security Bit: AI-Era Cyber Resilience Metric")
     print("=" * 70)
-    
+
     # Define baseline system profile
     mu = np.array([0.1, 0.2, 0.15, 0.33])  # CPU, Memory, Network, Disk I/O
     cov = np.eye(4) * 0.02  # Low variance in normal operation
     quantum_anchor = 6.144  # Baseline entropy
-    
+
     # Initialize qsecbit calculator
     config = QsecbitConfig(
         alpha=0.30,
@@ -1668,12 +692,12 @@ if __name__ == "__main__":
     )
 
     q = Qsecbit(mu, cov, quantum_anchor, config)
-    
+
     # Simulate attack scenario
     print("\n" + "-" * 70)
     print("SCENARIO: Simulating XSS → Memory Overflow → Orchestrator Pivot")
     print("-" * 70)
-    
+
     scenarios = [
         {
             'name': 'Normal Operation',
@@ -1718,7 +742,7 @@ if __name__ == "__main__":
             'q_t': 6.20
         }
     ]
-    
+
     for i, scenario in enumerate(scenarios, 1):
         sample = q.calculate(
             x_t=scenario['x_t'],
@@ -1728,7 +752,7 @@ if __name__ == "__main__":
             dt=1.0,
             metadata={'scenario': scenario['name']}
         )
-        
+
         print(f"\nStep {i}: {scenario['name']}")
         print(f"  Qsecbit Score:      {sample.score:.4f}")
         print(f"  RAG Status:         {sample.rag_status}")
@@ -1752,7 +776,7 @@ if __name__ == "__main__":
                     print(f"    - ⚠️  NIC POWER SPIKE")
                 if energy.get('xdp_spike'):
                     print(f"    - ⚠️  XDP POWER SPIKE")
-    
+
     # Summary statistics
     print("\n" + "=" * 70)
     print("SUMMARY STATISTICS")
@@ -1764,7 +788,7 @@ if __name__ == "__main__":
     print(f"Convergence Rate:     {stats['convergence_rate']:.2f} steps" if stats['convergence_rate'] else "N/A")
     print(f"Trend:                {stats['trend']}")
     print(f"RAG Distribution:     {stats['rag_distribution']}")
-    
+
     print("\n" + "=" * 70)
     print("Qsecbit calculation complete. Export with q.export_history('qsecbit.json')")
     print("=" * 70)
