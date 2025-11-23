@@ -16,11 +16,39 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 ### Added
 
 #### Core Components
-- **VictoriaLogs** (Apache 2.0) - Replaced Loki for log aggregation
+- **ClickHouse** (Apache 2.0) - OLAP database for security analytics, replacing VictoriaLogs
+  - 100-1000x faster analytical queries for security event analysis
+  - 90% storage reduction with ZSTD compression
+  - Unified log aggregation from Vector, Filebeat, ModSecurity, Zeek
+  - Historical Qsecbit analysis with 1-year retention
+  - Real-time attack correlation across multiple sources
+  - Comprehensive schemas: security_events, qsecbit_scores, network_flows, waf_events, system_logs, honeypot_attacks
+  - Materialized views for attack trends and top attackers
+- **Filebeat** (Elastic License 2.0) - Zeek log ingestion to ClickHouse
 - **Snort 3** (GPL 2.0) - Added for network-based intrusion detection
 - **Zeek** (BSD) - Added for behavioral analysis and protocol detection
 - **ModSecurity** (Apache 2.0) - Replaced NAXSI for web application firewall
 - **Custom MIT Scripts** - Replaced Kali tools for automated response
+
+#### MSSP Cloud Backend (Multi-Tenant Platform)
+- **Apache Doris Cluster** (Apache 2.0) - Centralized OLAP for 1000+ customers
+  - 3 Frontend nodes + 3+ Backend nodes (horizontally scalable)
+  - Row-level security with automatic tenant isolation
+  - MySQL protocol (port 9030) for easy integration
+  - Per-tenant resource quotas (CPU, memory, storage)
+  - Cross-customer threat intelligence aggregation
+  - GPU integration for ML model training
+  - 365+ day data retention per tenant
+- **Dual-Database Architecture**:
+  - **Edge**: ClickHouse for local fast analytics (0-90 days)
+  - **Cloud**: Apache Doris for multi-tenant aggregation (365+ days)
+  - Qsecbit auto-detects deployment type (DEPLOYMENT_TYPE env var)
+- **Kafka** (Apache 2.0) - High-throughput edge data ingestion
+- **Backend Deployment Scripts**:
+  - `backend-setup.sh` - Cross-platform (RHEL/Ubuntu/Fedora/Proxmox)
+  - `backend-network-config.sh` - Multi-tenant configuration
+  - `backend-uninstall.sh` - Clean removal
+  - Complete documentation in `Scripts/backend/install/README.md`
 
 #### Attack Mitigation System
 - `attack-mitigation-orchestrator.sh` - Main attack detection and response engine
