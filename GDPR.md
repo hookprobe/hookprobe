@@ -199,7 +199,7 @@ sudo /opt/hookprobe/scripts/gdpr-retention.sh
 ```bash
 BREACH_DETECTION_ENABLED=true
 BREACH_NOTIFICATION_DEADLINE_HOURS=72  # GDPR requirement
-BREACH_NOTIFICATION_EMAIL="dpo@hookprobe.com"
+BREACH_NOTIFICATION_EMAIL="qsecbit@hookprobe.com"
 ```
 
 **Breach Severity Thresholds:**
@@ -480,7 +480,7 @@ ENABLE_DATA_RECTIFICATION=true
 # Data Protection Officer (required for public authorities)
 DPO_REQUIRED=false  # Set to true if required
 DPO_NAME="Jane Doe"
-DPO_EMAIL="dpo@hookprobe.com"
+DPO_EMAIL="qsecbit@hookprobe.com"
 DPO_PHONE="+1-555-123-4567"
 ```
 
@@ -495,7 +495,7 @@ For most HookProbe deployments, DPO is **optional but recommended**.
 
 ```bash
 BREACH_DETECTION_ENABLED=true
-BREACH_NOTIFICATION_EMAIL="dpo@hookprobe.com"
+BREACH_NOTIFICATION_EMAIL="qsecbit@hookprobe.com"
 BREACH_NOTIFICATION_DEADLINE_HOURS=72  # GDPR requirement
 BREACH_SEVERITY_HIGH_THRESHOLD=1000
 BREACH_SEVERITY_CRITICAL_THRESHOLD=10000
@@ -760,7 +760,7 @@ T+72 hours   Data subjects notified (if high risk)
 
 2. **Notification** (Automated email to DPO)
    ```
-   To: dpo@hookprobe.com
+   To: qsecbit@hookprobe.com
    Subject: URGENT - Data Breach Detected
 
    Severity: HIGH
@@ -1083,7 +1083,7 @@ A: ⚠️ **Caution required**. Employee monitoring has additional GDPR requirem
 ### Contact
 
 For GDPR compliance questions:
-- **Email**: dpo@hookprobe.com
+- **Email**: qsecbit@hookprobe.com
 - **GitHub Issues**: https://github.com/hookprobe/hookprobe/issues
 - **Security Contact**: qsecbit@hookprobe.com
 
