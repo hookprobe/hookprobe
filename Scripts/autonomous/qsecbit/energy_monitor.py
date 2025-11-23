@@ -11,6 +11,7 @@ Algorithm:
 4. Build time-series of PID power consumption
 5. Detect anomalies using EWMA + Z-score
 6. Alert on spikes correlated with NIC/XDP processes
+7. Network direction-aware energy efficiency analysis (NEW v5.0)
 
 Author: Andrei Toma
 License: MIT
@@ -18,11 +19,25 @@ Version: 5.0
 """
 
 import os
+import psutil
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List, Dict
+from collections import deque
+from enum import Enum
 import numpy as np
+
+
+class DeploymentRole(Enum):
+    """
+    Deployment role for network direction analysis
+
+    PUBLIC_SERVER: Expects IN > OUT (web servers, APIs)
+    USER_ENDPOINT: Expects OUT > IN (clients, workstations)
+    """
+    PUBLIC_SERVER = "PUBLIC_SERVER"
+    USER_ENDPOINT = "USER_ENDPOINT"
 
 
 @dataclass
@@ -39,6 +54,31 @@ class PIDEnergyStats:
 
 
 @dataclass
+class NetworkEnergyStats:
+    """
+    Network direction-aware energy efficiency statistics
+
+    Tracks Energy-Per-Packet (EPP) and traffic direction for role-based anomaly detection.
+    This helps detect:
+    - Compromised endpoints sending spam/DDoS (OUT spike on USER_ENDPOINT)
+    - Servers under attack (IN spike on PUBLIC_SERVER)
+    - Data exfiltration (abnormal OUT traffic pattern)
+    - Cryptomining + network activity correlation
+    """
+    timestamp: datetime
+    interface: str
+    packets_sent: int
+    packets_recv: int
+    delta_packets_sent: int = 0
+    delta_packets_recv: int = 0
+    delta_energy_mj: float = 0.0  # Energy delta in millijoules
+    epp: float = 0.0  # Energy per packet (mJ/packet)
+    out_in_ratio: float = 0.0  # Traffic direction ratio
+    total_packets: int = 0  # Total packets in interval
+    anomaly_score: float = 0.0  # Normalized 0-100 score
+
+
+@dataclass
 class SystemEnergySnapshot:
     """System-wide energy snapshot"""
     timestamp: datetime
@@ -48,18 +88,24 @@ class SystemEnergySnapshot:
     pid_stats: List[PIDEnergyStats]
     nic_processes_watts: float = 0.0  # Total power from NIC-related processes
     xdp_processes_watts: float = 0.0  # Total power from XDP-related processes
+    network_stats: Optional[NetworkEnergyStats] = None  # Network energy efficiency (NEW)
 
 
 class EnergyMonitor:
     """
     Monitor system energy consumption via RAPL and per-PID CPU tracking.
+
+    v5.0 Enhancement: Network direction-aware energy efficiency analysis
     """
 
     def __init__(
         self,
         ewma_alpha: float = 0.3,
         spike_threshold: float = 2.5,
-        baseline_window: int = 100
+        baseline_window: int = 100,
+        network_interface: Optional[str] = None,
+        deployment_role: DeploymentRole = DeploymentRole.PUBLIC_SERVER,
+        network_monitoring_enabled: bool = True
     ):
         """
         Initialize energy monitor
@@ -68,10 +114,15 @@ class EnergyMonitor:
             ewma_alpha: EWMA smoothing factor (0-1, lower = more smoothing)
             spike_threshold: Z-score threshold for spike detection
             baseline_window: Number of samples for baseline calculation
+            network_interface: Network interface to monitor (auto-detect if None)
+            deployment_role: PUBLIC_SERVER or USER_ENDPOINT for direction analysis
+            network_monitoring_enabled: Enable network energy efficiency tracking
         """
         self.ewma_alpha = ewma_alpha
         self.spike_threshold = spike_threshold
         self.baseline_window = baseline_window
+        self.deployment_role = deployment_role
+        self.network_monitoring_enabled = network_monitoring_enabled
 
         # State tracking
         self.prev_snapshot: Optional[SystemEnergySnapshot] = None
@@ -80,6 +131,12 @@ class EnergyMonitor:
         self.pid_ewma: Dict[int, float] = {}  # PID -> EWMA of power
         self.pid_baseline_mean: Dict[int, float] = {}
         self.pid_baseline_std: Dict[int, float] = {}
+
+        # Network energy efficiency tracking (NEW v5.0)
+        self.network_interface = network_interface or self._detect_primary_interface()
+        self.epp_history: deque = deque(maxlen=50)  # Energy-per-packet history
+        self.packet_history: deque = deque(maxlen=50)  # Packet count history
+        self.prev_net_stats: Optional[tuple] = None  # (packets_sent, packets_recv)
 
         # RAPL availability
         self.rapl_available = False
@@ -97,6 +154,29 @@ class EnergyMonitor:
             'bpf',
             'ebpf',
         ]
+
+    def _detect_primary_interface(self) -> str:
+        """
+        Auto-detect primary network interface (highest packet count)
+
+        Returns:
+            Primary interface name (e.g., 'eth0', 'enp1s0', 'wlan0')
+        """
+        try:
+            net_io = psutil.net_io_counters(pernic=True)
+            # Filter out loopback
+            interfaces = {name: stats for name, stats in net_io.items() if not name.startswith('lo')}
+
+            if not interfaces:
+                return "eth0"  # Fallback
+
+            # Select interface with highest total packet count
+            primary = max(interfaces.items(), key=lambda x: x[1].packets_sent + x[1].packets_recv)
+            print(f"✓ Primary network interface detected: {primary[0]}")
+            return primary[0]
+        except Exception as e:
+            print(f"Warning: Failed to detect primary interface: {e}")
+            return "eth0"
 
     def _detect_rapl(self):
         """Detect RAPL (Running Average Power Limit) support"""
@@ -196,6 +276,101 @@ class EnergyMonitor:
 
         return pid_stats
 
+    def _get_nic_packets(self) -> tuple[int, int]:
+        """
+        Get current packet counts for primary network interface
+
+        Returns:
+            Tuple of (packets_sent, packets_recv)
+        """
+        try:
+            net_io = psutil.net_io_counters(pernic=True)
+            stats = net_io.get(self.network_interface)
+            if stats:
+                return (stats.packets_sent, stats.packets_recv)
+            return (0, 0)
+        except Exception as e:
+            print(f"Warning: Failed to read NIC packets: {e}")
+            return (0, 0)
+
+    def _compute_epp(self, delta_energy_mj: float, delta_packets: int) -> float:
+        """
+        Calculate Energy-Per-Packet (EPP)
+
+        Args:
+            delta_energy_mj: Energy consumed in millijoules
+            delta_packets: Total packets sent+received
+
+        Returns:
+            EPP in millijoules per packet
+        """
+        if delta_packets <= 0:
+            return 0.0
+        return delta_energy_mj / delta_packets
+
+    def _compute_out_in_ratio(self, packets_sent: int, packets_recv: int) -> float:
+        """
+        Calculate OUT/IN traffic ratio
+
+        Args:
+            packets_sent: Packets sent
+            packets_recv: Packets received
+
+        Returns:
+            OUT/IN ratio (1.0 = balanced, >1 = more outbound, <1 = more inbound)
+        """
+        if packets_recv == 0:
+            return float('inf') if packets_sent > 0 else 0.0
+        return packets_sent / packets_recv
+
+    def _compute_network_anomaly_score(
+        self,
+        epp: float,
+        out_in_ratio: float,
+        packet_burst: int
+    ) -> float:
+        """
+        Compute role-aware network anomaly score
+
+        Detects:
+        - High EPP (energy-inefficient, possible cryptomining + network activity)
+        - Direction anomalies based on deployment role
+        - Packet bursts (DDoS, data exfiltration)
+
+        Args:
+            epp: Energy per packet (mJ/packet)
+            out_in_ratio: OUT/IN traffic ratio
+            packet_burst: Packets in current interval
+
+        Returns:
+            Anomaly score 0-100 (0=normal, 100=critical)
+        """
+        # Component weights
+        W_EPP = 0.5      # Energy efficiency
+        W_RATIO = 0.3    # Direction anomaly
+        W_BURST = 0.2    # Packet burst
+
+        # EPP normalization (suspicious if > 5 mJ/packet)
+        epp_norm = min(epp / 5.0, 1.0)
+
+        # Direction anomaly (role-aware)
+        if self.deployment_role == DeploymentRole.PUBLIC_SERVER:
+            # Expect IN > OUT (ratio < 1), anomaly if OUT > IN
+            ratio_deviation = max(0, out_in_ratio - 1.0)  # Anomaly if ratio > 1
+        else:  # USER_ENDPOINT
+            # Expect OUT > IN (ratio > 1), anomaly if IN > OUT
+            ratio_deviation = max(0, 1.0 - out_in_ratio)  # Anomaly if ratio < 1
+
+        ratio_norm = min(ratio_deviation / 3.0, 1.0)  # Cap at 3x deviation
+
+        # Packet burst normalization (suspicious if > 5000 packets/interval)
+        burst_norm = min(packet_burst / 5000.0, 1.0)
+
+        # Weighted score (0-100)
+        score = 100 * (W_EPP * epp_norm + W_RATIO * ratio_norm + W_BURST * burst_norm)
+
+        return score
+
     def capture_snapshot(self) -> Optional[SystemEnergySnapshot]:
         """
         Capture current system energy snapshot
@@ -270,6 +445,48 @@ class EnergyMonitor:
 
                     snapshot.nic_processes_watts = nic_total_watts
                     snapshot.xdp_processes_watts = xdp_total_watts
+
+                # Network energy efficiency analysis (NEW v5.0)
+                if self.network_monitoring_enabled and self.rapl_available:
+                    packets_sent, packets_recv = self._get_nic_packets()
+
+                    # Calculate network stats if we have previous data
+                    if self.prev_net_stats:
+                        prev_sent, prev_recv = self.prev_net_stats
+
+                        delta_sent = packets_sent - prev_sent
+                        delta_recv = packets_recv - prev_recv
+                        delta_packets = delta_sent + delta_recv
+
+                        # Energy consumed during this interval (mJ)
+                        delta_energy_mj = energy_delta_j * 1000  # J to mJ
+
+                        # Calculate metrics
+                        epp = self._compute_epp(delta_energy_mj, delta_packets)
+                        out_in_ratio = self._compute_out_in_ratio(delta_sent, delta_recv)
+                        anomaly_score = self._compute_network_anomaly_score(epp, out_in_ratio, delta_packets)
+
+                        # Store in history
+                        self.epp_history.append(epp)
+                        self.packet_history.append(delta_packets)
+
+                        # Create network stats
+                        snapshot.network_stats = NetworkEnergyStats(
+                            timestamp=now,
+                            interface=self.network_interface,
+                            packets_sent=packets_sent,
+                            packets_recv=packets_recv,
+                            delta_packets_sent=delta_sent,
+                            delta_packets_recv=delta_recv,
+                            delta_energy_mj=delta_energy_mj,
+                            epp=epp,
+                            out_in_ratio=out_in_ratio,
+                            total_packets=delta_packets,
+                            anomaly_score=anomaly_score
+                        )
+
+                    # Store current stats for next iteration
+                    self.prev_net_stats = (packets_sent, packets_recv)
 
         self.prev_snapshot = snapshot
         self.history.append(snapshot)
