@@ -861,7 +861,7 @@ cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).tx
 ```bash
 BREACH_DETECTION_ENABLED=true
 BREACH_NOTIFICATION_DEADLINE_HOURS=72  # GDPR requirement
-BREACH_NOTIFICATION_EMAIL="dpo@hookprobe.com"
+BREACH_NOTIFICATION_EMAIL="qsecbit@hookprobe.com"
 ```
 
 **Response Timeline:**
