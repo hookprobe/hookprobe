@@ -6,6 +6,10 @@
 
 ---
 
+![Future City](/images/qsecbit-catcher.png)
+
+---
+
 ## 📋 Table of Contents
 
 - [Overview](#overview)
