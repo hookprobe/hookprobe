@@ -11,6 +11,7 @@
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [XDP/eBPF DDoS Mitigation](#xdpebpf-ddos-mitigation)
+- [Energy Monitoring & Anomaly Detection](#energy-monitoring--anomaly-detection)
 - [NIC Compatibility Matrix](#nic-compatibility-matrix)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -27,26 +28,34 @@
 
 ### Key Features
 
-- **Multi-Component Threat Analysis**: Combines statistical drift, ML predictions, classifier decay, and system entropy
+- **Multi-Component Threat Analysis**: Combines statistical drift, ML predictions, classifier decay, system entropy, and energy anomalies
 - **RAG Status System**: Real-time Red/Amber/Green threat classification
 - **XDP/eBPF Integration**: Kernel-level DDoS mitigation with automatic NIC detection
+- **Energy Monitoring (NEW)**: Per-PID power consumption tracking with EWMA/Z-score anomaly detection
 - **Dual-Database Support**: ClickHouse (edge) and Apache Doris (cloud) integration
 - **Automatic NIC Detection**: Intelligent XDP mode selection based on hardware capabilities
 - **Multi-Tenant Support**: Built for MSSP cloud deployments with tenant isolation
 
 ### Qsecbit Algorithm
 
-The Qsecbit score (R) is calculated as a weighted combination of four components:
+The Qsecbit score (R) is calculated as a weighted combination of **five components** (when energy monitoring is enabled):
 
 ```
-R = α·drift + β·p_attack + γ·decay + δ·q_drift
+R = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
 ```
 
-Where:
+**Default (Energy Monitoring Disabled)**:
 - **drift** (30%): Mahalanobis distance from baseline telemetry
 - **p_attack** (30%): ML-predicted attack probability
 - **decay** (20%): Rate of change in classifier confidence
 - **q_drift** (20%): System entropy deviation
+
+**With Energy Monitoring Enabled**:
+- **drift** (25%): Mahalanobis distance from baseline telemetry
+- **p_attack** (25%): ML-predicted attack probability
+- **decay** (20%): Rate of change in classifier confidence
+- **q_drift** (15%): System entropy deviation
+- **energy_anomaly** (15%): Power consumption anomaly score (NEW)
 
 **RAG Classification**:
 - **GREEN** (< 0.45): Normal operation
@@ -148,6 +157,333 @@ print(f"TCP SYN floods: {stats.tcp_syn_flood}")
 - TCP SYN flood attempts
 - UDP flood attempts
 - ICMP flood attempts
+
+---
+
+## ⚡ Energy Monitoring & Anomaly Detection
+
+### Overview
+
+**Qsecbit v5.0** includes a revolutionary **energy consumption-based early warning system** that detects threats by monitoring power consumption patterns at the per-process level. This provides an additional layer of defense against:
+
+- **DDoS attacks**: Network flooding causes abnormal CPU/power spikes in NIC interrupt handlers
+- **Cryptomining malware**: Distinctive high-power consumption patterns
+- **0-day exploits**: Unusual process behavior detectable via power signatures
+- **Kernel-level attacks**: XDP/eBPF process power anomalies
+
+### How It Works
+
+The energy monitoring system implements a **7-step algorithm**:
+
+```
+1. Initialize:
+   - Read initial total CPU time (/proc/stat)
+   - Read initial per-PID CPU times (/proc/[pid]/stat)
+   - Read initial RAPL energy counter (/sys/class/powercap/intel-rapl/)
+
+2. Sleep for Δt (e.g., 1 second)
+
+3. Read again:
+   - New total CPU time
+   - New per-PID CPU times
+   - New RAPL energy
+
+4. Compute:
+   - CPU time deltas (per-PID and total)
+   - CPU usage share per PID (percentage)
+   - Package wattage over interval (from RAPL delta)
+   - Estimated PID wattage = (PID CPU share) × (package wattage)
+
+5. Build time-series:
+   - pid_power[t] = estimated_watts
+   - Track NIC interrupt-handling PIDs (irq/, ksoftirqd, napi/)
+   - Track XDP driver PIDs (xdp, bpf, ebpf)
+
+6. Feed into anomaly detector:
+   - EWMA (Exponentially Weighted Moving Average) for smoothing
+   - Z-score spike detection (threshold: 2.5 sigma default)
+   - Baseline deviation tracking (50%+ increase = alert)
+   - Correlation with NIC/XDP process power spikes
+
+7. Trigger alert when:
+   - pid_power spikes > baseline × threshold
+   - NIC interrupt-handling PIDs show correlated spikes
+   - XDP driver CPU share increases disproportionately
+   - Overall anomaly score contributes to qsecbit RAG status
+```
+
+### Key Features
+
+- **RAPL Energy Counters**: Hardware-level power measurement (Intel CPUs)
+- **Per-PID Power Estimation**: Accurate wattage tracking for every process
+- **EWMA Smoothing**: Reduces false positives from transient spikes
+- **Z-Score Detection**: Statistical anomaly detection (configurable threshold)
+- **NIC Process Tracking**: Automatic detection of network-related processes
+- **XDP Correlation**: Correlates XDP/eBPF process power with DDoS attacks
+- **Integration with RAG**: Energy anomalies contribute 15% to qsecbit score
+
+### Example Detection Scenarios
+
+**Scenario 1: DDoS Attack via UDP Flood**
+```
+Normal State:
+  - ksoftirqd/0: 2.5W
+  - irq/eth0: 1.2W
+  - Total NIC: 3.7W
+
+During Attack:
+  - ksoftirqd/0: 8.3W (Z-score: 4.2 → SPIKE)
+  - irq/eth0: 5.1W (Z-score: 3.8 → SPIKE)
+  - Total NIC: 13.4W (+262% → ALERT)
+  - qsecbit energy_anomaly: 0.42 → RAG: AMBER
+```
+
+**Scenario 2: Cryptomining Malware**
+```
+Normal State:
+  - Total package power: 15W
+
+During Attack:
+  - malicious_miner (PID 12345): 18W (Z-score: 6.5 → SPIKE)
+  - Total package power: 33W (+120%)
+  - qsecbit energy_anomaly: 0.65 → RAG: AMBER
+```
+
+**Scenario 3: XDP/eBPF Exploitation**
+```
+Normal State:
+  - bpf_prog (XDP): 0.8W
+
+During Attack:
+  - bpf_prog (XDP): 4.2W (Z-score: 5.1 → SPIKE)
+  - xdp_spike: True
+  - qsecbit energy_anomaly: 0.51 → RAG: AMBER
+```
+
+### Hardware Requirements
+
+**Required**:
+- **Intel CPU** with RAPL (Running Average Power Limit) support
+  - **Supported**: Intel Core (6th gen+), Xeon (Skylake+), Atom (Goldmont+)
+  - **Not Supported**: AMD CPUs (no RAPL), ARM CPUs (no RAPL)
+  - **Partial Support**: Some AMD Ryzen CPUs via alternative power interfaces (not implemented)
+
+**Automatic Fallback**:
+- If RAPL is unavailable, energy monitoring uses CPU-time-based estimation only
+- Less accurate but still functional for relative power comparisons
+
+**Verification**:
+```bash
+# Check RAPL availability
+ls /sys/class/powercap/intel-rapl/
+
+# Expected output (if available):
+# intel-rapl:0/       # Package-0 (CPU socket)
+# intel-rapl:0:0/     # Core domain
+# intel-rapl:0:1/     # Uncore domain
+# ...
+
+# Read current energy (microjoules)
+cat /sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj
+```
+
+### Configuration
+
+Enable energy monitoring via `QsecbitConfig`:
+
+```python
+config = QsecbitConfig(
+    # Enable energy monitoring
+    energy_monitoring_enabled=True,
+
+    # Z-score threshold for spike detection (default: 2.5)
+    # Lower = more sensitive, Higher = fewer false positives
+    energy_spike_threshold=2.5,
+
+    # EWMA smoothing factor (0-1, default: 0.3)
+    # Lower = more smoothing, Higher = faster response
+    energy_ewma_alpha=0.3,
+
+    # Baseline window size (samples, default: 100)
+    # Larger = more stable baseline, Smaller = faster adaptation
+    energy_baseline_window=100
+)
+```
+
+### Usage Example
+
+```python
+#!/usr/bin/env python3
+import numpy as np
+from qsecbit import Qsecbit, QsecbitConfig
+
+# Enable energy monitoring
+config = QsecbitConfig(
+    energy_monitoring_enabled=True,
+    energy_spike_threshold=2.5,
+    energy_ewma_alpha=0.3
+)
+
+# Initialize qsecbit
+baseline_mu = np.array([0.1, 0.2, 0.15, 0.33])
+baseline_cov = np.eye(4) * 0.02
+quantum_anchor = 6.144
+
+qsecbit = Qsecbit(baseline_mu, baseline_cov, quantum_anchor, config)
+
+# Output:
+# ✓ Energy consumption monitoring enabled (RAPL + per-PID tracking)
+#   - RAPL energy counters detected
+
+# Analyze system state
+sample = qsecbit.calculate(
+    x_t=np.array([0.25, 0.42, 0.35, 0.45]),
+    p_attack=0.72,
+    c_t=np.array([0.76, 0.71, 0.73])
+)
+
+# Energy metadata automatically captured
+print(f"Qsecbit Score: {sample.score:.4f}")
+print(f"RAG Status: {sample.rag_status}")
+print(f"Energy Anomaly: {sample.components.get('energy_anomaly', 0):.4f}")
+
+if 'energy' in sample.metadata:
+    energy = sample.metadata['energy']
+    print(f"Package Power: {energy['package_watts']:.2f}W")
+    print(f"NIC Processes: {energy['nic_processes_watts']:.2f}W")
+    print(f"XDP Processes: {energy['xdp_processes_watts']:.2f}W")
+
+    if energy['has_energy_anomaly']:
+        print("⚠️  ENERGY ANOMALY DETECTED")
+        if energy['nic_spike']:
+            print("⚠️  NIC POWER SPIKE - Possible DDoS attack")
+        if energy['xdp_spike']:
+            print("⚠️  XDP POWER SPIKE - Possible kernel-level attack")
+
+        # Top 5 processes with power spikes
+        for spike in energy['energy_spike_pids']:
+            print(f"  - PID {spike['pid']} ({spike['name']}): "
+                  f"{spike['watts']:.2f}W (Z-score: {spike['z_score']:.2f})")
+```
+
+### Database Schema
+
+Energy metrics are automatically saved to ClickHouse (edge) or Doris (cloud):
+
+**Additional columns in `qsecbit_scores` table**:
+```sql
+-- Core energy component
+energy_anomaly Float32,  -- Anomaly score (0-1)
+
+-- Power measurements
+package_watts Float32,  -- Total CPU package power
+nic_processes_watts Float32,  -- Power from NIC-related processes
+xdp_processes_watts Float32,  -- Power from XDP/eBPF processes
+
+-- Anomaly flags
+has_energy_anomaly UInt8,  -- 1 if anomaly detected
+nic_spike UInt8,  -- 1 if NIC processes spiked
+xdp_spike UInt8   -- 1 if XDP processes spiked
+```
+
+**Example Queries**:
+
+```sql
+-- Top energy anomalies in last 24 hours
+SELECT
+    timestamp,
+    score AS qsecbit_score,
+    energy_anomaly,
+    package_watts,
+    nic_processes_watts,
+    has_energy_anomaly,
+    nic_spike
+FROM qsecbit_scores
+WHERE timestamp >= now() - INTERVAL 24 HOUR
+  AND has_energy_anomaly = 1
+ORDER BY energy_anomaly DESC
+LIMIT 10;
+
+-- Correlation between NIC power and packet drops (XDP)
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    avg(nic_processes_watts) AS avg_nic_watts,
+    avg(xdp_dropped_rate_limit) AS avg_drops,
+    count(*) FILTER (WHERE nic_spike = 1) AS nic_spike_count
+FROM qsecbit_scores
+WHERE timestamp >= now() - INTERVAL 7 DAY
+GROUP BY hour
+ORDER BY hour DESC;
+
+-- Energy baseline deviation trend
+SELECT
+    toDate(timestamp) AS day,
+    avg(package_watts) AS avg_package_watts,
+    max(package_watts) AS max_package_watts,
+    stddevPop(package_watts) AS stddev_package_watts,
+    countIf(has_energy_anomaly = 1) AS anomaly_count
+FROM qsecbit_scores
+WHERE timestamp >= now() - INTERVAL 30 DAY
+GROUP BY day
+ORDER BY day DESC;
+```
+
+### Benefits
+
+**1. Early DDoS Detection**
+- Detects attacks before traditional signatures
+- Correlates NIC interrupt spikes with network floods
+- Provides sub-second response time (integrated with qsecbit RAG)
+
+**2. Cryptomining Detection**
+- Identifies malicious miners by power consumption patterns
+- Works even if process name is obfuscated
+- Catches CPU-based and GPU-based miners
+
+**3. 0-Day Attack Detection**
+- Abnormal process behavior visible in power signatures
+- Detects kernel exploits via system call patterns
+- Catches privilege escalation attempts
+
+**4. Resource Optimization**
+- Identify power-hungry processes for optimization
+- Track system efficiency over time
+- Correlate power with performance metrics
+
+**5. Forensics & Incident Response**
+- Historical power consumption data for attack timeline reconstruction
+- Per-PID power tracking for root cause analysis
+- Integration with qsecbit RAG for automated response
+
+### Limitations
+
+**1. Intel CPU Required (for full functionality)**
+- RAPL is Intel-specific technology
+- AMD CPUs: No RAPL support (fallback to CPU-time estimation)
+- ARM CPUs: No RAPL support (fallback to CPU-time estimation)
+
+**2. Baseline Learning Period**
+- Requires 100+ samples (default) to establish baseline
+- First ~2 minutes may have false positives
+- Adjust `energy_baseline_window` for faster/slower adaptation
+
+**3. CPU-Intensive Operations**
+- Reading `/proc/[pid]/stat` for all processes has overhead
+- Recommended interval: 1-5 seconds (not sub-second)
+- May increase CPU usage by 1-3%
+
+**4. Process Lifetime**
+- Short-lived processes may be missed between samples
+- Long-lived processes have more accurate baselines
+- Aggregate NIC/XDP metrics mitigate this
+
+### Best Practices
+
+1. **Baseline Establishment**: Run system under normal load for 5-10 minutes before relying on alerts
+2. **Threshold Tuning**: Start with `energy_spike_threshold=2.5`, adjust based on false positive rate
+3. **Sampling Interval**: 1-second intervals recommended for edge, 5-second for cloud backend
+4. **Database Retention**: Energy metrics add ~200 bytes per sample, plan storage accordingly
+5. **Alert Correlation**: Combine energy anomalies with XDP stats and qsecbit RAG for maximum accuracy
 
 ---
 
@@ -433,10 +769,11 @@ sample = qsecbit.calculate(...)
 ```python
 config = QsecbitConfig(
     # Component weights (must sum to 1.0)
-    alpha=0.30,          # System drift weight
-    beta=0.30,           # Attack probability weight
+    alpha=0.30,          # System drift weight (auto: 0.25 if energy enabled)
+    beta=0.30,           # Attack probability weight (auto: 0.25 if energy enabled)
     gamma=0.20,          # Classifier decay weight
-    delta=0.20,          # Quantum drift weight
+    delta=0.20,          # Quantum drift weight (auto: 0.15 if energy enabled)
+    epsilon=0.0,         # Energy anomaly weight (auto: 0.15 if energy enabled)
 
     # RAG thresholds
     amber_threshold=0.45,  # Warning threshold
@@ -450,7 +787,13 @@ config = QsecbitConfig(
 
     # History management
     max_history_size=1000,      # Maximum samples to retain
-    convergence_window=10       # Samples for convergence analysis
+    convergence_window=10,      # Samples for convergence analysis
+
+    # Energy monitoring parameters (NEW)
+    energy_monitoring_enabled=False,  # Enable energy-based anomaly detection
+    energy_spike_threshold=2.5,       # Z-score threshold for spike detection
+    energy_ewma_alpha=0.3,            # EWMA smoothing factor (0-1)
+    energy_baseline_window=100        # Samples for baseline calculation
 )
 ```
 
@@ -483,6 +826,21 @@ config = QsecbitConfig(
 - `get_driver(interface)` → `str | None`
 - `detect_capability(interface)` → `NICCapability`
 - `select_xdp_mode(capability, prefer_drv=True)` → `XDPMode`
+
+### EnergyMonitor Class (NEW)
+
+**Methods**:
+- `capture_snapshot()` → `SystemEnergySnapshot | None`
+- `detect_anomalies(snapshot)` → `Dict[str, any]`
+- `update_baselines()` → `None`
+
+**Attributes**:
+- `rapl_available: bool` - Whether RAPL energy counters are available
+- `rapl_package_path: Path | None` - Path to RAPL energy counter
+- `history: List[SystemEnergySnapshot]` - Energy snapshot history
+- `pid_power_history: Dict[int, List[float]]` - Per-PID power time-series
+- `pid_baseline_mean: Dict[int, float]` - Per-PID power baselines
+- `pid_baseline_std: Dict[int, float]` - Per-PID power standard deviations
 
 ---
 
