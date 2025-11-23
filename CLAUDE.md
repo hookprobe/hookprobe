@@ -1088,6 +1088,327 @@ nikto -h http://localhost
 
 ---
 
+## 🔐 GDPR Compliance and Privacy
+
+### Overview
+
+**HookProbe v5.0 is GDPR-compliant by design and by default.** As an AI assistant working with this codebase, you should understand the privacy features and compliance requirements.
+
+### GDPR Compliance Framework
+
+HookProbe implements comprehensive GDPR compliance through:
+
+1. **Configuration Module**: `Scripts/autonomous/install/gdpr-config.sh`
+2. **Retention Script**: `Scripts/autonomous/install/gdpr-retention.sh`
+3. **Privacy Module**: `Scripts/autonomous/qsecbit/gdpr_privacy.py`
+4. **Documentation**: `GDPR.md` (comprehensive guide)
+
+### Key Privacy Features
+
+**Privacy by Design (Article 25)**:
+- IP anonymization (last octet masked: 192.168.1.0)
+- MAC anonymization (device ID masked: AA:BB:CC:00:00:00)
+- No payload collection (headers only)
+- Short retention periods (30-365 days)
+- Encrypted storage and transit
+
+**Data Minimization (Article 5(1)(c))**:
+```bash
+ANONYMIZE_IP_ADDRESSES=true          # Default: ON
+ANONYMIZE_MAC_ADDRESSES=true         # Default: ON
+COLLECT_FULL_PAYLOAD=false           # Default: OFF (privacy violation)
+COLLECT_USER_LOCATION=false          # Default: OFF
+```
+
+**Data Subject Rights (Chapter III)**:
+- Right of Access (Article 15) - JSON export
+- Right to Erasure (Article 17) - Account deletion + log anonymization
+- Right to Portability (Article 20) - Machine-readable export
+- Right to Rectification (Article 16) - Profile correction
+- Right to Object (Article 21) - Opt-out
+
+### When Making Code Changes
+
+**CRITICAL PRIVACY RULES**:
+
+1. **NEVER disable anonymization** without explicit justification
+   ```bash
+   # ❌ BAD - disables privacy protection
+   ANONYMIZE_IP_ADDRESSES=false
+
+   # ✅ GOOD - keep anonymization enabled
+   ANONYMIZE_IP_ADDRESSES=true
+   ```
+
+2. **NEVER enable payload collection** (privacy violation)
+   ```bash
+   # ❌ BAD - violates GDPR data minimization
+   COLLECT_FULL_PAYLOAD=true
+
+   # ✅ GOOD - headers only
+   COLLECT_FULL_PAYLOAD=false
+   ```
+
+3. **NEVER extend retention periods** without legal basis
+   ```bash
+   # ❌ BAD - excessive retention (privacy risk)
+   RETENTION_NETWORK_FLOWS_DAYS=3650  # 10 years!
+
+   # ✅ GOOD - minimal retention
+   RETENTION_NETWORK_FLOWS_DAYS=30  # 30 days
+   ```
+
+4. **ALWAYS consider privacy impact** when adding data collection
+   - Is this data really necessary?
+   - Can we anonymize it?
+   - What's the minimum retention period?
+   - What's the legal basis for processing?
+
+### Privacy-Preserving Code Examples
+
+**Using the GDPR privacy module**:
+
+```python
+from qsecbit.gdpr_privacy import PrivacyPreserver
+
+# Initialize privacy preserver
+privacy = PrivacyPreserver()
+
+# Anonymize IP addresses
+anonymized_ip = privacy.anonymize_ipv4("192.168.1.123")
+# Result: "192.168.1.0"
+
+# Anonymize MAC addresses
+anonymized_mac = privacy.anonymize_mac("AA:BB:CC:11:22:33")
+# Result: "AA:BB:CC:00:00:00"
+
+# Anonymize network flow data
+flow = {
+    'src_ip': '192.168.1.100',
+    'dst_ip': '8.8.8.8',
+    'src_mac': 'AA:BB:CC:11:22:33',
+    'url': 'https://example.com/page?user=john@doe.com'
+}
+anonymized_flow = privacy.anonymize_network_flow(flow)
+# Result: IPs/MACs anonymized, query params stripped
+```
+
+**Bash script GDPR integration**:
+
+```bash
+# Source GDPR configuration
+source "$(dirname "${BASH_SOURCE[0]}")/gdpr-config.sh"
+
+# Check if GDPR is enabled
+if is_gdpr_enabled; then
+    # Apply anonymization
+    log_gdpr_event "DATA_COLLECTION" "Collecting anonymized network data"
+fi
+
+# Get retention period for specific data type
+retention_days=$(get_retention_days "network_flows")
+echo "Network flows will be retained for $retention_days days"
+```
+
+### Common GDPR-Related Tasks
+
+**Task: Add new data collection**
+
+```bash
+# 1. Determine if collection is necessary (data minimization)
+# 2. Check legal basis (legitimate interest, contract, etc.)
+# 3. Add to gdpr-config.sh with appropriate retention
+# 4. Implement anonymization if possible
+# 5. Update GDPR.md data inventory
+# 6. Update compliance report
+```
+
+**Task: Modify retention periods**
+
+```bash
+# 1. Edit gdpr-config.sh
+nano Scripts/autonomous/install/gdpr-config.sh
+
+# 2. Change retention period (with justification)
+RETENTION_SECURITY_LOGS_DAYS=90  # Was 30, now 90 for threat trend analysis
+
+# 3. Update GDPR.md with justification
+# 4. Document in commit message
+git commit -m "gdpr: increase security log retention to 90 days for threat analysis"
+```
+
+**Task: Implement new data subject right**
+
+```python
+# 1. Add functionality to privacy module
+# 2. Add to gdpr-config.sh
+# 3. Update GDPR.md with procedure
+# 4. Add to compliance checklist
+```
+
+### GDPR Testing
+
+**Verify anonymization is working**:
+
+```bash
+# Test IP anonymization
+python3 -c "
+from Scripts.autonomous.qsecbit.gdpr_privacy import anonymize_ip
+print(anonymize_ip('192.168.1.123'))
+# Should output: 192.168.1.0
+"
+
+# Check Zeek logs for anonymized IPs
+tail /opt/zeek/logs/conn.log | grep "\.0$"
+# Should see .0 IPs
+```
+
+**Test data retention**:
+
+```bash
+# Run retention script manually
+sudo /opt/hookprobe/scripts/gdpr-retention.sh
+
+# Check logs
+tail -f /var/log/hookprobe/gdpr-retention.log
+
+# Verify old data deleted
+# (check ClickHouse, PostgreSQL, log files)
+```
+
+**Generate compliance report**:
+
+```bash
+sudo /opt/hookprobe/scripts/gdpr-retention.sh
+cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).txt
+```
+
+### Documentation Updates
+
+**When adding new features, update**:
+
+1. **GDPR.md** - If feature processes personal data
+   - Add to data inventory section
+   - Document retention period
+   - Update legal basis justification
+
+2. **gdpr-config.sh** - Add configuration options
+   ```bash
+   # New Feature: DNS query logging
+   RETENTION_DNS_LOGS_DAYS=30
+   ANONYMIZE_DNS_QUERIES=true
+   ```
+
+3. **gdpr-retention.sh** - Add cleanup logic
+   ```bash
+   delete_old_dns_logs() {
+       local retention_days="$RETENTION_DNS_LOGS_DAYS"
+       # ... deletion logic
+   }
+   ```
+
+4. **SECURITY.md** - Update privacy controls section
+
+5. **README.md** - Update GDPR Compliance section if user-facing
+
+### Privacy Impact Assessment
+
+**Before implementing features that process personal data**:
+
+1. **Necessity**: Is this data really needed?
+2. **Minimization**: Can we collect less?
+3. **Anonymization**: Can we anonymize it?
+4. **Retention**: What's the minimum retention?
+5. **Legal Basis**: Why are we processing this? (legitimate interest, contract, etc.)
+6. **Risks**: What are the privacy risks?
+7. **Safeguards**: How do we mitigate risks?
+
+**Document answers in**:
+- Commit messages
+- Code comments
+- GDPR.md updates
+
+### GDPR Compliance Checklist for Code Changes
+
+**Before committing code that handles personal data**:
+
+- [ ] Reviewed data minimization requirements
+- [ ] Implemented anonymization (if applicable)
+- [ ] Set appropriate retention period
+- [ ] Documented legal basis for processing
+- [ ] Updated GDPR.md data inventory
+- [ ] Added to gdpr-retention.sh cleanup (if applicable)
+- [ ] Tested privacy controls work correctly
+- [ ] Verified no payload collection enabled
+- [ ] Checked encryption is used (at rest and in transit)
+- [ ] Added GDPR audit logging (if applicable)
+
+### Resources
+
+- **GDPR.md** - Comprehensive compliance guide (legal and technical)
+- **gdpr-config.sh** - Configuration reference
+- **gdpr-retention.sh** - Automated retention script
+- **gdpr_privacy.py** - Privacy-preserving Python module
+- **Official GDPR**: https://gdpr-info.eu/
+
+### Contact
+
+- **Data Protection Officer**: dpo@hookprobe.com
+- **Security Contact**: qsecbit@hookprobe.com
+- **GitHub Issues**: https://github.com/hookprobe/hookprobe/issues
+
+### Example: Adding a New Security Feature
+
+```bash
+# Scenario: Adding HTTP request logging to ModSecurity
+
+# 1. Determine necessity
+# - Needed for WAF threat analysis (legitimate interest)
+
+# 2. Data minimization
+# - Log URL path only, not query parameters (may contain PII)
+# - Anonymize source IP
+
+# 3. Configuration
+cat >> gdpr-config.sh <<'EOF'
+# HTTP request logging
+RETENTION_HTTP_REQUESTS_DAYS=30
+ANONYMIZE_HTTP_QUERY_PARAMS=true
+EOF
+
+# 4. Retention cleanup
+cat >> gdpr-retention.sh <<'EOF'
+delete_old_http_logs() {
+    local retention_days="$RETENTION_HTTP_REQUESTS_DAYS"
+    find /var/log/modsecurity/ -name "*.log" -mtime +${retention_days} -delete
+}
+EOF
+
+# 5. Privacy module integration
+python3 <<'EOF'
+from qsecbit.gdpr_privacy import PrivacyPreserver
+
+# Anonymize URL
+url = "https://example.com/login?user=admin&token=abc123"
+anonymized_url = privacy.anonymize_url(url)
+# Result: "https://example.com/login" (query stripped)
+EOF
+
+# 6. Update documentation
+echo "- HTTP request logs: 30 days retention, URLs anonymized" >> GDPR.md
+
+# 7. Commit with GDPR context
+git commit -m "feat(waf): add HTTP request logging with GDPR compliance
+
+- Log URL paths for threat analysis (legitimate interest)
+- Strip query parameters (may contain PII)
+- Anonymize source IPs
+- 30-day retention period
+- Automated cleanup via gdpr-retention.sh"
+```
+
+---
+
 ## 🧪 Testing Guidelines
 
 ### Pre-Deployment Testing
@@ -1733,6 +2054,14 @@ Before completing work on this codebase:
 - [ ] Considered impact on all PODs
 - [ ] Validated deployment still works
 - [ ] Checked for exposed secrets
+- [ ] **GDPR Compliance** (if handling personal data):
+  - [ ] Verified anonymization is enabled (IP/MAC)
+  - [ ] Confirmed no payload collection (`COLLECT_FULL_PAYLOAD=false`)
+  - [ ] Set appropriate retention period (30-365 days max)
+  - [ ] Documented legal basis for processing
+  - [ ] Updated GDPR.md data inventory
+  - [ ] Added to gdpr-retention.sh cleanup (if applicable)
+  - [ ] Tested privacy controls work correctly
 
 ---
 
