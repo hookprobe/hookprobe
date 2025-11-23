@@ -151,7 +151,7 @@ AUTOMATED_DECISION_LOGGING=true        # Log all automated decisions
 # Data breach detection and notification
 
 BREACH_DETECTION_ENABLED=true          # Monitor for potential data breaches
-BREACH_NOTIFICATION_EMAIL="dpo@hookprobe.com"  # Data Protection Officer contact
+BREACH_NOTIFICATION_EMAIL="qsecbit@hookprobe.com"  # Data Protection Officer contact
 BREACH_NOTIFICATION_DEADLINE_HOURS=72  # Notify within 72 hours (GDPR requirement)
 BREACH_LOG_RETENTION_DAYS=2190         # Keep breach records for 6 years
 
@@ -237,7 +237,7 @@ CONSENT_RECORD_RETENTION_DAYS=2190     # Keep consent records for 6 years
 
 DPO_REQUIRED=false                     # Required for public authorities or large-scale monitoring
 DPO_NAME=""                            # Data Protection Officer name
-DPO_EMAIL="dpo@hookprobe.com"          # DPO contact email
+DPO_EMAIL="qsecbit@hookprobe.com"          # DPO contact email
 DPO_PHONE=""                           # DPO phone number
 
 # ============================================================
