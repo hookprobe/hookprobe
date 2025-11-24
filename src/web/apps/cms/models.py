@@ -1,0 +1,105 @@
+"""
+CMS Models - Blog posts, pages, etc.
+"""
+
+from django.db import models
+from django.contrib.auth.models import User
+from django.urls import reverse
+from django.utils.text import slugify
+
+
+class Page(models.Model):
+    """Static pages (About, Contact, etc.)"""
+    title = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=200, unique=True)
+    content = models.TextField()
+    meta_description = models.CharField(max_length=160, blank=True)
+    is_published = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'title']
+        verbose_name = 'Page'
+        verbose_name_plural = 'Pages'
+
+    def __str__(self):
+        return self.title
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.title)
+        super().save(*args, **kwargs)
+
+
+class BlogPost(models.Model):
+    """Blog posts for security updates, news, etc."""
+    title = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=200, unique=True)
+    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blog_posts')
+    excerpt = models.TextField(max_length=300)
+    content = models.TextField()
+    featured_image = models.ImageField(upload_to='blog/images/', null=True, blank=True)
+    meta_description = models.CharField(max_length=160, blank=True)
+    is_published = models.BooleanField(default=False)
+    is_featured = models.BooleanField(default=False)
+    published_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    views = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-published_at', '-created_at']
+        verbose_name = 'Blog Post'
+        verbose_name_plural = 'Blog Posts'
+
+    def __str__(self):
+        return self.title
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.title)
+        super().save(*args, **kwargs)
+
+    def get_absolute_url(self):
+        return reverse('cms:blog_detail', kwargs={'slug': self.slug})
+
+
+class BlogCategory(models.Model):
+    """Categories for blog posts"""
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'Blog Category'
+        verbose_name_plural = 'Blog Categories'
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+
+class ContactSubmission(models.Model):
+    """Contact form submissions"""
+    name = models.CharField(max_length=100)
+    email = models.EmailField()
+    subject = models.CharField(max_length=200)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Contact Submission'
+        verbose_name_plural = 'Contact Submissions'
+
+    def __str__(self):
+        return f"{self.name} - {self.subject}"
