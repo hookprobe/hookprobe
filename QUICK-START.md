@@ -93,7 +93,7 @@ HookProbe Installer
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Main Deployments:
-  1) Edge Deployment (SBC/Intel N100/Raspberry Pi)
+  1) Edge Deployment (x86_64: N100/Core/AMD | ARM: Pi/Jetson/Radxa)
   2) Cloud Backend (MSSP Multi-Tenant)
 
 Configuration:
@@ -123,10 +123,10 @@ sudo ./install.sh
 ```
 
 **Minimum Requirements:**
-- Intel N100 or equivalent
-- 16GB RAM
-- 500GB SSD
-- 1Gbps NIC
+- **CPU**: x86_64 (N100/N200, Core i3+, Ryzen) or ARM64 (Pi 4+, Jetson, Radxa)
+- **RAM**: 16GB (8GB for development/learning)
+- **Storage**: 500GB SSD
+- **Network**: 1Gbps NIC (2.5Gbps recommended for x86_64)
 
 ### Cloud Backend (MSSP)
 
