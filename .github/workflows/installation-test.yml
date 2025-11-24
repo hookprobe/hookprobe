@@ -220,54 +220,16 @@ jobs:
     if: always()
 
     steps:
-      - name: Check job results
-        id: check_results
-        run: |
-          echo "syntax_check=${{ needs.syntax-check.result }}" >> $GITHUB_OUTPUT
-          echo "config_wizard=${{ needs.test-config-wizard.result }}" >> $GITHUB_OUTPUT
-          echo "edge_deployment=${{ needs.test-edge-deployment.result }}" >> $GITHUB_OUTPUT
-          echo "documentation=${{ needs.test-documentation.result }}" >> $GITHUB_OUTPUT
-          echo "security=${{ needs.security-scan.result }}" >> $GITHUB_OUTPUT
-
       - name: Summary
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "   HookProbe Installation Tests"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "Syntax Check: ${{ steps.check_results.outputs.syntax_check }}"
-          echo "Config Wizard: ${{ steps.check_results.outputs.config_wizard }}"
-          echo "Edge Deployment: ${{ steps.check_results.outputs.edge_deployment }}"
-          echo "Documentation: ${{ steps.check_results.outputs.documentation }}"
-          echo "Security Scan: ${{ steps.check_results.outputs.security }}"
+          echo "Syntax Check: ${{ needs.syntax-check.result }}"
+          echo "Config Wizard: ${{ needs.test-config-wizard.result }}"
+          echo "Edge Deployment: ${{ needs.test-edge-deployment.result }}"
+          echo "Documentation: ${{ needs.test-documentation.result }}"
+          echo "Security Scan: ${{ needs.security-scan.result }}"
           echo ""
-
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const results = {
-              syntax: '${{ needs.syntax-check.result }}',
-              wizard: '${{ needs.test-config-wizard.result }}',
-              deployment: '${{ needs.test-edge-deployment.result }}',
-              docs: '${{ needs.test-documentation.result }}',
-              security: '${{ needs.security-scan.result }}'
-            };
-
-            const allPassed = Object.values(results).every(r => r === 'success');
-            const status = allPassed ? '✅ All installation tests passed!' : '⚠️ Some installation tests failed';
-
-            let body = `## ${status}\n\n**Test Results:**\n`;
-            body += `- ${results.syntax === 'success' ? '✅' : '❌'} Syntax validation\n`;
-            body += `- ${results.wizard === 'success' ? '✅' : '❌'} Configuration wizard\n`;
-            body += `- ${results.deployment === 'success' ? '✅' : '❌'} Edge deployment dry-run\n`;
-            body += `- ${results.docs === 'success' ? '✅' : '❌'} Documentation validation\n`;
-            body += `- ${results.security === 'success' ? '✅' : '❌'} Security scan\n`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+          echo "Summary completed"
