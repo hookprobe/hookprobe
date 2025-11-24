@@ -284,6 +284,7 @@ jobs:
       test-gdpr-compliance,
       test-security-features
     ]
+    if: always()
 
     steps:
       - name: Summary
@@ -292,37 +293,50 @@ jobs:
           echo "   Container & Integration Tests"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "✓ Podman compatibility verified"
-          echo "✓ Open vSwitch compatibility verified"
-          echo "✓ Python dependencies tested"
-          echo "✓ Qsecbit algorithm validated"
-          echo "✓ Network configuration tested"
-          echo "✓ Monitoring stack components verified"
-          echo "✓ GDPR compliance validated"
-          echo "✓ Security features verified"
+          echo "Podman: ${{ needs.test-podman-availability.result }}"
+          echo "OVS: ${{ needs.test-ovs-availability.result }}"
+          echo "Python: ${{ needs.test-python-dependencies.result }}"
+          echo "Qsecbit: ${{ needs.test-qsecbit-algorithm.result }}"
+          echo "Network: ${{ needs.test-network-configuration.result }}"
+          echo "Monitoring: ${{ needs.test-monitoring-stack.result }}"
+          echo "GDPR: ${{ needs.test-gdpr-compliance.result }}"
+          echo "Security: ${{ needs.test-security-features.result }}"
           echo ""
-          echo "All container and integration tests passed!"
 
-      - name: Comment on PR (if tests passed)
-        if: success() && github.event_name == 'pull_request'
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |
+            const results = {
+              podman: '${{ needs.test-podman-availability.result }}',
+              ovs: '${{ needs.test-ovs-availability.result }}',
+              python: '${{ needs.test-python-dependencies.result }}',
+              qsecbit: '${{ needs.test-qsecbit-algorithm.result }}',
+              network: '${{ needs.test-network-configuration.result }}',
+              monitoring: '${{ needs.test-monitoring-stack.result }}',
+              gdpr: '${{ needs.test-gdpr-compliance.result }}',
+              security: '${{ needs.test-security-features.result }}'
+            };
+
+            const allPassed = Object.values(results).every(r => r === 'success');
+            const status = allPassed ? '✅ All container tests passed!' : '⚠️ Some container tests failed';
+
+            let body = `## ${status}\n\n**Infrastructure:**\n`;
+            body += `- ${results.podman === 'success' ? '✅' : '❌'} Podman compatibility\n`;
+            body += `- ${results.ovs === 'success' ? '✅' : '❌'} Open vSwitch\n`;
+            body += `- ${results.python === 'success' ? '✅' : '❌'} Python environment\n\n`;
+            body += `**Components:**\n`;
+            body += `- ${results.qsecbit === 'success' ? '✅' : '❌'} Qsecbit algorithm\n`;
+            body += `- ${results.network === 'success' ? '✅' : '❌'} Network configuration\n`;
+            body += `- ${results.monitoring === 'success' ? '✅' : '❌'} Monitoring stack\n\n`;
+            body += `**Compliance:**\n`;
+            body += `- ${results.gdpr === 'success' ? '✅' : '❌'} GDPR compliance\n`;
+            body += `- ${results.security === 'success' ? '✅' : '❌'} Security features\n`;
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '✅ All container and integration tests passed!\n\n' +
-                    '**Infrastructure Tests:**\n' +
-                    '- ✓ Podman compatibility\n' +
-                    '- ✓ Open vSwitch\n' +
-                    '- ✓ Python environment\n\n' +
-                    '**Component Tests:**\n' +
-                    '- ✓ Qsecbit algorithm\n' +
-                    '- ✓ Network configuration\n' +
-                    '- ✓ Monitoring stack\n\n' +
-                    '**Compliance Tests:**\n' +
-                    '- ✓ GDPR compliance\n' +
-                    '- ✓ Security features\n\n' +
-                    'Ready for deployment!'
-            })
+              body: body
+            });
