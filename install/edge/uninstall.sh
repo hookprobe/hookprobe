@@ -13,10 +13,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load configuration
-if [ -f "$SCRIPT_DIR/network-config.sh" ]; then
-    source "$SCRIPT_DIR/network-config.sh"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    source "$SCRIPT_DIR/config.sh"
 else
-    echo "WARNING: network-config.sh not found, using defaults..."
+    echo "WARNING: config.sh not found, using defaults..."
     QSEC_BRIDGE="qsec-bridge"
     POD_WEB="hookprobe-web-dmz"
     POD_IAM="hookprobe-iam"
@@ -298,7 +298,7 @@ if [ "$remove_images" == "yes" ]; then
 fi
 echo ""
 echo "To reinstall:"
-echo "  1. Review network-config.sh"
+echo "  1. Review config.sh"
 echo "  2. Run: sudo ./setup.sh"
 echo ""
 echo "============================================================"
