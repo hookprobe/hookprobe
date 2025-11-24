@@ -1,8 +1,24 @@
 # HookProbe Quick Start Guide
 
-## 🚀 Installation in 3 Steps (NEW Simplified Process!)
+## 🆕 First Time with Linux?
 
-HookProbe v5.0 introduces an **interactive installation wizard** that eliminates manual configuration. Just run one command and answer a few prompts!
+**📘 [Complete Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)**
+
+If you've never used Linux before, start with our comprehensive beginner's guide that covers:
+- ✅ Downloading Linux (Fedora/Ubuntu) - **Step-by-step with screenshots**
+- ✅ Creating bootable USB drive - **Using Rufus or Etcher**
+- ✅ Installing Linux from scratch - **Complete walkthrough**
+- ✅ Partitioning your disk - **Recommended layouts**
+- ✅ Basic Linux setup - **Network, updates, tools**
+- ✅ Installing HookProbe - **One command installation**
+
+**Perfect for absolute beginners!** No Linux experience required.
+
+---
+
+## 🚀 Installation in 3 Steps (For Linux Users)
+
+Already have Linux? HookProbe v5.0 introduces an **interactive installation wizard** that eliminates manual configuration. Just run one command and answer a few prompts!
 
 ### Step 1: Clone Repository
 

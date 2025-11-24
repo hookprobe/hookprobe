@@ -258,9 +258,25 @@ HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data P
 
 ## 🚀 Getting Started
 
-### ⚡ Quick Install (Simplified Process)
+### 🆕 New to Linux? Start Here!
 
-HookProbe v5.0 features an **interactive installation wizard** that makes deployment effortless:
+**Never used Linux before?** We've got you covered!
+
+📘 **[Complete Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)** - Step-by-step guide including:
+- Where to download Linux (Fedora/Ubuntu)
+- How to create bootable USB drive
+- Complete Linux installation walkthrough
+- Disk partitioning for HookProbe
+- Network configuration
+- Installing HookProbe
+
+**Perfect for users with little to no Linux experience!**
+
+---
+
+### ⚡ Quick Install (For Linux Users)
+
+Already have Linux installed? HookProbe v5.0 features an **interactive installation wizard**:
 
 ```bash
 # 1. Clone repository
@@ -982,9 +998,17 @@ tail -f /var/log/hookprobe/gdpr-audit.log
 
 ## 📚 Documentation
 
+### Getting Started
+- **[🆕 Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)** - **START HERE if new to Linux!**
+  - Download Linux (Fedora/Ubuntu)
+  - Create bootable USB
+  - Install Linux step-by-step
+  - Partition disk for HookProbe
+  - Complete setup walkthrough
+- **[QUICK-START.md](QUICK-START.md)** - 3-step installation for Linux users
+- **[README.md](README.md)** - This file (overview and features)
+
 ### Core Documentation
-- **[README.md](README.md)** - This file (overview and quick start)
-- **[QUICK-START.md](QUICK-START.md)** - 3-step installation guide with configuration wizard
 - **[GDPR.md](docs/GDPR.md)** - GDPR compliance guide (privacy and data protection)
 - **[CI-CD.md](docs/CI-CD.md)** - CI/CD workflows, testing strategy, and contributing guidelines
 - **[Security Mitigation Plan](docs/architecture/security-model.md)** - Detailed security analysis
