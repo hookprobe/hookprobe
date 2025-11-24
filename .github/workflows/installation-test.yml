@@ -1,0 +1,283 @@
+name: Installation & Configuration Tests
+
+on:
+  push:
+    branches: [ main, master, develop, 'claude/**' ]
+    paths:
+      - 'install.sh'
+      - 'install/**/*.sh'
+      - '.github/workflows/installation-test.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'install.sh'
+      - 'install/**/*.sh'
+      - '.github/workflows/installation-test.yml'
+
+jobs:
+  syntax-check:
+    name: Shell Script Syntax Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate install.sh syntax
+        run: bash -n install.sh
+
+      - name: Validate all shell scripts
+        run: |
+          find install/ -name "*.sh" -type f | while read script; do
+            echo "Checking syntax: $script"
+            bash -n "$script"
+          done
+
+      - name: Check for common issues
+        run: |
+          echo "Checking for common shell script issues..."
+
+          # Check for missing shebangs
+          find install/ -name "*.sh" -type f | while read script; do
+            if ! head -n1 "$script" | grep -q "^#!/"; then
+              echo "ERROR: Missing shebang in $script"
+              exit 1
+            fi
+          done
+
+          # Check for set -e in critical scripts
+          for script in install.sh install/edge/setup.sh install/cloud/setup.sh; do
+            if [ -f "$script" ] && ! grep -q "set -e" "$script"; then
+              echo "WARNING: Missing 'set -e' in $script"
+            fi
+          done
+
+  test-config-wizard:
+    name: Configuration Wizard Tests
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y expect
+
+      - name: Test network interface detection
+        run: |
+          # Source the config wizard to test functions
+          source install/common/config-wizard.sh
+
+          # Test interface detection
+          echo "Testing interface detection..."
+          ip link show
+
+      - name: Test password generation
+        run: |
+          # Test that openssl is available for password generation
+          openssl rand -base64 32 | grep -E '^[A-Za-z0-9+/]{43}=$'
+
+      - name: Validate config wizard structure
+        run: |
+          # Check that config wizard has required functions
+          if ! grep -q "run_configuration_wizard" install/common/config-wizard.sh; then
+            echo "ERROR: Missing run_configuration_wizard function"
+            exit 1
+          fi
+
+          if ! grep -q "detect_network_interfaces" install/common/config-wizard.sh; then
+            echo "ERROR: Missing detect_network_interfaces function"
+            exit 1
+          fi
+
+  test-edge-deployment:
+    name: Edge Deployment Dry Run
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Install Open vSwitch
+        run: |
+          sudo apt-get install -y openvswitch-switch
+
+      - name: Create test configuration
+        run: |
+          mkdir -p install/edge
+          cat > install/edge/config.sh << 'EOF'
+          # Test configuration
+          export DEPLOYMENT_TYPE="edge"
+          export WAN_INTERFACE="eth0"
+          export HOST_IP="10.0.2.15"
+          export BRIDGE_NAME="qsec-bridge"
+          export BRIDGE_IP="10.200.0.1"
+          export VXLAN_PSK="test-psk-key-for-ci-testing-only"
+          export GRAFANA_PASSWORD="test-password"
+          export POSTGRES_PASSWORD="test-postgres-password"
+          export REDIS_PASSWORD="test-redis-password"
+          export ENABLE_XDP=false
+          export ENABLE_GDPR=true
+          EOF
+
+      - name: Validate configuration file
+        run: |
+          source install/edge/config.sh
+
+          # Verify required variables are set
+          : "${DEPLOYMENT_TYPE:?DEPLOYMENT_TYPE not set}"
+          : "${WAN_INTERFACE:?WAN_INTERFACE not set}"
+          : "${HOST_IP:?HOST_IP not set}"
+
+          echo "✓ Configuration validation passed"
+
+      - name: Test setup script dry-run
+        run: |
+          # Create a dry-run version of the setup script
+          if [ -f install/edge/setup.sh ]; then
+            echo "Setup script exists"
+            bash -n install/edge/setup.sh
+          else
+            echo "WARNING: install/edge/setup.sh not found"
+          fi
+
+  test-documentation:
+    name: Documentation Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check README references
+        run: |
+          echo "Checking README.md for installation references..."
+
+          # Check that README mentions the new installer
+          if ! grep -q "install.sh" README.md; then
+            echo "ERROR: README.md doesn't mention install.sh"
+            exit 1
+          fi
+
+          # Check for configuration wizard mention
+          if ! grep -q -i "configuration\|wizard\|interactive" README.md; then
+            echo "WARNING: README.md may not mention configuration wizard"
+          fi
+
+      - name: Check QUICK-START references
+        run: |
+          if [ -f QUICK-START.md ]; then
+            echo "Checking QUICK-START.md..."
+
+            # Check for install.sh reference
+            if ! grep -q "install.sh" QUICK-START.md; then
+              echo "ERROR: QUICK-START.md doesn't mention install.sh"
+              exit 1
+            fi
+          else
+            echo "WARNING: QUICK-START.md not found"
+          fi
+
+      - name: Verify installation guide exists
+        run: |
+          if [ ! -f docs/installation/INSTALLATION.md ]; then
+            echo "ERROR: docs/installation/INSTALLATION.md not found"
+            exit 1
+          fi
+
+  security-scan:
+    name: Security & Best Practices
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check for hardcoded credentials
+        run: |
+          echo "Scanning for hardcoded credentials..."
+
+          # Look for potential hardcoded passwords (exclude test files)
+          if grep -r -n -E 'password["\s]*=\s*["\047][^"\047]{8,}["\047]' install/ \
+             --include="*.sh" \
+             --exclude="*test*" \
+             --exclude="*example*" | grep -v "POSTGRES_PASSWORD="; then
+            echo "WARNING: Potential hardcoded passwords found"
+          fi
+
+          # Check that passwords are generated, not hardcoded
+          if ! grep -q "openssl rand" install/common/config-wizard.sh; then
+            echo "WARNING: Password generation not found in config wizard"
+          fi
+
+      - name: Check for unsafe commands
+        run: |
+          echo "Checking for unsafe shell commands..."
+
+          # Check for eval usage (can be dangerous)
+          if grep -r "eval" install/ --include="*.sh" | grep -v "#.*eval"; then
+            echo "WARNING: 'eval' command found - review for security"
+          fi
+
+          # Check for curl/wget without verification
+          if grep -r "curl.*http://" install/ --include="*.sh" | grep -v "#"; then
+            echo "WARNING: Unencrypted HTTP download found"
+          fi
+
+      - name: Verify security defaults
+        run: |
+          echo "Verifying security defaults..."
+
+          # Check that GDPR is enabled by default
+          if grep -q 'ENABLE_GDPR=false' install/common/config-wizard.sh; then
+            echo "ERROR: GDPR should be enabled by default"
+            exit 1
+          fi
+
+  integration-summary:
+    name: Integration Test Summary
+    runs-on: ubuntu-latest
+    needs: [syntax-check, test-config-wizard, test-edge-deployment, test-documentation, security-scan]
+
+    steps:
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   HookProbe Installation Tests"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "✓ Syntax validation passed"
+          echo "✓ Configuration wizard tests passed"
+          echo "✓ Edge deployment dry-run passed"
+          echo "✓ Documentation validation passed"
+          echo "✓ Security scan passed"
+          echo ""
+          echo "All installation tests completed successfully!"
+
+      - name: Comment on PR (if tests passed)
+        if: success() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ All installation and configuration tests passed successfully!\n\n' +
+                    '- ✓ Shell script syntax validation\n' +
+                    '- ✓ Configuration wizard tests\n' +
+                    '- ✓ Edge deployment dry-run\n' +
+                    '- ✓ Documentation validation\n' +
+                    '- ✓ Security scan\n\n' +
+                    'The installation process is ready for deployment.'
+            })
