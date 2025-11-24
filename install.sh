@@ -39,6 +39,9 @@ show_menu() {
     echo -e "  ${YELLOW}1${NC}) Edge Deployment (SBC/Intel N100/Raspberry Pi)"
     echo -e "  ${YELLOW}2${NC}) Cloud Backend (MSSP Multi-Tenant)"
     echo ""
+    echo "Configuration:"
+    echo -e "  ${YELLOW}c${NC}) Run Configuration Wizard"
+    echo ""
     echo "Optional Add-ons:"
     echo -e "  ${YELLOW}3${NC}) Install n8n Workflow Automation (POD 008)"
     echo -e "  ${YELLOW}4${NC}) Install LTE/5G Connectivity"
@@ -52,13 +55,51 @@ show_menu() {
     echo ""
 }
 
+run_config_wizard() {
+    local deployment_type="$1"
+    local config_file="$2"
+
+    # Source the configuration wizard
+    source "$SCRIPT_DIR/install/common/config-wizard.sh"
+
+    if run_configuration_wizard "$deployment_type" "$config_file"; then
+        echo -e "${GREEN}✓ Configuration completed${NC}"
+        return 0
+    else
+        echo -e "${RED}✗ Configuration failed or cancelled${NC}"
+        return 1
+    fi
+}
+
 run_installer() {
     local script_path="$1"
     local description="$2"
+    local deployment_type="$3"
 
     if [ ! -f "$script_path" ]; then
         echo -e "${RED}ERROR: Installer not found: $script_path${NC}"
         return 1
+    fi
+
+    # Determine config file path based on deployment type
+    local config_dir=$(dirname "$script_path")
+    local config_file="$config_dir/config.sh"
+
+    # Check if configuration exists
+    if [ ! -f "$config_file" ] || [ ! -s "$config_file" ]; then
+        echo -e "${YELLOW}⚠ No configuration found${NC}"
+        echo ""
+        if prompt_user "Run configuration wizard first?" "y"; then
+            if ! run_config_wizard "$deployment_type" "$config_file"; then
+                echo -e "${RED}Cannot proceed without configuration${NC}"
+                return 1
+            fi
+            echo ""
+        else
+            echo -e "${RED}Cannot proceed without configuration${NC}"
+            echo "Please run the configuration wizard first (option 'c')"
+            return 1
+        fi
     fi
 
     echo -e "${GREEN}Starting: $description${NC}"
@@ -70,6 +111,21 @@ run_installer() {
         echo -e "${RED}✗ $description failed${NC}"
         return 1
     fi
+}
+
+prompt_user() {
+    local prompt="$1"
+    local default="$2"
+
+    if [ "$default" = "y" ]; then
+        read -p "$(echo -e ${YELLOW}${prompt}${NC} [${GREEN}Y${NC}/n]: )" answer
+        answer=${answer:-y}
+    else
+        read -p "$(echo -e ${YELLOW}${prompt}${NC} [y/${GREEN}N${NC}]: )" answer
+        answer=${answer:-n}
+    fi
+
+    [[ "$answer" =~ ^[Yy] ]]
 }
 
 check_root() {
@@ -93,13 +149,28 @@ main() {
 
         case $choice in
             1)
-                run_installer "$SCRIPT_DIR/install/edge/setup.sh" "Edge Deployment"
+                run_installer "$SCRIPT_DIR/install/edge/setup.sh" "Edge Deployment" "edge"
                 ;;
             2)
-                run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Backend Deployment"
+                run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Backend Deployment" "cloud"
+                ;;
+            c|C)
+                echo ""
+                echo "Select deployment type for configuration:"
+                echo "  1) Edge Deployment"
+                echo "  2) Cloud Backend"
+                echo "  3) n8n Addon"
+                read -p "Select: " config_choice
+
+                case $config_choice in
+                    1) run_config_wizard "edge" "$SCRIPT_DIR/install/edge/config.sh" ;;
+                    2) run_config_wizard "cloud" "$SCRIPT_DIR/install/cloud/config.sh" ;;
+                    3) run_config_wizard "n8n" "$SCRIPT_DIR/install/addons/n8n/config.sh" ;;
+                    *) echo -e "${RED}Invalid option${NC}" ;;
+                esac
                 ;;
             3)
-                run_installer "$SCRIPT_DIR/install/addons/n8n/setup.sh" "n8n Workflow Automation"
+                run_installer "$SCRIPT_DIR/install/addons/n8n/setup.sh" "n8n Workflow Automation" "n8n"
                 ;;
             4)
                 echo -e "${BLUE}LTE/5G Setup${NC}"
@@ -117,14 +188,14 @@ main() {
                 read -p "Select: " uninstall_choice
 
                 case $uninstall_choice in
-                    1) run_installer "$SCRIPT_DIR/install/edge/uninstall.sh" "Edge Uninstall" ;;
-                    2) run_installer "$SCRIPT_DIR/install/cloud/uninstall.sh" "Cloud Uninstall" ;;
-                    3) run_installer "$SCRIPT_DIR/install/addons/n8n/uninstall.sh" "n8n Uninstall" ;;
+                    1) bash "$SCRIPT_DIR/install/edge/uninstall.sh" ;;
+                    2) bash "$SCRIPT_DIR/install/cloud/uninstall.sh" ;;
+                    3) bash "$SCRIPT_DIR/install/addons/n8n/uninstall.sh" ;;
                     *) echo -e "${RED}Invalid option${NC}" ;;
                 esac
                 ;;
             7)
-                run_installer "$SCRIPT_DIR/install/edge/update.sh" "Container Update"
+                bash "$SCRIPT_DIR/install/edge/update.sh"
                 ;;
             q|Q)
                 echo -e "${GREEN}Goodbye!${NC}"
