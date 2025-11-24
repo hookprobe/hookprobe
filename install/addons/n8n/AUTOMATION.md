@@ -6,6 +6,192 @@ High-Performance Automation for Securing Every Device, Everywhere
 
 HookProbe’s mission is to democratize autonomous cybersecurity across small businesses, smart homes, and edge devices using open-source, high-signal automation.
 
+
+# HOOKPROBE AUTOMATION FLOW  
+## Unified Cyber-Defense Pipeline for QSECBIT Integration  
+This document defines the next-generation automated cybersecurity pipeline for **HookProbe**, integrating **n8n**, **QSECBIT algorithmic scoring**, **ClickHouse**, **VictoriaMetrics**, **Apache Doris**, and cloud + edge deployments.  
+It includes **full deployment architecture diagrams (Mermaid)** and a **real-time defense workflow** optimized for 2025 threat models.
+
+---
+
+# 1. High-Level Architecture (Mermaid)
+
+```mermaid
+flowchart LR
+    subgraph EDGE["Edge Node / Smart Home / IoT"]
+        E1[IoT Device Sensors]
+        E2[HookProbe Agent]
+        E3[Local QSECBIT Scoring Engine]
+        E4[Local ClickHouse Edge]
+        E2 --> E3 --> E4
+    end
+
+    subgraph NETWORK["Network Layer"]
+        FW[Firewall / WAF]
+        TUN[WireGuard / Tailscale Tunnel]
+        CF[Cloudflare Tunnel]
+    end
+
+    EDGE --> NETWORK --> CLOUD
+
+    subgraph CLOUD["HookProbe Cloud Cluster"]
+        subgraph OBS["Observability Stack"]
+            VM[VictoriaMetrics]
+            CH[ClickHouse Cloud]
+            DORIS[Apache Doris Lakehouse]
+        end
+
+        subgraph PROC["Processing"]
+            N8N[n8n Automation Engine]
+            MCP[MCP Distributed AI Bus]
+            QAI[QSECBIT Global Engine]
+        end
+
+        subgraph THREAT["Threat Intelligence"]
+            NMAP[Nmap]
+            MSF[Metasploit]
+            OSINT[OSINT Feeds]
+            YAR[Yara Rules Engine]
+        end
+
+        PROC --> OBS
+        THREAT --> PROC
+        QAI --> PROC
+    end
+```
+
+---
+
+# 2. n8n Automation Flow (Mermaid)
+
+```mermaid
+flowchart TD
+    A[Event Trigger (Logs, Syscalls, Packets)] --> B[QSECBIT Pre-Filter]
+    B -->|Risk >= 0.7| C[Deep Packet & Behavior Analysis]
+    B -->|Risk < 0.7| Z[Store & Monitor Only]
+
+    C --> D{Correlate Against Threat Feeds?}
+    D -->|Yes| E[Nmap Active Validation]
+    D -->|Yes| F[Metasploit Fingerprint Match]
+    D -->|Yes| G[Yara File Scan]
+    D -->|No| Z
+
+    E --> H[ClickHouse Store]
+    F --> H
+    G --> H
+
+    H --> I[VictoriaMetrics Time-Series Alerts]
+    I --> J{Severity >= High?}
+
+    J -->|Yes| K[Automated Response Engine]
+    J -->|No| Z
+
+    K --> L[Network ACL Push]
+    K --> M[Edge Node Isolation]
+    K --> N[Cloudflare Zero-Trust Update]
+
+    N --> O[Notify SOC + Webhook + Slack/MS Teams]
+```
+
+---
+
+# 3. Full Cloud Deployment Diagram (Mermaid)
+
+```mermaid
+flowchart LR
+    subgraph CLOUD["Cloud Cluster"]
+        LB[Load Balancer]
+        API[HookProbe API Gateway]
+        N8N[n8n Automation Nodes]
+        MCP[MCP AI Messaging Bus]
+        QSEC[QSECBIT Scoring Engine]
+        CH[ClickHouse HA Cluster]
+        VM[VictoriaMetrics Cluster]
+        DORIS[Apache Doris Storage]
+        REDIS[Redis Cache]
+    end
+
+    LB --> API --> N8N
+    API --> CH
+    API --> VM
+    API --> DORIS
+    N8N --> MCP --> QSEC
+    QSEC --> CH
+    VM --> N8N
+```
+
+---
+
+# 4. Edge Deployment Diagram (Mermaid)
+
+```mermaid
+flowchart TD
+    subgraph EDGE["On-Prem / IoT / Smart Home"]
+        AGENT[HookProbe Edge Agent]
+        LOCALCH[ClickHouse Edge Node]
+        LQSEC[Local QSECBIT Engine]
+        SENS[System & IoT Telemetry]
+    end
+
+    SENS --> AGENT --> LQSEC --> LOCALCH
+
+    LOCALCH -->|Encrypted Telemetry| TUNNEL[WireGuard / Tailscale]
+```
+
+---
+
+# 5. End-to-End Data Flow (Mermaid Sequence Diagram)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant IoT as IoT Device
+    participant Agent as HookProbe Edge Agent
+    participant QL as QSECBIT Local
+    participant CH as ClickHouse Edge
+    participant N8N as n8n Cloud
+    participant QG as QSECBIT Global
+    participant TI as Threat Intel Stack
+
+    IoT->>Agent: Send Telemetry / Logs / Syscalls
+    Agent->>QL: Pre-analysis & scoring
+    QL->>CH: Store structured data
+    CH->>N8N: Trigger flow on anomaly
+    N8N->>QG: Global scoring check
+    N8N->>TI: Query Nmap/MSF/OSINT/Yara
+    TI-->>N8N: Threat verdict
+    N8N->>Agent: Issue Response (ACL, Isolation)
+    N8N->>User: Notify via webhook/SOC
+```
+
+---
+
+# 6. Deployment Targets
+
+| Environment | Components |
+|------------|------------|
+| **Edge** | HookProbe Agent, Local QSECBIT, ClickHouse Edge |
+| **Cloud** | Distributed n8n, MCP, QSECBIT Global, ClickHouse, VictoriaMetrics, Doris |
+| **Hybrid** | Full telemetry path with encrypted tunnels |
+| **Threat Intel** | Nmap, Metasploit, OSINT, Yara |
+
+---
+
+# 7. Innovation Areas
+
+- QSECBIT-based **adaptive threat scoring** (higher certainty & lower noise)
+- Multi-database architecture with CH + Doris for **OLAP + lakehouse fusion**
+- VictoriaMetrics for **real-time TS analytics**
+- n8n + MCP for **autonomous cybersecurity orchestration**
+- Edge-first model for **privacy, latency reduction, and survivability**
+
+---
+
+# 8. File Generated by ChatGPT (automation.md)
+This file contains **all diagrams**, **architecture**, and **deployment flows** ready for GitHub integration.
+
+
+
 This repository contains the HookProbe Automated Defense Flow, powered by:
 
 N8N Automation Engine
