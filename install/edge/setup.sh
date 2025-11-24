@@ -1693,10 +1693,39 @@ fi
 echo "✓ POD_WEB deployed"
 
 # ============================================================
-# STEP 18: DEPLOY POD_SECURITY - ZEEK + SNORT + QSECBIT
+# STEP 18: DEPLOY POD_SECURITY - ZEEK + SNORT + QSECBIT (OPTIONAL)
 # ============================================================
 echo ""
-echo "[STEP 18] Deploying POD_SECURITY - IDS/IPS + AI Analysis..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "[STEP 18] Security Analysis POD (Optional)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "This step deploys the AI-powered security analysis components:"
+echo "  • Zeek IDS       - Network traffic analysis"
+echo "  • Snort 3 IDS/IPS - Intrusion detection/prevention"
+echo "  • Qsecbit Agent  - AI threat analysis and automated response"
+echo ""
+echo "If you only want a simple web server without security analysis,"
+echo "you can skip this step and add it later."
+echo ""
+
+# Check if DEPLOY_SECURITY is set in environment or config
+if [ "${DEPLOY_SECURITY:-ask}" = "ask" ]; then
+    read -p "Deploy Security Analysis POD? (yes/no) [yes]: " deploy_security
+    deploy_security=${deploy_security:-yes}
+elif [ "${DEPLOY_SECURITY}" = "no" ]; then
+    deploy_security="no"
+else
+    deploy_security="yes"
+fi
+
+if [ "$deploy_security" != "yes" ]; then
+    echo "⊘ Security Analysis POD skipped (can be deployed later)"
+    echo "  To deploy later, run: sudo ./install.sh and select option 1"
+    echo ""
+else
+    echo "✓ Deploying Security Analysis POD..."
+    echo ""
 
 podman pod exists "$POD_SECURITY" 2>/dev/null && podman pod rm -f "$POD_SECURITY"
 
@@ -1858,7 +1887,11 @@ podman run -d --restart always \
     --log-opt tag="hookprobe-qsecbit" \
     hookprobe-qsecbit:v5
 
-echo "✓ POD_SECURITY deployed"
+    echo ""
+    echo "✓ Security Analysis POD deployed successfully!"
+    echo "  → Qsecbit API available at: http://${LOCAL_HOST_IP}:${PORT_QSECBIT_API}"
+    echo ""
+fi
 
 # ============================================================
 # STEP 19: DEPLOY POD_HONEYPOT - BASIC HONEYPOTS
