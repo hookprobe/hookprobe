@@ -248,36 +248,57 @@ jobs:
     name: Integration Test Summary
     runs-on: ubuntu-latest
     needs: [syntax-check, test-config-wizard, test-edge-deployment, test-documentation, security-scan]
+    if: always()
 
     steps:
+      - name: Check job results
+        id: check_results
+        run: |
+          echo "syntax_check=${{ needs.syntax-check.result }}" >> $GITHUB_OUTPUT
+          echo "config_wizard=${{ needs.test-config-wizard.result }}" >> $GITHUB_OUTPUT
+          echo "edge_deployment=${{ needs.test-edge-deployment.result }}" >> $GITHUB_OUTPUT
+          echo "documentation=${{ needs.test-documentation.result }}" >> $GITHUB_OUTPUT
+          echo "security=${{ needs.security-scan.result }}" >> $GITHUB_OUTPUT
+
       - name: Summary
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "   HookProbe Installation Tests"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "✓ Syntax validation passed"
-          echo "✓ Configuration wizard tests passed"
-          echo "✓ Edge deployment dry-run passed"
-          echo "✓ Documentation validation passed"
-          echo "✓ Security scan passed"
+          echo "Syntax Check: ${{ steps.check_results.outputs.syntax_check }}"
+          echo "Config Wizard: ${{ steps.check_results.outputs.config_wizard }}"
+          echo "Edge Deployment: ${{ steps.check_results.outputs.edge_deployment }}"
+          echo "Documentation: ${{ steps.check_results.outputs.documentation }}"
+          echo "Security Scan: ${{ steps.check_results.outputs.security }}"
           echo ""
-          echo "All installation tests completed successfully!"
 
-      - name: Comment on PR (if tests passed)
-        if: success() && github.event_name == 'pull_request'
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |
+            const results = {
+              syntax: '${{ needs.syntax-check.result }}',
+              wizard: '${{ needs.test-config-wizard.result }}',
+              deployment: '${{ needs.test-edge-deployment.result }}',
+              docs: '${{ needs.test-documentation.result }}',
+              security: '${{ needs.security-scan.result }}'
+            };
+
+            const allPassed = Object.values(results).every(r => r === 'success');
+            const status = allPassed ? '✅ All installation tests passed!' : '⚠️ Some installation tests failed';
+
+            let body = `## ${status}\n\n**Test Results:**\n`;
+            body += `- ${results.syntax === 'success' ? '✅' : '❌'} Syntax validation\n`;
+            body += `- ${results.wizard === 'success' ? '✅' : '❌'} Configuration wizard\n`;
+            body += `- ${results.deployment === 'success' ? '✅' : '❌'} Edge deployment dry-run\n`;
+            body += `- ${results.docs === 'success' ? '✅' : '❌'} Documentation validation\n`;
+            body += `- ${results.security === 'success' ? '✅' : '❌'} Security scan\n`;
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '✅ All installation and configuration tests passed successfully!\n\n' +
-                    '- ✓ Shell script syntax validation\n' +
-                    '- ✓ Configuration wizard tests\n' +
-                    '- ✓ Edge deployment dry-run\n' +
-                    '- ✓ Documentation validation\n' +
-                    '- ✓ Security scan\n\n' +
-                    'The installation process is ready for deployment.'
-            })
+              body: body
+            });

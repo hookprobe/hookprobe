@@ -476,7 +476,7 @@ sudo ./n8n_setup.sh
 - **n8n UI**: http://YOUR_IP:5678
 - **MCP API**: http://YOUR_IP:8889
 
-**Documentation**: See [N8N_README.md](../main/install/addons/n8n/README.md) for complete guide
+**Documentation**: See [N8N_README.md](install/addons/n8n/README.md) for complete guide
 
 #### n8n Use Cases
 
@@ -606,7 +606,7 @@ nmcli device show wwan0
 - Recommended: Unlimited or >100GB/month for primary use
 - Failover: 10-20GB/month typically sufficient
 
-**Documentation**: See [install/addons/lte/README.md](../main/install/addons/lte/README.md) for detailed setup
+**Documentation**: See [install/addons/lte/README.md](install/addons/lte/README.md) for detailed setup
 
 ---
 
