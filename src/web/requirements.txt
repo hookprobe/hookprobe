@@ -1,5 +1,5 @@
 # Core Django
-Django==5.0.1
+Django==5.1.14
 django-extensions==3.2.3
 
 # Database drivers
@@ -8,7 +8,7 @@ redis==5.0.1
 clickhouse-driver==0.2.7
 
 # REST API
-djangorestframework==3.14.0
+djangorestframework==3.15.2
 django-filter==23.5
 django-cors-headers==4.3.1
 
@@ -27,23 +27,23 @@ django-admin-interface==0.28.0
 
 # Utilities
 python-dotenv==1.0.0
-requests==2.31.0
+requests==2.32.4
 python-dateutil==2.8.2
 pytz==2024.1
 
 # Monitoring & Logging
 django-prometheus==2.3.1
-sentry-sdk==1.40.5
+sentry-sdk==1.45.1
 
 # Development tools (optional, for development only)
 django-debug-toolbar==4.3.0
 ipython==8.21.0
-black==24.1.1
+black==24.3.0
 flake8==7.0.0
 pytest-django==4.7.0
 
 # Web server (production)
-gunicorn==21.2.0
+gunicorn==22.0.0
 whitenoise==6.6.0
 
 # Data processing
