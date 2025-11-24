@@ -13,10 +13,10 @@ set -u  # Exit on undefined variable
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load network configuration
-if [ -f "$SCRIPT_DIR/network-config.sh" ]; then
-    source "$SCRIPT_DIR/network-config.sh"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    source "$SCRIPT_DIR/config.sh"
 else
-    echo "ERROR: network-config.sh not found in $SCRIPT_DIR"
+    echo "ERROR: config.sh not found in $SCRIPT_DIR"
     exit 1
 fi
 

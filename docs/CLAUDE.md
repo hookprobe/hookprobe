@@ -87,62 +87,95 @@ HookProbe is a **containerized cybersecurity platform** built for Single Board C
 
 ```
 hookprobe/
-├── Scripts/
-│   ├── autonomous/
-│   │   ├── install/
-│   │   │   ├── setup.sh              # MAIN DEPLOYMENT SCRIPT
-│   │   │   ├── network-config.sh     # NETWORK & SERVICE CONFIGURATION
-│   │   │   ├── uninstall.sh          # Cleanup script
-│   │   │   ├── kali-response-scripts.sh  # Automated response logic
-│   │   │   ├── n8n_setup.sh          # Optional POD 008 deployment
-│   │   │   ├── n8n_network-config.sh # n8n configuration
-│   │   │   ├── README.md             # Deployment guide
-│   │   │   └── checklist.md          # Pre/post deployment checklist
-│   │   └── qsecbit/
-│   │       ├── qsecbit.py            # AI THREAT ANALYSIS ENGINE + XDP/eBPF
-│   │       └── README.md             # Qsecbit documentation
-│   ├── backend/
-│   │   └── install/
-│   │       ├── backend-setup.sh      # MSSP cloud backend deployment
-│   │       ├── backend-network-config.sh  # Multi-tenant configuration
-│   │       └── backend-uninstall.sh  # Cloud backend cleanup
-│   ├── honeypot/
+├── install.sh                        # ⭐ MAIN INSTALLER (interactive menu)
+├── uninstall.sh                      # ⭐ MAIN UNINSTALLER (interactive menu)
+├── README.md                         # Main documentation
+├── LICENSE                           # MIT License
+├── CHANGELOG.md                      # Version history
+│
+├── install/                          # 🎯 Installation scripts (top-level, obvious)
+│   ├── edge/                         # Edge deployment (SBCs, Intel N100)
+│   │   ├── setup.sh                  # MAIN EDGE INSTALLER
+│   │   ├── uninstall.sh              # Edge cleanup
+│   │   ├── config.sh                 # Network & service configuration
+│   │   ├── checklist.md              # Pre/post validation
+│   │   ├── update.sh                 # Container updates
+│   │   └── README.md                 # Edge deployment guide
+│   │
+│   ├── cloud/                        # Cloud backend (MSSP)
+│   │   ├── setup.sh                  # Cloud installer
+│   │   ├── uninstall.sh              # Cloud cleanup
+│   │   ├── config.sh                 # Multi-tenant config
+│   │   └── README.md                 # Cloud deployment guide
+│   │
+│   ├── addons/                       # Optional components
+│   │   ├── n8n/                      # Workflow automation
+│   │   │   ├── setup.sh
+│   │   │   ├── uninstall.sh
+│   │   │   ├── config.sh
+│   │   │   ├── integration-checklist.md
+│   │   │   └── README.md
+│   │   ├── lte/                      # LTE/5G connectivity
+│   │   │   └── README.md
+│   │   └── clickhouse/               # Analytics database
+│   │
+│   └── common/                       # Shared utilities
+│
+├── src/                              # 🔧 Source code
+│   ├── qsecbit/                      # AI threat analysis engine
+│   │   ├── qsecbit.py                # Main algorithm
+│   │   ├── energy_monitor.py        # RAPL monitoring
+│   │   ├── xdp_manager.py            # XDP/eBPF DDoS
+│   │   ├── nic_detector.py           # NIC capabilities
+│   │   ├── gdpr_privacy.py           # Privacy module
+│   │   ├── requirements.txt
+│   │   └── README.md
+│   │
+│   ├── response/                     # Automated response
+│   │   ├── kali-scripts.sh           # Kali mitigation
 │   │   ├── attack-mitigation-orchestrator.sh
 │   │   ├── mitigation-maintenance.sh
-│   │   ├── mitigation-config.conf
 │   │   └── README.md
-│   └── webApp/
+│   │
+│   └── web/                          # Web interfaces
 │       └── templates/
-│           ├── qsecbit.py            # Web interface version
-│           └── qsecbit.html
-├── Documents/
-│   ├── backend/
-│   │   └── README.md                 # MSSP cloud backend guide
-│   ├── SecurityMitigationPlan.md     # Detailed security architecture
-│   ├── ClickHouse-Integration-Analysis.md  # OLAP database integration guide
-│   ├── ClickHouse-Quick-Start.md     # Quick deployment guide
-│   └── autonomous/
-│       └── ai-business.md            # AI/automation context
-├── n8n/
-│   ├── README.md                     # n8n integration guide
-│   ├── AI-blogging-workflow.md       # Workflow automation examples
-│   ├── integration-checklist.md      # Validation checklist
-│   ├── n8n_setup.sh                  # Deployment script (copy)
-│   ├── n8n_uninstall.sh
-│   └── n8n_network-config.sh         # Configuration (copy)
-├── LTE/
-│   └── README.md                     # LTE/5G connectivity guide
-├── images/
-│   └── *.png                         # Documentation images
-├── README.md                         # MAIN DOCUMENTATION
-├── CONTRIBUTING.md                   # Contribution guidelines
-├── SECURITY.md                       # Security policy
-├── CLAUDE.md                         # AI ASSISTANT GUIDE (this file)
-├── CHANGELOG.md                      # Version history
-├── LICENSE                           # MIT License
+│
+├── config/                           # 📝 Configuration templates
+│   ├── gdpr-config.sh                # GDPR settings
+│   └── mitigation-config.conf        # Response config
+│
+├── docs/                             # 📚 Documentation
+│   ├── installation/
+│   │   ├── INSTALLATION.md
+│   │   └── cloud-deployment.md
+│   ├── architecture/
+│   │   └── security-model.md
+│   ├── guides/
+│   │   ├── clickhouse-integration.md
+│   │   ├── clickhouse-quick-start.md
+│   │   └── ai-business.md
+│   ├── CONTRIBUTING.md
+│   ├── SECURITY.md
+│   ├── CLAUDE.md                     # AI assistant guide (this file)
+│   └── GDPR.md
+│
+├── examples/                         # 💡 Example workflows
+│   ├── n8n-workflows/
+│   │   └── AI-blogging-workflow.md
+│   ├── grafana-dashboards/
+│   └── response-playbooks/
+│
+├── scripts/                          # 🔨 Maintenance utilities
+│   └── gdpr-retention.sh             # Automated cleanup
+│
+├── assets/                           # 🎨 Images & diagrams
+│   └── *.png
+│
+├── tests/                            # 🧪 Test suites
+│
 ├── requirements.txt                  # Python dependencies
 ├── 3rd-party-licenses.md            # Dependency licenses
-└── hookprobe-r&d.md                 # R&D roadmap
+└── hookprobe-r&d.md                  # R&D roadmap
 
 ```
 
@@ -150,10 +183,10 @@ hookprobe/
 
 | Type | Purpose | Key Files |
 |------|---------|-----------|
-| **Bash Scripts** | Deployment automation | `setup.sh`, `uninstall.sh`, `network-config.sh`, `kali-response-scripts.sh` |
+| **Bash Scripts** | Deployment automation | `setup.sh`, `uninstall.sh`, `config.sh`, `kali-scripts.sh` |
 | **Python** | AI/security logic | `qsecbit.py` |
 | **Markdown** | Documentation | `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, all `*/README.md` |
-| **Config** | Service configuration | `*.conf`, `network-config.sh` |
+| **Config** | Service configuration | `*.conf`, `config.sh` |
 
 **NO TypeScript, JavaScript, Java, or traditional application code.**
 
@@ -223,7 +256,7 @@ HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for au
 
 **Qsecbit (Quantum Security Bit)** is HookProbe's **cyber resilience metric** - not just a threat detector.
 
-**Location**: `Scripts/autonomous/qsecbit/` (modular package in v5.0)
+**Location**: `src/qsecbit/` (modular package in v5.0)
 
 **What is Qsecbit?**
 
@@ -287,7 +320,7 @@ Qsecbit v5.0 introduces **deployment role-based network analysis** for enhanced 
 - `DeploymentRole.PUBLIC_SERVER`: Expects IN > OUT (web servers, APIs)
 - `DeploymentRole.USER_ENDPOINT`: Expects OUT > IN (clients, workstations)
 
-**See**: `Scripts/autonomous/qsecbit/README.md` for complete documentation with detection scenarios.
+**See**: `src/qsecbit/README.md` for complete documentation with detection scenarios.
 
 ### XDP/eBPF DDoS Mitigation
 
@@ -381,7 +414,7 @@ For 99% of deployments, **XDP-drv (Layer 1)** is the fastest practical mode.
 - **Intel N100**: Best value for edge deployment. Built-in I226 NIC supports full XDP-DRV mode.
 - **Mellanox ConnectX**: Enterprise-grade. Full XDP-DRV, AF_XDP, and hardware offload for maximum performance.
 
-**See**: `Scripts/autonomous/qsecbit/README.md` for complete XDP/eBPF documentation.
+**See**: `src/qsecbit/README.md` for complete XDP/eBPF documentation.
 
 ---
 
@@ -391,11 +424,11 @@ For 99% of deployments, **XDP-drv (Layer 1)** is the fastest practical mode.
 
 **HookProbe development is NOT traditional software development.** Changes typically involve:
 
-1. **Network Configuration** (`network-config.sh`)
+1. **Network Configuration** (`config.sh`)
 2. **Deployment Logic** (`setup.sh`)
 3. **Security Rules** (OpenFlow, nftables, WAF)
 4. **AI Logic** (`qsecbit/qsecbit.py`)
-5. **Response Scripts** (`kali-response-scripts.sh`)
+5. **Response Scripts** (`kali-scripts.sh`)
 6. **Documentation** (Markdown files)
 
 ### Making Changes to Deployment Scripts
@@ -403,11 +436,11 @@ For 99% of deployments, **XDP-drv (Layer 1)** is the fastest practical mode.
 **IMPORTANT**: Always test deployment changes in a **clean environment**.
 
 ```bash
-# 1. Make changes to setup.sh or network-config.sh
-nano Scripts/autonomous/install/setup.sh
+# 1. Make changes to setup.sh or config.sh
+nano install/edge/setup.sh
 
 # 2. Test deployment (requires root)
-cd Scripts/autonomous/install/
+cd install/edge/
 sudo ./setup.sh
 
 # 3. Verify all PODs are running
@@ -434,16 +467,16 @@ ovs-vsctl show # Should show minimal config
 
 ### Making Changes to Qsecbit Algorithm
 
-**Location**: `Scripts/autonomous/qsecbit/qsecbit.py`
+**Location**: `src/qsecbit/qsecbit.py`
 
 **Testing Workflow**:
 
 ```bash
 # 1. Modify qsecbit.py
-nano Scripts/autonomous/qsecbit/qsecbit.py
+nano src/qsecbit/qsecbit.py
 
 # 2. Run unit tests (if available)
-cd Scripts/autonomous/qsecbit/
+cd src/qsecbit/
 python3 -m pytest tests/
 
 # 3. Test with synthetic data
@@ -631,7 +664,7 @@ class QsecbitAnalyzer:
 
 ### Configuration File Conventions
 
-**network-config.sh Structure**:
+**config.sh Structure**:
 
 1. **Physical Host Config** (Lines 10-20)
 2. **OVS Bridge Config** (Lines 20-30)
@@ -677,8 +710,8 @@ class QsecbitAnalyzer:
 **Example**: Add Elasticsearch to POD 005 (Monitoring)
 
 ```bash
-# 1. Edit network-config.sh
-nano Scripts/autonomous/install/network-config.sh
+# 1. Edit config.sh
+nano install/edge/config.sh
 
 # Add IP allocation
 IP_ELASTICSEARCH="10.200.5.15"
@@ -687,7 +720,7 @@ IP_ELASTICSEARCH="10.200.5.15"
 IMAGE_ELASTICSEARCH="docker.io/elasticsearch:8.11.0"
 
 # 2. Edit setup.sh
-nano Scripts/autonomous/install/setup.sh
+nano install/edge/setup.sh
 
 # Find POD 005 creation section (search for "POD 005")
 # Add container creation:
@@ -712,7 +745,7 @@ podman run -d \
 
 ```bash
 # Edit qsecbit.py configuration
-nano Scripts/autonomous/qsecbit/qsecbit.py
+nano src/qsecbit/qsecbit.py
 
 # Modify QsecbitConfig dataclass:
 @dataclass
@@ -741,7 +774,7 @@ podman restart hookprobe-pod-006-security-qsecbit
 # For HookProbe, rules are updated via setup.sh
 
 # 2. Edit setup.sh to add new rule
-nano Scripts/autonomous/install/setup.sh
+nano install/edge/setup.sh
 
 # Find ModSecurity container section
 # Add custom rule file mounting:
@@ -773,17 +806,17 @@ podman restart hookprobe-waf-modsecurity
 # 5. Monitor blocks in Grafana
 ```
 
-### Task 4: Add LTE/5G Failover
+### Task 4: Add install/addons/lte/5G Failover
 
-See `LTE/README.md` for complete guide. Quick summary:
+See `install/addons/lte/README.md` for complete guide. Quick summary:
 
 ```bash
 # 1. Install hardware (Quectel RM520N-GL or similar)
 # 2. Install ModemManager
 dnf install -y ModemManager NetworkManager
 
-# 3. Edit network-config.sh
-nano Scripts/autonomous/install/network-config.sh
+# 3. Edit config.sh
+nano install/edge/config.sh
 
 # Add LTE config:
 LTE_ENABLED=true
@@ -809,8 +842,8 @@ nmcli connection add type gsm ifname '*' \
 podman pod ps | grep hookprobe
 
 # 2. Configure n8n
-cd Scripts/autonomous/install/
-nano n8n_network-config.sh
+cd install/edge/
+nano n8n_config.sh
 
 # Change credentials:
 N8N_BASIC_AUTH_USER="admin"
@@ -829,14 +862,14 @@ sudo ./n8n_setup.sh
 # http://YOUR_IP:5678
 # Login with credentials from step 2
 
-# 5. Import workflows (see n8n/README.md)
+# 5. Import workflows (see install/addons/n8n/README.md)
 ```
 
 ### Task 6: Update Container Images
 
 ```bash
-# 1. Edit network-config.sh with new versions
-nano Scripts/autonomous/install/network-config.sh
+# 1. Edit config.sh with new versions
+nano install/edge/config.sh
 
 # Example: Update Grafana
 IMAGE_GRAFANA="docker.io/grafana/grafana:11.5.0"  # Was 11.4.0
@@ -868,14 +901,14 @@ curl http://localhost:3000
 - Attack correlation across multiple sources
 - Forensics investigations
 
-**See Complete Guide**: `Documents/ClickHouse-Integration-Analysis.md`
-**Quick Start**: `Documents/ClickHouse-Quick-Start.md`
+**See Complete Guide**: `docs/ClickHouse-Integration-Analysis.md`
+**Quick Start**: `docs/ClickHouse-Quick-Start.md`
 
 **Quick Deployment** (30 minutes):
 
 ```bash
-# 1. Update network-config.sh
-nano Scripts/autonomous/install/network-config.sh
+# 1. Update config.sh
+nano install/edge/config.sh
 
 # Add ClickHouse configuration:
 IP_CLICKHOUSE="10.200.5.15"
@@ -1005,7 +1038,7 @@ LIMIT 10
 **CRITICAL SECURITY RULES**:
 
 1. **NEVER hardcode credentials** in scripts
-   - Use variables from `network-config.sh`
+   - Use variables from `config.sh`
    - Generate strong random values: `openssl rand -base64 32`
 
 2. **NEVER disable security features** without explicit justification
@@ -1042,8 +1075,8 @@ LIMIT 10
 |---------|-------------|--------------|-----------------|
 | Django Admin | admin | admin | POD 001 - Change via admin panel |
 | Grafana | admin | admin | POD 005 - Change on first login |
-| PostgreSQL | hookprobe_admin | CHANGE_ME_... | `network-config.sh:128` |
-| Keycloak | admin | CHANGE_ME_... | `network-config.sh:146` |
+| PostgreSQL | hookprobe_admin | CHANGE_ME_... | `config.sh:128` |
+| Keycloak | admin | CHANGE_ME_... | `config.sh:146` |
 | Redis | (no auth) | - | Add AUTH in production |
 
 **Always document credential changes** in deployment notes.
@@ -1051,8 +1084,8 @@ LIMIT 10
 ### Sensitive Files
 
 **Files containing secrets** (NEVER commit with real values):
-- `Scripts/autonomous/install/network-config.sh` - All credentials
-- `Scripts/autonomous/install/n8n_network-config.sh` - n8n credentials
+- `install/edge/config.sh` - All credentials
+- `install/edge/n8n_config.sh` - n8n credentials
 
 **Safe to commit**:
 - `setup.sh`, `uninstall.sh` - Logic only
@@ -1065,7 +1098,7 @@ LIMIT 10
 
 ```bash
 # 1. Static analysis
-shellcheck Scripts/autonomous/install/*.sh
+shellcheck install/edge/*.sh
 
 # Python security scan
 pip install bandit
@@ -1098,9 +1131,9 @@ nikto -h http://localhost
 
 HookProbe implements comprehensive GDPR compliance through:
 
-1. **Configuration Module**: `Scripts/autonomous/install/gdpr-config.sh`
-2. **Retention Script**: `Scripts/autonomous/install/gdpr-retention.sh`
-3. **Privacy Module**: `Scripts/autonomous/qsecbit/gdpr_privacy.py`
+1. **Configuration Module**: `install/edge/gdpr-config.sh`
+2. **Retention Script**: `install/edge/gdpr-retention.sh`
+3. **Privacy Module**: `src/qsecbit/gdpr_privacy.py`
 4. **Documentation**: `GDPR.md` (comprehensive guide)
 
 ### Key Privacy Features
@@ -1227,7 +1260,7 @@ echo "Network flows will be retained for $retention_days days"
 
 ```bash
 # 1. Edit gdpr-config.sh
-nano Scripts/autonomous/install/gdpr-config.sh
+nano install/edge/gdpr-config.sh
 
 # 2. Change retention period (with justification)
 RETENTION_SECURITY_LOGS_DAYS=90  # Was 30, now 90 for threat trend analysis
@@ -1417,7 +1450,7 @@ git commit -m "feat(waf): add HTTP request logging with GDPR compliance
 
 ```bash
 # 1. Clean existing deployment
-sudo ./Scripts/autonomous/install/uninstall.sh
+sudo ./install/edge/uninstall.sh
 
 # 2. Verify cleanup
 podman pod ps  # Should be empty
@@ -1425,7 +1458,7 @@ podman ps -a   # Should be empty
 ovs-vsctl show # Should show minimal state
 
 # 3. Fresh deployment
-sudo ./Scripts/autonomous/install/setup.sh
+sudo ./install/edge/setup.sh
 
 # 4. Monitor deployment
 # Watch for errors in output
@@ -1436,7 +1469,7 @@ sudo ./Scripts/autonomous/install/setup.sh
 
 ### Post-Deployment Validation
 
-**Use the deployment checklist**: `Scripts/autonomous/install/checklist.md`
+**Use the deployment checklist**: `install/edge/checklist.md`
 
 **Quick validation**:
 
@@ -1486,11 +1519,11 @@ curl http://localhost:8889/health
 
 # 4. Import test workflow
 # - Access n8n UI
-# - Import workflow from n8n/workflows/
+# - Import workflow from install/addons/n8n/workflows/
 # - Execute test run
 # - Verify no errors
 
-# See n8n/integration-checklist.md for complete validation
+# See install/addons/n8n/integration-checklist.md for complete validation
 ```
 
 ### Qsecbit Algorithm Testing
@@ -1553,19 +1586,19 @@ done
 
 | File | Purpose | When to Edit |
 |------|---------|--------------|
-| `Scripts/autonomous/install/network-config.sh` | **MAIN CONFIGURATION** - All network, IPs, credentials, images | Every deployment |
-| `Scripts/autonomous/install/setup.sh` | **MAIN DEPLOYMENT SCRIPT** - Creates all PODs, containers, networks | Adding services, changing deployment logic |
-| `Scripts/autonomous/qsecbit/qsecbit.py` | **AI THREAT ENGINE** - Qsecbit algorithm + XDP/eBPF DDoS mitigation | Adjusting thresholds, changing analysis logic, XDP configuration |
-| `Scripts/autonomous/qsecbit/README.md` | **QSECBIT DOCUMENTATION** - Complete guide to qsecbit module | Understanding qsecbit architecture, NIC compatibility |
-| `Scripts/autonomous/install/kali-response-scripts.sh` | **AUTOMATED RESPONSE** - Kali Linux mitigation scripts | Adding new attack responses |
+| `install/edge/config.sh` | **MAIN CONFIGURATION** - All network, IPs, credentials, images | Every deployment |
+| `install/edge/setup.sh` | **MAIN DEPLOYMENT SCRIPT** - Creates all PODs, containers, networks | Adding services, changing deployment logic |
+| `src/qsecbit/qsecbit.py` | **AI THREAT ENGINE** - Qsecbit algorithm + XDP/eBPF DDoS mitigation | Adjusting thresholds, changing analysis logic, XDP configuration |
+| `src/qsecbit/README.md` | **QSECBIT DOCUMENTATION** - Complete guide to qsecbit module | Understanding qsecbit architecture, NIC compatibility |
+| `install/edge/kali-scripts.sh` | **AUTOMATED RESPONSE** - Kali Linux mitigation scripts | Adding new attack responses |
 
 ### Optional Feature Configuration
 
 | File | Purpose | When to Edit |
 |------|---------|--------------|
-| `Scripts/autonomous/install/n8n_network-config.sh` | n8n POD 008 configuration | Deploying workflow automation |
-| `Scripts/autonomous/install/n8n_setup.sh` | n8n deployment script | Customizing n8n setup |
-| `LTE/README.md` | LTE/5G connectivity guide | Adding cellular failover |
+| `install/edge/n8n_config.sh` | n8n POD 008 configuration | Deploying workflow automation |
+| `install/edge/n8n_setup.sh` | n8n deployment script | Customizing n8n setup |
+| `install/addons/lte/README.md` | install/addons/lte/5G connectivity guide | Adding cellular failover |
 
 ### Documentation Files
 
@@ -1581,19 +1614,19 @@ done
 
 | File | Purpose | Audience |
 |------|---------|----------|
-| `Scripts/autonomous/install/README.md` | Detailed deployment guide | System administrators |
-| `Scripts/autonomous/install/checklist.md` | Pre/post deployment validation | Operators |
-| `n8n/README.md` | n8n integration guide | Automation users |
-| `n8n/integration-checklist.md` | n8n validation checklist | n8n operators |
-| `Documents/SecurityMitigationPlan.md` | Detailed security architecture | Security architects |
+| `install/edge/README.md` | Detailed deployment guide | System administrators |
+| `install/edge/checklist.md` | Pre/post deployment validation | Operators |
+| `install/addons/n8n/README.md` | n8n integration guide | Automation users |
+| `install/addons/n8n/integration-checklist.md` | n8n validation checklist | n8n operators |
+| `docs/SecurityMitigationPlan.md` | Detailed security architecture | Security architects |
 
 ### Maintenance Scripts
 
 | File | Purpose | When to Run |
 |------|---------|-------------|
-| `Scripts/autonomous/install/uninstall.sh` | Clean removal of all PODs/containers | Testing, troubleshooting, fresh install |
-| `Scripts/autonomous/install/n8n_uninstall.sh` | Remove POD 008 only | Removing n8n |
-| `Scripts/honeypot/mitigation-maintenance.sh` | Honeypot cleanup and maintenance | Scheduled (weekly/monthly) |
+| `install/edge/uninstall.sh` | Clean removal of all PODs/containers | Testing, troubleshooting, fresh install |
+| `install/edge/n8n_uninstall.sh` | Remove POD 008 only | Removing n8n |
+| `src/response/mitigation-maintenance.sh` | Honeypot cleanup and maintenance | Scheduled (weekly/monthly) |
 
 ---
 
@@ -1736,7 +1769,7 @@ ausearch -m avc -ts recent
 podman exec hookprobe-pod-003-db-persistent-postgres pg_isready
 
 # Verify credentials
-grep POSTGRES_ Scripts/autonomous/install/network-config.sh
+grep POSTGRES_ install/edge/config.sh
 
 # Test connection
 podman exec hookprobe-pod-003-db-persistent-postgres \
@@ -1750,7 +1783,7 @@ podman exec hookprobe-pod-003-db-persistent-postgres \
   psql -U postgres -c \
   "ALTER USER hookprobe_admin PASSWORD 'NEW_PASSWORD';"
 
-# Update network-config.sh with new password
+# Update config.sh with new password
 # Recreate dependent containers
 
 # Check PostgreSQL logs
@@ -1814,7 +1847,7 @@ podman restart <container>
 
 ```bash
 # Fresh install
-cd Scripts/autonomous/install/
+cd install/edge/
 sudo ./setup.sh
 
 # Add n8n (POD 008)
@@ -1929,7 +1962,7 @@ tar -czf hookprobe-backup-$(date +%Y%m%d).tar.gz \
 ### When Working with This Codebase
 
 1. **ALWAYS read configuration before suggesting changes**
-   - Review `network-config.sh` for current settings
+   - Review `config.sh` for current settings
    - Check `setup.sh` for deployment logic
    - Understand existing architecture before modifying
 
@@ -2007,9 +2040,9 @@ tar -czf hookprobe-backup-$(date +%Y%m%d).tar.gz \
 3. **SECURITY.md** - Security policy and hardening
 4. **CONTRIBUTING.md** - Contribution guidelines
 5. **Component READMEs** - Specific feature documentation
-   - `Scripts/autonomous/install/README.md`
-   - `n8n/README.md`
-   - `LTE/README.md`
+   - `install/edge/README.md`
+   - `install/addons/n8n/README.md`
+   - `install/addons/lte/README.md`
 
 ### External Resources
 

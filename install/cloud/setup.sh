@@ -15,7 +15,7 @@ set -euo pipefail
 # SCRIPT INITIALIZATION
 # ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/backend-network-config.sh"
+CONFIG_FILE="${SCRIPT_DIR}/config.sh"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Configuration file not found: $CONFIG_FILE"
