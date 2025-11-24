@@ -1,6 +1,6 @@
 
 # hookprobe
-![Future City](images/hookprobe-future-ram-cine.png)
+![Future City](assets/hookprobe-future-ram-cine.png)
 
 **"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"**
 
@@ -184,7 +184,7 @@ Cloud Infrastructure
 - Security research labs
 - SOC operations
 
-**See:** [Backend Deployment Guide](Documents/backend/README.md)
+**See:** [Backend Deployment Guide](docs/installation/cloud-deployment.md)
 
 ---
 
@@ -244,7 +244,7 @@ HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data P
 
 **Intel N100 Advantage**: Best price/performance for edge deployment. Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead.
 
-**See Complete Guide**: [Qsecbit XDP/eBPF Documentation](Scripts/autonomous/qsecbit/README.md)
+**See Complete Guide**: [Qsecbit XDP/eBPF Documentation](src/qsecbit/README.md)
 
 ---
 
@@ -273,20 +273,26 @@ Choose your deployment model:
 ```bash
 # 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
-cd hookprobe/Scripts/autonomous/install/
+cd hookprobe
 
-# 2. Configure
-nano network-config.sh
+# 2. Run installer (interactive menu)
+sudo ./install.sh
+
+# Or directly deploy edge:
+cd install/edge/
+
+# 3. Configure
+nano config.sh
 # Change: HOST_A_IP, passwords, PSK keys
 
-# 3. Deploy
+# 4. Deploy
 sudo ./setup.sh
 
-# 4. Access Grafana
+# 5. Access Grafana
 # http://YOUR_IP:3000 (admin/admin - change immediately!)
 ```
 
-**See:** [Edge Deployment Checklist](Scripts/autonomous/install/checklist.md)
+**See:** [Edge Deployment Checklist](install/edge/checklist.md)
 
 ---
 
@@ -313,14 +319,20 @@ sudo ./setup.sh
 ```bash
 # 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
-cd hookprobe/Scripts/backend/install/
+cd hookprobe
 
-# 2. Configure
-nano backend-network-config.sh
+# 2. Run installer and select option 2
+sudo ./install.sh
+
+# Or directly:
+cd install/cloud/
+
+# 3. Configure
+nano config.sh
 # Change: DORIS_ADMIN_PASSWORD, DORIS_BE_STORAGE, etc.
 
-# 3. Deploy
-sudo ./backend-setup.sh
+# 4. Deploy
+sudo ./setup.sh
 
 # 4. Initialize Doris cluster
 mysql -h 10.100.1.10 -P 9030 -uroot < /tmp/doris-init.sql
@@ -329,7 +341,7 @@ mysql -h 10.100.1.10 -P 9030 -uroot < /tmp/doris-init.sql
 # (See Documents/backend/README.md)
 ```
 
-**See:** [Backend Deployment Guide](Documents/backend/README.md)
+**See:** [Backend Deployment Guide](docs/installation/cloud-deployment.md)
 
 ---
 
@@ -418,7 +430,7 @@ sudo ./n8n_setup.sh
 - **n8n UI**: http://YOUR_IP:5678
 - **MCP API**: http://YOUR_IP:8889
 
-**Documentation**: See [N8N_README.md](../main/n8n/README.md) for complete guide
+**Documentation**: See [N8N_README.md](../main/install/addons/n8n/README.md) for complete guide
 
 #### n8n Use Cases
 
@@ -548,7 +560,7 @@ nmcli device show wwan0
 - Recommended: Unlimited or >100GB/month for primary use
 - Failover: 10-20GB/month typically sufficient
 
-**Documentation**: See [LTE/README.md](../main/LTE/README.md) for detailed setup
+**Documentation**: See [install/addons/lte/README.md](../main/install/addons/lte/README.md) for detailed setup
 
 ---
 
@@ -928,14 +940,14 @@ tail -f /var/log/hookprobe/gdpr-audit.log
 - **[README.md](README.md)** - This file (overview and quick start)
 - **[GDPR.md](GDPR.md)** - GDPR compliance guide (privacy and data protection)
 - **[setup.sh Documentation](Scripts/autonomous/install/README.md)** - Main deployment guide
-- **[Security Mitigation Plan](Documents/SecurityMitigationPlan.md)** - Detailed security analysis
+- **[Security Mitigation Plan](docs/architecture/security-model.md)** - Detailed security analysis
 - **[Deployment Checklist](Scripts/autonomous/install/checklist.md)** - Pre/post deployment tasks
 
 ### Optional Feature Documentation
-- **[n8n Integration](../main/n8n/README.md)** - Workflow automation setup
+- **[n8n Integration](../main/install/addons/n8n/README.md)** - Workflow automation setup
 - **[n8n Checklist](../main/n8n/integration-checklist.md)** - N8N Integration validation
 - **[Autonomous Blog Workflow](../main/n8n/AI-blogging-workflow.md)** - Advanced content pipeline
-- **[LTE/5G Setup](../main/LTE/README.md)** - Cellular connectivity guide
+- **[LTE/5G Setup](../main/install/addons/lte/README.md)** - Cellular connectivity guide
 
 ### Configuration Files
 - **[network-config.sh](Scripts/autonomous/install/network-config.sh)** - Main network configuration
@@ -1086,9 +1098,9 @@ See [LICENSE](LICENSE) for details.
 
 ---
 
-[![hookprobe budget](images/hookprobe-r&d.png)](hookprobe-r&d.md)
+[![hookprobe budget](assets/hookprobe-r&d.png)](hookprobe-r&d.md)
 
-[![hookprobe budget](images/xSOC-HLD-v1.2.png)](Documents/SecurityMitigationPlan.md)
+[![hookprobe budget](assets/xSOC-HLD-v1.2.png)](docs/architecture/security-model.md)
 
 ---
 

@@ -18,10 +18,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load n8n configuration
-if [ -f "$SCRIPT_DIR/n8n_network-config.sh" ]; then
-    source "$SCRIPT_DIR/n8n_network-config.sh"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    source "$SCRIPT_DIR/config.sh"
 else
-    echo "ERROR: n8n_network-config.sh not found in $SCRIPT_DIR"
+    echo "ERROR: config.sh not found in $SCRIPT_DIR"
     exit 1
 fi
 
@@ -735,7 +735,7 @@ echo "  ━━━━━━━━━━━━━━━━━━━━━━━━
 echo "  🤖 n8n Workflow Automation:"
 echo "     URL: http://$LOCAL_HOST_IP:$PORT_N8N"
 echo "     Username: $N8N_BASIC_AUTH_USER"
-echo "     Password: [configured in n8n_network-config.sh]"
+echo "     Password: [configured in config.sh]"
 echo ""
 echo "  🔌 MCP Server:"
 echo "     API: http://$LOCAL_HOST_IP:$PORT_MCP"
@@ -750,7 +750,7 @@ echo ""
 echo "📋 Next Steps:"
 echo "  1. Access n8n UI at http://$LOCAL_HOST_IP:$PORT_N8N"
 echo "  2. Import starter workflows from: $WORKFLOW_DIR"
-echo "  3. Configure AI API keys (OpenAI/Anthropic) in n8n_network-config.sh"
+echo "  3. Configure AI API keys (OpenAI/Anthropic) in config.sh"
 echo "  4. Create credentials in n8n:"
 echo "     • Django CMS API"
 echo "     • Qsecbit API"
