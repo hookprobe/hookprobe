@@ -1,6 +1,8 @@
 # HookProbe Quick Start Guide
 
-## 🚀 Installation in 3 Steps
+## 🚀 Installation in 3 Steps (NEW Simplified Process!)
+
+HookProbe v5.0 introduces an **interactive installation wizard** that eliminates manual configuration. Just run one command and answer a few prompts!
 
 ### Step 1: Clone Repository
 
@@ -17,12 +19,54 @@ sudo ./install.sh
 
 ### Step 3: Follow the Wizard
 
-The interactive installer will:
+The interactive installer will automatically:
 
-1. **Detect Network Interfaces** - Automatically scans your hardware
-2. **Configure Networks** - Set IP addresses, bridges, VNIs, and VXLANs
-3. **Generate Security** - Create secure passwords and encryption keys
-4. **Deploy PODs** - Install and configure all 7 security PODs
+1. **Detect Network Interfaces** - Scans your hardware (eth0, wlan0, etc.)
+2. **Configure Networks** - Prompts for IP addresses, automatically sets up bridges, VNIs, and VXLANs
+3. **Generate Security** - Creates secure passwords and encryption keys (no manual editing!)
+4. **Deploy PODs** - Installs and configures all 7 security PODs
+5. **Verify Deployment** - Runs health checks
+
+**⏱️ Installation completes in 15-20 minutes!**
+
+---
+
+## ✨ What's New in v5.0
+
+### Simplified Installation Process
+
+**Before v5.0** (Manual):
+```bash
+# Old process - manual editing required
+git clone repo
+nano config.sh          # Manual editing
+  - Set HOST_IP
+  - Set passwords
+  - Set PSK keys
+  - Configure VXLANs
+sudo ./setup.sh
+```
+
+**v5.0** (Automated):
+```bash
+# New process - fully interactive
+git clone repo
+sudo ./install.sh       # Interactive wizard does everything!
+  ✓ Detects interfaces automatically
+  ✓ Prompts for IP (with validation)
+  ✓ Generates passwords securely
+  ✓ Creates encryption keys
+  ✓ Configures all PODs
+  ✓ Deploys containers
+```
+
+**Benefits:**
+- ✅ **No manual file editing** - wizard handles everything
+- ✅ **Automatic network detection** - finds interfaces for you
+- ✅ **Secure by default** - generates cryptographically secure passwords
+- ✅ **Error validation** - validates inputs before proceeding
+- ✅ **Guided process** - clear prompts and explanations
+- ✅ **Professional configuration** - production-ready settings
 
 ## 📋 Configuration Menu
 
@@ -152,6 +196,55 @@ sudo ./install.sh
 # Updates all container images
 ```
 
+## 🧪 CI/CD & Quality Assurance
+
+HookProbe v5.0 includes comprehensive CI/CD testing to ensure reliable deployments:
+
+### Automated Testing
+
+Every commit is automatically tested:
+
+- ✅ **Installation Tests** - Validates installer and configuration wizard
+- ✅ **Container Tests** - Verifies Podman, OVS, and networking
+- ✅ **Python Linting** - Ensures code quality (flake8, pylint, bandit)
+- ✅ **ShellCheck** - Validates shell scripts
+- ✅ **Link Validation** - Checks documentation links
+
+### CI/CD Status Badges
+
+Check the build status on the README:
+
+[![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
+[![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
+
+### Running Tests Locally
+
+Before deploying, you can run tests locally:
+
+```bash
+# Syntax validation
+bash -n install.sh
+find install/ -name "*.sh" -exec bash -n {} \;
+
+# Test configuration wizard
+sudo ./install.sh
+# Select option 'c' for configuration
+
+# Verify Podman and OVS
+podman --version
+sudo ovs-vsctl --version
+```
+
+### Complete CI/CD Documentation
+
+See [docs/CI-CD.md](docs/CI-CD.md) for:
+- Complete testing strategy
+- Contributing guidelines
+- Troubleshooting CI/CD issues
+- Local test commands
+
+---
+
 ## 📚 Next Steps
 
 1. **Review Security Settings** - Check [SECURITY.md](docs/SECURITY.md)
@@ -159,6 +252,7 @@ sudo ./install.sh
 3. **Set Up Alerts** - Configure Grafana alerting
 4. **Enable Cloudflare Tunnel** - For remote access (optional)
 5. **Review GDPR Settings** - See [GDPR.md](docs/GDPR.md)
+6. **Check CI/CD Status** - Review automated test results
 
 ## 🆘 Troubleshooting
 
