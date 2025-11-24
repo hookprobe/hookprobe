@@ -73,6 +73,7 @@ print_header() {
     echo -e "${BLUE}   HookProbe Configuration Wizard${NC}"
     echo -e "${BLUE}   $1${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}   💡 Press 'q' at any prompt to quit and discard changes${NC}"
     echo ""
 }
 
@@ -97,13 +98,27 @@ prompt_input() {
     local default="$2"
     local var_name="$3"
 
-    if [ -n "$default" ]; then
-        read -p "$(echo -e ${CYAN}${prompt}${NC} [${GREEN}${default}${NC}]: )" input
-        eval $var_name="${input:-$default}"
-    else
-        read -p "$(echo -e ${CYAN}${prompt}${NC}: )" input
-        eval $var_name="$input"
-    fi
+    while true; do
+        if [ -n "$default" ]; then
+            read -p "$(echo -e ${CYAN}${prompt}${NC} [${GREEN}${default}${NC}/q]: )" input
+        else
+            read -p "$(echo -e ${CYAN}${prompt}${NC} [q to quit]: )" input
+        fi
+
+        # Check for quit
+        if [[ "$input" =~ ^[Qq]$ ]]; then
+            confirm_quit
+            continue
+        fi
+
+        # Use default if empty, or use input
+        if [ -n "$default" ] && [ -z "$input" ]; then
+            eval $var_name="$default"
+        else
+            eval $var_name="$input"
+        fi
+        break
+    done
 }
 
 prompt_password() {
@@ -112,11 +127,26 @@ prompt_password() {
     local password1=""
     local password2=""
 
+    echo -e "${YELLOW}💡 Enter 'q' to quit at password prompt${NC}"
+
     while true; do
         read -sp "$(echo -e ${CYAN}${prompt}${NC}: )" password1
         echo ""
+
+        # Check for quit
+        if [[ "$password1" =~ ^[Qq]$ ]]; then
+            confirm_quit
+            continue
+        fi
+
         read -sp "$(echo -e ${CYAN}Confirm password${NC}: )" password2
         echo ""
+
+        # Check for quit on confirmation
+        if [[ "$password2" =~ ^[Qq]$ ]]; then
+            confirm_quit
+            continue
+        fi
 
         if [ "$password1" = "$password2" ]; then
             if [ ${#password1} -ge 8 ]; then
@@ -135,15 +165,37 @@ prompt_yesno() {
     local prompt="$1"
     local default="$2"
 
-    if [ "$default" = "y" ]; then
-        read -p "$(echo -e ${CYAN}${prompt}${NC} [${GREEN}Y${NC}/n]: )" answer
-        answer=${answer:-y}
-    else
-        read -p "$(echo -e ${CYAN}${prompt}${NC} [y/${GREEN}N${NC}]: )" answer
-        answer=${answer:-n}
-    fi
+    while true; do
+        if [ "$default" = "y" ]; then
+            read -p "$(echo -e ${CYAN}${prompt}${NC} [${GREEN}Y${NC}/n/q]: )" answer
+            answer=${answer:-y}
+        else
+            read -p "$(echo -e ${CYAN}${prompt}${NC} [y/${GREEN}N${NC}/q]: )" answer
+            answer=${answer:-n}
+        fi
 
-    [[ "$answer" =~ ^[Yy] ]]
+        if [[ "$answer" =~ ^[Qq] ]]; then
+            confirm_quit
+            continue
+        fi
+
+        [[ "$answer" =~ ^[Yy] ]] && return 0
+        [[ "$answer" =~ ^[Nn] ]] && return 1
+    done
+}
+
+confirm_quit() {
+    echo ""
+    print_warning "⚠ This will discard all configuration changes!"
+    read -p "$(echo -e ${RED}Are you sure you want to quit?${NC} [y/N]: )" confirm
+    if [[ "$confirm" =~ ^[Yy] ]]; then
+        echo ""
+        print_info "Configuration cancelled. No changes saved."
+        exit 0
+    fi
+    echo ""
+    print_info "Continuing configuration..."
+    echo ""
 }
 
 generate_password() {
@@ -185,12 +237,10 @@ detect_network_interfaces() {
     for iface in "${DETECTED_INTERFACES[@]}"; do
         local ip_addr=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | head -1)
         local status=$(cat "/sys/class/net/$iface/operstate" 2>/dev/null || echo "unknown")
-        local speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "?")
 
-        printf "  ${YELLOW}%d${NC}) %-12s " "$idx" "$iface"
-        printf "IP: %-15s " "${ip_addr:-none}"
-        printf "Status: %-8s " "$status"
-        printf "Speed: %s Mbps\n" "$speed"
+        printf "  ${YELLOW}[%d]${NC} %-12s " "$idx" "$iface"
+        printf "│ IP: %-16s " "${ip_addr:-none}"
+        printf "│ Status: %s\n" "$status"
         ((idx++))
     done
     echo ""
@@ -204,13 +254,22 @@ select_wan_interface() {
 
     local idx=1
     for iface in "${DETECTED_INTERFACES[@]}"; do
-        echo "  ${YELLOW}$idx${NC}) $iface"
+        local ip_addr=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | head -1)
+        printf "  ${YELLOW}[%d]${NC} %-12s │ %s\n" "$idx" "$iface" "${ip_addr:-no IP}"
         ((idx++))
     done
     echo ""
+    echo -e "  ${YELLOW}[q]${NC} Quit (discard changes)"
+    echo ""
 
     while true; do
-        read -p "$(echo -e ${CYAN}Select WAN interface${NC} [1-${#DETECTED_INTERFACES[@]}]: )" selection
+        read -p "$(echo -e ${CYAN}Select WAN interface${NC} [1-${#DETECTED_INTERFACES[@]}/q]: )" selection
+
+        # Check for quit
+        if [[ "$selection" =~ ^[Qq] ]]; then
+            confirm_quit
+            continue
+        fi
 
         if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#DETECTED_INTERFACES[@]}" ]; then
             WAN_INTERFACE="${DETECTED_INTERFACES[$((selection-1))]}"
@@ -218,7 +277,7 @@ select_wan_interface() {
             sleep 1
             break
         else
-            print_error "Invalid selection"
+            print_error "Invalid selection. Please enter 1-${#DETECTED_INTERFACES[@]} or 'q' to quit"
         fi
     done
 }
@@ -514,6 +573,15 @@ run_configuration_wizard() {
     echo "This wizard will help you configure HookProbe deployment."
     echo ""
     print_info "Deployment type: $DEPLOYMENT_TYPE"
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}✓${NC} Automatic network interface detection"
+    echo -e "${GREEN}✓${NC} Guided step-by-step configuration"
+    echo -e "${GREEN}✓${NC} Secure password generation"
+    echo -e "${GREEN}✓${NC} VXLAN and VNI setup"
+    echo ""
+    echo -e "${YELLOW}💡 You can press 'q' at any time to quit and discard changes${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     read -p "Press Enter to continue..."
 
