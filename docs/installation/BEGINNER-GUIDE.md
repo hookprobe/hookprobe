@@ -38,29 +38,198 @@ This guide will walk you through **everything** you need to deploy HookProbe, ev
 
 ## Hardware Requirements
 
-### Minimum Hardware for HookProbe
+### Supported Platforms - We Support Your Cybersecurity Journey!
 
-| Component | Minimum | Recommended | Best |
-|-----------|---------|-------------|------|
-| **CPU** | Intel N100 (4 cores) | Intel N100 | Intel Xeon/AMD EPYC |
+HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterprise servers. Choose what fits your needs and budget!
+
+### Minimum Requirements
+
+| Component | Minimum | Recommended | Enterprise |
+|-----------|---------|-------------|------------|
+| **CPU** | 4+ cores (2020+) | 6+ cores | 8+ cores |
 | **RAM** | 8GB | 16GB | 32GB+ |
 | **Storage** | 256GB SSD | 500GB SSD | 1TB+ NVMe SSD |
-| **Network** | 1Gbps NIC | 2.5Gbps (Intel I226) | 10Gbps+ |
+| **Network** | 1Gbps NIC | 2.5Gbps NIC | 10Gbps+ NIC |
 
-### Recommended Hardware Platforms
+### Supported CPU Architectures
 
-**Budget Option (~$150-300):**
-- Intel N100 Mini PC (Beelink, GMKtec, etc.)
-- 8-16GB RAM
-- 256-500GB SSD
-- Perfect for home/small office
+**x86_64 (Intel/AMD):**
+- ✅ Intel N-series (N100, N200, N300, N305)
+- ✅ Intel Core mobile (i3, i5, i7, i9) - 8th gen+
+- ✅ Intel Core desktop (i3, i5, i7, i9) - 8th gen+
+- ✅ Intel Xeon (any recent generation)
+- ✅ AMD Ryzen (3000 series+)
+- ✅ AMD EPYC (any generation)
 
-**Enterprise Option ($500+):**
-- Dell OptiPlex, HP EliteDesk
-- Intel Core i5/i7 or equivalent
-- 16-32GB RAM
-- 500GB+ SSD
-- Multiple NICs
+**ARM64 (ARMv8):**
+- ✅ Raspberry Pi 4/5 (4GB+ RAM)
+- ✅ Banana Pi (BPI-R3, BPI-R4, BPI-M5, etc.)
+- ✅ Nvidia Jetson (Nano, Xavier, Orin)
+- ✅ Radxa (ROCK 5, ROCK 4)
+- ✅ Orange Pi (5/5+)
+- ✅ Odroid (N2+, C4, etc.)
+
+**Key: Hardware released 2020 or later with focus on energy efficiency**
+
+### Hardware Examples by Budget
+
+#### Budget-Friendly ($100-$300)
+**Perfect for: Home users, learning, small deployments**
+
+**x86_64 Options:**
+- Intel N100/N200 Mini PC (Beelink, GMKtec, Trigkey)
+  - 8-16GB RAM
+  - Built-in 2.5Gbps NIC
+  - ~15W power consumption
+  - **Best value for beginners!**
+
+- Intel NUC 11/12/13 (used/refurbished)
+  - Core i3/i5
+  - 8-16GB RAM
+  - Low power, compact
+
+**ARM64 Options:**
+- Raspberry Pi 5 (8GB)
+  - $80-100
+  - Great community support
+  - Perfect for learning
+
+- Banana Pi BPI-R3
+  - $100-150
+  - Built-in 2.5Gbps
+  - M.2 slot for expansion
+
+#### Mid-Range ($300-$700)
+**Perfect for: Small business, branch offices, enthusiasts**
+
+**x86_64 Options:**
+- Intel NUC 12/13/14 (new)
+  - Core i5/i7
+  - 16-32GB RAM
+  - Thunderbolt, multiple displays
+  - 25-65W power consumption
+
+- Mini PC with Intel Core i5-12th gen+
+  - 16-32GB RAM
+  - Dual 2.5Gbps NICs
+  - NVMe storage
+
+- Dell OptiPlex Micro (refurbished)
+- HP EliteDesk Mini (refurbished)
+
+**ARM64 Options:**
+- Nvidia Jetson Orin Nano
+  - GPU acceleration
+  - AI workloads
+  - 8GB RAM
+
+- Radxa ROCK 5B
+  - 8-16GB RAM
+  - PCIe 3.0
+  - M.2 NVMe
+
+#### Enterprise ($700+)
+**Perfect for: MSSP, large deployments, production**
+
+**x86_64 Options:**
+- Dell PowerEdge (R340, R440, R640)
+- HP ProLiant (DL20, DL360)
+- Intel Xeon servers
+- AMD EPYC servers
+- Dual 10Gbps+ NICs
+- ECC RAM
+- Hardware RAID
+
+**ARM64 Options:**
+- Nvidia Jetson AGX Orin
+  - Up to 64GB RAM
+  - Enterprise-grade
+  - GPU acceleration
+
+### Platform-Specific Advantages
+
+#### Intel N-Series (N100, N200, N300)
+- ✅ **Excellent price/performance**
+- ✅ Low power (15W)
+- ✅ Built-in Intel I226 NIC (2.5Gbps)
+- ✅ Full XDP/eBPF support
+- ✅ Perfect for beginners
+- ⚠️ Entry-level (good for most home/small business)
+
+#### Intel Core i3/i5/i7 (8th gen+)
+- ✅ **Better performance** than N-series
+- ✅ More cores/threads
+- ✅ Better for multiple VMs
+- ✅ Great for small-medium business
+- ⚠️ Higher power consumption (35-65W)
+
+#### Intel NUC
+- ✅ **Compact and reliable**
+- ✅ Thunderbolt support
+- ✅ Multiple display outputs
+- ✅ Excellent Linux support
+- ✅ Great for enthusiasts
+
+#### Raspberry Pi
+- ✅ **Largest community**
+- ✅ Most tutorials available
+- ✅ Very affordable
+- ✅ Perfect for learning
+- ⚠️ ARM architecture (some limitations)
+- ⚠️ Generic XDP mode (not hardware-accelerated)
+
+#### Banana Pi / Radxa / Orange Pi
+- ✅ **More powerful** than Raspberry Pi
+- ✅ Built-in networking features
+- ✅ M.2/PCIe expansion
+- ✅ Good ARM alternative
+- ⚠️ Smaller community than Raspberry Pi
+
+#### Nvidia Jetson
+- ✅ **GPU acceleration**
+- ✅ AI/ML workloads
+- ✅ Computer vision support
+- ✅ Great for advanced projects
+- ⚠️ Higher cost
+- ⚠️ More complex setup
+
+### Quick Decision Guide
+
+```
+Budget?
+├─ Under $200
+│  ├─ Want x86_64? → Intel N100 Mini PC ✓
+│  └─ Want ARM64? → Raspberry Pi 5 (8GB) ✓
+│
+├─ $200-$500
+│  ├─ Want x86_64? → Intel NUC 12/13 (i5) ✓
+│  └─ Want ARM64? → Banana Pi BPI-R3 / Radxa ROCK 5B ✓
+│
+└─ $500+
+   ├─ Want x86_64? → Dell/HP Enterprise / Intel Xeon ✓
+   └─ Want ARM64? → Nvidia Jetson Orin ✓
+
+Need AI/ML? → Nvidia Jetson ✓
+Need lowest power? → Intel N100 / Raspberry Pi ✓
+Need best performance? → Intel Xeon / AMD EPYC ✓
+Need most support? → Raspberry Pi / Intel NUC ✓
+```
+
+### Platform Compatibility Matrix
+
+| Feature | Intel x86 | AMD x86 | Raspberry Pi | Other ARM | Nvidia Jetson |
+|---------|-----------|---------|--------------|-----------|---------------|
+| **Basic HookProbe** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **XDP Hardware Mode** | ✅ Yes* | ✅ Yes* | ⚠️ Generic | ⚠️ Generic | ⚠️ Generic |
+| **Podman Containers** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **All 7 PODs** | ✅ Yes | ✅ Yes | ✅ Yes** | ✅ Yes** | ✅ Yes |
+| **Energy Monitoring** | ✅ RAPL | ✅ RAPL | ⚠️ Limited | ⚠️ Limited | ⚠️ Limited |
+| **GPU Acceleration** | ⚠️ Limited | ⚠️ Limited | ❌ No | ❌ No | ✅ Yes |
+
+\* With Intel I226/I211 or compatible NIC
+\** May need 8GB+ RAM for all PODs
+
+**Bottom Line: Any modern hardware (2020+) with 8GB+ RAM will work!**
 
 ---
 
