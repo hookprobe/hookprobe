@@ -302,41 +302,4 @@ jobs:
           echo "GDPR: ${{ needs.test-gdpr-compliance.result }}"
           echo "Security: ${{ needs.test-security-features.result }}"
           echo ""
-
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const results = {
-              podman: '${{ needs.test-podman-availability.result }}',
-              ovs: '${{ needs.test-ovs-availability.result }}',
-              python: '${{ needs.test-python-dependencies.result }}',
-              qsecbit: '${{ needs.test-qsecbit-algorithm.result }}',
-              network: '${{ needs.test-network-configuration.result }}',
-              monitoring: '${{ needs.test-monitoring-stack.result }}',
-              gdpr: '${{ needs.test-gdpr-compliance.result }}',
-              security: '${{ needs.test-security-features.result }}'
-            };
-
-            const allPassed = Object.values(results).every(r => r === 'success');
-            const status = allPassed ? '✅ All container tests passed!' : '⚠️ Some container tests failed';
-
-            let body = `## ${status}\n\n**Infrastructure:**\n`;
-            body += `- ${results.podman === 'success' ? '✅' : '❌'} Podman compatibility\n`;
-            body += `- ${results.ovs === 'success' ? '✅' : '❌'} Open vSwitch\n`;
-            body += `- ${results.python === 'success' ? '✅' : '❌'} Python environment\n\n`;
-            body += `**Components:**\n`;
-            body += `- ${results.qsecbit === 'success' ? '✅' : '❌'} Qsecbit algorithm\n`;
-            body += `- ${results.network === 'success' ? '✅' : '❌'} Network configuration\n`;
-            body += `- ${results.monitoring === 'success' ? '✅' : '❌'} Monitoring stack\n\n`;
-            body += `**Compliance:**\n`;
-            body += `- ${results.gdpr === 'success' ? '✅' : '❌'} GDPR compliance\n`;
-            body += `- ${results.security === 'success' ? '✅' : '❌'} Security features\n`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+          echo "Summary completed"
