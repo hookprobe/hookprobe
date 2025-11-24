@@ -279,7 +279,8 @@ cd hookprobe
 sudo ./install.sh
 
 # Or directly deploy edge:
-cd install/edge/
+# Or run configuration wizard first:
+sudo ./install.sh    # Select option "c" to configure
 
 # 3. Configure
 nano config.sh
