@@ -15,100 +15,98 @@ It includes **full deployment architecture diagrams (Mermaid)** and a **real-tim
 ---
 
 # 1. High-Level Architecture (Mermaid)
-
-```mermaid
+   
+```mermaid 
 flowchart LR
     subgraph EDGE["Edge Node / Smart Home / IoT"]
-        E1[IoT Device Sensors]
-        E2[HookProbe Agent]
-        E3[Local QSECBIT Scoring Engine]
-        E4[Local ClickHouse Edge]
-        E2 --> E3 --> E4
+        E1["IoT Device<br>Sensors"]
+        E2["HookProbe<br>Agent"]
+        E3["Local QSECBIT<br>Scoring Engine"]
+        E4["Local ClickHouse<br>Edge"]
+        E2 --> E3
+        E3 --> E4
     end
 
     subgraph NETWORK["Network Layer"]
-        FW[Firewall / WAF]
-        TUN[WireGuard / Tailscale Tunnel]
-        CF[Cloudflare Tunnel]
+        FW["Firewall / WAF"]
+        TUN["WireGuard / Tailscale Tunnel"]
+        CF["Cloudflare Tunnel"]
     end
 
-    EDGE --> NETWORK --> CLOUD
+    EDGE --> NETWORK
+    NETWORK --> CLOUD
 
     subgraph CLOUD["HookProbe Cloud Cluster"]
         subgraph OBS["Observability Stack"]
-            VM[VictoriaMetrics]
-            CH[ClickHouse Cloud]
-            DORIS[Apache Doris Lakehouse]
+            VM["VictoriaMetrics"]
+            CH["ClickHouse Cloud"]
+            DORIS["Apache Doris Lakehouse"]
         end
 
         subgraph PROC["Processing"]
-            N8N[n8n Automation Engine]
-            MCP[MCP Distributed AI Bus]
-            QAI[QSECBIT Global Engine]
+            N8N["n8n Automation Engine"]
+            MCP["MCP Distributed AI Bus"]
+            QAI["QSECBIT Global Engine"]
         end
 
         subgraph THREAT["Threat Intelligence"]
-            NMAP[Nmap]
-            MSF[Metasploit]
-            OSINT[OSINT Feeds]
-            YAR[Yara Rules Engine]
+            NMAP["Nmap"]
+            MSF["Metasploit"]
+            OSINT["OSINT Feeds"]
+            YAR["Yara Rules Engine"]
         end
 
         PROC --> OBS
         THREAT --> PROC
         QAI --> PROC
     end
+
 ```
 
----
-
 # 2. n8n Automation Flow (Mermaid)
-
 ```mermaid
 flowchart TD
-    A[Event Trigger (Logs, Syscalls, Packets)] --> B[QSECBIT Pre-Filter]
-    B -->|Risk >= 0.7| C[Deep Packet & Behavior Analysis]
-    B -->|Risk < 0.7| Z[Store & Monitor Only]
+    A["Event Trigger<br>Logs / Syscalls / Packets"] --> B["QSECBIT<br>Pre-Filter"]
+    B -->|Risk >= 0.7| C["Deep Packet &<br>Behavior Analysis"]
+    B -->|Risk < 0.7| Z["Store &<br>Monitor Only"]
 
-    C --> D{Correlate Against Threat Feeds?}
-    D -->|Yes| E[Nmap Active Validation]
-    D -->|Yes| F[Metasploit Fingerprint Match]
-    D -->|Yes| G[Yara File Scan]
+    C --> D{"Correlate Against<br>Threat Feeds?"}
+    D -->|Yes| E["Nmap Active<br>Validation"]
+    D -->|Yes| F["Metasploit<br>Fingerprint Match"]
+    D -->|Yes| G["Yara File<br>Scan"]
     D -->|No| Z
 
-    E --> H[ClickHouse Store]
+    E --> H["ClickHouse<br>Store"]
     F --> H
     G --> H
 
-    H --> I[VictoriaMetrics Time-Series Alerts]
-    I --> J{Severity >= High?}
+    H --> I["VictoriaMetrics<br>Time-Series Alerts"]
+    I --> J{"Severity >= High?"}
 
-    J -->|Yes| K[Automated Response Engine]
+    J -->|Yes| K["Automated Response<br>Engine"]
     J -->|No| Z
 
-    K --> L[Network ACL Push]
-    K --> M[Edge Node Isolation]
-    K --> N[Cloudflare Zero-Trust Update]
+    K --> L["Network ACL<br>Push"]
+    K --> M["Edge Node<br>Isolation"]
+    K --> N["Cloudflare<br>Zero-Trust Update"]
 
-    N --> O[Notify SOC + Webhook + Slack/MS Teams]
-```
+    N --> O["Notify SOC<br>Webhook / Chat"]
 
----
+ ```
 
 # 3. Full Cloud Deployment Diagram (Mermaid)
-
 ```mermaid
 flowchart LR
     subgraph CLOUD["Cloud Cluster"]
-        LB[Load Balancer]
-        API[HookProbe API Gateway]
-        N8N[n8n Automation Nodes]
-        MCP[MCP AI Messaging Bus]
-        QSEC[QSECBIT Scoring Engine]
-        CH[ClickHouse HA Cluster]
-        VM[VictoriaMetrics Cluster]
-        DORIS[Apache Doris Storage]
-        REDIS[Redis Cache]
+        LB["Load Balancer"]
+        API["HookProbe API<br>Gateway"]
+        N8N["n8n Automation Nodes"]
+        MCP["MCP AI Messaging Bus"]
+        QSEC["QSECBIT Scoring Engine"]
+        CH["ClickHouse HA Cluster"]
+        VM["VictoriaMetrics Cluster"]
+        DORIS["Apache Doris Storage"]
+        REDIS["Redis Cache"]
     end
 
     LB --> API --> N8N
@@ -120,28 +118,22 @@ flowchart LR
     VM --> N8N
 ```
 
----
-
 # 4. Edge Deployment Diagram (Mermaid)
-
 ```mermaid
+
 flowchart TD
     subgraph EDGE["On-Prem / IoT / Smart Home"]
-        AGENT[HookProbe Edge Agent]
-        LOCALCH[ClickHouse Edge Node]
-        LQSEC[Local QSECBIT Engine]
-        SENS[System & IoT Telemetry]
+        AGENT["HookProbe<br>Edge Agent"]
+        LOCALCH["ClickHouse<br>Edge Node"]
+        LQSEC["Local QSECBIT<br>Engine"]
+        SENS["System & IoT<br>Telemetry"]
     end
 
     SENS --> AGENT --> LQSEC --> LOCALCH
-
-    LOCALCH -->|Encrypted Telemetry| TUNNEL[WireGuard / Tailscale]
+    LOCALCH -->|Encrypted Telemetry| TUNNEL["WireGuard / Tailscale"]
 ```
 
----
-
 # 5. End-to-End Data Flow (Mermaid Sequence Diagram)
-
 ```mermaid
 sequenceDiagram
     autonumber
@@ -153,15 +145,15 @@ sequenceDiagram
     participant QG as QSECBIT Global
     participant TI as Threat Intel Stack
 
-    IoT->>Agent: Send Telemetry / Logs / Syscalls
+    IoT->>Agent: Send telemetry, logs, syscalls
     Agent->>QL: Pre-analysis & scoring
     QL->>CH: Store structured data
     CH->>N8N: Trigger flow on anomaly
     N8N->>QG: Global scoring check
     N8N->>TI: Query Nmap/MSF/OSINT/Yara
     TI-->>N8N: Threat verdict
-    N8N->>Agent: Issue Response (ACL, Isolation)
-    N8N->>User: Notify via webhook/SOC
+    N8N->>Agent: Issue response (ACL, Isolation)
+    N8N->>User: Notify via webhook / SOC
 ```
 
 ---
