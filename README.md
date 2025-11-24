@@ -105,7 +105,7 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
                    │
          ┌─────────▼─────────┐
          │  Physical Host    │
-         │  (Intel N100)     │
+         │  (SBC/Server)     │
          │  OVS Bridge       │
          └─────────┬─────────┘
                    │
@@ -142,7 +142,8 @@ HookProbe now supports **two deployment models**:
 Customer Site
 ┌──────────────────────┐
 │ HookProbe SBC        │
-│ Intel N100 (8-16GB)  │
+│ x86_64 or ARM64      │
+│ (8-16GB RAM)         │
 │                      │
 │ PODs 001-007:        │
 │ - ClickHouse (local) │
@@ -223,36 +224,195 @@ HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data P
 - **Layer 1 (XDP-drv)**: Native driver mode - Full kernel bypass, < 1µs latency
 - **Layer 1.5 (XDP-skb)**: Generic software mode - Partial bypass, 5-10µs latency, higher CPU
 
+### Supported Hardware Platforms - We Support Your Cybersecurity Journey!
+
+HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterprise servers. Choose what fits your needs and budget!
+
+#### Supported CPU Architectures
+
+**x86_64 (Intel/AMD):**
+- ✅ Intel N-series (N100, N200, N300, N305) - 2020+ energy efficient
+- ✅ Intel Core mobile (i3, i5, i7, i9) - 8th gen+ (2018+)
+- ✅ Intel Core desktop (i3, i5, i7, i9) - 8th gen+ (2018+)
+- ✅ Intel NUC (all generations 8+)
+- ✅ Intel Xeon (any recent generation)
+- ✅ AMD Ryzen (3000 series+)
+- ✅ AMD EPYC (any generation)
+
+**ARM64 (ARMv8):**
+- ✅ Raspberry Pi 4/5 (4GB+ RAM)
+- ✅ Banana Pi (BPI-R3, BPI-R4, BPI-M5, etc.)
+- ✅ Nvidia Jetson (Nano, Xavier, Orin)
+- ✅ Radxa (ROCK 5, ROCK 4)
+- ✅ Orange Pi (5/5+)
+- ✅ Odroid (N2+, C4, etc.)
+
+**Key: Hardware released 2020 or later with focus on energy efficiency**
+
 ### Recommended Hardware Configurations
 
-#### 💰 Budget Edge (< $300)
-- **SBC**: Intel N100 (8GB RAM, ~$150)
-- **NIC**: Intel I226-V (built-in, 2.5Gbps)
+#### 💰 Budget Edge ($100-$300)
+
+**Intel N-Series SBC:**
+- **CPU**: Intel N100/N200 (4-8 cores, ~6W TDP)
+- **RAM**: 8-16GB DDR4/DDR5
+- **NIC**: Intel I226-V (2.5Gbps, built-in)
 - **XDP**: Native DRV mode ✅
 - **Performance**: 2.5 Gbps line rate DDoS filtering
-- **Use Case**: Home lab, small office, development
+- **Use Case**: Home lab, small office, learning cybersecurity
+- **Price**: $150-$250
 
-#### 🏢 Production Edge ($300-$1000)
-- **SBC**: Mini PC with Intel I211 or I226
-- **NIC**: Intel I226-V (2.5Gbps)
+**ARM SBC (Raspberry Pi, Banana Pi, Orange Pi):**
+- **CPU**: ARM Cortex-A76 (4+ cores, ~5-15W TDP)
+- **RAM**: 8GB minimum (16GB for Radxa)
+- **NIC**: Gigabit Ethernet (Realtek/Broadcom)
+- **XDP**: Generic SKB mode (software)
+- **Performance**: 1 Gbps, higher CPU overhead
+- **Use Case**: Development, learning, home lab
+- **Price**: $100-$200
+
+**Best for**: First-time users, students, home enthusiasts, budget-conscious deployments
+
+#### 🏢 Mid-Range Edge ($300-$700)
+
+**Intel Core Mini PC (i3/i5/i7 Mobile):**
+- **CPU**: Intel Core i3/i5 (8th gen+, 15-28W TDP)
+- **RAM**: 16-32GB DDR4
+- **NIC**: Intel I226-V or add-on Intel I211/I350
 - **XDP**: Native DRV mode ✅
-- **Performance**: 1-2.5 Gbps sustained
-- **Use Case**: Branch office, edge security appliance
+- **Performance**: 2.5-10 Gbps sustained
+- **Use Case**: Small business, branch office, edge security appliance
+- **Examples**: Intel NUC, Beelink, Minisforum, ASUS Mini PC
+- **Price**: $300-$600
+
+**Nvidia Jetson (ARM with GPU):**
+- **CPU**: ARM Cortex-A78AE (6-8 cores)
+- **GPU**: NVIDIA GPU (for ML inference)
+- **RAM**: 8-32GB unified memory
+- **NIC**: Gigabit/2.5G Ethernet
+- **XDP**: Generic SKB mode
+- **Performance**: 1-2.5 Gbps, excellent AI performance
+- **Use Case**: AI-heavy workloads, ML training, computer vision
+- **Price**: $200-$500
+
+**Advanced ARM SBC (Radxa, Banana Pi):**
+- **CPU**: RK3588/RK3568 (8 cores, ARM Cortex-A76)
+- **RAM**: 16GB LPDDR4/DDR5
+- **NIC**: 2.5G Ethernet (some models have dual NICs)
+- **XDP**: Generic SKB mode
+- **Performance**: 2.5 Gbps
+- **Use Case**: Seasoned users, advanced networking, network appliances
+- **Examples**: Radxa ROCK 5, Banana Pi BPI-R4
+- **Price**: $200-$400
+
+**Best for**: Small businesses, IT professionals, prosumers, multi-site deployments
+
+#### 🏢 Enterprise Edge ($700-$2000)
+
+**Intel Core Desktop/Server (i7/i9/Xeon):**
+- **CPU**: Intel Core i7/i9 or Xeon E (8-24 cores, 65-125W TDP)
+- **RAM**: 32-128GB DDR4/DDR5 ECC
+- **NIC**: Intel X520/X710 (10-40Gbps)
+- **XDP**: Native DRV mode ✅
+- **Performance**: 10-40 Gbps sustained
+- **Use Case**: Large enterprise, data center edge, high-throughput environments
+- **Price**: $800-$2000
+
+**AMD Ryzen/EPYC:**
+- **CPU**: AMD Ryzen 7/9 or EPYC (8-64 cores, 65-280W TDP)
+- **RAM**: 32-256GB DDR4/DDR5 ECC
+- **NIC**: Intel X710 or Mellanox ConnectX-5
+- **XDP**: Native DRV mode ✅
+- **Performance**: 10-100 Gbps sustained
+- **Use Case**: High-performance computing, multi-tenant edge
+- **Price**: $1000-$2000
+
+**Best for**: Enterprise security teams, MSSP edge nodes, high-traffic environments
 
 #### ☁️ MSSP Cloud Backend ($2000+)
-- **Server**: Dell R650/HP DL360 Gen11
-- **NIC**: Intel X710 (40Gbps) or Mellanox ConnectX-5 (100Gbps)
+
+**Datacenter Servers:**
+- **CPU**: Intel Xeon Scalable or AMD EPYC (32-128 cores)
+- **RAM**: 128GB-1TB DDR4/DDR5 ECC
+- **NIC**: Intel X710 (40Gbps) or Mellanox ConnectX-5/6/7 (100-200Gbps)
 - **XDP**: Native DRV + Hardware Offload ✅
-- **Performance**: 40-100 Gbps aggregate
-- **Use Case**: Multi-tenant MSSP, 100-1000 customers
+- **Performance**: 40-200 Gbps aggregate
+- **Use Case**: Multi-tenant MSSP, 100-1000 customers, SOC operations
+- **Examples**: Dell R650, HP DL360 Gen11, Supermicro
+- **Price**: $2000-$10000+
+
+**Best for**: MSSP providers, security service providers, cloud-native deployments
+
+### Platform Comparison & Selection Guide
+
+#### Quick Decision Guide
+
+```
+Budget?
+├─ Under $200
+│  ├─ Learning/Development → Raspberry Pi 4/5 (8GB)
+│  └─ Home Security → Intel N100 Mini PC
+├─ $200-$400
+│  ├─ Home/Small Office → Intel N100/N200 (16GB)
+│  ├─ Advanced Networking → Radxa ROCK 5 / Banana Pi BPI-R4
+│  └─ AI/ML Focus → Nvidia Jetson Nano/Xavier
+├─ $400-$1000
+│  ├─ Small Business → Intel NUC (Core i3/i5, 16-32GB)
+│  ├─ Branch Office → Intel Core Mini PC (i5/i7)
+│  └─ Advanced AI → Nvidia Jetson Orin
+└─ Over $1000
+   ├─ Enterprise Edge → Intel Xeon / AMD EPYC workstation
+   └─ MSSP Backend → Datacenter servers (Dell/HP/Supermicro)
+```
+
+#### Platform-Specific Advantages
+
+| Platform | Best For | XDP Performance | Power | Price Range |
+|----------|----------|-----------------|-------|-------------|
+| **Intel N100/N200** | Entry-level, home, learning | ✅ Native DRV | 6-10W | $150-$250 |
+| **Intel Core (i3/i5/i7)** | Small business, prosumer | ✅ Native DRV | 15-65W | $300-$800 |
+| **Intel NUC** | Clean form factor, office | ✅ Native DRV | 15-28W | $400-$700 |
+| **Raspberry Pi** | Development, learning | ⚠️ SKB mode | 5-8W | $80-$120 |
+| **Banana Pi / Radxa** | Advanced ARM networking | ⚠️ SKB mode | 10-20W | $150-$300 |
+| **Orange Pi** | Budget ARM platform | ⚠️ SKB mode | 8-15W | $80-$150 |
+| **Nvidia Jetson** | AI/ML workloads | ⚠️ SKB mode | 10-60W | $200-$500 |
+| **Intel Xeon** | Enterprise, datacenter | ✅ Native DRV | 65-270W | $1000+ |
+| **AMD EPYC** | High core count, cloud | ✅ Native DRV | 120-280W | $1500+ |
+
+**Legend:**
+- ✅ **Native DRV**: Full XDP driver mode - kernel bypass, < 1µs latency, best DDoS protection
+- ⚠️ **SKB mode**: Generic software mode - higher CPU overhead, 5-10µs latency, suitable for learning/dev
 
 ### ⚠️ Important Notes
 
-**Raspberry Pi Limitation**: Raspberry Pi 4/5 only supports XDP in generic (SKB) mode, which has higher CPU overhead and limited throughput. For production DDoS mitigation, use Intel N100 with I226 NIC for native XDP-DRV support.
+**ARM Platform Considerations**:
+- ARM platforms (Raspberry Pi, Banana Pi, Jetson, Radxa, etc.) support XDP in generic (SKB) mode, which has higher CPU overhead
+- Still excellent for: development, learning, home labs, AI/ML workloads, and moderate traffic (< 1 Gbps)
+- For production DDoS mitigation at 2.5+ Gbps, Intel/AMD x86_64 platforms provide native XDP-DRV support
 
-**Intel N100 Advantage**: Best price/performance for edge deployment. Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead.
+**Intel N-Series Value**:
+- Best price/performance for edge deployment
+- Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead
+- Excellent for first-time users and small deployments
 
-**See Complete Guide**: [Qsecbit XDP/eBPF Documentation](src/qsecbit/README.md)
+**Intel NUC Flexibility**:
+- Compact, professional form factor
+- Wide range of CPU options (Core i3 to i9)
+- Excellent for office environments
+
+**Nvidia Jetson AI Advantages**:
+- Integrated GPU for AI/ML inference
+- Best for Qsecbit algorithm with local ML models
+- Lower power consumption than desktop GPUs
+
+**Advanced ARM Platforms (Radxa, Banana Pi)**:
+- More powerful than Raspberry Pi
+- Dual NICs on some models (BPI-R4)
+- Great for seasoned users exploring ARM networking
+
+**See Complete Guide**:
+- [Qsecbit XDP/eBPF Documentation](src/qsecbit/README.md)
+- [Beginner's Hardware Guide](docs/installation/BEGINNER-GUIDE.md)
 
 ---
 
@@ -312,10 +472,12 @@ Choose your deployment model:
 ### 📍 Option 1: Edge Deployment (Single-Tenant SBC)
 
 **Hardware Requirements:**
-- **CPU**: Intel N100 or equivalent x86_64 (4+ cores)
+- **CPU**:
+  - x86_64: Intel N100/N200, Core i3/i5, AMD Ryzen (4+ cores)
+  - ARM64: Raspberry Pi 4/5, Banana Pi, Radxa, Nvidia Jetson (4+ cores)
 - **RAM**: 16GB minimum (32GB recommended)
 - **Storage**: 500GB SSD minimum (1TB recommended)
-- **Network**: 1Gbps NIC
+- **Network**: 1Gbps NIC (2.5Gbps recommended for Intel platforms)
 
 **Software Requirements:**
 - **OS** (automatically detected):
