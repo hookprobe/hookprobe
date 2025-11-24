@@ -4,6 +4,14 @@
 
 **"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"**
 
+## CI/CD Status
+
+[![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
+[![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
+[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
+[![ShellCheck](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml)
+[![Markdown Links](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml)
+
 ## 🎯 Overview
 
 HookProbe is a comprehensive cybersecurity platform built on Single Board Computers (SBCs), providing enterprise-grade security capabilities for individuals, small businesses, and home networks. The platform combines cutting-edge AI-driven threat detection with automated response systems, making advanced cybersecurity accessible and affordable.
@@ -250,6 +258,39 @@ HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data P
 
 ## 🚀 Getting Started
 
+### ⚡ Quick Install (Simplified Process)
+
+HookProbe v5.0 features an **interactive installation wizard** that makes deployment effortless:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+
+# 2. Run interactive installer
+sudo ./install.sh
+
+# 3. Follow the wizard - it will:
+#    - Detect your network interfaces automatically
+#    - Configure IP addresses and VXLANs
+#    - Generate secure passwords and encryption keys
+#    - Deploy all PODs
+#    - Set up monitoring and security
+```
+
+**Installation completes in 15-20 minutes!**
+
+**Access services:**
+- **Grafana**: http://YOUR_IP:3000 (credentials set during install)
+- **Qsecbit API**: http://YOUR_IP:8888
+- **Logto Admin**: http://YOUR_IP:3002
+
+⚠️ **Important**: Passwords are configured during installation wizard. Note them securely!
+
+---
+
+### 📋 Detailed Installation Options
+
 Choose your deployment model:
 
 ### 📍 Option 1: Edge Deployment (Single-Tenant SBC)
@@ -268,32 +309,36 @@ Choose your deployment model:
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
 
-**Installation:**
+**Installation Steps:**
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
 
-# 2. Run installer (interactive menu)
+# 2. Run installer and select option 1
 sudo ./install.sh
+# Select: 1) Edge Deployment
 
-# Or directly deploy edge:
 # Or run configuration wizard first:
-sudo ./install.sh    # Select option "c" to configure
+sudo ./install.sh
+# Select: c) Run Configuration Wizard
+# Then: 1) Edge Deployment
 
-# 3. Configure
-nano config.sh
-# Change: HOST_A_IP, passwords, PSK keys
+# 3. Wizard will automatically:
+#    - Detect network interfaces (eth0, wlan0, etc.)
+#    - Prompt for host IP address
+#    - Generate VXLAN encryption keys
+#    - Create secure passwords for all services
+#    - Configure all 7 PODs
+#    - Deploy containers
 
-# 4. Deploy
-sudo ./setup.sh
-
-# 5. Access Grafana
-# http://YOUR_IP:3000 (admin/admin - change immediately!)
+# 4. Access services
+# Grafana: http://YOUR_IP:3000
+# Qsecbit: http://YOUR_IP:8888
 ```
 
-**See:** [Edge Deployment Checklist](install/edge/checklist.md)
+**See:** [Edge Deployment Checklist](install/edge/checklist.md) | [Quick Start Guide](QUICK-START.md)
 
 ---
 
@@ -939,21 +984,32 @@ tail -f /var/log/hookprobe/gdpr-audit.log
 
 ### Core Documentation
 - **[README.md](README.md)** - This file (overview and quick start)
-- **[GDPR.md](GDPR.md)** - GDPR compliance guide (privacy and data protection)
-- **[setup.sh Documentation](Scripts/autonomous/install/README.md)** - Main deployment guide
+- **[QUICK-START.md](QUICK-START.md)** - 3-step installation guide with configuration wizard
+- **[GDPR.md](docs/GDPR.md)** - GDPR compliance guide (privacy and data protection)
+- **[CI-CD.md](docs/CI-CD.md)** - CI/CD workflows, testing strategy, and contributing guidelines
 - **[Security Mitigation Plan](docs/architecture/security-model.md)** - Detailed security analysis
-- **[Deployment Checklist](Scripts/autonomous/install/checklist.md)** - Pre/post deployment tasks
+- **[Edge Deployment Checklist](install/edge/checklist.md)** - Pre/post deployment tasks
+
+### Installation & Configuration
+- **[Interactive Installer](install.sh)** - Main entry point with menu system
+- **[Configuration Wizard](install/common/config-wizard.sh)** - Automated network detection and setup
+- **[Edge Deployment](install/edge/)** - Single-tenant SBC deployment
+- **[Cloud Deployment](docs/installation/cloud-deployment.md)** - Multi-tenant MSSP backend
 
 ### Optional Feature Documentation
-- **[n8n Integration](../main/install/addons/n8n/README.md)** - Workflow automation setup
-- **[n8n Checklist](../main/n8n/integration-checklist.md)** - N8N Integration validation
-- **[Autonomous Blog Workflow](../main/n8n/AI-blogging-workflow.md)** - Advanced content pipeline
-- **[LTE/5G Setup](../main/install/addons/lte/README.md)** - Cellular connectivity guide
+- **[n8n Integration](install/addons/n8n/README.md)** - Workflow automation setup (POD 008)
+- **[LTE/5G Setup](install/addons/lte/README.md)** - Cellular connectivity guide
 
-### Configuration Files
-- **[network-config.sh](Scripts/autonomous/install/network-config.sh)** - Main network configuration
-- **[n8n_network-config.sh](Scripts/autonomous/install/n8n_network-config.sh)** - n8n network settings
-- **[Qsecbit Algorithm](Scripts/autonomous/qsecbit.py)** - Threat analysis implementation
+### CI/CD & Testing
+- **[CI/CD Documentation](docs/CI-CD.md)** - Complete CI/CD pipeline documentation
+- **[Installation Tests](.github/workflows/installation-test.yml)** - Automated installation testing
+- **[Container Tests](.github/workflows/container-tests.yml)** - Container and integration tests
+- **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute with CI/CD best practices
+
+### Technical Reference
+- **[Qsecbit Algorithm](src/qsecbit/)** - AI threat analysis implementation
+- **[Network Configuration](install/edge/config.sh)** - Network settings template
+- **[Architecture Overview](docs/architecture/security-model.md)** - 7-POD architecture details
 
 ---
 
