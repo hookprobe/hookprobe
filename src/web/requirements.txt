@@ -1,0 +1,56 @@
+# Core Django
+Django==5.0.1
+django-extensions==3.2.3
+
+# Database drivers
+psycopg2-binary==2.9.9
+redis==5.0.1
+clickhouse-driver==0.2.7
+
+# REST API
+djangorestframework==3.14.0
+django-filter==23.5
+django-cors-headers==4.3.1
+
+# Celery for async tasks
+celery==5.3.6
+django-celery-beat==2.5.0
+django-celery-results==2.5.1
+
+# Authentication & Security
+django-allauth==0.61.1
+pyjwt==2.8.0
+
+# Admin enhancements
+django-import-export==3.3.7
+django-admin-interface==0.28.0
+
+# Utilities
+python-dotenv==1.0.0
+requests==2.31.0
+python-dateutil==2.8.2
+pytz==2024.1
+
+# Monitoring & Logging
+django-prometheus==2.3.1
+sentry-sdk==1.40.5
+
+# Development tools (optional, for development only)
+django-debug-toolbar==4.3.0
+ipython==8.21.0
+black==24.1.1
+flake8==7.0.0
+pytest-django==4.7.0
+
+# Web server (production)
+gunicorn==21.2.0
+whitenoise==6.6.0
+
+# Data processing
+pandas==2.2.0
+numpy==1.26.3
+
+# Frontend/Templates
+django-widget-tweaks==1.5.0
+django-crispy-forms==2.1
+crispy-bootstrap4==2.0.0
