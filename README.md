@@ -605,7 +605,6 @@ Installation takes **15-20 minutes**.
 
 4. **Access Services**
 
-- **Django Admin**: http://YOUR_IP/admin (admin/admin)
 - **Grafana**: http://YOUR_IP:3000 (admin/admin)
 - **Logto Admin**: http://YOUR_IP:3002
 - **Qsecbit API**: http://YOUR_IP:8888
@@ -615,6 +614,83 @@ Installation takes **15-20 minutes**.
 ---
 
 ## 🔧 Optional Features
+
+### Web Server & CMS (POD 001)
+
+**Status**: Optional Post-Installation Addon
+
+The HookProbe web server provides a Django-based CMS and management interface. It's an **optional addon** installed **after** the main HookProbe infrastructure is running.
+
+#### Why Optional?
+
+- **Reduced complexity** - Core security functions work without web UI
+- **Edge flexibility** - Not all edge devices need full web interface
+- **Cloud centralization** - MSSP can run centralized web server for multiple edges
+- **Resource efficiency** - Save RAM/CPU on constrained devices
+- **Staged deployment** - Install web components when ready
+
+#### Features
+
+- **Public CMS** (Forty HTML5 theme) - Blog, pages, contact forms
+- **Admin Dashboard** (AdminLTE) - System overview, POD monitoring
+- **MSSP Device Management** - Multi-tenant edge device tracking
+- **Security Dashboard** - Qsecbit scores, IDS/IPS/WAF events
+- **REST APIs** - Device management, security events, metrics
+
+#### Quick Start: Web Server Installation
+
+**Prerequisites:**
+- HookProbe PODs 001-007 must be running
+- PostgreSQL (POD-003) and Redis (POD-004) accessible
+- Python 3.11+ or Podman 4.0+
+
+**Option 1: Native Installation (Edge)**
+
+```bash
+cd install/addons/webserver
+
+# Configure (optional)
+nano config/webserver-config.sh
+
+# Run installation
+sudo ./setup-webserver.sh edge
+```
+
+**Option 2: Podman Container (Recommended)**
+
+```bash
+cd install/addons/webserver
+
+# Configure (optional)
+nano config/webserver-config.sh
+
+# Run Podman installation
+sudo ./setup-webserver-podman.sh edge
+```
+
+**Option 3: Cloud Centralized (MSSP)**
+
+```bash
+cd install/addons/webserver
+
+# Configure for cloud
+export DEPLOYMENT_TYPE=cloud
+export MULTITENANT_ENABLED=true
+
+# Run installation on cloud server
+sudo ./setup-webserver-podman.sh cloud
+```
+
+**Access:**
+- Public Site: http://YOUR_IP/
+- Admin Interface: http://YOUR_IP/admin/
+- Dashboard: http://YOUR_IP/dashboard/
+- Device Management: http://YOUR_IP/devices/
+- API: http://YOUR_IP/api/v1/
+
+**Documentation**: See [Web Server README](install/addons/webserver/README.md) for complete guide
+
+---
 
 ### n8n Workflow Automation (POD 008)
 
