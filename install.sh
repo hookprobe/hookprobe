@@ -16,7 +16,50 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# ============================================================
+# SYSTEM DETECTION FUNCTIONS
+# ============================================================
+
+detect_os() {
+    # Detect OS distribution and version
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_NAME=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
+        OS_VERSION="$VERSION_ID"
+        OS_PRETTY="$PRETTY_NAME"
+    elif [ -f /etc/redhat-release ]; then
+        OS_NAME="rhel"
+        OS_VERSION=$(cat /etc/redhat-release | sed 's/.*release \([0-9.]*\).*/\1/')
+        OS_PRETTY=$(cat /etc/redhat-release)
+    else
+        OS_NAME="unknown"
+        OS_VERSION="unknown"
+        OS_PRETTY="Unknown Linux"
+    fi
+    echo "$OS_PRETTY"
+}
+
+get_container_status() {
+    # Check if containers are running
+    local container_count=0
+    local running_count=0
+
+    if command -v podman &> /dev/null; then
+        container_count=$(podman ps -a --format "{{.Names}}" 2>/dev/null | wc -l)
+        running_count=$(podman ps --format "{{.Names}}" 2>/dev/null | wc -l)
+
+        if [ "$container_count" -eq 0 ]; then
+            echo "${YELLOW}No containers deployed${NC}"
+        else
+            echo "${GREEN}$running_count${NC}/${CYAN}$container_count${NC} running"
+        fi
+    else
+        echo "${RED}Podman not installed${NC}"
+    fi
+}
 
 show_banner() {
     echo -e "${BLUE}"
@@ -35,8 +78,15 @@ show_menu() {
     echo -e "${GREEN}HookProbe Installer${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+
+    # System Information
+    echo -e "${CYAN}System Information:${NC}"
+    echo -e "  OS: $(detect_os)"
+    echo -e "  Containers: $(get_container_status)"
+    echo ""
+
     echo "Main Deployments:"
-    echo -e "  ${YELLOW}1${NC}) Edge Deployment (SBC/Intel N100/Raspberry Pi)"
+    echo -e "  ${YELLOW}1${NC}) Edge Deployment (x86_64: N100/Core/AMD | ARM: Pi/Jetson/Radxa)"
     echo -e "  ${YELLOW}2${NC}) Cloud Backend (MSSP Multi-Tenant)"
     echo ""
     echo "Configuration:"
