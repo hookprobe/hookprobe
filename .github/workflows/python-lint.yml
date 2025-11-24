@@ -36,11 +36,11 @@ jobs:
 
       - name: Check code formatting with Black
         run: |
-          black --check --diff Scripts/autonomous/qsecbit.py Scripts/webApp/templates/qsecbit.py || true
+          black --check --diff src/ || true
 
       - name: Check import sorting with isort
         run: |
-          isort --check-only --diff Scripts/autonomous/qsecbit.py Scripts/webApp/templates/qsecbit.py || true
+          isort --check-only --diff src/ || true
 
       - name: Lint with flake8
         run: |
@@ -55,12 +55,12 @@ jobs:
 
       - name: Security check with bandit
         run: |
-          bandit -r Scripts/ -f json -o bandit-report.json || true
-          bandit -r Scripts/ -ll || true
+          bandit -r src/ -f json -o bandit-report.json || true
+          bandit -r src/ -ll || true
 
       - name: Type check with mypy (if type hints present)
         run: |
-          mypy Scripts/autonomous/qsecbit.py --ignore-missing-imports --no-strict-optional || true
+          mypy src/ --ignore-missing-imports --no-strict-optional || true
 
       - name: Upload bandit report
         if: always()
@@ -70,14 +70,3 @@ jobs:
           path: bandit-report.json
           retention-days: 30
 
-      - name: Comment on PR (if issues found)
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '⚠️ Python linting found issues. Please review the logs and fix before merging.'
-            })
