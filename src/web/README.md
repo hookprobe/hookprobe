@@ -1,8 +1,14 @@
 # HookProbe Web Application
 
-Django-based CMS and Management Dashboard for HookProbe v5.0
+**Django-based CMS and Management Dashboard for HookProbe v5.0**
+
+**⚠️ IMPORTANT:** This web application is an **optional addon** for POD-001 (Web DMZ). It should be installed **after** the main HookProbe infrastructure (PODs 001-007) is running.
+
+**📖 Installation Guide:** See [install/addons/webserver/](../../install/addons/webserver/) for installation instructions.
 
 ## Overview
+
+This is the **source code** for the HookProbe web application. For most users, you should use the automated installation scripts in `install/addons/webserver/` instead of manually setting up from this directory.
 
 This web application provides:
 - **Public-facing CMS** using HTML5 UP Forty theme
@@ -42,14 +48,37 @@ This web application provides:
 
 ## Installation
 
-### Prerequisites
+**⚠️ RECOMMENDED APPROACH:** Use the automated installer instead of manual setup.
+
+### Option 1: Automated Installation (Recommended)
+
+```bash
+# Navigate to addon directory
+cd ../../install/addons/webserver
+
+# Option A: Podman container (recommended)
+sudo ./setup-webserver-podman.sh edge
+
+# Option B: Native installation
+sudo ./setup-webserver.sh edge
+```
+
+See [Installation Guide](../../install/addons/webserver/README.md) for complete instructions.
+
+---
+
+### Option 2: Manual Installation (Development Only)
+
+For developers who want to run from source:
+
+#### Prerequisites
 
 - Python 3.11+
-- PostgreSQL 14+ (POD-003)
-- Redis 7+ (POD-004)
+- PostgreSQL 14+ (POD-003) running at 10.200.3.12
+- Redis 7+ (POD-004) running at 10.200.4.12
 - HookProbe v5.0 infrastructure deployed
 
-### Quick Start
+#### Quick Start
 
 1. **Create virtual environment**
    ```bash
@@ -118,7 +147,11 @@ Redis cache is configured in POD-004:
 
 ## Production Deployment
 
-### Using Gunicorn
+**⚠️ For production deployments, use the automated installation scripts** in `install/addons/webserver/` which handle all configuration, systemd services, Nginx setup, and security hardening automatically.
+
+### Manual Gunicorn Setup (Not Recommended)
+
+If you must deploy manually:
 
 ```bash
 # Install gunicorn
@@ -132,6 +165,8 @@ gunicorn hookprobe.wsgi:application \
     --access-logfile /var/log/hookprobe/gunicorn-access.log \
     --error-logfile /var/log/hookprobe/gunicorn-error.log
 ```
+
+**Better approach:** Use the automated installer which includes systemd service, Nginx config, SSL setup, and more.
 
 ### Using Systemd
 
