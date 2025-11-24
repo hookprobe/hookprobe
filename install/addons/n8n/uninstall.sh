@@ -11,10 +11,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load configuration
-if [ -f "$SCRIPT_DIR/n8n_network-config.sh" ]; then
-    source "$SCRIPT_DIR/n8n_network-config.sh"
+if [ -f "$SCRIPT_DIR/config.sh" ]; then
+    source "$SCRIPT_DIR/config.sh"
 else
-    echo "WARNING: n8n_network-config.sh not found, using defaults..."
+    echo "WARNING: config.sh not found, using defaults..."
     POD_008_NAME="hookprobe-pod-008-automation"
     NETWORK_POD008="pod008-automation-net"
     QSEC_BRIDGE="qsec-bridge"
@@ -239,11 +239,11 @@ fi
 echo ""
 echo "📝 Notes:"
 echo "  • Workflow templates preserved in /tmp/n8n-workflows (if not removed)"
-echo "  • Configuration file preserved: n8n_network-config.sh"
+echo "  • Configuration file preserved: config.sh"
 echo "  • Main HookProbe infrastructure (PODs 001-007) unchanged"
 echo ""
 echo "To reinstall:"
-echo "  1. Review n8n_network-config.sh"
+echo "  1. Review config.sh"
 echo "  2. Run: sudo ./n8n_setup.sh"
 echo ""
 echo "============================================================"
