@@ -201,25 +201,10 @@ jobs:
           path: ci_status_report.md
           retention-days: 30
 
-      - name: Comment status on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const report = fs.readFileSync('ci_status_report.md', 'utf8');
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '## 📊 CI/CD Status Report\n\n' +
-                    'A comprehensive CI/CD status report has been generated.\n\n' +
-                    '<details>\n<summary>View Full Report</summary>\n\n' +
-                    report +
-                    '\n</details>\n\n' +
-                    '**All workflows must pass before merging.**'
-            })
+      - name: Display report summary
+        run: |
+          echo "CI/CD Status Report generated successfully"
+          echo "Report saved as artifact"
 
   verify-all-checks:
     name: Verify All CI/CD Checks
