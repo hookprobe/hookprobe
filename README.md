@@ -12,10 +12,6 @@
 [![ShellCheck](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml)
 [![Configuration Validation](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml)
 
-### Web Application (POD-001)
-[![Django Tests](https://github.com/hookprobe/hookprobe/actions/workflows/django-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/django-tests.yml)
-[![Web Server Addon Tests](https://github.com/hookprobe/hookprobe/actions/workflows/webserver-addon-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/webserver-addon-tests.yml)
-
 ### Code Quality
 [![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
 [![Markdown Links](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml)
