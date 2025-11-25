@@ -31,6 +31,8 @@ INSTALLED_APPS = [
     # HookProbe apps
     'apps.cms',
     'apps.dashboard',
+    'apps.admin_dashboard',  # AdminLTE dashboard for team management
+    'apps.merchandise',       # E-commerce for HookProbe merch
     'apps.devices',
     'apps.monitoring',
     'apps.security',
