@@ -20,6 +20,7 @@ django-celery-results==2.5.1
 # Authentication & Security
 django-allauth==0.61.1
 pyjwt==2.8.0
+cryptography==42.0.0
 
 # Admin enhancements
 django-import-export==3.3.7

@@ -109,6 +109,7 @@ jobs:
         if: steps.check.outputs.found == 'true'
         run: |
           docker run -d --name webserver-test \
+            -e DJANGO_ENV=test \
             -e POSTGRES_DB=test \
             -e POSTGRES_USER=test \
             -e POSTGRES_PASSWORD=test \
@@ -170,11 +171,14 @@ jobs:
         if: steps.check.outputs.found == 'true'
         run: |
           podman run -d --name webserver-podman-test \
+            -e DJANGO_ENV=test \
             -e POSTGRES_DB=test \
             -e POSTGRES_USER=test \
             -e POSTGRES_PASSWORD=test \
             -e POSTGRES_HOST=localhost \
             -e POSTGRES_PORT=5432 \
+            -e REDIS_HOST=localhost \
+            -e REDIS_PORT=6379 \
             -e DJANGO_SECRET_KEY=test-secret-key \
             -e DEBUG=True \
             hookprobe-webserver:podman-test || echo "Podman container start had issues"
@@ -245,12 +249,16 @@ jobs:
 
       - name: Test database connectivity
         env:
+          DJANGO_ENV: test
           POSTGRES_DB: hookprobe
           POSTGRES_USER: hookprobe
           POSTGRES_PASSWORD: test_password
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5432
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
           DJANGO_SECRET_KEY: test-secret-key
+          DEBUG: 'True'
         run: |
           cd src/web
           python manage.py check --database default || echo "Database check had issues"
@@ -271,6 +279,7 @@ except Exception as e:
 
       - name: Run migrations
         env:
+          DJANGO_ENV: test
           POSTGRES_DB: hookprobe
           POSTGRES_USER: hookprobe
           POSTGRES_PASSWORD: test_password
@@ -279,6 +288,7 @@ except Exception as e:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           DJANGO_SECRET_KEY: test-secret-key
+          DEBUG: 'True'
         run: |
           cd src/web
           python manage.py migrate --noinput || echo "Migration had issues"
