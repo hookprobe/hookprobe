@@ -10,6 +10,11 @@ DEBUG = True
 # Allow all hosts in test
 ALLOWED_HOSTS = ['*']
 
+# Disable Logto authentication in tests (not configured in CI)
+os.environ.setdefault('LOGTO_ENDPOINT', '')
+os.environ.setdefault('LOGTO_APP_ID', '')
+os.environ.setdefault('LOGTO_APP_SECRET', '')
+
 # Don't use django-debug-toolbar in tests (it's optional)
 try:
     INSTALLED_APPS.remove('debug_toolbar')

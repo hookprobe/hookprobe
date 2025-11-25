@@ -20,7 +20,15 @@ from typing import Optional, Dict, Any
 from django.contrib.auth.models import User, Group
 from django.contrib.auth.backends import BaseBackend
 from django.core.cache import cache
-from jwt import decode as jwt_decode, PyJWK, PyJWKClient, PyJWTError
+
+try:
+    import jwt
+    from jwt import PyJWK
+    from jwt.exceptions import PyJWTError
+except ImportError:
+    jwt = None
+    PyJWK = None
+    PyJWTError = Exception
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +46,14 @@ class LogtoAuthenticationBackend(BaseBackend):
         self.logto_endpoint = os.getenv('LOGTO_ENDPOINT', 'http://10.200.2.12:3001')
         self.logto_app_id = os.getenv('LOGTO_APP_ID', '')
         self.logto_app_secret = os.getenv('LOGTO_APP_SECRET', '')
-        self.logto_issuer = f"{self.logto_endpoint}/oidc"
+        self.logto_issuer = os.getenv('LOGTO_ISSUER', f"{self.logto_endpoint}/oidc")
 
         # Cache keys for JWKS
         self.jwks_cache_key = 'logto_jwks'
         self.jwks_cache_timeout = 3600  # 1 hour
+
+        # Check if Logto is configured
+        self.is_configured = bool(self.logto_app_id and self.logto_app_secret)
 
     def authenticate(self, request, username=None, password=None, access_token=None):
         """
@@ -57,6 +68,11 @@ class LogtoAuthenticationBackend(BaseBackend):
         Returns:
             User object if authentication succeeds, None otherwise
         """
+        # Skip Logto authentication if not configured (fall back to ModelBackend)
+        if not self.is_configured:
+            logger.debug("Logto not configured, skipping Logto authentication")
+            return None
+
         try:
             if access_token:
                 # Token-based authentication (OAuth/OIDC)
@@ -175,6 +191,10 @@ class LogtoAuthenticationBackend(BaseBackend):
         Returns:
             Decoded token payload if valid, None otherwise
         """
+        if not jwt:
+            logger.error("PyJWT library not available")
+            return None
+
         try:
             # Get JWKS (JSON Web Key Set) from Logto
             jwks = self._get_jwks()
@@ -184,7 +204,7 @@ class LogtoAuthenticationBackend(BaseBackend):
                 return None
 
             # Decode and verify token
-            header = jwt_decode(token, options={"verify_signature": False})
+            header = jwt.decode(token, options={"verify_signature": False})
             kid = header.get('kid')
 
             if not kid:
@@ -195,7 +215,8 @@ class LogtoAuthenticationBackend(BaseBackend):
             key = None
             for jwk in jwks.get('keys', []):
                 if jwk.get('kid') == kid:
-                    key = PyJWK(jwk).key
+                    if PyJWK:
+                        key = PyJWK(jwk).key
                     break
 
             if not key:
@@ -203,7 +224,7 @@ class LogtoAuthenticationBackend(BaseBackend):
                 return None
 
             # Verify and decode
-            payload = jwt_decode(
+            payload = jwt.decode(
                 token,
                 key=key,
                 algorithms=['RS256', 'ES256'],
