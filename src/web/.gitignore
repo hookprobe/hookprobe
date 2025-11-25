@@ -45,6 +45,7 @@ venv.bak/
 # Environment variables
 .env
 .env.local
+.env.local.example
 
 # OS
 .DS_Store
