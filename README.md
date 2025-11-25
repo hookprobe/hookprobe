@@ -2,7 +2,6 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
-<h1 align="center">hookprobe</h1>
 
 <p align="center">
   <strong>"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"</strong>
