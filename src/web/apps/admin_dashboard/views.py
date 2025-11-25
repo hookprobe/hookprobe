@@ -365,7 +365,7 @@ def n8n_webhook_create_draft(request):
 
         return JsonResponse({
             'success': False,
-            'error': str(e)
+            'error': 'An internal error occurred.'
         }, status=500)
 
 
