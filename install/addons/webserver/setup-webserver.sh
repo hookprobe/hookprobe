@@ -235,12 +235,66 @@ initialize_database() {
         sleep 2
     done
 
+    # Test database connection
+    log_info "Testing database connection..."
+    if ! python manage.py check --database default 2>/dev/null; then
+        log_error "Database connection failed. Please verify PostgreSQL configuration."
+        exit 1
+    fi
+    log_success "Database connection successful"
+
     # Run migrations
     log_info "Running database migrations..."
-    python manage.py makemigrations
-    python manage.py migrate
+
+    # Create migrations if needed (development mode only)
+    if [ "$DJANGO_DEBUG" = "true" ] || [ "$DJANGO_DEBUG" = "True" ]; then
+        log_info "Checking for new migrations..."
+        python manage.py makemigrations --noinput || log_warning "No new migrations to create"
+    fi
+
+    # Apply migrations
+    if ! python manage.py migrate --noinput; then
+        log_error "Database migration failed"
+        exit 1
+    fi
+    log_success "Database migrations applied successfully"
+
+    # Verify migrations
+    log_info "Verifying migrations..."
+    if python manage.py showmigrations 2>/dev/null | grep -q '\[ \]'; then
+        log_warning "Some migrations may not have been applied"
+    else
+        log_success "All migrations verified"
+    fi
 
     log_success "Database initialized"
+}
+
+load_seed_data() {
+    log_info "Loading seed data..."
+
+    source "${VENV_DIR}/bin/activate"
+    cd "${WEB_DIR}"
+
+    # Check if seed data command exists
+    if python manage.py help seed_demo_data &>/dev/null; then
+        log_info "Found seed_demo_data command, loading demo data..."
+
+        # Ask user if they want to load seed data
+        echo ""
+        read -p "Do you want to load demo/sample data? (yes/no): " -r
+        if [[ $REPLY =~ ^[Yy]es$ ]]; then
+            if python manage.py seed_demo_data; then
+                log_success "Seed data loaded successfully"
+            else
+                log_warning "Seed data loading encountered issues (non-critical)"
+            fi
+        else
+            log_info "Skipping seed data"
+        fi
+    else
+        log_info "No seed data command found (skipping)"
+    fi
 }
 
 collect_static_files() {
@@ -498,6 +552,7 @@ main() {
     create_env_file
     download_frontend_themes
     initialize_database
+    load_seed_data
     collect_static_files
     create_systemd_service
     configure_nginx
