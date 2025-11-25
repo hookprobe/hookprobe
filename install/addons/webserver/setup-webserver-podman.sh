@@ -268,6 +268,52 @@ EOF
     fi
 }
 
+verify_migrations() {
+    log_info "Verifying database migrations..."
+
+    # Wait a bit for migrations to complete
+    sleep 5
+
+    # Check container logs for migration status
+    if podman logs ${CONTAINER_NAME} 2>&1 | grep -q "Running database migrations"; then
+        log_success "Migrations started in container"
+    else
+        log_warning "Migration logs not found in container output"
+    fi
+
+    # Verify migrations were applied
+    if podman exec ${CONTAINER_NAME} python manage.py showmigrations 2>&1 | grep -q '\[X\]'; then
+        log_success "Database migrations verified"
+    else
+        log_warning "Could not verify migrations (container may still be starting)"
+    fi
+}
+
+load_seed_data() {
+    log_info "Checking for seed data..."
+
+    # Check if seed data command exists
+    if podman exec ${CONTAINER_NAME} python manage.py help seed_demo_data &>/dev/null; then
+        log_info "Found seed_demo_data command"
+
+        # Ask user if they want to load seed data
+        echo ""
+        read -p "Do you want to load demo/sample data? (yes/no): " -r
+        if [[ $REPLY =~ ^[Yy]es$ ]]; then
+            log_info "Loading seed data in container..."
+            if podman exec ${CONTAINER_NAME} python manage.py seed_demo_data; then
+                log_success "Seed data loaded successfully"
+            else
+                log_warning "Seed data loading encountered issues (non-critical)"
+            fi
+        else
+            log_info "Skipping seed data"
+        fi
+    else
+        log_info "No seed data command found (skipping)"
+    fi
+}
+
 create_superuser() {
     log_info "Creating Django superuser..."
 
@@ -414,6 +460,12 @@ main() {
     # Wait for container to be healthy
     log_info "Waiting for container to be healthy..."
     sleep 10
+
+    # Verify database migrations
+    verify_migrations
+
+    # Load seed data if available
+    load_seed_data
 
     # Create superuser
     create_superuser
