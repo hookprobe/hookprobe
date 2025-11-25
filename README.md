@@ -1,8 +1,16 @@
+<p align="center">
+  <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
+</p>
 
-# hookprobe
-![Future City](assets/hookprobe-future-ram-cine.png)
+<h1 align="center">hookprobe</h1>
 
-**"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"**
+<p align="center">
+  <strong>"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"</strong>
+</p>
+
+<p align="center">
+  <img src="assets/hookprobe-future-ram-cine.png" alt="Future City" width="600"/>
+</p>
 
 ## CI/CD Status
 
@@ -131,27 +139,39 @@ And so, in the face of ever-evolving dangers, humanity adapted and thrived, usin
 
 ## 🏗️ Architecture
 
-HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for automation:
+HookProbe v5.0 implements a **modular POD architecture** with comprehensive documentation for each component:
 
-### Core PODs (001-007)
+### Core Infrastructure PODs (001-007)
 
-| POD | Network | Purpose | Key Components | Optional Components |
-|-----|---------|---------|----------------|---------------------|
-| **001** | 10.200.1.0/24 | Web DMZ & Management | Nginx, REST API, NAXSI WAF | Django CMS, Cloudflare Tunnel |
-| **002** | 10.200.2.0/24 | IAM/Auth | Logto, PostgreSQL | OAuth Providers |
-| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS | RADIUS |
-| **004** | 10.200.4.0/24 | Transient DB | Redis | Valkey |
-| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse | Vector, Filebeat |
-| **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit | Custom Rules |
-| **007** | 10.200.7.0/24 | AI Response | Kali Linux, Mitigation Engine | Honeypots |
+| POD | Network | Purpose | Documentation |
+|-----|---------|---------|---------------|
+| **[POD-001](docs/components/POD-001.md)** | 10.200.1.0/24 | Web DMZ & Management | Nginx, REST API, NAXSI WAF, Django CMS |
+| **[POD-002](docs/components/POD-002.md)** | 10.200.2.0/24 | IAM/Auth | Logto, OAuth 2.0, SSO, RBAC |
+| **[POD-003](docs/components/POD-003.md)** | 10.200.3.0/24 | Persistent Database | PostgreSQL, NFS, RADIUS (optional) |
+| **[POD-004](docs/components/POD-004.md)** | 10.200.4.0/24 | Transient Database | Redis, Valkey, Caching Layer |
+| **[POD-005](docs/components/POD-005.md)** | 10.200.5.0/24 | Monitoring & Analytics | Grafana, ClickHouse, VictoriaMetrics |
+| **[POD-006](docs/components/POD-006.md)** | 10.200.6.0/24 | Security Detection | Zeek, Snort 3, Suricata, Qsecbit AI |
+| **[POD-007](docs/components/POD-007.md)** | 10.200.7.0/24 | AI Response Engine | Kali Linux, Automated Mitigation |
 
-**Note**: POD-001 is always deployed with Nginx and REST API for system management. The Django CMS public website is optional and can be enabled during installation.
+### Optional Extensions (POD-008+)
 
-### Optional POD (008)
+| POD | Network | Purpose | Documentation |
+|-----|---------|---------|---------------|
+| **[POD-008](docs/components/POD-008.md)** | 10.200.8.0/24 | Workflow Automation | n8n, MCP Server, AI Integration |
+| **[POD-009](docs/components/POD-009.md)** | 10.200.9.0/24 | Email System | Postfix, DKIM, Cloudflare Tunnel |
 
-| POD | Network | Purpose | Key Components |
-|-----|---------|---------|----------------|
-| **008** | 10.200.8.0/24 | Automation | n8n, PostgreSQL, Redis, MCP Server |
+### Dashboards & Interfaces
+
+| Dashboard | Purpose | Documentation |
+|-----------|---------|---------------|
+| **[Admin Dashboard](docs/dashboards/admin-dashboard.md)** | Content & Merchandise Management | Blog posts, products, AI content generation |
+| **[MSSP Dashboard](docs/dashboards/mssp-dashboard.md)** | Security Monitoring (SIEM) | Real-time metrics, threat hunting, SOAR |
+
+**Quick Links:**
+- 📖 [High-Level Design (HLD)](docs/architecture/security-model.md) - Complete system architecture
+- 🚀 [Dashboard Implementation Plan](docs/DASHBOARD-IMPLEMENTATION-PLAN.md) - Detailed development roadmap
+- 🛡️ [Security Features](#security-features) - Six-layer defense system
+- 📊 [Monitoring & Analytics](#monitoring--analytics) - Observability stack
 
 ### Network Topology
 
