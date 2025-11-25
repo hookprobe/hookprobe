@@ -25,55 +25,6 @@
 
 ---
 
-## 🚀 Recent Updates (v5.0.1)
-
-**Phase 1-2 Implementation Complete** ✅
-
-### What's New
-
-#### 🔧 Unified Configuration System
-- Centralized configuration for all 8 PODs (`install/common/unified-config.sh`)
-- Support for multiple deployment types (edge, cloud, hybrid, headless, development)
-- Environment-based configuration with sensible defaults
-- Built-in validation and export functions
-- Feature flags for optional components
-
-#### 🔐 IAM Integration with Logto (POD-002)
-- Complete OAuth 2.0 / OpenID Connect authentication
-- JWT token verification with automatic user provisioning
-- Role-based access control (Logto roles → Django groups)
-- Single Sign-On (SSO) support
-- Password and token-based authentication flows
-- See [IAM Integration Guide](docs/IAM-INTEGRATION-GUIDE.md) for setup
-
-#### 🗄️ Enhanced Database Management
-- Django migrations integrated into installation scripts
-- Migration validation and verification
-- Demo data seeding with `seed_demo_data` management command
-- Sample blog posts, categories, and pages included
-- Idempotent operations (safe to run multiple times)
-
-#### ✅ Configuration Validation
-- Comprehensive validation script (`install/scripts/validate-config.sh`)
-- Shell syntax checking and ShellCheck integration
-- Network range and deployment type validation
-- Version consistency checks
-- Pre-deployment validation support
-
-#### 🧪 Improved CI/CD
-- All tests now passing with proper isolation
-- Test-specific settings module (test.py)
-- Container build validation
-- Lenient integration tests (informational, non-blocking)
-- Comprehensive smoke tests
-
-### Documentation
-- [IAM Integration Guide](docs/IAM-INTEGRATION-GUIDE.md) - Complete Logto setup guide
-- [Implementation Summary](IMPLEMENTATION-SUMMARY-PHASE1-2.md) - Technical details
-- [Architectural Assessment](ARCHITECTURAL-ASSESSMENT.md) - 12-week roadmap
-
----
-
 ## 🎯 Overview
 
 HookProbe is a comprehensive cybersecurity platform built on Single Board Computers (SBCs), providing enterprise-grade security capabilities for individuals, small businesses, and home networks. The platform combines cutting-edge AI-driven threat detection with automated response systems, making advanced cybersecurity accessible and affordable.
@@ -107,6 +58,13 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+### Documentation
+- [IAM Integration Guide](docs/IAM-INTEGRATION-GUIDE.md) - Complete Logto setup guide
+- [Implementation Summary](IMPLEMENTATION-SUMMARY-PHASE1-2.md) - Technical details
+- [Architectural Assessment](ARCHITECTURAL-ASSESSMENT.md) - 12-week roadmap
 
 ---
 
