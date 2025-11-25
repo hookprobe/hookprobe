@@ -72,6 +72,7 @@ jobs:
 
       - name: Run Django system checks
         env:
+          DJANGO_ENV: test
           POSTGRES_DB: hookprobe_test
           POSTGRES_USER: hookprobe
           POSTGRES_PASSWORD: test_password
@@ -80,13 +81,14 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           DJANGO_SECRET_KEY: test-secret-key-for-ci-only
-          DEBUG: 'False'
+          DEBUG: 'True'
         run: |
           cd src/web
           python manage.py check || echo "Some checks failed, continuing..."
 
       - name: Run database migrations
         env:
+          DJANGO_ENV: test
           POSTGRES_DB: hookprobe_test
           POSTGRES_USER: hookprobe
           POSTGRES_PASSWORD: test_password
@@ -95,13 +97,14 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           DJANGO_SECRET_KEY: test-secret-key-for-ci-only
-          DEBUG: 'False'
+          DEBUG: 'True'
         run: |
           cd src/web
           python manage.py migrate --noinput
 
       - name: Collect static files
         env:
+          DJANGO_ENV: test
           POSTGRES_DB: hookprobe_test
           POSTGRES_USER: hookprobe
           POSTGRES_PASSWORD: test_password
@@ -110,13 +113,14 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           DJANGO_SECRET_KEY: test-secret-key-for-ci-only
-          DEBUG: 'False'
+          DEBUG: 'True'
         run: |
           cd src/web
           python manage.py collectstatic --noinput || echo "Static collection had issues, continuing..."
 
       - name: Run tests with coverage
         env:
+          DJANGO_ENV: test
           POSTGRES_DB: hookprobe_test
           POSTGRES_USER: hookprobe
           POSTGRES_PASSWORD: test_password
@@ -125,7 +129,7 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           DJANGO_SECRET_KEY: test-secret-key-for-ci-only
-          DEBUG: 'False'
+          DEBUG: 'True'
         run: |
           cd src/web
           # Create pytest configuration if it doesn't exist
