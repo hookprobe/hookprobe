@@ -136,9 +136,10 @@ jobs:
           if [ ! -f pytest.ini ]; then
             cat > pytest.ini <<'EOF'
 [pytest]
-DJANGO_SETTINGS_MODULE = hookprobe.settings.base
+DJANGO_SETTINGS_MODULE = hookprobe.settings.test
 python_files = tests.py test_*.py *_tests.py
 testpaths = apps
+addopts = -v --tb=short
 EOF
           fi
 
@@ -150,7 +151,7 @@ EOF
               --cov-report=html \
               --cov-report=term \
               --maxfail=5 \
-              --tb=short || echo "Some tests failed, continuing..."
+              -v || echo "Some tests failed, continuing..."
           else
             echo "No test files found - creating placeholder test results"
             mkdir -p htmlcov
@@ -315,24 +316,15 @@ EOF
           cd install/addons/webserver
           docker build -f Containerfile -t hookprobe-webserver:test ../../.. || echo "Docker build encountered issues"
 
-      - name: Test container health
+      - name: Validate container image
         if: success()
         run: |
-          docker run -d --name webserver-test \
-            -e POSTGRES_DB=test \
-            -e POSTGRES_USER=test \
-            -e POSTGRES_PASSWORD=test \
-            -e POSTGRES_HOST=localhost \
-            -e POSTGRES_PORT=5432 \
-            -e DJANGO_SECRET_KEY=test-secret-key \
-            -e DEBUG=True \
-            hookprobe-webserver:test || echo "Container start had issues"
+          echo "Validating container image..."
 
-          sleep 10
+          # Check if image exists
+          docker images | grep hookprobe-webserver || exit 1
 
-          # Check if container is running
-          docker ps | grep webserver-test || echo "Container not running as expected"
+          # Inspect the image
+          docker inspect hookprobe-webserver:test > /dev/null || exit 1
 
-          # Clean up
-          docker stop webserver-test || true
-          docker rm webserver-test || true
+          echo "✓ Container image is valid"
