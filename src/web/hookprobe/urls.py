@@ -18,6 +18,12 @@ urlpatterns = [
     # Admin Dashboard (AdminLTE)
     path('dashboard/', include('apps.dashboard.urls', namespace='dashboard')),
 
+    # Admin Dashboard - HookProbe Team (AdminLTE with AI & Merchandise)
+    path('admin-dashboard/', include('apps.admin_dashboard.urls', namespace='admin_dashboard')),
+
+    # Merchandise Store
+    path('merchandise/', include('apps.merchandise.urls', namespace='merchandise')),
+
     # Device Management
     path('devices/', include('apps.devices.urls', namespace='devices')),
 
