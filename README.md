@@ -6,10 +6,18 @@
 
 ## CI/CD Status
 
+### Core Infrastructure
 [![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
 [![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
-[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
 [![ShellCheck](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml)
+[![Configuration Validation](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml)
+
+### Web Application (POD-001)
+[![Django Tests](https://github.com/hookprobe/hookprobe/actions/workflows/django-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/django-tests.yml)
+[![Web Server Addon Tests](https://github.com/hookprobe/hookprobe/actions/workflows/webserver-addon-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/webserver-addon-tests.yml)
+
+### Code Quality
+[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
 [![Markdown Links](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml)
 
 ## 🎯 Overview
@@ -80,15 +88,17 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
 
 ### Core PODs (001-007)
 
-| POD | Network | Purpose | Key Components |
-|-----|---------|---------|----------------|
-| **001** | 10.200.1.0/24 | Web DMZ | Django CMS, NAXSI WAF, Nginx, Cloudflare Tunnel |
-| **002** | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
-| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
-| **004** | 10.200.4.0/24 | Transient DB | Redis, Valkey |
-| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse, Vector, Filebeat, node_exporter |
-| **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit |
-| **007** | 10.200.7.0/24 | AI Response | Honeypots, Kali Linux, Mitigation Engine |
+| POD | Network | Purpose | Key Components | Optional Components |
+|-----|---------|---------|----------------|---------------------|
+| **001** | 10.200.1.0/24 | Web DMZ & Management | Nginx, REST API, NAXSI WAF | Django CMS, Cloudflare Tunnel |
+| **002** | 10.200.2.0/24 | IAM/Auth | Logto, PostgreSQL | OAuth Providers |
+| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS | RADIUS |
+| **004** | 10.200.4.0/24 | Transient DB | Redis | Valkey |
+| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse | Vector, Filebeat |
+| **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit | Custom Rules |
+| **007** | 10.200.7.0/24 | AI Response | Kali Linux, Mitigation Engine | Honeypots |
+
+**Note**: POD-001 is always deployed with Nginx and REST API for system management. The Django CMS public website is optional and can be enabled during installation.
 
 ### Optional POD (008)
 
