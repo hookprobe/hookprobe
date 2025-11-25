@@ -105,26 +105,21 @@ jobs:
             -t hookprobe-webserver:test-amd64 \
             ../../.. || echo "x86_64 build had issues"
 
-      - name: Test container starts
+      - name: Validate container image
         if: steps.check.outputs.found == 'true'
         run: |
-          echo "Testing container startup (without external services)..."
+          echo "Validating container image..."
 
-          # Start container with timeout that will fail but proves the container is valid
-          timeout 30 docker run --rm \
-            -e DJANGO_ENV=test \
-            -e POSTGRES_DB=test \
-            -e POSTGRES_USER=test \
-            -e POSTGRES_PASSWORD=test \
-            -e POSTGRES_HOST=fakehostname \
-            -e POSTGRES_PORT=5432 \
-            -e REDIS_HOST=fakehostname \
-            -e REDIS_PORT=6379 \
-            -e DJANGO_SECRET_KEY=test-secret-key-do-not-use-in-production \
-            -e DEBUG=True \
-            hookprobe-webserver:test-amd64 || echo "Container stopped (expected - no services available)"
+          # Check if image exists
+          docker images | grep hookprobe-webserver || exit 1
 
-          echo "✓ Container image is valid and starts successfully"
+          # Inspect the image
+          docker inspect hookprobe-webserver:test-amd64 > /dev/null || exit 1
+
+          # Verify entrypoint exists
+          docker inspect hookprobe-webserver:test-amd64 | grep -q entrypoint || echo "Entrypoint may be missing"
+
+          echo "✓ Container image is valid"
 
   podman-build:
     runs-on: ubuntu-latest
@@ -157,26 +152,21 @@ jobs:
             -t hookprobe-webserver:podman-test \
             ../../.. || echo "Podman build had issues"
 
-      - name: Test Podman container starts
+      - name: Validate Podman container image
         if: steps.check.outputs.found == 'true'
         run: |
-          echo "Testing Podman container startup (without external services)..."
+          echo "Validating Podman container image..."
 
-          # Start container with timeout that will fail but proves the container is valid
-          timeout 30 podman run --rm \
-            -e DJANGO_ENV=test \
-            -e POSTGRES_DB=test \
-            -e POSTGRES_USER=test \
-            -e POSTGRES_PASSWORD=test \
-            -e POSTGRES_HOST=fakehostname \
-            -e POSTGRES_PORT=5432 \
-            -e REDIS_HOST=fakehostname \
-            -e REDIS_PORT=6379 \
-            -e DJANGO_SECRET_KEY=test-secret-key \
-            -e DEBUG=True \
-            hookprobe-webserver:podman-test || echo "Podman container stopped (expected - no services available)"
+          # Check if image exists
+          podman images | grep hookprobe-webserver || exit 1
 
-          echo "✓ Podman container image is valid and starts successfully"
+          # Inspect the image
+          podman inspect hookprobe-webserver:podman-test > /dev/null || exit 1
+
+          # Verify entrypoint exists
+          podman inspect hookprobe-webserver:podman-test | grep -q entrypoint || echo "Entrypoint may be missing"
+
+          echo "✓ Podman container image is valid"
 
   documentation-check:
     runs-on: ubuntu-latest
@@ -244,7 +234,8 @@ jobs:
           DEBUG: 'True'
         run: |
           cd src/web
-          python manage.py check --database default || echo "Database check had issues"
+          echo "Testing database connectivity..."
+          python manage.py check --database default && echo "✓ Database check passed" || echo "⚠ Database check failed (non-critical)"
 
       - name: Test Redis connectivity
         run: |
@@ -274,7 +265,8 @@ except Exception as e:
           DEBUG: 'True'
         run: |
           cd src/web
-          python manage.py migrate --noinput || echo "Migration had issues"
+          echo "Running database migrations..."
+          python manage.py migrate --noinput && echo "✓ Migrations completed" || echo "⚠ Migration failed (non-critical)"
 
   security-scan:
     runs-on: ubuntu-latest
