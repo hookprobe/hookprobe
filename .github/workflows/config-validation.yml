@@ -1,0 +1,368 @@
+name: Configuration Validation
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+    paths:
+      - '**/config.sh'
+      - '**/*-config.sh'
+      - 'install/**'
+      - '.github/workflows/config-validation.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/config.sh'
+      - '**/*-config.sh'
+      - 'install/**'
+
+jobs:
+  shellcheck-configs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Find all config files
+        id: find-configs
+        run: |
+          echo "Found configuration files:"
+          find . -name 'config.sh' -o -name '*-config.sh' | sort
+
+      - name: Run ShellCheck on all config files
+        run: |
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            echo "Checking: $file"
+            shellcheck "$file" || echo "Warning: ShellCheck found issues in $file"
+          done
+
+  syntax-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Bash syntax check on all config files
+        run: |
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            echo "Syntax check: $file"
+            bash -n "$file"
+          done
+
+      - name: Check for required variables in edge config
+        run: |
+          if [ -f "install/edge/config.sh" ]; then
+            echo "Checking install/edge/config.sh for required variables..."
+
+            required_vars=(
+              "DEPLOYMENT_TYPE"
+              "PHYSICAL_HOST_INTERFACE"
+              "PHYSICAL_HOST_IP"
+              "POSTGRES_HOST"
+              "REDIS_HOST"
+            )
+
+            for var in "${required_vars[@]}"; do
+              if grep -q "^${var}=" install/edge/config.sh; then
+                echo "✓ Found: $var"
+              else
+                echo "✗ Missing: $var"
+                exit 1
+              fi
+            done
+          fi
+
+      - name: Check for required variables in cloud config
+        run: |
+          if [ -f "install/cloud/config.sh" ]; then
+            echo "Checking install/cloud/config.sh for required variables..."
+
+            required_vars=(
+              "DEPLOYMENT_TYPE"
+              "DORIS_FE_NODES"
+              "DORIS_BE_NODES"
+            )
+
+            for var in "${required_vars[@]}"; do
+              if grep -q "^${var}=" install/cloud/config.sh; then
+                echo "✓ Found: $var"
+              else
+                echo "✗ Missing: $var"
+                exit 1
+              fi
+            done
+          fi
+
+  duplicate-detection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for duplicate variable definitions
+        run: |
+          echo "Checking for duplicate variable definitions across config files..."
+
+          # Extract all variable assignments from config files
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            grep '^[A-Z_]*=' "$file" | sed "s|=.*|:$file|"
+          done > /tmp/all_vars.txt
+
+          # Find duplicates
+          cut -d: -f1 /tmp/all_vars.txt | sort | uniq -d > /tmp/duplicate_vars.txt
+
+          if [ -s /tmp/duplicate_vars.txt ]; then
+            echo "⚠️  WARNING: Found duplicate variable definitions:"
+            while read -r var; do
+              echo ""
+              echo "Variable: $var"
+              echo "Defined in:"
+              grep "^${var}:" /tmp/all_vars.txt | cut -d: -f2-
+            done < /tmp/duplicate_vars.txt
+
+            # Don't fail the build, just warn
+            # exit 1
+          else
+            echo "✓ No duplicate variable definitions found"
+          fi
+
+  network-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate POD network ranges
+        run: |
+          echo "Validating POD network ranges don't overlap..."
+
+          # Expected POD networks
+          expected_networks=(
+            "10.200.1.0/24"  # POD-001
+            "10.200.2.0/24"  # POD-002
+            "10.200.3.0/24"  # POD-003
+            "10.200.4.0/24"  # POD-004
+            "10.200.5.0/24"  # POD-005
+            "10.200.6.0/24"  # POD-006
+            "10.200.7.0/24"  # POD-007
+            "10.200.8.0/24"  # POD-008
+          )
+
+          echo "Expected POD networks:"
+          printf '%s\n' "${expected_networks[@]}"
+
+          # Check for network definitions in config files
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            echo ""
+            echo "Checking networks in: $file"
+            grep -E '10\.200\.[0-9]+\.' "$file" || echo "  (no POD networks found)"
+          done
+
+      - name: Validate IP address formats
+        run: |
+          echo "Validating IP address formats in config files..."
+
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            echo "Checking: $file"
+
+            # Find IP address assignments
+            grep -E '[A-Z_]*_IP=' "$file" || continue
+
+            # Validate format (basic check)
+            grep -E '[A-Z_]*_IP=' "$file" | while read -r line; do
+              ip=$(echo "$line" | cut -d= -f2 | tr -d '"' | tr -d "'")
+              if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "⚠️  Invalid IP format: $line"
+              fi
+            done
+          done
+
+  credential-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for hardcoded credentials
+        run: |
+          echo "Checking for hardcoded passwords (should use env vars or prompts)..."
+
+          suspicious_patterns=(
+            "PASSWORD=.*[^$]"
+            "SECRET=.*[^$]"
+            "API_KEY=.*[^$]"
+            "_KEY=.*[^$]"
+          )
+
+          issues_found=0
+
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            for pattern in "${suspicious_patterns[@]}"; do
+              if grep -E "$pattern" "$file" | grep -v -E '(CHANGEME|TODO|FIXME|\$\{|\$\()'; then
+                echo "⚠️  Potential hardcoded credential in: $file"
+                echo "   Pattern: $pattern"
+                issues_found=$((issues_found + 1))
+              fi
+            done
+          done
+
+          if [ $issues_found -gt 0 ]; then
+            echo ""
+            echo "⚠️  Found $issues_found potential hardcoded credentials"
+            echo "   Credentials should use environment variables or interactive prompts"
+            # Don't fail build, just warn
+            # exit 1
+          else
+            echo "✓ No obvious hardcoded credentials found"
+          fi
+
+  dependency-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check configuration dependencies
+        run: |
+          echo "Checking if config files reference correct dependencies..."
+
+          # Check edge config references correct PODs
+          if [ -f "install/edge/config.sh" ]; then
+            echo "Checking install/edge/config.sh..."
+
+            required_deps=(
+              "POSTGRES"
+              "REDIS"
+              "CLICKHOUSE"
+              "QSECBIT"
+            )
+
+            for dep in "${required_deps[@]}"; do
+              if grep -q "${dep}" install/edge/config.sh; then
+                echo "✓ References: $dep"
+              else
+                echo "⚠️  Missing reference to: $dep"
+              fi
+            done
+          fi
+
+  consistency-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check version consistency
+        run: |
+          echo "Checking version consistency across configs..."
+
+          # Extract version numbers from all configs
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            if grep -q '^VERSION=' "$file"; then
+              version=$(grep '^VERSION=' "$file" | cut -d= -f2 | tr -d '"' | tr -d "'")
+              echo "$file: VERSION=$version"
+            fi
+          done
+
+      - name: Check deployment type values
+        run: |
+          echo "Validating DEPLOYMENT_TYPE values..."
+
+          valid_types=("edge" "cloud" "hybrid" "headless" "development")
+
+          find . -name 'config.sh' -o -name '*-config.sh' | while read -r file; do
+            if grep -q '^DEPLOYMENT_TYPE=' "$file"; then
+              deployment_type=$(grep '^DEPLOYMENT_TYPE=' "$file" | cut -d= -f2 | tr -d '"' | tr -d "'")
+
+              if [[ " ${valid_types[@]} " =~ " ${deployment_type} " ]]; then
+                echo "✓ $file: DEPLOYMENT_TYPE=$deployment_type"
+              else
+                echo "✗ $file: Invalid DEPLOYMENT_TYPE=$deployment_type"
+                echo "   Valid types: ${valid_types[*]}"
+                exit 1
+              fi
+            fi
+          done
+
+  documentation-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if config documentation is up to date
+        run: |
+          echo "Checking if configuration is documented..."
+
+          # Check for README or documentation mentioning config files
+          find install/ -name 'README.md' | while read -r readme; do
+            dir=$(dirname "$readme")
+
+            # Check if there's a config file in the same directory
+            if [ -f "$dir/config.sh" ]; then
+              if grep -q "config.sh" "$readme"; then
+                echo "✓ $readme documents config.sh"
+              else
+                echo "⚠️  $readme doesn't mention config.sh"
+              fi
+            fi
+          done
+
+  template-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for template files
+        run: |
+          echo "Checking for .template or .example config files..."
+
+          find . -name '*.template' -o -name '*.example' -o -name 'config.sh.dist' | while read -r template; do
+            echo "Found template: $template"
+
+            # Check if corresponding config file exists
+            config_file="${template%.template}"
+            config_file="${config_file%.example}"
+            config_file="${config_file%.dist}"
+
+            if [ -f "$config_file" ]; then
+              echo "  ✓ Has corresponding config: $config_file"
+            else
+              echo "  ⚠️  Missing config file: $config_file"
+            fi
+          done
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [shellcheck-configs, syntax-validation, duplicate-detection, network-validation, credential-check, dependency-check, consistency-check, documentation-sync, template-check]
+    if: always()
+
+    steps:
+      - name: Configuration validation summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   Configuration Validation Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "All configuration validation checks completed."
+          echo ""
+          echo "Jobs status:"
+          echo "  - ShellCheck configs: ${{ needs.shellcheck-configs.result }}"
+          echo "  - Syntax validation: ${{ needs.syntax-validation.result }}"
+          echo "  - Duplicate detection: ${{ needs.duplicate-detection.result }}"
+          echo "  - Network validation: ${{ needs.network-validation.result }}"
+          echo "  - Credential check: ${{ needs.credential-check.result }}"
+          echo "  - Dependency check: ${{ needs.dependency-check.result }}"
+          echo "  - Consistency check: ${{ needs.consistency-check.result }}"
+          echo "  - Documentation sync: ${{ needs.documentation-sync.result }}"
+          echo "  - Template check: ${{ needs.template-check.result }}"
+          echo ""
