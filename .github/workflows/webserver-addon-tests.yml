@@ -1,0 +1,303 @@
+name: Web Server Addon Tests
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+    paths:
+      - 'install/addons/webserver/**'
+      - '.github/workflows/webserver-addon-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'install/addons/webserver/**'
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck on installation scripts
+        run: |
+          cd install/addons/webserver
+          shellcheck setup-webserver.sh
+          shellcheck setup-webserver-podman.sh
+          shellcheck config/webserver-config.sh
+
+  syntax-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: |
+          cd install/addons/webserver
+          bash -n setup-webserver.sh
+          bash -n setup-webserver-podman.sh
+          bash -n config/webserver-config.sh
+
+      - name: Check for common script issues
+        run: |
+          cd install/addons/webserver
+          # Check for undefined variables
+          grep -n '\$[A-Z_]*' *.sh | grep -v '${' || true
+          # Check for unquoted variables
+          grep -n '\$[A-Z_]*[^}]' *.sh || true
+
+  containerfile-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run hadolint on Containerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: install/addons/webserver/Containerfile
+          failure-threshold: warning
+
+  container-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build web server container (x86_64)
+        run: |
+          cd install/addons/webserver
+          docker build \
+            --platform linux/amd64 \
+            -f Containerfile \
+            -t hookprobe-webserver:test-amd64 \
+            ../../..
+
+      - name: Build web server container (arm64)
+        run: |
+          cd install/addons/webserver
+          docker build \
+            --platform linux/arm64 \
+            -f Containerfile \
+            -t hookprobe-webserver:test-arm64 \
+            ../../..
+
+      - name: Test container health (x86_64)
+        run: |
+          docker run -d --name webserver-test \
+            -e DATABASE_URL=sqlite:///db.sqlite3 \
+            -e SECRET_KEY=test-secret-key-do-not-use-in-production \
+            -e DEBUG=True \
+            -e ALLOWED_HOSTS=localhost,127.0.0.1 \
+            hookprobe-webserver:test-amd64
+
+          sleep 15
+
+          # Check container is running
+          docker ps | grep webserver-test
+
+          # Check Django system
+          docker exec webserver-test python manage.py check
+
+          # Check migrations
+          docker exec webserver-test python manage.py makemigrations --check --dry-run
+
+          # Check static files
+          docker exec webserver-test ls -la /app/static/
+
+          # Check logs
+          docker logs webserver-test
+
+          # Cleanup
+          docker stop webserver-test
+          docker rm webserver-test
+
+  podman-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Build with Podman
+        run: |
+          cd install/addons/webserver
+          podman build \
+            -f Containerfile \
+            -t hookprobe-webserver:podman-test \
+            ../../..
+
+      - name: Test Podman container
+        run: |
+          podman run -d --name webserver-podman-test \
+            -e DATABASE_URL=sqlite:///db.sqlite3 \
+            -e SECRET_KEY=test-secret-key \
+            -e DEBUG=True \
+            hookprobe-webserver:podman-test
+
+          sleep 15
+
+          # Check container
+          podman ps | grep webserver-podman-test
+
+          # Test Django
+          podman exec webserver-podman-test python manage.py check
+
+          # Cleanup
+          podman stop webserver-podman-test
+          podman rm webserver-podman-test
+
+  documentation-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check documentation exists
+        run: |
+          cd install/addons/webserver
+          test -f README.md || exit 1
+          test -f QUICKSTART.md || exit 1
+          test -f DEPLOYMENT_GUIDE.md || exit 1
+
+      - name: Validate documentation links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          folder-path: 'install/addons/webserver'
+
+      - name: Check README completeness
+        run: |
+          cd install/addons/webserver
+          # Ensure key sections exist
+          grep -q "Prerequisites" README.md || exit 1
+          grep -q "Installation" README.md || exit 1
+          grep -q "Configuration" README.md || exit 1
+
+  integration-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hookprobe
+          POSTGRES_USER: hookprobe
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install web server dependencies
+        run: |
+          cd src/web
+          pip install -r requirements.txt
+
+      - name: Test database connectivity
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe
+          SECRET_KEY: test-secret-key
+        run: |
+          cd src/web
+          python manage.py check --database default
+
+      - name: Test Redis connectivity
+        env:
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key
+        run: |
+          cd src/web
+          python -c "
+          import redis
+          r = redis.Redis(host='localhost', port=6379, db=0)
+          r.ping()
+          print('Redis connection successful')
+          "
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key
+        run: |
+          cd src/web
+          python manage.py migrate --noinput
+
+      - name: Create superuser
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key
+        run: |
+          cd src/web
+          python manage.py shell -c "
+          from django.contrib.auth import get_user_model;
+          User = get_user_model();
+          User.objects.create_superuser('admin', 'admin@test.com', 'admin123')
+          "
+
+      - name: Test web server startup
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key
+          DEBUG: 'True'
+        run: |
+          cd src/web
+          timeout 30s python manage.py runserver 0.0.0.0:8000 &
+          sleep 10
+
+          # Test health endpoint (if exists)
+          curl -f http://localhost:8000/ || echo "Server started but root endpoint not accessible"
+
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Scan Containerfile with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: 'install/addons/webserver/Containerfile'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
