@@ -1,0 +1,296 @@
+name: Django Web Application Tests
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+    paths:
+      - 'src/web/**'
+      - '.github/workflows/django-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/web/**'
+
+jobs:
+  django-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hookprobe_test
+          POSTGRES_USER: hookprobe
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: 'src/web/requirements.txt'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpq-dev \
+            python3-dev \
+            gettext
+
+      - name: Install Python dependencies
+        run: |
+          cd src/web
+          pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pytest pytest-django pytest-cov pytest-xdist
+
+      - name: Run Django system checks
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci-only
+          DEBUG: 'False'
+        run: |
+          cd src/web
+          python manage.py check --deploy
+
+      - name: Check for missing migrations
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci-only
+          DEBUG: 'False'
+        run: |
+          cd src/web
+          python manage.py makemigrations --check --dry-run --verbosity 3
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci-only
+          DEBUG: 'False'
+        run: |
+          cd src/web
+          python manage.py migrate --noinput
+
+      - name: Collect static files
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci-only
+          DEBUG: 'False'
+        run: |
+          cd src/web
+          python manage.py collectstatic --noinput
+
+      - name: Run tests with coverage
+        env:
+          DATABASE_URL: postgresql://hookprobe:test_password@localhost:5432/hookprobe_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci-only
+          DEBUG: 'False'
+        run: |
+          cd src/web
+          pytest \
+            --cov=apps \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=term \
+            -n auto \
+            --maxfail=5 \
+            --tb=short
+
+      - name: Upload coverage reports to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./src/web/coverage.xml
+          flags: django
+          name: django-tests
+          fail_ci_if_error: false
+
+      - name: Upload coverage HTML report
+        if: matrix.python-version == '3.11' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: src/web/htmlcov/
+
+  template-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'src/web/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          cd src/web
+          pip install --upgrade pip
+          pip install Django==5.0
+
+      - name: Validate templates exist
+        run: |
+          cd src/web
+          echo "Checking for template files..."
+          find templates -name '*.html' -type f | wc -l
+
+          # Ensure critical templates exist
+          test -f templates/public/base.html || exit 1
+          test -f templates/public/home.html || exit 1
+          test -f templates/public/about.html || exit 1
+
+      - name: Check template syntax
+        env:
+          SECRET_KEY: test-secret-key-for-ci-only
+          DEBUG: 'True'
+        run: |
+          cd src/web
+          python manage.py check --tag templates
+
+  security-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'src/web/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          cd src/web
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install safety bandit
+
+      - name: Check for security vulnerabilities in dependencies
+        run: |
+          cd src/web
+          safety check --json || true
+
+      - name: Run Bandit security linter
+        run: |
+          cd src/web
+          bandit -r apps/ -f json -o bandit-report.json || true
+          bandit -r apps/ -f txt
+
+      - name: Upload Bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-security-report
+          path: src/web/bandit-report.json
+
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'src/web/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          cd src/web
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pylint pylint-django
+
+      - name: Run pylint
+        run: |
+          cd src/web
+          pylint --load-plugins pylint_django \
+                 --django-settings-module=hookprobe.settings \
+                 apps/ || true
+
+      - name: Check code formatting with black
+        run: |
+          pip install black
+          cd src/web
+          black --check apps/ || true
+
+      - name: Check import sorting with isort
+        run: |
+          pip install isort
+          cd src/web
+          isort --check-only apps/ || true
+
+  docker-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test build web server container
+        run: |
+          cd install/addons/webserver
+          docker build -f Containerfile -t hookprobe-webserver:test ../../../
+
+      - name: Test container health
+        run: |
+          docker run -d --name webserver-test \
+            -e DATABASE_URL=sqlite:///db.sqlite3 \
+            -e SECRET_KEY=test-secret-key \
+            -e DEBUG=True \
+            hookprobe-webserver:test
+
+          sleep 10
+
+          # Check if container is running
+          docker ps | grep webserver-test
+
+          # Check Django is working
+          docker exec webserver-test python manage.py check
+
+          # Clean up
+          docker stop webserver-test
+          docker rm webserver-test
