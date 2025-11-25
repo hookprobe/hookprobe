@@ -1,0 +1,177 @@
+{% extends "public/base.html" %}
+{% load static %}
+
+{% block title %}{{ post.title }} - HookProbe Blog{% endblock %}
+
+{% block meta_description %}{{ post.meta_description|default:post.excerpt }}{% endblock %}
+
+{% block content %}
+
+<!-- Main -->
+<div id="main" class="alt">
+
+    <!-- Blog Post -->
+    <section id="post" class="wrapper">
+        <div class="inner">
+
+            <!-- Post Header -->
+            <header class="major">
+                <span class="date">{{ post.published_at|date:"F d, Y" }}</span>
+                <h1>{{ post.title }}</h1>
+                <ul class="meta">
+                    <li><span class="icon solid fa-user"></span> By <strong>{{ post.author.get_full_name|default:post.author.username }}</strong></li>
+                    <li><span class="icon solid fa-calendar"></span> {{ post.published_at|date:"F d, Y" }}</li>
+                    <li><span class="icon solid fa-clock"></span> {{ post.content|wordcount|div:200 }} min read</li>
+                    <li><span class="icon solid fa-eye"></span> {{ post.views }} views</li>
+                </ul>
+            </header>
+
+            <!-- Featured Image -->
+            {% if post.featured_image %}
+            <span class="image main">
+                <img src="{{ post.featured_image.url }}" alt="{{ post.title }}" />
+            </span>
+            {% endif %}
+
+            <!-- Post Content -->
+            <div class="content">
+                {{ post.content|safe }}
+            </div>
+
+            <!-- Tags -->
+            {% if post.tags %}
+            <div class="tags">
+                <h4>Tags:</h4>
+                <ul class="actions small">
+                    {% for tag in post.tags %}
+                    <li><a href="{% url 'cms:blog_list' %}?tag={{ tag }}" class="button small">{{ tag }}</a></li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <!-- Share Buttons -->
+            <div class="share">
+                <h4>Share this article:</h4>
+                <ul class="icons">
+                    <li><a href="https://twitter.com/intent/tweet?url={{ request.build_absolute_uri }}&text={{ post.title }}" class="icon brands fa-twitter" target="_blank"><span class="label">Twitter</span></a></li>
+                    <li><a href="https://www.facebook.com/sharer/sharer.php?u={{ request.build_absolute_uri }}" class="icon brands fa-facebook-f" target="_blank"><span class="label">Facebook</span></a></li>
+                    <li><a href="https://www.linkedin.com/shareArticle?mini=true&url={{ request.build_absolute_uri }}&title={{ post.title }}" class="icon brands fa-linkedin-in" target="_blank"><span class="label">LinkedIn</span></a></li>
+                    <li><a href="mailto:?subject={{ post.title }}&body=Check out this article: {{ request.build_absolute_uri }}" class="icon solid fa-envelope"><span class="label">Email</span></a></li>
+                </ul>
+            </div>
+
+            <hr class="major" />
+
+            <!-- Author Bio -->
+            <div class="author-bio box">
+                <div class="row">
+                    <div class="col-2">
+                        <span class="image fit">
+                            {% if post.author.profile.avatar %}
+                                <img src="{{ post.author.profile.avatar.url }}" alt="{{ post.author.get_full_name }}" style="border-radius: 50%;" />
+                            {% else %}
+                                <img src="{% static 'common/images/default-avatar.png' %}" alt="{{ post.author.get_full_name }}" style="border-radius: 50%;" />
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="col-10">
+                        <h4>About {{ post.author.get_full_name|default:post.author.username }}</h4>
+                        <p>{{ post.author.profile.bio|default:"Security researcher and HookProbe contributor." }}</p>
+                        {% if post.author.profile.github or post.author.profile.twitter or post.author.profile.linkedin %}
+                        <ul class="icons">
+                            {% if post.author.profile.github %}<li><a href="https://github.com/{{ post.author.profile.github }}" class="icon brands fa-github"><span class="label">GitHub</span></a></li>{% endif %}
+                            {% if post.author.profile.twitter %}<li><a href="https://twitter.com/{{ post.author.profile.twitter }}" class="icon brands fa-twitter"><span class="label">Twitter</span></a></li>{% endif %}
+                            {% if post.author.profile.linkedin %}<li><a href="{{ post.author.profile.linkedin }}" class="icon brands fa-linkedin"><span class="label">LinkedIn</span></a></li>{% endif %}
+                        </ul>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Related Posts -->
+            {% if related_posts %}
+            <section id="related">
+                <header>
+                    <h3>Related Articles</h3>
+                </header>
+                <div class="posts">
+                    {% for related_post in related_posts %}
+                    <article>
+                        <a href="{{ related_post.get_absolute_url }}" class="image">
+                            {% if related_post.featured_image %}
+                                <img src="{{ related_post.featured_image.url }}" alt="{{ related_post.title }}" />
+                            {% else %}
+                                <img src="{% static 'common/images/blog-placeholder.jpg' %}" alt="{{ related_post.title }}" />
+                            {% endif %}
+                        </a>
+                        <h3><a href="{{ related_post.get_absolute_url }}">{{ related_post.title }}</a></h3>
+                        <ul class="meta">
+                            <li>{{ related_post.published_at|date:"M d, Y" }}</li>
+                            <li>{{ related_post.views }} views</li>
+                        </ul>
+                        <ul class="actions">
+                            <li><a href="{{ related_post.get_absolute_url }}" class="button small">Read</a></li>
+                        </ul>
+                    </article>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endif %}
+
+            <!-- Comments Section (Future Enhancement) -->
+            <section id="comments">
+                <header>
+                    <h3>Discussion</h3>
+                </header>
+                <p>Comments coming soon! For now, join the discussion on <a href="https://github.com/hookprobe/hookprobe/discussions" target="_blank">GitHub Discussions</a>.</p>
+            </section>
+
+            <!-- Back to Blog -->
+            <ul class="actions">
+                <li><a href="{% url 'cms:blog_list' %}" class="button icon solid fa-arrow-left">Back to Blog</a></li>
+            </ul>
+
+        </div>
+    </section>
+
+    <!-- Newsletter CTA -->
+    <section id="newsletter" class="wrapper style2 special">
+        <div class="inner">
+            <header class="major">
+                <h2>Enjoyed this article?</h2>
+                <p>Subscribe to get more security insights delivered to your inbox</p>
+            </header>
+            <form method="post" action="{% url 'cms:newsletter_signup' %}">
+                {% csrf_token %}
+                <div class="row gtr-uniform">
+                    <div class="col-6 col-12-xsmall">
+                        <input type="text" name="name" placeholder="Name" required />
+                    </div>
+                    <div class="col-6 col-12-xsmall">
+                        <input type="email" name="email" placeholder="Email" required />
+                    </div>
+                    <div class="col-12">
+                        <input type="checkbox" id="article_gdpr" name="gdpr_consent" required>
+                        <label for="article_gdpr">I agree to receive blog updates and understand I can unsubscribe anytime. <a href="{% url 'cms:privacy_policy' %}" target="_blank">Privacy Policy</a></label>
+                    </div>
+                    <div class="col-12">
+                        <ul class="actions special">
+                            <li><input type="submit" value="Subscribe" class="primary" /></li>
+                        </ul>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </section>
+
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Syntax highlighting for code blocks (if using Prism.js or highlight.js)
+    // Add your preferred code highlighting library here
+</script>
+{% endblock %}

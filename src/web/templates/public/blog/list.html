@@ -1,0 +1,228 @@
+{% extends "public/base.html" %}
+{% load static %}
+
+{% block title %}Blog - HookProbe{% endblock %}
+
+{% block meta_description %}Latest articles about cybersecurity, threat hunting, malware analysis, and HookProbe tutorials from our security experts.{% endblock %}
+
+{% block content %}
+
+<!-- Main -->
+<div id="main" class="alt">
+
+    <!-- Banner -->
+    <section id="banner" class="style2">
+        <div class="inner">
+            <header class="major">
+                <h1>HookProbe Blog</h1>
+            </header>
+            <div class="content">
+                <p>Security insights, tutorials, and updates from the HookProbe community</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Blog Posts -->
+    <section id="blog-posts" class="wrapper">
+        <div class="inner">
+
+            <!-- Search and Filter -->
+            <div class="row gtr-uniform">
+                <div class="col-8">
+                    <form method="get" action="{% url 'cms:blog_list' %}">
+                        <div class="row gtr-uniform">
+                            <div class="col-9 col-12-xsmall">
+                                <input type="text" name="q" placeholder="Search articles..." value="{{ request.GET.q }}" />
+                            </div>
+                            <div class="col-3 col-12-xsmall">
+                                <input type="submit" value="Search" class="primary fit" />
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="col-4">
+                    <select name="category" onchange="window.location.href='{% url 'cms:blog_list' %}?category='+this.value">
+                        <option value="">All Categories</option>
+                        <option value="tutorials">Tutorials</option>
+                        <option value="security">Security News</option>
+                        <option value="updates">Product Updates</option>
+                        <option value="research">Research</option>
+                    </select>
+                </div>
+            </div>
+
+            <hr class="major" />
+
+            <!-- Featured Post -->
+            {% if featured_post %}
+            <section id="featured">
+                <header class="major">
+                    <h2>Featured Article</h2>
+                </header>
+                <div class="box alt">
+                    <div class="row gtr-50 gtr-uniform">
+                        <div class="col-6">
+                            {% if featured_post.featured_image %}
+                                <span class="image fit">
+                                    <img src="{{ featured_post.featured_image.url }}" alt="{{ featured_post.title }}" />
+                                </span>
+                            {% else %}
+                                <span class="image fit">
+                                    <img src="{% static 'common/images/blog-placeholder.jpg' %}" alt="{{ featured_post.title }}" />
+                                </span>
+                            {% endif %}
+                        </div>
+                        <div class="col-6">
+                            <header>
+                                <h3><a href="{{ featured_post.get_absolute_url }}">{{ featured_post.title }}</a></h3>
+                                <ul class="meta">
+                                    <li><span class="icon solid fa-user"></span> {{ featured_post.author.get_full_name|default:featured_post.author.username }}</li>
+                                    <li><span class="icon solid fa-calendar"></span> {{ featured_post.published_at|date:"F d, Y" }}</li>
+                                    <li><span class="icon solid fa-eye"></span> {{ featured_post.views }} views</li>
+                                </ul>
+                            </header>
+                            <p>{{ featured_post.excerpt }}</p>
+                            <ul class="actions">
+                                <li><a href="{{ featured_post.get_absolute_url }}" class="button primary">Read More</a></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <hr class="major" />
+            {% endif %}
+
+            <!-- Blog Posts Grid -->
+            <div class="posts">
+                {% for post in posts %}
+                <article>
+                    <a href="{{ post.get_absolute_url }}" class="image">
+                        {% if post.featured_image %}
+                            <img src="{{ post.featured_image.url }}" alt="{{ post.title }}" />
+                        {% else %}
+                            <img src="{% static 'common/images/blog-placeholder.jpg' %}" alt="{{ post.title }}" />
+                        {% endif %}
+                    </a>
+                    <h3><a href="{{ post.get_absolute_url }}">{{ post.title }}</a></h3>
+                    <ul class="meta">
+                        <li><span class="icon solid fa-user"></span> {{ post.author.get_full_name|default:post.author.username }}</li>
+                        <li><span class="icon solid fa-calendar"></span> {{ post.published_at|date:"M d, Y" }}</li>
+                        <li><span class="icon solid fa-eye"></span> {{ post.views }} views</li>
+                    </ul>
+                    <p>{{ post.excerpt|truncatewords:30 }}</p>
+                    <ul class="actions">
+                        <li><a href="{{ post.get_absolute_url }}" class="button">More</a></li>
+                    </ul>
+                </article>
+                {% empty %}
+                <article>
+                    <span class="image">
+                        <img src="{% static 'common/images/blog-placeholder.jpg' %}" alt="No Posts Yet" />
+                    </span>
+                    <h3>No Articles Found</h3>
+                    <p>We're working on creating great content for you. Check back soon!</p>
+                </article>
+                {% endfor %}
+            </div>
+
+            <!-- Pagination -->
+            {% if is_paginated %}
+            <ul class="pagination">
+                {% if page_obj.has_previous %}
+                    <li><a href="?page=1" class="button">First</a></li>
+                    <li><a href="?page={{ page_obj.previous_page_number }}" class="button">Prev</a></li>
+                {% endif %}
+
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                        <li><span class="button primary">{{ num }}</span></li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <li><a href="?page={{ num }}" class="button">{{ num }}</a></li>
+                    {% endif %}
+                {% endfor %}
+
+                {% if page_obj.has_next %}
+                    <li><a href="?page={{ page_obj.next_page_number }}" class="button">Next</a></li>
+                    <li><a href="?page={{ page_obj.paginator.num_pages }}" class="button">Last</a></li>
+                {% endif %}
+            </ul>
+            {% endif %}
+
+        </div>
+    </section>
+
+    <!-- Sidebar -->
+    <section id="sidebar" class="wrapper style1">
+        <div class="inner">
+            <!-- Newsletter Signup -->
+            <section>
+                <header>
+                    <h3>Subscribe to Updates</h3>
+                </header>
+                <p>Get the latest security articles delivered to your inbox</p>
+                <form method="post" action="{% url 'cms:newsletter_signup' %}">
+                    {% csrf_token %}
+                    <div class="row gtr-uniform">
+                        <div class="col-12">
+                            <input type="email" name="email" placeholder="Your email" required />
+                        </div>
+                        <div class="col-12">
+                            <input type="checkbox" id="blog_gdpr" name="gdpr_consent" required>
+                            <label for="blog_gdpr">I agree to receive blog updates</label>
+                        </div>
+                        <div class="col-12">
+                            <input type="submit" value="Subscribe" class="primary fit small" />
+                        </div>
+                    </div>
+                </form>
+            </section>
+
+            <!-- Popular Posts -->
+            <section>
+                <header>
+                    <h3>Popular Articles</h3>
+                </header>
+                <ul class="alt">
+                    {% for post in popular_posts %}
+                    <li>
+                        <a href="{{ post.get_absolute_url }}">{{ post.title }}</a>
+                        <br /><small>{{ post.views }} views</small>
+                    </li>
+                    {% empty %}
+                    <li>No articles yet</li>
+                    {% endfor %}
+                </ul>
+            </section>
+
+            <!-- Categories -->
+            <section>
+                <header>
+                    <h3>Categories</h3>
+                </header>
+                <ul class="alt">
+                    <li><a href="{% url 'cms:blog_list' %}?category=tutorials">Tutorials</a></li>
+                    <li><a href="{% url 'cms:blog_list' %}?category=security">Security News</a></li>
+                    <li><a href="{% url 'cms:blog_list' %}?category=updates">Product Updates</a></li>
+                    <li><a href="{% url 'cms:blog_list' %}?category=research">Research</a></li>
+                    <li><a href="{% url 'cms:blog_list' %}?category=malware">Malware Analysis</a></li>
+                    <li><a href="{% url 'cms:blog_list' %}?category=threat-hunting">Threat Hunting</a></li>
+                </ul>
+            </section>
+
+            <!-- Social -->
+            <section>
+                <header>
+                    <h3>Follow Us</h3>
+                </header>
+                <ul class="icons">
+                    <li><a href="https://github.com/hookprobe/hookprobe" class="icon brands fa-github" target="_blank"><span class="label">GitHub</span></a></li>
+                    <li><a href="https://twitter.com/hookprobe" class="icon brands fa-twitter" target="_blank"><span class="label">Twitter</span></a></li>
+                    <li><a href="https://linkedin.com/company/hookprobe" class="icon brands fa-linkedin" target="_blank"><span class="label">LinkedIn</span></a></li>
+                </ul>
+            </section>
+        </div>
+    </section>
+
+</div>
+
+{% endblock %}
