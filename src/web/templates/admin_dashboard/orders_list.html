@@ -1,0 +1,201 @@
+{% extends 'admin_dashboard/base.html' %}
+
+{% block title %}Orders - HookProbe{% endblock %}
+{% block page_title %}Merchandise Orders{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'admin_dashboard:home' %}">Home</a></li>
+<li class="breadcrumb-item active">Orders</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-receipt mr-2"></i>
+                    Customer Orders
+                </h3>
+            </div>
+            <div class="card-body">
+                <!-- Filter Bar -->
+                <form method="get" class="mb-3">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <select name="status" class="form-control" onchange="this.form.submit()">
+                                <option value="">All Statuses</option>
+                                <option value="pending" {% if request.GET.status == 'pending' %}selected{% endif %}>Pending</option>
+                                <option value="processing" {% if request.GET.status == 'processing' %}selected{% endif %}>Processing</option>
+                                <option value="shipped" {% if request.GET.status == 'shipped' %}selected{% endif %}>Shipped</option>
+                                <option value="delivered" {% if request.GET.status == 'delivered' %}selected{% endif %}>Delivered</option>
+                                <option value="cancelled" {% if request.GET.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <select name="payment_status" class="form-control" onchange="this.form.submit()">
+                                <option value="">All Payment Statuses</option>
+                                <option value="pending" {% if request.GET.payment_status == 'pending' %}selected{% endif %}>Payment Pending</option>
+                                <option value="paid" {% if request.GET.payment_status == 'paid' %}selected{% endif %}>Paid</option>
+                                <option value="failed" {% if request.GET.payment_status == 'failed' %}selected{% endif %}>Failed</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <input type="text" name="search" class="form-control" placeholder="Search order # or customer..." value="{{ request.GET.search }}">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-info btn-block">
+                                <i class="fas fa-search"></i> Search
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Orders Table -->
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Order #</th>
+                                <th>Customer</th>
+                                <th>Items</th>
+                                <th>Total</th>
+                                <th>Payment</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for order in orders %}
+                            <tr>
+                                <td>
+                                    <a href="{% url 'admin_dashboard:order_detail' order.id %}">
+                                        <strong>{{ order.order_number }}</strong>
+                                    </a>
+                                </td>
+                                <td>
+                                    <div>{{ order.customer_name }}</div>
+                                    <small class="text-muted">{{ order.customer_email }}</small>
+                                </td>
+                                <td>
+                                    <span class="badge badge-primary">{{ order.items.count }} items</span>
+                                </td>
+                                <td>
+                                    <strong>${{ order.total }}</strong>
+                                </td>
+                                <td>
+                                    {% if order.payment_status == 'pending' %}
+                                        <span class="badge badge-warning">Pending</span>
+                                    {% elif order.payment_status == 'paid' %}
+                                        <span class="badge badge-success">Paid</span>
+                                    {% elif order.payment_status == 'failed' %}
+                                        <span class="badge badge-danger">Failed</span>
+                                    {% endif %}
+                                    {% if order.payment_method %}
+                                        <br><small class="text-muted">{{ order.payment_method }}</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if order.status == 'pending' %}
+                                        <span class="badge badge-warning">Pending</span>
+                                    {% elif order.status == 'processing' %}
+                                        <span class="badge badge-info">Processing</span>
+                                    {% elif order.status == 'shipped' %}
+                                        <span class="badge badge-primary">Shipped</span>
+                                    {% elif order.status == 'delivered' %}
+                                        <span class="badge badge-success">Delivered</span>
+                                    {% elif order.status == 'cancelled' %}
+                                        <span class="badge badge-danger">Cancelled</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ order.created_at|date:"M d, Y" }}
+                                    <br><small class="text-muted">{{ order.created_at|time:"g:i A" }}</small>
+                                </td>
+                                <td>
+                                    <a href="{% url 'admin_dashboard:order_detail' order.id %}" class="btn btn-sm btn-info" title="View">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                    {% if order.status == 'pending' and order.payment_status == 'paid' %}
+                                    <button class="btn btn-sm btn-primary" title="Mark as Processing" onclick="updateOrderStatus({{ order.id }}, 'processing')">
+                                        <i class="fas fa-cog"></i>
+                                    </button>
+                                    {% elif order.status == 'processing' %}
+                                    <button class="btn btn-sm btn-success" title="Mark as Shipped" onclick="updateOrderStatus({{ order.id }}, 'shipped')">
+                                        <i class="fas fa-shipping-fast"></i>
+                                    </button>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="8" class="text-center text-muted py-4">
+                                    <i class="fas fa-inbox fa-3x mb-3 d-block"></i>
+                                    No orders found.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Stats Footer -->
+            <div class="card-footer">
+                <div class="row">
+                    <div class="col-md-2 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header">{{ total_orders }}</h5>
+                            <span class="description-text">Total Orders</span>
+                        </div>
+                    </div>
+                    <div class="col-md-2 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header text-warning">{{ pending_orders }}</h5>
+                            <span class="description-text">Pending</span>
+                        </div>
+                    </div>
+                    <div class="col-md-2 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header text-info">{{ processing_orders }}</h5>
+                            <span class="description-text">Processing</span>
+                        </div>
+                    </div>
+                    <div class="col-md-2 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header text-primary">{{ shipped_orders }}</h5>
+                            <span class="description-text">Shipped</span>
+                        </div>
+                    </div>
+                    <div class="col-md-2 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header text-success">{{ delivered_orders }}</h5>
+                            <span class="description-text">Delivered</span>
+                        </div>
+                    </div>
+                    <div class="col-md-2 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header">${{ total_revenue|default:"0.00" }}</h5>
+                            <span class="description-text">Total Revenue</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function updateOrderStatus(orderId, newStatus) {
+    if (confirm('Update order status to "' + newStatus + '"?')) {
+        // Implementation would use AJAX to update order status
+        console.log('Update order', orderId, 'to', newStatus);
+        alert('Order status updated! (Mock implementation)');
+        location.reload();
+    }
+}
+</script>
+{% endblock %}

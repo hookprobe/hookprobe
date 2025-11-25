@@ -1,0 +1,326 @@
+{% extends 'admin_dashboard/base.html' %}
+
+{% block title %}Admin Dashboard - HookProbe{% endblock %}
+{% block page_title %}Admin Dashboard{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Dashboard</li>
+{% endblock %}
+
+{% block content %}
+<!-- Info boxes -->
+<div class="row">
+    <!-- Blog Posts -->
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box">
+            <span class="info-box-icon bg-info elevation-1"><i class="fas fa-newspaper"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Blog Posts</span>
+                <span class="info-box-number">{{ blog_post_count }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Drafts -->
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box mb-3">
+            <span class="info-box-icon bg-warning elevation-1"><i class="fas fa-robot"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">AI Drafts Pending</span>
+                <span class="info-box-number">{{ ai_drafts_pending }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Products -->
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box mb-3">
+            <span class="info-box-icon bg-success elevation-1"><i class="fas fa-shopping-cart"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Products</span>
+                <span class="info-box-number">{{ product_count }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Orders -->
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box mb-3">
+            <span class="info-box-icon bg-danger elevation-1"><i class="fas fa-receipt"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Pending Orders</span>
+                <span class="info-box-number">{{ pending_orders }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- AI Content Drafts -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-robot mr-1"></i>
+                    Recent AI Drafts
+                </h3>
+                <div class="card-tools">
+                    <a href="{% url 'admin_dashboard:ai_generate' %}" class="btn btn-sm btn-primary">
+                        <i class="fas fa-plus"></i> Generate New
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Status</th>
+                            <th>Confidence</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for draft in recent_ai_drafts %}
+                        <tr>
+                            <td>
+                                <a href="{% url 'admin_dashboard:ai_draft_detail' draft.id %}">
+                                    {{ draft.title|truncatewords:10 }}
+                                </a>
+                            </td>
+                            <td>
+                                {% if draft.status == 'draft' %}
+                                    <span class="badge badge-secondary">Draft</span>
+                                {% elif draft.status == 'review' %}
+                                    <span class="badge badge-warning">Review</span>
+                                {% elif draft.status == 'approved' %}
+                                    <span class="badge badge-info">Approved</span>
+                                {% elif draft.status == 'published' %}
+                                    <span class="badge badge-success">Published</span>
+                                {% elif draft.status == 'rejected' %}
+                                    <span class="badge badge-danger">Rejected</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if draft.ai_confidence_score %}
+                                    {% with confidence=draft.ai_confidence_score|floatformat:0 %}
+                                        {% if confidence >= '90' %}
+                                            <span class="ai-badge confidence-high">{{ confidence }}%</span>
+                                        {% elif confidence >= '70' %}
+                                            <span class="ai-badge confidence-medium">{{ confidence }}%</span>
+                                        {% else %}
+                                            <span class="ai-badge confidence-low">{{ confidence }}%</span>
+                                        {% endif %}
+                                    {% endwith %}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{% url 'admin_dashboard:ai_draft_detail' draft.id %}" class="btn btn-sm btn-info">
+                                    <i class="fas fa-eye"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="4" class="text-center text-muted">No AI drafts yet</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer clearfix">
+                <a href="{% url 'admin_dashboard:ai_drafts' %}" class="btn btn-sm btn-secondary float-right">View All Drafts</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Orders -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-receipt mr-1"></i>
+                    Recent Orders
+                </h3>
+                <div class="card-tools">
+                    <a href="{% url 'admin_dashboard:orders' %}" class="btn btn-sm btn-secondary">
+                        <i class="fas fa-list"></i> View All
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Order #</th>
+                            <th>Customer</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for order in recent_orders %}
+                        <tr>
+                            <td>
+                                <a href="{% url 'admin_dashboard:order_detail' order.id %}">
+                                    {{ order.order_number }}
+                                </a>
+                            </td>
+                            <td>{{ order.customer_name|truncatewords:3 }}</td>
+                            <td>${{ order.total }}</td>
+                            <td>
+                                {% if order.status == 'pending' %}
+                                    <span class="badge badge-warning">Pending</span>
+                                {% elif order.status == 'processing' %}
+                                    <span class="badge badge-info">Processing</span>
+                                {% elif order.status == 'shipped' %}
+                                    <span class="badge badge-primary">Shipped</span>
+                                {% elif order.status == 'delivered' %}
+                                    <span class="badge badge-success">Delivered</span>
+                                {% elif order.status == 'cancelled' %}
+                                    <span class="badge badge-danger">Cancelled</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="4" class="text-center text-muted">No orders yet</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer clearfix">
+                <a href="{% url 'admin_dashboard:orders' %}" class="btn btn-sm btn-secondary float-right">View All Orders</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Low Stock Products -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-exclamation-triangle mr-1"></i>
+                    Low Stock Products
+                </h3>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Stock</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for product in low_stock_products %}
+                        <tr>
+                            <td>{{ product.name }}</td>
+                            <td>{{ product.stock_quantity }}</td>
+                            <td>
+                                {% if product.stock_quantity == 0 %}
+                                    <span class="badge badge-danger">Out of Stock</span>
+                                {% else %}
+                                    <span class="badge badge-warning">Low Stock</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="3" class="text-center text-muted">All products are well-stocked</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Research Tasks -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-search mr-1"></i>
+                    Active Research Tasks
+                </h3>
+                <div class="card-tools">
+                    <a href="{% url 'admin_dashboard:research_tasks' %}" class="btn btn-sm btn-secondary">
+                        <i class="fas fa-plus"></i> New Task
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Topic</th>
+                            <th>Status</th>
+                            <th>Sources</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in active_research_tasks %}
+                        <tr>
+                            <td>{{ task.topic|truncatewords:8 }}</td>
+                            <td>
+                                {% if task.status == 'pending' %}
+                                    <span class="badge badge-secondary">Pending</span>
+                                {% elif task.status == 'in_progress' %}
+                                    <span class="badge badge-info">In Progress</span>
+                                {% elif task.status == 'completed' %}
+                                    <span class="badge badge-success">Completed</span>
+                                {% elif task.status == 'failed' %}
+                                    <span class="badge badge-danger">Failed</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ task.sources_found }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="3" class="text-center text-muted">No active research tasks</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-bolt mr-1"></i>
+                    Quick Actions
+                </h3>
+            </div>
+            <div class="card-body">
+                <div class="btn-group" role="group">
+                    <a href="{% url 'admin_dashboard:ai_generate' %}" class="btn btn-primary">
+                        <i class="fas fa-robot"></i> Generate AI Content
+                    </a>
+                    <a href="{% url 'cms:admin_post_create' %}" class="btn btn-info">
+                        <i class="fas fa-edit"></i> Write Blog Post
+                    </a>
+                    <a href="{% url 'admin:merchandise_product_add' %}" class="btn btn-success">
+                        <i class="fas fa-plus"></i> Add Product
+                    </a>
+                    <a href="{% url 'admin:index' %}" class="btn btn-secondary">
+                        <i class="fas fa-cog"></i> Django Admin
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
