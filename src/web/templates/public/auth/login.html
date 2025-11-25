@@ -1,0 +1,174 @@
+{% extends "public/base.html" %}
+{% load static %}
+
+{% block title %}Sign In - HookProbe{% endblock %}
+
+{% block content %}
+
+<!-- Main -->
+<div id="main" class="alt">
+
+    <!-- Banner -->
+    <section id="banner" class="style2">
+        <div class="inner">
+            <header class="major">
+                <h1>Sign In</h1>
+            </header>
+            <div class="content">
+                <p>Access your HookProbe dashboard</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Login Form -->
+    <section id="login" class="wrapper">
+        <div class="inner">
+            <div class="row">
+                <div class="col-6 col-12-medium">
+                    <header>
+                        <h2>Welcome Back</h2>
+                        <p>Sign in to access your HookProbe dashboard, manage devices, and view security analytics</p>
+                    </header>
+
+                    {% if messages %}
+                        {% for message in messages %}
+                            <div class="alert {% if message.tags %}alert-{{ message.tags }}{% endif %}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+
+                    <form method="post" action="{% url 'login' %}">
+                        {% csrf_token %}
+                        <div class="row gtr-uniform">
+                            <div class="col-12">
+                                <input type="text" name="username" id="username" placeholder="Username or Email" required autofocus />
+                            </div>
+                            <div class="col-12">
+                                <input type="password" name="password" id="password" placeholder="Password" required />
+                            </div>
+                            <div class="col-12">
+                                <input type="checkbox" id="remember_me" name="remember_me">
+                                <label for="remember_me">Remember me for 30 days</label>
+                            </div>
+                            <div class="col-12">
+                                <ul class="actions">
+                                    <li><input type="submit" value="Sign In" class="primary fit" /></li>
+                                </ul>
+                            </div>
+                            <div class="col-12">
+                                <p><a href="{% url 'password_reset' %}">Forgot your password?</a></p>
+                            </div>
+                        </div>
+                    </form>
+
+                    <hr />
+
+                    <p>Don't have an account? <a href="{% url 'signup' %}"><strong>Sign Up</strong></a></p>
+
+                </div>
+
+                <div class="col-6 col-12-medium">
+                    <div class="box">
+                        <h3><span class="icon solid fa-shield-alt"></span> Why Sign In?</h3>
+                        <ul>
+                            <li><span class="icon fa-check"></span> Access your HookProbe dashboard</li>
+                            <li><span class="icon fa-check"></span> Manage edge devices and sensors</li>
+                            <li><span class="icon fa-check"></span> View real-time security analytics</li>
+                            <li><span class="icon fa-check"></span> Monitor Qsecbit threat scores</li>
+                            <li><span class="icon fa-check"></span> Configure alerts and notifications</li>
+                            <li><span class="icon fa-check"></span> Access API keys for automation</li>
+                        </ul>
+
+                        <hr />
+
+                        <h4><span class="icon solid fa-user-shield"></span> Secure Authentication</h4>
+                        <p>Your account is protected with:</p>
+                        <ul>
+                            <li>✅ Encrypted password storage (bcrypt)</li>
+                            <li>✅ Session security with HTTP-only cookies</li>
+                            <li>✅ Optional Two-Factor Authentication</li>
+                            <li>✅ Login activity monitoring</li>
+                            <li>✅ Automatic logout after inactivity</li>
+                        </ul>
+
+                        <hr />
+
+                        <h4><span class="icon solid fa-graduation-cap"></span> New to HookProbe?</h4>
+                        <p>Start with our <a href="https://github.com/hookprobe/hookprobe#-quick-install" target="_blank">Quick Install Guide</a> to deploy HookProbe on your hardware in 15 minutes.</p>
+                        <ul class="actions">
+                            <li><a href="{% url 'cms:about' %}" class="button small">Learn More</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SSO / IAM Integration (Future) -->
+    <section id="sso" class="wrapper style1">
+        <div class="inner">
+            <header class="major">
+                <h2>Enterprise Authentication</h2>
+            </header>
+            <p>For enterprise deployments, HookProbe integrates with:</p>
+            <div class="features">
+                <article>
+                    <span class="icon brands fa-microsoft"></span>
+                    <div class="content">
+                        <h3>Logto (POD-002)</h3>
+                        <p>Integrated Identity and Access Management with OAuth 2.0 and OpenID Connect support</p>
+                        <ul class="actions">
+                            <li><a href="http://10.200.2.12:3000" class="button small" target="_blank">Logto Admin</a></li>
+                        </ul>
+                    </div>
+                </article>
+
+                <article>
+                    <span class="icon solid fa-key"></span>
+                    <div class="content">
+                        <h3>SAML & OAuth</h3>
+                        <p>Coming Soon: SAML 2.0, OAuth 2.0, and OpenID Connect for enterprise SSO integration</p>
+                    </div>
+                </article>
+
+                <article>
+                    <span class="icon solid fa-users"></span>
+                    <div class="content">
+                        <h3>LDAP / Active Directory</h3>
+                        <p>Coming Soon: Integrate with existing LDAP or Active Directory infrastructure</p>
+                    </div>
+                </article>
+            </div>
+        </div>
+    </section>
+
+</div>
+
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .alert {
+        padding: 15px;
+        margin-bottom: 20px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+    }
+    .alert-success {
+        color: #3c763d;
+        background-color: #dff0d8;
+        border-color: #d6e9c6;
+    }
+    .alert-error, .alert-danger {
+        color: #a94442;
+        background-color: #f2dede;
+        border-color: #ebccd1;
+    }
+    .alert-info {
+        color: #31708f;
+        background-color: #d9edf7;
+        border-color: #bce8f1;
+    }
+</style>
+{% endblock %}

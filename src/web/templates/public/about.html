@@ -1,0 +1,291 @@
+{% extends "public/base.html" %}
+{% load static %}
+
+{% block title %}About Us - HookProbe{% endblock %}
+
+{% block meta_description %}Learn about HookProbe's mission to democratize cybersecurity through edge computing. Our story, vision, and commitment to open-source security.{% endblock %}
+
+{% block content %}
+
+<!-- Main -->
+<div id="main" class="alt">
+
+    <!-- Banner -->
+    <section id="banner" class="style2">
+        <div class="inner">
+            <header class="major">
+                <h1>About HookProbe</h1>
+            </header>
+            <div class="content">
+                <p>Democratizing Cybersecurity Through Edge Computing</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Our Story -->
+    <section id="story" class="wrapper">
+        <div class="inner">
+            <header class="major">
+                <h2>Our Story: The Birth of HookProbe</h2>
+                <p>"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"</p>
+            </header>
+
+            <div class="content">
+                <h3>The Year 2035: A Digital Landscape Under Siege</h3>
+                <p>In the year 2035, the digital landscape had evolved into a complex, interconnected web where threats lurked around every corner. Cyberattacks were no longer the domain of isolated hackers; they had become sophisticated operations executed by highly organized groups. Governments, corporations, and individuals alike were under constant siege from these digital marauders, who exploited every vulnerability to steal data, disrupt services, and wreak havoc.</p>
+
+                <p>In this climate of omnipresent danger, traditional security measures proved insufficient. Firewalls and antivirus software, once the mainstay of cybersecurity, could no longer keep pace with the rapid evolution of threats. The need for real-time detection and response had become paramount, and this necessity gave rise to an innovative solution: the integration of edge technology with Security Operations Centers (SOCs).</p>
+
+                <span class="image main">
+                    <img src="{% static 'common/images/future-city.png' %}" alt="Future Cybersecurity Landscape" />
+                </span>
+
+                <h3>Edge Technology: The New Frontier</h3>
+                <p>Edge technology, characterized by the use of decentralized computing resources at the "edge" of the network, offered a way to process data closer to its source, reducing latency and enabling real-time decision-making. This approach became the backbone of modern security infrastructure. Central to this transformation were single-board computers (SBCs) like Nvidia Jetson, Raspberry Pi and Banana Pi (Arm64 based SoCs) which empowered individuals to take an active role in their own digital defense.</p>
+
+                <p>In this new era, homes and small businesses deployed SBCs as personal security nodes. Equipped with advanced sensors and AI-driven software, these compact devices continuously monitored network traffic, identifying anomalies and potential threats with unprecedented speed and accuracy. The data collected by these SBCs was then relayed to a decentralized network of SOCs, where it was aggregated and analyzed in real-time.</p>
+
+                <h3>The SOC Revolution</h3>
+                <p>Each SOC was a hub of activity, staffed by a new breed of cybersecurity analysts who used advanced tools to correlate data from thousands of edge devices. Machine learning algorithms sifted through the information, detecting patterns that indicated malicious activity. When a threat was identified, the SOC could issue immediate countermeasures, deploying patches, isolating infected devices, and even launching counter-hacks to neutralize the attackers.</p>
+
+                <div class="box">
+                    <h4>A Real-World Example: The Bucharest Command Center</h4>
+                    <p>In the heart of Bucharest, one such SOC was operated by a team of experts led by <strong>Andrei Toma</strong>, a former interior architect turned cybersecurity strategist. His command center was a high-tech fortress, filled with screens displaying live feeds from edge devices across the city. Andrei's team worked in shifts, ensuring 24/7 vigilance.</p>
+
+                    <p>One evening, as HookProbe intelligence monitored the incoming data, a spike in traffic from a cluster of residential SBCs caught the intelligence eye. The pattern suggested a coordinated attack targeting smart home devices. With a few swift commands, iEYE directed the SOC's AI to analyze the data more closely. Within seconds, it identified the source: a botnet attempting root shell access in home security cameras and smart locks.</p>
+
+                    <p>HookProbe activated the local SOC's response protocol. Alerts were sent to the affected households, activating DDoS protection by cutting down the connection, instructing residents that traffic was going to the back-up connection. Simultaneously, the SOC's AI deployed patches to seal the exploited vulnerabilities. For those already compromised, HookProbe's team used edge technology to isolate the infected devices from the rest of the network, preventing the spread of the attack.</p>
+
+                    <p>Thanks to the decentralized nature of the edge network, the response was swift and efficient. The botnet was neutralized before it could cause significant damage, and the residents' digital lives were safeguarded.</p>
+                </div>
+
+                <h3>The Power of Decentralized Defense</h3>
+                <p>As the crisis abated, HookProbe Team reflected on the power of this new paradigm. In a world where threats were everywhere, the combination of edge technology and SOCs provided a robust defense. Single-board computers like Nvidia Jetson, Raspberry Pi and Banana Pi had democratized cybersecurity, turning ordinary people into vigilant guardians of their digital realms. Through this collaborative effort, the digital world had become a safer place, where threats could be met and defeated in real time.</p>
+
+                <p>And so, in the face of ever-evolving dangers, humanity adapted and thrived, using the very technology that once made them vulnerable to create a resilient and secure digital future.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Our Mission -->
+    <section id="mission" class="wrapper style1">
+        <div class="inner">
+            <header class="major">
+                <h2>Our Mission</h2>
+            </header>
+            <div class="grid-wrapper">
+                <div class="col-6">
+                    <h3>Making Enterprise Security Accessible</h3>
+                    <p>HookProbe was born from a simple belief: <strong>enterprise-grade cybersecurity should be accessible to everyone</strong>, not just large corporations with massive budgets.</p>
+                    <ul>
+                        <li><strong>Affordable:</strong> Run on $150-$600 hardware (Raspberry Pi, Intel NUC)</li>
+                        <li><strong>Open Source:</strong> Free, transparent, community-driven</li>
+                        <li><strong>Educational:</strong> Learn cybersecurity hands-on</li>
+                        <li><strong>Privacy-First:</strong> Your data stays on your devices</li>
+                    </ul>
+                </div>
+                <div class="col-6">
+                    <h3>What We Deliver</h3>
+                    <ul class="alt">
+                        <li><span class="icon solid fa-check"></span> <strong>AI-Powered Threat Detection:</strong> Qsecbit algorithm for real-time security analysis</li>
+                        <li><span class="icon solid fa-check"></span> <strong>Automated Response:</strong> Kali Linux on-demand threat mitigation</li>
+                        <li><span class="icon solid fa-check"></span> <strong>Complete Monitoring:</strong> Grafana + ClickHouse + VictoriaMetrics</li>
+                        <li><span class="icon solid fa-check"></span> <strong>Zero Trust Architecture:</strong> PSK-encrypted VXLAN, OpenFlow ACLs</li>
+                        <li><span class="icon solid fa-check"></span> <strong>Web Application Firewall:</strong> NAXSI/ModSecurity with auto-updating rules</li>
+                        <li><span class="icon solid fa-check"></span> <strong>IDS/IPS:</strong> Zeek, Snort 3, Suricata integration</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Team -->
+    <section id="team" class="wrapper">
+        <div class="inner">
+            <header class="major">
+                <h2>The Team Behind HookProbe</h2>
+            </header>
+            <div class="grid-wrapper">
+                <div class="col-4">
+                    <div class="box">
+                        <span class="image fit">
+                            <img src="{% static 'common/images/team-andrei.jpg' %}" alt="Andrei Toma" />
+                        </span>
+                        <h3>Andrei Toma</h3>
+                        <p><strong>Founder & Lead Developer</strong></p>
+                        <p>Former interior architect turned cybersecurity strategist. Creator of the Qsecbit algorithm and visionary behind HookProbe's edge-first architecture.</p>
+                        <ul class="icons">
+                            <li><a href="https://github.com/andreitoma" class="icon brands fa-github"><span class="label">GitHub</span></a></li>
+                            <li><a href="https://linkedin.com/in/andreitoma" class="icon brands fa-linkedin"><span class="label">LinkedIn</span></a></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="box">
+                        <span class="image fit">
+                            <img src="{% static 'common/images/team-community.jpg' %}" alt="Community Contributors" />
+                        </span>
+                        <h3>Open Source Community</h3>
+                        <p><strong>Contributors Worldwide</strong></p>
+                        <p>HookProbe is built by a global community of security researchers, developers, and enthusiasts committed to democratizing cybersecurity.</p>
+                        <ul class="icons">
+                            <li><a href="https://github.com/hookprobe/hookprobe/graphs/contributors" class="icon brands fa-github"><span class="label">Contributors</span></a></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="box">
+                        <span class="image fit">
+                            <img src="{% static 'common/images/team-you.jpg' %}" alt="Join Us" />
+                        </span>
+                        <h3>Join Us!</h3>
+                        <p><strong>Be Part of the Revolution</strong></p>
+                        <p>We're always looking for contributors, testers, and security researchers to help make HookProbe even better.</p>
+                        <ul class="actions">
+                            <li><a href="https://github.com/hookprobe/hookprobe/blob/main/CONTRIBUTING.md" class="button small" target="_blank">Contribute</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Technology Stack -->
+    <section id="technology" class="wrapper style1">
+        <div class="inner">
+            <header class="major">
+                <h2>Technology Stack</h2>
+                <p>Built on proven, enterprise-grade open-source technologies</p>
+            </header>
+            <div class="table-wrapper">
+                <table class="alt">
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>Technology</th>
+                            <th>Purpose</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Container Runtime</td>
+                            <td>Podman 4.x+</td>
+                            <td>Rootless containers, POD architecture</td>
+                        </tr>
+                        <tr>
+                            <td>Network Virtualization</td>
+                            <td>Open vSwitch + VXLAN</td>
+                            <td>PSK-encrypted POD isolation</td>
+                        </tr>
+                        <tr>
+                            <td>DDoS Mitigation</td>
+                            <td>XDP/eBPF</td>
+                            <td>Kernel-level packet filtering</td>
+                        </tr>
+                        <tr>
+                            <td>IDS/IPS</td>
+                            <td>Zeek, Snort 3, Suricata</td>
+                            <td>Network threat detection</td>
+                        </tr>
+                        <tr>
+                            <td>Web Application Firewall</td>
+                            <td>NAXSI, ModSecurity</td>
+                            <td>Application-layer protection</td>
+                        </tr>
+                        <tr>
+                            <td>AI Threat Analysis</td>
+                            <td>Qsecbit Algorithm</td>
+                            <td>Real-time RAG scoring</td>
+                        </tr>
+                        <tr>
+                            <td>Automated Response</td>
+                            <td>Kali Linux</td>
+                            <td>On-demand threat mitigation</td>
+                        </tr>
+                        <tr>
+                            <td>Time-Series Database</td>
+                            <td>VictoriaMetrics</td>
+                            <td>Metrics storage</td>
+                        </tr>
+                        <tr>
+                            <td>OLAP Database</td>
+                            <td>ClickHouse</td>
+                            <td>Security analytics</td>
+                        </tr>
+                        <tr>
+                            <td>Visualization</td>
+                            <td>Grafana</td>
+                            <td>Dashboards and alerts</td>
+                        </tr>
+                        <tr>
+                            <td>Web Framework</td>
+                            <td>Django 5.0</td>
+                            <td>CMS and management interface</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Roadmap -->
+    <section id="roadmap" class="wrapper">
+        <div class="inner">
+            <header class="major">
+                <h2>Project Roadmap</h2>
+            </header>
+            <div class="timeline">
+                <div class="box">
+                    <h3>v5.0 (Current) - Q4 2025</h3>
+                    <ul>
+                        <li>✅ Complete GPL elimination (MIT License)</li>
+                        <li>✅ Qsecbit AI threat analysis</li>
+                        <li>✅ Kali Linux automated response</li>
+                        <li>✅ 7-POD architecture</li>
+                        <li>✅ n8n workflow automation (optional)</li>
+                        <li>⏳ LTE/5G failover support</li>
+                    </ul>
+                </div>
+
+                <div class="box">
+                    <h3>v5.1 - Q1 2026</h3>
+                    <ul>
+                        <li>🔄 Web UI for management (in progress)</li>
+                        <li>📋 Multi-host clustering</li>
+                        <li>🔐 Hardware security module (HSM) support</li>
+                        <li>🔒 Post-quantum cryptography</li>
+                        <li>🤖 Enhanced AI models (local LLM support)</li>
+                    </ul>
+                </div>
+
+                <div class="box">
+                    <h3>v6.0 - Q2 2026</h3>
+                    <ul>
+                        <li>☸️ Kubernetes orchestration option</li>
+                        <li>☁️ Cloud-native deployment</li>
+                        <li>🔍 Advanced threat hunting</li>
+                        <li>📊 Security analytics platform</li>
+                        <li>💼 Commercial support options</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Call to Action -->
+    <section id="cta" class="wrapper style2 special">
+        <div class="inner">
+            <header class="major">
+                <h2>Join the HookProbe Revolution</h2>
+                <p>Be part of democratizing cybersecurity for everyone</p>
+            </header>
+            <ul class="actions special">
+                <li><a href="https://github.com/hookprobe/hookprobe" class="button primary icon brands fa-github" target="_blank">Star on GitHub</a></li>
+                <li><a href="{% url 'cms:contact' %}" class="button">Get in Touch</a></li>
+            </ul>
+        </div>
+    </section>
+
+</div>
+
+{% endblock %}
