@@ -5,7 +5,8 @@ MSSP Dashboard Admin Configuration
 from django.contrib import admin
 from .models import (
     SecurityDevice, SecurityMetric, Vulnerability,
-    SOARPlaybook, PlaybookExecution, ThreatIntelligence
+    SOARPlaybook, PlaybookExecution, ThreatIntelligence,
+    IndicatorOfCompromise, IoC_Report
 )
 
 
@@ -115,3 +116,123 @@ class ThreatIntelligenceAdmin(admin.ModelAdmin):
     search_fields = ['title', 'description', 'threat_actor']
     date_hierarchy = 'published_at'
     readonly_fields = ['created_at']
+
+
+@admin.register(IndicatorOfCompromise)
+class IndicatorOfCompromiseAdmin(admin.ModelAdmin):
+    """Admin interface for Indicators of Compromise."""
+
+    list_display = [
+        'value', 'ioc_type', 'severity', 'confidence_score', 'detection_count',
+        'risk_score_display', 'is_active', 'first_seen', 'last_seen'
+    ]
+    list_filter = [
+        'ioc_type', 'severity', 'is_active', 'is_false_positive', 'is_whitelisted',
+        'detected_by_qsecbit', 'detected_by_openflow', 'detected_by_suricata',
+        'detected_by_snort', 'detected_by_zeek', 'detected_by_xdp',
+        'detected_by_ebpf', 'detected_by_siem', 'detected_by_threat_intel',
+        'first_seen', 'last_seen'
+    ]
+    search_fields = ['value', 'description', 'tags']
+    date_hierarchy = 'first_seen'
+    filter_horizontal = ['related_iocs']
+    readonly_fields = ['detection_count', 'first_seen', 'last_seen', 'risk_score_display', 'created_at', 'updated_at']
+
+    fieldsets = [
+        ('IoC Details', {
+            'fields': ['customer', 'ioc_type', 'value', 'description', 'tags']
+        }),
+        ('Severity & Confidence', {
+            'fields': ['severity', 'confidence_score', 'risk_score_display', 'detection_count']
+        }),
+        ('Detection Sources (One Brain)', {
+            'fields': [
+                'detected_by_qsecbit', 'detected_by_openflow', 'detected_by_suricata',
+                'detected_by_snort', 'detected_by_zeek', 'detected_by_xdp',
+                'detected_by_ebpf', 'detected_by_siem', 'detected_by_threat_intel'
+            ],
+            'description': 'Which security systems detected this IoC'
+        }),
+        ('QSECBIT AI Analysis', {
+            'fields': ['qsecbit_score', 'qsecbit_rag_status', 'qsecbit_metadata'],
+            'classes': ['collapse']
+        }),
+        ('Status & Timing', {
+            'fields': ['is_active', 'is_false_positive', 'is_whitelisted', 'first_seen', 'last_seen']
+        }),
+        ('Correlations', {
+            'fields': ['related_iocs'],
+            'description': 'Related IoCs that appear together'
+        }),
+        ('Additional Data', {
+            'fields': ['metadata', 'raw_data'],
+            'classes': ['collapse']
+        }),
+        ('Timestamps', {
+            'fields': ['created_at', 'updated_at'],
+            'classes': ['collapse']
+        }),
+    ]
+
+    def risk_score_display(self, obj):
+        """Display risk score with color coding."""
+        score = obj.risk_score
+        if score >= 80:
+            color = 'red'
+        elif score >= 60:
+            color = 'orange'
+        elif score >= 40:
+            color = 'yellow'
+        else:
+            color = 'green'
+        return f"{score:.1f}"
+    risk_score_display.short_description = 'Risk Score'
+
+
+@admin.register(IoC_Report)
+class IoC_ReportAdmin(admin.ModelAdmin):
+    """Admin interface for IoC Reports."""
+
+    list_display = [
+        'title', 'severity', 'status', 'overall_risk_score',
+        'systems_compromised', 'created_by', 'created_at', 'updated_at'
+    ]
+    list_filter = ['severity', 'status', 'created_at', 'updated_at']
+    search_fields = ['title', 'summary', 'mitigation_steps']
+    date_hierarchy = 'created_at'
+    filter_horizontal = ['iocs']
+    readonly_fields = ['overall_risk_score', 'created_at', 'updated_at']
+
+    fieldsets = [
+        ('Report Details', {
+            'fields': ['customer', 'title', 'summary', 'severity', 'status']
+        }),
+        ('Associated IoCs', {
+            'fields': ['iocs'],
+            'description': 'Indicators of Compromise included in this report'
+        }),
+        ('Impact Assessment', {
+            'fields': ['systems_compromised', 'data_exfiltrated', 'estimated_impact', 'overall_risk_score']
+        }),
+        ('Analysis from Security Systems', {
+            'fields': [
+                'qsecbit_analysis', 'openflow_metrics', 'ids_alerts',
+                'network_analysis', 'packet_analysis'
+            ],
+            'classes': ['collapse'],
+            'description': 'Aggregated data from all security vectors'
+        }),
+        ('Response', {
+            'fields': ['mitigation_steps', 'mitigation_status', 'assigned_to', 'resolved_at']
+        }),
+        ('Report Management', {
+            'fields': ['created_by', 'created_at', 'updated_at']
+        }),
+    ]
+
+    def save_model(self, request, obj, form, change):
+        """Auto-calculate risk score on save."""
+        if not change:  # New object
+            obj.created_by = request.user
+        obj.overall_risk_score = obj.calculate_overall_risk()
+        super().save_model(request, obj, form, change)
