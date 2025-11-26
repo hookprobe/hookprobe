@@ -36,6 +36,7 @@ Understanding HookProbe's security architecture.
 
 ### Core Architecture
 - **[Security Model](architecture/security-model.md)** - Complete security architecture
+- **[DSM Whitepaper](architecture/dsm-whitepaper.md)** ⭐ **Decentralized Security Mesh architecture**
 - **[POD Components Overview](components/README.md)** - All 7-9 POD modules
 - **[Network Topology](architecture/security-model.md#network-topology)** - VXLAN, OpenFlow, isolation
 
@@ -221,6 +222,7 @@ For contributors and developers.
 Technical reference and detailed specifications.
 
 ### Specifications
+- **[DSM Whitepaper](architecture/dsm-whitepaper.md)** - Decentralized Security Mesh technical whitepaper
 - **[Architectural Assessment](../ARCHITECTURAL-ASSESSMENT.md)** - 12-week roadmap
 - **[Implementation Summary](../IMPLEMENTATION-SUMMARY-PHASE1-2.md)** - Phase 1-2 details
 - **[Unified Install System](../UNIFIED-INSTALL-SYSTEM.md)** - Install architecture
@@ -248,24 +250,27 @@ Technical reference and detailed specifications.
 4. [Installation Guide](installation/INSTALLATION.md)
 
 ### For System Administrators
-1. [Security Model](architecture/security-model.md)
-2. [POD Components](components/README.md)
-3. [Admin Dashboard](dashboards/admin-dashboard.md)
-4. [Configuration Guide](../install/common/README.md)
-5. [Utility Scripts](../install/scripts/README.md)
+1. [DSM Whitepaper](architecture/dsm-whitepaper.md)
+2. [Security Model](architecture/security-model.md)
+3. [POD Components](components/README.md)
+4. [Admin Dashboard](dashboards/admin-dashboard.md)
+5. [Configuration Guide](../install/common/README.md)
+6. [Utility Scripts](../install/scripts/README.md)
 
 ### For Security Teams
-1. [MSSP Dashboard](dashboards/mssp-dashboard.md)
-2. [Qsecbit Algorithm](../src/qsecbit/README.md)
-3. [Security Model](architecture/security-model.md)
-4. [Threat Detection](components/POD-006.md)
-5. [Incident Response](components/POD-007.md)
+1. [DSM Whitepaper](architecture/dsm-whitepaper.md)
+2. [MSSP Dashboard](dashboards/mssp-dashboard.md)
+3. [Qsecbit Algorithm](../src/qsecbit/README.md)
+4. [Security Model](architecture/security-model.md)
+5. [Threat Detection](components/POD-006.md)
+6. [Incident Response](components/POD-007.md)
 
 ### For MSSP Providers
-1. [Cloud Backend Deployment](installation/cloud-deployment.md)
-2. [MSSP Dashboard](dashboards/mssp-dashboard.md)
-3. [Multi-Tenant Setup](../install/cloud/README.md)
-4. [Edge Device Management](dashboards/mssp-dashboard.md#endpoints)
+1. [DSM Whitepaper](architecture/dsm-whitepaper.md)
+2. [Cloud Backend Deployment](installation/cloud-deployment.md)
+3. [MSSP Dashboard](dashboards/mssp-dashboard.md)
+4. [Multi-Tenant Setup](../install/cloud/README.md)
+5. [Edge Device Management](dashboards/mssp-dashboard.md#endpoints)
 
 ### For Developers
 1. [Contributing Guide](CONTRIBUTING.md)
