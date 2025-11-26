@@ -205,7 +205,7 @@ python manage.py sendtestemail your-email@example.com
 mailq
 
 # Check Postfix logs on DMZ gateway:
-docker logs hookprobe-dmz-mail-gateway
+podman logs hookprobe-dmz-mail-gateway
 
 # Monitor DKIM signing:
 tail -f /var/log/mail.log | grep DKIM
@@ -221,7 +221,7 @@ Common Issues:
 1. Connection Refused
    - Check firewall rules allow Django app → Internal mail server
    - Verify internal mail server is running:
-     docker ps | grep internal-mail
+     podman ps | grep internal-mail
 
 2. Authentication Failed
    - Check EMAIL_HOST_USER and EMAIL_HOST_PASSWORD
@@ -234,7 +234,7 @@ Common Issues:
 4. Emails Not Sending
    - Check Django logs: tail -f /var/log/django/error.log
    - Check Postfix queue: mailq
-   - Check DMZ gateway logs: docker logs hookprobe-dmz-mail-gateway
+   - Check DMZ gateway logs: podman logs hookprobe-dmz-mail-gateway
 
 5. DKIM Failures
    - Verify DNS record: dig default._domainkey.hookprobe.com TXT
@@ -250,8 +250,8 @@ Common Issues:
    - Test with mail-tester.com
 
 Monitor POD-009:
-- DMZ Gateway: docker logs -f hookprobe-dmz-mail-gateway
-- Internal Server: docker logs -f hookprobe-internal-mail
+- DMZ Gateway: podman logs -f hookprobe-dmz-mail-gateway
+- Internal Server: podman logs -f hookprobe-internal-mail
 - IDS Alerts: tail -f /var/log/suricata/fast.log
 - Firewall Drops: tail -f /var/log/syslog | grep FW
 """
