@@ -1,0 +1,324 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # DMZ MAIL GATEWAY (10.200.9.10)
+  # Public-facing SMTP relay with security filtering
+  # ============================================
+  dmz-mail-gateway:
+    image: ubuntu/postfix:latest
+    container_name: hookprobe-dmz-mail-gateway
+    hostname: mail.hookprobe.com
+    restart: unless-stopped
+
+    networks:
+      dmz:
+        ipv4_address: 10.200.9.10
+      internal:
+        ipv4_address: 10.200.1.26  # Bridge to internal network (restricted)
+
+    ports:
+      - "25:25"     # SMTP
+      - "587:587"   # Submission (STARTTLS)
+
+    volumes:
+      - ./dmz-gateway/main.cf:/etc/postfix/main.cf:ro
+      - ./dmz-gateway/master.cf:/etc/postfix/master.cf:ro
+      - ./dmz-gateway/dkim:/etc/postfix/dkim:ro
+      - dmz-mail-queue:/var/spool/postfix
+      - dmz-mail-logs:/var/log
+
+    environment:
+      - TZ=UTC
+      - POSTFIX_MYHOSTNAME=mail.hookprobe.com
+      - POSTFIX_MYDOMAIN=hookprobe.com
+      - POSTFIX_MYNETWORKS=10.200.1.0/24,10.200.9.0/24
+      - POSTFIX_RELAY_HOST=10.200.1.25  # Internal mail server
+      - POSTFIX_MESSAGE_SIZE_LIMIT=52428800  # 50MB
+      - POSTFIX_MAILBOX_SIZE_LIMIT=0  # No mailboxes in DMZ
+
+    # Security hardening
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+    read_only: false  # Postfix needs write access to queue
+
+    security_opt:
+      - no-new-privileges:true
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=dmz-gateway"
+      - "com.hookprobe.security=high"
+
+    healthcheck:
+      test: ["CMD", "postfix", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # ANTI-SPAM FILTER (SpamAssassin)
+  # Integrated with DMZ gateway
+  # ============================================
+  dmz-spamassassin:
+    image: instantlinux/spamassassin:latest
+    container_name: hookprobe-spamassassin
+    restart: unless-stopped
+
+    networks:
+      dmz:
+        ipv4_address: 10.200.9.12
+
+    volumes:
+      - spamassassin-data:/var/lib/spamassassin
+      - ./dmz-gateway/spamassassin/local.cf:/etc/mail/spamassassin/local.cf:ro
+
+    environment:
+      - TZ=UTC
+      - SA_KILL=6.0
+      - SA_TAG=3.0
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=anti-spam"
+
+  # ============================================
+  # ANTI-VIRUS SCANNER (ClamAV)
+  # Scans all inbound attachments
+  # ============================================
+  dmz-clamav:
+    image: clamav/clamav:latest
+    container_name: hookprobe-clamav
+    restart: unless-stopped
+
+    networks:
+      dmz:
+        ipv4_address: 10.200.9.13
+
+    volumes:
+      - clamav-data:/var/lib/clamav
+      - clamav-logs:/var/log/clamav
+
+    environment:
+      - TZ=UTC
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=anti-virus"
+
+    healthcheck:
+      test: ["CMD", "clamdscan", "--version"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # DMZ IDS/IPS (Suricata)
+  # Monitors all SMTP traffic for threats
+  # ============================================
+  dmz-mail-ids:
+    image: jasonish/suricata:latest
+    container_name: hookprobe-dmz-mail-ids
+    restart: unless-stopped
+
+    networks:
+      dmz:
+        ipv4_address: 10.200.9.11
+
+    volumes:
+      - ./monitoring/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./monitoring/rules:/var/lib/suricata/rules:ro
+      - suricata-logs:/var/log/suricata
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+      - NET_RAW
+
+    environment:
+      - TZ=UTC
+      - SURICATA_OPTIONS=-i eth0
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=ids"
+      - "com.hookprobe.security=critical"
+
+    command: -i eth0 --init-errors-fatal
+
+  # ============================================
+  # INTERNAL MAIL SERVER (10.200.1.25)
+  # Employee mailboxes and storage
+  # ============================================
+  internal-mail-server:
+    image: tvial/docker-mailserver:latest
+    container_name: hookprobe-internal-mail
+    hostname: internal-mail.hookprobe.local
+    restart: unless-stopped
+
+    networks:
+      internal:
+        ipv4_address: 10.200.1.25
+
+    # NO external ports - internal only
+    expose:
+      - "25"    # SMTP (internal only)
+      - "993"   # IMAPS (internal only)
+      - "4190"  # Sieve (internal only)
+
+    volumes:
+      - ./internal-server/postfix-main.cf:/tmp/docker-mailserver/postfix-main.cf:ro
+      - ./internal-server/postfix-master.cf:/tmp/docker-mailserver/postfix-master.cf:ro
+      - ./internal-server/dovecot.cf:/tmp/docker-mailserver/dovecot.cf:ro
+      - internal-mail-data:/var/mail
+      - internal-mail-state:/var/mail-state
+      - internal-mail-logs:/var/log/mail
+      - ./internal-server/accounts:/tmp/docker-mailserver/postfix-accounts.cf:ro
+
+    environment:
+      - ENABLE_SPAMASSASSIN=0  # Already filtered in DMZ
+      - ENABLE_CLAMAV=0         # Already scanned in DMZ
+      - ENABLE_FAIL2BAN=1       # Protect against brute force
+      - ENABLE_POSTGREY=0       # Greylisting in DMZ
+      - ONE_DIR=1
+      - DMS_DEBUG=0
+      - POSTFIX_MAILBOX_SIZE_LIMIT=0
+      - POSTFIX_MESSAGE_SIZE_LIMIT=52428800
+      - ENABLE_QUOTAS=1
+      - QUOTA_DEFAULT=10G
+      - SSL_TYPE=self-signed  # Internal use only
+      - TZ=UTC
+      - PERMIT_DOCKER=network
+      - POSTFIX_INET_PROTOCOLS=ipv4
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=internal-server"
+      - "com.hookprobe.security=high"
+
+    healthcheck:
+      test: ["CMD", "postfix", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # CLOUDFLARE TUNNEL
+  # Zero-trust access and DDoS protection
+  # ============================================
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: hookprobe-cloudflare-tunnel
+    restart: unless-stopped
+
+    networks:
+      dmz:
+        ipv4_address: 10.200.9.14
+
+    volumes:
+      - ./cloudflare/config.yml:/etc/cloudflared/config.yml:ro
+      - ./cloudflare/credentials.json:/etc/cloudflared/credentials.json:ro
+
+    environment:
+      - TZ=UTC
+
+    command: tunnel --config /etc/cloudflared/config.yml run
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=cloudflare-tunnel"
+
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "info"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # MAIL LOG AGGREGATOR
+  # Forwards logs to Wazuh (POD-007)
+  # ============================================
+  mail-log-forwarder:
+    image: grafana/promtail:latest
+    container_name: hookprobe-mail-logs
+    restart: unless-stopped
+
+    networks:
+      internal:
+        ipv4_address: 10.200.1.27
+
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - dmz-mail-logs:/var/log/dmz:ro
+      - internal-mail-logs:/var/log/internal:ro
+      - suricata-logs:/var/log/suricata:ro
+
+    command: -config.file=/etc/promtail/config.yml
+
+    labels:
+      - "com.hookprobe.pod=009"
+      - "com.hookprobe.component=logging"
+
+networks:
+  dmz:
+    name: hookprobe-dmz
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.200.9.0/24
+          gateway: 10.200.9.1
+
+    # DMZ network isolation
+    internal: false  # Needs internet access
+
+    labels:
+      - "com.hookprobe.network=dmz"
+      - "com.hookprobe.security=high-risk"
+
+  internal:
+    name: hookprobe-internal
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.200.1.0/24
+          gateway: 10.200.1.1
+
+    # Internal network (no direct internet)
+    internal: true
+
+    labels:
+      - "com.hookprobe.network=internal"
+      - "com.hookprobe.security=protected"
+
+volumes:
+  dmz-mail-queue:
+    name: hookprobe-dmz-mail-queue
+  dmz-mail-logs:
+    name: hookprobe-dmz-mail-logs
+  spamassassin-data:
+    name: hookprobe-spamassassin-data
+  clamav-data:
+    name: hookprobe-clamav-data
+  clamav-logs:
+    name: hookprobe-clamav-logs
+  suricata-logs:
+    name: hookprobe-suricata-logs
+  internal-mail-data:
+    name: hookprobe-internal-mail-data
+  internal-mail-state:
+    name: hookprobe-internal-mail-state
+  internal-mail-logs:
+    name: hookprobe-internal-mail-logs
