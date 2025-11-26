@@ -1,0 +1,62 @@
+# Configuration template for DSM Phase 1
+
+dsm:
+  # Node configuration
+  node:
+    id: "${HOOKPROBE_NODE_ID}"  # Unique node identifier
+    role: "edge"  # "edge" or "validator"
+
+  # TPM configuration (fallback to software RSA if not available)
+  tpm:
+    enabled: true  # Try to use TPM if available
+    key_path: "/var/lib/hookprobe/dsm/keys/dsm-node-key.pem"
+    pcr_indices: [0, 1, 2, 3, 7]  # Platform integrity measurements
+
+  # Validator configuration (only for validators)
+  validator:
+    enabled: false  # Set true for validator nodes
+    certificate_path: "/var/lib/hookprobe/certs/validator.pem"
+
+  # Consensus parameters
+  consensus:
+    epoch_duration: 300  # 5 minutes per epoch
+    quorum_threshold: 0.67  # 2/3 validators required
+    signature_timeout: 30  # seconds to collect signatures
+
+  # Storage configuration
+  storage:
+    microblocks:
+      backend: "leveldb"  # or "memory" for fallback
+      path: "/var/lib/hookprobe/dsm/microblocks"
+      retention_days: 30
+    checkpoints:
+      backend: "postgresql"  # POD-003
+      table: "dsm_checkpoints"
+      retention_days: 365
+
+  # Network configuration (Phase 1: basic gossip)
+  gossip:
+    enabled: true
+    port: 7946
+    bootstrap_nodes:
+      - "validator1.mesh.hookprobe.local:7946"
+      - "validator2.mesh.hookprobe.local:7946"
+    max_peers: 10  # Phase 1 limit
+
+  # Integration with existing PODs
+  integrations:
+    pod_006:
+      enabled: true
+      events: ["ids_alert", "threat_detected"]
+    pod_007:
+      enabled: true
+      events: ["mitigation_applied"]
+    pod_005:
+      metrics_export: true
+      dashboard: "DSM Mesh Overview"
+
+  # Logging
+  logging:
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+    format: "json"
+    output: "stdout"
