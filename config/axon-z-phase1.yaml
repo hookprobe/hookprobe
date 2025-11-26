@@ -1,0 +1,202 @@
+# HookProbe Axon-Z Protocol Configuration
+# Phase 1 Implementation (Q1 2025)
+
+# --- PROTOCOL IDENTIFICATION ---
+protocol:
+  name: "HookProbe-Axon-Z"
+  version: "1.0-alpha"
+  max_handshake_mtu: 146  # bytes
+  min_ter_rate_per_min: 10  # Minimum TER generation rate for health check
+
+# --- END-TO-END ENCRYPTION PRIMITIVES ---
+e2ee_primitives:
+  # Authenticated Encryption with Associated Data (AEAD)
+  transport_aead:
+    name: "ChaCha20-Poly1305"
+    key_size_bits: 256
+    nonce_size_bytes: 12
+    tag_size_bytes: 16
+
+  # Key Agreement Protocol for Forward Secrecy
+  key_agreement:
+    name: "Curve25519"
+    key_size_bytes: 32
+
+  # Hash-based Key Derivation Function
+  hkdf:
+    name: "HKDF-SHA256"
+    hash_primitive: "SHA256"
+    output_key_material_bytes: 32
+
+# --- NEURAL NETWORK ARCHITECTURE ---
+neural_engine:
+  architecture: "FeedForward-FixedPoint-Micro"
+  precision: "Q16.16"  # 16-bit integer, 16-bit fractional
+
+  layers:
+    input:
+      size: 64  # TER block size
+      activation: "none"
+
+    hidden_1:
+      size: 128
+      activation: "ReLU-FP"  # Fixed-point ReLU
+
+    hidden_2:
+      size: 64
+      activation: "ReLU-FP"
+
+    L_X_SIG_07:  # PoSF signing layer
+      size: 32
+      activation: "Sigmoid-FP"
+
+  optimizer:
+    type: "SGD-FixedPoint"
+    base_learning_rate: 0.0001  # η_base
+    momentum: 0.9
+
+# --- QSECBIT INTERFACE MAPPING ---
+qsecbit_interface:
+  ter_block_size_bytes: 64
+
+  components:
+    h_entropy:
+      size_bytes: 32
+      source_metrics:
+        - cpu_usage
+        - memory_footprint
+        - network_queue_depth
+        - disk_io_wait
+      derivation: "SHA256(cpu || mem || net || disk || timestamp)"
+
+    h_integrity:
+      size_bytes: 20
+      source_metrics:
+        - kernel_hash
+        - core_binary_hash
+        - config_file_hash
+      derivation: "RIPEMD160(kernel_sha256 || binary_sha256 || config_sha256)"
+      # Expensive - only recalculate every N TERs
+      recalculation_interval: 100  # Every 100 TERs
+
+    posf_signing_layer:
+      layer_id: "L_X_SIG_07"
+      output_size_bytes: 32
+
+# --- HIBERNATION / OFFLINE OPERATION ---
+hibernation:
+  # Maximum offline time before quarantine (seconds)
+  max_quarantine_time: 86400  # 24 hours
+
+  learning_rate_modulator_formula:
+    base_rate: 0.0001
+    decay_constant_seconds: 7200  # 2 hours (τ in exp(-Δt/τ))
+    # After 2 hours offline: learning rate drops to ~37%
+    # After 24 hours: learning rate ≈ 0 (minimal drift)
+
+  integrity_loss_coefficient_formula:
+    base_coefficient: 5.0  # Multiplier for Σ_threat
+    # L_new = L_base + (5.0 × Σ_threat)
+    # If H_Integrity changes, Σ_threat becomes unpredictable
+    # → Large, unpredictable weight updates
+    # → Cloud detects mismatch
+
+# --- STORAGE CONFIGURATION ---
+storage:
+  # Edge node storage
+  edge:
+    dream_log_path: "/var/lib/hookprobe/axon/dream_log.bin"
+    weight_state_path: "/var/lib/hookprobe/axon/weights.bin"
+    max_dream_log_size_mb: 100  # ~24 hours at 60 TER/hour
+
+  # Cloud validator storage
+  cloud:
+    ter_archive_path: "/data/hookprobe/axon/ter_archive"
+    retention_days: 30
+    compression: "zstd"  # Compress TER logs for storage
+
+# --- DEPLOYMENT CONFIGURATION ---
+deployment:
+  # Node role: 'edge' or 'validator'
+  role: "${AXON_Z_ROLE:-edge}"
+
+  # Node identification
+  node_id: "${HOOKPROBE_NODE_ID}"
+
+  # Initial weight synchronization
+  initial_sync:
+    # Master salt for initial HKDF (MUST BE CHANGED PER DEPLOYMENT)
+    initial_hkdf_master_salt: "F2D9-A1C8-B6E4-90G5-K3J7-L5P9-M2Q8-N4R6"
+
+    # Initial weight fingerprint size (bytes)
+    w_fingerprint_size_bytes: 512
+
+# --- INTEGRATION WITH DSM ---
+dsm_integration:
+  enabled: true
+
+  # Attach Axon-Z metadata to DSM microblocks
+  microblock_enhancement:
+    include_ter_hash: true
+    include_w_fingerprint: true
+    include_posf_signature: true
+
+  # Validator checkpoint verification
+  checkpoint_verification:
+    min_verified_edges: 2  # Minimum verified edges for checkpoint approval
+    max_weight_divergence: 0.01  # Maximum allowed ||W_edge - W_simulated||
+
+# --- SECURITY PARAMETERS ---
+security:
+  # TER validation
+  ter_validation:
+    check_chain_integrity: true
+    check_sequence_monotonicity: true
+    check_timestamp_anomalies: true
+    max_timestamp_gap_seconds: 3600  # 1 hour
+
+  # Weight verification
+  weight_verification:
+    enforce_determinism: true
+    tolerance: 0  # Bit-for-bit match required
+
+  # Quarantine thresholds
+  quarantine:
+    integrity_violation_threshold: 1  # Any integrity violation → quarantine
+    unexplained_drift_threshold: 0.1  # Weight divergence threshold
+
+# --- MONITORING & LOGGING ---
+monitoring:
+  # Metrics export
+  prometheus:
+    enabled: true
+    port: 9100
+    metrics:
+      - axon_z_ter_generation_rate
+      - axon_z_weight_divergence
+      - axon_z_signature_verifications
+      - axon_z_quarantine_events
+
+  # Logging
+  logging:
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+    output: "/var/log/hookprobe/axon-z.log"
+    rotation: "daily"
+    retention_days: 7
+
+# --- EXPERIMENTAL FEATURES (Phase 2+) ---
+experimental:
+  # Full deterministic replay (Phase 2)
+  deterministic_replay:
+    enabled: false
+    replay_batch_size: 1000  # TERs per batch
+
+  # Side-channel attack mitigation (Phase 3)
+  side_channel_mitigation:
+    constant_time_ops: false
+    noise_injection: false
+
+  # Quantum-resistant upgrade (Phase 4)
+  quantum_resistant:
+    enabled: false
+    aead: "AES-256-GCM-SIV"  # Fallback for post-quantum
