@@ -1,0 +1,182 @@
+# Postfix Internal Mail Server Configuration
+# HookProbe POD-009 - Employee Mailboxes (Internal Only)
+# Security: NO direct internet access, isolated from DMZ
+
+# ============================================
+# BASIC SETTINGS
+# ============================================
+myhostname = internal-mail.hookprobe.local
+mydomain = hookprobe.local
+myorigin = hookprobe.com
+
+# Local delivery enabled (mailboxes)
+mydestination = hookprobe.com, hookprobe.local, localhost.localdomain, localhost
+local_recipient_maps = proxy:unix:passwd.byname $alias_maps
+
+# Network configuration - INTERNAL ONLY
+mynetworks = 10.200.1.0/24, 127.0.0.0/8
+inet_interfaces = all
+inet_protocols = ipv4
+
+# Relay outbound mail to DMZ gateway
+relayhost = [10.200.9.10]:25
+
+# ============================================
+# MAILBOX STORAGE
+# ============================================
+# Maildir format (one file per message)
+home_mailbox = Maildir/
+mailbox_command =
+
+# Virtual mailbox support
+virtual_mailbox_domains = hookprobe.com
+virtual_mailbox_base = /var/mail/vhosts
+virtual_mailbox_maps = hash:/etc/postfix/virtual_mailbox_maps
+virtual_uid_maps = static:5000
+virtual_gid_maps = static:5000
+
+# Aliases
+alias_maps = hash:/etc/postfix/aliases
+alias_database = hash:/etc/postfix/aliases
+
+# ============================================
+# QUOTA MANAGEMENT
+# ============================================
+# 10GB default quota per user
+mailbox_size_limit = 10737418240
+message_size_limit = 52428800  # 50MB max message size
+
+# ============================================
+# SECURITY - TLS/SSL (Internal)
+# ============================================
+# Use self-signed certs for internal communication
+
+# TLS for incoming (from DMZ gateway)
+smtpd_use_tls = yes
+smtpd_tls_security_level = may
+smtpd_tls_cert_file = /etc/postfix/certs/internal-cert.pem
+smtpd_tls_key_file = /etc/postfix/certs/internal-key.pem
+smtpd_tls_session_cache_database = btree:/var/lib/postfix/smtpd_tls_session_cache
+
+# TLS for outgoing (to DMZ gateway)
+smtp_use_tls = yes
+smtp_tls_security_level = may
+smtp_tls_session_cache_database = btree:/var/lib/postfix/smtp_tls_session_cache
+
+# TLS settings
+smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtp_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_ciphers = high
+smtp_tls_ciphers = high
+
+# ============================================
+# AUTHENTICATION
+# ============================================
+# SASL authentication for IMAP/SMTP
+
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_security_options = noanonymous
+smtpd_sasl_local_domain = $myhostname
+
+broken_sasl_auth_clients = yes
+
+# ============================================
+# ACCESS CONTROL
+# ============================================
+# Only allow internal network
+
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination,
+    reject_non_fqdn_recipient,
+    reject_unknown_recipient_domain,
+    permit
+
+smtpd_sender_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_non_fqdn_sender,
+    reject_unknown_sender_domain,
+    permit
+
+smtpd_client_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unknown_client_hostname,
+    permit
+
+# Require HELO
+smtpd_helo_required = yes
+smtpd_helo_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_invalid_helo_hostname,
+    reject_non_fqdn_helo_hostname,
+    permit
+
+# ============================================
+# DOVECOT INTEGRATION (LMTP)
+# ============================================
+# Deliver mail via Dovecot LMTP for better performance
+
+virtual_transport = lmtp:unix:private/dovecot-lmtp
+
+# ============================================
+# ANTI-ABUSE (Internal)
+# ============================================
+# Lighter restrictions since this is internal
+
+# Disable VRFY
+disable_vrfy_command = yes
+
+# Limits
+smtpd_client_connection_count_limit = 50
+smtpd_client_connection_rate_limit = 100
+smtpd_recipient_limit = 100
+
+# Error handling
+smtpd_error_sleep_time = 1s
+smtpd_soft_error_limit = 10
+smtpd_hard_error_limit = 20
+
+# ============================================
+# QUEUE MANAGEMENT
+# ============================================
+maximal_queue_lifetime = 5d
+bounce_queue_lifetime = 5d
+maximal_backoff_time = 4000s
+minimal_backoff_time = 300s
+queue_run_delay = 300s
+
+# ============================================
+# LOGGING
+# ============================================
+maillog_file = /var/log/mail/postfix.log
+maillog_file_rotate_suffix = %Y%m%d-%H%M%S
+
+# ============================================
+# COMPATIBILITY
+# ============================================
+compatibility_level = 3.6
+smtputf8_enable = yes
+
+# ============================================
+# PERFORMANCE
+# ============================================
+default_process_limit = 100
+smtp_destination_concurrency_limit = 20
+
+# ============================================
+# CONTENT FILTERING
+# ============================================
+# No need for spam/virus filtering - already done in DMZ
+
+# ============================================
+# ADDRESS REWRITING
+# ============================================
+# Rewrite internal addresses to public domain
+sender_canonical_maps = hash:/etc/postfix/sender_canonical
+recipient_canonical_maps = hash:/etc/postfix/recipient_canonical

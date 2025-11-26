@@ -1,0 +1,195 @@
+{% extends 'admin_dashboard/base.html' %}
+
+{% block title %}Products - HookProbe{% endblock %}
+{% block page_title %}Merchandise Products{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'admin_dashboard:home' %}">Home</a></li>
+<li class="breadcrumb-item active">Products</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-box mr-2"></i>
+                    Product Catalog
+                </h3>
+                <div class="card-tools">
+                    <a href="{% url 'admin:merchandise_product_add' %}" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Add Product
+                    </a>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Filter Bar -->
+                <form method="get" class="mb-3">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <select name="category" class="form-control" onchange="this.form.submit()">
+                                <option value="">All Categories</option>
+                                {% for cat in categories %}
+                                <option value="{{ cat.id }}" {% if request.GET.category == cat.id|stringformat:"s" %}selected{% endif %}>
+                                    {{ cat.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <select name="stock_status" class="form-control" onchange="this.form.submit()">
+                                <option value="">All Stock Levels</option>
+                                <option value="in_stock" {% if request.GET.stock_status == 'in_stock' %}selected{% endif %}>In Stock</option>
+                                <option value="low_stock" {% if request.GET.stock_status == 'low_stock' %}selected{% endif %}>Low Stock</option>
+                                <option value="out_of_stock" {% if request.GET.stock_status == 'out_of_stock' %}selected{% endif %}>Out of Stock</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <input type="text" name="search" class="form-control" placeholder="Search products..." value="{{ request.GET.search }}">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-info btn-block">
+                                <i class="fas fa-search"></i> Search
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Products Table -->
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th style="width: 80px;">Image</th>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>SKU</th>
+                                <th>Price</th>
+                                <th>Stock</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for product in products %}
+                            <tr>
+                                <td>
+                                    {% if product.images.first %}
+                                        <img src="{{ product.images.first.image.url }}" alt="{{ product.name }}"
+                                             class="img-thumbnail" style="max-width: 60px;">
+                                    {% else %}
+                                        <div class="bg-secondary text-white text-center" style="width: 60px; height: 60px; line-height: 60px;">
+                                            <i class="fas fa-image"></i>
+                                        </div>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <strong>{{ product.name }}</strong>
+                                    {% if product.has_variants %}
+                                        <br><small class="text-muted"><i class="fas fa-layer-group"></i> {{ product.variants.count }} variants</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge badge-secondary">{{ product.category.name }}</span>
+                                </td>
+                                <td><code>{{ product.sku }}</code></td>
+                                <td>
+                                    {% if product.compare_at_price and product.compare_at_price > product.price %}
+                                        <span style="text-decoration: line-through; color: #999;">${{ product.compare_at_price }}</span>
+                                        <br>
+                                        <strong style="color: #28a745;">${{ product.price }}</strong>
+                                        <span class="badge badge-success ml-1">-{{ product.discount_percentage }}%</span>
+                                    {% else %}
+                                        <strong>${{ product.price }}</strong>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if product.stock_quantity > 10 %}
+                                        <span class="badge badge-success">{{ product.stock_quantity }}</span>
+                                    {% elif product.stock_quantity > 0 %}
+                                        <span class="badge badge-warning">{{ product.stock_quantity }}</span>
+                                    {% else %}
+                                        <span class="badge badge-danger">{{ product.stock_quantity }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if product.active %}
+                                        <span class="badge badge-success">Active</span>
+                                    {% else %}
+                                        <span class="badge badge-secondary">Inactive</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{% url 'admin:merchandise_product_change' product.id %}" class="btn btn-sm btn-info" title="Edit">
+                                        <i class="fas fa-edit"></i>
+                                    </a>
+                                    {% if product.active %}
+                                    <button class="btn btn-sm btn-secondary" title="Deactivate" onclick="toggleProduct({{ product.id }}, false)">
+                                        <i class="fas fa-eye-slash"></i>
+                                    </button>
+                                    {% else %}
+                                    <button class="btn btn-sm btn-success" title="Activate" onclick="toggleProduct({{ product.id }}, true)">
+                                        <i class="fas fa-eye"></i>
+                                    </button>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="8" class="text-center text-muted py-4">
+                                    <i class="fas fa-inbox fa-3x mb-3 d-block"></i>
+                                    No products found. <a href="{% url 'admin:merchandise_product_add' %}">Add your first product!</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Stats Footer -->
+            <div class="card-footer">
+                <div class="row">
+                    <div class="col-md-3 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header">{{ total_products }}</h5>
+                            <span class="description-text">Total Products</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header">{{ active_products }}</h5>
+                            <span class="description-text">Active</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header">${{ total_value|default:"0.00" }}</h5>
+                            <span class="description-text">Total Inventory Value</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="description-block">
+                            <h5 class="description-header">{{ low_stock_count }}</h5>
+                            <span class="description-text">Low Stock Items</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleProduct(productId, active) {
+    if (confirm('Are you sure you want to ' + (active ? 'activate' : 'deactivate') + ' this product?')) {
+        // Implementation would use AJAX to toggle product status
+        console.log('Toggle product', productId, 'to', active);
+        alert('Product status updated! (Mock implementation)');
+    }
+}
+</script>
+{% endblock %}

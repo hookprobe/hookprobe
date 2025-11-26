@@ -17,11 +17,17 @@
     },
     {
       "pattern": "^http://HOST"
+    },
+    {
+      "pattern": "^https://github.com/.*/blob/main/"
+    },
+    {
+      "pattern": "^https://github.com/.*/tree/main/"
     }
   ],
-  "timeout": "20s",
+  "timeout": "30s",
   "retryOn429": true,
-  "retryCount": 3,
+  "retryCount": 5,
   "fallbackRetryDelay": "30s",
-  "aliveStatusCodes": [200, 206, 301, 302, 307, 308]
+  "aliveStatusCodes": [200, 206, 301, 302, 307, 308, 403, 429]
 }

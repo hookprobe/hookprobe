@@ -33,7 +33,13 @@ fi
 # ============================================================
 # LOGGING
 # ============================================================
-LOG_FILE="/var/log/hookprobe-backend-setup.log"
+LOG_DIR="/var/log/hookprobe"
+LOG_FILE="$LOG_DIR/backend-setup.log"
+
+# Create log directory if it doesn't exist
+mkdir -p "$LOG_DIR"
+chmod 755 "$LOG_DIR"
+
 exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 
@@ -53,15 +59,15 @@ install_packages() {
 
     case "$OS_NAME" in
         rhel|centos|fedora|rocky|almalinux)
+            # Core packages
+            log "  → Installing core packages..."
             dnf install -y \
                 podman \
-                podman-compose \
                 jq \
                 curl \
                 wget \
                 git \
                 vim \
-                htop \
                 iotop \
                 sysstat \
                 nftables \
@@ -70,13 +76,20 @@ install_packages() {
                 logrotate \
                 tar \
                 gzip \
-                unzip
+                unzip || true
+
+            # Optional packages (don't fail if not available)
+            log "  → Installing optional packages..."
+            dnf install -y htop 2>/dev/null || log "    ⚠ htop not available (using top instead)"
+
+            # Note: podman-compose is not available in RHEL 10
+            # We use 'podman compose' (native quadlet support) instead
+            log "    ℹ Using native 'podman compose' (no podman-compose needed)"
             ;;
         ubuntu|debian)
             apt-get update
             apt-get install -y \
                 podman \
-                podman-compose \
                 jq \
                 curl \
                 wget \
@@ -92,6 +105,9 @@ install_packages() {
                 tar \
                 gzip \
                 unzip
+
+            # podman-compose for Debian/Ubuntu (if available)
+            apt-get install -y podman-compose 2>/dev/null || log "    ⚠ podman-compose not available"
             ;;
         *)
             error "Unsupported OS: $OS_NAME"
