@@ -228,6 +228,49 @@ fi
 echo ""
 echo "[STEP 2] Validating environment..."
 
+# Validate or auto-detect PHYSICAL_HOST_INTERFACE
+if [ -z "${PHYSICAL_HOST_INTERFACE:-}" ]; then
+    echo "⚠️  PHYSICAL_HOST_INTERFACE not set in config.sh, attempting auto-detection..."
+    PHYSICAL_HOST_INTERFACE=$(ip route show default | grep -oP '(?<=dev )[^ ]+' | head -1)
+
+    if [ -z "$PHYSICAL_HOST_INTERFACE" ]; then
+        echo "❌ ERROR: Could not auto-detect network interface."
+        echo "   Please set PHYSICAL_HOST_INTERFACE in config.sh"
+        echo ""
+        echo "Available interfaces:"
+        ip -brief addr show
+        exit 1
+    fi
+
+    echo "✓ Auto-detected interface: $PHYSICAL_HOST_INTERFACE"
+
+    # Show IP for confirmation
+    detected_ip=$(ip -4 addr show "$PHYSICAL_HOST_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "")
+    if [ -n "$detected_ip" ]; then
+        echo "  Interface IP: $detected_ip"
+    fi
+
+    # Confirm with user
+    read -p "  Use this interface? (yes/no) [yes]: " confirm_interface
+    confirm_interface=${confirm_interface:-yes}
+    if [ "$confirm_interface" != "yes" ]; then
+        echo ""
+        echo "Available interfaces:"
+        ip -brief addr show
+        echo ""
+        echo "Please set PHYSICAL_HOST_INTERFACE in config.sh and run again"
+        exit 1
+    fi
+elif ! ip link show "$PHYSICAL_HOST_INTERFACE" &>/dev/null; then
+    # Interface is set but doesn't exist
+    echo "❌ ERROR: Interface '$PHYSICAL_HOST_INTERFACE' does not exist"
+    echo "   Please update PHYSICAL_HOST_INTERFACE in config.sh"
+    echo ""
+    echo "Available interfaces:"
+    ip -brief addr show
+    exit 1
+fi
+
 # Detect local host IP
 LOCAL_HOST_IP=$(ip -4 addr show "$PHYSICAL_HOST_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
 if [ -z "$LOCAL_HOST_IP" ]; then
