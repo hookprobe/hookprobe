@@ -5,13 +5,15 @@
 ---
 
 
+## HookProbe: The Neuro-Resonant Cybersecurity Protocol
+Project Abstract / Overview 🧠
 
-## Project Abstract / Overview 🧠
+HookProbe redefines cybersecurity by integrating AI learning directly into the network communication layer. Traditional security solutions struggle with latency and scale, often resorting to broad, inefficient blocks (like entire /24 subnets). HookProbe solves this by democratizing defense through Edge-Cloud Neuro-Resonance.
 
-HookProbe redefines cybersecurity by integrating AI learning directly into the network communication layer. Traditional security solutions struggle with latency and scale, forcing broad, inefficient blocks (like /24 subnets). HookProbe solves this by democratizing defense through **Edge-Cloud Neuro-Resonance**.
+The protocol enables low-resource Edge Nodes to achieve surgically accurate defense (e.g., blocking a single compromised host /32) by leveraging the global intelligence of the Cloud Core. This is achieved by transforming the AI's neural state (W) into the core security primitive—the identity, the key, and the proof of integrity—ensuring security is built into the intelligence stream itself.
 
-The protocol enables low-resource Edge devices to achieve **surgically accurate defense** (e.g., blocking a single compromised host /32) by leveraging the global intelligence of the Cloud AI. It achieves this by transforming the AI's neural state ($\mathbf{W}$) into the core security primitive—the identity, the key, and the proof of integrity—ensuring security is built into the intelligence stream itself.
-
+Core Innovation ✨
+The HookProbe Protocol is secured by three unique, interrelated mechanisms that replace traditional blockchain and signature concepts, minimizing both latency and computational cost.
 ----
 
 ## Core Innovation ✨
@@ -92,20 +94,80 @@ initial_sync:
   w_fingerprint_size_bytes: 512
 ```
 
+## The Temporal Event Record (TER) Structure
+
+The TER is the Dream Log of the Edge node. The Cloud Core's Deterministic Replay process uses these 64 bytes to calculate the new neural state (W 
+′
+ ).
+
+Input Vector: The 32 bytes of H 
+Entropy
+​	
+  are fed directly into the initial layer of the W 
+−1
+​	
+ model as the input stimulus.
+
+Learning Modulator: The Δt (Time Delta) and the H 
+Integrity
+​	
+  are used to adjust the model's learning rate and loss function for that specific step. This ensures that a long delay (Δt) dampens weight change, or an anomalous integrity hash (H 
+Integrity
+​	
+ ) causes a specific, predictable weight penalty.
+
+Chain Check: The entire sequence is hash-chained. A single bit error in any TER field will result in a different final W 
+simulated
+​	
+ , breaking the final PoSF signature match and proving tampering.
+
+## Development Blueprint & Quick Start 💻
+This blueprint outlines the immediate coding goals for setting up the HookProbe development environment.
+
+### 1. Cryptographic Library Integration
+
+The first step is implementing the primitives defined in the YAML:
+
+Key Derivation: Implement HKDF-SHA256 using the W 
+−1
+​	
+  fingerprint and the initial_hkdf_master_salt to generate the 256-bit session key.
+
+AEAD Implementation: Integrate a library (e.g., libsodium, Go standard crypto) for ChaCha20-Poly1305 using the specified 12-byte nonce and 16-byte tag size. This is the foundation for all communication.
+
+### 2. Qsecbit Data Structure & Encoding
+
+Develop the fixed-size data structs for the Temporal Event Record (TER).
+
+TER Struct: Create a C/Go/Rust struct that enforces the strict 64-byte length (ter_block_size_bytes).
+
+Hash Generation: Implement the Qsecbit Interface to generate the 32-byte H 
+Entropy
+​	
+  and 20-byte H 
+Integrity
+​	
+  from the source metrics (CPU, kernel hashes, etc.).
+
+### 3. Edge and Core Service Stubs
+
+Edge Stub: A service that simulates eBPF detection, generates a TER, encrypts it, and bursts it to the Core.
+
+Core Stub: A service that listens for encrypted bursts, decrypts the TER using the synchronized key, and begins the Deterministic Replay process.
+
 ## Status & Roadmap 🗺️
 We are actively developing the foundational components of the HookProbe Protocol, targeting a full system rollout in Q1 2026.
 
-Current Focus: Core Integration 🛠️ The core team is currently focused on implementing the fixed-point math engine for Deterministic Replay and finalizing the Qsecbit data capture layer to ensure bit-for-bit synchronization across all environments.
+Current Focus: Implementing the fixed-point math engine for Deterministic Replay and finalizing the Qsecbit data capture layer to ensure bit-for-bit synchronization.
 
-Next Milestone: PoCL Validation ✅ Following the internal integration, we will initiate a closed beta to validate the Proof of Cognitive Lineage (PoCL) consensus mechanism across a distributed network of Core instances.
+Next Milestone: Closed beta for PoCL Validation across a distributed network of Core instances.
 
-Future Vision 🌍 The ultimate goal is to evolve HookProbe into a decentralized, self-healing network ecosystem where security intelligence is managed autonomously by the collective neural state.
-
-## How to Contribute
+### How to Contribute
 
 While core protocol development is currently managed internally, we strongly welcome contributions in the following areas:
 
-Documentation & Examples: Helping to clarify complex concepts and build illustrative use cases.
+### Documentation & Examples: Clarifying complex concepts and building illustrative use cases.
 
-Testing & Validation: Developing stress tests and adversarial scenarios to challenge the Deterministic Replay engine.
+### Testing & Validation: Developing stress tests and adversarial scenarios to challenge the Deterministic Replay engine.
 
+### Ecosystem Tools: Creating monitoring dashboards or integrations with existing network orchestration tools.
