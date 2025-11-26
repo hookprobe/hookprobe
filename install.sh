@@ -92,10 +92,10 @@ show_menu() {
     echo "Configuration:"
     echo -e "  ${YELLOW}c${NC}) Run Configuration Wizard"
     echo ""
-    echo "Optional Add-ons:"
-    echo -e "  ${YELLOW}3${NC}) Install n8n Workflow Automation (POD 008)"
-    echo -e "  ${YELLOW}4${NC}) Install LTE/5G Connectivity"
-    echo -e "  ${YELLOW}5${NC}) Install ClickHouse Analytics"
+    echo "Optional Add-ons (can be installed separately anytime):"
+    echo -e "  ${YELLOW}3${NC}) Install n8n Workflow Automation (POD 008) ${GREEN}[Automated]${NC}"
+    echo -e "  ${YELLOW}4${NC}) LTE/5G Connectivity Setup ${CYAN}[Manual Guide]${NC}"
+    echo -e "  ${YELLOW}5${NC}) ClickHouse Analytics Setup ${CYAN}[Manual Guide]${NC}"
     echo ""
     echo "Maintenance:"
     echo -e "  ${YELLOW}6${NC}) Uninstall HookProbe"
@@ -223,12 +223,50 @@ main() {
                 run_installer "$SCRIPT_DIR/install/addons/n8n/setup.sh" "n8n Workflow Automation" "n8n"
                 ;;
             4)
-                echo -e "${BLUE}LTE/5G Setup${NC}"
-                echo "Please see: install/addons/lte/README.md for manual setup instructions"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${BLUE}LTE/5G Connectivity Setup (Manual)${NC}"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "This is a manual setup process for adding LTE/5G connectivity."
+                echo ""
+                echo "📖 Documentation: install/addons/lte/README.md"
+                echo ""
+                echo "The guide covers:"
+                echo "  • Hardware requirements (modems, SIM cards)"
+                echo "  • Driver installation"
+                echo "  • Network configuration"
+                echo "  • Failover setup"
+                echo ""
+                if [ -f "$SCRIPT_DIR/install/addons/lte/README.md" ]; then
+                    read -p "Open documentation now? (yes/no) [no]: " open_lte_docs
+                    if [ "$open_lte_docs" = "yes" ]; then
+                        less "$SCRIPT_DIR/install/addons/lte/README.md"
+                    fi
+                fi
                 ;;
             5)
-                echo -e "${BLUE}ClickHouse Setup${NC}"
-                echo "Please see: docs/guides/clickhouse-quick-start.md for setup instructions"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${BLUE}ClickHouse Analytics Setup (Manual)${NC}"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "This is a manual setup process for ClickHouse analytics."
+                echo ""
+                echo "📖 Quick Start: docs/guides/clickhouse-quick-start.md"
+                echo "📖 Integration Guide: docs/guides/clickhouse-integration.md"
+                echo ""
+                echo "The guides cover:"
+                echo "  • ClickHouse installation with Podman"
+                echo "  • Database schema setup"
+                echo "  • Qsecbit integration"
+                echo "  • Security analytics queries"
+                echo "  • Performance optimization"
+                echo ""
+                if [ -f "$SCRIPT_DIR/docs/guides/clickhouse-quick-start.md" ]; then
+                    read -p "Open quick start guide now? (yes/no) [no]: " open_ch_docs
+                    if [ "$open_ch_docs" = "yes" ]; then
+                        less "$SCRIPT_DIR/docs/guides/clickhouse-quick-start.md"
+                    fi
+                fi
                 ;;
             6)
                 echo -e "${YELLOW}Uninstall Options:${NC}"
