@@ -1,0 +1,315 @@
+# Suricata IDS Rules for SMTP Traffic
+# HookProbe POD-009 - DMZ Mail Gateway Monitoring
+#
+# Purpose: Detect malicious SMTP activity and attacks
+#
+# These rules monitor for:
+# - SMTP enumeration attacks
+# - Brute force authentication
+# - Spam campaigns
+# - Command injection
+# - Buffer overflow attempts
+# - Data exfiltration via email
+
+# ============================================
+# SMTP ENUMERATION DETECTION
+# ============================================
+
+# VRFY command abuse (email address enumeration)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP VRFY enumeration attempt"; \
+    flow:established,to_server; \
+    content:"VRFY"; nocase; offset:0; depth:4; \
+    threshold:type threshold, track by_src, count 10, seconds 60; \
+    classtype:attempted-recon; \
+    sid:9000001; rev:1;)
+
+# EXPN command abuse (mailing list enumeration)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP EXPN enumeration attempt"; \
+    flow:established,to_server; \
+    content:"EXPN"; nocase; offset:0; depth:4; \
+    threshold:type threshold, track by_src, count 5, seconds 60; \
+    classtype:attempted-recon; \
+    sid:9000002; rev:1;)
+
+# Rapid RCPT TO enumeration
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP recipient enumeration (rapid RCPT TO)"; \
+    flow:established,to_server; \
+    content:"RCPT TO"; nocase; \
+    threshold:type threshold, track by_src, count 50, seconds 60; \
+    classtype:attempted-recon; \
+    sid:9000003; rev:1;)
+
+# ============================================
+# AUTHENTICATION ATTACKS
+# ============================================
+
+# Brute force authentication attempts
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP authentication brute force"; \
+    flow:established,to_server; \
+    content:"AUTH"; nocase; offset:0; depth:4; \
+    threshold:type threshold, track by_src, count 10, seconds 300; \
+    classtype:attempted-user; \
+    sid:9000004; rev:1;)
+
+# Failed AUTH after 535 response
+alert tcp $HOME_NET 25 -> any any (msg:"SMTP repeated authentication failures"; \
+    flow:established,from_server; \
+    content:"535"; offset:0; depth:3; \
+    threshold:type threshold, track by_dst, count 5, seconds 60; \
+    classtype:unsuccessful-user; \
+    sid:9000005; rev:1;)
+
+# ============================================
+# SPAM DETECTION
+# ============================================
+
+# High volume email from single source
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP potential spam campaign (high volume)"; \
+    flow:established,to_server; \
+    content:"MAIL FROM"; nocase; \
+    threshold:type threshold, track by_src, count 100, seconds 300; \
+    classtype:policy-violation; \
+    sid:9000006; rev:1;)
+
+# Rapid connection/disconnection (spam bot behavior)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP rapid connect/disconnect (spam bot)"; \
+    flags:S; \
+    threshold:type both, track by_src, count 20, seconds 60; \
+    classtype:misc-activity; \
+    sid:9000007; rev:1;)
+
+# Open relay attempt
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP open relay attempt"; \
+    flow:established,to_server; \
+    content:"RCPT TO"; nocase; \
+    pcre:"/RCPT TO\s*:\s*<[^@]+@(?!hookprobe\.com)/i"; \
+    classtype:policy-violation; \
+    sid:9000008; rev:1;)
+
+# ============================================
+# COMMAND INJECTION
+# ============================================
+
+# Shell metacharacters in SMTP commands
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP command injection attempt (shell metacharacters)"; \
+    flow:established,to_server; \
+    pcre:"/[;|&`$(){}]/"; \
+    classtype:web-application-attack; \
+    sid:9000009; rev:1;)
+
+# SQL injection attempts
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP SQL injection attempt"; \
+    flow:established,to_server; \
+    pcre:"/(union|select|insert|update|delete|drop|create|alter)/i"; \
+    classtype:web-application-attack; \
+    sid:9000010; rev:1;)
+
+# Path traversal attempts
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP path traversal attempt"; \
+    flow:established,to_server; \
+    content:"../"; \
+    classtype:web-application-attack; \
+    sid:9000011; rev:1;)
+
+# ============================================
+# BUFFER OVERFLOW ATTEMPTS
+# ============================================
+
+# Excessively long SMTP command
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP oversized command (possible buffer overflow)"; \
+    flow:established,to_server; \
+    dsize:>512; \
+    classtype:attempted-dos; \
+    sid:9000012; rev:1;)
+
+# Extremely long email address
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP oversized email address"; \
+    flow:established,to_server; \
+    content:"MAIL FROM"; nocase; \
+    pcre:"/MAIL FROM\s*:\s*<.{256,}/i"; \
+    classtype:attempted-dos; \
+    sid:9000013; rev:1;)
+
+# ============================================
+# MALICIOUS CONTENT
+# ============================================
+
+# Executable attachments (common malware vectors)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP executable attachment detected"; \
+    flow:established,to_server; \
+    file_data; \
+    content:"Content-Type"; nocase; \
+    pcre:"/Content-Type\s*:\s*application\/(x-msdownload|x-executable|x-dosexec)/i"; \
+    classtype:trojan-activity; \
+    sid:9000014; rev:1;)
+
+# Suspicious script attachments
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP script attachment detected"; \
+    flow:established,to_server; \
+    file_data; \
+    content:"Content-Type"; nocase; \
+    pcre:"/Content-Type\s*:\s*application\/(javascript|x-sh|x-python)/i"; \
+    classtype:trojan-activity; \
+    sid:9000015; rev:1;)
+
+# Office macros (common phishing vector)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP Office document with macros"; \
+    flow:established,to_server; \
+    file_data; \
+    content:"vbaProject"; nocase; \
+    classtype:policy-violation; \
+    sid:9000016; rev:1;)
+
+# ============================================
+# PROTOCOL VIOLATIONS
+# ============================================
+
+# Missing HELO/EHLO
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP MAIL FROM before HELO/EHLO"; \
+    flow:established,to_server; \
+    content:"MAIL FROM"; nocase; offset:0; depth:9; \
+    classtype:protocol-command-decode; \
+    sid:9000017; rev:1;)
+
+# Pipelining abuse
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP excessive pipelining"; \
+    flow:established,to_server; \
+    content:"|0d 0a|"; \
+    threshold:type threshold, track by_src, count 10, seconds 1; \
+    classtype:protocol-command-decode; \
+    sid:9000018; rev:1;)
+
+# Invalid SMTP commands
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP invalid command"; \
+    flow:established,to_server; \
+    content:!"HELO"; nocase; offset:0; depth:4; \
+    content:!"EHLO"; nocase; offset:0; depth:4; \
+    content:!"MAIL"; nocase; offset:0; depth:4; \
+    content:!"RCPT"; nocase; offset:0; depth:4; \
+    content:!"DATA"; nocase; offset:0; depth:4; \
+    content:!"QUIT"; nocase; offset:0; depth:4; \
+    content:!"RSET"; nocase; offset:0; depth:4; \
+    content:!"NOOP"; nocase; offset:0; depth:4; \
+    classtype:protocol-command-decode; \
+    sid:9000019; rev:1;)
+
+# ============================================
+# DATA EXFILTRATION
+# ============================================
+
+# Extremely large emails (potential data exfiltration)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP excessively large email (>50MB)"; \
+    flow:established,to_server; \
+    content:"DATA"; nocase; \
+    byte_extract:4,0,email_size,relative,dce; \
+    byte_test:4,>,52428800,0,relative; \
+    classtype:policy-violation; \
+    sid:9000020; rev:1;)
+
+# High attachment count (potential data theft)
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP email with excessive attachments"; \
+    flow:established,to_server; \
+    file_data; \
+    content:"Content-Disposition"; nocase; \
+    threshold:type threshold, track by_flow, count 20, seconds 300; \
+    classtype:policy-violation; \
+    sid:9000021; rev:1;)
+
+# ============================================
+# KNOWN ATTACK SIGNATURES
+# ============================================
+
+# Sendmail header attack
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP Sendmail header injection"; \
+    flow:established,to_server; \
+    content:"|0a|From"; \
+    classtype:attempted-admin; \
+    sid:9000022; rev:1;)
+
+# SMTP STARTTLS stripping attack
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP STARTTLS stripping attempt"; \
+    flow:established,to_server; \
+    content:"STARTTLS"; nocase; \
+    content:"|0a|QUIT"; nocase; within:10; \
+    classtype:protocol-command-decode; \
+    sid:9000023; rev:1;)
+
+# ============================================
+# RATE LIMITING VIOLATIONS
+# ============================================
+
+# Exceeded connection rate
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP connection rate limit exceeded"; \
+    flags:S; \
+    threshold:type both, track by_src, count 30, seconds 60; \
+    classtype:attempted-dos; \
+    sid:9000024; rev:1;)
+
+# Exceeded message rate
+alert tcp any any -> $HOME_NET 25 (msg:"SMTP message rate limit exceeded"; \
+    flow:established,to_server; \
+    content:"DATA"; nocase; \
+    threshold:type threshold, track by_src, count 100, seconds 3600; \
+    classtype:attempted-dos; \
+    sid:9000025; rev:1;)
+
+# ============================================
+# CONFIGURATION
+# ============================================
+
+# Variables
+# HOME_NET should be set to DMZ network: 10.200.9.0/24
+
+# Alert levels:
+# - classtype:attempted-recon      - Reconnaissance attempt
+# - classtype:attempted-user       - Authentication attack
+# - classtype:unsuccessful-user    - Failed authentication
+# - classtype:policy-violation     - Policy violation (spam, etc.)
+# - classtype:web-application-attack - Injection attacks
+# - classtype:attempted-dos        - DoS attempt
+# - classtype:trojan-activity      - Malware detected
+# - classtype:protocol-command-decode - Protocol violation
+# - classtype:attempted-admin      - Admin compromise attempt
+
+# Action on alert:
+# - alert: Log and alert (default)
+# - drop: Drop packet and alert (IPS mode)
+# - reject: Send RST and alert (IPS mode)
+
+# Thresholds:
+# - type threshold: Alert after N events
+# - type limit: Alert first N events
+# - type both: Alert first N, then every N events
+# - track by_src: Track by source IP
+# - track by_dst: Track by destination IP
+# - track by_flow: Track by connection
+
+# ============================================
+# INTEGRATION WITH WAZUH
+# ============================================
+
+# Forward Suricata alerts to Wazuh (POD-007)
+# Configure in suricata.yaml:
+#   outputs:
+#     - eve-log:
+#         enabled: yes
+#         filetype: regular
+#         filename: /var/log/suricata/eve.json
+#         types:
+#           - alert
+#
+# Then configure filebeat to forward to Wazuh
+
+# ============================================
+# TESTING
+# ============================================
+
+# Test rules with:
+# suricata -T -c /etc/suricata/suricata.yaml
+#
+# Test specific rule:
+# suricata -c /etc/suricata/suricata.yaml -r test.pcap -l /var/log/suricata/
+#
+# Update rules:
+# suricata-update
+# systemctl restart suricata

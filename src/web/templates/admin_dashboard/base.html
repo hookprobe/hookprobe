@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}HookProbe Admin Dashboard{% endblock %}</title>
+
+    <!-- Google Font: Source Sans Pro -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,700&display=fallback">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- AdminLTE -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
+    <!-- Chart.js -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.css">
+
+    {% block extra_css %}{% endblock %}
+
+    <style>
+        .brand-link {
+            text-align: center;
+            padding: 0.8rem 0.5rem;
+        }
+        .brand-image {
+            max-height: 50px;
+            width: auto;
+        }
+        .ai-badge {
+            display: inline-block;
+            padding: 0.25em 0.6em;
+            font-size: 75%;
+            font-weight: 700;
+            line-height: 1;
+            text-align: center;
+            white-space: nowrap;
+            vertical-align: baseline;
+            border-radius: 0.25rem;
+        }
+        .confidence-high { background-color: #28a745; color: white; }
+        .confidence-medium { background-color: #ffc107; color: black; }
+        .confidence-low { background-color: #dc3545; color: white; }
+    </style>
+</head>
+<body class="hold-transition sidebar-mini layout-fixed">
+<div class="wrapper">
+
+    <!-- Navbar -->
+    <nav class="main-header navbar navbar-expand navbar-white navbar-light">
+        <!-- Left navbar links -->
+        <ul class="navbar-nav">
+            <li class="nav-item">
+                <a class="nav-link" data-widget="pushmenu" href="#" role="button"><i class="fas fa-bars"></i></a>
+            </li>
+            <li class="nav-item d-none d-sm-inline-block">
+                <a href="{% url 'admin_dashboard:home' %}" class="nav-link">Home</a>
+            </li>
+        </ul>
+
+        <!-- Right navbar links -->
+        <ul class="navbar-nav ml-auto">
+            <!-- Notifications Dropdown Menu -->
+            <li class="nav-item dropdown">
+                <a class="nav-link" data-toggle="dropdown" href="#">
+                    <i class="far fa-bell"></i>
+                    <span class="badge badge-warning navbar-badge">{{ pending_drafts_count|default:0 }}</span>
+                </a>
+                <div class="dropdown-menu dropdown-menu-lg dropdown-menu-right">
+                    <span class="dropdown-item dropdown-header">{{ pending_drafts_count|default:0 }} Pending Drafts</span>
+                    <div class="dropdown-divider"></div>
+                    <a href="{% url 'admin_dashboard:ai_drafts' %}" class="dropdown-item">
+                        <i class="fas fa-file-alt mr-2"></i> Review AI Drafts
+                    </a>
+                </div>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="{% url 'admin:index' %}">
+                    <i class="fas fa-cog"></i>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="{% url 'admin:logout' %}">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
+            </li>
+        </ul>
+    </nav>
+    <!-- /.navbar -->
+
+    <!-- Main Sidebar Container -->
+    <aside class="main-sidebar sidebar-dark-primary elevation-4">
+        <!-- Brand Logo -->
+        <a href="{% url 'admin_dashboard:home' %}" class="brand-link">
+            <img src="/static/assets/hookprobe-logo-white.svg" alt="HookProbe" class="brand-image" onerror="this.onerror=null; this.innerHTML='<span style=\'color:white;font-size:20px;font-weight:bold;\'>HookProbe</span>';">
+        </a>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Sidebar user panel -->
+            <div class="user-panel mt-3 pb-3 mb-3 d-flex">
+                <div class="image">
+                    <i class="fas fa-user-circle fa-2x text-white"></i>
+                </div>
+                <div class="info">
+                    <a href="#" class="d-block">{{ request.user.get_full_name|default:request.user.username }}</a>
+                </div>
+            </div>
+
+            <!-- Sidebar Menu -->
+            <nav class="mt-2">
+                <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu" data-accordion="false">
+                    <!-- Dashboard -->
+                    <li class="nav-item">
+                        <a href="{% url 'admin_dashboard:home' %}" class="nav-link {% if request.resolver_match.url_name == 'home' %}active{% endif %}">
+                            <i class="nav-icon fas fa-tachometer-alt"></i>
+                            <p>Dashboard</p>
+                        </a>
+                    </li>
+
+                    <!-- AI Content Management -->
+                    <li class="nav-item {% if 'ai' in request.resolver_match.url_name or 'content' in request.resolver_match.url_name %}menu-open{% endif %}">
+                        <a href="#" class="nav-link">
+                            <i class="nav-icon fas fa-robot"></i>
+                            <p>
+                                AI Content
+                                <i class="fas fa-angle-left right"></i>
+                                {% if pending_drafts_count > 0 %}
+                                <span class="badge badge-warning right">{{ pending_drafts_count }}</span>
+                                {% endif %}
+                            </p>
+                        </a>
+                        <ul class="nav nav-treeview">
+                            <li class="nav-item">
+                                <a href="{% url 'admin_dashboard:ai_drafts' %}" class="nav-link">
+                                    <i class="far fa-circle nav-icon"></i>
+                                    <p>AI Drafts</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{% url 'admin_dashboard:ai_generate' %}" class="nav-link">
+                                    <i class="far fa-circle nav-icon"></i>
+                                    <p>Generate Content</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{% url 'admin_dashboard:research_tasks' %}" class="nav-link">
+                                    <i class="far fa-circle nav-icon"></i>
+                                    <p>Research Tasks</p>
+                                </a>
+                            </li>
+                        </ul>
+                    </li>
+
+                    <!-- Blog Management -->
+                    <li class="nav-item">
+                        <a href="{% url 'cms:admin_post_list' %}" class="nav-link">
+                            <i class="nav-icon fas fa-newspaper"></i>
+                            <p>Blog Posts</p>
+                        </a>
+                    </li>
+
+                    <!-- Merchandise -->
+                    <li class="nav-item {% if 'merchandise' in request.resolver_match.url_name or 'product' in request.resolver_match.url_name %}menu-open{% endif %}">
+                        <a href="#" class="nav-link">
+                            <i class="nav-icon fas fa-shopping-cart"></i>
+                            <p>
+                                Merchandise
+                                <i class="fas fa-angle-left right"></i>
+                            </p>
+                        </a>
+                        <ul class="nav nav-treeview">
+                            <li class="nav-item">
+                                <a href="{% url 'admin_dashboard:products' %}" class="nav-link">
+                                    <i class="far fa-circle nav-icon"></i>
+                                    <p>Products</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{% url 'admin_dashboard:orders' %}" class="nav-link">
+                                    <i class="far fa-circle nav-icon"></i>
+                                    <p>Orders</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{% url 'admin_dashboard:categories' %}" class="nav-link">
+                                    <i class="far fa-circle nav-icon"></i>
+                                    <p>Categories</p>
+                                </a>
+                            </li>
+                        </ul>
+                    </li>
+
+                    <!-- Divider -->
+                    <li class="nav-header">SYSTEM</li>
+
+                    <!-- Analytics -->
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <i class="nav-icon fas fa-chart-line"></i>
+                            <p>Analytics</p>
+                        </a>
+                    </li>
+
+                    <!-- Settings -->
+                    <li class="nav-item">
+                        <a href="{% url 'admin:index' %}" class="nav-link">
+                            <i class="nav-icon fas fa-cogs"></i>
+                            <p>Django Admin</p>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+            <!-- /.sidebar-menu -->
+        </div>
+        <!-- /.sidebar -->
+    </aside>
+
+    <!-- Content Wrapper. Contains page content -->
+    <div class="content-wrapper">
+        <!-- Content Header (Page header) -->
+        <div class="content-header">
+            <div class="container-fluid">
+                <div class="row mb-2">
+                    <div class="col-sm-6">
+                        <h1 class="m-0">{% block page_title %}Dashboard{% endblock %}</h1>
+                    </div>
+                    <div class="col-sm-6">
+                        <ol class="breadcrumb float-sm-right">
+                            {% block breadcrumb %}
+                            <li class="breadcrumb-item"><a href="{% url 'admin_dashboard:home' %}">Home</a></li>
+                            {% endblock %}
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- /.content-header -->
+
+        <!-- Main content -->
+        <section class="content">
+            <div class="container-fluid">
+                {% if messages %}
+                    {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+
+                {% block content %}{% endblock %}
+            </div>
+        </section>
+        <!-- /.content -->
+    </div>
+    <!-- /.content-wrapper -->
+
+    <!-- Footer -->
+    <footer class="main-footer">
+        <strong>Copyright &copy; 2025 <a href="https://github.com/hookprobe/hookprobe">HookProbe</a>.</strong>
+        All rights reserved.
+        <div class="float-right d-none d-sm-inline-block">
+            <b>Version</b> 5.0.1
+        </div>
+    </footer>
+</div>
+<!-- ./wrapper -->
+
+<!-- jQuery -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<!-- Bootstrap 4 -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+<!-- AdminLTE App -->
+<script src="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/js/adminlte.min.js"></script>
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+{% block extra_js %}{% endblock %}
+
+</body>
+</html>
