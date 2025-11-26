@@ -2,7 +2,111 @@
 
 **An Open-Source, DIY Framework for Distributed Detection, Response & Trust Validation**
 
-*Draft Technical Whitepaper — 2025*
+*work in progress*
+
+---
+```mermaid
+
+flowchart TD
+
+%% -----------------------------
+%% 1. USER ENVIRONMENT
+%% -----------------------------
+UserStart([User Initiates Hookprobe])
+UserConfig[User Configuration: Minimal or Full Install]
+UserDevices[User Edge Devices and Sensors]
+
+UserStart --> UserConfig
+UserConfig --> UserDevices
+
+%% -----------------------------
+%% 2. EDGE NODE ARCHITECTURE
+%% -----------------------------
+subgraph EdgeNode[Hookprobe Edge Node]
+    EN_Input[Data Intake: Logs, Syscalls, Network Events]
+    EN_FP[Fingerprint Engine]
+    EN_Features[Feature Extraction]
+    EN_LocalModel[Local ML Model]
+    EN_DPoL[DPoL Submission Engine]
+    EN_Alerts[Local Alerting and Actions]
+end
+
+UserDevices --> EN_Input
+EN_Input --> EN_FP --> EN_Features --> EN_LocalModel
+EN_LocalModel --> EN_DPoL
+EN_LocalModel --> EN_Alerts
+
+%% -----------------------------
+%% 3. CLOUD CORE ARCHITECTURE
+%% -----------------------------
+subgraph CloudCore[Hookprobe Cloud Core]
+    CC_Aggregator[Telemetry Aggregation Layer]
+    CC_ModelTraining[Global Model Training]
+    CC_SecurityRules[Security Rule Engine]
+    CC_DPoLCollector[DPoL Collector and Validator]
+    CC_Ledger[Decentralized Ledger]
+    CC_API[API and Integration Layer]
+end
+
+EN_DPoL --> CC_DPoLCollector
+CC_DPoLCollector --> CC_Ledger
+CC_Ledger --> CC_Aggregator
+
+CC_Aggregator --> CC_ModelTraining
+CC_ModelTraining --> CC_SecurityRules
+CC_SecurityRules --> CC_API
+
+%% -----------------------------
+%% 4. VALIDATORS: DECENTRALIZED network
+%% -----------------------------
+subgraph Validators[Independent Validator Nodes]
+    V_Receive[Receive Stake and DPoL Submissions]
+    V_Check[Validate Evidence and Node Reputation]
+    V_Update[Update Distributed Ledger]
+end
+
+CC_DPoLCollector --> V_Receive
+V_Receive --> V_Check --> V_Update --> CC_Ledger
+
+%% -----------------------------
+%% 5. DISTRIBUTED MODEL AND POLICY UPDATES
+%% -----------------------------
+CC_SecurityRules --> Dist_Update[Distributed Updates to Edge Nodes]
+CC_ModelTraining --> Dist_Update
+Dist_Update --> EN_LocalModel
+Dist_Update --> UserDevices
+
+%% -----------------------------
+%% 6. OPTIONAL ADD ONS
+%% -----------------------------
+subgraph AddOns[Optional Modules]
+    GDPR_Mod[GDPR Compliance Module]
+    Firewall_Mod[Adaptive Firewall]
+    WebServer_Mod[Secure Local Web Server]
+    Email_Mod[Encrypted Email Relay]
+end
+
+UserConfig --> AddOns
+AddOns --> EN_LocalModel
+AddOns --> CC_API
+
+%% -----------------------------
+%% 7. COMMAND CENTER VIEW
+%% -----------------------------
+subgraph CommandCenter[Decentralized SOC Command Center]
+    CC_Dashboard[Unified Dashboard]
+    CC_Analytics[Analytics Engine]
+    CC_AIAssist[AI Assistant for Threat Response]
+end
+
+CC_API --> CC_Dashboard
+CC_Aggregator --> CC_Analytics
+CC_SecurityRules --> CC_AIAssist
+
+
+
+
+```
 
 ---
 
