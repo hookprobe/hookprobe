@@ -1,0 +1,176 @@
+{
+  "name": "HookProbe: Event Ingestion Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook - Security Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "hookprobe-events"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract and normalize event data\nconst event = items[0].json;\n\nconst normalized = {\n  timestamp: event.timestamp || new Date().toISO String(),\n  source_type: event.source_type || 'unknown',\n  source_ip: event.source_ip,\n  destination_ip: event.destination_ip,\n  event_type: event.event_type,\n  severity: event.severity || 'info',\n  raw_data: JSON.stringify(event),\n  tenant_id: event.tenant_id || 'default'\n};\n\nreturn [{ json: normalized }];"
+      },
+      "id": "normalize-event",
+      "name": "Normalize Event",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8888/api/v1/score",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "event",
+              "value": "={{$json}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "qsecbit-scoring",
+      "name": "QSECBIT Risk Scoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.qsecbit_score}}",
+              "operation": "largerEqual",
+              "value2": 0.7
+            }
+          ]
+        }
+      },
+      "id": "risk-threshold",
+      "name": "Risk Threshold >= 0.7?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflow": "threat-correlation"
+      },
+      "id": "threat-correlation-trigger",
+      "name": "Trigger Threat Correlation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://clickhouse:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO security_events FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "store-clickhouse-high",
+      "name": "Store in ClickHouse (High Priority)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://clickhouse:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO security_events FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "store-clickhouse-low",
+      "name": "Store in ClickHouse (Low Priority)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "url": "http://victoriametrics:8428/api/v1/write",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "metric",
+              "value": "hookprobe_threat_score{tenant=\"={{$json.tenant_id}}\",source=\"={{$json.source_ip}}\"} ={{$json.qsecbit_score}} ={{Date.now()}}"
+            }
+          ]
+        }
+      },
+      "id": "send-metrics",
+      "name": "Send Metrics to VictoriaMetrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1450, 200]
+    }
+  ],
+  "connections": {
+    "Webhook - Security Event": {
+      "main": [[{ "node": "Normalize Event", "type": "main", "index": 0 }]]
+    },
+    "Normalize Event": {
+      "main": [[{ "node": "QSECBIT Risk Scoring", "type": "main", "index": 0 }]]
+    },
+    "QSECBIT Risk Scoring": {
+      "main": [[{ "node": "Risk Threshold >= 0.7?", "type": "main", "index": 0 }]]
+    },
+    "Risk Threshold >= 0.7?": {
+      "main": [
+        [{ "node": "Trigger Threat Correlation", "type": "main", "index": 0 }],
+        [{ "node": "Store in ClickHouse (Low Priority)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Trigger Threat Correlation": {
+      "main": [[{ "node": "Store in ClickHouse (High Priority)", "type": "main", "index": 0 }]]
+    },
+    "Store in ClickHouse (High Priority)": {
+      "main": [[{ "node": "Send Metrics to VictoriaMetrics", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HookProbe",
+      "id": "hookprobe"
+    },
+    {
+      "name": "Core",
+      "id": "core"
+    }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}
