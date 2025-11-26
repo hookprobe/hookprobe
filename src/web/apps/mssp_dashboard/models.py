@@ -337,3 +337,293 @@ class ThreatIntelligence(models.Model):
 
     def __str__(self):
         return f"{self.threat_type} - {self.title}"
+
+
+class IndicatorOfCompromise(models.Model):
+    """
+    Unified Indicators of Compromise (IoC) aggregated from ALL security vectors.
+    Acts as "one brain" collecting data from:
+    - QSECBIT AI threat scoring
+    - OpenFlow SDN
+    - Suricata/Snort IDS/IPS
+    - Zeek network analysis
+    - XDP packet filtering
+    - eBPF monitoring
+    - SIEM correlations
+    - Threat intelligence feeds
+    """
+
+    IOC_TYPE_CHOICES = [
+        ('ip', 'IP Address'),
+        ('domain', 'Domain Name'),
+        ('url', 'URL'),
+        ('email', 'Email Address'),
+        ('file_hash', 'File Hash (MD5/SHA256)'),
+        ('mac_address', 'MAC Address'),
+        ('user_agent', 'User Agent'),
+        ('certificate', 'SSL Certificate'),
+        ('registry_key', 'Registry Key'),
+        ('process', 'Process Name'),
+        ('command', 'Command Line'),
+        ('behavior', 'Behavioral Pattern'),
+    ]
+
+    SEVERITY_CHOICES = [
+        ('critical', 'Critical'),
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+        ('info', 'Informational'),
+    ]
+
+    # IoC identification
+    ioc_type = models.CharField(max_length=20, choices=IOC_TYPE_CHOICES)
+    value = models.CharField(max_length=500, help_text="The actual IoC value")
+    severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES)
+
+    # Source tracking - which system detected this IoC
+    detected_by_qsecbit = models.BooleanField(default=False)
+    detected_by_openflow = models.BooleanField(default=False)
+    detected_by_suricata = models.BooleanField(default=False)
+    detected_by_snort = models.BooleanField(default=False)
+    detected_by_zeek = models.BooleanField(default=False)
+    detected_by_xdp = models.BooleanField(default=False)
+    detected_by_ebpf = models.BooleanField(default=False)
+    detected_by_siem = models.BooleanField(default=False)
+    detected_by_threat_intel = models.BooleanField(default=False)
+
+    # Correlation scoring - how many systems agree this is malicious
+    detection_count = models.IntegerField(default=0, help_text="Number of systems that detected this")
+    confidence_score = models.FloatField(default=0.0, help_text="0-100: Confidence this is malicious")
+
+    # QSECBIT AI scoring
+    qsecbit_score = models.FloatField(null=True, blank=True, help_text="QSECBIT threat score")
+    qsecbit_rag_status = models.CharField(max_length=10, blank=True, help_text="RED/AMBER/GREEN")
+
+    # Context and metadata
+    description = models.TextField(blank=True)
+    first_seen = models.DateTimeField(default=now)
+    last_seen = models.DateTimeField(default=now)
+    occurrence_count = models.IntegerField(default=1, help_text="How many times observed")
+
+    # Related threat intelligence
+    threat_intel = models.ForeignKey(ThreatIntelligence, on_delete=models.SET_NULL, null=True, blank=True, related_name='related_iocs')
+
+    # Affected systems
+    affected_devices = models.ManyToManyField(SecurityDevice, related_name='detected_iocs')
+
+    # Additional data from various sources
+    source_data = models.JSONField(default=dict, blank=True, help_text="Raw data from detection sources")
+
+    # Relationships with other IoCs
+    related_iocs = models.ManyToManyField('self', blank=True, symmetrical=False, related_name='correlations')
+
+    # Status
+    is_active = models.BooleanField(default=True)
+    is_false_positive = models.BooleanField(default=False)
+    is_whitelisted = models.BooleanField(default=False)
+
+    # Assignment
+    customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='customer_iocs')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'mssp_indicator_of_compromise'
+        verbose_name = 'Indicator of Compromise'
+        verbose_name_plural = 'Indicators of Compromise'
+        ordering = ['-severity', '-confidence_score', '-last_seen']
+        indexes = [
+            models.Index(fields=['customer', 'is_active']),
+            models.Index(fields=['ioc_type', 'value']),
+            models.Index(fields=['severity', '-confidence_score']),
+            models.Index(fields=['-last_seen']),
+        ]
+        unique_together = [['customer', 'ioc_type', 'value']]
+
+    def __str__(self):
+        return f"{self.ioc_type}: {self.value} ({self.severity})"
+
+    @property
+    def detection_sources(self):
+        """Return list of systems that detected this IoC."""
+        sources = []
+        if self.detected_by_qsecbit:
+            sources.append('QSECBIT')
+        if self.detected_by_openflow:
+            sources.append('OpenFlow')
+        if self.detected_by_suricata:
+            sources.append('Suricata')
+        if self.detected_by_snort:
+            sources.append('Snort')
+        if self.detected_by_zeek:
+            sources.append('Zeek')
+        if self.detected_by_xdp:
+            sources.append('XDP')
+        if self.detected_by_ebpf:
+            sources.append('eBPF')
+        if self.detected_by_siem:
+            sources.append('SIEM')
+        if self.detected_by_threat_intel:
+            sources.append('Threat Intel')
+        return sources
+
+    @property
+    def is_high_confidence(self):
+        """High confidence if detected by 3+ systems or confidence > 80."""
+        return self.detection_count >= 3 or self.confidence_score > 80
+
+    @property
+    def risk_score(self):
+        """Calculate overall risk score (0-100) based on all factors."""
+        score = 0
+
+        # Base severity score
+        severity_scores = {
+            'critical': 40,
+            'high': 30,
+            'medium': 20,
+            'low': 10,
+            'info': 5
+        }
+        score += severity_scores.get(self.severity, 0)
+
+        # Confidence contribution (0-30 points)
+        score += (self.confidence_score * 0.3)
+
+        # Detection count (0-20 points, max at 5 systems)
+        score += min(self.detection_count * 4, 20)
+
+        # QSECBIT contribution (0-10 points)
+        if self.qsecbit_score:
+            score += self.qsecbit_score * 10
+
+        return min(score, 100)
+
+
+class IoC_Report(models.Model):
+    """
+    Comprehensive IoC-based security reports.
+    Aggregates data from all vectors to create unified incident reports.
+    """
+
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('active', 'Active Investigation'),
+        ('resolved', 'Resolved'),
+        ('false_positive', 'False Positive'),
+        ('archived', 'Archived'),
+    ]
+
+    SEVERITY_CHOICES = [
+        ('critical', 'Critical Incident'),
+        ('high', 'High Severity'),
+        ('medium', 'Medium Severity'),
+        ('low', 'Low Severity'),
+        ('info', 'Informational'),
+    ]
+
+    # Report identification
+    title = models.CharField(max_length=300)
+    description = models.TextField()
+    severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+
+    # Associated IoCs
+    iocs = models.ManyToManyField(IndicatorOfCompromise, related_name='reports')
+
+    # Affected systems
+    affected_devices = models.ManyToManyField(SecurityDevice, related_name='ioc_reports')
+
+    # Timeline
+    incident_start = models.DateTimeField(help_text="When the incident started")
+    incident_end = models.DateTimeField(null=True, blank=True, help_text="When resolved")
+
+    # Analysis
+    attack_vector = models.CharField(max_length=100, blank=True, help_text="How the attack occurred")
+    attack_stages = models.JSONField(default=list, blank=True, help_text="Kill chain stages observed")
+
+    # Impact assessment
+    impact_assessment = models.TextField(blank=True)
+    data_exfiltrated = models.BooleanField(default=False)
+    systems_compromised = models.IntegerField(default=0)
+
+    # Attribution
+    threat_actor = models.CharField(max_length=200, blank=True)
+    related_threat_intel = models.ManyToManyField(ThreatIntelligence, blank=True, related_name='related_reports')
+
+    # Response actions
+    response_actions = models.JSONField(default=list, blank=True, help_text="Actions taken to respond")
+    playbooks_executed = models.ManyToManyField(PlaybookExecution, blank=True, related_name='related_reports')
+
+    # Recommendations
+    recommendations = models.TextField(blank=True, help_text="Recommendations to prevent recurrence")
+
+    # Aggregated scores from all systems
+    overall_risk_score = models.FloatField(default=0.0, help_text="Aggregated risk score 0-100")
+    qsecbit_analysis = models.JSONField(default=dict, blank=True, help_text="QSECBIT AI analysis")
+    openflow_metrics = models.JSONField(default=dict, blank=True, help_text="OpenFlow SDN data")
+    ids_alerts = models.JSONField(default=dict, blank=True, help_text="Suricata/Snort alerts")
+    network_analysis = models.JSONField(default=dict, blank=True, help_text="Zeek network analysis")
+    packet_analysis = models.JSONField(default=dict, blank=True, help_text="XDP/eBPF data")
+
+    # Assignment and tracking
+    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_ioc_reports')
+    customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='customer_ioc_reports')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'mssp_ioc_report'
+        verbose_name = 'IoC Report'
+        verbose_name_plural = 'IoC Reports'
+        ordering = ['-severity', '-created_at']
+        indexes = [
+            models.Index(fields=['customer', 'status']),
+            models.Index(fields=['severity', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.severity})"
+
+    @property
+    def duration(self):
+        """Calculate incident duration."""
+        if self.incident_end:
+            return self.incident_end - self.incident_start
+        return now() - self.incident_start
+
+    @property
+    def is_ongoing(self):
+        """Check if incident is still active."""
+        return self.status in ['draft', 'active']
+
+    def calculate_overall_risk(self):
+        """Calculate overall risk score based on all IoCs and data sources."""
+        if not self.iocs.exists():
+            return 0.0
+
+        # Average IoC risk scores
+        ioc_scores = [ioc.risk_score for ioc in self.iocs.all()]
+        avg_ioc_score = sum(ioc_scores) / len(ioc_scores) if ioc_scores else 0
+
+        # Severity multiplier
+        severity_multipliers = {
+            'critical': 1.5,
+            'high': 1.2,
+            'medium': 1.0,
+            'low': 0.8,
+            'info': 0.5
+        }
+        multiplier = severity_multipliers.get(self.severity, 1.0)
+
+        # Number of affected systems factor
+        systems_factor = min(self.systems_compromised * 2, 20)
+
+        # Calculate final score
+        risk = (avg_ioc_score * multiplier) + systems_factor
+
+        return min(risk, 100.0)

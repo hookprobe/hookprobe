@@ -19,7 +19,8 @@ from django.conf import settings
 
 from .models import (
     SecurityDevice, SecurityMetric, Vulnerability,
-    SOARPlaybook, PlaybookExecution, ThreatIntelligence
+    SOARPlaybook, PlaybookExecution, ThreatIntelligence,
+    IndicatorOfCompromise, IoC_Report
 )
 
 
@@ -294,12 +295,13 @@ def soar_playbooks(request):
 @login_required
 def xsoc_dashboard(request):
     """
-    xSOC Tab - Red/Blue Team Dashboards with n8n automation.
+    xSOC Tab - Red/Blue Team Dashboards with n8n automation + IoC Reporting.
 
     Displays:
     - Red Team: Attack simulation results
     - Blue Team: Defense metrics
     - Threat intelligence feed
+    - IoC Reporting: Unified view from all security vectors
     - n8n workflow integration
     """
 
@@ -308,6 +310,7 @@ def xsoc_dashboard(request):
 
     # Recent security metrics grouped by threat type
     last_7d = now() - timedelta(days=7)
+    last_24h = now() - timedelta(hours=24)
     threat_metrics = SecurityMetric.objects.filter(
         device__customer=request.user,
         timestamp__gte=last_7d,
@@ -320,10 +323,96 @@ def xsoc_dashboard(request):
         started_at__gte=last_7d
     ).count()
 
+    # ============================================================================
+    # IoC REPORTING - Aggregation from ALL security vectors
+    # ============================================================================
+
+    # Get all active IoCs for this customer
+    all_iocs = IndicatorOfCompromise.objects.filter(
+        customer=request.user,
+        is_active=True,
+        is_false_positive=False
+    )
+
+    # Recent IoCs (last 24 hours)
+    recent_iocs = all_iocs.filter(last_seen__gte=last_24h).order_by('-last_seen')[:20]
+
+    # High-confidence IoCs (detected by 3+ systems or confidence > 80)
+    high_confidence_iocs = all_iocs.filter(
+        Q(detection_count__gte=3) | Q(confidence_score__gt=80)
+    ).order_by('-confidence_score', '-last_seen')[:10]
+
+    # Critical IoCs by severity
+    critical_iocs = all_iocs.filter(severity='critical').count()
+    high_iocs = all_iocs.filter(severity='high').count()
+    medium_iocs = all_iocs.filter(severity='medium').count()
+
+    # IoCs by type distribution
+    ioc_by_type = all_iocs.values('ioc_type').annotate(count=Count('id')).order_by('-count')
+
+    # IoCs by detection source (which system detected it)
+    detection_sources = {
+        'QSECBIT': all_iocs.filter(detected_by_qsecbit=True).count(),
+        'OpenFlow': all_iocs.filter(detected_by_openflow=True).count(),
+        'Suricata': all_iocs.filter(detected_by_suricata=True).count(),
+        'Snort': all_iocs.filter(detected_by_snort=True).count(),
+        'Zeek': all_iocs.filter(detected_by_zeek=True).count(),
+        'XDP': all_iocs.filter(detected_by_xdp=True).count(),
+        'eBPF': all_iocs.filter(detected_by_ebpf=True).count(),
+        'SIEM': all_iocs.filter(detected_by_siem=True).count(),
+        'Threat Intel': all_iocs.filter(detected_by_threat_intel=True).count(),
+    }
+
+    # Get active IoC reports
+    active_reports = IoC_Report.objects.filter(
+        customer=request.user,
+        status__in=['draft', 'active']
+    ).order_by('-severity', '-created_at')[:10]
+
+    # Recent closed reports
+    recent_closed_reports = IoC_Report.objects.filter(
+        customer=request.user,
+        status='resolved'
+    ).order_by('-updated_at')[:5]
+
+    # Overall risk score (average of all active high-risk IoCs)
+    high_risk_iocs = all_iocs.filter(
+        Q(severity='critical') | Q(severity='high')
+    )
+    if high_risk_iocs.exists():
+        risk_scores = [ioc.risk_score for ioc in high_risk_iocs]
+        overall_risk = sum(risk_scores) / len(risk_scores)
+    else:
+        overall_risk = 0
+
+    # IoC correlation - IoCs that appear together frequently
+    correlated_iocs = []
+    for ioc in recent_iocs[:5]:
+        if ioc.related_iocs.exists():
+            correlated_iocs.append({
+                'primary': ioc,
+                'related': ioc.related_iocs.all()[:3]
+            })
+
     context = {
+        # Existing data
         'threats': threats,
         'threat_metrics': threat_metrics,
         'automated_responses': automated_responses,
+
+        # IoC Reporting Data
+        'total_iocs': all_iocs.count(),
+        'recent_iocs': recent_iocs,
+        'high_confidence_iocs': high_confidence_iocs,
+        'critical_iocs_count': critical_iocs,
+        'high_iocs_count': high_iocs,
+        'medium_iocs_count': medium_iocs,
+        'ioc_by_type': ioc_by_type,
+        'detection_sources': detection_sources,
+        'active_reports': active_reports,
+        'recent_closed_reports': recent_closed_reports,
+        'overall_risk_score': round(overall_risk, 2),
+        'correlated_iocs': correlated_iocs,
     }
 
     return render(request, 'mssp_dashboard/xsoc.html', context)
