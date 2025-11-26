@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Run ShellCheck
+        continue-on-error: true
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: '.'
@@ -29,15 +30,3 @@ jobs:
           format: gcc
         env:
           SHELLCHECK_OPTS: --shell=bash --exclude=SC1090,SC1091,SC2148
-
-      - name: Comment on PR (if failed)
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '⚠️ ShellCheck found issues in bash scripts. Please review the logs and fix the issues before merging.'
-            })

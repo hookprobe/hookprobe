@@ -299,6 +299,6 @@ fi
 echo ""
 echo "To reinstall:"
 echo "  1. Review config.sh"
-echo "  2. Run: sudo ./setup.sh"
+echo "  2. Run: sudo ./install.sh (and select option 1)"
 echo ""
 echo "============================================================"

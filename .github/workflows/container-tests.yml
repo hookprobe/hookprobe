@@ -1,0 +1,305 @@
+name: Container & Integration Tests
+
+on:
+  push:
+    branches: [ main, master, develop, 'claude/**' ]
+    paths:
+      - 'install/**/*.sh'
+      - 'src/**/*.py'
+      - '.github/workflows/container-tests.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    # Run weekly on Sunday at 02:00 UTC to test container availability
+    - cron: '0 2 * * 0'
+
+jobs:
+  test-podman-availability:
+    name: Test Podman Compatibility
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Verify Podman installation
+        run: |
+          podman --version
+          podman info
+
+      - name: Test Pod creation
+        run: |
+          # Test basic pod creation
+          podman pod create --name test-pod --network bridge
+          podman pod ls
+          podman pod rm test-pod
+
+      - name: Test container networking
+        run: |
+          # Test that we can create containers with custom networks
+          podman network create test-network
+          podman network ls
+          podman network rm test-network
+
+  test-ovs-availability:
+    name: Test Open vSwitch Compatibility
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Open vSwitch
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openvswitch-switch
+
+      - name: Verify OVS installation
+        run: |
+          sudo systemctl start openvswitch-switch
+          sudo ovs-vsctl --version
+
+      - name: Test OVS bridge creation
+        run: |
+          # Test basic bridge operations
+          sudo ovs-vsctl add-br test-bridge
+          sudo ovs-vsctl show
+          sudo ovs-vsctl del-br test-bridge
+
+      - name: Test VXLAN tunnel creation
+        run: |
+          # Test VXLAN tunnel creation
+          sudo ovs-vsctl add-br test-bridge
+          sudo ovs-vsctl add-port test-bridge vxlan-test -- set interface vxlan-test type=vxlan options:remote_ip=127.0.0.1 options:key=100
+          sudo ovs-vsctl show
+          sudo ovs-vsctl del-br test-bridge
+
+  test-python-dependencies:
+    name: Test Python Dependencies
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Check for requirements.txt
+        run: |
+          if [ -f requirements.txt ]; then
+            echo "requirements.txt found"
+            cat requirements.txt
+          else
+            echo "No requirements.txt found - creating minimal test file"
+            echo "requests>=2.31.0" > requirements.txt
+            echo "flask>=3.0.0" >> requirements.txt
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Test Python imports
+        run: |
+          # Test that basic Python modules can be imported
+          python -c "import sys; print(sys.version)"
+          python -c "import json; import os; import subprocess"
+
+  test-qsecbit-algorithm:
+    name: Test Qsecbit Algorithm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install common scientific libraries
+          pip install numpy pandas scikit-learn
+
+      - name: Check Qsecbit source files
+        run: |
+          # Look for qsecbit Python files
+          find . -name "qsecbit*.py" -type f
+
+      - name: Syntax check Qsecbit scripts
+        run: |
+          # Validate Python syntax for qsecbit files
+          find src/ -name "*.py" -type f 2>/dev/null | while read pyfile; do
+            echo "Checking: $pyfile"
+            python -m py_compile "$pyfile" || echo "WARNING: Syntax check failed for $pyfile"
+          done
+
+  test-network-configuration:
+    name: Test Network Configuration Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Test network detection
+        run: |
+          # Test that network detection works
+          ip link show
+          ip addr show
+
+      - name: Validate IP configuration
+        run: |
+          # Test IP validation functions
+          source install/common/config-wizard.sh 2>/dev/null || true
+
+          # Test IP format validation
+          echo "Testing IP validation..."
+
+      - name: Test nftables availability
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables
+          sudo nft --version
+
+  test-monitoring-stack:
+    name: Test Monitoring Components
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Test Grafana configuration
+        run: |
+          # Check for Grafana configuration files
+          echo "Checking for Grafana configurations..."
+          find . -name "*grafana*" -type f 2>/dev/null | head -10 || echo "No Grafana configs found"
+
+      - name: Test metrics endpoint format
+        run: |
+          # Verify that we can parse Prometheus metrics format
+          echo "# HELP test_metric A test metric" > test_metrics.txt
+          echo "# TYPE test_metric gauge" >> test_metrics.txt
+          echo "test_metric{label=\"value\"} 42" >> test_metrics.txt
+
+          # Validate format
+          cat test_metrics.txt
+
+  test-gdpr-compliance:
+    name: Test GDPR Compliance Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check GDPR documentation
+        run: |
+          if [ ! -f docs/GDPR.md ]; then
+            echo "ERROR: GDPR.md documentation not found"
+            exit 1
+          fi
+
+          echo "✓ GDPR documentation exists"
+
+      - name: Verify GDPR configuration
+        run: |
+          # Check that GDPR configuration exists
+          if grep -r "ENABLE_GDPR" install/ --include="*.sh"; then
+            echo "✓ GDPR configuration found"
+          else
+            echo "WARNING: GDPR configuration not found"
+          fi
+
+      - name: Check anonymization functions
+        run: |
+          # Check for IP anonymization references
+          if grep -r "anonymize" . --include="*.py" --include="*.sh" | head -5; then
+            echo "✓ Anonymization functions found"
+          else
+            echo "WARNING: Anonymization functions not found"
+          fi
+
+  test-security-features:
+    name: Test Security Features
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Verify XDP/eBPF references
+        run: |
+          if grep -r "XDP\|eBPF\|xdp" install/ src/ --include="*.sh" --include="*.py" | head -5; then
+            echo "✓ XDP/eBPF implementation found"
+          else
+            echo "WARNING: XDP/eBPF implementation not found"
+          fi
+
+      - name: Check WAF configuration
+        run: |
+          if grep -r "NAXSI\|ModSecurity\|WAF" . --include="*.sh" --include="*.md" | head -5; then
+            echo "✓ WAF configuration found"
+          else
+            echo "WARNING: WAF configuration not found"
+          fi
+
+      - name: Verify encryption settings
+        run: |
+          # Check for encryption key generation
+          if grep -r "openssl rand" install/ --include="*.sh" | head -5; then
+            echo "✓ Encryption key generation found"
+          else
+            echo "WARNING: Encryption key generation not found"
+          fi
+
+  integration-test-summary:
+    name: Container & Integration Test Summary
+    runs-on: ubuntu-latest
+    needs: [
+      test-podman-availability,
+      test-ovs-availability,
+      test-python-dependencies,
+      test-qsecbit-algorithm,
+      test-network-configuration,
+      test-monitoring-stack,
+      test-gdpr-compliance,
+      test-security-features
+    ]
+    if: always()
+
+    steps:
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   Container & Integration Tests"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Podman: ${{ needs.test-podman-availability.result }}"
+          echo "OVS: ${{ needs.test-ovs-availability.result }}"
+          echo "Python: ${{ needs.test-python-dependencies.result }}"
+          echo "Qsecbit: ${{ needs.test-qsecbit-algorithm.result }}"
+          echo "Network: ${{ needs.test-network-configuration.result }}"
+          echo "Monitoring: ${{ needs.test-monitoring-stack.result }}"
+          echo "GDPR: ${{ needs.test-gdpr-compliance.result }}"
+          echo "Security: ${{ needs.test-security-features.result }}"
+          echo ""
+          echo "Summary completed"
