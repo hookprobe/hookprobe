@@ -6,7 +6,7 @@
 
 ---
 
-![Future City](/images/qsecbit-catcher.png)
+![Future City](../../assets/qsecbit-catcher.png)
 
 ---
 
