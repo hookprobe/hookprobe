@@ -96,10 +96,11 @@ show_menu() {
     echo -e "  ${YELLOW}3${NC}) Install n8n Workflow Automation (POD 008) ${GREEN}[Automated]${NC}"
     echo -e "  ${YELLOW}4${NC}) LTE/5G Connectivity Setup ${CYAN}[Manual Guide]${NC}"
     echo -e "  ${YELLOW}5${NC}) ClickHouse Analytics Setup ${CYAN}[Manual Guide]${NC}"
+    echo -e "  ${YELLOW}6${NC}) POD-009 Email System with DMZ ${CYAN}[Manual Guide]${NC}"
     echo ""
     echo "Maintenance:"
-    echo -e "  ${YELLOW}6${NC}) Uninstall HookProbe"
-    echo -e "  ${YELLOW}7${NC}) Update Containers"
+    echo -e "  ${YELLOW}7${NC}) Uninstall HookProbe"
+    echo -e "  ${YELLOW}8${NC}) Update Containers"
     echo ""
     echo -e "  ${YELLOW}q${NC}) Quit"
     echo ""
@@ -269,6 +270,36 @@ main() {
                 fi
                 ;;
             6)
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${BLUE}POD-009 Email System Deployment (Manual)${NC}"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "This is a manual deployment for enterprise email with DMZ architecture."
+                echo ""
+                echo "📖 README: infrastructure/pod-009-email/README.md"
+                echo "📖 Deployment Guide: infrastructure/pod-009-email/DEPLOYMENT.md"
+                echo "📖 Podman Guide: infrastructure/pod-009-email/PODMAN.md"
+                echo ""
+                echo "Features:"
+                echo "  • Dual-firewall DMZ architecture"
+                echo "  • Postfix SMTP relay + mail server"
+                echo "  • DKIM/SPF/DMARC authentication"
+                echo "  • Suricata IDS monitoring"
+                echo "  • Cloudflare Tunnel integration"
+                echo "  • Podman rootless deployment"
+                echo ""
+                echo "Quick Start:"
+                echo "  cd infrastructure/pod-009-email"
+                echo "  podman-compose up -d"
+                echo ""
+                if [ -f "$SCRIPT_DIR/infrastructure/pod-009-email/DEPLOYMENT.md" ]; then
+                    read -p "Open deployment guide now? (yes/no) [no]: " open_email_docs
+                    if [ "$open_email_docs" = "yes" ]; then
+                        less "$SCRIPT_DIR/infrastructure/pod-009-email/DEPLOYMENT.md"
+                    fi
+                fi
+                ;;
+            7)
                 echo -e "${YELLOW}Uninstall Options:${NC}"
                 echo "1) Uninstall Edge Deployment"
                 echo "2) Uninstall Cloud Backend"
@@ -282,7 +313,7 @@ main() {
                     *) echo -e "${RED}Invalid option${NC}" ;;
                 esac
                 ;;
-            7)
+            8)
                 bash "$SCRIPT_DIR/install/edge/update.sh"
                 ;;
             q|Q)
