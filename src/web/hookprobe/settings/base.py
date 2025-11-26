@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'apps.dashboard',
     'apps.admin_dashboard',  # AdminLTE dashboard for team management
     'apps.merchandise',       # E-commerce for HookProbe merch
+    'apps.mssp_dashboard',    # Customer-facing MSSP dashboard
     'apps.devices',
     'apps.monitoring',
     'apps.security',
