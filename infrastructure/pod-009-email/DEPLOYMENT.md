@@ -5,15 +5,15 @@
 ```bash
 cd /home/user/hookprobe/infrastructure/pod-009-email
 
-# 1. Deploy containers
-docker-compose up -d
+# 1. Deploy containers with Podman
+podman-compose up -d
 
 # 2. Configure firewalls
 sudo bash firewall-rules/iptables-firewall1-external.sh
 sudo bash firewall-rules/iptables-firewall2-internal.sh
 
 # 3. Setup DKIM
-docker exec hookprobe-dmz-mail-gateway bash /opt/dkim-setup.sh
+podman exec hookprobe-dmz-mail-gateway bash /opt/dkim-setup.sh
 
 # 4. Configure DNS records (see dmz-gateway/spf-dmarc-setup.md)
 
@@ -22,38 +22,57 @@ cloudflared tunnel create hookprobe-mail
 cloudflared tunnel route dns hookprobe-mail mail.hookprobe.com
 
 # 6. Test email
-docker exec hookprobe-internal-mail echo "Test" | mail -s "Test" your-email@example.com
+podman exec hookprobe-internal-mail echo "Test" | mail -s "Test" your-email@example.com
 ```
 
 ## Detailed Deployment Steps
 
 ### 1. Prerequisites
 
-- Docker and Docker Compose installed
+- **Podman** and **podman-compose** installed
 - DNS access to create TXT/MX records
 - Cloudflare account (free tier works)
 - Public IP address for DMZ gateway
 - iptables-persistent package
 
+**Install Podman (if not installed):**
+```bash
+# RHEL/CentOS/Fedora
+sudo dnf install podman podman-compose
+
+# Ubuntu/Debian
+sudo apt-get install podman podman-compose
+
+# Verify installation
+podman --version
+podman-compose --version
+```
+
 ### 2. Network Setup
 
 ```bash
-# Create Docker networks
-docker network create hookprobe-dmz --subnet=10.200.9.0/24
-docker network create hookprobe-internal --subnet=10.200.1.0/24 --internal
+# Create Podman networks
+podman network create hookprobe-dmz --subnet=10.200.9.0/24
+podman network create hookprobe-internal --subnet=10.200.1.0/24 --internal
+
+# Verify networks
+podman network ls
 ```
 
 ### 3. Deploy Containers
 
 ```bash
-# Start all services
-docker-compose up -d
+# Start all services with podman-compose
+podman-compose up -d
 
 # Verify containers are running
-docker ps | grep hookprobe
+podman ps | grep hookprobe
 
 # Check logs
-docker-compose logs -f
+podman-compose logs -f
+
+# Or check individual container
+podman logs -f hookprobe-dmz-mail-gateway
 ```
 
 ### 4. Configure Firewalls
@@ -91,10 +110,10 @@ sudo systemctl enable netfilter-persistent
 
 ```bash
 # Generate DKIM keys
-docker exec -it hookprobe-dmz-mail-gateway bash dmz-gateway/dkim-setup.sh
+podman exec -it hookprobe-dmz-mail-gateway bash dmz-gateway/dkim-setup.sh
 
 # Copy DNS record
-docker exec hookprobe-dmz-mail-gateway cat /etc/postfix/dkim/keys/hookprobe.com/default.txt
+podman exec hookprobe-dmz-mail-gateway cat /etc/postfix/dkim/keys/hookprobe.com/default.txt
 
 # Add to DNS (see next section)
 ```
@@ -145,7 +164,7 @@ sudo cp ~/.cloudflared/*.json /etc/cloudflared/credentials.json
 cloudflared tunnel route dns hookprobe-mail mail.hookprobe.com
 
 # Start tunnel
-docker-compose restart cloudflare-tunnel
+podman-compose restart cloudflare-tunnel
 
 # Verify tunnel
 cloudflared tunnel info hookprobe-mail
@@ -155,7 +174,7 @@ cloudflared tunnel info hookprobe-mail
 
 ```bash
 # Create mailboxes
-docker exec -it hookprobe-internal-mail bash
+podman exec -it hookprobe-internal-mail bash
 
 # Add user
 setup email add admin@hookprobe.com SecurePassword123
@@ -195,20 +214,20 @@ send_mail(
 
 ```bash
 # Start Suricata
-docker-compose up -d dmz-mail-ids
+podman-compose up -d dmz-mail-ids
 
 # Verify Suricata is running
-docker exec hookprobe-dmz-mail-ids suricata --build-info
+podman exec hookprobe-dmz-mail-ids suricata --build-info
 
 # Check rules
-docker exec hookprobe-dmz-mail-ids cat /var/lib/suricata/rules/*.rules | wc -l
+podman exec hookprobe-dmz-mail-ids cat /var/lib/suricata/rules/*.rules | wc -l
 
 # Monitor alerts
-docker exec hookprobe-dmz-mail-ids tail -f /var/log/suricata/fast.log
+podman exec hookprobe-dmz-mail-ids tail -f /var/log/suricata/fast.log
 
 # Update rules
-docker exec hookprobe-dmz-mail-ids suricata-update
-docker-compose restart dmz-mail-ids
+podman exec hookprobe-dmz-mail-ids suricata-update
+podman-compose restart dmz-mail-ids
 ```
 
 ## Verification & Testing
@@ -230,7 +249,7 @@ telnet mail.hookprobe.com 25
 
 ```bash
 # From Django app
-docker exec hookprobe-django python manage.py shell
+podman exec hookprobe-django python manage.py shell
 
 >>> from apps.common.email import send_hookprobe_email
 >>> send_hookprobe_email(
@@ -272,23 +291,23 @@ Target score: **9/10 or higher**
 
 ```bash
 # On DMZ gateway
-docker exec hookprobe-dmz-mail-gateway mailq
+podman exec hookprobe-dmz-mail-gateway mailq
 
 # On internal server
-docker exec hookprobe-internal-mail mailq
+podman exec hookprobe-internal-mail mailq
 ```
 
 ### 2. Monitor Logs
 
 ```bash
 # DMZ gateway logs
-docker logs -f hookprobe-dmz-mail-gateway
+podman logs -f hookprobe-dmz-mail-gateway
 
 # Internal server logs
-docker logs -f hookprobe-internal-mail
+podman logs -f hookprobe-internal-mail
 
 # Suricata IDS alerts
-docker logs -f hookprobe-dmz-mail-ids
+podman logs -f hookprobe-dmz-mail-ids
 
 # Firewall drops
 tail -f /var/log/syslog | grep -E 'FW[12]'
@@ -301,7 +320,7 @@ tail -f /var/log/syslog | grep -E 'FW[12]'
 curl http://localhost:9090/metrics
 
 # Postfix metrics
-docker exec hookprobe-dmz-mail-gateway postfix status
+podman exec hookprobe-dmz-mail-gateway postfix status
 ```
 
 ## Maintenance
