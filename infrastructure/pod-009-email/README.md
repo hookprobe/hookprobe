@@ -202,12 +202,23 @@ Django App (10.200.1.12)
 
 ## Deployment
 
-### Docker Compose
-All components deployed as containers:
+### Podman Compose Deployment
+All components deployed as Podman containers:
 - `dmz-mail-gateway`: Postfix relay + security filtering
 - `dmz-mail-ids`: Suricata IDS monitoring
 - `internal-mail-server`: Postfix + Dovecot
 - `cloudflared`: Cloudflare Tunnel client
+
+**Deploy with:**
+```bash
+podman-compose up -d
+```
+
+**Podman Benefits:**
+- Rootless containers (enhanced security)
+- Daemonless architecture
+- OCI-compliant
+- Drop-in Docker replacement
 
 ### Networks
 ```yaml
