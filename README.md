@@ -153,10 +153,7 @@ T+30s: Attack neutralized globally
 <summary><strong>📦 Deploy in 15 minutes, own it forever</strong></summary>
 
 ```bash
-# One command to rule them all
-curl -fsSL https://get.hookprobe.io | sudo bash
-
-# Or manual install
+# Clone from GitHub and install
 git clone https://github.com/hookprobe/hookprobe
 cd hookprobe
 sudo ./install.sh
@@ -167,7 +164,7 @@ sudo ./install.sh
 - ✅ No telemetry, no phone-home
 - ✅ No subscription fees
 - ✅ No feature restrictions
-- ✅ Production containers (Podman/Docker)
+- ✅ Production Podman containers
 - ✅ Complete documentation
 
 **Community Support:**
@@ -297,16 +294,15 @@ sudo ./install.sh
 ### Quick Install (Recommended)
 
 ```bash
-# For edge node (home/SMB)
-curl -fsSL https://get.hookprobe.io/edge | sudo bash
-
-# For validator (MSSP/cloud)
-curl -fsSL https://get.hookprobe.io/validator | sudo bash
-
-# Manual install
+# Clone from GitHub
 git clone https://github.com/hookprobe/hookprobe
 cd hookprobe
-sudo ./install.sh
+
+# For edge node (home/SMB)
+sudo ./install.sh --role edge
+
+# For validator (MSSP/cloud)
+sudo ./install.sh --role validator
 ```
 
 ### Deploy DSM (Decentralized Security Mesh)
@@ -316,12 +312,12 @@ sudo ./install.sh
 cd /opt/hookprobe
 export HOOKPROBE_NODE_ID="edge-$(hostname)"
 export DSM_NODE_ROLE="edge"
-export DSM_BOOTSTRAP_NODES="validator.cloud.hookprobe.io:7946"
+export DSM_BOOTSTRAP_NODES="validator.cloud.hookprobe.com:7946"
 
-docker-compose -f infrastructure/pod-010-dsm/docker-compose.yml up -d
+podman-compose -f infrastructure/pod-010-dsm/docker-compose.yml up -d
 
 # Verify
-docker-compose -f infrastructure/pod-010-dsm/docker-compose.yml logs -f
+podman-compose -f infrastructure/pod-010-dsm/docker-compose.yml logs -f
 ```
 
 ### 3-Minute Security Check
@@ -692,8 +688,8 @@ When Qsecbit detects high-confidence threat (>0.8):
 ### Security Disclosure
 
 **Found a vulnerability?**
-📧 Email: security@hookprobe.io
-🔒 PGP: [Download Public Key](https://hookprobe.io/pgp)
+📧 Email: security@hookprobe.com
+🔒 PGP: [Download Public Key](https://hookprobe.com/pgp)
 
 See [SECURITY.md](docs/SECURITY.md) for responsible disclosure policy.
 
@@ -727,7 +723,7 @@ See [3rd-party-licenses.md](3rd-party-licenses.md) for complete attributions.
 - **Security**: Suricata, Zeek, Snort3, NAXSI, ModSecurity
 - **AI/ML**: Custom Qsecbit algorithm, RAG, TensorFlow
 - **Analytics**: ClickHouse, Grafana, VictoriaMetrics
-- **Orchestration**: Podman, Docker, systemd
+- **Orchestration**: Podman, systemd
 - **Crypto**: TPM 2.0, BLS signatures, Merkle DAG
 - **Networking**: OVS, VXLAN, WireGuard, OpenFlow
 
@@ -770,7 +766,7 @@ Join us in building the world's first truly decentralized security mesh.
 
 <p align="center">
   <strong>🚀 Deploy HookProbe Today 🚀</strong><br>
-  <code>curl -fsSL https://get.hookprobe.io | sudo bash</code>
+  <code>git clone https://github.com/hookprobe/hookprobe && cd hookprobe && sudo ./install.sh</code>
 </p>
 
 <p align="center">
