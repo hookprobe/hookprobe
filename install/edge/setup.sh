@@ -223,69 +223,121 @@ if [ "$HARDWARE_PLATFORM" = "raspberry-pi-4" ] || [ "$HARDWARE_PLATFORM" = "rasp
 fi
 
 # ============================================================
+# HELPER: Update config.sh with a value
+# ============================================================
+update_config() {
+    local key="$1"
+    local value="$2"
+    local config_file="$SCRIPT_DIR/config.sh"
+
+    if grep -q "^${key}=" "$config_file"; then
+        # Update existing value
+        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "$config_file"
+    else
+        # Add new value
+        echo "${key}=\"${value}\"" >> "$config_file"
+    fi
+}
+
+# ============================================================
+# HELPER: Interactive interface selection
+# ============================================================
+select_network_interface() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "   Network Interface Selection"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    # Get list of interfaces with IPs
+    local interfaces=($(ip -brief addr show | awk '{print $1}' | grep -v '^lo$'))
+
+    if [ ${#interfaces[@]} -eq 0 ]; then
+        echo "❌ ERROR: No network interfaces found"
+        exit 1
+    fi
+
+    echo "Available network interfaces:"
+    echo ""
+
+    local i=1
+    for iface in "${interfaces[@]}"; do
+        local ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "no IP")
+        local state=$(ip -brief addr show "$iface" | awk '{print $2}')
+        echo "  $i) $iface - $ip ($state)"
+        ((i++))
+    done
+
+    echo ""
+    read -p "Select interface number [1]: " iface_choice
+    iface_choice=${iface_choice:-1}
+
+    # Validate choice
+    if ! [[ "$iface_choice" =~ ^[0-9]+$ ]] || [ "$iface_choice" -lt 1 ] || [ "$iface_choice" -gt "${#interfaces[@]}" ]; then
+        echo "❌ ERROR: Invalid selection"
+        exit 1
+    fi
+
+    # Get selected interface (arrays are 0-indexed)
+    local selected_iface="${interfaces[$((iface_choice-1))]}"
+    echo ""
+    echo "✓ Selected interface: $selected_iface"
+
+    # Update config.sh
+    update_config "PHYSICAL_HOST_INTERFACE" "$selected_iface"
+    echo "✓ Saved to config.sh"
+
+    # Export for current session
+    export PHYSICAL_HOST_INTERFACE="$selected_iface"
+}
+
+# ============================================================
 # STEP 2: VALIDATE ENVIRONMENT
 # ============================================================
 echo ""
 echo "[STEP 2] Validating environment..."
 
-# Validate or auto-detect PHYSICAL_HOST_INTERFACE
+# Validate or select PHYSICAL_HOST_INTERFACE
 if [ -z "${PHYSICAL_HOST_INTERFACE:-}" ]; then
-    echo "⚠️  PHYSICAL_HOST_INTERFACE not set in config.sh, attempting auto-detection..."
-    PHYSICAL_HOST_INTERFACE=$(ip route show default | grep -oP '(?<=dev )[^ ]+' | head -1)
-
-    if [ -z "$PHYSICAL_HOST_INTERFACE" ]; then
-        echo "❌ ERROR: Could not auto-detect network interface."
-        echo "   Please set PHYSICAL_HOST_INTERFACE in config.sh"
-        echo ""
-        echo "Available interfaces:"
-        ip -brief addr show
-        exit 1
-    fi
-
-    echo "✓ Auto-detected interface: $PHYSICAL_HOST_INTERFACE"
-
-    # Show IP for confirmation
-    detected_ip=$(ip -4 addr show "$PHYSICAL_HOST_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "")
-    if [ -n "$detected_ip" ]; then
-        echo "  Interface IP: $detected_ip"
-    fi
-
-    # Confirm with user
-    read -p "  Use this interface? (yes/no) [yes]: " confirm_interface
-    confirm_interface=${confirm_interface:-yes}
-    if [ "$confirm_interface" != "yes" ]; then
-        echo ""
-        echo "Available interfaces:"
-        ip -brief addr show
-        echo ""
-        echo "Please set PHYSICAL_HOST_INTERFACE in config.sh and run again"
-        exit 1
-    fi
+    echo "⚠️  PHYSICAL_HOST_INTERFACE not set in config.sh"
+    select_network_interface
 elif ! ip link show "$PHYSICAL_HOST_INTERFACE" &>/dev/null; then
-    # Interface is set but doesn't exist
-    echo "❌ ERROR: Interface '$PHYSICAL_HOST_INTERFACE' does not exist"
-    echo "   Please update PHYSICAL_HOST_INTERFACE in config.sh"
-    echo ""
-    echo "Available interfaces:"
-    ip -brief addr show
-    exit 1
+    echo "❌ ERROR: Configured interface '$PHYSICAL_HOST_INTERFACE' does not exist"
+    select_network_interface
+else
+    echo "✓ Using configured interface: $PHYSICAL_HOST_INTERFACE"
 fi
 
 # Detect local host IP
-LOCAL_HOST_IP=$(ip -4 addr show "$PHYSICAL_HOST_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
+LOCAL_HOST_IP=$(ip -4 addr show "$PHYSICAL_HOST_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "")
 if [ -z "$LOCAL_HOST_IP" ]; then
-    echo "ERROR: Could not detect IP on interface '$PHYSICAL_HOST_INTERFACE'"
+    echo "❌ ERROR: Could not detect IP on interface '$PHYSICAL_HOST_INTERFACE'"
+    echo "   The interface may not have an IP address assigned"
     exit 1
 fi
 echo "✓ Local Host IP: $LOCAL_HOST_IP"
 
-# Determine remote peer
-if [ "$LOCAL_HOST_IP" == "$HOST_A_IP" ]; then
-    REMOTE_HOST_IP="$HOST_B_IP"
-else
-    REMOTE_HOST_IP="$HOST_A_IP"
+# Validate HOST_A_IP and HOST_B_IP (for multi-host deployments)
+if [ -z "${HOST_A_IP:-}" ]; then
+    echo "⚠️  HOST_A_IP not set, using local IP: $LOCAL_HOST_IP"
+    HOST_A_IP="$LOCAL_HOST_IP"
+    update_config "HOST_A_IP" "$LOCAL_HOST_IP"
 fi
-echo "✓ Remote Peer IP: $REMOTE_HOST_IP"
+
+if [ -z "${HOST_B_IP:-}" ]; then
+    echo "⚠️  HOST_B_IP not set, single-host deployment assumed"
+    HOST_B_IP="$LOCAL_HOST_IP"
+    update_config "HOST_B_IP" "$LOCAL_HOST_IP"
+fi
+
+# Determine remote peer (for multi-host VXLAN)
+if [ "$LOCAL_HOST_IP" == "$HOST_A_IP" ] && [ "$HOST_A_IP" != "$HOST_B_IP" ]; then
+    REMOTE_HOST_IP="$HOST_B_IP"
+    echo "✓ Multi-host mode: Remote Peer IP: $REMOTE_HOST_IP"
+else
+    REMOTE_HOST_IP="$LOCAL_HOST_IP"
+    echo "✓ Single-host mode"
+fi
 
 # Check if PSK was changed
 if [ "$VXLAN_PSK" == "HookProbe_VXLAN_Master_Key_2025_CHANGE_ME_NOW" ]; then
