@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MSSP Dashboard{% endblock %} - HookProbe</title>
+
+    <!-- AdminLTE CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,700">
+
+    {% block extra_css %}{% endblock %}
+
+    <style>
+        /* HookProbe brand colors */
+        .bg-hookprobe-primary {
+            background-color: #1e3a8a !important;
+        }
+        .text-hookprobe-primary {
+            color: #1e3a8a !important;
+        }
+
+        /* Custom navbar styling */
+        .main-header.navbar {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            border-bottom: 3px solid #60a5fa;
+        }
+
+        .main-header .navbar-nav .nav-link {
+            color: #ffffff !important;
+        }
+
+        .main-header .navbar-nav .nav-link:hover {
+            color: #dbeafe !important;
+        }
+
+        /* Sidebar styling for dark theme */
+        .main-sidebar {
+            background: #1f2937 !important;
+        }
+
+        .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active {
+            background-color: #3b82f6 !important;
+        }
+
+        /* Tab navigation */
+        .nav-tabs-custom {
+            margin-bottom: 20px;
+        }
+
+        .nav-tabs-custom .nav-link {
+            border-radius: 0;
+            color: #6b7280;
+        }
+
+        .nav-tabs-custom .nav-link.active {
+            color: #1e3a8a;
+            border-bottom: 3px solid #3b82f6;
+        }
+
+        /* Metric cards */
+        .metric-card {
+            transition: transform 0.2s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+
+        /* Status badges */
+        .status-online {
+            background-color: #10b981;
+            color: white;
+        }
+
+        .status-offline {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .status-degraded {
+            background-color: #f59e0b;
+            color: white;
+        }
+
+        /* Severity badges */
+        .severity-critical {
+            background-color: #dc2626;
+            color: white;
+            font-weight: bold;
+        }
+
+        .severity-high {
+            background-color: #f97316;
+            color: white;
+        }
+
+        .severity-medium {
+            background-color: #eab308;
+            color: #000;
+        }
+
+        .severity-low {
+            background-color: #3b82f6;
+            color: white;
+        }
+    </style>
+</head>
+<body class="hold-transition sidebar-mini layout-fixed">
+    <div class="wrapper">
+        <!-- Navbar -->
+        <nav class="main-header navbar navbar-expand navbar-dark">
+            <!-- Left navbar links -->
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" data-widget="pushmenu" href="#" role="button">
+                        <i class="fas fa-bars"></i>
+                    </a>
+                </li>
+                <li class="nav-item d-none d-sm-inline-block">
+                    <span class="nav-link">
+                        <i class="fas fa-shield-alt mr-2"></i>
+                        <strong>MSSP Security Dashboard</strong>
+                    </span>
+                </li>
+            </ul>
+
+            <!-- Right navbar links -->
+            <ul class="navbar-nav ml-auto">
+                <!-- Notifications -->
+                <li class="nav-item dropdown">
+                    <a class="nav-link" data-toggle="dropdown" href="#">
+                        <i class="far fa-bell"></i>
+                        <span class="badge badge-danger navbar-badge">{{ critical_alerts|default:0 }}</span>
+                    </a>
+                    <div class="dropdown-menu dropdown-menu-lg dropdown-menu-right">
+                        <span class="dropdown-item dropdown-header">{{ critical_alerts|default:0 }} Critical Alerts</span>
+                        <div class="dropdown-divider"></div>
+                        <a href="{% url 'mssp_dashboard:home' %}" class="dropdown-item">
+                            <i class="fas fa-exclamation-triangle mr-2"></i> View All Alerts
+                        </a>
+                    </div>
+                </li>
+
+                <!-- User menu -->
+                <li class="nav-item dropdown">
+                    <a class="nav-link" data-toggle="dropdown" href="#">
+                        <i class="far fa-user"></i>
+                    </a>
+                    <div class="dropdown-menu dropdown-menu-lg dropdown-menu-right">
+                        <a href="#" class="dropdown-item">
+                            <i class="fas fa-user mr-2"></i> {{ request.user.username }}
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="/admin/logout/" class="dropdown-item">
+                            <i class="fas fa-sign-out-alt mr-2"></i> Logout
+                        </a>
+                    </div>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Main Sidebar -->
+        <aside class="main-sidebar sidebar-dark-primary elevation-4">
+            <!-- Brand Logo -->
+            <a href="{% url 'mssp_dashboard:home' %}" class="brand-link bg-hookprobe-primary">
+                <i class="fas fa-shield-alt brand-image ml-3"></i>
+                <span class="brand-text font-weight-light">HookProbe MSSP</span>
+            </a>
+
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <!-- Sidebar Menu -->
+                <nav class="mt-2">
+                    <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu">
+                        <li class="nav-item">
+                            <a href="{% url 'mssp_dashboard:home' %}" class="nav-link {% if request.resolver_match.url_name == 'home' %}active{% endif %}">
+                                <i class="nav-icon fas fa-tachometer-alt"></i>
+                                <p>Dashboard Home</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="{% url 'mssp_dashboard:endpoints' %}" class="nav-link {% if request.resolver_match.url_name == 'endpoints' %}active{% endif %}">
+                                <i class="nav-icon fas fa-map-marked-alt"></i>
+                                <p>Endpoints</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="{% url 'mssp_dashboard:vulnerabilities' %}" class="nav-link {% if 'vulnerabilities' in request.resolver_match.url_name %}active{% endif %}">
+                                <i class="nav-icon fas fa-bug"></i>
+                                <p>Vulnerabilities</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="{% url 'mssp_dashboard:soar' %}" class="nav-link {% if request.resolver_match.url_name == 'soar' %}active{% endif %}">
+                                <i class="nav-icon fas fa-robot"></i>
+                                <p>SOAR Playbooks</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="{% url 'mssp_dashboard:xsoc' %}" class="nav-link {% if request.resolver_match.url_name == 'xsoc' %}active{% endif %}">
+                                <i class="nav-icon fas fa-user-shield"></i>
+                                <p>xSOC</p>
+                            </a>
+                        </li>
+
+                        <li class="nav-header">SECURITY TOOLS</li>
+                        <li class="nav-item">
+                            <a href="#" class="nav-link">
+                                <i class="nav-icon fas fa-network-wired"></i>
+                                <p>Suricata IDS/IPS</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="#" class="nav-link">
+                                <i class="nav-icon fas fa-search"></i>
+                                <p>Zeek Analysis</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="#" class="nav-link">
+                                <i class="nav-icon fas fa-sitemap"></i>
+                                <p>OpenFlow SDN</p>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="#" class="nav-link">
+                                <i class="nav-icon fas fa-bolt"></i>
+                                <p>XDP/eBPF</p>
+                            </a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+        </aside>
+
+        <!-- Content Wrapper -->
+        <div class="content-wrapper">
+            <!-- Content Header -->
+            <div class="content-header">
+                <div class="container-fluid">
+                    <div class="row mb-2">
+                        <div class="col-sm-6">
+                            <h1 class="m-0">{% block page_title %}Dashboard{% endblock %}</h1>
+                        </div>
+                        <div class="col-sm-6">
+                            <ol class="breadcrumb float-sm-right">
+                                <li class="breadcrumb-item"><a href="{% url 'mssp_dashboard:home' %}">Home</a></li>
+                                {% block breadcrumb %}{% endblock %}
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main content -->
+            <section class="content">
+                <div class="container-fluid">
+                    {% block content %}{% endblock %}
+                </div>
+            </section>
+        </div>
+
+        <!-- Footer -->
+        <footer class="main-footer">
+            <strong>&copy; 2025 <a href="https://hookprobe.com">HookProbe</a>.</strong>
+            All rights reserved.
+            <div class="float-right d-none d-sm-inline-block">
+                <b>Version</b> 1.0.0
+            </div>
+        </footer>
+    </div>
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- AdminLTE App -->
+    <script src="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/js/adminlte.min.js"></script>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
