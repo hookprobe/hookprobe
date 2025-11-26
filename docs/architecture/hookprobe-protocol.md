@@ -1,7 +1,7 @@
 # HookProbe: The Neuro-Resonant Cybersecurity Protocol
 
 ---
-
+![HookProbe Protocol](../../assets/hookprobe-protocol.png)
 ---
 
 
