@@ -30,6 +30,15 @@
                     Threat Intelligence
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link" id="ioc-reporting-tab" data-toggle="pill" href="#ioc-reporting" role="tab">
+                    <i class="fas fa-file-alt mr-2"></i>
+                    IoC Reporting
+                    {% if critical_iocs_count > 0 %}
+                    <span class="badge badge-danger ml-1">{{ critical_iocs_count }}</span>
+                    {% endif %}
+                </a>
+            </li>
         </ul>
     </div>
     <div class="card-body">
@@ -273,6 +282,342 @@
                     {% endfor %}
                 </div>
             </div>
+
+            <!-- IoC Reporting Tab -->
+            <div class="tab-pane fade" id="ioc-reporting" role="tabpanel">
+                <h4><i class="fas fa-file-alt mr-2 text-info"></i>Indicator of Compromise Reporting</h4>
+
+                <div class="alert alert-info">
+                    <i class="fas fa-brain mr-2"></i>
+                    <strong>Unified Intelligence:</strong> IoCs aggregated from ALL security vectors acting as one brain:
+                    QSECBIT, OpenFlow, Suricata, Snort, Zeek, XDP, eBPF, SIEM, and Threat Intelligence.
+                </div>
+
+                <!-- IoC Overview Statistics -->
+                <div class="row mb-4">
+                    <div class="col-md-3">
+                        <div class="info-box bg-danger">
+                            <span class="info-box-icon"><i class="fas fa-exclamation-triangle"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Critical IoCs</span>
+                                <span class="info-box-number">{{ critical_iocs_count }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="info-box bg-warning">
+                            <span class="info-box-icon"><i class="fas fa-shield-alt"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">High Severity</span>
+                                <span class="info-box-number">{{ high_iocs_count }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="info-box bg-info">
+                            <span class="info-box-icon"><i class="fas fa-chart-line"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Overall Risk Score</span>
+                                <span class="info-box-number">{{ overall_risk_score }}%</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="info-box bg-success">
+                            <span class="info-box-icon"><i class="fas fa-database"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Total Active IoCs</span>
+                                <span class="info-box-number">{{ total_iocs }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detection Sources - Which Systems Detected IoCs -->
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header bg-primary">
+                                <h3 class="card-title">
+                                    <i class="fas fa-network-wired mr-2"></i>
+                                    Detection Sources (One Brain Approach)
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Security System</th>
+                                            <th class="text-center">IoCs Detected</th>
+                                            <th class="text-center">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for source, count in detection_sources.items %}
+                                        <tr>
+                                            <td>
+                                                <i class="fas fa-server mr-2 text-primary"></i>
+                                                <strong>{{ source }}</strong>
+                                            </td>
+                                            <td class="text-center">
+                                                <span class="badge badge-{% if count > 0 %}info{% else %}secondary{% endif %}">
+                                                    {{ count }}
+                                                </span>
+                                            </td>
+                                            <td class="text-center">
+                                                {% if count > 0 %}
+                                                <i class="fas fa-check-circle text-success"></i>
+                                                {% else %}
+                                                <i class="fas fa-minus-circle text-muted"></i>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- IoC Type Distribution -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header bg-info">
+                                <h3 class="card-title">
+                                    <i class="fas fa-chart-pie mr-2"></i>
+                                    IoC Type Distribution
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="iocTypeChart" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- High Confidence IoCs -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header bg-danger">
+                                <h3 class="card-title">
+                                    <i class="fas fa-crosshairs mr-2"></i>
+                                    High Confidence IoCs (Detected by 3+ Systems)
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Type</th>
+                                            <th>Value</th>
+                                            <th>Severity</th>
+                                            <th>Confidence</th>
+                                            <th>Detection Count</th>
+                                            <th>Detected By</th>
+                                            <th>Last Seen</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for ioc in high_confidence_iocs %}
+                                        <tr>
+                                            <td><span class="badge badge-secondary">{{ ioc.get_ioc_type_display }}</span></td>
+                                            <td><code>{{ ioc.value|truncatechars:40 }}</code></td>
+                                            <td>
+                                                <span class="badge badge-{{ ioc.severity == 'critical' and 'danger' or ioc.severity == 'high' and 'warning' or 'info' }}">
+                                                    {{ ioc.severity|upper }}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div class="progress" style="width: 100px;">
+                                                    <div class="progress-bar bg-{{ ioc.confidence_score > 80 and 'success' or 'warning' }}"
+                                                         style="width: {{ ioc.confidence_score }}%">
+                                                        {{ ioc.confidence_score|floatformat:0 }}%
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td class="text-center">
+                                                <span class="badge badge-primary">{{ ioc.detection_count }}</span>
+                                            </td>
+                                            <td>
+                                                {% for source in ioc.detection_sources %}
+                                                <span class="badge badge-info mr-1">{{ source }}</span>
+                                                {% endfor %}
+                                            </td>
+                                            <td>{{ ioc.last_seen|timesince }} ago</td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="7" class="text-center text-muted">
+                                                <i class="fas fa-info-circle mr-2"></i>
+                                                No high-confidence IoCs detected
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active IoC Reports -->
+                <div class="row mb-4">
+                    <div class="col-md-8">
+                        <div class="card">
+                            <div class="card-header bg-warning">
+                                <h3 class="card-title">
+                                    <i class="fas fa-folder-open mr-2"></i>
+                                    Active IoC Investigation Reports
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                {% for report in active_reports %}
+                                <div class="card mb-3 border-left-{{ report.severity == 'critical' and 'danger' or report.severity == 'high' and 'warning' or 'info' }}"
+                                     style="border-left: 4px solid;">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between align-items-start">
+                                            <div>
+                                                <h5>
+                                                    {{ report.title }}
+                                                    <span class="badge badge-{{ report.severity == 'critical' and 'danger' or report.severity == 'high' and 'warning' or 'info' }} ml-2">
+                                                        {{ report.get_severity_display }}
+                                                    </span>
+                                                    <span class="badge badge-primary ml-1">{{ report.get_status_display }}</span>
+                                                </h5>
+                                                <p class="mb-2">{{ report.description|truncatewords:30 }}</p>
+                                                <div class="row">
+                                                    <div class="col-md-4">
+                                                        <small class="text-muted">
+                                                            <i class="fas fa-database mr-1"></i>
+                                                            <strong>IoCs:</strong> {{ report.iocs.count }}
+                                                        </small>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <small class="text-muted">
+                                                            <i class="fas fa-server mr-1"></i>
+                                                            <strong>Systems:</strong> {{ report.systems_compromised }}
+                                                        </small>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <small class="text-muted">
+                                                            <i class="fas fa-clock mr-1"></i>
+                                                            <strong>Duration:</strong> {{ report.duration }}
+                                                        </small>
+                                                    </div>
+                                                </div>
+                                                {% if report.threat_actor %}
+                                                <div class="mt-2">
+                                                    <span class="badge badge-dark">
+                                                        <i class="fas fa-user-secret mr-1"></i>
+                                                        Threat Actor: {{ report.threat_actor }}
+                                                    </span>
+                                                </div>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <button class="btn btn-sm btn-info">
+                                                    <i class="fas fa-eye"></i>
+                                                    View Details
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {% empty %}
+                                <div class="alert alert-success text-center">
+                                    <i class="fas fa-check-circle fa-3x mb-3 d-block"></i>
+                                    <p>No active investigations. System secure!</p>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent IoCs Timeline -->
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-header bg-success">
+                                <h3 class="card-title">
+                                    <i class="fas fa-clock mr-2"></i>
+                                    Recent IoCs (24h)
+                                </h3>
+                            </div>
+                            <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                                {% for ioc in recent_iocs %}
+                                <div class="timeline-item mb-3 pb-3 border-bottom">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="badge badge-{{ ioc.severity == 'critical' and 'danger' or ioc.severity == 'high' and 'warning' or 'info' }}">
+                                            {{ ioc.get_ioc_type_display }}
+                                        </span>
+                                        <small class="text-muted">{{ ioc.last_seen|timesince }} ago</small>
+                                    </div>
+                                    <div class="mt-1">
+                                        <code class="small">{{ ioc.value|truncatechars:35 }}</code>
+                                    </div>
+                                    <div class="mt-1">
+                                        <small>
+                                            {% for source in ioc.detection_sources|slice:":3" %}
+                                            <span class="badge badge-light">{{ source }}</span>
+                                            {% endfor %}
+                                            {% if ioc.detection_sources|length > 3 %}
+                                            <span class="text-muted">+{{ ioc.detection_sources|length|add:"-3" }} more</span>
+                                            {% endif %}
+                                        </small>
+                                    </div>
+                                </div>
+                                {% empty %}
+                                <div class="text-center text-muted">
+                                    <i class="fas fa-info-circle fa-2x mb-2 d-block"></i>
+                                    <p>No recent IoCs detected</p>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Correlated IoCs -->
+                {% if correlated_iocs %}
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header bg-dark">
+                                <h3 class="card-title">
+                                    <i class="fas fa-project-diagram mr-2"></i>
+                                    IoC Correlations (Related Indicators)
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                {% for correlation in correlated_iocs %}
+                                <div class="mb-3 pb-3 border-bottom">
+                                    <div class="mb-2">
+                                        <strong>Primary IoC:</strong>
+                                        <span class="badge badge-{{ correlation.primary.severity == 'critical' and 'danger' or 'info' }}">
+                                            {{ correlation.primary.get_ioc_type_display }}
+                                        </span>
+                                        <code>{{ correlation.primary.value }}</code>
+                                    </div>
+                                    <div class="ml-4">
+                                        <strong>Related IoCs:</strong>
+                                        <ul class="mb-0 mt-2">
+                                            {% for related in correlation.related %}
+                                            <li>
+                                                <span class="badge badge-secondary">{{ related.get_ioc_type_display }}</span>
+                                                <code>{{ related.value }}</code>
+                                                (Confidence: {{ related.confidence_score|floatformat:0 }}%)
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>
@@ -340,6 +685,71 @@ if (threatCtx) {
             scales: {
                 y: {
                     beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+// IoC Type Distribution Chart
+const iocTypeCtx = document.getElementById('iocTypeChart');
+if (iocTypeCtx) {
+    new Chart(iocTypeCtx.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: [
+                {% for item in ioc_by_type %}
+                '{{ item.get_ioc_type_display|default:item.ioc_type }}'{% if not forloop.last %},{% endif %}
+                {% endfor %}
+            ],
+            datasets: [{
+                label: 'IoC Distribution',
+                data: [
+                    {% for item in ioc_by_type %}
+                    {{ item.count }}{% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                backgroundColor: [
+                    '#ef4444',  // Red
+                    '#f59e0b',  // Orange
+                    '#eab308',  // Yellow
+                    '#22c55e',  // Green
+                    '#06b6d4',  // Cyan
+                    '#3b82f6',  // Blue
+                    '#8b5cf6',  // Purple
+                    '#ec4899',  // Pink
+                    '#6366f1',  // Indigo
+                    '#14b8a6',  // Teal
+                    '#f97316',  // Orange-red
+                    '#84cc16',  // Lime
+                ],
+                borderWidth: 2,
+                borderColor: '#1f2937'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
+                        padding: 15,
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const label = context.label || '';
+                            const value = context.parsed || 0;
+                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                            const percentage = ((value / total) * 100).toFixed(1);
+                            return `${label}: ${value} (${percentage}%)`;
+                        }
+                    }
                 }
             }
         }
