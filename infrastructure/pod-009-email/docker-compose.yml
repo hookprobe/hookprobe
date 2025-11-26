@@ -1,3 +1,12 @@
+# Podman Compose Configuration for POD-009 Email System
+# HookProbe - Enterprise Email with DMZ Architecture
+#
+# Deploy with: podman-compose up -d
+# Stop with: podman-compose down
+# Logs: podman-compose logs -f
+#
+# Podman rootless mode recommended for enhanced security
+
 version: '3.8'
 
 services:
