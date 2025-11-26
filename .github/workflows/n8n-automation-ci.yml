@@ -1,4 +1,6 @@
 name: N8N Automation CI/CD
+permissions:
+  contents: read
 
 on:
   push:
