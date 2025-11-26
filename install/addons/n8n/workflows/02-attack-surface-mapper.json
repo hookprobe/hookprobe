@@ -1,5 +1,5 @@
 {
-  "name": "Continuous Attack Surface Mapper",
+  "name": "Attack Surface Mapper",
   "nodes": [
     {
       "parameters": {
@@ -12,22 +12,24 @@
           ]
         }
       },
-      "id": "schedule-scan",
-      "name": "Schedule Scan (Every 6 Hours)",
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
+      "name": "Every 6 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1,
+      "typeVersion": 1.1,
       "position": [250, 300]
     },
     {
       "parameters": {
         "url": "http://10.200.8.15:8889/api/scanner/network-discovery",
-        "method": "POST",
+        "authentication": "none",
+        "requestMethod": "POST",
         "sendBody": true,
-        "contentType": "json",
-        "body": "={{ JSON.stringify({ scan_type: 'full', include_services: true, detect_os: true }) }}"
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({scan_type: 'full', include_services: true, detect_os: true}) }}",
+        "options": {}
       },
-      "id": "network-discovery",
-      "name": "Network Discovery Scan",
+      "id": "a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d",
+      "name": "Network Discovery",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
       "position": [450, 300]
@@ -35,36 +37,25 @@
     {
       "parameters": {
         "url": "http://10.200.5.13:8123",
-        "method": "POST",
+        "authentication": "none",
+        "requestMethod": "POST",
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "query",
-              "value": "SELECT device_id, ip_address, open_ports, services, last_seen FROM security.attack_surface ORDER BY last_seen DESC"
-            }
-          ]
-        },
-        "options": {
-          "response": {
-            "response": {
-              "format": "json"
-            }
-          }
-        }
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({query: 'SELECT device_id, ip_address, open_ports, services FROM security.attack_surface ORDER BY last_seen DESC'}) }}",
+        "options": {}
       },
-      "id": "fetch-baseline",
-      "name": "Fetch Baseline from ClickHouse",
+      "id": "b3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e",
+      "name": "Get Baseline",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
       "position": [650, 300]
     },
     {
       "parameters": {
-        "jsCode": "const current = $('Network Discovery Scan').item.json.devices || [];\nconst baseline = $('Fetch Baseline from ClickHouse').item.json.data || [];\n\nconst newDevices = [];\nconst changedPorts = [];\nconst changedServices = [];\n\ncurrent.forEach(device => {\n  const baselineDevice = baseline.find(b => b.ip_address === device.ip_address);\n  \n  if (!baselineDevice) {\n    newDevices.push(device);\n  } else {\n    // Check for port changes\n    const newPorts = device.open_ports.filter(p => !baselineDevice.open_ports.includes(p));\n    const closedPorts = baselineDevice.open_ports.filter(p => !device.open_ports.includes(p));\n    \n    if (newPorts.length > 0 || closedPorts.length > 0) {\n      changedPorts.push({\n        ip_address: device.ip_address,\n        new_ports: newPorts,\n        closed_ports: closedPorts\n      });\n    }\n    \n    // Check for service changes\n    const newServices = device.services.filter(s => !baselineDevice.services.some(bs => bs.port === s.port && bs.name === s.name));\n    \n    if (newServices.length > 0) {\n      changedServices.push({\n        ip_address: device.ip_address,\n        new_services: newServices\n      });\n    }\n  }\n});\n\nreturn {\n  json: {\n    timestamp: new Date().toISOString(),\n    new_devices: newDevices,\n    changed_ports: changedPorts,\n    changed_services: changedServices,\n    has_changes: newDevices.length > 0 || changedPorts.length > 0 || changedServices.length > 0\n  }\n};"
+        "jsCode": "// Compare current scan with baseline\nconst current = $input.first().json.devices || [];\nconst baseline = $input.last().json.data || [];\n\nconst changes = {\n  new_devices: [],\n  changed_ports: [],\n  timestamp: new Date().toISOString(),\n  has_changes: false\n};\n\n// Detect new devices\ncurrent.forEach(device => {\n  const exists = baseline.find(b => b.ip_address === device.ip_address);\n  if (!exists) {\n    changes.new_devices.push(device);\n    changes.has_changes = true;\n  } else {\n    // Check for port changes\n    const newPorts = device.open_ports.filter(p => !exists.open_ports.includes(p));\n    if (newPorts.length > 0) {\n      changes.changed_ports.push({\n        ip_address: device.ip_address,\n        new_ports: newPorts\n      });\n      changes.has_changes = true;\n    }\n  }\n});\n\nreturn { json: changes };"
       },
-      "id": "api-diff-engine",
-      "name": "API Diff Engine (Detect Changes)",
+      "id": "c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f",
+      "name": "Diff Engine",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [850, 300]
@@ -72,150 +63,95 @@
     {
       "parameters": {
         "conditions": {
-          "boolean": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.has_changes }}",
-              "value2": true
+              "id": "condition1",
+              "leftValue": "={{ $json.has_changes }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             }
-          ]
-        }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       },
-      "id": "check-changes",
+      "id": "d5e6f7a8-b9c0-4d1e-2f3a-4b5c6d7e8f9a",
       "name": "Has Changes?",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [1050, 300]
     },
     {
       "parameters": {
-        "url": "http://10.200.7.12:8888/api/qsecbit/analyze-surface-change",
-        "method": "POST",
+        "url": "http://10.200.5.13:8123",
+        "authentication": "none",
+        "requestMethod": "POST",
         "sendBody": true,
-        "contentType": "json",
-        "body": "={{ JSON.stringify($json) }}"
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({query: 'INSERT INTO security.attack_surface_changes FORMAT JSONEachRow', data: JSON.stringify($json)}) }}",
+        "options": {}
       },
-      "id": "qsecbit-analysis",
-      "name": "QSECBIT Learn Behavioral Baseline",
+      "id": "e6f7a8b9-c0d1-4e2f-3a4b-5c6d7e8f9a0b",
+      "name": "Store Changes",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
       "position": [1250, 200]
     },
     {
       "parameters": {
-        "url": "http://10.200.5.13:8123",
-        "method": "POST",
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "query",
-              "value": "INSERT INTO security.attack_surface_changes FORMAT JSONEachRow"
-            },
-            {
-              "name": "data",
-              "value": "={{ JSON.stringify({ timestamp: $json.timestamp, new_devices: JSON.stringify($json.new_devices), changed_ports: JSON.stringify($json.changed_ports), changed_services: JSON.stringify($json.changed_services), qsecbit_risk_score: $('QSECBIT Learn Behavioral Baseline').item.json.risk_score }) }}"
-            }
-          ]
-        }
+        "mode": "passThrough",
+        "output": "={{ JSON.stringify({status: 'Scan complete', timestamp: $now, changes: $json.has_changes}) }}"
       },
-      "id": "store-changes",
-      "name": "Store Changes in ClickHouse",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [1450, 200]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "number": [
-            {
-              "value1": "={{ $('QSECBIT Learn Behavioral Baseline').item.json.risk_score }}",
-              "operation": "larger",
-              "value2": 0.6
-            }
-          ]
-        }
-      },
-      "id": "check-risk",
-      "name": "Risk Score > 0.6?",
-      "type": "n8n-nodes-base.if",
+      "id": "f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0b1c",
+      "name": "Complete",
+      "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [1650, 200]
-    },
-    {
-      "parameters": {
-        "url": "http://10.200.1.12:8000/api/alerts/",
-        "method": "POST",
-        "sendBody": true,
-        "contentType": "json",
-        "body": "={{ JSON.stringify({ title: 'Attack Surface Change Detected', content: 'New devices: ' + $json.new_devices.length + ', Changed ports: ' + $json.changed_ports.length + ', Risk score: ' + $('QSECBIT Learn Behavioral Baseline').item.json.risk_score, severity: 'warning', timestamp: new Date().toISOString() }) }}"
-      },
-      "id": "alert-soc",
-      "name": "Alert SOC Team",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [1850, 100]
-    },
-    {
-      "parameters": {
-        "url": "http://10.200.5.13:8123",
-        "method": "POST",
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "query",
-              "value": "INSERT INTO security.attack_surface FORMAT JSONEachRow"
-            },
-            {
-              "name": "data",
-              "value": "={{ JSON.stringify({ timestamp: new Date().toISOString(), devices: JSON.stringify($('Network Discovery Scan').item.json.devices) }) }}"
-            }
-          ]
-        }
-      },
-      "id": "update-baseline",
-      "name": "Update Baseline in ClickHouse",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [1050, 450]
+      "position": [1250, 400]
     }
   ],
   "connections": {
-    "Schedule Scan (Every 6 Hours)": {
+    "Every 6 Hours": {
       "main": [
         [
           {
-            "node": "Network Discovery Scan",
+            "node": "Network Discovery",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Network Discovery Scan": {
+    "Network Discovery": {
       "main": [
         [
           {
-            "node": "Fetch Baseline from ClickHouse",
+            "node": "Get Baseline",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Fetch Baseline from ClickHouse": {
+    "Get Baseline": {
       "main": [
         [
           {
-            "node": "API Diff Engine (Detect Changes)",
+            "node": "Diff Engine",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "API Diff Engine (Detect Changes)": {
+    "Diff Engine": {
       "main": [
         [
           {
@@ -230,47 +166,25 @@
       "main": [
         [
           {
-            "node": "QSECBIT Learn Behavioral Baseline",
+            "node": "Store Changes",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Update Baseline in ClickHouse",
+            "node": "Complete",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "QSECBIT Learn Behavioral Baseline": {
+    "Store Changes": {
       "main": [
         [
           {
-            "node": "Store Changes in ClickHouse",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Store Changes in ClickHouse": {
-      "main": [
-        [
-          {
-            "node": "Risk Score > 0.6?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Risk Score > 0.6?": {
-      "main": [
-        [
-          {
-            "node": "Alert SOC Team",
+            "node": "Complete",
             "type": "main",
             "index": 0
           }
@@ -278,9 +192,19 @@
       ]
     }
   },
-  "settings": {},
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
   "staticData": null,
-  "tags": [],
+  "tags": [
+    {
+      "createdAt": "2025-01-26T00:00:00.000Z",
+      "updatedAt": "2025-01-26T00:00:00.000Z",
+      "id": "2",
+      "name": "security"
+    }
+  ],
   "triggerCount": 1,
   "updatedAt": "2025-01-26T00:00:00.000Z",
   "versionId": "1"
