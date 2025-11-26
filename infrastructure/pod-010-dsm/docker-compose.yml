@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  dsm-node:
+    image: hookprobe/dsm-node:latest
+    container_name: pod-010-dsm-node
+    network_mode: "host"
+    devices:
+      - /dev/tpm0:/dev/tpm0
+      - /dev/tpmrm0:/dev/tpmrm0
+    volumes:
+      - /var/lib/hookprobe/dsm/microblocks:/data/microblocks
+      - /var/lib/hookprobe/dsm/keys:/keys
+      - /var/lib/hookprobe/certs:/certs:ro
+    environment:
+      - NODE_ID=${HOOKPROBE_NODE_ID:-edge-001}
+      - NODE_ROLE=${DSM_NODE_ROLE:-edge}
+      - TPM_ENABLED=${DSM_TPM_ENABLED:-true}
+      - KEY_PATH=/keys/dsm-node-key.pem
+      - LEDGER_PATH=/data/microblocks
+      - GOSSIP_PORT=7946
+      - BOOTSTRAP_NODES=${DSM_BOOTSTRAP_NODES:-}
+      - LOG_LEVEL=${DSM_LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.connect(('127.0.0.1',7946)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  dsm-api:
+    image: hookprobe/dsm-api:latest
+    container_name: pod-010-dsm-api
+    network_mode: "host"
+    depends_on:
+      - dsm-node
+    volumes:
+      - /var/lib/hookprobe/dsm/microblocks:/data/microblocks:ro
+    environment:
+      - API_PORT=8100
+      - LEDGER_PATH=/data/microblocks
+      - LOG_LEVEL=${DSM_LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
