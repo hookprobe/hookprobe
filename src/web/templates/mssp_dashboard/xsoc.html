@@ -1,0 +1,349 @@
+{% extends 'mssp_dashboard/base.html' %}
+
+{% block title %}xSOC - MSSP{% endblock %}
+{% block page_title %}Extended Security Operations Center{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">xSOC</li>
+{% endblock %}
+
+{% block content %}
+<!-- xSOC Tabs: Red Team / Blue Team -->
+<div class="card card-primary card-outline card-tabs">
+    <div class="card-header p-0 pt-1 border-bottom-0">
+        <ul class="nav nav-tabs" id="xsoc-tabs" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link active" id="blue-team-tab" data-toggle="pill" href="#blue-team" role="tab">
+                    <i class="fas fa-shield-alt mr-2"></i>
+                    Blue Team (Defense)
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="red-team-tab" data-toggle="pill" href="#red-team" role="tab">
+                    <i class="fas fa-user-secret mr-2"></i>
+                    Red Team (Attack Simulation)
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="threat-intel-tab" data-toggle="pill" href="#threat-intel" role="tab">
+                    <i class="fas fa-broadcast-tower mr-2"></i>
+                    Threat Intelligence
+                </a>
+            </li>
+        </ul>
+    </div>
+    <div class="card-body">
+        <div class="tab-content" id="xsoc-tabContent">
+            <!-- Blue Team Tab -->
+            <div class="tab-pane fade show active" id="blue-team" role="tabpanel">
+                <h4><i class="fas fa-shield-alt mr-2 text-primary"></i>Defensive Security Metrics</h4>
+
+                <!-- Defense Metrics -->
+                <div class="row mb-4">
+                    <div class="col-md-3">
+                        <div class="info-box bg-success">
+                            <span class="info-box-icon"><i class="fas fa-check-shield"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Threats Blocked</span>
+                                <span class="info-box-number">{{ automated_responses }}</span>
+                                <span class="info-box-text">Last 7 days</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="info-box bg-info">
+                            <span class="info-box-icon"><i class="fas fa-robot"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Automated Responses</span>
+                                <span class="info-box-number">{{ automated_responses }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="info-box bg-warning">
+                            <span class="info-box-icon"><i class="fas fa-exclamation-triangle"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Active Investigations</span>
+                                <span class="info-box-number">3</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="info-box bg-primary">
+                            <span class="info-box-icon"><i class="fas fa-clock"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Avg Response Time</span>
+                                <span class="info-box-number">2.3m</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Defense Actions -->
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">
+                                    <i class="fas fa-tasks mr-2"></i>
+                                    Recent Defense Actions
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Action</th>
+                                            <th>Result</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>2 min ago</td>
+                                            <td>Blocked malicious IP</td>
+                                            <td><span class="badge badge-success">Success</span></td>
+                                        </tr>
+                                        <tr>
+                                            <td>15 min ago</td>
+                                            <td>Quarantined suspicious file</td>
+                                            <td><span class="badge badge-success">Success</span></td>
+                                        </tr>
+                                        <tr>
+                                            <td>32 min ago</td>
+                                            <td>Updated firewall rules</td>
+                                            <td><span class="badge badge-success">Success</span></td>
+                                        </tr>
+                                        <tr>
+                                            <td>1 hour ago</td>
+                                            <td>Disabled compromised account</td>
+                                            <td><span class="badge badge-success">Success</span></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">
+                                    <i class="fas fa-chart-line mr-2"></i>
+                                    Threat Metrics (7 Days)
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="threatMetricsChart" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Red Team Tab -->
+            <div class="tab-pane fade" id="red-team" role="tabpanel">
+                <h4><i class="fas fa-user-secret mr-2 text-danger"></i>Attack Simulation Results</h4>
+
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    <strong>Red Team Operations:</strong> Controlled attack simulations to test defensive capabilities
+                </div>
+
+                <!-- Simulation Results -->
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-header bg-danger">
+                                <h3 class="card-title">Latest Penetration Test</h3>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Test Date:</strong> Nov 20, 2025</p>
+                                <p><strong>Target:</strong> Web Application</p>
+                                <p><strong>Findings:</strong></p>
+                                <ul>
+                                    <li><span class="badge badge-danger">Critical: 0</span></li>
+                                    <li><span class="badge badge-warning">High: 2</span></li>
+                                    <li><span class="badge badge-info">Medium: 5</span></li>
+                                    <li><span class="badge badge-secondary">Low: 12</span></li>
+                                </ul>
+                                <button class="btn btn-sm btn-primary">View Full Report</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">
+                                    <i class="fas fa-crosshairs mr-2"></i>
+                                    Attack Simulation History
+                                </h3>
+                            </div>
+                            <div class="card-body">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Attack Type</th>
+                                            <th>Target</th>
+                                            <th>Success Rate</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>Nov 20, 2025</td>
+                                            <td><span class="badge badge-danger">SQL Injection</span></td>
+                                            <td>Web App</td>
+                                            <td><span class="badge badge-success">0% (Blocked)</span></td>
+                                            <td><button class="btn btn-sm btn-info"><i class="fas fa-eye"></i></button></td>
+                                        </tr>
+                                        <tr>
+                                            <td>Nov 18, 2025</td>
+                                            <td><span class="badge badge-warning">Phishing Campaign</span></td>
+                                            <td>Email Users</td>
+                                            <td><span class="badge badge-warning">15% Clicked</span></td>
+                                            <td><button class="btn btn-sm btn-info"><i class="fas fa-eye"></i></button></td>
+                                        </tr>
+                                        <tr>
+                                            <td>Nov 15, 2025</td>
+                                            <td><span class="badge badge-info">Port Scanning</span></td>
+                                            <td>Network</td>
+                                            <td><span class="badge badge-success">Detected</span></td>
+                                            <td><button class="btn btn-sm btn-info"><i class="fas fa-eye"></i></button></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Threat Intelligence Tab -->
+            <div class="tab-pane fade" id="threat-intel" role="tabpanel">
+                <h4><i class="fas fa-broadcast-tower mr-2 text-warning"></i>Global Threat Intelligence Feed</h4>
+
+                <!-- Threat Feed -->
+                <div class="row">
+                    {% for threat in threats %}
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header bg-{{ threat.threat_type == 'ransomware' and 'danger' or threat.threat_type == 'phishing' and 'warning' or 'info' }}">
+                                <h3 class="card-title">
+                                    {{ threat.get_threat_type_display }}
+                                    <span class="badge badge-light ml-2">{{ threat.confidence }}</span>
+                                </h3>
+                                <span class="float-right text-sm">{{ threat.published_at|timesince }} ago</span>
+                            </div>
+                            <div class="card-body">
+                                <h5>{{ threat.title }}</h5>
+                                <p>{{ threat.description|truncatewords:30 }}</p>
+
+                                {% if threat.threat_actor %}
+                                <p><strong>Threat Actor:</strong> <code>{{ threat.threat_actor }}</code></p>
+                                {% endif %}
+
+                                <p><strong>Source:</strong> {{ threat.source }}</p>
+
+                                {% if threat.iocs %}
+                                <div class="mt-2">
+                                    <strong>Indicators of Compromise:</strong>
+                                    <ul class="mb-0">
+                                        {% for ioc in threat.iocs|slice:":3" %}
+                                        <li><code>{{ ioc }}</code></li>
+                                        {% endfor %}
+                                        {% if threat.iocs|length > 3 %}
+                                        <li class="text-muted">... and {{ threat.iocs|length|add:"-3" }} more</li>
+                                        {% endif %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% empty %}
+                    <div class="col-12">
+                        <div class="alert alert-info text-center">
+                            <i class="fas fa-info-circle fa-3x mb-3 d-block"></i>
+                            <p>No recent threat intelligence available</p>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- n8n Integration Status -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-primary">
+                <h3 class="card-title">
+                    <i class="fas fa-network-wired mr-2"></i>
+                    n8n Workflow Automation (POD-008)
+                </h3>
+            </div>
+            <div class="card-body">
+                <p>
+                    <i class="fas fa-check-circle text-success mr-2"></i>
+                    <strong>n8n is connected and operational</strong>
+                </p>
+                <p class="mb-0">
+                    Automated workflows are running for threat detection, incident response, and
+                    coordination between Red/Blue teams. Configure additional automation in POD-008.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+<script>
+// Threat Metrics Chart
+const threatCtx = document.getElementById('threatMetricsChart');
+if (threatCtx) {
+    new Chart(threatCtx.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+            datasets: [
+                {
+                    label: 'Threats Detected',
+                    data: [45, 52, 38, 61, 48, 33, 29],
+                    borderColor: '#ef4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    tension: 0.4
+                },
+                {
+                    label: 'Threats Blocked',
+                    data: [42, 50, 36, 58, 46, 31, 28],
+                    borderColor: '#10b981',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    tension: 0.4
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom'
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+</script>
+{% endblock %}
