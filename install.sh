@@ -443,11 +443,12 @@ show_extensions_menu() {
     echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${YELLOW}1${NC}) POD-008: Automation / Workflow (n8n) ${GREEN}[Automated]${NC}"
-    echo -e "  ${YELLOW}2${NC}) POD-009: Email System & Notification ${CYAN}[Manual Guide]${NC}"
-    echo -e "  ${YELLOW}3${NC}) Remote Access / Cloud Tunnel (Cloudflare) ${CYAN}[Manual Guide]${NC}"
-    echo -e "  ${YELLOW}4${NC}) GDPR / Privacy & Compliance Settings ${CYAN}[Configuration]${NC}"
-    echo -e "  ${YELLOW}5${NC}) LTE/5G Connectivity ${CYAN}[Manual Guide]${NC}"
-    echo -e "  ${YELLOW}6${NC}) ClickHouse Analytics ${CYAN}[Manual Guide]${NC}"
+    echo -e "  ${YELLOW}2${NC}) POD-008: QSECBIT Automation Framework ${GREEN}[Automated]${NC}"
+    echo -e "  ${YELLOW}3${NC}) POD-009: Email System & Notification ${CYAN}[Manual Guide]${NC}"
+    echo -e "  ${YELLOW}4${NC}) Remote Access / Cloud Tunnel (Cloudflare) ${CYAN}[Manual Guide]${NC}"
+    echo -e "  ${YELLOW}5${NC}) GDPR / Privacy & Compliance Settings ${CYAN}[Configuration]${NC}"
+    echo -e "  ${YELLOW}6${NC}) LTE/5G Connectivity ${CYAN}[Manual Guide]${NC}"
+    echo -e "  ${YELLOW}7${NC}) ClickHouse Analytics ${CYAN}[Manual Guide]${NC}"
     echo ""
     echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
     echo ""
@@ -464,18 +465,36 @@ handle_extensions() {
                 run_installer "$SCRIPT_DIR/install/addons/n8n/setup.sh" "n8n Workflow Automation" "n8n"
                 ;;
             2)
-                show_email_guide
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${BLUE}QSECBIT Automation Framework Deployment${NC}"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "This deploys the enhanced n8n automation with:"
+                echo "  • QSECBIT-integrated defense workflows"
+                echo "  • Enhanced MCP server with threat intelligence"
+                echo "  • ClickHouse schemas for automation data"
+                echo "  • Automated response engine"
+                echo ""
+                echo "⚠️  Prerequisites: POD-008 (n8n) must be installed first"
+                echo ""
+                read -p "Continue with automation framework deployment? (y/n): " confirm
+                if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                    run_installer "$SCRIPT_DIR/install/addons/n8n/setup-automation.sh" "QSECBIT Automation Framework" "automation"
+                fi
                 ;;
             3)
-                show_cloudflare_guide
+                show_email_guide
                 ;;
             4)
-                show_gdpr_config
+                show_cloudflare_guide
                 ;;
             5)
-                show_lte_guide
+                show_gdpr_config
                 ;;
             6)
+                show_lte_guide
+                ;;
+            7)
                 show_clickhouse_guide
                 ;;
             b|B)

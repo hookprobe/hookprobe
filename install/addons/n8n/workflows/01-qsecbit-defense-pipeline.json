@@ -1,0 +1,466 @@
+{
+  "name": "QSECBIT Autonomous Defense Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "* * * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Event Trigger (Every Minute)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.7.12:8888/api/qsecbit/latest",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "get-qsecbit",
+      "name": "QSECBIT Pre-Filter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.score }}",
+              "operation": "largerEqual",
+              "value2": 0.7
+            }
+          ]
+        }
+      },
+      "id": "risk-filter",
+      "name": "Risk >= 0.7?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.5.13:8123",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO security.qsecbit_monitoring FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        }
+      },
+      "id": "store-monitor",
+      "name": "Store & Monitor Only",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 450]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/threat/deep-analysis",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json) }}"
+      },
+      "id": "deep-analysis",
+      "name": "Deep Packet & Behavior Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.correlation_required }}",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "correlate-check",
+      "name": "Correlate Against Threat Feeds?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 150]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/threat/nmap-validate",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ target: $json.source_ip, scan_type: 'active' }) }}"
+      },
+      "id": "nmap-validate",
+      "name": "Nmap Active Validation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 50]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/threat/metasploit-fingerprint",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ target: $json.source_ip, ports: $json.open_ports }) }}"
+      },
+      "id": "metasploit-fp",
+      "name": "Metasploit Fingerprint Match",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 150]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/threat/yara-scan",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ file_hash: $json.file_hash, suspicious_files: $json.files }) }}"
+      },
+      "id": "yara-scan",
+      "name": "Yara File Scan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 250]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.5.13:8123",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO security.threat_intelligence FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{ JSON.stringify({ timestamp: Date.now(), qsecbit_score: $json.score, nmap_result: $('Nmap Active Validation').item.json, metasploit_result: $('Metasploit Fingerprint Match').item.json, yara_result: $('Yara File Scan').item.json }) }}"
+            }
+          ]
+        }
+      },
+      "id": "clickhouse-store",
+      "name": "ClickHouse Store",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1450, 150]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.5.14:8428/api/v1/write",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "hookprobe_threat_score{severity=\"high\",source=\"qsecbit\"} {{ $json.score }} {{ Date.now() }}"
+            }
+          ]
+        }
+      },
+      "id": "victoria-metrics",
+      "name": "VictoriaMetrics Time-Series Alerts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1650, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.severity }}",
+              "operation": "equals",
+              "value2": "high"
+            }
+          ]
+        }
+      },
+      "id": "severity-check",
+      "name": "Severity >= High?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1850, 150]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/response/automated",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ action: 'execute_response', threat_data: $json }) }}"
+      },
+      "id": "auto-response",
+      "name": "Automated Response Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2050, 50]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/response/network-acl",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ action: 'block_ip', ip_address: $json.source_ip, duration: 3600 }) }}"
+      },
+      "id": "network-acl",
+      "name": "Network ACL Push",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 50]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/response/edge-isolation",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ action: 'isolate_node', node_id: $json.edge_node_id, vxlan_update: true }) }}"
+      },
+      "id": "edge-isolate",
+      "name": "Edge Node Isolation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 150]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.8.15:8889/api/response/cloudflare-update",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ action: 'update_zero_trust', ip_blocklist: [$json.source_ip] }) }}"
+      },
+      "id": "cloudflare-update",
+      "name": "Cloudflare Zero-Trust Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 250]
+    },
+    {
+      "parameters": {
+        "url": "http://10.200.1.12:8000/api/alerts/",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ title: 'Security Alert: ' + $json.attack_type, content: 'Threat detected with QSECBIT score ' + $json.score + '. Automated response executed.', severity: 'critical', timestamp: new Date().toISOString() }) }}"
+      },
+      "id": "notify-soc",
+      "name": "Notify SOC (Webhook / Chat)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2450, 150]
+    }
+  ],
+  "connections": {
+    "Event Trigger (Every Minute)": {
+      "main": [
+        [
+          {
+            "node": "QSECBIT Pre-Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QSECBIT Pre-Filter": {
+      "main": [
+        [
+          {
+            "node": "Risk >= 0.7?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk >= 0.7?": {
+      "main": [
+        [
+          {
+            "node": "Deep Packet & Behavior Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store & Monitor Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deep Packet & Behavior Analysis": {
+      "main": [
+        [
+          {
+            "node": "Correlate Against Threat Feeds?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Correlate Against Threat Feeds?": {
+      "main": [
+        [
+          {
+            "node": "Nmap Active Validation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Metasploit Fingerprint Match",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Yara File Scan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store & Monitor Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nmap Active Validation": {
+      "main": [
+        [
+          {
+            "node": "ClickHouse Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Metasploit Fingerprint Match": {
+      "main": [
+        [
+          {
+            "node": "ClickHouse Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Yara File Scan": {
+      "main": [
+        [
+          {
+            "node": "ClickHouse Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClickHouse Store": {
+      "main": [
+        [
+          {
+            "node": "VictoriaMetrics Time-Series Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VictoriaMetrics Time-Series Alerts": {
+      "main": [
+        [
+          {
+            "node": "Severity >= High?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Severity >= High?": {
+      "main": [
+        [
+          {
+            "node": "Automated Response Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Automated Response Engine": {
+      "main": [
+        [
+          {
+            "node": "Network ACL Push",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Edge Node Isolation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cloudflare Zero-Trust Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cloudflare Zero-Trust Update": {
+      "main": [
+        [
+          {
+            "node": "Notify SOC (Webhook / Chat)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-26T00:00:00.000Z",
+  "versionId": "1"
+}
