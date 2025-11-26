@@ -1,8 +1,29 @@
+<p align="center">
+  <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
+</p>
 
-# hookprobe
-![Future City](assets/hookprobe-future-ram-cine.png)
 
-**"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"**
+<p align="center">
+  <strong>"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"</strong>
+</p>
+
+<p align="center">
+  <img src="assets/hookprobe-future-ram-cine.png" alt="Future City" width="600"/>
+</p>
+
+## CI/CD Status
+
+### Core Infrastructure
+[![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
+[![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
+[![ShellCheck](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml)
+[![Configuration Validation](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml)
+
+### Code Quality
+[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
+[![Markdown Links](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml)
+
+---
 
 ## 🎯 Overview
 
@@ -40,6 +61,13 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 
 ---
 
+### Documentation
+- [IAM Integration Guide](docs/IAM-INTEGRATION-GUIDE.md) - Complete Logto setup guide
+- [Implementation Summary](IMPLEMENTATION-SUMMARY-PHASE1-2.md) - Technical details
+- [Architectural Assessment](ARCHITECTURAL-ASSESSMENT.md) - 12-week roadmap
+
+---
+
 ## 🌆 Background Story
 
 In the year 2035, the digital landscape had evolved into a complex, interconnected web where threats lurked around every corner. Cyberattacks were no longer the domain of isolated hackers; they had become sophisticated operations executed by highly organized groups. Governments, corporations, and individuals alike were under constant siege from these digital marauders, who exploited every vulnerability to steal data, disrupt services, and wreak havoc.
@@ -68,25 +96,39 @@ And so, in the face of ever-evolving dangers, humanity adapted and thrived, usin
 
 ## 🏗️ Architecture
 
-HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for automation:
+HookProbe v5.0 implements a **modular POD architecture** with comprehensive documentation for each component:
 
-### Core PODs (001-007)
+### Core Infrastructure PODs (001-007)
 
-| POD | Network | Purpose | Key Components |
-|-----|---------|---------|----------------|
-| **001** | 10.200.1.0/24 | Web DMZ | Django CMS, NAXSI WAF, Nginx, Cloudflare Tunnel |
-| **002** | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
-| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
-| **004** | 10.200.4.0/24 | Transient DB | Redis, Valkey |
-| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse, Vector, Filebeat, node_exporter |
-| **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit |
-| **007** | 10.200.7.0/24 | AI Response | Honeypots, Kali Linux, Mitigation Engine |
+| POD | Network | Purpose | Documentation |
+|-----|---------|---------|---------------|
+| **[POD-001](docs/components/POD-001.md)** | 10.200.1.0/24 | Web DMZ & Management | Nginx, REST API, NAXSI WAF, Django CMS |
+| **[POD-002](docs/components/POD-002.md)** | 10.200.2.0/24 | IAM/Auth | Logto, OAuth 2.0, SSO, RBAC |
+| **[POD-003](docs/components/POD-003.md)** | 10.200.3.0/24 | Persistent Database | PostgreSQL, NFS, RADIUS (optional) |
+| **[POD-004](docs/components/POD-004.md)** | 10.200.4.0/24 | Transient Database | Redis, Valkey, Caching Layer |
+| **[POD-005](docs/components/POD-005.md)** | 10.200.5.0/24 | Monitoring & Analytics | Grafana, ClickHouse, VictoriaMetrics |
+| **[POD-006](docs/components/POD-006.md)** | 10.200.6.0/24 | Security Detection | Zeek, Snort 3, Suricata, Qsecbit AI |
+| **[POD-007](docs/components/POD-007.md)** | 10.200.7.0/24 | AI Response Engine | Kali Linux, Automated Mitigation |
 
-### Optional POD (008)
+### Optional Extensions (POD-008+)
 
-| POD | Network | Purpose | Key Components |
-|-----|---------|---------|----------------|
-| **008** | 10.200.8.0/24 | Automation | n8n, PostgreSQL, Redis, MCP Server |
+| POD | Network | Purpose | Documentation |
+|-----|---------|---------|---------------|
+| **[POD-008](docs/components/POD-008.md)** | 10.200.8.0/24 | Workflow Automation | n8n, MCP Server, AI Integration |
+| **[POD-009](docs/components/POD-009.md)** | 10.200.9.0/24 | Email System | Postfix, DKIM, Cloudflare Tunnel |
+
+### Dashboards & Interfaces
+
+| Dashboard | Purpose | Documentation |
+|-----------|---------|---------------|
+| **[Admin Dashboard](docs/dashboards/admin-dashboard.md)** | Content & Merchandise Management | Blog posts, products, AI content generation |
+| **[MSSP Dashboard](docs/dashboards/mssp-dashboard.md)** | Security Monitoring (SIEM) | Real-time metrics, threat hunting, SOAR |
+
+**Quick Links:**
+- 📖 [High-Level Design (HLD)](docs/architecture/security-model.md) - Complete system architecture
+- 🚀 [Dashboard Implementation Plan](docs/DASHBOARD-IMPLEMENTATION-PLAN.md) - Detailed development roadmap
+- 🛡️ [Security Features](#security-features) - Six-layer defense system
+- 📊 [Monitoring & Analytics](#monitoring--analytics) - Observability stack
 
 ### Network Topology
 
@@ -97,7 +139,7 @@ HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for aut
                    │
          ┌─────────▼─────────┐
          │  Physical Host    │
-         │  (Intel N100)     │
+         │  (SBC/Server)     │
          │  OVS Bridge       │
          └─────────┬─────────┘
                    │
@@ -134,7 +176,8 @@ HookProbe now supports **two deployment models**:
 Customer Site
 ┌──────────────────────┐
 │ HookProbe SBC        │
-│ Intel N100 (8-16GB)  │
+│ x86_64 or ARM64      │
+│ (8-16GB RAM)         │
 │                      │
 │ PODs 001-007:        │
 │ - ClickHouse (local) │
@@ -215,50 +258,260 @@ HookProbe v5.0 includes **kernel-level DDoS mitigation** via XDP (eXpress Data P
 - **Layer 1 (XDP-drv)**: Native driver mode - Full kernel bypass, < 1µs latency
 - **Layer 1.5 (XDP-skb)**: Generic software mode - Partial bypass, 5-10µs latency, higher CPU
 
+### Supported Hardware Platforms - We Support Your Cybersecurity Journey!
+
+HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterprise servers. Choose what fits your needs and budget!
+
+#### Supported CPU Architectures
+
+**x86_64 (Intel/AMD):**
+- ✅ Intel N-series (N100, N200, N300, N305) - 2020+ energy efficient
+- ✅ Intel Core mobile (i3, i5, i7, i9) - 8th gen+ (2018+)
+- ✅ Intel Core desktop (i3, i5, i7, i9) - 8th gen+ (2018+)
+- ✅ Intel NUC (all generations 8+)
+- ✅ Intel Xeon (any recent generation)
+- ✅ AMD Ryzen (3000 series+)
+- ✅ AMD EPYC (any generation)
+
+**ARM64 (ARMv8):**
+- ✅ Raspberry Pi 4/5 (4GB+ RAM)
+- ✅ Banana Pi (BPI-R3, BPI-R4, BPI-M5, etc.)
+- ✅ Nvidia Jetson (Nano, Xavier, Orin)
+- ✅ Radxa (ROCK 5, ROCK 4)
+- ✅ Orange Pi (5/5+)
+- ✅ Odroid (N2+, C4, etc.)
+
+**Key: Hardware released 2020 or later with focus on energy efficiency**
+
 ### Recommended Hardware Configurations
 
-#### 💰 Budget Edge (< $300)
-- **SBC**: Intel N100 (8GB RAM, ~$150)
-- **NIC**: Intel I226-V (built-in, 2.5Gbps)
+#### 💰 Budget Edge ($100-$300)
+
+**Intel N-Series SBC:**
+- **CPU**: Intel N100/N200 (4-8 cores, ~6W TDP)
+- **RAM**: 8-16GB DDR4/DDR5
+- **NIC**: Intel I226-V (2.5Gbps, built-in)
 - **XDP**: Native DRV mode ✅
 - **Performance**: 2.5 Gbps line rate DDoS filtering
-- **Use Case**: Home lab, small office, development
+- **Use Case**: Home lab, small office, learning cybersecurity
+- **Price**: $150-$250
 
-#### 🏢 Production Edge ($300-$1000)
-- **SBC**: Mini PC with Intel I211 or I226
-- **NIC**: Intel I226-V (2.5Gbps)
+**ARM SBC (Raspberry Pi, Banana Pi, Orange Pi):**
+- **CPU**: ARM Cortex-A76 (4+ cores, ~5-15W TDP)
+- **RAM**: 8GB minimum (16GB for Radxa)
+- **NIC**: Gigabit Ethernet (Realtek/Broadcom)
+- **XDP**: Generic SKB mode (software)
+- **Performance**: 1 Gbps, higher CPU overhead
+- **Use Case**: Development, learning, home lab
+- **Price**: $100-$200
+
+**Best for**: First-time users, students, home enthusiasts, budget-conscious deployments
+
+#### 🏢 Mid-Range Edge ($300-$700)
+
+**Intel Core Mini PC (i3/i5/i7 Mobile):**
+- **CPU**: Intel Core i3/i5 (8th gen+, 15-28W TDP)
+- **RAM**: 16-32GB DDR4
+- **NIC**: Intel I226-V or add-on Intel I211/I350
 - **XDP**: Native DRV mode ✅
-- **Performance**: 1-2.5 Gbps sustained
-- **Use Case**: Branch office, edge security appliance
+- **Performance**: 2.5-10 Gbps sustained
+- **Use Case**: Small business, branch office, edge security appliance
+- **Examples**: Intel NUC, Beelink, Minisforum, ASUS Mini PC
+- **Price**: $300-$600
+
+**Nvidia Jetson (ARM with GPU):**
+- **CPU**: ARM Cortex-A78AE (6-8 cores)
+- **GPU**: NVIDIA GPU (for ML inference)
+- **RAM**: 8-32GB unified memory
+- **NIC**: Gigabit/2.5G Ethernet
+- **XDP**: Generic SKB mode
+- **Performance**: 1-2.5 Gbps, excellent AI performance
+- **Use Case**: AI-heavy workloads, ML training, computer vision
+- **Price**: $200-$500
+
+**Advanced ARM SBC (Radxa, Banana Pi):**
+- **CPU**: RK3588/RK3568 (8 cores, ARM Cortex-A76)
+- **RAM**: 16GB LPDDR4/DDR5
+- **NIC**: 2.5G Ethernet (some models have dual NICs)
+- **XDP**: Generic SKB mode
+- **Performance**: 2.5 Gbps
+- **Use Case**: Seasoned users, advanced networking, network appliances
+- **Examples**: Radxa ROCK 5, Banana Pi BPI-R4
+- **Price**: $200-$400
+
+**Best for**: Small businesses, IT professionals, prosumers, multi-site deployments
+
+#### 🏢 Enterprise Edge ($700-$2000)
+
+**Intel Core Desktop/Server (i7/i9/Xeon):**
+- **CPU**: Intel Core i7/i9 or Xeon E (8-24 cores, 65-125W TDP)
+- **RAM**: 32-128GB DDR4/DDR5 ECC
+- **NIC**: Intel X520/X710 (10-40Gbps)
+- **XDP**: Native DRV mode ✅
+- **Performance**: 10-40 Gbps sustained
+- **Use Case**: Large enterprise, data center edge, high-throughput environments
+- **Price**: $800-$2000
+
+**AMD Ryzen/EPYC:**
+- **CPU**: AMD Ryzen 7/9 or EPYC (8-64 cores, 65-280W TDP)
+- **RAM**: 32-256GB DDR4/DDR5 ECC
+- **NIC**: Intel X710 or Mellanox ConnectX-5
+- **XDP**: Native DRV mode ✅
+- **Performance**: 10-100 Gbps sustained
+- **Use Case**: High-performance computing, multi-tenant edge
+- **Price**: $1000-$2000
+
+**Best for**: Enterprise security teams, MSSP edge nodes, high-traffic environments
 
 #### ☁️ MSSP Cloud Backend ($2000+)
-- **Server**: Dell R650/HP DL360 Gen11
-- **NIC**: Intel X710 (40Gbps) or Mellanox ConnectX-5 (100Gbps)
+
+**Datacenter Servers:**
+- **CPU**: Intel Xeon Scalable or AMD EPYC (32-128 cores)
+- **RAM**: 128GB-1TB DDR4/DDR5 ECC
+- **NIC**: Intel X710 (40Gbps) or Mellanox ConnectX-5/6/7 (100-200Gbps)
 - **XDP**: Native DRV + Hardware Offload ✅
-- **Performance**: 40-100 Gbps aggregate
-- **Use Case**: Multi-tenant MSSP, 100-1000 customers
+- **Performance**: 40-200 Gbps aggregate
+- **Use Case**: Multi-tenant MSSP, 100-1000 customers, SOC operations
+- **Examples**: Dell R650, HP DL360 Gen11, Supermicro
+- **Price**: $2000-$10000+
+
+**Best for**: MSSP providers, security service providers, cloud-native deployments
+
+### Platform Comparison & Selection Guide
+
+#### Quick Decision Guide
+
+```
+Budget?
+├─ Under $200
+│  ├─ Learning/Development → Raspberry Pi 4/5 (8GB)
+│  └─ Home Security → Intel N100 Mini PC
+├─ $200-$400
+│  ├─ Home/Small Office → Intel N100/N200 (16GB)
+│  ├─ Advanced Networking → Radxa ROCK 5 / Banana Pi BPI-R4
+│  └─ AI/ML Focus → Nvidia Jetson Nano/Xavier
+├─ $400-$1000
+│  ├─ Small Business → Intel NUC (Core i3/i5, 16-32GB)
+│  ├─ Branch Office → Intel Core Mini PC (i5/i7)
+│  └─ Advanced AI → Nvidia Jetson Orin
+└─ Over $1000
+   ├─ Enterprise Edge → Intel Xeon / AMD EPYC workstation
+   └─ MSSP Backend → Datacenter servers (Dell/HP/Supermicro)
+```
+
+#### Platform-Specific Advantages
+
+| Platform | Best For | XDP Performance | Power | Price Range |
+|----------|----------|-----------------|-------|-------------|
+| **Intel N100/N200** | Entry-level, home, learning | ✅ Native DRV | 6-10W | $150-$250 |
+| **Intel Core (i3/i5/i7)** | Small business, prosumer | ✅ Native DRV | 15-65W | $300-$800 |
+| **Intel NUC** | Clean form factor, office | ✅ Native DRV | 15-28W | $400-$700 |
+| **Raspberry Pi** | Development, learning | ⚠️ SKB mode | 5-8W | $80-$120 |
+| **Banana Pi / Radxa** | Advanced ARM networking | ⚠️ SKB mode | 10-20W | $150-$300 |
+| **Orange Pi** | Budget ARM platform | ⚠️ SKB mode | 8-15W | $80-$150 |
+| **Nvidia Jetson** | AI/ML workloads | ⚠️ SKB mode | 10-60W | $200-$500 |
+| **Intel Xeon** | Enterprise, datacenter | ✅ Native DRV | 65-270W | $1000+ |
+| **AMD EPYC** | High core count, cloud | ✅ Native DRV | 120-280W | $1500+ |
+
+**Legend:**
+- ✅ **Native DRV**: Full XDP driver mode - kernel bypass, < 1µs latency, best DDoS protection
+- ⚠️ **SKB mode**: Generic software mode - higher CPU overhead, 5-10µs latency, suitable for learning/dev
 
 ### ⚠️ Important Notes
 
-**Raspberry Pi Limitation**: Raspberry Pi 4/5 only supports XDP in generic (SKB) mode, which has higher CPU overhead and limited throughput. For production DDoS mitigation, use Intel N100 with I226 NIC for native XDP-DRV support.
+**ARM Platform Considerations**:
+- ARM platforms (Raspberry Pi, Banana Pi, Jetson, Radxa, etc.) support XDP in generic (SKB) mode, which has higher CPU overhead
+- Still excellent for: development, learning, home labs, AI/ML workloads, and moderate traffic (< 1 Gbps)
+- For production DDoS mitigation at 2.5+ Gbps, Intel/AMD x86_64 platforms provide native XDP-DRV support
 
-**Intel N100 Advantage**: Best price/performance for edge deployment. Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead.
+**Intel N-Series Value**:
+- Best price/performance for edge deployment
+- Built-in I226 NIC provides full XDP-DRV support at 2.5 Gbps with minimal CPU overhead
+- Excellent for first-time users and small deployments
 
-**See Complete Guide**: [Qsecbit XDP/eBPF Documentation](src/qsecbit/README.md)
+**Intel NUC Flexibility**:
+- Compact, professional form factor
+- Wide range of CPU options (Core i3 to i9)
+- Excellent for office environments
+
+**Nvidia Jetson AI Advantages**:
+- Integrated GPU for AI/ML inference
+- Best for Qsecbit algorithm with local ML models
+- Lower power consumption than desktop GPUs
+
+**Advanced ARM Platforms (Radxa, Banana Pi)**:
+- More powerful than Raspberry Pi
+- Dual NICs on some models (BPI-R4)
+- Great for seasoned users exploring ARM networking
+
+**See Complete Guide**:
+- [Qsecbit XDP/eBPF Documentation](src/qsecbit/README.md)
+- [Beginner's Hardware Guide](docs/installation/BEGINNER-GUIDE.md)
 
 ---
 
 ## 🚀 Getting Started
+
+### 🆕 New to Linux? Start Here!
+
+**Never used Linux before?** We've got you covered!
+
+📘 **[Complete Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)** - Step-by-step guide including:
+- Where to download Linux (Fedora/Ubuntu)
+- How to create bootable USB drive
+- Complete Linux installation walkthrough
+- Disk partitioning for HookProbe
+- Network configuration
+- Installing HookProbe
+
+**Perfect for users with little to no Linux experience!**
+
+---
+
+### ⚡ Quick Install (For Linux Users)
+
+Already have Linux installed? HookProbe v5.0 features an **interactive installation wizard**:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+
+# 2. Run interactive installer
+sudo ./install.sh
+
+# 3. Follow the wizard - it will:
+#    - Detect your network interfaces automatically
+#    - Configure IP addresses and VXLANs
+#    - Generate secure passwords and encryption keys
+#    - Deploy all PODs
+#    - Set up monitoring and security
+```
+
+**Installation completes in 15-20 minutes!**
+
+**Access services:**
+- **Grafana**: http://YOUR_IP:3000 (credentials set during install)
+- **Qsecbit API**: http://YOUR_IP:8888
+- **Logto Admin**: http://YOUR_IP:3002
+
+⚠️ **Important**: Passwords are configured during installation wizard. Note them securely!
+
+---
+
+### 📋 Detailed Installation Options
 
 Choose your deployment model:
 
 ### 📍 Option 1: Edge Deployment (Single-Tenant SBC)
 
 **Hardware Requirements:**
-- **CPU**: Intel N100 or equivalent x86_64 (4+ cores)
+- **CPU**:
+  - x86_64: Intel N100/N200, Core i3/i5, AMD Ryzen (4+ cores)
+  - ARM64: Raspberry Pi 4/5, Banana Pi, Radxa, Nvidia Jetson (4+ cores)
 - **RAM**: 16GB minimum (32GB recommended)
 - **Storage**: 500GB SSD minimum (1TB recommended)
-- **Network**: 1Gbps NIC
+- **Network**: 1Gbps NIC (2.5Gbps recommended for Intel platforms)
 
 **Software Requirements:**
 - **OS** (automatically detected):
@@ -268,32 +521,36 @@ Choose your deployment model:
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
 
-**Installation:**
+**Installation Steps:**
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
 
-# 2. Run installer (interactive menu)
+# 2. Run installer and select option 1
 sudo ./install.sh
+# Select: 1) Edge Deployment
 
-# Or directly deploy edge:
 # Or run configuration wizard first:
-sudo ./install.sh    # Select option "c" to configure
+sudo ./install.sh
+# Select: c) Run Configuration Wizard
+# Then: 1) Edge Deployment
 
-# 3. Configure
-nano config.sh
-# Change: HOST_A_IP, passwords, PSK keys
+# 3. Wizard will automatically:
+#    - Detect network interfaces (eth0, wlan0, etc.)
+#    - Prompt for host IP address
+#    - Generate VXLAN encryption keys
+#    - Create secure passwords for all services
+#    - Configure all 7 PODs
+#    - Deploy containers
 
-# 4. Deploy
-sudo ./setup.sh
-
-# 5. Access Grafana
-# http://YOUR_IP:3000 (admin/admin - change immediately!)
+# 4. Access services
+# Grafana: http://YOUR_IP:3000
+# Qsecbit: http://YOUR_IP:8888
 ```
 
-**See:** [Edge Deployment Checklist](install/edge/checklist.md)
+**See:** [Edge Deployment Checklist](install/edge/checklist.md) | [Quick Start Guide](QUICK-START.md)
 
 ---
 
@@ -382,7 +639,6 @@ Installation takes **15-20 minutes**.
 
 4. **Access Services**
 
-- **Django Admin**: http://YOUR_IP/admin (admin/admin)
 - **Grafana**: http://YOUR_IP:3000 (admin/admin)
 - **Logto Admin**: http://YOUR_IP:3002
 - **Qsecbit API**: http://YOUR_IP:8888
@@ -392,6 +648,83 @@ Installation takes **15-20 minutes**.
 ---
 
 ## 🔧 Optional Features
+
+### Web Server & CMS (POD 001)
+
+**Status**: Optional Post-Installation Addon
+
+The HookProbe web server provides a Django-based CMS and management interface. It's an **optional addon** installed **after** the main HookProbe infrastructure is running.
+
+#### Why Optional?
+
+- **Reduced complexity** - Core security functions work without web UI
+- **Edge flexibility** - Not all edge devices need full web interface
+- **Cloud centralization** - MSSP can run centralized web server for multiple edges
+- **Resource efficiency** - Save RAM/CPU on constrained devices
+- **Staged deployment** - Install web components when ready
+
+#### Features
+
+- **Public CMS** (Forty HTML5 theme) - Blog, pages, contact forms
+- **Admin Dashboard** (AdminLTE) - System overview, POD monitoring
+- **MSSP Device Management** - Multi-tenant edge device tracking
+- **Security Dashboard** - Qsecbit scores, IDS/IPS/WAF events
+- **REST APIs** - Device management, security events, metrics
+
+#### Quick Start: Web Server Installation
+
+**Prerequisites:**
+- HookProbe PODs 001-007 must be running
+- PostgreSQL (POD-003) and Redis (POD-004) accessible
+- Python 3.11+ or Podman 4.0+
+
+**Option 1: Native Installation (Edge)**
+
+```bash
+cd install/addons/webserver
+
+# Configure (optional)
+nano config/webserver-config.sh
+
+# Run installation
+sudo ./setup-webserver.sh edge
+```
+
+**Option 2: Podman Container (Recommended)**
+
+```bash
+cd install/addons/webserver
+
+# Configure (optional)
+nano config/webserver-config.sh
+
+# Run Podman installation
+sudo ./setup-webserver-podman.sh edge
+```
+
+**Option 3: Cloud Centralized (MSSP)**
+
+```bash
+cd install/addons/webserver
+
+# Configure for cloud
+export DEPLOYMENT_TYPE=cloud
+export MULTITENANT_ENABLED=true
+
+# Run installation on cloud server
+sudo ./setup-webserver-podman.sh cloud
+```
+
+**Access:**
+- Public Site: http://YOUR_IP/
+- Admin Interface: http://YOUR_IP/admin/
+- Dashboard: http://YOUR_IP/dashboard/
+- Device Management: http://YOUR_IP/devices/
+- API: http://YOUR_IP/api/v1/
+
+**Documentation**: See [Web Server README](install/addons/webserver/README.md) for complete guide
+
+---
 
 ### n8n Workflow Automation (POD 008)
 
@@ -431,7 +764,7 @@ sudo ./n8n_setup.sh
 - **n8n UI**: http://YOUR_IP:5678
 - **MCP API**: http://YOUR_IP:8889
 
-**Documentation**: See [N8N_README.md](../main/install/addons/n8n/README.md) for complete guide
+**Documentation**: See [N8N_README.md](install/addons/n8n/README.md) for complete guide
 
 #### n8n Use Cases
 
@@ -561,7 +894,7 @@ nmcli device show wwan0
 - Recommended: Unlimited or >100GB/month for primary use
 - Failover: 10-20GB/month typically sufficient
 
-**Documentation**: See [install/addons/lte/README.md](../main/install/addons/lte/README.md) for detailed setup
+**Documentation**: See [install/addons/lte/README.md](install/addons/lte/README.md) for detailed setup
 
 ---
 
@@ -937,23 +1270,42 @@ tail -f /var/log/hookprobe/gdpr-audit.log
 
 ## 📚 Documentation
 
+### Getting Started
+- **[🆕 Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)** - **START HERE if new to Linux!**
+  - Download Linux (Fedora/Ubuntu)
+  - Create bootable USB
+  - Install Linux step-by-step
+  - Partition disk for HookProbe
+  - Complete setup walkthrough
+- **[QUICK-START.md](QUICK-START.md)** - 3-step installation for Linux users
+- **[README.md](README.md)** - This file (overview and features)
+
 ### Core Documentation
-- **[README.md](README.md)** - This file (overview and quick start)
-- **[GDPR.md](GDPR.md)** - GDPR compliance guide (privacy and data protection)
-- **[setup.sh Documentation](Scripts/autonomous/install/README.md)** - Main deployment guide
+- **[GDPR.md](docs/GDPR.md)** - GDPR compliance guide (privacy and data protection)
+- **[CI-CD.md](docs/CI-CD.md)** - CI/CD workflows, testing strategy, and contributing guidelines
 - **[Security Mitigation Plan](docs/architecture/security-model.md)** - Detailed security analysis
-- **[Deployment Checklist](Scripts/autonomous/install/checklist.md)** - Pre/post deployment tasks
+- **[Edge Deployment Checklist](install/edge/checklist.md)** - Pre/post deployment tasks
+
+### Installation & Configuration
+- **[Interactive Installer](install.sh)** - Main entry point with menu system
+- **[Configuration Wizard](install/common/config-wizard.sh)** - Automated network detection and setup
+- **[Edge Deployment](install/edge/)** - Single-tenant SBC deployment
+- **[Cloud Deployment](docs/installation/cloud-deployment.md)** - Multi-tenant MSSP backend
 
 ### Optional Feature Documentation
-- **[n8n Integration](../main/install/addons/n8n/README.md)** - Workflow automation setup
-- **[n8n Checklist](../main/n8n/integration-checklist.md)** - N8N Integration validation
-- **[Autonomous Blog Workflow](../main/n8n/AI-blogging-workflow.md)** - Advanced content pipeline
-- **[LTE/5G Setup](../main/install/addons/lte/README.md)** - Cellular connectivity guide
+- **[n8n Integration](install/addons/n8n/README.md)** - Workflow automation setup (POD 008)
+- **[LTE/5G Setup](install/addons/lte/README.md)** - Cellular connectivity guide
 
-### Configuration Files
-- **[network-config.sh](Scripts/autonomous/install/network-config.sh)** - Main network configuration
-- **[n8n_network-config.sh](Scripts/autonomous/install/n8n_network-config.sh)** - n8n network settings
-- **[Qsecbit Algorithm](Scripts/autonomous/qsecbit.py)** - Threat analysis implementation
+### CI/CD & Testing
+- **[CI/CD Documentation](docs/CI-CD.md)** - Complete CI/CD pipeline documentation
+- **[Installation Tests](.github/workflows/installation-test.yml)** - Automated installation testing
+- **[Container Tests](.github/workflows/container-tests.yml)** - Container and integration tests
+- **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute with CI/CD best practices
+
+### Technical Reference
+- **[Qsecbit Algorithm](src/qsecbit/)** - AI threat analysis implementation
+- **[Network Configuration](install/edge/config.sh)** - Network settings template
+- **[Architecture Overview](docs/architecture/security-model.md)** - 7-POD architecture details
 
 ---
 
