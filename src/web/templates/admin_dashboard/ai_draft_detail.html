@@ -1,0 +1,246 @@
+{% extends 'admin_dashboard/base.html' %}
+
+{% block title %}{{ draft.title }} - HookProbe{% endblock %}
+{% block page_title %}AI Draft Detail{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'admin_dashboard:home' %}">Home</a></li>
+<li class="breadcrumb-item"><a href="{% url 'admin_dashboard:ai_drafts' %}">AI Drafts</a></li>
+<li class="breadcrumb-item active">{{ draft.title|truncatewords:5 }}</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Main Content -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-file-alt mr-2"></i>
+                    {{ draft.title }}
+                </h3>
+            </div>
+            <div class="card-body">
+                <!-- Draft Metadata -->
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <p><strong>AI Provider:</strong>
+                            {% if draft.ai_provider == 'openai' %}
+                                <span class="badge badge-success"><i class="fas fa-brain"></i> OpenAI</span>
+                            {% elif draft.ai_provider == 'anthropic' %}
+                                <span class="badge badge-info"><i class="fas fa-robot"></i> Anthropic</span>
+                            {% else %}
+                                <span class="badge badge-secondary"><i class="fas fa-user"></i> Manual</span>
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Status:</strong>
+                            {% if draft.status == 'draft' %}
+                                <span class="badge badge-secondary">Draft</span>
+                            {% elif draft.status == 'review' %}
+                                <span class="badge badge-warning">Review</span>
+                            {% elif draft.status == 'approved' %}
+                                <span class="badge badge-info">Approved</span>
+                            {% elif draft.status == 'published' %}
+                                <span class="badge badge-success">Published</span>
+                            {% elif draft.status == 'rejected' %}
+                                <span class="badge badge-danger">Rejected</span>
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Content Preview -->
+                <div class="border rounded p-3 mb-3" style="background-color: #f8f9fa;">
+                    <h5>Content Preview:</h5>
+                    <div class="content-preview">
+                        {{ draft.content|linebreaks }}
+                    </div>
+                </div>
+
+                <!-- SEO Preview -->
+                {% if draft.seo_title or draft.seo_description %}
+                <div class="border rounded p-3 mb-3">
+                    <h5><i class="fas fa-search mr-2"></i>SEO Preview:</h5>
+                    <div class="seo-preview">
+                        <div style="color: #1a0dab; font-size: 20px; font-weight: 400;">
+                            {{ draft.seo_title|default:draft.title }}
+                        </div>
+                        <div style="color: #006621; font-size: 14px;">
+                            https://hookprobe.com/blog/{{ draft.title|slugify }}
+                        </div>
+                        <div style="color: #545454; font-size: 14px; margin-top: 5px;">
+                            {{ draft.seo_description|default:draft.content|truncatewords:30 }}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Research Sources -->
+                {% if draft.research_sources %}
+                <div class="border rounded p-3 mb-3">
+                    <h5><i class="fas fa-link mr-2"></i>Research Sources:</h5>
+                    <ul>
+                        {% for source in draft.research_sources %}
+                        <li><a href="{{ source }}" target="_blank">{{ source }}</a></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                <!-- Action Buttons -->
+                <div class="btn-group btn-group-lg" role="group">
+                    {% if draft.status == 'review' %}
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="approve">
+                        <button type="submit" class="btn btn-success">
+                            <i class="fas fa-check"></i> Approve
+                        </button>
+                    </form>
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reject">
+                        <button type="submit" class="btn btn-danger">
+                            <i class="fas fa-times"></i> Reject
+                        </button>
+                    </form>
+                    {% elif draft.status == 'approved' %}
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="publish">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-upload"></i> Publish to Blog
+                        </button>
+                    </form>
+                    {% elif draft.status == 'published' %}
+                    <a href="{{ draft.blog_post.get_absolute_url }}" class="btn btn-info" target="_blank">
+                        <i class="fas fa-external-link-alt"></i> View Published Post
+                    </a>
+                    {% endif %}
+
+                    <a href="{% url 'admin_dashboard:ai_drafts' %}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Back to Drafts
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-md-4">
+        <!-- Metrics Card -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-chart-bar mr-2"></i>
+                    Quality Metrics
+                </h3>
+            </div>
+            <div class="card-body">
+                <!-- AI Confidence -->
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between">
+                        <span><strong>AI Confidence:</strong></span>
+                        <span>
+                            {% if draft.ai_confidence_score %}
+                                {% with confidence=draft.ai_confidence_score|floatformat:0 %}
+                                    {{ confidence }}%
+                                {% endwith %}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </span>
+                    </div>
+                    {% if draft.ai_confidence_score %}
+                    <div class="progress mt-2">
+                        {% with confidence=draft.ai_confidence_score|floatformat:0 %}
+                            {% if confidence >= '90' %}
+                                <div class="progress-bar bg-success" style="width: {{ confidence }}%"></div>
+                            {% elif confidence >= '70' %}
+                                <div class="progress-bar bg-warning" style="width: {{ confidence }}%"></div>
+                            {% else %}
+                                <div class="progress-bar bg-danger" style="width: {{ confidence }}%"></div>
+                            {% endif %}
+                        {% endwith %}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- SEO Score -->
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between">
+                        <span><strong>SEO Score:</strong></span>
+                        <span>{{ draft.seo_score }}/100</span>
+                    </div>
+                    <div class="progress mt-2">
+                        {% if draft.seo_score >= 80 %}
+                            <div class="progress-bar bg-success" style="width: {{ draft.seo_score }}%"></div>
+                        {% elif draft.seo_score >= 60 %}
+                            <div class="progress-bar bg-warning" style="width: {{ draft.seo_score }}%"></div>
+                        {% else %}
+                            <div class="progress-bar bg-danger" style="width: {{ draft.seo_score }}%"></div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Word Count -->
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between">
+                        <span><strong>Word Count:</strong></span>
+                        <span>{{ draft.content|wordcount }}</span>
+                    </div>
+                </div>
+
+                <!-- Character Count -->
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between">
+                        <span><strong>Characters:</strong></span>
+                        <span>{{ draft.content|length }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline Card -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-history mr-2"></i>
+                    Timeline
+                </h3>
+            </div>
+            <div class="card-body">
+                <ul class="timeline">
+                    <li>
+                        <i class="fas fa-plus bg-blue"></i>
+                        <div class="timeline-item">
+                            <span class="time"><i class="fas fa-clock"></i> {{ draft.created_at|date:"M d, Y g:i A" }}</span>
+                            <h3 class="timeline-header">Draft Created</h3>
+                        </div>
+                    </li>
+                    {% if draft.updated_at != draft.created_at %}
+                    <li>
+                        <i class="fas fa-edit bg-warning"></i>
+                        <div class="timeline-item">
+                            <span class="time"><i class="fas fa-clock"></i> {{ draft.updated_at|date:"M d, Y g:i A" }}</span>
+                            <h3 class="timeline-header">Last Updated</h3>
+                        </div>
+                    </li>
+                    {% endif %}
+                    {% if draft.status == 'published' and draft.blog_post %}
+                    <li>
+                        <i class="fas fa-check bg-success"></i>
+                        <div class="timeline-item">
+                            <span class="time"><i class="fas fa-clock"></i> {{ draft.blog_post.published_at|date:"M d, Y g:i A" }}</span>
+                            <h3 class="timeline-header">Published to Blog</h3>
+                        </div>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

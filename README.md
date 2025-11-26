@@ -1,16 +1,29 @@
+<p align="center">
+  <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
+</p>
 
-# hookprobe
-![Future City](assets/hookprobe-future-ram-cine.png)
 
-**"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"**
+<p align="center">
+  <strong>"Single Board Computers (SBCs) and Security Operations Centers (SOCs): Leading the Charge in the Cybersecurity Battle"</strong>
+</p>
+
+<p align="center">
+  <img src="assets/hookprobe-future-ram-cine.png" alt="Future City" width="600"/>
+</p>
 
 ## CI/CD Status
 
+### Core Infrastructure
 [![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
 [![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
-[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
 [![ShellCheck](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml)
+[![Configuration Validation](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/config-validation.yml)
+
+### Code Quality
+[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
 [![Markdown Links](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml)
+
+---
 
 ## 🎯 Overview
 
@@ -48,6 +61,13 @@ HookProbe is a comprehensive cybersecurity platform built on Single Board Comput
 
 ---
 
+### Documentation
+- [IAM Integration Guide](docs/IAM-INTEGRATION-GUIDE.md) - Complete Logto setup guide
+- [Implementation Summary](IMPLEMENTATION-SUMMARY-PHASE1-2.md) - Technical details
+- [Architectural Assessment](ARCHITECTURAL-ASSESSMENT.md) - 12-week roadmap
+
+---
+
 ## 🌆 Background Story
 
 In the year 2035, the digital landscape had evolved into a complex, interconnected web where threats lurked around every corner. Cyberattacks were no longer the domain of isolated hackers; they had become sophisticated operations executed by highly organized groups. Governments, corporations, and individuals alike were under constant siege from these digital marauders, who exploited every vulnerability to steal data, disrupt services, and wreak havoc.
@@ -76,25 +96,39 @@ And so, in the face of ever-evolving dangers, humanity adapted and thrived, usin
 
 ## 🏗️ Architecture
 
-HookProbe v5.0 implements a **7-POD architecture** with optional 8th POD for automation:
+HookProbe v5.0 implements a **modular POD architecture** with comprehensive documentation for each component:
 
-### Core PODs (001-007)
+### Core Infrastructure PODs (001-007)
 
-| POD | Network | Purpose | Key Components |
-|-----|---------|---------|----------------|
-| **001** | 10.200.1.0/24 | Web DMZ | Django CMS, NAXSI WAF, Nginx, Cloudflare Tunnel |
-| **002** | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
-| **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
-| **004** | 10.200.4.0/24 | Transient DB | Redis, Valkey |
-| **005** | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, ClickHouse, Vector, Filebeat, node_exporter |
-| **006** | 10.200.6.0/24 | Security | Zeek, Snort 3, Qsecbit |
-| **007** | 10.200.7.0/24 | AI Response | Honeypots, Kali Linux, Mitigation Engine |
+| POD | Network | Purpose | Documentation |
+|-----|---------|---------|---------------|
+| **[POD-001](docs/components/POD-001.md)** | 10.200.1.0/24 | Web DMZ & Management | Nginx, REST API, NAXSI WAF, Django CMS |
+| **[POD-002](docs/components/POD-002.md)** | 10.200.2.0/24 | IAM/Auth | Logto, OAuth 2.0, SSO, RBAC |
+| **[POD-003](docs/components/POD-003.md)** | 10.200.3.0/24 | Persistent Database | PostgreSQL, NFS, RADIUS (optional) |
+| **[POD-004](docs/components/POD-004.md)** | 10.200.4.0/24 | Transient Database | Redis, Valkey, Caching Layer |
+| **[POD-005](docs/components/POD-005.md)** | 10.200.5.0/24 | Monitoring & Analytics | Grafana, ClickHouse, VictoriaMetrics |
+| **[POD-006](docs/components/POD-006.md)** | 10.200.6.0/24 | Security Detection | Zeek, Snort 3, Suricata, Qsecbit AI |
+| **[POD-007](docs/components/POD-007.md)** | 10.200.7.0/24 | AI Response Engine | Kali Linux, Automated Mitigation |
 
-### Optional POD (008)
+### Optional Extensions (POD-008+)
 
-| POD | Network | Purpose | Key Components |
-|-----|---------|---------|----------------|
-| **008** | 10.200.8.0/24 | Automation | n8n, PostgreSQL, Redis, MCP Server |
+| POD | Network | Purpose | Documentation |
+|-----|---------|---------|---------------|
+| **[POD-008](docs/components/POD-008.md)** | 10.200.8.0/24 | Workflow Automation | n8n, MCP Server, AI Integration |
+| **[POD-009](docs/components/POD-009.md)** | 10.200.9.0/24 | Email System | Postfix, DKIM, Cloudflare Tunnel |
+
+### Dashboards & Interfaces
+
+| Dashboard | Purpose | Documentation |
+|-----------|---------|---------------|
+| **[Admin Dashboard](docs/dashboards/admin-dashboard.md)** | Content & Merchandise Management | Blog posts, products, AI content generation |
+| **[MSSP Dashboard](docs/dashboards/mssp-dashboard.md)** | Security Monitoring (SIEM) | Real-time metrics, threat hunting, SOAR |
+
+**Quick Links:**
+- 📖 [High-Level Design (HLD)](docs/architecture/security-model.md) - Complete system architecture
+- 🚀 [Dashboard Implementation Plan](docs/DASHBOARD-IMPLEMENTATION-PLAN.md) - Detailed development roadmap
+- 🛡️ [Security Features](#security-features) - Six-layer defense system
+- 📊 [Monitoring & Analytics](#monitoring--analytics) - Observability stack
 
 ### Network Topology
 
@@ -605,7 +639,6 @@ Installation takes **15-20 minutes**.
 
 4. **Access Services**
 
-- **Django Admin**: http://YOUR_IP/admin (admin/admin)
 - **Grafana**: http://YOUR_IP:3000 (admin/admin)
 - **Logto Admin**: http://YOUR_IP:3002
 - **Qsecbit API**: http://YOUR_IP:8888
@@ -615,6 +648,83 @@ Installation takes **15-20 minutes**.
 ---
 
 ## 🔧 Optional Features
+
+### Web Server & CMS (POD 001)
+
+**Status**: Optional Post-Installation Addon
+
+The HookProbe web server provides a Django-based CMS and management interface. It's an **optional addon** installed **after** the main HookProbe infrastructure is running.
+
+#### Why Optional?
+
+- **Reduced complexity** - Core security functions work without web UI
+- **Edge flexibility** - Not all edge devices need full web interface
+- **Cloud centralization** - MSSP can run centralized web server for multiple edges
+- **Resource efficiency** - Save RAM/CPU on constrained devices
+- **Staged deployment** - Install web components when ready
+
+#### Features
+
+- **Public CMS** (Forty HTML5 theme) - Blog, pages, contact forms
+- **Admin Dashboard** (AdminLTE) - System overview, POD monitoring
+- **MSSP Device Management** - Multi-tenant edge device tracking
+- **Security Dashboard** - Qsecbit scores, IDS/IPS/WAF events
+- **REST APIs** - Device management, security events, metrics
+
+#### Quick Start: Web Server Installation
+
+**Prerequisites:**
+- HookProbe PODs 001-007 must be running
+- PostgreSQL (POD-003) and Redis (POD-004) accessible
+- Python 3.11+ or Podman 4.0+
+
+**Option 1: Native Installation (Edge)**
+
+```bash
+cd install/addons/webserver
+
+# Configure (optional)
+nano config/webserver-config.sh
+
+# Run installation
+sudo ./setup-webserver.sh edge
+```
+
+**Option 2: Podman Container (Recommended)**
+
+```bash
+cd install/addons/webserver
+
+# Configure (optional)
+nano config/webserver-config.sh
+
+# Run Podman installation
+sudo ./setup-webserver-podman.sh edge
+```
+
+**Option 3: Cloud Centralized (MSSP)**
+
+```bash
+cd install/addons/webserver
+
+# Configure for cloud
+export DEPLOYMENT_TYPE=cloud
+export MULTITENANT_ENABLED=true
+
+# Run installation on cloud server
+sudo ./setup-webserver-podman.sh cloud
+```
+
+**Access:**
+- Public Site: http://YOUR_IP/
+- Admin Interface: http://YOUR_IP/admin/
+- Dashboard: http://YOUR_IP/dashboard/
+- Device Management: http://YOUR_IP/devices/
+- API: http://YOUR_IP/api/v1/
+
+**Documentation**: See [Web Server README](install/addons/webserver/README.md) for complete guide
+
+---
 
 ### n8n Workflow Automation (POD 008)
 

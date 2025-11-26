@@ -1,0 +1,229 @@
+{% extends 'mssp_dashboard/base.html' %}
+
+{% block title %}SOAR Playbooks - MSSP{% endblock %}
+{% block page_title %}Security Orchestration, Automation & Response{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">SOAR</li>
+{% endblock %}
+
+{% block content %}
+<!-- SOAR Statistics -->
+<div class="row mb-3">
+    <div class="col-md-3">
+        <div class="info-box bg-primary">
+            <span class="info-box-icon"><i class="fas fa-robot"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Total Playbooks</span>
+                <span class="info-box-number">{{ total_playbooks }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="info-box bg-success">
+            <span class="info-box-icon"><i class="fas fa-check-circle"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Active</span>
+                <span class="info-box-number">{{ active_playbooks }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="info-box bg-info">
+            <span class="info-box-icon"><i class="fas fa-play"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Total Executions</span>
+                <span class="info-box-number">{{ total_executions }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="info-box bg-success">
+            <span class="info-box-icon"><i class="fas fa-trophy"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Success Rate</span>
+                <span class="info-box-number">
+                    {% if total_executions > 0 %}
+                        {{ successful_executions|floatformat:0 }}/{{ total_executions }}
+                    {% else %}
+                        0%
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Playbooks -->
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-book mr-2"></i>
+                    Automation Playbooks
+                </h3>
+                <div class="card-tools">
+                    <button class="btn btn-primary btn-sm">
+                        <i class="fas fa-plus"></i> Create Playbook
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Playbook</th>
+                            <th>Triggers</th>
+                            <th>Status</th>
+                            <th>Executions</th>
+                            <th>Success Rate</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for playbook in playbooks %}
+                        <tr>
+                            <td>
+                                <strong>{{ playbook.name }}</strong><br>
+                                <small class="text-muted">{{ playbook.description|truncatewords:15 }}</small>
+                            </td>
+                            <td>
+                                {% if playbook.trigger_on_vulnerability %}
+                                    <span class="badge badge-warning">Vulnerability</span>
+                                {% endif %}
+                                {% if playbook.trigger_on_alert %}
+                                    <span class="badge badge-danger">Alert</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if playbook.status == 'active' %}
+                                    <span class="badge badge-success">Active</span>
+                                {% elif playbook.status == 'paused' %}
+                                    <span class="badge badge-warning">Paused</span>
+                                {% elif playbook.status == 'draft' %}
+                                    <span class="badge badge-secondary">Draft</span>
+                                {% endif %}
+                            </td>
+                            <td><span class="badge badge-primary">{{ playbook.execution_count }}</span></td>
+                            <td>
+                                <div class="progress" style="height: 20px;">
+                                    <div class="progress-bar {% if playbook.success_rate >= 80 %}bg-success{% elif playbook.success_rate >= 50 %}bg-warning{% else %}bg-danger{% endif %}"
+                                         style="width: {{ playbook.success_rate }}%">
+                                        {{ playbook.success_rate|floatformat:0 }}%
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-info" title="View Details">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-primary" onclick="runPlaybook({{ playbook.id }})" title="Execute">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                {% if playbook.status == 'active' %}
+                                <button class="btn btn-sm btn-warning" title="Pause">
+                                    <i class="fas fa-pause"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">
+                                <i class="fas fa-robot fa-3x mb-3 d-block"></i>
+                                No playbooks created yet. Create your first automation playbook!
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Integration Info -->
+        <div class="card">
+            <div class="card-header bg-info">
+                <h3 class="card-title">
+                    <i class="fas fa-plug mr-2"></i>
+                    n8n Workflow Integration
+                </h3>
+            </div>
+            <div class="card-body">
+                <p>
+                    <i class="fas fa-check-circle text-success mr-2"></i>
+                    <strong>n8n is connected</strong> - Playbooks can trigger automated workflows in POD-008
+                </p>
+                <p class="mb-0">
+                    <small class="text-muted">
+                        Configure n8n webhook URLs in each playbook to enable autonomous security operations
+                        including automated patching, firewall rule updates, and alert escalation.
+                    </small>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Executions -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-history mr-2"></i>
+                    Recent Executions
+                </h3>
+            </div>
+            <div class="card-body" style="max-height: 600px; overflow-y: auto;">
+                <div class="timeline">
+                    {% for execution in recent_executions %}
+                    <div>
+                        <i class="fas fa-play bg-{{ execution.status == 'success' and 'success' or execution.status == 'running' and 'info' or 'danger' }}"></i>
+                        <div class="timeline-item">
+                            <span class="time">
+                                <i class="fas fa-clock"></i> {{ execution.started_at|timesince }} ago
+                            </span>
+                            <h3 class="timeline-header">
+                                {{ execution.playbook.name }}
+                            </h3>
+                            <div class="timeline-body">
+                                <p>
+                                    <strong>Status:</strong>
+                                    {% if execution.status == 'success' %}
+                                        <span class="badge badge-success">Success</span>
+                                    {% elif execution.status == 'running' %}
+                                        <span class="badge badge-info">
+                                            <i class="fas fa-spinner fa-spin"></i> Running
+                                        </span>
+                                    {% elif execution.status == 'failed' %}
+                                        <span class="badge badge-danger">Failed</span>
+                                    {% endif %}
+                                </p>
+                                {% if execution.vulnerability %}
+                                <p class="mb-0">
+                                    <small>Target: {{ execution.vulnerability.title|truncatewords:8 }}</small>
+                                </p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% empty %}
+                    <p class="text-muted text-center">No executions yet</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function runPlaybook(playbookId) {
+    if (confirm('Execute this SOAR playbook now?')) {
+        alert('Playbook execution started! Check the Recent Executions panel for progress.');
+        // In production, this would trigger an API call
+        setTimeout(() => location.reload(), 2000);
+    }
+}
+</script>
+{% endblock %}
