@@ -6,7 +6,7 @@ Last Updated: November 2025
 Status: Production Ready
 
 ---
-![SecurityMitigataionPlan](../images/xSOC-HLD-v1.3.png)
+![SecurityMitigataionPlan](../../assets/xSOC-HLD-v1.2.png)
 ---
 
 ## Executive Summary

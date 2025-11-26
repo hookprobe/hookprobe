@@ -1,0 +1,333 @@
+{% extends "public/base.html" %}
+{% load static %}
+
+{% block title %}HookProbe - Democratizing Cybersecurity Through Edge Computing{% endblock %}
+
+{% block content %}
+
+<!-- Hero Banner -->
+<section id="banner" class="major">
+    <div class="inner">
+        <div class="grid-wrapper">
+            <div class="col-6">
+                <header class="major">
+                    <h1>Uncovering the truth,<br />
+                    protecting your digital world.</h1>
+                </header>
+                <div class="content">
+                    <p>Open-source cybersecurity platform for edge and cloud deployments.<br />
+                    Build your own SOC on single-board computers or centralized infrastructure.</p>
+                    <ul class="actions">
+                        <li><a href="#signup" class="button next scrolly">Get Started</a></li>
+                        <li><a href="{% url 'cms:about' %}" class="button">Learn More</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="col-6">
+                <span class="image">
+                    <img src="{% static 'common/images/hero-placeholder.png' %}" alt="HookProbe - Cybersecurity Platform" />
+                </span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Key Features -->
+<section id="features" class="wrapper style1">
+    <div class="inner">
+        <header class="major">
+            <h2>Why HookProbe?</h2>
+            <p>Enterprise-grade cybersecurity made accessible and affordable</p>
+        </header>
+        <div class="grid-wrapper">
+            <div class="col-6">
+                <ul class="alt">
+                    <li><span class="icon solid fa-shield-alt"></span> <strong>Build your own SOC</strong> for Digital forensics investigations</li>
+                    <li><span class="icon solid fa-bell"></span> <strong>Triage, alert and incident response</strong> platform on your SBC</li>
+                    <li><span class="icon solid fa-bug"></span> <strong>Open-Source malware analysis</strong>, and threat hunting</li>
+                    <li><span class="icon solid fa-cogs"></span> <strong>DIY, multipurpose</strong> and adaptable to everyone's needs</li>
+                </ul>
+            </div>
+            <div class="col-6">
+                <h3>Real-Time Threat Detection</h3>
+                <p>HookProbe leverages the <strong>Qsecbit algorithm</strong> - an AI-driven threat analysis engine that provides real-time security scoring using RAG (Red/Amber/Green) status indicators.</p>
+                <ul class="actions">
+                    <li><a href="https://github.com/hookprobe/hookprobe" class="button icon brands fa-github" target="_blank">View on GitHub</a></li>
+                    <li><a href="{% url 'cms:blog_list' %}" class="button">Read Blog</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CTA Signup Section -->
+<section id="signup" class="wrapper style2 special">
+    <div class="inner">
+        <header class="major">
+            <h2>Stay Updated with HookProbe</h2>
+            <p>Get free updates about HookProbe releases, security insights, and Qsecbit algorithm improvements</p>
+        </header>
+
+        {% if messages %}
+            {% for message in messages %}
+                <div class="alert {% if message.tags %}alert-{{ message.tags }}{% endif %}">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        {% endif %}
+
+        <form method="post" action="{% url 'cms:newsletter_signup' %}">
+            {% csrf_token %}
+            <div class="row gtr-uniform">
+                <div class="col-6 col-12-xsmall">
+                    <input type="text" name="name" id="name" placeholder="Full Name" required />
+                </div>
+                <div class="col-6 col-12-xsmall">
+                    <input type="email" name="email" id="email" placeholder="Email Address" required />
+                </div>
+                <div class="col-12">
+                    <input type="checkbox" id="gdpr_consent" name="gdpr_consent" required>
+                    <label for="gdpr_consent">
+                        I agree to receive updates and marketing communications from HookProbe.
+                        I understand I can unsubscribe at any time.
+                        By submitting this form, I acknowledge that I have read and agree to the
+                        <a href="{% url 'cms:privacy_policy' %}" target="_blank">Privacy Policy</a> and
+                        <a href="{% url 'cms:terms_of_service' %}" target="_blank">Terms of Service</a>.
+                    </label>
+                </div>
+                <div class="col-12">
+                    <input type="checkbox" id="marketing_consent" name="marketing_consent">
+                    <label for="marketing_consent">
+                        I consent to receive promotional emails about products, services, and events (optional)
+                    </label>
+                </div>
+                <div class="col-12">
+                    <ul class="actions special">
+                        <li><input type="submit" value="Subscribe" class="primary" /></li>
+                    </ul>
+                    <p class="note"><small>
+                        <strong>Your privacy matters:</strong> We are GDPR compliant. Your data will never be sold or shared with third parties.
+                        We use anonymized analytics and maintain strict data retention policies.
+                        <a href="{% url 'cms:gdpr' %}">Learn more about our GDPR compliance</a>.
+                    </small></p>
+                </div>
+            </div>
+        </form>
+    </div>
+</section>
+
+<!-- Deployment Options -->
+<section id="deployment" class="wrapper">
+    <div class="inner">
+        <header class="major">
+            <h2>Choose Your Deployment</h2>
+            <p>Flexible deployment options for edge devices and cloud infrastructure</p>
+        </header>
+
+        <!-- Edge Deployment -->
+        <section id="edge-deployment">
+            <div class="grid-wrapper">
+                <div class="col-6">
+                    <span class="image fit">
+                        <img src="{% static 'common/images/edge-deployment-placeholder.png' %}" alt="Edge Deployment" />
+                    </span>
+                </div>
+                <div class="col-6">
+                    <h3><span class="icon solid fa-microchip"></span> Edge Deployment</h3>
+                    <p><strong>Perfect for home users, small businesses, and remote sites</strong></p>
+                    <ul>
+                        <li><strong>Hardware:</strong> Run on Raspberry Pi, Intel NUC, or any SBC</li>
+                        <li><strong>Minimum:</strong> 8GB RAM, 500GB storage</li>
+                        <li><strong>Network:</strong> 1Gbps Ethernet (2.5Gbps recommended)</li>
+                        <li><strong>Cost:</strong> $150-$600 hardware investment</li>
+                        <li><strong>Benefits:</strong> Complete local control, no cloud dependency, GDPR compliant</li>
+                    </ul>
+                    <h4>Key Features:</h4>
+                    <ul class="icons-list">
+                        <li><span class="icon fa-check"></span> XDP/eBPF DDoS mitigation at kernel level</li>
+                        <li><span class="icon fa-check"></span> AI-powered threat detection (Qsecbit)</li>
+                        <li><span class="icon fa-check"></span> Automated Kali Linux response</li>
+                        <li><span class="icon fa-check"></span> 7-POD architecture for complete security</li>
+                        <li><span class="icon fa-check"></span> Works offline - all data stays on-premises</li>
+                    </ul>
+                    <ul class="actions">
+                        <li><a href="https://github.com/hookprobe/hookprobe#-quick-install" class="button primary" target="_blank">Install Guide</a></li>
+                        <li><a href="{% url 'cms:blog_list' %}?tag=edge" class="button">Edge Blog Posts</a></li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <hr class="major" />
+
+        <!-- Cloud Deployment -->
+        <section id="cloud-deployment">
+            <div class="grid-wrapper">
+                <div class="col-6">
+                    <h3><span class="icon solid fa-cloud"></span> Cloud Deployment</h3>
+                    <p><strong>Ideal for MSSPs, enterprises, and multi-tenant environments</strong></p>
+                    <ul>
+                        <li><strong>Hardware:</strong> Datacenter servers or cloud VMs</li>
+                        <li><strong>Minimum:</strong> 32GB RAM, 1TB storage per node</li>
+                        <li><strong>Cluster:</strong> 3 Frontend + 3+ Backend nodes</li>
+                        <li><strong>Capacity:</strong> 100-1000+ customer sites per cluster</li>
+                        <li><strong>Benefits:</strong> Centralized management, multi-tenant isolation, cross-customer threat intelligence</li>
+                    </ul>
+                    <h4>Key Features:</h4>
+                    <ul class="icons-list">
+                        <li><span class="icon fa-check"></span> Apache Doris multi-tenant backend</li>
+                        <li><span class="icon fa-check"></span> Centralized web dashboard for all customers</li>
+                        <li><span class="icon fa-check"></span> 365+ day data retention</li>
+                        <li><span class="icon fa-check"></span> GPU-accelerated ML training (optional)</li>
+                        <li><span class="icon fa-check"></span> Cross-customer threat correlation</li>
+                    </ul>
+                    <ul class="actions">
+                        <li><a href="https://github.com/hookprobe/hookprobe/blob/main/docs/installation/cloud-deployment.md" class="button primary" target="_blank">Cloud Guide</a></li>
+                        <li><a href="{% url 'cms:blog_list' %}?tag=cloud" class="button">Cloud Blog Posts</a></li>
+                    </ul>
+                </div>
+                <div class="col-6">
+                    <span class="image fit">
+                        <img src="{% static 'common/images/cloud-deployment-placeholder.png' %}" alt="Cloud Deployment" />
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        <hr class="major" />
+
+        <!-- Hybrid Deployment -->
+        <section id="hybrid-deployment" class="spotlight">
+            <div class="content">
+                <header>
+                    <h3><span class="icon solid fa-project-diagram"></span> Hybrid Deployment</h3>
+                </header>
+                <p><strong>Best of both worlds:</strong> Edge devices for local security + Cloud backend for centralized management</p>
+                <ul>
+                    <li>Deploy HookProbe edge devices at customer sites</li>
+                    <li>Aggregate data to centralized cloud backend</li>
+                    <li>Local UI for high-value customers, headless for others</li>
+                    <li>Flexible resource allocation based on customer needs</li>
+                </ul>
+                <ul class="actions">
+                    <li><a href="{% url 'cms:contact' %}" class="button">Contact for MSSP Setup</a></li>
+                </ul>
+            </div>
+        </section>
+    </div>
+</section>
+
+<!-- Use Cases / Marketing -->
+<section id="use-cases" class="wrapper style1 special">
+    <div class="inner">
+        <header class="major">
+            <h2>Who Uses HookProbe?</h2>
+            <p>From home enthusiasts to enterprise security teams</p>
+        </header>
+        <div class="features">
+            <article>
+                <span class="icon solid fa-home"></span>
+                <div class="content">
+                    <h3>Home Users</h3>
+                    <p>Protect your smart home, IoT devices, and personal network from cyber threats. Run HookProbe on a Raspberry Pi for affordable, professional-grade security.</p>
+                </div>
+            </article>
+            <article>
+                <span class="icon solid fa-building"></span>
+                <div class="content">
+                    <h3>Small Businesses</h3>
+                    <p>Enterprise security without enterprise costs. Monitor your network, detect threats, and respond automatically with HookProbe on affordable hardware.</p>
+                </div>
+            </article>
+            <article>
+                <span class="icon solid fa-shield-alt"></span>
+                <div class="content">
+                    <h3>MSSPs</h3>
+                    <p>Deploy edge devices at customer sites and manage centrally from the cloud. Multi-tenant architecture with cross-customer threat intelligence.</p>
+                </div>
+            </article>
+            <article>
+                <span class="icon solid fa-graduation-cap"></span>
+                <div class="content">
+                    <h3>Education</h3>
+                    <p>Learn cybersecurity hands-on. Perfect for universities, training programs, and certifications. Open-source and fully documented.</p>
+                </div>
+            </article>
+            <article>
+                <span class="icon solid fa-search"></span>
+                <div class="content">
+                    <h3>Security Researchers</h3>
+                    <p>Malware analysis, threat hunting, and digital forensics platform. Integrated Kali Linux for penetration testing and incident response.</p>
+                </div>
+            </article>
+            <article>
+                <span class="icon solid fa-globe"></span>
+                <div class="content">
+                    <h3>IoT & Edge Computing</h3>
+                    <p>Secure edge devices in industrial, retail, and remote environments. Low power consumption, offline operation, and real-time threat detection.</p>
+                </div>
+            </article>
+        </div>
+    </div>
+</section>
+
+<!-- Latest Blog Posts -->
+<section id="recent-posts" class="wrapper">
+    <div class="inner">
+        <header class="major">
+            <h2>Latest from Our Blog</h2>
+            <p>Security insights, tutorials, and updates</p>
+        </header>
+        <div class="tiles">
+            {% for post in latest_posts %}
+            <article>
+                <span class="image">
+                    {% if post.featured_image %}
+                        <img src="{{ post.featured_image.url }}" alt="{{ post.title }}" />
+                    {% else %}
+                        <img src="{% static 'common/images/blog-placeholder.jpg' %}" alt="{{ post.title }}" />
+                    {% endif %}
+                </span>
+                <header class="major">
+                    <h3><a href="{{ post.get_absolute_url }}">{{ post.title }}</a></h3>
+                    <p>{{ post.excerpt }}</p>
+                    <ul class="meta">
+                        <li><span class="icon solid fa-user"></span> {{ post.author.get_full_name|default:post.author.username }}</li>
+                        <li><span class="icon solid fa-calendar"></span> {{ post.published_at|date:"F d, Y" }}</li>
+                        <li><span class="icon solid fa-eye"></span> {{ post.views }} views</li>
+                    </ul>
+                </header>
+            </article>
+            {% empty %}
+            <article>
+                <span class="image">
+                    <img src="{% static 'common/images/blog-placeholder.jpg' %}" alt="Coming Soon" />
+                </span>
+                <header class="major">
+                    <h3>Blog Coming Soon</h3>
+                    <p>We're preparing exciting content about cybersecurity, threat hunting, and HookProbe tutorials.</p>
+                </header>
+            </article>
+            {% endfor %}
+        </div>
+        <ul class="actions special">
+            <li><a href="{% url 'cms:blog_list' %}" class="button">View All Posts</a></li>
+        </ul>
+    </div>
+</section>
+
+<!-- Call to Action -->
+<section id="cta" class="wrapper style2 special">
+    <div class="inner">
+        <header class="major">
+            <h2>Ready to Secure Your Digital World?</h2>
+            <p>Get started with HookProbe today - it's free, open-source, and takes 15 minutes to install</p>
+        </header>
+        <ul class="actions special">
+            <li><a href="https://github.com/hookprobe/hookprobe" class="button primary large icon brands fa-github" target="_blank">Get Started on GitHub</a></li>
+            <li><a href="{% url 'cms:contact' %}" class="button large">Contact Us</a></li>
+        </ul>
+    </div>
+</section>
+
+{% endblock %}
