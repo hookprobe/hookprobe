@@ -24,6 +24,9 @@ urlpatterns = [
     # Merchandise Store
     path('merchandise/', include('apps.merchandise.urls', namespace='merchandise')),
 
+    # MSSP Dashboard - Customer-Facing (SIEM-like)
+    path('mssp/', include('apps.mssp_dashboard.urls', namespace='mssp_dashboard')),
+
     # Device Management
     path('devices/', include('apps.devices.urls', namespace='devices')),
 
