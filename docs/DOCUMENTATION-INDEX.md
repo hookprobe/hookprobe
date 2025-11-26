@@ -37,6 +37,9 @@ Understanding HookProbe's security architecture.
 ### Core Architecture
 - **[Security Model](architecture/security-model.md)** - Complete security architecture
 - **[DSM Whitepaper](architecture/dsm-whitepaper.md)** ⭐ **Decentralized Security Mesh architecture**
+- **[DSM Implementation](architecture/dsm-implementation.md)** - Technical implementation guide
+- **[Axon-Z Protocol](architecture/hookprobe-axon-z-protocol.md)** 🔥 **Revolutionary neural-weight-based authentication**
+- **[HookProbe Protocol Overview](architecture/hookprobe-protocol.md)** - Edge-cloud communication protocol
 - **[POD Components Overview](components/README.md)** - All 7-9 POD modules
 - **[Network Topology](architecture/security-model.md#network-topology)** - VXLAN, OpenFlow, isolation
 
@@ -50,6 +53,7 @@ Understanding HookProbe's security architecture.
 - **[POD-005: Monitoring](components/POD-005.md)** - Grafana, ClickHouse, VictoriaMetrics
 - **[POD-006: Security Detection](components/POD-006.md)** - Zeek, Snort, Suricata
 - **[POD-007: AI Response](components/POD-007.md)** - Qsecbit, Kali Linux, mitigation
+- **[POD-010: DSM Ledger](../infrastructure/pod-010-dsm/README.md)** 🔥 **Decentralized Security Mesh + Axon-Z**
 
 #### Optional Extension PODs
 - **[POD-008: Automation](components/POD-008.md)** - n8n workflows, MCP server
@@ -73,6 +77,8 @@ Deep dive into HookProbe's security capabilities.
 - **[WAF Configuration](components/POD-001.md#waf)** - NAXSI/ModSecurity
 
 ### Advanced Security
+- **[Axon-Z Protocol](architecture/hookprobe-axon-z-protocol.md)** 🔥 **Neural-weight-based continuous authentication**
+- **[Axon-Z Implementation](../src/axon/README.md)** - Proof-of-Sensor-Fusion (PoSF) signatures
 - **[XDP/eBPF DDoS Mitigation](../src/qsecbit/README.md#xdp)** - Kernel-level filtering
 - **[Network Hardening](architecture/security-model.md#network-hardening)** - OpenFlow ACLs
 - **[Zero Trust Architecture](architecture/security-model.md#zero-trust)** - Security principles
