@@ -4,6 +4,77 @@
 ![HookProbe Protocol](../../assets/hookprobe-protocol.png)
 ---
 
+```mermaid
+flowchart TD
+    %% ===========================
+    %% 1. SIGNAL ACQUISITION
+    %% ===========================
+    A1[System Signals Collected]
+    A2[Kernel Events]
+    A3[Syscalls]
+    A4[Network Metrics]
+    A5[Process Metadata]
+
+    A1 --> A2
+    A1 --> A3
+    A1 --> A4
+    A1 --> A5
+
+    %% ===========================
+    %% 2. TEMPORAL EVENT RECORD
+    %% ===========================
+    B1[Event Normalization]
+    B2[Feature Extraction]
+    B3[Temporal Record Packing]
+    B4[Hashing for Integrity]
+    B5[Temporal Event Record Output]
+
+    A2 --> B1
+    A3 --> B1
+    A4 --> B1
+    A5 --> B1
+
+    B1 --> B2 --> B3 --> B4 --> B5
+
+    %% ===========================
+    %% 3. ENTROPY AND RESONANCE LAYER
+    %% ===========================
+    C1[Entropy Calculation]
+    C2[State Vector Update]
+    C3[Resonance Score Generation]
+    C4[Anomaly Folding]
+    C5[Neuro Resonance Packet]
+
+    B5 --> C1 --> C2 --> C3 --> C4 --> C5
+
+    %% ===========================
+    %% 4. MODEL UPDATE ENGINE
+    %% ===========================
+    D1[Weights Store]
+    D2[Learning Rate Adaptive]
+    D3[Gradient Evaluation]
+    D4[Online Update Loop]
+    D5[Model State Output]
+
+    C5 --> D3 --> D4 --> D5
+    D5 --> D1
+    D5 --> D2
+
+    %% ===========================
+    %% 5. ACTION AND CONTROL LAYER
+    %% ===========================
+    E1[Alert Generation]
+    E2[Policy Feedback]
+    E3[Mitigation Trigger]
+    E4[Distributed Sync]
+
+    D5 --> E1
+    D5 --> E2
+    D5 --> E3
+    C5 --> E4
+
+
+```
 
 ## HookProbe: The Neuro-Resonant Cybersecurity Protocol
 Project Abstract / Overview 🧠
