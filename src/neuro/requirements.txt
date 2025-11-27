@@ -1,0 +1,12 @@
+# HookProbe Axon-Z Protocol Dependencies
+
+# Core dependencies
+numpy>=1.24.0
+cryptography>=41.0.0  # For ChaCha20-Poly1305, Curve25519, HKDF
+
+# Optional: Integration with Qsecbit
+# (Already included in main HookProbe installation)
+
+# Development dependencies (testing only)
+pytest>=7.4.0
+hypothesis>=6.82.0  # Property-based testing for determinism
