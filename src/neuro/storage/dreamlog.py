@@ -35,7 +35,7 @@ class DreamLog:
     File Format:
     ┌─────────────────────────────────────────────────┐
     │ Header (128 bytes)                              │
-    │  - Magic: "AXONZ-DREAM-LOG" (16 bytes)          │
+    │  - Magic: "NEUROZ-DREAM-LOG" (16 bytes)          │
     │  - Version: uint32                              │
     │  - Node ID: string (32 bytes)                   │
     │  - Created: uint64 (timestamp)                  │
@@ -52,7 +52,7 @@ class DreamLog:
     └─────────────────────────────────────────────────┘
     """
 
-    MAGIC = b"AXONZ-DREAM-LOG\x00"
+    MAGIC = b"NEUROZ-DREAM-LOG\x00"
     VERSION = 1
     HEADER_SIZE = 128
 
