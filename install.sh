@@ -877,12 +877,158 @@ check_root() {
 }
 
 # ============================================================
+# COMMAND-LINE ARGUMENT PARSING
+# ============================================================
+
+show_usage() {
+    echo -e "${CYAN}HookProbe Installer${NC}"
+    echo ""
+    echo "Usage:"
+    echo "  $0                    # Interactive menu mode"
+    echo "  $0 --role <ROLE>      # Automated installation"
+    echo ""
+    echo "Roles:"
+    echo "  edge                  # Edge node deployment (home/SMB/branch office)"
+    echo "  validator             # Cloud validator deployment (MSSP backend)"
+    echo "  cloud                 # Alias for 'validator'"
+    echo ""
+    echo "Examples:"
+    echo "  sudo ./install.sh --role edge        # Install edge node"
+    echo "  sudo ./install.sh --role validator   # Install cloud validator"
+    echo ""
+    echo "After installation:"
+    echo "  # Initialize Neuro protocol"
+    echo "  python3 -m neuro.tools.init_weights --node-id <YOUR-NODE-ID>"
+    echo ""
+    echo "  # Start services"
+    echo "  sudo systemctl start hookprobe-edge   # (edge nodes)"
+    echo "  sudo systemctl start hookprobe-neuro  # (all nodes with Neuro)"
+    echo ""
+}
+
+automated_install() {
+    local role="$1"
+
+    clear
+    show_banner
+
+    case "$role" in
+        edge)
+            echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${GREEN}║  AUTOMATED EDGE NODE INSTALLATION                         ║${NC}"
+            echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${CYAN}Installing HookProbe Edge Node...${NC}"
+            echo -e "${CYAN}Target: Home/SMB/Branch Office deployment${NC}"
+            echo ""
+
+            if run_installer "$SCRIPT_DIR/install/edge/setup.sh" "Edge Deployment" "edge"; then
+                echo ""
+                echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${GREEN}║  ✓ EDGE NODE INSTALLATION COMPLETE                        ║${NC}"
+                echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+                echo ""
+                echo -e "${YELLOW}Next Steps:${NC}"
+                echo ""
+                echo -e "1. Initialize Neuro Protocol:"
+                echo -e "   ${CYAN}python3 -m neuro.tools.init_weights --node-id edge-001${NC}"
+                echo ""
+                echo -e "2. Start HookProbe services:"
+                echo -e "   ${CYAN}sudo systemctl start hookprobe-edge${NC}"
+                echo -e "   ${CYAN}sudo systemctl start hookprobe-neuro${NC}"
+                echo ""
+                echo -e "3. Verify installation:"
+                echo -e "   ${CYAN}sudo systemctl status hookprobe-edge${NC}"
+                echo ""
+                echo -e "4. Access dashboard:"
+                echo -e "   ${CYAN}https://$(hostname -I | awk '{print $1}'):8443${NC}"
+                echo ""
+                exit 0
+            else
+                echo -e "${RED}✗ Edge installation failed${NC}"
+                exit 1
+            fi
+            ;;
+
+        validator|cloud)
+            echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${GREEN}║  AUTOMATED CLOUD VALIDATOR INSTALLATION                   ║${NC}"
+            echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${CYAN}Installing HookProbe Cloud Validator...${NC}"
+            echo -e "${CYAN}Target: MSSP backend / Multi-tenant SOC${NC}"
+            echo ""
+
+            if run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Validator Deployment" "cloud"; then
+                echo ""
+                echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${GREEN}║  ✓ CLOUD VALIDATOR INSTALLATION COMPLETE                  ║${NC}"
+                echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+                echo ""
+                echo -e "${YELLOW}Next Steps:${NC}"
+                echo ""
+                echo -e "1. Configure validator settings:"
+                echo -e "   ${CYAN}nano /etc/hookprobe/validator.conf${NC}"
+                echo ""
+                echo -e "2. Start validator services:"
+                echo -e "   ${CYAN}sudo systemctl start hookprobe-validator${NC}"
+                echo -e "   ${CYAN}sudo systemctl start hookprobe-neuro-validator${NC}"
+                echo ""
+                echo -e "3. Verify Neuro deterministic replay:"
+                echo -e "   ${CYAN}curl http://localhost:8080/neuro/status${NC}"
+                echo ""
+                echo -e "4. Configure edge nodes to connect:"
+                echo -e "   ${CYAN}Set VALIDATOR_URL in edge config${NC}"
+                echo ""
+                exit 0
+            else
+                echo -e "${RED}✗ Cloud validator installation failed${NC}"
+                exit 1
+            fi
+            ;;
+
+        *)
+            echo -e "${RED}ERROR: Invalid role '$role'${NC}"
+            echo ""
+            show_usage
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
 # MAIN LOOP
 # ============================================================
 
 main() {
     check_root
 
+    # Parse command-line arguments
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            --role)
+                if [ -z "$2" ]; then
+                    echo -e "${RED}ERROR: --role requires an argument${NC}"
+                    echo ""
+                    show_usage
+                    exit 1
+                fi
+                automated_install "$2"
+                ;;
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}ERROR: Unknown option '$1'${NC}"
+                echo ""
+                show_usage
+                exit 1
+                ;;
+        esac
+    fi
+
+    # Interactive menu mode (no arguments provided)
     while true; do
         clear
         show_banner
@@ -913,4 +1059,4 @@ main() {
     done
 }
 
-main
+main "$@"
