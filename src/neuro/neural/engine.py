@@ -279,8 +279,8 @@ class NeuralEngine:
         return input_fp
 
 
-# Default HookProbe Axon-Z architecture
-AXON_Z_ARCHITECTURE = {
+# Default HookProbe Neuro-Z architecture
+NEURO_Z_ARCHITECTURE = {
     'input': 64,       # TER size
     'hidden_1': 128,   # First hidden layer
     'hidden_2': 64,    # Second hidden layer
@@ -301,7 +301,7 @@ def create_initial_weights(seed: int = 42) -> WeightState:
         WeightState instance
     """
     np.random.seed(seed)
-    return WeightState(AXON_Z_ARCHITECTURE)
+    return WeightState(NEURO_Z_ARCHITECTURE)
 
 
 if __name__ == '__main__':
@@ -334,7 +334,7 @@ if __name__ == '__main__':
 
     # Test weight serialization
     W_bytes = W0.to_bytes()
-    W_restored = WeightState.from_bytes(W_bytes, AXON_Z_ARCHITECTURE)
+    W_restored = WeightState.from_bytes(W_bytes, NEURO_Z_ARCHITECTURE)
 
     if W0.fingerprint() == W_restored.fingerprint():
         print("✓ Weight serialization verified")

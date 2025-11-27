@@ -1,4 +1,4 @@
-# HookProbe-Axon-Z Protocol Specification
+# HookProbe-Neuro Protocol Specification
 
 **Version**: 1.0-alpha
 **Status**: Phase 1 Implementation
@@ -8,11 +8,11 @@
 
 ## Executive Summary
 
-**HookProbe-Axon-Z** introduces a revolutionary cryptographic protocol where **deterministic neural network weight evolution replaces traditional static keys** for continuous mutual authentication between Edge nodes and Cloud validators.
+**HookProbe-Neuro** introduces a revolutionary cryptographic protocol where **deterministic neural network weight evolution replaces traditional static keys** for continuous mutual authentication between Edge nodes and Cloud validators.
 
 ### Core Innovation
 
-Instead of pre-shared keys or PKI, Axon-Z uses:
+Instead of pre-shared keys or PKI, Neuro uses:
 - **Temporal Event Records (TER)**: 64-byte sensor snapshots (entropy + integrity)
 - **Deterministic Weight Evolution**: W(t+1) = f(W(t), TER, Δt) via fixed-point math
 - **Proof-of-Sensor-Fusion (PoSF)**: Neural network output becomes the signature
@@ -93,7 +93,7 @@ Instead of pre-shared keys or PKI, Axon-Z uses:
 
 ### Threats Mitigated
 
-| Attack | Traditional Defense | Axon-Z Defense |
+| Attack | Traditional Defense | Neuro Defense |
 |--------|-------------------|---------------|
 | **Static Key Theft** | Key rotation, HSM | No static keys - weights constantly evolve |
 | **Offline Tampering** | TPM attestation | Integrity hash change → weight divergence → detection |
@@ -124,7 +124,7 @@ Instead of pre-shared keys or PKI, Axon-Z uses:
 
 ```yaml
 protocol:
-  name: "HookProbe-Axon-Z"
+  name: "HookProbe-Neuro"
   version: "1.0-alpha"
   max_handshake_mtu: 146  # bytes
   min_ter_rate_per_min: 10  # Minimum TER generation rate
@@ -534,7 +534,7 @@ def derive_transport_key(W_current, session_id, direction):
 
     # HKDF key derivation
     salt = hashlib.sha256(session_id).digest()
-    info = f"HookProbe-Axon-Z-v1.0-{direction}".encode()
+    info = f"HookProbe-Neuro-v1.0-{direction}".encode()
 
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
@@ -795,7 +795,7 @@ assert fp_exp(-1.0) ≈ 0.367879 (within 1e-6)
 - Deterministic ReLU, Sigmoid (fixed-point approximations)
 - Identical weight initialization on edge and cloud
 
-**Reference Implementation**: `/src/axon/neural_engine_fp.c`
+**Reference Implementation**: `/src/neuro/neural_engine_fp.c`
 
 ### Time Synchronization
 
@@ -826,7 +826,7 @@ assert fp_exp(-1.0) ≈ 0.367879 (within 1e-6)
 
 ### DSM Microblock Enhancement
 
-Add Axon-Z authentication to DSM microblocks:
+Add Neuro authentication to DSM microblocks:
 
 ```json
 {
@@ -838,7 +838,7 @@ Add Axon-Z authentication to DSM microblocks:
   "payload_hash": "sha256-of-security-event",
   "event_type": "ids_alert",
 
-  "axon_z": {
+  "neuro_z": {
     "ter_hash": "sha256-of-current-ter",
     "w_fingerprint": "sha512-of-current-weights",
     "posf_signature": "32-byte-neural-signature"
@@ -857,7 +857,7 @@ Add Axon-Z authentication to DSM microblocks:
   "timestamp": "2025-11-26T18:40:00Z",
   "merkle_root": "root-of-all-microblocks-in-epoch",
 
-  "axon_z_verification": {
+  "neuro_z_verification": {
     "verified_edges": ["edge-uuid-12345", "edge-uuid-67890"],
     "quarantined_edges": [],
     "total_ter_replayed": 1847,
@@ -873,7 +873,7 @@ Add Axon-Z authentication to DSM microblocks:
 ### Integration Flow
 
 ```
-POD-006 (Detection)          Axon-Z Engine          POD-010 (DSM)
+POD-006 (Detection)          Neuro Engine          POD-010 (DSM)
         │                          │                       │
         │── Security Event ───────►│                       │
         │                          │                       │
@@ -882,7 +882,7 @@ POD-006 (Detection)          Axon-Z Engine          POD-010 (DSM)
         │                      Create PoSF                 │
         │                          │                       │
         │                          │──── Microblock ──────►│
-        │                          │    (with Axon-Z auth) │
+        │                          │    (with Neuro auth) │
         │                          │                       │
         │                          │                   Gossip to
         │                          │                   validators
@@ -896,32 +896,32 @@ POD-006 (Detection)          Axon-Z Engine          POD-010 (DSM)
 ### Phase 1: Core Components
 
 ```bash
-# Install Axon-Z protocol
+# Install Neuro protocol
 cd /opt/hookprobe
-pip install -r src/axon/requirements.txt
+pip install -r src/neuro/requirements.txt
 
 # Initialize neural weights (first-time setup)
-python3 -m axon.tools.init_weights --node-id edge-001 --output /var/lib/hookprobe/axon/W_initial.bin
+python3 -m neuro.tools.init_weights --node-id edge-001 --output /var/lib/hookprobe/neuro/W_initial.bin
 
-# Start Axon-Z daemon
-systemctl start hookprobe-axon-z
+# Start Neuro daemon
+systemctl start hookprobe-neuro
 
 # Verify TER generation
-journalctl -u hookprobe-axon-z -f | grep "TER_GENERATED"
+journalctl -u hookprobe-neuro -f | grep "TER_GENERATED"
 ```
 
 ### Phase 2: Cloud Validator Setup
 
 ```bash
 # Configure cloud validator
-export AXON_Z_ROLE=validator
-export AXON_Z_STORAGE=/data/hookprobe/axon/ter_archive
+export NEURO_Z_ROLE=validator
+export NEURO_Z_STORAGE=/data/hookprobe/neuro/ter_archive
 
 # Start replay simulation engine
-systemctl start hookprobe-axon-z-validator
+systemctl start hookprobe-neuro-validator
 
 # Monitor edge verifications
-curl http://localhost:8080/axon-z/status
+curl http://localhost:8080/neuro/status
 ```
 
 ---
@@ -972,7 +972,7 @@ curl http://localhost:8080/axon-z/status
 
 ---
 
-**HookProbe-Axon-Z Protocol v1.0-alpha**
+**HookProbe-Neuro Protocol v1.0-alpha**
 *Where Neural Networks Become Cryptographic Keys*
 
 ---

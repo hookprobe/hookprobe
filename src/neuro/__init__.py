@@ -1,5 +1,5 @@
 """
-HookProbe Axon-Z Protocol
+HookProbe Neuro Protocol
 
 Revolutionary cryptographic protocol using deterministic neural weight evolution
 for continuous mutual authentication between Edge and Cloud.
@@ -18,7 +18,7 @@ __license__ = "MIT"
 from .core.ter import TER, TERGenerator, TERValidator
 from .core.posf import PoSFSigner, PoSFVerifier
 from .core.replay import DeterministicReplay, ReplayResult, ReplayCache
-from .crypto.transport import AxonZTransport, AxonZServer, AxonZSession
+from .crypto.transport import NeuroZTransport, NeuroZServer, NeuroZSession
 from .storage.dreamlog import DreamLog, DreamLogMetadata
 from .neural.engine import NeuralEngine, WeightState, create_initial_weights
 from .neural.fixedpoint import FixedPoint, FixedPointArray, verify_determinism
@@ -36,9 +36,9 @@ __all__ = [
     "ReplayResult",
     "ReplayCache",
     # E2EE transport
-    "AxonZTransport",
-    "AxonZServer",
-    "AxonZSession",
+    "NeuroZTransport",
+    "NeuroZServer",
+    "NeuroZSession",
     # Dream log
     "DreamLog",
     "DreamLogMetadata",

@@ -37,7 +37,7 @@ class DeterministicReplay:
         """
         Args:
             W_initial: Last known edge weight state
-            config: Axon-Z configuration (learning rates, coefficients)
+            config: Neuro-Z configuration (learning rates, coefficients)
         """
         self.W_initial = W_initial.copy()
         self.config = config

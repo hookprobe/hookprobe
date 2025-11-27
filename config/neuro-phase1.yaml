@@ -1,9 +1,9 @@
-# HookProbe Axon-Z Protocol Configuration
+# HookProbe Neuro-Z Protocol Configuration
 # Phase 1 Implementation (Q1 2025)
 
 # --- PROTOCOL IDENTIFICATION ---
 protocol:
-  name: "HookProbe-Axon-Z"
+  name: "HookProbe-Neuro-Z"
   version: "1.0-alpha"
   max_handshake_mtu: 146  # bytes
   min_ter_rate_per_min: 10  # Minimum TER generation rate for health check
@@ -105,20 +105,20 @@ hibernation:
 storage:
   # Edge node storage
   edge:
-    dream_log_path: "/var/lib/hookprobe/axon/dream_log.bin"
-    weight_state_path: "/var/lib/hookprobe/axon/weights.bin"
+    dream_log_path: "/var/lib/hookprobe/neuro/dream_log.bin"
+    weight_state_path: "/var/lib/hookprobe/neuro/weights.bin"
     max_dream_log_size_mb: 100  # ~24 hours at 60 TER/hour
 
   # Cloud validator storage
   cloud:
-    ter_archive_path: "/data/hookprobe/axon/ter_archive"
+    ter_archive_path: "/data/hookprobe/neuro/ter_archive"
     retention_days: 30
     compression: "zstd"  # Compress TER logs for storage
 
 # --- DEPLOYMENT CONFIGURATION ---
 deployment:
   # Node role: 'edge' or 'validator'
-  role: "${AXON_Z_ROLE:-edge}"
+  role: "${NEURO_Z_ROLE:-edge}"
 
   # Node identification
   node_id: "${HOOKPROBE_NODE_ID}"
@@ -135,7 +135,7 @@ deployment:
 dsm_integration:
   enabled: true
 
-  # Attach Axon-Z metadata to DSM microblocks
+  # Attach Neuro-Z metadata to DSM microblocks
   microblock_enhancement:
     include_ter_hash: true
     include_w_fingerprint: true
@@ -172,15 +172,15 @@ monitoring:
     enabled: true
     port: 9100
     metrics:
-      - axon_z_ter_generation_rate
-      - axon_z_weight_divergence
-      - axon_z_signature_verifications
-      - axon_z_quarantine_events
+      - neuro_z_ter_generation_rate
+      - neuro_z_weight_divergence
+      - neuro_z_signature_verifications
+      - neuro_z_quarantine_events
 
   # Logging
   logging:
     level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-    output: "/var/log/hookprobe/axon-z.log"
+    output: "/var/log/hookprobe/neuro-z.log"
     rotation: "daily"
     retention_days: 7
 

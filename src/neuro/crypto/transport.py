@@ -1,5 +1,5 @@
 """
-E2EE Transport Layer - Axon-Z Secure Communication
+E2EE Transport Layer - Neuro-Z Secure Communication
 
 ChaCha20-Poly1305 AEAD with keys derived from neural weights via HKDF.
 Provides forward secrecy via Curve25519 key exchange.
@@ -18,8 +18,8 @@ from ..neural.engine import WeightState
 
 
 @dataclass
-class AxonZSession:
-    """Active Axon-Z communication session."""
+class NeuroZSession:
+    """Active Neuro-Z communication session."""
     session_id: bytes  # 16 bytes
     node_id: str
     peer_id: str
@@ -28,7 +28,7 @@ class AxonZSession:
     last_activity_timestamp: int
 
 
-class AxonZTransport:
+class NeuroZTransport:
     """
     E2EE transport layer using ChaCha20-Poly1305.
 
@@ -85,7 +85,7 @@ class AxonZTransport:
         self,
         server_hello: bytes,
         peer_id: str
-    ) -> Tuple[bytes, AxonZSession]:
+    ) -> Tuple[bytes, NeuroZSession]:
         """
         Handle SERVER_HELLO and establish session.
 
@@ -118,7 +118,7 @@ class AxonZTransport:
 
         # Create session
         import time
-        session = AxonZSession(
+        session = NeuroZSession(
             session_id=nonce_cloud,
             node_id=self.node_id,
             peer_id=peer_id,
@@ -204,7 +204,7 @@ class AxonZTransport:
         K_transport = HKDF-SHA256(
             IKM = shared_secret || W_local || W_peer,
             salt = session_id,
-            info = "HookProbe-Axon-Z-v1.0-transport"
+            info = "HookProbe-Neuro-Z-v1.0-transport"
         )
 
         Args:
@@ -224,14 +224,14 @@ class AxonZTransport:
             algorithm=hashes.SHA256(),
             length=32,
             salt=session_id,
-            info=b"HookProbe-Axon-Z-v1.0-transport"
+            info=b"HookProbe-Neuro-Z-v1.0-transport"
         )
 
         transport_key = hkdf.derive(ikm)
 
         return transport_key
 
-    def _build_key_confirm(self, session: AxonZSession, nonce: bytes) -> bytes:
+    def _build_key_confirm(self, session: NeuroZSession, nonce: bytes) -> bytes:
         """
         Build KEY_CONFIRM message to prove correct key derivation.
 
@@ -255,9 +255,9 @@ class AxonZTransport:
         return confirm
 
 
-class AxonZServer:
+class NeuroZServer:
     """
-    Cloud validator side of Axon-Z protocol.
+    Cloud validator side of Neuro-Z protocol.
     """
 
     def __init__(self, validator_id: str, weight_state: WeightState):
@@ -315,7 +315,7 @@ class AxonZServer:
         key_confirm: bytes,
         edge_public_key_bytes: bytes,
         nonce_cloud: bytes
-    ) -> AxonZSession:
+    ) -> NeuroZSession:
         """
         Verify KEY_CONFIRM and finalize session.
 
@@ -334,7 +334,7 @@ class AxonZServer:
         shared_secret = self.private_key.exchange(edge_public_key)
 
         # Derive transport key (same as edge)
-        transport = AxonZTransport(self.validator_id, self.weight_state)
+        transport = NeuroZTransport(self.validator_id, self.weight_state)
         transport_key = transport._derive_transport_key(
             shared_secret=shared_secret,
             w_fingerprint_local=self.weight_state.fingerprint(),
@@ -357,7 +357,7 @@ class AxonZServer:
 
         # Create session
         import time
-        session = AxonZSession(
+        session = NeuroZSession(
             session_id=nonce_cloud,
             node_id=self.validator_id,
             peer_id=edge_node_id,
@@ -375,14 +375,14 @@ class AxonZServer:
 if __name__ == '__main__':
     from ..neural.engine import create_initial_weights
 
-    print("=== Testing Axon-Z E2EE Transport ===\n")
+    print("=== Testing Neuro-Z E2EE Transport ===\n")
 
     # Shared initial weights (provisioned during setup)
     W0 = create_initial_weights(seed=42)
     print(f"Shared weight fingerprint: {W0.fingerprint().hex()[:32]}...\n")
 
     # Edge: Initialize transport
-    edge_transport = AxonZTransport(node_id='edge-001', weight_state=W0)
+    edge_transport = NeuroZTransport(node_id='edge-001', weight_state=W0)
 
     # Edge: Initiate handshake
     print("Edge: Initiating handshake...")
@@ -390,7 +390,7 @@ if __name__ == '__main__':
     print(f"  CLIENT_HELLO: {len(client_hello)} bytes")
 
     # Cloud: Initialize server
-    cloud_server = AxonZServer(validator_id='validator-001', weight_state=W0)
+    cloud_server = NeuroZServer(validator_id='validator-001', weight_state=W0)
 
     # Cloud: Handle CLIENT_HELLO
     print("\nCloud: Handling CLIENT_HELLO...")
@@ -421,7 +421,7 @@ if __name__ == '__main__':
     print(f"  Encrypted: {len(encrypted)} bytes")
 
     # Cloud decrypt
-    decrypted_at_cloud = cloud_transport = AxonZTransport(node_id='validator-001', weight_state=W0)
+    decrypted_at_cloud = cloud_transport = NeuroZTransport(node_id='validator-001', weight_state=W0)
     cloud_transport.active_sessions[cloud_session.session_id] = cloud_session
     decrypted = cloud_transport.decrypt_message(cloud_session.session_id, encrypted)
     print(f"  Decrypted at Cloud: {decrypted.decode()}")
@@ -448,4 +448,4 @@ if __name__ == '__main__':
     else:
         print("  ✗ Bidirectional E2EE FAILED")
 
-    print("\n✓ Axon-Z E2EE transport test complete")
+    print("\n✓ Neuro-Z E2EE transport test complete")
