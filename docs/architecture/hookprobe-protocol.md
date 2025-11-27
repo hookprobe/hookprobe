@@ -52,7 +52,7 @@ This YAML file serves as the single source of truth, defining the cryptographic 
 # hookprobe_e2ee_config.yaml
 # --- 1. CORE PROTOCOL IDENTIFIERS ---
 protocol:
-  name: "HookProbe-Axon-Z"
+  name: "HookProbe-NEURO"
   version: "1.0-alpha"
   max_handshake_mtu: 146
   min_ter_rate_per_min: 10
