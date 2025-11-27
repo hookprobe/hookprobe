@@ -1,4 +1,4 @@
-# HookProbe Axon-Z Protocol
+# HookProbe Neuro Protocol
 
 **Revolutionary cryptographic protocol using deterministic neural weight evolution for continuous mutual authentication.**
 
@@ -6,12 +6,12 @@
 
 ## Overview
 
-**Axon-Z** replaces traditional static keys (RSA, ECDSA) with **neural network weights that evolve deterministically** based on sensor data. This creates a continuously-authenticating, tamper-evident communication channel between Edge nodes and Cloud validators.
+**Neuro** replaces traditional static keys (RSA, ECDSA) with **neural network weights that evolve deterministically** based on sensor data. This creates a continuously-authenticating, tamper-evident communication channel between Edge nodes and Cloud validators.
 
 ### Core Innovation
 
 Instead of: *"Do you still know the secret key?"*
-**Axon-Z asks**: *"Can you prove your sensor history by showing the correct weight evolution?"*
+**Neuro asks**: *"Can you prove your sensor history by showing the correct weight evolution?"*
 
 ---
 
@@ -48,7 +48,7 @@ signature = neural_network(W_current, message_hash, nonce)
 ### 4. E2EE Transport
 ChaCha20-Poly1305 encryption with keys derived from current weights:
 ```python
-K_transport = HKDF-SHA256(W_fingerprint, session_salt, "Axon-Z-v1.0")
+K_transport = HKDF-SHA256(W_fingerprint, session_salt, "Neuro-v1.0")
 ```
 
 ---
@@ -57,7 +57,7 @@ K_transport = HKDF-SHA256(W_fingerprint, session_salt, "Axon-Z-v1.0")
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                  HookProbe Axon-Z Stack                     │
+│                  HookProbe Neuro Stack                     │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐  │
@@ -88,7 +88,7 @@ K_transport = HKDF-SHA256(W_fingerprint, session_salt, "Axon-Z-v1.0")
 ## Module Structure
 
 ```
-src/axon/
+src/neuro/
 ├── __init__.py                 # Package exports
 ├── requirements.txt            # Dependencies
 ├── README.md                   # This file
@@ -120,13 +120,13 @@ src/axon/
 
 ```bash
 cd /home/user/hookprobe
-pip install -r src/axon/requirements.txt
+pip install -r src/neuro/requirements.txt
 ```
 
 ### 2. Generate Initial Weights
 
 ```python
-from axon.neural.engine import create_initial_weights
+from neuro.neural.engine import create_initial_weights
 
 # Create deterministic initial weights (run once during provisioning)
 W0 = create_initial_weights(seed=42)
@@ -138,7 +138,7 @@ W0.to_bytes()  # Serialize for storage
 ### 3. Edge: Generate TER
 
 ```python
-from axon.core.ter import TERGenerator
+from neuro.core.ter import TERGenerator
 
 # Initialize TER generator (integrates with Qsecbit)
 ter_gen = TERGenerator(qsecbit_interface=None)  # Uses psutil fallback
@@ -154,7 +154,7 @@ print(f"Threat Score: {ter.calculate_threat_score():.4f}")
 ### 4. Edge: Sign with PoSF
 
 ```python
-from axon.core.posf import PoSFSigner
+from neuro.core.posf import PoSFSigner
 
 # Create signer with current weights
 signer = PoSFSigner(W_current)
@@ -168,7 +168,7 @@ print(f"PoSF Signature: {signature.hex()[:32]}...")
 ### 5. Cloud: Verify Signature
 
 ```python
-from axon.core.posf import PoSFVerifier
+from neuro.core.posf import PoSFVerifier
 
 # Cloud simulates edge weights from TER history
 W_simulated = simulate_edge_evolution(ter_history)
@@ -189,7 +189,7 @@ else:
 
 ## Configuration
 
-See `config/axon-z-phase1.yaml` for complete configuration options.
+See `config/neuro-phase1.yaml` for complete configuration options.
 
 ### Key Parameters
 
@@ -242,13 +242,13 @@ security:
 
 ```bash
 # Test fixed-point math
-python3 -m axon.neural.fixedpoint
+python3 -m neuro.neural.fixedpoint
 
 # Test neural engine
-python3 -m axon.neural.engine
+python3 -m neuro.neural.engine
 
 # Test PoSF signatures
-python3 -m axon.core.posf
+python3 -m neuro.core.posf
 ```
 
 **Expected Output**:
@@ -265,7 +265,7 @@ python3 -m axon.core.posf
 
 ## Integration with DSM
 
-Axon-Z enhances DSM microblocks with continuous authentication:
+Neuro enhances DSM microblocks with continuous authentication:
 
 ```json
 {
@@ -274,7 +274,7 @@ Axon-Z enhances DSM microblocks with continuous authentication:
   "seq": 1847,
   "payload_hash": "sha256-of-security-event",
 
-  "axon_z": {
+  "neuro_z": {
     "ter_hash": "sha256-of-current-ter",
     "w_fingerprint": "sha512-of-current-weights",
     "posf_signature": "32-byte-neural-signature"
@@ -337,7 +337,7 @@ Axon-Z enhances DSM microblocks with continuous authentication:
 
 ## References
 
-1. **[Protocol Specification](../../docs/architecture/hookprobe-axon-z-protocol.md)** - Complete technical spec
+1. **[Protocol Specification](../../docs/architecture/hookprobe-neuro-protocol.md)** - Complete technical spec
 2. **[DSM Integration](../../docs/architecture/dsm-implementation.md)** - Decentralized Security Mesh
 3. **[Qsecbit AI](../qsecbit/README.md)** - Sensor interface
 
@@ -353,8 +353,8 @@ MIT License - See [LICENSE](../../LICENSE) file
 
 **Andrei Toma**
 HookProbe Project
-axon-z@hookprobe.com
+neuro@hookprobe.com
 
 ---
 
-**HookProbe Axon-Z** - Where Neural Networks Become Cryptographic Keys
+**HookProbe Neuro** - Where Neural Networks Become Cryptographic Keys
