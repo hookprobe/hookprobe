@@ -15,19 +15,39 @@ __version__ = "1.0.0-alpha"
 __author__ = "Andrei Toma"
 __license__ = "MIT"
 
-from .core.ter import TER, TERGenerator
+from .core.ter import TER, TERGenerator, TERValidator
 from .core.posf import PoSFSigner, PoSFVerifier
-from .core.replay import DeterministicReplay
-from .crypto.transport import AxonZTransport
-from .neural.engine import NeuralEngine, WeightState
+from .core.replay import DeterministicReplay, ReplayResult, ReplayCache
+from .crypto.transport import AxonZTransport, AxonZServer, AxonZSession
+from .storage.dreamlog import DreamLog, DreamLogMetadata
+from .neural.engine import NeuralEngine, WeightState, create_initial_weights
+from .neural.fixedpoint import FixedPoint, FixedPointArray, verify_determinism
 
 __all__ = [
+    # TER components
     "TER",
     "TERGenerator",
+    "TERValidator",
+    # PoSF signatures
     "PoSFSigner",
     "PoSFVerifier",
+    # Deterministic replay
     "DeterministicReplay",
+    "ReplayResult",
+    "ReplayCache",
+    # E2EE transport
     "AxonZTransport",
+    "AxonZServer",
+    "AxonZSession",
+    # Dream log
+    "DreamLog",
+    "DreamLogMetadata",
+    # Neural engine
     "NeuralEngine",
     "WeightState",
+    "create_initial_weights",
+    # Fixed-point math
+    "FixedPoint",
+    "FixedPointArray",
+    "verify_determinism",
 ]
