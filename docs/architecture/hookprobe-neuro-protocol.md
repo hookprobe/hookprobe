@@ -5,6 +5,8 @@
 **Last Updated**: 2025-11-26
 
 ---
+![HookProbe Protocol](../../assets/hookprobe-neuro-resonant-protocol.png)
+---
 
 ## Executive Summary
 
@@ -1168,5 +1170,3 @@ curl http://localhost:8080/neuro/status
 *Where Neural Networks Become Cryptographic Keys*
 
 **Neurosurgical Cybersecurity for the Connected World**
-
----
