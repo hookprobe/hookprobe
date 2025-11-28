@@ -1170,3 +1170,234 @@ curl http://localhost:8080/neuro/status
 *Where Neural Networks Become Cryptographic Keys*
 
 **Neurosurgical Cybersecurity for the Connected World**
+
+
+
+# Version: 1.1-beta (Includes Phase 2: Synaptic Transport)
+
+Status: Active Implementation
+Previous Version: 1.0-alpha
+Last Updated: 2025-11-28
+
+Executive Summary (v1.1 Update)
+
+HookProbe-Neuro v1.1 extends the core cryptographic resonance model to the transport layer, addressing the challenge of NAT and CGNAT traversal (Carrier-Grade NAT).
+
+In modern hostile networks, Edge nodes are often behind restrictive firewalls that drop idle connections. To maintain the Neural Resonance required for real-time security updates, v1.1 introduces Synaptic Transport.
+
+Core Innovation: The Synaptic Bridge
+
+Instead of a passive TCP connection, the Edge and Cloud maintain a Synaptic Bridge—a UDP-based, stateful connection kept alive by Neuro-Pulses.
+
+Neuro-Pulse (Heartbeat): A lightweight, cryptographic heartbeat derived from the current neural weights. It punches a hole in the NAT (Membrane Potential) and proves liveliness.
+
+Axonal Back-propagation: The Cloud Validator uses the open NAT pinhole created by the Pulse to push urgent security updates (new signatures) instantly, without waiting for a scheduled check-in.
+
+Dendritic Spine ID (DSID): A connection identifier that persists across IP changes, allowing the "neuron" (Edge) to roam across networks (WiFi to 5G) without severing the resonance.
+
+# 12. Synaptic Transport Layer (New in v1.1)
+
+This layer replaces the generic "E2EE Transport" from v1.0 with a specific UDP-based protocol designed for high-assurance NAT traversal.
+
+### 12.1 The Biological Metaphor for NAT
+
+Network Concept
+
+HookProbe-Neuro Term
+
+Biological Analogy
+
+NAT Gateway
+
+Membrane Barrier
+
+The cell membrane regulating ion flow.
+
+NAT Pinhole
+
+Ion Channel
+
+A temporary opening allowing signals to pass.
+
+Heartbeat Packet
+
+Neuro-Pulse
+
+Action potential firing to keep the channel potent.
+
+Connection ID
+
+Dendritic Spine ID (DSID)
+
+The physical structure maintaining the connection.
+
+Cloud-to-Edge Push
+
+Back-propagation
+
+Signal traveling backward to adjust the neuron.
+
+### 12.2 Packet Structure
+
+All packets run over UDP. The header is unencrypted (but authenticated), while the payload is ChaCha20-Poly1305 encrypted using the weight-derived keys.
+
+struct SynapticHeader {
+    uint8_t  type;             // 0x01: PULSE, 0x02: UPDATE, 0x03: SYNC
+    uint64_t dsid;             // Dendritic Spine ID (Persistent Session ID)
+    uint32_t sequence;         // Packet sequence number
+    uint8_t  weight_hint[4];   // First 4 bytes of current W_fingerprint (Context)
+};
+
+
+# 13. The Neuro-Pulse Mechanism (Heartbeat)
+
+To keep the "Ion Channel" (NAT Pinhole) open, the Edge must fire continuously. However, a static "ping" is insecure. The Neuro-Pulse acts as both a keep-alive and a micro-authentication.
+
+### 13.1 Pulse Logic
+
+The Edge sends a Pulse to the Cloud every $T_{pulse}$ seconds.
+
+$$ T_{pulse} = \min(T_{NAT_limit} - \delta, \frac{1}{R_{stress}}) $$
+
+$T_{NAT\_limit}$: The estimated NAT timeout (usually 30s for UDP).
+
+$R_{stress}$: The "Stress Factor" (derived from Qsecbit Resilience Score).
+
+Calm State: Pulse every 25 seconds (Keep NAT open).
+
+Attack State: Pulse every 1 second (High readiness for Cloud commands).
+
+### 13.2 Pulse Payload (Lightweight PoSF)
+
+The Pulse does not send a full TER. It sends a "Spark"—a hash proving the Edge is currently resonant without transmitting the full weight state.
+
+def generate_neuro_pulse(W_current, dsid, sequence):
+    """
+    Generates a lightweight heartbeat verifying Weight State.
+    """
+    # Create a "Spark" - a micro-proof of current neural state
+    # W_current is 4096 bytes, we only need a deterministic digest
+    spark_input = W_current.tobytes() + struct.pack('<Q I', dsid, sequence)
+    spark = hashlib.blake2b(spark_input, digest_size=16).digest()
+    
+    return spark
+
+
+### 13.3 Cloud Response: The Axonal Trigger
+
+When the Cloud receives a Neuro-Pulse, it performs two checks:
+
+Resonance Check: Does the spark match the Cloud's simulation of the Edge?
+
+Yes: Connection is valid.
+
+No: Immediate Desynchronization Alert.
+
+Update Check (The "Update" Requirement): Are there new security signatures or weight adjustments waiting for this Edge?
+
+# 14. Validator-to-Edge Back-propagation
+
+This addresses the requirement: "if the cloud wants to update the edge security signatures can do so."
+
+Because the Edge initiated the UDP Neuro-Pulse, the NAT gateway considers the connection "Established." The Cloud can now send data back through this temporary opening.
+
+### 14.1 The "Piggyback" Protocol
+
+If the Cloud has no updates, it sends a 1-byte PULSE_ACK.
+If the Cloud has updates, it upgrades the response to a SYNAPTIC_OVERRIDE.
+
+Scenario: Zero-Day Signature Update
+
+Cloud identifies a new global threat. It generates a "Weight Bias Adjustment" ($\Delta W_{patch}$) to protect all Edges.
+
+Edge is behind CGNAT. Cloud cannot connect directly.
+
+Edge sends routine Neuro-Pulse (Sequence 105).
+
+Cloud receives Pulse 105. Matches DSID.
+
+Cloud immediately transmits SYNAPTIC_OVERRIDE packet containing $\Delta W_{patch}$.
+
+Note: This packet travels through the hole opened by Pulse 105.
+
+Edge receives $\Delta W_{patch}$, applies it to Neural Engine, and instantly gains protection against the Zero-Day.
+
+### 14.2 Code Implementation: NAT Traversal Loop
+
+class SynapticTransmitter:
+    def __init__(self, cloud_ip, port, initial_weights):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.dsid = secrets.randbits(64) # Dendritic Spine ID
+        self.weights = initial_weights
+        self.stress_level = 0.0 # From Qsecbit
+
+    def start_synaptic_loop(self):
+        while True:
+            # 1. Calculate Pulse Interval based on Stress/NAT
+            interval = self._calculate_interval()
+            
+            # 2. Generate Neuro-Pulse
+            payload = generate_neuro_pulse(self.weights, self.dsid, self.seq)
+            
+            # 3. Fire across the Synapse (Send UDP)
+            encrypted_pulse = self._encrypt(payload)
+            self.sock.sendto(encrypted_pulse, (self.cloud_ip, self.port))
+            
+            # 4. Await Potential Back-propagation (Timeout = 2s)
+            try:
+                data, _ = self.sock.recvfrom(4096)
+                response = self._decrypt(data)
+                
+                if response.type == UPDATE_AVAILABLE:
+                    # Cloud is pushing new security signatures!
+                    self._apply_axonal_update(response.payload)
+                    
+            except socket.timeout:
+                # No update from cloud, connection is just being kept alive
+                pass
+                
+            time.sleep(interval)
+
+    def _calculate_interval(self):
+        # High stress = faster heart rate = faster command reception
+        if self.stress_level > 0.7: return 1.0 
+        return 25.0 # Standard NAT Keep-alive
+
+
+### 15. Dendritic Spine ID (DSID) & Mobility
+
+Standard protocols break when the client IP changes (e.g., switching from WiFi to Cellular), requiring a full handshake. HookProbe-Neuro uses the DSID to handle this.
+
+The Logic:
+
+The DSID is a random 64-bit integer generated during the initial Phase 1 Handshake.
+
+The Cloud maps DSID -> {Simulated_Weights, Last_IP, Last_Port}.
+
+If the Edge switches IPs (NAT Rebind), the Cloud sees the known DSID coming from a new IP.
+
+The Cloud automatically updates the endpoint mapping without forcing a heavy re-authentication, because the Neuro-Pulse payload (spark) proves the identity cryptographically via the weights.
+
+Security Implication: An attacker cannot hijack the session just by knowing the DSID, because they cannot generate the correct spark hash without the current, evolving Neural Weights.
+
+### 16. Summary of Flow (The "HookProbe" Way)
+
+Edge is Alive: Sends Neuro-Pulse (UDP) containing weight-derived spark.
+
+Effect: Opens NAT Pinhole.
+
+Cloud Verifies: Checks spark against simulated weights.
+
+Effect: Confirms "Neural Resonance."
+
+Cloud Decision:
+
+Nothing New: Sends silence or tiny ACK.
+
+Threat Update: Sends Axonal Update (New Signatures) through the open pinhole.
+
+Edge Evolves: Edge applies update, changing its weights.
+
+Cycle Continues: Next pulse uses new weights, confirming receipt of update.
+
+This architecture ensures that even in deep CGNAT environments, the Cloud acts as the Central Nervous System, capable of sending reflex signals (updates) to the Motor Neurons (Edges) the moment they fire a resting pulse.
