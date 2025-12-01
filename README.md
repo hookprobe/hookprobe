@@ -150,6 +150,144 @@ This is **quantum-level authentication** — you can't fake it, you can't replay
 
 ---
 
+### 1.5 **Liberty Transport Layer** - Simple, Secure Communication
+
+**HookProbe Transport Protocol (HTP)** is our custom protocol designed specifically for edge-validator communication under NAT/CGNAT environments.
+
+**Why NOT generic QUIC?** Because HookProbe needs **simple, auditable, unhackable** security. Generic protocols are complex and hard to audit.
+
+<details>
+<summary><strong>🔒 HTP Protocol Design</strong></summary>
+
+#### The 9 Message Types
+```
+HELLO      → Edge initiates connection with weight fingerprint
+CHALLENGE  → Validator sends nonce
+ATTEST     → Edge signs nonce with device key
+ACCEPT     → Validator approves, sends session secret
+REJECT     → Validator denies connection
+DATA       → Encrypted bidirectional communication
+HEARTBEAT  → NAT keep-alive every 30 seconds
+ACK        → Message acknowledgment
+CLOSE      → Session termination
+```
+
+#### Connection Flow
+```
+Edge (behind NAT)               Validator (public IP)
+ │                                   │
+ │──HELLO (weight_fp + node_id)─────►│
+ │                                   │ Checks MSSP registry
+ │                                   │ Validates device exists
+ │                                   │
+ │◄─────CHALLENGE (nonce)────────────│
+ │                                   │
+ │ Sign: sig = Ed25519(nonce + fp)   │
+ │                                   │
+ │──ATTEST (signature)───────────────►│
+ │                                   │ Verify signature
+ │                                   │ Generate session_secret
+ │                                   │
+ │◄─────ACCEPT (session_secret)──────│
+ │                                   │
+ │ Derive ChaCha20 key:              │ Derive same key:
+ │ k = SHA256(secret + weight_fp)    │ k = SHA256(secret + weight_fp)
+ │                                   │
+ │◄────DATA (encrypted)─────────────►│
+ │                                   │
+ │──HEARTBEAT (every 30s)───────────►│ Keeps NAT mapping alive
+```
+
+#### Security Properties
+- **UDP-based**: Works through NAT/CGNAT
+- **ChaCha20-Poly1305**: AEAD encryption (fast, secure)
+- **Weight fingerprint binding**: Session key derived from neural weights
+- **Ed25519 signatures**: Device authentication
+- **Heartbeat protocol**: Maintains NAT mappings for long-lived sessions
+- **Simple state machine**: Easy to audit = unhackable
+
+📖 **[HTP Implementation →](src/neuro/transport/htp.py)**
+
+</details>
+
+---
+
+### 1.6 **Liberty Device Identity** - Hardware Fingerprinting
+
+**No TPM? No problem.** Liberty creates unique device fingerprints from stable hardware characteristics.
+
+<details>
+<summary><strong>🔧 Hardware Fingerprinting Without TPM</strong></summary>
+
+#### What We Collect
+```python
+fingerprint_id = SHA256(
+    cpu_id +           # CPU model/serial
+    mac_addresses +    # Network interface MACs
+    disk_serials +     # Storage device serials
+    dmi_uuid +         # SMBIOS UUID
+    hostname +         # System hostname
+    timestamp          # Binding timestamp
+)
+```
+
+#### Why This Works
+- **Stable**: Hardware IDs don't change across reboots
+- **Unique**: Combination creates device-specific fingerprint
+- **Verifiable**: MSSP tracks all devices by fingerprint
+- **Tolerance**: Verification allows 2 component changes (e.g., add NIC)
+
+#### MSSP Device Registry
+Every device in HookProbe network is tracked:
+```
+devices table:
+  - device_id (unique identifier)
+  - hardware_fingerprint (SHA256 hash)
+  - public_key_ed25519 (device signing key)
+  - status (PENDING → ACTIVE → SUSPENDED → REVOKED)
+  - kyc_verified (for validators)
+  - geolocation (IP-based tracking)
+
+device_locations table:
+  - device_id
+  - timestamp
+  - ip_address, country, region, city
+  - latitude, longitude
+  - asn, isp
+```
+
+#### Prerequisite Enforcement
+```
+Cannot deploy validator without MSSP cloud:
+
+  ┌─────────────┐
+  │ MSSP Cloud  │ ← Must exist first (device_type=CLOUD, status=ACTIVE)
+  └──────┬──────┘
+         │
+    ┌────▼────┐
+    │Validator│ ← Requires cloud + KYC verification
+    └────┬────┘
+         │
+    ┌────▼────┐
+    │  Edge   │ ← Can deploy anytime (auto-approve)
+    └─────────┘
+```
+
+**Benefits**:
+- ✅ Works on any device ($75 Raspberry Pi to $200 SBC)
+- ✅ No special hardware required
+- ✅ Tracks device location changes
+- ✅ Enforces deployment order (cloud → validator → edge)
+- ✅ KYC verification for validators (trust model)
+
+📖 **[Hardware Fingerprinting →](src/neuro/identity/hardware_fingerprint.py)**
+📖 **[MSSP Device Registry →](src/mssp/device_registry.py)**
+📖 **[GeoIP Integration →](src/mssp/geolocation.py)**
+
+</details>
+
+---
+
 ### 2. **Decentralized Security Mesh (DSM)** - Collective Intelligence
 
 **One brain powered by many edge nodes.**
@@ -454,6 +592,16 @@ Qsecbit quantifies your **ability to absorb and recover from attacks**, not just
 
 ## 🏗️ Architecture - The Complete Picture
 
+**Liberty Architecture Philosophy**: Simple, yet effective. Robust, secure, unhackable.
+
+Every component in HookProbe follows the **KISS principle** (Keep It Simple & Secure):
+- HTP has 9 message types (vs QUIC's 100+)
+- Hardware fingerprinting uses standard /proc /sys files (no proprietary TPM)
+- MSSP registry is SQLite (proven, auditable, fast)
+- All code is open source (anyone can audit = trust through transparency)
+
+**Why simplicity matters**: Complex systems have more bugs. Simple systems are auditable. Auditable systems are unhackable.
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                                                                   │
@@ -590,19 +738,26 @@ sudo systemctl start hookprobe-neuro
 
 ### Option 2: Cloud Validator (MSSP)
 
+**⚠️ PREREQUISITE**: MSSP Cloud must be deployed first. Validators cannot be installed without cloud infrastructure.
+
 ```bash
-# Clone and install
+# Clone repository
 git clone https://github.com/hookprobe/hookprobe
 cd hookprobe
 
-# Install for validator role
-sudo ./install.sh --role validator
+# Install validator (requires MSSP cloud deployed)
+sudo ./install-validator.sh
 
-# Configure validator
-cp config/neuro-phase1.yaml /etc/hookprobe/neuro.yaml
-vim /etc/hookprobe/neuro.yaml  # Set validator_id
+# The script will:
+# 1. Check MSSP cloud is deployed (strict prerequisite)
+# 2. Validate hardware requirements (4+ cores, 8GB+ RAM)
+# 3. Collect KYC information (organization, email, country)
+# 4. Generate hardware fingerprint (no TPM required)
+# 5. Register with MSSP (status: PENDING)
+# 6. Generate Ed25519 device key
+# 7. Wait for KYC approval before activation
 
-# Start validator services
+# After KYC approval by MSSP admin:
 sudo systemctl start hookprobe-validator
 sudo systemctl start hookprobe-neuro-validator
 ```
@@ -674,9 +829,14 @@ make dsm-status
 - [x] Neuro resonance handshakes
 - [x] Cloud validator service
 
-### Phase 3 (Q3 2025) - IN PROGRESS
-- [ ] Integration tests (edge ↔ cloud end-to-end)
-- [ ] Production deployment automation
+### Phase 3 (Q3 2025) - ✅ LIBERTY COMPLETE
+- [x] **HookProbe Transport Protocol (HTP)** - Custom UDP protocol for NAT/CGNAT
+- [x] **Hardware Fingerprinting** - Device identity without TPM
+- [x] **MSSP Device Registry** - Centralized device tracking with geolocation
+- [x] **Validator Install Script** - MSSP prerequisite enforcement + KYC
+- [x] **GeoIP2 Integration** - MaxMind + IP-API geolocation service
+- [x] **End-to-End HTP Tests** - Complete edge ↔ validator communication flow
+- [ ] Production MSSP deployment (hookprobe.com)
 - [ ] Neuro + Qsecbit convergence analysis
 - [ ] Performance optimization (1M TER/sec target)
 - [ ] Side-channel attack mitigation
@@ -806,7 +966,10 @@ See [LICENSE](LICENSE) file for details.
 - **AI/ML**: Custom Qsecbit algorithm, TensorFlow
 - **Analytics**: ClickHouse, Grafana, VictoriaMetrics
 - **Orchestration**: Podman, systemd
-- **Crypto**: TPM 2.0, ChaCha20-Poly1305, Curve25519, BLS signatures
+- **Crypto**: ChaCha20-Poly1305, Ed25519, Curve25519, BLS signatures
+- **Transport**: HookProbe Transport Protocol (HTP) - custom UDP-based
+- **Identity**: Hardware fingerprinting (CPU/MAC/disk/DMI), MSSP device registry
+- **Geolocation**: MaxMind GeoIP2, IP-API
 - **Networking**: OVS, VXLAN, XDP/eBPF
 
 **Inspiration**:
