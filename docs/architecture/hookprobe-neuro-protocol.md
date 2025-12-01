@@ -1,8 +1,8 @@
 # HookProbe-Neuro Protocol Specification
 
-**Version**: 1.0-alpha
-**Status**: Phase 1 Implementation
-**Last Updated**: 2025-11-26
+**Version**: 1.0-Liberty
+**Status**: Phase 3 Liberty Complete
+**Last Updated**: 2025-12-01
 
 ---
 
@@ -41,11 +41,12 @@ Like neurons firing in perfect synchronization, edge and cloud weights must matc
 4. [Temporal Event Record (TER)](#temporal-event-record-ter)
 5. [Deterministic Weight Evolution](#deterministic-weight-evolution)
 6. [Proof-of-Sensor-Fusion (PoSF)](#proof-of-sensor-fusion-posf)
-7. [E2EE Transport Layer](#e2ee-transport-layer)
-8. [Hibernation & Offline Operation](#hibernation--offline-operation)
-9. [Security Analysis](#security-analysis)
-10. [Implementation Requirements](#implementation-requirements)
-11. [Integration with DSM](#integration-with-dsm)
+7. [E2EE Transport Layer - HTP](#e2ee-transport-layer---hookprobe-transport-protocol-htp)
+8. [Device Identity Management](#device-identity-management---liberty-architecture)
+9. [Hibernation & Offline Operation](#hibernation--offline-operation)
+10. [Security Analysis](#security-analysis)
+11. [Implementation Requirements](#implementation-requirements)
+12. [Integration with DSM](#integration-with-dsm)
 
 ---
 
@@ -128,7 +129,8 @@ Traditional security operates like **medieval fortifications** — static defens
 2. **Trusted Time**: Edge has access to monotonic time (ideally TPM clock)
 3. **Qsecbit Integrity**: Sensor data collection (TER) is trustworthy
 4. **Fixed-Point Determinism**: Both edge and cloud use identical math libraries
-5. **TPM Availability**: Preferred but not required (software fallback available)
+5. **Device Identity**: Hardware fingerprinting provides unique device identification
+6. **MSSP Registry**: Central device registry tracks all edge nodes and validators
 
 ### Out-of-Scope
 
@@ -628,67 +630,91 @@ def verify_posf_signature(W_expected, message_hash, nonce, signature):
 
 ---
 
-## E2EE Transport Layer
+## E2EE Transport Layer - HookProbe Transport Protocol (HTP)
+
+### Liberty Architecture: Simple, Auditable, Unhackable
+
+**Why HTP instead of generic QUIC?**
+- **Simplicity**: 9 message types vs QUIC's 100+ (easier to audit)
+- **HookProbe-specific**: Designed for weight fingerprint binding
+- **NAT-friendly**: UDP-based with heartbeat keep-alive
+- **Transparency**: Open source, fully auditable
+
+📖 **[Complete HTP Implementation →](../../src/neuro/transport/htp.py)**
+
+### HTP Protocol Flow
+
+```
+Edge (behind NAT/CGNAT)               Validator (Cloud)
+  │                                        │
+  │─── (1) HELLO ─────────────────────────►│
+  │   [node_id, W_fingerprint]             │ Check MSSP registry
+  │                                        │ Validate device exists
+  │                                        │
+  │◄── (2) CHALLENGE ──────────────────────│
+  │   [nonce (16 bytes)]                   │
+  │                                        │
+  │ Sign: Ed25519(nonce + W_fingerprint)   │
+  │                                        │
+  │─── (3) ATTEST ─────────────────────────►│
+  │   [signature (64 bytes)]               │ Verify device signature
+  │                                        │ Generate session_secret
+  │                                        │
+  │◄── (4) ACCEPT ──────────────────────────│
+  │   [session_secret (32 bytes)]          │
+  │                                        │
+  │ Derive ChaCha20 key:                   │ Derive same key:
+  │ k = SHA256(secret + W_fingerprint)     │ k = SHA256(secret + W_fingerprint)
+  │                                        │
+  │◄══ (5) DATA (ChaCha20-Poly1305) ══════►│
+  │   [encrypted TER logs, PoSF sigs]      │
+  │                                        │
+  │─── (6) HEARTBEAT (every 30s) ──────────►│ Maintain NAT mapping
+  │   [session_id, sequence]               │
+  │                                        │
+  │◄── (7) ACK ─────────────────────────────│
+```
+
+### HTP Message Types
+
+| Type | Direction | Purpose | Payload Size |
+|------|-----------|---------|--------------|
+| **HELLO** | Edge → Validator | Initiate connection | 96 bytes (node_id + weight_fp) |
+| **CHALLENGE** | Validator → Edge | Authenticate device | 16 bytes (nonce) |
+| **ATTEST** | Edge → Validator | Prove device identity | 64 bytes (Ed25519 sig) |
+| **ACCEPT** | Validator → Edge | Approve + session key | 32 bytes (session_secret) |
+| **REJECT** | Validator → Edge | Deny connection | 4 bytes (reason code) |
+| **DATA** | Bidirectional | Encrypted payload | Variable (ChaCha20) |
+| **HEARTBEAT** | Edge → Validator | NAT keep-alive | 24 bytes (session_id + seq) |
+| **ACK** | Bidirectional | Acknowledge message | 8 bytes (msg_id) |
+| **CLOSE** | Bidirectional | Graceful disconnect | 4 bytes (reason) |
 
 ### Key Derivation from Neural Weights
 
 ```python
-def derive_transport_key(W_current, session_id, direction):
+def derive_htp_session_key(session_secret, weight_fingerprint):
     """
-    Derive ChaCha20-Poly1305 key from current weight state.
+    Derive ChaCha20-Poly1305 key from session secret + weight fingerprint.
 
     Args:
-        W_current: Current neural weights (fixed-point)
-        session_id: Unique session identifier
-        direction: 'edge_to_cloud' or 'cloud_to_edge'
+        session_secret: 32-byte random secret from validator
+        weight_fingerprint: 64-byte SHA512(W_current)
 
     Returns:
-        32-byte encryption key
+        32-byte ChaCha20 key
     """
-    # Create weight fingerprint (512 bytes → 64 bytes via SHA512)
-    W_bytes = W_current.tobytes()
-    W_fingerprint = hashlib.sha512(W_bytes).digest()
+    # Bind session to neural weight state
+    combined = session_secret + weight_fingerprint
+    session_key = hashlib.sha256(combined).digest()
 
-    # HKDF key derivation
-    salt = hashlib.sha256(session_id).digest()
-    info = f"HookProbe-Neuro-v1.0-{direction}".encode()
-
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        info=info
-    )
-
-    transport_key = hkdf.derive(W_fingerprint)
-
-    return transport_key
+    return session_key
 ```
 
-### Handshake Protocol
-
-```
-Edge                                                 Cloud
-  │                                                    │
-  │ ─────── (1) CLIENT_HELLO ───────────────────────► │
-  │   [node_id, nonce_edge, W_fingerprint_edge]       │
-  │                                                    │
-  │ ◄────── (2) SERVER_HELLO ────────────────────────  │
-  │   [validator_id, nonce_cloud, W_fingerprint_cloud] │
-  │                                                    │
-  │ ──────── (3) KEY_EXCHANGE ──────────────────────► │
-  │   [Curve25519_pubkey_edge, PoSF_sig_edge]         │
-  │                                                    │
-  │ ◄─────── (4) KEY_CONFIRM ────────────────────────  │
-  │   [Curve25519_pubkey_cloud, PoSF_sig_cloud]       │
-  │                                                    │
-  │ ── (5) Both derive shared secret via ECDH ──────  │
-  │   K_shared = ECDH(privkey_self, pubkey_peer)      │
-  │   K_transport = HKDF(K_shared || W_edge || W_cloud)│
-  │                                                    │
-  │ ◄══════ (6) Encrypted channel established ═══════► │
-  │   ChaCha20-Poly1305(K_transport, nonce, message)  │
-```
+**Security Properties**:
+- **Weight binding**: Session key cryptographically tied to current weight state
+- **Perfect forward secrecy**: New session_secret for each connection
+- **NAT traversal**: Heartbeat maintains mappings through CGNAT
+- **Replay protection**: Monotonic sequence numbers
 
 ### Message Encryption
 
@@ -710,6 +736,250 @@ def encrypt_message(plaintext, W_current, session_id):
     # Return nonce + ciphertext + tag
     return nonce + ciphertext
 ```
+
+---
+
+## Device Identity Management - Liberty Architecture
+
+### Hardware Fingerprinting Without TPM
+
+**Liberty Design Principle**: Security should work on $75 Raspberry Pi, not just enterprise servers.
+
+**Problem**: Not all devices have TPM 2.0 hardware.
+**Solution**: Generate unique fingerprint from stable hardware characteristics.
+
+📖 **[Hardware Fingerprinting Implementation →](../../src/neuro/identity/hardware_fingerprint.py)**
+
+#### Fingerprint Generation
+
+```python
+class HardwareFingerprintGenerator:
+    def generate(self) -> HardwareFingerprint:
+        """
+        Generate unique hardware fingerprint.
+
+        Combines:
+        - CPU ID (model, serial if available)
+        - MAC addresses (all network interfaces)
+        - Disk serials (storage devices)
+        - DMI UUID (SMBIOS identifier)
+        - Hostname (system name)
+        - Timestamp (binding time)
+
+        Returns:
+            HardwareFingerprint with SHA256 fingerprint_id
+        """
+        cpu_id = self._get_cpu_id()
+        mac_addresses = self._get_mac_addresses()
+        disk_serials = self._get_disk_serials()
+        dmi_uuid = self._get_dmi_uuid()
+        hostname = platform.node()
+
+        # Create deterministic hash
+        fingerprint_id = SHA256(
+            cpu_id +
+            sorted(mac_addresses) +
+            sorted(disk_serials) +
+            dmi_uuid +
+            hostname +
+            str(timestamp)
+        )
+
+        return fingerprint_id
+```
+
+#### Fingerprint Verification with Tolerance
+
+```python
+def verify(self, stored_fingerprint: HardwareFingerprint, tolerance: int = 2):
+    """
+    Verify current hardware matches stored fingerprint.
+
+    Args:
+        stored_fingerprint: Previously registered fingerprint
+        tolerance: Number of allowed mismatches (default 2)
+
+    Returns:
+        Verification result with mismatch details
+    """
+    current = self.generate()
+    mismatches = []
+
+    # Check each component
+    if current.cpu_id != stored.cpu_id:
+        mismatches.append('cpu_id')
+    if not (set(current.mac_addresses) & set(stored.mac_addresses)):
+        mismatches.append('mac_addresses')
+    if not (set(current.disk_serials) & set(stored.disk_serials)):
+        mismatches.append('disk_serials')
+    if current.dmi_uuid != stored.dmi_uuid:
+        mismatches.append('dmi_uuid')
+
+    # Allow up to 'tolerance' mismatches (e.g., added new NIC)
+    is_valid = len(mismatches) <= tolerance
+
+    return {
+        'valid': is_valid,
+        'mismatches': mismatches,
+        'mismatch_count': len(mismatches)
+    }
+```
+
+**Why This Works**:
+- ✅ **Stable**: Hardware IDs don't change across reboots
+- ✅ **Unique**: Combination creates device-specific fingerprint
+- ✅ **Verifiable**: MSSP tracks all devices by fingerprint
+- ✅ **Flexible**: Tolerance allows minor hardware changes (add RAM, NIC, etc.)
+- ✅ **No TPM required**: Works on any Linux device
+
+### MSSP Device Registry
+
+**Central registry tracking all devices in HookProbe network.**
+
+📖 **[MSSP Device Registry Implementation →](../../src/mssp/device_registry.py)**
+
+#### Database Schema
+
+```sql
+-- Main devices table
+CREATE TABLE devices (
+    device_id TEXT PRIMARY KEY,
+    device_type TEXT NOT NULL,              -- 'edge', 'validator', 'cloud'
+    hardware_fingerprint TEXT NOT NULL,     -- SHA256 hash
+    public_key_ed25519 TEXT NOT NULL,       -- Device signing key
+    certificate_hash TEXT,                  -- OEM certificate (optional)
+    status TEXT NOT NULL,                   -- 'PENDING', 'ACTIVE', 'SUSPENDED', 'REVOKED'
+    kyc_verified INTEGER DEFAULT 0,         -- KYC completed (validators only)
+    firmware_version TEXT,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    validator_stake INTEGER,                -- For validators
+    validator_reputation REAL,              -- For validators
+    managed_by_validator TEXT,              -- For edge nodes
+    UNIQUE(hardware_fingerprint)
+);
+
+-- Location tracking table
+CREATE TABLE device_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    ip_address TEXT NOT NULL,
+    country TEXT,
+    region TEXT,
+    city TEXT,
+    latitude REAL,
+    longitude REAL,
+    asn INTEGER,                            -- Autonomous System Number
+    isp TEXT,
+    FOREIGN KEY (device_id) REFERENCES devices(device_id)
+);
+```
+
+#### Device Registration Flow
+
+```python
+class MSS PDeviceRegistry:
+    def register_device(
+        self,
+        device_id: str,
+        device_type: DeviceType,
+        hardware_fingerprint: str,
+        public_key: str,
+        firmware_version: str,
+        location: DeviceLocation
+    ) -> bool:
+        """
+        Register new device with MSSP.
+
+        Prerequisite Enforcement:
+        - Validators require MSSP cloud to exist (checked via _check_cloud_exists())
+        - Edge devices can register anytime
+
+        Returns:
+            True if registration successful
+        """
+        # CRITICAL: Validators need cloud deployed first
+        if device_type == DeviceType.VALIDATOR:
+            if not self._check_cloud_exists():
+                print("ERROR: Cannot register validator - MSSP Cloud not deployed")
+                return False
+
+        # Insert device with PENDING status
+        # Record initial location
+        # Return success
+```
+
+#### Deployment Order Enforcement
+
+```
+┌─────────────┐
+│ MSSP Cloud  │ ← Must exist first
+│ (device_type=CLOUD, status=ACTIVE)
+└──────┬──────┘
+       │ Prerequisite check passes ✓
+       │
+  ┌────▼────┐
+  │Validator│ ← Requires cloud + KYC verification
+  │ (status=PENDING → KYC → ACTIVE)
+  └────┬────┘
+       │ No prerequisite (can deploy anytime) ✓
+       │
+  ┌────▼────┐
+  │  Edge   │ ← Auto-approve after registration
+  │ (status=PENDING → ACTIVE)
+  └─────────┘
+```
+
+**Why This Matters**:
+- ✅ **Order enforcement**: Validators cannot install without MSSP cloud
+- ✅ **Trust model**: KYC verification for validators (operators must be verified)
+- ✅ **Location tracking**: Every device check-in updates location history
+- ✅ **Revocation**: MSSP can suspend/revoke compromised devices
+- ✅ **Audit trail**: Complete device lifecycle tracking
+
+### GeoIP Integration
+
+**IP-based geolocation for device tracking.**
+
+📖 **[GeoIP Service Implementation →](../../src/mssp/geolocation.py)**
+
+```python
+class GeoIPService:
+    def geolocate(self, ip_address: str) -> Optional[GeoLocation]:
+        """
+        Geolocate IP address.
+
+        Priority:
+        1. MaxMind GeoIP2 (if database available)
+        2. IP-API.com (free tier fallback)
+
+        Returns:
+            GeoLocation with country, region, city, coordinates, ASN, ISP
+        """
+        # Try MaxMind GeoLite2-City first
+        if self.city_reader:
+            response = self.city_reader.city(ip_address)
+            return GeoLocation(
+                ip_address=ip_address,
+                country=response.country.name,
+                region=response.subdivisions.most_specific.name,
+                city=response.city.name,
+                latitude=response.location.latitude,
+                longitude=response.location.longitude,
+                asn=asn_response.autonomous_system_number,
+                isp=asn_response.autonomous_system_organization
+            )
+
+        # Fallback to IP-API.com
+        return self._geolocate_ipapi(ip_address)
+```
+
+**Use Cases**:
+- Track device location changes (detect unauthorized relocation)
+- Geographic distribution of validators
+- Compliance with regional data sovereignty
+- Detect anomalous IP changes (potential device compromise)
 
 ---
 
