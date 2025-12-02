@@ -1,10 +1,21 @@
 # Software Testing Strategy for HookProbe MSSP
 ## Raspberry Pi 4 (4GB RAM) - Web Services Only
 
+> **⚠️ IMPORTANT: This document is for TESTING and DEVELOPMENT only**
+>
+> **For Production Installation**, see:
+> - **[QUICK-START.md](QUICK-START.md)** - Interactive 3-step installation
+> - **[install/edge/README.md](install/edge/README.md)** - Edge deployment guide
+> - **[install/cloud/README.md](install/cloud/README.md)** - Cloud/MSSP deployment
+> - **[DOCUMENTATION-INDEX.md](DOCUMENTATION-INDEX.md)** - Complete documentation guide
+>
+> This document covers testing infrastructure for developers, QA teams, and CI/CD pipelines.
+
 **Target Platform:** Raspberry Pi 4 Model B (4GB RAM)
-**Scope:** Web-related services (POD-001, POD-002, POD-003, POD-005)
+**Scope:** Web-related services testing (POD-001, POD-002, POD-003, POD-005)
 **Excluded:** AI workloads (POD-007), Heavy monitoring (POD-004 Grafana stack)
 **Budget:** Minimal - Using existing hardware and free/open-source tools
+**Container Runtime:** Podman-only (no Docker)
 
 ---
 
