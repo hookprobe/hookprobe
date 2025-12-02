@@ -195,7 +195,7 @@ class IoC_ReportAdmin(admin.ModelAdmin):
 
     list_display = [
         'title', 'severity', 'status', 'overall_risk_score',
-        'systems_compromised', 'created_by', 'created_at', 'updated_at'
+        'systems_compromised', 'created_at', 'updated_at'
     ]
     list_filter = ['severity', 'status', 'created_at', 'updated_at']
     search_fields = ['title', 'summary', 'mitigation_steps']
