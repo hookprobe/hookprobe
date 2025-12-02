@@ -130,7 +130,7 @@ echo -e "${GREEN}✓${NC} Architecture: $ARCH_TYPE"
 # Detect Raspberry Pi
 if [ "$ARCH_TYPE" = "arm64" ]; then
     if grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null || grep -qi "raspberry pi" /sys/firmware/devicetree/base/model 2>/dev/null; then
-        RPI_MODEL=$(cat /proc/device-tree/model 2>/dev/null || cat /sys/firmware/devicetree/base/model 2>/dev/null)
+        RPI_MODEL=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0' || cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0')
         if echo "$RPI_MODEL" | grep -qi "raspberry pi 4"; then
             echo -e "${GREEN}✓${NC} Hardware: Raspberry Pi 4 ${GREEN}(Recommended)${NC}"
         elif echo "$RPI_MODEL" | grep -qi "raspberry pi 5"; then
@@ -400,7 +400,10 @@ if ! podman image exists hookprobe-django:lightweight 2>/dev/null; then
     if [ -f "$SCRIPT_DIR/../../src/web/Dockerfile.test" ]; then
         cd "$SCRIPT_DIR/../../src/web"
         podman build \
+            --format docker \
             --arch "$ARCH_TYPE" \
+            --build-arg BUILDPLATFORM=linux/$ARCH_TYPE \
+            --build-arg TARGETPLATFORM=linux/$ARCH_TYPE \
             -t hookprobe-django:lightweight \
             -f Dockerfile.test \
             . || {
