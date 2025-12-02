@@ -31,6 +31,8 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@hookprobe.com')
 
 # Logging configuration
+# For containerized deployments, logs go to stdout/stderr
+# Container orchestrators (Podman/Docker) capture and manage logs
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -50,44 +52,34 @@ LOGGING = {
         },
     },
     'handlers': {
-        'file': {
-            'level': 'INFO',
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': '/var/log/hookprobe/django.log',
-            'maxBytes': 1024 * 1024 * 10,  # 10 MB
-            'backupCount': 10,
-            'formatter': 'verbose',
-        },
-        'error_file': {
-            'level': 'ERROR',
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': '/var/log/hookprobe/django-error.log',
-            'maxBytes': 1024 * 1024 * 10,  # 10 MB
-            'backupCount': 10,
-            'formatter': 'verbose',
-        },
         'console': {
             'class': 'logging.StreamHandler',
-            'formatter': 'simple',
+            'formatter': 'verbose',
+            'level': 'INFO',
+        },
+        'console_error': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+            'level': 'ERROR',
         },
     },
     'root': {
-        'handlers': ['file', 'console'],
+        'handlers': ['console'],
         'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['file', 'error_file'],
+            'handlers': ['console', 'console_error'],
             'level': 'INFO',
             'propagate': False,
         },
         'django.request': {
-            'handlers': ['error_file'],
+            'handlers': ['console_error'],
             'level': 'ERROR',
             'propagate': False,
         },
         'apps': {
-            'handlers': ['file'],
+            'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
         },
