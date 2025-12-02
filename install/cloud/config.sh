@@ -109,7 +109,7 @@ IMAGE_VECTOR="docker.io/timberio/vector:latest-alpine"             # Apache 2.0
 IMAGE_GRAFANA="docker.io/grafana/grafana:11.4.0"                   # AGPL-3 (service use OK)
 IMAGE_POSTGRES="docker.io/postgres:16-alpine"                      # PostgreSQL License
 IMAGE_KEYCLOAK="quay.io/keycloak/keycloak:23.0"                    # Apache 2.0
-IMAGE_REDIS="docker.io/redis:7.2-alpine"                           # BSD-3-Clause
+IMAGE_REDIS="docker.io/redis:7-alpine"                              # BSD-3-Clause
 IMAGE_NGINX="docker.io/nginx:1.25-alpine"                          # BSD-2-Clause
 
 # ============================================================
