@@ -846,7 +846,25 @@ run_installer() {
     fi
 
     local config_dir=$(dirname "$script_path")
-    local config_file="$config_dir/config.sh"
+    local config_file=""
+
+    # Determine correct config file based on deployment type
+    case "$deployment_type" in
+        testing)
+            config_file="$config_dir/lightweight-config.sh"
+            ;;
+        edge|cloud|n8n)
+            config_file="$config_dir/config.sh"
+            ;;
+        *)
+            # Fallback: try lightweight-config.sh first, then config.sh
+            if [ -f "$config_dir/lightweight-config.sh" ]; then
+                config_file="$config_dir/lightweight-config.sh"
+            else
+                config_file="$config_dir/config.sh"
+            fi
+            ;;
+    esac
 
     # Check if configuration exists
     if [ ! -f "$config_file" ] || [ ! -s "$config_file" ]; then
