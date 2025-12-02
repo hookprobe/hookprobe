@@ -5,6 +5,8 @@
 **Last Updated**: 2025-12-01
 
 ---
+![HookProbe Protocol](../../assets/hookprobe-neuro-resonant-protocol.png)
+---
 
 ## Executive Summary
 
@@ -981,4 +983,838 @@ else:
 
 ---
 
-**Made with ❤️ and 🧠 for a safer, more equitable internet**
+**HookProbe-Neuro Protocol v1.0-alpha**
+*Where Neural Networks Become Cryptographic Keys*
+
+**Neurosurgical Cybersecurity for the Connected World**
+
+
+
+# Version: 1.1-beta (Includes Phase 2: Synaptic Transport)
+
+Status: Active Implementation
+Previous Version: 1.0-alpha
+Last Updated: 2025-11-28
+
+Executive Summary (v1.1 Update)
+
+HookProbe-Neuro v1.1 extends the core cryptographic resonance model to the transport layer, addressing the challenge of NAT and CGNAT traversal (Carrier-Grade NAT).
+
+In modern hostile networks, Edge nodes are often behind restrictive firewalls that drop idle connections. To maintain the Neural Resonance required for real-time security updates, v1.1 introduces Synaptic Transport.
+
+Core Innovation: The Synaptic Bridge
+
+Instead of a passive TCP connection, the Edge and Cloud maintain a Synaptic Bridge—a UDP-based, stateful connection kept alive by Neuro-Pulses.
+
+Neuro-Pulse (Heartbeat): A lightweight, cryptographic heartbeat derived from the current neural weights. It punches a hole in the NAT (Membrane Potential) and proves liveliness.
+
+Axonal Back-propagation: The Cloud Validator uses the open NAT pinhole created by the Pulse to push urgent security updates (new signatures) instantly, without waiting for a scheduled check-in.
+
+Dendritic Spine ID (DSID): A connection identifier that persists across IP changes, allowing the "neuron" (Edge) to roam across networks (WiFi to 5G) without severing the resonance.
+
+# 12. Synaptic Transport Layer (New in v1.1)
+
+This layer replaces the generic "E2EE Transport" from v1.0 with a specific UDP-based protocol designed for high-assurance NAT traversal.
+
+### 12.1 The Biological Metaphor for NAT
+
+Network Concept
+
+HookProbe-Neuro Term
+
+Biological Analogy
+
+NAT Gateway
+
+Membrane Barrier
+
+The cell membrane regulating ion flow.
+
+NAT Pinhole
+
+Ion Channel
+
+A temporary opening allowing signals to pass.
+
+Heartbeat Packet
+
+Neuro-Pulse
+
+Action potential firing to keep the channel potent.
+
+Connection ID
+
+Dendritic Spine ID (DSID)
+
+The physical structure maintaining the connection.
+
+Cloud-to-Edge Push
+
+Back-propagation
+
+Signal traveling backward to adjust the neuron.
+
+### 12.2 Packet Structure
+
+All packets run over UDP. The header is unencrypted (but authenticated), while the payload is ChaCha20-Poly1305 encrypted using the weight-derived keys.
+
+struct SynapticHeader {
+    uint8_t  type;             // 0x01: PULSE, 0x02: UPDATE, 0x03: SYNC
+    uint64_t dsid;             // Dendritic Spine ID (Persistent Session ID)
+    uint32_t sequence;         // Packet sequence number
+    uint8_t  weight_hint[4];   // First 4 bytes of current W_fingerprint (Context)
+};
+
+
+# 13. The Neuro-Pulse Mechanism (Heartbeat)
+
+To keep the "Ion Channel" (NAT Pinhole) open, the Edge must fire continuously. However, a static "ping" is insecure. The Neuro-Pulse acts as both a keep-alive and a micro-authentication.
+
+### 13.1 Pulse Logic
+
+The Edge sends a Pulse to the Cloud every $T_{pulse}$ seconds.
+
+$$ T_{pulse} = \min(T_{NAT_limit} - \delta, \frac{1}{R_{stress}}) $$
+
+$T_{NAT\_limit}$: The estimated NAT timeout (usually 30s for UDP).
+
+$R_{stress}$: The "Stress Factor" (derived from Qsecbit Resilience Score).
+
+Calm State: Pulse every 25 seconds (Keep NAT open).
+
+Attack State: Pulse every 1 second (High readiness for Cloud commands).
+
+### 13.2 Pulse Payload (Lightweight PoSF)
+
+The Pulse does not send a full TER. It sends a "Spark"—a hash proving the Edge is currently resonant without transmitting the full weight state.
+
+def generate_neuro_pulse(W_current, dsid, sequence):
+    """
+    Generates a lightweight heartbeat verifying Weight State.
+    """
+    # Create a "Spark" - a micro-proof of current neural state
+    # W_current is 4096 bytes, we only need a deterministic digest
+    spark_input = W_current.tobytes() + struct.pack('<Q I', dsid, sequence)
+    spark = hashlib.blake2b(spark_input, digest_size=16).digest()
+    
+    return spark
+
+
+### 13.3 Cloud Response: The Axonal Trigger
+
+When the Cloud receives a Neuro-Pulse, it performs two checks:
+
+Resonance Check: Does the spark match the Cloud's simulation of the Edge?
+
+Yes: Connection is valid.
+
+No: Immediate Desynchronization Alert.
+
+Update Check (The "Update" Requirement): Are there new security signatures or weight adjustments waiting for this Edge?
+
+# 14. Validator-to-Edge Back-propagation
+
+This addresses the requirement: "if the cloud wants to update the edge security signatures can do so."
+
+Because the Edge initiated the UDP Neuro-Pulse, the NAT gateway considers the connection "Established." The Cloud can now send data back through this temporary opening.
+
+### 14.1 The "Piggyback" Protocol
+
+If the Cloud has no updates, it sends a 1-byte PULSE_ACK.
+If the Cloud has updates, it upgrades the response to a SYNAPTIC_OVERRIDE.
+
+Scenario: Zero-Day Signature Update
+
+Cloud identifies a new global threat. It generates a "Weight Bias Adjustment" ($\Delta W_{patch}$) to protect all Edges.
+
+Edge is behind CGNAT. Cloud cannot connect directly.
+
+Edge sends routine Neuro-Pulse (Sequence 105).
+
+Cloud receives Pulse 105. Matches DSID.
+
+Cloud immediately transmits SYNAPTIC_OVERRIDE packet containing $\Delta W_{patch}$.
+
+Note: This packet travels through the hole opened by Pulse 105.
+
+Edge receives $\Delta W_{patch}$, applies it to Neural Engine, and instantly gains protection against the Zero-Day.
+
+### 14.2 Code Implementation: NAT Traversal Loop
+
+class SynapticTransmitter:
+    def __init__(self, cloud_ip, port, initial_weights):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.dsid = secrets.randbits(64) # Dendritic Spine ID
+        self.weights = initial_weights
+        self.stress_level = 0.0 # From Qsecbit
+
+    def start_synaptic_loop(self):
+        while True:
+            # 1. Calculate Pulse Interval based on Stress/NAT
+            interval = self._calculate_interval()
+            
+            # 2. Generate Neuro-Pulse
+            payload = generate_neuro_pulse(self.weights, self.dsid, self.seq)
+            
+            # 3. Fire across the Synapse (Send UDP)
+            encrypted_pulse = self._encrypt(payload)
+            self.sock.sendto(encrypted_pulse, (self.cloud_ip, self.port))
+            
+            # 4. Await Potential Back-propagation (Timeout = 2s)
+            try:
+                data, _ = self.sock.recvfrom(4096)
+                response = self._decrypt(data)
+                
+                if response.type == UPDATE_AVAILABLE:
+                    # Cloud is pushing new security signatures!
+                    self._apply_axonal_update(response.payload)
+                    
+            except socket.timeout:
+                # No update from cloud, connection is just being kept alive
+                pass
+                
+            time.sleep(interval)
+
+    def _calculate_interval(self):
+        # High stress = faster heart rate = faster command reception
+        if self.stress_level > 0.7: return 1.0 
+        return 25.0 # Standard NAT Keep-alive
+
+
+### 15. Dendritic Spine ID (DSID) & Mobility
+
+Standard protocols break when the client IP changes (e.g., switching from WiFi to Cellular), requiring a full handshake. HookProbe-Neuro uses the DSID to handle this.
+
+The Logic:
+
+The DSID is a random 64-bit integer generated during the initial Phase 1 Handshake.
+
+The Cloud maps DSID -> {Simulated_Weights, Last_IP, Last_Port}.
+
+If the Edge switches IPs (NAT Rebind), the Cloud sees the known DSID coming from a new IP.
+
+The Cloud automatically updates the endpoint mapping without forcing a heavy re-authentication, because the Neuro-Pulse payload (spark) proves the identity cryptographically via the weights.
+
+Security Implication: An attacker cannot hijack the session just by knowing the DSID, because they cannot generate the correct spark hash without the current, evolving Neural Weights.
+
+### 16. Summary of Flow (The "HookProbe" Way)
+
+Edge is Alive: Sends Neuro-Pulse (UDP) containing weight-derived spark.
+
+Effect: Opens NAT Pinhole.
+
+Cloud Verifies: Checks spark against simulated weights.
+
+Effect: Confirms "Neural Resonance."
+
+Cloud Decision:
+
+Nothing New: Sends silence or tiny ACK.
+
+Threat Update: Sends Axonal Update (New Signatures) through the open pinhole.
+
+Edge Evolves: Edge applies update, changing its weights.
+
+Cycle Continues: Next pulse uses new weights, confirming receipt of update.
+
+This architecture ensures that even in deep CGNAT environments, the Cloud acts as the Central Nervous System, capable of sending reflex signals (updates) to the Motor Neurons (Edges) the moment they fire a resting pulse.
+
+
+HookProbe-Neuro Protocol Specification
+
+Version: 2.0-preview (Phase 2)
+Status: Architecture Design (Q2 2025 Roadmap)
+Previous Version: 1.1-beta
+Last Updated: 2025-11-29
+
+Executive Summary (Phase 2 Update)
+
+HookProbe-Neuro v2.0 represents the "Cognitive Maturation" of the protocol. While v1.x established the connection (Synapse) and authentication (Resonance), v2.0 introduces Intelligence and Immunity.
+
+Phase 2 focuses on four critical pillars:
+
+Absolute Determinism: A formal engine for guaranteeing bit-perfect state replication across diverse hardware (Edge vs. Cloud).
+
+Resilience: A robust reconnection protocol ("Synaptic Regrowth") for recovering from extended offline states.
+
+Immunity (DSM): The introduction of Dynamic Security Microblocks—hot-swappable logic units that act like antibodies, hunting for specific APTs without requiring firmware updates.
+
+Stealth: Advanced mitigation of side-channel attacks (power/timing analysis) using Neuro-Cloaking.
+
+17. Deterministic Replay Engine (DRE)
+
+The DRE is the core of the Cloud Validator. It is not a simulator; it is a Twin Universe. It must reproduce the Edge's neural evolution with zero-tolerance for deviation.
+
+17.1 The "Butterfly Effect" Guardrails
+
+In a chaotic neural system, a 0.000001 difference in a weight update can lead to total desynchronization after 1,000 steps. The DRE enforces strict determinism.
+
+Component
+
+Constraint
+
+Specification
+
+Arithmetic
+
+Fixed-Point Q16.16
+
+All operations (Add, Mul, Activation) use 32-bit integers. Floating-point units (FPU) are strictly forbidden to avoid architecture-specific rounding (x86 vs ARM).
+
+Activation
+
+Lookup Tables (LUT)
+
+Functions like Sigmoid or Tanh are implemented as pre-computed, integer-based LUTs to guarantee identical outputs on all platforms.
+
+RNG
+
+Cryptographic PRNG
+
+Random number generation for weight initialization or noise injection is derived solely from the HKDF(Seed, Step_Counter).
+
+Concurrency
+
+Serial-Equivalent
+
+Multi-threaded processing is permitted only if the reduction order is deterministic.
+
+17.2 The Replay Loop
+
+class DeterministicReplayEngine:
+    def __init__(self, initial_state_hash):
+        self.state = load_state(initial_state_hash)
+        self.math = FixedPointMath(precision='Q16.16')
+
+    def evolve_epoch(self, ter_batch):
+        """
+        Bit-perfect reproduction of Edge behavior.
+        """
+        for ter in ter_batch:
+            # 1. Verify TER Integrity (Chain Hash)
+            if not self.verify_chain(ter):
+                raise SecurityAnomaly("Time-Line Corruption")
+
+            # 2. Inject DSM Logic (Phase 2)
+            # DSMs can alter inputs based on specific threat heuristics
+            ter_features = self.dsm_processor.apply_microblocks(ter)
+
+            # 3. Deterministic Forward Pass
+            # No floats allowed. 
+            layer_1 = self.math.matmul(ter_features, self.state.W1)
+            layer_1 = self.math.relu_lut(layer_1)
+            
+            # 4. Weight Evolution (Hebbian-Cryptographic Rule)
+            # W(t+1) = W(t) + LearningRate * Error * Input
+            self.state.update_weights(layer_1, ter.resilience_score)
+            
+        return self.state.current_fingerprint()
+
+
+18. Cloud Validator Integration
+
+The Cloud Validator Nexus is the backend infrastructure that manages the "Twin Universes" for millions of Edges.
+
+18.1 Nexus Architecture
+
+graph TD
+    A[Edge Node] -->|Neuro-Pulse (UDP)| B(Synaptic Gateway)
+    B -->|Load Balance| C{Validator Pods}
+    C -->|Fetch State| D[Redis: Hot State]
+    C -->|Fetch History| E[S3: Deep Dream Logs]
+    C -- DRE Simulation --> F[Resonance Decision]
+    F -->|Match| G[Send Pulse ACK]
+    F -->|Mismatch| H[Trigger Alarm / Synaptic Sever]
+
+
+Synaptic Gateway: A high-performance UDP ingress handling millions of packets/sec (eDPF/XDP based).
+
+Validator Pods: Containerized DRE instances. They are stateless; they pull the "Brain State" (Weights) from Hot Storage, evolve it by one step based on the Pulse, and save it back.
+
+Deep Dream Logs: Long-term storage of TERs for forensic replay if a persistent threat is detected months later.
+
+19. Synaptic Regrowth (Reconnection Protocol)
+
+When a connection is severed (Timeouts, ISP failure, Attack), the Edge must "regrow" the connection without opening vulnerabilities.
+
+19.1 The Regrowth Hierarchy
+
+State
+
+Condition
+
+Protocol Action
+
+Micro-Sleep
+
+Missed < 3 Pulses
+
+Fast-Resume: Resend last pulse with same Sequence ID.
+
+Faint
+
+Missed < 100 Pulses
+
+Catch-Up: Edge sends a compressed "Burst" of missed TER hashes. Cloud fast-forwards DRE.
+
+Coma
+
+Offline > 24 Hours
+
+Deep-Sync: Weights have drifted significantly. Edge enters "Dream State," generating a Dream_Log (Summary of events).
+
+Severed
+
+Integrity Failure
+
+Regenesis: Keys wiped. Manual admin intervention or TPM-based Zero-Touch Provisioning required.
+
+19.2 The "Handshake of Trust" (Phase 2)
+
+Unlike standard TLS resumption, Regrowth requires proving what happened while offline.
+
+Edge: Sends REGROWTH_REQUEST + Dream_Hash (Merkle root of offline TERs).
+
+Cloud: Checks Dream_Hash.
+
+If trustworthy: Requests Dream_Log_Stream.
+
+If suspicious (high threat score): Requests Forensic_Dump.
+
+Edge: Streams the compressed TERs.
+
+Cloud: Runs DRE on the stream.
+
+Final Check: If DRE_Result == Edge_Current_Weights, connection is Healed.
+
+20. DSM Microblocks (Dynamic Security Modules)
+
+DSM is a Phase 2 breakthrough. It allows the Cloud to inject "Intelligence" into the protocol dynamically. DSMs are tiny, sandboxed logic blocks (like eBPF or WASM) that attach to the Neural Engine.
+
+20.1 The Biological Analogy
+
+Firmware: The DNA (Static, hard to change).
+
+Weights: The Memories (Dynamic, evolving).
+
+DSM Microblocks: Antibodies (Targeted, deployed for specific threats).
+
+20.2 DSM Structure
+
+A DSM Microblock contains:
+
+Target Hook: Where to attach (e.g., PRE_TER_HASH, POST_WEIGHT_UPDATE).
+
+Logic Bytecode: The detection logic (e.g., "Check memory range 0x8000 for pattern X").
+
+Action: What to do if triggers (e.g., "Max out Resilience Score", "Zero out Weight W_5").
+
+20.3 Use Case: Stopping a Persistent Threat (APT)
+
+Scenario: A new "Sleepy Rootkit" is discovered that hides in /tmp/.hidden.
+
+Cloud: Compiles a DSM Microblock: CheckFileExists("/tmp/.hidden").
+
+Back-propagation: Cloud pushes DSM to Edge via Axonal Update.
+
+Edge: Installs DSM into the TER_Gathering loop.
+
+Detection: DSM finds the file. It forces the H_Integrity hash to a specific "Tainted" value.
+
+Resonance: The weights diverge immediately and specifically.
+
+Cloud: DRE sees the specific divergence pattern and flags: "APT Detained: Sleepy Rootkit Variant."
+
+21. Side-Channel Mitigation (Neuro-Cloaking)
+
+To prevent attackers from inferring keys or weights by measuring power/EM emissions during the heartbeat generation.
+
+21.1 Masked Neural Arithmetic
+
+We employ Boolean Masking for all fixed-point operations.
+
+Instead of computing z = x * w, the Edge computes on shares:
+
+Split $x$ into $x_1, x_2$ such that $x = x_1 \oplus x_2$.
+
+Split $w$ into $w_1, w_2$ such that $w = w_1 \oplus w_2$.
+
+Perform multiplication in the masked domain (requires randomness).
+
+Result $z$ is never exposed in cleartext on the bus.
+
+Effect: Power trace looks like random noise.
+
+21.2 Temporal Jitter
+
+The Neuro-Pulse transmission time is randomized within a micro-window:
+$$ T_{send} = T_{scheduled} + \text{PRNG}(\text{Seed}_{jitter}) % 500\text{ms} $$
+This prevents attackers from correlating precise packet timing with internal processing states.
+
+22. Persistent Threat Mitigation Matrix
+
+Threat Type
+
+Standard Defense
+
+Phase 2 HookProbe Defense
+
+Logic Bomb (Dormant malware)
+
+Missed by antivirus (signature based)
+
+DSM Microblock: Cloud pushes behavioral heuristics to monitor specific system calls over time.
+
+Fileless Malware (Memory resident)
+
+Reboot clears it, but damage done
+
+Memory-DSM: A microblock that checksums critical RAM regions and feeds it into the TER entropy, permanently altering weight history.
+
+Man-at-the-Side (Side-channel)
+
+Hard to detect
+
+Neuro-Cloaking: Masked arithmetic makes power analysis computationally infeasible.
+
+Rollback Attack (Restoring old backup)
+
+Nonces
+
+Resonance Failure: Old backup has old weights. DRE immediately rejects connection (cannot generate valid Pulse).
+
+23. Implementation Roadmap (Q2 2025)
+
+April 2025: Finalize DRE specification and release libneuro-fixedpoint (C/Rust).
+
+May 2025: Deploy Validator Nexus beta on Kubernetes.
+
+June 2025: DSM Compiler release (allowing security teams to write custom Microblocks).
+
+July 2025: Full Phase 2 Audit & Rollout.
+
+
+
+
+
+HookProbe-Neuro Protocol Specification
+
+Version: 3.0-alpha (The "Quantum Triad" Update)
+Status: Research & Formal Verification
+Previous Version: 2.0-preview
+Last Updated: 2025-11-29
+
+Executive Summary (v3.0 Update)
+
+HookProbe-Neuro v3.0 restructures the ecosystem into a Cryptographic Triad to eliminate single points of failure and ensure hacker-proof integrity.
+
+The Core Shift: In previous versions, the Cloud acted as both Judge (Validator) and Benefactor (Update Provider). In v3.0, these roles are split.
+
+The Cloud (The Cortex): Responsible for AI analysis, threat research, and pushing "Axonal Updates" (Signatures).
+
+The Validator (The Brainstem): A strictly isolated, deterministic verifier responsible for "Life Support" (Integrity).
+
+The Edge (The Neuron): The sensor node.
+
+Trust Model: Neural Quorum. The Edge is only "Genuine" if both the Cloud and the Validator independently achieve resonance.
+
+24. The Neuro-Triad Architecture
+
+To prevent a compromised Cloud from tricking the Edge, or a compromised Edge from fooling the Cloud, we introduce the Triad Handshake.
+
+24.1 Dual-Stream Resonance
+
+When the Edge initiates a connection, it opens two distinct cryptographic streams multiplexed over the same UDP socket (to penetrate NAT).
+
+Stream Alpha (Intelligence): Edge <--> Cloud
+
+Purpose: Telemetry upload, receiving Security Microblocks (DSMs), Heuristic Analysis.
+
+Key: $K_{alpha}$ (Derived from Weight State A).
+
+Stream Beta (Integrity): Edge <--> [Cloud Relay] <--> Validator
+
+Purpose: Strict deterministic replay verification.
+
+Key: $K_{beta}$ (Derived from Weight State B).
+
+Constraint: The Cloud cannot decrypt Stream Beta. It acts as a blind relay.
+
+24.2 NAT-to-NAT Communication (Synaptic Relay)
+
+Both the Edge and the Validator are often behind CGNAT (e.g., Starlink, 5G, Residential ISPs). They cannot connect directly.
+
+The Solution: The Cloud acts as the Synaptic Cleft (Relay).
+
+Edge sends Pulse B to Cloud: UDP( IP_Cloud, Payload=[Encrypted_for_Validator] ).
+
+Cloud recognizes StreamID: Beta. It looks up the active Validator for this Edge DSID.
+
+Cloud forwards packet to Validator: UDP( IP_Validator, Payload=[Encrypted_for_Validator] ).
+
+Validator receives, validates, and sends ACK back via Cloud.
+
+Security Proof:
+Since $K_{beta}$ is negotiated directly between Edge and Validator (via Kyber-KEM), the Cloud sees only ciphertext. The Cloud cannot fake a Validator response.
+
+25. Quantum-Resistant Transport
+
+To secure the protocol against future "Store Now, Decrypt Later" attacks by quantum computers, v3.0 upgrades the E2EE primitives.
+
+25.1 The PQC Suite
+
+Component
+
+Legacy (v2.0)
+
+Quantum-Resistant (v3.0)
+
+Rationale
+
+Key Encapsulation
+
+Curve25519 (ECDH)
+
+ML-KEM-1024 (Kyber)
+
+NIST-standard lattice-based KEM. Resistant to Shor's algorithm.
+
+Signatures
+
+Ed25519
+
+ML-DSA-87 (Dilithium)
+
+Lattice-based digital signatures for initial handshake identity.
+
+Symmetric AEAD
+
+ChaCha20-Poly1305
+
+AES-256-GCM + GMAC
+
+256-bit keys offer sufficient quantum resistance (Grover's algo reduces effective security to 128-bit).
+
+Weight Hashing
+
+SHA-256
+
+SHA3-512 (Keccak)
+
+Higher resistance to collision attacks.
+
+25.2 The "Hybrid" Handshake
+
+To balance speed and security, we use a hybrid approach during the initial connection:
+
+
+$$K_{session} = \text{HKDF}( \text{ECDH}(A, B) \parallel \text{KyberDecaps}(C, D) )$$
+
+
+Even if the Quantum algorithm breaks Kyber, the ECDH remains (and vice versa).
+
+26. Hardware Acceleration (FPGA/ASIC)
+
+To achieve the target of 1,000,000 TER/sec (Temporal Event Records per second), software processing is insufficient. v3.0 defines a Hardware Description Language (HDL) spec for the Neural Engine.
+
+26.1 FPGA Architecture (The "Neuro-Core")
+
+The Neuro-Core is a specialized pipeline designed for Xilinx Ultrascale+ or Lattice FPGAs.
+
+module NeuroCore_Pipeline (
+    input clk,
+    input [511:0] ter_data,       // 64-byte TER input
+    input [31:0]  weight_ram_addr,
+    output [31:0] resonance_hash
+);
+    // Stage 1: Parallel Fixed-Point Dot Product
+    // Processes 64 inputs simultaneously in one clock cycle
+    DSP48E2_Slice dot_product_array[63:0] (
+        .A(ter_data), 
+        .B(current_weights), 
+        .P(neuron_activation)
+    );
+
+    // Stage 2: LUT-based Activation (Sigmoid/ReLU)
+    // Zero-latency lookup instead of mathematical calculation
+    Activation_LUT activation_stage (
+        .in(neuron_activation),
+        .out(layer_1_out)
+    );
+
+    // Stage 3: Keccak Sponge (Output Hash)
+    Keccak_f1600_Pipeline hasher (
+        .in(layer_1_out),
+        .out(resonance_hash)
+    );
+endmodule
+
+
+26.2 Performance Targets
+
+Platform
+
+Throughput (TER/sec)
+
+Latency
+
+Power Efficiency
+
+CPU (ARM64)
+
+12,000
+
+800 $\mu$s
+
+Low
+
+GPU (CUDA)
+
+450,000
+
+2 ms (Batching lag)
+
+Medium
+
+FPGA (Neuro-Core)
+
+1,200,000
+
+3 $\mu$s
+
+High
+
+27. Formal Verification of Determinism
+
+To prove that the Edge and Validator will always stay in sync (given identical inputs), we employ formal methods.
+
+27.1 The Constraint Model
+
+We define the Neural State Transition function $S_{t+1} = F(S_t, I_t)$ using TLA+ (Temporal Logic of Actions).
+
+Theorem:
+$$ \forall S_t, I_t: \text{Hardware}{\text{FPGA}}(S_t, I_t) \equiv \text{Software}{\text{Cloud}}(S_t, I_t) $$
+
+27.2 Verification Steps
+
+Bit-Vector Logic: The DRE (Cloud) uses ap_fixed<32,16> types which are bit-accurate to the Verilog signed [31:0] implementation.
+
+Model Checking: We use the Z3 Theorem Prover to verify that no arithmetic overflow/underflow occurs in the Q16.16 domain that would be handled differently by CPU vs FPGA (e.g., saturation behavior).
+
+Result: "Mathematically Proven Resonance."
+
+28. Quorum Consensus Logic
+
+The protocol defines the state of the Edge based on the Triad Agreement.
+
+28.1 The Voting Table
+
+Edge Claim
+
+Cloud Verdict
+
+Validator Verdict
+
+Final Status
+
+Action
+
+"I am 0xA1"
+
+Match
+
+Match
+
+GENUINE
+
+Open Synapse. Allow Data.
+
+"I am 0xA1"
+
+Mismatch
+
+Match
+
+SUSPICIOUS
+
+Cloud Logic Error? Re-sync Cloud DRE.
+
+"I am 0xA1"
+
+Match
+
+Mismatch
+
+TAINTED
+
+Edge likely compromised (Cloud tricked, Validator caught it).
+
+"I am 0xA1"
+
+Mismatch
+
+Mismatch
+
+REJECTED
+
+Close Connection.
+
+28.2 The 50% + 1 Rule
+
+Total Nodes: 3 (Edge, Cloud, Validator).
+
+Required for "Genuine": 3/3 Agreement (Unanimous Resonance) is ideal.
+
+Minimum Safe Operation: Cloud + Validator must agree on the Edge's state. (2 vs 1).
+
+If Cloud and Validator disagree, the system defaults to Safety Mode (Quarantine), as the "Truth" cannot be established.
+
+29. Academic & Research Roadmap
+
+This protocol update is structured to support peer-reviewed publication.
+
+29.1 Key Contributions
+
+"Cryptographic Neural Resonance": Novel primitive replacing static keys with evolving weight states.
+
+"Synaptic Relay Protocol": Method for high-assurance, encrypted NAT-to-NAT verification.
+
+"FPGA-Verified Determinism": A framework for hardware-software equivalence in security protocols.
+
+29.2 Target Conferences (2025-2026)
+
+USENIX Security '25: Focus on the system architecture and DSM microblocks.
+
+CCS '25 (ACM Conference on Computer and Communications Security): Focus on the Quantum-Resistant Triad handshake.
+
+FPGA '26: Focus on the Neuro-Core hardware acceleration and 1M TER/s throughput.
+
+30. Summary of v3.0 Flows
+
+1. Initialization:
+
+Edge performs Kyber-1024 handshake with Cloud.
+
+Edge performs Kyber-1024 handshake with Validator (proxied via Cloud).
+
+2. The Heartbeat Cycle:
+
+t=0: Edge fires Pulse_Alpha (to Cloud) and Pulse_Beta (to Validator).
+
+t=1: Cloud receives Alpha. Runs DRE. Result: Match.
+
+t=2: Cloud forwards Beta to Validator.
+
+t=3: Validator receives Beta. Runs Hardware DRE. Result: Match.
+
+t=4: Validator sends Signed_Token_OK to Cloud.
+
+t=5: Cloud aggregates Match + Token_OK.
+
+t=6: Cloud sends Synaptic_Update (New Signatures) to Edge.
+
+3. Result:
+
+A hacker must compromise The Edge AND The Cloud AND The Validator simultaneously to forge a connection.
+
+Breaking the crypto requires a Quantum Computer.
