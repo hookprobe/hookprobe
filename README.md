@@ -8,9 +8,10 @@
 
 [![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
 [![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
-[![Python Linting](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
-[![ShellCheck](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/shellcheck.yml)
-[![Markdown Links](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/markdown-link-check.yml)
+[![Python Quality](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/python-lint.yml)
+[![Application Tests](https://github.com/hookprobe/hookprobe/actions/workflows/app-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/app-tests.yml)
+[![Documentation](https://github.com/hookprobe/hookprobe/actions/workflows/documentation.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/documentation.yml)
+[![CI Status](https://github.com/hookprobe/hookprobe/actions/workflows/ci-status.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/ci-status.yml)
 
 ## 🎯 Overview
 
