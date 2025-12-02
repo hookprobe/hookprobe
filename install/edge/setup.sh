@@ -20,6 +20,27 @@ else
     exit 1
 fi
 
+# Validate critical variables are defined
+REQUIRED_VARS=(
+    "VOLUME_POSTGRES_DATA"
+    "VOLUME_DJANGO_STATIC"
+    "VOLUME_DJANGO_MEDIA"
+    "POD_WEB"
+    "POD_DATABASE"
+    "NETWORK_WEB"
+    "NETWORK_DATABASE"
+)
+
+for var in "${REQUIRED_VARS[@]}"; do
+    if [ -z "${!var:-}" ]; then
+        echo "ERROR: Required variable $var is not defined in config.sh"
+        echo "Please check $SCRIPT_DIR/config.sh"
+        exit 1
+    fi
+done
+
+echo "✓ Configuration loaded and validated"
+
 echo "============================================================"
 echo "   HOOKPROBE v5.0 - STAGE 1 DEPLOYMENT"
 echo "   GPL-FREE Security Platform"
