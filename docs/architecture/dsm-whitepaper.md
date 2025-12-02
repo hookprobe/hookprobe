@@ -186,26 +186,46 @@ All responses are logged as cryptographically signed **"mitigation blocks"**.
 
 ## 6. Identity, Attestation & Trust
 
-### 6.1 Edge Identity
+### 6.1 Edge Identity (Liberty Architecture)
 
-Each node generates a hardware-backed keypair stored in:
+**HookProbe Liberty**: Hardware fingerprinting without TPM requirement - works on $75 Raspberry Pi.
 
-- **TPM 2.0**
+Each node generates a unique hardware fingerprint from:
+
+- **CPU ID** (model, serial if available)
+- **MAC addresses** (all network interfaces)
+- **Disk serials** (storage devices)
+- **DMI UUID** (SMBIOS identifier)
+- **Hostname**
+- **Ed25519 keypair** (software-generated, device-bound)
+
+**Optional hardware security** (for validators/high-security deployments):
+- **TPM 2.0** (preferred for validators)
 - **ARM TrustZone**
 - **Intel TXT/SGX**
-- **Qualcomm SDX65 secure enclave** (supported)
+- **Qualcomm SDX65 secure enclave**
 
 ### 6.2 Cloud Attestation Authority
 
-The cloud backend signs node certificates and issues:
+The MSSP cloud backend validates device identity and issues:
 
 - **Node UUID**
-- **Policy fingerprint**
+- **Device certificate** (Ed25519 public key)
+- **Weight fingerprint** (initial W_0 state)
 - **Cluster membership token**
 
 ### 6.3 Mutual Verification
 
-Edges verify cloud policy signatures. Cloud verifies edge integrity (PCR measurements).
+**Neural Resonance Authentication**:
+- Edge proves identity through deterministic weight evolution (PoSF signatures)
+- Cloud simulates edge weights from TER history (deterministic replay)
+- Bit-for-bit weight matching = authentication success
+- Weight divergence = compromised device → quarantine
+
+**Device Registry Validation**:
+- Hardware fingerprint verification (with tolerance for minor changes)
+- Geolocation tracking (IP-API + MaxMind GeoIP2)
+- KYC workflow for validators (MSSP production requirement)
 
 ---
 
