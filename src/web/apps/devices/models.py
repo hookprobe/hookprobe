@@ -59,6 +59,61 @@ class Device(models.Model):
     ip_address = models.GenericIPAddressField()
     mac_address = models.CharField(max_length=17, blank=True)
 
+    # Liberty Architecture - Hardware Fingerprinting (no TPM required)
+    hardware_fingerprint = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="SHA256 of CPU+MAC+disk+DMI+hostname"
+    )
+    public_key_ed25519 = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Device Ed25519 public key for HTP authentication"
+    )
+
+    # Neuro Protocol - Neural Resonance Authentication
+    neural_weight_fingerprint = models.CharField(
+        max_length=128,
+        blank=True,
+        help_text="SHA512 of current neural weight state"
+    )
+    last_posf_signature = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Last Proof-of-Sensor-Fusion signature (32 bytes hex)"
+    )
+    last_ter_timestamp = models.BigIntegerField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of last TER generation (microseconds)"
+    )
+
+    # HTP Protocol - Transport Session
+    htp_session_active = models.BooleanField(
+        default=False,
+        help_text="Active HTP session with validator"
+    )
+    last_htp_heartbeat = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last HTP heartbeat timestamp"
+    )
+
+    # DSM - Decentralized Security Mesh
+    dsm_consensus_participant = models.BooleanField(
+        default=False,
+        help_text="Participating in DSM mesh consensus"
+    )
+    validator_id = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Validator managing this edge node"
+    )
+    kyc_verified = models.BooleanField(
+        default=False,
+        help_text="KYC verification status (for validators)"
+    )
+
     # Hardware specs
     architecture = models.CharField(
         max_length=20,
@@ -66,10 +121,25 @@ class Device(models.Model):
         default='x86_64'
     )
     cpu_model = models.CharField(max_length=200, blank=True)
+    cpu_id = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="CPU serial number for fingerprinting"
+    )
     cpu_cores = models.IntegerField(null=True, blank=True)
     ram_gb = models.IntegerField(null=True, blank=True)
     storage_gb = models.IntegerField(null=True, blank=True)
+    disk_serials = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of disk serial numbers for fingerprinting"
+    )
     nic_model = models.CharField(max_length=200, blank=True)
+    dmi_uuid = models.CharField(
+        max_length=36,
+        blank=True,
+        help_text="DMI/SMBIOS UUID for fingerprinting"
+    )
 
     # Software
     os_version = models.CharField(max_length=100, blank=True)
