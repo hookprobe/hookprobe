@@ -1,0 +1,84 @@
+# HookProbe Web Server Container
+# Base image: Python 3.11 slim
+FROM python:3.11-slim
+
+LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
+LABEL description="HookProbe Django Web Application"
+LABEL version="5.0"
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DJANGO_SETTINGS_MODULE=hookprobe.settings
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    libpq-dev \
+    gcc \
+    curl \
+    netcat-traditional \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create application directory
+WORKDIR /app
+
+# Copy requirements first (for better layer caching)
+COPY src/web/requirements.txt /app/requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY src/web /app/
+
+# Create directories
+RUN mkdir -p /app/staticfiles /app/media /app/logs
+
+# Collect static files (will be overridden by volume mounts)
+RUN python manage.py collectstatic --noinput || true
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/admin/login/ || exit 1
+
+# Create entrypoint script
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+echo "Waiting for PostgreSQL..."\n\
+while ! nc -z $POSTGRES_HOST $POSTGRES_PORT; do\n\
+    sleep 1\n\
+done\n\
+echo "PostgreSQL is ready"\n\
+\n\
+echo "Waiting for Redis..."\n\
+while ! nc -z $REDIS_HOST $REDIS_PORT; do\n\
+    sleep 1\n\
+done\n\
+echo "Redis is ready"\n\
+\n\
+echo "Running database migrations..."\n\
+python manage.py migrate --noinput\n\
+\n\
+echo "Collecting static files..."\n\
+python manage.py collectstatic --noinput\n\
+\n\
+echo "Starting Gunicorn..."\n\
+exec gunicorn hookprobe.wsgi:application \\\n\
+    --bind 0.0.0.0:8000 \\\n\
+    --workers ${GUNICORN_WORKERS:-4} \\\n\
+    --timeout ${GUNICORN_TIMEOUT:-120} \\\n\
+    --access-logfile - \\\n\
+    --error-logfile - \\\n\
+    --log-level info\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

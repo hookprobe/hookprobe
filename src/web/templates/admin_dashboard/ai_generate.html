@@ -1,0 +1,201 @@
+{% extends 'admin_dashboard/base.html' %}
+
+{% block title %}Generate AI Content - HookProbe{% endblock %}
+{% block page_title %}Generate AI Content{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'admin_dashboard:home' %}">Home</a></li>
+<li class="breadcrumb-item"><a href="{% url 'admin_dashboard:ai_drafts' %}">AI Drafts</a></li>
+<li class="breadcrumb-item active">Generate</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-magic mr-2"></i>
+                    AI Content Generation
+                </h3>
+            </div>
+            <div class="card-body">
+                <form method="post" id="generateForm">
+                    {% csrf_token %}
+
+                    <!-- Topic Input -->
+                    <div class="form-group">
+                        <label for="topic">
+                            <i class="fas fa-lightbulb mr-1"></i>
+                            Blog Post Topic <span class="text-danger">*</span>
+                        </label>
+                        <input type="text" class="form-control" id="topic" name="topic"
+                               placeholder="e.g., Zero-Day Vulnerabilities in Cloud Infrastructure"
+                               required>
+                        <small class="form-text text-muted">
+                            Enter the main topic or subject for your blog post.
+                        </small>
+                    </div>
+
+                    <!-- AI Provider Selection -->
+                    <div class="form-group">
+                        <label for="ai_provider">
+                            <i class="fas fa-robot mr-1"></i>
+                            AI Provider <span class="text-danger">*</span>
+                        </label>
+                        <select class="form-control" id="ai_provider" name="ai_provider" required>
+                            <option value="anthropic" selected>Anthropic Claude (Recommended)</option>
+                            <option value="openai">OpenAI GPT-4</option>
+                        </select>
+                        <small class="form-text text-muted">
+                            Choose which AI model to use for content generation.
+                        </small>
+                    </div>
+
+                    <!-- Keywords -->
+                    <div class="form-group">
+                        <label for="keywords">
+                            <i class="fas fa-tags mr-1"></i>
+                            Keywords (Optional)
+                        </label>
+                        <input type="text" class="form-control" id="keywords" name="keywords"
+                               placeholder="security, threat detection, network monitoring">
+                        <small class="form-text text-muted">
+                            Comma-separated keywords to include in the content for SEO optimization.
+                        </small>
+                    </div>
+
+                    <!-- Target Word Count -->
+                    <div class="form-group">
+                        <label for="target_length">
+                            <i class="fas fa-ruler mr-1"></i>
+                            Target Word Count
+                        </label>
+                        <input type="number" class="form-control" id="target_length" name="target_length"
+                               value="800" min="300" max="3000" step="100">
+                        <small class="form-text text-muted">
+                            Approximate number of words for the blog post (300-3000).
+                        </small>
+                    </div>
+
+                    <!-- Research Sources -->
+                    <div class="form-group">
+                        <label for="research_sources">
+                            <i class="fas fa-link mr-1"></i>
+                            Research Sources (Optional)
+                        </label>
+                        <textarea class="form-control" id="research_sources" name="research_sources"
+                                  rows="3" placeholder="https://nvd.nist.gov/&#10;https://www.cisa.gov/&#10;https://www.cve.org/"></textarea>
+                        <small class="form-text text-muted">
+                            One URL per line. These sources will be referenced in the AI prompt.
+                        </small>
+                    </div>
+
+                    <!-- Include Options -->
+                    <div class="form-group">
+                        <label>
+                            <i class="fas fa-cog mr-1"></i>
+                            Content Options
+                        </label>
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="include_cve" name="include_cve">
+                            <label class="custom-control-label" for="include_cve">
+                                Include CVE database references
+                            </label>
+                        </div>
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="include_news" name="include_news" checked>
+                            <label class="custom-control-label" for="include_news">
+                                Include recent cybersecurity news
+                            </label>
+                        </div>
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="optimize_seo" name="optimize_seo" checked>
+                            <label class="custom-control-label" for="optimize_seo">
+                                Optimize for SEO
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Submit Buttons -->
+                    <div class="form-group">
+                        <button type="submit" class="btn btn-primary btn-lg" id="generateBtn">
+                            <i class="fas fa-magic mr-2"></i>
+                            Generate Content
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-lg" onclick="window.location.href='{% url 'admin_dashboard:ai_drafts' %}'">
+                            <i class="fas fa-times mr-2"></i>
+                            Cancel
+                        </button>
+                    </div>
+
+                    <!-- Loading Indicator -->
+                    <div id="loadingIndicator" class="alert alert-info" style="display: none;">
+                        <i class="fas fa-spinner fa-spin mr-2"></i>
+                        <strong>Generating content...</strong> This may take 30-60 seconds. Please wait.
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar with Tips -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-info">
+                <h3 class="card-title">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    Content Generation Tips
+                </h3>
+            </div>
+            <div class="card-body">
+                <h5><i class="fas fa-lightbulb mr-2 text-warning"></i>Best Practices:</h5>
+                <ul>
+                    <li><strong>Be Specific:</strong> Detailed topics produce better results (e.g., "XSS vulnerabilities in React applications" vs. "web security")</li>
+                    <li><strong>Use Keywords:</strong> Include 3-5 relevant SEO keywords for better optimization</li>
+                    <li><strong>Provide Sources:</strong> Quality research URLs improve content accuracy</li>
+                    <li><strong>Review Output:</strong> Always review and edit AI-generated content before publishing</li>
+                </ul>
+
+                <h5 class="mt-3"><i class="fas fa-chart-line mr-2 text-success"></i>AI Confidence:</h5>
+                <ul>
+                    <li><strong>90%+:</strong> High-quality, ready for quick review</li>
+                    <li><strong>70-89%:</strong> Good quality, needs review</li>
+                    <li><strong>&lt;70%:</strong> May need significant editing</li>
+                </ul>
+
+                <h5 class="mt-3"><i class="fas fa-robot mr-2 text-primary"></i>Provider Comparison:</h5>
+                <ul>
+                    <li><strong>Anthropic Claude:</strong> Better for technical content, detailed analysis</li>
+                    <li><strong>OpenAI GPT-4:</strong> Creative writing, broader topics</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-success">
+                <h3 class="card-title">
+                    <i class="fas fa-database mr-2"></i>
+                    Quick Research
+                </h3>
+            </div>
+            <div class="card-body">
+                <p>Need research first? Start a research task:</p>
+                <a href="{% url 'admin_dashboard:research_tasks' %}" class="btn btn-success btn-block">
+                    <i class="fas fa-search mr-2"></i>
+                    Research Topics
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('generateForm').addEventListener('submit', function() {
+    document.getElementById('generateBtn').disabled = true;
+    document.getElementById('loadingIndicator').style.display = 'block';
+});
+</script>
+{% endblock %}

@@ -1,0 +1,21 @@
+# HookProbe DSM Phase 1 - Requirements
+
+# Core dependencies (always required)
+cryptography>=41.0.0      # RSA operations, software fallback
+
+# Optional: TPM support
+# tpm2-pytss>=2.0.0       # Uncomment if TPM 2.0 hardware available
+
+# Optional: BLS signatures
+# py-ecc>=6.0.0           # Uncomment for true BLS aggregation
+# or
+# blspy>=2.0.0            # Alternative BLS implementation
+
+# Optional: LevelDB storage
+# plyvel>=1.5.0           # Uncomment for persistent storage
+# Falls back to in-memory if not installed
+
+# Existing HookProbe dependencies
+# (these should already be installed)
+# requests>=2.31.0
+# python-dateutil>=2.8.0
