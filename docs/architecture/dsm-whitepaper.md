@@ -323,13 +323,16 @@ HookProbe DSM is:
 
 ## 13. Roadmap
 
-| Phase | Deliverable |
-|-------|-------------|
-| Q1 | DSM ledger prototype, RAFT consensus |
-| Q2 | Full POD integration, attestation engine |
-| Q3 | Threat Intelligence Mesh federation |
-| Q4 | Decentralized AI response engine |
-| Q5 | Open consortium launch (Hackers / Makers SOC Network) |
+| Phase | Status | Deliverable |
+|-------|--------|-------------|
+| **Q1 2025** | ✅ Complete | DSM ledger prototype, microblocks, fallback mechanisms |
+| **Q2 2025** | ✅ Complete | POD integration, validator consensus, BLS signatures |
+| **Q3 2025** | ✅ Complete | HTP protocol, MSSP registry, device tracking |
+| **Q4 2025** | 🔄 In Progress | Production MSSP deployment, beta validator network |
+| **Q1 2026** | Planned | Threat Intelligence Mesh federation, global mesh sync |
+| **Q2-Q3 2026** | Planned | Decentralized AI response engine, federated ML |
+| **Q4 2026** | Planned | Open consortium launch (Hackers / Makers SOC Network) |
+| **2027+** | Vision | Multi-mesh global federation, 10K+ edge nodes |
 
 ---
 
@@ -353,5 +356,5 @@ By combining open-source software, affordable hardware, and a trust-by-design ar
 ---
 
 **Version**: 1.0 (Draft)
-**Last Updated**: 2025-11-26
+**Last Updated**: 2025-12-02
 **Maintained by**: HookProbe Team
