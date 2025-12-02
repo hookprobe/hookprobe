@@ -1,0 +1,58 @@
+# Dockerfile.test - Multi-arch test container for HookProbe Web Application
+# Supports: linux/amd64, linux/arm64 (Raspberry Pi 4)
+
+FROM python:3.11-slim-bookworm
+
+# Set build arguments
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    DJANGO_ENV=test
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    libpq-dev \
+    gcc \
+    g++ \
+    make \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt /app/
+COPY requirements-dev.txt /app/ 2>/dev/null || true
+
+# Install Python dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements.txt && \
+    pip install pytest pytest-django pytest-cov pytest-xdist coverage
+
+# Copy application code
+COPY . /app/
+
+# Create directories for static files and media
+RUN mkdir -p /app/staticfiles /app/media /app/logs
+
+# Set ownership (non-root user)
+RUN useradd -m -u 1000 hookprobe && \
+    chown -R hookprobe:hookprobe /app
+
+USER hookprobe
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python manage.py check --database default || exit 1
+
+# Default command: run tests
+CMD ["pytest", "--cov=apps", "--cov-report=term-missing", "--cov-report=html", "-v"]
