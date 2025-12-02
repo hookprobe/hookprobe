@@ -5,6 +5,8 @@
 **Last Updated**: 2025-12-02
 
 ---
+![HookProbe Protocol](../../assets/hookprobe-neuro-resonant-protocol.png)
+---
 
 ## Executive Summary
 
@@ -1113,4 +1115,7 @@ With Jitter:    P(correlation) = 0.12 (protected)
 
 ---
 
-**Made with ❤️ and 🧠 for a safer, more equitable internet**
+**HookProbe-Neuro Protocol v1.0-alpha**
+*Where Neural Networks Become Cryptographic Keys*
+
+**Neurosurgical Cybersecurity for the Connected World**

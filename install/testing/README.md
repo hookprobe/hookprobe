@@ -1,223 +1,308 @@
-# HookProbe Lightweight Testing/Development Setup
+# HookProbe Lightweight Testing/Development Deployment
 
-This directory contains scripts for setting up a lightweight HookProbe instance optimized for:
-- **Development and testing**
-- **Learning and experimentation**
-- **Resource-constrained devices** (Raspberry Pi 4B, 4-8GB RAM)
+**Target Platform:** Raspberry Pi 4 (4GB RAM), Development Machines
+**Purpose:** Testing, Development, CI/CD
+**NOT FOR PRODUCTION USE**
 
-## Quick Start
+---
 
-### Raspberry Pi 4B (4GB RAM)
+## Overview
+
+This lightweight deployment installs only essential PODs for testing and development:
+
+- ✅ **POD-001: Web Server** (Django + Nginx + NAXSI WAF)
+- ✅ **POD-002: IAM** (Logto authentication)
+- ✅ **POD-003: Database** (PostgreSQL 16-alpine)
+- ✅ **POD-005: Cache** (Redis 7-alpine)
+- ❌ **POD-004: Monitoring** (Excluded - too heavy)
+- ❌ **POD-007: AI/Qsecbit** (Excluded - too heavy)
+
+**Memory Usage:** ~2.5GB (leaves 1.5GB for OS on 4GB system)
+
+---
+
+## Prerequisites
+
+### Hardware
+- **Raspberry Pi 4 (4GB RAM)** or equivalent
+- **20GB+ storage** (microSD or USB SSD)
+- **Network connection**
+
+### Software
+- **OS:** Ubuntu Server 22.04 LTS ARM64, Raspberry Pi OS 64-bit, or Debian 12+
+- **Podman:** Container runtime (will be installed if missing)
+- **Root access:** Required for installation
+
+---
+
+## Quick Installation
 
 ```bash
-# 1. Clone the repository
+# 1. Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
 
-# 2. Run lightweight setup (as root or with sudo)
-sudo ./install/testing/lightweight-setup.sh
+# 2. Run lightweight installation
+sudo ./install.sh
 
-# 3. Start the testing environment
-sudo /opt/hookprobe/testing/start-testing.sh
+# 3. Select option: 2) Select Deployment Mode
+# 4. Choose: 3) Lightweight Testing (Raspberry Pi 4 / Development)
 ```
 
-## What Gets Installed
-
-The lightweight setup installs a minimal HookProbe stack:
-
-| Component | Purpose | Memory |
-|-----------|---------|--------|
-| **PostgreSQL 16** | Database | ~100MB |
-| **VictoriaMetrics** | Time-series metrics | ~50MB |
-| **Grafana** | Dashboards & visualization | ~100MB |
-
-**Total estimated memory usage**: ~250MB (leaves plenty of RAM for development)
-
-## System Requirements
-
-### Minimum
-- **RAM**: 2GB (4GB+ recommended)
-- **Disk**: 10GB free space
-- **OS**: Debian 12+, Ubuntu 22.04+, RHEL 9+, Fedora 40+
-- **Architecture**: ARM64 (aarch64) or x86_64
-
-### Supported Devices
-- ✅ Raspberry Pi 4B (4GB/8GB) - **Primary target**
-- ✅ Raspberry Pi 5 (4GB/8GB)
-- ✅ Any x86_64 Linux PC/VM with 4GB+ RAM
-- ✅ Rock Pi 4, Orange Pi 5, ODROID N2+
-- ❌ Raspberry Pi 3 (ARMv7 32-bit not supported)
-
-## Installation Steps
-
-The setup script automatically:
-
-1. **Detects platform** - OS, architecture, available resources
-2. **Checks system resources** - Ensures minimum RAM/disk requirements
-3. **Installs container runtime** - Podman (preferred) or Docker
-4. **Installs required tools** - Python 3, pip, git, curl
-5. **Configures container runtime** - Enables rootless mode if possible
-6. **Creates persistent volumes** - For database and metrics storage
-7. **Pulls container images** - Minimal set (PostgreSQL, Grafana, VictoriaMetrics)
-8. **Creates network** - Isolated container network
-9. **Generates configuration** - Secure passwords and environment variables
-10. **Creates management scripts** - Start/stop scripts for easy management
-
-## Usage
-
-### Start Testing Environment
+### Alternative: Direct Installation
 
 ```bash
-sudo /opt/hookprobe/testing/start-testing.sh
+cd hookprobe/install/testing
+sudo bash lightweight-setup.sh
 ```
 
-This starts:
-- **PostgreSQL**: Database (internal only)
-- **VictoriaMetrics**: http://localhost:8428
-- **Grafana**: http://localhost:3000 (admin/admin)
+---
 
-### Stop Testing Environment
+## Installation Steps (Detailed)
 
+### Step 1: System Check
+
+The installer will check:
+- RAM: Minimum 4GB
+- Disk: Minimum 20GB free
+- Architecture: ARM64 or x86_64
+- Podman: Will install if missing
+
+### Step 2: Network Configuration
+
+Simple network setup for testing:
+- Web: 10.250.1.0/24
+- Database: 10.250.2.0/24
+- Cache: 10.250.3.0/24
+- IAM: 10.250.4.0/24
+
+### Step 3: POD Deployment
+
+**POD-001: Web Server**
+- Django application
+- Nginx reverse proxy
+- NAXSI WAF
+- Memory: 1GB
+- Port: 80, 443
+
+**POD-002: IAM (Logto)**
+- Authentication service
+- Memory: 512MB
+- Port: 3001 (app), 3002 (admin)
+
+**POD-003: Database (PostgreSQL)**
+- PostgreSQL 16-alpine
+- Memory: 512MB
+- Port: 5432 (internal only)
+
+**POD-005: Cache (Redis)**
+- Redis 7-alpine
+- Memory: 256MB
+- Port: 6379 (internal only)
+
+### Step 4: Verification
+
+After installation:
 ```bash
-sudo /opt/hookprobe/testing/stop-testing.sh
+# Check running pods
+podman pod ls
+
+# Check containers
+podman ps
+
+# Access web interface
+curl http://localhost
 ```
 
-This stops and removes all containers (data is preserved in volumes).
-
-### Access Services
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| **Grafana** | http://localhost:3000 | admin / admin |
-| **VictoriaMetrics** | http://localhost:8428 | - |
-| **PostgreSQL** | localhost:5432 | hookprobe / (see config) |
+---
 
 ## Configuration
 
-Configuration files are stored in `/opt/hookprobe/testing/`:
+### Default Credentials (⚠️ CHANGE THESE)
 
-- `env` - Environment variables (passwords, database URLs)
-- `start-testing.sh` - Start script
-- `stop-testing.sh` - Stop script
+**Django Admin:**
+- URL: http://localhost/admin
+- Username: admin
+- Password: admin
 
-### Custom Configuration
+**PostgreSQL:**
+- Database: hookprobe
+- User: hookprobe
+- Password: hookprobe_test_password_CHANGE_ME
 
-You can customize the installation by setting environment variables before running the setup:
+**Redis:**
+- Password: redis_test_password_CHANGE_ME
 
+**Logto:**
+- URL: http://localhost:3002
+- Default setup wizard on first access
+
+### Configuration File
+
+Edit `/home/user/hookprobe/install/testing/lightweight-config.sh` to change:
+- Database passwords
+- Django secret key
+- Resource limits
+- Network subnets
+
+---
+
+## Testing
+
+### Unit Tests
 ```bash
-# Custom volume names
-export VOLUME_POSTGRES_DATA="my-postgres-data"
-export VOLUME_GRAFANA_DATA="my-grafana-data"
-
-# Custom ports
-export PORT_HTTP=8080
-export PORT_GRAFANA=3001
-
-# Run setup
-sudo -E ./install/testing/lightweight-setup.sh
+cd hookprobe
+./scripts/run-unit-tests.sh
 ```
+
+### Integration Tests
+```bash
+./scripts/run-integration-tests.sh
+```
+
+### Performance Tests
+```bash
+./scripts/run-performance-tests.sh
+```
+
+---
+
+## Resource Usage
+
+### Expected Memory Usage
+
+| Component | Memory Limit | Typical Usage |
+|-----------|--------------|---------------|
+| Django | 1GB | ~600MB |
+| PostgreSQL | 512MB | ~300MB |
+| Logto | 512MB | ~250MB |
+| Redis | 256MB | ~100MB |
+| Nginx | 256MB | ~50MB |
+| **Total** | **2.5GB** | **~1.3GB** |
+
+Leaves ~2.7GB for OS on 4GB system, ~6.5GB on 8GB system
+
+### CPU Usage
+
+- Light load: 10-20% of 4 cores
+- Under test: 40-60% of 4 cores
+- Stress test: 80-100% of 4 cores
+
+---
 
 ## Troubleshooting
 
-### Error: "VOLUME_POSTGRES_DATA: unbound variable"
-
-This error occurs when the setup script tries to use a variable that hasn't been defined. The fixed lightweight-setup.sh script now:
-- Defines all variables with default values using `${VAR:-default}` syntax
-- Is compatible with `set -u` (exit on undefined variable)
-
-### Low Memory Warning
-
-If you have less than 4GB RAM, some services may be disabled automatically:
-
-```
-⚠ WARNING: Low RAM (2GB). Some services will be disabled.
-```
-
-The minimal mode installs only:
-- PostgreSQL (required)
-- VictoriaMetrics (lightweight metrics)
-- Grafana (monitoring)
-
-### Container Runtime Issues
-
-**Podman vs Docker:**
-- Script prefers Podman (more secure, rootless mode)
-- Falls back to Docker if Podman not available
-- Both work identically for testing
-
-**Permission Denied:**
+### Pod won't start
 ```bash
-# If running as non-root user, add to docker/podman group
-sudo usermod -aG docker $USER  # Docker
-sudo usermod -aG podman $USER  # Podman
+# Check pod status
+podman pod ps -a
 
-# Logout and login again
+# Check container logs
+podman logs hookprobe-web-django
+podman logs hookprobe-database-postgres
+
+# Restart pod
+podman pod restart hookprobe-web
 ```
 
-### Port Conflicts
+### Out of memory
+```bash
+# Check memory usage
+free -h
 
-If ports 3000 or 8428 are already in use:
+# Reduce resource limits in lightweight-config.sh
+# Restart pods after changes
+```
+
+### Network issues
+```bash
+# Check podman networks
+podman network ls
+
+# Inspect network
+podman network inspect web-net
+
+# Recreate networks
+podman network rm web-net database-net cache-net iam-net
+# Re-run installation
+```
+
+---
+
+## Upgrading to Full Deployment
+
+To upgrade from lightweight to full edge deployment:
 
 ```bash
-# Check what's using the port
-sudo ss -tulpn | grep :3000
+# 1. Backup data
+podman exec hookprobe-database-postgres pg_dump hookprobe > backup.sql
 
-# Kill the process or use custom ports
-export PORT_GRAFANA=3001
-sudo -E ./install/testing/lightweight-setup.sh
+# 2. Uninstall lightweight
+sudo ./install.sh
+# Select: 9) Uninstall / Cleanup → 1) Uninstall Lightweight
+
+# 3. Install full edge deployment
+sudo ./install.sh
+# Select: 2) Select Deployment Mode → 1) Edge Deployment
+
+# 4. Restore data
+podman exec -i hookprobe-database-postgres psql hookprobe < backup.sql
 ```
 
-## Differences from Production Setup
+---
 
-This lightweight testing setup differs from production (`install/edge/setup.sh`):
+## Uninstallation
 
-| Feature | Testing | Production |
-|---------|---------|------------|
-| **Memory usage** | ~250MB | ~2-4GB |
-| **Services** | 3 core services | 15+ services |
-| **Security** | Development mode | Hardened (SELinux, AppArmor) |
-| **Networking** | Simple bridge | OVS, VXLANs, segmentation |
-| **IDS/IPS** | Disabled | Suricata, Snort3 |
-| **Honeypots** | Disabled | Multiple honeypots |
-| **MSSP** | Disabled | Full MSSP platform |
+```bash
+sudo ./install.sh
+# Select: 9) Uninstall / Cleanup
+# Select: 1) Uninstall Lightweight Deployment
+```
 
-**⚠ DO NOT use testing setup in production!**
+Or manually:
+```bash
+# Stop and remove all pods
+podman pod stop hookprobe-web hookprobe-database hookprobe-cache hookprobe-iam
+podman pod rm hookprobe-web hookprobe-database hookprobe-cache hookprobe-iam
 
-## Next Steps
+# Remove networks
+podman network rm web-net database-net cache-net iam-net
 
-After installation, you can:
+# Remove volumes
+podman volume prune
+```
 
-1. **Explore the platform**
-   - Access Grafana dashboards
-   - Review container logs: `podman logs hookprobe-postgres-test`
-   - Connect to database: `psql -h localhost -U hookprobe -d hookprobe`
+---
 
-2. **Develop and test**
-   - Modify source code in `src/`
-   - Test changes in containerized environment
-   - Use volume mounts for live code updates
+## Limitations
 
-3. **Upgrade to full installation**
-   - When ready for production, run `install/edge/setup.sh`
-   - Migrates data from testing volumes
-   - Enables all security features
+This lightweight deployment is intended for:
+- ✅ Development and testing
+- ✅ Learning HookProbe
+- ✅ CI/CD pipelines
+- ✅ Proof of concept
 
-## Contributing
+It is NOT suitable for:
+- ❌ Production deployments
+- ❌ High-traffic environments
+- ❌ Multi-tenant MSSP
+- ❌ Advanced monitoring needs
+- ❌ AI-powered threat detection
 
-Found a bug or want to improve the testing setup?
+For production, use:
+- **[Edge Deployment](../edge/README.md)** - Full single-tenant (16GB+ RAM)
+- **[Cloud Deployment](../cloud/README.md)** - Multi-tenant MSSP (64GB+ RAM)
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b fix/testing-setup`
-3. Make your changes
-4. Test on Raspberry Pi 4B if possible
-5. Submit a pull request
+---
 
 ## Support
 
-- **Documentation**: https://github.com/hookprobe/hookprobe/wiki
-- **Issues**: https://github.com/hookprobe/hookprobe/issues
-- **Discussions**: https://github.com/hookprobe/hookprobe/discussions
+- **Documentation:** [DOCUMENTATION-INDEX.md](../../DOCUMENTATION-INDEX.md)
+- **Testing Guide:** [SOFTWARE-TESTING-STRATEGY.md](../../SOFTWARE-TESTING-STRATEGY.md)
+- **Issues:** https://github.com/hookprobe/hookprobe/issues
 
-## License
+---
 
-HookProbe is licensed under the MIT License. See [LICENSE](../../LICENSE) for details.
+**Last Updated:** 2025-12-02
+**Version:** 5.0
+**Status:** Beta - For testing only
