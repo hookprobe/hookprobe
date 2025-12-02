@@ -51,26 +51,28 @@
 
 **Testing Process:**
 1. **Installation Testing:**
-   - Run `install-pod-001.sh` through `install-pod-005.sh`
-   - Validate each POD starts successfully
-   - Check memory usage after each POD deployment
+   - Run lightweight installation: `cd install/testing && sudo bash lightweight-setup.sh`
+   - OR use interactive wizard: `sudo ./install.sh` → Select "Lightweight Testing"
+   - Validate each POD starts successfully: `podman pod ps`
+   - Check memory usage: `free -h` and `podman stats`
+   - Verify containers: `podman ps -a`
 
 2. **Functional Testing:**
-   - Manual UI testing via web browser
-   - Django admin panel verification
+   - Manual UI testing via web browser (http://localhost)
+   - Django admin panel verification (http://localhost/admin)
    - User authentication flows (login/logout/signup)
    - CRUD operations on blog posts, pages
    - WAF rule triggering (test XSS/SQLi payloads)
 
 3. **Integration Testing:**
-   - Database connectivity tests
-   - IAM token validation
-   - Inter-POD communication (web → database)
+   - Database connectivity tests: `podman exec hookprobe-database-postgres pg_isready`
+   - IAM token validation (Logto at http://localhost:3002)
+   - Inter-POD communication (web → database → cache)
    - Configuration reload tests
 
 4. **Performance Testing:**
-   - Apache Bench (ab) for load testing
-   - Monitor with `htop`, `free -h`, `iostat`
+   - Apache Bench (ab) for load testing: `ab -n 1000 -c 10 http://localhost/`
+   - Monitor with `htop`, `free -h`, `podman stats`
    - Measure response times under load
    - Identify memory/CPU bottlenecks
 
@@ -545,19 +547,29 @@ ssh ubuntu@raspberrypi.local
 
 # Install required packages
 sudo apt update
-sudo apt install podman postgresql-client redis-tools
+sudo apt install podman python3-pip git
 
 # Clone repository
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
 
-# Run installation
-sudo ./install/install-pod-001.sh
-sudo ./install/install-pod-002.sh
-sudo ./install/install-pod-003.sh
+# Option 1: Interactive installation (Recommended)
+sudo ./install.sh
+# Select: 2) Select Deployment Mode
+# Choose: 3) Lightweight Testing (Raspberry Pi 4 / Development)
 
-# Run smoke tests
-./scripts/smoke-test.sh
+# Option 2: Direct lightweight installation
+cd install/testing
+sudo bash lightweight-setup.sh
+
+# Verify installation
+podman pod ps        # Check pods
+podman ps -a         # Check containers
+podman stats         # Check resource usage
+
+# Test web access
+curl http://localhost
+curl http://localhost/admin
 
 # Monitor resources
 htop
@@ -566,9 +578,11 @@ df -h
 ```
 
 **Hardware Test Checklist:**
-- [ ] POD-001 starts successfully
-- [ ] Web UI accessible on port 80/443
+- [ ] All PODs start successfully (web, database, cache, iam)
+- [ ] Web UI accessible: `http://raspberry-pi-ip/`
+- [ ] Django admin accessible: `http://raspberry-pi-ip/admin`
 - [ ] Database migrations complete
+- [ ] Logto IAM accessible: `http://raspberry-pi-ip:3002`
 - [ ] User login/logout works
 - [ ] Blog CRUD operations function
 - [ ] WAF blocks malicious requests
