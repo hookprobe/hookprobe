@@ -167,6 +167,24 @@ NGINX_MEMORY_LIMIT="256m"
 NGINX_CPU_LIMIT="1.0"
 
 # ============================================================
+# PERSISTENT VOLUMES
+# ============================================================
+VOLUME_POSTGRES_DATA="hookprobe-postgres-data-test"
+VOLUME_DJANGO_STATIC="hookprobe-django-static-test"
+VOLUME_DJANGO_MEDIA="hookprobe-django-media-test"
+VOLUME_LOGTO_DATA="hookprobe-logto-data-test"
+
+# ============================================================
+# PORT MAPPINGS
+# ============================================================
+PORT_HTTP="8080"           # Web application HTTP
+PORT_HTTPS="8443"          # Web application HTTPS
+PORT_POSTGRES="5432"       # PostgreSQL database
+PORT_REDIS="6379"          # Redis cache
+PORT_LOGTO="3001"          # Logto authentication API
+PORT_LOGTO_ADMIN="3002"    # Logto admin interface
+
+# ============================================================
 # RESOURCE TOTALS (Estimated for 4GB RAM System)
 # ============================================================
 # Django:      1GB
@@ -270,5 +288,7 @@ export DJANGO_MEMORY_LIMIT DJANGO_CPU_LIMIT
 export LOGTO_ENDPOINT LOGTO_ADMIN_ENDPOINT
 export LOGTO_MEMORY_LIMIT LOGTO_CPU_LIMIT
 export NGINX_MEMORY_LIMIT NGINX_CPU_LIMIT
+export VOLUME_POSTGRES_DATA VOLUME_DJANGO_STATIC VOLUME_DJANGO_MEDIA VOLUME_LOGTO_DATA
+export PORT_HTTP PORT_HTTPS PORT_POSTGRES PORT_REDIS PORT_LOGTO PORT_LOGTO_ADMIN
 
 echo "✓ Lightweight configuration loaded for $DEPLOYMENT_TYPE"
