@@ -284,6 +284,12 @@ show_deployment_menu() {
     echo -e "     └─ For: MSSPs, enterprise multi-site, SOC operations"
     echo -e "     └─ Platforms: Datacenter servers, cloud instances"
     echo ""
+    echo -e "  ${YELLOW}3${NC}) Lightweight Testing/Development ${CYAN}[Testing Only]${NC}"
+    echo -e "     └─ For: Testing, development, CI/CD, Raspberry Pi 4"
+    echo -e "     └─ Includes: PODs 001-003, 005 only (excludes monitoring & AI)"
+    echo -e "     └─ RAM Usage: ~2.5GB (suitable for 4GB systems)"
+    echo -e "     ${RED}└─ NOT FOR PRODUCTION USE${NC}"
+    echo ""
     echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
     echo ""
 }
@@ -301,6 +307,10 @@ handle_deployment() {
                 ;;
             2)
                 run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Backend Deployment" "cloud"
+                return
+                ;;
+            3)
+                run_installer "$SCRIPT_DIR/install/testing/lightweight-setup.sh" "Lightweight Testing/Development" "testing"
                 return
                 ;;
             b|B)
