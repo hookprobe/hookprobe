@@ -69,9 +69,9 @@ class AIContentDraftAdmin(admin.ModelAdmin):
     def ai_provider_display(self, obj):
         """Display AI provider with icon."""
         icons = {
-            'openai': '>',
-            'anthropic': '>�',
-            'manual': '',
+            'openai': '🤖',
+            'anthropic': '🔮',
+            'manual': '✏️',
         }
         icon = icons.get(obj.ai_provider, '')
         return f'{icon} {obj.get_ai_provider_display()}'
