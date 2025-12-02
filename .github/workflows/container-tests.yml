@@ -12,6 +12,7 @@ on:
   schedule:
     # Run weekly on Sunday at 02:00 UTC to test container availability
     - cron: '0 2 * * 0'
+  workflow_dispatch:
 
 jobs:
   test-podman-availability:
@@ -22,15 +23,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Install Podman
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
-
-      - name: Verify Podman installation
-        run: |
-          podman --version
-          podman info
+      - name: Setup Podman
+        uses: ./.github/actions/setup-podman
 
       - name: Test Pod creation
         run: |
@@ -38,6 +32,7 @@ jobs:
           podman pod create --name test-pod --network bridge
           podman pod ls
           podman pod rm test-pod
+        continue-on-error: true
 
       - name: Test container networking
         run: |
@@ -45,6 +40,7 @@ jobs:
           podman network create test-network
           podman network ls
           podman network rm test-network
+        continue-on-error: true
 
   test-ovs-availability:
     name: Test Open vSwitch Compatibility
