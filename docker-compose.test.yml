@@ -1,13 +1,19 @@
 # docker-compose.test.yml
-# Multi-arch testing environment for HookProbe
+# Multi-arch testing environment for HookProbe using Podman
 # Supports: linux/amd64, linux/arm64 (Raspberry Pi 4)
 #
-# Usage with Podman:
+# Prerequisites:
+#   sudo apt install podman
 #   pip3 install podman-compose
-#   podman-compose -f docker-compose.test.yml up
 #
-# Usage with Docker:
-#   docker-compose -f docker-compose.test.yml up
+# Usage:
+#   podman-compose -f docker-compose.test.yml up
+#   podman-compose -f docker-compose.test.yml down -v
+#
+# Run tests:
+#   ./scripts/run-unit-tests.sh
+#   ./scripts/run-integration-tests.sh
+#   ./scripts/run-performance-tests.sh
 
 version: '3.8'
 

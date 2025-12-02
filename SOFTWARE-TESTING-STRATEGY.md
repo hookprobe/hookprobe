@@ -162,23 +162,23 @@ qemu-system-aarch64 \
 
 ---
 
-### Strategy 3: Hybrid Docker/Podman Container Testing (Lightweight)
+### Strategy 3: Hybrid Podman Container Testing (Lightweight)
 
-**Approach:** Test individual components in ARM64 containers, full integration on Pi
+**Approach:** Test individual components in ARM64 containers using Podman, full integration on Pi
 
 **Setup:**
 ```bash
-# Host: x86_64 machine with Docker/Podman + buildx
+# Host: x86_64 machine with Podman
 # Multi-arch builds: ARM64 containers on x86_64 via QEMU user-mode
 
+# Install Podman and dependencies:
+sudo apt install podman qemu-user-static
+pip3 install podman-compose
+
 # Enable ARM64 emulation:
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
-# Build ARM64 containers:
-docker buildx create --name multiarch --driver docker-container --use
-docker buildx build --platform linux/arm64 -t hookprobe-web:arm64 .
-
-# Or use Podman:
+# Build ARM64 containers with Podman:
 podman build --arch arm64 -t hookprobe-web:arm64 .
 ```
 
@@ -201,7 +201,7 @@ podman build --arch arm64 -t hookprobe-web:arm64 .
 
      db:
        platform: linux/arm64
-       image: postgres:16
+       image: postgres:16-alpine
        mem_limit: 512m
 
      iam:
@@ -225,12 +225,14 @@ Layer 3: Integration Tests (Pi hardware) - Full system (hours/days)
 
 **Pros:**
 - ✅ Best of both worlds (fast dev + real hardware validation)
-- ✅ Resource-efficient (containers vs full VMs)
-- ✅ CI/CD friendly (GitHub Actions supports multi-arch)
-- ✅ Mimics actual deployment (containers on Pi)
+- ✅ Resource-efficient (Podman containers vs full VMs)
+- ✅ CI/CD friendly (Podman in GitHub Actions)
+- ✅ Mimics actual deployment (Podman containers on Pi)
 - ✅ Easy to isolate and test individual services
 - ✅ Fast unit test iteration
 - ✅ Reliable integration testing on real hardware
+- ✅ Rootless container support with Podman
+- ✅ Docker-compatible but more secure
 
 **Cons:**
 - ❌ More complex setup (multi-arch tooling)
@@ -342,15 +344,18 @@ Layer 3: Integration Tests (Pi hardware) - Full system (hours/days)
 
 **Prerequisites:**
 ```bash
-# Install Docker/Podman with multi-arch support
+# Install Podman with multi-arch support
 sudo apt update
-sudo apt install docker.io docker-buildx qemu-user-static
+sudo apt install podman qemu-user-static python3-pip
 
-# Verify multi-arch support
-docker buildx ls
+# Install podman-compose
+pip3 install podman-compose
+
+# Verify Podman installation
+podman --version
 
 # Enable ARM64 emulation
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
 ```
 
 **Create Test Configuration:**
@@ -394,14 +399,13 @@ set -e
 
 echo "🧪 Running unit tests in ARM64 container..."
 
-docker buildx build \
-  --platform linux/arm64 \
+podman build \
+  --arch arm64 \
   -t hookprobe-web-test:latest \
   -f src/web/Dockerfile.test \
   src/web
 
-docker run --rm \
-  --platform linux/arm64 \
+podman run --rm \
   -e DJANGO_ENV=test \
   hookprobe-web-test:latest \
   pytest --cov=apps --cov-report=term-missing
@@ -419,21 +423,21 @@ set -e
 echo "🔗 Running integration tests..."
 
 # Start services
-docker-compose -f docker-compose.test.yml up -d
+podman-compose -f docker-compose.test.yml up -d
 
 # Wait for services
 sleep 10
 
 # Run migrations
-docker-compose -f docker-compose.test.yml exec -T web-test \
+podman-compose -f docker-compose.test.yml exec -T web-test \
   python manage.py migrate --noinput
 
 # Run integration tests
-docker-compose -f docker-compose.test.yml exec -T web-test \
+podman-compose -f docker-compose.test.yml exec -T web-test \
   pytest tests/integration/ -v
 
 # Cleanup
-docker-compose -f docker-compose.test.yml down -v
+podman-compose -f docker-compose.test.yml down -v
 
 echo "✅ Integration tests completed"
 ```
@@ -448,21 +452,21 @@ set -e
 echo "📊 Running performance baseline tests..."
 
 # Start services
-docker-compose -f docker-compose.test.yml up -d
+podman-compose -f docker-compose.test.yml up -d
 
 # Wait for readiness
 sleep 15
 
-# Get container IP
-WEB_IP=$(docker-compose -f docker-compose.test.yml exec -T web-test hostname -i)
+# Get container name
+WEB_CONTAINER="hookprobe-web-test"
 
-# Run Apache Bench test
-ab -n 1000 -c 10 http://${WEB_IP}:8000/ > performance-results.txt
+# Run Apache Bench test inside container
+podman exec $WEB_CONTAINER ab -n 1000 -c 10 http://localhost:8000/ > performance-results.txt
 
 echo "✅ Performance tests completed"
 echo "Results saved to: performance-results.txt"
 
-docker-compose -f docker-compose.test.yml down
+podman-compose -f docker-compose.test.yml down
 ```
 
 ### Step 3: Configure CI/CD (Day 4)
@@ -470,7 +474,7 @@ docker-compose -f docker-compose.test.yml down
 **GitHub Actions Workflow:**
 ```yaml
 # .github/workflows/arm64-tests.yml
-name: ARM64 Integration Tests
+name: ARM64 Integration Tests (Podman)
 
 on:
   push:
@@ -486,38 +490,39 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up QEMU for ARM64
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build ARM64 test image
+      - name: Install Podman and dependencies
         run: |
-          docker buildx build \
-            --platform linux/arm64 \
+          sudo apt-get update
+          sudo apt-get install -y podman qemu-user-static python3-pip
+          pip3 install podman-compose
+          podman --version
+
+      - name: Set up QEMU for ARM64 emulation
+        run: |
+          podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+      - name: Build ARM64 test image with Podman
+        run: |
+          podman build \
+            --arch arm64 \
             -t hookprobe-web-test:arm64 \
             -f src/web/Dockerfile.test \
-            --load \
             src/web
 
       - name: Run unit tests
         run: |
-          docker run --rm \
-            --platform linux/arm64 \
+          podman run --rm \
             -e DJANGO_ENV=test \
             hookprobe-web-test:arm64 \
             pytest --cov=apps -v
 
       - name: Run integration tests
         run: |
-          docker-compose -f docker-compose.test.yml up -d
+          podman-compose -f docker-compose.test.yml up -d
           sleep 10
-          docker-compose -f docker-compose.test.yml exec -T web-test \
+          podman-compose -f docker-compose.test.yml exec -T web-test \
             python manage.py test
-          docker-compose -f docker-compose.test.yml down -v
+          podman-compose -f docker-compose.test.yml down -v
 ```
 
 ### Step 4: Raspberry Pi Hardware Testing (Week 2+)
