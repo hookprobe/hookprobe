@@ -1,5 +1,8 @@
 name: Application Tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ main, master, develop, 'claude/**' ]
