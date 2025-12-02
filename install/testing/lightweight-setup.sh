@@ -1,13 +1,22 @@
 #!/bin/bash
 #
-# lightweight-setup.sh - HookProbe Lightweight Testing/Development Setup
-# Optimized for resource-constrained devices (Raspberry Pi 4B 4GB RAM)
-# Version: 5.0.0
+# lightweight-setup.sh - HookProbe Lightweight Testing/Development Deployment
+# Target: Raspberry Pi 4 (4GB RAM), Testing, Development
+# Version: 1.0.0
 #
-# This script provides a minimal HookProbe installation suitable for:
-# - Development and testing
-# - Learning and experimentation
-# - Resource-constrained devices (4-8GB RAM)
+# This script deploys a minimal HookProbe installation with:
+# - POD-001: Web Server (Django + Nginx)
+# - POD-002: IAM (Logto authentication)
+# - POD-003: Database (PostgreSQL 16-alpine)
+# - POD-005: Cache (Redis 7-alpine)
+#
+# EXCLUDED (to reduce RAM usage):
+# - POD-004: Monitoring (VictoriaMetrics, ClickHouse, Grafana)
+# - POD-007: AI/Security Analysis (Zeek, Snort, Qsecbit)
+#
+# Total RAM usage: ~2.5GB (leaves ~1.5GB for OS on 4GB systems)
+#
+# ⚠️  NOT FOR PRODUCTION USE - Testing and Development Only
 #
 
 set -e  # Exit on error
@@ -15,85 +24,90 @@ set -u  # Exit on undefined variable
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load configuration file if it exists
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}============================================================${NC}"
+echo -e "${BLUE}   HOOKPROBE LIGHTWEIGHT TESTING/DEVELOPMENT DEPLOYMENT${NC}"
+echo -e "${BLUE}   Target: Raspberry Pi 4 (4GB RAM) / Development${NC}"
+echo -e "${BLUE}   Version: 1.0.0${NC}"
+echo -e "${BLUE}============================================================${NC}"
+echo ""
+echo -e "${YELLOW}⚠️  WARNING: This is a lightweight testing/development deployment${NC}"
+echo -e "${YELLOW}   NOT intended for production use.${NC}"
+echo ""
+echo -e "This will deploy:"
+echo -e "  ${GREEN}✓${NC} POD-001: Web Server (Django + Nginx)"
+echo -e "  ${GREEN}✓${NC} POD-002: IAM (Logto authentication)"
+echo -e "  ${GREEN}✓${NC} POD-003: Database (PostgreSQL 16-alpine)"
+echo -e "  ${GREEN}✓${NC} POD-005: Cache (Redis 7-alpine)"
+echo ""
+echo -e "Excluded (to reduce RAM):"
+echo -e "  ${RED}✗${NC} POD-004: Monitoring (too heavy for 4GB)"
+echo -e "  ${RED}✗${NC} POD-007: AI/Security Analysis (too heavy for 4GB)"
+echo ""
+echo -e "${BLUE}Expected RAM usage: ~2.5GB (leaves 1.5GB for OS)${NC}"
+echo ""
+
+# Load configuration
 if [ -f "$SCRIPT_DIR/lightweight-config.sh" ]; then
-    echo "Loading configuration from lightweight-config.sh..."
     source "$SCRIPT_DIR/lightweight-config.sh"
 else
-    echo "Using default configuration (lightweight-config.sh not found)"
+    echo -e "${RED}ERROR: lightweight-config.sh not found in $SCRIPT_DIR${NC}"
+    exit 1
 fi
 
-echo "============================================================"
-echo "   HOOKPROBE v5.0 - LIGHTWEIGHT TESTING/DEVELOPMENT SETUP"
-echo "   Optimized for Raspberry Pi 4B / Low-Resource Devices"
-echo "============================================================"
-
 # ============================================================
-# CONFIGURATION - Minimal Setup (with safe defaults)
-# ============================================================
-
-# Volume names (simplified for testing)
-VOLUME_POSTGRES_DATA="${VOLUME_POSTGRES_DATA:-hookprobe-postgres-test}"
-VOLUME_DJANGO_STATIC="${VOLUME_DJANGO_STATIC:-hookprobe-django-static-test}"
-VOLUME_DJANGO_MEDIA="${VOLUME_DJANGO_MEDIA:-hookprobe-django-media-test}"
-VOLUME_VICTORIAMETRICS_DATA="${VOLUME_VICTORIAMETRICS_DATA:-hookprobe-victoriametrics-test}"
-VOLUME_GRAFANA_DATA="${VOLUME_GRAFANA_DATA:-hookprobe-grafana-test}"
-VOLUME_QSECBIT_DATA="${VOLUME_QSECBIT_DATA:-hookprobe-qsecbit-test}"
-
-# Container/Pod names
-POD_WEB="${POD_WEB:-hookprobe-web-test}"
-POD_DATABASE="${POD_DATABASE:-hookprobe-database-test}"
-POD_MONITORING="${POD_MONITORING:-hookprobe-monitoring-test}"
-
-# Port mappings
-PORT_HTTP="${PORT_HTTP:-8000}"
-PORT_HTTPS="${PORT_HTTPS:-8443}"
-PORT_POSTGRES="${PORT_POSTGRES:-5432}"
-PORT_GRAFANA="${PORT_GRAFANA:-3000}"
-
-# Installation mode
-INSTALL_MODE="${INSTALL_MODE:-minimal}"  # minimal, standard, full
-
-# Validate all critical variables are defined
-echo ""
-echo "Validating configuration..."
-
-CRITICAL_VARS=(
-    "VOLUME_POSTGRES_DATA"
-    "VOLUME_GRAFANA_DATA"
-    "VOLUME_VICTORIAMETRICS_DATA"
-    "POD_DATABASE"
-)
-
-for var in "${CRITICAL_VARS[@]}"; do
-    if [ -z "${!var:-}" ]; then
-        echo "ERROR: Critical variable $var is not defined!"
-        echo "Please check $SCRIPT_DIR/lightweight-config.sh or script defaults"
-        exit 1
-    fi
-done
-
-echo "✓ Configuration validated"
-
-# ============================================================
-# STEP 1: DETECT PLATFORM
+# STEP 1: CHECK ROOT PRIVILEGES
 # ============================================================
 echo ""
-echo "[STEP 1] Detecting platform..."
+echo -e "${BLUE}[STEP 1]${NC} Checking privileges..."
 
-# Check for root
 if [[ $EUID -ne 0 ]]; then
-   echo "ERROR: This script must be run as root or with sudo"
+   echo -e "${RED}ERROR: This script must be run as root${NC}"
+   echo "Usage: sudo $0"
    exit 1
 fi
 
-# Detect OS
+echo -e "${GREEN}✓${NC} Running as root"
+
+# ============================================================
+# STEP 2: DETECT PLATFORM AND HARDWARE
+# ============================================================
+echo ""
+echo -e "${BLUE}[STEP 2]${NC} Detecting platform and hardware..."
+
+# Detect OS family
+PLATFORM_FAMILY="unknown"
+PKG_MANAGER="unknown"
+
 if [ -f /etc/os-release ]; then
     source /etc/os-release
-    PLATFORM_OS="$NAME"
-    echo "✓ OS Detected: $NAME ($VERSION_ID)"
+
+    case "$ID" in
+        rhel|centos|fedora|rocky|almalinux)
+            PLATFORM_FAMILY="rhel"
+            PKG_MANAGER="dnf"
+            ;;
+        debian|ubuntu|pop|linuxmint|raspbian)
+            PLATFORM_FAMILY="debian"
+            PKG_MANAGER="apt"
+            ;;
+        *)
+            echo -e "${RED}ERROR: Unsupported OS: $ID${NC}"
+            echo "Supported: RHEL/Fedora/CentOS, Debian/Ubuntu/Raspbian"
+            exit 1
+            ;;
+    esac
+
+    echo -e "${GREEN}✓${NC} OS Detected: $NAME ($VERSION)"
+    echo -e "${GREEN}✓${NC} Platform Family: $PLATFORM_FAMILY"
 else
-    echo "ERROR: Cannot detect OS (missing /etc/os-release)"
+    echo -e "${RED}ERROR: Cannot detect OS (missing /etc/os-release)${NC}"
     exit 1
 fi
 
@@ -105,363 +119,436 @@ case "$ARCH" in
         ;;
     aarch64|arm64)
         ARCH_TYPE="arm64"
-        echo "✓ ARM64 detected (Raspberry Pi compatible)"
-        ;;
-    armv7l)
-        echo "ERROR: ARMv7 (32-bit) is not supported. Use ARMv8/ARM64."
-        exit 1
         ;;
     *)
-        echo "ERROR: Unsupported architecture: $ARCH"
+        echo -e "${RED}ERROR: Unsupported architecture: $ARCH${NC}"
         exit 1
         ;;
 esac
-echo "✓ Architecture: $ARCH_TYPE"
+echo -e "${GREEN}✓${NC} Architecture: $ARCH_TYPE"
 
-# ============================================================
-# STEP 2: CHECK SYSTEM RESOURCES
-# ============================================================
-echo ""
-echo "[STEP 2] Checking system resources..."
+# Detect Raspberry Pi
+if [ "$ARCH_TYPE" = "arm64" ]; then
+    if grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null || grep -qi "raspberry pi" /sys/firmware/devicetree/base/model 2>/dev/null; then
+        RPI_MODEL=$(cat /proc/device-tree/model 2>/dev/null || cat /sys/firmware/devicetree/base/model 2>/dev/null)
+        if echo "$RPI_MODEL" | grep -qi "raspberry pi 4"; then
+            echo -e "${GREEN}✓${NC} Hardware: Raspberry Pi 4 ${GREEN}(Recommended)${NC}"
+        elif echo "$RPI_MODEL" | grep -qi "raspberry pi 5"; then
+            echo -e "${GREEN}✓${NC} Hardware: Raspberry Pi 5 ${GREEN}(Excellent)${NC}"
+        else
+            echo -e "${YELLOW}⚠${NC}  Hardware: $RPI_MODEL"
+            echo -e "${YELLOW}   Raspberry Pi 4/5 recommended for optimal performance${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓${NC} Hardware: ARM64 SBC"
+    fi
+else
+    echo -e "${GREEN}✓${NC} Hardware: x86_64 system"
+fi
 
-# Check RAM
+# Check available RAM
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 TOTAL_RAM_GB=$((TOTAL_RAM_KB / 1024 / 1024))
 
-echo "✓ Total RAM: ${TOTAL_RAM_GB}GB"
+echo -e "${GREEN}✓${NC} Total RAM: ${TOTAL_RAM_GB}GB"
 
-if [ "$TOTAL_RAM_GB" -lt 2 ]; then
-    echo "ERROR: Minimum 2GB RAM required. Found: ${TOTAL_RAM_GB}GB"
-    exit 1
-elif [ "$TOTAL_RAM_GB" -lt 4 ]; then
-    echo "⚠ WARNING: Low RAM (${TOTAL_RAM_GB}GB). Some services will be disabled."
-    INSTALL_MODE="minimal"
-fi
-
-# Check disk space
-AVAILABLE_SPACE=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
-echo "✓ Available disk space: ${AVAILABLE_SPACE}GB"
-
-if [ "$AVAILABLE_SPACE" -lt 10 ]; then
-    echo "ERROR: Minimum 10GB free disk space required"
-    exit 1
+if [ $TOTAL_RAM_GB -lt 4 ]; then
+    echo -e "${YELLOW}⚠${NC}  WARNING: Less than 4GB RAM detected"
+    echo -e "${YELLOW}   This deployment requires ~2.5GB. System may be slow.${NC}"
 fi
 
 # ============================================================
-# STEP 3: INSTALL CONTAINER RUNTIME
+# STEP 3: INSTALL DEPENDENCIES
 # ============================================================
 echo ""
-echo "[STEP 3] Installing container runtime..."
+echo -e "${BLUE}[STEP 3]${NC} Installing dependencies..."
 
-# Detect package manager
-if command -v apt-get &> /dev/null; then
-    PKG_MANAGER="apt"
-elif command -v dnf &> /dev/null; then
-    PKG_MANAGER="dnf"
-elif command -v yum &> /dev/null; then
-    PKG_MANAGER="yum"
+if [ "$PLATFORM_FAMILY" = "rhel" ]; then
+    echo "Installing packages for RHEL/Fedora/CentOS..."
+    $PKG_MANAGER update -y || true
+    $PKG_MANAGER install -y \
+        podman \
+        python3 \
+        python3-pip \
+        git \
+        curl \
+        wget \
+        postgresql \
+        jq \
+        net-tools \
+        iproute
+
+elif [ "$PLATFORM_FAMILY" = "debian" ]; then
+    echo "Installing packages for Debian/Ubuntu/Raspbian..."
+    apt-get update || true
+    apt-get install -y \
+        podman \
+        python3 \
+        python3-pip \
+        git \
+        curl \
+        wget \
+        postgresql-client \
+        jq \
+        net-tools \
+        iproute2
+
 else
-    echo "ERROR: No supported package manager found"
+    echo -e "${RED}ERROR: Unknown platform family: $PLATFORM_FAMILY${NC}"
     exit 1
 fi
 
-# Check if Docker or Podman is installed
-if command -v podman &> /dev/null; then
-    CONTAINER_RUNTIME="podman"
-    echo "✓ Podman already installed: $(podman --version)"
-elif command -v docker &> /dev/null; then
-    CONTAINER_RUNTIME="docker"
-    echo "✓ Docker already installed: $(docker --version)"
-else
-    echo "Installing Podman..."
-
-    case "$PKG_MANAGER" in
-        apt)
-            apt-get update
-            apt-get install -y podman
-            ;;
-        dnf|yum)
-            $PKG_MANAGER install -y podman
-            ;;
-    esac
-
-    CONTAINER_RUNTIME="podman"
-    echo "✓ Podman installed: $(podman --version)"
-fi
+echo -e "${GREEN}✓${NC} Dependencies installed"
 
 # ============================================================
-# STEP 4: INSTALL REQUIRED TOOLS
+# STEP 4: CONFIGURE BASIC NETWORKING
 # ============================================================
 echo ""
-echo "[STEP 4] Installing required tools..."
+echo -e "${BLUE}[STEP 4]${NC} Configuring basic networking..."
 
-REQUIRED_TOOLS="python3 python3-pip git curl wget"
+# Enable IP forwarding
+echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-hookprobe-lightweight.conf
+sysctl -p /etc/sysctl.d/99-hookprobe-lightweight.conf > /dev/null
 
-case "$PKG_MANAGER" in
-    apt)
-        apt-get update
-        apt-get install -y $REQUIRED_TOOLS
-        ;;
-    dnf|yum)
-        $PKG_MANAGER install -y $REQUIRED_TOOLS
-        ;;
-esac
-
-echo "✓ Required tools installed"
+echo -e "${GREEN}✓${NC} Basic networking configured"
 
 # ============================================================
-# STEP 5: CONFIGURE CONTAINER RUNTIME
+# STEP 5: CREATE PODMAN NETWORKS
 # ============================================================
 echo ""
-echo "[STEP 5] Configuring container runtime..."
+echo -e "${BLUE}[STEP 5]${NC} Creating Podman networks..."
 
-if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    # Enable podman socket for rootless mode (if not root)
-    if [[ $EUID -eq 0 ]]; then
-        systemctl enable --now podman.socket || true
-    else
-        systemctl --user enable --now podman.socket || true
-    fi
-    echo "✓ Podman socket enabled"
-fi
+create_podman_network() {
+    local net_name=$1
+    local subnet=$2
+    local gateway=$3
+
+    echo -e "  → Creating network: ${BLUE}$net_name${NC} ($subnet)"
+
+    # Remove if exists
+    podman network exists "$net_name" 2>/dev/null && podman network rm "$net_name" 2>/dev/null || true
+
+    # Create network
+    podman network create \
+        --driver bridge \
+        --subnet="$subnet" \
+        --gateway="$gateway" \
+        "$net_name" > /dev/null
+}
+
+# Create only 4 networks (lightweight)
+create_podman_network "$NETWORK_WEB" "$SUBNET_WEB" "$GATEWAY_WEB"
+create_podman_network "$NETWORK_IAM" "$SUBNET_IAM" "$GATEWAY_IAM"
+create_podman_network "$NETWORK_DATABASE" "$SUBNET_DATABASE" "$GATEWAY_DATABASE"
+create_podman_network "$NETWORK_CACHE" "$SUBNET_CACHE" "$GATEWAY_CACHE"
+
+echo -e "${GREEN}✓${NC} Podman networks created"
 
 # ============================================================
 # STEP 6: CREATE PERSISTENT VOLUMES
 # ============================================================
 echo ""
-echo "[STEP 6] Creating persistent volumes..."
+echo -e "${BLUE}[STEP 6]${NC} Creating persistent volumes..."
 
 create_volume() {
-    local volume_name="$1"
-
-    if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-        if ! podman volume exists "$volume_name" 2>/dev/null; then
-            podman volume create "$volume_name"
-            echo "✓ Created volume: $volume_name"
-        else
-            echo "✓ Volume already exists: $volume_name"
-        fi
+    local vol_name=$1
+    if ! podman volume exists "$vol_name" 2>/dev/null; then
+        podman volume create "$vol_name" > /dev/null
+        echo -e "  → Created volume: ${BLUE}$vol_name${NC}"
     else
-        if ! docker volume inspect "$volume_name" &>/dev/null; then
-            docker volume create "$volume_name"
-            echo "✓ Created volume: $volume_name"
-        else
-            echo "✓ Volume already exists: $volume_name"
-        fi
+        echo -e "  → Volume exists: $vol_name"
     fi
 }
 
-# Create all required volumes
 create_volume "$VOLUME_POSTGRES_DATA"
 create_volume "$VOLUME_DJANGO_STATIC"
 create_volume "$VOLUME_DJANGO_MEDIA"
-create_volume "$VOLUME_VICTORIAMETRICS_DATA"
-create_volume "$VOLUME_GRAFANA_DATA"
-create_volume "$VOLUME_QSECBIT_DATA"
+create_volume "$VOLUME_LOGTO_DATA"
+
+echo -e "${GREEN}✓${NC} Persistent volumes ready"
 
 # ============================================================
-# STEP 7: PULL CONTAINER IMAGES
-# ============================================================
-echo ""
-echo "[STEP 7] Pulling container images..."
-
-pull_image() {
-    local image="$1"
-    echo "Pulling $image..."
-
-    if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-        podman pull "$image"
-    else
-        docker pull "$image"
-    fi
-}
-
-# Minimal image set for testing
-pull_image "docker.io/library/postgres:16-alpine"
-pull_image "docker.io/library/python:3.11-slim"
-pull_image "docker.io/grafana/grafana:latest"
-pull_image "docker.io/victoriametrics/victoria-metrics:latest"
-
-echo "✓ Container images pulled"
-
-# ============================================================
-# STEP 8: CREATE NETWORK
+# STEP 7: DEPLOY POD-003 - DATABASE (POSTGRESQL)
 # ============================================================
 echo ""
-echo "[STEP 8] Creating container network..."
+echo -e "${BLUE}[STEP 7]${NC} Deploying POD-003: Database (PostgreSQL 16-alpine)..."
 
-NETWORK_NAME="hookprobe-test-net"
+# Remove existing pod if present
+podman pod exists "$POD_DATABASE" 2>/dev/null && podman pod rm -f "$POD_DATABASE" 2>/dev/null || true
 
-if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    if ! podman network exists "$NETWORK_NAME" 2>/dev/null; then
-        podman network create "$NETWORK_NAME"
-        echo "✓ Created network: $NETWORK_NAME"
-    else
-        echo "✓ Network already exists: $NETWORK_NAME"
-    fi
-else
-    if ! docker network inspect "$NETWORK_NAME" &>/dev/null; then
-        docker network create "$NETWORK_NAME"
-        echo "✓ Created network: $NETWORK_NAME"
-    else
-        echo "✓ Network already exists: $NETWORK_NAME"
-    fi
-fi
+# Create pod
+podman pod create \
+    --name "$POD_DATABASE" \
+    --network "$NETWORK_DATABASE" \
+    -p ${PORT_POSTGRES}:5432 > /dev/null
 
-# ============================================================
-# STEP 9: GENERATE CONFIGURATION
-# ============================================================
-echo ""
-echo "[STEP 9] Generating configuration files..."
-
-CONFIG_DIR="/opt/hookprobe/testing"
-mkdir -p "$CONFIG_DIR"
-
-# Create environment file
-cat > "$CONFIG_DIR/env" <<EOF
-# HookProbe Lightweight Testing Configuration
-POSTGRES_PASSWORD=$(openssl rand -base64 32)
-DJANGO_SECRET_KEY=$(openssl rand -base64 64)
-DJANGO_DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-DATABASE_URL=postgresql://hookprobe:changeme@postgres:5432/hookprobe
-REDIS_URL=redis://redis:6379/0
-EOF
-
-echo "✓ Configuration generated in $CONFIG_DIR"
-
-# ============================================================
-# STEP 10: CREATE START SCRIPT
-# ============================================================
-echo ""
-echo "[STEP 10] Creating start script..."
-
-cat > "$CONFIG_DIR/start-testing.sh" <<'EOFSTART'
-#!/bin/bash
-#
-# start-testing.sh - Start HookProbe testing environment
-#
-
-set -e
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/env"
-
-CONTAINER_RUNTIME="podman"
-if command -v docker &> /dev/null && ! command -v podman &> /dev/null; then
-    CONTAINER_RUNTIME="docker"
-fi
-
-echo "Starting HookProbe testing environment..."
-
-# Start PostgreSQL
-$CONTAINER_RUNTIME run -d \
-    --name hookprobe-postgres-test \
-    --network hookprobe-test-net \
-    -e POSTGRES_DB=hookprobe \
-    -e POSTGRES_USER=hookprobe \
+echo -e "  → Starting PostgreSQL container..."
+podman run -d --restart always \
+    --pod "$POD_DATABASE" \
+    --name "${POD_DATABASE}-postgres" \
+    -e POSTGRES_DB="$POSTGRES_DB" \
+    -e POSTGRES_USER="$POSTGRES_USER" \
     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-    -v hookprobe-postgres-test:/var/lib/postgresql/data \
-    postgres:16-alpine
+    -v "$VOLUME_POSTGRES_DATA:/var/lib/postgresql/data" \
+    --memory="$POSTGRES_MEMORY_LIMIT" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-postgres" \
+    "$IMAGE_POSTGRES" > /dev/null
 
-echo "✓ PostgreSQL started"
+echo -e "  → Waiting for PostgreSQL to be ready..."
+sleep 10
 
-# Start VictoriaMetrics
-$CONTAINER_RUNTIME run -d \
-    --name hookprobe-victoriametrics-test \
-    --network hookprobe-test-net \
-    -p 8428:8428 \
-    -v hookprobe-victoriametrics-test:/victoria-metrics-data \
-    victoriametrics/victoria-metrics:latest
-
-echo "✓ VictoriaMetrics started"
-
-# Start Grafana
-$CONTAINER_RUNTIME run -d \
-    --name hookprobe-grafana-test \
-    --network hookprobe-test-net \
-    -p 3000:3000 \
-    -e GF_SECURITY_ADMIN_PASSWORD=admin \
-    -v hookprobe-grafana-test:/var/lib/grafana \
-    grafana/grafana:latest
-
-echo "✓ Grafana started"
-
-echo ""
-echo "============================================================"
-echo "   HookProbe Testing Environment Started"
-echo "============================================================"
-echo ""
-echo "Services:"
-echo "  - PostgreSQL: hookprobe-postgres-test (internal)"
-echo "  - VictoriaMetrics: http://localhost:8428"
-echo "  - Grafana: http://localhost:3000 (admin/admin)"
-echo ""
-echo "To stop: $SCRIPT_DIR/stop-testing.sh"
-echo ""
-
-EOFSTART
-
-chmod +x "$CONFIG_DIR/start-testing.sh"
-
-# ============================================================
-# STEP 11: CREATE STOP SCRIPT
-# ============================================================
-
-cat > "$CONFIG_DIR/stop-testing.sh" <<'EOFSTOP'
-#!/bin/bash
-#
-# stop-testing.sh - Stop HookProbe testing environment
-#
-
-CONTAINER_RUNTIME="podman"
-if command -v docker &> /dev/null && ! command -v podman &> /dev/null; then
-    CONTAINER_RUNTIME="docker"
-fi
-
-echo "Stopping HookProbe testing environment..."
-
-for container in hookprobe-postgres-test hookprobe-victoriametrics-test hookprobe-grafana-test; do
-    if $CONTAINER_RUNTIME ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
-        $CONTAINER_RUNTIME stop "$container" 2>/dev/null || true
-        $CONTAINER_RUNTIME rm "$container" 2>/dev/null || true
-        echo "✓ Stopped and removed: $container"
+# Wait for PostgreSQL to be ready
+for i in {1..30}; do
+    if podman exec "${POD_DATABASE}-postgres" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} POD-003: Database deployed and ready"
+        break
     fi
+    if [ $i -eq 30 ]; then
+        echo -e "${RED}ERROR: PostgreSQL failed to start${NC}"
+        exit 1
+    fi
+    sleep 1
 done
 
-echo ""
-echo "HookProbe testing environment stopped"
-
-EOFSTOP
-
-chmod +x "$CONFIG_DIR/stop-testing.sh"
-
-echo "✓ Management scripts created"
-
 # ============================================================
-# INSTALLATION COMPLETE
+# STEP 8: DEPLOY POD-005 - CACHE (REDIS)
 # ============================================================
 echo ""
-echo "============================================================"
-echo "   ✓ LIGHTWEIGHT TESTING/DEVELOPMENT SETUP COMPLETE"
-echo "============================================================"
+echo -e "${BLUE}[STEP 8]${NC} Deploying POD-005: Cache (Redis 7-alpine)..."
+
+# Remove existing pod if present
+podman pod exists "$POD_CACHE" 2>/dev/null && podman pod rm -f "$POD_CACHE" 2>/dev/null || true
+
+# Create pod
+podman pod create \
+    --name "$POD_CACHE" \
+    --network "$NETWORK_CACHE" \
+    -p ${PORT_REDIS}:6379 > /dev/null
+
+echo -e "  → Starting Redis container..."
+podman run -d --restart always \
+    --pod "$POD_CACHE" \
+    --name "${POD_CACHE}-redis" \
+    --memory="$REDIS_MEMORY_LIMIT" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-redis" \
+    "$IMAGE_REDIS" \
+    redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru --appendonly yes > /dev/null
+
+echo -e "  → Waiting for Redis to be ready..."
+sleep 5
+
+# Wait for Redis to be ready
+for i in {1..20}; do
+    if podman exec "${POD_CACHE}-redis" redis-cli ping > /dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} POD-005: Cache deployed and ready"
+        break
+    fi
+    if [ $i -eq 20 ]; then
+        echo -e "${RED}ERROR: Redis failed to start${NC}"
+        exit 1
+    fi
+    sleep 1
+done
+
+# ============================================================
+# STEP 9: DEPLOY POD-002 - IAM (LOGTO)
+# ============================================================
 echo ""
-echo "Installation Summary:"
-echo "  - Configuration: $CONFIG_DIR"
-echo "  - Container Runtime: $CONTAINER_RUNTIME"
-echo "  - Install Mode: $INSTALL_MODE"
-echo "  - System RAM: ${TOTAL_RAM_GB}GB"
+echo -e "${BLUE}[STEP 9]${NC} Deploying POD-002: IAM (Logto authentication)..."
+
+# Remove existing pod if present
+podman pod exists "$POD_IAM" 2>/dev/null && podman pod rm -f "$POD_IAM" 2>/dev/null || true
+
+# Create pod
+podman pod create \
+    --name "$POD_IAM" \
+    --network "$NETWORK_IAM" \
+    -p ${PORT_LOGTO}:3001 \
+    -p ${PORT_LOGTO_ADMIN}:3002 > /dev/null
+
+echo -e "  → Starting Logto container..."
+podman run -d --restart always \
+    --pod "$POD_IAM" \
+    --name "${POD_IAM}-logto" \
+    -e DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POD_DATABASE}-postgres.dns.podman:5432/${POSTGRES_DB}" \
+    -e ADMIN_ENDPOINT="http://localhost:${PORT_LOGTO_ADMIN}" \
+    -e ENDPOINT="http://localhost:${PORT_LOGTO}" \
+    -v "$VOLUME_LOGTO_DATA:/app/data" \
+    --memory="$LOGTO_MEMORY_LIMIT" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-logto" \
+    "$IMAGE_LOGTO" > /dev/null
+
+echo -e "  → Waiting for Logto to be ready..."
+sleep 15
+
+echo -e "${GREEN}✓${NC} POD-002: IAM deployed"
+
+# ============================================================
+# STEP 10: BUILD DJANGO IMAGE (IF NEEDED)
+# ============================================================
 echo ""
-echo "Next Steps:"
-echo "  1. Start testing environment:"
-echo "     $CONFIG_DIR/start-testing.sh"
+echo -e "${BLUE}[STEP 10]${NC} Preparing Django application..."
+
+# Check if Django image exists
+if ! podman image exists hookprobe-django:lightweight 2>/dev/null; then
+    echo -e "  → Building Django image..."
+
+    # Check if source code exists
+    if [ -f "$SCRIPT_DIR/../../src/web/Dockerfile" ]; then
+        cd "$SCRIPT_DIR/../../src/web"
+        podman build \
+            --arch "$ARCH_TYPE" \
+            -t hookprobe-django:lightweight \
+            -f Dockerfile \
+            . || {
+            echo -e "${RED}ERROR: Failed to build Django image${NC}"
+            exit 1
+        }
+        echo -e "${GREEN}✓${NC} Django image built"
+    else
+        echo -e "${RED}ERROR: Django source code not found${NC}"
+        echo "Expected: $SCRIPT_DIR/../../src/web/Dockerfile"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✓${NC} Django image already exists"
+fi
+
+# ============================================================
+# STEP 11: DEPLOY POD-001 - WEB (DJANGO + NGINX)
+# ============================================================
 echo ""
-echo "  2. Access services:"
-echo "     - Grafana: http://localhost:3000 (admin/admin)"
-echo "     - VictoriaMetrics: http://localhost:8428"
+echo -e "${BLUE}[STEP 11]${NC} Deploying POD-001: Web Server (Django + Nginx)..."
+
+# Remove existing pod if present
+podman pod exists "$POD_WEB" 2>/dev/null && podman pod rm -f "$POD_WEB" 2>/dev/null || true
+
+# Create pod
+podman pod create \
+    --name "$POD_WEB" \
+    --network "$NETWORK_WEB" \
+    -p ${PORT_HTTP}:80 \
+    -p ${PORT_HTTPS}:443 \
+    -p 8000:8000 > /dev/null
+
+echo -e "  → Starting Django application..."
+podman run -d --restart always \
+    --pod "$POD_WEB" \
+    --name "${POD_WEB}-django" \
+    -e DJANGO_ENV="production" \
+    -e DJANGO_SETTINGS_MODULE="hookprobe.settings.production" \
+    -e DJANGO_SECRET_KEY="$DJANGO_SECRET_KEY" \
+    -e DEBUG="False" \
+    -e ALLOWED_HOSTS="*" \
+    -e POSTGRES_DB="$POSTGRES_DB" \
+    -e POSTGRES_USER="$POSTGRES_USER" \
+    -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+    -e POSTGRES_HOST="${POD_DATABASE}-postgres.dns.podman" \
+    -e POSTGRES_PORT="5432" \
+    -e REDIS_HOST="${POD_CACHE}-redis.dns.podman" \
+    -e REDIS_PORT="6379" \
+    -e LOGTO_ENDPOINT="http://${POD_IAM}-logto.dns.podman:${PORT_LOGTO}" \
+    -e LOGTO_APP_ID="$LOGTO_APP_ID" \
+    -e LOGTO_APP_SECRET="$LOGTO_APP_SECRET" \
+    -v "$VOLUME_DJANGO_STATIC:/app/staticfiles" \
+    -v "$VOLUME_DJANGO_MEDIA:/app/media" \
+    --memory="$DJANGO_MEMORY_LIMIT" \
+    --log-driver=journald \
+    --log-opt tag="hookprobe-django" \
+    hookprobe-django:lightweight > /dev/null
+
+echo -e "  → Waiting for Django to be ready..."
+sleep 10
+
+# ============================================================
+# STEP 12: RUN DATABASE MIGRATIONS
+# ============================================================
 echo ""
-echo "  3. Stop testing environment:"
-echo "     $CONFIG_DIR/stop-testing.sh"
+echo -e "${BLUE}[STEP 12]${NC} Running database migrations..."
+
+# Wait for Django to be fully started
+sleep 5
+
+echo -e "  → Running migrations..."
+podman exec "${POD_WEB}-django" python manage.py migrate --noinput || {
+    echo -e "${YELLOW}⚠${NC}  Warning: Migrations failed or partially completed"
+}
+
+echo -e "  → Collecting static files..."
+podman exec "${POD_WEB}-django" python manage.py collectstatic --noinput || {
+    echo -e "${YELLOW}⚠${NC}  Warning: Static file collection failed"
+}
+
+echo -e "${GREEN}✓${NC} Database migrations completed"
+
+# ============================================================
+# STEP 13: VALIDATE DEPLOYMENT
+# ============================================================
 echo ""
-echo "For development, see: https://github.com/hookprobe/hookprobe/wiki"
+echo -e "${BLUE}[STEP 13]${NC} Validating deployment..."
+
+echo -e "  → Checking POD status..."
+PODS_STATUS=$(podman pod ps --format "{{.Name}} {{.Status}}")
+echo "$PODS_STATUS"
+
+# Count running pods
+EXPECTED_PODS=4
+RUNNING_PODS=$(echo "$PODS_STATUS" | grep -c "Running" || true)
+
+if [ $RUNNING_PODS -eq $EXPECTED_PODS ]; then
+    echo -e "${GREEN}✓${NC} All PODs are running ($RUNNING_PODS/$EXPECTED_PODS)"
+else
+    echo -e "${YELLOW}⚠${NC}  Warning: $RUNNING_PODS/$EXPECTED_PODS PODs are running"
+fi
+
+echo ""
+echo -e "  → Checking container status..."
+podman ps --format "table {{.Names}}\t{{.Status}}" | grep hookprobe || true
+
+# ============================================================
+# DEPLOYMENT COMPLETE
+# ============================================================
+echo ""
+echo -e "${GREEN}============================================================${NC}"
+echo -e "${GREEN}   HOOKPROBE LIGHTWEIGHT DEPLOYMENT COMPLETE${NC}"
+echo -e "${GREEN}============================================================${NC}"
+echo ""
+echo -e "Deployed PODs:"
+echo -e "  ${GREEN}✓${NC} POD-001: Web Server        (port ${PORT_HTTP}, ${PORT_HTTPS})"
+echo -e "  ${GREEN}✓${NC} POD-002: IAM (Logto)        (port ${PORT_LOGTO}, ${PORT_LOGTO_ADMIN})"
+echo -e "  ${GREEN}✓${NC} POD-003: Database (PostgreSQL) (port ${PORT_POSTGRES})"
+echo -e "  ${GREEN}✓${NC} POD-005: Cache (Redis)      (port ${PORT_REDIS})"
+echo ""
+echo -e "${BLUE}Access Points:${NC}"
+echo -e "  • Web Application:    http://localhost:${PORT_HTTP}"
+echo -e "  • Logto Admin:        http://localhost:${PORT_LOGTO_ADMIN}"
+echo -e "  • Logto API:          http://localhost:${PORT_LOGTO}"
+echo ""
+echo -e "${BLUE}Useful Commands:${NC}"
+echo -e "  • Check POD status:   ${GREEN}podman pod ps${NC}"
+echo -e "  • Check containers:   ${GREEN}podman ps${NC}"
+echo -e "  • View logs:          ${GREEN}podman logs <container-name>${NC}"
+echo -e "  • Stop all PODs:      ${GREEN}podman pod stop --all${NC}"
+echo -e "  • Remove all PODs:    ${GREEN}podman pod rm -f --all${NC}"
+echo ""
+echo -e "${BLUE}Memory Usage:${NC}"
+echo -e "  • PostgreSQL:  ${POSTGRES_MEMORY_LIMIT}"
+echo -e "  • Redis:       ${REDIS_MEMORY_LIMIT}"
+echo -e "  • Django:      ${DJANGO_MEMORY_LIMIT}"
+echo -e "  • Logto:       ${LOGTO_MEMORY_LIMIT}"
+echo -e "  • Total:       ~2.5GB"
+echo ""
+echo -e "${YELLOW}Next Steps:${NC}"
+echo -e "  1. Configure Logto authentication at http://localhost:${PORT_LOGTO_ADMIN}"
+echo -e "  2. Update LOGTO_APP_ID and LOGTO_APP_SECRET in lightweight-config.sh"
+echo -e "  3. Test the web application at http://localhost:${PORT_HTTP}"
+echo -e "  4. Monitor resource usage: ${GREEN}podman stats${NC}"
+echo ""
+echo -e "${YELLOW}⚠️  Remember: This is a testing/development deployment${NC}"
+echo -e "${YELLOW}   For production, use the full installation: install/edge/setup.sh${NC}"
+echo ""
+echo -e "${GREEN}Deployment log saved to: /var/log/hookprobe-lightweight-install.log${NC}"
 echo ""

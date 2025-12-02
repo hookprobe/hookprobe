@@ -910,14 +910,16 @@ make dsm-status
 
 ## 📚 Documentation
 
+> **📖 [Complete Documentation Index](DOCUMENTATION-INDEX.md)** - Navigate all docs by use case and audience
+
 ### Quick Links
 - 🚀 **[Quick Start](QUICK-START.md)** - 3-step installation
+- 🧪 **[Testing Strategy](SOFTWARE-TESTING-STRATEGY.md)** - Podman testing for RPi4 (developers only)
 - 🏗️ **[Architecture Overview](docs/architecture/security-model.md)** - Complete security model
 - 🧬 **[Neuro Protocol](docs/architecture/hookprobe-neuro-protocol.md)** - Neural cryptography spec
 - 🌐 **[DSM Whitepaper](docs/architecture/dsm-whitepaper.md)** - Decentralized mesh architecture
 - 🎯 **[Qsecbit Algorithm](src/qsecbit/README.md)** - Resilience metrics deep dive
 - 📦 **[POD Components](docs/components/README.md)** - All modules explained
-- 📖 **[Complete Documentation Index](docs/DOCUMENTATION-INDEX.md)** - Find anything
 
 ### Key Concepts
 - **[Neuro Resonance Handshakes](src/neuro/README.md#resonance)** - How edge and cloud synchronize
