@@ -15,13 +15,21 @@ set -u  # Exit on undefined variable
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Load configuration file if it exists
+if [ -f "$SCRIPT_DIR/lightweight-config.sh" ]; then
+    echo "Loading configuration from lightweight-config.sh..."
+    source "$SCRIPT_DIR/lightweight-config.sh"
+else
+    echo "Using default configuration (lightweight-config.sh not found)"
+fi
+
 echo "============================================================"
 echo "   HOOKPROBE v5.0 - LIGHTWEIGHT TESTING/DEVELOPMENT SETUP"
 echo "   Optimized for Raspberry Pi 4B / Low-Resource Devices"
 echo "============================================================"
 
 # ============================================================
-# CONFIGURATION - Minimal Setup
+# CONFIGURATION - Minimal Setup (with safe defaults)
 # ============================================================
 
 # Volume names (simplified for testing)
@@ -45,6 +53,27 @@ PORT_GRAFANA="${PORT_GRAFANA:-3000}"
 
 # Installation mode
 INSTALL_MODE="${INSTALL_MODE:-minimal}"  # minimal, standard, full
+
+# Validate all critical variables are defined
+echo ""
+echo "Validating configuration..."
+
+CRITICAL_VARS=(
+    "VOLUME_POSTGRES_DATA"
+    "VOLUME_GRAFANA_DATA"
+    "VOLUME_VICTORIAMETRICS_DATA"
+    "POD_DATABASE"
+)
+
+for var in "${CRITICAL_VARS[@]}"; do
+    if [ -z "${!var:-}" ]; then
+        echo "ERROR: Critical variable $var is not defined!"
+        echo "Please check $SCRIPT_DIR/lightweight-config.sh or script defaults"
+        exit 1
+    fi
+done
+
+echo "✓ Configuration validated"
 
 # ============================================================
 # STEP 1: DETECT PLATFORM
