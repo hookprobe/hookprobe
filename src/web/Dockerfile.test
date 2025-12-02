@@ -41,7 +41,7 @@ RUN pip install --root-user-action=ignore --upgrade pip setuptools wheel && \
 COPY . /app/
 
 # Create directories for static files and media
-RUN mkdir -p /app/staticfiles /app/media /app/logs
+RUN mkdir -p /app/staticfiles /app/media /app/logs /app/static
 
 # Set ownership (non-root user)
 RUN useradd -m -u 1000 hookprobe && \
