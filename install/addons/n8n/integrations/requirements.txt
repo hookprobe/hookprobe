@@ -1,0 +1,39 @@
+# HookProbe N8N Integrations Requirements
+# Python 3.11+
+
+# Core dependencies
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ClickHouse client
+clickhouse-connect>=0.6.0
+clickhouse-driver>=0.2.6
+
+# Metrics and monitoring
+prometheus-client>=0.17.0
+
+# Utilities
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# Development dependencies (optional)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.1
+requests-mock>=1.11.0
+black>=23.7.0
+flake8>=6.0.0
+mypy>=1.4.0
+pylint>=2.17.0
+
+# Security
+cryptography>=41.0.0
+pyjwt>=2.8.0
+
+# Logging
+structlog>=23.1.0
+colorama>=0.4.6

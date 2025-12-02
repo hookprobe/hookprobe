@@ -6,7 +6,7 @@ Last Updated: November 2025
 Status: Production Ready
 
 ---
-![SecurityMitigataionPlan](../images/xSOC-HLD-v1.3.png)
+![SecurityMitigataionPlan](../../assets/xSOC-HLD-v1.2.png)
 ---
 
 ## Executive Summary
@@ -33,10 +33,11 @@ HookProbe implements a **zero-trust, AI-driven security architecture** combining
 5. [Network Layer Security](#5-network-layer-security)
 6. [Application Layer Defense](#6-application-layer-defense)
 7. [AI Threat Detection & Response](#7-ai-threat-detection--response)
-8. [Hybrid Cloud Integration](#8-hybrid-cloud-integration)
-9. [Operational Security](#9-operational-security)
-10. [Compliance & Governance](#10-compliance--governance)
-11. [Implementation Roadmap](#11-implementation-roadmap)
+8. [Decentralized Security Mesh (DSM)](#8-decentralized-security-mesh-dsm)
+9. [Hybrid Cloud Integration](#9-hybrid-cloud-integration)
+10. [Operational Security](#10-operational-security)
+11. [Compliance & Governance](#11-compliance--governance)
+12. [Implementation Roadmap](#12-implementation-roadmap)
 
 ---
 
@@ -1652,9 +1653,655 @@ def push_policy_update(rule_type, rule_data):
 
 ---
 
-## 8. Hybrid Cloud Integration
+## 8. Decentralized Security Mesh (DSM)
 
-### 8.1 Proxmox VE Backend Architecture
+### 12.1 Overview: "One Brain Powered by Many"
+
+HookProbe DSM transforms the traditional centralized SOC model into a **distributed, cryptographically verifiable security mesh** where:
+
+- **Every edge node** creates tamper-evident microblocks for security events
+- **Validator nodes** aggregate events into cryptographically signed checkpoints
+- **BLS signature aggregation** ensures Byzantine fault tolerance
+- **TPM-backed identities** prevent unauthorized node participation
+- **The mesh operates as one unified brain** powered by distributed intelligence
+
+**Key Principle**: No single point of failure, no single point of trust. Security is a collective property of the mesh.
+
+### 12.2 DSM Trust Architecture
+
+#### 8.2.1 Three-Layer Security Model
+
+```
+┌──────────────────────────────────────────────────────────┐
+│         Layer 3: CONSENSUS (Byzantine Fault Tolerant)     │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ Validator Quorum (7-10 nodes)                      │  │
+│  │ - BLS signature aggregation                        │  │
+│  │ - 2/3 consensus required                           │  │
+│  │ - Tolerates f=(n-1)/3 Byzantine nodes              │  │
+│  │ - Checkpoint every 5 minutes                       │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+                         ▲
+┌──────────────────────────────────────────────────────────┐
+│         Layer 2: VALIDATION (Merkle DAG)                  │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ Gossip Protocol                                    │  │
+│  │ - Announce microblock IDs                          │  │
+│  │ - Validators collect and verify                    │  │
+│  │ - Build Merkle tree of all events                  │  │
+│  │ - Tamper-evident chaining                          │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+                         ▲
+┌──────────────────────────────────────────────────────────┐
+│         Layer 1: DETECTION (Edge Nodes)                   │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ HookProbe Edge Nodes (100s-1000s)                  │  │
+│  │ - POD-006: Security events (Suricata/Zeek)        │  │
+│  │ - POD-007: Mitigation actions (Qsecbit)           │  │
+│  │ - POD-010: DSM microblock creation                 │  │
+│  │ - TPM-signed, cryptographically verifiable         │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### 8.2.2 Preventing Bad Actors: Multi-Layer Defense
+
+**Challenge**: In a decentralized system, how do we prevent malicious nodes from poisoning the security mesh?
+
+**Solution**: Five-layer defense against compromise:
+
+##### 1. TPM-Backed Hardware Identity
+
+```python
+# Every node must have TPM 2.0 attestation
+class NodeProvisioning:
+    def provision_new_node(self, hardware_id):
+        """
+        Provision node with hardware-backed cryptographic identity.
+        Cannot be spoofed without physical TPM access.
+        """
+        # Generate TPM-backed key pair (sealed to platform)
+        tpm_key = tpm2_create_primary(
+            hierarchy=TPM2_RH_OWNER,
+            attrs=['fixedtpm', 'fixedparent', 'sensitivedataorigin']
+        )
+
+        # Read Platform Configuration Registers (integrity measurements)
+        pcr_snapshot = tpm2_pcr_read([0, 1, 2, 3, 7])
+        # PCR 0: BIOS/UEFI code
+        # PCR 1: BIOS/UEFI data
+        # PCR 2: Option ROM code
+        # PCR 3: Option ROM data
+        # PCR 7: Secure Boot state
+
+        # Create Certificate Signing Request
+        csr = create_csr(
+            public_key=tpm_key.public,
+            subject={
+                'CN': f'hookprobe-edge-{hardware_id}',
+                'OU': 'DSM-Edge-Nodes',
+                'O': 'HookProbe-Mesh'
+            },
+            extensions={
+                'tpm_manufacturer': tpm2_get_capability('vendor'),
+                'pcr_baseline': pcr_snapshot,
+                'timestamp': datetime.utcnow()
+            }
+        )
+
+        # Submit to DSM Certificate Authority (requires manual approval)
+        cert_request_id = submit_to_ca(csr)
+
+        # CA validates:
+        # 1. TPM is genuine (manufacturer cert chain)
+        # 2. PCR values match expected HookProbe image
+        # 3. No previous cert for this TPM (prevent duplication)
+
+        return cert_request_id
+```
+
+**Protection**: Even if attacker gains network access, they cannot generate valid signatures without the physical TPM.
+
+##### 2. Platform Integrity Attestation
+
+```python
+# Continuous attestation required to maintain validator status
+class ContinuousAttestation:
+    def attest_platform_integrity(self):
+        """
+        Prove current system state matches provisioned state.
+        Required every 6 hours or validator loses quorum membership.
+        """
+        # Current PCR values
+        current_pcr = tpm2_pcr_read([0, 1, 2, 3, 7])
+
+        # Generate quote (TPM signs PCR values + nonce)
+        nonce = secure_random(32)
+        quote = tpm2_quote(
+            pcr_selection=current_pcr,
+            nonce=nonce,
+            signing_key=self.tpm_key
+        )
+
+        # Include runtime integrity
+        attestation = {
+            'pcr_values': current_pcr,
+            'tpm_quote': quote,
+            'nonce': nonce,
+            'runtime_checks': {
+                'container_signatures': verify_all_pod_signatures(),
+                'kernel_modules': get_loaded_kernel_modules(),
+                'firewall_rules': hash_nftables_ruleset(),
+                'selinux_status': get_selinux_enforcing(),
+            },
+            'timestamp': datetime.utcnow()
+        }
+
+        # Submit to validators for verification
+        validators = get_validator_quorum()
+        votes = []
+        for v in validators:
+            vote = v.verify_attestation(attestation, self.node_id)
+            votes.append(vote)
+
+        # Require 2/3 validators to accept attestation
+        if votes.count(True) < len(validators) * 2/3:
+            self.demote_from_validator()
+            alert_security_team("Node failed attestation: PCR mismatch or runtime compromise")
+```
+
+**Protection**: Compromised nodes fail attestation and are automatically removed from validator quorum.
+
+##### 3. Validator Approval Quorum
+
+```python
+class ValidatorRegistry:
+    """
+    New validators require approval from existing validator quorum.
+    Prevents attacker from injecting malicious validators.
+    """
+
+    def apply_for_validator_status(self, applicant_node):
+        """
+        Node applies to join validator quorum.
+        Requires 2/3 vote from existing validators.
+        """
+        # Verify applicant meets requirements
+        requirements = {
+            'valid_tpm_cert': verify_certificate_chain(applicant_node.cert),
+            'attestation_passed': verify_attestation(applicant_node.attest()),
+            'uptime_history': get_uptime_stats(applicant_node.id),  # >30 days
+            'reputation_score': calculate_reputation(applicant_node.id),  # >0.8
+            'stake': verify_stake_deposited(applicant_node.id),  # Optional economic incentive
+        }
+
+        if not all(requirements.values()):
+            return reject("Requirements not met", requirements)
+
+        # Create validator application
+        application = {
+            'applicant': applicant_node.id,
+            'timestamp': datetime.utcnow(),
+            'requirements': requirements,
+            'proposed_by': self.node_id,
+        }
+
+        # Broadcast to existing validators
+        votes = self.broadcast_validator_vote(application, timeout=3600)
+
+        # Count votes
+        approve_votes = votes.count('approve')
+        reject_votes = votes.count('reject')
+        abstain_votes = votes.count('abstain')
+
+        total_validators = len(self.get_active_validators())
+
+        # Require 2/3 supermajority
+        if approve_votes >= total_validators * 2/3:
+            self.add_validator(applicant_node)
+            self.broadcast_quorum_update()
+            return approve("Validator admitted to quorum")
+        else:
+            return reject(f"Insufficient votes: {approve_votes}/{total_validators}")
+```
+
+**Protection**: Attacker must compromise 2/3 of existing validators to admit a malicious validator.
+
+##### 4. Byzantine Fault Tolerant Consensus
+
+```python
+class BFTCheckpoint:
+    """
+    BLS signature aggregation with Byzantine fault tolerance.
+    Tolerates up to f=(n-1)/3 malicious validators.
+    """
+
+    def finalize_checkpoint(self, checkpoint):
+        """
+        Aggregate signatures from validator quorum.
+        Requires 2/3 honest validators.
+
+        For n=10 validators:
+        - Tolerates f=3 Byzantine (malicious) validators
+        - Requires 7 honest signatures for finality
+        """
+        total_validators = len(self.validator_quorum)
+        byzantine_tolerance = (total_validators - 1) // 3
+        required_signatures = total_validators - byzantine_tolerance
+
+        # Collect signatures from validators
+        signatures = []
+        for validator in self.validator_quorum:
+            try:
+                sig = validator.sign_checkpoint(checkpoint)
+
+                # Verify signature before accepting
+                if verify_tpm_signature(sig, validator.public_key, checkpoint):
+                    signatures.append({
+                        'validator_id': validator.id,
+                        'signature': sig,
+                        'timestamp': datetime.utcnow()
+                    })
+            except Exception as e:
+                log.warning(f"Validator {validator.id} failed to sign: {e}")
+
+        # Check quorum
+        if len(signatures) < required_signatures:
+            raise QuorumNotReached(
+                f"Only {len(signatures)}/{required_signatures} signatures collected"
+            )
+
+        # Aggregate BLS signatures
+        bls_signatures = [s['signature'] for s in signatures]
+        aggregated_sig = bls_aggregate(bls_signatures)
+
+        # Verify aggregated signature
+        validator_pubkeys = [v.public_key for v in self.validator_quorum]
+        if not bls_verify(aggregated_sig, validator_pubkeys, checkpoint):
+            raise InvalidAggregateSignature("BLS verification failed")
+
+        # Checkpoint is now final and immutable
+        checkpoint['signatures'] = signatures
+        checkpoint['aggregated_signature'] = aggregated_sig
+        checkpoint['finalized_at'] = datetime.utcnow()
+
+        # Broadcast to all nodes
+        self.broadcast_final_checkpoint(checkpoint)
+
+        metrics.increment('dsm.checkpoints.finalized',
+                         tags=[f'validators:{len(signatures)}'])
+```
+
+**Protection**: Even if attacker compromises f=(n-1)/3 validators, honest majority still produces valid checkpoints.
+
+##### 5. Anomaly Detection & Automatic Quarantine
+
+```python
+class MeshAnomalyDetection:
+    """
+    AI-powered detection of malicious validator behavior.
+    Automatically quarantines suspicious nodes.
+    """
+
+    def detect_malicious_validators(self):
+        """
+        Monitor validator behavior for anomalies:
+        - Signing invalid checkpoints
+        - Excessive rejections of valid blocks
+        - Timing attacks (withholding signatures)
+        - Collusion patterns with other validators
+        """
+        for validator in self.validator_quorum:
+            metrics = self.collect_validator_metrics(validator.id)
+
+            anomalies = []
+
+            # Check 1: Invalid checkpoint signatures
+            if metrics['invalid_signatures'] > 0:
+                anomalies.append({
+                    'type': 'invalid_signature',
+                    'severity': 'critical',
+                    'count': metrics['invalid_signatures']
+                })
+
+            # Check 2: Excessive block rejections
+            reject_rate = metrics['blocks_rejected'] / metrics['blocks_total']
+            if reject_rate > 0.1:  # >10% rejection rate
+                anomalies.append({
+                    'type': 'excessive_rejections',
+                    'severity': 'high',
+                    'rate': reject_rate
+                })
+
+            # Check 3: Timing attacks (late signatures)
+            if metrics['avg_signature_delay'] > 10:  # >10 seconds
+                anomalies.append({
+                    'type': 'timing_attack',
+                    'severity': 'medium',
+                    'delay': metrics['avg_signature_delay']
+                })
+
+            # Check 4: Collusion detection (always agrees with specific validators)
+            for other_validator in self.validator_quorum:
+                if other_validator.id != validator.id:
+                    agreement_rate = calculate_agreement_rate(validator, other_validator)
+                    if agreement_rate > 0.95:  # Suspiciously high
+                        anomalies.append({
+                            'type': 'suspected_collusion',
+                            'severity': 'high',
+                            'partner': other_validator.id,
+                            'rate': agreement_rate
+                        })
+
+            # Take action on anomalies
+            if anomalies:
+                self.handle_suspicious_validator(validator, anomalies)
+
+    def handle_suspicious_validator(self, validator, anomalies):
+        """
+        Automated response to suspicious validator behavior.
+        """
+        # Calculate threat score
+        threat_score = sum(self.severity_weights[a['severity']] for a in anomalies)
+
+        if threat_score >= 0.8:
+            # CRITICAL: Immediate quarantine
+            self.quarantine_validator(validator)
+            self.initiate_emergency_vote_for_removal(validator)
+
+        elif threat_score >= 0.5:
+            # HIGH: Temporary suspension
+            self.suspend_validator(validator, duration=3600)  # 1 hour
+            self.alert_security_team(validator, anomalies)
+
+        else:
+            # MEDIUM: Warning + monitoring
+            self.flag_for_monitoring(validator, anomalies)
+```
+
+**Protection**: Malicious validators are detected and quarantined before they can cause significant damage.
+
+### 12.3 Microblock Creation & Event Chain
+
+#### 8.3.1 Integration with POD-006 (Security Detection)
+
+```python
+# Automatic DSM microblock creation when security event occurs
+class SecurityEventHandler:
+    def on_suricata_alert(self, alert):
+        """
+        Called when POD-006 (Suricata/Zeek/Snort3) generates alert.
+        Creates cryptographically signed microblock for DSM.
+        """
+        # Existing: Log to ClickHouse
+        self.log_to_clickhouse(alert)
+
+        # NEW: Create DSM microblock
+        microblock = dsm_node.create_microblock(
+            payload={
+                'event_id': alert.id,
+                'signature_id': alert.signature_id,
+                'severity': alert.severity,
+                'category': alert.category,
+                'src_ip': anonymize_ip(alert.src_ip),
+                'dst_ip': anonymize_ip(alert.dst_ip),
+                'threat_score': qsecbit.analyze(alert),
+            },
+            event_type='ids_alert'
+        )
+
+        # Announce to DSM mesh
+        dsm_node.gossip.announce(microblock.id)
+
+        # Return microblock ID for correlation
+        return microblock.id
+```
+
+#### 8.3.2 Integration with POD-007 (AI Response)
+
+```python
+# Log mitigation actions to DSM for audit trail
+class MitigationLogger:
+    def on_mitigation_executed(self, threat, action):
+        """
+        Called when POD-007 (Qsecbit + Kali) executes mitigation.
+        Creates tamper-evident record of security action.
+        """
+        # Create DSM microblock for mitigation
+        microblock = dsm_node.create_microblock(
+            payload={
+                'threat_id': threat.id,
+                'threat_score': threat.score,
+                'action': action.type,  # 'block', 'rate_limit', 'quarantine'
+                'target': anonymize(action.target),
+                'success': action.success,
+                'duration': action.duration,
+                'triggered_by': action.triggered_by,  # 'qsecbit', 'manual', 'policy'
+            },
+            event_type='mitigation'
+        )
+
+        # Link to original detection microblock
+        microblock['references'] = [threat.detection_microblock_id]
+
+        # Announce to mesh
+        dsm_node.gossip.announce(microblock.id)
+```
+
+### 12.4 Threat Intelligence Mesh
+
+#### 8.4.1 Cross-Node Intelligence Sharing
+
+When one edge detects a threat, all edges benefit:
+
+```python
+class ThreatIntelligenceMesh:
+    """
+    Federated threat intelligence powered by DSM.
+    When one node detects C2, all nodes block it.
+    """
+
+    def on_checkpoint_finalized(self, checkpoint):
+        """
+        Called when validator quorum finalizes checkpoint.
+        Extract threat intelligence and distribute to all nodes.
+        """
+        # Fetch all microblocks in checkpoint
+        microblocks = self.fetch_microblocks(checkpoint['included_ranges'])
+
+        # Extract high-severity threats
+        threats = []
+        for block in microblocks:
+            if block['event_type'] == 'ids_alert' and block['payload']['severity'] in ['critical', 'high']:
+                threats.append(block['payload'])
+
+        # Aggregate and deduplicate
+        threat_intel = self.aggregate_threats(threats)
+
+        # Create Threat Advisory
+        advisory = {
+            'checkpoint_epoch': checkpoint['epoch'],
+            'threats': threat_intel,
+            'timestamp': datetime.utcnow(),
+            'auto_mitigate': True,  # Automatically apply rules
+        }
+
+        # Broadcast to all edge nodes
+        for edge_node in get_all_edge_nodes():
+            self.send_threat_advisory(edge_node, advisory)
+
+    def apply_threat_advisory(self, advisory):
+        """
+        Automatically update local defense based on mesh intelligence.
+        """
+        for threat in advisory['threats']:
+            if threat['category'] == 'c2':
+                # Block C2 IPs in firewall
+                nft.add(f'add element inet filter blacklist {{ {threat["indicator"]} }}')
+
+            elif threat['category'] == 'malware_signature':
+                # Update Suricata rules
+                suricata.add_rule(threat['signature'])
+
+            elif threat['category'] == 'exploit':
+                # Update WAF rules
+                naxsi.add_rule(threat['pattern'], score=threat['severity_score'])
+
+        # Log applied updates
+        log.info(f"Applied {len(advisory['threats'])} threat intel updates from DSM mesh")
+```
+
+**Result**: Network effect where security improves with every new edge node.
+
+### 12.5 Security Guarantees
+
+#### 8.5.1 Tamper-Evidence
+
+```
+Every security event is immutably recorded:
+
+Event → Microblock → Checkpoint → Finalized Chain
+  ↓         ↓            ↓              ↓
+ Hash   TPM Sign   Merkle Tree   BLS Aggregate
+
+Any modification breaks the chain and is detectable.
+```
+
+#### 8.5.2 Non-Repudiation
+
+```python
+# Validators cannot deny signing a checkpoint
+def prove_validator_signed_checkpoint(checkpoint, validator):
+    """
+    Cryptographic proof that validator participated in consensus.
+    """
+    # Extract validator's BLS signature component
+    validator_sig = extract_bls_component(
+        checkpoint['aggregated_signature'],
+        validator.public_key
+    )
+
+    # Verify using validator's TPM-backed public key
+    return bls_verify_single(validator_sig, validator.public_key, checkpoint)
+```
+
+#### 8.5.3 Byzantine Fault Tolerance
+
+```
+With 10 validators:
+- Tolerates 3 malicious/offline validators
+- Requires 7 honest validators for consensus
+- Attacker needs to compromise 4+ validators (extremely difficult)
+
+With TPM attestation:
+- Attacker needs physical access to 4+ validator TPMs
+- Plus knowledge of TPM PINs/passwords
+- Plus ability to defeat secure boot
+- Effectively impossible without insider threat
+```
+
+### 12.6 POD-010: DSM Ledger Deployment
+
+#### 8.6.1 Container Stack
+
+```yaml
+# infrastructure/pod-010-dsm/docker-compose.yml
+version: '3.8'
+
+services:
+  dsm-node:
+    image: hookprobe/dsm-node:latest
+    container_name: pod-010-dsm-node
+    network_mode: "host"
+    devices:
+      - /dev/tpm0:/dev/tpm0  # TPM access
+      - /dev/tpmrm0:/dev/tpmrm0
+    volumes:
+      - /var/lib/hookprobe/dsm/microblocks:/data/microblocks
+      - /var/lib/hookprobe/certs:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - NODE_ID=${HOOKPROBE_NODE_ID}
+      - NODE_ROLE=edge  # or "validator"
+      - TPM_KEY_PATH=/certs/tpm-dsm-key
+      - GOSSIP_PORT=7946
+      - BOOTSTRAP_NODES=validator1.mesh:7946,validator2.mesh:7946
+    restart: unless-stopped
+
+  dsm-api:
+    image: hookprobe/dsm-api:latest
+    container_name: pod-010-dsm-api
+    network_mode: "host"
+    depends_on:
+      - dsm-node
+    environment:
+      - API_PORT=8100
+      - LEDGER_PATH=/data/microblocks
+    restart: unless-stopped
+```
+
+#### 8.6.2 Integration with Existing PODs
+
+```
+POD-006 (Suricata/Zeek) ──→ POD-010 (DSM Node) ──→ Gossip Network
+                                    ↓
+POD-007 (Qsecbit/Mitigation) ──→ Microblock Creation
+                                    ↓
+POD-003 (PostgreSQL) ←──────── Checkpoint Storage
+                                    ↓
+POD-005 (Grafana) ←───────────── DSM Metrics
+```
+
+### 12.7 Metrics & Monitoring
+
+```python
+# Grafana dashboard queries for DSM health
+
+# Microblock creation rate
+dsm_microblocks_created_total
+
+# Checkpoint finalization rate
+dsm_checkpoints_finalized_total
+
+# Validator quorum health
+dsm_validator_quorum_size
+dsm_validator_quorum_health
+
+# Consensus latency
+histogram_quantile(0.99, dsm_checkpoint_latency_seconds)
+
+# Byzantine fault tolerance margin
+dsm_byzantine_tolerance_margin  # (n - signatures_required)
+
+# Attestation failures
+dsm_attestation_failures_total
+
+# Threat intelligence propagation
+dsm_threat_intel_updates_applied_total
+```
+
+### 12.8 Implementation Status
+
+| Component | Status | Target Date |
+|-----------|--------|-------------|
+| POD-010 Infrastructure | ✅ Specified | Q1 2025 |
+| TPM Integration | 🟡 In Progress | Q1 2025 |
+| Microblock Creation | ✅ Specified | Q2 2025 |
+| Gossip Protocol | 🟡 In Design | Q2 2025 |
+| Validator Quorum | 📋 Planned | Q2 2025 |
+| BLS Aggregation | 📋 Planned | Q3 2025 |
+| Threat Intel Mesh | 📋 Planned | Q3 2025 |
+| Full Mesh Operations | 📋 Planned | Q4 2025 |
+
+**Reference**: See [DSM Implementation Architecture](dsm-implementation.md) for technical specifications.
+
+---
+
+## 12. Hybrid Cloud Integration
+
+### 12.1 Proxmox VE Backend Architecture
 
 **Why Proxmox Over VMware**:
 - **Cost Savings**: €52,000+ annually (no licensing fees)
@@ -1715,7 +2362,7 @@ resource "proxmox_vm_qemu" "k8s_worker" {
 }
 ```
 
-### 8.2 Edge-to-Cloud Connectivity
+### 12.2 Edge-to-Cloud Connectivity
 
 **WireGuard VPN Mesh**:
 ```bash
@@ -1742,7 +2389,7 @@ ip route add default via 192.168.1.1 dev eth0 metric 100
 ip route add default via 10.64.64.64 dev wwan0 metric 200
 ```
 
-### 8.3 Centralized SIEM (Cloud)
+### 12.3 Centralized SIEM (Cloud)
 
 **Architecture**:
 ```
@@ -2006,7 +2653,7 @@ ORDER BY query_duration_ms DESC
 LIMIT 20;
 ```
 
-### 8.4 ML Model Training (Cloud GPU)
+### 12.4 ML Model Training (Cloud GPU)
 
 **GPU Passthrough for TensorFlow**:
 ```yaml
@@ -2046,9 +2693,9 @@ ssh edge-node-01 "podman exec qsecbit \
 
 ---
 
-## 9. Operational Security
+## 12. Operational Security
 
-### 9.1 Secrets Management (Vault)
+### 12.1 Secrets Management (Vault)
 
 **HashiCorp Vault Setup** (Cloud K8s):
 ```yaml
@@ -2123,7 +2770,7 @@ for node in get_edge_nodes():
     requests.post(f'https://{node}/api/secrets/rotate')
 ```
 
-### 9.2 Certificate Management (cert-manager)
+### 12.2 Certificate Management (cert-manager)
 
 **Automatic TLS Cert Issuance**:
 ```yaml
@@ -2156,7 +2803,7 @@ spec:
     mode: STRICT  # Require mTLS for all services
 ```
 
-### 9.3 Audit Logging
+### 12.3 Audit Logging
 
 **Comprehensive Audit Trail**:
 ```bash
@@ -2216,7 +2863,7 @@ PUT _ilm/policy/audit-logs-policy
 }
 ```
 
-### 9.4 Backup & Disaster Recovery
+### 12.4 Backup & Disaster Recovery
 
 **Edge Backup Strategy**:
 ```bash
@@ -2280,9 +2927,9 @@ echo "RTO: $(cat /var/log/dr-drill.log | grep recovery_time)"
 
 ---
 
-## 10. Compliance & Governance
+## 12. Compliance & Governance
 
-### 10.1 Regulatory Alignment
+### 12.1 Regulatory Alignment
 
 **GDPR** (Data Privacy):
 - Personal data encrypted at rest + in transit
@@ -2302,7 +2949,7 @@ echo "RTO: $(cat /var/log/dr-drill.log | grep recovery_time)"
 - Breach notification (automated alerts)
 - Business Associate Agreements (BAAs)
 
-### 10.2 Security Frameworks
+### 12.2 Security Frameworks
 
 **NIST Cybersecurity Framework**:
 
@@ -2321,7 +2968,7 @@ echo "RTO: $(cat /var/log/dr-drill.log | grep recovery_time)"
 - **CIS Control 8**: Audit logs (centralized syslog, retention)
 - **CIS Control 12**: Network monitoring (mirroring, flow logs)
 
-### 10.3 Security Metrics (KPIs)
+### 12.3 Security Metrics (KPIs)
 
 **Qsecbit Dashboard** (Grafana + ClickHouse):
 ```
@@ -2412,7 +3059,7 @@ GROUP BY site_id;
 
 ---
 
-## 11. Implementation Roadmap
+## 12. Implementation Roadmap
 
 ### Phase 1: Edge Hardening (Weeks 1-2)
 

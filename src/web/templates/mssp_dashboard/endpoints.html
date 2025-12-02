@@ -1,0 +1,368 @@
+{% extends 'mssp_dashboard/base.html' %}
+
+{% block title %}Endpoints Map - MSSP{% endblock %}
+{% block page_title %}Security Endpoints{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Endpoints</li>
+{% endblock %}
+
+{% block extra_css %}
+<!-- MapBox GL JS -->
+<link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+<style>
+    #map {
+        height: 600px;
+        width: 100%;
+        border-radius: 5px;
+    }
+
+    .mapboxgl-popup {
+        max-width: 300px;
+    }
+
+    .mapboxgl-popup-content {
+        padding: 15px;
+    }
+
+    .device-popup h4 {
+        margin-top: 0;
+        margin-bottom: 10px;
+        color: #1e3a8a;
+    }
+
+    .device-popup .device-detail {
+        margin: 5px 0;
+        font-size: 14px;
+    }
+
+    .device-popup .device-detail strong {
+        display: inline-block;
+        width: 100px;
+    }
+
+    /* Legend */
+    .map-legend {
+        background: white;
+        padding: 15px;
+        margin: 10px;
+        border-radius: 5px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        font-size: 14px;
+    }
+
+    .map-legend h5 {
+        margin-top: 0;
+        font-size: 16px;
+        font-weight: bold;
+        color: #1e3a8a;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        margin: 8px 0;
+    }
+
+    .legend-icon {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        margin-right: 10px;
+    }
+
+    .legend-icon.online {
+        background-color: #10b981;
+    }
+
+    .legend-icon.offline {
+        background-color: #ef4444;
+    }
+
+    .legend-icon.degraded {
+        background-color: #f59e0b;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Endpoint Statistics -->
+<div class="row mb-3">
+    <div class="col-md-3 col-sm-6">
+        <div class="info-box">
+            <span class="info-box-icon bg-info"><i class="fas fa-map-marker-alt"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Total Endpoints</span>
+                <span class="info-box-number">{{ devices.count }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="info-box">
+            <span class="info-box-icon bg-success"><i class="fas fa-check-circle"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Online</span>
+                <span class="info-box-number" id="onlineCount">0</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="info-box">
+            <span class="info-box-icon bg-danger"><i class="fas fa-times-circle"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Offline</span>
+                <span class="info-box-number" id="offlineCount">0</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="info-box">
+            <span class="info-box-icon bg-warning"><i class="fas fa-exclamation-circle"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Degraded</span>
+                <span class="info-box-number" id="degradedCount">0</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Map and Device List -->
+<div class="row">
+    <!-- Map -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-globe-americas mr-2"></i>
+                    Geographic Device Distribution
+                </h3>
+                <div class="card-tools">
+                    <button type="button" class="btn btn-tool" onclick="refreshMap()">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="map"></div>
+            </div>
+        </div>
+
+        <!-- Map Legend -->
+        <div class="map-legend">
+            <h5><i class="fas fa-info-circle mr-2"></i>Device Status</h5>
+            <div class="legend-item">
+                <div class="legend-icon online"></div>
+                <span>Online - Actively reporting</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-icon degraded"></div>
+                <span>Degraded - Limited functionality</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-icon offline"></div>
+                <span>Offline - No recent activity</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device List -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-list mr-2"></i>
+                    Device List
+                </h3>
+            </div>
+            <div class="card-body p-0" style="max-height: 700px; overflow-y: auto;">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Device</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for device in devices %}
+                        <tr onclick="flyToDevice({{ device.longitude }}, {{ device.latitude }}, '{{ device.name }}')" style="cursor: pointer;">
+                            <td>
+                                <strong>{{ device.name }}</strong><br>
+                                <small class="text-muted">{{ device.location_name }}</small>
+                            </td>
+                            <td>
+                                <span class="badge badge-secondary">{{ device.get_device_type_display }}</span>
+                            </td>
+                            <td>
+                                {% if device.status == 'online' %}
+                                    <span class="badge status-online">Online</span>
+                                {% elif device.status == 'offline' %}
+                                    <span class="badge status-offline">Offline</span>
+                                {% elif device.status == 'degraded' %}
+                                    <span class="badge status-degraded">Degraded</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="3" class="text-center text-muted py-3">
+                                <i class="fas fa-inbox fa-2x mb-2 d-block"></i>
+                                No devices configured
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Device Type Breakdown -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-chart-pie mr-2"></i>
+                    Device Types
+                </h3>
+            </div>
+            <div class="card-body">
+                {% regroup devices by device_type as device_groups %}
+                {% for group in device_groups %}
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between">
+                        <span>{{ group.grouper }}</span>
+                        <span class="badge badge-primary">{{ group.list|length }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!-- MapBox GL JS -->
+<script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+<script>
+mapboxgl.accessToken = '{{ mapbox_config.access_token }}';
+
+// Initialize map
+const map = new mapboxgl.Map({
+    container: 'map',
+    style: '{{ mapbox_config.style_url|default:"mapbox://styles/mapbox/dark-v11" }}',
+    center: {{ mapbox_config.default_center|default:"[-98.5795, 39.8283]"|safe }},
+    zoom: {{ mapbox_config.default_zoom|default:4 }}
+});
+
+// Add navigation controls
+map.addControl(new mapboxgl.NavigationControl());
+map.addControl(new mapboxgl.FullscreenControl());
+
+// Load device data and add markers
+map.on('load', function() {
+    fetch('{% url "mssp_dashboard:endpoints_geojson" %}')
+        .then(response => response.json())
+        .then(data => {
+            // Count devices by status
+            let onlineCount = 0, offlineCount = 0, degradedCount = 0;
+
+            // Add markers for each device
+            data.features.forEach(feature => {
+                const props = feature.properties;
+                const coords = feature.geometry.coordinates;
+
+                // Count by status
+                if (props.status === 'online') onlineCount++;
+                else if (props.status === 'offline') offlineCount++;
+                else if (props.status === 'degraded') degradedCount++;
+
+                // Determine marker color based on status
+                let markerColor = '#6b7280'; // default gray
+                if (props.status === 'online') markerColor = '#10b981'; // green
+                else if (props.status === 'offline') markerColor = '#ef4444'; // red
+                else if (props.status === 'degraded') markerColor = '#f59e0b'; // orange
+
+                // Create popup content
+                const popupHTML = `
+                    <div class="device-popup">
+                        <h4><i class="fas fa-server mr-2"></i>${props.name}</h4>
+                        <div class="device-detail">
+                            <strong>Type:</strong> ${props.device_type}
+                        </div>
+                        <div class="device-detail">
+                            <strong>Status:</strong>
+                            <span class="badge status-${props.status}">${props.status}</span>
+                        </div>
+                        <div class="device-detail">
+                            <strong>IP Address:</strong> ${props.ip_address}
+                        </div>
+                        <div class="device-detail">
+                            <strong>Location:</strong> ${props.location_name}
+                        </div>
+                        <div class="device-detail">
+                            <strong>Last Seen:</strong> ${new Date(props.last_seen).toLocaleString()}
+                        </div>
+                    </div>
+                `;
+
+                // Create marker
+                const marker = new mapboxgl.Marker({ color: markerColor })
+                    .setLngLat(coords)
+                    .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(popupHTML))
+                    .addTo(map);
+
+                // Pulse animation for offline devices
+                if (props.status === 'offline') {
+                    marker.getElement().style.animation = 'pulse 2s infinite';
+                }
+            });
+
+            // Update counts
+            document.getElementById('onlineCount').textContent = onlineCount;
+            document.getElementById('offlineCount').textContent = offlineCount;
+            document.getElementById('degradedCount').textContent = degradedCount;
+
+            // Fit map to show all markers if there are any
+            if (data.features.length > 0) {
+                const bounds = new mapboxgl.LngLatBounds();
+                data.features.forEach(feature => {
+                    bounds.extend(feature.geometry.coordinates);
+                });
+                map.fitBounds(bounds, { padding: 50 });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading device data:', error);
+        });
+});
+
+// Function to fly to a specific device
+function flyToDevice(lng, lat, name) {
+    map.flyTo({
+        center: [lng, lat],
+        zoom: 10,
+        essential: true
+    });
+}
+
+// Function to refresh map
+function refreshMap() {
+    location.reload();
+}
+
+// CSS for pulse animation
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+`;
+document.head.appendChild(style);
+
+// Auto-refresh every 60 seconds
+setInterval(function() {
+    refreshMap();
+}, 60000);
+</script>
+{% endblock %}

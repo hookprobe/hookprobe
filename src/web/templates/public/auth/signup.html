@@ -1,0 +1,272 @@
+{% extends "public/base.html" %}
+{% load static %}
+
+{% block title %}Sign Up - HookProbe{% endblock %}
+
+{% block content %}
+
+<!-- Main -->
+<div id="main" class="alt">
+
+    <!-- Banner -->
+    <section id="banner" class="style2">
+        <div class="inner">
+            <header class="major">
+                <h1>Create Account</h1>
+            </header>
+            <div class="content">
+                <p>Join the HookProbe community</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Signup Form -->
+    <section id="signup" class="wrapper">
+        <div class="inner">
+            <div class="row">
+                <div class="col-6 col-12-medium">
+                    <header>
+                        <h2>Get Started with HookProbe</h2>
+                        <p>Create a free account to access the dashboard and manage your security infrastructure</p>
+                    </header>
+
+                    {% if messages %}
+                        {% for message in messages %}
+                            <div class="alert {% if message.tags %}alert-{{ message.tags }}{% endif %}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+
+                    <form method="post" action="{% url 'signup' %}">
+                        {% csrf_token %}
+                        <div class="row gtr-uniform">
+                            <div class="col-6 col-12-xsmall">
+                                <input type="text" name="first_name" id="first_name" placeholder="First Name" required />
+                            </div>
+                            <div class="col-6 col-12-xsmall">
+                                <input type="text" name="last_name" id="last_name" placeholder="Last Name" required />
+                            </div>
+                            <div class="col-12">
+                                <input type="text" name="username" id="username" placeholder="Username" required />
+                                <small>3-30 characters, letters, numbers, and underscores only</small>
+                            </div>
+                            <div class="col-12">
+                                <input type="email" name="email" id="email" placeholder="Email Address" required />
+                            </div>
+                            <div class="col-12">
+                                <input type="password" name="password1" id="password1" placeholder="Password" required />
+                                <small>Minimum 12 characters, mix of letters, numbers, and symbols</small>
+                            </div>
+                            <div class="col-12">
+                                <input type="password" name="password2" id="password2" placeholder="Confirm Password" required />
+                            </div>
+
+                            <div class="col-12">
+                                <hr />
+                                <h4>Terms and Privacy</h4>
+                            </div>
+
+                            <div class="col-12">
+                                <input type="checkbox" id="terms_consent" name="terms_consent" required>
+                                <label for="terms_consent">
+                                    I have read and agree to the <a href="{% url 'cms:terms_of_service' %}" target="_blank">Terms of Service</a>
+                                </label>
+                            </div>
+
+                            <div class="col-12">
+                                <input type="checkbox" id="privacy_consent" name="privacy_consent" required>
+                                <label for="privacy_consent">
+                                    I have read and agree to the <a href="{% url 'cms:privacy_policy' %}" target="_blank">Privacy Policy</a>
+                                </label>
+                            </div>
+
+                            <div class="col-12">
+                                <input type="checkbox" id="gdpr_consent" name="gdpr_consent" required>
+                                <label for="gdpr_consent">
+                                    <strong>GDPR Consent:</strong> I consent to HookProbe storing and processing my personal data as described in the Privacy Policy. I understand I can request data deletion at any time by contacting <a href="mailto:privacy@hookprobe.com">privacy@hookprobe.com</a>.
+                                </label>
+                            </div>
+
+                            <div class="col-12">
+                                <input type="checkbox" id="marketing_consent" name="marketing_consent">
+                                <label for="marketing_consent">
+                                    I consent to receive promotional emails about HookProbe products, updates, and events (optional)
+                                </label>
+                            </div>
+
+                            <div class="col-12">
+                                <ul class="actions">
+                                    <li><input type="submit" value="Create Account" class="primary fit" /></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </form>
+
+                    <hr />
+
+                    <p>Already have an account? <a href="{% url 'login' %}"><strong>Sign In</strong></a></p>
+
+                </div>
+
+                <div class="col-6 col-12-medium">
+                    <div class="box">
+                        <h3><span class="icon solid fa-user-plus"></span> Why Create an Account?</h3>
+                        <ul>
+                            <li><span class="icon fa-check"></span> <strong>Dashboard Access:</strong> Web-based management interface</li>
+                            <li><span class="icon fa-check"></span> <strong>Device Management:</strong> Monitor and configure edge devices</li>
+                            <li><span class="icon fa-check"></span> <strong>Security Analytics:</strong> Real-time threat visualization</li>
+                            <li><span class="icon fa-check"></span> <strong>API Access:</strong> Automate with REST APIs</li>
+                            <li><span class="icon fa-check"></span> <strong>Alerts:</strong> Email and webhook notifications</li>
+                            <li><span class="icon fa-check"></span> <strong>Community:</strong> Access to forums and support</li>
+                        </ul>
+
+                        <hr />
+
+                        <h4><span class="icon solid fa-shield-alt"></span> 100% Free & Open Source</h4>
+                        <p>HookProbe is and always will be free. No hidden fees, no premium tiers. Just powerful, open-source cybersecurity.</p>
+                        <ul>
+                            <li>✅ MIT License - Use commercially</li>
+                            <li>✅ No credit card required</li>
+                            <li>✅ No usage limits</li>
+                            <li>✅ Full feature access</li>
+                            <li>✅ Community support included</li>
+                        </ul>
+
+                        <hr />
+
+                        <h4><span class="icon solid fa-user-shield"></span> Privacy First</h4>
+                        <p><strong>We respect your privacy:</strong></p>
+                        <ul>
+                            <li>✅ GDPR compliant by design</li>
+                            <li>✅ Your data stays on your devices</li>
+                            <li>✅ No tracking or analytics without consent</li>
+                            <li>✅ Data anonymization enabled by default</li>
+                            <li>✅ Right to data deletion anytime</li>
+                            <li>✅ Transparent data practices</li>
+                        </ul>
+                        <p><small>Learn more: <a href="{% url 'cms:gdpr' %}" target="_blank">GDPR Compliance</a></small></p>
+
+                        <hr />
+
+                        <h4><span class="icon solid fa-question-circle"></span> Questions?</h4>
+                        <ul class="actions small">
+                            <li><a href="{% url 'cms:about' %}" class="button small">About HookProbe</a></li>
+                            <li><a href="{% url 'cms:contact' %}" class="button small">Contact Us</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Account Types -->
+    <section id="account-types" class="wrapper style1">
+        <div class="inner">
+            <header class="major">
+                <h2>Choose Your Deployment</h2>
+                <p>After creating your account, select the deployment type that fits your needs</p>
+            </header>
+
+            <div class="features">
+                <article>
+                    <span class="icon solid fa-home"></span>
+                    <div class="content">
+                        <h3>Personal / Home</h3>
+                        <p><strong>Free forever</strong></p>
+                        <ul>
+                            <li>1-3 edge devices</li>
+                            <li>Full security features</li>
+                            <li>Community support</li>
+                            <li>Perfect for home users and enthusiasts</li>
+                        </ul>
+                    </div>
+                </article>
+
+                <article>
+                    <span class="icon solid fa-building"></span>
+                    <div class="content">
+                        <h3>Small Business</h3>
+                        <p><strong>Free forever</strong></p>
+                        <ul>
+                            <li>Up to 10 edge devices</li>
+                            <li>Multi-site support</li>
+                            <li>Email support (best effort)</li>
+                            <li>Perfect for small teams</li>
+                        </ul>
+                    </div>
+                </article>
+
+                <article>
+                    <span class="icon solid fa-cloud"></span>
+                    <div class="content">
+                        <h3>MSSP / Enterprise</h3>
+                        <p><strong>Free (self-hosted) or contact for managed</strong></p>
+                        <ul>
+                            <li>Unlimited devices</li>
+                            <li>Multi-tenant support</li>
+                            <li>Cloud backend option</li>
+                            <li>Priority support (coming soon)</li>
+                        </ul>
+                        <ul class="actions">
+                            <li><a href="mailto:enterprise@hookprobe.com" class="button small">Contact Sales</a></li>
+                        </ul>
+                    </div>
+                </article>
+            </div>
+        </div>
+    </section>
+
+</div>
+
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .alert {
+        padding: 15px;
+        margin-bottom: 20px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+    }
+    .alert-success {
+        color: #3c763d;
+        background-color: #dff0d8;
+        border-color: #d6e9c6;
+    }
+    .alert-error, .alert-danger {
+        color: #a94442;
+        background-color: #f2dede;
+        border-color: #ebccd1;
+    }
+    .alert-info {
+        color: #31708f;
+        background-color: #d9edf7;
+        border-color: #bce8f1;
+    }
+    small {
+        display: block;
+        margin-top: 5px;
+        color: #999;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Password strength indicator
+    document.getElementById('password1').addEventListener('input', function() {
+        var password = this.value;
+        var strength = 0;
+
+        if (password.length >= 12) strength += 25;
+        if (password.match(/[a-z]+/)) strength += 25;
+        if (password.match(/[A-Z]+/)) strength += 25;
+        if (password.match(/[0-9]+/)) strength += 25;
+        if (password.match(/[$@#&!]+/)) strength += 25;
+
+        // Visual feedback (add a strength meter if desired)
+        console.log('Password strength:', strength);
+    });
+</script>
+{% endblock %}
