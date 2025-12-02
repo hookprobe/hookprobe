@@ -1,7 +1,7 @@
 # HookProbe ATP - Adaptive Transmission Protocol
 
 **Version**: 2.0-Liberty-ATP
-**Status**: Phase 5 Development (Q1 2026)
+**Status**: 2026 Roadmap - Development starts Q1 2026
 **Last Updated**: 2025-12-02
 **Supersedes**: HTP (HookProbe Transport Protocol) v1.0
 
@@ -9,7 +9,9 @@
 
 ## Executive Summary
 
-**HookProbe ATP (Adaptive Transmission Protocol)** is an intelligent, intent-aware transport protocol that combines neural resonance authentication with adaptive transmission strategies, energy-aware routing, and anti-surveillance jitter injection.
+**HookProbe ATP (Adaptive Transmission Protocol)** is a 2026 enhancement to HookProbe Liberty - an intelligent, intent-aware transport protocol that combines neural resonance authentication with adaptive transmission strategies, energy-aware routing, and anti-surveillance jitter injection.
+
+**Timeline**: Development Q1 2026 → Beta Q2-Q3 2026 → Production Q4 2026
 
 ATP addresses critical vulnerabilities found in traditional protocols:
 - **Smart-Contract Handshakes**: Prevents leech nodes and packet hallucination
@@ -677,29 +679,48 @@ Heartbeat     | 10ms     | 1 Kbps     | Very Low          | 100%
 
 ## Implementation Roadmap
 
-### Phase 5 (Q1 2026) - ATP Development
+### 2025 Status: HTP v1.0 Complete ✅
 
-- [ ] Implement ATP packet header structure
-- [ ] Build trust scoring engine
+HookProbe Liberty (Phase 3, Q3 2025) successfully deployed with:
+- HTP (HookProbe Transport Protocol) v1.0
+- Neural resonance authentication
+- Hardware fingerprinting (no TPM)
+- MSSP device registry with geolocation
+
+### 2026 Evolution: ATP v2.0 Development
+
+#### Phase 5 (Q1 2026) - ATP Development 🚀
+
+**Target: January-March 2026**
+
+- [ ] Implement ATP packet header structure (32-byte header)
+- [ ] Build neural trust scoring engine
 - [ ] Integrate with Neuro Protocol weight verification
-- [ ] Develop intent recognition system
-- [ ] Create jitter injection engine
+- [ ] Develop intent recognition system (Burst/Swarm/Ghost)
+- [ ] Create jitter injection engine (10-500ms randomization)
+- [ ] Implement energy-aware routing for battery devices
 
-### Phase 6 (Q2 2026) - ATP Beta Testing
+#### Phase 6 (Q2-Q3 2026) - ATP Beta Testing 🧪
 
-- [ ] Deploy Burst Mode for video streaming
-- [ ] Deploy Swarm Mode for file transfer
-- [ ] Deploy Ghost Mode for sensitive communications
-- [ ] Test energy-aware routing on battery devices
+**Target: April-September 2026**
+
+- [ ] Deploy Burst Mode for video streaming (45ms latency target)
+- [ ] Deploy Swarm Mode for file transfer (99.99% reliability)
+- [ ] Deploy Ghost Mode for sensitive communications (anti-surveillance)
+- [ ] Test energy-aware routing on battery-powered Raspberry Pi devices
 - [ ] Performance benchmarking vs HTP v1.0
+- [ ] Beta testing with 50-100 edge nodes
 
-### Phase 7 (Q3-Q4 2026) - ATP Production
+#### Phase 7 (Q4 2026) - ATP Production Launch 🎯
+
+**Target: October-December 2026**
 
 - [ ] Migrate all HTP v1.0 nodes to ATP v2.0
 - [ ] Academic publication on ATP security properties
 - [ ] Open-source ATP reference implementation
-- [ ] Third-party security audit
+- [ ] Third-party security audit (ATP + Neuro Protocol)
 - [ ] Integration with mobile edge nodes (iOS/Android)
+- [ ] **Goal**: 1,000 edge nodes running ATP v2.0 globally
 
 ---
 
