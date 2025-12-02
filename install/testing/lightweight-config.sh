@@ -73,6 +73,12 @@ NETWORK_DATABASE="database-net"
 NETWORK_CACHE="cache-net"
 NETWORK_IAM="iam-net"
 
+# Network Interface Names (visible in ip addr / ifconfig)
+INTERFACE_WEB="hpweb0"        # HookProbe Web interface
+INTERFACE_DATABASE="hpdb0"    # HookProbe Database interface
+INTERFACE_CACHE="hpcache0"    # HookProbe Cache interface
+INTERFACE_IAM="hpiam0"        # HookProbe IAM interface
+
 # ============================================================
 # WEB POD NETWORK (Django + Nginx + NAXSI)
 # ============================================================
@@ -260,6 +266,7 @@ export DEPLOYMENT_TYPE MSSP_MODE
 export ENABLE_WEB ENABLE_IAM ENABLE_DATABASE ENABLE_CACHE ENABLE_MONITORING ENABLE_AI
 export POD_WEB POD_DATABASE POD_CACHE POD_IAM
 export NETWORK_WEB NETWORK_DATABASE NETWORK_CACHE NETWORK_IAM
+export INTERFACE_WEB INTERFACE_DATABASE INTERFACE_CACHE INTERFACE_IAM
 export SUBNET_WEB GATEWAY_WEB IP_WEB_DJANGO IP_WEB_NGINX
 export SUBNET_DATABASE GATEWAY_DATABASE IP_DATABASE_POSTGRES
 export SUBNET_CACHE GATEWAY_CACHE IP_CACHE_REDIS
