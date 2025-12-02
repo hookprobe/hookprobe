@@ -851,23 +851,30 @@ make dsm-status
 - [ ] Public MSSP cloud launch
 - [ ] Validator onboarding program (KYC workflow)
 - [ ] Edge node general availability
+- [ ] **ATP v2.0 Development** - Adaptive Transmission Protocol
+  - [ ] Smart-contract handshakes with trust scoring
+  - [ ] Adaptive polymorphism (Burst/Swarm/Ghost modes)
+  - [ ] Jitter-injection engine (anti-surveillance)
+  - [ ] Energy-aware routing (battery management)
 - [ ] Performance optimization (1M TER/sec target)
 - [ ] Side-channel attack mitigation
 - [ ] Academic publication (preprint)
 
 ### Phase 6 (Q2-Q3 2026) - ADVANCED FEATURES
+- [ ] **ATP v2.0 Beta Testing** - Deploy adaptive transmission modes
 - [ ] Federated machine learning across mesh
 - [ ] Zero-knowledge proofs for privacy-preserving intelligence
-- [ ] Mobile edge nodes (iOS/Android)
+- [ ] Mobile edge nodes (iOS/Android) with ATP
 - [ ] Formal verification of critical components
-- [ ] Third-party security audit
+- [ ] Third-party security audit (ATP + Neuro Protocol)
 
 ### Phase 7 (Q4 2026) - ECOSYSTEM EXPANSION
+- [ ] **ATP v2.0 Production** - Migrate all nodes from HTP v1.0
 - [ ] Quantum-resistant signature upgrade
-- [ ] Cross-mesh federation protocol
+- [ ] Cross-mesh federation protocol with ATP
 - [ ] Decentralized governance framework (DAO design)
 - [ ] Open consortium formation
-- [ ] **Goal**: 1,000 edge nodes deployed globally
+- [ ] **Goal**: 1,000 edge nodes deployed globally with ATP
 
 ### Vision (2027+)
 - [ ] Smart contract-based threat bounties
