@@ -1,0 +1,24 @@
+name: 'Setup Podman Environment'
+description: 'Installs and configures Podman for container testing'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Podman
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y podman
+
+    - name: Verify Podman installation
+      shell: bash
+      run: |
+        podman --version
+        podman info | head -20
+
+    - name: Configure Podman for rootless
+      shell: bash
+      run: |
+        # Enable rootless mode
+        loginctl enable-linger $USER || true
+        echo "Podman configured for testing"
