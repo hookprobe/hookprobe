@@ -1,19 +1,19 @@
 # HookProbe ATP - Adaptive Transmission Protocol
 
-**Version**: 2.0-Liberty-ATP
+**Version**: HTP with ATP Enhancements
 **Status**: 2026 Roadmap - Development starts Q1 2026
 **Last Updated**: 2025-12-02
-**Supersedes**: HTP (HookProbe Transport Protocol) v1.0
+**Enhances**: HTP (HookProbe Transport Protocol) - The one and only core transport protocol
 
 ---
 
 ## Executive Summary
 
-**HookProbe ATP (Adaptive Transmission Protocol)** is a 2026 enhancement to HookProbe Liberty - an intelligent, intent-aware transport protocol that combines neural resonance authentication with adaptive transmission strategies, energy-aware routing, and anti-surveillance jitter injection.
+**HookProbe ATP (Adaptive Transmission Protocol)** represents enhanced capabilities added to HTP (HookProbe Transport Protocol) in 2026 - making the core protocol more secure, efficient, less hackable, and future-ready for state-of-the-art end-to-end communication between edges, cloud, and validators.
 
 **Timeline**: Development Q1 2026 → Beta Q2-Q3 2026 → Production Q4 2026
 
-ATP addresses critical vulnerabilities found in traditional protocols:
+**HTP remains the one and only transport protocol.** ATP describes the adaptive benefits added to the existing HTP core:
 - **Smart-Contract Handshakes**: Prevents leech nodes and packet hallucination
 - **Adaptive Polymorphism**: Intent-driven mode switching (Burst/Swarm/Ghost)
 - **Jitter-Injection**: Defeats timing analysis and traffic correlation
@@ -39,9 +39,9 @@ ATP addresses critical vulnerabilities found in traditional protocols:
 
 ## Architecture Overview
 
-### ATP vs HTP Comparison
+### HTP Evolution - Before and After ATP Enhancements
 
-| Feature | HTP v1.0 | ATP v2.0 |
+| Feature | HTP v1.0 (Current) | HTP with ATP (2026) |
 |---------|----------|----------|
 | **Authentication** | Ed25519 signatures | Neural trust scores + Ed25519 |
 | **Encryption** | ChaCha20-Poly1305 | ChaCha20-Poly1305 + mode-specific |
@@ -687,7 +687,7 @@ HookProbe Liberty (Phase 3, Q3 2025) successfully deployed with:
 - Hardware fingerprinting (no TPM)
 - MSSP device registry with geolocation
 
-### 2026 Evolution: ATP v2.0 Development
+### 2026 Evolution: Adding ATP Enhancements to HTP
 
 #### Phase 5 (Q1 2026) - ATP Development 🚀
 
@@ -708,19 +708,19 @@ HookProbe Liberty (Phase 3, Q3 2025) successfully deployed with:
 - [ ] Deploy Swarm Mode for file transfer (99.99% reliability)
 - [ ] Deploy Ghost Mode for sensitive communications (anti-surveillance)
 - [ ] Test energy-aware routing on battery-powered Raspberry Pi devices
-- [ ] Performance benchmarking vs HTP v1.0
+- [ ] Performance benchmarking: HTP with vs without ATP enhancements
 - [ ] Beta testing with 50-100 edge nodes
 
 #### Phase 7 (Q4 2026) - ATP Production Launch 🎯
 
 **Target: October-December 2026**
 
-- [ ] Migrate all HTP v1.0 nodes to ATP v2.0
+- [ ] Add ATP enhancements to all HTP nodes (backward compatible upgrade)
 - [ ] Academic publication on ATP security properties
 - [ ] Open-source ATP reference implementation
-- [ ] Third-party security audit (ATP + Neuro Protocol)
+- [ ] Third-party security audit (HTP + ATP + Neuro Protocol)
 - [ ] Integration with mobile edge nodes (iOS/Android)
-- [ ] **Goal**: 1,000 edge nodes running ATP v2.0 globally
+- [ ] **Goal**: 1,000 edge nodes running HTP with ATP enhancements globally
 
 ---
 
@@ -733,4 +733,4 @@ HookProbe Liberty (Phase 3, Q3 2025) successfully deployed with:
 ---
 
 **Made with ❤️ and 🧠 for a safer, more equitable internet**
-**ATP: Adaptive. Trustworthy. Private.**
+**HTP: The one and only protocol. ATP: The adaptive enhancements that make it unstoppable.**
