@@ -960,6 +960,138 @@ else:
 
 ---
 
+## HTP Enhancements (2026 Roadmap)
+
+### Overview
+
+**HTP is the one and only transport protocol for HookProbe.** In 2026, we're adding adaptive enhancements to make HTP more secure, efficient, less hackable, and future-ready for state-of-the-art end-to-end communication.
+
+**Timeline**: Development Q1 2026 → Beta Q2-Q3 2026 → Production Q4 2026
+
+### Planned Enhancements
+
+#### 1. Smart-Contract Handshakes (Neural Trust Scoring)
+
+**Problem**: Current HTP uses binary trust (accept/reject). Malicious nodes can participate until caught.
+
+**Enhancement**: Continuous trust scoring (0.0-1.0) based on:
+```python
+trust_score = 0.4 * weight_match +       # Neuro Protocol integration
+              0.3 * delivery_rate +       # Packet reliability
+              0.2 * integrity_check +     # No tampering
+              0.1 * timing_accuracy       # Compliance
+```
+
+**Benefits**:
+- Automatic route-around for low-trust nodes (< 0.5 threshold)
+- Prevents leech nodes and packet hallucination
+- Integration with DSM consensus for mesh-wide trust propagation
+
+#### 2. Adaptive Polymorphism (Intent-Aware Transmission)
+
+**Problem**: Current HTP uses single DATA message type for all traffic.
+
+**Enhancement**: Three transmission modes optimized for different use cases:
+
+| Mode | Use Case | Latency | Reliability | Power |
+|------|----------|---------|-------------|-------|
+| **BURST** | Video, streaming | 45ms | 95% | High |
+| **SWARM** | Files, text | 120ms | 99.99% | Medium |
+| **GHOST** | Privacy, stealth | 350ms | 99.9% | Low |
+
+**Intent Byte** in packet header auto-selects optimal mode based on traffic analysis.
+
+#### 3. Jitter-Injection Engine (Anti-Surveillance)
+
+**Problem**: Current HTP is vulnerable to timing correlation attacks.
+
+**Enhancement**: Randomized micro-delays (10-500ms) to defeat statistical timing analysis:
+```
+Without Jitter: P(correlation) = 0.95 (vulnerable)
+With Jitter:    P(correlation) = 0.12 (protected)
+```
+
+**Jitter Offset** field in header allows receiver to re-align packets while maintaining timing obfuscation.
+
+#### 4. Energy-Aware Routing (Battery Management)
+
+**Problem**: Current HTP doesn't consider device power status in mesh routing.
+
+**Enhancement**: **Power-to-Weight Flag** in header:
+```
+0x00 = WALL_POWERED  → Can relay mesh traffic
+0x01 = BATTERY       → Read-only (receive but no relay)
+0x02 = LOW_BATTERY   → Emergency mode
+0x03 = CHARGING      → Gradual relay capability
+```
+
+**Benefits**: 80% power savings for battery-powered edge nodes (Raspberry Pi, IoT devices)
+
+#### 5. Witness-Based Verification (Anti-Hallucination)
+
+**Problem**: Nodes can claim to deliver packets without actually transmitting.
+
+**Enhancement**: **Witness Signatures** - downstream nodes sign acknowledgment of receipt:
+- Trust hash includes witness BLS aggregate signatures
+- Integration with DSM consensus for verification
+- Hallucination detected → trust score plummets → quarantine
+
+### Enhanced HTP Header (32 bytes)
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Source Port          |       Destination Port        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Intent Byte  |  Power Flag   |         Sequence Number       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Trust Hash (12 bytes)                  |
+|                 HMAC-SHA256(session + W_fingerprint)          |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Jitter Offset (4 bytes)                    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                   Witness Signature (8 bytes)                 |
+|                     BLS aggregate from mesh                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+### Development Roadmap
+
+#### Phase 5 (Q1 2026) - Development
+- [ ] Implement enhanced 32-byte HTP header
+- [ ] Build neural trust scoring engine
+- [ ] Develop intent recognition system
+- [ ] Create jitter injection engine
+- [ ] Implement energy-aware routing
+
+#### Phase 6 (Q2-Q3 2026) - Beta Testing
+- [ ] Deploy Burst/Swarm/Ghost modes on live nodes
+- [ ] Test battery-powered Raspberry Pi devices
+- [ ] Performance benchmarking: HTP with vs without enhancements
+- [ ] Beta testing with 50-100 edge nodes
+
+#### Phase 7 (Q4 2026) - Production Launch
+- [ ] Add enhancements to all HTP nodes (backward compatible)
+- [ ] Third-party security audit
+- [ ] Academic publication
+- [ ] **Goal**: 1,000 edge nodes with enhanced HTP globally
+
+### Security Analysis
+
+| Attack Type | Current HTP | Enhanced HTP | Improvement |
+|-------------|-------------|--------------|-------------|
+| **Leech Node** | Detected after breach | Trust scoring → auto route-around | ✅ Proactive |
+| **Packet Hallucination** | Possible | Witness signatures prevent | ✅ Eliminated |
+| **Timing Analysis** | Vulnerable | Jitter injection defeats | ✅ Protected |
+| **Battery Drain** | No optimization | 80% power savings | ✅ Optimized |
+| **Traffic Analysis** | Single mode | Adaptive polymorphism | ✅ Camouflaged |
+
+**Core Principle**: HTP remains the one and only protocol. These enhancements maintain backward compatibility while adding adaptive capabilities for 2026 and beyond.
+
+---
+
 ## References
 
 ### Implementation Files
