@@ -222,25 +222,27 @@ create_podman_network() {
     local net_name=$1
     local subnet=$2
     local gateway=$3
+    local interface_name=$4
 
-    echo -e "  → Creating network: ${BLUE}$net_name${NC} ($subnet)"
+    echo -e "  → Creating network: ${BLUE}$net_name${NC} ($subnet) - interface: $interface_name"
 
     # Remove if exists
     podman network exists "$net_name" 2>/dev/null && podman network rm "$net_name" 2>/dev/null || true
 
-    # Create network
+    # Create network with custom interface name
     podman network create \
         --driver bridge \
+        --interface-name="$interface_name" \
         --subnet="$subnet" \
         --gateway="$gateway" \
         "$net_name" > /dev/null
 }
 
-# Create only 4 networks (lightweight)
-create_podman_network "$NETWORK_WEB" "$SUBNET_WEB" "$GATEWAY_WEB"
-create_podman_network "$NETWORK_IAM" "$SUBNET_IAM" "$GATEWAY_IAM"
-create_podman_network "$NETWORK_DATABASE" "$SUBNET_DATABASE" "$GATEWAY_DATABASE"
-create_podman_network "$NETWORK_CACHE" "$SUBNET_CACHE" "$GATEWAY_CACHE"
+# Create only 4 networks (lightweight) with descriptive interface names
+create_podman_network "$NETWORK_WEB" "$SUBNET_WEB" "$GATEWAY_WEB" "hpweb0"
+create_podman_network "$NETWORK_IAM" "$SUBNET_IAM" "$GATEWAY_IAM" "hpiam0"
+create_podman_network "$NETWORK_DATABASE" "$SUBNET_DATABASE" "$GATEWAY_DATABASE" "hpdb0"
+create_podman_network "$NETWORK_CACHE" "$SUBNET_CACHE" "$GATEWAY_CACHE" "hpcache0"
 
 echo -e "${GREEN}✓${NC} Podman networks created"
 
