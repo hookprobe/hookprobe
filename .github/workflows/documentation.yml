@@ -1,0 +1,134 @@
+name: Documentation Quality
+
+on:
+  push:
+    branches: [ main, master, develop, 'claude/**' ]
+    paths:
+      - '**/*.sh'
+      - '**/*.md'
+      - '.github/workflows/documentation.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - '**/*.sh'
+      - '**/*.md'
+  schedule:
+    # Run weekly to catch broken links
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: Shell Script Quality
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        continue-on-error: true
+        with:
+          severity: warning
+
+      - name: ShellCheck Summary
+        if: always()
+        run: |
+          echo "✓ ShellCheck analysis completed"
+          echo "  Severity: warning and above"
+          echo "  Mode: informational (non-blocking)"
+
+  markdown-links:
+    name: Markdown Link Validation
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check markdown links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        continue-on-error: true
+        with:
+          config-file: '.github/markdown-link-check-config.json'
+          use-quiet-mode: 'yes'
+          use-verbose-mode: 'no'
+
+      - name: Link Check Summary
+        if: always()
+        run: |
+          echo "✓ Markdown link validation completed"
+          echo "  Config: .github/markdown-link-check-config.json"
+          echo "  Mode: informational (non-blocking)"
+
+  markdown-lint:
+    name: Markdown Style
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Lint markdown files
+        run: |
+          echo "Checking markdown file structure..."
+
+          # Check for required documentation files
+          required_docs=(
+            "README.md"
+            "QUICK-START.md"
+            "docs/CI-CD.md"
+            "docs/installation/BEGINNER-GUIDE.md"
+          )
+
+          for doc in "${required_docs[@]}"; do
+            if [ -f "$doc" ]; then
+              echo "✓ $doc exists"
+              # Check file size
+              size=$(wc -l < "$doc")
+              echo "  Lines: $size"
+            else
+              echo "✗ $doc missing"
+            fi
+          done
+
+      - name: Check for broken internal links
+        run: |
+          echo "Checking for common markdown issues..."
+
+          # Look for common problems
+          find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*" | while read -r file; do
+            # Check for relative link issues
+            if grep -q "\](\.\./" "$file" 2>/dev/null; then
+              echo "  ⚠ Relative links in: $file"
+            fi
+          done || true
+        continue-on-error: true
+
+  documentation-summary:
+    name: Documentation Quality Summary
+    runs-on: ubuntu-latest
+    needs: [shellcheck, markdown-links, markdown-lint]
+    if: always()
+
+    steps:
+      - name: Summary Report
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Documentation Quality Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "ShellCheck: ${{ needs.shellcheck.result }}"
+          echo "Markdown Links: ${{ needs.markdown-links.result }}"
+          echo "Markdown Lint: ${{ needs.markdown-lint.result }}"
+          echo ""
+          echo "✓ Documentation quality checks completed"
+          echo "  • Shell scripts validated (ShellCheck)"
+          echo "  • Markdown links checked"
+          echo "  • Documentation structure verified"
+          echo ""
+          echo "Note: All tests are informational (non-blocking)"

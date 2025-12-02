@@ -257,7 +257,7 @@ if __name__ == '__main__':
             print(f"  Country: {location.country} ({location.country_code})")
             print(f"  Region: {location.region}")
             print(f"  City: {location.city}")
-            print(f"  Coordinates: {location.latitude}, {location.longitude}")
+            print("  Coordinates: [REDACTED]")
             print(f"  ASN: AS{location.asn} ({location.asn_org})")
             print(f"  Timezone: {location.timezone}")
             print(f"  Accuracy: ±{location.accuracy_radius}km")
