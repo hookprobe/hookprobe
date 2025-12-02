@@ -7,7 +7,8 @@
 # Validates system requirements before installation
 #
 
-set -e
+# Note: Do NOT use 'set -e' here - we want to complete all checks even if some fail
+# set -e would cause the script to exit on first failure
 
 # Colors
 RED='\033[0;31m'
