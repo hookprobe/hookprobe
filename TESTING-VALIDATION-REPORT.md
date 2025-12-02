@@ -1,9 +1,15 @@
 # Testing & Installation Infrastructure Validation Report
 ## HookProbe MSSP - Raspberry Pi 4 Deployment
 
+> **📋 Document Purpose:** Technical validation report for developers and QA teams
+>
+> This document validates that testing infrastructure matches installation scripts.
+> For installation instructions, see [DOCUMENTATION-INDEX.md](DOCUMENTATION-INDEX.md)
+
 **Date:** 2025-12-02
 **Validation Status:** ✅ PASSED
 **Scope:** Testing infrastructure alignment with installation scripts
+**Audience:** Developers, QA teams, DevOps engineers
 
 ---
 
