@@ -21,6 +21,8 @@ class SecurityDevice(models.Model):
     """
 
     DEVICE_TYPE_CHOICES = [
+        ('edge', 'HookProbe Edge Node'),
+        ('validator', 'DSM Validator'),
         ('suricata', 'Suricata IDS/IPS'),
         ('zeek', 'Zeek Network Monitor'),
         ('openflow', 'OpenFlow Switch'),
@@ -35,6 +37,7 @@ class SecurityDevice(models.Model):
         ('offline', 'Offline'),
         ('degraded', 'Degraded'),
         ('maintenance', 'Maintenance'),
+        ('quarantine', 'Quarantine - Weight Divergence'),
     ]
 
     name = models.CharField(max_length=200)
@@ -42,10 +45,67 @@ class SecurityDevice(models.Model):
     ip_address = models.GenericIPAddressField()
     mac_address = models.CharField(max_length=17, blank=True)
 
+    # Liberty Architecture - Hardware Fingerprinting
+    hardware_fingerprint = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="SHA256 of CPU+MAC+disk+DMI+hostname (no TPM required)"
+    )
+    public_key_ed25519 = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Device Ed25519 public key"
+    )
+
+    # Neuro Protocol - Neural Resonance Authentication
+    neural_weight_fingerprint = models.CharField(
+        max_length=128,
+        blank=True,
+        help_text="SHA512 of current neural weight state"
+    )
+    last_posf_signature = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Last Proof-of-Sensor-Fusion signature"
+    )
+    weight_divergence_detected = models.BooleanField(
+        default=False,
+        help_text="Offline tampering detected via weight mismatch"
+    )
+
+    # HTP Protocol
+    htp_session_active = models.BooleanField(
+        default=False,
+        help_text="Active HTP session"
+    )
+    last_htp_heartbeat = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last HTP heartbeat"
+    )
+
+    # DSM - Decentralized Security Mesh
+    dsm_participant = models.BooleanField(
+        default=False,
+        help_text="Participating in DSM consensus"
+    )
+    validator_id = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Managing validator ID"
+    )
+    kyc_verified = models.BooleanField(
+        default=False,
+        help_text="KYC verified (validators only)"
+    )
+
     # Geographic location for MapBox visualization
     latitude = models.FloatField(help_text="Geographic latitude")
     longitude = models.FloatField(help_text="Geographic longitude")
     location_name = models.CharField(max_length=200, help_text="City, Country")
+    country = models.CharField(max_length=100, blank=True)
+    asn = models.IntegerField(null=True, blank=True, help_text="Autonomous System Number")
+    isp = models.CharField(max_length=200, blank=True, help_text="Internet Service Provider")
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='online')
     last_seen = models.DateTimeField(default=now)
