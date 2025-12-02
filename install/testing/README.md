@@ -35,6 +35,87 @@ This lightweight deployment installs only essential PODs for testing and develop
 
 ---
 
+## ⚠️ **CRITICAL REQUIREMENT: Cgroup Configuration** ⚠️
+
+**🔴 MANDATORY FOR RASPBERRY PI AND ARM64 SYSTEMS 🔴**
+
+Before running the installation, you **MUST** enable cgroup support in the boot configuration. Without this, Podman containers will fail with errors like:
+
+```
+crun: opening file `memory.max` for writing: No such file or directory
+```
+
+### Fix for Raspberry Pi OS / Debian-based Systems
+
+1. **Edit boot configuration:**
+
+   ```bash
+   # For Raspberry Pi OS Bookworm (Debian 12+)
+   sudo nano /boot/firmware/cmdline.txt
+
+   # For older Raspberry Pi OS
+   sudo nano /boot/cmdline.txt
+   ```
+
+2. **Add these parameters to the EXISTING line** (do NOT create a new line):
+
+   ```
+   cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 systemd.unified_cgroup_hierarchy=1
+   ```
+
+   **Example:** If your `cmdline.txt` contains:
+   ```
+   console=serial0,115200 console=tty1 root=PARTUUID=12345678-02 rootfstype=ext4 fsck.repair=yes rootwait
+   ```
+
+   It should become:
+   ```
+   console=serial0,115200 console=tty1 root=PARTUUID=12345678-02 rootfstype=ext4 fsck.repair=yes rootwait cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 systemd.unified_cgroup_hierarchy=1
+   ```
+
+3. **Save and reboot:**
+
+   ```bash
+   sudo reboot
+   ```
+
+4. **Verify cgroup is enabled after reboot:**
+
+   ```bash
+   cat /proc/cgroups | grep memory
+   # Should show: memory ... 1
+
+   ls /sys/fs/cgroup/memory.max
+   # Should exist without errors
+   ```
+
+### Fix for Ubuntu Server ARM64
+
+Ubuntu Server typically has cgroups enabled by default. If you encounter issues:
+
+1. **Edit GRUB configuration:**
+
+   ```bash
+   sudo nano /etc/default/grub
+   ```
+
+2. **Modify the `GRUB_CMDLINE_LINUX` line:**
+
+   ```
+   GRUB_CMDLINE_LINUX="cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 systemd.unified_cgroup_hierarchy=1"
+   ```
+
+3. **Update GRUB and reboot:**
+
+   ```bash
+   sudo update-grub
+   sudo reboot
+   ```
+
+**🔴 DO NOT SKIP THIS STEP 🔴** - Container deployment will fail without proper cgroup configuration.
+
+---
+
 ## Quick Installation
 
 ```bash
