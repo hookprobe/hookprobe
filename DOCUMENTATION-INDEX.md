@@ -63,8 +63,8 @@ This index provides a complete guide to HookProbe documentation, organized by us
 3. **Need detailed instructions?**
    → Read [INSTALLATION.md](docs/installation/INSTALLATION.md)
 
-4. **Deploy on Raspberry Pi 4?**
-   → See "Test HookProbe" section below (testing infrastructure)
+4. **Deploy on Raspberry Pi 4 (4GB)?**
+   → Use Method 3: [install/testing/README.md](install/testing/README.md) - Lightweight deployment
 
 #### Configure HookProbe
 1. **Edge deployment?**
@@ -147,13 +147,30 @@ sudo ./setup.sh
 
 **Documentation:** [install/edge/README.md](install/edge/README.md)
 
-### Method 3: Testing Environment (Development)
+### Method 3: Lightweight Testing/Development (Raspberry Pi 4)
+```bash
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+sudo ./install.sh
+# Select: 2) Select Deployment Mode
+# Choose: 3) Lightweight Testing/Development
+```
+**Features:**
+- ✅ Optimized for 4GB RAM systems
+- ✅ Only essential PODs (Web, IAM, Database, Cache)
+- ✅ Excludes heavy components (Monitoring, AI)
+- ✅ ~2.5GB total memory usage
+- ⚠️  **NOT FOR PRODUCTION USE**
+
+**Documentation:** [install/testing/README.md](install/testing/README.md)
+
+### Method 4: Testing Environment (Unit/Integration Tests)
 ```bash
 # Install Podman and dependencies
 sudo apt install podman python3-pip
 pip3 install podman-compose
 
-# Enable ARM64 emulation (for RPi4 testing)
+# Enable ARM64 emulation (for RPi4 testing on x86_64)
 podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 # Run tests
@@ -184,8 +201,9 @@ podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 | Platform | RAM | Documentation | Method |
 |----------|-----|---------------|--------|
-| **Raspberry Pi 4** (ARM64) | 4GB | [SOFTWARE-TESTING-STRATEGY.md](SOFTWARE-TESTING-STRATEGY.md) | Method 3 |
-| **Dev Machine** (x86_64 + QEMU) | 8GB+ | [SOFTWARE-TESTING-STRATEGY.md](SOFTWARE-TESTING-STRATEGY.md) | Method 3 |
+| **Raspberry Pi 4** (ARM64, lightweight) | 4GB | [install/testing/README.md](install/testing/README.md) | Method 3 |
+| **Dev Machine** (x86_64 + QEMU) | 8GB+ | [SOFTWARE-TESTING-STRATEGY.md](SOFTWARE-TESTING-STRATEGY.md) | Method 4 |
+| **CI/CD Pipeline** (GitHub Actions) | N/A | [.github/workflows/arm64-tests.yml](.github/workflows/arm64-tests.yml) | Method 4 |
 
 ---
 
@@ -198,8 +216,10 @@ podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
 | `install.sh` | Interactive installation wizard | Method 1 |
 | `install/edge/setup.sh` | Edge deployment script | Method 2 |
 | `install/cloud/setup.sh` | Cloud deployment script | Method 2 |
+| `install/testing/lightweight-setup.sh` | Lightweight testing/development script | Method 3 |
 | `install/edge/config.sh` | Edge configuration | Manual editing |
 | `install/cloud/config.sh` | Cloud configuration | Manual editing |
+| `install/testing/lightweight-config.sh` | Lightweight testing configuration | Method 3 |
 | `install/common/unified-config.sh` | Unified config system | All methods |
 
 ### Testing Scripts
