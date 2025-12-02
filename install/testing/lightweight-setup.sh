@@ -397,12 +397,12 @@ if ! podman image exists hookprobe-django:lightweight 2>/dev/null; then
     echo -e "  → Building Django image..."
 
     # Check if source code exists
-    if [ -f "$SCRIPT_DIR/../../src/web/Dockerfile" ]; then
+    if [ -f "$SCRIPT_DIR/../../src/web/Dockerfile.test" ]; then
         cd "$SCRIPT_DIR/../../src/web"
         podman build \
             --arch "$ARCH_TYPE" \
             -t hookprobe-django:lightweight \
-            -f Dockerfile \
+            -f Dockerfile.test \
             . || {
             echo -e "${RED}ERROR: Failed to build Django image${NC}"
             exit 1
@@ -410,7 +410,7 @@ if ! podman image exists hookprobe-django:lightweight 2>/dev/null; then
         echo -e "${GREEN}✓${NC} Django image built"
     else
         echo -e "${RED}ERROR: Django source code not found${NC}"
-        echo "Expected: $SCRIPT_DIR/../../src/web/Dockerfile"
+        echo "Expected: $SCRIPT_DIR/../../src/web/Dockerfile.test"
         exit 1
     fi
 else
