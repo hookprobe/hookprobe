@@ -226,8 +226,26 @@ create_podman_network() {
 
     echo -e "  → Creating network: ${BLUE}$net_name${NC} ($subnet) - interface: $interface_name"
 
-    # Remove if exists
-    podman network exists "$net_name" 2>/dev/null && podman network rm "$net_name" 2>/dev/null || true
+    # Check if network exists
+    if podman network exists "$net_name" 2>/dev/null; then
+        echo -e "    ${YELLOW}Network $net_name already exists, removing...${NC}"
+
+        # Find and disconnect any containers using this network
+        local containers=$(podman ps -a --filter "network=$net_name" --format "{{.Names}}" 2>/dev/null || true)
+        if [ -n "$containers" ]; then
+            echo -e "    ${YELLOW}Disconnecting containers from network...${NC}"
+            for container in $containers; do
+                echo -e "      • Disconnecting: $container"
+                podman network disconnect "$net_name" "$container" 2>/dev/null || true
+            done
+        fi
+
+        # Now remove the network
+        podman network rm "$net_name" 2>/dev/null || {
+            echo -e "    ${RED}Failed to remove network, forcing removal...${NC}"
+            podman network rm -f "$net_name" 2>/dev/null || true
+        }
+    fi
 
     # Create network with custom interface name
     podman network create \
@@ -236,6 +254,8 @@ create_podman_network() {
         --subnet="$subnet" \
         --gateway="$gateway" \
         "$net_name" > /dev/null
+
+    echo -e "    ${GREEN}✓${NC} Network created successfully"
 }
 
 # Create only 4 networks (lightweight) with descriptive interface names
