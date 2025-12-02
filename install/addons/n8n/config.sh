@@ -173,25 +173,43 @@ PORT_MCP=8889           # MCP server
 
 validate_n8n_config() {
     local errors=0
-    
+
+    # Check required variables are defined
+    local required_vars=(
+        "VOLUME_N8N_DATA"
+        "VOLUME_N8N_DB"
+        "VOLUME_N8N_REDIS"
+        "VOLUME_MCP_DATA"
+        "VOLUME_SCRAPING_CACHE"
+        "POD_008_NAME"
+        "NETWORK_POD008"
+    )
+
+    for var in "${required_vars[@]}"; do
+        if [ -z "${!var:-}" ]; then
+            echo "ERROR: Required variable $var is not defined"
+            errors=$((errors + 1))
+        fi
+    done
+
     if [ "$N8N_BASIC_AUTH_PASSWORD" == "CHANGE_ME_N8N_PASSWORD" ]; then
         echo "ERROR: Please change N8N_BASIC_AUTH_PASSWORD"
         errors=$((errors + 1))
     fi
-    
+
     if [ "$N8N_DB_POSTGRESDB_PASSWORD" == "CHANGE_ME_N8N_DB_PASSWORD" ]; then
         echo "ERROR: Please change N8N_DB_POSTGRESDB_PASSWORD"
         errors=$((errors + 1))
     fi
-    
+
     if [ "$OPENAI_API_KEY" == "CHANGE_ME_OPENAI_KEY" ]; then
         echo "WARNING: OPENAI_API_KEY not configured (AI features will be limited)"
     fi
-    
+
     if [ "$ANTHROPIC_API_KEY" == "CHANGE_ME_ANTHROPIC_KEY" ]; then
         echo "WARNING: ANTHROPIC_API_KEY not configured (AI features will be limited)"
     fi
-    
+
     return $errors
 }
 
