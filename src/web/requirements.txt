@@ -53,5 +53,5 @@ numpy==1.26.3
 
 # Frontend/Templates
 django-widget-tweaks==1.5.0
-django-crispy-forms==2.1
+django-crispy-forms==2.3
 crispy-bootstrap4==2024.10
