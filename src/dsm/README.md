@@ -1,12 +1,24 @@
 # HookProbe DSM: Decentralized Security Mesh
 
-**Python implementation of the DSM distributed security architecture**
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+</p>
+
+**Pillar 2 of HookProbe: Collective Intelligence**
+
+> *One brain powered by many edge nodes*
+
+---
 
 ## Overview
 
-This module implements the Decentralized Security Mesh (DSM) described in the [DSM Whitepaper](../../docs/architecture/dsm-whitepaper.md) and [DSM Implementation Architecture](../../docs/architecture/dsm-implementation.md).
+Traditional SOC: One analyst watches 1000 networks (impossible).
+**DSM**: 1000 nodes share intelligence instantly (unstoppable).
 
-DSM transforms HookProbe from a standalone security platform into a distributed, cryptographically verifiable security mesh operating as **"one brain powered by many"** edge nodes.
+This module implements the Decentralized Security Mesh — a Byzantine fault-tolerant distributed SOC where **one node's detection becomes everyone's protection in seconds**.
+
+📖 **Architecture**: [DSM Whitepaper](../../docs/architecture/dsm-whitepaper.md) | [Implementation](../../docs/architecture/dsm-implementation.md)
 
 ## Architecture
 
