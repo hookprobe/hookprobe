@@ -463,6 +463,9 @@ echo -e "  → Starting Django application..."
 podman run -d --restart always \
     --pod "$POD_WEB" \
     --name "${POD_WEB}-django" \
+    --network="$NETWORK_DATABASE" \
+    --network="$NETWORK_CACHE" \
+    --network="$NETWORK_IAM" \
     -e DJANGO_ENV="production" \
     -e DJANGO_SETTINGS_MODULE="hookprobe.settings.production" \
     -e DJANGO_SECRET_KEY="$DJANGO_SECRET_KEY" \
@@ -471,11 +474,11 @@ podman run -d --restart always \
     -e POSTGRES_DB="$POSTGRES_DB" \
     -e POSTGRES_USER="$POSTGRES_USER" \
     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-    -e POSTGRES_HOST="${POD_DATABASE}-postgres.dns.podman" \
+    -e POSTGRES_HOST="$IP_DATABASE_POSTGRES" \
     -e POSTGRES_PORT="5432" \
-    -e REDIS_HOST="${POD_CACHE}-redis.dns.podman" \
+    -e REDIS_HOST="$IP_CACHE_REDIS" \
     -e REDIS_PORT="6379" \
-    -e LOGTO_ENDPOINT="http://${POD_IAM}-logto.dns.podman:${PORT_LOGTO}" \
+    -e LOGTO_ENDPOINT="http://$IP_IAM_LOGTO:${PORT_LOGTO}" \
     -e LOGTO_APP_ID="$LOGTO_APP_ID" \
     -e LOGTO_APP_SECRET="$LOGTO_APP_SECRET" \
     -v "$VOLUME_DJANGO_STATIC:/app/staticfiles" \
