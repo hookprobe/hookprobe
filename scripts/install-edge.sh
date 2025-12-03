@@ -1260,6 +1260,14 @@ deploy_web_pod() {
         --publish 80:80 \
         --publish 443:443
 
+    # Determine if we should use standalone mode (no external database)
+    # Standalone mode uses SQLite instead of PostgreSQL
+    local standalone_mode="false"
+    if [ "${ENABLE_DATABASE:-true}" != "true" ]; then
+        standalone_mode="true"
+        echo "  Database POD disabled - Django will use SQLite (standalone mode)"
+    fi
+
     # Deploy Django container
     if [ "$django_image" = "hookprobe-web-django:edge" ]; then
         # Use built container with proper entrypoint
@@ -1280,6 +1288,9 @@ deploy_web_pod() {
             -e REDIS_PORT="6379" \
             -e GUNICORN_WORKERS="2" \
             -e GUNICORN_TIMEOUT="120" \
+            -e STANDALONE_MODE="$standalone_mode" \
+            -e DB_WAIT_TIMEOUT="30" \
+            -e REDIS_WAIT_TIMEOUT="15" \
             "$django_image"
     else
         # Fallback: minimal Django status page
@@ -1327,17 +1338,65 @@ URLSEOF
             '
     fi
 
-    # Deploy Nginx + NAXSI
+    # Create nginx configuration
+    local nginx_conf_dir="/tmp/hookprobe-nginx-config"
+    mkdir -p "$nginx_conf_dir"
+
+    # Copy nginx config if available, otherwise create inline
+    local nginx_conf_src="$REPO_ROOT/install/addons/webserver/nginx/default.conf"
+    if [ -f "$nginx_conf_src" ]; then
+        cp "$nginx_conf_src" "$nginx_conf_dir/default.conf"
+    else
+        cat > "$nginx_conf_dir/default.conf" << 'NGINXCONF'
+upstream django {
+    server 127.0.0.1:8000;
+}
+server {
+    listen 80;
+    server_name _;
+    client_max_body_size 100M;
+
+    location /static/ {
+        alias /app/staticfiles/;
+        expires 30d;
+    }
+
+    location /media/ {
+        alias /app/media/;
+    }
+
+    location /nginx-health {
+        access_log off;
+        return 200 "OK\n";
+    }
+
+    location / {
+        proxy_pass http://django;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+}
+NGINXCONF
+    fi
+
+    # Deploy Nginx with proxy configuration
     podman run -d \
         --pod hookprobe-web \
         --name hookprobe-web-nginx \
         --memory 256M \
         --restart unless-stopped \
-        --health-cmd "wget -q --spider http://localhost:80 || exit 1" \
+        --health-cmd "wget -q --spider http://localhost:80/nginx-health || exit 1" \
         --health-interval 30s \
         --health-timeout 10s \
         --health-retries 3 \
         --health-start-period 30s \
+        -v "$nginx_conf_dir/default.conf:/etc/nginx/conf.d/default.conf:ro" \
         docker.io/library/nginx:alpine
 
     echo -e "${GREEN}[x]${NC} POD-001 deployed"
