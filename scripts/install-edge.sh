@@ -369,6 +369,142 @@ detect_container_environment() {
     return 1  # Not in LXC
 }
 
+get_cni_version() {
+    # Get installed CNI plugins version
+    # Returns version string or "none" if not installed
+
+    local cni_version="none"
+
+    # Check common CNI plugin locations
+    if [ -f /usr/lib/cni/bridge ]; then
+        # Try to get version from binary (some CNI plugins support --version)
+        cni_version=$(/usr/lib/cni/bridge 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+    elif [ -f /opt/cni/bin/bridge ]; then
+        cni_version=$(/opt/cni/bin/bridge 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+    fi
+
+    # Fallback: check package manager for version
+    if [ -z "$cni_version" ] || [ "$cni_version" = "none" ]; then
+        if command -v dpkg &> /dev/null; then
+            cni_version=$(dpkg -l | grep -E 'containernetworking-plugins|cni-plugins' | awk '{print $3}' | head -1 || echo "")
+        elif command -v rpm &> /dev/null; then
+            cni_version=$(rpm -q containernetworking-plugins --queryformat '%{VERSION}' 2>/dev/null || echo "")
+        fi
+    fi
+
+    if [ -z "$cni_version" ]; then
+        echo "none"
+    else
+        echo "$cni_version"
+    fi
+}
+
+compare_versions() {
+    # Compare two version strings
+    # Returns: 0 if $1 >= $2, 1 if $1 < $2
+    local ver1="$1"
+    local ver2="$2"
+
+    # Handle "none" case
+    if [ "$ver1" = "none" ]; then
+        return 1
+    fi
+
+    # Use sort -V for version comparison
+    local lowest=$(printf '%s\n%s' "$ver1" "$ver2" | sort -V | head -n1)
+    if [ "$lowest" = "$ver2" ]; then
+        return 0  # ver1 >= ver2
+    else
+        return 1  # ver1 < ver2
+    fi
+}
+
+check_and_upgrade_cni() {
+    # Check CNI version and upgrade if needed for Podman compatibility
+    # Podman 4.x requires CNI plugins 1.0.0+
+
+    local required_version="1.0.0"
+    local current_version=$(get_cni_version)
+
+    echo "Checking CNI plugins version..."
+    echo "  Current version: $current_version"
+    echo "  Required version: $required_version+"
+
+    if [ "$current_version" = "none" ]; then
+        echo -e "${YELLOW}⚠ CNI plugins not found - will be installed with Podman${NC}"
+        return 0
+    fi
+
+    if compare_versions "$current_version" "$required_version"; then
+        echo -e "${GREEN}✓${NC} CNI plugins version is compatible"
+        return 0
+    fi
+
+    echo -e "${YELLOW}⚠ CNI plugins version $current_version is outdated${NC}"
+    echo "  Podman requires CNI plugins $required_version or newer."
+    echo ""
+
+    # Attempt auto-upgrade
+    echo "Attempting to upgrade CNI plugins..."
+
+    if command -v apt-get &> /dev/null; then
+        # Debian/Ubuntu
+        apt-get update -qq
+        if apt-get install -y containernetworking-plugins 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} CNI plugins upgraded via apt"
+            return 0
+        fi
+        # Try alternative package name
+        if apt-get install -y golang-github-containernetworking-plugins 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} CNI plugins upgraded via apt (alternative package)"
+            return 0
+        fi
+    elif command -v dnf &> /dev/null; then
+        # Fedora/RHEL 8+
+        if dnf install -y containernetworking-plugins 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} CNI plugins upgraded via dnf"
+            return 0
+        fi
+    elif command -v yum &> /dev/null; then
+        # RHEL 7/CentOS
+        if yum install -y containernetworking-plugins 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} CNI plugins upgraded via yum"
+            return 0
+        fi
+    fi
+
+    # Manual installation fallback
+    echo -e "${YELLOW}⚠ Package manager upgrade failed, attempting manual install...${NC}"
+
+    local cni_url="https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')-v1.4.0.tgz"
+    local cni_dir="/opt/cni/bin"
+
+    mkdir -p "$cni_dir"
+
+    if command -v curl &> /dev/null; then
+        if curl -sSL "$cni_url" | tar -xz -C "$cni_dir" 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} CNI plugins installed manually to $cni_dir"
+            return 0
+        fi
+    elif command -v wget &> /dev/null; then
+        if wget -qO- "$cni_url" | tar -xz -C "$cni_dir" 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} CNI plugins installed manually to $cni_dir"
+            return 0
+        fi
+    fi
+
+    echo -e "${RED}✗ Failed to upgrade CNI plugins${NC}"
+    echo ""
+    echo "Please manually upgrade CNI plugins to version 1.0.0 or newer:"
+    echo "  Option 1: apt install containernetworking-plugins"
+    echo "  Option 2: dnf install containernetworking-plugins"
+    echo "  Option 3: Download from https://github.com/containernetworking/plugins/releases"
+    echo ""
+    echo "Falling back to host networking mode..."
+    USE_HOST_NETWORK=true
+    return 1
+}
+
 create_networks() {
     echo "Creating Podman networks..."
 
@@ -376,6 +512,17 @@ create_networks() {
     if detect_container_environment; then
         echo -e "${YELLOW}⚠ LXC/LXD container detected${NC}"
         echo "  Custom Podman networks may not work in LXC containers."
+        echo ""
+
+        # Check and upgrade CNI if needed
+        check_and_upgrade_cni
+
+        if [ "$USE_HOST_NETWORK" = true ]; then
+            echo -e "${YELLOW}⚠ Using host network mode due to CNI/container limitations${NC}"
+            return 0
+        fi
+
+        echo ""
         echo "  Attempting network creation..."
     fi
 
