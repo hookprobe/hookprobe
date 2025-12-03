@@ -12,45 +12,53 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
 # Load configuration
 if [ -f "$SCRIPT_DIR/config.sh" ]; then
     source "$SCRIPT_DIR/config.sh"
-else
-    echo "WARNING: config.sh not found, using defaults..."
-    QSEC_BRIDGE="qsec-bridge"
-    POD_WEB="hookprobe-web-dmz"
-    POD_IAM="hookprobe-iam"
-    POD_DATABASE="hookprobe-database"
-    POD_CACHE="hookprobe-cache"
-    POD_MONITORING="hookprobe-monitoring"
-    POD_SECURITY="hookprobe-security"
-    POD_HONEYPOT="hookprobe-honeypot"
 fi
+
+# Load OVS bridge config if exists
+if [ -f /etc/hookprobe/ovs-bridge.conf ]; then
+    source /etc/hookprobe/ovs-bridge.conf
+fi
+
+# Default values (new unified naming)
+OVS_BRIDGE_NAME="${OVS_BRIDGE_NAME:-hookprobe}"
+QSEC_BRIDGE="${QSEC_BRIDGE:-qsec-bridge}"  # Legacy support
 
 echo "============================================================"
 echo "   HOOKPROBE v5.0 INFRASTRUCTURE CLEANUP"
 echo "============================================================"
 echo ""
-echo "⚠️  WARNING: This will DESTROY all HookProbe v5.0 infrastructure!"
+echo -e "${RED}WARNING: This will DESTROY all HookProbe v5.0 infrastructure!${NC}"
 echo ""
 echo "Components to be removed:"
-echo "  ❌ All PODs and containers"
-echo "  ❌ All volumes (databases, logs, data)"
-echo "  ❌ All Podman networks"
-echo "  ❌ OVS bridge and VXLAN tunnels"
-echo "  ❌ Firewall rules (nftables)"
-echo "  ❌ XDP DDoS mitigation program"
-echo "  ❌ Kernel configuration"
+echo -e "  ${RED}[x]${NC} All PODs and containers"
+echo -e "  ${RED}[x]${NC} All volumes (databases, logs, data)"
+echo -e "  ${RED}[x]${NC} All Podman networks"
+echo -e "  ${RED}[x]${NC} OVS bridge ($OVS_BRIDGE_NAME) and VXLAN tunnels"
+echo -e "  ${RED}[x]${NC} OpenFlow flows"
+echo -e "  ${RED}[x]${NC} Firewall rules (nftables)"
+echo -e "  ${RED}[x]${NC} XDP DDoS mitigation program"
+echo -e "  ${RED}[x]${NC} Kernel configuration"
+echo -e "  ${RED}[x]${NC} Configuration files (/etc/hookprobe)"
 echo ""
 read -p "Are you ABSOLUTELY sure? (yes/no): " confirm
 
 if [ "$confirm" != "yes" ]; then
-    echo "✓ Uninstall cancelled."
+    echo -e "${GREEN}[x]${NC} Uninstall cancelled."
     exit 0
 fi
 
 echo ""
-echo "⏰ Starting cleanup in 5 seconds... (Ctrl+C to cancel)"
+echo -e "${YELLOW}Starting cleanup in 5 seconds... (Ctrl+C to cancel)${NC}"
 sleep 5
 
 # ============================================================
@@ -59,27 +67,53 @@ sleep 5
 echo ""
 echo "[STEP 1] Removing PODs..."
 
-POD_NAMES=(
-    "$POD_WEB"
-    "$POD_IAM"
-    "$POD_DATABASE"
-    "$POD_CACHE"
-    "$POD_MONITORING"
-    "$POD_SECURITY"
-    "$POD_HONEYPOT"
+# New unified POD names
+NEW_POD_NAMES=(
+    "hookprobe-web"
+    "hookprobe-iam"
+    "hookprobe-database"
+    "hookprobe-cache"
+    "hookprobe-monitoring"
+    "hookprobe-detection"
+    "hookprobe-ai"
+    "hookprobe-neuro"
 )
 
-for pod in "${POD_NAMES[@]}"; do
+# Legacy POD names
+LEGACY_POD_NAMES=(
+    "hookprobe-web-dmz"
+    "hookprobe-security"
+    "hookprobe-honeypot"
+)
+
+# Remove all new PODs
+for pod in "${NEW_POD_NAMES[@]}"; do
     if podman pod exists "$pod" 2>/dev/null; then
-        echo "  → Removing: $pod"
+        echo -e "  ${YELLOW}→${NC} Removing: $pod"
         podman pod stop "$pod" 2>/dev/null || true
         podman pod rm -f "$pod" 2>/dev/null || true
     fi
 done
 
+# Remove legacy PODs
+for pod in "${LEGACY_POD_NAMES[@]}"; do
+    if podman pod exists "$pod" 2>/dev/null; then
+        echo -e "  ${YELLOW}→${NC} Removing (legacy): $pod"
+        podman pod stop "$pod" 2>/dev/null || true
+        podman pod rm -f "$pod" 2>/dev/null || true
+    fi
+done
+
+# Remove any hookprobe-* pods we might have missed
+podman pod ls --format "{{.Name}}" 2>/dev/null | grep -E "^hookprobe" | while read -r pod; do
+    echo -e "  ${YELLOW}→${NC} Removing: $pod"
+    podman pod stop "$pod" 2>/dev/null || true
+    podman pod rm -f "$pod" 2>/dev/null || true
+done
+
 # Remove any remaining containers
-podman container prune -f || true
-echo "✓ All PODs removed"
+podman container prune -f 2>/dev/null || true
+echo -e "${GREEN}[x]${NC} All PODs removed"
 
 # ============================================================
 # STEP 2: REMOVE NETWORKS
@@ -87,7 +121,20 @@ echo "✓ All PODs removed"
 echo ""
 echo "[STEP 2] Removing networks..."
 
-NETWORK_NAMES=(
+# New unified network names (hookprobe-*)
+NEW_NETWORK_NAMES=(
+    "hookprobe-web"
+    "hookprobe-iam"
+    "hookprobe-database"
+    "hookprobe-cache"
+    "hookprobe-monitoring"
+    "hookprobe-detection"
+    "hookprobe-ai"
+    "hookprobe-neuro"
+)
+
+# Legacy network names
+LEGACY_NETWORK_NAMES=(
     "web-dmz-net"
     "iam-net"
     "database-net"
@@ -97,15 +144,30 @@ NETWORK_NAMES=(
     "honeypot-net"
 )
 
-for network in "${NETWORK_NAMES[@]}"; do
+# Remove new networks
+for network in "${NEW_NETWORK_NAMES[@]}"; do
     if podman network exists "$network" 2>/dev/null; then
-        echo "  → Removing: $network"
+        echo -e "  ${YELLOW}→${NC} Removing: $network"
         podman network rm "$network" 2>/dev/null || true
     fi
 done
 
+# Remove legacy networks
+for network in "${LEGACY_NETWORK_NAMES[@]}"; do
+    if podman network exists "$network" 2>/dev/null; then
+        echo -e "  ${YELLOW}→${NC} Removing (legacy): $network"
+        podman network rm "$network" 2>/dev/null || true
+    fi
+done
+
+# Remove any hookprobe-* networks we might have missed
+podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^hookprobe" | while read -r network; do
+    echo -e "  ${YELLOW}→${NC} Removing: $network"
+    podman network rm "$network" 2>/dev/null || true
+done
+
 podman network prune -f || true
-echo "✓ Networks removed"
+echo -e "${GREEN}[x]${NC} Networks removed"
 
 # ============================================================
 # STEP 3: REMOVE VOLUMES
@@ -115,20 +177,20 @@ read -p "Remove all volumes? THIS DELETES ALL DATA! (yes/no): " remove_volumes
 
 if [ "$remove_volumes" == "yes" ]; then
     echo "[STEP 3] Removing volumes..."
-    
+
     VOLUMES=$(podman volume ls -q | grep -i hookprobe 2>/dev/null || true)
-    
+
     if [ -n "$VOLUMES" ]; then
         for volume in $VOLUMES; do
-            echo "  → Removing: $volume"
+            echo -e "  ${YELLOW}→${NC} Removing: $volume"
             podman volume rm "$volume" 2>/dev/null || true
         done
     fi
-    
+
     podman volume prune -f || true
-    echo "✓ All volumes removed (DATA DELETED)"
+    echo -e "${GREEN}[x]${NC} All volumes removed (DATA DELETED)"
 else
-    echo "[STEP 3] ✓ Volumes preserved"
+    echo -e "[STEP 3] ${GREEN}[x]${NC} Volumes preserved"
 fi
 
 # ============================================================
@@ -140,13 +202,13 @@ echo "[STEP 4] Removing XDP DDoS mitigation..."
 if [ -n "$PHYSICAL_HOST_INTERFACE" ]; then
     # Remove XDP program from interface
     ip link set dev "$PHYSICAL_HOST_INTERFACE" xdp off 2>/dev/null || true
-    echo "✓ XDP program removed from $PHYSICAL_HOST_INTERFACE"
+    echo -e "${GREEN}[x]${NC} XDP program removed from $PHYSICAL_HOST_INTERFACE"
 fi
 
 # Remove XDP files
 if [ -d /opt/hookprobe/xdp ]; then
     rm -rf /opt/hookprobe/xdp
-    echo "✓ XDP files removed"
+    echo -e "${GREEN}[x]${NC} XDP files removed"
 fi
 
 # ============================================================
@@ -155,21 +217,66 @@ fi
 echo ""
 echo "[STEP 5] Removing OVS configuration..."
 
-if ovs-vsctl br-exists "$QSEC_BRIDGE" 2>/dev/null; then
-    VXLAN_PORTS=$(ovs-vsctl list-ports "$QSEC_BRIDGE" 2>/dev/null | grep -i vxlan || true)
-    
-    if [ -n "$VXLAN_PORTS" ]; then
-        echo "$VXLAN_PORTS" | while read port; do
-            echo "  → Removing VXLAN: $port"
-            ovs-vsctl --if-exists del-port "$QSEC_BRIDGE" "$port"
-        done
+# Function to remove OVS bridge and all its components
+remove_ovs_bridge() {
+    local bridge_name="$1"
+
+    if ! command -v ovs-vsctl &> /dev/null; then
+        echo -e "  ${YELLOW}!${NC} OVS not installed, skipping bridge removal"
+        return 0
     fi
-    
-    echo "  → Removing bridge: $QSEC_BRIDGE"
-    ovs-vsctl --if-exists del-br "$QSEC_BRIDGE"
+
+    if ovs-vsctl br-exists "$bridge_name" 2>/dev/null; then
+        echo -e "  ${CYAN}Found bridge: $bridge_name${NC}"
+
+        # Remove all OpenFlow flows first
+        echo -e "  ${YELLOW}→${NC} Clearing OpenFlow flows..."
+        ovs-ofctl del-flows "$bridge_name" 2>/dev/null || true
+
+        # List and remove all ports (including VXLAN tunnels)
+        local ports=$(ovs-vsctl list-ports "$bridge_name" 2>/dev/null || true)
+
+        if [ -n "$ports" ]; then
+            echo "$ports" | while read -r port; do
+                if [ -n "$port" ]; then
+                    # Get port type for display
+                    local port_type=$(ovs-vsctl get interface "$port" type 2>/dev/null || echo "unknown")
+                    echo -e "  ${YELLOW}→${NC} Removing port: $port (type: $port_type)"
+                    ovs-vsctl --if-exists del-port "$bridge_name" "$port"
+                fi
+            done
+        fi
+
+        # Remove the bridge itself
+        echo -e "  ${YELLOW}→${NC} Removing bridge: $bridge_name"
+        ovs-vsctl --if-exists del-br "$bridge_name"
+        echo -e "  ${GREEN}[x]${NC} Bridge $bridge_name removed"
+    else
+        echo -e "  ${YELLOW}!${NC} Bridge $bridge_name not found"
+    fi
+}
+
+# Remove new unified bridge (hookprobe)
+remove_ovs_bridge "$OVS_BRIDGE_NAME"
+
+# Remove legacy bridge (qsec-bridge) if different
+if [ "$QSEC_BRIDGE" != "$OVS_BRIDGE_NAME" ]; then
+    remove_ovs_bridge "$QSEC_BRIDGE"
 fi
 
-echo "✓ OVS configuration removed"
+# Clean up any orphaned OVS ports
+echo -e "  ${YELLOW}→${NC} Cleaning orphaned OVS ports..."
+ovs-vsctl show 2>/dev/null | grep -E "hookprobe|qsec" | while read -r line; do
+    echo -e "  ${YELLOW}!${NC} Found orphaned: $line"
+done
+
+# Remove VXLAN monitoring script
+if [ -f /usr/local/bin/hookprobe-vxlan-monitor ]; then
+    echo -e "  ${YELLOW}→${NC} Removing VXLAN monitor script"
+    rm -f /usr/local/bin/hookprobe-vxlan-monitor
+fi
+
+echo -e "${GREEN}[x]${NC} OVS configuration removed"
 
 # ============================================================
 # STEP 6: CLEAN FIREWALL (NFTABLES)
@@ -179,13 +286,13 @@ echo "[STEP 6] Cleaning firewall..."
 
 if [ -f /etc/nftables/hookprobe-v5.nft ]; then
     rm -f /etc/nftables/hookprobe-v5.nft
-    echo "✓ nftables configuration removed"
+    echo -e "${GREEN}[x]${NC} nftables configuration removed"
 fi
 
 # Flush all nftables rules
 nft flush ruleset 2>/dev/null || true
 
-echo "✓ Firewall cleaned"
+echo -e "${GREEN}[x]${NC} Firewall cleaned"
 
 # ============================================================
 # STEP 7: REMOVE KERNEL CONFIGURATION
@@ -195,19 +302,19 @@ echo "[STEP 7] Removing kernel configuration..."
 
 if [ -f /etc/sysctl.d/99-hookprobe-v5.conf ]; then
     rm -f /etc/sysctl.d/99-hookprobe-v5.conf
-    echo "✓ Kernel sysctl configuration removed"
+    echo -e "${GREEN}[x]${NC} Kernel sysctl configuration removed"
 fi
 
 if [ -f /etc/modules-load.d/hookprobe-v5.conf ]; then
     rm -f /etc/modules-load.d/hookprobe-v5.conf
-    echo "✓ Kernel modules configuration removed"
+    echo -e "${GREEN}[x]${NC} Kernel modules configuration removed"
 fi
 
 # ============================================================
-# STEP 8: REMOVE BUILD DIRECTORIES
+# STEP 8: REMOVE BUILD AND CONFIG DIRECTORIES
 # ============================================================
 echo ""
-echo "[STEP 8] Removing build directories..."
+echo "[STEP 8] Removing build and config directories..."
 
 BUILD_DIRS=(
     "/tmp/hookprobe-django-build"
@@ -221,11 +328,26 @@ BUILD_DIRS=(
 
 for dir in "${BUILD_DIRS[@]}"; do
     if [ -d "$dir" ]; then
+        echo -e "  ${YELLOW}→${NC} Removing: $dir"
         rm -rf "$dir"
     fi
 done
 
-echo "✓ Build directories removed"
+# Remove HookProbe configuration directory
+if [ -d /etc/hookprobe ]; then
+    echo ""
+    read -p "Remove /etc/hookprobe configuration (contains secrets)? (yes/no): " remove_config
+
+    if [ "$remove_config" == "yes" ]; then
+        echo -e "  ${YELLOW}→${NC} Removing /etc/hookprobe (secrets, OVS config, VXLAN PSKs)"
+        rm -rf /etc/hookprobe
+        echo -e "  ${GREEN}[x]${NC} Configuration removed"
+    else
+        echo -e "  ${YELLOW}!${NC} Configuration preserved at /etc/hookprobe"
+    fi
+fi
+
+echo -e "${GREEN}[x]${NC} Build directories removed"
 
 # ============================================================
 # STEP 9: REMOVE IMAGES (OPTIONAL)
@@ -242,7 +364,7 @@ if [ "$remove_images" == "yes" ]; then
     if [ -n "$IMAGES" ]; then
         echo "$IMAGES" | while read -r image; do
             if [ -n "$image" ]; then
-                echo "  Removing: $image"
+                echo -e "  ${YELLOW}→${NC} Removing: $image"
                 podman rmi -f "$image" 2>/dev/null || true
             fi
         done
@@ -250,7 +372,7 @@ if [ "$remove_images" == "yes" ]; then
 
     # Also remove any dangling images
     podman image prune -af 2>/dev/null || true
-    echo "✓ Images removed"
+    echo -e "${GREEN}[x]${NC} Images removed"
 fi
 
 # ============================================================
@@ -262,7 +384,7 @@ read -p "Stop OVS service? (yes/no): " stop_ovs
 if [ "$stop_ovs" == "yes" ]; then
     systemctl stop openvswitch 2>/dev/null || true
     systemctl disable openvswitch 2>/dev/null || true
-    echo "✓ OVS stopped"
+    echo -e "${GREEN}[x]${NC} OVS stopped"
 fi
 
 # ============================================================
@@ -273,11 +395,11 @@ echo "[FINAL] System cleanup..."
 
 podman system prune -af --volumes 2>/dev/null || true
 
-ip netns list 2>/dev/null | grep -i hookprobe | while read ns; do
+ip netns list 2>/dev/null | grep -i hookprobe | while read -r ns; do
     ip netns delete "$ns" 2>/dev/null || true
 done
 
-echo "✓ System cleanup complete"
+echo -e "${GREEN}[x]${NC} System cleanup complete"
 
 # ============================================================
 # SUMMARY
@@ -287,23 +409,30 @@ echo "============================================================"
 echo "   HOOKPROBE v5.0 CLEANUP COMPLETE!"
 echo "============================================================"
 echo ""
-echo "✅ Removed:"
-echo "  ✓ All 7 PODs"
+echo -e "${GREEN}Removed:${NC}"
+echo -e "  ${GREEN}[x]${NC} All PODs (hookprobe-web, iam, database, cache, monitoring, detection, ai, neuro)"
 if [ "$remove_volumes" == "yes" ]; then
-    echo "  ✓ All data (PERMANENTLY DELETED)"
+    echo -e "  ${GREEN}[x]${NC} All data (PERMANENTLY DELETED)"
 else
-    echo "  ⊘ Volumes preserved"
+    echo -e "  ${YELLOW}[-]${NC} Volumes preserved"
 fi
-echo "  ✓ Networks and OVS bridge"
-echo "  ✓ Firewall rules (nftables)"
-echo "  ✓ XDP DDoS mitigation"
-echo "  ✓ Kernel configuration"
+echo -e "  ${GREEN}[x]${NC} Networks (hookprobe-* podman networks)"
+echo -e "  ${GREEN}[x]${NC} OVS bridge ($OVS_BRIDGE_NAME) and VXLAN tunnels"
+echo -e "  ${GREEN}[x]${NC} OpenFlow flows"
+echo -e "  ${GREEN}[x]${NC} Firewall rules (nftables)"
+echo -e "  ${GREEN}[x]${NC} XDP DDoS mitigation"
+echo -e "  ${GREEN}[x]${NC} Kernel configuration"
 if [ "$remove_images" == "yes" ]; then
-    echo "  ✓ Container images"
+    echo -e "  ${GREEN}[x]${NC} Container images"
+fi
+if [ "$remove_config" == "yes" ]; then
+    echo -e "  ${GREEN}[x]${NC} Configuration and secrets (/etc/hookprobe)"
+else
+    echo -e "  ${YELLOW}[-]${NC} Configuration preserved (/etc/hookprobe)"
 fi
 echo ""
 echo "To reinstall:"
 echo "  1. Review config.sh"
-echo "  2. Run: sudo ./install.sh (and select option 1)"
+echo "  2. Run: sudo ./install-edge.sh"
 echo ""
 echo "============================================================"
