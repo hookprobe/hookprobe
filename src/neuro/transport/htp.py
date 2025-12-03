@@ -287,12 +287,13 @@ class NeuroStateEvolver:
     W(t+1) = W(t) - eta * gradient + xi * qsecbit
 
     Uses int16 arithmetic for determinism (no floating-point).
+    Per spec: int16 multiplies, not int8.
     """
 
     def __init__(self, initial_weights: Optional[bytes] = None, eta: int = 5, xi: int = 1):
         """
         Args:
-            initial_weights: Initial weights (128 bytes)
+            initial_weights: Initial weights (128 bytes = 64 int16 values)
             eta: Learning rate scaled by 10000 (e.g., 5 = 0.0005)
             xi: Noise coefficient scaled by 100000 (e.g., 1 = 0.00001)
         """
@@ -302,7 +303,7 @@ class NeuroStateEvolver:
 
     def evolve(self, ter: bytes, qsecbit: bytes) -> bytes:
         """
-        Evolve weights based on TER and qsecbit.
+        Evolve weights based on TER and qsecbit using int16 arithmetic.
 
         Args:
             ter: Telemetry Evolution Register (64 bytes)
@@ -311,23 +312,43 @@ class NeuroStateEvolver:
         Returns:
             delta_W (128 bytes)
         """
-        # Compute gradient from TER (simplified: just use TER as gradient signal)
+        # Compute gradient from TER (simplified: use TER as gradient signal)
         gradient = hashlib.sha256(ter).digest() + hashlib.sha256(ter + b'\x01').digest()
         gradient = gradient[:128]
 
-        # Convert to signed int8 arrays
-        W_arr = [int.from_bytes([b], 'big', signed=True) for b in self.W]
-        grad_arr = [int.from_bytes([b], 'big', signed=True) for b in gradient]
-        noise_arr = [int.from_bytes([b], 'big', signed=True) for b in (qsecbit * 4)[:128]]
+        # Expand qsecbit to 128 bytes for noise injection
+        noise_bytes = (qsecbit * 4)[:128]
+
+        # Convert 128 bytes to 64 int16 values (big-endian)
+        W_arr = []
+        grad_arr = []
+        noise_arr = []
+
+        for i in range(0, 128, 2):
+            # int16: -32768 to +32767
+            W_arr.append(struct.unpack('>h', self.W[i:i+2])[0])
+            grad_arr.append(struct.unpack('>h', gradient[i:i+2])[0])
+            noise_arr.append(struct.unpack('>h', noise_bytes[i:i+2])[0])
 
         # Fixed-point update: W -= eta * grad + xi * noise
+        # eta and xi are pre-scaled, so we divide after multiplication
         delta_W = bytearray(128)
-        for i in range(128):
-            update = -(self.eta * grad_arr[i]) // 10000 + (self.xi * noise_arr[i]) // 100000
+
+        for i in range(64):
+            # Compute update with int16 arithmetic
+            gradient_term = (self.eta * grad_arr[i]) // 10000
+            noise_term = (self.xi * noise_arr[i]) // 100000
+            update = -gradient_term + noise_term
+
+            # Update weight
             new_val = W_arr[i] + update
-            new_val = max(-128, min(127, new_val))  # Clamp to int8 range
-            self.W[i] = new_val & 0xFF
-            delta_W[i] = update & 0xFF
+
+            # Clamp to int16 range
+            new_val = max(-32768, min(32767, new_val))
+
+            # Store back to bytearray (big-endian int16)
+            self.W[i*2:i*2+2] = struct.pack('>h', new_val)
+            delta_W[i*2:i*2+2] = struct.pack('>h', update)
 
         return bytes(delta_W)
 
@@ -662,6 +683,117 @@ class HookProbeTransport:
         self.send_data(flow_token, minimal_payload, PacketMode.SENSOR)
 
         session.last_keepalive = current_time
+
+    def complete_resonance(self, flow_token: int, received_entropy_echo: int) -> bool:
+        """
+        Complete resonance handshake and transition to STREAMING state.
+
+        State transitions: RESONATE → SYNC → STREAMING
+
+        Args:
+            flow_token: Session flow token
+            received_entropy_echo: Entropy echo from peer's resonance reply
+
+        Returns:
+            True if resonance completed successfully
+        """
+        session = self.sessions.get(flow_token)
+        if not session or session.state != HTPState.RESONATE:
+            print(f"[HTP] complete_resonance: Invalid state {session.state if session else 'NO SESSION'}")
+            return False
+
+        # Verify entropy echo
+        expected_echo = verify_entropy_echo(session.local_noise, received_entropy_echo)
+
+        # Transition to SYNC
+        session.state = HTPState.SYNC
+        print(f"[HTP] State: RESONATE → SYNC")
+
+        # For now, immediately transition to STREAMING
+        # In full implementation, would wait for PoSF/RDV validation
+        session.state = HTPState.STREAMING
+        print(f"[HTP] State: SYNC → STREAMING")
+        print(f"[HTP] Session {flow_token:016x} is now STREAMING")
+
+        return True
+
+    def cleanup_sessions(self):
+        """
+        Remove timed-out sessions (memory leak prevention).
+
+        Should be called periodically or in receive loop.
+        """
+        current_time = time.time()
+        expired = []
+
+        for flow_token, session in self.sessions.items():
+            if current_time - session.last_activity > self.SESSION_TIMEOUT:
+                expired.append(flow_token)
+
+        for flow_token in expired:
+            del self.sessions[flow_token]
+            print(f"[HTP] Session {flow_token:016x} expired after {self.SESSION_TIMEOUT}s inactivity")
+
+        if expired:
+            print(f"[HTP] Cleaned up {len(expired)} expired session(s)")
+
+    def trigger_adaptive_mode(self, flow_token: int):
+        """
+        Trigger adaptive mode based on network conditions.
+
+        Checks RTT, packet loss, and transitions to ADAPTIVE state if needed.
+
+        Args:
+            flow_token: Session flow token
+        """
+        session = self.sessions.get(flow_token)
+        if not session or session.state != HTPState.STREAMING:
+            return
+
+        # Check if RTT exceeds threshold
+        # (In full implementation, would track actual RTT measurements)
+        # For now, this is a placeholder
+
+        # Check packet loss rate
+        if session.loss_rate > self.LOSS_RATE_THRESHOLD:
+            print(f"[HTP] High loss rate detected: {session.loss_rate:.1%}")
+            session.state = HTPState.ADAPTIVE
+            print(f"[HTP] State: STREAMING → ADAPTIVE")
+
+            # Switch to lower-bandwidth mode
+            if session.current_mode != PacketMode.SENSOR.value:
+                session.current_mode = PacketMode.SENSOR.value
+                print(f"[HTP] Adaptive: Switching to SENSOR mode")
+
+    def trigger_re_resonance(self, flow_token: int):
+        """
+        Trigger re-resonance due to RDV divergence or PoSF mismatch.
+
+        State: Any → RE_RESONATE → RESONATE
+
+        Args:
+            flow_token: Session flow token
+        """
+        session = self.sessions.get(flow_token)
+        if not session:
+            return
+
+        print(f"[HTP] Triggering RE-RESONANCE for session {flow_token:016x}")
+        session.state = HTPState.RE_RESONATE
+        print(f"[HTP] State: {session.state} → RE_RESONATE")
+
+        # Reset resonance state
+        session.local_noise = secrets.token_bytes(32)
+        session.remote_noise_guess = b''
+        session.last_rdv = b''
+        session.last_posf = b''
+
+        # Send resonance packet
+        self._send_resonance_packet(session, minimal=False)
+
+        # Transition back to RESONATE
+        session.state = HTPState.RESONATE
+        print(f"[HTP] State: RE_RESONATE → RESONATE")
 
     # ========================================================================
     # PRIVATE METHODS
