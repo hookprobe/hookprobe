@@ -284,8 +284,8 @@ Vector will stream data from edge ClickHouse → Backend Kafka → Backend Doris
 
 - [Apache Doris Documentation](https://doris.apache.org/docs/summary/basic-summary)
 - [HookProbe Main README](../../../README.md)
-- [ClickHouse Integration Analysis](../../../Documents/ClickHouse-Integration-Analysis.md)
-- [MSSP Architecture Design](../../../Documents/Backend-Architecture.md) _(coming soon)_
+- [ClickHouse Integration Guide](../guides/clickhouse-integration.md)
+- [ClickHouse Quick Start](../guides/clickhouse-quick-start.md)
 
 ---
 
