@@ -232,22 +232,40 @@ check_network() {
 
 check_dns() {
     # Check if DNS resolution works.
-
     #
-
+    # Uses multiple methods for reliability:
+    #   1. getent hosts - standard glibc resolver
+    #   2. ping with hostname - fallback test
+    #
     # Returns:
+    #   0 if DNS works
+    #   1 if DNS fails
 
-    # 0 if DNS works
-
-    # 1 if DNS fails
-
-    if nslookup github.com &> /dev/null || host github.com &> /dev/null; then
+    # Method 1: Use getent (most reliable, uses system resolver)
+    if getent hosts github.com &> /dev/null; then
         echo -e "${GREEN}✓${NC} DNS resolution OK"
         return 0
-    else
-        echo -e "${YELLOW}⚠${NC} DNS resolution issues (may affect installation)"
-        return 1
     fi
+
+    # Method 2: Try ping with hostname (tests DNS indirectly)
+    if ping -c 1 -W 2 github.com &> /dev/null; then
+        echo -e "${GREEN}✓${NC} DNS resolution OK"
+        return 0
+    fi
+
+    # Method 3: Fallback to nslookup/host if available
+    if command -v nslookup &> /dev/null && nslookup github.com &> /dev/null; then
+        echo -e "${GREEN}✓${NC} DNS resolution OK"
+        return 0
+    fi
+
+    if command -v host &> /dev/null && host github.com &> /dev/null; then
+        echo -e "${GREEN}✓${NC} DNS resolution OK"
+        return 0
+    fi
+
+    echo -e "${YELLOW}!${NC} DNS resolution issues (may affect installation)"
+    return 1
 }
 
 # ============================================================
