@@ -91,45 +91,103 @@ detect_platform() {
 # ============================================================
 
 check_cgroup_enabled() {
-    # Check if cgroup v2 memory controller is enabled.
+    # Check if cgroups are enabled and functional.
+    #
+    # Uses multiple detection methods:
+    #   1. stat -fc %T /sys/fs/cgroup/ - detects cgroup filesystem type
+    #   2. mount | grep cgroup - verifies cgroup is mounted
+    #   3. /proc/cgroups check for memory controller
     #
     # Returns:
     #   0 if enabled
     #   1 if not enabled
 
-    # Check for cgroup v2 memory controller
-    if [ -f /sys/fs/cgroup/memory.max ]; then
-        return 0  # Enabled
-    fi
-
-    # Check for cgroup v1 memory controller (older systems)
-    if [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
-        return 0  # Enabled (v1)
-    fi
-
-    # Check /proc/cgroups
-    if [ -f /proc/cgroups ]; then
-        if grep -q "^memory.*1$" /proc/cgroups; then
-            return 0  # Enabled
+    # Method 1: Check cgroup filesystem type using stat
+    # cgroup2fs = cgroup v2, tmpfs/cgroup = cgroup v1
+    if [ -d /sys/fs/cgroup ]; then
+        local cgroup_type=$(stat -fc %T /sys/fs/cgroup/ 2>/dev/null)
+        if [ "$cgroup_type" = "cgroup2fs" ]; then
+            # cgroup v2 detected, check if memory controller is available
+            if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+                if grep -q "memory" /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
+                    return 0  # cgroup v2 with memory controller
+                fi
+            fi
+            # cgroup v2 mounted but might not have memory controller enabled
+            # Still return success as cgroup is functional
+            return 0
+        elif [ "$cgroup_type" = "tmpfs" ] || [ "$cgroup_type" = "cgroup" ]; then
+            # cgroup v1 or hybrid - check if memory controller exists
+            if [ -d /sys/fs/cgroup/memory ] || [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+                return 0  # cgroup v1 with memory controller
+            fi
         fi
     fi
 
-    return 1  # Not enabled
+    # Method 2: Check if cgroup is mounted using mount command
+    if mount | grep -q "cgroup" 2>/dev/null; then
+        # cgroup is mounted - check for memory controller
+        if mount | grep -q "cgroup.*memory" 2>/dev/null || \
+           mount | grep -q "cgroup2" 2>/dev/null; then
+            return 0  # Memory cgroup is mounted
+        fi
+        # cgroup mounted but memory might not be enabled
+        # Check /proc/cgroups as fallback
+    fi
+
+    # Method 3: Check /proc/cgroups for memory controller status
+    if [ -f /proc/cgroups ]; then
+        # Format: name hierarchy num_cgroups enabled
+        # We check if memory is enabled (last column = 1)
+        if awk '$1 == "memory" && $4 == 1 {exit 0} END {exit 1}' /proc/cgroups 2>/dev/null; then
+            return 0  # Memory controller enabled in kernel
+        fi
+    fi
+
+    return 1  # cgroups not properly enabled
 }
 
 get_cgroup_version() {
-    # Detect cgroup version (v1 or v2).
+    # Detect cgroup version (v1, v2, or hybrid).
+    #
+    # Uses stat -fc %T to detect filesystem type
     #
     # Outputs:
-    #   "v2" or "v1" or "none"
+    #   "v2" or "v1" or "hybrid" or "none"
 
-    if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
-        echo "v2"
-    elif [ -d /sys/fs/cgroup/memory ]; then
-        echo "v1"
-    else
+    if [ ! -d /sys/fs/cgroup ]; then
         echo "none"
+        return
     fi
+
+    local cgroup_type=$(stat -fc %T /sys/fs/cgroup/ 2>/dev/null)
+
+    case "$cgroup_type" in
+        cgroup2fs)
+            echo "v2"
+            ;;
+        tmpfs)
+            # Hybrid mode - cgroup v1 with v2 unified hierarchy
+            if [ -d /sys/fs/cgroup/unified ]; then
+                echo "hybrid"
+            else
+                echo "v1"
+            fi
+            ;;
+        cgroup)
+            echo "v1"
+            ;;
+        *)
+            # Fallback: check for v2 controller file
+            if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+                echo "v2"
+            elif [ -d /sys/fs/cgroup/memory ]; then
+                echo "v1"
+            else
+                echo "none"
+            fi
+            ;;
+    esac
 }
 
 get_boot_config_path() {
