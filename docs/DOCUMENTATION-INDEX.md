@@ -1,8 +1,16 @@
 # HookProbe Documentation Index
 
-**Complete Navigation Guide to HookProbe Documentation**
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em><br><br>
+  <strong>Enterprise-Grade AI Security for $150 · Democratizing Cybersecurity for Millions</strong>
+</p>
 
-Welcome to the HookProbe documentation! This index provides a comprehensive overview of all available documentation organized by topic.
+---
+
+**Complete Navigation Guide to HookProbe v5.0 "Liberty" Documentation**
+
+Welcome to HookProbe — the world's first Neurosurgical Cybersecurity Platform. This index provides comprehensive documentation organized by topic and audience.
 
 ---
 
@@ -208,7 +216,7 @@ For contributors and developers.
 ### Contributing
 - **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
 - **[CI/CD Documentation](CI-CD.md)** - Testing and workflows
-- **[CI/CD Summary](../CI-CD-SUMMARY.md)** - Quick reference
+- **[CI/CD Changelog](CHANGELOG-CICD.md)** - CI/CD updates and changes
 
 ### Development
 - **[Source Code Overview](../src/README.md)** - Code structure
@@ -282,7 +290,7 @@ Technical reference and detailed specifications.
 1. [Contributing Guide](CONTRIBUTING.md)
 2. [Source Code Overview](../src/README.md)
 3. [CI/CD Documentation](CI-CD.md)
-4. [Development Setup](../src/web/SETUP_GUIDE.md)
+4. [Web Development](../src/web/README.md)
 
 ---
 
