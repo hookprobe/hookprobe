@@ -389,7 +389,7 @@ By 2030:
   <strong>HookProbe v5.0 "Liberty"</strong> · MIT License<br><br>
   <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
   <a href="https://hookprobe.com">Website</a> ·
-  <a href="mailto:security@hookprobe.com">Security</a>
+  <a href="mailto:qsecbit@hookprobe.com">Security</a>
 </p>
 
 ---
