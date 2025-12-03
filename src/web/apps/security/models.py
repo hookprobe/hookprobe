@@ -49,6 +49,8 @@ class SecurityEvent(models.Model):
             models.Index(fields=['-timestamp']),
             models.Index(fields=['severity', '-timestamp']),
             models.Index(fields=['src_ip']),
+            models.Index(fields=['attack_type', '-timestamp']),  # Fast filtering by attack type
+            models.Index(fields=['source_type', '-timestamp']),  # Fast filtering by source
         ]
 
     def __str__(self):
