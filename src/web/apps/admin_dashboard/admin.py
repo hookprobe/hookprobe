@@ -210,7 +210,7 @@ class N8NWebhookLogAdmin(admin.ModelAdmin):
         """Display success status with icon."""
         if obj.success:
             return format_html('<span style="color: #27ae60;"> Success</span>')
-        return format_html('<span style="color: #e74c3c;">L Failed</span>')
+        return format_html('<span style="color: #e74c3c;">✗ Failed</span>')
     success_display.short_description = 'Status'
 
     def has_add_permission(self, request):
