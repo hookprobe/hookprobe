@@ -352,42 +352,122 @@ install_dependencies() {
 # NETWORK CREATION
 # ============================================================
 
+# Global flag for network mode
+USE_HOST_NETWORK=false
+
+detect_container_environment() {
+    # Detect if running inside LXC/LXD container
+    if [ -f /proc/1/environ ] && grep -qa "container=lxc" /proc/1/environ 2>/dev/null; then
+        return 0  # LXC detected
+    fi
+    if [ -f /run/systemd/container ] && grep -q "lxc" /run/systemd/container 2>/dev/null; then
+        return 0  # LXC detected
+    fi
+    if grep -qa "lxc" /proc/1/cgroup 2>/dev/null; then
+        return 0  # LXC detected
+    fi
+    return 1  # Not in LXC
+}
+
 create_networks() {
     echo "Creating Podman networks..."
+
+    # Check if running in LXC container
+    if detect_container_environment; then
+        echo -e "${YELLOW}⚠ LXC/LXD container detected${NC}"
+        echo "  Custom Podman networks may not work in LXC containers."
+        echo "  Attempting network creation..."
+    fi
 
     # Remove existing networks if present
     podman network rm web-net database-net cache-net iam-net neuro-net 2>/dev/null || true
 
-    # Create networks
-    podman network create --subnet 10.250.1.0/24 web-net
-    podman network create --subnet 10.250.2.0/24 database-net
-    podman network create --subnet 10.250.3.0/24 cache-net
-    podman network create --subnet 10.250.4.0/24 iam-net
-    podman network create --subnet 10.250.10.0/24 neuro-net
+    # Try to create networks with error handling
+    local network_failed=false
 
-    if [ "$ENABLE_MONITORING" = true ]; then
-        podman network create --subnet 10.250.5.0/24 monitoring-net
+    if ! podman network create --subnet 10.250.1.0/24 web-net 2>/dev/null; then
+        echo -e "${YELLOW}⚠ Failed to create web-net with custom subnet${NC}"
+        # Try without subnet (simpler network)
+        if ! podman network create web-net 2>/dev/null; then
+            echo -e "${YELLOW}⚠ Failed to create web-net${NC}"
+            network_failed=true
+        fi
     fi
 
-    if [ "$ENABLE_AI" = true ]; then
-        podman network create --subnet 10.250.6.0/24 detection-net
-        podman network create --subnet 10.250.7.0/24 ai-net
+    if [ "$network_failed" = false ]; then
+        podman network create --subnet 10.250.2.0/24 database-net 2>/dev/null || \
+            podman network create database-net 2>/dev/null || true
+        podman network create --subnet 10.250.3.0/24 cache-net 2>/dev/null || \
+            podman network create cache-net 2>/dev/null || true
+        podman network create --subnet 10.250.4.0/24 iam-net 2>/dev/null || \
+            podman network create iam-net 2>/dev/null || true
+        podman network create --subnet 10.250.10.0/24 neuro-net 2>/dev/null || \
+            podman network create neuro-net 2>/dev/null || true
+
+        if [ "$ENABLE_MONITORING" = true ]; then
+            podman network create --subnet 10.250.5.0/24 monitoring-net 2>/dev/null || \
+                podman network create monitoring-net 2>/dev/null || true
+        fi
+
+        if [ "$ENABLE_AI" = true ]; then
+            podman network create --subnet 10.250.6.0/24 detection-net 2>/dev/null || \
+                podman network create detection-net 2>/dev/null || true
+            podman network create --subnet 10.250.7.0/24 ai-net 2>/dev/null || \
+                podman network create ai-net 2>/dev/null || true
+        fi
     fi
 
-    echo -e "${GREEN}✓${NC} Networks created"
+    # Verify networks were created
+    if ! podman network exists web-net 2>/dev/null; then
+        echo -e "${YELLOW}⚠ Custom networks unavailable - using host network mode${NC}"
+        echo "  This is common in LXC/LXD containers or restricted environments."
+        echo "  Pods will use host networking instead."
+        USE_HOST_NETWORK=true
+    else
+        echo -e "${GREEN}✓${NC} Networks created"
+    fi
 }
 
 # ============================================================
 # POD DEPLOYMENT
 # ============================================================
 
+# Helper function to get network argument
+get_network_arg() {
+    local network_name="$1"
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        echo "--network host"
+    else
+        echo "--network $network_name"
+    fi
+}
+
+# Helper to get database/redis host (localhost for host network, IP for custom)
+get_db_host() {
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        echo "127.0.0.1"
+    else
+        echo "10.250.2.2"
+    fi
+}
+
+get_redis_host() {
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        echo "127.0.0.1"
+    else
+        echo "10.250.3.2"
+    fi
+}
+
 deploy_web_pod() {
     echo "Deploying POD-001: Web Server..."
+
+    local network_arg=$(get_network_arg "web-net")
 
     # Create pod
     podman pod create \
         --name hookprobe-web \
-        --network web-net \
+        $network_arg \
         --publish 80:80 \
         --publish 443:443
 
@@ -403,9 +483,9 @@ deploy_web_pod() {
         --health-retries 3 \
         --health-start-period 60s \
         -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
-        -e DATABASE_HOST="10.250.2.2" \
+        -e DATABASE_HOST="$(get_db_host)" \
         -e DATABASE_PORT="5432" \
-        -e REDIS_HOST="10.250.3.2" \
+        -e REDIS_HOST="$(get_redis_host)" \
         -e REDIS_PORT="6379" \
         docker.io/library/python:3.11-slim \
         bash -c "pip install django gunicorn && python -m gunicorn --bind 0.0.0.0:8000"
@@ -429,9 +509,11 @@ deploy_web_pod() {
 deploy_iam_pod() {
     echo "Deploying POD-002: IAM (Logto)..."
 
+    local network_arg=$(get_network_arg "iam-net")
+
     podman pod create \
         --name hookprobe-iam \
-        --network iam-net \
+        $network_arg \
         --publish 3001:3001 \
         --publish 3002:3002
 
@@ -445,7 +527,7 @@ deploy_iam_pod() {
         --health-timeout 10s \
         --health-retries 3 \
         --health-start-period 60s \
-        -e DB_URL="postgresql://hookprobe:hookprobe@10.250.2.2:5432/logto" \
+        -e DB_URL="postgresql://hookprobe:hookprobe@$(get_db_host):5432/logto" \
         docker.io/svhd/logto:latest
 
     echo -e "${GREEN}✓${NC} POD-002 deployed"
@@ -454,9 +536,18 @@ deploy_iam_pod() {
 deploy_database_pod() {
     echo "Deploying POD-003: Database (PostgreSQL)..."
 
+    local network_arg=$(get_network_arg "database-net")
+    local publish_arg=""
+
+    # Publish port when using host network so other containers can connect
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        publish_arg="--publish 5432:5432"
+    fi
+
     podman pod create \
         --name hookprobe-database \
-        --network database-net
+        $network_arg \
+        $publish_arg
 
     podman run -d \
         --pod hookprobe-database \
@@ -480,9 +571,18 @@ deploy_database_pod() {
 deploy_cache_pod() {
     echo "Deploying POD-005: Cache (Redis)..."
 
+    local network_arg=$(get_network_arg "cache-net")
+    local publish_arg=""
+
+    # Publish port when using host network
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        publish_arg="--publish 6379:6379"
+    fi
+
     podman pod create \
         --name hookprobe-cache \
-        --network cache-net
+        $network_arg \
+        $publish_arg
 
     podman run -d \
         --pod hookprobe-cache \
@@ -504,9 +604,11 @@ deploy_cache_pod() {
 deploy_neuro_pod() {
     echo "Deploying POD-010: Neuro Protocol (Qsecbit + HTP)..."
 
+    local network_arg=$(get_network_arg "neuro-net")
+
     podman pod create \
         --name hookprobe-neuro \
-        --network neuro-net
+        $network_arg
 
     # Qsecbit container
     podman run -d \
@@ -530,9 +632,11 @@ deploy_neuro_pod() {
 deploy_monitoring_pod() {
     echo "Deploying POD-004: Monitoring (Grafana + VictoriaMetrics)..."
 
+    local network_arg=$(get_network_arg "monitoring-net")
+
     podman pod create \
         --name hookprobe-monitoring \
-        --network monitoring-net \
+        $network_arg \
         --publish 3000:3000 \
         --publish 8428:8428
 
@@ -568,9 +672,11 @@ deploy_monitoring_pod() {
 deploy_detection_pod() {
     echo "Deploying POD-006: Detection (Suricata, Zeek, Snort)..."
 
+    local network_arg=$(get_network_arg "detection-net")
+
     podman pod create \
         --name hookprobe-detection \
-        --network detection-net
+        $network_arg
 
     podman run -d \
         --pod hookprobe-detection \
@@ -591,9 +697,11 @@ deploy_detection_pod() {
 deploy_ai_pod() {
     echo "Deploying POD-007: AI Analysis (Machine Learning)..."
 
+    local network_arg=$(get_network_arg "ai-net")
+
     podman pod create \
         --name hookprobe-ai \
-        --network ai-net
+        $network_arg
 
     podman run -d \
         --pod hookprobe-ai \
