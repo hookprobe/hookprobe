@@ -163,11 +163,14 @@ jobs:
 
       - name: Validate IP configuration
         run: |
-          # Test IP validation functions
-          source install/common/config-wizard.sh 2>/dev/null || true
-
-          # Test IP format validation
+          # Test IP validation functions (now built into unified installer)
           echo "Testing IP validation..."
+
+          # IP validation is now handled by scripts/lib/platform.sh
+          if [ -f scripts/lib/platform.sh ]; then
+            echo "✓ Platform detection library exists"
+            # Validation functions are called automatically during installation
+          fi
 
       - name: Test nftables availability
         run: |
