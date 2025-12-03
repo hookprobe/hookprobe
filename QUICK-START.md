@@ -1,5 +1,17 @@
 # HookProbe Quick Start Guide
 
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em><br><br>
+  <strong>Enterprise-Grade AI Security for $150 · Democratizing Cybersecurity for Millions</strong>
+</p>
+
+---
+
+**Get enterprise-grade security running in 15 minutes** — protecting your network with the same capabilities that cost enterprises $400,000+/year.
+
+---
+
 ## 🆕 First Time with Linux?
 
 **📘 [Complete Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)**
