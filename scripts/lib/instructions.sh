@@ -109,14 +109,13 @@ show_cgroup_instructions() {
 
 show_low_ram_warning() {
     # Show warning when RAM is below minimum requirements.
-
     #
-
     # Args:
-
-    # $1 - detected RAM in GB
-
-    # $2 - minimum required RAM in GB
+    #   $1 - detected RAM in GB
+    #   $2 - minimum required RAM in GB
+    #
+    # Uses environment variables:
+    #   ENABLE_WEBSERVER, ENABLE_IAM, ENABLE_MONITORING, ENABLE_AI
 
     local detected=$1
     local required=$2
@@ -126,18 +125,29 @@ show_low_ram_warning() {
     echo -e "${RED}└────────────────────────────────────────────────────────────┘${NC}"
     echo ""
     echo -e "Your system has ${RED}${detected}GB${NC} RAM"
-    echo -e "Minimum required: ${GREEN}${required}GB${NC} RAM"
+    echo -e "Minimum required: ${GREEN}${required}GB${NC} RAM for selected components"
     echo ""
-    echo "HookProbe Edge lightweight profile:"
-    echo "  • Web + Database + Cache: ~1.15GB"
-    echo "  • Neuro Protocol + IAM:   ~0.6GB"
-    echo "  • Total POD usage:        ~1.75GB"
-    echo "  • OS/kernel overhead:     ~1GB minimum"
+    echo "Selected components RAM usage:"
+    echo "  • Core (Database + Cache + Neuro): ~1.5GB  [always]"
+
+    [ "${ENABLE_WEBSERVER:-false}" = true ] && \
+    echo "  • Web Server (Django + Nginx):     ~0.5GB  [selected]"
+
+    [ "${ENABLE_IAM:-false}" = true ] && \
+    echo "  • IAM (Logto):                     ~0.5GB  [selected]"
+
+    [ "${ENABLE_MONITORING:-false}" = true ] && \
+    echo "  • Monitoring (Grafana + Victoria): ~2GB    [selected]"
+
+    [ "${ENABLE_AI:-false}" = true ] && \
+    echo "  • AI Detection (Suricata + ML):    ~4GB    [selected]"
+
+    echo "  • OS/kernel overhead:              ~1GB"
     echo ""
     echo "Recommendations:"
-    echo "  1. Use Raspberry Pi 4/5 with 3GB+ RAM"
-    echo "  2. Or use x86_64 system with 3GB+ RAM"
-    echo "  3. Close other applications to free up memory"
+    echo "  1. Use a system with ${required}GB+ RAM"
+    echo "  2. Disable some optional components"
+    echo "  3. For Raspberry Pi: Use 4GB+ model for web, 8GB+ for AI"
     echo ""
 }
 
@@ -228,21 +238,22 @@ show_ai_enable_warning() {
 
 show_success_message() {
     # Show success message after installation.
-
     #
+    # Args (legacy, now uses env vars):
+    #   $1 - enable_ai (true/false)
+    #   $2 - enable_monitoring (true/false)
+    #
+    # Environment variables:
+    #   ENABLE_WEBSERVER, ENABLE_IAM, ENABLE_MONITORING, ENABLE_AI
 
-    # Args:
-
-    # $1 - enable_ai (true/false)
-
-    # $2 - enable_monitoring (true/false)
-
-    local enable_ai=$1
-    local enable_monitoring=$2
+    local enable_ai=${ENABLE_AI:-${1:-false}}
+    local enable_monitoring=${ENABLE_MONITORING:-${2:-false}}
+    local enable_webserver=${ENABLE_WEBSERVER:-true}
+    local enable_iam=${ENABLE_IAM:-true}
 
     echo ""
     echo -e "${GREEN}┌────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${GREEN}│ ✓ HOOKPROBE EDGE NODE INSTALLED SUCCESSFULLY              │${NC}"
+    echo -e "${GREEN}│ [x] HOOKPROBE EDGE NODE INSTALLED SUCCESSFULLY            │${NC}"
     echo -e "${GREEN}└────────────────────────────────────────────────────────────┘${NC}"
     echo ""
     echo -e "${CYAN}Configuration Summary:${NC}"
@@ -251,27 +262,33 @@ show_success_message() {
     echo "  CPU Cores:   $CPU_CORES"
     echo ""
     echo -e "${CYAN}Installed Components:${NC}"
-    echo "  ${GREEN}✓${NC} POD-001: Web Server (Django + Nginx + NAXSI WAF)"
-    echo "  ${GREEN}✓${NC} POD-002: IAM (Logto authentication)"
-    echo "  ${GREEN}✓${NC} POD-003: Database (PostgreSQL 16)"
-    echo "  ${GREEN}✓${NC} POD-005: Cache (Redis 7)"
-    echo "  ${GREEN}✓${NC} POD-010: Neuro Protocol (Qsecbit + HTP)"
+    echo "  ${GREEN}[x]${NC} POD-003: Database (PostgreSQL 16)"
+    echo "  ${GREEN}[x]${NC} POD-005: Cache (Redis 7)"
+    echo "  ${GREEN}[x]${NC} POD-010: Neuro Protocol (Qsecbit + HTP)"
 
-    if [ "$enable_ai" = true ]; then
-        echo "  ${GREEN}✓${NC} POD-006: Detection (Suricata, Zeek, Snort)"
-        echo "  ${GREEN}✓${NC} POD-007: AI Analysis (Machine Learning)"
+    if [ "$enable_webserver" = true ]; then
+        echo "  ${GREEN}[x]${NC} POD-001: Web Server (Django + Nginx + NAXSI WAF)"
+    fi
+
+    if [ "$enable_iam" = true ]; then
+        echo "  ${GREEN}[x]${NC} POD-002: IAM (Logto authentication)"
     fi
 
     if [ "$enable_monitoring" = true ]; then
-        echo "  ${GREEN}✓${NC} POD-004: Monitoring (Grafana, VictoriaMetrics)"
+        echo "  ${GREEN}[x]${NC} POD-004: Monitoring (Grafana, VictoriaMetrics)"
+    fi
+
+    if [ "$enable_ai" = true ]; then
+        echo "  ${GREEN}[x]${NC} POD-006: Detection (Suricata, Zeek, Snort)"
+        echo "  ${GREEN}[x]${NC} POD-007: AI Analysis (Machine Learning)"
     fi
 
     echo ""
     echo -e "${CYAN}Security Features:${NC}"
-    echo "  ${GREEN}✓${NC} Qsecbit:     Enabled (quantum-resistant crypto)"
-    echo "  ${GREEN}✓${NC} HTP:         Enabled (adaptive transport)"
-    echo "  ${GREEN}✓${NC} P2 Adaptive: RTT, bandwidth, stress monitoring"
-    echo "  $([ "$enable_ai" = true ] && echo "${GREEN}✓${NC} AI Detection: Enabled" || echo "${YELLOW}✗${NC} AI Detection: Disabled (use --enable-ai)")"
+    echo "  ${GREEN}[x]${NC} Qsecbit:     Enabled (quantum-resistant crypto)"
+    echo "  ${GREEN}[x]${NC} HTP:         Enabled (adaptive transport)"
+    echo "  ${GREEN}[x]${NC} P2 Adaptive: RTT, bandwidth, stress monitoring"
+    [ "$enable_ai" = true ] && echo "  ${GREEN}[x]${NC} AI Detection: Enabled" || echo "  ${YELLOW}[-]${NC} AI Detection: Disabled"
     echo ""
 
     echo -e "${CYAN}Next Steps:${NC}"
@@ -280,24 +297,12 @@ show_success_message() {
     echo -e "     ${BLUE}podman pod ls${NC}"
     echo ""
     echo "  2. View container logs:"
-    echo -e "     ${BLUE}podman logs -f hookprobe-web-django${NC}"
-    echo ""
-    echo "  3. Access web interface:"
-    echo -e "     ${BLUE}http://localhost${NC} or ${BLUE}http://$(hostname -I | awk '{print $1}')${NC}"
-    echo ""
-    echo "  4. Check Qsecbit status:"
     echo -e "     ${BLUE}podman logs -f hookprobe-neuro-qsecbit${NC}"
     echo ""
 
-    if [ "$enable_ai" = false ]; then
-        echo -e "${YELLOW}To enable AI later:${NC}"
-        echo -e "  ${BLUE}sudo bash $(readlink -f "$0") --enable-ai${NC}"
-        echo ""
-    fi
-
-    if [ "$enable_monitoring" = false ]; then
-        echo -e "${YELLOW}To enable monitoring later:${NC}"
-        echo -e "  ${BLUE}sudo bash $(readlink -f "$0") --enable-monitoring${NC}"
+    if [ "$enable_webserver" = true ]; then
+        echo "  3. Access web interface:"
+        echo -e "     ${BLUE}http://localhost${NC} or ${BLUE}http://$(hostname -I | awk '{print $1}')${NC}"
         echo ""
     fi
 
