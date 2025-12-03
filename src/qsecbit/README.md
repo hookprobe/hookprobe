@@ -1065,8 +1065,8 @@ mysql -h 10.100.1.10 -P 9030 -u root -p
 
 - **Main Documentation**: `/home/user/hookprobe/README.md`
 - **CLAUDE.md**: AI assistant guide
-- **Backend Deployment**: `Documents/backend/README.md`
-- **ClickHouse Integration**: `Documents/ClickHouse-Quick-Start.md`
+- **Backend Deployment**: `docs/installation/cloud-deployment.md`
+- **ClickHouse Integration**: `docs/guides/clickhouse-quick-start.md`
 
 ---
 
