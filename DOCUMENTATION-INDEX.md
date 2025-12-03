@@ -1,9 +1,17 @@
 # HookProbe Documentation Index
 
-**Last Updated:** 2025-12-02
-**Version:** 5.0.1
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em><br><br>
+  <strong>Enterprise-Grade AI Security for $150 · Democratizing Cybersecurity for Millions</strong>
+</p>
 
-This index provides a complete guide to HookProbe documentation, organized by use case and audience.
+---
+
+**Last Updated:** 2025-12-03
+**Version:** 5.0.1 Liberty
+
+This index provides a complete guide to HookProbe v5.0 "Liberty" documentation, organized by use case and audience. HookProbe is the world's first Neurosurgical Cybersecurity Platform — democratizing enterprise-grade security for everyone.
 
 ---
 
