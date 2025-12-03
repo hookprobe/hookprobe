@@ -41,6 +41,18 @@ source "$LIB_DIR/instructions.sh"
 ENABLE_AI=false
 ENABLE_MONITORING=false
 ENABLE_IAM=true
+ENABLE_WEBSERVER=false
+INTERACTIVE_MODE=true
+
+# OVS Bridge configuration
+OVS_BRIDGE_NAME="hookprobe"
+OVS_BRIDGE_SUBNET="10.250.0.0/16"
+
+# Secrets (will be populated by prompts or env vars)
+CLOUDFLARE_TUNNEL_TOKEN=""
+LOGTO_ENDPOINT=""
+LOGTO_APP_ID=""
+LOGTO_APP_SECRET=""
 
 # Colors
 RED='\033[0;31m'
@@ -60,7 +72,9 @@ parse_arguments() {
     # Flags:
     #   --enable-ai: Enable AI detection (needs 8GB+ RAM)
     #   --enable-monitoring: Enable Grafana/VictoriaMetrics
+    #   --enable-webserver: Enable web server (Django + Nginx)
     #   --disable-iam: Skip IAM (Logto) installation
+    #   --non-interactive: Skip interactive prompts
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -72,9 +86,21 @@ parse_arguments() {
                 ENABLE_MONITORING=true
                 shift
                 ;;
+            --enable-webserver)
+                ENABLE_WEBSERVER=true
+                shift
+                ;;
             --disable-iam)
                 ENABLE_IAM=false
                 shift
+                ;;
+            --non-interactive)
+                INTERACTIVE_MODE=false
+                shift
+                ;;
+            --cf-token)
+                CLOUDFLARE_TUNNEL_TOKEN="$2"
+                shift 2
                 ;;
             --help|-h)
                 show_help
@@ -99,32 +125,231 @@ Usage:
 Options:
   --enable-ai          Enable AI detection (requires 8GB+ RAM)
   --enable-monitoring  Enable Grafana/VictoriaMetrics monitoring
+  --enable-webserver   Enable Web Server (Django + Nginx + WAF)
   --disable-iam        Skip IAM (Logto) installation
+  --non-interactive    Skip interactive prompts (use defaults)
+  --cf-token TOKEN     Cloudflare Tunnel token (for web server)
   --help, -h           Show this help message
 
-Default Configuration:
-  • POD-001: Web Server (Django + Nginx + NAXSI WAF)
-  • POD-002: IAM (Logto authentication)
+Edge Deployment Profiles:
+  1. Minimal (default)  - Neuro Protocol only (validator/firewall)
+  2. With Web Server    - Adds Django dashboard, requires secrets config
+  3. Full Stack         - All components including AI/monitoring
+
+Core Components (always installed):
   • POD-003: Database (PostgreSQL 16)
   • POD-005: Cache (Redis 7)
   • POD-010: Neuro Protocol (Qsecbit + HTP)
 
+Optional Components:
+  • POD-001: Web Server (Django + Nginx + NAXSI WAF)
+  • POD-002: IAM (Logto authentication)
+  • POD-004: Monitoring (Grafana + VictoriaMetrics)
+  • POD-006: Detection (Suricata, Zeek, Snort)
+  • POD-007: AI Analysis (Machine Learning)
+
 Examples:
-  # Basic installation (Qsecbit only, no AI)
+  # Minimal edge (validator only)
   sudo bash scripts/install-edge.sh
 
-  # With AI detection
-  sudo bash scripts/install-edge.sh --enable-ai
+  # Edge with web dashboard
+  sudo bash scripts/install-edge.sh --enable-webserver
 
-  # With monitoring, without IAM
-  sudo bash scripts/install-edge.sh --enable-monitoring --disable-iam
+  # Full stack with AI
+  sudo bash scripts/install-edge.sh --enable-webserver --enable-ai
 
 Target Platforms:
-  • Raspberry Pi 4/5 (4GB+ RAM, 32GB+ storage)
-  • x86_64 servers (4GB+ RAM, 20GB+ storage)
-  • ARM64 systems (4GB+ RAM, 20GB+ storage)
+  • Raspberry Pi 4/5 (3GB+ RAM, 32GB+ storage)
+  • x86_64 servers (3GB+ RAM, 20GB+ storage)
+  • ARM64 systems (3GB+ RAM, 20GB+ storage)
 
 EOF
+}
+
+# ============================================================
+# COMPONENT SELECTION MENU
+# ============================================================
+
+show_component_menu() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  Edge Deployment Profile Selection${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Select your edge deployment profile:"
+    echo ""
+    echo -e "  ${YELLOW}1${NC}) Minimal Edge ${GREEN}[Recommended for validators]${NC}"
+    echo "     └─ Neuro Protocol (Qsecbit + HTP) + Database + Cache"
+    echo "     └─ For: Edge firewall, IDS/IPS, WAF validators"
+    echo "     └─ RAM: ~1.5GB"
+    echo ""
+    echo -e "  ${YELLOW}2${NC}) Edge with Web Dashboard ${CYAN}[Requires secrets config]${NC}"
+    echo "     └─ Adds: Django dashboard + Nginx + NAXSI WAF + IAM"
+    echo "     └─ For: Standalone edge with local management UI"
+    echo "     └─ RAM: ~2GB"
+    echo ""
+    echo -e "  ${YELLOW}3${NC}) Full Edge Stack ${YELLOW}[8GB+ RAM recommended]${NC}"
+    echo "     └─ All components including AI detection & monitoring"
+    echo "     └─ For: Complete edge security appliance"
+    echo "     └─ RAM: ~6GB"
+    echo ""
+    echo -e "  ${YELLOW}4${NC}) Custom Selection"
+    echo "     └─ Choose individual components"
+    echo ""
+}
+
+select_components() {
+    if [ "$INTERACTIVE_MODE" = false ]; then
+        return 0
+    fi
+
+    show_component_menu
+    read -p "Select profile [1-4]: " profile_choice
+    echo ""
+
+    case $profile_choice in
+        1)
+            # Minimal - just Neuro Protocol
+            ENABLE_WEBSERVER=false
+            ENABLE_IAM=false
+            ENABLE_AI=false
+            ENABLE_MONITORING=false
+            echo -e "${GREEN}[x]${NC} Selected: Minimal Edge (Neuro Protocol only)"
+            ;;
+        2)
+            # Edge with Web Dashboard
+            ENABLE_WEBSERVER=true
+            ENABLE_IAM=true
+            ENABLE_AI=false
+            ENABLE_MONITORING=false
+            echo -e "${GREEN}[x]${NC} Selected: Edge with Web Dashboard"
+            configure_webserver_secrets
+            ;;
+        3)
+            # Full Stack
+            ENABLE_WEBSERVER=true
+            ENABLE_IAM=true
+            ENABLE_AI=true
+            ENABLE_MONITORING=true
+            echo -e "${GREEN}[x]${NC} Selected: Full Edge Stack"
+            configure_webserver_secrets
+            ;;
+        4)
+            # Custom selection
+            custom_component_selection
+            if [ "$ENABLE_WEBSERVER" = true ]; then
+                configure_webserver_secrets
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}Invalid selection, using Minimal profile${NC}"
+            ENABLE_WEBSERVER=false
+            ENABLE_IAM=false
+            ENABLE_AI=false
+            ENABLE_MONITORING=false
+            ;;
+    esac
+    echo ""
+}
+
+custom_component_selection() {
+    echo -e "${CYAN}Custom Component Selection${NC}"
+    echo ""
+
+    read -p "Enable Web Server (Django + Nginx)? [y/N]: " -n 1 -r
+    echo ""
+    [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_WEBSERVER=true || ENABLE_WEBSERVER=false
+
+    read -p "Enable IAM (Logto authentication)? [y/N]: " -n 1 -r
+    echo ""
+    [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_IAM=true || ENABLE_IAM=false
+
+    read -p "Enable Monitoring (Grafana + VictoriaMetrics)? [y/N]: " -n 1 -r
+    echo ""
+    [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_MONITORING=true || ENABLE_MONITORING=false
+
+    read -p "Enable AI Detection (requires 8GB+ RAM)? [y/N]: " -n 1 -r
+    echo ""
+    [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_AI=true || ENABLE_AI=false
+
+    echo ""
+    echo "Selected components:"
+    echo -e "  $([ "$ENABLE_WEBSERVER" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") Web Server"
+    echo -e "  $([ "$ENABLE_IAM" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") IAM"
+    echo -e "  $([ "$ENABLE_MONITORING" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") Monitoring"
+    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") AI Detection"
+}
+
+# ============================================================
+# SECRETS CONFIGURATION
+# ============================================================
+
+configure_webserver_secrets() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  Web Server Secrets Configuration${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "The web server requires secrets for secure operation."
+    echo "You can skip these now and configure later in /etc/hookprobe/secrets/"
+    echo ""
+
+    # Cloudflare Tunnel
+    echo -e "${YELLOW}Cloudflare Tunnel (optional)${NC}"
+    echo "Used for secure external access without opening ports."
+    if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+        read -p "Cloudflare Tunnel Token (or press Enter to skip): " cf_token
+        CLOUDFLARE_TUNNEL_TOKEN="$cf_token"
+    else
+        echo -e "  Token: ${GREEN}[configured via --cf-token]${NC}"
+    fi
+    echo ""
+
+    # Logto Configuration
+    if [ "$ENABLE_IAM" = true ]; then
+        echo -e "${YELLOW}Logto IAM Configuration${NC}"
+        echo "Authentication service for user management."
+
+        read -p "Logto Endpoint URL (or press Enter for local): " logto_endpoint
+        LOGTO_ENDPOINT="${logto_endpoint:-http://localhost:3001}"
+
+        read -p "Logto App ID (or press Enter to auto-generate): " logto_app_id
+        LOGTO_APP_ID="${logto_app_id:-$(openssl rand -hex 16)}"
+
+        read -p "Logto App Secret (or press Enter to auto-generate): " logto_secret
+        LOGTO_APP_SECRET="${logto_secret:-$(openssl rand -base64 32)}"
+        echo ""
+    fi
+
+    # Create secrets directory
+    mkdir -p /etc/hookprobe/secrets
+    chmod 700 /etc/hookprobe/secrets
+
+    # Save secrets
+    if [ -n "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+        echo "$CLOUDFLARE_TUNNEL_TOKEN" > /etc/hookprobe/secrets/cloudflare-tunnel-token
+        chmod 600 /etc/hookprobe/secrets/cloudflare-tunnel-token
+        echo -e "  ${GREEN}[x]${NC} Cloudflare Tunnel token saved"
+    fi
+
+    if [ "$ENABLE_IAM" = true ]; then
+        cat > /etc/hookprobe/secrets/logto.env << LOGTOEOF
+LOGTO_ENDPOINT=$LOGTO_ENDPOINT
+LOGTO_APP_ID=$LOGTO_APP_ID
+LOGTO_APP_SECRET=$LOGTO_APP_SECRET
+LOGTOEOF
+        chmod 600 /etc/hookprobe/secrets/logto.env
+        echo -e "  ${GREEN}[x]${NC} Logto configuration saved"
+    fi
+
+    # Generate Django secret key
+    DJANGO_SECRET_KEY=$(openssl rand -base64 32)
+    echo "$DJANGO_SECRET_KEY" > /etc/hookprobe/secrets/django-secret-key
+    chmod 600 /etc/hookprobe/secrets/django-secret-key
+    echo -e "  ${GREEN}[x]${NC} Django secret key generated"
+
+    echo ""
+    echo -e "${GREEN}Secrets saved to /etc/hookprobe/secrets/${NC}"
 }
 
 # ============================================================
@@ -141,9 +366,9 @@ main() {
     parse_arguments "$@"
 
     # --------------------------------------------------------
-    # [1/6] PLATFORM DETECTION
+    # [1/7] PLATFORM DETECTION
     # --------------------------------------------------------
-    echo -e "${BLUE}[1/6] Detecting platform...${NC}"
+    echo -e "${BLUE}[1/7] Detecting platform...${NC}"
     echo ""
 
     detect_platform
@@ -164,9 +389,16 @@ main() {
     echo ""
 
     # --------------------------------------------------------
-    # [2/6] SYSTEM REQUIREMENTS CHECK
+    # [2/7] COMPONENT SELECTION
     # --------------------------------------------------------
-    echo -e "${BLUE}[2/6] Checking system requirements...${NC}"
+    echo -e "${BLUE}[2/7] Selecting deployment profile...${NC}"
+
+    select_components
+
+    # --------------------------------------------------------
+    # [3/7] SYSTEM REQUIREMENTS CHECK
+    # --------------------------------------------------------
+    echo -e "${BLUE}[3/7] Checking system requirements...${NC}"
 
     if ! run_system_check "$ENABLE_AI" "$ENABLE_MONITORING"; then
         echo ""
@@ -184,9 +416,9 @@ main() {
     echo ""
 
     # --------------------------------------------------------
-    # [3/6] MEMORY SUFFICIENCY CHECK
+    # [4/7] MEMORY SUFFICIENCY CHECK
     # --------------------------------------------------------
-    echo -e "${BLUE}[3/6] Validating memory allocation...${NC}"
+    echo -e "${BLUE}[4/7] Validating memory allocation...${NC}"
 
     if ! check_memory_sufficiency "$ENABLE_AI" "$ENABLE_MONITORING" "$ENABLE_IAM"; then
         echo ""
@@ -206,24 +438,28 @@ main() {
     echo ""
 
     # --------------------------------------------------------
-    # [4/6] DETERMINE PODS TO DEPLOY
+    # [5/7] DETERMINE PODS TO DEPLOY
     # --------------------------------------------------------
-    echo -e "${BLUE}[4/6] Planning POD deployment...${NC}"
+    echo -e "${BLUE}[5/7] Planning POD deployment...${NC}"
     echo ""
 
     echo "PODs to be deployed:"
-    echo "  ${GREEN}✓${NC} POD-001: Web Server (Django + Nginx + NAXSI)"
-    echo "  $([ "$ENABLE_IAM" = true ] && echo "${GREEN}✓${NC}" || echo "${YELLOW}✗${NC}") POD-002: IAM (Logto authentication)"
-    echo "  ${GREEN}✓${NC} POD-003: Database (PostgreSQL 16)"
-    echo "  ${GREEN}✓${NC} POD-005: Cache (Redis 7)"
-    echo "  ${GREEN}✓${NC} POD-010: Neuro Protocol (Qsecbit + HTP)"
-    echo "  $([ "$ENABLE_MONITORING" = true ] && echo "${GREEN}✓${NC}" || echo "${YELLOW}✗${NC}") POD-004: Monitoring (Grafana + VictoriaMetrics)"
-    echo "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}✓${NC}" || echo "${YELLOW}✗${NC}") POD-006: Detection (Suricata, Zeek, Snort)"
-    echo "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}✓${NC}" || echo "${YELLOW}✗${NC}") POD-007: AI Analysis (Machine Learning)"
+    echo -e "  $([ "$ENABLE_WEBSERVER" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-001: Web Server (Django + Nginx + NAXSI)"
+    echo -e "  $([ "$ENABLE_IAM" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-002: IAM (Logto authentication)"
+    echo -e "  ${GREEN}[x]${NC} POD-003: Database (PostgreSQL 16)"
+    echo -e "  ${GREEN}[x]${NC} POD-005: Cache (Redis 7)"
+    echo -e "  ${GREEN}[x]${NC} POD-010: Neuro Protocol (Qsecbit + HTP)"
+    echo -e "  $([ "$ENABLE_MONITORING" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-004: Monitoring (Grafana + VictoriaMetrics)"
+    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-006: Detection (Suricata, Zeek, Snort)"
+    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-007: AI Analysis (Machine Learning)"
 
     echo ""
+    echo "Network: OVS Bridge '$OVS_BRIDGE_NAME'"
+    echo ""
     echo "Memory allocation:"
-    echo "  Web Server:      $POD_MEMORY_WEB"
+    if [ "$ENABLE_WEBSERVER" = true ]; then
+        echo "  Web Server:      $POD_MEMORY_WEB"
+    fi
     echo "  Database:        $POD_MEMORY_DATABASE"
     echo "  Cache:           $POD_MEMORY_CACHE"
     echo "  Neuro Protocol:  $POD_MEMORY_NEURO"
@@ -247,26 +483,33 @@ main() {
     fi
 
     # --------------------------------------------------------
-    # [5/6] DEPLOY PODS
+    # [6/7] DEPLOY PODS
     # --------------------------------------------------------
     echo ""
-    echo -e "${BLUE}[5/6] Deploying PODs...${NC}"
+    echo -e "${BLUE}[6/7] Deploying PODs...${NC}"
     echo ""
 
     # Install dependencies
     install_dependencies
 
-    # Create Podman networks
+    # Setup OVS bridge and Podman networks
+    setup_ovs_bridge
     create_networks
 
-    # Deploy core PODs
-    deploy_web_pod
-    if [ "$ENABLE_IAM" = true ]; then
-        deploy_iam_pod
-    fi
+    # Deploy core PODs (always installed)
     deploy_database_pod
     deploy_cache_pod
     deploy_neuro_pod
+
+    # Deploy optional Web Server POD
+    if [ "$ENABLE_WEBSERVER" = true ]; then
+        deploy_web_pod
+    fi
+
+    # Deploy optional IAM POD
+    if [ "$ENABLE_IAM" = true ]; then
+        deploy_iam_pod
+    fi
 
     # Deploy optional PODs
     if [ "$ENABLE_MONITORING" = true ]; then
@@ -279,10 +522,10 @@ main() {
     fi
 
     # --------------------------------------------------------
-    # [6/6] POST-INSTALL
+    # [7/7] POST-INSTALL
     # --------------------------------------------------------
     echo ""
-    echo -e "${BLUE}[6/6] Finalizing installation...${NC}"
+    echo -e "${BLUE}[7/7] Finalizing installation...${NC}"
     echo ""
 
     # Wait for containers to start
@@ -505,8 +748,79 @@ check_and_upgrade_cni() {
     return 1
 }
 
+# ============================================================
+# OVS BRIDGE SETUP
+# ============================================================
+
+setup_ovs_bridge() {
+    echo "Setting up OVS bridge '$OVS_BRIDGE_NAME'..."
+
+    # Check if OVS is installed
+    if ! command -v ovs-vsctl &> /dev/null; then
+        echo "  Installing Open vSwitch..."
+        if command -v apt-get &> /dev/null; then
+            apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
+        elif command -v dnf &> /dev/null; then
+            dnf install -y openvswitch 2>/dev/null
+        elif command -v yum &> /dev/null; then
+            yum install -y openvswitch 2>/dev/null
+        fi
+    fi
+
+    # If OVS still not available, fall back to Linux bridge
+    if ! command -v ovs-vsctl &> /dev/null; then
+        echo -e "${YELLOW}⚠ OVS not available, using standard bridge mode${NC}"
+        USE_OVS_BRIDGE=false
+        return 0
+    fi
+
+    USE_OVS_BRIDGE=true
+
+    # Start OVS service
+    systemctl start openvswitch-switch 2>/dev/null || \
+    systemctl start ovs-vswitchd 2>/dev/null || \
+    service openvswitch-switch start 2>/dev/null || true
+
+    # Check if bridge already exists
+    if ovs-vsctl br-exists "$OVS_BRIDGE_NAME" 2>/dev/null; then
+        echo -e "  ${GREEN}[x]${NC} OVS bridge '$OVS_BRIDGE_NAME' already exists"
+    else
+        # Create OVS bridge
+        ovs-vsctl add-br "$OVS_BRIDGE_NAME" 2>/dev/null || {
+            echo -e "${YELLOW}⚠ Failed to create OVS bridge, using standard networking${NC}"
+            USE_OVS_BRIDGE=false
+            return 0
+        }
+        echo -e "  ${GREEN}[x]${NC} OVS bridge '$OVS_BRIDGE_NAME' created"
+    fi
+
+    # Configure bridge IP
+    ip addr add 10.250.0.1/16 dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
+    ip link set "$OVS_BRIDGE_NAME" up 2>/dev/null || true
+
+    # Enable IP forwarding
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+
+    # Save OVS bridge config
+    mkdir -p /etc/hookprobe
+    cat > /etc/hookprobe/ovs-bridge.conf << OVSEOF
+# HookProbe OVS Bridge Configuration
+OVS_BRIDGE_NAME=$OVS_BRIDGE_NAME
+OVS_BRIDGE_SUBNET=$OVS_BRIDGE_SUBNET
+OVS_BRIDGE_IP=10.250.0.1
+OVSEOF
+
+    echo -e "  ${GREEN}[x]${NC} OVS bridge configured"
+    echo ""
+
+    # Show bridge status
+    echo "OVS Bridge Status:"
+    ovs-vsctl show 2>/dev/null | head -20
+    echo ""
+}
+
 create_networks() {
-    echo "Creating Podman networks..."
+    echo "Creating Podman networks on OVS bridge..."
 
     # Check if running in LXC container
     if detect_container_environment; then
@@ -527,51 +841,116 @@ create_networks() {
     fi
 
     # Remove existing networks if present
+    podman network rm hookprobe-web hookprobe-database hookprobe-cache hookprobe-iam hookprobe-neuro 2>/dev/null || true
     podman network rm web-net database-net cache-net iam-net neuro-net 2>/dev/null || true
 
-    # Try to create networks with error handling
+    # Try to create networks with OVS bridge driver if available
     local network_failed=false
+    local bridge_opt=""
 
-    if ! podman network create --subnet 10.250.1.0/24 web-net 2>/dev/null; then
-        echo -e "${YELLOW}⚠ Failed to create web-net with custom subnet${NC}"
-        # Try without subnet (simpler network)
-        if ! podman network create web-net 2>/dev/null; then
-            echo -e "${YELLOW}⚠ Failed to create web-net${NC}"
-            network_failed=true
+    if [ "$USE_OVS_BRIDGE" = true ]; then
+        # Use OVS bridge for networking
+        bridge_opt="--opt bridge=$OVS_BRIDGE_NAME"
+    fi
+
+    # Create POD networks under the hookprobe namespace
+    # Each POD gets its own subnet under 10.250.x.0/24
+
+    # Core networks (always created)
+    echo "  Creating core POD networks..."
+
+    # Database network (POD-003)
+    if ! podman network create \
+        --subnet 10.250.3.0/24 \
+        --gateway 10.250.3.1 \
+        $bridge_opt \
+        hookprobe-database 2>/dev/null; then
+        podman network create hookprobe-database 2>/dev/null || network_failed=true
+    fi
+
+    # Cache network (POD-005)
+    if ! podman network create \
+        --subnet 10.250.5.0/24 \
+        --gateway 10.250.5.1 \
+        $bridge_opt \
+        hookprobe-cache 2>/dev/null; then
+        podman network create hookprobe-cache 2>/dev/null || true
+    fi
+
+    # Neuro network (POD-010)
+    if ! podman network create \
+        --subnet 10.250.10.0/24 \
+        --gateway 10.250.10.1 \
+        $bridge_opt \
+        hookprobe-neuro 2>/dev/null; then
+        podman network create hookprobe-neuro 2>/dev/null || true
+    fi
+
+    # Optional networks based on selected components
+    if [ "$ENABLE_WEBSERVER" = true ]; then
+        echo "  Creating web server network..."
+        if ! podman network create \
+            --subnet 10.250.1.0/24 \
+            --gateway 10.250.1.1 \
+            $bridge_opt \
+            hookprobe-web 2>/dev/null; then
+            podman network create hookprobe-web 2>/dev/null || true
         fi
     fi
 
-    if [ "$network_failed" = false ]; then
-        podman network create --subnet 10.250.2.0/24 database-net 2>/dev/null || \
-            podman network create database-net 2>/dev/null || true
-        podman network create --subnet 10.250.3.0/24 cache-net 2>/dev/null || \
-            podman network create cache-net 2>/dev/null || true
-        podman network create --subnet 10.250.4.0/24 iam-net 2>/dev/null || \
-            podman network create iam-net 2>/dev/null || true
-        podman network create --subnet 10.250.10.0/24 neuro-net 2>/dev/null || \
-            podman network create neuro-net 2>/dev/null || true
-
-        if [ "$ENABLE_MONITORING" = true ]; then
-            podman network create --subnet 10.250.5.0/24 monitoring-net 2>/dev/null || \
-                podman network create monitoring-net 2>/dev/null || true
+    if [ "$ENABLE_IAM" = true ]; then
+        echo "  Creating IAM network..."
+        if ! podman network create \
+            --subnet 10.250.2.0/24 \
+            --gateway 10.250.2.1 \
+            $bridge_opt \
+            hookprobe-iam 2>/dev/null; then
+            podman network create hookprobe-iam 2>/dev/null || true
         fi
+    fi
 
-        if [ "$ENABLE_AI" = true ]; then
-            podman network create --subnet 10.250.6.0/24 detection-net 2>/dev/null || \
-                podman network create detection-net 2>/dev/null || true
-            podman network create --subnet 10.250.7.0/24 ai-net 2>/dev/null || \
-                podman network create ai-net 2>/dev/null || true
+    if [ "$ENABLE_MONITORING" = true ]; then
+        echo "  Creating monitoring network..."
+        if ! podman network create \
+            --subnet 10.250.4.0/24 \
+            --gateway 10.250.4.1 \
+            $bridge_opt \
+            hookprobe-monitoring 2>/dev/null; then
+            podman network create hookprobe-monitoring 2>/dev/null || true
+        fi
+    fi
+
+    if [ "$ENABLE_AI" = true ]; then
+        echo "  Creating AI/detection networks..."
+        if ! podman network create \
+            --subnet 10.250.6.0/24 \
+            --gateway 10.250.6.1 \
+            $bridge_opt \
+            hookprobe-detection 2>/dev/null; then
+            podman network create hookprobe-detection 2>/dev/null || true
+        fi
+        if ! podman network create \
+            --subnet 10.250.7.0/24 \
+            --gateway 10.250.7.1 \
+            $bridge_opt \
+            hookprobe-ai 2>/dev/null; then
+            podman network create hookprobe-ai 2>/dev/null || true
         fi
     fi
 
     # Verify networks were created
-    if ! podman network exists web-net 2>/dev/null; then
+    if ! podman network exists hookprobe-database 2>/dev/null; then
         echo -e "${YELLOW}⚠ Custom networks unavailable - using host network mode${NC}"
         echo "  This is common in LXC/LXD containers or restricted environments."
         echo "  Pods will use host networking instead."
         USE_HOST_NETWORK=true
     else
-        echo -e "${GREEN}✓${NC} Networks created"
+        echo -e "${GREEN}[x]${NC} POD networks created on bridge '$OVS_BRIDGE_NAME'"
+
+        # Show network summary
+        echo ""
+        echo "Network Summary:"
+        podman network ls --format "  {{.Name}}\t{{.Subnets}}" 2>/dev/null | grep hookprobe || true
     fi
 }
 
@@ -580,21 +959,54 @@ create_networks() {
 # ============================================================
 
 # Helper function to get network argument
+# Maps POD type to network name
 get_network_arg() {
-    local network_name="$1"
+    local pod_type="$1"
     if [ "$USE_HOST_NETWORK" = true ]; then
         echo "--network host"
     else
-        echo "--network $network_name"
+        # Map pod types to hookprobe network names
+        case "$pod_type" in
+            web|web-net)
+                echo "--network hookprobe-web"
+                ;;
+            database|database-net)
+                echo "--network hookprobe-database"
+                ;;
+            cache|cache-net)
+                echo "--network hookprobe-cache"
+                ;;
+            iam|iam-net)
+                echo "--network hookprobe-iam"
+                ;;
+            neuro|neuro-net)
+                echo "--network hookprobe-neuro"
+                ;;
+            monitoring|monitoring-net)
+                echo "--network hookprobe-monitoring"
+                ;;
+            detection|detection-net)
+                echo "--network hookprobe-detection"
+                ;;
+            ai|ai-net)
+                echo "--network hookprobe-ai"
+                ;;
+            *)
+                echo "--network hookprobe-$pod_type"
+                ;;
+        esac
     fi
 }
 
 # Helper to get database/redis host (localhost for host network, IP for custom)
+# Network allocation:
+#   hookprobe-database: 10.250.3.0/24
+#   hookprobe-cache:    10.250.5.0/24
 get_db_host() {
     if [ "$USE_HOST_NETWORK" = true ]; then
         echo "127.0.0.1"
     else
-        echo "10.250.2.2"
+        echo "10.250.3.2"  # Database on hookprobe-database network
     fi
 }
 
@@ -602,14 +1014,31 @@ get_redis_host() {
     if [ "$USE_HOST_NETWORK" = true ]; then
         echo "127.0.0.1"
     else
-        echo "10.250.3.2"
+        echo "10.250.5.2"  # Redis on hookprobe-cache network
     fi
 }
 
 deploy_web_pod() {
     echo "Deploying POD-001: Web Server..."
 
-    local network_arg=$(get_network_arg "web-net")
+    local network_arg=$(get_network_arg "web")
+
+    # Build Django container from Containerfile
+    echo "  Building Django container (this may take a few minutes on ARM64)..."
+    if [ -f "$SCRIPT_DIR/../install/addons/webserver/Containerfile" ]; then
+        podman build \
+            -t hookprobe-web-django:edge \
+            -f "$SCRIPT_DIR/../install/addons/webserver/Containerfile" \
+            "$SCRIPT_DIR/.." || {
+            echo -e "${RED}✗${NC} Failed to build Django container"
+            return 1
+        }
+        local django_image="hookprobe-web-django:edge"
+    else
+        # Fallback: use minimal Django app inline
+        echo "  Containerfile not found, using minimal inline setup..."
+        local django_image="docker.io/library/python:3.11-slim"
+    fi
 
     # Create pod
     podman pod create \
@@ -619,23 +1048,71 @@ deploy_web_pod() {
         --publish 443:443
 
     # Deploy Django container
-    podman run -d \
-        --pod hookprobe-web \
-        --name hookprobe-web-django \
-        --memory "$POD_MEMORY_WEB" \
-        --restart unless-stopped \
-        --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000\")' || exit 1" \
-        --health-interval 30s \
-        --health-timeout 10s \
-        --health-retries 3 \
-        --health-start-period 60s \
-        -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
-        -e DATABASE_HOST="$(get_db_host)" \
-        -e DATABASE_PORT="5432" \
-        -e REDIS_HOST="$(get_redis_host)" \
-        -e REDIS_PORT="6379" \
-        docker.io/library/python:3.11-slim \
-        bash -c "pip install django gunicorn && python -m gunicorn --bind 0.0.0.0:8000"
+    if [ "$django_image" = "hookprobe-web-django:edge" ]; then
+        # Use built container with proper entrypoint
+        podman run -d \
+            --pod hookprobe-web \
+            --name hookprobe-web-django \
+            --memory "$POD_MEMORY_WEB" \
+            --restart unless-stopped \
+            -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
+            -e DJANGO_DEBUG="false" \
+            -e DJANGO_ALLOWED_HOSTS="*" \
+            -e POSTGRES_HOST="$(get_db_host)" \
+            -e POSTGRES_PORT="5432" \
+            -e POSTGRES_DB="hookprobe" \
+            -e POSTGRES_USER="hookprobe" \
+            -e POSTGRES_PASSWORD="hookprobe" \
+            -e REDIS_HOST="$(get_redis_host)" \
+            -e REDIS_PORT="6379" \
+            -e GUNICORN_WORKERS="2" \
+            -e GUNICORN_TIMEOUT="120" \
+            "$django_image"
+    else
+        # Fallback: minimal Django status page
+        podman run -d \
+            --pod hookprobe-web \
+            --name hookprobe-web-django \
+            --memory "$POD_MEMORY_WEB" \
+            --restart unless-stopped \
+            --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000\")' || exit 1" \
+            --health-interval 30s \
+            --health-timeout 10s \
+            --health-retries 3 \
+            --health-start-period 60s \
+            -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
+            "$django_image" \
+            bash -c '
+                pip install --quiet django gunicorn whitenoise
+                mkdir -p /app && cd /app
+                django-admin startproject hookprobe .
+                cat > hookprobe/views.py << "VIEWSEOF"
+from django.http import JsonResponse
+import platform, os
+def status(request):
+    return JsonResponse({
+        "service": "HookProbe Edge",
+        "status": "running",
+        "version": "5.0",
+        "platform": platform.machine(),
+        "python": platform.python_version()
+    })
+VIEWSEOF
+                cat > hookprobe/urls.py << "URLSEOF"
+from django.contrib import admin
+from django.urls import path
+from . import views
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("", views.status),
+    path("health/", views.status),
+    path("api/status/", views.status),
+]
+URLSEOF
+                python manage.py migrate --run-syncdb
+                exec gunicorn hookprobe.wsgi:application --bind 0.0.0.0:8000 --workers 2
+            '
+    fi
 
     # Deploy Nginx + NAXSI
     podman run -d \
@@ -650,13 +1127,13 @@ deploy_web_pod() {
         --health-start-period 30s \
         docker.io/library/nginx:alpine
 
-    echo -e "${GREEN}✓${NC} POD-001 deployed"
+    echo -e "${GREEN}[x]${NC} POD-001 deployed"
 }
 
 deploy_iam_pod() {
     echo "Deploying POD-002: IAM (Logto)..."
 
-    local network_arg=$(get_network_arg "iam-net")
+    local network_arg=$(get_network_arg "iam")
 
     podman pod create \
         --name hookprobe-iam \
@@ -683,7 +1160,7 @@ deploy_iam_pod() {
 deploy_database_pod() {
     echo "Deploying POD-003: Database (PostgreSQL)..."
 
-    local network_arg=$(get_network_arg "database-net")
+    local network_arg=$(get_network_arg "database")
     local publish_arg=""
 
     # Publish port when using host network so other containers can connect
@@ -718,7 +1195,7 @@ deploy_database_pod() {
 deploy_cache_pod() {
     echo "Deploying POD-005: Cache (Redis)..."
 
-    local network_arg=$(get_network_arg "cache-net")
+    local network_arg=$(get_network_arg "cache")
     local publish_arg=""
 
     # Publish port when using host network
@@ -751,7 +1228,7 @@ deploy_cache_pod() {
 deploy_neuro_pod() {
     echo "Deploying POD-010: Neuro Protocol (Qsecbit + HTP)..."
 
-    local network_arg=$(get_network_arg "neuro-net")
+    local network_arg=$(get_network_arg "neuro")
 
     podman pod create \
         --name hookprobe-neuro \
@@ -779,7 +1256,7 @@ deploy_neuro_pod() {
 deploy_monitoring_pod() {
     echo "Deploying POD-004: Monitoring (Grafana + VictoriaMetrics)..."
 
-    local network_arg=$(get_network_arg "monitoring-net")
+    local network_arg=$(get_network_arg "monitoring")
 
     podman pod create \
         --name hookprobe-monitoring \
@@ -819,7 +1296,7 @@ deploy_monitoring_pod() {
 deploy_detection_pod() {
     echo "Deploying POD-006: Detection (Suricata, Zeek, Snort)..."
 
-    local network_arg=$(get_network_arg "detection-net")
+    local network_arg=$(get_network_arg "detection")
 
     podman pod create \
         --name hookprobe-detection \
@@ -844,7 +1321,7 @@ deploy_detection_pod() {
 deploy_ai_pod() {
     echo "Deploying POD-007: AI Analysis (Machine Learning)..."
 
-    local network_arg=$(get_network_arg "ai-net")
+    local network_arg=$(get_network_arg "ai")
 
     podman pod create \
         --name hookprobe-ai \
@@ -879,36 +1356,77 @@ check_pod_status() {
 
     local failed_pods=0
 
-    # Check each deployed POD
-    if ! podman pod ps | grep -q "hookprobe-web.*Running"; then
-        echo -e "${RED}✗${NC} POD-001 (Web) not running"
-        failed_pods=$((failed_pods + 1))
-    fi
-
-    if [ "$ENABLE_IAM" = true ] && ! podman pod ps | grep -q "hookprobe-iam.*Running"; then
-        echo -e "${RED}✗${NC} POD-002 (IAM) not running"
-        failed_pods=$((failed_pods + 1))
-    fi
-
+    # Check core PODs (always deployed)
     if ! podman pod ps | grep -q "hookprobe-database.*Running"; then
-        echo -e "${RED}✗${NC} POD-003 (Database) not running"
+        echo -e "${RED}[!]${NC} POD-003 (Database) not running"
         failed_pods=$((failed_pods + 1))
+    else
+        echo -e "${GREEN}[x]${NC} POD-003 (Database) running"
     fi
 
     if ! podman pod ps | grep -q "hookprobe-cache.*Running"; then
-        echo -e "${RED}✗${NC} POD-005 (Cache) not running"
+        echo -e "${RED}[!]${NC} POD-005 (Cache) not running"
         failed_pods=$((failed_pods + 1))
+    else
+        echo -e "${GREEN}[x]${NC} POD-005 (Cache) running"
     fi
 
     if ! podman pod ps | grep -q "hookprobe-neuro.*Running"; then
-        echo -e "${RED}✗${NC} POD-010 (Neuro) not running"
+        echo -e "${RED}[!]${NC} POD-010 (Neuro) not running"
         failed_pods=$((failed_pods + 1))
+    else
+        echo -e "${GREEN}[x]${NC} POD-010 (Neuro) running"
     fi
 
+    # Check optional PODs based on configuration
+    if [ "$ENABLE_WEBSERVER" = true ]; then
+        if ! podman pod ps | grep -q "hookprobe-web.*Running"; then
+            echo -e "${RED}[!]${NC} POD-001 (Web) not running"
+            failed_pods=$((failed_pods + 1))
+        else
+            echo -e "${GREEN}[x]${NC} POD-001 (Web) running"
+        fi
+    fi
+
+    if [ "$ENABLE_IAM" = true ]; then
+        if ! podman pod ps | grep -q "hookprobe-iam.*Running"; then
+            echo -e "${RED}[!]${NC} POD-002 (IAM) not running"
+            failed_pods=$((failed_pods + 1))
+        else
+            echo -e "${GREEN}[x]${NC} POD-002 (IAM) running"
+        fi
+    fi
+
+    if [ "$ENABLE_MONITORING" = true ]; then
+        if ! podman pod ps | grep -q "hookprobe-monitoring.*Running"; then
+            echo -e "${RED}[!]${NC} POD-004 (Monitoring) not running"
+            failed_pods=$((failed_pods + 1))
+        else
+            echo -e "${GREEN}[x]${NC} POD-004 (Monitoring) running"
+        fi
+    fi
+
+    if [ "$ENABLE_AI" = true ]; then
+        if ! podman pod ps | grep -q "hookprobe-detection.*Running"; then
+            echo -e "${RED}[!]${NC} POD-006 (Detection) not running"
+            failed_pods=$((failed_pods + 1))
+        else
+            echo -e "${GREEN}[x]${NC} POD-006 (Detection) running"
+        fi
+        if ! podman pod ps | grep -q "hookprobe-ai.*Running"; then
+            echo -e "${RED}[!]${NC} POD-007 (AI) not running"
+            failed_pods=$((failed_pods + 1))
+        else
+            echo -e "${GREEN}[x]${NC} POD-007 (AI) running"
+        fi
+    fi
+
+    echo ""
     if [ "$failed_pods" -gt 0 ]; then
-        echo ""
-        echo -e "${YELLOW}⚠ Warning: Some PODs failed to start${NC}"
+        echo -e "${YELLOW}Warning: $failed_pods POD(s) failed to start${NC}"
         echo "Check logs with: podman logs <container-name>"
+    else
+        echo -e "${GREEN}All PODs running successfully${NC}"
     fi
 }
 
