@@ -525,7 +525,7 @@ curl -u hookprobe:PASSWORD http://10.200.5.15:8123/?query=SELECT%201
 6. ⬜ Test with real traffic
 7. ⬜ Document operational procedures
 
-**See full guide**: `Documents/ClickHouse-Integration-Analysis.md`
+**See full guide**: [ClickHouse Integration Guide](./clickhouse-integration.md)
 
 ---
 
