@@ -133,14 +133,14 @@ class IndicatorOfCompromiseAdmin(admin.ModelAdmin):
         'detected_by_ebpf', 'detected_by_siem', 'detected_by_threat_intel',
         'first_seen', 'last_seen'
     ]
-    search_fields = ['value', 'description', 'tags']
+    search_fields = ['value', 'description']
     date_hierarchy = 'first_seen'
     filter_horizontal = ['related_iocs']
     readonly_fields = ['detection_count', 'first_seen', 'last_seen', 'risk_score_display', 'created_at', 'updated_at']
 
     fieldsets = [
         ('IoC Details', {
-            'fields': ['customer', 'ioc_type', 'value', 'description', 'tags']
+            'fields': ['customer', 'ioc_type', 'value', 'description']
         }),
         ('Severity & Confidence', {
             'fields': ['severity', 'confidence_score', 'risk_score_display', 'detection_count']
@@ -154,7 +154,7 @@ class IndicatorOfCompromiseAdmin(admin.ModelAdmin):
             'description': 'Which security systems detected this IoC'
         }),
         ('QSECBIT AI Analysis', {
-            'fields': ['qsecbit_score', 'qsecbit_rag_status', 'qsecbit_metadata'],
+            'fields': ['qsecbit_score', 'qsecbit_rag_status'],
             'classes': ['collapse']
         }),
         ('Status & Timing', {
@@ -165,7 +165,7 @@ class IndicatorOfCompromiseAdmin(admin.ModelAdmin):
             'description': 'Related IoCs that appear together'
         }),
         ('Additional Data', {
-            'fields': ['metadata', 'raw_data'],
+            'fields': ['source_data'],
             'classes': ['collapse']
         }),
         ('Timestamps', {
@@ -198,21 +198,24 @@ class IoC_ReportAdmin(admin.ModelAdmin):
         'systems_compromised', 'created_at', 'updated_at'
     ]
     list_filter = ['severity', 'status', 'created_at', 'updated_at']
-    search_fields = ['title', 'summary', 'mitigation_steps']
+    search_fields = ['title', 'description', 'response_actions']
     date_hierarchy = 'created_at'
     filter_horizontal = ['iocs']
     readonly_fields = ['overall_risk_score', 'created_at', 'updated_at']
 
     fieldsets = [
         ('Report Details', {
-            'fields': ['customer', 'title', 'summary', 'severity', 'status']
+            'fields': ['customer', 'title', 'description', 'severity', 'status']
         }),
         ('Associated IoCs', {
             'fields': ['iocs'],
             'description': 'Indicators of Compromise included in this report'
         }),
+        ('Timeline', {
+            'fields': ['incident_start', 'incident_end']
+        }),
         ('Impact Assessment', {
-            'fields': ['systems_compromised', 'data_exfiltrated', 'estimated_impact', 'overall_risk_score']
+            'fields': ['systems_compromised', 'data_exfiltrated', 'impact_assessment', 'overall_risk_score']
         }),
         ('Analysis from Security Systems', {
             'fields': [
@@ -223,16 +226,14 @@ class IoC_ReportAdmin(admin.ModelAdmin):
             'description': 'Aggregated data from all security vectors'
         }),
         ('Response', {
-            'fields': ['mitigation_steps', 'mitigation_status', 'assigned_to', 'resolved_at']
+            'fields': ['response_actions', 'recommendations', 'assigned_to']
         }),
         ('Report Management', {
-            'fields': ['created_by', 'created_at', 'updated_at']
+            'fields': ['created_at', 'updated_at']
         }),
     ]
 
     def save_model(self, request, obj, form, change):
         """Auto-calculate risk score on save."""
-        if not change:  # New object
-            obj.created_by = request.user
         obj.overall_risk_score = obj.calculate_overall_risk()
         super().save_model(request, obj, form, change)
