@@ -425,13 +425,25 @@ handle_configuration() {
                 ;;
             6)
                 echo "Select deployment type for configuration:"
-                echo "  1) Edge Deployment"
-                echo "  2) Cloud Backend"
-                echo "  3) n8n Addon"
+                echo "  1) Edge Deployment ${GREEN}[Auto-detection, no config needed]${NC}"
+                echo "  2) Cloud Backend ${YELLOW}[Requires config.sh]${NC}"
+                echo "  3) n8n Addon ${YELLOW}[Requires config.sh]${NC}"
                 read -p "Select: " config_choice
 
                 case $config_choice in
-                    1) run_config_wizard "edge" "$SCRIPT_DIR/install/edge/config.sh" ;;
+                    1)
+                        echo -e "${GREEN}✓ Edge deployment uses auto-detection${NC}"
+                        echo "  No manual configuration needed - system will auto-detect:"
+                        echo "    • Operating system and architecture"
+                        echo "    • Available RAM and storage"
+                        echo "    • Raspberry Pi model (if applicable)"
+                        echo "    • Optimal memory limits"
+                        echo ""
+                        echo "  You can customize with flags when running the installer:"
+                        echo "    --enable-ai           Enable AI detection"
+                        echo "    --enable-monitoring   Enable monitoring stack"
+                        echo "    --disable-iam         Skip IAM installation"
+                        ;;
                     2) run_config_wizard "cloud" "$SCRIPT_DIR/install/cloud/config.sh" ;;
                     3) run_config_wizard "n8n" "$SCRIPT_DIR/install/addons/n8n/config.sh" ;;
                     *) echo -e "${RED}Invalid option${NC}" ;;
@@ -869,42 +881,43 @@ run_installer() {
         return 1
     fi
 
-    local config_dir=$(dirname "$script_path")
     local config_file=""
+    local needs_config=true
 
     # Determine correct config file based on deployment type
+    # Edge deployment uses auto-detection - no config file needed
     case "$deployment_type" in
-        testing)
-            config_file="$config_dir/lightweight-config.sh"
+        edge|testing)
+            # Edge uses auto-detection, no config file needed
+            needs_config=false
+            echo -e "${GREEN}✓ Edge deployment uses auto-detection${NC}"
+            echo "  No manual configuration needed - system will auto-detect:"
+            echo "    • Operating system and architecture"
+            echo "    • Available RAM and storage"
+            echo "    • Raspberry Pi model (if applicable)"
+            echo "    • Optimal memory limits"
+            echo ""
             ;;
-        edge|cloud|n8n)
-            config_file="$config_dir/config.sh"
+        cloud)
+            config_file="$SCRIPT_DIR/install/cloud/config.sh"
+            ;;
+        n8n)
+            config_file="$SCRIPT_DIR/install/addons/n8n/config.sh"
             ;;
         *)
-            # Fallback: try lightweight-config.sh first, then config.sh
-            if [ -f "$config_dir/lightweight-config.sh" ]; then
-                config_file="$config_dir/lightweight-config.sh"
-            else
-                config_file="$config_dir/config.sh"
-            fi
+            local config_dir=$(dirname "$script_path")
+            config_file="$config_dir/config.sh"
             ;;
     esac
 
-    # Check if configuration exists
-    if [ ! -f "$config_file" ] || [ ! -s "$config_file" ]; then
-        echo -e "${YELLOW}⚠ No configuration found${NC}"
-        echo ""
-        read -p "Run configuration wizard first? (yes/no) [yes]: " run_wizard
-        run_wizard=${run_wizard:-yes}
-
-        if [ "$run_wizard" = "yes" ]; then
-            if ! run_config_wizard "$deployment_type" "$config_file"; then
-                echo -e "${RED}Cannot proceed without configuration${NC}"
-                return 1
-            fi
+    # Check if configuration exists (only for deployments that need it)
+    if [ "$needs_config" = true ]; then
+        if [ ! -f "$config_file" ] || [ ! -s "$config_file" ]; then
+            echo -e "${RED}ERROR: Configuration file not found: $config_file${NC}"
             echo ""
-        else
-            echo -e "${RED}Cannot proceed without configuration${NC}"
+            echo "Please ensure the configuration file exists before proceeding."
+            echo "For cloud deployment: $SCRIPT_DIR/install/cloud/config.sh"
+            echo "For n8n addon: $SCRIPT_DIR/install/addons/n8n/config.sh"
             return 1
         fi
     fi
