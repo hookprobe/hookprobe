@@ -611,6 +611,23 @@ deploy_web_pod() {
 
     local network_arg=$(get_network_arg "web-net")
 
+    # Build Django container from Containerfile
+    echo "  Building Django container (this may take a few minutes on ARM64)..."
+    if [ -f "$SCRIPT_DIR/../install/addons/webserver/Containerfile" ]; then
+        podman build \
+            -t hookprobe-web-django:edge \
+            -f "$SCRIPT_DIR/../install/addons/webserver/Containerfile" \
+            "$SCRIPT_DIR/.." || {
+            echo -e "${RED}✗${NC} Failed to build Django container"
+            return 1
+        }
+        local django_image="hookprobe-web-django:edge"
+    else
+        # Fallback: use minimal Django app inline
+        echo "  Containerfile not found, using minimal inline setup..."
+        local django_image="docker.io/library/python:3.11-slim"
+    fi
+
     # Create pod
     podman pod create \
         --name hookprobe-web \
@@ -619,23 +636,71 @@ deploy_web_pod() {
         --publish 443:443
 
     # Deploy Django container
-    podman run -d \
-        --pod hookprobe-web \
-        --name hookprobe-web-django \
-        --memory "$POD_MEMORY_WEB" \
-        --restart unless-stopped \
-        --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000\")' || exit 1" \
-        --health-interval 30s \
-        --health-timeout 10s \
-        --health-retries 3 \
-        --health-start-period 60s \
-        -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
-        -e DATABASE_HOST="$(get_db_host)" \
-        -e DATABASE_PORT="5432" \
-        -e REDIS_HOST="$(get_redis_host)" \
-        -e REDIS_PORT="6379" \
-        docker.io/library/python:3.11-slim \
-        bash -c "pip install django gunicorn && python -m gunicorn --bind 0.0.0.0:8000"
+    if [ "$django_image" = "hookprobe-web-django:edge" ]; then
+        # Use built container with proper entrypoint
+        podman run -d \
+            --pod hookprobe-web \
+            --name hookprobe-web-django \
+            --memory "$POD_MEMORY_WEB" \
+            --restart unless-stopped \
+            -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
+            -e DJANGO_DEBUG="false" \
+            -e DJANGO_ALLOWED_HOSTS="*" \
+            -e POSTGRES_HOST="$(get_db_host)" \
+            -e POSTGRES_PORT="5432" \
+            -e POSTGRES_DB="hookprobe" \
+            -e POSTGRES_USER="hookprobe" \
+            -e POSTGRES_PASSWORD="hookprobe" \
+            -e REDIS_HOST="$(get_redis_host)" \
+            -e REDIS_PORT="6379" \
+            -e GUNICORN_WORKERS="2" \
+            -e GUNICORN_TIMEOUT="120" \
+            "$django_image"
+    else
+        # Fallback: minimal Django status page
+        podman run -d \
+            --pod hookprobe-web \
+            --name hookprobe-web-django \
+            --memory "$POD_MEMORY_WEB" \
+            --restart unless-stopped \
+            --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000\")' || exit 1" \
+            --health-interval 30s \
+            --health-timeout 10s \
+            --health-retries 3 \
+            --health-start-period 60s \
+            -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
+            "$django_image" \
+            bash -c '
+                pip install --quiet django gunicorn whitenoise
+                mkdir -p /app && cd /app
+                django-admin startproject hookprobe .
+                cat > hookprobe/views.py << "VIEWSEOF"
+from django.http import JsonResponse
+import platform, os
+def status(request):
+    return JsonResponse({
+        "service": "HookProbe Edge",
+        "status": "running",
+        "version": "5.0",
+        "platform": platform.machine(),
+        "python": platform.python_version()
+    })
+VIEWSEOF
+                cat > hookprobe/urls.py << "URLSEOF"
+from django.contrib import admin
+from django.urls import path
+from . import views
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("", views.status),
+    path("health/", views.status),
+    path("api/status/", views.status),
+]
+URLSEOF
+                python manage.py migrate --run-syncdb
+                exec gunicorn hookprobe.wsgi:application --bind 0.0.0.0:8000 --workers 2
+            '
+    fi
 
     # Deploy Nginx + NAXSI
     podman run -d \
@@ -650,7 +715,7 @@ deploy_web_pod() {
         --health-start-period 30s \
         docker.io/library/nginx:alpine
 
-    echo -e "${GREEN}✓${NC} POD-001 deployed"
+    echo -e "${GREEN}[x]${NC} POD-001 deployed"
 }
 
 deploy_iam_pod() {
