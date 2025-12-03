@@ -1,6 +1,11 @@
 # HookProbe Neuro Protocol
 
-**Revolutionary cryptographic protocol using deterministic neural weight evolution for continuous mutual authentication.**
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+</p>
+
+**Pillar 1 of HookProbe: Living Cryptography**
 
 > *Where Neural Networks Become Cryptographic Keys*
 
@@ -10,15 +15,12 @@
 
 **Neuro** replaces traditional static keys (RSA, ECDSA) with **neural network weights that evolve deterministically** based on sensor data. This creates a continuously-authenticating, tamper-evident communication channel between Edge nodes and Cloud validators.
 
-This is **neurosurgical cybersecurity** — precision authentication at the neural level, where cryptographic proofs emerge from the exact trajectory of weight evolution driven by your device's unique sensor history.
+### The Core Insight
 
-### Core Innovation: Neural Resonance Authentication
+Traditional authentication: *"Do you know the password?"*
+Neural Resonance: *"Can you prove your entire sensor history through deterministic weight evolution?"*
 
-Instead of: *"Do you still know the secret key?"*
-**Neuro asks**: *"Can you prove your sensor history by showing the correct weight evolution?"*
-
-Traditional cryptography asks for **password recall**.
-**Neuro Protocol demands perfect neural resonance** — edge and cloud weights must synchronize bit-for-bit, like neurons firing in perfect harmony. One bit of divergence = complete desynchronization = immediate detection.
+**Neuro Protocol demands perfect neural resonance** — edge and cloud weights must synchronize bit-for-bit. One bit of divergence = immediate detection.
 
 ---
 
