@@ -24,13 +24,15 @@ NC='\033[0m'
 # ============================================================
 
 check_root() {
-    """
-    Check if running as root.
+    # Check if running as root.
 
-    Returns:
-        0 if root
-        1 if not root
-    """
+    #
+
+    # Returns:
+
+    # 0 if root
+
+    # 1 if not root
 
     if [[ $EUID -ne 0 ]]; then
         echo -e "${RED}✗ ERROR: This script must be run as root${NC}"
@@ -44,16 +46,21 @@ check_root() {
 }
 
 check_ram() {
-    """
-    Check if system has sufficient RAM.
+    # Check if system has sufficient RAM.
 
-    Args:
-        $1 - minimum required RAM in GB (default: 4)
+    #
 
-    Returns:
-        0 if sufficient
-        1 if insufficient
-    """
+    # Args:
+
+    # $1 - minimum required RAM in GB (default: 4)
+
+    #
+
+    # Returns:
+
+    # 0 if sufficient
+
+    # 1 if insufficient
 
     local min_ram_gb=${1:-4}
 
@@ -67,16 +74,21 @@ check_ram() {
 }
 
 check_disk_space() {
-    """
-    Check if / has sufficient free space.
+    # Check if / has sufficient free space.
 
-    Args:
-        $1 - minimum required space in GB (default: 20)
+    #
 
-    Returns:
-        0 if sufficient
-        1 if insufficient
-    """
+    # Args:
+
+    # $1 - minimum required space in GB (default: 20)
+
+    #
+
+    # Returns:
+
+    # 0 if sufficient
+
+    # 1 if insufficient
 
     local min_space_gb=${1:-20}
 
@@ -94,13 +106,15 @@ check_disk_space() {
 }
 
 check_cgroup_requirements() {
-    """
-    Check cgroup requirements for Raspberry Pi.
+    # Check cgroup requirements for Raspberry Pi.
 
-    Returns:
-        0 if OK or not Raspberry Pi
-        1 if Raspberry Pi and cgroups not enabled
-    """
+    #
+
+    # Returns:
+
+    # 0 if OK or not Raspberry Pi
+
+    # 1 if Raspberry Pi and cgroups not enabled
 
     # Only check on Raspberry Pi
     if [ "$IS_RASPBERRY_PI" != true ]; then
@@ -121,13 +135,15 @@ check_cgroup_requirements() {
 # ============================================================
 
 check_podman() {
-    """
-    Check if Podman is installed.
+    # Check if Podman is installed.
 
-    Returns:
-        0 if installed
-        1 if not installed
-    """
+    #
+
+    # Returns:
+
+    # 0 if installed
+
+    # 1 if not installed
 
     if command -v podman &> /dev/null; then
         local version=$(podman --version | awk '{print $3}')
@@ -140,13 +156,15 @@ check_podman() {
 }
 
 check_git() {
-    """
-    Check if Git is installed.
+    # Check if Git is installed.
 
-    Returns:
-        0 if installed
-        1 if not installed
-    """
+    #
+
+    # Returns:
+
+    # 0 if installed
+
+    # 1 if not installed
 
     if command -v git &> /dev/null; then
         local version=$(git --version | awk '{print $3}')
@@ -159,13 +177,15 @@ check_git() {
 }
 
 check_python() {
-    """
-    Check if Python 3.9+ is installed.
+    # Check if Python 3.9+ is installed.
 
-    Returns:
-        0 if installed and version OK
-        1 if not installed or version too old
-    """
+    #
+
+    # Returns:
+
+    # 0 if installed and version OK
+
+    # 1 if not installed or version too old
 
     if command -v python3 &> /dev/null; then
         local version=$(python3 --version | awk '{print $2}')
@@ -190,13 +210,15 @@ check_python() {
 # ============================================================
 
 check_network() {
-    """
-    Check if system has network connectivity.
+    # Check if system has network connectivity.
 
-    Returns:
-        0 if connected
-        1 if not connected
-    """
+    #
+
+    # Returns:
+
+    # 0 if connected
+
+    # 1 if not connected
 
     # Try to ping a reliable DNS server
     if ping -c 1 -W 2 8.8.8.8 &> /dev/null; then
@@ -209,13 +231,15 @@ check_network() {
 }
 
 check_dns() {
-    """
-    Check if DNS resolution works.
+    # Check if DNS resolution works.
 
-    Returns:
-        0 if DNS works
-        1 if DNS fails
-    """
+    #
+
+    # Returns:
+
+    # 0 if DNS works
+
+    # 1 if DNS fails
 
     if nslookup github.com &> /dev/null || host github.com &> /dev/null; then
         echo -e "${GREEN}✓${NC} DNS resolution OK"
@@ -231,17 +255,23 @@ check_dns() {
 # ============================================================
 
 run_system_check() {
-    """
-    Run comprehensive system requirements check.
+    # Run comprehensive system requirements check.
 
-    Args:
-        $1 - enable_ai (true/false)
-        $2 - enable_monitoring (true/false)
+    #
 
-    Returns:
-        0 if all checks pass
-        1 if any critical check fails
-    """
+    # Args:
+
+    # $1 - enable_ai (true/false)
+
+    # $2 - enable_monitoring (true/false)
+
+    #
+
+    # Returns:
+
+    # 0 if all checks pass
+
+    # 1 if any critical check fails
 
     local enable_ai=${1:-false}
     local enable_monitoring=${2:-false}
@@ -331,18 +361,25 @@ run_system_check() {
 # ============================================================
 
 check_memory_sufficiency() {
-    """
-    Check if available RAM is sufficient for selected PODs.
+    # Check if available RAM is sufficient for selected PODs.
 
-    Args:
-        $1 - enable_ai (true/false)
-        $2 - enable_monitoring (true/false)
-        $3 - enable_iam (true/false)
+    #
 
-    Returns:
-        0 if sufficient
-        1 if insufficient
-    """
+    # Args:
+
+    # $1 - enable_ai (true/false)
+
+    # $2 - enable_monitoring (true/false)
+
+    # $3 - enable_iam (true/false)
+
+    #
+
+    # Returns:
+
+    # 0 if sufficient
+
+    # 1 if insufficient
 
     local enable_ai=${1:-false}
     local enable_monitoring=${2:-false}
@@ -384,16 +421,21 @@ check_memory_sufficiency() {
 # ============================================================
 
 check_port_available() {
-    """
-    Check if a port is available.
+    # Check if a port is available.
 
-    Args:
-        $1 - port number
+    #
 
-    Returns:
-        0 if available
-        1 if in use
-    """
+    # Args:
+
+    # $1 - port number
+
+    #
+
+    # Returns:
+
+    # 0 if available
+
+    # 1 if in use
 
     local port=$1
 
@@ -406,13 +448,15 @@ check_port_available() {
 }
 
 check_required_ports() {
-    """
-    Check if required ports are available.
+    # Check if required ports are available.
 
-    Returns:
-        0 if all available
-        1 if any port is in use
-    """
+    #
+
+    # Returns:
+
+    # 0 if all available
+
+    # 1 if any port is in use
 
     local ports=(80 443 5432 6379 3001 3002)
     local in_use=()

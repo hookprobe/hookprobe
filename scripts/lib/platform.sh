@@ -11,16 +11,14 @@
 # ============================================================
 
 detect_platform() {
-    """
-    Detect platform information and export variables.
-
-    Exports:
-        PLATFORM_OS       - Pretty OS name (e.g., "Raspberry Pi OS")
-        PLATFORM_ARCH     - Architecture (x86_64, ARM64, ARM32)
-        TOTAL_RAM_GB      - Total RAM in GB
-        IS_RASPBERRY_PI   - true/false
-        CPU_CORES         - Number of CPU cores
-    """
+    # Detect platform information and export variables.
+    #
+    # Exports:
+    #   PLATFORM_OS       - Pretty OS name (e.g., "Raspberry Pi OS")
+    #   PLATFORM_ARCH     - Architecture (x86_64, ARM64, ARM32)
+    #   TOTAL_RAM_GB      - Total RAM in GB
+    #   IS_RASPBERRY_PI   - true/false
+    #   CPU_CORES         - Number of CPU cores
 
     # Detect OS
     if [ -f /etc/os-release ]; then
@@ -93,13 +91,11 @@ detect_platform() {
 # ============================================================
 
 check_cgroup_enabled() {
-    """
-    Check if cgroup v2 memory controller is enabled.
-
-    Returns:
-        0 if enabled
-        1 if not enabled
-    """
+    # Check if cgroup v2 memory controller is enabled.
+    #
+    # Returns:
+    #   0 if enabled
+    #   1 if not enabled
 
     # Check for cgroup v2 memory controller
     if [ -f /sys/fs/cgroup/memory.max ]; then
@@ -122,12 +118,10 @@ check_cgroup_enabled() {
 }
 
 get_cgroup_version() {
-    """
-    Detect cgroup version (v1 or v2).
-
-    Outputs:
-        "v2" or "v1" or "none"
-    """
+    # Detect cgroup version (v1 or v2).
+    #
+    # Outputs:
+    #   "v2" or "v1" or "none"
 
     if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
         echo "v2"
@@ -139,12 +133,10 @@ get_cgroup_version() {
 }
 
 get_boot_config_path() {
-    """
-    Determine the correct boot configuration path for Raspberry Pi.
-
-    Outputs:
-        Path to cmdline.txt or empty string if not found
-    """
+    # Determine the correct boot configuration path for Raspberry Pi.
+    #
+    # Outputs:
+    #   Path to cmdline.txt or empty string if not found
 
     # Raspberry Pi OS Bookworm (Debian 12+)
     if [ -f /boot/firmware/cmdline.txt ]; then
@@ -163,13 +155,11 @@ get_boot_config_path() {
 }
 
 check_cgroup_boot_params() {
-    """
-    Check if cgroup parameters are present in boot config.
-
-    Returns:
-        0 if present
-        1 if not present or file not found
-    """
+    # Check if cgroup parameters are present in boot config.
+    #
+    # Returns:
+    #   0 if present
+    #   1 if not present or file not found
 
     local boot_config=$(get_boot_config_path)
 
@@ -197,17 +187,15 @@ check_cgroup_boot_params() {
 # ============================================================
 
 calculate_memory_limits() {
-    """
-    Calculate appropriate memory limits based on total RAM.
-
-    Exports:
-        POD_MEMORY_WEB
-        POD_MEMORY_DATABASE
-        POD_MEMORY_CACHE
-        POD_MEMORY_NEURO
-        POD_MEMORY_IAM
-        MEMORY_PROFILE (Lightweight/Moderate/Full)
-    """
+    # Calculate appropriate memory limits based on total RAM.
+    #
+    # Exports:
+    #   POD_MEMORY_WEB
+    #   POD_MEMORY_DATABASE
+    #   POD_MEMORY_CACHE
+    #   POD_MEMORY_NEURO
+    #   POD_MEMORY_IAM
+    #   MEMORY_PROFILE (Lightweight/Moderate/Full)
 
     if [ "$TOTAL_RAM_GB" -le 4 ]; then
         # Conservative for 4GB systems (Raspberry Pi 4B)
@@ -243,17 +231,15 @@ calculate_memory_limits() {
 # ============================================================
 
 get_total_memory_usage() {
-    """
-    Calculate total memory usage for selected PODs.
-
-    Args:
-        $1 - enable_ai (true/false)
-        $2 - enable_monitoring (true/false)
-        $3 - enable_iam (true/false)
-
-    Outputs:
-        Total memory in MB
-    """
+    # Calculate total memory usage for selected PODs.
+    #
+    # Args:
+    #   $1 - enable_ai (true/false)
+    #   $2 - enable_monitoring (true/false)
+    #   $3 - enable_iam (true/false)
+    #
+    # Outputs:
+    #   Total memory in MB
 
     local enable_ai=${1:-false}
     local enable_monitoring=${2:-false}
@@ -286,15 +272,13 @@ get_total_memory_usage() {
 }
 
 format_bytes() {
-    """
-    Format bytes to human-readable format.
-
-    Args:
-        $1 - bytes
-
-    Outputs:
-        Formatted string (e.g., "4.2GB")
-    """
+    # Format bytes to human-readable format.
+    #
+    # Args:
+    #   $1 - bytes
+    #
+    # Outputs:
+    #   Formatted string (e.g., "4.2GB")
 
     local bytes=$1
 
