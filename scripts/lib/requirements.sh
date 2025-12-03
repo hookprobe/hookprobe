@@ -317,8 +317,8 @@ run_system_check() {
             failed=1
         fi
     else
-        if ! check_ram 4; then  # Qsecbit only needs 4GB
-            show_low_ram_warning "$TOTAL_RAM_GB" 4
+        if ! check_ram 3; then  # Edge lightweight needs at least 3GB
+            show_low_ram_warning "$TOTAL_RAM_GB" 3
             failed=1
         fi
     fi

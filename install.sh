@@ -399,6 +399,95 @@ show_configuration_menu() {
     echo ""
 }
 
+show_network_configuration() {
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}Network Configuration${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # VXLAN Configuration
+    echo -e "${CYAN}VXLAN Settings:${NC}"
+    local vxlan_config="/etc/hookprobe/vxlan.conf"
+    if [ -f "$vxlan_config" ]; then
+        echo -e "  Config file: ${GREEN}$vxlan_config${NC}"
+        grep -E "^(VNI|VXLAN_PORT|VXLAN_DEV|VTEP_IP)" "$vxlan_config" 2>/dev/null | while read line; do
+            echo "    $line"
+        done
+    else
+        echo -e "  ${YELLOW}Default values (no custom config):${NC}"
+        echo "    VNI=100"
+        echo "    VXLAN_PORT=4789"
+        echo "    VXLAN_DEV=vxlan0"
+    fi
+    echo ""
+
+    # Bridge Configuration
+    echo -e "${CYAN}Network Bridges:${NC}"
+    if command -v ip &> /dev/null; then
+        ip -brief link show type bridge 2>/dev/null | while read line; do
+            echo "    $line"
+        done
+        if [ -z "$(ip -brief link show type bridge 2>/dev/null)" ]; then
+            echo -e "    ${YELLOW}No bridges configured${NC}"
+        fi
+    fi
+    echo ""
+
+    # OpenFlow / OVS Configuration
+    echo -e "${CYAN}Open vSwitch (OVS):${NC}"
+    if command -v ovs-vsctl &> /dev/null; then
+        echo -e "  Status: ${GREEN}Installed${NC}"
+        ovs-vsctl list-br 2>/dev/null | while read br; do
+            echo "    Bridge: $br"
+            ovs-vsctl list-ports "$br" 2>/dev/null | sed 's/^/      Port: /'
+        done
+    else
+        echo -e "  Status: ${YELLOW}Not installed${NC}"
+    fi
+    echo ""
+
+    # PSK / Secrets
+    echo -e "${CYAN}Security Keys (PSK):${NC}"
+    local secrets_dir="/etc/hookprobe/secrets"
+    if [ -d "$secrets_dir" ]; then
+        echo -e "  Secrets directory: ${GREEN}$secrets_dir${NC}"
+        ls -la "$secrets_dir" 2>/dev/null | grep -v "^total" | grep -v "^\." | while read line; do
+            local fname=$(echo "$line" | awk '{print $NF}')
+            echo -e "    • $fname ${GREEN}[configured]${NC}"
+        done
+    else
+        echo -e "  ${YELLOW}No secrets configured${NC}"
+        echo "  Default location: /etc/hookprobe/secrets/"
+    fi
+    echo ""
+
+    # POD Network Configuration
+    echo -e "${CYAN}POD Networks:${NC}"
+    if command -v podman &> /dev/null; then
+        podman network ls --format "{{.Name}}\t{{.Driver}}\t{{.Subnets}}" 2>/dev/null | while read line; do
+            echo "    $line"
+        done
+    else
+        echo -e "  ${YELLOW}Podman not installed${NC}"
+    fi
+    echo ""
+
+    # Subnet Configuration
+    echo -e "${CYAN}Subnet Allocation:${NC}"
+    local subnet_config="/etc/hookprobe/subnets.conf"
+    if [ -f "$subnet_config" ]; then
+        cat "$subnet_config" 2>/dev/null | while read line; do
+            echo "    $line"
+        done
+    else
+        echo -e "  ${YELLOW}Default subnets:${NC}"
+        echo "    POD Network:    10.88.0.0/16"
+        echo "    VXLAN Overlay:  10.200.0.0/16"
+        echo "    Management:     172.16.0.0/24"
+    fi
+    echo ""
+}
+
 handle_configuration() {
     while true; do
         show_configuration_menu
@@ -406,15 +495,18 @@ handle_configuration() {
         echo ""
 
         case $choice in
-            1|2|3|4|5)
-                echo -e "${YELLOW}Individual configuration sections not yet implemented${NC}"
+            1)
+                show_network_configuration
+                ;;
+            2|3|4|5)
+                echo -e "${YELLOW}Configuration section under development${NC}"
                 echo "Please use option 6 (Configuration Wizard)"
                 ;;
             6)
                 echo "Select deployment type for configuration:"
-                echo "  1) Edge Deployment ${GREEN}[Auto-detection, no config needed]${NC}"
-                echo "  2) Cloud Backend ${YELLOW}[Requires config.sh]${NC}"
-                echo "  3) n8n Addon ${YELLOW}[Requires config.sh]${NC}"
+                echo -e "  1) Edge Deployment ${GREEN}[Auto-detection, no config needed]${NC}"
+                echo -e "  2) Cloud Backend ${YELLOW}[Requires config.sh]${NC}"
+                echo -e "  3) n8n Addon ${YELLOW}[Requires config.sh]${NC}"
                 read -p "Select: " config_choice
 
                 case $config_choice in
