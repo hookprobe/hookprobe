@@ -9,10 +9,15 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-CHANGE-THIS-IN-PRODUCTION'
-)
+# Generate a secure key with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    # In production, this will raise an error - SECRET_KEY is required
+    import sys
+    if 'test' not in sys.argv and os.getenv('DJANGO_ENV') == 'production':
+        raise ValueError('DJANGO_SECRET_KEY environment variable must be set in production')
+    # Development/test fallback
+    SECRET_KEY = 'django-insecure-dev-only-DO-NOT-USE-IN-PRODUCTION-' + 'x' * 50
 
 # Application definition
 INSTALLED_APPS = [
@@ -152,19 +157,41 @@ CORS_ALLOWED_ORIGINS = [
 
 # HookProbe specific settings
 HOOKPROBE = {
+    # Qsecbit API configuration (POD-006)
     'QSECBIT_API_URL': os.getenv('QSECBIT_API_URL', 'http://10.200.6.12:8888'),
+    'QSECBIT_API_KEY': os.getenv('QSECBIT_API_KEY', ''),  # API key for authentication
+    'QSECBIT_TIMEOUT': int(os.getenv('QSECBIT_TIMEOUT', '30')),  # Request timeout in seconds
+
+    # ClickHouse configuration (POD-005)
     'CLICKHOUSE_HOST': os.getenv('CLICKHOUSE_HOST', '10.200.5.12'),
     'CLICKHOUSE_PORT': int(os.getenv('CLICKHOUSE_PORT', '8123')),
     'CLICKHOUSE_DATABASE': os.getenv('CLICKHOUSE_DATABASE', 'security'),
+    'CLICKHOUSE_USER': os.getenv('CLICKHOUSE_USER', 'default'),
+    'CLICKHOUSE_PASSWORD': os.getenv('CLICKHOUSE_PASSWORD', ''),
+
+    # Redis configuration (POD-004)
     'REDIS_HOST': os.getenv('REDIS_HOST', '10.200.4.12'),
     'REDIS_PORT': int(os.getenv('REDIS_PORT', '6379')),
+    'REDIS_PASSWORD': os.getenv('REDIS_PASSWORD', ''),
+    'REDIS_DB': int(os.getenv('REDIS_DB', '1')),
 }
 
 # Cache configuration (Redis in POD-004)
+redis_url = f"redis://"
+if HOOKPROBE['REDIS_PASSWORD']:
+    redis_url += f":{HOOKPROBE['REDIS_PASSWORD']}@"
+redis_url += f"{HOOKPROBE['REDIS_HOST']}:{HOOKPROBE['REDIS_PORT']}/{HOOKPROBE['REDIS_DB']}"
+
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': f"redis://{HOOKPROBE['REDIS_HOST']}:{HOOKPROBE['REDIS_PORT']}/1",
+        'LOCATION': redis_url,
+        'OPTIONS': {
+            'max_connections': 50,  # Connection pooling
+            'socket_connect_timeout': 5,  # seconds
+            'socket_timeout': 5,  # seconds
+            'retry_on_timeout': True,
+        }
     }
 }
 
