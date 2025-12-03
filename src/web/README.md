@@ -1,21 +1,29 @@
 # HookProbe Web Application
 
-**Django-based CMS and Management Dashboard for HookProbe v5.0**
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+</p>
 
-**⚠️ IMPORTANT:** This web application is an **optional addon** for POD-001 (Web DMZ). It should be installed **after** the main HookProbe infrastructure (PODs 001-007) is running.
+**Django-Powered Dashboard & APIs for HookProbe v5.0 "Liberty"**
 
-**📖 Installation Guide:** See [install/addons/webserver/](../../install/addons/webserver/) for installation instructions.
+---
 
 ## Overview
 
-This is the **source code** for the HookProbe web application. For most users, you should use the automated installation scripts in `install/addons/webserver/` instead of manually setting up from this directory.
+**Optional addon** providing web interface and REST APIs for HookProbe deployments.
 
-This web application provides:
-- **Public-facing CMS** using HTML5 UP Forty theme
-- **Admin Dashboard** using AdminLTE for system management
-- **MSSP Device Management** for edge device monitoring
-- **Security Events** dashboard with Qsecbit integration
-- **Monitoring Integration** with Grafana and ClickHouse
+| Feature | Description |
+|---------|-------------|
+| **Public CMS** | Forty HTML5 theme for marketing/blog |
+| **Admin Dashboard** | AdminLTE for system management |
+| **MSSP Portal** | Multi-tenant device management |
+| **Security Dashboard** | Qsecbit scores, threat events, alerts |
+| **REST APIs** | Device registration, security events |
+
+> **Note**: Web application is optional. Core security (Neuro, DSM, Qsecbit) works without UI.
+
+📖 **Installation**: [install/addons/webserver/](../../install/addons/webserver/)
 
 ## Architecture
 
