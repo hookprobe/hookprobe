@@ -290,12 +290,6 @@ show_deployment_menu() {
     echo -e "     └─ For: MSSPs, enterprise multi-site, SOC operations"
     echo -e "     └─ Platforms: Datacenter servers, cloud instances"
     echo ""
-    echo -e "  ${YELLOW}3${NC}) Lightweight Testing/Development ${CYAN}[Testing Only]${NC}"
-    echo -e "     └─ For: Testing, development, CI/CD, Raspberry Pi 4"
-    echo -e "     └─ Includes: PODs 001-003, 005 only (excludes monitoring & AI)"
-    echo -e "     └─ RAM Usage: ~2.5GB (suitable for 4GB systems)"
-    echo -e "     ${RED}└─ NOT FOR PRODUCTION USE${NC}"
-    echo ""
     echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
     echo ""
 }
@@ -313,13 +307,6 @@ handle_deployment() {
                 ;;
             2)
                 run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Backend Deployment" "cloud"
-                return
-                ;;
-            3)
-                echo -e "${YELLOW}Note: Lightweight testing now uses the same unified installer${NC}"
-                echo -e "${YELLOW}Running edge installation without AI (suitable for 4GB RAM)${NC}"
-                echo ""
-                run_installer "$SCRIPT_DIR/scripts/install-edge.sh" "Edge Deployment (Lightweight)" "edge"
                 return
                 ;;
             b|B)
