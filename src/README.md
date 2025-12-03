@@ -1,393 +1,240 @@
 # HookProbe Source Code
 
-**Democratizing Cybersecurity Through Edge Computing**
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+</p>
 
-This directory contains the core source code for HookProbe's security and monitoring components.
+**Enterprise-Grade AI Security for $150 · Democratizing Cybersecurity for Millions**
 
 ---
 
-## 📁 Directory Structure
+## The Three Pillars
+
+This directory contains the core implementations of HookProbe's revolutionary security architecture.
 
 ```
 src/
-├── qsecbit/          # Qsecbit AI Threat Analysis Engine
-├── response/         # Automated Response & Mitigation
-└── web/              # Django Web Application & CMS
+├── neuro/      # Pillar 1: Neural Resonance Protocol
+├── dsm/        # Pillar 2: Decentralized Security Mesh
+├── qsecbit/    # Pillar 3: AI Resilience Metrics
+├── response/   # Automated Threat Mitigation
+└── web/        # Django Dashboard & APIs
 ```
 
 ---
 
-## 🤖 Qsecbit AI Engine (`qsecbit/`)
+## Pillar 1: Neural Resonance Protocol (`neuro/`)
 
-**Quantum Security Bit (Qsecbit)** - The heart of HookProbe's AI-powered threat detection.
+**Living cryptography where neural network weights become your identity.**
 
-### What is Qsecbit?
+Traditional authentication: *"Do you know the password?"*
+Neural Resonance: *"Can you prove your sensor history through deterministic weight evolution?"*
 
-A cyber resilience metric measuring the smallest unit where AI-driven attack and defense reach equilibrium through continuous error correction. Think of it as a "security health score" that combines:
+### Core Components
 
-- **System Drift**: Deviation from baseline behavior
-- **Attack Probability**: ML-predicted threat level
-- **Classifier Decay**: ML confidence degradation
-- **Quantum Drift**: System entropy changes
-- **Energy Anomaly**: Power consumption patterns (Intel CPUs with RAPL)
+| Component | File | Purpose |
+|-----------|------|---------|
+| **TER Generator** | `core/ter.py` | 64-byte sensor snapshots every 60 seconds |
+| **Weight Engine** | `neural/engine.py` | Deterministic Q16.16 fixed-point evolution |
+| **PoSF Signatures** | `core/posf.py` | Neural network output as cryptographic proof |
+| **HTP Transport** | `transport/htp.py` | 9-message UDP protocol, quantum-resistant |
 
-### RAG Status System
+### The Algorithm
 
-- 🟢 **GREEN** (< 0.45): System resilient, all quiet
-- 🟡 **AMBER** (0.45-0.70): Warning detected, defensive systems activating
-- 🔴 **RED** (> 0.70): Critical threat, automated response engaged
+```python
+# Weight Evolution (every 60 seconds)
+W(t+1) = W(t) - η × ∇L(W, TER)
 
-### Features
-
-✅ **XDP/eBPF DDoS Mitigation** - Kernel-level packet filtering
-✅ **Energy Monitoring** - RAPL + per-process power tracking
-✅ **Network Direction-Aware** - Detects compromised endpoints vs servers under attack
-✅ **Dual-Database Support** - ClickHouse (edge) + Apache Doris (cloud)
-✅ **Automated Response** - Kali Linux integration for counter-measures
-
-**Documentation**: [src/qsecbit/README.md](qsecbit/README.md)
-
----
-
-## 🛡️ Automated Response (`response/`)
-
-**Kali Linux on-demand** - Automated threat mitigation and incident response.
-
-### What It Does
-
-When Qsecbit detects a threat (AMBER/RED status), the response engine automatically:
-
-1. **Spins up Kali Linux container** (on-demand, lightweight)
-2. **Analyzes the threat** using appropriate tools
-3. **Implements countermeasures**:
-   - Update WAF rules to block attack patterns
-   - Add IP to blocklist
-   - Capture network forensics
-   - Generate incident reports
-4. **Shuts down** when threat cleared (resource efficient)
-
-### Supported Threat Types
-
-| Threat | Response Actions |
-|--------|------------------|
-| **XSS Injection** | Update WAF rules, Block IP, Scan attacker, Generate report |
-| **SQL Injection** | DB snapshot, Update WAF, Block IP, Enable logging, Integrity check |
-| **Memory Overflow** | Capture diagnostics, Reduce limits, Clear caches, Safe restart |
-| **DDoS Attack** | Enable XDP filtering, Rate limiting, GeoIP blocking |
-| **Port Scan** | Tarpit attacker, Block subnet, Update firewall rules |
-
-### Why Kali on-Demand?
-
-- **Resource Efficient**: Only runs when needed (RAM savings on edge devices)
-- **Always Updated**: Pulls latest image when threat detected
-- **Professional Tools**: Metasploit, nmap, Wireshark, volatility
-- **Automated**: No manual intervention required
-
-**Documentation**: [src/response/README.md](response/README.md)
-
----
-
-## 🌐 Web Application (`web/`)
-
-**Django-powered CMS and Security Dashboard** - Optional web interface for HookProbe.
-
-### Features
-
-#### Public Website (Forty Theme)
-- 🌐 Blog and content management
-- 📧 Contact forms
-- 📄 Static pages
-- 🎨 Modern responsive design
-
-#### Admin Dashboard (AdminLTE)
-- 📊 System overview and POD health
-- 🛒 Merchandise management (AI content + products)
-- ✍️ Blog post editor
-- 👥 User management
-
-#### MSSP Dashboard
-- 🔒 Security monitoring (SIEM)
-- 📱 Multi-device management
-- 📈 Real-time metrics
-- 🎯 Threat hunting interface
-- 🚨 Alert management
-
-#### REST APIs
-- 📡 Device registration and management
-- 🔐 Security events ingestion
-- 📊 Metrics collection
-- 🤖 AI integration (n8n workflows)
-
-### Why Optional?
-
-The web server is an **addon** (not core infrastructure) because:
-
-- Core security works without UI
-- Edge devices can save resources
-- MSSP can centralize web interface
-- Staged deployment flexibility
-
-### Installation
-
-```bash
-cd install/addons/webserver
-sudo ./setup-webserver.sh edge
+where:
+    η = η_base × exp(-Δt / τ)     # Time-decayed learning rate
+    L = L_base + C × Σ_threat     # Integrity penalty
 ```
 
-**Documentation**: [src/web/README.md](web/README.md) | [Setup Guide](web/SETUP_GUIDE.md)
+**Why attackers can't win**: Tampering changes integrity hash → unpredictable weight divergence → instant detection on reconnect.
+
+📖 **[Full Documentation →](neuro/README.md)**
 
 ---
 
-## 🚀 Quick Start
+## Pillar 2: Decentralized Security Mesh (`dsm/`)
 
-### 1. Deploy Core HookProbe
+**One brain powered by many edge nodes.**
 
-```bash
-cd /home/user/hookprobe
-sudo ./install.sh
-# Select: 2) Select Deployment Mode → 1) Edge Deployment
+Traditional SOC: One analyst watches 1000 networks (impossible).
+DSM: 1000 nodes share intelligence instantly (unstoppable).
+
+### Core Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **DSM Node** | `node.py` | Edge node microblock creation |
+| **Validator** | `validator.py` | Checkpoint creation and verification |
+| **Consensus** | `consensus.py` | BLS signature aggregation (2/3 quorum) |
+| **Gossip** | `gossip.py` | P2P threat announcement |
+
+### Real Attack Scenario
+
+```
+T+00s: Home 1 detects C2 communication
+T+05s: Creates microblock with PoSF signature
+T+10s: Announces to mesh via gossip protocol
+T+15s: Validators aggregate into checkpoint
+T+20s: ALL mesh nodes block the threat
+
+One node's detection → Everyone's protection
 ```
 
-### 2. Access Qsecbit
-
-```bash
-# Check threat status
-curl http://localhost:8888/status
-
-# View current score
-curl http://localhost:8888/score
-```
-
-### 3. Monitor in Grafana
-
-Open http://YOUR_IP:3000 and look for:
-- **Qsecbit Dashboard**: Real-time RAG status
-- **Security Events**: IDS/IPS alerts
-- **System Overview**: All POD health
+📖 **[Full Documentation →](dsm/README.md)**
 
 ---
 
-## 🔧 Development
+## Pillar 3: Qsecbit AI (`qsecbit/`)
 
-### Python Environment
+**Quantified cyber resilience, not binary detection.**
+
+Traditional security: *"Are we under attack?"* (yes/no)
+Qsecbit: *"How fast can we return to equilibrium?"* (0.0-1.0)
+
+### The Formula
+
+```python
+Qsecbit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
+
+# RAG Status
+GREEN  (< 0.45):  Normal — learning baseline
+AMBER  (0.45-0.70): Warning — auto-response triggered
+RED    (> 0.70):  Critical — full mitigation deployed
+```
+
+### Energy-Based Attack Detection (v5.0)
+
+```
+DDoS Attack Pattern:
+  ksoftirqd/0 power: 2.5W → 8.3W (Z-score: 4.2)
+  → Qsecbit: 0.78 (RED)
+  → XDP auto-deploys rate limiting
+```
+
+📖 **[Full Documentation →](qsecbit/README.md)**
+
+---
+
+## Automated Response (`response/`)
+
+**Kali Linux on-demand for automated threat mitigation.**
+
+When Qsecbit detects a threat (AMBER/RED):
+
+1. Spin up Kali container (on-demand)
+2. Analyze threat with appropriate tools
+3. Implement countermeasures (WAF, firewall, forensics)
+4. Shut down when threat cleared
+
+| Threat | Response |
+|--------|----------|
+| **XSS** | Update WAF rules, block IP |
+| **SQLi** | DB snapshot, update WAF |
+| **DDoS** | XDP filtering, rate limiting |
+| **Memory overflow** | Capture diagnostics, safe restart |
+
+📖 **[Full Documentation →](response/README.md)**
+
+---
+
+## Web Application (`web/`)
+
+**Django-powered dashboard and APIs** (optional addon).
+
+- **Public CMS**: Forty HTML5 theme
+- **Admin Dashboard**: AdminLTE system management
+- **MSSP Portal**: Multi-tenant device management
+- **REST APIs**: Device registration, security events
+
+📖 **[Full Documentation →](web/README.md)**
+
+---
+
+## Quick Start
+
+### Development Environment
 
 ```bash
 # Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 
-# Install dependencies
-pip install -r src/web/requirements.txt
+# Install all dependencies
+pip install -r src/neuro/requirements.txt
 pip install -r src/qsecbit/requirements.txt
+pip install -r src/web/requirements.txt
+
+# Test Neuro Protocol
+python3 -m neuro.core.ter       # TER generation
+python3 -m neuro.neural.engine  # Weight evolution
+python3 -m neuro.core.posf      # PoSF signatures
 ```
 
-### Running Components Locally
+### Production Deployment
 
 ```bash
-# Qsecbit (requires ClickHouse/Doris running)
-cd src/qsecbit
-python qsecbit.py --config /opt/hookprobe/config/qsecbit.conf
+# Full installation
+sudo ./install.sh --role edge
 
-# Django web server (requires PostgreSQL + Redis)
-cd src/web
-python manage.py runserver 0.0.0.0:8000
-```
+# Initialize Neuro weights
+python3 -m neuro.tools.init_weights --node-id edge-001
 
-### Running Tests
-
-```bash
-# Web application tests
-cd src/web
-python manage.py test
-
-# Qsecbit tests
-cd src/qsecbit
-pytest tests/
+# Start services
+sudo systemctl start hookprobe-edge hookprobe-neuro
 ```
 
 ---
 
-## 🏗️ Architecture
-
-### How Components Interact
+## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│              Network Traffic                │
-└──────────┬──────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────┐
-│   XDP/eBPF Filter    │  ← DDoS mitigation at NIC level
-│   (Qsecbit)          │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│   IDS/IPS Layer      │  ← Zeek, Snort, Suricata
-│   (POD-006)          │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│   Qsecbit Analysis   │  ← AI threat scoring
-│   (POD-007)          │     - System drift
-└──────────┬───────────┘     - Attack probability
-           │                  - Energy anomalies
-           │
-           ├─── GREEN → Monitor only
-           │
-           ├─── AMBER → Kali spins up (defensive posture)
-           │
-           └─── RED ──┐
-                      │
-                      ▼
-           ┌──────────────────────┐
-           │  Response Engine     │  ← Automated countermeasures
-           │  (Kali Container)    │     - Update WAF
-           └──────────────────────┘     - Block IPs
-                                         - Capture forensics
-```
-
-### Data Flow
-
-```
-1. Network Traffic → XDP Filter → IDS/IPS
-                          ↓
-2. Security Events → ClickHouse/Doris
-                          ↓
-3. Qsecbit Analysis → RAG Score → Response Decision
-                          ↓
-4. Kali Response → Mitigation Actions → WAF/Firewall Updates
-                          ↓
-5. Web Dashboard → Display Alerts → Operator Notification
+┌─────────────────────────────────────────────────────────────┐
+│                    HOOKPROBE STACK                           │
+├─────────────────────────────────────────────────────────────┤
+│  LAYER 4: DSM Consensus (BLS signatures, 2/3 quorum)        │
+├─────────────────────────────────────────────────────────────┤
+│  LAYER 3: Neural Resonance (TER → Weight → PoSF)            │
+├─────────────────────────────────────────────────────────────┤
+│  LAYER 2: Qsecbit AI (Resilience metrics, auto-response)    │
+├─────────────────────────────────────────────────────────────┤
+│  LAYER 1: Detection (XDP/eBPF, Suricata, Zeek, Snort3)      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📊 Performance
+## Performance
 
-### Resource Usage (Typical Edge Deployment)
-
-| Component | CPU (avg) | RAM | Storage | Notes |
-|-----------|-----------|-----|---------|-------|
-| **Qsecbit** | 5-15% | 500MB | 100MB | Spikes during analysis |
-| **Response** | 0% idle | 0MB idle | 2GB image | On-demand only |
-| **Web (Django)** | 2-5% | 300MB | 500MB | Optional addon |
-
-### Scaling
-
-- **Edge Device**: Handles 1-10 Gbps traffic, 10K events/sec
-- **MSSP Backend**: 1000+ edge devices, 1M+ events/sec, 365+ day retention
+| Component | CPU | RAM | Throughput |
+|-----------|-----|-----|------------|
+| **Neuro** | <1% | 2MB | 60 TER/hour |
+| **Qsecbit** | 5-15% | 500MB | 10K events/sec |
+| **XDP** | 5-10% | 1MB | 2.5 Gbps line-rate |
+| **Response** | 0% idle | 0MB idle | On-demand |
 
 ---
 
-## 🛠️ Troubleshooting
+## Documentation
 
-### Qsecbit Not Responding
-
-```bash
-# Check status
-podman ps | grep qsecbit
-
-# View logs
-podman logs hookprobe-pod-007-ai-response-qsecbit
-
-# Restart
-podman restart hookprobe-pod-007-ai-response-qsecbit
-
-# Test API
-curl http://localhost:8888/health
-```
-
-### Response Engine Not Triggering
-
-```bash
-# Check Qsecbit score
-curl http://localhost:8888/score
-
-# Manual trigger (testing)
-curl -X POST http://localhost:8888/trigger-response
-
-# Check Kali container
-podman ps -a | grep kali
-```
-
-### Web Dashboard Errors
-
-```bash
-# Check Django logs
-journalctl -u hookprobe-web -n 50
-
-# Test database connection
-podman exec hookprobe-pod-003-db-persistent-postgres pg_isready
-
-# Check Redis
-podman exec hookprobe-pod-004-db-transient-redis redis-cli ping
-```
+| Module | Technical Spec | Architecture |
+|--------|----------------|--------------|
+| **Neuro** | [neuro/README.md](neuro/README.md) | [Protocol Spec](../docs/architecture/hookprobe-neuro-protocol.md) |
+| **DSM** | [dsm/README.md](dsm/README.md) | [Whitepaper](../docs/architecture/dsm-whitepaper.md) |
+| **Qsecbit** | [qsecbit/README.md](qsecbit/README.md) | [Security Model](../docs/architecture/security-model.md) |
+| **HTP** | [neuro/transport/](neuro/transport/) | [Quantum Analysis](../docs/HTP_QUANTUM_CRYPTOGRAPHY.md) |
 
 ---
 
-## 🤝 Contributing
+## License
 
-We welcome contributions to all source components!
-
-### Areas for Contribution
-
-- **Qsecbit Algorithm**: New threat detection methods, ML models
-- **Response Actions**: Additional mitigation strategies
-- **Web Interface**: New dashboards, widgets, visualizations
-- **Integrations**: External tools, APIs, data sources
-
-### Development Workflow
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Make changes
-4. Test locally
-5. Run CI checks (`./scripts/run-tests.sh`)
-6. Submit PR with clear description
-
-**See**: [CONTRIBUTING.md](../docs/CONTRIBUTING.md) for detailed guidelines
+**MIT License** — All source code components.
 
 ---
 
-## 📚 Documentation
+**HookProbe** · Neural Resonance · Decentralized Mesh · Surgical Precision
 
-### Component-Specific
-
-- **Qsecbit**: [src/qsecbit/README.md](qsecbit/README.md)
-- **Response Engine**: [src/response/README.md](response/README.md)
-- **Web Application**: [src/web/README.md](web/README.md) | [Setup Guide](web/SETUP_GUIDE.md)
-
-### General
-
-- **Architecture**: [docs/architecture/security-model.md](../docs/architecture/security-model.md)
-- **Installation**: [QUICK-START.md](../QUICK-START.md)
-- **Beginner's Guide**: [docs/installation/BEGINNER-GUIDE.md](../docs/installation/BEGINNER-GUIDE.md)
-
----
-
-## 📄 License
-
-All source code components are licensed under **MIT License** (HookProbe v5.0+).
-
-- ✅ **Qsecbit Algorithm**: MIT (Andrei Toma)
-- ✅ **Response Engine**: MIT (HookProbe Team)
-- ✅ **Web Application**: MIT (HookProbe Team)
-
-See [LICENSE](../LICENSE) for details.
-
----
-
-## 📞 Support
-
-- **GitHub Issues**: https://github.com/hookprobe/hookprobe/issues
-- **Security Contact**: qsecbit@hookprobe.com
-- **Documentation**: https://github.com/hookprobe/hookprobe
-
----
-
-**HookProbe** - *Democratizing Cybersecurity Through Edge Computing*
-
-Built with ❤️ for the security community by Andrei Toma and the HookProbe Team
+*Democratizing enterprise-grade cybersecurity for millions*
