@@ -380,10 +380,31 @@ class HTPSession:
     last_activity: float = 0.0
     last_keepalive: float = 0.0
 
+    # RTT measurement (P2 feature)
+    rtt_samples: deque = field(default_factory=lambda: deque(maxlen=20))  # Last 20 RTT samples
+    rtt_current: float = 0.0  # Current RTT in seconds
+    rtt_baseline: float = 0.1  # Baseline RTT (updated via EWMA)
+    rtt_min: float = float('inf')  # Minimum observed RTT
+    rtt_max: float = 0.0  # Maximum observed RTT
+    last_sent_timestamp: Dict[int, float] = field(default_factory=dict)  # seq → timestamp
+
+    # Bandwidth detection (P2 feature)
+    bandwidth_bytes_sent: int = 0
+    bandwidth_bytes_received: int = 0
+    bandwidth_window_start: float = 0.0
+    bandwidth_current_bps: float = 0.0  # Current bandwidth in bits/sec
+    loss_rate: float = 0.0  # Packet loss rate (0.0 to 1.0)
+    packets_sent: int = 0
+    packets_received: int = 0
+    packets_expected: int = 0
+
     # Adaptive state
-    rtt_baseline: float = 0.1  # seconds
-    loss_rate: float = 0.0
     current_mode: int = PacketMode.SENSOR.value
+
+    # CPU/temp stress (P2 feature)
+    cpu_usage: float = 0.0  # Current CPU usage (0.0 to 1.0)
+    temperature_celsius: float = 0.0  # Device temperature (if available)
+    stress_level: str = "NORMAL"  # NORMAL, MODERATE, HIGH
 
     # Sequence tracking
     send_sequence: int = 0
@@ -417,6 +438,15 @@ class HookProbeTransport:
     RTT_THRESHOLD_MULTIPLIER = 1.5
     LOSS_RATE_THRESHOLD = 0.15  # 15%
     RDV_DIVERGENCE_THRESHOLD = 0.20  # 20% Hamming distance
+
+    # P2: CPU/temp stress thresholds
+    CPU_STRESS_THRESHOLD = 0.85  # 85% CPU usage
+    TEMP_STRESS_THRESHOLD = 75.0  # 75°C
+    CPU_CRITICAL_THRESHOLD = 0.95  # 95% CPU usage
+
+    # P2: Bandwidth window for measurement
+    BANDWIDTH_WINDOW = 10.0  # 10 seconds
+    RTT_EWMA_ALPHA = 0.125  # Exponential weighted moving average factor
 
     def __init__(
         self,
@@ -579,10 +609,24 @@ class HookProbeTransport:
         # Assemble packet
         packet = header.serialize() + resonance.serialize() + neuro.serialize() + payload
 
+        # P2: Track RTT - store send timestamp for this sequence
+        send_time = time.time()
+        session.last_sent_timestamp[session.send_sequence] = send_time
+
+        # P2: Update bandwidth tracking
+        packet_size = len(packet)
+        session.bandwidth_bytes_sent += packet_size
+        session.packets_sent += 1
+        self._update_bandwidth(session)
+
         # Send
         self.socket.sendto(packet, session.peer_address)
         session.send_sequence += 1
         session.last_activity = time.time()
+
+        # P2: Update CPU/temp stress and check adaptive mode triggers
+        self._update_stress_metrics(session)
+        self._check_adaptive_triggers(session, flow_token)
 
         return True
 
@@ -647,6 +691,23 @@ class HookProbeTransport:
                     except Exception as e:
                         print(f"[HTP] Decryption failed: {e}")
                         continue
+
+                # P2: Calculate RTT if we have send timestamp for this sequence
+                recv_time = time.time()
+                # Estimate which sequence this is a response to (simplified)
+                expected_seq = session.recv_sequence
+                if expected_seq in session.last_sent_timestamp:
+                    rtt = recv_time - session.last_sent_timestamp[expected_seq]
+                    self._update_rtt(session, rtt)
+                    # Clean up old timestamps
+                    del session.last_sent_timestamp[expected_seq]
+
+                # P2: Update bandwidth tracking
+                packet_size = len(packet)
+                session.bandwidth_bytes_received += packet_size
+                session.packets_received += 1
+                session.packets_expected += 1
+                self._update_bandwidth(session)
 
                 session.recv_sequence += 1
                 session.last_activity = time.time()
@@ -741,7 +802,7 @@ class HookProbeTransport:
         """
         Trigger adaptive mode based on network conditions.
 
-        Checks RTT, packet loss, and transitions to ADAPTIVE state if needed.
+        Checks RTT, packet loss, stress level and transitions to ADAPTIVE state if needed.
 
         Args:
             flow_token: Session flow token
@@ -750,20 +811,36 @@ class HookProbeTransport:
         if not session or session.state != HTPState.STREAMING:
             return
 
-        # Check if RTT exceeds threshold
-        # (In full implementation, would track actual RTT measurements)
-        # For now, this is a placeholder
+        # P2: Check multiple conditions for adaptive mode
+        should_adapt = False
+        reasons = []
+
+        # Check RTT elevation
+        if (session.rtt_current > 0 and
+            session.rtt_current > session.rtt_baseline * self.RTT_THRESHOLD_MULTIPLIER):
+            should_adapt = True
+            reasons.append(f"elevated RTT ({session.rtt_current*1000:.1f}ms)")
 
         # Check packet loss rate
         if session.loss_rate > self.LOSS_RATE_THRESHOLD:
-            print(f"[HTP] High loss rate detected: {session.loss_rate:.1%}")
+            should_adapt = True
+            reasons.append(f"high loss ({session.loss_rate:.1%})")
+
+        # Check stress level
+        if session.stress_level == "HIGH":
+            should_adapt = True
+            reasons.append(f"high system stress")
+
+        # Transition to ADAPTIVE if conditions met
+        if should_adapt:
+            print(f"[HTP] Adaptive mode triggered: {', '.join(reasons)}")
             session.state = HTPState.ADAPTIVE
             print(f"[HTP] State: STREAMING → ADAPTIVE")
 
             # Switch to lower-bandwidth mode
             if session.current_mode != PacketMode.SENSOR.value:
                 session.current_mode = PacketMode.SENSOR.value
-                print(f"[HTP] Adaptive: Switching to SENSOR mode")
+                print(f"[HTP] Adaptive: Switching to SENSOR mode (reduced bandwidth)")
 
     def trigger_re_resonance(self, flow_token: int):
         """
@@ -794,6 +871,169 @@ class HookProbeTransport:
         # Transition back to RESONATE
         session.state = HTPState.RESONATE
         print(f"[HTP] State: RE_RESONATE → RESONATE")
+
+    # ========================================================================
+    # P2: RTT / BANDWIDTH / STRESS MONITORING
+    # ========================================================================
+
+    def _update_rtt(self, session: HTPSession, rtt: float):
+        """
+        Update RTT statistics using exponential weighted moving average (EWMA).
+
+        Args:
+            session: HTP session
+            rtt: Measured round-trip time in seconds
+        """
+        # Update current RTT
+        session.rtt_current = rtt
+
+        # Update min/max
+        session.rtt_min = min(session.rtt_min, rtt)
+        session.rtt_max = max(session.rtt_max, rtt)
+
+        # Add to samples window
+        session.rtt_samples.append(rtt)
+
+        # Update baseline using EWMA: baseline = alpha * rtt + (1-alpha) * baseline
+        if session.rtt_baseline == 0.1:  # First measurement
+            session.rtt_baseline = rtt
+        else:
+            session.rtt_baseline = (self.RTT_EWMA_ALPHA * rtt +
+                                   (1 - self.RTT_EWMA_ALPHA) * session.rtt_baseline)
+
+        # Check if RTT is significantly elevated
+        if rtt > session.rtt_baseline * self.RTT_THRESHOLD_MULTIPLIER:
+            print(f"[HTP P2] Elevated RTT detected: {rtt*1000:.1f}ms "
+                  f"(baseline: {session.rtt_baseline*1000:.1f}ms)")
+
+    def _update_bandwidth(self, session: HTPSession):
+        """
+        Calculate current bandwidth in bits per second over measurement window.
+
+        Args:
+            session: HTP session
+        """
+        current_time = time.time()
+
+        # Initialize window start if needed
+        if session.bandwidth_window_start == 0.0:
+            session.bandwidth_window_start = current_time
+            return
+
+        # Calculate elapsed time
+        elapsed = current_time - session.bandwidth_window_start
+
+        # Update bandwidth if window has elapsed
+        if elapsed >= self.BANDWIDTH_WINDOW:
+            # Calculate total bytes transferred
+            total_bytes = session.bandwidth_bytes_sent + session.bandwidth_bytes_received
+
+            # Calculate bits per second
+            session.bandwidth_current_bps = (total_bytes * 8) / elapsed
+
+            # Calculate packet loss rate
+            if session.packets_expected > 0:
+                packets_lost = session.packets_expected - session.packets_received
+                session.loss_rate = max(0.0, packets_lost / session.packets_expected)
+            else:
+                session.loss_rate = 0.0
+
+            # Reset window
+            session.bandwidth_bytes_sent = 0
+            session.bandwidth_bytes_received = 0
+            session.bandwidth_window_start = current_time
+
+            # Log bandwidth metrics
+            bw_mbps = session.bandwidth_current_bps / 1_000_000
+            print(f"[HTP P2] Bandwidth: {bw_mbps:.2f} Mbps, Loss rate: {session.loss_rate:.1%}")
+
+    def _update_stress_metrics(self, session: HTPSession):
+        """
+        Update CPU usage and temperature stress metrics.
+
+        Args:
+            session: HTP session
+        """
+        # Try to read CPU usage from /proc/stat (simplified)
+        try:
+            with open('/proc/stat', 'r') as f:
+                line = f.readline()
+                if line.startswith('cpu '):
+                    # Parse: cpu user nice system idle iowait irq softirq
+                    parts = line.split()
+                    user = int(parts[1])
+                    nice = int(parts[2])
+                    system = int(parts[3])
+                    idle = int(parts[4])
+                    total = user + nice + system + idle
+                    active = user + nice + system
+                    if total > 0:
+                        session.cpu_usage = active / total
+        except:
+            pass  # Fallback: keep previous value
+
+        # Try to read temperature from /sys/class/thermal (simplified)
+        try:
+            # Try common thermal zones
+            for zone in [0, 1, 2]:
+                temp_path = f'/sys/class/thermal/thermal_zone{zone}/temp'
+                try:
+                    with open(temp_path, 'r') as f:
+                        # Temperature in millidegrees Celsius
+                        temp_millidegrees = int(f.read().strip())
+                        session.temperature_celsius = temp_millidegrees / 1000.0
+                        break  # Use first available zone
+                except:
+                    continue
+        except:
+            pass  # Fallback: keep previous value
+
+        # Determine stress level
+        if (session.cpu_usage >= self.CPU_CRITICAL_THRESHOLD or
+            session.temperature_celsius >= self.TEMP_STRESS_THRESHOLD + 10):
+            session.stress_level = "HIGH"
+        elif (session.cpu_usage >= self.CPU_STRESS_THRESHOLD or
+              session.temperature_celsius >= self.TEMP_STRESS_THRESHOLD):
+            session.stress_level = "MODERATE"
+        else:
+            session.stress_level = "NORMAL"
+
+        # Log stress warnings
+        if session.stress_level != "NORMAL":
+            print(f"[HTP P2] Stress level: {session.stress_level} "
+                  f"(CPU: {session.cpu_usage*100:.1f}%, Temp: {session.temperature_celsius:.1f}°C)")
+
+    def _check_adaptive_triggers(self, session: HTPSession, flow_token: int):
+        """
+        Check if adaptive mode should be triggered based on P2 metrics.
+
+        Args:
+            session: HTP session
+            flow_token: Session flow token
+        """
+        # Check if we should trigger adaptive mode
+        should_adapt = False
+        reasons = []
+
+        # Check RTT
+        if session.rtt_current > session.rtt_baseline * self.RTT_THRESHOLD_MULTIPLIER:
+            should_adapt = True
+            reasons.append(f"RTT: {session.rtt_current*1000:.1f}ms > {session.rtt_baseline*self.RTT_THRESHOLD_MULTIPLIER*1000:.1f}ms")
+
+        # Check packet loss
+        if session.loss_rate > self.LOSS_RATE_THRESHOLD:
+            should_adapt = True
+            reasons.append(f"Loss: {session.loss_rate:.1%}")
+
+        # Check stress level
+        if session.stress_level == "HIGH":
+            should_adapt = True
+            reasons.append(f"Stress: {session.stress_level}")
+
+        # Trigger adaptive mode if needed
+        if should_adapt and session.state == HTPState.STREAMING:
+            print(f"[HTP P2] Triggering ADAPTIVE mode: {', '.join(reasons)}")
+            self.trigger_adaptive_mode(flow_token)
 
     # ========================================================================
     # PRIVATE METHODS
