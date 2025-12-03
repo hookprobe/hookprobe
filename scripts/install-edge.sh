@@ -610,7 +610,9 @@ install_dependencies() {
 # ============================================================
 
 # Global flag for network mode
-USE_HOST_NETWORK=false
+# For edge deployments, host network is recommended for simplicity
+# and to allow inter-container communication without complex routing
+USE_HOST_NETWORK=true
 
 detect_container_environment() {
     # Detect if running inside LXC/LXD container
@@ -1254,11 +1256,18 @@ deploy_web_pod() {
     fi
 
     # Create pod
-    podman pod create \
-        --name hookprobe-web \
-        $network_arg \
-        --publish 80:80 \
-        --publish 443:443
+    # With host network, containers bind directly to host ports
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        podman pod create \
+            --name hookprobe-web \
+            $network_arg
+    else
+        podman pod create \
+            --name hookprobe-web \
+            $network_arg \
+            --publish 80:80 \
+            --publish 443:443
+    fi
 
     # Determine if we should use standalone mode (no external database)
     # Standalone mode uses SQLite instead of PostgreSQL
@@ -1433,17 +1442,19 @@ deploy_database_pod() {
     echo "Deploying POD-003: Database (PostgreSQL)..."
 
     local network_arg=$(get_network_arg "database")
-    local publish_arg=""
 
-    # Publish port when using host network so other containers can connect
+    # With host network, containers bind directly to host ports (no --publish needed)
+    # With custom network, publish port for external access if needed
     if [ "$USE_HOST_NETWORK" = true ]; then
-        publish_arg="--publish 5432:5432"
+        podman pod create \
+            --name hookprobe-database \
+            $network_arg
+    else
+        podman pod create \
+            --name hookprobe-database \
+            $network_arg \
+            --publish 5432:5432
     fi
-
-    podman pod create \
-        --name hookprobe-database \
-        $network_arg \
-        $publish_arg
 
     podman run -d \
         --pod hookprobe-database \
@@ -1468,17 +1479,18 @@ deploy_cache_pod() {
     echo "Deploying POD-005: Cache (Redis)..."
 
     local network_arg=$(get_network_arg "cache")
-    local publish_arg=""
 
-    # Publish port when using host network
+    # With host network, containers bind directly to host ports (no --publish needed)
     if [ "$USE_HOST_NETWORK" = true ]; then
-        publish_arg="--publish 6379:6379"
+        podman pod create \
+            --name hookprobe-cache \
+            $network_arg
+    else
+        podman pod create \
+            --name hookprobe-cache \
+            $network_arg \
+            --publish 6379:6379
     fi
-
-    podman pod create \
-        --name hookprobe-cache \
-        $network_arg \
-        $publish_arg
 
     podman run -d \
         --pod hookprobe-cache \
