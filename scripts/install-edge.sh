@@ -181,20 +181,20 @@ show_component_menu() {
     echo -e "  ${YELLOW}1${NC}) Minimal Edge ${GREEN}[Recommended for validators]${NC}"
     echo "     └─ Neuro Protocol (Qsecbit + HTP) + Database + Cache"
     echo "     └─ For: Edge firewall, IDS/IPS, WAF validators"
-    echo "     └─ RAM: ~1.5GB"
+    echo "     └─ Min RAM: 3GB | PODs: ~1.5GB"
     echo ""
     echo -e "  ${YELLOW}2${NC}) Edge with Web Dashboard ${CYAN}[Requires secrets config]${NC}"
     echo "     └─ Adds: Django dashboard + Nginx + NAXSI WAF + IAM"
     echo "     └─ For: Standalone edge with local management UI"
-    echo "     └─ RAM: ~2GB"
+    echo "     └─ Min RAM: 4GB | PODs: ~2.5GB"
     echo ""
-    echo -e "  ${YELLOW}3${NC}) Full Edge Stack ${YELLOW}[8GB+ RAM recommended]${NC}"
+    echo -e "  ${YELLOW}3${NC}) Full Edge Stack ${YELLOW}[8GB+ RAM required]${NC}"
     echo "     └─ All components including AI detection & monitoring"
     echo "     └─ For: Complete edge security appliance"
-    echo "     └─ RAM: ~6GB"
+    echo "     └─ Min RAM: 10GB | PODs: ~8GB"
     echo ""
     echo -e "  ${YELLOW}4${NC}) Custom Selection"
-    echo "     └─ Choose individual components"
+    echo "     └─ Choose individual components (RAM calculated dynamically)"
     echo ""
 }
 
@@ -255,29 +255,40 @@ select_components() {
 custom_component_selection() {
     echo -e "${CYAN}Custom Component Selection${NC}"
     echo ""
+    echo "Core components (always installed): Database, Cache, Neuro Protocol (~1.5GB)"
+    echo ""
 
-    read -p "Enable Web Server (Django + Nginx)? [y/N]: " -n 1 -r
+    read -p "Enable Web Server (Django + Nginx) [+0.5GB RAM]? [y/N]: " -n 1 -r
     echo ""
     [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_WEBSERVER=true || ENABLE_WEBSERVER=false
 
-    read -p "Enable IAM (Logto authentication)? [y/N]: " -n 1 -r
+    read -p "Enable IAM (Logto authentication) [+1GB RAM]? [y/N]: " -n 1 -r
     echo ""
     [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_IAM=true || ENABLE_IAM=false
 
-    read -p "Enable Monitoring (Grafana + VictoriaMetrics)? [y/N]: " -n 1 -r
+    read -p "Enable Monitoring (Grafana + VictoriaMetrics) [+2GB RAM]? [y/N]: " -n 1 -r
     echo ""
     [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_MONITORING=true || ENABLE_MONITORING=false
 
-    read -p "Enable AI Detection (requires 8GB+ RAM)? [y/N]: " -n 1 -r
+    read -p "Enable AI Detection (Suricata + ML) [+4GB RAM]? [y/N]: " -n 1 -r
     echo ""
     [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_AI=true || ENABLE_AI=false
 
+    # Calculate minimum RAM for selected components
+    local min_ram=3  # Base
+    [ "$ENABLE_IAM" = true ] && min_ram=$((min_ram + 1))
+    [ "$ENABLE_MONITORING" = true ] && min_ram=$((min_ram + 2))
+    [ "$ENABLE_AI" = true ] && min_ram=$((min_ram + 4))
+
     echo ""
     echo "Selected components:"
-    echo -e "  $([ "$ENABLE_WEBSERVER" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") Web Server"
-    echo -e "  $([ "$ENABLE_IAM" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") IAM"
-    echo -e "  $([ "$ENABLE_MONITORING" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") Monitoring"
-    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") AI Detection"
+    echo -e "  ${GREEN}[x]${NC} Core (Database + Cache + Neuro)"
+    echo -e "  $([ "$ENABLE_WEBSERVER" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") Web Server (+0.5GB)"
+    echo -e "  $([ "$ENABLE_IAM" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") IAM (+1GB)"
+    echo -e "  $([ "$ENABLE_MONITORING" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") Monitoring (+2GB)"
+    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") AI Detection (+4GB)"
+    echo ""
+    echo -e "Minimum RAM required: ${CYAN}${min_ram}GB${NC}"
 }
 
 # ============================================================

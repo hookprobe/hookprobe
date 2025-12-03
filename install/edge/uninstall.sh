@@ -235,16 +235,21 @@ read -p "Remove HookProbe container images? (yes/no): " remove_images
 
 if [ "$remove_images" == "yes" ]; then
     echo "[STEP 9] Removing images..."
-    
-    IMAGES=$(podman images -q | xargs podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "hookprobe|modsecurity|zeek|victoriametrics|victorialogs" 2>/dev/null || true)
-    
+
+    # Get list of HookProbe-related images
+    IMAGES=$(podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "hookprobe|modsecurity|zeek|victoriametrics|victorialogs" 2>/dev/null || true)
+
     if [ -n "$IMAGES" ]; then
-        echo "$IMAGES" | while read image; do
-            podman rmi -f "$image" 2>/dev/null || true
+        echo "$IMAGES" | while read -r image; do
+            if [ -n "$image" ]; then
+                echo "  Removing: $image"
+                podman rmi -f "$image" 2>/dev/null || true
+            fi
         done
     fi
-    
-    podman image prune -af || true
+
+    # Also remove any dangling images
+    podman image prune -af 2>/dev/null || true
     echo "✓ Images removed"
 fi
 
