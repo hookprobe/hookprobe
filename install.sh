@@ -249,8 +249,14 @@ handle_preinstall() {
             5)
                 echo -e "${GREEN}Running complete pre-install check...${NC}"
                 echo ""
-                # Run all checks
-                bash "$SCRIPT_DIR/install/common/pre-install-check.sh" 2>/dev/null || echo "Pre-install check script not found"
+                echo -e "${YELLOW}Note: Pre-install checks are now built into the unified installer${NC}"
+                echo -e "${YELLOW}System validation runs automatically when you select deployment mode${NC}"
+                echo ""
+                echo "Quick checks:"
+                echo "  OS: $(detect_os)"
+                echo "  Architecture: $(detect_architecture)"
+                echo "  RAM: $(detect_ram)"
+                echo "  Containers: $(get_container_status)"
                 ;;
             b|B)
                 return
@@ -302,7 +308,7 @@ handle_deployment() {
 
         case $choice in
             1)
-                run_installer "$SCRIPT_DIR/install/edge/setup.sh" "Edge Deployment" "edge"
+                run_installer "$SCRIPT_DIR/scripts/install-edge.sh" "Edge Deployment" "edge"
                 return
                 ;;
             2)
@@ -310,7 +316,10 @@ handle_deployment() {
                 return
                 ;;
             3)
-                run_installer "$SCRIPT_DIR/install/testing/lightweight-setup.sh" "Lightweight Testing/Development" "testing"
+                echo -e "${YELLOW}Note: Lightweight testing now uses the same unified installer${NC}"
+                echo -e "${YELLOW}Running edge installation without AI (suitable for 4GB RAM)${NC}"
+                echo ""
+                run_installer "$SCRIPT_DIR/scripts/install-edge.sh" "Edge Deployment (Lightweight)" "edge"
                 return
                 ;;
             b|B)
@@ -819,18 +828,33 @@ run_config_wizard() {
     local deployment_type="$1"
     local config_file="$2"
 
-    if [ -f "$SCRIPT_DIR/install/common/config-wizard.sh" ]; then
-        source "$SCRIPT_DIR/install/common/config-wizard.sh"
-        if run_configuration_wizard "$deployment_type" "$config_file"; then
-            echo -e "${GREEN}✓ Configuration completed${NC}"
-            return 0
-        else
-            echo -e "${RED}✗ Configuration failed or cancelled${NC}"
-            return 1
+    # Edge deployment uses auto-detection (no manual config needed)
+    if [ "$deployment_type" = "edge" ] || [ "$deployment_type" = "testing" ]; then
+        echo -e "${GREEN}✓ Edge deployment uses auto-detection${NC}"
+        echo -e "${GREEN}  No manual configuration needed - system will auto-detect:${NC}"
+        echo "    • Operating system and architecture"
+        echo "    • Available RAM and storage"
+        echo "    • Raspberry Pi model (if applicable)"
+        echo "    • Optimal memory limits"
+        echo ""
+        echo "  You can customize with flags:"
+        echo "    --enable-ai           Enable AI detection"
+        echo "    --enable-monitoring   Enable monitoring stack"
+        echo "    --disable-iam         Skip IAM installation"
+        return 0
+    fi
+
+    # Cloud/n8n deployments still use manual config
+    if [ -f "$config_file" ]; then
+        echo -e "${YELLOW}⚠ Please review and edit configuration:${NC}"
+        echo "  $config_file"
+        read -p "Open for editing now? (yes/no) [no]: " edit_now
+        if [ "$edit_now" = "yes" ]; then
+            ${EDITOR:-nano} "$config_file"
         fi
+        return 0
     else
-        echo -e "${YELLOW}⚠ Configuration wizard not found${NC}"
-        echo "Manually edit: $config_file"
+        echo -e "${RED}✗ Configuration file not found: $config_file${NC}"
         return 1
     fi
 }
@@ -950,7 +974,7 @@ automated_install() {
             echo -e "${CYAN}Target: Home/SMB/Branch Office deployment${NC}"
             echo ""
 
-            if run_installer "$SCRIPT_DIR/install/edge/setup.sh" "Edge Deployment" "edge"; then
+            if run_installer "$SCRIPT_DIR/scripts/install-edge.sh" "Edge Deployment" "edge"; then
                 echo ""
                 echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
                 echo -e "${GREEN}║  ✓ EDGE NODE INSTALLATION COMPLETE                        ║${NC}"
