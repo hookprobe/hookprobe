@@ -8,14 +8,16 @@ on:
     branches: [ main, master, develop, 'claude/**' ]
     paths:
       - 'src/**/*.py'
-      - 'install/edge/setup.sh'
+      - 'scripts/install-edge.sh'
+      - 'scripts/lib/**'
       - 'install/addons/**'
       - '.github/workflows/app-tests.yml'
   pull_request:
     branches: [ main, master, develop ]
     paths:
       - 'src/**/*.py'
-      - 'install/edge/setup.sh'
+      - 'scripts/install-edge.sh'
+      - 'scripts/lib/**'
       - 'install/addons/**'
   workflow_dispatch:
 
@@ -64,8 +66,8 @@ jobs:
 
       - name: Check Django deployment
         run: |
-          echo "Checking Django deployment in setup.sh..."
-          if grep -q "django" install/edge/setup.sh 2>/dev/null; then
+          echo "Checking Django deployment in unified installer..."
+          if grep -q "django" scripts/install-edge.sh 2>/dev/null; then
             echo "✓ Django deployment found"
           else
             echo "⊘ Django deployment not found (may use different method)"
@@ -84,7 +86,7 @@ jobs:
       - name: Validate Nginx configuration
         run: |
           echo "Checking Nginx configurations..."
-          if grep -q "nginx" install/edge/setup.sh 2>/dev/null; then
+          if grep -q "nginx" scripts/install-edge.sh 2>/dev/null; then
             echo "✓ Nginx deployment found"
           else
             echo "⊘ Nginx configuration not found"
@@ -94,7 +96,7 @@ jobs:
       - name: Check WAF configuration
         run: |
           echo "Checking WAF deployment..."
-          if grep -qi "modsecurity\|naxsi" install/edge/setup.sh 2>/dev/null; then
+          if grep -qi "modsecurity\|naxsi" scripts/install-edge.sh 2>/dev/null; then
             echo "✓ WAF configuration found"
           else
             echo "⊘ WAF not configured"
@@ -125,7 +127,7 @@ jobs:
       - name: Check Cloudflare Tunnel
         run: |
           echo "Checking Cloudflare Tunnel..."
-          if grep -q "cloudflare" install/edge/setup.sh 2>/dev/null; then
+          if grep -q "cloudflare" scripts/install-edge.sh 2>/dev/null; then
             echo "✓ Cloudflare Tunnel found"
           else
             echo "⊘ Cloudflare Tunnel not configured"
