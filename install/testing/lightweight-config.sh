@@ -171,6 +171,24 @@ LOGTO_MEMORY_LIMIT="512m"
 LOGTO_CPU_LIMIT="1.0"
 
 # ============================================================
+# PORT MAPPINGS (Host → Container)
+# ============================================================
+PORT_HTTP="8080"           # Django HTTP port
+PORT_HTTPS="8443"          # Nginx HTTPS port
+PORT_POSTGRES="5432"       # PostgreSQL database port
+PORT_REDIS="6379"          # Redis cache port
+PORT_LOGTO="3001"          # Logto authentication endpoint
+PORT_LOGTO_ADMIN="3002"    # Logto admin console
+
+# ============================================================
+# PERSISTENT VOLUMES (Podman Named Volumes)
+# ============================================================
+VOLUME_POSTGRES_DATA="hookprobe-postgres-data-test"      # PostgreSQL data
+VOLUME_DJANGO_STATIC="hookprobe-django-static-test"      # Django static files
+VOLUME_DJANGO_MEDIA="hookprobe-django-media-test"        # Django media uploads
+VOLUME_LOGTO_DATA="hookprobe-logto-data-test"            # Logto configuration
+
+# ============================================================
 # NGINX WAF CONFIGURATION
 # ============================================================
 NGINX_MEMORY_LIMIT="256m"

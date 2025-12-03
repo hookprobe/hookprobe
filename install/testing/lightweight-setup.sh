@@ -451,21 +451,17 @@ echo -e "${BLUE}[STEP 11]${NC} Deploying POD-001: Web Server (Django + Nginx)...
 # Remove existing pod if present
 podman pod exists "$POD_WEB" 2>/dev/null && podman pod rm -f "$POD_WEB" 2>/dev/null || true
 
-# Create pod
-podman pod create \
-    --name "$POD_WEB" \
-    --network "$NETWORK_WEB" \
-    -p ${PORT_HTTP}:80 \
-    -p ${PORT_HTTPS}:443 \
-    -p 8000:8000 > /dev/null
+# Remove existing Django container if present
+podman rm -f "${POD_WEB}-django" 2>/dev/null || true
 
 echo -e "  → Starting Django application..."
 podman run -d --restart always \
-    --pod "$POD_WEB" \
     --name "${POD_WEB}-django" \
+    --network="$NETWORK_WEB" \
     --network="$NETWORK_DATABASE" \
     --network="$NETWORK_CACHE" \
     --network="$NETWORK_IAM" \
+    -p ${PORT_HTTP}:8000 \
     -e DJANGO_ENV="production" \
     -e DJANGO_SETTINGS_MODULE="hookprobe.settings.production" \
     -e DJANGO_SECRET_KEY="$DJANGO_SECRET_KEY" \
