@@ -256,12 +256,13 @@ calculate_memory_limits() {
     #   MEMORY_PROFILE (Lightweight/Moderate/Full)
 
     if [ "$TOTAL_RAM_GB" -le 4 ]; then
-        # Conservative for 4GB systems (Raspberry Pi 4B)
-        export POD_MEMORY_WEB="768M"
+        # Ultra-lightweight for 4GB systems (Raspberry Pi 4B)
+        # Total POD usage: ~1.75GB, leaves ~2.25GB for OS/buffers
+        export POD_MEMORY_WEB="512M"
         export POD_MEMORY_DATABASE="512M"
-        export POD_MEMORY_CACHE="256M"
-        export POD_MEMORY_NEURO="512M"
-        export POD_MEMORY_IAM="384M"
+        export POD_MEMORY_CACHE="128M"
+        export POD_MEMORY_NEURO="384M"
+        export POD_MEMORY_IAM="256M"
         export MEMORY_PROFILE="Lightweight"
 
     elif [ "$TOTAL_RAM_GB" -le 8 ]; then
