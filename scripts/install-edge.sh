@@ -399,6 +399,11 @@ deploy_web_pod() {
         --name hookprobe-web-django \
         --memory "$POD_MEMORY_WEB" \
         --restart unless-stopped \
+        --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000\")' || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 60s \
         -e DJANGO_SECRET_KEY="$(openssl rand -base64 32)" \
         -e DATABASE_HOST="10.250.2.2" \
         -e DATABASE_PORT="5432" \
@@ -413,6 +418,11 @@ deploy_web_pod() {
         --name hookprobe-web-nginx \
         --memory 256M \
         --restart unless-stopped \
+        --health-cmd "wget -q --spider http://localhost:80 || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 30s \
         docker.io/library/nginx:alpine
 
     echo -e "${GREEN}✓${NC} POD-001 deployed"
@@ -432,6 +442,11 @@ deploy_iam_pod() {
         --name hookprobe-iam-logto \
         --memory "$POD_MEMORY_IAM" \
         --restart unless-stopped \
+        --health-cmd "wget -q --spider http://localhost:3001/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 60s \
         -e DB_URL="postgresql://hookprobe:hookprobe@10.250.2.2:5432/logto" \
         docker.io/svhd/logto:latest
 
@@ -450,6 +465,11 @@ deploy_database_pod() {
         --name hookprobe-database-postgres \
         --memory "$POD_MEMORY_DATABASE" \
         --restart unless-stopped \
+        --health-cmd "pg_isready -U hookprobe -d hookprobe || exit 1" \
+        --health-interval 30s \
+        --health-timeout 5s \
+        --health-retries 3 \
+        --health-start-period 60s \
         -e POSTGRES_DB="hookprobe" \
         -e POSTGRES_USER="hookprobe" \
         -e POSTGRES_PASSWORD="$(openssl rand -base64 16)" \
@@ -471,6 +491,11 @@ deploy_cache_pod() {
         --name hookprobe-cache-redis \
         --memory "$POD_MEMORY_CACHE" \
         --restart unless-stopped \
+        --health-cmd "redis-cli ping || exit 1" \
+        --health-interval 30s \
+        --health-timeout 5s \
+        --health-retries 3 \
+        --health-start-period 30s \
         -v hookprobe-redis-data:/data \
         docker.io/library/redis:7-alpine \
         redis-server --requirepass "$(openssl rand -base64 16)"
@@ -491,6 +516,11 @@ deploy_neuro_pod() {
         --name hookprobe-neuro-qsecbit \
         --memory "$POD_MEMORY_NEURO" \
         --restart unless-stopped \
+        --health-cmd "pgrep python || exit 1" \
+        --health-interval 30s \
+        --health-timeout 5s \
+        --health-retries 3 \
+        --health-start-period 60s \
         -e QSECBIT_MODE="quantum-resistant" \
         -e HTP_ENABLED="true" \
         docker.io/library/python:3.11-slim \
@@ -514,6 +544,11 @@ deploy_monitoring_pod() {
         --name hookprobe-monitoring-grafana \
         --memory 1024M \
         --restart unless-stopped \
+        --health-cmd "wget -q --spider http://localhost:3000/api/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 60s \
         docker.io/grafana/grafana:latest
 
     # VictoriaMetrics
@@ -522,6 +557,11 @@ deploy_monitoring_pod() {
         --name hookprobe-monitoring-victoria \
         --memory 1024M \
         --restart unless-stopped \
+        --health-cmd "wget -q --spider http://localhost:8428/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 60s \
         docker.io/victoriametrics/victoria-metrics:latest
 
     echo -e "${GREEN}✓${NC} POD-004 deployed"
@@ -539,6 +579,11 @@ deploy_detection_pod() {
         --name hookprobe-detection-suricata \
         --memory 2048M \
         --restart unless-stopped \
+        --health-cmd "pgrep suricata || exit 1" \
+        --health-interval 30s \
+        --health-timeout 5s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --cap-add NET_ADMIN \
         docker.io/jasonish/suricata:latest
 
@@ -557,6 +602,11 @@ deploy_ai_pod() {
         --name hookprobe-ai-ml \
         --memory 2048M \
         --restart unless-stopped \
+        --health-cmd "pgrep python || exit 1" \
+        --health-interval 30s \
+        --health-timeout 5s \
+        --health-retries 3 \
+        --health-start-period 120s \
         docker.io/library/python:3.11-slim \
         bash -c "pip install scikit-learn tensorflow && python -c 'import time; print(\"AI running...\"); time.sleep(999999)'"
 
