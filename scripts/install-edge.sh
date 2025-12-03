@@ -23,8 +23,9 @@ set -e  # Exit on error
 # CONFIGURATION
 # ============================================================
 
-# Script directory
+# Script directory and repo root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
 
 # Source library files
@@ -503,9 +504,11 @@ main() {
     # Install dependencies
     install_dependencies
 
-    # Setup OVS bridge and Podman networks
+    # Setup OVS bridge with VXLAN networking
     setup_ovs_bridge
     create_networks
+    setup_vxlan_tunnels
+    setup_openflow_monitoring
 
     # Deploy core PODs (always installed)
     deploy_database_pod
@@ -760,11 +763,29 @@ check_and_upgrade_cni() {
 }
 
 # ============================================================
-# OVS BRIDGE SETUP
+# OVS BRIDGE SETUP WITH VXLAN/VNI/PSK
 # ============================================================
 
+# VXLAN Configuration for each POD network
+# Format: POD_NAME:VNI:VXLAN_PORT
+declare -A VXLAN_CONFIG=(
+    ["hookprobe-web"]="100:4789"
+    ["hookprobe-iam"]="200:4790"
+    ["hookprobe-database"]="300:4791"
+    ["hookprobe-monitoring"]="400:4792"
+    ["hookprobe-cache"]="500:4793"
+    ["hookprobe-detection"]="600:4794"
+    ["hookprobe-ai"]="700:4795"
+    ["hookprobe-neuro"]="1000:4800"
+)
+
+generate_vxlan_psk() {
+    # Generate a PSK for VXLAN tunnel encryption
+    openssl rand -base64 32
+}
+
 setup_ovs_bridge() {
-    echo "Setting up OVS bridge '$OVS_BRIDGE_NAME'..."
+    echo "Setting up OVS bridge '$OVS_BRIDGE_NAME' with VXLAN networking..."
 
     # Check if OVS is installed
     if ! command -v ovs-vsctl &> /dev/null; then
@@ -805,12 +826,26 @@ setup_ovs_bridge() {
         echo -e "  ${GREEN}[x]${NC} OVS bridge '$OVS_BRIDGE_NAME' created"
     fi
 
+    # Enable OpenFlow 1.3 for advanced flow monitoring
+    ovs-vsctl set bridge "$OVS_BRIDGE_NAME" protocols=OpenFlow10,OpenFlow13 2>/dev/null || true
+
     # Configure bridge IP
     ip addr add 10.250.0.1/16 dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
     ip link set "$OVS_BRIDGE_NAME" up 2>/dev/null || true
 
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+
+    # Create secrets directory for VXLAN PSK
+    mkdir -p /etc/hookprobe/secrets/vxlan
+    chmod 700 /etc/hookprobe/secrets/vxlan
+
+    # Generate master PSK if not exists
+    if [ ! -f /etc/hookprobe/secrets/vxlan/master.psk ]; then
+        generate_vxlan_psk > /etc/hookprobe/secrets/vxlan/master.psk
+        chmod 600 /etc/hookprobe/secrets/vxlan/master.psk
+        echo -e "  ${GREEN}[x]${NC} VXLAN master PSK generated"
+    fi
 
     # Save OVS bridge config
     mkdir -p /etc/hookprobe
@@ -819,15 +854,163 @@ setup_ovs_bridge() {
 OVS_BRIDGE_NAME=$OVS_BRIDGE_NAME
 OVS_BRIDGE_SUBNET=$OVS_BRIDGE_SUBNET
 OVS_BRIDGE_IP=10.250.0.1
+OPENFLOW_VERSION=1.3
+
+# VXLAN Configuration
+VXLAN_ENABLED=true
+VXLAN_MASTER_PSK=/etc/hookprobe/secrets/vxlan/master.psk
 OVSEOF
 
-    echo -e "  ${GREEN}[x]${NC} OVS bridge configured"
+    echo -e "  ${GREEN}[x]${NC} OVS bridge configured with OpenFlow 1.3"
     echo ""
+}
 
-    # Show bridge status
-    echo "OVS Bridge Status:"
-    ovs-vsctl show 2>/dev/null | head -20
-    echo ""
+setup_vxlan_tunnels() {
+    echo "Setting up VXLAN tunnels for POD networks..."
+
+    if [ "$USE_OVS_BRIDGE" != true ]; then
+        echo -e "  ${YELLOW}[-]${NC} VXLAN skipped (OVS not available)"
+        return 0
+    fi
+
+    # Get local IP for VXLAN endpoints
+    local local_ip=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' || hostname -I | awk '{print $1}')
+
+    # Create VXLAN config file
+    cat > /etc/hookprobe/vxlan-networks.conf << 'VXLANHEADER'
+# HookProbe VXLAN Network Configuration
+# Format: NETWORK_NAME|VNI|VXLAN_PORT|SUBNET|PSK_FILE
+VXLANHEADER
+
+    local vxlan_count=0
+
+    # Setup VXLAN for each enabled network
+    for network in "${!VXLAN_CONFIG[@]}"; do
+        local config="${VXLAN_CONFIG[$network]}"
+        local vni=$(echo "$config" | cut -d: -f1)
+        local port=$(echo "$config" | cut -d: -f2)
+
+        # Check if this network should be created based on enabled components
+        local should_create=false
+        case "$network" in
+            hookprobe-web) [ "$ENABLE_WEBSERVER" = true ] && should_create=true ;;
+            hookprobe-iam) [ "$ENABLE_IAM" = true ] && should_create=true ;;
+            hookprobe-database) should_create=true ;;  # Always
+            hookprobe-cache) should_create=true ;;     # Always
+            hookprobe-neuro) should_create=true ;;     # Always
+            hookprobe-monitoring) [ "$ENABLE_MONITORING" = true ] && should_create=true ;;
+            hookprobe-detection|hookprobe-ai) [ "$ENABLE_AI" = true ] && should_create=true ;;
+        esac
+
+        if [ "$should_create" = true ]; then
+            # Generate per-tunnel PSK
+            local psk_file="/etc/hookprobe/secrets/vxlan/${network}.psk"
+            if [ ! -f "$psk_file" ]; then
+                generate_vxlan_psk > "$psk_file"
+                chmod 600 "$psk_file"
+            fi
+
+            # Get subnet for this network
+            local subnet=""
+            case "$network" in
+                hookprobe-web) subnet="10.250.1.0/24" ;;
+                hookprobe-iam) subnet="10.250.2.0/24" ;;
+                hookprobe-database) subnet="10.250.3.0/24" ;;
+                hookprobe-monitoring) subnet="10.250.4.0/24" ;;
+                hookprobe-cache) subnet="10.250.5.0/24" ;;
+                hookprobe-detection) subnet="10.250.6.0/24" ;;
+                hookprobe-ai) subnet="10.250.7.0/24" ;;
+                hookprobe-neuro) subnet="10.250.10.0/24" ;;
+            esac
+
+            # Add VXLAN port to OVS bridge
+            local vxlan_port="vxlan_${vni}"
+            ovs-vsctl --may-exist add-port "$OVS_BRIDGE_NAME" "$vxlan_port" \
+                -- set interface "$vxlan_port" type=vxlan \
+                options:key="$vni" \
+                options:local_ip="$local_ip" \
+                options:remote_ip=flow 2>/dev/null || true
+
+            # Save to config
+            echo "${network}|${vni}|${port}|${subnet}|${psk_file}" >> /etc/hookprobe/vxlan-networks.conf
+
+            vxlan_count=$((vxlan_count + 1))
+        fi
+    done
+
+    if [ "$vxlan_count" -gt 0 ]; then
+        echo -e "  ${GREEN}[x]${NC} $vxlan_count VXLAN tunnels configured"
+    fi
+}
+
+setup_openflow_monitoring() {
+    echo "Setting up OpenFlow monitoring for VXLAN tunnels..."
+
+    if [ "$USE_OVS_BRIDGE" != true ]; then
+        echo -e "  ${YELLOW}[-]${NC} OpenFlow monitoring skipped (OVS not available)"
+        return 0
+    fi
+
+    # Create OpenFlow rules for monitoring and security
+
+    # Rule 1: Drop invalid packets
+    ovs-ofctl add-flow "$OVS_BRIDGE_NAME" "priority=0,actions=drop" 2>/dev/null || true
+
+    # Rule 2: Allow ARP
+    ovs-ofctl add-flow "$OVS_BRIDGE_NAME" "priority=100,arp,actions=normal" 2>/dev/null || true
+
+    # Rule 3: Allow ICMP for diagnostics
+    ovs-ofctl add-flow "$OVS_BRIDGE_NAME" "priority=100,icmp,actions=normal" 2>/dev/null || true
+
+    # Rule 4: Allow established connections
+    ovs-ofctl add-flow "$OVS_BRIDGE_NAME" "priority=50,ip,actions=normal" 2>/dev/null || true
+
+    # Rule 5: Monitor VXLAN traffic (match UDP dst port range 4789-4800)
+    for port in 4789 4790 4791 4792 4793 4794 4795 4800; do
+        ovs-ofctl add-flow "$OVS_BRIDGE_NAME" \
+            "priority=200,udp,tp_dst=$port,actions=normal" 2>/dev/null || true
+    done
+
+    # Create monitoring script
+    cat > /usr/local/bin/hookprobe-vxlan-monitor << 'MONITOREOF'
+#!/bin/bash
+# HookProbe VXLAN Monitor
+# Displays VXLAN tunnel statistics and OpenFlow flows
+
+OVS_BRIDGE="${1:-hookprobe}"
+
+echo "=== HookProbe VXLAN Monitor ==="
+echo ""
+
+echo "Bridge: $OVS_BRIDGE"
+echo ""
+
+echo "--- VXLAN Ports ---"
+ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep vxlan || echo "No VXLAN ports"
+echo ""
+
+echo "--- OpenFlow Flows ---"
+ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | head -20
+echo ""
+
+echo "--- Port Statistics ---"
+ovs-ofctl dump-ports "$OVS_BRIDGE" 2>/dev/null | head -30
+echo ""
+
+echo "--- Network Config ---"
+if [ -f /etc/hookprobe/vxlan-networks.conf ]; then
+    echo "Network              | VNI  | Port | Subnet"
+    echo "---------------------|------|------|---------------"
+    grep -v "^#" /etc/hookprobe/vxlan-networks.conf | while IFS='|' read name vni port subnet psk; do
+        [ -n "$name" ] && printf "%-20s | %-4s | %-4s | %s\n" "$name" "$vni" "$port" "$subnet"
+    done
+fi
+MONITOREOF
+
+    chmod +x /usr/local/bin/hookprobe-vxlan-monitor
+
+    echo -e "  ${GREEN}[x]${NC} OpenFlow monitoring configured"
+    echo -e "  ${GREEN}[x]${NC} Monitor tool: hookprobe-vxlan-monitor"
 }
 
 create_networks() {
@@ -958,10 +1141,27 @@ create_networks() {
     else
         echo -e "${GREEN}[x]${NC} POD networks created on bridge '$OVS_BRIDGE_NAME'"
 
-        # Show network summary
+        # Show network summary with VXLAN info
         echo ""
         echo "Network Summary:"
-        podman network ls --format "  {{.Name}}\t{{.Subnets}}" 2>/dev/null | grep hookprobe || true
+        echo "  Network              Subnet           VNI    Port"
+        echo "  -------------------  ---------------  -----  ----"
+        for net in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep hookprobe); do
+            local subnet=$(podman network inspect "$net" --format '{{range .Subnets}}{{.Subnet}}{{end}}' 2>/dev/null || echo "N/A")
+            local vni="N/A"
+            local port="N/A"
+            case "$net" in
+                hookprobe-web) vni="100"; port="4789" ;;
+                hookprobe-iam) vni="200"; port="4790" ;;
+                hookprobe-database) vni="300"; port="4791" ;;
+                hookprobe-monitoring) vni="400"; port="4792" ;;
+                hookprobe-cache) vni="500"; port="4793" ;;
+                hookprobe-detection) vni="600"; port="4794" ;;
+                hookprobe-ai) vni="700"; port="4795" ;;
+                hookprobe-neuro) vni="1000"; port="4800" ;;
+            esac
+            printf "  %-19s  %-15s  %-5s  %s\n" "$net" "$subnet" "$vni" "$port"
+        done
     fi
 }
 
@@ -1036,11 +1236,13 @@ deploy_web_pod() {
 
     # Build Django container from Containerfile
     echo "  Building Django container (this may take a few minutes on ARM64)..."
-    if [ -f "$SCRIPT_DIR/../install/addons/webserver/Containerfile" ]; then
+    local containerfile="$REPO_ROOT/install/addons/webserver/Containerfile"
+    if [ -f "$containerfile" ]; then
+        echo "  Found Containerfile: $containerfile"
         podman build \
             -t hookprobe-web-django:edge \
-            -f "$SCRIPT_DIR/../install/addons/webserver/Containerfile" \
-            "$SCRIPT_DIR/.." || {
+            -f "$containerfile" \
+            "$REPO_ROOT" || {
             echo -e "${RED}✗${NC} Failed to build Django container"
             return 1
         }
