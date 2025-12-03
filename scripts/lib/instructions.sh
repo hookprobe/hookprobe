@@ -19,11 +19,11 @@ NC='\033[0m' # No Color
 # ============================================================
 
 show_cgroup_instructions() {
-    """
-    Show detailed instructions for enabling cgroups on Raspberry Pi.
+    # Show detailed instructions for enabling cgroups on Raspberry Pi.
 
-    Uses platform detection to show exact file path.
-    """
+    #
+
+    # Uses platform detection to show exact file path.
 
     local boot_config=$(get_boot_config_path)
 
@@ -108,13 +108,15 @@ show_cgroup_instructions() {
 # ============================================================
 
 show_low_ram_warning() {
-    """
-    Show warning when RAM is below minimum requirements.
+    # Show warning when RAM is below minimum requirements.
 
-    Args:
-        $1 - detected RAM in GB
-        $2 - minimum required RAM in GB
-    """
+    #
+
+    # Args:
+
+    # $1 - detected RAM in GB
+
+    # $2 - minimum required RAM in GB
 
     local detected=$1
     local required=$2
@@ -143,13 +145,15 @@ show_low_ram_warning() {
 # ============================================================
 
 show_low_disk_warning() {
-    """
-    Show warning when disk space is below minimum.
+    # Show warning when disk space is below minimum.
 
-    Args:
-        $1 - detected free space in GB
-        $2 - minimum required space in GB
-    """
+    #
+
+    # Args:
+
+    # $1 - detected free space in GB
+
+    # $2 - minimum required space in GB
 
     local detected=$1
     local required=$2
@@ -179,13 +183,15 @@ show_low_disk_warning() {
 # ============================================================
 
 show_ai_enable_warning() {
-    """
-    Show warning when trying to enable AI on low-RAM system.
+    # Show warning when trying to enable AI on low-RAM system.
 
-    Args:
-        $1 - total RAM in GB
-        $2 - estimated total memory usage in MB
-    """
+    #
+
+    # Args:
+
+    # $1 - total RAM in GB
+
+    # $2 - estimated total memory usage in MB
 
     local ram_gb=$1
     local usage_mb=$2
@@ -220,13 +226,15 @@ show_ai_enable_warning() {
 # ============================================================
 
 show_success_message() {
-    """
-    Show success message after installation.
+    # Show success message after installation.
 
-    Args:
-        $1 - enable_ai (true/false)
-        $2 - enable_monitoring (true/false)
-    """
+    #
+
+    # Args:
+
+    # $1 - enable_ai (true/false)
+
+    # $2 - enable_monitoring (true/false)
 
     local enable_ai=$1
     local enable_monitoring=$2
@@ -303,9 +311,7 @@ show_success_message() {
 # ============================================================
 
 show_quick_reference() {
-    """
-    Show quick reference card for HookProbe commands.
-    """
+    # Show quick reference card for HookProbe commands.
 
     echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${CYAN}│ HOOKPROBE QUICK REFERENCE                                  │${NC}"
