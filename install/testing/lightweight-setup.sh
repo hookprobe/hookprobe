@@ -470,7 +470,7 @@ podman run -d --restart always \
     -e POSTGRES_DB="$POSTGRES_DB" \
     -e POSTGRES_USER="$POSTGRES_USER" \
     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-    -e POSTGRES_HOST="${POD_DATABASE}-postgres" \
+    -e POSTGRES_HOST="${POD_DATABASE}-postgres.dns.podman" \
     -e POSTGRES_PORT="5432" \
     -e REDIS_HOST="$IP_CACHE_REDIS" \
     -e REDIS_PORT="6379" \
