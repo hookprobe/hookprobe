@@ -177,6 +177,13 @@ class Device(models.Model):
         ordering = ['customer', 'name']
         verbose_name = 'Device'
         verbose_name_plural = 'Devices'
+        indexes = [
+            models.Index(fields=['customer', 'status']),  # Fast filtering by customer and status
+            models.Index(fields=['device_id']),           # Fast device lookup
+            models.Index(fields=['-last_seen']),          # Recent devices query
+            models.Index(fields=['hardware_fingerprint']),  # Authentication lookups
+            models.Index(fields=['customer', '-last_seen']),  # Customer's recent devices
+        ]
 
     def __str__(self):
         return f"{self.customer.name} - {self.name}"
@@ -213,6 +220,9 @@ class DeviceLog(models.Model):
         ordering = ['-timestamp']
         verbose_name = 'Device Log'
         verbose_name_plural = 'Device Logs'
+        indexes = [
+            models.Index(fields=['device', 'log_type', '-timestamp']),  # Filter logs by device and type
+        ]
 
     def __str__(self):
         return f"{self.device.name} - {self.log_type} - {self.timestamp}"

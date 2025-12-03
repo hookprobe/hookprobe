@@ -234,6 +234,11 @@ deploy_doris_frontends() {
         -e FE_SERVERS="fe1:$IP_DORIS_FE_1:9010" \
         -e FE_ID=1 \
         -e JAVA_OPTS="-Xmx${DORIS_FE_MEMORY}" \
+        --health-cmd "curl -f http://localhost:8030/api/bootstrap || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --log-driver=journald \
         --log-opt tag="doris-fe-1" \
         "$IMAGE_DORIS" \
@@ -253,6 +258,11 @@ deploy_doris_frontends() {
         -e FE_MASTER_HOST="$IP_DORIS_FE_1" \
         -e FE_MASTER_PORT=9010 \
         -e JAVA_OPTS="-Xmx${DORIS_FE_MEMORY}" \
+        --health-cmd "curl -f http://localhost:8030/api/bootstrap || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --log-driver=journald \
         --log-opt tag="doris-fe-2" \
         "$IMAGE_DORIS" \
@@ -272,6 +282,11 @@ deploy_doris_frontends() {
         -e FE_MASTER_HOST="$IP_DORIS_FE_1" \
         -e FE_MASTER_PORT=9010 \
         -e JAVA_OPTS="-Xmx${DORIS_FE_MEMORY}" \
+        --health-cmd "curl -f http://localhost:8030/api/bootstrap || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --log-driver=journald \
         --log-opt tag="doris-fe-3" \
         "$IMAGE_DORIS" \
@@ -301,6 +316,11 @@ deploy_doris_backends() {
         -e BE_ADDR="$IP_DORIS_BE_1:9050" \
         --memory="${DORIS_BE_MEMORY}" \
         --cpus=16 \
+        --health-cmd "curl -f http://localhost:8040/api/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --log-driver=journald \
         --log-opt tag="doris-be-1" \
         "$IMAGE_DORIS" \
@@ -318,6 +338,11 @@ deploy_doris_backends() {
         -e BE_ADDR="$IP_DORIS_BE_2:9050" \
         --memory="${DORIS_BE_MEMORY}" \
         --cpus=16 \
+        --health-cmd "curl -f http://localhost:8040/api/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --log-driver=journald \
         --log-opt tag="doris-be-2" \
         "$IMAGE_DORIS" \
@@ -335,6 +360,11 @@ deploy_doris_backends() {
         -e BE_ADDR="$IP_DORIS_BE_3:9050" \
         --memory="${DORIS_BE_MEMORY}" \
         --cpus=16 \
+        --health-cmd "curl -f http://localhost:8040/api/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 120s \
         --log-driver=journald \
         --log-opt tag="doris-be-3" \
         "$IMAGE_DORIS" \
@@ -408,6 +438,11 @@ deploy_kafka() {
         -e KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@$IP_KAFKA:9093 \
         -e KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER \
         -e KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true \
+        --health-cmd "kafka-broker-api-versions.sh --bootstrap-server=localhost:9092 || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 60s \
         --log-driver=journald \
         --log-opt tag="hookprobe-kafka" \
         "$IMAGE_KAFKA"
@@ -432,6 +467,11 @@ deploy_postgres() {
         -e POSTGRES_USER="$POSTGRES_MGMT_USER" \
         -e POSTGRES_PASSWORD="$POSTGRES_MGMT_PASSWORD" \
         -e POSTGRES_DB="$POSTGRES_MGMT_DB" \
+        --health-cmd "pg_isready -U $POSTGRES_MGMT_USER -d $POSTGRES_MGMT_DB || exit 1" \
+        --health-interval 30s \
+        --health-timeout 5s \
+        --health-retries 3 \
+        --health-start-period 60s \
         --log-driver=journald \
         --log-opt tag="hookprobe-postgres-mgmt" \
         "$IMAGE_POSTGRES"
@@ -459,6 +499,11 @@ deploy_grafana() {
         -e GF_USERS_ALLOW_SIGN_UP=false \
         -e GF_AUTH_ANONYMOUS_ENABLED=false \
         -e GF_INSTALL_PLUGINS=vertamedia-clickhouse-datasource,yesoreyeram-infinity-datasource \
+        --health-cmd "wget -q --spider http://localhost:3000/api/health || exit 1" \
+        --health-interval 30s \
+        --health-timeout 10s \
+        --health-retries 3 \
+        --health-start-period 60s \
         --log-driver=journald \
         --log-opt tag="hookprobe-grafana-backend" \
         "$IMAGE_GRAFANA"
