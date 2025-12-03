@@ -1,8 +1,13 @@
-# Qsecbit: Quantum Security Bit
+# Qsecbit: AI Resilience Metrics
 
-**Version**: 5.0
-**License**: MIT
-**Author**: Andrei Toma
+<p align="center">
+  <strong>The Future of Cybersecurity</strong><br>
+  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+</p>
+
+**Pillar 3 of HookProbe: Quantified Cyber Resilience**
+
+**Version**: 5.0 "Liberty" | **License**: MIT | **Author**: Andrei Toma
 
 ---
 
@@ -28,7 +33,10 @@
 
 ## 🎯 Overview
 
-**Qsecbit (Quantum Security Bit)** is an AI-driven threat detection engine that measures cyber resilience as the smallest unit where AI-driven attack and defense reach equilibrium through continuous error correction.
+Traditional security asks: *"Are we under attack?"* (binary yes/no)
+**Qsecbit asks**: *"How fast can we return to equilibrium?"* (quantified resilience 0.0-1.0)
+
+**Qsecbit (Quantum Security Bit)** measures cyber resilience as the smallest unit where AI-driven attack and defense reach equilibrium through continuous error correction.
 
 ### Key Features
 
