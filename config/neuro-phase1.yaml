@@ -146,7 +146,7 @@ dsm_integration:
     min_verified_edges: 2  # Minimum verified edges for checkpoint approval
     max_weight_divergence: 0.01  # Maximum allowed ||W_edge - W_simulated||
 
-# --- SECURITY PARAMETERS ---
+# --- SECURITY PARAMETERS (KEYLESS DESIGN) ---
 security:
   # TER validation
   ter_validation:
@@ -158,90 +158,98 @@ security:
   # Weight verification
   weight_verification:
     enforce_determinism: true
-    tolerance: 0  # Bit-for-bit match required
+    tolerance: 0  # Bit-for-bit match required (int16 fixed-point)
 
   # Quarantine thresholds
   quarantine:
     integrity_violation_threshold: 1  # Any integrity violation → quarantine
     unexplained_drift_threshold: 0.1  # Weight divergence threshold
 
-  # Enhanced handshake with Perfect Forward Secrecy
-  handshake:
-    use_ephemeral_keys: true  # Enable X25519 ephemeral key exchange
-    encrypt_session_secret: true  # Encrypt session_secret in ACCEPT message
-    signature_verification: true  # Verify Ed25519 signatures
-    handshake_timeout_seconds: 10.0
+  # Keyless resonance handshake (no traditional PKI)
+  resonance:
+    qsecbit_history_window: 50  # Number of qsecbit samples for RDV
+    entropy_echo_timeout_seconds: 10.0  # Timeout for entropy echo verification
+    rdv_divergence_threshold: 0.20  # 20% Hamming distance triggers re-resonance
+    posf_verification: true  # Verify Proof-of-Sensor-Fusion
 
-  # Continuous key rotation
-  key_rotation:
+  # Anti-replay protection
+  anti_replay:
     enabled: true
-    rotation_interval_seconds: 300  # 5 minutes
-    rotation_trigger: "time_based"  # time_based or weight_based
+    nonce_history_size: 100  # Track last 100 nonces
+    qsecbit_drift_detection: true  # Detect drift in qsecbit
 
-  # Anti-DoS protection
-  anti_dos:
-    enabled: true
-    max_hello_per_minute: 10  # Per source IP
-    rate_limit_window_seconds: 60
-    challenge_difficulty: 0  # Future: computational puzzle difficulty
+  # Session management
+  session:
+    timeout_seconds: 60  # Session expires after 60s inactivity
+    cleanup_interval_seconds: 30  # Run cleanup every 30s
+    max_sessions_per_node: 100  # Prevent resource exhaustion
 
-# --- TRANSPORT SECURITY ENHANCEMENTS ---
-transport_security:
-  # Traffic analysis resistance
-  padding:
-    enabled: true
-    min_bytes: 16
-    max_bytes: 128
-    mode_specific: true  # Use mode-specific padding ranges
+# --- HTP KEYLESS PROTOCOL SETTINGS ---
+htp_protocol:
+  # Protocol version
+  version: 0x0001
 
-  # Jitter injection (anti-surveillance)
-  jitter:
-    enabled: true
-    min_ms: 100
-    max_ms: 2000
-    apply_to:
-      - heartbeat
-      - data_transmission
-
-  # Adaptive transport modes (polymorphism)
+  # Packet modes
   modes:
-    BURST:
-      description: "Low-latency, minimal overhead"
-      padding_range: [0, 16]
-      jitter_range_ms: [0, 100]
-      heartbeat_interval_seconds: 15.0
-      use_case: "Real-time video streaming, low-latency C2"
+    SENSOR: 0x01    # Sensor telemetry (8-64 bytes)
+    TEXT: 0x02      # Text/command data
+    VIDEO: 0x03     # Video slice (128-4096 bytes)
+    FRAME: 0x04     # Frame batch (512-8192 bytes)
 
-    BALANCED:
-      description: "Balance of performance and stealth"
-      padding_range: [16, 64]
-      jitter_range_ms: [100, 1000]
-      heartbeat_interval_seconds: 30.0
-      use_case: "General purpose, default mode"
+  # Minimum packet sizes
+  header_size: 32       # HTPHeader
+  resonance_size: 64    # ResonanceLayer (RDV + PoSF)
+  neuro_size: 224       # NeuroLayer (delta_W + TER + entropy_vec)
+  min_packet_size: 320  # header + resonance + neuro
 
-    STEALTH:
-      description: "High stealth, variable timing"
-      padding_range: [64, 128]
-      jitter_range_ms: [500, 2000]
-      heartbeat_interval_seconds: 60.0
-      use_case: "Evading basic DPI, moderate surveillance"
+  # NAT/CGNAT traversal
+  nat_traversal:
+    noise_pulsed_keepalive: true
+    keepalive_interval_min_ms: 500
+    keepalive_interval_max_ms: 900
+    nat_pinhole_duration_seconds: 30  # Typical NAT timeout
+    hole_punching_retries: 3
 
-    GHOST:
-      description: "Maximum stealth, sparse communication"
-      padding_range: [128, 256]
-      jitter_range_ms: [1000, 5000]
-      heartbeat_interval_seconds: 120.0
-      use_case: "High-threat environments, state-level adversaries"
+  # qsecbit generation
+  qsecbit:
+    algorithm: "SHA256"  # white_noise + sensor_vec + clock_jitter
+    size_bytes: 32
+    history_max_samples: 100
 
-  # Default transport mode
-  default_mode: "BALANCED"
+  # Resonance Drift Vector (RDV)
+  rdv:
+    algorithm: "BLAKE3"  # or SHA256 fallback
+    size_bytes: 32
+    qsecbit_window: 50  # Number of samples for history
 
-  # PoSF signatures on messages
-  posf_signatures:
-    enabled: true
-    sign_data_messages: true
-    sign_heartbeats: true
-    signature_size_bytes: 32
+  # Proof-of-Sensor-Fusion (PoSF)
+  posf:
+    algorithm: "BLAKE3"  # or SHA256 fallback
+    size_bytes: 32
+    includes:
+      - sensor_matrix
+      - rdv
+      - delta_W
+
+  # Neuro-state evolution
+  neuro_evolution:
+    arithmetic: "int16"  # Fixed-point (not int8)
+    weight_size_bytes: 128  # 64 int16 values
+    eta_base: 5  # Learning rate × 10000 (0.0005)
+    xi_base: 1   # Noise coefficient × 100000 (0.00001)
+
+  # Metadata shielding
+  metadata_shielding:
+    no_stable_ids: true
+    ephemeral_flow_tokens: true
+    no_pki_certificates: true
+    timing_jitter: true
+
+  # Optional payload encryption
+  payload_encryption:
+    enabled: false  # Optional ChaCha20-Poly1305
+    algorithm: "ChaCha20-Poly1305"
+    key_size_bits: 256
 
 # --- MONITORING & LOGGING ---
 monitoring:
