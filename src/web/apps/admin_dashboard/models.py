@@ -81,7 +81,8 @@ class AIContentDraft(models.Model):
             content=self.content,
             excerpt=self.summary,
             author=user,
-            status='published',
+            is_published=True,
+            published_at=timezone.now(),
             ai_generated=True,
         )
 
