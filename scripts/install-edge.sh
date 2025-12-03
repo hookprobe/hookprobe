@@ -55,14 +55,12 @@ NC='\033[0m'
 # ============================================================
 
 parse_arguments() {
-    """
-    Parse command-line arguments.
-
-    Flags:
-        --enable-ai: Enable AI detection (needs 8GB+ RAM)
-        --enable-monitoring: Enable Grafana/VictoriaMetrics
-        --disable-iam: Skip IAM (Logto) installation
-    """
+    # Parse command-line arguments.
+    #
+    # Flags:
+    #   --enable-ai: Enable AI detection (needs 8GB+ RAM)
+    #   --enable-monitoring: Enable Grafana/VictoriaMetrics
+    #   --disable-iam: Skip IAM (Logto) installation
 
     while [[ $# -gt 0 ]]; do
         case $1 in
