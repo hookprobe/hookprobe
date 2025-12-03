@@ -124,6 +124,7 @@ class SecurityDevice(models.Model):
         indexes = [
             models.Index(fields=['customer', 'status']),
             models.Index(fields=['device_type']),
+            models.Index(fields=['-last_seen']),  # Fast recent device queries
         ]
 
     def __str__(self):
@@ -245,6 +246,7 @@ class Vulnerability(models.Model):
         indexes = [
             models.Index(fields=['customer', 'status']),
             models.Index(fields=['severity', 'status']),
+            models.Index(fields=['-discovered_at']),  # Fast recent vulnerability queries
         ]
 
     def __str__(self):
@@ -499,6 +501,7 @@ class IndicatorOfCompromise(models.Model):
             models.Index(fields=['ioc_type', 'value']),
             models.Index(fields=['severity', '-confidence_score']),
             models.Index(fields=['-last_seen']),
+            models.Index(fields=['qsecbit_rag_status', '-last_seen']),  # Fast filtering by QSECBIT status
         ]
         unique_together = [['customer', 'ioc_type', 'value']]
 

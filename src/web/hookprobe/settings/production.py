@@ -12,6 +12,17 @@ ALLOWED_HOSTS = [
     os.getenv('DJANGO_ALLOWED_HOST', 'hookprobe.local'),
 ]
 
+# Database connection pooling and optimization
+DATABASES['default'].update({
+    'CONN_MAX_AGE': 600,  # Keep connections alive for 10 minutes (connection pooling)
+    'OPTIONS': {
+        'connect_timeout': 10,  # Connection timeout in seconds
+        'options': '-c statement_timeout=30000',  # 30 second query timeout
+    },
+    'ATOMIC_REQUESTS': True,  # Wrap each request in a transaction
+    'AUTOCOMMIT': True,
+})
+
 # Security settings
 SECURE_SSL_REDIRECT = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
