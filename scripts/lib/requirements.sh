@@ -272,27 +272,54 @@ check_dns() {
 # COMPREHENSIVE SYSTEM CHECK
 # ============================================================
 
+calculate_minimum_ram() {
+    # Calculate minimum RAM required based on selected components.
+    #
+    # Args (all via environment variables):
+    #   ENABLE_WEBSERVER, ENABLE_IAM, ENABLE_MONITORING, ENABLE_AI
+    #
+    # Returns:
+    #   Prints minimum RAM in GB
+
+    local min_ram=3  # Base: Core components (Database + Cache + Neuro) need ~1.5GB + OS overhead
+
+    # Add RAM for optional components
+    if [ "${ENABLE_WEBSERVER:-false}" = true ]; then
+        min_ram=$((min_ram + 0))  # Web server fits in base 3GB allocation
+    fi
+
+    if [ "${ENABLE_IAM:-false}" = true ]; then
+        min_ram=$((min_ram + 1))  # IAM adds ~512MB, round up
+    fi
+
+    if [ "${ENABLE_MONITORING:-false}" = true ]; then
+        min_ram=$((min_ram + 2))  # Monitoring (Grafana + VictoriaMetrics) needs ~2GB
+    fi
+
+    if [ "${ENABLE_AI:-false}" = true ]; then
+        min_ram=$((min_ram + 4))  # AI/Detection needs ~4GB
+    fi
+
+    echo "$min_ram"
+}
+
 run_system_check() {
     # Run comprehensive system requirements check.
-
     #
-
     # Args:
-
-    # $1 - enable_ai (true/false)
-
-    # $2 - enable_monitoring (true/false)
-
+    #   $1 - enable_ai (true/false) [legacy, now uses env vars]
+    #   $2 - enable_monitoring (true/false) [legacy, now uses env vars]
     #
-
+    # Environment variables used:
+    #   ENABLE_WEBSERVER, ENABLE_IAM, ENABLE_MONITORING, ENABLE_AI
+    #
     # Returns:
+    #   0 if all checks pass
+    #   1 if any critical check fails
 
-    # 0 if all checks pass
-
-    # 1 if any critical check fails
-
-    local enable_ai=${1:-false}
-    local enable_monitoring=${2:-false}
+    # Support both legacy args and env vars
+    local enable_ai=${ENABLE_AI:-${1:-false}}
+    local enable_monitoring=${ENABLE_MONITORING:-${2:-false}}
 
     echo ""
     echo "Running system requirements check..."
@@ -310,17 +337,13 @@ run_system_check() {
         detect_platform
     fi
 
-    # RAM check
-    if [ "$enable_ai" = true ]; then
-        if ! check_ram 8; then  # AI needs at least 8GB
-            show_low_ram_warning "$TOTAL_RAM_GB" 8
-            failed=1
-        fi
-    else
-        if ! check_ram 3; then  # Edge lightweight needs at least 3GB
-            show_low_ram_warning "$TOTAL_RAM_GB" 3
-            failed=1
-        fi
+    # Calculate dynamic minimum RAM based on selected components
+    local min_ram=$(calculate_minimum_ram)
+
+    # RAM check with dynamic minimum
+    if ! check_ram "$min_ram"; then
+        show_low_ram_warning "$TOTAL_RAM_GB" "$min_ram"
+        failed=1
     fi
 
     # Disk space check (Raspberry Pi may have smaller SD cards)
