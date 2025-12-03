@@ -64,32 +64,30 @@ Current:
 
 ---
 
-## ✅ Proposed Solution: Unified Installation Flow
+## ✅ Proposed Solution: ONE Unified Edge Installation
 
-### New Structure
+### New Structure (Simplified)
 
 ```
 hookprobe/
-├── install.sh                          ← SIMPLIFIED menu
+├── install.sh                          ← Main entry point (simplified menu)
 ├── scripts/
-│   ├── install-edge.sh                 ← UNIFIED edge installation
+│   ├── install-edge.sh                 ← ONE unified edge (auto-detects everything)
 │   ├── install-cloud.sh                ← Cloud/MSSP installation
 │   ├── install-validator.sh            ← Validator installation
-│   └── utils/
-│       ├── detect-platform.sh          ← OS/hardware detection
-│       ├── check-requirements.sh       ← Validate system
-│       └── setup-cgroups.sh            ← Raspberry Pi cgroup setup
-├── config/
-│   ├── edge-minimal.yaml               ← Edge with qsecbit only (DEFAULT)
-│   ├── edge-full.yaml                  ← Edge with AI/monitoring
-│   ├── edge-rpi.yaml                   ← Raspberry Pi 4GB optimized
-│   ├── cloud.yaml                      ← Cloud/MSSP
-│   └── validator.yaml                  ← Validator nodes
+│   └── lib/
+│       ├── platform.sh                 ← Platform detection (OS/arch/RAM/RPi)
+│       ├── requirements.sh             ← System validation
+│       ├── instructions.sh             ← Show user instructions when needed
+│       └── pods.sh                     ← POD deployment functions
 └── DELETE:
-    ├── install/testing/                ← REMOVE entirely
+    ├── install/testing/                ← REMOVE entirely (broken)
     ├── install/edge/setup.sh           ← MERGE into scripts/install-edge.sh
+    ├── install/edge/config.sh          ← MERGE into scripts/lib/platform.sh
     └── install-validator.sh (root)     ← MOVE to scripts/
 ```
+
+**Key Principle**: ONE script that's smart, not multiple flavors.
 
 ---
 
@@ -102,7 +100,7 @@ hookprobe/
 rm -rf install/testing/                  # Broken lightweight install
 rm install-validator.sh                  # Move to scripts/
 rm install/edge/setup.sh                 # Merge into unified script
-rm install/edge/config.sh                # Move to config/
+rm install/edge/config.sh                # Merge into lib/platform.sh
 ```
 
 **KEEP (for reference, then delete after migration):**
@@ -111,320 +109,440 @@ rm install/edge/config.sh                # Move to config/
 
 ---
 
-### Phase 2: Create Unified Edge Installation
+### Phase 2: Create ONE Unified Edge Installation
 
 **New file: `scripts/install-edge.sh`**
 
 ```bash
 #!/bin/bash
 #
-# install-edge.sh - Unified Edge Node Installation
-# Supports 3 flavors via --flavor flag
+# install-edge.sh - ONE Unified Edge Installation
+# Auto-detects platform and adjusts accordingly
 #
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/platform.sh"
+source "$SCRIPT_DIR/lib/requirements.sh"
+source "$SCRIPT_DIR/lib/instructions.sh"
+source "$SCRIPT_DIR/lib/pods.sh"
+
 # ============================================================
-# EDGE FLAVORS
+# DEFAULT CONFIGURATION (User can override with flags)
 # ============================================================
 
-FLAVOR="minimal"  # DEFAULT: qsecbit only, no AI
+ENABLE_AI=false          # DEFAULT: NO AI (qsecbit only)
+ENABLE_MONITORING=false  # DEFAULT: NO monitoring
+ENABLE_IAM=true          # IAM usually needed
 
-case "$1" in
-    --flavor=minimal)
-        FLAVOR="minimal"
-        CONFIG="config/edge-minimal.yaml"
-        PODS="001,002,003,005,010"  # Web, IAM, DB, Cache, Neuro (qsecbit)
-        MEMORY_REQUIRED="4GB"
-        ;;
-    --flavor=full)
-        FLAVOR="full"
-        CONFIG="config/edge-full.yaml"
-        PODS="001,002,003,004,005,006,007,010"  # All PODs including AI
-        MEMORY_REQUIRED="16GB"
-        ;;
-    --flavor=rpi)
-        FLAVOR="rpi"
-        CONFIG="config/edge-rpi.yaml"
-        PODS="001,003,005,010"  # Minimal for RPi 4GB
-        MEMORY_REQUIRED="4GB"
-        ENABLE_CGROUP_CHECK=true
-        ;;
-    *)
-        echo "Usage: $0 [--flavor=minimal|full|rpi]"
+# Parse command-line flags
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --enable-ai)
+            ENABLE_AI=true
+            shift
+            ;;
+        --enable-monitoring)
+            ENABLE_MONITORING=true
+            shift
+            ;;
+        --disable-iam)
+            ENABLE_IAM=false
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--enable-ai] [--enable-monitoring] [--disable-iam]"
+            exit 1
+            ;;
+    esac
+done
+
+echo "============================================================"
+echo "   HOOKPROBE EDGE INSTALLATION"
+echo "   One Unified Installer - Auto-Detection"
+echo "============================================================"
+echo ""
+
+# ============================================================
+# STEP 1: DETECT PLATFORM
+# ============================================================
+
+echo "[1/6] Detecting platform..."
+detect_platform  # Sets: PLATFORM_OS, PLATFORM_ARCH, TOTAL_RAM_GB, IS_RASPBERRY_PI
+
+echo "  OS:           $PLATFORM_OS"
+echo "  Architecture: $PLATFORM_ARCH"
+echo "  RAM:          ${TOTAL_RAM_GB}GB"
+echo "  Raspberry Pi: $IS_RASPBERRY_PI"
+echo ""
+
+# ============================================================
+# STEP 2: CHECK REQUIREMENTS & SHOW INSTRUCTIONS
+# ============================================================
+
+echo "[2/6] Checking requirements..."
+
+# Check if Raspberry Pi needs cgroup setup
+if [ "$IS_RASPBERRY_PI" = true ]; then
+    if ! check_cgroup_enabled; then
         echo ""
-        echo "Flavors:"
-        echo "  minimal  - Qsecbit only, no AI (DEFAULT) [4GB RAM]"
-        echo "  full     - All features: Qsecbit + AI + Monitoring [16GB RAM]"
-        echo "  rpi      - Raspberry Pi optimized [4GB RAM]"
+        echo "⚠️  CRITICAL: Cgroups not enabled (required for Raspberry Pi)"
+        echo ""
+        show_cgroup_instructions  # From lib/instructions.sh
+        echo ""
+        echo "After making these changes, reboot and re-run this script."
         exit 1
-        ;;
-esac
+    fi
+    echo "  ✓ Cgroups enabled"
+fi
+
+# Check RAM requirements
+if [ "$TOTAL_RAM_GB" -lt 4 ]; then
+    echo "  ✗ Insufficient RAM: ${TOTAL_RAM_GB}GB (minimum 4GB required)"
+    exit 1
+fi
+echo "  ✓ RAM sufficient: ${TOTAL_RAM_GB}GB"
+
+# Check disk space
+if ! check_disk_space 20; then  # Minimum 20GB free
+    echo "  ✗ Insufficient disk space (minimum 20GB required)"
+    exit 1
+fi
+echo "  ✓ Disk space sufficient"
+
+echo ""
 
 # ============================================================
-# RASPBERRY PI CGROUP CHECK
+# STEP 3: CALCULATE MEMORY LIMITS (Auto-adjust based on RAM)
 # ============================================================
 
-if [ "$ENABLE_CGROUP_CHECK" = true ]; then
-    source "$(dirname $0)/utils/setup-cgroups.sh"
-    check_cgroup_support
+echo "[3/6] Calculating resource limits..."
 
-    if ! is_cgroup_enabled; then
-        echo "⚠️  CRITICAL: Cgroup not enabled on Raspberry Pi"
-        echo ""
-        echo "You must enable cgroups in /boot/firmware/cmdline.txt"
-        echo "Add this to the EXISTING line (do NOT create new line):"
-        echo ""
-        echo "  cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1"
-        echo ""
-        echo "Then reboot and re-run this script."
-        exit 1
+if [ "$TOTAL_RAM_GB" -le 4 ]; then
+    # Conservative for 4GB systems (Raspberry Pi)
+    export POD_MEMORY_WEB="768M"
+    export POD_MEMORY_DATABASE="512M"
+    export POD_MEMORY_CACHE="256M"
+    export POD_MEMORY_NEURO="512M"
+    echo "  Profile: Lightweight (4GB system)"
+elif [ "$TOTAL_RAM_GB" -le 8 ]; then
+    # Moderate for 8GB systems
+    export POD_MEMORY_WEB="1.5G"
+    export POD_MEMORY_DATABASE="1.5G"
+    export POD_MEMORY_CACHE="512M"
+    export POD_MEMORY_NEURO="1G"
+    echo "  Profile: Moderate (8GB system)"
+else
+    # Full for 16GB+ systems
+    export POD_MEMORY_WEB="2G"
+    export POD_MEMORY_DATABASE="2G"
+    export POD_MEMORY_CACHE="1G"
+    export POD_MEMORY_NEURO="1G"
+    echo "  Profile: Full (16GB+ system)"
+fi
+
+echo "  Memory limits configured for ${TOTAL_RAM_GB}GB RAM"
+echo ""
+
+# ============================================================
+# STEP 4: DETERMINE PODS TO DEPLOY
+# ============================================================
+
+echo "[4/6] Determining PODs to deploy..."
+echo ""
+echo "  Core PODs (always deployed):"
+echo "    ✓ POD-001: Web Server (Django + Nginx + NAXSI)"
+echo "    ✓ POD-003: Database (PostgreSQL)"
+echo "    ✓ POD-005: Cache (Redis)"
+echo "    ✓ POD-010: Neuro Protocol (Qsecbit + HTP)"
+
+if [ "$ENABLE_IAM" = true ]; then
+    echo "    ✓ POD-002: IAM (Logto authentication)"
+fi
+
+echo ""
+echo "  Optional PODs (disabled by default):"
+
+if [ "$ENABLE_MONITORING" = true ]; then
+    echo "    ✓ POD-004: Monitoring (Grafana, VictoriaMetrics)"
+else
+    echo "    ✗ POD-004: Monitoring (use --enable-monitoring to enable)"
+fi
+
+if [ "$ENABLE_AI" = true ]; then
+    echo "    ✓ POD-006: Detection (Suricata, Zeek)"
+    echo "    ✓ POD-007: AI Analysis (Qsecbit ML models)"
+else
+    echo "    ✗ POD-006: Detection (use --enable-ai to enable)"
+    echo "    ✗ POD-007: AI Analysis (use --enable-ai to enable)"
+fi
+
+echo ""
+
+# Warn if trying to enable AI on low RAM
+if [ "$ENABLE_AI" = true ] && [ "$TOTAL_RAM_GB" -lt 16 ]; then
+    echo "  ⚠️  WARNING: AI enabled but only ${TOTAL_RAM_GB}GB RAM available"
+    echo "     Recommended: 16GB+ for AI features"
+    echo ""
+    read -p "  Continue anyway? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "  Installation cancelled."
+        exit 0
     fi
 fi
 
 # ============================================================
-# MEMORY LIMITS FOR RASPBERRY PI
+# STEP 5: DEPLOY PODS
 # ============================================================
 
-if [ "$FLAVOR" = "rpi" ]; then
-    # Raspberry Pi memory limits (conservative for 4GB)
-    export POD_MEMORY_LIMIT_WEB="768M"       # Django + Nginx
-    export POD_MEMORY_LIMIT_DATABASE="512M"  # PostgreSQL
-    export POD_MEMORY_LIMIT_CACHE="256M"     # Redis
-    export POD_MEMORY_LIMIT_NEURO="512M"     # Qsecbit (int16, lightweight)
-    # Total: ~2GB, leaves 2GB for OS
-else
-    # Standard edge memory limits
-    export POD_MEMORY_LIMIT_WEB="2G"
-    export POD_MEMORY_LIMIT_DATABASE="2G"
-    export POD_MEMORY_LIMIT_CACHE="1G"
-    export POD_MEMORY_LIMIT_NEURO="1G"
+echo "[5/6] Deploying PODs..."
+echo ""
+
+deploy_pod_web        # Always
+deploy_pod_database   # Always
+deploy_pod_cache      # Always
+deploy_pod_neuro      # Always (qsecbit + HTP)
+
+if [ "$ENABLE_IAM" = true ]; then
+    deploy_pod_iam
 fi
 
+if [ "$ENABLE_MONITORING" = true ]; then
+    deploy_pod_monitoring
+fi
+
+if [ "$ENABLE_AI" = true ]; then
+    deploy_pod_detection
+    deploy_pod_ai
+fi
+
+echo ""
+echo "  ✓ All PODs deployed successfully"
+
 # ============================================================
-# POD DEPLOYMENT
+# STEP 6: POST-INSTALL INSTRUCTIONS
 # ============================================================
 
-deploy_pods() {
-    echo "Deploying Edge Flavor: $FLAVOR"
-    echo "Configuration: $CONFIG"
-    echo "PODs: $PODS"
+echo ""
+echo "[6/6] Installation complete!"
+echo ""
+echo "============================================================"
+echo "   HOOKPROBE EDGE NODE READY"
+echo "============================================================"
+echo ""
+echo "Configuration:"
+echo "  Platform:    $PLATFORM_ARCH on $PLATFORM_OS"
+echo "  RAM:         ${TOTAL_RAM_GB}GB"
+echo "  Qsecbit:     ✓ Enabled (quantum-resistant)"
+echo "  HTP:         ✓ Enabled (adaptive transport)"
+echo "  AI:          $([ "$ENABLE_AI" = true ] && echo "✓ Enabled" || echo "✗ Disabled")"
+echo "  Monitoring:  $([ "$ENABLE_MONITORING" = true ] && echo "✓ Enabled" || echo "✗ Disabled")"
+echo ""
+echo "Next steps:"
+echo "  1. Check status:  podman pod ls"
+echo "  2. View logs:     podman logs -f hookprobe-web-django"
+echo "  3. Access web:    http://localhost"
+echo ""
+echo "To enable AI later:  sudo bash $0 --enable-ai"
+echo "To enable monitoring: sudo bash $0 --enable-monitoring"
+echo ""
+```
+
+**New file: `scripts/lib/platform.sh`**
+
+```bash
+#!/bin/bash
+#
+# platform.sh - Platform Detection Library
+#
+
+detect_platform() {
+    # Detect OS
+    if [ -f /etc/os-release ]; then
+        source /etc/os-release
+        PLATFORM_OS="$PRETTY_NAME"
+    else
+        PLATFORM_OS="Unknown Linux"
+    fi
+
+    # Detect architecture
+    case "$(uname -m)" in
+        x86_64|amd64)
+            PLATFORM_ARCH="x86_64"
+            ;;
+        aarch64|arm64)
+            PLATFORM_ARCH="ARM64"
+            ;;
+        armv7l)
+            PLATFORM_ARCH="ARM32"
+            ;;
+        *)
+            PLATFORM_ARCH="$(uname -m)"
+            ;;
+    esac
+
+    # Detect total RAM in GB
+    local ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    TOTAL_RAM_GB=$((ram_kb / 1024 / 1024))
+
+    # Detect if Raspberry Pi
+    IS_RASPBERRY_PI=false
+    if [ -f /proc/device-tree/model ]; then
+        local model=$(cat /proc/device-tree/model)
+        if [[ "$model" == *"Raspberry Pi"* ]]; then
+            IS_RASPBERRY_PI=true
+        fi
+    fi
+
+    # Export for use by other scripts
+    export PLATFORM_OS PLATFORM_ARCH TOTAL_RAM_GB IS_RASPBERRY_PI
+}
+
+check_cgroup_enabled() {
+    # Check if cgroup memory controller is enabled
+    if [ -f /sys/fs/cgroup/memory.max ]; then
+        return 0  # Enabled
+    else
+        return 1  # Not enabled
+    fi
+}
+```
+
+**New file: `scripts/lib/instructions.sh`**
+
+```bash
+#!/bin/bash
+#
+# instructions.sh - Show user instructions when manual changes needed
+#
+
+show_cgroup_instructions() {
+    cat << 'EOF'
+┌────────────────────────────────────────────────────────────┐
+│ RASPBERRY PI CGROUP CONFIGURATION REQUIRED                 │
+└────────────────────────────────────────────────────────────┘
+
+Raspberry Pi requires cgroup configuration for containers.
+
+STEP 1: Edit boot configuration
+
+  # For Raspberry Pi OS Bookworm (Debian 12+)
+  sudo nano /boot/firmware/cmdline.txt
+
+  # For older Raspberry Pi OS
+  sudo nano /boot/cmdline.txt
+
+STEP 2: Add these parameters to the EXISTING line
+        (Do NOT create a new line)
+
+  cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1
+
+EXAMPLE:
+
+  Before:
+  console=serial0,115200 root=PARTUUID=12345-02 rootwait
+
+  After:
+  console=serial0,115200 root=PARTUUID=12345-02 rootwait cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1
+
+STEP 3: Save and reboot
+
+  sudo reboot
+
+STEP 4: Verify (after reboot)
+
+  cat /proc/cgroups | grep memory
+  # Should show: memory ... 1
+
+  ls /sys/fs/cgroup/memory.max
+  # Should exist without errors
+
+EOF
+}
+```
+
+---
+
+### Phase 3: Simplify Main Menu
+
+**Update `install.sh` to use new unified installer:**
+
+```bash
+show_deployment_menu() {
+    echo "Select Deployment Mode:"
+    echo ""
+    echo "  1) Edge Node - Qsecbit only (DEFAULT) [4GB+ RAM]"
+    echo "     └─ Optional: --enable-ai, --enable-monitoring"
+    echo ""
+    echo "  2) Cloud/MSSP - Multi-tenant [64GB+ RAM]"
+    echo "  3) Validator - Consensus node [8GB+ RAM]"
     echo ""
 
-    IFS=',' read -ra POD_LIST <<< "$PODS"
-    for pod in "${POD_LIST[@]}"; do
-        case "$pod" in
-            001) deploy_pod_web ;;
-            002) deploy_pod_iam ;;
-            003) deploy_pod_database ;;
-            004) deploy_pod_monitoring ;;
-            005) deploy_pod_cache ;;
-            006) deploy_pod_detection ;;
-            007) deploy_pod_ai ;;
-            010) deploy_pod_neuro ;;
-        esac
-    done
+    read -p "Select option: " choice
+
+    case $choice in
+        1)
+            echo ""
+            echo "Edge installation options:"
+            echo "  a) Standard (qsecbit only)"
+            echo "  b) With AI detection and monitoring"
+            echo ""
+            read -p "Select: " edge_choice
+            case $edge_choice in
+                a) bash scripts/install-edge.sh ;;
+                b) bash scripts/install-edge.sh --enable-ai --enable-monitoring ;;
+                *) echo "Invalid option" ;;
+            esac
+            ;;
+        2) bash scripts/install-cloud.sh ;;
+        3) bash scripts/install-validator.sh ;;
+        *) echo "Invalid option" ;;
+    esac
 }
-
-deploy_pod_neuro() {
-    echo "🧠 Deploying POD-010: Neuro Protocol (Qsecbit)"
-
-    podman pod create \
-        --name hookprobe-neuro \
-        --network neuro-net
-
-    # Qsecbit engine (lightweight, no AI models)
-    podman run -d \
-        --name hookprobe-neuro-qsecbit \
-        --pod hookprobe-neuro \
-        --memory "$POD_MEMORY_LIMIT_NEURO" \
-        --memory-swap 0 \
-        -v hookprobe-neuro-data:/data \
-        hookprobe/qsecbit:latest
-
-    # HTP transport protocol
-    podman run -d \
-        --name hookprobe-neuro-htp \
-        --pod hookprobe-neuro \
-        --memory 256M \
-        hookprobe/htp:latest
-}
-
-# Main deployment
-deploy_pods
 ```
+
+**Key Point**: No configuration files needed! Everything is auto-detected and adjusted in the script.
 
 ---
 
-### Phase 3: Create Configuration Files
-
-**File: `config/edge-minimal.yaml` (DEFAULT)**
-
-```yaml
-# Edge Minimal Configuration
-# Qsecbit only, no AI/monitoring
-# Memory: 4GB minimum
-# Target: Home users, SMB, IoT edge devices
-
-deployment:
-  mode: edge
-  flavor: minimal
-
-pods:
-  enabled:
-    - pod-001  # Web Server (Django + Nginx + NAXSI)
-    - pod-002  # IAM (Logto authentication)
-    - pod-003  # Database (PostgreSQL 16)
-    - pod-005  # Cache (Redis 7)
-    - pod-010  # Neuro Protocol (Qsecbit + HTP)
-
-  disabled:
-    - pod-004  # Monitoring (VictoriaMetrics, Grafana) - TOO HEAVY
-    - pod-006  # Detection (Suricata, Zeek, Snort) - AI NOT INCLUDED
-    - pod-007  # AI Analysis (ML models) - NOT INCLUDED
-    - pod-008  # Automation (n8n) - Optional
-
-resources:
-  memory:
-    web: 2G
-    database: 2G
-    cache: 1G
-    neuro: 1G
-    # Total: ~6GB (requires 8GB system for OS overhead)
-
-security:
-  # Qsecbit enabled by default
-  qsecbit:
-    enabled: true
-    algorithm: SHA256  # Quantum-resistant hash
-    rdv_algorithm: BLAKE3
-    posf_enabled: true
-
-  # HTP transport protocol
-  htp:
-    enabled: true
-    quantum_resistant: true
-    adaptive_mode: true
-    rtt_measurement: true
-    bandwidth_detection: true
-    stress_monitoring: true
-
-  # AI features DISABLED in minimal
-  ai_detection:
-    enabled: false
-
-  monitoring:
-    enabled: false
-```
-
-**File: `config/edge-rpi.yaml`**
-
-```yaml
-# Raspberry Pi Edge Configuration
-# Optimized for 4GB RAM (leaves 2GB for OS)
-# Ultra-lightweight: Qsecbit only
-
-deployment:
-  mode: edge
-  flavor: rpi
-  platform: arm64
-
-pods:
-  enabled:
-    - pod-001  # Web (lightweight)
-    - pod-003  # Database (PostgreSQL alpine)
-    - pod-005  # Cache (Redis alpine)
-    - pod-010  # Neuro (Qsecbit only, no AI models)
-
-  disabled:
-    - pod-002  # IAM (optional, can enable if needed)
-    - pod-004  # Monitoring (too heavy)
-    - pod-006  # Detection (too heavy)
-    - pod-007  # AI (too heavy)
-    - pod-008  # Automation (too heavy)
-
-resources:
-  # Conservative limits for Raspberry Pi 4GB
-  memory:
-    web: 768M           # Django + Nginx
-    database: 512M      # PostgreSQL alpine
-    cache: 256M         # Redis alpine
-    neuro: 512M         # Qsecbit (int16, no ML)
-    # Total: ~2GB, leaves 2GB for OS
-
-  cpu:
-    # Use CPU quotas to prevent thermal throttling
-    web: 1.5            # 1.5 cores max
-    database: 1.0       # 1 core max
-    cache: 0.5          # 0.5 cores max
-    neuro: 1.0          # 1 core max
-
-platform:
-  raspberry_pi:
-    # Raspberry Pi specific optimizations
-    enable_cgroup_check: true
-    thermal_throttle_check: true
-    max_temperature_celsius: 70  # Throttle if CPU > 70°C
-
-    # Memory pressure handling
-    oom_score_adjust:
-      web: 0           # Normal priority
-      database: -100   # Protect database from OOM killer
-      cache: 100       # Cache can be killed first
-      neuro: -50       # Protect qsecbit engine
-
-security:
-  qsecbit:
-    enabled: true
-    # Lightweight mode for Raspberry Pi
-    weight_evolution_interval: 120  # Every 2 minutes (vs 60s default)
-    ter_compression: true           # Compress TER logs
-
-  htp:
-    enabled: true
-    adaptive_mode: true
-    # Reduce cryptographic load on RPi
-    chacha20_enabled: false         # Disable encryption (trust LAN)
-    posf_verification_interval: 300 # Every 5 minutes (vs 60s)
-
-  ai_detection:
-    enabled: false  # NO AI on Raspberry Pi
-
-  monitoring:
-    enabled: false  # NO monitoring on Raspberry Pi
-```
-
----
-
-## 🚀 New Installation Flow
+## 🚀 New Installation Flow (Simplified)
 
 ### User Experience
 
 ```bash
-# Install HookProbe Edge (DEFAULT: qsecbit only, no AI)
+# Install HookProbe Edge (DEFAULT: qsecbit only, auto-detects platform)
 sudo ./install.sh
 
 # Main Menu:
-# 1) Select Deployment Mode
-#    ├─ Edge (Minimal) - Qsecbit only [DEFAULT] [4GB RAM]
-#    ├─ Edge (Full) - Qsecbit + AI + Monitoring [16GB RAM]
-#    ├─ Edge (Raspberry Pi) - Optimized for RPi 4GB
-#    ├─ Cloud/MSSP - Multi-tenant [64GB+ RAM]
-#    └─ Validator - Byzantine consensus node [8GB+ RAM]
+# 1) Edge Node - Qsecbit only [DEFAULT] [4GB+ RAM]
+#    ├─ Auto-detects: x86_64, ARM64, Raspberry Pi
+#    ├─ Auto-adjusts: Memory limits based on RAM
+#    └─ Optional: --enable-ai, --enable-monitoring
+#
+# 2) Cloud/MSSP - Multi-tenant [64GB+ RAM]
+# 3) Validator - Byzantine consensus node [8GB+ RAM]
 ```
 
-**Simplified edge install:**
+**Direct installation (bypassing menu):**
 ```bash
-# Method 1: Interactive menu
-sudo ./install.sh
-# Select: 1) Edge (Minimal)
+# Standard edge (qsecbit only, auto-detects everything)
+sudo bash scripts/install-edge.sh
 
-# Method 2: Direct command
-sudo bash scripts/install-edge.sh --flavor=minimal
+# Edge with AI and monitoring
+sudo bash scripts/install-edge.sh --enable-ai --enable-monitoring
 
-# Method 3: Raspberry Pi
-sudo bash scripts/install-edge.sh --flavor=rpi
+# Edge without IAM (if you don't need authentication)
+sudo bash scripts/install-edge.sh --disable-iam
 ```
+
+**What gets auto-detected:**
+- ✅ Operating system (RHEL, Debian, Ubuntu, Raspberry Pi OS)
+- ✅ Architecture (x86_64, ARM64, ARM32)
+- ✅ Total RAM (adjusts memory limits automatically)
+- ✅ Raspberry Pi detection (enables cgroup check)
+- ✅ Disk space (validates 20GB+ available)
 
 ---
 
@@ -433,39 +551,41 @@ sudo bash scripts/install-edge.sh --flavor=rpi
 ### Immediate Deletion (Broken/Duplicated)
 
 ```bash
-# Testing directory (broken, integrate into edge)
-install/testing/README.md
-install/testing/lightweight-setup.sh
-install/testing/lightweight-config.sh
+# Testing directory (broken, ~1,000 lines)
+install/testing/README.md               # 390 lines of obsolete instructions
+install/testing/lightweight-setup.sh    # 600+ lines of broken code
+install/testing/lightweight-config.sh   # 200+ lines of duplicate config
 
 # Duplicated edge setup (merge into scripts/install-edge.sh)
-install/edge/setup.sh
-install/edge/config.sh
+install/edge/setup.sh                   # 2,000+ lines → merge
+install/edge/config.sh                  # 500+ lines → merge into lib/platform.sh
 
 # Duplicated validator install (move to scripts/)
-install-validator.sh  # Move to scripts/install-validator.sh
+install-validator.sh                    # Move to scripts/install-validator.sh
 
 # Obsolete documentation (merge into docs/installation/)
-install/edge/checklist.md
-install/edge/QUICK-START.md
+install/edge/checklist.md               # Merge into INSTALLATION.md
+install/edge/QUICK-START.md             # Merge into QUICK-START.md
+
+# Total deleted: ~3,700 lines of duplicated/broken code
 ```
 
 ### Files to KEEP (but reorganize)
 
 ```bash
-# Move to scripts/utils/
-install/edge/hookprobe-bootstrap.sh → scripts/utils/bootstrap.sh
-install/edge/hookprobe-ctl → scripts/utils/hookprobe-ctl
-install/edge/provision.sh → scripts/utils/provision.sh
-install/edge/update.sh → scripts/utils/update.sh
-install/edge/cleanup.sh → scripts/utils/cleanup.sh
-install/edge/uninstall.sh → scripts/utils/uninstall.sh
+# Move to scripts/lib/ (renamed from utils/)
+install/edge/hookprobe-bootstrap.sh → scripts/lib/bootstrap.sh
+install/edge/hookprobe-ctl → scripts/lib/hookprobe-ctl
+install/edge/provision.sh → scripts/lib/provision.sh
+install/edge/update.sh → scripts/lib/update.sh
+install/edge/cleanup.sh → scripts/lib/cleanup.sh
+install/edge/uninstall.sh → scripts/lib/uninstall.sh
 
 # Move systemd services
 install/edge/systemd/*.service → systemd/edge/
 
 # Keep common utilities
-install/common/ → scripts/common/
+install/common/ → scripts/lib/common/
 ```
 
 ---
@@ -628,28 +748,37 @@ Installation Paths: 3 (confusing)
 - install/testing/lightweight-setup.sh (broken)
 - install-validator.sh (separate)
 
-Edge Flavors: 1 (all or nothing)
+Edge Options: 1 (all or nothing)
 - Full edge only (includes AI, requires 16GB)
+- No qsecbit-only option
 
 Raspberry Pi Support: Partial (only in testing, broken)
-Qsecbit-only option: NO
-Lines of Code: ~1,500 (duplicated across scripts)
+Platform Detection: None (user must know their system)
+Memory Limits: Fixed (doesn't adjust to available RAM)
+User Instructions: None (fails silently on Raspberry Pi)
+
+Lines of Code: ~3,700 (duplicated across 3 scripts)
 ```
 
 ### After (Proposed - Clean)
 
 ```
 Installation Paths: 1 (clear)
-- install.sh → scripts/install-{edge,cloud,validator}.sh
+- install.sh → scripts/install-edge.sh (one smart script)
 
-Edge Flavors: 3 (clear choice)
-- Minimal: Qsecbit only, no AI (DEFAULT) [4GB]
-- Full: Qsecbit + AI + Monitoring [16GB]
-- RPi: Raspberry Pi optimized [4GB]
+Edge Options: Simple flags
+- DEFAULT: Qsecbit only, no AI [4GB+]
+- --enable-ai: Add detection and AI
+- --enable-monitoring: Add Grafana/metrics
+- --disable-iam: Remove authentication
 
-Raspberry Pi Support: Full (built-in)
-Qsecbit-only option: YES (default minimal flavor)
-Lines of Code: ~800 (unified, no duplication)
+Raspberry Pi Support: Full (auto-detected, built-in)
+Platform Detection: Automatic (OS, arch, RAM, RPi)
+Memory Limits: Dynamic (adjusts to available RAM)
+User Instructions: Clear (shows exactly what to modify)
+
+Lines of Code: ~800 (one unified script + libs)
+Code Reduction: 79% less code (3,700 → 800 lines)
 ```
 
 ---
@@ -752,13 +881,16 @@ install/edge/systemd/*.service
 
 ## 🎯 Success Criteria
 
-1. ✅ **Single installation path**: `sudo ./install.sh` works for all modes
-2. ✅ **Clear flavors**: Minimal (qsecbit), Full (AI), RPi (optimized)
-3. ✅ **Raspberry Pi support**: Built-in cgroup validation, memory limits
-4. ✅ **Qsecbit-only mode**: Default minimal flavor, no AI
-5. ✅ **No broken code**: Delete install/testing/ (doesn't work)
-6. ✅ **Less code**: Reduce from ~3,700 to ~800 lines (unified)
-7. ✅ **Better UX**: "Which script?" → "Which flavor?"
+1. ✅ **Single installation command**: `sudo ./install.sh` works for all platforms
+2. ✅ **Auto-detection**: Platform, RAM, Raspberry Pi detected automatically
+3. ✅ **Dynamic adjustment**: Memory limits scale with available RAM
+4. ✅ **Clear instructions**: If manual change needed (cgroup), show exact steps
+5. ✅ **Qsecbit-only default**: NO AI by default (user must opt-in with --enable-ai)
+6. ✅ **Raspberry Pi support**: Built-in detection, cgroup validation, memory limits
+7. ✅ **No broken code**: Delete install/testing/ (doesn't work)
+8. ✅ **Less code**: Reduce from ~3,700 to ~800 lines (79% reduction)
+9. ✅ **Simple flags**: --enable-ai, --enable-monitoring, --disable-iam
+10. ✅ **Better UX**: "Which script?" → ONE script, auto-detects everything
 
 ---
 
