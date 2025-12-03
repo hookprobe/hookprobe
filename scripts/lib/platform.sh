@@ -65,7 +65,8 @@ detect_platform() {
     RASPBERRY_PI_MODEL=""
 
     if [ -f /proc/device-tree/model ]; then
-        local model=$(cat /proc/device-tree/model 2>/dev/null || echo "")
+        # Use tr to remove null bytes that cause warnings
+        local model=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "")
         if [[ "$model" == *"Raspberry Pi"* ]]; then
             IS_RASPBERRY_PI=true
             RASPBERRY_PI_MODEL="$model"
