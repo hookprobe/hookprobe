@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # install.sh - HookProbe Installation Menu
-# Version: 5.0
+# Version: 6.0
 # License: MIT
 #
-# Comprehensive hierarchical installation menu
+# Capability-based installation menu - shows only what your system supports
 #
 
 set -e
@@ -18,66 +18,335 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
 
 # ============================================================
-# SYSTEM DETECTION FUNCTIONS
+# SYSTEM CAPABILITY DETECTION
 # ============================================================
+
+# Global capability variables (set by detect_capabilities)
+declare -g SYS_RAM_MB=0
+declare -g SYS_RAM_GB=0
+declare -g SYS_STORAGE_GB=0
+declare -g SYS_CPU_CORES=0
+declare -g SYS_CPU_MODEL=""
+declare -g SYS_ARCH=""
+declare -g SYS_KERNEL_VERSION=""
+declare -g SYS_KERNEL_MAJOR=0
+declare -g SYS_OS_NAME=""
+declare -g SYS_OS_VERSION=""
+declare -g SYS_OS_PRETTY=""
+
+# Network capabilities
+declare -g SYS_ETH_COUNT=0
+declare -g SYS_WIFI_COUNT=0
+declare -g SYS_WIFI_HOTSPOT=false
+declare -g SYS_WIFI_5GHZ=false
+declare -g SYS_WIFI_2GHZ=false
+declare -g SYS_LTE_COUNT=0
+declare -g SYS_NET_INTERFACES=""
+
+# Virtualization capabilities
+declare -g SYS_IS_VM=false
+declare -g SYS_VM_TYPE=""
+declare -g SYS_NESTED_VIRT=false
+declare -g SYS_IS_PROXMOX=false
+declare -g SYS_IS_LXC=false
+declare -g SYS_CGROUPS_V2=false
+
+# Security capabilities
+declare -g SYS_APPARMOR=false
+declare -g SYS_SELINUX=false
+declare -g SYS_BPF_SUPPORT=false
+
+# GPU capabilities
+declare -g SYS_HAS_GPU=false
+declare -g SYS_GPU_TYPE=""
+
+# Deployment tier eligibility
+declare -g CAN_VALIDATOR=false
+declare -g CAN_ROUTER_EDGE=false
+declare -g CAN_ADVANCED_EDGE=false
+declare -g CAN_MSSP_SERVER=false
 
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        OS_NAME=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
-        OS_VERSION="$VERSION_ID"
-        OS_PRETTY="$PRETTY_NAME"
+        SYS_OS_NAME=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
+        SYS_OS_VERSION="$VERSION_ID"
+        SYS_OS_PRETTY="$PRETTY_NAME"
     elif [ -f /etc/redhat-release ]; then
-        OS_NAME="rhel"
-        OS_VERSION=$(cat /etc/redhat-release | sed 's/.*release \([0-9.]*\).*/\1/')
-        OS_PRETTY=$(cat /etc/redhat-release)
+        SYS_OS_NAME="rhel"
+        SYS_OS_VERSION=$(cat /etc/redhat-release | sed 's/.*release \([0-9.]*\).*/\1/')
+        SYS_OS_PRETTY=$(cat /etc/redhat-release)
     else
-        OS_NAME="unknown"
-        OS_VERSION="unknown"
-        OS_PRETTY="Unknown Linux"
+        SYS_OS_NAME="unknown"
+        SYS_OS_VERSION="unknown"
+        SYS_OS_PRETTY="Unknown Linux"
     fi
-    echo "$OS_PRETTY"
 }
 
 detect_architecture() {
-    local arch=$(uname -m)
-    case "$arch" in
-        x86_64) echo "x86_64 (AMD64)" ;;
-        aarch64) echo "ARM64 (aarch64)" ;;
-        armv7l) echo "ARM32 (armv7l)" ;;
-        *) echo "$arch" ;;
-    esac
+    SYS_ARCH=$(uname -m)
+}
+
+detect_kernel() {
+    SYS_KERNEL_VERSION=$(uname -r)
+    SYS_KERNEL_MAJOR=$(echo "$SYS_KERNEL_VERSION" | cut -d. -f1)
+}
+
+detect_cpu() {
+    SYS_CPU_CORES=$(nproc 2>/dev/null || echo 1)
+    if [ -f /proc/cpuinfo ]; then
+        SYS_CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown")
+        if [ -z "$SYS_CPU_MODEL" ] || [ "$SYS_CPU_MODEL" = "Unknown" ]; then
+            # ARM processors may use different field
+            SYS_CPU_MODEL=$(grep -m1 "Model" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown")
+        fi
+    fi
 }
 
 detect_ram() {
-    local ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local ram_gb=$((ram_kb / 1024 / 1024))
-    echo "${ram_gb}GB"
+    if [ -f /proc/meminfo ]; then
+        local ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        SYS_RAM_MB=$((ram_kb / 1024))
+        SYS_RAM_GB=$((ram_kb / 1024 / 1024))
+    fi
 }
 
-get_container_status() {
-    local container_count=0
-    local running_count=0
+detect_storage() {
+    # Get available storage on root partition
+    local storage_kb=$(df / 2>/dev/null | awk 'NR==2 {print $4}')
+    SYS_STORAGE_GB=$((storage_kb / 1024 / 1024))
+}
 
-    if command -v podman &> /dev/null; then
-        container_count=$(podman ps -a --format "{{.Names}}" 2>/dev/null | wc -l)
-        running_count=$(podman ps --format "{{.Names}}" 2>/dev/null | wc -l)
+detect_network_interfaces() {
+    SYS_ETH_COUNT=0
+    SYS_WIFI_COUNT=0
+    SYS_LTE_COUNT=0
+    SYS_NET_INTERFACES=""
 
-        if [ "$container_count" -eq 0 ]; then
-            echo "No containers"
-        else
-            echo "$running_count/$container_count running"
+    # Detect ethernet interfaces
+    for iface in /sys/class/net/*; do
+        local name=$(basename "$iface")
+        [ "$name" = "lo" ] && continue
+
+        if [ -d "$iface" ]; then
+            local type_file="$iface/type"
+            local wireless_dir="$iface/wireless"
+            local device_type=""
+
+            if [ -d "$wireless_dir" ]; then
+                # WiFi interface
+                SYS_WIFI_COUNT=$((SYS_WIFI_COUNT + 1))
+                device_type="wifi"
+
+                # Check WiFi capabilities using iw
+                if command -v iw &>/dev/null; then
+                    local phy=$(iw dev "$name" info 2>/dev/null | grep wiphy | awk '{print $2}')
+                    if [ -n "$phy" ]; then
+                        local bands=$(iw phy "phy$phy" info 2>/dev/null | grep -E "Band [0-9]:" || true)
+                        if echo "$bands" | grep -q "Band 1:"; then
+                            SYS_WIFI_2GHZ=true
+                        fi
+                        if echo "$bands" | grep -q "Band 2:"; then
+                            SYS_WIFI_5GHZ=true
+                        fi
+
+                        # Check AP mode support (hotspot)
+                        if iw phy "phy$phy" info 2>/dev/null | grep -q "* AP"; then
+                            SYS_WIFI_HOTSPOT=true
+                        fi
+                    fi
+                fi
+            elif [ -f "$type_file" ] && [ "$(cat "$type_file" 2>/dev/null)" = "1" ]; then
+                # Check if it's an LTE/mobile interface
+                if echo "$name" | grep -qiE "^(wwan|lte|usb|ppp)"; then
+                    SYS_LTE_COUNT=$((SYS_LTE_COUNT + 1))
+                    device_type="lte"
+                else
+                    # Regular ethernet
+                    SYS_ETH_COUNT=$((SYS_ETH_COUNT + 1))
+                    device_type="eth"
+                fi
+            fi
+
+            if [ -n "$device_type" ]; then
+                local state="down"
+                [ -f "$iface/operstate" ] && state=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
+                SYS_NET_INTERFACES="${SYS_NET_INTERFACES}${name}:${device_type}:${state}\n"
+            fi
         fi
-    else
-        echo "Podman not installed"
+    done
+}
+
+detect_virtualization() {
+    SYS_IS_VM=false
+    SYS_VM_TYPE=""
+    SYS_NESTED_VIRT=false
+    SYS_IS_PROXMOX=false
+    SYS_IS_LXC=false
+
+    # Detect if running in a VM
+    if [ -f /sys/class/dmi/id/product_name ]; then
+        local product=$(cat /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')
+        case "$product" in
+            *vmware*) SYS_IS_VM=true; SYS_VM_TYPE="vmware" ;;
+            *virtualbox*) SYS_IS_VM=true; SYS_VM_TYPE="virtualbox" ;;
+            *kvm*|*qemu*) SYS_IS_VM=true; SYS_VM_TYPE="kvm" ;;
+            *hyper-v*|*virtual*machine*) SYS_IS_VM=true; SYS_VM_TYPE="hyperv" ;;
+        esac
+    fi
+
+    # Check for systemd-detect-virt
+    if command -v systemd-detect-virt &>/dev/null; then
+        local virt=$(systemd-detect-virt 2>/dev/null || echo "none")
+        if [ "$virt" != "none" ]; then
+            SYS_IS_VM=true
+            [ -z "$SYS_VM_TYPE" ] && SYS_VM_TYPE="$virt"
+        fi
+        if [ "$virt" = "lxc" ]; then
+            SYS_IS_LXC=true
+        fi
+    fi
+
+    # Check for LXC container
+    if grep -qa "container=lxc" /proc/1/environ 2>/dev/null || [ -f /dev/lxd/sock ]; then
+        SYS_IS_LXC=true
+        SYS_IS_VM=true
+        SYS_VM_TYPE="lxc"
+    fi
+
+    # Check for Proxmox
+    if [ -f /etc/pve/.version ] || command -v pvesh &>/dev/null; then
+        SYS_IS_PROXMOX=true
+    fi
+
+    # Check nested virtualization
+    if [ -f /sys/module/kvm_intel/parameters/nested ]; then
+        [ "$(cat /sys/module/kvm_intel/parameters/nested 2>/dev/null)" = "Y" ] && SYS_NESTED_VIRT=true
+    elif [ -f /sys/module/kvm_amd/parameters/nested ]; then
+        [ "$(cat /sys/module/kvm_amd/parameters/nested 2>/dev/null)" = "1" ] && SYS_NESTED_VIRT=true
+    fi
+}
+
+detect_cgroups() {
+    SYS_CGROUPS_V2=false
+    if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+        SYS_CGROUPS_V2=true
+    fi
+}
+
+detect_security() {
+    SYS_APPARMOR=false
+    SYS_SELINUX=false
+    SYS_BPF_SUPPORT=false
+
+    # AppArmor
+    if [ -d /sys/kernel/security/apparmor ] || command -v apparmor_status &>/dev/null; then
+        SYS_APPARMOR=true
+    fi
+
+    # SELinux
+    if command -v getenforce &>/dev/null && [ "$(getenforce 2>/dev/null)" != "Disabled" ]; then
+        SYS_SELINUX=true
+    fi
+
+    # BPF/eBPF support
+    if [ -d /sys/fs/bpf ] || [ "$SYS_KERNEL_MAJOR" -ge 5 ]; then
+        SYS_BPF_SUPPORT=true
+    fi
+}
+
+detect_gpu() {
+    SYS_HAS_GPU=false
+    SYS_GPU_TYPE=""
+
+    # Check for NVIDIA GPU
+    if command -v nvidia-smi &>/dev/null || [ -d /proc/driver/nvidia ]; then
+        SYS_HAS_GPU=true
+        SYS_GPU_TYPE="nvidia"
+    # Check for AMD GPU
+    elif lspci 2>/dev/null | grep -qi "vga.*amd\|display.*amd"; then
+        SYS_HAS_GPU=true
+        SYS_GPU_TYPE="amd"
+    # Check for Intel GPU
+    elif lspci 2>/dev/null | grep -qi "vga.*intel"; then
+        SYS_HAS_GPU=true
+        SYS_GPU_TYPE="intel"
+    fi
+}
+
+# Run all detection functions
+detect_capabilities() {
+    detect_os
+    detect_architecture
+    detect_kernel
+    detect_cpu
+    detect_ram
+    detect_storage
+    detect_network_interfaces
+    detect_virtualization
+    detect_cgroups
+    detect_security
+    detect_gpu
+    evaluate_deployment_tiers
+}
+
+# ============================================================
+# DEPLOYMENT TIER EVALUATION
+# ============================================================
+
+evaluate_deployment_tiers() {
+    # Reset all tiers
+    CAN_VALIDATOR=false
+    CAN_ROUTER_EDGE=false
+    CAN_ADVANCED_EDGE=false
+    CAN_MSSP_SERVER=false
+
+    local total_net=$((SYS_ETH_COUNT + SYS_WIFI_COUNT))
+
+    # VALIDATOR ONLY
+    # Requirements: 512MB-3GB RAM, 8-64GB storage, 1 ethernet (WAN only), no LAN, no WiFi requirement
+    # Purpose: Validates edge nodes, needs internet connectivity
+    if [ "$SYS_RAM_MB" -ge 512 ] && [ "$SYS_STORAGE_GB" -ge 8 ]; then
+        if [ "$SYS_ETH_COUNT" -ge 1 ] || [ "$total_net" -ge 1 ]; then
+            CAN_VALIDATOR=true
+        fi
+    fi
+
+    # ROUTER EDGE
+    # Requirements: 3GB+ RAM, 16-64GB+ storage, 2+ network interfaces (2 eth OR 1 eth + 1 wifi)
+    # Platforms: Raspberry Pi style devices - secure gateway with qsecbit, openflow, WAF, IDS/IPS, lite AI
+    # Requires: MSSP ID for management
+    if [ "$SYS_RAM_MB" -ge 3072 ] && [ "$SYS_STORAGE_GB" -ge 16 ]; then
+        # Need at least 2 network interfaces for WAN + LAN
+        if [ "$SYS_ETH_COUNT" -ge 2 ] || ([ "$SYS_ETH_COUNT" -ge 1 ] && [ "$SYS_WIFI_COUNT" -ge 1 ]); then
+            CAN_ROUTER_EDGE=true
+        fi
+    fi
+
+    # ADVANCED ROUTER EDGE
+    # Requirements: 8GB+ RAM, 2+ ethernet ports, optional LTE/5G
+    # Platforms: N100/NUC style systems - includes monitoring, victoria metrics, n8n, web dashboard
+    if [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 32 ]; then
+        if [ "$SYS_ETH_COUNT" -ge 2 ]; then
+            CAN_ADVANCED_EDGE=true
+        fi
+    fi
+
+    # MSSP SERVER
+    # Requirements: 8+ cores, dedicated GPU (optional but recommended), 64GB+ RAM, 1TB+ storage
+    # Purpose: Heavy lifting multi-tenant backend
+    if [ "$SYS_CPU_CORES" -ge 8 ] && [ "$SYS_RAM_MB" -ge 65536 ] && [ "$SYS_STORAGE_GB" -ge 1000 ]; then
+        CAN_MSSP_SERVER=true
     fi
 }
 
 # ============================================================
-# BANNER DISPLAY
+# BANNER AND UI HELPERS
 # ============================================================
 
 show_banner() {
@@ -88,9 +357,48 @@ show_banner() {
     ╩ ╩╚═╝╚═╝╩ ╩╩  ╩╚═╚═╝╚═╝╚═╝
 
     Cyber Resilience at the Edge
-    Version 5.0 - GPL-FREE Edition
+    Version 6.0 - Capability-Based Install
 EOF
     echo -e "${NC}"
+}
+
+print_header() {
+    local title="$1"
+    local color="${2:-$GREEN}"
+    echo -e "${color}╔════════════════════════════════════════════════════════════╗${NC}"
+    printf "${color}║  %-57s ║${NC}\n" "$title"
+    echo -e "${color}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_section() {
+    local title="$1"
+    echo -e "${CYAN}━━━ $title ━━━${NC}"
+}
+
+print_ok() {
+    echo -e "  ${GREEN}✓${NC} $1"
+}
+
+print_warn() {
+    echo -e "  ${YELLOW}⚠${NC} $1"
+}
+
+print_fail() {
+    echo -e "  ${RED}✗${NC} $1"
+}
+
+print_info() {
+    echo -e "  ${BLUE}•${NC} $1"
+}
+
+format_bytes() {
+    local bytes=$1
+    if [ "$bytes" -ge 1024 ]; then
+        echo "${bytes}GB"
+    else
+        echo "${bytes}MB"
+    fi
 }
 
 # ============================================================
@@ -98,822 +406,828 @@ EOF
 # ============================================================
 
 show_main_menu() {
-    echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║  HOOKPROBE INSTALL / CONFIGURATION MENU                   ║${NC}"
-    echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
+    print_header "HOOKPROBE INSTALLER"
 
-    # System Information
-    echo -e "${CYAN}System Information:${NC}"
-    echo -e "  OS:           $(detect_os)"
-    echo -e "  Architecture: $(detect_architecture)"
-    echo -e "  RAM:          $(detect_ram)"
-    echo -e "  Containers:   $(get_container_status)"
-    echo ""
-
-    echo -e "${YELLOW}┌─ Main Menu ────────────────────────────────────────────┐${NC}"
-    echo -e "│                                                        │"
-    echo -e "│  ${YELLOW}1${NC}) Pre-Install / System Check                       │"
-    echo -e "│  ${YELLOW}2${NC}) Select Deployment Mode                           │"
-    echo -e "│  ${YELLOW}3${NC}) Install Core Infrastructure (PODs 001-007)       │"
-    echo -e "│  ${YELLOW}4${NC}) Basic Configuration                              │"
-    echo -e "│  ${YELLOW}5${NC}) Optional Extensions / Add-ons                    │"
-    echo -e "│  ${YELLOW}6${NC}) MSSP / Multi-Tenant Specific                     │"
-    echo -e "│  ${YELLOW}7${NC}) Post-Install: Dashboards & Interfaces            │"
-    echo -e "│  ${YELLOW}8${NC}) Advanced / Optional Configurations               │"
-    echo -e "│  ${YELLOW}9${NC}) Uninstall / Cleanup                              │"
-    echo -e "│                                                        │"
-    echo -e "│  ${YELLOW}q${NC}) Quit                                              │"
-    echo -e "│                                                        │"
-    echo -e "${YELLOW}└────────────────────────────────────────────────────────┘${NC}"
+    echo -e "${YELLOW}┌─ Main Menu ────────────────────────────────────────────────┐${NC}"
+    echo -e "│                                                            │"
+    echo -e "│  ${BOLD}1${NC}) Check System Capabilities                              │"
+    echo -e "│  ${BOLD}2${NC}) Install HookProbe                                      │"
+    echo -e "│  ${BOLD}3${NC}) Uninstall / Cleanup                                    │"
+    echo -e "│                                                            │"
+    echo -e "│  ${BOLD}q${NC}) Quit                                                   │"
+    echo -e "│                                                            │"
+    echo -e "${YELLOW}└────────────────────────────────────────────────────────────┘${NC}"
     echo ""
 }
 
 # ============================================================
-# SUBMENU 1: PRE-INSTALL / SYSTEM CHECK
+# CAPABILITY CHECK MENU
 # ============================================================
 
-show_preinstall_menu() {
+show_capability_summary() {
     clear
     show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  1. PRE-INSTALL / SYSTEM CHECK                            ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) Hardware / Platform Check"
-    echo -e "  ${YELLOW}2${NC}) OS / Kernel Compatibility Check"
-    echo -e "  ${YELLOW}3${NC}) Network Topology / Requirements"
-    echo -e "  ${YELLOW}4${NC}) Backup / Data-Storage Plan"
-    echo -e "  ${YELLOW}5${NC}) Run Complete Pre-Install Check ${GREEN}[Recommended]${NC}"
-    echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
+    print_header "SYSTEM CAPABILITY CHECK" "$CYAN"
 
-handle_preinstall() {
-    while true; do
-        show_preinstall_menu
-        read -p "Select option: " choice
-        echo ""
-
-        case $choice in
-            1)
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo -e "${BLUE}Hardware / Platform Check${NC}"
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo ""
-                echo "CPU Architecture: $(uname -m)"
-                echo "CPU Cores: $(nproc)"
-                echo "RAM: $(detect_ram)"
-                echo "Disk Space: $(df -h / | awk 'NR==2 {print $4}') available"
-                echo ""
-                echo "Network Interfaces:"
-                ip -brief addr show | grep -v "^lo"
-                echo ""
-                echo "Checking for XDP/eBPF support..."
-                if [ -d /sys/fs/bpf ]; then
-                    echo "  ✓ BPF filesystem mounted"
-                else
-                    echo "  ⚠ BPF filesystem not mounted"
-                fi
-                ;;
-            2)
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo -e "${BLUE}OS / Kernel Compatibility Check${NC}"
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo ""
-                echo "OS: $(detect_os)"
-                echo "Kernel: $(uname -r)"
-                echo "Kernel Version: $(uname -v)"
-                echo ""
-                echo "Checking requirements..."
-
-                # Check kernel version
-                kernel_ver=$(uname -r | cut -d. -f1)
-                if [ "$kernel_ver" -ge 5 ]; then
-                    echo "  ✓ Kernel version $kernel_ver (5.x+ required)"
-                else
-                    echo "  ✗ Kernel version $kernel_ver (5.x+ required)"
-                fi
-
-                # Check for Podman
-                if command -v podman &> /dev/null; then
-                    echo "  ✓ Podman installed: $(podman --version)"
-                else
-                    echo "  ⚠ Podman not installed"
-                fi
-
-                # Check for OVS
-                if command -v ovs-vsctl &> /dev/null; then
-                    echo "  ✓ Open vSwitch installed"
-                else
-                    echo "  ⚠ Open vSwitch not installed"
-                fi
-                ;;
-            3)
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo -e "${BLUE}Network Topology / Requirements${NC}"
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo ""
-                echo "Available Network Interfaces:"
-                echo ""
-                ip -brief addr show | grep -v "^lo" | while read line; do
-                    iface=$(echo $line | awk '{print $1}')
-                    state=$(echo $line | awk '{print $2}')
-                    ip=$(echo $line | awk '{print $3}')
-                    echo "  • $iface: $ip ($state)"
-
-                    # Check link speed if available
-                    if [ -f "/sys/class/net/$iface/speed" ]; then
-                        speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
-                        if [ "$speed" != "unknown" ] && [ "$speed" != "-1" ]; then
-                            echo "    Link Speed: ${speed}Mbps"
-                        fi
-                    fi
-                done
-                ;;
-            4)
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo -e "${BLUE}Backup / Data-Storage Plan${NC}"
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo ""
-                echo "Storage Requirements:"
-                echo "  • Database (PostgreSQL): ~50GB minimum"
-                echo "  • Logs & Analytics: ~100GB minimum"
-                echo "  • Container Images: ~10GB"
-                echo "  • Total Recommended: 200GB+"
-                echo ""
-                echo "Current Disk Usage:"
-                df -h /
-                ;;
-            5)
-                echo -e "${GREEN}Running complete pre-install check...${NC}"
-                echo ""
-                echo -e "${YELLOW}Note: Pre-install checks are now built into the unified installer${NC}"
-                echo -e "${YELLOW}System validation runs automatically when you select deployment mode${NC}"
-                echo ""
-                echo "Quick checks:"
-                echo "  OS: $(detect_os)"
-                echo "  Architecture: $(detect_architecture)"
-                echo "  RAM: $(detect_ram)"
-                echo "  Containers: $(get_container_status)"
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                ;;
-        esac
-
-        echo ""
-        read -p "Press Enter to continue..."
-    done
-}
-
-# ============================================================
-# SUBMENU 2: SELECT DEPLOYMENT MODE
-# ============================================================
-
-show_deployment_menu() {
-    clear
-    show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  2. SELECT DEPLOYMENT MODE                                ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) Edge Deployment ${CYAN}[Single-Tenant]${NC}"
-    echo -e "     └─ For: Home users, small business, branch office, standalone"
-    echo -e "     └─ Platforms: N100/Core/AMD (x86_64), Pi 4/5/Jetson/Radxa (ARM)"
-    echo -e "     └─ RAM: 2GB+ recommended"
-    echo ""
-    echo -e "  ${YELLOW}2${NC}) MSSP Cloud Backend ${CYAN}[Multi-Tenant]${NC}"
-    echo -e "     └─ For: MSSPs, enterprise multi-site, SOC operations"
-    echo -e "     └─ Platforms: Datacenter servers, cloud instances"
-    echo ""
-    echo -e "  ${YELLOW}3${NC}) Sentinel Lite ${GREEN}[Ultra-Lightweight]${NC}"
-    echo -e "     └─ For: Constrained devices, LTE/mobile, distributed validators"
-    echo -e "     └─ Platforms: Pi 3/Zero, Pico-class, low-power ARM, IoT gateways"
-    echo -e "     └─ RAM: 256MB-1GB (no containers, native service)"
-    echo -e "     └─ ${CYAN}curl -sSL .../releases/sentinel-lite/bootstrap.sh | sudo bash${NC}"
-    echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
-
-handle_deployment() {
-    while true; do
-        show_deployment_menu
-        read -p "Select deployment mode: " choice
-        echo ""
-
-        case $choice in
-            1)
-                run_installer "$SCRIPT_DIR/scripts/install-edge.sh" "Edge Deployment" "edge"
-                return
-                ;;
-            2)
-                run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Backend Deployment" "cloud"
-                return
-                ;;
-            3)
-                run_installer "$SCRIPT_DIR/install-sentinel-lite.sh" "Sentinel Lite Deployment" "sentinel-lite"
-                return
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                echo ""
-                read -p "Press Enter to continue..."
-                ;;
-        esac
-    done
-}
-
-# ============================================================
-# SUBMENU 3: INSTALL CORE INFRASTRUCTURE
-# ============================================================
-
-show_core_infrastructure_menu() {
-    clear
-    show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  3. INSTALL CORE INFRASTRUCTURE (PODs 001-007)            ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${GREEN}Note: Core PODs are installed automatically with deployment mode${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) POD-001: Web / DMZ / Management"
-    echo -e "  ${YELLOW}2${NC}) POD-002: IAM / Auth / SSO / RBAC"
-    echo -e "  ${YELLOW}3${NC}) POD-003: Persistent Database (PostgreSQL)"
-    echo -e "  ${YELLOW}4${NC}) POD-004: Cache / Redis / Valkey"
-    echo -e "  ${YELLOW}5${NC}) POD-005: Monitoring & Analytics"
-    echo -e "  ${YELLOW}6${NC}) POD-006: Security Detection (Zeek, Snort, Suricata)"
-    echo -e "  ${YELLOW}7${NC}) POD-007: AI Response / Mitigation Engine"
-    echo ""
-    echo -e "  ${YELLOW}a${NC}) Install All Core PODs ${GREEN}[Recommended]${NC}"
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
-
-handle_core_infrastructure() {
-    while true; do
-        show_core_infrastructure_menu
-        read -p "Select option: " choice
-        echo ""
-
-        case $choice in
-            a|A)
-                echo -e "${GREEN}Installing all core PODs...${NC}"
-                echo "This is typically done via deployment mode (option 2)"
-                echo "Would you like to run edge or cloud deployment?"
-                ;;
-            1|2|3|4|5|6|7)
-                echo -e "${YELLOW}Individual POD installation not yet implemented${NC}"
-                echo "Core PODs are installed as part of the deployment process"
-                echo "Please use option 2 (Select Deployment Mode)"
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                ;;
-        esac
-
-        echo ""
-        read -p "Press Enter to continue..."
-    done
-}
-
-# ============================================================
-# SUBMENU 4: BASIC CONFIGURATION
-# ============================================================
-
-show_configuration_menu() {
-    clear
-    show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  4. BASIC CONFIGURATION                                   ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) Network Configuration (VXLAN, OpenFlow, Subnets)"
-    echo -e "  ${YELLOW}2${NC}) Firewall / WAF Configuration"
-    echo -e "  ${YELLOW}3${NC}) Security Policy / Zero-Trust Setup"
-    echo -e "  ${YELLOW}4${NC}) Database & Storage Settings"
-    echo -e "  ${YELLOW}5${NC}) Monitoring & Logging Settings"
-    echo -e "  ${YELLOW}6${NC}) Run Configuration Wizard ${GREEN}[Interactive]${NC}"
-    echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
-
-show_network_configuration() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}Network Configuration${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    # System Overview
+    print_section "System Overview"
+    print_info "OS: $SYS_OS_PRETTY"
+    print_info "Architecture: $SYS_ARCH"
+    print_info "Kernel: $SYS_KERNEL_VERSION"
     echo ""
 
-    # VXLAN Configuration
-    echo -e "${CYAN}VXLAN Settings:${NC}"
-    local vxlan_config="/etc/hookprobe/vxlan.conf"
-    if [ -f "$vxlan_config" ]; then
-        echo -e "  Config file: ${GREEN}$vxlan_config${NC}"
-        grep -E "^(VNI|VXLAN_PORT|VXLAN_DEV|VTEP_IP)" "$vxlan_config" 2>/dev/null | while read line; do
-            echo "    $line"
-        done
+    # Hardware
+    print_section "Hardware"
+    print_info "CPU: $SYS_CPU_MODEL"
+    print_info "Cores: $SYS_CPU_CORES"
+
+    if [ "$SYS_RAM_GB" -ge 64 ]; then
+        print_ok "RAM: ${SYS_RAM_GB}GB (excellent for MSSP)"
+    elif [ "$SYS_RAM_GB" -ge 8 ]; then
+        print_ok "RAM: ${SYS_RAM_GB}GB (good for advanced edge)"
+    elif [ "$SYS_RAM_GB" -ge 3 ]; then
+        print_ok "RAM: ${SYS_RAM_GB}GB (sufficient for router edge)"
+    elif [ "$SYS_RAM_MB" -ge 512 ]; then
+        print_warn "RAM: ${SYS_RAM_MB}MB (validator only)"
     else
-        echo -e "  ${YELLOW}Default values (no custom config):${NC}"
-        echo "    VNI=100"
-        echo "    VXLAN_PORT=4789"
-        echo "    VXLAN_DEV=vxlan0"
+        print_fail "RAM: ${SYS_RAM_MB}MB (insufficient)"
+    fi
+
+    if [ "$SYS_STORAGE_GB" -ge 1000 ]; then
+        print_ok "Storage: ${SYS_STORAGE_GB}GB available (excellent)"
+    elif [ "$SYS_STORAGE_GB" -ge 32 ]; then
+        print_ok "Storage: ${SYS_STORAGE_GB}GB available (good)"
+    elif [ "$SYS_STORAGE_GB" -ge 8 ]; then
+        print_warn "Storage: ${SYS_STORAGE_GB}GB available (minimal)"
+    else
+        print_fail "Storage: ${SYS_STORAGE_GB}GB available (insufficient)"
     fi
     echo ""
 
-    # Bridge Configuration
-    echo -e "${CYAN}Network Bridges:${NC}"
-    if command -v ip &> /dev/null; then
-        ip -brief link show type bridge 2>/dev/null | while read line; do
-            echo "    $line"
-        done
-        if [ -z "$(ip -brief link show type bridge 2>/dev/null)" ]; then
-            echo -e "    ${YELLOW}No bridges configured${NC}"
+    # GPU
+    print_section "GPU"
+    if [ "$SYS_HAS_GPU" = true ]; then
+        print_ok "GPU detected: $SYS_GPU_TYPE"
+    else
+        print_info "No dedicated GPU detected"
+    fi
+    echo ""
+
+    # Network Interfaces
+    print_section "Network Interfaces"
+    print_info "Ethernet: $SYS_ETH_COUNT interface(s)"
+    print_info "WiFi: $SYS_WIFI_COUNT interface(s)"
+    if [ "$SYS_LTE_COUNT" -gt 0 ]; then
+        print_info "LTE/Mobile: $SYS_LTE_COUNT interface(s)"
+    fi
+
+    if [ "$SYS_WIFI_COUNT" -gt 0 ]; then
+        echo ""
+        print_section "WiFi Capabilities"
+        if [ "$SYS_WIFI_2GHZ" = true ]; then
+            print_ok "2.4GHz band supported"
+        fi
+        if [ "$SYS_WIFI_5GHZ" = true ]; then
+            print_ok "5GHz band supported"
+        fi
+        if [ "$SYS_WIFI_HOTSPOT" = true ]; then
+            print_ok "Hotspot/AP mode supported"
+        else
+            print_warn "Hotspot/AP mode not available"
         fi
     fi
     echo ""
 
-    # OpenFlow / OVS Configuration
-    echo -e "${CYAN}Open vSwitch (OVS):${NC}"
-    if command -v ovs-vsctl &> /dev/null; then
-        echo -e "  Status: ${GREEN}Installed${NC}"
-        ovs-vsctl list-br 2>/dev/null | while read br; do
-            echo "    Bridge: $br"
-            ovs-vsctl list-ports "$br" 2>/dev/null | sed 's/^/      Port: /'
-        done
-    else
-        echo -e "  Status: ${YELLOW}Not installed${NC}"
-    fi
-    echo ""
-
-    # PSK / Secrets
-    echo -e "${CYAN}Security Keys (PSK):${NC}"
-    local secrets_dir="/etc/hookprobe/secrets"
-    if [ -d "$secrets_dir" ]; then
-        echo -e "  Secrets directory: ${GREEN}$secrets_dir${NC}"
-        ls -la "$secrets_dir" 2>/dev/null | grep -v "^total" | grep -v "^\." | while read line; do
-            local fname=$(echo "$line" | awk '{print $NF}')
-            echo -e "    • $fname ${GREEN}[configured]${NC}"
-        done
-    else
-        echo -e "  ${YELLOW}No secrets configured${NC}"
-        echo "  Default location: /etc/hookprobe/secrets/"
-    fi
-    echo ""
-
-    # POD Network Configuration
-    echo -e "${CYAN}POD Networks:${NC}"
-    if command -v podman &> /dev/null; then
-        podman network ls --format "{{.Name}}\t{{.Driver}}\t{{.Subnets}}" 2>/dev/null | while read line; do
-            echo "    $line"
-        done
-    else
-        echo -e "  ${YELLOW}Podman not installed${NC}"
-    fi
-    echo ""
-
-    # Subnet Configuration
-    echo -e "${CYAN}Subnet Allocation:${NC}"
-    local subnet_config="/etc/hookprobe/subnets.conf"
-    if [ -f "$subnet_config" ]; then
-        cat "$subnet_config" 2>/dev/null | while read line; do
-            echo "    $line"
-        done
-    else
-        echo -e "  ${YELLOW}Default subnets:${NC}"
-        echo "    POD Network:    10.88.0.0/16"
-        echo "    VXLAN Overlay:  10.200.0.0/16"
-        echo "    Management:     172.16.0.0/24"
-    fi
-    echo ""
-}
-
-handle_configuration() {
-    while true; do
-        show_configuration_menu
-        read -p "Select option: " choice
-        echo ""
-
-        case $choice in
-            1)
-                show_network_configuration
-                ;;
-            2|3|4|5)
-                echo -e "${YELLOW}Configuration section under development${NC}"
-                echo "Please use option 6 (Configuration Wizard)"
-                ;;
-            6)
-                echo "Select deployment type for configuration:"
-                echo -e "  1) Edge Deployment ${GREEN}[Auto-detection, no config needed]${NC}"
-                echo -e "  2) Cloud Backend ${YELLOW}[Requires config.sh]${NC}"
-                echo -e "  3) n8n Addon ${YELLOW}[Requires config.sh]${NC}"
-                read -p "Select: " config_choice
-
-                case $config_choice in
-                    1)
-                        echo -e "${GREEN}✓ Edge deployment uses auto-detection${NC}"
-                        echo "  No manual configuration needed - system will auto-detect:"
-                        echo "    • Operating system and architecture"
-                        echo "    • Available RAM and storage"
-                        echo "    • Raspberry Pi model (if applicable)"
-                        echo "    • Optimal memory limits"
-                        echo ""
-                        echo "  You can customize with flags when running the installer:"
-                        echo "    --enable-ai           Enable AI detection"
-                        echo "    --enable-monitoring   Enable monitoring stack"
-                        echo "    --disable-iam         Skip IAM installation"
-                        ;;
-                    2) run_config_wizard "cloud" "$SCRIPT_DIR/install/cloud/config.sh" ;;
-                    3) run_config_wizard "n8n" "$SCRIPT_DIR/install/addons/n8n/config.sh" ;;
-                    *) echo -e "${RED}Invalid option${NC}" ;;
-                esac
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                ;;
-        esac
-
-        echo ""
-        read -p "Press Enter to continue..."
-    done
-}
-
-# ============================================================
-# SUBMENU 5: OPTIONAL EXTENSIONS / ADD-ONS
-# ============================================================
-
-show_extensions_menu() {
-    clear
-    show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  5. OPTIONAL EXTENSIONS / ADD-ONS                         ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) POD-008: Automation / Workflow (n8n) ${GREEN}[Automated]${NC}"
-    echo -e "  ${YELLOW}2${NC}) POD-009: Email System & Notification ${CYAN}[Manual Guide]${NC}"
-    echo -e "  ${YELLOW}3${NC}) Remote Access / Cloud Tunnel (Cloudflare) ${CYAN}[Manual Guide]${NC}"
-    echo -e "  ${YELLOW}4${NC}) GDPR / Privacy & Compliance Settings ${CYAN}[Configuration]${NC}"
-    echo -e "  ${YELLOW}5${NC}) LTE/5G Connectivity ${CYAN}[Manual Guide]${NC}"
-    echo -e "  ${YELLOW}6${NC}) ClickHouse Analytics ${CYAN}[Manual Guide]${NC}"
-    echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
-
-handle_extensions() {
-    while true; do
-        show_extensions_menu
-        read -p "Select option: " choice
-        echo ""
-
-        case $choice in
-            1)
-                run_installer "$SCRIPT_DIR/install/addons/n8n/setup.sh" "n8n Workflow Automation" "n8n"
-                ;;
-            2)
-                show_email_guide
-                ;;
-            3)
-                show_cloudflare_guide
-                ;;
-            4)
-                show_gdpr_config
-                ;;
-            5)
-                show_lte_guide
-                ;;
-            6)
-                show_clickhouse_guide
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                ;;
-        esac
-
-        echo ""
-        read -p "Press Enter to continue..."
-    done
-}
-
-# Extension guide functions
-show_email_guide() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}POD-009 Email System Deployment (Manual)${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "Enterprise email with DMZ architecture"
-    echo ""
-    echo "📖 README: infrastructure/pod-009-email/README.md"
-    echo "📖 Deployment: infrastructure/pod-009-email/DEPLOYMENT.md"
-    echo "📖 Podman Guide: infrastructure/pod-009-email/PODMAN.md"
-    echo ""
-    echo "Features:"
-    echo "  • Dual-firewall DMZ architecture"
-    echo "  • Postfix SMTP relay + mail server"
-    echo "  • DKIM/SPF/DMARC authentication"
-    echo "  • Suricata IDS monitoring"
-    echo ""
-    if [ -f "$SCRIPT_DIR/infrastructure/pod-009-email/DEPLOYMENT.md" ]; then
-        read -p "Open deployment guide? (yes/no) [no]: " open_docs
-        if [ "$open_docs" = "yes" ]; then
-            less "$SCRIPT_DIR/infrastructure/pod-009-email/DEPLOYMENT.md"
+    # Virtualization
+    print_section "Virtualization Environment"
+    if [ "$SYS_IS_VM" = true ]; then
+        print_info "Running in: $SYS_VM_TYPE"
+        if [ "$SYS_IS_LXC" = true ]; then
+            print_info "Container type: LXC"
         fi
+    else
+        print_info "Running on bare metal"
     fi
+    if [ "$SYS_IS_PROXMOX" = true ]; then
+        print_info "Proxmox VE detected"
+    fi
+    if [ "$SYS_NESTED_VIRT" = true ]; then
+        print_ok "Nested virtualization enabled"
+    fi
+    if [ "$SYS_CGROUPS_V2" = true ]; then
+        print_ok "cgroups v2 enabled"
+    else
+        print_info "cgroups v1 (legacy)"
+    fi
+    echo ""
+
+    # Security
+    print_section "Security Features"
+    if [ "$SYS_APPARMOR" = true ]; then
+        print_ok "AppArmor available"
+    fi
+    if [ "$SYS_SELINUX" = true ]; then
+        print_ok "SELinux enabled"
+    fi
+    if [ "$SYS_BPF_SUPPORT" = true ]; then
+        print_ok "BPF/eBPF supported"
+    else
+        print_warn "BPF/eBPF not available (kernel 5.x+ recommended)"
+    fi
+    echo ""
+
+    # Eligible Deployment Tiers
+    print_section "Eligible Deployment Modes"
+    echo ""
+
+    if [ "$CAN_MSSP_SERVER" = true ]; then
+        echo -e "  ${GREEN}█${NC} ${BOLD}MSSP Server${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "    ${DIM}Multi-tenant backend with full analytics${NC}"
+    else
+        echo -e "  ${DIM}░ MSSP Server [NOT AVAILABLE]${NC}"
+        echo -e "    ${DIM}Requires: 8+ cores, 64GB+ RAM, 1TB+ storage${NC}"
+    fi
+
+    if [ "$CAN_ADVANCED_EDGE" = true ]; then
+        echo -e "  ${GREEN}█${NC} ${BOLD}Advanced Router Edge${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "    ${DIM}Full monitoring, dashboards, automation${NC}"
+    else
+        echo -e "  ${DIM}░ Advanced Router Edge [NOT AVAILABLE]${NC}"
+        echo -e "    ${DIM}Requires: 8GB+ RAM, 2+ ethernet ports${NC}"
+    fi
+
+    if [ "$CAN_ROUTER_EDGE" = true ]; then
+        echo -e "  ${GREEN}█${NC} ${BOLD}Router Edge${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "    ${DIM}Secure gateway with IDS/IPS, WAF, lite AI${NC}"
+    else
+        echo -e "  ${DIM}░ Router Edge [NOT AVAILABLE]${NC}"
+        echo -e "    ${DIM}Requires: 3GB+ RAM, 2+ network interfaces${NC}"
+    fi
+
+    if [ "$CAN_VALIDATOR" = true ]; then
+        echo -e "  ${GREEN}█${NC} ${BOLD}Validator Only${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "    ${DIM}Lightweight edge node validator${NC}"
+    else
+        echo -e "  ${DIM}░ Validator Only [NOT AVAILABLE]${NC}"
+        echo -e "    ${DIM}Requires: 512MB+ RAM, 8GB+ storage, network${NC}"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}b${NC}) Back to Main Menu    ${BOLD}q${NC}) Quit"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
-show_cloudflare_guide() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}Cloudflare Tunnel Setup${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "See POD-009 Email documentation for Cloudflare Tunnel setup"
+handle_capability_check() {
+    while true; do
+        show_capability_summary
+        read -p "Select option: " choice
+
+        case $choice in
+            b|B) return ;;
+            q|Q) exit 0 ;;
+            *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
+        esac
+    done
 }
 
-show_gdpr_config() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}GDPR / Privacy & Compliance Settings${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "GDPR compliance configuration"
-    echo "See: install/edge/gdpr-config.sh for settings"
-}
+# ============================================================
+# INSTALL MENU
+# ============================================================
 
-show_lte_guide() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}LTE/5G Connectivity Setup (Manual)${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+show_install_menu() {
+    clear
+    show_banner
+    print_header "INSTALL HOOKPROBE" "$GREEN"
+
+    echo -e "${CYAN}Available deployment modes for your system:${NC}"
     echo ""
-    echo "📖 Documentation: install/addons/lte/README.md"
-    echo ""
-    echo "Covers:"
-    echo "  • Hardware requirements (modems, SIM cards)"
-    echo "  • Driver installation"
-    echo "  • Network configuration"
-    echo "  • Failover setup"
-    echo ""
-    if [ -f "$SCRIPT_DIR/install/addons/lte/README.md" ]; then
-        read -p "Open documentation? (yes/no) [no]: " open_docs
-        if [ "$open_docs" = "yes" ]; then
-            less "$SCRIPT_DIR/install/addons/lte/README.md"
+
+    local option_num=1
+    local options=()
+
+    # Show only available options based on system capabilities
+    if [ "$CAN_VALIDATOR" = true ]; then
+        echo -e "  ${BOLD}${option_num}${NC}) ${BOLD}Validator Only${NC}"
+        echo -e "     ${DIM}Lightweight validator for constrained devices${NC}"
+        echo -e "     ${DIM}RAM: 512MB-3GB | Storage: 8GB+ | Network: 1+ interface${NC}"
+        echo -e "     ${DIM}Features: Edge node validation, health monitoring${NC}"
+        echo ""
+        options+=("validator")
+        option_num=$((option_num + 1))
+    fi
+
+    if [ "$CAN_ROUTER_EDGE" = true ]; then
+        echo -e "  ${BOLD}${option_num}${NC}) ${BOLD}Router Edge${NC}"
+        echo -e "     ${DIM}Secure gateway for home/SMB/branch office${NC}"
+        echo -e "     ${DIM}RAM: 3GB+ | Storage: 16GB+ | Network: 2+ interfaces${NC}"
+        echo -e "     ${DIM}Features: QSecBit, OpenFlow, WAF, IDS/IPS, Lite AI${NC}"
+        echo -e "     ${YELLOW}Requires: MSSP ID for management${NC}"
+        echo ""
+        options+=("router-edge")
+        option_num=$((option_num + 1))
+    fi
+
+    if [ "$CAN_ADVANCED_EDGE" = true ]; then
+        echo -e "  ${BOLD}${option_num}${NC}) ${BOLD}Advanced Router Edge${NC}"
+        echo -e "     ${DIM}Full-featured edge with monitoring & automation${NC}"
+        echo -e "     ${DIM}RAM: 8GB+ | Storage: 32GB+ | Network: 2+ ethernet${NC}"
+        echo -e "     ${DIM}Features: All Router Edge + Victoria Metrics, n8n, Dashboard${NC}"
+        if [ "$SYS_LTE_COUNT" -gt 0 ]; then
+            echo -e "     ${GREEN}LTE/5G failover available${NC}"
         fi
+        echo ""
+        options+=("advanced-edge")
+        option_num=$((option_num + 1))
     fi
-}
 
-show_clickhouse_guide() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}ClickHouse Analytics Setup (Manual)${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "📖 Quick Start: docs/guides/clickhouse-quick-start.md"
-    echo "📖 Integration: docs/guides/clickhouse-integration.md"
-    echo ""
-    echo "Covers:"
-    echo "  • ClickHouse installation with Podman"
-    echo "  • Database schema setup"
-    echo "  • Qsecbit integration"
-    echo "  • Security analytics queries"
-    echo ""
-    if [ -f "$SCRIPT_DIR/docs/guides/clickhouse-quick-start.md" ]; then
-        read -p "Open quick start guide? (yes/no) [no]: " open_docs
-        if [ "$open_docs" = "yes" ]; then
-            less "$SCRIPT_DIR/docs/guides/clickhouse-quick-start.md"
+    if [ "$CAN_MSSP_SERVER" = true ]; then
+        echo -e "  ${BOLD}${option_num}${NC}) ${BOLD}MSSP Server${NC}"
+        echo -e "     ${DIM}Multi-tenant backend for service providers${NC}"
+        echo -e "     ${DIM}Cores: 8+ | RAM: 64GB+ | Storage: 1TB+${NC}"
+        echo -e "     ${DIM}Features: Multi-tenant SOC, analytics, long-term retention${NC}"
+        if [ "$SYS_HAS_GPU" = true ]; then
+            echo -e "     ${GREEN}GPU acceleration available ($SYS_GPU_TYPE)${NC}"
         fi
+        echo ""
+        options+=("mssp-server")
+        option_num=$((option_num + 1))
+    fi
+
+    # If no options available
+    if [ ${#options[@]} -eq 0 ]; then
+        echo -e "  ${RED}No deployment modes available for this system.${NC}"
+        echo ""
+        echo -e "  ${YELLOW}Minimum requirements:${NC}"
+        echo -e "    • RAM: 512MB+"
+        echo -e "    • Storage: 8GB+"
+        echo -e "    • Network: 1+ interface"
+        echo ""
+        echo -e "  ${CYAN}Consider using Sentinel Lite for ultra-constrained devices:${NC}"
+        echo -e "    curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite/bootstrap.sh | sudo bash"
+        echo ""
+    fi
+
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}b${NC}) Back to Main Menu    ${BOLD}m${NC}) Main Menu    ${BOLD}q${NC}) Quit"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    # Return the options array for use by handler
+    printf '%s\n' "${options[@]}"
+}
+
+install_validator() {
+    clear
+    show_banner
+    print_header "INSTALL: VALIDATOR ONLY" "$GREEN"
+
+    echo -e "${CYAN}Validator Only Deployment${NC}"
+    echo ""
+    echo "This deployment mode installs a lightweight validator service"
+    echo "suitable for constrained devices like Raspberry Pi 3, IoT gateways,"
+    echo "and systems with limited resources."
+    echo ""
+    echo -e "${YELLOW}What will be installed:${NC}"
+    echo "  • HookProbe Sentinel Lite service"
+    echo "  • Health monitoring endpoint"
+    echo "  • Edge node validation"
+    echo "  • Minimal resource footprint (~50MB)"
+    echo ""
+    echo -e "${YELLOW}Network Requirements:${NC}"
+    echo "  • Internet connectivity to reach MSSP backend"
+    echo "  • Outbound HTTPS (port 443)"
+    echo ""
+
+    read -p "Proceed with installation? (yes/no) [no]: " confirm
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+        if [ -f "$SCRIPT_DIR/install-sentinel-lite.sh" ]; then
+            bash "$SCRIPT_DIR/install-sentinel-lite.sh"
+        elif [ -f "$SCRIPT_DIR/releases/sentinel-lite/bootstrap.sh" ]; then
+            bash "$SCRIPT_DIR/releases/sentinel-lite/bootstrap.sh"
+        else
+            echo -e "${RED}Installer not found. Downloading...${NC}"
+            curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite/bootstrap.sh | bash
+        fi
+    else
+        echo "Installation cancelled."
     fi
 }
 
-# ============================================================
-# SUBMENU 6: MSSP / MULTI-TENANT
-# ============================================================
-
-show_mssp_menu() {
+install_router_edge() {
     clear
     show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  6. MSSP / MULTI-TENANT SPECIFIC                          ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    print_header "INSTALL: ROUTER EDGE" "$GREEN"
+
+    echo -e "${CYAN}Router Edge Deployment${NC}"
     echo ""
-    echo -e "  ${YELLOW}1${NC}) Cluster Setup (Storage + Compute)"
-    echo -e "  ${YELLOW}2${NC}) Tenant Onboarding / Management"
-    echo -e "  ${YELLOW}3${NC}) Ingest Streams Configuration (TLS from edges)"
-    echo -e "  ${YELLOW}4${NC}) Long-term Data Retention & Analytics"
+    echo "This deployment mode installs a secure gateway suitable for"
+    echo "home networks, small businesses, and branch offices."
     echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
+    echo -e "${YELLOW}What will be installed:${NC}"
+    echo "  • QSecBit quantum-resistant security"
+    echo "  • OpenFlow software-defined networking"
+    echo "  • Web Application Firewall (WAF)"
+    echo "  • IDS/IPS (Suricata/Zeek)"
+    echo "  • Lite AI threat detection"
+    echo "  • Container runtime (Podman)"
     echo ""
+    echo -e "${YELLOW}Network Configuration:${NC}"
+    echo "  • WAN interface: Internet uplink"
+    echo "  • LAN interface: Protected network"
+    if [ "$SYS_WIFI_COUNT" -gt 0 ] && [ "$SYS_WIFI_HOTSPOT" = true ]; then
+        echo "  • WiFi hotspot: Available for LAN"
+    fi
+    echo ""
+    echo -e "${RED}MSSP Registration Required${NC}"
+    echo "You will need to provide your MSSP ID to connect this edge"
+    echo "device to your management backend."
+    echo ""
+
+    read -p "Enter your MSSP ID (or 'skip' to configure later): " mssp_id
+
+    if [ "$mssp_id" != "skip" ] && [ -n "$mssp_id" ]; then
+        # Save MSSP ID
+        mkdir -p /etc/hookprobe/secrets
+        echo "$mssp_id" > /etc/hookprobe/secrets/mssp-id
+        chmod 600 /etc/hookprobe/secrets/mssp-id
+        echo -e "${GREEN}✓ MSSP ID saved${NC}"
+    fi
+
+    echo ""
+    read -p "Proceed with installation? (yes/no) [no]: " confirm
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+        export HOOKPROBE_DEPLOYMENT_MODE="router-edge"
+        if [ -f "$SCRIPT_DIR/scripts/install-edge.sh" ]; then
+            bash "$SCRIPT_DIR/scripts/install-edge.sh" --mode router-edge
+        else
+            echo -e "${RED}Edge installer not found${NC}"
+        fi
+    else
+        echo "Installation cancelled."
+    fi
 }
 
-handle_mssp() {
-    while true; do
-        show_mssp_menu
-        read -p "Select option: " choice
+install_advanced_edge() {
+    clear
+    show_banner
+    print_header "INSTALL: ADVANCED ROUTER EDGE" "$GREEN"
+
+    echo -e "${CYAN}Advanced Router Edge Deployment${NC}"
+    echo ""
+    echo "This deployment mode installs a full-featured edge gateway"
+    echo "with monitoring, metrics, and automation capabilities."
+    echo ""
+    echo -e "${YELLOW}What will be installed:${NC}"
+    echo "  • All Router Edge features, plus:"
+    echo "  • Victoria Metrics (time-series database)"
+    echo "  • Grafana dashboards"
+    echo "  • n8n workflow automation"
+    echo "  • Web management interface"
+    echo "  • Full AI threat detection"
+    if [ "$SYS_LTE_COUNT" -gt 0 ]; then
+        echo "  • LTE/5G failover support"
+    fi
+    echo ""
+    echo -e "${YELLOW}Resource Usage:${NC}"
+    echo "  • RAM: ~4-6GB under normal operation"
+    echo "  • Storage: ~20GB for containers and data"
+    echo "  • CPU: Moderate utilization"
+    echo ""
+
+    # Optional features
+    echo -e "${YELLOW}Optional Features:${NC}"
+    read -p "Enable n8n automation? (yes/no) [yes]: " enable_n8n
+    enable_n8n=${enable_n8n:-yes}
+
+    read -p "Enable Grafana dashboards? (yes/no) [yes]: " enable_grafana
+    enable_grafana=${enable_grafana:-yes}
+
+    if [ "$SYS_LTE_COUNT" -gt 0 ]; then
+        read -p "Enable LTE failover? (yes/no) [yes]: " enable_lte
+        enable_lte=${enable_lte:-yes}
+    fi
+
+    echo ""
+    read -p "Proceed with installation? (yes/no) [no]: " confirm
+    if [ "$confirm" = "yes" ]; then
         echo ""
+        export HOOKPROBE_DEPLOYMENT_MODE="advanced-edge"
+        local extra_args=""
+        [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
+        [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
+        [ "$enable_lte" = "yes" ] && extra_args="$extra_args --enable-lte"
+
+        if [ -f "$SCRIPT_DIR/scripts/install-edge.sh" ]; then
+            bash "$SCRIPT_DIR/scripts/install-edge.sh" --mode advanced-edge $extra_args
+        else
+            echo -e "${RED}Edge installer not found${NC}"
+        fi
+    else
+        echo "Installation cancelled."
+    fi
+}
+
+install_mssp_server() {
+    clear
+    show_banner
+    print_header "INSTALL: MSSP SERVER" "$GREEN"
+
+    echo -e "${CYAN}MSSP Server Deployment${NC}"
+    echo ""
+    echo "This deployment mode installs a multi-tenant backend suitable"
+    echo "for Managed Security Service Providers (MSSPs) and enterprise SOCs."
+    echo ""
+    echo -e "${YELLOW}What will be installed:${NC}"
+    echo "  • Multi-tenant management platform"
+    echo "  • ClickHouse analytics database"
+    echo "  • Long-term data retention"
+    echo "  • Centralized logging and SIEM"
+    echo "  • Edge node orchestration"
+    echo "  • Tenant isolation and RBAC"
+    if [ "$SYS_HAS_GPU" = true ]; then
+        echo "  • GPU-accelerated AI ($SYS_GPU_TYPE)"
+    fi
+    echo ""
+    echo -e "${YELLOW}Resource Usage:${NC}"
+    echo "  • RAM: ~32-48GB under normal operation"
+    echo "  • Storage: Depends on retention policy"
+    echo "  • CPU: High utilization during analysis"
+    echo ""
+    echo -e "${RED}Production Deployment${NC}"
+    echo "This is intended for production environments. Ensure you have:"
+    echo "  • Proper backup strategy"
+    echo "  • TLS certificates"
+    echo "  • DNS configuration"
+    echo ""
+
+    read -p "Proceed with installation? (yes/no) [no]: " confirm
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+        if [ -f "$SCRIPT_DIR/install/cloud/setup.sh" ]; then
+            bash "$SCRIPT_DIR/install/cloud/setup.sh"
+        else
+            echo -e "${RED}Cloud installer not found${NC}"
+        fi
+    else
+        echo "Installation cancelled."
+    fi
+}
+
+handle_install() {
+    while true; do
+        # Get available options
+        local options_output
+        options_output=$(show_install_menu)
+
+        # Parse options into array
+        local options=()
+        while IFS= read -r line; do
+            [ -n "$line" ] && options+=("$line")
+        done <<< "$options_output"
+
+        read -p "Select option: " choice
 
         case $choice in
-            1|2|3|4)
-                echo -e "${YELLOW}MSSP features are available via Cloud Backend deployment${NC}"
-                echo "Please use option 2 (Select Deployment Mode) → Cloud Backend"
-                ;;
-            b|B)
-                return
+            b|B|m|M) return ;;
+            q|Q) exit 0 ;;
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#options[@]} ]; then
+                    case "${options[$idx]}" in
+                        validator) install_validator ;;
+                        router-edge) install_router_edge ;;
+                        advanced-edge) install_advanced_edge ;;
+                        mssp-server) install_mssp_server ;;
+                    esac
+                    echo ""
+                    read -p "Press Enter to continue..."
+                else
+                    echo -e "${RED}Invalid option${NC}"
+                    sleep 1
+                fi
                 ;;
             *)
                 echo -e "${RED}Invalid option${NC}"
+                sleep 1
                 ;;
         esac
-
-        echo ""
-        read -p "Press Enter to continue..."
     done
 }
 
 # ============================================================
-# SUBMENU 7: POST-INSTALL DASHBOARDS
-# ============================================================
-
-show_dashboards_menu() {
-    clear
-    show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  7. POST-INSTALL: DASHBOARDS & INTERFACES                 ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) Admin Dashboard (CMS, Blog Management)"
-    echo -e "  ${YELLOW}2${NC}) Security / SIEM Dashboard (Threat Hunting, SOAR)"
-    echo -e "  ${YELLOW}3${NC}) Alerting / Notification Settings"
-    echo -e "  ${YELLOW}4${NC}) Maintenance Tools (Update, Backup, Logs)"
-    echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
-
-handle_dashboards() {
-    while true; do
-        show_dashboards_menu
-        read -p "Select option: " choice
-        echo ""
-
-        case $choice in
-            1)
-                echo "Admin Dashboard access:"
-                echo "  URL: http://localhost:3000/admin"
-                echo "  Default credentials are set during deployment"
-                ;;
-            2)
-                echo "Security Dashboard access:"
-                echo "  URL: http://localhost:3000/dashboard"
-                echo "  Grafana: http://localhost:3000"
-                ;;
-            3|4)
-                echo -e "${YELLOW}Feature under development${NC}"
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                ;;
-        esac
-
-        echo ""
-        read -p "Press Enter to continue..."
-    done
-}
-
-# ============================================================
-# SUBMENU 8: ADVANCED CONFIGURATIONS
-# ============================================================
-
-show_advanced_menu() {
-    clear
-    show_banner
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  8. ADVANCED / OPTIONAL CONFIGURATIONS                    ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1${NC}) Hardware Acceleration / NIC Tuning (XDP/eBPF)"
-    echo -e "  ${YELLOW}2${NC}) Custom Rules / Signatures (IDS/IPS, WAF)"
-    echo -e "  ${YELLOW}3${NC}) Integration with External Tools (SIEM, SOC)"
-    echo -e "  ${YELLOW}4${NC}) Disaster Recovery & Hardening"
-    echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
-    echo ""
-}
-
-handle_advanced() {
-    while true; do
-        show_advanced_menu
-        read -p "Select option: " choice
-        echo ""
-
-        case $choice in
-            1|2|3|4)
-                echo -e "${YELLOW}Advanced configurations are documented in:${NC}"
-                echo "  • docs/guides/"
-                echo "  • install/edge/config.sh"
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid option${NC}"
-                ;;
-        esac
-
-        echo ""
-        read -p "Press Enter to continue..."
-    done
-}
-
-# ============================================================
-# SUBMENU 9: UNINSTALL / CLEANUP
+# UNINSTALL MENU
 # ============================================================
 
 show_uninstall_menu() {
     clear
     show_banner
+    print_header "UNINSTALL / CLEANUP" "$RED"
+
+    echo -e "${YELLOW}Select what to remove:${NC}"
+    echo ""
+    echo -e "  ${BOLD}1${NC}) Stop All Services"
+    echo -e "     ${DIM}Stop all HookProbe containers and services${NC}"
+    echo ""
+    echo -e "  ${BOLD}2${NC}) Remove Containers"
+    echo -e "     ${DIM}Remove all HookProbe containers (preserves data)${NC}"
+    echo ""
+    echo -e "  ${BOLD}3${NC}) Remove Container Images"
+    echo -e "     ${DIM}Remove downloaded container images${NC}"
+    echo ""
+    echo -e "  ${BOLD}4${NC}) Remove Volumes & Data"
+    echo -e "     ${DIM}Remove persistent volumes (databases, logs)${NC}"
+    echo -e "     ${RED}WARNING: This will delete all data!${NC}"
+    echo ""
+    echo -e "  ${BOLD}5${NC}) Remove Pod Networks"
+    echo -e "     ${DIM}Remove Podman networks created by HookProbe${NC}"
+    echo ""
+    echo -e "  ${BOLD}6${NC}) Remove OVS Bridges"
+    echo -e "     ${DIM}Remove Open vSwitch bridges and configurations${NC}"
+    echo ""
+    echo -e "  ${BOLD}7${NC}) Remove Network Bridges"
+    echo -e "     ${DIM}Remove Linux bridges created by HookProbe${NC}"
+    echo ""
+    echo -e "  ${BOLD}8${NC}) Reset WiFi Configuration"
+    echo -e "     ${DIM}Remove hotspot configuration, restore defaults${NC}"
+    echo ""
+    echo -e "  ${BOLD}9${NC}) Complete Uninstall"
+    echo -e "     ${DIM}Remove everything - containers, data, configs${NC}"
+    echo -e "     ${RED}WARNING: This is destructive and irreversible!${NC}"
+    echo ""
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}b${NC}) Back to Main Menu    ${BOLD}m${NC}) Main Menu    ${BOLD}q${NC}) Quit"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+}
+
+uninstall_stop_services() {
+    echo -e "${CYAN}Stopping all HookProbe services...${NC}"
+    echo ""
+
+    # Stop systemd services
+    for service in hookprobe-edge hookprobe-sentinel-lite hookprobe-neuro hookprobe-validator; do
+        if systemctl is-active --quiet "$service" 2>/dev/null; then
+            echo "Stopping $service..."
+            systemctl stop "$service" 2>/dev/null || true
+        fi
+    done
+
+    # Stop Podman containers
+    if command -v podman &>/dev/null; then
+        local containers=$(podman ps -q --filter "name=hookprobe" 2>/dev/null)
+        if [ -n "$containers" ]; then
+            echo "Stopping containers..."
+            podman stop $containers 2>/dev/null || true
+        fi
+
+        # Stop any pods
+        local pods=$(podman pod ps -q --filter "name=hookprobe" 2>/dev/null)
+        if [ -n "$pods" ]; then
+            echo "Stopping pods..."
+            podman pod stop $pods 2>/dev/null || true
+        fi
+    fi
+
+    echo -e "${GREEN}✓ Services stopped${NC}"
+}
+
+uninstall_containers() {
+    echo -e "${CYAN}Removing HookProbe containers...${NC}"
+    echo ""
+
+    if command -v podman &>/dev/null; then
+        # Remove containers
+        local containers=$(podman ps -aq --filter "name=hookprobe" 2>/dev/null)
+        if [ -n "$containers" ]; then
+            echo "Removing containers..."
+            podman rm -f $containers 2>/dev/null || true
+        fi
+
+        # Remove pods
+        local pods=$(podman pod ps -q --filter "name=hookprobe" 2>/dev/null)
+        if [ -n "$pods" ]; then
+            echo "Removing pods..."
+            podman pod rm -f $pods 2>/dev/null || true
+        fi
+
+        echo -e "${GREEN}✓ Containers removed${NC}"
+    else
+        echo -e "${YELLOW}Podman not installed${NC}"
+    fi
+}
+
+uninstall_images() {
+    echo -e "${CYAN}Removing container images...${NC}"
+    echo ""
+
+    if command -v podman &>/dev/null; then
+        local images=$(podman images -q --filter "reference=*hookprobe*" 2>/dev/null)
+        if [ -n "$images" ]; then
+            podman rmi -f $images 2>/dev/null || true
+        fi
+
+        # Also remove common images used by HookProbe
+        for img in postgres redis valkey grafana victoria-metrics n8n suricata zeek; do
+            podman rmi -f "$img" 2>/dev/null || true
+        done
+
+        echo -e "${GREEN}✓ Images removed${NC}"
+    else
+        echo -e "${YELLOW}Podman not installed${NC}"
+    fi
+}
+
+uninstall_volumes() {
+    echo -e "${RED}WARNING: This will delete all persistent data!${NC}"
+    read -p "Type 'DELETE' to confirm: " confirm
+
+    if [ "$confirm" = "DELETE" ]; then
+        echo ""
+        echo -e "${CYAN}Removing volumes...${NC}"
+
+        if command -v podman &>/dev/null; then
+            local volumes=$(podman volume ls -q --filter "name=hookprobe" 2>/dev/null)
+            if [ -n "$volumes" ]; then
+                podman volume rm -f $volumes 2>/dev/null || true
+            fi
+        fi
+
+        # Remove data directories
+        rm -rf /var/lib/hookprobe 2>/dev/null || true
+        rm -rf /var/log/hookprobe 2>/dev/null || true
+
+        echo -e "${GREEN}✓ Volumes and data removed${NC}"
+    else
+        echo "Cancelled."
+    fi
+}
+
+uninstall_networks() {
+    echo -e "${CYAN}Removing pod networks...${NC}"
+    echo ""
+
+    if command -v podman &>/dev/null; then
+        local networks=$(podman network ls -q --filter "name=hookprobe" 2>/dev/null)
+        if [ -n "$networks" ]; then
+            podman network rm -f $networks 2>/dev/null || true
+        fi
+        echo -e "${GREEN}✓ Pod networks removed${NC}"
+    else
+        echo -e "${YELLOW}Podman not installed${NC}"
+    fi
+}
+
+uninstall_ovs() {
+    echo -e "${CYAN}Removing OVS bridges...${NC}"
+    echo ""
+
+    if command -v ovs-vsctl &>/dev/null; then
+        for br in $(ovs-vsctl list-br 2>/dev/null | grep -E "^(hookprobe|hp-)" || true); do
+            echo "Removing bridge: $br"
+            ovs-vsctl del-br "$br" 2>/dev/null || true
+        done
+        echo -e "${GREEN}✓ OVS bridges removed${NC}"
+    else
+        echo -e "${YELLOW}OVS not installed${NC}"
+    fi
+}
+
+uninstall_bridges() {
+    echo -e "${CYAN}Removing Linux bridges...${NC}"
+    echo ""
+
+    for br in $(ip -brief link show type bridge 2>/dev/null | awk '{print $1}' | grep -E "^(hookprobe|hp-|br-hp)" || true); do
+        echo "Removing bridge: $br"
+        ip link set "$br" down 2>/dev/null || true
+        ip link delete "$br" 2>/dev/null || true
+    done
+
+    echo -e "${GREEN}✓ Bridges removed${NC}"
+}
+
+uninstall_wifi() {
+    echo -e "${CYAN}Resetting WiFi configuration...${NC}"
+    echo ""
+
+    # Stop hostapd if running
+    systemctl stop hostapd 2>/dev/null || true
+    systemctl disable hostapd 2>/dev/null || true
+
+    # Remove hostapd config
+    rm -f /etc/hostapd/hookprobe.conf 2>/dev/null || true
+
+    # Remove dnsmasq config
+    rm -f /etc/dnsmasq.d/hookprobe.conf 2>/dev/null || true
+
+    # Restart network manager
+    systemctl restart NetworkManager 2>/dev/null || true
+
+    echo -e "${GREEN}✓ WiFi configuration reset${NC}"
+}
+
+uninstall_complete() {
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║  9. UNINSTALL / CLEANUP                                   ║${NC}"
+    echo -e "${RED}║  COMPLETE UNINSTALL - ALL DATA WILL BE DELETED            ║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${YELLOW}1${NC}) Stop All PODs / Services"
-    echo -e "  ${YELLOW}2${NC}) Remove Containers / Services / Configs"
-    echo -e "  ${YELLOW}3${NC}) Uninstall Edge Deployment"
-    echo -e "  ${YELLOW}4${NC}) Uninstall Cloud Backend"
-    echo -e "  ${YELLOW}5${NC}) Uninstall n8n Only"
-    echo -e "  ${YELLOW}6${NC}) Wipe Data / Logs / DB ${RED}[DESTRUCTIVE]${NC}"
+    echo "This will remove:"
+    echo "  • All containers and pods"
+    echo "  • All container images"
+    echo "  • All volumes and persistent data"
+    echo "  • All network configurations"
+    echo "  • All configuration files"
+    echo "  • All systemd services"
     echo ""
-    echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
+    echo -e "${RED}THIS CANNOT BE UNDONE!${NC}"
     echo ""
+    read -p "Type 'UNINSTALL EVERYTHING' to confirm: " confirm
+
+    if [ "$confirm" = "UNINSTALL EVERYTHING" ]; then
+        echo ""
+        echo -e "${CYAN}Starting complete uninstall...${NC}"
+        echo ""
+
+        uninstall_stop_services
+        echo ""
+        uninstall_containers
+        echo ""
+        uninstall_images
+        echo ""
+
+        # Force delete volumes without prompt
+        if command -v podman &>/dev/null; then
+            podman volume rm -f $(podman volume ls -q) 2>/dev/null || true
+        fi
+        rm -rf /var/lib/hookprobe 2>/dev/null || true
+        rm -rf /var/log/hookprobe 2>/dev/null || true
+        echo -e "${GREEN}✓ Volumes removed${NC}"
+        echo ""
+
+        uninstall_networks
+        echo ""
+        uninstall_ovs
+        echo ""
+        uninstall_bridges
+        echo ""
+        uninstall_wifi
+        echo ""
+
+        # Remove config files
+        echo -e "${CYAN}Removing configuration files...${NC}"
+        rm -rf /etc/hookprobe 2>/dev/null || true
+        echo -e "${GREEN}✓ Configuration removed${NC}"
+        echo ""
+
+        # Remove systemd services
+        echo -e "${CYAN}Removing systemd services...${NC}"
+        for service in hookprobe-edge hookprobe-sentinel-lite hookprobe-neuro hookprobe-validator; do
+            systemctl disable "$service" 2>/dev/null || true
+            rm -f "/etc/systemd/system/${service}.service" 2>/dev/null || true
+        done
+        systemctl daemon-reload 2>/dev/null || true
+        echo -e "${GREEN}✓ Services removed${NC}"
+        echo ""
+
+        # Run edge uninstaller if available
+        if [ -f "$SCRIPT_DIR/install/edge/uninstall.sh" ]; then
+            bash "$SCRIPT_DIR/install/edge/uninstall.sh" --force 2>/dev/null || true
+        fi
+
+        echo ""
+        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║  UNINSTALL COMPLETE                                        ║${NC}"
+        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+    else
+        echo "Uninstall cancelled."
+    fi
 }
 
 handle_uninstall() {
     while true; do
         show_uninstall_menu
         read -p "Select option: " choice
-        echo ""
 
         case $choice in
-            1)
-                echo "Stopping all containers..."
-                podman stop $(podman ps -q) 2>/dev/null || echo "No running containers"
-                ;;
-            2)
-                echo "Removing all containers..."
-                podman rm $(podman ps -aq) 2>/dev/null || echo "No containers to remove"
-                ;;
-            3)
-                if [ -f "$SCRIPT_DIR/install/edge/uninstall.sh" ]; then
-                    bash "$SCRIPT_DIR/install/edge/uninstall.sh"
-                else
-                    echo "Edge uninstall script not found"
-                fi
-                ;;
-            4)
-                if [ -f "$SCRIPT_DIR/install/cloud/uninstall.sh" ]; then
-                    bash "$SCRIPT_DIR/install/cloud/uninstall.sh"
-                else
-                    echo "Cloud uninstall script not found"
-                fi
-                ;;
-            5)
-                if [ -f "$SCRIPT_DIR/install/addons/n8n/uninstall.sh" ]; then
-                    bash "$SCRIPT_DIR/install/addons/n8n/uninstall.sh"
-                else
-                    echo "n8n uninstall script not found"
-                fi
-                ;;
-            6)
-                echo -e "${RED}⚠ WARNING: This will permanently delete all data!${NC}"
-                read -p "Type 'DELETE' to confirm: " confirm
-                if [ "$confirm" = "DELETE" ]; then
-                    echo "Wiping data..."
-                    podman volume rm $(podman volume ls -q) 2>/dev/null || echo "No volumes to remove"
-                    echo "Data wiped"
-                else
-                    echo "Cancelled"
-                fi
-                ;;
-            b|B)
-                return
-                ;;
+            1) uninstall_stop_services ;;
+            2) uninstall_containers ;;
+            3) uninstall_images ;;
+            4) uninstall_volumes ;;
+            5) uninstall_networks ;;
+            6) uninstall_ovs ;;
+            7) uninstall_bridges ;;
+            8) uninstall_wifi ;;
+            9) uninstall_complete ;;
+            b|B|m|M) return ;;
+            q|Q) exit 0 ;;
             *)
                 echo -e "${RED}Invalid option${NC}"
+                sleep 1
+                continue
                 ;;
         esac
 
@@ -923,115 +1237,79 @@ handle_uninstall() {
 }
 
 # ============================================================
-# HELPER FUNCTIONS
+# COMMAND-LINE ARGUMENT PARSING
 # ============================================================
 
-run_config_wizard() {
-    local deployment_type="$1"
-    local config_file="$2"
-
-    # Edge deployment uses auto-detection (no manual config needed)
-    if [ "$deployment_type" = "edge" ] || [ "$deployment_type" = "testing" ]; then
-        echo -e "${GREEN}✓ Edge deployment uses auto-detection${NC}"
-        echo -e "${GREEN}  No manual configuration needed - system will auto-detect:${NC}"
-        echo "    • Operating system and architecture"
-        echo "    • Available RAM and storage"
-        echo "    • Raspberry Pi model (if applicable)"
-        echo "    • Optimal memory limits"
-        echo ""
-        echo "  You can customize with flags:"
-        echo "    --enable-ai           Enable AI detection"
-        echo "    --enable-monitoring   Enable monitoring stack"
-        echo "    --disable-iam         Skip IAM installation"
-        return 0
-    fi
-
-    # Cloud/n8n deployments still use manual config
-    if [ -f "$config_file" ]; then
-        echo -e "${YELLOW}⚠ Please review and edit configuration:${NC}"
-        echo "  $config_file"
-        read -p "Open for editing now? (yes/no) [no]: " edit_now
-        if [ "$edit_now" = "yes" ]; then
-            ${EDITOR:-nano} "$config_file"
-        fi
-        return 0
-    else
-        echo -e "${RED}✗ Configuration file not found: $config_file${NC}"
-        return 1
-    fi
+show_usage() {
+    echo -e "${CYAN}HookProbe Installer v6.0${NC}"
+    echo ""
+    echo "Usage:"
+    echo "  $0                        # Interactive menu mode"
+    echo "  $0 --check                # Check system capabilities only"
+    echo "  $0 --role <ROLE>          # Automated installation"
+    echo ""
+    echo "Roles:"
+    echo "  validator                 # Lightweight validator (512MB+ RAM)"
+    echo "  router-edge               # Secure gateway (3GB+ RAM, 2+ NICs)"
+    echo "  advanced-edge             # Full-featured edge (8GB+ RAM)"
+    echo "  mssp-server               # Multi-tenant backend (64GB+ RAM)"
+    echo ""
+    echo "Examples:"
+    echo "  sudo ./install.sh --check"
+    echo "  sudo ./install.sh --role validator"
+    echo "  sudo ./install.sh --role router-edge"
+    echo ""
 }
 
-run_installer() {
-    local script_path="$1"
-    local description="$2"
-    local deployment_type="$3"
+automated_install() {
+    local role="$1"
 
-    if [ ! -f "$script_path" ]; then
-        echo -e "${RED}ERROR: Installer not found: $script_path${NC}"
-        return 1
-    fi
+    # Detect capabilities first
+    detect_capabilities
 
-    local config_file=""
-    local needs_config=true
-
-    # Determine correct config file based on deployment type
-    # Edge and sentinel-lite deployments use auto-detection - no config file needed
-    case "$deployment_type" in
-        edge|testing)
-            # Edge uses auto-detection, no config file needed
-            needs_config=false
-            echo -e "${GREEN}✓ Edge deployment uses auto-detection${NC}"
-            echo "  No manual configuration needed - system will auto-detect:"
-            echo "    • Operating system and architecture"
-            echo "    • Available RAM and storage"
-            echo "    • Raspberry Pi model (if applicable)"
-            echo "    • Optimal memory limits"
-            echo ""
+    case "$role" in
+        validator|sentinel-lite)
+            if [ "$CAN_VALIDATOR" = true ]; then
+                install_validator
+            else
+                echo -e "${RED}System does not meet requirements for Validator deployment${NC}"
+                echo "Required: 512MB+ RAM, 8GB+ storage, 1+ network interface"
+                exit 1
+            fi
             ;;
-        sentinel-lite)
-            # Sentinel-lite uses auto-detection, no config file needed
-            needs_config=false
-            echo -e "${GREEN}✓ Sentinel Lite deployment uses auto-detection${NC}"
-            echo "  Ultra-lightweight validator for constrained devices:"
-            echo "    • No container overhead (native Python service)"
-            echo "    • Auto-detects available RAM (128-384MB)"
-            echo "    • Minimal disk footprint (~50MB)"
-            echo "    • Ideal for LTE/mobile networks"
-            echo ""
+        router-edge|edge)
+            if [ "$CAN_ROUTER_EDGE" = true ]; then
+                install_router_edge
+            else
+                echo -e "${RED}System does not meet requirements for Router Edge deployment${NC}"
+                echo "Required: 3GB+ RAM, 16GB+ storage, 2+ network interfaces"
+                exit 1
+            fi
             ;;
-        cloud)
-            config_file="$SCRIPT_DIR/install/cloud/config.sh"
+        advanced-edge|advanced)
+            if [ "$CAN_ADVANCED_EDGE" = true ]; then
+                install_advanced_edge
+            else
+                echo -e "${RED}System does not meet requirements for Advanced Edge deployment${NC}"
+                echo "Required: 8GB+ RAM, 32GB+ storage, 2+ ethernet ports"
+                exit 1
+            fi
             ;;
-        n8n)
-            config_file="$SCRIPT_DIR/install/addons/n8n/config.sh"
+        mssp-server|mssp|cloud)
+            if [ "$CAN_MSSP_SERVER" = true ]; then
+                install_mssp_server
+            else
+                echo -e "${RED}System does not meet requirements for MSSP Server deployment${NC}"
+                echo "Required: 8+ cores, 64GB+ RAM, 1TB+ storage"
+                exit 1
+            fi
             ;;
         *)
-            local config_dir=$(dirname "$script_path")
-            config_file="$config_dir/config.sh"
+            echo -e "${RED}Unknown role: $role${NC}"
+            show_usage
+            exit 1
             ;;
     esac
-
-    # Check if configuration exists (only for deployments that need it)
-    if [ "$needs_config" = true ]; then
-        if [ ! -f "$config_file" ] || [ ! -s "$config_file" ]; then
-            echo -e "${RED}ERROR: Configuration file not found: $config_file${NC}"
-            echo ""
-            echo "Please ensure the configuration file exists before proceeding."
-            echo "For cloud deployment: $SCRIPT_DIR/install/cloud/config.sh"
-            echo "For n8n addon: $SCRIPT_DIR/install/addons/n8n/config.sh"
-            return 1
-        fi
-    fi
-
-    echo -e "${GREEN}Starting: $description${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    if bash "$script_path"; then
-        echo -e "${GREEN}✓ $description completed successfully${NC}"
-    else
-        echo -e "${RED}✗ $description failed${NC}"
-        return 1
-    fi
 }
 
 check_root() {
@@ -1043,172 +1321,7 @@ check_root() {
 }
 
 # ============================================================
-# COMMAND-LINE ARGUMENT PARSING
-# ============================================================
-
-show_usage() {
-    echo -e "${CYAN}HookProbe Installer${NC}"
-    echo ""
-    echo "Usage:"
-    echo "  $0                    # Interactive menu mode"
-    echo "  $0 --role <ROLE>      # Automated installation"
-    echo ""
-    echo "Roles:"
-    echo "  edge                  # Edge node deployment (home/SMB/branch office)"
-    echo "                        # Requires: 2GB+ RAM, Podman containers"
-    echo ""
-    echo "  validator|cloud       # Cloud validator deployment (MSSP backend)"
-    echo "                        # Requires: 8GB+ RAM, datacenter/cloud"
-    echo ""
-    echo "  sentinel-lite         # Ultra-lightweight validator for constrained devices"
-    echo "                        # Requires: 256MB-1GB RAM (no containers)"
-    echo "                        # Ideal for: Pi 3/Zero, IoT gateways, LTE devices"
-    echo ""
-    echo "Examples:"
-    echo "  sudo ./install.sh --role edge           # Install edge node"
-    echo "  sudo ./install.sh --role validator      # Install cloud validator"
-    echo "  sudo ./install.sh --role sentinel-lite  # Install lightweight sentinel"
-    echo ""
-    echo "Direct download (for constrained devices):"
-    echo "  curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite/bootstrap.sh | sudo bash"
-    echo ""
-    echo "After installation:"
-    echo "  # Edge nodes:"
-    echo "  sudo systemctl start hookprobe-edge"
-    echo ""
-    echo "  # Sentinel Lite (constrained devices):"
-    echo "  sudo systemctl start hookprobe-sentinel-lite"
-    echo ""
-}
-
-automated_install() {
-    local role="$1"
-
-    clear
-    show_banner
-
-    case "$role" in
-        edge)
-            echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-            echo -e "${GREEN}║  AUTOMATED EDGE NODE INSTALLATION                         ║${NC}"
-            echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-            echo ""
-            echo -e "${CYAN}Installing HookProbe Edge Node...${NC}"
-            echo -e "${CYAN}Target: Home/SMB/Branch Office deployment${NC}"
-            echo ""
-
-            if run_installer "$SCRIPT_DIR/scripts/install-edge.sh" "Edge Deployment" "edge"; then
-                echo ""
-                echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-                echo -e "${GREEN}║  ✓ EDGE NODE INSTALLATION COMPLETE                        ║${NC}"
-                echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-                echo ""
-                echo -e "${YELLOW}Next Steps:${NC}"
-                echo ""
-                echo -e "1. Initialize Neuro Protocol:"
-                echo -e "   ${CYAN}python3 -m neuro.tools.init_weights --node-id edge-001${NC}"
-                echo ""
-                echo -e "2. Start HookProbe services:"
-                echo -e "   ${CYAN}sudo systemctl start hookprobe-edge${NC}"
-                echo -e "   ${CYAN}sudo systemctl start hookprobe-neuro${NC}"
-                echo ""
-                echo -e "3. Verify installation:"
-                echo -e "   ${CYAN}sudo systemctl status hookprobe-edge${NC}"
-                echo ""
-                echo -e "4. Access dashboard:"
-                echo -e "   ${CYAN}https://$(hostname -I | awk '{print $1}'):8443${NC}"
-                echo ""
-                exit 0
-            else
-                echo -e "${RED}✗ Edge installation failed${NC}"
-                exit 1
-            fi
-            ;;
-
-        validator|cloud)
-            echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-            echo -e "${GREEN}║  AUTOMATED CLOUD VALIDATOR INSTALLATION                   ║${NC}"
-            echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-            echo ""
-            echo -e "${CYAN}Installing HookProbe Cloud Validator...${NC}"
-            echo -e "${CYAN}Target: MSSP backend / Multi-tenant SOC${NC}"
-            echo ""
-
-            if run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Validator Deployment" "cloud"; then
-                echo ""
-                echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-                echo -e "${GREEN}║  ✓ CLOUD VALIDATOR INSTALLATION COMPLETE                  ║${NC}"
-                echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-                echo ""
-                echo -e "${YELLOW}Next Steps:${NC}"
-                echo ""
-                echo -e "1. Configure validator settings:"
-                echo -e "   ${CYAN}nano /etc/hookprobe/validator.conf${NC}"
-                echo ""
-                echo -e "2. Start validator services:"
-                echo -e "   ${CYAN}sudo systemctl start hookprobe-validator${NC}"
-                echo -e "   ${CYAN}sudo systemctl start hookprobe-neuro-validator${NC}"
-                echo ""
-                echo -e "3. Verify Neuro deterministic replay:"
-                echo -e "   ${CYAN}curl http://localhost:8080/neuro/status${NC}"
-                echo ""
-                echo -e "4. Configure edge nodes to connect:"
-                echo -e "   ${CYAN}Set VALIDATOR_URL in edge config${NC}"
-                echo ""
-                exit 0
-            else
-                echo -e "${RED}✗ Cloud validator installation failed${NC}"
-                exit 1
-            fi
-            ;;
-
-        sentinel-lite)
-            echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-            echo -e "${GREEN}║  AUTOMATED SENTINEL LITE INSTALLATION                     ║${NC}"
-            echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-            echo ""
-            echo -e "${CYAN}Installing HookProbe Sentinel Lite...${NC}"
-            echo -e "${CYAN}Target: Constrained devices (Pi 3/Zero, IoT, LTE)${NC}"
-            echo ""
-
-            if run_installer "$SCRIPT_DIR/install-sentinel-lite.sh" "Sentinel Lite Deployment" "sentinel-lite"; then
-                echo ""
-                echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-                echo -e "${GREEN}║  ✓ SENTINEL LITE INSTALLATION COMPLETE                    ║${NC}"
-                echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-                echo ""
-                echo -e "${YELLOW}Next Steps:${NC}"
-                echo ""
-                echo -e "1. Start Sentinel Lite service:"
-                echo -e "   ${CYAN}sudo systemctl start hookprobe-sentinel-lite${NC}"
-                echo ""
-                echo -e "2. Check status:"
-                echo -e "   ${CYAN}sudo systemctl status hookprobe-sentinel-lite${NC}"
-                echo ""
-                echo -e "3. View logs:"
-                echo -e "   ${CYAN}sudo journalctl -u hookprobe-sentinel-lite -f${NC}"
-                echo ""
-                echo -e "4. Check health endpoint:"
-                echo -e "   ${CYAN}curl http://localhost:9090/health${NC}"
-                echo ""
-                exit 0
-            else
-                echo -e "${RED}✗ Sentinel Lite installation failed${NC}"
-                exit 1
-            fi
-            ;;
-
-        *)
-            echo -e "${RED}ERROR: Invalid role '$role'${NC}"
-            echo ""
-            show_usage
-            exit 1
-            ;;
-    esac
-}
-
-# ============================================================
-# MAIN LOOP
+# MAIN
 # ============================================================
 
 main() {
@@ -1217,54 +1330,54 @@ main() {
     # Parse command-line arguments
     if [ $# -gt 0 ]; then
         case "$1" in
+            --check)
+                detect_capabilities
+                show_capability_summary
+                exit 0
+                ;;
             --role)
                 if [ -z "$2" ]; then
                     echo -e "${RED}ERROR: --role requires an argument${NC}"
-                    echo ""
                     show_usage
                     exit 1
                 fi
                 automated_install "$2"
+                exit $?
                 ;;
             --help|-h)
                 show_usage
                 exit 0
                 ;;
             *)
-                echo -e "${RED}ERROR: Unknown option '$1'${NC}"
-                echo ""
+                echo -e "${RED}Unknown option: $1${NC}"
                 show_usage
                 exit 1
                 ;;
         esac
     fi
 
-    # Interactive menu mode (no arguments provided)
+    # Detect capabilities for interactive mode
+    detect_capabilities
+
+    # Interactive menu mode
     while true; do
         clear
         show_banner
         show_main_menu
 
         read -p "Select option: " choice
-        echo ""
 
         case $choice in
-            1) handle_preinstall ;;
-            2) handle_deployment ;;
-            3) handle_core_infrastructure ;;
-            4) handle_configuration ;;
-            5) handle_extensions ;;
-            6) handle_mssp ;;
-            7) handle_dashboards ;;
-            8) handle_advanced ;;
-            9) handle_uninstall ;;
+            1) handle_capability_check ;;
+            2) handle_install ;;
+            3) handle_uninstall ;;
             q|Q)
                 echo -e "${GREEN}Goodbye!${NC}"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}Invalid option. Please try again.${NC}"
-                read -p "Press Enter to continue..."
+                echo -e "${RED}Invalid option${NC}"
+                sleep 1
                 ;;
         esac
     done
