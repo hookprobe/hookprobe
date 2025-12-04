@@ -433,6 +433,10 @@ configure_mssp_secrets() {
         echo ""
         echo -e "${YELLOW}Saving MSSP/HTP configuration...${NC}"
 
+        # Ensure secrets directory exists
+        mkdir -p /etc/hookprobe/secrets
+        chmod 700 /etc/hookprobe/secrets
+
         # Save MSSP configuration
         cat > /etc/hookprobe/secrets/mssp.env << MSSPEOF
 MSSP_ENDPOINT=$MSSP_ENDPOINT
