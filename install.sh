@@ -284,11 +284,18 @@ show_deployment_menu() {
     echo ""
     echo -e "  ${YELLOW}1${NC}) Edge Deployment ${CYAN}[Single-Tenant]${NC}"
     echo -e "     └─ For: Home users, small business, branch office, standalone"
-    echo -e "     └─ Platforms: N100/Core/AMD (x86_64), Pi/Jetson/Radxa (ARM)"
+    echo -e "     └─ Platforms: N100/Core/AMD (x86_64), Pi 4/5/Jetson/Radxa (ARM)"
+    echo -e "     └─ RAM: 2GB+ recommended"
     echo ""
     echo -e "  ${YELLOW}2${NC}) MSSP Cloud Backend ${CYAN}[Multi-Tenant]${NC}"
     echo -e "     └─ For: MSSPs, enterprise multi-site, SOC operations"
     echo -e "     └─ Platforms: Datacenter servers, cloud instances"
+    echo ""
+    echo -e "  ${YELLOW}3${NC}) Sentinel Lite ${GREEN}[Ultra-Lightweight]${NC}"
+    echo -e "     └─ For: Constrained devices, LTE/mobile, distributed validators"
+    echo -e "     └─ Platforms: Pi 3/Zero, Pico-class, low-power ARM, IoT gateways"
+    echo -e "     └─ RAM: 256MB-1GB (no containers, native service)"
+    echo -e "     └─ ${CYAN}curl -sSL .../releases/sentinel-lite/bootstrap.sh | sudo bash${NC}"
     echo ""
     echo -e "  ${YELLOW}b${NC}) Back to Main Menu"
     echo ""
@@ -307,6 +314,10 @@ handle_deployment() {
                 ;;
             2)
                 run_installer "$SCRIPT_DIR/install/cloud/setup.sh" "Cloud Backend Deployment" "cloud"
+                return
+                ;;
+            3)
+                run_installer "$SCRIPT_DIR/install-sentinel-lite.sh" "Sentinel Lite Deployment" "sentinel-lite"
                 return
                 ;;
             b|B)
@@ -964,7 +975,7 @@ run_installer() {
     local needs_config=true
 
     # Determine correct config file based on deployment type
-    # Edge deployment uses auto-detection - no config file needed
+    # Edge and sentinel-lite deployments use auto-detection - no config file needed
     case "$deployment_type" in
         edge|testing)
             # Edge uses auto-detection, no config file needed
@@ -975,6 +986,17 @@ run_installer() {
             echo "    • Available RAM and storage"
             echo "    • Raspberry Pi model (if applicable)"
             echo "    • Optimal memory limits"
+            echo ""
+            ;;
+        sentinel-lite)
+            # Sentinel-lite uses auto-detection, no config file needed
+            needs_config=false
+            echo -e "${GREEN}✓ Sentinel Lite deployment uses auto-detection${NC}"
+            echo "  Ultra-lightweight validator for constrained devices:"
+            echo "    • No container overhead (native Python service)"
+            echo "    • Auto-detects available RAM (128-384MB)"
+            echo "    • Minimal disk footprint (~50MB)"
+            echo "    • Ideal for LTE/mobile networks"
             echo ""
             ;;
         cloud)
@@ -1033,20 +1055,29 @@ show_usage() {
     echo ""
     echo "Roles:"
     echo "  edge                  # Edge node deployment (home/SMB/branch office)"
-    echo "  validator             # Cloud validator deployment (MSSP backend)"
-    echo "  cloud                 # Alias for 'validator'"
+    echo "                        # Requires: 2GB+ RAM, Podman containers"
+    echo ""
+    echo "  validator|cloud       # Cloud validator deployment (MSSP backend)"
+    echo "                        # Requires: 8GB+ RAM, datacenter/cloud"
+    echo ""
+    echo "  sentinel-lite         # Ultra-lightweight validator for constrained devices"
+    echo "                        # Requires: 256MB-1GB RAM (no containers)"
+    echo "                        # Ideal for: Pi 3/Zero, IoT gateways, LTE devices"
     echo ""
     echo "Examples:"
-    echo "  sudo ./install.sh --role edge        # Install edge node"
-    echo "  sudo ./install.sh --role validator   # Install cloud validator"
+    echo "  sudo ./install.sh --role edge           # Install edge node"
+    echo "  sudo ./install.sh --role validator      # Install cloud validator"
+    echo "  sudo ./install.sh --role sentinel-lite  # Install lightweight sentinel"
+    echo ""
+    echo "Direct download (for constrained devices):"
+    echo "  curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite/bootstrap.sh | sudo bash"
     echo ""
     echo "After installation:"
-    echo "  # Initialize Neuro protocol"
-    echo "  python3 -m neuro.tools.init_weights --node-id <YOUR-NODE-ID>"
+    echo "  # Edge nodes:"
+    echo "  sudo systemctl start hookprobe-edge"
     echo ""
-    echo "  # Start services"
-    echo "  sudo systemctl start hookprobe-edge   # (edge nodes)"
-    echo "  sudo systemctl start hookprobe-neuro  # (all nodes with Neuro)"
+    echo "  # Sentinel Lite (constrained devices):"
+    echo "  sudo systemctl start hookprobe-sentinel-lite"
     echo ""
 }
 
@@ -1127,6 +1158,42 @@ automated_install() {
                 exit 0
             else
                 echo -e "${RED}✗ Cloud validator installation failed${NC}"
+                exit 1
+            fi
+            ;;
+
+        sentinel-lite)
+            echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${GREEN}║  AUTOMATED SENTINEL LITE INSTALLATION                     ║${NC}"
+            echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${CYAN}Installing HookProbe Sentinel Lite...${NC}"
+            echo -e "${CYAN}Target: Constrained devices (Pi 3/Zero, IoT, LTE)${NC}"
+            echo ""
+
+            if run_installer "$SCRIPT_DIR/install-sentinel-lite.sh" "Sentinel Lite Deployment" "sentinel-lite"; then
+                echo ""
+                echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${GREEN}║  ✓ SENTINEL LITE INSTALLATION COMPLETE                    ║${NC}"
+                echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+                echo ""
+                echo -e "${YELLOW}Next Steps:${NC}"
+                echo ""
+                echo -e "1. Start Sentinel Lite service:"
+                echo -e "   ${CYAN}sudo systemctl start hookprobe-sentinel-lite${NC}"
+                echo ""
+                echo -e "2. Check status:"
+                echo -e "   ${CYAN}sudo systemctl status hookprobe-sentinel-lite${NC}"
+                echo ""
+                echo -e "3. View logs:"
+                echo -e "   ${CYAN}sudo journalctl -u hookprobe-sentinel-lite -f${NC}"
+                echo ""
+                echo -e "4. Check health endpoint:"
+                echo -e "   ${CYAN}curl http://localhost:9090/health${NC}"
+                echo ""
+                exit 0
+            else
+                echo -e "${RED}✗ Sentinel Lite installation failed${NC}"
                 exit 1
             fi
             ;;
