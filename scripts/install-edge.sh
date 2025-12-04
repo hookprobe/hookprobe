@@ -1146,12 +1146,10 @@ load_hookprobe_configs() {
     if [ -f /etc/hookprobe/cloudflare.conf ]; then
         echo -e "${GREEN}[✓]${NC} Loading Cloudflare configuration..."
         source /etc/hookprobe/cloudflare.conf
-        # Map config variables
-        CLOUDFLARE_TUNNEL_TOKEN="${CF_API_TOKEN:-$CLOUDFLARE_TUNNEL_TOKEN}"
+        # Map config variables - CF_TUNNEL_TOKEN is the minimum required
+        CLOUDFLARE_TUNNEL_TOKEN="${CF_TUNNEL_TOKEN:-$CLOUDFLARE_TUNNEL_TOKEN}"
+        CF_TUNNEL_ID="${CF_TUNNEL_ID:-}"
         CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
-        CF_ZONE_ID="${CF_ZONE_ID:-}"
-        CF_DOMAIN="${CF_DOMAIN:-}"
-        CF_TUNNEL_SUBDOMAIN="${CF_TUNNEL_SUBDOMAIN:-}"
     fi
 
     # Load network/bridge configuration if available
