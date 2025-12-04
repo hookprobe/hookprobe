@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # install.sh - HookProbe Unified Installer
-# Version: 6.1
+# Version: 6.2
 # License: MIT
 #
 # Capability-based installation menu with branded deployment tiers:
@@ -10,6 +10,13 @@
 #   - Fortress   : Full-featured edge with monitoring
 #   - Nexus      : Multi-tenant MSSP command center
 #
+
+# Check bash version (need 4.0+)
+if [ -z "$BASH_VERSION" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "ERROR: This script requires bash 4.0 or higher"
+    echo "Current: ${BASH_VERSION:-not bash}"
+    exit 1
+fi
 
 set -e
 
@@ -20,7 +27,7 @@ export TERM="${TERM:-xterm}"
 
 # Safe clear function that won't fail
 safe_clear() {
-    command clear 2>/dev/null || printf '\033[2J\033[H'
+    clear 2>/dev/null || printf '\033[2J\033[H' || true
 }
 
 # ============================================================
@@ -1558,6 +1565,9 @@ check_root() {
 # ============================================================
 
 main() {
+    # Debug: confirm script is running
+    echo "HookProbe Installer v6.2 starting..." >&2
+
     check_root
 
     # Parse CLI arguments
