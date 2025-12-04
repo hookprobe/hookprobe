@@ -1417,44 +1417,35 @@ install_fortress() {
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo "Cloudflare Tunnel provides secure access to your Fortress without"
-    echo "exposing ports to the internet. This configuration is required."
+    echo "exposing ports to the internet."
     echo ""
-    echo "You can find these values in your Cloudflare dashboard:"
-    echo "  - API Token: https://dash.cloudflare.com/profile/api-tokens"
-    echo "  - Account ID: Dashboard > Workers & Pages > Account ID"
-    echo "  - Zone ID: Dashboard > [Your Domain] > Overview > Zone ID"
+    echo -e "${YELLOW}How to get your Tunnel Token:${NC}"
+    echo "  1. Go to: https://one.dash.cloudflare.com/"
+    echo "  2. Navigate to: Networks > Tunnels"
+    echo "  3. Create a new tunnel or select existing"
+    echo "  4. Click 'Configure' > 'Install connector'"
+    echo "  5. Copy the token from the install command"
+    echo ""
+    echo -e "${DIM}The token looks like: eyJhIjoiNz...${NC}"
     echo ""
 
-    read -sp "Enter Cloudflare API Token: " cf_api_token
+    # Minimum required: Tunnel Token
+    read -sp "Enter Cloudflare Tunnel Token (required): " cf_tunnel_token
     echo ""
-    while [ -z "$cf_api_token" ]; do
-        echo -e "${RED}API Token is required${NC}"
-        read -sp "Enter Cloudflare API Token: " cf_api_token
+    while [ -z "$cf_tunnel_token" ]; do
+        echo -e "${RED}Tunnel Token is required${NC}"
+        read -sp "Enter Cloudflare Tunnel Token: " cf_tunnel_token
         echo ""
     done
+    echo -e "${GREEN}✓ Tunnel Token captured${NC}"
+    echo ""
 
-    read -p "Enter Cloudflare Account ID: " cf_account_id
-    while [ -z "$cf_account_id" ]; do
-        echo -e "${RED}Account ID is required${NC}"
-        read -p "Enter Cloudflare Account ID: " cf_account_id
-    done
+    # Optional: Tunnel ID and Account ID (for advanced API operations)
+    echo -e "${YELLOW}Optional - for advanced management:${NC}"
+    read -p "Enter Tunnel ID (or press Enter to skip): " cf_tunnel_id
+    read -p "Enter Account ID (or press Enter to skip): " cf_account_id
 
-    read -p "Enter Cloudflare Zone ID: " cf_zone_id
-    while [ -z "$cf_zone_id" ]; do
-        echo -e "${RED}Zone ID is required${NC}"
-        read -p "Enter Cloudflare Zone ID: " cf_zone_id
-    done
-
-    read -p "Enter your domain name (e.g., example.com): " cf_domain
-    while [ -z "$cf_domain" ]; do
-        echo -e "${RED}Domain name is required${NC}"
-        read -p "Enter your domain name: " cf_domain
-    done
-
-    read -p "Enter tunnel subdomain (e.g., fortress): " cf_tunnel_subdomain
-    cf_tunnel_subdomain=${cf_tunnel_subdomain:-fortress}
-
-    echo -e "${GREEN}✓ Cloudflare configuration captured${NC}"
+    echo -e "${GREEN}✓ Cloudflare configuration complete${NC}"
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
@@ -1498,12 +1489,11 @@ LOGTOEOF
         # Save Cloudflare configuration
         cat > /etc/hookprobe/cloudflare.conf << CFEOF
 # Cloudflare Tunnel Configuration
-CF_API_TOKEN="$cf_api_token"
-CF_ACCOUNT_ID="$cf_account_id"
-CF_ZONE_ID="$cf_zone_id"
-CF_DOMAIN="$cf_domain"
-CF_TUNNEL_SUBDOMAIN="$cf_tunnel_subdomain"
-CF_TUNNEL_HOSTNAME="${cf_tunnel_subdomain}.${cf_domain}"
+# Minimum required: TUNNEL_TOKEN
+CF_TUNNEL_TOKEN="$cf_tunnel_token"
+# Optional - for advanced API operations
+CF_TUNNEL_ID="${cf_tunnel_id:-}"
+CF_ACCOUNT_ID="${cf_account_id:-}"
 CFEOF
         chmod 600 /etc/hookprobe/cloudflare.conf
         echo -e "${GREEN}✓ Cloudflare configuration saved${NC}"
