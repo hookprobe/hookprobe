@@ -55,6 +55,13 @@ LOGTO_ENDPOINT=""
 LOGTO_APP_ID=""
 LOGTO_APP_SECRET=""
 
+# MSSP/HTP Configuration
+MSSP_ENDPOINT="${MSSP_ENDPOINT:-mssp.hookprobe.com}"
+MSSP_PORT="${MSSP_PORT:-8443}"
+HTP_NODE_ID=""
+HTP_VALIDATOR_MODE="${HTP_VALIDATOR_MODE:-false}"
+EDGE_MODE="${EDGE_MODE:-standalone}"  # standalone, validator, mssp-connected
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -250,6 +257,12 @@ select_components() {
             ENABLE_MONITORING=false
             ;;
     esac
+
+    # Configure MSSP/HTP for all profiles (Neuro Protocol is always installed)
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        configure_mssp_secrets
+    fi
+
     echo ""
 }
 
@@ -362,6 +375,126 @@ LOGTOEOF
 
     echo ""
     echo -e "${GREEN}Secrets saved to /etc/hookprobe/secrets/${NC}"
+}
+
+configure_mssp_secrets() {
+    # Configure MSSP/HTP tunnel secrets
+    echo ""
+    echo -e "${CYAN}MSSP/HTP Tunnel Configuration${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Configure connection to MSSP (Managed Security Service Provider)"
+    echo ""
+
+    # Edge mode selection
+    echo -e "${YELLOW}Select Edge Mode:${NC}"
+    echo "  1) Standalone  - Edge runs independently (no MSSP connection)"
+    echo "  2) Validator   - Edge validates traffic and reports to MSSP"
+    echo "  3) MSSP-Connected - Full integration with MSSP dashboard"
+    echo ""
+    read -p "Select mode [1-3, default: 1]: " edge_mode_choice
+
+    case "$edge_mode_choice" in
+        2)
+            EDGE_MODE="validator"
+            HTP_VALIDATOR_MODE="true"
+            echo -e "  ${GREEN}[x]${NC} Validator mode selected"
+            ;;
+        3)
+            EDGE_MODE="mssp-connected"
+            HTP_VALIDATOR_MODE="false"
+            echo -e "  ${GREEN}[x]${NC} MSSP-Connected mode selected"
+            ;;
+        *)
+            EDGE_MODE="standalone"
+            HTP_VALIDATOR_MODE="false"
+            echo -e "  ${GREEN}[x]${NC} Standalone mode selected"
+            return 0  # No further config needed
+            ;;
+    esac
+
+    echo ""
+
+    # MSSP endpoint configuration
+    if [ "$EDGE_MODE" != "standalone" ]; then
+        read -p "MSSP Endpoint [default: $MSSP_ENDPOINT]: " mssp_endpoint
+        MSSP_ENDPOINT="${mssp_endpoint:-$MSSP_ENDPOINT}"
+
+        read -p "MSSP Port [default: $MSSP_PORT]: " mssp_port
+        MSSP_PORT="${mssp_port:-$MSSP_PORT}"
+
+        # Generate node ID if not set
+        if [ -z "$HTP_NODE_ID" ]; then
+            HTP_NODE_ID=$(cat /etc/machine-id 2>/dev/null || openssl rand -hex 16)
+        fi
+        read -p "Node ID [default: ${HTP_NODE_ID:0:16}...]: " node_id
+        HTP_NODE_ID="${node_id:-$HTP_NODE_ID}"
+
+        echo ""
+        echo -e "${YELLOW}Saving MSSP/HTP configuration...${NC}"
+
+        # Save MSSP configuration
+        cat > /etc/hookprobe/secrets/mssp.env << MSSPEOF
+MSSP_ENDPOINT=$MSSP_ENDPOINT
+MSSP_PORT=$MSSP_PORT
+HTP_NODE_ID=$HTP_NODE_ID
+EDGE_MODE=$EDGE_MODE
+HTP_VALIDATOR_MODE=$HTP_VALIDATOR_MODE
+MSSPEOF
+        chmod 600 /etc/hookprobe/secrets/mssp.env
+        echo -e "  ${GREEN}[x]${NC} MSSP configuration saved"
+
+        # Generate HTP identity keys (keyless design uses qsecbit, but we store node identity)
+        echo "$HTP_NODE_ID" > /etc/hookprobe/secrets/htp-node-id
+        chmod 600 /etc/hookprobe/secrets/htp-node-id
+        echo -e "  ${GREEN}[x]${NC} HTP node identity saved"
+
+        echo ""
+        echo -e "${GREEN}MSSP configuration complete${NC}"
+    fi
+}
+
+validate_htp_connection() {
+    # Test HTP connection to MSSP
+    echo ""
+    echo -e "${CYAN}Validating HTP Connection to MSSP...${NC}"
+
+    if [ "$EDGE_MODE" = "standalone" ]; then
+        echo -e "  ${YELLOW}[-]${NC} Standalone mode - skipping MSSP validation"
+        return 0
+    fi
+
+    # Check if MSSP endpoint is reachable
+    echo -e "  Testing connectivity to $MSSP_ENDPOINT:$MSSP_PORT..."
+
+    # Try TCP connection first
+    if timeout 5 bash -c "echo >/dev/tcp/$MSSP_ENDPOINT/$MSSP_PORT" 2>/dev/null; then
+        echo -e "  ${GREEN}[x]${NC} MSSP endpoint reachable (TCP)"
+    else
+        # Try UDP (HTP uses UDP)
+        if command -v nc &> /dev/null; then
+            if timeout 5 nc -zu "$MSSP_ENDPOINT" "$MSSP_PORT" 2>/dev/null; then
+                echo -e "  ${GREEN}[x]${NC} MSSP endpoint reachable (UDP)"
+            else
+                echo -e "  ${YELLOW}[!]${NC} MSSP endpoint not reachable"
+                echo "      This may be normal if MSSP uses NAT traversal"
+            fi
+        else
+            echo -e "  ${YELLOW}[!]${NC} Cannot test UDP connectivity (nc not installed)"
+        fi
+    fi
+
+    # DNS resolution check
+    if host "$MSSP_ENDPOINT" &>/dev/null || dig +short "$MSSP_ENDPOINT" &>/dev/null; then
+        local mssp_ip=$(dig +short "$MSSP_ENDPOINT" 2>/dev/null | head -1)
+        echo -e "  ${GREEN}[x]${NC} DNS resolves: $MSSP_ENDPOINT -> ${mssp_ip:-resolved}"
+    else
+        echo -e "  ${YELLOW}[!]${NC} DNS resolution pending (will retry on startup)"
+    fi
+
+    echo ""
+    echo -e "${GREEN}HTP validation complete${NC}"
+    echo "  Note: Full HTP handshake will occur when Neuro Pod starts"
 }
 
 # ============================================================
@@ -1550,11 +1683,36 @@ deploy_neuro_pod() {
 
     local network_arg=$(get_network_arg "neuro")
 
-    podman pod create \
-        --name hookprobe-neuro \
-        $network_arg
+    # Load MSSP configuration if available
+    local mssp_env=""
+    if [ -f /etc/hookprobe/secrets/mssp.env ]; then
+        source /etc/hookprobe/secrets/mssp.env
+        mssp_env="-e MSSP_ENDPOINT=$MSSP_ENDPOINT -e MSSP_PORT=$MSSP_PORT -e HTP_NODE_ID=$HTP_NODE_ID -e EDGE_MODE=$EDGE_MODE -e HTP_VALIDATOR_MODE=$HTP_VALIDATOR_MODE"
+    fi
 
-    # Qsecbit container
+    # With host network for HTP UDP connectivity
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        podman pod create \
+            --name hookprobe-neuro \
+            $network_arg
+    else
+        podman pod create \
+            --name hookprobe-neuro \
+            $network_arg \
+            --publish 8443:8443/udp
+    fi
+
+    # Create neuro working directory
+    mkdir -p /opt/hookprobe/neuro
+
+    # Copy neuro source if available
+    if [ -d "$REPO_ROOT/src/neuro" ]; then
+        cp -r "$REPO_ROOT/src/neuro" /opt/hookprobe/
+        cp -r "$REPO_ROOT/src/qsecbit" /opt/hookprobe/ 2>/dev/null || true
+        echo "  Neuro source code installed"
+    fi
+
+    # Qsecbit + HTP container
     podman run -d \
         --pod hookprobe-neuro \
         --name hookprobe-neuro-qsecbit \
@@ -1565,12 +1723,59 @@ deploy_neuro_pod() {
         --health-timeout 5s \
         --health-retries 3 \
         --health-start-period 60s \
+        -v /opt/hookprobe/neuro:/app/neuro:ro \
+        -v /opt/hookprobe/qsecbit:/app/qsecbit:ro \
+        -v /etc/hookprobe/secrets:/secrets:ro \
         -e QSECBIT_MODE="quantum-resistant" \
         -e HTP_ENABLED="true" \
+        -e PYTHONPATH="/app" \
+        $mssp_env \
         docker.io/library/python:3.11-slim \
-        bash -c "pip install numpy && python -c 'import time; print(\"Qsecbit running...\"); time.sleep(999999)'"
+        bash -c '
+            pip install --quiet numpy cryptography blake3 2>/dev/null || pip install --quiet numpy
+            cd /app
+            echo "HookProbe Neuro Protocol starting..."
+            echo "  Mode: ${EDGE_MODE:-standalone}"
+            echo "  MSSP: ${MSSP_ENDPOINT:-not configured}"
+            echo "  Node ID: ${HTP_NODE_ID:-auto-generated}"
+
+            # Test HTP module import
+            if python -c "from neuro.transport.htp import HookProbeTransport; print(\"HTP module loaded\")" 2>/dev/null; then
+                echo "  HTP: Available"
+                # Start HTP service
+                python -c "
+from neuro.transport.htp import HookProbeTransport
+import os, time
+
+node_id = os.environ.get(\"HTP_NODE_ID\", \"edge-node\")
+mssp_endpoint = os.environ.get(\"MSSP_ENDPOINT\", \"\")
+mssp_port = int(os.environ.get(\"MSSP_PORT\", \"8443\"))
+edge_mode = os.environ.get(\"EDGE_MODE\", \"standalone\")
+
+print(f\"Starting HTP Transport: {node_id}\")
+transport = HookProbeTransport(node_id=node_id, listen_port=8443)
+transport.start()
+
+if edge_mode != \"standalone\" and mssp_endpoint:
+    print(f\"Connecting to MSSP: {mssp_endpoint}:{mssp_port}\")
+    # HTP uses UDP hole punching, connection is established on first packet
+
+print(\"Neuro Protocol running...\")
+while True:
+    time.sleep(60)
+" 2>&1 || echo "HTP standalone mode"
+            else
+                echo "  HTP: Using fallback mode"
+                python -c "import time; print(\"Qsecbit fallback running...\"); [time.sleep(60) for _ in iter(int, 1)]"
+            fi
+        '
 
     echo -e "${GREEN}✓${NC} POD-010 deployed"
+
+    # Validate HTP connection if not standalone
+    if [ "$EDGE_MODE" != "standalone" ]; then
+        validate_htp_connection
+    fi
 }
 
 deploy_monitoring_pod() {
