@@ -1015,25 +1015,44 @@ MONITOREOF
     echo -e "  ${GREEN}[x]${NC} Monitor tool: hookprobe-vxlan-monitor"
 }
 
+cleanup_old_cni_configs() {
+    # Remove old CNI configs that might cause warnings
+    local cni_dir="/etc/cni/net.d"
+    if [ -d "$cni_dir" ]; then
+        echo "  Cleaning up old CNI configs..."
+        rm -f "$cni_dir"/web-net.conflist 2>/dev/null || true
+        rm -f "$cni_dir"/database-net.conflist 2>/dev/null || true
+        rm -f "$cni_dir"/cache-net.conflist 2>/dev/null || true
+        rm -f "$cni_dir"/iam-net.conflist 2>/dev/null || true
+        rm -f "$cni_dir"/neuro-net.conflist 2>/dev/null || true
+        rm -f "$cni_dir"/hookprobe-*.conflist 2>/dev/null || true
+    fi
+    # Also remove podman networks
+    podman network rm hookprobe-web hookprobe-database hookprobe-cache hookprobe-iam hookprobe-neuro 2>/dev/null || true
+    podman network rm web-net database-net cache-net iam-net neuro-net 2>/dev/null || true
+}
+
 create_networks() {
-    echo "Creating Podman networks on OVS bridge..."
+    echo "Creating Podman networks..."
 
-    # Check if running in LXC container
+    # Check if running in LXC container - force host network mode
     if detect_container_environment; then
-        echo -e "${YELLOW}⚠ LXC/LXD container detected${NC}"
-        echo "  Custom Podman networks may not work in LXC containers."
+        echo -e "${YELLOW}[!] LXC/LXD container detected${NC}"
+        echo "  CNI networking has compatibility issues in LXC containers."
+        echo "  (firewall plugin does not support CNI config version 1.0.0)"
         echo ""
+        # Clean up any old CNI configs that could cause warnings
+        cleanup_old_cni_configs
+        echo -e "${GREEN}[x]${NC} Using host network mode for LXC compatibility"
+        USE_HOST_NETWORK=true
+        return 0
+    fi
 
-        # Check and upgrade CNI if needed
-        check_and_upgrade_cni
-
-        if [ "$USE_HOST_NETWORK" = true ]; then
-            echo -e "${YELLOW}⚠ Using host network mode due to CNI/container limitations${NC}"
-            return 0
-        fi
-
-        echo ""
-        echo "  Attempting network creation..."
+    # Skip network creation if using host network
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        echo -e "${GREEN}[x]${NC} Using host network mode - skipping custom network creation"
+        cleanup_old_cni_configs
+        return 0
     fi
 
     # Remove existing networks if present
