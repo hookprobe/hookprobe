@@ -254,16 +254,57 @@ calculate_memory_limits() {
     #   POD_MEMORY_CACHE
     #   POD_MEMORY_NEURO
     #   POD_MEMORY_IAM
-    #   MEMORY_PROFILE (Lightweight/Moderate/Full)
+    #   POD_MEMORY_SENTINEL
+    #   MEMORY_PROFILE (Ultra/Lightweight/Moderate/Full)
 
-    if [ "$TOTAL_RAM_GB" -le 4 ]; then
-        # Ultra-lightweight for 4GB systems (Raspberry Pi 4B)
+    # Calculate total RAM in MB for finer granularity
+    local ram_mb=$((TOTAL_RAM_GB * 1024))
+    if [ -f /proc/meminfo ]; then
+        ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+    fi
+
+    if [ "$ram_mb" -le 512 ]; then
+        # Ultra-constrained for 512MB systems (Pi Zero, Pico-class)
+        # Only sentinel-lite supported - no PODs
+        export POD_MEMORY_WEB="0"
+        export POD_MEMORY_DATABASE="0"
+        export POD_MEMORY_CACHE="0"
+        export POD_MEMORY_NEURO="0"
+        export POD_MEMORY_IAM="0"
+        export POD_MEMORY_SENTINEL="128M"
+        export MEMORY_PROFILE="Ultra"
+
+    elif [ "$ram_mb" -le 1024 ]; then
+        # Ultra-lightweight for 1GB systems (Raspberry Pi 3, Pi Zero 2)
+        # Sentinel-lite only, no full POD support
+        export POD_MEMORY_WEB="0"
+        export POD_MEMORY_DATABASE="0"
+        export POD_MEMORY_CACHE="0"
+        export POD_MEMORY_NEURO="0"
+        export POD_MEMORY_IAM="0"
+        export POD_MEMORY_SENTINEL="192M"
+        export MEMORY_PROFILE="Ultra"
+
+    elif [ "$ram_mb" -le 2048 ]; then
+        # Minimal for 2GB systems (Pi 3B+, low-end ARM)
+        # Supports sentinel + minimal edge, no AI/monitoring
+        export POD_MEMORY_WEB="256M"
+        export POD_MEMORY_DATABASE="256M"
+        export POD_MEMORY_CACHE="64M"
+        export POD_MEMORY_NEURO="256M"
+        export POD_MEMORY_IAM="128M"
+        export POD_MEMORY_SENTINEL="256M"
+        export MEMORY_PROFILE="Minimal"
+
+    elif [ "$TOTAL_RAM_GB" -le 4 ]; then
+        # Lightweight for 4GB systems (Raspberry Pi 4B)
         # Total POD usage: ~1.75GB, leaves ~2.25GB for OS/buffers
         export POD_MEMORY_WEB="512M"
         export POD_MEMORY_DATABASE="512M"
         export POD_MEMORY_CACHE="128M"
         export POD_MEMORY_NEURO="384M"
         export POD_MEMORY_IAM="256M"
+        export POD_MEMORY_SENTINEL="256M"
         export MEMORY_PROFILE="Lightweight"
 
     elif [ "$TOTAL_RAM_GB" -le 8 ]; then
@@ -273,6 +314,7 @@ calculate_memory_limits() {
         export POD_MEMORY_CACHE="512M"
         export POD_MEMORY_NEURO="1024M"
         export POD_MEMORY_IAM="512M"
+        export POD_MEMORY_SENTINEL="512M"
         export MEMORY_PROFILE="Moderate"
 
     else
@@ -282,7 +324,45 @@ calculate_memory_limits() {
         export POD_MEMORY_CACHE="1024M"
         export POD_MEMORY_NEURO="1024M"
         export POD_MEMORY_IAM="512M"
+        export POD_MEMORY_SENTINEL="512M"
         export MEMORY_PROFILE="Full"
+    fi
+}
+
+get_sentinel_memory_limit() {
+    # Get appropriate memory limit for sentinel based on available RAM
+    #
+    # Args:
+    #   $1 - mode: "lite" for sentinel-lite, "full" for containerized sentinel
+    #
+    # Outputs:
+    #   Memory limit in MB
+
+    local mode=${1:-"lite"}
+
+    # Get available RAM in MB
+    local ram_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "512")
+
+    if [ "$mode" = "lite" ]; then
+        # Sentinel Lite (native, no container)
+        if [ "$ram_mb" -le 384 ]; then
+            echo "128"    # Ultra-constrained: 128MB
+        elif [ "$ram_mb" -le 768 ]; then
+            echo "192"    # Constrained: 192MB
+        elif [ "$ram_mb" -le 1536 ]; then
+            echo "256"    # Low: 256MB
+        else
+            echo "384"    # Standard: 384MB
+        fi
+    else
+        # Full Sentinel (containerized)
+        if [ "$ram_mb" -le 1024 ]; then
+            echo "256"    # Minimal container
+        elif [ "$ram_mb" -le 2048 ]; then
+            echo "384"    # Low container
+        else
+            echo "512"    # Standard container
+        fi
     fi
 }
 
