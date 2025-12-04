@@ -491,6 +491,9 @@ detect_container_runtime() {
 
 # Run all detection functions
 detect_capabilities() {
+    # Disable exit on error for detection (many commands may fail on different systems)
+    set +e
+
     detect_os
     detect_architecture
     detect_kernel
@@ -506,6 +509,9 @@ detect_capabilities() {
     detect_gpu
     detect_container_runtime
     evaluate_deployment_tiers
+
+    # Re-enable exit on error
+    set -e
 }
 
 # ============================================================
@@ -1569,11 +1575,13 @@ main() {
     echo "HookProbe Installer v6.2 starting..." >&2
 
     check_root
+    echo "Root check passed..." >&2
 
     # Parse CLI arguments
     if [ $# -gt 0 ]; then
         case "$1" in
             --check)
+                echo "Running capability check..." >&2
                 detect_capabilities
                 show_capability_summary
                 exit 0
@@ -1596,7 +1604,9 @@ main() {
     fi
 
     # Interactive mode
-    detect_capabilities
+    echo "Detecting capabilities..." >&2
+    detect_capabilities || { echo "Capability detection failed" >&2; }
+    echo "Starting interactive mode..." >&2
 
     while true; do
         safe_clear
