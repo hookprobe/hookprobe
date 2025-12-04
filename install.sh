@@ -1017,8 +1017,8 @@ install_sentinel() {
     echo ""
     echo -e "${YELLOW}Network Requirements:${NC}"
     echo "  • Internet connectivity to MSSP backend"
-    echo "  • Outbound HTTPS (port 443)"
-    echo "  • No offline mode supported"
+    echo "  • Outbound HTP (port 8443) - HookProbe Transport Protocol"
+    echo "  • Health endpoint on port 9090 (HTTP)"
     echo ""
 
     read -p "Proceed with Sentinel installation? (yes/no) [no]: " confirm
