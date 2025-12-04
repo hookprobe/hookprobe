@@ -922,23 +922,77 @@ generate_vxlan_psk() {
 setup_ovs_bridge() {
     echo "Setting up OVS bridge '$OVS_BRIDGE_NAME' with VXLAN networking..."
 
-    # Check if OVS is installed
-    if ! command -v ovs-vsctl &> /dev/null; then
-        echo "  Installing Open vSwitch..."
-        if command -v apt-get &> /dev/null; then
-            apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
-        elif command -v dnf &> /dev/null; then
-            dnf install -y openvswitch 2>/dev/null
-        elif command -v yum &> /dev/null; then
-            yum install -y openvswitch 2>/dev/null
+    # Check if running in LXC container - OVS kernel modules can't be loaded
+    if detect_container_environment; then
+        echo -e "  ${YELLOW}[!]${NC} LXC container detected"
+        echo "  OVS kernel modules cannot be built/loaded in LXC containers."
+        echo "  (openvswitch-datapath-dkms requires host kernel access)"
+        echo ""
+
+        # Check if OVS kernel module is available from host
+        if lsmod | grep -q openvswitch 2>/dev/null; then
+            echo -e "  ${GREEN}[x]${NC} OVS kernel module available from host"
+        else
+            echo -e "  ${YELLOW}[!]${NC} OVS kernel module not loaded on host"
+            echo "  To use OVS in LXC, load the module on the Proxmox host:"
+            echo "    modprobe openvswitch"
+            echo "    echo 'openvswitch' >> /etc/modules"
+            echo ""
+            echo -e "  ${GREEN}[x]${NC} Using host network mode instead (recommended for LXC)"
+            USE_OVS_BRIDGE=false
+            USE_HOST_NETWORK=true
+            return 0
         fi
     fi
 
-    # If OVS still not available, fall back to Linux bridge
+    # Check if OVS is installed
     if ! command -v ovs-vsctl &> /dev/null; then
-        echo -e "${YELLOW}⚠ OVS not available, using standard bridge mode${NC}"
+        echo "  Installing Open vSwitch..."
+
+        # In LXC, only install userspace tools (not dkms)
+        if detect_container_environment; then
+            if command -v apt-get &> /dev/null; then
+                # Install only userspace components, skip dkms
+                apt-get update -qq
+                apt-get install -y --no-install-recommends openvswitch-switch openvswitch-common 2>/dev/null || {
+                    echo -e "  ${YELLOW}[!]${NC} OVS installation failed in LXC"
+                    USE_OVS_BRIDGE=false
+                    USE_HOST_NETWORK=true
+                    return 0
+                }
+            fi
+        else
+            # Normal installation (non-LXC)
+            if command -v apt-get &> /dev/null; then
+                apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
+            elif command -v dnf &> /dev/null; then
+                dnf install -y openvswitch 2>/dev/null
+            elif command -v yum &> /dev/null; then
+                yum install -y openvswitch 2>/dev/null
+            fi
+        fi
+    fi
+
+    # If OVS still not available, fall back to host networking
+    if ! command -v ovs-vsctl &> /dev/null; then
+        echo -e "${YELLOW}[!]${NC} OVS not available, using host network mode"
         USE_OVS_BRIDGE=false
+        USE_HOST_NETWORK=true
         return 0
+    fi
+
+    # Check if OVS kernel module is loaded
+    if ! lsmod | grep -q openvswitch 2>/dev/null; then
+        # Try to load it (will fail in LXC)
+        modprobe openvswitch 2>/dev/null || {
+            if detect_container_environment; then
+                echo -e "  ${YELLOW}[!]${NC} Cannot load OVS module in LXC container"
+                echo "  Load 'openvswitch' module on Proxmox host, or use host networking"
+                USE_OVS_BRIDGE=false
+                USE_HOST_NETWORK=true
+                return 0
+            fi
+        }
     fi
 
     USE_OVS_BRIDGE=true
