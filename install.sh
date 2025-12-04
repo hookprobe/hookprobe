@@ -86,6 +86,12 @@ declare -g SYS_WIFI_2GHZ=false
 declare -g SYS_LTE_COUNT=0
 declare -g SYS_LTE_INTERFACES=""
 declare -g SYS_BRIDGE_COUNT=0
+declare -g SYS_BRIDGES=""
+declare -g SYS_WIFI_BRIDGE_COUNT=0
+declare -g SYS_WIFI_BRIDGES=""
+declare -g SYS_WAN_INTERFACE=""
+declare -g SYS_WAN_GATEWAY=""
+declare -g SYS_HOOKPROBE_BRIDGE=""
 declare -g SYS_DEFAULT_ROUTE=""
 declare -g SYS_HAS_INTERNET=false
 
@@ -266,9 +272,13 @@ detect_network_interfaces() {
     SYS_WIFI_COUNT=0
     SYS_LTE_COUNT=0
     SYS_BRIDGE_COUNT=0
+    SYS_WIFI_BRIDGE_COUNT=0
     SYS_ETH_INTERFACES=""
     SYS_WIFI_INTERFACES=""
     SYS_LTE_INTERFACES=""
+    SYS_BRIDGES=""
+    SYS_WIFI_BRIDGES=""
+    SYS_HOOKPROBE_BRIDGE=""
 
     for iface in /sys/class/net/*; do
         local name=$(basename "$iface")
@@ -279,9 +289,21 @@ detect_network_interfaces() {
             local wireless_dir="$iface/wireless"
             local operstate=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
 
-            # Check for bridge
+            # Check for bridge interfaces
             if [ -d "$iface/bridge" ]; then
                 SYS_BRIDGE_COUNT=$((SYS_BRIDGE_COUNT + 1))
+                SYS_BRIDGES="${SYS_BRIDGES}${name}:${operstate} "
+
+                # Check if it's a WiFi/AP bridge (ap*, wifi-br*, wlan-br*, hostap*)
+                if echo "$name" | grep -qiE "^(ap[0-9]|wifi[-_]?br|wlan[-_]?br|hostap|wap)"; then
+                    SYS_WIFI_BRIDGE_COUNT=$((SYS_WIFI_BRIDGE_COUNT + 1))
+                    SYS_WIFI_BRIDGES="${SYS_WIFI_BRIDGES}${name}:${operstate} "
+                fi
+
+                # Check for HookProbe bridge specifically
+                if echo "$name" | grep -qiE "^(hookprobe|hpbr|hp[-_]?br)"; then
+                    SYS_HOOKPROBE_BRIDGE="$name"
+                fi
                 continue
             fi
 
@@ -331,12 +353,31 @@ detect_network_interfaces() {
 detect_internet_connectivity() {
     SYS_HAS_INTERNET=false
     SYS_DEFAULT_ROUTE=""
+    SYS_WAN_INTERFACE=""
+    SYS_WAN_GATEWAY=""
 
-    # Get default route
-    SYS_DEFAULT_ROUTE=$(ip route show default 2>/dev/null | head -1 | awk '{print $3}')
+    # Detect WAN interface and gateway using ip route get (most reliable method)
+    # This shows the actual interface used to reach the internet
+    local route_info=$(ip route get 1.1.1.1 2>/dev/null)
+    if [ -n "$route_info" ]; then
+        # Extract WAN interface (dev <interface>)
+        SYS_WAN_INTERFACE=$(echo "$route_info" | grep -oP 'dev \K\S+' | head -1)
+        # Extract gateway (via <gateway>)
+        SYS_WAN_GATEWAY=$(echo "$route_info" | grep -oP 'via \K\S+' | head -1)
+    fi
+
+    # Fallback: Get default route from routing table if ip route get failed
+    if [ -z "$SYS_WAN_INTERFACE" ]; then
+        local default_route=$(ip route show default 2>/dev/null | head -1)
+        SYS_DEFAULT_ROUTE=$(echo "$default_route" | awk '{print $3}')
+        SYS_WAN_INTERFACE=$(echo "$default_route" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+        SYS_WAN_GATEWAY="$SYS_DEFAULT_ROUTE"
+    else
+        SYS_DEFAULT_ROUTE="$SYS_WAN_GATEWAY"
+    fi
 
     # Quick connectivity check (timeout 3 seconds)
-    if [ -n "$SYS_DEFAULT_ROUTE" ]; then
+    if [ -n "$SYS_WAN_INTERFACE" ] || [ -n "$SYS_DEFAULT_ROUTE" ]; then
         if ping -c 1 -W 3 8.8.8.8 &>/dev/null || ping -c 1 -W 3 1.1.1.1 &>/dev/null; then
             SYS_HAS_INTERNET=true
         fi
@@ -553,12 +594,17 @@ evaluate_deployment_tiers() {
     #   - Storage: 16GB - 64GB+
     #   - Network: 2+ interfaces (2 eth OR 1 eth + 1 wifi)
     #   - Internet: Required (MSSP connectivity)
+    #   - Bridge: HookProbe bridge required for WiFi deployments
     # Features: QSecBit, OpenFlow, WAF, IDS/IPS, Lite AI
     # Platforms: Raspberry Pi 4/5, Radxa, Banana Pi, etc.
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if [ "$SYS_RAM_MB" -ge 3072 ] && [ "$SYS_STORAGE_GB" -ge 16 ]; then
         # Need at least 2 network interfaces for WAN + LAN
         if [ "$SYS_ETH_COUNT" -ge 2 ] || ([ "$SYS_ETH_COUNT" -ge 1 ] && [ "$SYS_WIFI_COUNT" -ge 1 ]); then
+            CAN_GUARDIAN=true
+        fi
+        # Also allow if we have WiFi bridges that can be controlled
+        if [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ] && [ "$SYS_ETH_COUNT" -ge 1 ]; then
             CAN_GUARDIAN=true
         fi
     fi
@@ -571,13 +617,19 @@ evaluate_deployment_tiers() {
     #   - RAM: 8GB+
     #   - Storage: 32GB+
     #   - Network: 2+ ethernet ports (optional LTE/5G)
+    #   - Bridge: HookProbe bridge mandatory for traffic routing
     #   - Kernel: 5.x+ recommended
     # Features: All Guardian + Victoria Metrics, Grafana,
     #           n8n automation, web dashboard, local AI
     # Platforms: Intel N100, NUC, mini PCs, small servers
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 32 ]; then
+        # Primary: 2+ ethernet ports
         if [ "$SYS_ETH_COUNT" -ge 2 ]; then
+            CAN_FORTRESS=true
+        fi
+        # Alternative: 1 eth + WiFi bridges with HookProbe bridge for traffic control
+        if [ "$SYS_ETH_COUNT" -ge 1 ] && [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ]; then
             CAN_FORTRESS=true
         fi
     fi
@@ -599,6 +651,108 @@ evaluate_deployment_tiers() {
     if [ "$SYS_CPU_CORES" -ge 8 ] && [ "$SYS_RAM_MB" -ge 65536 ] && [ "$SYS_STORAGE_GB" -ge 1000 ]; then
         CAN_NEXUS=true
     fi
+}
+
+# ============================================================
+# NETWORK CONFIGURATION HELPERS
+# ============================================================
+
+# Configure HookProbe bridge with route metrics for traffic control
+# This is called during Guardian/Fortress installation when WiFi bridges are present
+configure_hookprobe_bridge() {
+    local bridge_name="${1:-hpbr0}"
+    local metric="${2:-100}"
+
+    echo -e "${CYAN}Configuring HookProbe bridge...${NC}"
+
+    # Check if bridge-utils is available
+    if ! command -v brctl &>/dev/null && ! command -v ip &>/dev/null; then
+        echo -e "${YELLOW}Installing bridge-utils...${NC}"
+        apt-get install -y bridge-utils iproute2 2>/dev/null || \
+        yum install -y bridge-utils iproute2 2>/dev/null
+    fi
+
+    # Create HookProbe bridge if it doesn't exist
+    if ! ip link show "$bridge_name" &>/dev/null; then
+        ip link add name "$bridge_name" type bridge
+        ip link set "$bridge_name" up
+        echo -e "${GREEN}✓ Created bridge: $bridge_name${NC}"
+    else
+        echo -e "${GREEN}✓ Bridge exists: $bridge_name${NC}"
+    fi
+
+    # Configure route metric for traffic prioritization
+    # Lower metric = higher priority
+    if [ -n "$SYS_WAN_INTERFACE" ] && [ -n "$SYS_WAN_GATEWAY" ]; then
+        # Remove existing default route and re-add with metric
+        ip route del default via "$SYS_WAN_GATEWAY" dev "$SYS_WAN_INTERFACE" 2>/dev/null || true
+        ip route add default via "$SYS_WAN_GATEWAY" dev "$SYS_WAN_INTERFACE" metric 200
+        echo -e "${GREEN}✓ WAN route configured: metric 200 (lower priority)${NC}"
+
+        # Add bridge route with higher priority (lower metric number)
+        ip route add default via "$SYS_WAN_GATEWAY" dev "$bridge_name" metric "$metric" 2>/dev/null || true
+        echo -e "${GREEN}✓ Bridge route configured: metric $metric (higher priority)${NC}"
+    fi
+
+    # Save configuration for persistence
+    mkdir -p /etc/hookprobe/network
+    cat > /etc/hookprobe/network/bridge.conf << BRIDGEEOF
+# HookProbe Bridge Configuration
+HOOKPROBE_BRIDGE="$bridge_name"
+BRIDGE_METRIC=$metric
+WAN_INTERFACE="$SYS_WAN_INTERFACE"
+WAN_GATEWAY="$SYS_WAN_GATEWAY"
+WIFI_BRIDGES="$SYS_WIFI_BRIDGES"
+BRIDGEEOF
+    chmod 644 /etc/hookprobe/network/bridge.conf
+    echo -e "${GREEN}✓ Bridge configuration saved${NC}"
+
+    # Update global variable
+    SYS_HOOKPROBE_BRIDGE="$bridge_name"
+}
+
+# Display detected network topology
+show_network_topology() {
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                    NETWORK TOPOLOGY                           ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # WAN
+    if [ -n "$SYS_WAN_INTERFACE" ]; then
+        echo -e "  ${GREEN}[WAN]${NC} ─── $SYS_WAN_INTERFACE ─── Gateway: $SYS_WAN_GATEWAY"
+    fi
+
+    # Bridges
+    if [ "$SYS_BRIDGE_COUNT" -gt 0 ]; then
+        echo "     │"
+        for br in $SYS_BRIDGES; do
+            br_name="${br%%:*}"
+            echo -e "     ├── ${CYAN}[BR]${NC} $br_name"
+        done
+    fi
+
+    # Ethernet
+    if [ "$SYS_ETH_COUNT" -gt 0 ]; then
+        echo "     │"
+        for eth in $SYS_ETH_INTERFACES; do
+            eth_name="${eth%%:*}"
+            [ "$eth_name" = "$SYS_WAN_INTERFACE" ] && continue
+            echo -e "     ├── ${BLUE}[ETH]${NC} $eth_name"
+        done
+    fi
+
+    # WiFi
+    if [ "$SYS_WIFI_COUNT" -gt 0 ]; then
+        echo "     │"
+        for wifi in $SYS_WIFI_INTERFACES; do
+            wifi_name="${wifi%%:*}"
+            echo -e "     └── ${YELLOW}[WiFi]${NC} $wifi_name"
+        done
+    fi
+
+    echo ""
 }
 
 # ============================================================
@@ -748,6 +902,21 @@ show_capability_summary() {
         print_ok "LTE/5G: $SYS_LTE_COUNT interface(s) [$SYS_LTE_INTERFACES]"
     fi
 
+    # Bridge Interfaces
+    if [ "$SYS_BRIDGE_COUNT" -gt 0 ]; then
+        echo ""
+        print_section "Network Bridges"
+        print_ok "Bridges: $SYS_BRIDGE_COUNT [$SYS_BRIDGES]"
+        if [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ]; then
+            print_ok "WiFi/AP Bridges: $SYS_WIFI_BRIDGE_COUNT [$SYS_WIFI_BRIDGES]"
+        fi
+        if [ -n "$SYS_HOOKPROBE_BRIDGE" ]; then
+            print_ok "HookProbe Bridge: $SYS_HOOKPROBE_BRIDGE (configured)"
+        else
+            print_info "HookProbe Bridge: Not configured"
+        fi
+    fi
+
     # WiFi Capabilities
     if [ "$SYS_WIFI_COUNT" -gt 0 ]; then
         echo ""
@@ -761,11 +930,17 @@ show_capability_summary() {
         fi
     fi
 
-    # Internet Connectivity
+    # Internet Connectivity / WAN Detection
     echo ""
-    print_section "Connectivity"
+    print_section "WAN / Connectivity"
+    if [ -n "$SYS_WAN_INTERFACE" ]; then
+        print_ok "WAN Interface: $SYS_WAN_INTERFACE"
+    fi
+    if [ -n "$SYS_WAN_GATEWAY" ]; then
+        print_ok "Gateway: $SYS_WAN_GATEWAY"
+    fi
     if [ "$SYS_HAS_INTERNET" = true ]; then
-        print_ok "Internet: Connected (gateway: $SYS_DEFAULT_ROUTE)"
+        print_ok "Internet: Connected"
     else
         print_warn "Internet: Not detected or unreachable"
     fi
@@ -1057,10 +1232,25 @@ install_guardian() {
     echo "  • Container runtime (Podman)"
     echo ""
     echo -e "${YELLOW}Network Configuration:${NC}"
-    echo "  • WAN: Internet uplink (DHCP or static)"
+    if [ -n "$SYS_WAN_INTERFACE" ]; then
+        echo "  • WAN Interface: $SYS_WAN_INTERFACE (detected)"
+    else
+        echo "  • WAN: Internet uplink (DHCP or static)"
+    fi
     echo "  • LAN: Protected network"
     if [ "$SYS_WIFI_HOTSPOT" = true ]; then
         echo "  • WiFi: Hotspot available for LAN clients"
+    fi
+    if [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ]; then
+        echo ""
+        echo -e "${CYAN}Bridge Configuration (WiFi deployment detected):${NC}"
+        echo "  • WiFi Bridges: $SYS_WIFI_BRIDGES"
+        if [ -n "$SYS_HOOKPROBE_BRIDGE" ]; then
+            echo -e "  • HookProbe Bridge: ${GREEN}$SYS_HOOKPROBE_BRIDGE (configured)${NC}"
+        else
+            echo -e "  • HookProbe Bridge: ${YELLOW}Will be created during install${NC}"
+        fi
+        echo "  • Route metric: 100 (HookProbe bridge priority)"
     fi
     echo ""
 
@@ -1150,6 +1340,28 @@ install_fortress() {
     echo -e "${YELLOW}Resource Usage:${NC}"
     echo "  • RAM: ~4-6GB under normal operation"
     echo "  • Storage: ~20GB for containers and data"
+    echo ""
+    echo -e "${YELLOW}Network Configuration:${NC}"
+    if [ -n "$SYS_WAN_INTERFACE" ]; then
+        echo "  • WAN Interface: $SYS_WAN_INTERFACE (detected)"
+    else
+        echo "  • WAN: Internet uplink"
+    fi
+    echo "  • LAN: Protected network(s)"
+    if [ "$SYS_BRIDGE_COUNT" -gt 0 ]; then
+        echo ""
+        echo -e "${CYAN}Bridge Configuration:${NC}"
+        echo "  • Detected Bridges: $SYS_BRIDGES"
+        if [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ]; then
+            echo "  • WiFi Bridges: $SYS_WIFI_BRIDGES"
+        fi
+        if [ -n "$SYS_HOOKPROBE_BRIDGE" ]; then
+            echo -e "  • HookProbe Bridge: ${GREEN}$SYS_HOOKPROBE_BRIDGE (active)${NC}"
+        else
+            echo -e "  • HookProbe Bridge: ${YELLOW}Required - will be configured${NC}"
+        fi
+        echo "  • Route metrics will be configured for traffic control"
+    fi
     echo ""
 
     # Optional features
