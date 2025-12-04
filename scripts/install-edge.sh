@@ -735,6 +735,30 @@ install_dependencies() {
         fi
     fi
 
+    # Detect LXC environment and configure podman accordingly
+    if detect_container_environment; then
+        echo ""
+        echo -e "${CYAN}LXC container environment detected${NC}"
+
+        # Check if unprivileged
+        detect_lxc_unprivileged
+
+        if [ "$IS_LXC_UNPRIVILEGED" = true ]; then
+            echo -e "  ${YELLOW}[!]${NC} Running in unprivileged mode"
+        else
+            echo -e "  ${GREEN}[x]${NC} Running in privileged mode"
+        fi
+
+        # Configure podman for LXC compatibility
+        configure_podman_for_lxc
+
+        # Show guidance
+        show_proxmox_lxc_guidance
+
+        # Force host network in LXC
+        USE_HOST_NETWORK=true
+    fi
+
     # Install Git if not present
     if ! command -v git &> /dev/null; then
         echo "Installing Git..."
@@ -763,6 +787,11 @@ install_dependencies() {
 # and to allow inter-container communication without complex routing
 USE_HOST_NETWORK=true
 
+# Global flags for LXC environment
+IS_LXC_CONTAINER=false
+IS_LXC_UNPRIVILEGED=false
+USE_VFS_STORAGE=false
+
 detect_container_environment() {
     # Detect if running inside LXC/LXD container
     if [ -f /proc/1/environ ] && grep -qa "container=lxc" /proc/1/environ 2>/dev/null; then
@@ -775,6 +804,214 @@ detect_container_environment() {
         return 0  # LXC detected
     fi
     return 1  # Not in LXC
+}
+
+detect_lxc_unprivileged() {
+    # Detect if running in unprivileged LXC container
+    # Unprivileged containers have limited capabilities and UID mapping
+
+    if ! detect_container_environment; then
+        return 1  # Not in LXC at all
+    fi
+
+    IS_LXC_CONTAINER=true
+
+    # Check 1: UID mapping - unprivileged containers map root to non-zero UID
+    if [ -f /proc/self/uid_map ]; then
+        local uid_map=$(cat /proc/self/uid_map 2>/dev/null)
+        # In unprivileged: "0 100000 65536" (root maps to 100000+)
+        # In privileged: "0 0 4294967295" (root maps to root)
+        if echo "$uid_map" | grep -qE '^\s*0\s+[1-9][0-9]+'; then
+            IS_LXC_UNPRIVILEGED=true
+            return 0
+        fi
+    fi
+
+    # Check 2: Can't access certain privileged operations
+    if ! capsh --print 2>/dev/null | grep -q "cap_sys_admin"; then
+        # Missing CAP_SYS_ADMIN typically means unprivileged
+        IS_LXC_UNPRIVILEGED=true
+        return 0
+    fi
+
+    # Check 3: Check if we can create network namespaces
+    if ! unshare --net true 2>/dev/null; then
+        IS_LXC_UNPRIVILEGED=true
+        return 0
+    fi
+
+    # Check 4: AppArmor restrictions - common in Proxmox unprivileged LXC
+    if [ -f /sys/kernel/security/apparmor/profiles ]; then
+        if grep -q "lxc-container-default" /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+            # Running under restricted AppArmor profile
+            IS_LXC_UNPRIVILEGED=true
+            return 0
+        fi
+    fi
+
+    return 1  # Privileged LXC
+}
+
+configure_podman_for_lxc() {
+    # Configure podman to work in LXC containers (especially unprivileged)
+    echo "Configuring Podman for LXC environment..."
+
+    local podman_conf_dir="/etc/containers"
+    local storage_conf="$podman_conf_dir/storage.conf"
+    local containers_conf="$podman_conf_dir/containers.conf"
+
+    mkdir -p "$podman_conf_dir"
+
+    # Detect if overlay works
+    local use_overlay=true
+    if [ "$IS_LXC_UNPRIVILEGED" = true ]; then
+        # Test if overlay is available
+        if ! grep -q "overlay" /proc/filesystems 2>/dev/null; then
+            use_overlay=false
+            USE_VFS_STORAGE=true
+            echo -e "  ${YELLOW}[!]${NC} Overlay filesystem not available"
+        fi
+
+        # Even if overlay is in /proc/filesystems, it may not work in unprivileged
+        # Test by trying to mount
+        if [ "$use_overlay" = true ]; then
+            local test_dir=$(mktemp -d)
+            mkdir -p "$test_dir/lower" "$test_dir/upper" "$test_dir/work" "$test_dir/merged"
+            if ! mount -t overlay overlay -o "lowerdir=$test_dir/lower,upperdir=$test_dir/upper,workdir=$test_dir/work" "$test_dir/merged" 2>/dev/null; then
+                use_overlay=false
+                USE_VFS_STORAGE=true
+                echo -e "  ${YELLOW}[!]${NC} Overlay mount not permitted"
+            else
+                umount "$test_dir/merged" 2>/dev/null || true
+            fi
+            rm -rf "$test_dir"
+        fi
+    fi
+
+    # Configure storage driver
+    if [ "$USE_VFS_STORAGE" = true ]; then
+        echo -e "  ${CYAN}→${NC} Using vfs storage driver (slower but compatible)"
+        cat > "$storage_conf" << 'STORAGEEOF'
+[storage]
+driver = "vfs"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+
+[storage.options]
+pull_options = {enable_partial_images = "false", use_hard_links = "false", ostree_repos=""}
+
+[storage.options.overlay]
+mount_program = "/usr/bin/fuse-overlayfs"
+STORAGEEOF
+    else
+        echo -e "  ${GREEN}[x]${NC} Using overlay storage driver"
+        cat > "$storage_conf" << 'STORAGEEOF'
+[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+
+[storage.options.overlay]
+mount_program = "/usr/bin/fuse-overlayfs"
+STORAGEEOF
+    fi
+
+    # Configure containers.conf for LXC compatibility
+    cat > "$containers_conf" << 'CONTAINERSEOF'
+[containers]
+# Disable features that don't work in LXC
+netns = "host"
+userns = "host"
+ipcns = "host"
+utsns = "host"
+cgroupns = "host"
+
+# Disable seccomp in LXC (host handles security)
+seccomp_profile = ""
+
+# Disable AppArmor (handled by LXC host)
+apparmor_profile = ""
+
+# Use crun if available (better LXC compatibility)
+runtime = "crun"
+
+[engine]
+# Use host network by default in LXC
+network_cmd_options = ["--network=host"]
+
+# Disable healthchecks that may fail in LXC
+healthcheck_events = false
+CONTAINERSEOF
+
+    # Install crun if not present (better than runc for LXC)
+    if ! command -v crun &>/dev/null; then
+        echo -e "  ${CYAN}→${NC} Installing crun runtime..."
+        if command -v apt-get &>/dev/null; then
+            apt-get install -y crun 2>/dev/null || true
+        elif command -v dnf &>/dev/null; then
+            dnf install -y crun 2>/dev/null || true
+        fi
+    fi
+
+    # Install fuse-overlayfs for better overlay support
+    if ! command -v fuse-overlayfs &>/dev/null && [ "$USE_VFS_STORAGE" != true ]; then
+        echo -e "  ${CYAN}→${NC} Installing fuse-overlayfs..."
+        if command -v apt-get &>/dev/null; then
+            apt-get install -y fuse-overlayfs 2>/dev/null || true
+        elif command -v dnf &>/dev/null; then
+            dnf install -y fuse-overlayfs 2>/dev/null || true
+        fi
+    fi
+
+    echo -e "  ${GREEN}[x]${NC} Podman configured for LXC"
+}
+
+show_proxmox_lxc_guidance() {
+    # Show guidance for Proxmox LXC configuration
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  Proxmox LXC Configuration Guide${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    if [ "$IS_LXC_UNPRIVILEGED" = true ]; then
+        echo -e "${YELLOW}Unprivileged LXC container detected${NC}"
+        echo ""
+        echo "HookProbe can run in unprivileged mode with some limitations:"
+        echo -e "  ${GREEN}[x]${NC} Podman containers (using vfs/fuse-overlayfs)"
+        echo -e "  ${GREEN}[x]${NC} Host network mode"
+        echo -e "  ${GREEN}[x]${NC} All core functionality"
+        echo -e "  ${YELLOW}[-]${NC} No OVS/VXLAN networking (uses host network)"
+        echo -e "  ${YELLOW}[-]${NC} No XDP DDoS mitigation"
+        echo ""
+        echo "For better performance, configure on Proxmox host:"
+        echo ""
+        echo -e "${CYAN}Option 1: Enable nesting (recommended)${NC}"
+        echo "  pct set <CTID> --features nesting=1"
+        echo ""
+        echo -e "${CYAN}Option 2: Use privileged container${NC}"
+        echo "  pct set <CTID> --unprivileged 0"
+        echo "  # WARNING: Less secure, use only in trusted environments"
+        echo ""
+        echo -e "${CYAN}Option 3: Add specific capabilities (advanced)${NC}"
+        echo "  # Edit /etc/pve/lxc/<CTID>.conf on Proxmox host:"
+        echo "  lxc.cap.drop ="
+        echo "  lxc.cgroup2.devices.allow = a"
+        echo "  lxc.mount.auto = proc:rw sys:rw"
+        echo ""
+    else
+        echo -e "${GREEN}Privileged LXC container detected${NC}"
+        echo ""
+        echo "For OVS support, load kernel module on Proxmox host:"
+        echo "  modprobe openvswitch"
+        echo "  echo 'openvswitch' >> /etc/modules"
+        echo ""
+    fi
+
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        echo -e "${YELLOW}Press Enter to continue with installation...${NC}"
+        read -r
+    fi
 }
 
 get_cni_version() {
