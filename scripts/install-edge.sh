@@ -2221,9 +2221,23 @@ setup_ovs_bridge() {
             if command -v apt-get &> /dev/null; then
                 apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
             elif command -v dnf &> /dev/null; then
-                dnf install -y openvswitch 2>/dev/null
+                # RHEL/Fedora - try multiple package names
+                # RHEL 8+: openvswitch may be versioned (openvswitch2.17, openvswitch3.1, etc.)
+                dnf install -y openvswitch 2>/dev/null || \
+                dnf install -y openvswitch3.1 2>/dev/null || \
+                dnf install -y openvswitch2.17 2>/dev/null || \
+                dnf install -y $(dnf search openvswitch 2>/dev/null | grep -oP '^openvswitch[\d.]+' | head -1) 2>/dev/null || {
+                    echo -e "  ${YELLOW}[!]${NC} OVS package not found in RHEL repos"
+                    echo "  Trying to enable NFV repo for Open vSwitch..."
+                    # Try enabling the NFV/Fast Datapath repository
+                    subscription-manager repos --enable=fast-datapath-for-rhel-9-x86_64-rpms 2>/dev/null || \
+                    subscription-manager repos --enable=fast-datapath-for-rhel-8-x86_64-rpms 2>/dev/null || true
+                    dnf install -y openvswitch 2>/dev/null || \
+                    dnf install -y openvswitch3.1 2>/dev/null || true
+                }
             elif command -v yum &> /dev/null; then
-                yum install -y openvswitch 2>/dev/null
+                yum install -y openvswitch 2>/dev/null || \
+                yum install -y openvswitch2.17 2>/dev/null || true
             fi
         fi
     fi
