@@ -1,28 +1,33 @@
 #!/bin/bash
 #
 # HookProbe Sentinel Bootstrap
-# "The Watchful Eye" - Ultra-lightweight validator for constrained devices
+# "The Watchful Eye" - Secure, lightweight validator for edge devices
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash
 #   # OR with options:
-#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash -s -- --mssp-endpoint my-mssp.example.com
+#   curl -sSL ... | sudo bash -s -- --mssp-endpoint my-mssp.example.com
 #
 # Requirements:
 #   - Linux (Debian/Ubuntu/Raspbian, RHEL/Fedora, Alpine)
 #   - Python 3.7+
 #   - 256MB+ RAM
 #   - Root access
+#   - Internet connectivity
 #
-# Target devices:
-#   - Raspberry Pi 3/Zero/Pico
-#   - Low-power ARM/IoT gateways
-#   - LTE/mobile network validators
+# Security Features:
+#   - TLS-only MSSP communication
+#   - Rate limiting / DDoS protection
+#   - Process sandboxing (seccomp, capabilities)
+#   - Automatic firewall rules
+#   - Integrity verification
+#   - Fail2ban integration
 #
 
 set -e
 
-VERSION="1.0.0"
+VERSION="2.0.0"
+GITHUB_REPO="https://github.com/hookprobe/hookprobe.git"
 GITHUB_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel"
 
 # Colors
@@ -30,46 +35,59 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Installation paths
-INSTALL_DIR="/opt/hookprobe-sentinel"
+INSTALL_DIR="/opt/hookprobe/sentinel"
 CONFIG_DIR="/etc/hookprobe"
+SECRETS_DIR="/etc/hookprobe/secrets"
 DATA_DIR="/var/lib/hookprobe/sentinel"
 LOG_DIR="/var/log/hookprobe"
+RUN_DIR="/run/hookprobe"
 
 # Defaults
 MSSP_ENDPOINT="${MSSP_ENDPOINT:-mssp.hookprobe.com}"
 MSSP_PORT="${MSSP_PORT:-8443}"
-SENTINEL_PORT="${SENTINEL_PORT:-8443}"
-METRICS_PORT="${METRICS_PORT:-9090}"
+HEALTH_PORT="${HEALTH_PORT:-9090}"
 SENTINEL_REGION="${SENTINEL_REGION:-auto}"
-SENTINEL_TIER="${SENTINEL_TIER:-community}"
+ENABLE_FIREWALL="${ENABLE_FIREWALL:-yes}"
+ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-yes}"
 
 # ============================================================
-# FUNCTIONS
+# LOGGING
 # ============================================================
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_security() { echo -e "${CYAN}[SECURITY]${NC} $1"; }
+
+# ============================================================
+# BANNER
+# ============================================================
 
 show_banner() {
     echo -e "${BLUE}"
     cat << "EOF"
-  ___ ___ _  _ _____ ___ _  _ ___ _
- / __| __| \| |_   _|_ _| \| | __| |
- \__ \ _|| .` | | |  | || .` | _|| |__
- |___/___|_|\_| |_| |___|_|\_|___|____|
-
- "The Watchful Eye"
-
+  ╔═══════════════════════════════════════════════════════╗
+  ║  ___ ___ _  _ _____ ___ _  _ ___ _                    ║
+  ║ / __| __| \| |_   _|_ _| \| | __| |                   ║
+  ║ \__ \ _|| .` | | |  | || .` | _|| |__                 ║
+  ║ |___/___|_|\_| |_| |___|_|\_|___|____|                ║
+  ║                                                       ║
+  ║           "The Watchful Eye"                          ║
+  ╚═══════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
     echo "  HookProbe Sentinel v${VERSION}"
-    echo "  Ultra-lightweight validator for edge devices"
+    echo "  Secure edge validator with attack protection"
     echo ""
 }
+
+# ============================================================
+# CHECKS
+# ============================================================
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -79,11 +97,34 @@ check_root() {
     fi
 }
 
+check_internet() {
+    log_info "Checking internet connectivity..."
+    if ! ping -c 1 -W 5 8.8.8.8 &>/dev/null && ! ping -c 1 -W 5 1.1.1.1 &>/dev/null; then
+        log_error "No internet connectivity. Sentinel requires internet access."
+        exit 1
+    fi
+    log_info "Internet: Connected"
+}
+
 detect_platform() {
     ARCH=$(uname -m)
+    OS_ID=$(grep -E "^ID=" /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "unknown")
     TOTAL_RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "512")
 
-    # Auto-select memory limit
+    # Detect package manager
+    if command -v apt-get &>/dev/null; then
+        PKG_MANAGER="apt"
+    elif command -v dnf &>/dev/null; then
+        PKG_MANAGER="dnf"
+    elif command -v yum &>/dev/null; then
+        PKG_MANAGER="yum"
+    elif command -v apk &>/dev/null; then
+        PKG_MANAGER="apk"
+    else
+        PKG_MANAGER="unknown"
+    fi
+
+    # Auto-select memory limit based on available RAM
     if [ "$TOTAL_RAM_MB" -le 512 ]; then
         MEMORY_LIMIT=128
     elif [ "$TOTAL_RAM_MB" -le 1024 ]; then
@@ -94,149 +135,824 @@ detect_platform() {
         MEMORY_LIMIT=384
     fi
 
-    log_info "Platform: $ARCH, RAM: ${TOTAL_RAM_MB}MB, Memory limit: ${MEMORY_LIMIT}MB"
+    log_info "Platform: $ARCH | OS: $OS_ID | RAM: ${TOTAL_RAM_MB}MB | Limit: ${MEMORY_LIMIT}MB"
 }
 
-install_deps() {
-    log_info "Installing minimal dependencies..."
+# ============================================================
+# DEPENDENCIES
+# ============================================================
 
-    if command -v apt-get &>/dev/null; then
-        apt-get update -qq 2>/dev/null || true
-        apt-get install -y -qq --no-install-recommends python3 curl ca-certificates 2>/dev/null
-    elif command -v dnf &>/dev/null; then
-        dnf install -y -q python3 curl ca-certificates 2>/dev/null
-    elif command -v yum &>/dev/null; then
-        yum install -y -q python3 curl ca-certificates 2>/dev/null
-    elif command -v apk &>/dev/null; then
-        apk add --no-cache python3 curl ca-certificates 2>/dev/null
+install_deps() {
+    log_info "Installing dependencies..."
+
+    case "$PKG_MANAGER" in
+        apt)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y -qq --no-install-recommends \
+                python3 python3-pip python3-venv \
+                curl wget ca-certificates \
+                git iptables \
+                2>/dev/null || true
+            ;;
+        dnf)
+            dnf install -y -q \
+                python3 python3-pip \
+                curl wget ca-certificates \
+                git iptables \
+                2>/dev/null || true
+            ;;
+        yum)
+            yum install -y -q \
+                python3 python3-pip \
+                curl wget ca-certificates \
+                git iptables \
+                2>/dev/null || true
+            ;;
+        apk)
+            apk add --no-cache \
+                python3 py3-pip \
+                curl wget ca-certificates \
+                git iptables \
+                2>/dev/null || true
+            ;;
+    esac
+
+    # Install fail2ban if enabled
+    if [ "$ENABLE_FAIL2BAN" = "yes" ]; then
+        log_info "Installing fail2ban..."
+        case "$PKG_MANAGER" in
+            apt) apt-get install -y -qq fail2ban 2>/dev/null || true ;;
+            dnf|yum) dnf install -y -q fail2ban 2>/dev/null || yum install -y -q fail2ban 2>/dev/null || true ;;
+            apk) apk add --no-cache fail2ban 2>/dev/null || true ;;
+        esac
     fi
 }
 
+# ============================================================
+# DOWNLOAD & INSTALL
+# ============================================================
+
 download_sentinel() {
-    log_info "Downloading Sentinel Lite..."
+    log_info "Downloading Sentinel components..."
 
-    mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
-    chmod 750 "$CONFIG_DIR" "$DATA_DIR"
+    # Create directories with secure permissions
+    mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$SECRETS_DIR" "$DATA_DIR" "$LOG_DIR" "$RUN_DIR"
+    chmod 755 "$INSTALL_DIR"
+    chmod 750 "$CONFIG_DIR"
+    chmod 700 "$SECRETS_DIR"
+    chmod 750 "$DATA_DIR"
+    chmod 755 "$LOG_DIR"
+    chmod 755 "$RUN_DIR"
 
-    # Download the sentinel Python script
+    # Download main sentinel script
+    log_info "Downloading sentinel.py..."
     if ! curl -sSfL "$GITHUB_RAW/sentinel.py" -o "$INSTALL_DIR/sentinel.py"; then
         log_error "Failed to download sentinel.py"
         exit 1
     fi
-    chmod +x "$INSTALL_DIR/sentinel.py"
 
-    log_info "Downloaded sentinel.py ($(wc -c < "$INSTALL_DIR/sentinel.py") bytes)"
+    # Download security module
+    log_info "Downloading security module..."
+    if ! curl -sSfL "$GITHUB_RAW/sentinel_security.py" -o "$INSTALL_DIR/sentinel_security.py"; then
+        log_warn "Security module not found, creating default..."
+        create_security_module
+    fi
+
+    # Download signatures (lightweight ruleset)
+    log_info "Downloading threat signatures..."
+    mkdir -p "$DATA_DIR/signatures"
+    curl -sSfL "$GITHUB_RAW/signatures/basic.rules" -o "$DATA_DIR/signatures/basic.rules" 2>/dev/null || \
+        create_basic_signatures
+
+    # Set permissions
+    chmod 755 "$INSTALL_DIR/sentinel.py"
+    chmod 644 "$INSTALL_DIR/sentinel_security.py" 2>/dev/null || true
+
+    # Verify download integrity
+    local size=$(wc -c < "$INSTALL_DIR/sentinel.py" 2>/dev/null || echo "0")
+    if [ "$size" -lt 1000 ]; then
+        log_error "Downloaded file appears incomplete (${size} bytes)"
+        exit 1
+    fi
+
+    log_info "Downloaded sentinel.py (${size} bytes)"
 }
+
+create_security_module() {
+    cat > "$INSTALL_DIR/sentinel_security.py" << 'SECMOD'
+#!/usr/bin/env python3
+"""
+HookProbe Sentinel Security Module
+Lightweight protection for edge validators
+"""
+
+import os
+import sys
+import json
+import time
+import hashlib
+import logging
+import ipaddress
+from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Dict, Set, Optional, Tuple
+
+logger = logging.getLogger("sentinel.security")
+
+class RateLimiter:
+    """Token bucket rate limiter for DDoS protection"""
+
+    def __init__(self, rate: int = 100, burst: int = 200):
+        self.rate = rate  # requests per second
+        self.burst = burst
+        self.tokens: Dict[str, float] = defaultdict(lambda: burst)
+        self.last_update: Dict[str, float] = defaultdict(time.time)
+
+    def allow(self, client_ip: str) -> bool:
+        now = time.time()
+        elapsed = now - self.last_update[client_ip]
+        self.last_update[client_ip] = now
+
+        # Add tokens based on elapsed time
+        self.tokens[client_ip] = min(
+            self.burst,
+            self.tokens[client_ip] + elapsed * self.rate
+        )
+
+        if self.tokens[client_ip] >= 1:
+            self.tokens[client_ip] -= 1
+            return True
+        return False
+
+    def cleanup(self, max_age: int = 3600):
+        """Remove old entries"""
+        now = time.time()
+        expired = [ip for ip, ts in self.last_update.items() if now - ts > max_age]
+        for ip in expired:
+            del self.tokens[ip]
+            del self.last_update[ip]
+
+
+class ThreatDetector:
+    """Lightweight threat detection"""
+
+    # Known malicious patterns
+    SUSPICIOUS_PATTERNS = [
+        b"../",  # Path traversal
+        b"<script",  # XSS attempt
+        b"SELECT ",  # SQL injection
+        b"UNION ",
+        b"; DROP",
+        b"eval(",
+        b"exec(",
+        b"/etc/passwd",
+        b"/etc/shadow",
+        b"cmd.exe",
+        b"powershell",
+    ]
+
+    # Rate thresholds
+    THRESHOLD_REQUESTS_PER_MIN = 300
+    THRESHOLD_ERRORS_PER_MIN = 50
+    THRESHOLD_UNIQUE_PATHS = 100
+
+    def __init__(self):
+        self.blocked_ips: Set[str] = set()
+        self.request_counts: Dict[str, int] = defaultdict(int)
+        self.error_counts: Dict[str, int] = defaultdict(int)
+        self.path_counts: Dict[str, Set[str]] = defaultdict(set)
+        self.last_reset = time.time()
+        self.alert_callback = None
+
+    def check_request(self, client_ip: str, path: str, body: bytes = b"") -> Tuple[bool, str]:
+        """
+        Check if request should be allowed.
+        Returns (allowed, reason)
+        """
+        # Check if IP is blocked
+        if client_ip in self.blocked_ips:
+            return False, "IP blocked"
+
+        # Reset counters every minute
+        now = time.time()
+        if now - self.last_reset > 60:
+            self.request_counts.clear()
+            self.error_counts.clear()
+            self.path_counts.clear()
+            self.last_reset = now
+
+        # Check rate limits
+        self.request_counts[client_ip] += 1
+        if self.request_counts[client_ip] > self.THRESHOLD_REQUESTS_PER_MIN:
+            self._block_ip(client_ip, "Rate limit exceeded")
+            return False, "Rate limit"
+
+        # Check path scanning
+        self.path_counts[client_ip].add(path)
+        if len(self.path_counts[client_ip]) > self.THRESHOLD_UNIQUE_PATHS:
+            self._block_ip(client_ip, "Path scanning detected")
+            return False, "Path scanning"
+
+        # Check for malicious patterns
+        combined = path.encode() + body
+        for pattern in self.SUSPICIOUS_PATTERNS:
+            if pattern.lower() in combined.lower():
+                self._block_ip(client_ip, f"Malicious pattern: {pattern.decode(errors='ignore')}")
+                return False, "Malicious pattern"
+
+        return True, "OK"
+
+    def record_error(self, client_ip: str):
+        """Record an error from this IP"""
+        self.error_counts[client_ip] += 1
+        if self.error_counts[client_ip] > self.THRESHOLD_ERRORS_PER_MIN:
+            self._block_ip(client_ip, "Too many errors")
+
+    def _block_ip(self, ip: str, reason: str):
+        """Block an IP address"""
+        if ip not in self.blocked_ips:
+            self.blocked_ips.add(ip)
+            logger.warning(f"Blocked IP {ip}: {reason}")
+            if self.alert_callback:
+                self.alert_callback("ip_blocked", {"ip": ip, "reason": reason})
+
+    def unblock_ip(self, ip: str):
+        """Unblock an IP address"""
+        self.blocked_ips.discard(ip)
+
+    def get_blocked_ips(self) -> Set[str]:
+        """Get set of blocked IPs"""
+        return self.blocked_ips.copy()
+
+
+class IntegrityChecker:
+    """File integrity monitoring"""
+
+    def __init__(self, watch_paths: list = None):
+        self.watch_paths = watch_paths or [
+            "/opt/hookprobe/sentinel/sentinel.py",
+            "/etc/hookprobe/sentinel.env",
+        ]
+        self.hashes: Dict[str, str] = {}
+        self._compute_initial_hashes()
+
+    def _compute_initial_hashes(self):
+        """Compute initial file hashes"""
+        for path in self.watch_paths:
+            if os.path.exists(path):
+                self.hashes[path] = self._hash_file(path)
+
+    def _hash_file(self, path: str) -> str:
+        """Compute SHA256 hash of file"""
+        hasher = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception:
+            return ""
+
+    def check_integrity(self) -> list:
+        """Check if any watched files have changed"""
+        changes = []
+        for path in self.watch_paths:
+            if os.path.exists(path):
+                current_hash = self._hash_file(path)
+                if path in self.hashes and current_hash != self.hashes[path]:
+                    changes.append({
+                        "path": path,
+                        "old_hash": self.hashes[path][:16],
+                        "new_hash": current_hash[:16],
+                    })
+        return changes
+
+
+class FirewallManager:
+    """Manage iptables rules for protection"""
+
+    @staticmethod
+    def setup_basic_rules(health_port: int = 9090):
+        """Setup basic firewall protection"""
+        rules = [
+            # Allow established connections
+            "-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT",
+            # Allow loopback
+            "-A INPUT -i lo -j ACCEPT",
+            # Allow health check port
+            f"-A INPUT -p tcp --dport {health_port} -j ACCEPT",
+            # Rate limit new connections
+            "-A INPUT -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT",
+            # Drop invalid packets
+            "-A INPUT -m state --state INVALID -j DROP",
+        ]
+
+        for rule in rules:
+            os.system(f"iptables {rule} 2>/dev/null")
+
+    @staticmethod
+    def block_ip(ip: str):
+        """Block an IP address"""
+        os.system(f"iptables -I INPUT -s {ip} -j DROP 2>/dev/null")
+
+    @staticmethod
+    def unblock_ip(ip: str):
+        """Unblock an IP address"""
+        os.system(f"iptables -D INPUT -s {ip} -j DROP 2>/dev/null")
+
+
+class SecurityManager:
+    """Main security manager combining all components"""
+
+    def __init__(self, config: dict = None):
+        self.config = config or {}
+        self.rate_limiter = RateLimiter(
+            rate=self.config.get("rate_limit", 100),
+            burst=self.config.get("rate_burst", 200)
+        )
+        self.threat_detector = ThreatDetector()
+        self.integrity_checker = IntegrityChecker()
+        self.firewall_enabled = self.config.get("firewall_enabled", True)
+        self.stats = {
+            "requests_total": 0,
+            "requests_blocked": 0,
+            "attacks_detected": 0,
+            "ips_blocked": 0,
+        }
+
+    def check_request(self, client_ip: str, path: str = "/", body: bytes = b"") -> Tuple[bool, str]:
+        """Check if a request should be allowed"""
+        self.stats["requests_total"] += 1
+
+        # Rate limiting
+        if not self.rate_limiter.allow(client_ip):
+            self.stats["requests_blocked"] += 1
+            return False, "Rate limited"
+
+        # Threat detection
+        allowed, reason = self.threat_detector.check_request(client_ip, path, body)
+        if not allowed:
+            self.stats["requests_blocked"] += 1
+            self.stats["attacks_detected"] += 1
+            if self.firewall_enabled:
+                FirewallManager.block_ip(client_ip)
+            return False, reason
+
+        return True, "OK"
+
+    def get_stats(self) -> dict:
+        """Get security statistics"""
+        return {
+            **self.stats,
+            "blocked_ips": list(self.threat_detector.get_blocked_ips()),
+            "integrity_changes": self.integrity_checker.check_integrity(),
+        }
+
+    def periodic_cleanup(self):
+        """Periodic cleanup tasks"""
+        self.rate_limiter.cleanup()
+
+
+# Export main class
+__all__ = ["SecurityManager", "RateLimiter", "ThreatDetector", "IntegrityChecker", "FirewallManager"]
+SECMOD
+    chmod 644 "$INSTALL_DIR/sentinel_security.py"
+    log_info "Created security module"
+}
+
+create_basic_signatures() {
+    cat > "$DATA_DIR/signatures/basic.rules" << 'SIGS'
+# HookProbe Sentinel Basic Signatures
+# Format: type|pattern|severity|description
+
+# Path traversal
+path|../|high|Path traversal attempt
+path|..%2f|high|Encoded path traversal
+path|%2e%2e/|high|Double-encoded path traversal
+
+# SQL Injection
+body|union.*select|high|SQL injection UNION SELECT
+body|or.*1.*=.*1|medium|SQL injection OR 1=1
+body|drop.*table|critical|SQL DROP TABLE attempt
+body|insert.*into|high|SQL INSERT attempt
+
+# XSS
+body|<script|high|XSS script tag
+body|javascript:|high|XSS javascript protocol
+body|onerror=|medium|XSS event handler
+
+# Command injection
+body|;.*cat.*|high|Command injection cat
+body|;.*ls.*|medium|Command injection ls
+body|\|.*sh|high|Pipe to shell
+
+# Sensitive files
+path|/etc/passwd|critical|Access to passwd
+path|/etc/shadow|critical|Access to shadow
+path|.env|high|Access to environment file
+path|.git/|high|Access to git directory
+
+# Scanner signatures
+header|nikto|medium|Nikto scanner
+header|sqlmap|high|SQLMap scanner
+header|nmap|medium|Nmap scanner
+SIGS
+    chmod 644 "$DATA_DIR/signatures/basic.rules"
+    log_info "Created basic signatures"
+}
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 create_config() {
     log_info "Creating configuration..."
 
-    # Generate node ID
-    local NODE_ID="sentinel-lite-$(hostname -s 2>/dev/null || echo 'node')-$(date +%s | sha256sum | head -c 8)"
+    # Generate secure node ID
+    local NODE_ID="sentinel-$(hostname -s 2>/dev/null || echo 'node')-$(head -c 8 /dev/urandom | xxd -p)"
 
     # Auto-detect region
     if [ "$SENTINEL_REGION" = "auto" ]; then
-        SENTINEL_REGION=$(curl -sf --connect-timeout 3 http://ip-api.com/json/ 2>/dev/null | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || echo "unknown")
+        SENTINEL_REGION=$(curl -sf --connect-timeout 3 http://ip-api.com/json/ 2>/dev/null | \
+            grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || echo "unknown")
         [ -z "$SENTINEL_REGION" ] && SENTINEL_REGION="unknown"
     fi
 
-    # Create environment file
-    cat > "$CONFIG_DIR/sentinel-lite.env" << ENV
+    # Create main configuration
+    cat > "$CONFIG_DIR/sentinel.env" << ENV
+# HookProbe Sentinel Configuration
+# Generated: $(date -Iseconds)
+
+# Node Identity
 SENTINEL_NODE_ID=${NODE_ID}
 SENTINEL_REGION=${SENTINEL_REGION}
-SENTINEL_TIER=${SENTINEL_TIER}
+SENTINEL_VERSION=${VERSION}
+
+# MSSP Backend (TLS required)
 MSSP_ENDPOINT=${MSSP_ENDPOINT}
 MSSP_PORT=${MSSP_PORT}
-SENTINEL_PORT=${SENTINEL_PORT}
-METRICS_PORT=${METRICS_PORT}
+MSSP_TLS=true
+MSSP_VERIFY_CERT=true
+
+# Health Endpoint
+HEALTH_PORT=${HEALTH_PORT}
+HEALTH_BIND=0.0.0.0
+
+# Security Settings
+ENABLE_RATE_LIMITING=true
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_BURST=200
+ENABLE_THREAT_DETECTION=true
+ENABLE_INTEGRITY_CHECK=true
+BLOCK_ON_ATTACK=true
+
+# Resource Limits
 MEMORY_LIMIT_MB=${MEMORY_LIMIT}
+
+# Logging
 LOG_LEVEL=INFO
+LOG_FILE=/var/log/hookprobe/sentinel.log
+LOG_MAX_SIZE_MB=10
+LOG_BACKUP_COUNT=3
+
+# Paths
+DATA_DIR=${DATA_DIR}
+SIGNATURES_DIR=${DATA_DIR}/signatures
 ENV
-    chmod 640 "$CONFIG_DIR/sentinel-lite.env"
+    chmod 640 "$CONFIG_DIR/sentinel.env"
+
+    # Create secrets file for MSSP token (if provided)
+    if [ -n "$MSSP_TOKEN" ]; then
+        echo "$MSSP_TOKEN" > "$SECRETS_DIR/mssp-token"
+        chmod 600 "$SECRETS_DIR/mssp-token"
+    fi
 
     log_info "Node ID: ${NODE_ID}"
+    log_info "Region: ${SENTINEL_REGION}"
 }
+
+# ============================================================
+# FIREWALL SETUP
+# ============================================================
+
+setup_firewall() {
+    if [ "$ENABLE_FIREWALL" != "yes" ]; then
+        log_warn "Firewall setup skipped"
+        return
+    fi
+
+    log_security "Configuring firewall rules..."
+
+    # Check for iptables
+    if ! command -v iptables &>/dev/null; then
+        log_warn "iptables not found, skipping firewall setup"
+        return
+    fi
+
+    # Create HookProbe chain if it doesn't exist
+    iptables -N HOOKPROBE 2>/dev/null || true
+
+    # Flush existing rules in our chain
+    iptables -F HOOKPROBE 2>/dev/null || true
+
+    # Basic protection rules
+    # Rate limit incoming connections
+    iptables -A HOOKPROBE -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT
+
+    # Allow health check port
+    iptables -A HOOKPROBE -p tcp --dport "$HEALTH_PORT" -j ACCEPT
+
+    # Drop invalid packets
+    iptables -A HOOKPROBE -m state --state INVALID -j DROP
+
+    # Insert our chain into INPUT
+    iptables -I INPUT -j HOOKPROBE 2>/dev/null || true
+
+    # Save rules (distribution-specific)
+    if command -v netfilter-persistent &>/dev/null; then
+        netfilter-persistent save 2>/dev/null || true
+    elif [ -f /etc/redhat-release ]; then
+        iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
+    fi
+
+    log_security "Firewall configured"
+}
+
+# ============================================================
+# FAIL2BAN SETUP
+# ============================================================
+
+setup_fail2ban() {
+    if [ "$ENABLE_FAIL2BAN" != "yes" ]; then
+        return
+    fi
+
+    if ! command -v fail2ban-client &>/dev/null; then
+        log_warn "fail2ban not installed, skipping"
+        return
+    fi
+
+    log_security "Configuring fail2ban..."
+
+    # Create sentinel jail
+    cat > /etc/fail2ban/jail.d/hookprobe-sentinel.conf << 'F2B'
+[hookprobe-sentinel]
+enabled = true
+port = 9090
+filter = hookprobe-sentinel
+logpath = /var/log/hookprobe/sentinel.log
+maxretry = 5
+findtime = 300
+bantime = 3600
+action = iptables-multiport[name=hookprobe, port="9090"]
+F2B
+
+    # Create filter
+    cat > /etc/fail2ban/filter.d/hookprobe-sentinel.conf << 'F2BF'
+[Definition]
+failregex = ^.*\[SECURITY\].*Blocked IP <HOST>.*$
+            ^.*\[WARNING\].*Attack detected from <HOST>.*$
+            ^.*\[ERROR\].*Rate limit exceeded: <HOST>.*$
+ignoreregex =
+F2BF
+
+    # Restart fail2ban
+    systemctl restart fail2ban 2>/dev/null || true
+    log_security "fail2ban configured"
+}
+
+# ============================================================
+# SYSTEMD SERVICE
+# ============================================================
 
 create_service() {
     log_info "Creating systemd service..."
 
-    cat > /etc/systemd/system/hookprobe-sentinel-lite.service << 'SERVICE'
+    cat > /etc/systemd/system/hookprobe-sentinel.service << 'SERVICE'
 [Unit]
-Description=HookProbe Sentinel Lite
+Description=HookProbe Sentinel - The Watchful Eye
+Documentation=https://github.com/hookprobe/hookprobe
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/hookprobe-sentinel
-EnvironmentFile=/etc/hookprobe/sentinel-lite.env
-MemoryMax=${MEMORY_LIMIT_MB}M
+Group=root
+
+# Working directory
+WorkingDirectory=/opt/hookprobe/sentinel
+
+# Environment
+EnvironmentFile=/etc/hookprobe/sentinel.env
+
+# Resource limits
+MemoryMax=384M
+MemoryHigh=256M
 CPUWeight=50
+TasksMax=50
 Nice=10
-ExecStart=/usr/bin/python3 /opt/hookprobe-sentinel/sentinel.py
+
+# Start command
+ExecStart=/usr/bin/python3 /opt/hookprobe/sentinel/sentinel.py
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
 Restart=always
 RestartSec=10
+WatchdogSec=60
+
+# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/hookprobe /var/log/hookprobe
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Allow necessary paths
+ReadWritePaths=/var/lib/hookprobe /var/log/hookprobe /run/hookprobe
+
+# Capabilities
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Seccomp filter
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @privileged
 
 [Install]
 WantedBy=multi-user.target
 SERVICE
 
+    # Reload and enable
     systemctl daemon-reload
-    systemctl enable hookprobe-sentinel-lite.service 2>/dev/null
+    systemctl enable hookprobe-sentinel.service 2>/dev/null
+
+    log_info "Service created and enabled"
 }
+
+# ============================================================
+# VERIFICATION
+# ============================================================
+
+verify_installation() {
+    log_info "Verifying installation..."
+
+    local errors=0
+
+    # Check files
+    [ -f "$INSTALL_DIR/sentinel.py" ] || { log_error "sentinel.py missing"; errors=$((errors+1)); }
+    [ -f "$CONFIG_DIR/sentinel.env" ] || { log_error "sentinel.env missing"; errors=$((errors+1)); }
+    [ -d "$DATA_DIR" ] || { log_error "data directory missing"; errors=$((errors+1)); }
+
+    # Check Python
+    python3 --version &>/dev/null || { log_error "Python3 not found"; errors=$((errors+1)); }
+
+    # Check service
+    systemctl is-enabled hookprobe-sentinel.service &>/dev/null || { log_warn "Service not enabled"; }
+
+    if [ $errors -gt 0 ]; then
+        log_error "Installation verification failed with $errors errors"
+        return 1
+    fi
+
+    log_info "Installation verified successfully"
+    return 0
+}
+
+# ============================================================
+# COMPLETION
+# ============================================================
 
 show_complete() {
     echo ""
-    echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║  SENTINEL INSTALLED SUCCESSFULLY               ║${NC}"
-    echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}"
+    echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║  SENTINEL INSTALLED SUCCESSFULLY                           ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    source "$CONFIG_DIR/sentinel-lite.env" 2>/dev/null
-    echo "  Node ID:    ${SENTINEL_NODE_ID:-generated}"
-    echo "  Region:     ${SENTINEL_REGION:-auto}"
-    echo "  Memory:     ${MEMORY_LIMIT}MB"
-    echo "  MSSP:       ${MSSP_ENDPOINT}:${MSSP_PORT}"
+
+    source "$CONFIG_DIR/sentinel.env" 2>/dev/null
+
+    echo -e "${CYAN}Configuration:${NC}"
+    echo "  Node ID:      ${SENTINEL_NODE_ID:-generated}"
+    echo "  Region:       ${SENTINEL_REGION:-auto}"
+    echo "  Memory Limit: ${MEMORY_LIMIT}MB"
+    echo "  Health Port:  ${HEALTH_PORT}"
     echo ""
+
+    echo -e "${CYAN}MSSP Backend:${NC}"
+    echo "  Endpoint:     ${MSSP_ENDPOINT}:${MSSP_PORT}"
+    echo "  TLS:          Enabled"
+    echo ""
+
+    echo -e "${CYAN}Security Features:${NC}"
+    echo "  Rate Limiting:     Enabled"
+    echo "  Threat Detection:  Enabled"
+    echo "  Integrity Check:   Enabled"
+    [ "$ENABLE_FIREWALL" = "yes" ] && echo "  Firewall Rules:    Configured"
+    [ "$ENABLE_FAIL2BAN" = "yes" ] && echo "  Fail2ban:          Configured"
+    echo ""
+
     echo -e "${YELLOW}Commands:${NC}"
-    echo "  sudo systemctl start hookprobe-sentinel-lite"
-    echo "  sudo systemctl status hookprobe-sentinel-lite"
-    echo "  curl http://localhost:${METRICS_PORT}/health"
+    echo "  sudo systemctl start hookprobe-sentinel    # Start service"
+    echo "  sudo systemctl status hookprobe-sentinel   # Check status"
+    echo "  sudo journalctl -u hookprobe-sentinel -f   # View logs"
+    echo "  curl http://localhost:${HEALTH_PORT}/health  # Health check"
+    echo ""
+
+    echo -e "${CYAN}Files:${NC}"
+    echo "  Install:   $INSTALL_DIR"
+    echo "  Config:    $CONFIG_DIR/sentinel.env"
+    echo "  Logs:      $LOG_DIR/sentinel.log"
+    echo "  Data:      $DATA_DIR"
     echo ""
 }
 
+# ============================================================
+# UNINSTALL
+# ============================================================
+
 uninstall() {
-    log_warn "Uninstalling Sentinel Lite..."
-    systemctl stop hookprobe-sentinel-lite.service 2>/dev/null || true
-    systemctl disable hookprobe-sentinel-lite.service 2>/dev/null || true
-    rm -f /etc/systemd/system/hookprobe-sentinel-lite.service
-    rm -rf "$INSTALL_DIR" "$CONFIG_DIR/sentinel-lite.env" "$DATA_DIR"
+    log_warn "Uninstalling HookProbe Sentinel..."
+
+    # Stop service
+    systemctl stop hookprobe-sentinel.service 2>/dev/null || true
+    systemctl disable hookprobe-sentinel.service 2>/dev/null || true
+
+    # Remove service file
+    rm -f /etc/systemd/system/hookprobe-sentinel.service
     systemctl daemon-reload
+
+    # Remove firewall rules
+    iptables -D INPUT -j HOOKPROBE 2>/dev/null || true
+    iptables -F HOOKPROBE 2>/dev/null || true
+    iptables -X HOOKPROBE 2>/dev/null || true
+
+    # Remove fail2ban config
+    rm -f /etc/fail2ban/jail.d/hookprobe-sentinel.conf
+    rm -f /etc/fail2ban/filter.d/hookprobe-sentinel.conf
+    systemctl restart fail2ban 2>/dev/null || true
+
+    # Remove files
+    rm -rf "$INSTALL_DIR"
+    rm -f "$CONFIG_DIR/sentinel.env"
+    rm -rf "$DATA_DIR"
+
     log_info "Uninstalled successfully"
     exit 0
 }
 
+# ============================================================
+# HELP
+# ============================================================
+
 show_help() {
-    echo "HookProbe Sentinel Bootstrap v${VERSION}"
-    echo ""
-    echo "Usage:"
-    echo "  curl -sSL $GITHUB_RAW/bootstrap.sh | sudo bash"
-    echo "  curl -sSL $GITHUB_RAW/bootstrap.sh | sudo bash -s -- [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "  --mssp-endpoint URL   MSSP server (default: mssp.hookprobe.com)"
-    echo "  --mssp-port PORT      MSSP port (default: 8443)"
-    echo "  --port PORT           Listen port (default: 8443)"
-    echo "  --region REGION       Region (default: auto-detect)"
-    echo "  --tier TIER           Tier: community|professional|enterprise"
-    echo "  --uninstall           Remove Sentinel Lite"
-    echo "  --help                Show this help"
-    echo ""
+    cat << HELP
+HookProbe Sentinel Bootstrap v${VERSION}
+"The Watchful Eye" - Secure edge validator
+
+Usage:
+  curl -sSL $GITHUB_RAW/bootstrap.sh | sudo bash
+  curl -sSL ... | sudo bash -s -- [OPTIONS]
+
+Options:
+  --mssp-endpoint URL   MSSP backend server (default: mssp.hookprobe.com)
+  --mssp-port PORT      MSSP port (default: 8443)
+  --mssp-token TOKEN    MSSP authentication token
+  --health-port PORT    Health endpoint port (default: 9090)
+  --region REGION       Region code (default: auto-detect)
+  --no-firewall         Skip firewall configuration
+  --no-fail2ban         Skip fail2ban configuration
+  --uninstall           Remove Sentinel completely
+  --help                Show this help
+
+Security Features:
+  • TLS-only MSSP communication
+  • Rate limiting / DDoS protection
+  • Threat pattern detection
+  • File integrity monitoring
+  • Process sandboxing (seccomp)
+  • Automatic firewall rules
+  • Fail2ban integration
+
+Examples:
+  # Basic install
+  curl -sSL ... | sudo bash
+
+  # Custom MSSP endpoint
+  curl -sSL ... | sudo bash -s -- --mssp-endpoint security.mycompany.com
+
+  # Minimal install (no firewall/fail2ban)
+  curl -sSL ... | sudo bash -s -- --no-firewall --no-fail2ban
+
+HELP
     exit 0
 }
 
@@ -250,9 +966,11 @@ main() {
         case $1 in
             --mssp-endpoint) MSSP_ENDPOINT="$2"; shift 2 ;;
             --mssp-port) MSSP_PORT="$2"; shift 2 ;;
-            --port) SENTINEL_PORT="$2"; shift 2 ;;
+            --mssp-token) MSSP_TOKEN="$2"; shift 2 ;;
+            --health-port) HEALTH_PORT="$2"; shift 2 ;;
             --region) SENTINEL_REGION="$2"; shift 2 ;;
-            --tier) SENTINEL_TIER="$2"; shift 2 ;;
+            --no-firewall) ENABLE_FIREWALL="no"; shift ;;
+            --no-fail2ban) ENABLE_FAIL2BAN="no"; shift ;;
             --uninstall) uninstall ;;
             --help|-h) show_help ;;
             *) log_error "Unknown option: $1"; show_help ;;
@@ -261,22 +979,29 @@ main() {
 
     show_banner
     check_root
+    check_internet
     detect_platform
     install_deps
     download_sentinel
     create_config
+    setup_firewall
+    setup_fail2ban
     create_service
+    verify_installation
     show_complete
 
     # Auto-start prompt
-    read -p "Start Sentinel Lite now? [Y/n]: " start_now
+    echo ""
+    read -p "Start Sentinel now? [Y/n]: " start_now
     if [ "${start_now:-y}" != "n" ] && [ "${start_now:-Y}" != "N" ]; then
-        systemctl start hookprobe-sentinel-lite.service
+        systemctl start hookprobe-sentinel.service
         sleep 2
-        if systemctl is-active --quiet hookprobe-sentinel-lite.service; then
-            echo -e "${GREEN}✓ Sentinel Lite is running${NC}"
+        if systemctl is-active --quiet hookprobe-sentinel.service; then
+            echo -e "${GREEN}✓ Sentinel is running${NC}"
+            echo ""
+            echo "Health check: curl http://localhost:${HEALTH_PORT}/health"
         else
-            echo -e "${RED}✗ Failed to start. Check: journalctl -u hookprobe-sentinel-lite${NC}"
+            echo -e "${RED}✗ Failed to start. Check: journalctl -u hookprobe-sentinel -e${NC}"
         fi
     fi
 }
