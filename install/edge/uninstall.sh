@@ -45,7 +45,7 @@ echo -e "  ${RED}[x]${NC} All volumes (databases, logs, data)"
 echo -e "  ${RED}[x]${NC} All Podman networks"
 echo -e "  ${RED}[x]${NC} OVS bridge ($OVS_BRIDGE_NAME) and VXLAN tunnels"
 echo -e "  ${RED}[x]${NC} OpenFlow flows"
-echo -e "  ${RED}[x]${NC} Firewall rules (nftables)"
+echo -e "  ${RED}[x]${NC} Firewall and NAT routing rules"
 echo -e "  ${RED}[x]${NC} XDP DDoS mitigation program"
 echo -e "  ${RED}[x]${NC} Kernel configuration"
 echo -e "  ${RED}[x]${NC} Configuration files (/etc/hookprobe)"
@@ -279,20 +279,50 @@ fi
 echo -e "${GREEN}[x]${NC} OVS configuration removed"
 
 # ============================================================
-# STEP 6: CLEAN FIREWALL (NFTABLES)
+# STEP 6: CLEAN FIREWALL AND ROUTING
 # ============================================================
 echo ""
-echo "[STEP 6] Cleaning firewall..."
+echo "[STEP 6] Cleaning firewall and routing..."
 
 if [ -f /etc/nftables/hookprobe-v5.nft ]; then
     rm -f /etc/nftables/hookprobe-v5.nft
     echo -e "${GREEN}[x]${NC} nftables configuration removed"
 fi
 
-# Flush all nftables rules
-nft flush ruleset 2>/dev/null || true
+# Remove HookProbe NAT table (nftables)
+if command -v nft &>/dev/null; then
+    if nft list table ip hookprobe_nat &>/dev/null 2>&1; then
+        echo -e "  ${YELLOW}→${NC} Removing hookprobe_nat table"
+        nft delete table ip hookprobe_nat 2>/dev/null || true
+        echo -e "  ${GREEN}[x]${NC} NAT table removed"
+    fi
+fi
 
-echo -e "${GREEN}[x]${NC} Firewall cleaned"
+# Remove HookProbe NAT rules (iptables fallback)
+if command -v iptables &>/dev/null; then
+    # Load routing config if exists
+    if [ -f /etc/hookprobe/routing.conf ]; then
+        source /etc/hookprobe/routing.conf
+    fi
+    hookprobe_subnet="${HOOKPROBE_SUBNET:-10.250.0.0/16}"
+    wan_iface="${WAN_INTERFACE:-}"
+
+    if [ -n "$wan_iface" ]; then
+        if iptables -t nat -C POSTROUTING -s "$hookprobe_subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            echo -e "  ${YELLOW}→${NC} Removing iptables NAT rule"
+            iptables -t nat -D POSTROUTING -s "$hookprobe_subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null || true
+            echo -e "  ${GREEN}[x]${NC} iptables NAT rule removed"
+        fi
+    fi
+fi
+
+# Remove routing config file
+if [ -f /etc/hookprobe/routing.conf ]; then
+    echo -e "  ${YELLOW}→${NC} Removing routing configuration"
+    rm -f /etc/hookprobe/routing.conf
+fi
+
+echo -e "${GREEN}[x]${NC} Firewall and routing cleaned"
 
 # ============================================================
 # STEP 7: REMOVE KERNEL CONFIGURATION
@@ -419,7 +449,7 @@ fi
 echo -e "  ${GREEN}[x]${NC} Networks (hookprobe-* podman networks)"
 echo -e "  ${GREEN}[x]${NC} OVS bridge ($OVS_BRIDGE_NAME) and VXLAN tunnels"
 echo -e "  ${GREEN}[x]${NC} OpenFlow flows"
-echo -e "  ${GREEN}[x]${NC} Firewall rules (nftables)"
+echo -e "  ${GREEN}[x]${NC} Firewall and NAT routing rules"
 echo -e "  ${GREEN}[x]${NC} XDP DDoS mitigation"
 echo -e "  ${GREEN}[x]${NC} Kernel configuration"
 if [ "$remove_images" == "yes" ]; then
