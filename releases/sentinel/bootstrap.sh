@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# HookProbe Sentinel Lite Bootstrap
-# Ultra-lightweight validator for constrained devices
+# HookProbe Sentinel Bootstrap
+# "The Watchful Eye" - Ultra-lightweight validator for constrained devices
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite/bootstrap.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash
 #   # OR with options:
-#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite/bootstrap.sh | sudo bash -s -- --mssp-endpoint my-mssp.example.com
+#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash -s -- --mssp-endpoint my-mssp.example.com
 #
 # Requirements:
 #   - Linux (Debian/Ubuntu/Raspbian, RHEL/Fedora, Alpine)
@@ -23,7 +23,7 @@
 set -e
 
 VERSION="1.0.0"
-GITHUB_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel-lite"
+GITHUB_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel"
 
 # Colors
 RED='\033[0;31m'
@@ -57,15 +57,17 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 show_banner() {
     echo -e "${BLUE}"
     cat << "EOF"
-  ___ ___ _  _ _____ ___ _  _ ___ _      _    ___ _____ ___
- / __| __| \| |_   _|_ _| \| | __| |    | |  |_ _|_   _| __|
- \__ \ _|| .` | | |  | || .` | _|| |__  | |__ | |  | | | _|
- |___/___|_|\_| |_| |___|_|\_|___|____| |____|___| |_| |___|
+  ___ ___ _  _ _____ ___ _  _ ___ _
+ / __| __| \| |_   _|_ _| \| | __| |
+ \__ \ _|| .` | | |  | || .` | _|| |__
+ |___/___|_|\_| |_| |___|_|\_|___|____|
+
+ "The Watchful Eye"
 
 EOF
     echo -e "${NC}"
-    echo "  Ultra-Lightweight Validator v${VERSION}"
-    echo "  For Raspberry Pi, ARM, IoT, and LTE devices"
+    echo "  HookProbe Sentinel v${VERSION}"
+    echo "  Ultra-lightweight validator for edge devices"
     echo ""
 }
 
@@ -192,7 +194,7 @@ SERVICE
 show_complete() {
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║  SENTINEL LITE INSTALLED SUCCESSFULLY          ║${NC}"
+    echo -e "${GREEN}║  SENTINEL INSTALLED SUCCESSFULLY               ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}"
     echo ""
     source "$CONFIG_DIR/sentinel-lite.env" 2>/dev/null
@@ -220,7 +222,7 @@ uninstall() {
 }
 
 show_help() {
-    echo "HookProbe Sentinel Lite Bootstrap v${VERSION}"
+    echo "HookProbe Sentinel Bootstrap v${VERSION}"
     echo ""
     echo "Usage:"
     echo "  curl -sSL $GITHUB_RAW/bootstrap.sh | sudo bash"
