@@ -433,4 +433,4 @@ MIT License - See main repository for details.
 
 - **Issues**: https://github.com/hookprobe/hookprobe/issues
 - **Documentation**: https://docs.hookprobe.com/sentinel
-- **Community**: https://discord.gg/uKf2K9as
+- **Community**: https://discord.gg/bWKSFPxD
