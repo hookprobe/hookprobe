@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-HookProbe Sentinel Lite - Ultra-Lightweight Edge Validator
-Version: 1.0.0
+HookProbe Sentinel - "The Watchful Eye"
+Ultra-Lightweight Edge Validator with Security Protection
+Version: 2.0.0
 
 Standalone validator for constrained devices:
 - Raspberry Pi 3/Zero/Pico
 - Low-power ARM/IoT gateways
 - LTE/mobile network deployments
 
+Features:
+- Edge device validation
+- Rate limiting / DDoS protection
+- Threat detection
+- Integrity monitoring
+- Minimal footprint (~50MB)
+
 Memory target: 128-384MB
-No external dependencies (stdlib only)
 """
 
 import os
@@ -31,7 +38,7 @@ from threading import Thread
 # CONFIGURATION (from environment)
 # ============================================================
 
-NODE_ID = os.environ.get("SENTINEL_NODE_ID", f"sentinel-lite-{socket.gethostname()}")
+NODE_ID = os.environ.get("SENTINEL_NODE_ID", f"sentinel-{socket.gethostname()}")
 MSSP_ENDPOINT = os.environ.get("MSSP_ENDPOINT", "mssp.hookprobe.com")
 MSSP_PORT = int(os.environ.get("MSSP_PORT", "8443"))
 LISTEN_PORT = int(os.environ.get("SENTINEL_PORT", "8443"))
@@ -50,6 +57,13 @@ GC_INTERVAL = 60
 # Rate limits
 RATE_LIMITS = {"community": 100, "professional": 1000, "enterprise": 10000}
 
+# Security settings
+SECURITY_ENABLED = os.environ.get("ENABLE_THREAT_DETECTION", "true").lower() == "true"
+RATE_LIMITING_ENABLED = os.environ.get("ENABLE_RATE_LIMITING", "true").lower() == "true"
+BLOCK_ON_ATTACK = os.environ.get("BLOCK_ON_ATTACK", "true").lower() == "true"
+RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "100"))
+RATE_LIMIT_BURST = int(os.environ.get("RATE_LIMIT_BURST", "200"))
+
 # ============================================================
 # LOGGING
 # ============================================================
@@ -57,7 +71,7 @@ RATE_LIMITS = {"community": 100, "professional": 1000, "enterprise": 10000}
 log_handlers = [logging.StreamHandler(sys.stdout)]
 if os.path.exists('/var/log/hookprobe'):
     log_handlers.append(logging.handlers.RotatingFileHandler(
-        '/var/log/hookprobe/sentinel-lite.log',
+        '/var/log/hookprobe/sentinel.log',
         maxBytes=1024*1024, backupCount=2
     ))
 
@@ -107,24 +121,55 @@ class LRUCache:
                 self.order.remove(k)
 
 # ============================================================
+# SECURITY MODULE (optional - loads if available)
+# ============================================================
+
+security_manager = None
+try:
+    from sentinel_security import SecurityManager
+    security_manager = SecurityManager({
+        "rate_limit": RATE_LIMIT_REQUESTS,
+        "rate_burst": RATE_LIMIT_BURST,
+        "firewall_enabled": BLOCK_ON_ATTACK,
+    })
+    log.info("Security module loaded")
+except ImportError:
+    log.warning("Security module not available - running without protection")
+except Exception as e:
+    log.warning(f"Failed to load security module: {e}")
+
+# ============================================================
 # SENTINEL VALIDATOR
 # ============================================================
 
 class Sentinel:
-    """Lightweight edge device validator"""
+    """Lightweight edge device validator with security protection"""
 
     def __init__(self):
         self.cache = LRUCache(CACHE_MAX, CACHE_TTL)
         self.rates = defaultdict(int)
         self.rate_window = 0
-        self.stats = {'ok': 0, 'fail': 0, 'err': 0, 'start': time.time()}
+        self.stats = {'ok': 0, 'fail': 0, 'err': 0, 'blocked': 0, 'start': time.time()}
         self.edges = []
+        self.security = security_manager
 
     def validate(self, data: bytes, addr: tuple) -> dict:
-        """Validate HTP message from edge device"""
+        """Validate HTP message from edge device with security checks"""
+        client_ip = addr[0] if addr else "unknown"
+
         try:
+            # Security check first (if enabled)
+            if self.security and SECURITY_ENABLED:
+                allowed, reason = self.security.check_request(client_ip, "/validate", data)
+                if not allowed:
+                    self.stats['blocked'] += 1
+                    log.warning(f"[SECURITY] Blocked {client_ip}: {reason}")
+                    return {'valid': False, 'reason': 'blocked', 'security': reason}
+
             if len(data) < 32:
                 self.stats['fail'] += 1
+                if self.security:
+                    self.security.threat_detector.record_error(client_ip)
                 return {'valid': False, 'reason': 'short'}
 
             edge_id = data[:16].hex()
@@ -146,6 +191,8 @@ class Sentinel:
                 self._track(edge_id)
             else:
                 self.stats['fail'] += 1
+                if self.security:
+                    self.security.threat_detector.record_error(client_ip)
 
             return result
         except Exception as e:
@@ -187,6 +234,8 @@ class Sentinel:
     def cleanup(self):
         """Periodic cleanup"""
         self.cache.cleanup()
+        if self.security:
+            self.security.periodic_cleanup()
         gc.collect()
 
 # ============================================================
@@ -212,6 +261,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
     def _metrics(self):
         s = sentinel.stats
         up = time.time() - s['start']
+
+        # Security stats
+        sec_stats = sentinel.security.get_stats() if sentinel.security else {}
+        blocked_count = s.get('blocked', 0)
+        attacks = sec_stats.get('attacks_detected', 0)
+        blocked_ips = len(sec_stats.get('blocked_ips', []))
+
         m = f"""# HELP sentinel_validated Total validated
 # TYPE sentinel_validated counter
 sentinel_validated {s['ok']}
@@ -221,12 +277,24 @@ sentinel_rejected {s['fail']}
 # HELP sentinel_errors Total errors
 # TYPE sentinel_errors counter
 sentinel_errors {s['err']}
+# HELP sentinel_blocked Total blocked by security
+# TYPE sentinel_blocked counter
+sentinel_blocked {blocked_count}
+# HELP sentinel_attacks_detected Attacks detected
+# TYPE sentinel_attacks_detected counter
+sentinel_attacks_detected {attacks}
+# HELP sentinel_blocked_ips Number of blocked IPs
+# TYPE sentinel_blocked_ips gauge
+sentinel_blocked_ips {blocked_ips}
 # HELP sentinel_edges Active edges
 # TYPE sentinel_edges gauge
 sentinel_edges {len(sentinel.edges)}
 # HELP sentinel_uptime Uptime seconds
 # TYPE sentinel_uptime gauge
 sentinel_uptime {up:.0f}
+# HELP sentinel_security_enabled Security protection enabled
+# TYPE sentinel_security_enabled gauge
+sentinel_security_enabled {1 if sentinel.security else 0}
 # HELP sentinel_info Info
 # TYPE sentinel_info gauge
 sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
@@ -238,15 +306,26 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
 
     def _health(self):
         s = sentinel.stats
+        sec_stats = sentinel.security.get_stats() if sentinel.security else {}
+
         h = {
             'status': 'healthy',
+            'version': '2.0.0',
             'node_id': NODE_ID,
             'region': REGION,
             'tier': TIER,
             'uptime': int(time.time() - s['start']),
             'validated': s['ok'],
+            'rejected': s['fail'],
+            'blocked': s.get('blocked', 0),
             'edges': len(sentinel.edges),
-            'memory_mb': MEMORY_LIMIT
+            'memory_mb': MEMORY_LIMIT,
+            'security': {
+                'enabled': sentinel.security is not None,
+                'attacks_detected': sec_stats.get('attacks_detected', 0),
+                'blocked_ips': len(sec_stats.get('blocked_ips', [])),
+                'integrity_ok': len(sec_stats.get('integrity_changes', [])) == 0
+            }
         }
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -294,15 +373,22 @@ def main():
     global sentinel
 
     log.info("=" * 50)
-    log.info("HookProbe Sentinel Lite v1.0.0")
+    log.info("HookProbe Sentinel v2.0.0")
+    log.info("\"The Watchful Eye\"")
     log.info("=" * 50)
-    log.info(f"Node:    {NODE_ID}")
-    log.info(f"Region:  {REGION}")
-    log.info(f"Tier:    {TIER}")
-    log.info(f"Listen:  UDP:{LISTEN_PORT}")
-    log.info(f"Metrics: HTTP:{METRICS_PORT}")
-    log.info(f"MSSP:    {MSSP_ENDPOINT}:{MSSP_PORT}")
-    log.info(f"Memory:  {MEMORY_LIMIT}MB limit")
+    log.info(f"Node:     {NODE_ID}")
+    log.info(f"Region:   {REGION}")
+    log.info(f"Tier:     {TIER}")
+    log.info(f"Listen:   UDP:{LISTEN_PORT}")
+    log.info(f"Metrics:  HTTP:{METRICS_PORT}")
+    log.info(f"MSSP:     {MSSP_ENDPOINT}:{MSSP_PORT}")
+    log.info(f"Memory:   {MEMORY_LIMIT}MB limit")
+    log.info("-" * 50)
+    log.info(f"Security: {'ENABLED' if security_manager else 'DISABLED'}")
+    if security_manager:
+        log.info(f"  Rate Limit: {RATE_LIMIT_REQUESTS}/s (burst: {RATE_LIMIT_BURST})")
+        log.info(f"  Threat Detection: {SECURITY_ENABLED}")
+        log.info(f"  Block on Attack: {BLOCK_ON_ATTACK}")
     log.info("=" * 50)
 
     sentinel = Sentinel()
