@@ -637,11 +637,23 @@ main() {
     # Install dependencies
     install_dependencies
 
+    # Detect existing network configuration (WiFi bridges, WAN, etc.)
+    echo ""
+    echo -e "${CYAN}Detecting network configuration...${NC}"
+    echo ""
+    detect_network_config
+
+    # Show network summary and get confirmation
+    show_network_summary
+
     # Setup OVS bridge with VXLAN networking
     setup_ovs_bridge
     create_networks
     setup_vxlan_tunnels
     setup_openflow_monitoring
+
+    # Configure routing from hookprobe bridge to WAN
+    configure_hookprobe_routing
 
     # Deploy core PODs (always installed)
     deploy_database_pod
@@ -898,6 +910,276 @@ check_and_upgrade_cni() {
 }
 
 # ============================================================
+# NETWORK DETECTION AND SAFE BRIDGE CONFIGURATION
+# ============================================================
+
+# Detected network configuration (populated by detect_network_config)
+DETECTED_BRIDGES=()
+DETECTED_WIFI_INTERFACES=()
+DETECTED_WIFI_BRIDGES=()
+DETECTED_WAN_INTERFACE=""
+DETECTED_DEFAULT_GATEWAY=""
+NETWORK_MANAGER_ACTIVE=false
+EXISTING_HOOKPROBE_BRIDGE=false
+
+detect_network_config() {
+    # Comprehensive network detection to avoid conflicts with existing services
+    echo "Detecting network configuration..."
+    echo ""
+
+    # Check if NetworkManager is managing the network
+    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        NETWORK_MANAGER_ACTIVE=true
+        echo -e "  ${CYAN}NetworkManager:${NC} Active"
+    elif command -v nmcli &>/dev/null && nmcli general status &>/dev/null; then
+        NETWORK_MANAGER_ACTIVE=true
+        echo -e "  ${CYAN}NetworkManager:${NC} Active"
+    else
+        echo -e "  ${CYAN}NetworkManager:${NC} Not active"
+    fi
+
+    # Detect existing Linux bridges
+    echo ""
+    echo -e "  ${CYAN}Existing bridges:${NC}"
+    local bridges=$(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1)
+    if [ -n "$bridges" ]; then
+        while read -r br; do
+            [ -z "$br" ] && continue
+            DETECTED_BRIDGES+=("$br")
+            local br_ip=$(ip -4 addr show "$br" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+            local br_state=$(ip link show "$br" 2>/dev/null | grep -oP '(?<=state\s)\w+')
+            echo "    - $br (IP: ${br_ip:-none}, State: ${br_state:-unknown})"
+
+            # Check if this is a hookprobe bridge
+            if [[ "$br" == "hookprobe" ]] || [[ "$br" == "hkpr-"* ]]; then
+                EXISTING_HOOKPROBE_BRIDGE=true
+            fi
+        done <<< "$bridges"
+    else
+        echo "    (none found)"
+    fi
+
+    # Detect OVS bridges
+    if command -v ovs-vsctl &>/dev/null; then
+        local ovs_bridges=$(ovs-vsctl list-br 2>/dev/null)
+        if [ -n "$ovs_bridges" ]; then
+            echo ""
+            echo -e "  ${CYAN}OVS bridges:${NC}"
+            while read -r br; do
+                [ -z "$br" ] && continue
+                DETECTED_BRIDGES+=("ovs:$br")
+                echo "    - $br (OVS)"
+                if [[ "$br" == "hookprobe" ]]; then
+                    EXISTING_HOOKPROBE_BRIDGE=true
+                fi
+            done <<< "$ovs_bridges"
+        fi
+    fi
+
+    # Detect WiFi interfaces
+    echo ""
+    echo -e "  ${CYAN}WiFi interfaces:${NC}"
+    local wifi_ifaces=$(iw dev 2>/dev/null | grep Interface | awk '{print $2}')
+    if [ -z "$wifi_ifaces" ]; then
+        # Fallback: check /sys/class/net for wireless
+        wifi_ifaces=$(ls -d /sys/class/net/*/wireless 2>/dev/null | cut -d'/' -f5)
+    fi
+
+    if [ -n "$wifi_ifaces" ]; then
+        while read -r iface; do
+            [ -z "$iface" ] && continue
+            DETECTED_WIFI_INTERFACES+=("$iface")
+            local wifi_mode=$(iw dev "$iface" info 2>/dev/null | grep type | awk '{print $2}')
+            local wifi_ssid=$(iw dev "$iface" info 2>/dev/null | grep ssid | awk '{print $2}')
+            echo "    - $iface (Mode: ${wifi_mode:-unknown}, SSID: ${wifi_ssid:-not connected})"
+
+            # Check if WiFi is bridged
+            local master=$(ip link show "$iface" 2>/dev/null | grep -oP '(?<=master\s)\w+')
+            if [ -n "$master" ]; then
+                DETECTED_WIFI_BRIDGES+=("$master")
+                echo "      └─ Bridged to: $master"
+            fi
+        done <<< "$wifi_ifaces"
+    else
+        echo "    (none found)"
+    fi
+
+    # Detect WAN interface (default route)
+    echo ""
+    echo -e "  ${CYAN}WAN interface:${NC}"
+    DETECTED_DEFAULT_GATEWAY=$(ip route show default 2>/dev/null | head -1 | awk '{print $3}')
+    DETECTED_WAN_INTERFACE=$(ip route show default 2>/dev/null | head -1 | awk '{print $5}')
+
+    if [ -n "$DETECTED_WAN_INTERFACE" ]; then
+        local wan_ip=$(ip -4 addr show "$DETECTED_WAN_INTERFACE" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+        echo "    - $DETECTED_WAN_INTERFACE (IP: ${wan_ip:-dhcp}, Gateway: ${DETECTED_DEFAULT_GATEWAY:-none})"
+    else
+        echo "    (no default route found)"
+    fi
+
+    # Detect NetworkManager connections
+    if [ "$NETWORK_MANAGER_ACTIVE" = true ]; then
+        echo ""
+        echo -e "  ${CYAN}NetworkManager connections:${NC}"
+        nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null | while IFS=':' read -r name type device; do
+            echo "    - $name ($type) on ${device:-disconnected}"
+        done
+    fi
+
+    # Check for hostapd (WiFi AP mode)
+    if pgrep -x hostapd &>/dev/null || systemctl is-active --quiet hostapd 2>/dev/null; then
+        echo ""
+        echo -e "  ${CYAN}WiFi Access Point:${NC}"
+        echo "    - hostapd is running (WiFi AP mode detected)"
+        local hostapd_conf=$(cat /etc/hostapd/hostapd.conf 2>/dev/null | grep -E "^interface=|^bridge=" | tr '\n' ', ')
+        [ -n "$hostapd_conf" ] && echo "      Config: $hostapd_conf"
+    fi
+
+    # Check for dnsmasq (DHCP server)
+    if pgrep -x dnsmasq &>/dev/null || systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        echo ""
+        echo -e "  ${CYAN}DHCP Server:${NC}"
+        echo "    - dnsmasq is running"
+    fi
+
+    echo ""
+}
+
+show_network_summary() {
+    # Display network summary and get user confirmation
+    echo -e "${CYAN}Network Configuration Summary${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    if [ "$EXISTING_HOOKPROBE_BRIDGE" = true ]; then
+        echo -e "${YELLOW}[!] Existing HookProbe bridge detected${NC}"
+        echo "    The installer will reconfigure the existing bridge."
+        echo ""
+    fi
+
+    if [ ${#DETECTED_WIFI_BRIDGES[@]} -gt 0 ]; then
+        echo -e "${GREEN}[x] WiFi bridge(s) detected - will NOT be modified:${NC}"
+        for br in "${DETECTED_WIFI_BRIDGES[@]}"; do
+            echo "    - $br"
+        done
+        echo ""
+    fi
+
+    if [ -n "$DETECTED_WAN_INTERFACE" ]; then
+        echo -e "${GREEN}[x] WAN interface: $DETECTED_WAN_INTERFACE${NC}"
+        echo "    HookProbe bridge will route traffic through this interface"
+        echo ""
+    fi
+
+    echo -e "${CYAN}HookProbe network configuration:${NC}"
+    echo "    Bridge name:    $OVS_BRIDGE_NAME"
+    echo "    Bridge subnet:  $OVS_BRIDGE_SUBNET"
+    echo "    Bridge IP:      10.250.0.1"
+    echo ""
+
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        echo -e "${YELLOW}Important:${NC}"
+        echo "  - HookProbe will create an isolated bridge for container traffic"
+        echo "  - Existing WiFi bridges and services will NOT be affected"
+        echo "  - Container traffic will be NATed through $DETECTED_WAN_INTERFACE"
+        echo ""
+        read -p "Proceed with network configuration? [Y/n]: " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Nn]$ ]]; then
+            echo "Network configuration cancelled."
+            echo "Using host network mode instead."
+            USE_HOST_NETWORK=true
+            return 1
+        fi
+    fi
+    return 0
+}
+
+configure_hookprobe_routing() {
+    # Configure routing from hookprobe bridge to WAN interface
+    # This ensures container traffic can reach the internet without affecting other services
+
+    echo "Configuring HookProbe network routing..."
+
+    # Skip if using host network
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        echo -e "  ${YELLOW}[-]${NC} Host network mode - skipping routing setup"
+        return 0
+    fi
+
+    # Ensure WAN interface is detected
+    if [ -z "$DETECTED_WAN_INTERFACE" ]; then
+        DETECTED_WAN_INTERFACE=$(ip route show default 2>/dev/null | head -1 | awk '{print $5}')
+    fi
+
+    if [ -z "$DETECTED_WAN_INTERFACE" ]; then
+        echo -e "  ${YELLOW}[!]${NC} No WAN interface detected - skipping routing"
+        return 0
+    fi
+
+    echo -e "  WAN interface: $DETECTED_WAN_INTERFACE"
+
+    # Enable IP forwarding
+    echo -e "  Enabling IP forwarding..."
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+
+    # Make persistent
+    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    fi
+
+    # Configure NAT for HookProbe subnet using nftables or iptables
+    local hookprobe_subnet="10.250.0.0/16"
+
+    if command -v nft &>/dev/null; then
+        # Use nftables (preferred on modern systems)
+        echo -e "  Configuring NAT with nftables..."
+
+        # Create hookprobe NAT table if not exists
+        nft list table ip hookprobe_nat &>/dev/null || {
+            nft add table ip hookprobe_nat
+            nft add chain ip hookprobe_nat postrouting '{ type nat hook postrouting priority 100 ; }'
+        }
+
+        # Add masquerade rule for hookprobe subnet
+        nft add rule ip hookprobe_nat postrouting oifname "$DETECTED_WAN_INTERFACE" ip saddr $hookprobe_subnet masquerade 2>/dev/null || true
+
+        echo -e "  ${GREEN}[x]${NC} NAT configured (nftables)"
+
+    elif command -v iptables &>/dev/null; then
+        # Fallback to iptables
+        echo -e "  Configuring NAT with iptables..."
+
+        # Check if rule already exists
+        if ! iptables -t nat -C POSTROUTING -s $hookprobe_subnet -o "$DETECTED_WAN_INTERFACE" -j MASQUERADE 2>/dev/null; then
+            iptables -t nat -A POSTROUTING -s $hookprobe_subnet -o "$DETECTED_WAN_INTERFACE" -j MASQUERADE
+        fi
+
+        echo -e "  ${GREEN}[x]${NC} NAT configured (iptables)"
+    else
+        echo -e "  ${YELLOW}[!]${NC} Neither nftables nor iptables available - manual NAT setup required"
+    fi
+
+    # Add route for hookprobe subnet if bridge exists
+    if ip link show "$OVS_BRIDGE_NAME" &>/dev/null; then
+        ip route add $hookprobe_subnet dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
+    fi
+
+    # Save routing configuration
+    mkdir -p /etc/hookprobe
+    cat > /etc/hookprobe/routing.conf << ROUTEEOF
+# HookProbe Routing Configuration
+WAN_INTERFACE=$DETECTED_WAN_INTERFACE
+HOOKPROBE_SUBNET=$hookprobe_subnet
+HOOKPROBE_BRIDGE=$OVS_BRIDGE_NAME
+DEFAULT_GATEWAY=$DETECTED_DEFAULT_GATEWAY
+ROUTEEOF
+    chmod 644 /etc/hookprobe/routing.conf
+
+    echo -e "  ${GREEN}[x]${NC} Routing configuration saved"
+}
+
+# ============================================================
 # OVS BRIDGE SETUP WITH VXLAN/VNI/PSK
 # ============================================================
 
@@ -922,23 +1204,77 @@ generate_vxlan_psk() {
 setup_ovs_bridge() {
     echo "Setting up OVS bridge '$OVS_BRIDGE_NAME' with VXLAN networking..."
 
-    # Check if OVS is installed
-    if ! command -v ovs-vsctl &> /dev/null; then
-        echo "  Installing Open vSwitch..."
-        if command -v apt-get &> /dev/null; then
-            apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
-        elif command -v dnf &> /dev/null; then
-            dnf install -y openvswitch 2>/dev/null
-        elif command -v yum &> /dev/null; then
-            yum install -y openvswitch 2>/dev/null
+    # Check if running in LXC container - OVS kernel modules can't be loaded
+    if detect_container_environment; then
+        echo -e "  ${YELLOW}[!]${NC} LXC container detected"
+        echo "  OVS kernel modules cannot be built/loaded in LXC containers."
+        echo "  (openvswitch-datapath-dkms requires host kernel access)"
+        echo ""
+
+        # Check if OVS kernel module is available from host
+        if lsmod | grep -q openvswitch 2>/dev/null; then
+            echo -e "  ${GREEN}[x]${NC} OVS kernel module available from host"
+        else
+            echo -e "  ${YELLOW}[!]${NC} OVS kernel module not loaded on host"
+            echo "  To use OVS in LXC, load the module on the Proxmox host:"
+            echo "    modprobe openvswitch"
+            echo "    echo 'openvswitch' >> /etc/modules"
+            echo ""
+            echo -e "  ${GREEN}[x]${NC} Using host network mode instead (recommended for LXC)"
+            USE_OVS_BRIDGE=false
+            USE_HOST_NETWORK=true
+            return 0
         fi
     fi
 
-    # If OVS still not available, fall back to Linux bridge
+    # Check if OVS is installed
     if ! command -v ovs-vsctl &> /dev/null; then
-        echo -e "${YELLOW}⚠ OVS not available, using standard bridge mode${NC}"
+        echo "  Installing Open vSwitch..."
+
+        # In LXC, only install userspace tools (not dkms)
+        if detect_container_environment; then
+            if command -v apt-get &> /dev/null; then
+                # Install only userspace components, skip dkms
+                apt-get update -qq
+                apt-get install -y --no-install-recommends openvswitch-switch openvswitch-common 2>/dev/null || {
+                    echo -e "  ${YELLOW}[!]${NC} OVS installation failed in LXC"
+                    USE_OVS_BRIDGE=false
+                    USE_HOST_NETWORK=true
+                    return 0
+                }
+            fi
+        else
+            # Normal installation (non-LXC)
+            if command -v apt-get &> /dev/null; then
+                apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
+            elif command -v dnf &> /dev/null; then
+                dnf install -y openvswitch 2>/dev/null
+            elif command -v yum &> /dev/null; then
+                yum install -y openvswitch 2>/dev/null
+            fi
+        fi
+    fi
+
+    # If OVS still not available, fall back to host networking
+    if ! command -v ovs-vsctl &> /dev/null; then
+        echo -e "${YELLOW}[!]${NC} OVS not available, using host network mode"
         USE_OVS_BRIDGE=false
+        USE_HOST_NETWORK=true
         return 0
+    fi
+
+    # Check if OVS kernel module is loaded
+    if ! lsmod | grep -q openvswitch 2>/dev/null; then
+        # Try to load it (will fail in LXC)
+        modprobe openvswitch 2>/dev/null || {
+            if detect_container_environment; then
+                echo -e "  ${YELLOW}[!]${NC} Cannot load OVS module in LXC container"
+                echo "  Load 'openvswitch' module on Proxmox host, or use host networking"
+                USE_OVS_BRIDGE=false
+                USE_HOST_NETWORK=true
+                return 0
+            fi
+        }
     fi
 
     USE_OVS_BRIDGE=true
