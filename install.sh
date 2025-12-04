@@ -654,13 +654,10 @@ show_main_menu() {
 
     echo -e "${YELLOW}┌─ Main Menu ────────────────────────────────────────────────┐${NC}"
     echo -e "│                                                            │"
-    echo -e "│  ${BOLD}1${NC}) Check System Capabilities                              │"
-    echo -e "│     ${DIM}Analyze hardware and determine eligible tiers${NC}         │"
+    echo -e "│  ${BOLD}1${NC}) Check System & Install                                 │"
+    echo -e "│     ${DIM}Analyze hardware, select tier, and deploy${NC}              │"
     echo -e "│                                                            │"
-    echo -e "│  ${BOLD}2${NC}) Install HookProbe                                      │"
-    echo -e "│     ${DIM}Deploy Sentinel, Guardian, Fortress, or Nexus${NC}          │"
-    echo -e "│                                                            │"
-    echo -e "│  ${BOLD}3${NC}) Uninstall / Cleanup                                    │"
+    echo -e "│  ${BOLD}2${NC}) Uninstall / Cleanup                                    │"
     echo -e "│     ${DIM}Remove containers, networks, configurations${NC}            │"
     echo -e "│                                                            │"
     echo -e "│  ${BOLD}q${NC}) Quit                                                   │"
@@ -1646,8 +1643,7 @@ main() {
 
         case $choice in
             1) handle_capability_check ;;
-            2) handle_install ;;
-            3) handle_uninstall ;;
+            2) handle_uninstall ;;
             q|Q) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
         esac
