@@ -1,0 +1,123 @@
+# HookProbe Sentinel Basic Signatures
+# Version: 2.0.0
+#
+# Format: type|pattern|severity|description
+# Types: path, body, header
+# Severities: low, medium, high, critical
+
+# ============================================================
+# PATH TRAVERSAL
+# ============================================================
+path|../|high|Path traversal attempt
+path|..%2f|high|Encoded path traversal
+path|%2e%2e/|high|Double-encoded path traversal
+path|..%5c|high|Windows path traversal
+path|%2e%2e%5c|high|Double-encoded Windows traversal
+path|....//|high|Double-dot path traversal bypass
+
+# ============================================================
+# SQL INJECTION
+# ============================================================
+body|union.*select|high|SQL injection UNION SELECT
+body|or\s+1\s*=\s*1|medium|SQL injection OR 1=1
+body|and\s+1\s*=\s*1|medium|SQL injection AND 1=1
+body|drop\s+table|critical|SQL DROP TABLE attempt
+body|insert\s+into|high|SQL INSERT attempt
+body|delete\s+from|critical|SQL DELETE attempt
+body|update\s+.*set|high|SQL UPDATE attempt
+body|exec\s+xp_|critical|SQL Server xp_ exec
+body|waitfor\s+delay|high|SQL time-based injection
+body|benchmark\s*\(|high|MySQL time-based injection
+body|sleep\s*\(\d|high|Time-based injection sleep()
+
+# ============================================================
+# XSS (Cross-Site Scripting)
+# ============================================================
+body|<script|high|XSS script tag
+body|javascript:|high|XSS javascript protocol
+body|onerror\s*=|medium|XSS event handler onerror
+body|onload\s*=|medium|XSS event handler onload
+body|onclick\s*=|medium|XSS event handler onclick
+body|onmouseover\s*=|low|XSS event handler onmouseover
+body|<iframe|medium|XSS iframe injection
+body|<object|medium|XSS object tag
+body|<embed|medium|XSS embed tag
+body|<svg.*onload|high|SVG XSS payload
+
+# ============================================================
+# COMMAND INJECTION
+# ============================================================
+body|;\s*cat\s|high|Command injection cat
+body|;\s*ls\s|medium|Command injection ls
+body|;\s*id\s*$|high|Command injection id
+body|;\s*whoami|high|Command injection whoami
+body|\|\s*sh\s|high|Pipe to shell
+body|\|\s*bash\s|high|Pipe to bash
+body|`.*`|high|Backtick command execution
+body|\$\(.*\)|high|Command substitution
+body|/bin/sh|critical|Direct shell access
+body|/bin/bash|critical|Direct bash access
+body|cmd\.exe|high|Windows cmd.exe
+body|powershell|high|PowerShell execution
+
+# ============================================================
+# SENSITIVE FILE ACCESS
+# ============================================================
+path|/etc/passwd|critical|Access to passwd
+path|/etc/shadow|critical|Access to shadow
+path|/etc/hosts|medium|Access to hosts file
+path|\.env|high|Access to environment file
+path|\.git/|high|Access to git directory
+path|\.svn/|high|Access to svn directory
+path|wp-config\.php|high|WordPress config
+path|config\.php|medium|PHP config file
+path|\.htaccess|high|Apache htaccess
+path|web\.config|high|IIS web.config
+path|\.ssh/|critical|SSH directory access
+path|id_rsa|critical|SSH private key access
+
+# ============================================================
+# SCANNER SIGNATURES
+# ============================================================
+header|nikto|medium|Nikto scanner
+header|sqlmap|high|SQLMap scanner
+header|nmap|medium|Nmap scanner
+header|masscan|medium|Masscan scanner
+header|dirbuster|medium|DirBuster scanner
+header|gobuster|medium|GoBuster scanner
+header|wfuzz|medium|WFuzz scanner
+header|burp|medium|Burp Suite
+header|zap|medium|OWASP ZAP
+header|acunetix|high|Acunetix scanner
+header|nessus|medium|Nessus scanner
+
+# ============================================================
+# PROTOCOL ATTACKS
+# ============================================================
+body|%00|high|Null byte injection
+body|%0d%0a|high|CRLF injection
+body|\r\n.*:\s|high|HTTP header injection
+path|\.\.%00|critical|Null byte path traversal
+
+# ============================================================
+# LOG INJECTION
+# ============================================================
+body|\n.*=.*|medium|Log injection newline
+body|%0a.*%3d|medium|Encoded log injection
+
+# ============================================================
+# SSRF (Server-Side Request Forgery)
+# ============================================================
+body|127\.0\.0\.1|medium|Localhost SSRF attempt
+body|localhost|medium|Localhost SSRF keyword
+body|0\.0\.0\.0|medium|Zero IP SSRF
+body|169\.254\.|high|AWS metadata SSRF
+body|metadata\.google|high|GCP metadata SSRF
+
+# ============================================================
+# XXE (XML External Entity)
+# ============================================================
+body|<!ENTITY|critical|XXE entity declaration
+body|SYSTEM\s+"file:|critical|XXE file protocol
+body|SYSTEM\s+"http:|high|XXE http protocol
+body|<!DOCTYPE.*\[|high|XXE DOCTYPE with DTD
