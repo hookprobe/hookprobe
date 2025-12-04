@@ -66,6 +66,9 @@ LOGTO_ENDPOINT=""
 LOGTO_APP_ID=""
 LOGTO_APP_SECRET=""
 
+# Kali Security Module
+ENABLE_KALI=false
+
 # MSSP/HTP Configuration
 MSSP_ENDPOINT="${MSSP_ENDPOINT:-mssp.hookprobe.com}"
 MSSP_PORT="${MSSP_PORT:-8443}"
@@ -149,6 +152,53 @@ parse_arguments() {
                 CLOUDFLARE_TUNNEL_TOKEN="$2"
                 shift 2
                 ;;
+            --tier)
+                # Deployment tier from unified installer
+                case "$2" in
+                    guardian)
+                        ENABLE_SENTINEL_ONLY=false
+                        ENABLE_SENTINEL=true
+                        ENABLE_EDGE=true
+                        ENABLE_DATABASE=true
+                        ENABLE_CACHE=true
+                        ENABLE_WEBSERVER=false
+                        ENABLE_IAM=false
+                        ENABLE_AI=false
+                        ENABLE_MONITORING=false
+                        EDGE_MODE="guardian"
+                        ;;
+                    fortress)
+                        ENABLE_SENTINEL_ONLY=false
+                        ENABLE_SENTINEL=true
+                        ENABLE_EDGE=true
+                        ENABLE_DATABASE=true
+                        ENABLE_CACHE=true
+                        ENABLE_WEBSERVER=true
+                        ENABLE_IAM=true
+                        ENABLE_AI=true
+                        ENABLE_MONITORING=true
+                        EDGE_MODE="fortress"
+                        ;;
+                    nexus)
+                        ENABLE_SENTINEL_ONLY=false
+                        ENABLE_SENTINEL=true
+                        ENABLE_EDGE=true
+                        ENABLE_DATABASE=true
+                        ENABLE_CACHE=true
+                        ENABLE_WEBSERVER=true
+                        ENABLE_IAM=true
+                        ENABLE_AI=true
+                        ENABLE_MONITORING=true
+                        ENABLE_CLICKHOUSE=true
+                        EDGE_MODE="nexus"
+                        ;;
+                esac
+                shift 2
+                ;;
+            --enable-kali)
+                ENABLE_KALI=true
+                shift
+                ;;
             --mssp-endpoint)
                 MSSP_ENDPOINT="$2"
                 shift 2
@@ -203,6 +253,8 @@ Options:
   --disable-iam        Skip IAM (Logto) installation
   --non-interactive    Skip interactive prompts (use defaults)
   --cf-token TOKEN     Cloudflare Tunnel token (for web server)
+  --tier TIER          Deployment tier (guardian, fortress, nexus)
+  --enable-kali        Enable Kali security module (pentest tools)
   --mssp-endpoint HOST MSSP endpoint for Sentinel/Edge connection
   --mssp-port PORT     MSSP port (default: 8443)
   --node-id ID         Node identifier for MSSP registration
@@ -1076,6 +1128,46 @@ validate_htp_connection() {
 }
 
 # ============================================================
+# CONFIG LOADING
+# ============================================================
+
+load_hookprobe_configs() {
+    # Load Logto configuration if available
+    if [ -f /etc/hookprobe/logto.conf ]; then
+        echo -e "${GREEN}[✓]${NC} Loading Logto configuration..."
+        source /etc/hookprobe/logto.conf
+        # Map config variables to installer variables
+        LOGTO_ENDPOINT="${LOGTO_ENDPOINT:-}"
+        LOGTO_APP_ID="${LOGTO_APP_ID:-}"
+        LOGTO_APP_SECRET="${LOGTO_APP_SECRET:-}"
+    fi
+
+    # Load Cloudflare configuration if available
+    if [ -f /etc/hookprobe/cloudflare.conf ]; then
+        echo -e "${GREEN}[✓]${NC} Loading Cloudflare configuration..."
+        source /etc/hookprobe/cloudflare.conf
+        # Map config variables
+        CLOUDFLARE_TUNNEL_TOKEN="${CF_API_TOKEN:-$CLOUDFLARE_TUNNEL_TOKEN}"
+        CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+        CF_ZONE_ID="${CF_ZONE_ID:-}"
+        CF_DOMAIN="${CF_DOMAIN:-}"
+        CF_TUNNEL_SUBDOMAIN="${CF_TUNNEL_SUBDOMAIN:-}"
+    fi
+
+    # Load network/bridge configuration if available
+    if [ -f /etc/hookprobe/network/bridge.conf ]; then
+        echo -e "${GREEN}[✓]${NC} Loading network bridge configuration..."
+        source /etc/hookprobe/network/bridge.conf
+    fi
+
+    # Load MSSP secrets if available
+    if [ -f /etc/hookprobe/secrets/mssp-id ]; then
+        MSSP_ID=$(cat /etc/hookprobe/secrets/mssp-id 2>/dev/null)
+        echo -e "${GREEN}[✓]${NC} MSSP ID loaded"
+    fi
+}
+
+# ============================================================
 # INSTALLATION STEPS
 # ============================================================
 
@@ -1087,6 +1179,9 @@ main() {
 
     # Parse command-line arguments
     parse_arguments "$@"
+
+    # Load existing configurations from /etc/hookprobe/
+    load_hookprobe_configs
 
     # --------------------------------------------------------
     # [1/7] PLATFORM DETECTION
@@ -1282,6 +1377,11 @@ main() {
         if [ "$ENABLE_AI" = true ]; then
             deploy_detection_pod
             deploy_ai_pod
+        fi
+
+        # Deploy Kali security module if enabled
+        if [ "$ENABLE_KALI" = true ]; then
+            deploy_kali_pod
         fi
     fi
 
@@ -3402,6 +3502,69 @@ deploy_ai_pod() {
         bash -c "pip install scikit-learn tensorflow && python -c 'import time; print(\"AI running...\"); time.sleep(999999)'"
 
     echo -e "${GREEN}✓${NC} POD-007 deployed"
+}
+
+deploy_kali_pod() {
+    echo "Deploying POD-008: Kali Security Module (Pentest Tools)..."
+
+    local network_arg=$(get_network_arg "kali")
+
+    podman pod create \
+        --name hookprobe-kali \
+        $network_arg
+
+    # Kali Linux container with essential security tools
+    podman run -d \
+        --pod hookprobe-kali \
+        --name hookprobe-kali-tools \
+        --memory 1024M \
+        --restart unless-stopped \
+        --privileged \
+        --cap-add NET_ADMIN \
+        --cap-add NET_RAW \
+        --cap-add SYS_ADMIN \
+        -v /etc/hookprobe/kali:/data:Z \
+        docker.io/kalilinux/kali-rolling:latest \
+        bash -c '
+            apt-get update && apt-get install -y --no-install-recommends \
+                nmap \
+                nikto \
+                sqlmap \
+                dirb \
+                gobuster \
+                hydra \
+                john \
+                hashcat \
+                metasploit-framework \
+                exploitdb \
+                wpscan \
+                nuclei \
+                whatweb \
+                sslscan \
+                testssl.sh \
+                net-tools \
+                iputils-ping \
+                dnsutils \
+                curl \
+                wget \
+            && mkdir -p /data/reports \
+            && echo "Kali tools ready" \
+            && tail -f /dev/null
+        '
+
+    echo -e "${GREEN}✓${NC} POD-008 deployed"
+    echo ""
+    echo "Kali Security Module includes:"
+    echo "  • nmap         - Network scanner"
+    echo "  • nikto        - Web server scanner"
+    echo "  • sqlmap       - SQL injection tool"
+    echo "  • hydra        - Password cracker"
+    echo "  • metasploit   - Penetration testing framework"
+    echo "  • nuclei       - Vulnerability scanner"
+    echo "  • wpscan       - WordPress scanner"
+    echo "  • sslscan      - SSL/TLS scanner"
+    echo ""
+    echo "Access: podman exec -it hookprobe-kali-tools bash"
 }
 
 # ============================================================

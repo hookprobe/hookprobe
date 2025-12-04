@@ -287,17 +287,24 @@ detect_network_interfaces() {
         if [ -d "$iface" ]; then
             local type_file="$iface/type"
             local wireless_dir="$iface/wireless"
-            local operstate=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
+
+            # Determine interface state by IP address presence (more reliable than operstate)
+            # Has IP = UP, No IP = DOWN
+            local iface_ip=$(ip -4 addr show "$name" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+            local state="down"
+            if [ -n "$iface_ip" ]; then
+                state="up"
+            fi
 
             # Check for bridge interfaces
             if [ -d "$iface/bridge" ]; then
                 SYS_BRIDGE_COUNT=$((SYS_BRIDGE_COUNT + 1))
-                SYS_BRIDGES="${SYS_BRIDGES}${name}:${operstate} "
+                SYS_BRIDGES="${SYS_BRIDGES}${name}:${state} "
 
                 # Check if it's a WiFi/AP bridge (ap*, wifi-br*, wlan-br*, hostap*)
                 if echo "$name" | grep -qiE "^(ap[0-9]|wifi[-_]?br|wlan[-_]?br|hostap|wap)"; then
                     SYS_WIFI_BRIDGE_COUNT=$((SYS_WIFI_BRIDGE_COUNT + 1))
-                    SYS_WIFI_BRIDGES="${SYS_WIFI_BRIDGES}${name}:${operstate} "
+                    SYS_WIFI_BRIDGES="${SYS_WIFI_BRIDGES}${name}:${state} "
                 fi
 
                 # Check for HookProbe bridge specifically
@@ -310,7 +317,7 @@ detect_network_interfaces() {
             if [ -d "$wireless_dir" ]; then
                 # WiFi interface
                 SYS_WIFI_COUNT=$((SYS_WIFI_COUNT + 1))
-                SYS_WIFI_INTERFACES="${SYS_WIFI_INTERFACES}${name}:${operstate} "
+                SYS_WIFI_INTERFACES="${SYS_WIFI_INTERFACES}${name}:${state} "
 
                 # Check WiFi capabilities using iw
                 if command -v iw &>/dev/null; then
@@ -333,17 +340,18 @@ detect_network_interfaces() {
                     fi
                 fi
             elif [ -f "$type_file" ] && [ "$(cat "$type_file" 2>/dev/null)" = "1" ]; then
-                # Check if it's an LTE/mobile interface
-                if echo "$name" | grep -qiE "^(wwan|lte|usb|ppp|cdc|mbim)"; then
+                # Check if it's an LTE/5G/mobile interface
+                # Patterns: wwan*, lte*, wwp* (double W like wwp0s20f0u4), usb*, ppp*, cdc*, mbim*
+                if echo "$name" | grep -qiE "^(wwan|wwp|lte|usb|ppp|cdc|mbim)"; then
                     SYS_LTE_COUNT=$((SYS_LTE_COUNT + 1))
-                    SYS_LTE_INTERFACES="${SYS_LTE_INTERFACES}${name}:${operstate} "
+                    SYS_LTE_INTERFACES="${SYS_LTE_INTERFACES}${name}:${state} "
                 elif echo "$name" | grep -qiE "^(veth|docker|br-|virbr|cni|flannel|calico)"; then
                     # Virtual/container interface, skip
                     continue
                 else
                     # Regular ethernet
                     SYS_ETH_COUNT=$((SYS_ETH_COUNT + 1))
-                    SYS_ETH_INTERFACES="${SYS_ETH_INTERFACES}${name}:${operstate} "
+                    SYS_ETH_INTERFACES="${SYS_ETH_INTERFACES}${name}:${state} "
                 fi
             fi
         fi
@@ -1325,14 +1333,16 @@ install_fortress() {
     echo "Fortress is a full-featured edge gateway with local monitoring,"
     echo "dashboards, and automation capabilities for advanced deployments."
     echo ""
-    echo -e "${YELLOW}What will be installed:${NC}"
+    echo -e "${YELLOW}Core Components:${NC}"
     echo "  • All Guardian features, plus:"
+    echo "  • Nginx Web Server (reverse proxy)"
+    echo "  • PostgreSQL Database"
+    echo "  • Logto IAM (Identity & Access Management)"
+    echo "  • n8n Workflow Automation"
+    echo "  • Kali Security Module (pentest tools)"
     echo "  • Victoria Metrics (time-series database)"
-    echo "  • Grafana dashboards"
-    echo "  • n8n workflow automation"
-    echo "  • Web management interface"
-    echo "  • Local AI threat detection"
-    echo "  • ClickHouse analytics (optional)"
+    echo "  • Grafana Dashboards"
+    echo "  • Local AI Threat Detection"
     if [ "$SYS_LTE_COUNT" -gt 0 ]; then
         echo "  • LTE/5G failover support"
     fi
@@ -1364,8 +1374,96 @@ install_fortress() {
     fi
     echo ""
 
-    # Optional features
+    # ─────────────────────────────────────────────────────────────────
+    # Logto IAM Configuration
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}LOGTO IAM CONFIGURATION${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Logto provides identity and access management for the Fortress."
+    echo "You need to create an application in your Logto console first."
+    echo ""
+    local logto_endpoint="https://dvvud6.logto.app/"
+    echo -e "Default Endpoint: ${GREEN}$logto_endpoint${NC}"
+    echo ""
+    read -p "Use default Logto endpoint? (yes/no) [yes]: " use_default_logto
+    use_default_logto=${use_default_logto:-yes}
+    if [ "$use_default_logto" != "yes" ]; then
+        read -p "Enter Logto endpoint URL: " logto_endpoint
+    fi
+
+    read -p "Enter Logto App ID: " logto_app_id
+    while [ -z "$logto_app_id" ]; do
+        echo -e "${RED}App ID is required${NC}"
+        read -p "Enter Logto App ID: " logto_app_id
+    done
+
+    read -sp "Enter Logto App Secret: " logto_app_secret
+    echo ""
+    while [ -z "$logto_app_secret" ]; do
+        echo -e "${RED}App Secret is required${NC}"
+        read -sp "Enter Logto App Secret: " logto_app_secret
+        echo ""
+    done
+    echo -e "${GREEN}✓ Logto configuration captured${NC}"
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────────
+    # Cloudflare Tunnel Configuration
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}CLOUDFLARE TUNNEL CONFIGURATION${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Cloudflare Tunnel provides secure access to your Fortress without"
+    echo "exposing ports to the internet. This configuration is required."
+    echo ""
+    echo "You can find these values in your Cloudflare dashboard:"
+    echo "  - API Token: https://dash.cloudflare.com/profile/api-tokens"
+    echo "  - Account ID: Dashboard > Workers & Pages > Account ID"
+    echo "  - Zone ID: Dashboard > [Your Domain] > Overview > Zone ID"
+    echo ""
+
+    read -sp "Enter Cloudflare API Token: " cf_api_token
+    echo ""
+    while [ -z "$cf_api_token" ]; do
+        echo -e "${RED}API Token is required${NC}"
+        read -sp "Enter Cloudflare API Token: " cf_api_token
+        echo ""
+    done
+
+    read -p "Enter Cloudflare Account ID: " cf_account_id
+    while [ -z "$cf_account_id" ]; do
+        echo -e "${RED}Account ID is required${NC}"
+        read -p "Enter Cloudflare Account ID: " cf_account_id
+    done
+
+    read -p "Enter Cloudflare Zone ID: " cf_zone_id
+    while [ -z "$cf_zone_id" ]; do
+        echo -e "${RED}Zone ID is required${NC}"
+        read -p "Enter Cloudflare Zone ID: " cf_zone_id
+    done
+
+    read -p "Enter your domain name (e.g., example.com): " cf_domain
+    while [ -z "$cf_domain" ]; do
+        echo -e "${RED}Domain name is required${NC}"
+        read -p "Enter your domain name: " cf_domain
+    done
+
+    read -p "Enter tunnel subdomain (e.g., fortress): " cf_tunnel_subdomain
+    cf_tunnel_subdomain=${cf_tunnel_subdomain:-fortress}
+
+    echo -e "${GREEN}✓ Cloudflare configuration captured${NC}"
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────────
+    # Optional Features
+    # ─────────────────────────────────────────────────────────────────
     echo -e "${YELLOW}Optional Features:${NC}"
+    read -p "Enable Kali security module? (yes/no) [yes]: " enable_kali
+    enable_kali=${enable_kali:-yes}
+
     read -p "Enable n8n automation? (yes/no) [yes]: " enable_n8n
     enable_n8n=${enable_n8n:-yes}
 
@@ -1385,8 +1483,34 @@ install_fortress() {
     read -p "Proceed with Fortress installation? (yes/no) [no]: " confirm
     if [ "$confirm" = "yes" ]; then
         echo ""
+
+        # Save Logto configuration
+        mkdir -p /etc/hookprobe/secrets
+        cat > /etc/hookprobe/logto.conf << LOGTOEOF
+# Logto IAM Configuration
+LOGTO_ENDPOINT="$logto_endpoint"
+LOGTO_APP_ID="$logto_app_id"
+LOGTO_APP_SECRET="$logto_app_secret"
+LOGTOEOF
+        chmod 600 /etc/hookprobe/logto.conf
+        echo -e "${GREEN}✓ Logto configuration saved${NC}"
+
+        # Save Cloudflare configuration
+        cat > /etc/hookprobe/cloudflare.conf << CFEOF
+# Cloudflare Tunnel Configuration
+CF_API_TOKEN="$cf_api_token"
+CF_ACCOUNT_ID="$cf_account_id"
+CF_ZONE_ID="$cf_zone_id"
+CF_DOMAIN="$cf_domain"
+CF_TUNNEL_SUBDOMAIN="$cf_tunnel_subdomain"
+CF_TUNNEL_HOSTNAME="${cf_tunnel_subdomain}.${cf_domain}"
+CFEOF
+        chmod 600 /etc/hookprobe/cloudflare.conf
+        echo -e "${GREEN}✓ Cloudflare configuration saved${NC}"
+
         export HOOKPROBE_TIER="fortress"
         local extra_args=""
+        [ "$enable_kali" = "yes" ] && extra_args="$extra_args --enable-kali"
         [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
         [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
         [ "$enable_clickhouse" = "yes" ] && extra_args="$extra_args --enable-clickhouse"
