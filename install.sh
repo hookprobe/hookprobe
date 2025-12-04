@@ -1382,31 +1382,55 @@ install_fortress() {
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo "Logto provides identity and access management for the Fortress."
-    echo "You need to create an application in your Logto console first."
     echo ""
-    local logto_endpoint="https://dvvud6.logto.app/"
-    echo -e "Default Endpoint: ${GREEN}$logto_endpoint${NC}"
+    echo -e "${YELLOW}Deployment Options:${NC}"
+    echo "  1) Local - Deploy Logto container locally (recommended)"
+    echo "  2) Cloud - Use external Logto cloud service"
     echo ""
-    read -p "Use default Logto endpoint? (yes/no) [yes]: " use_default_logto
-    use_default_logto=${use_default_logto:-yes}
-    if [ "$use_default_logto" != "yes" ]; then
-        read -p "Enter Logto endpoint URL: " logto_endpoint
-    fi
+    read -p "Select Logto deployment [1]: " logto_deployment
+    logto_deployment=${logto_deployment:-1}
 
-    read -p "Enter Logto App ID: " logto_app_id
-    while [ -z "$logto_app_id" ]; do
-        echo -e "${RED}App ID is required${NC}"
+    local logto_endpoint=""
+    local logto_app_id=""
+    local logto_app_secret=""
+    local logto_local=false
+
+    if [ "$logto_deployment" = "1" ]; then
+        # Local Logto deployment
+        logto_local=true
+        logto_endpoint="http://localhost:3001"
+        logto_app_id="local-fortress-app"
+        logto_app_secret="auto-generated-on-startup"
+        echo -e "${GREEN}✓ Using local Logto container${NC}"
+        echo "  Logto will be deployed as part of Fortress installation"
+    else
+        # Cloud Logto
+        local default_endpoint="https://dvvud6.logto.app/"
+        echo ""
+        echo -e "Default Cloud Endpoint: ${GREEN}$default_endpoint${NC}"
+        read -p "Use default endpoint? (yes/no) [yes]: " use_default_logto
+        use_default_logto=${use_default_logto:-yes}
+        if [ "$use_default_logto" = "yes" ]; then
+            logto_endpoint="$default_endpoint"
+        else
+            read -p "Enter Logto endpoint URL: " logto_endpoint
+        fi
+
         read -p "Enter Logto App ID: " logto_app_id
-    done
+        while [ -z "$logto_app_id" ]; do
+            echo -e "${RED}App ID is required${NC}"
+            read -p "Enter Logto App ID: " logto_app_id
+        done
 
-    read -sp "Enter Logto App Secret: " logto_app_secret
-    echo ""
-    while [ -z "$logto_app_secret" ]; do
-        echo -e "${RED}App Secret is required${NC}"
         read -sp "Enter Logto App Secret: " logto_app_secret
         echo ""
-    done
-    echo -e "${GREEN}✓ Logto configuration captured${NC}"
+        while [ -z "$logto_app_secret" ]; do
+            echo -e "${RED}App Secret is required${NC}"
+            read -sp "Enter Logto App Secret: " logto_app_secret
+            echo ""
+        done
+        echo -e "${GREEN}✓ Logto cloud configuration captured${NC}"
+    fi
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
@@ -1479,6 +1503,7 @@ install_fortress() {
         mkdir -p /etc/hookprobe/secrets
         cat > /etc/hookprobe/logto.conf << LOGTOEOF
 # Logto IAM Configuration
+LOGTO_LOCAL=$logto_local
 LOGTO_ENDPOINT="$logto_endpoint"
 LOGTO_APP_ID="$logto_app_id"
 LOGTO_APP_SECRET="$logto_app_secret"
@@ -1498,13 +1523,18 @@ CFEOF
         chmod 600 /etc/hookprobe/cloudflare.conf
         echo -e "${GREEN}✓ Cloudflare configuration saved${NC}"
 
+        echo ""
+        echo -e "${CYAN}Starting Fortress installation...${NC}"
+        echo ""
+
         export HOOKPROBE_TIER="fortress"
-        local extra_args=""
+        local extra_args="--non-interactive"
         [ "$enable_kali" = "yes" ] && extra_args="$extra_args --enable-kali"
         [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
         [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
         [ "$enable_clickhouse" = "yes" ] && extra_args="$extra_args --enable-clickhouse"
         [ "$enable_lte" = "yes" ] && extra_args="$extra_args --enable-lte"
+        [ "$logto_local" = true ] && extra_args="$extra_args --enable-iam"
 
         if [ -f "$SCRIPT_DIR/install/fortress/setup.sh" ]; then
             bash "$SCRIPT_DIR/install/fortress/setup.sh" $extra_args
