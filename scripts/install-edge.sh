@@ -1445,11 +1445,18 @@ deploy_iam_pod() {
 
     local network_arg=$(get_network_arg "iam")
 
-    podman pod create \
-        --name hookprobe-iam \
-        $network_arg \
-        --publish 3001:3001 \
-        --publish 3002:3002
+    # With host network, containers bind directly to host ports
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        podman pod create \
+            --name hookprobe-iam \
+            $network_arg
+    else
+        podman pod create \
+            --name hookprobe-iam \
+            $network_arg \
+            --publish 3001:3001 \
+            --publish 3002:3002
+    fi
 
     podman run -d \
         --pod hookprobe-iam \
@@ -1571,11 +1578,18 @@ deploy_monitoring_pod() {
 
     local network_arg=$(get_network_arg "monitoring")
 
-    podman pod create \
-        --name hookprobe-monitoring \
-        $network_arg \
-        --publish 3000:3000 \
-        --publish 8428:8428
+    # With host network, containers bind directly to host ports
+    if [ "$USE_HOST_NETWORK" = true ]; then
+        podman pod create \
+            --name hookprobe-monitoring \
+            $network_arg
+    else
+        podman pod create \
+            --name hookprobe-monitoring \
+            $network_arg \
+            --publish 3000:3000 \
+            --publish 8428:8428
+    fi
 
     # Grafana
     podman run -d \
