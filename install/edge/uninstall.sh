@@ -77,7 +77,7 @@ NEW_POD_NAMES=(
     "hookprobe-detection"
     "hookprobe-ai"
     "hookprobe-neuro"
-    "hookprobe-validator"
+    "hookprobe-sentinel"
 )
 
 # Legacy POD names
