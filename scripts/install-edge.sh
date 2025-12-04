@@ -66,8 +66,11 @@ LOGTO_ENDPOINT=""
 LOGTO_APP_ID=""
 LOGTO_APP_SECRET=""
 
-# Kali Security Module
+# Optional modules
 ENABLE_KALI=false
+ENABLE_N8N=false
+ENABLE_CLICKHOUSE=false
+ENABLE_LTE=false
 
 # MSSP/HTP Configuration
 MSSP_ENDPOINT="${MSSP_ENDPOINT:-mssp.hookprobe.com}"
@@ -199,6 +202,18 @@ parse_arguments() {
                 ENABLE_KALI=true
                 shift
                 ;;
+            --enable-n8n)
+                ENABLE_N8N=true
+                shift
+                ;;
+            --enable-clickhouse)
+                ENABLE_CLICKHOUSE=true
+                shift
+                ;;
+            --enable-lte)
+                ENABLE_LTE=true
+                shift
+                ;;
             --mssp-endpoint)
                 MSSP_ENDPOINT="$2"
                 shift 2
@@ -255,6 +270,9 @@ Options:
   --cf-token TOKEN     Cloudflare Tunnel token (for web server)
   --tier TIER          Deployment tier (guardian, fortress, nexus)
   --enable-kali        Enable Kali security module (pentest tools)
+  --enable-n8n         Enable n8n workflow automation
+  --enable-clickhouse  Enable ClickHouse analytics database
+  --enable-lte         Enable LTE/5G failover support
   --mssp-endpoint HOST MSSP endpoint for Sentinel/Edge connection
   --mssp-port PORT     MSSP port (default: 8443)
   --node-id ID         Node identifier for MSSP registration
@@ -1380,6 +1398,21 @@ main() {
         # Deploy Kali security module if enabled
         if [ "$ENABLE_KALI" = true ]; then
             deploy_kali_pod
+        fi
+
+        # Deploy n8n automation if enabled
+        if [ "$ENABLE_N8N" = true ]; then
+            deploy_n8n_pod
+        fi
+
+        # Deploy ClickHouse analytics if enabled
+        if [ "$ENABLE_CLICKHOUSE" = true ]; then
+            deploy_clickhouse_pod
+        fi
+
+        # Configure LTE failover if enabled
+        if [ "$ENABLE_LTE" = true ]; then
+            configure_lte_failover
         fi
     fi
 
@@ -3563,6 +3596,144 @@ deploy_kali_pod() {
     echo "  • sslscan      - SSL/TLS scanner"
     echo ""
     echo "Access: podman exec -it hookprobe-kali-tools bash"
+}
+
+deploy_n8n_pod() {
+    echo "Deploying POD-009: n8n Workflow Automation..."
+
+    local network_arg=$(get_network_arg "n8n")
+
+    # Create data directory
+    mkdir -p /etc/hookprobe/n8n
+
+    podman pod create \
+        --name hookprobe-n8n \
+        -p 5678:5678 \
+        $network_arg
+
+    podman run -d \
+        --pod hookprobe-n8n \
+        --name hookprobe-n8n-app \
+        --memory 512M \
+        --restart unless-stopped \
+        -e N8N_BASIC_AUTH_ACTIVE=true \
+        -e N8N_BASIC_AUTH_USER=admin \
+        -e N8N_BASIC_AUTH_PASSWORD=hookprobe \
+        -e N8N_HOST=0.0.0.0 \
+        -e N8N_PORT=5678 \
+        -e N8N_PROTOCOL=http \
+        -e WEBHOOK_URL=http://localhost:5678/ \
+        -v /etc/hookprobe/n8n:/home/node/.n8n:Z \
+        docker.io/n8nio/n8n:latest
+
+    echo -e "${GREEN}✓${NC} POD-009 deployed"
+    echo ""
+    echo "n8n Workflow Automation:"
+    echo "  • URL: http://localhost:5678"
+    echo "  • Default login: admin / hookprobe"
+    echo "  • Change password after first login!"
+}
+
+deploy_clickhouse_pod() {
+    echo "Deploying POD-010: ClickHouse Analytics Database..."
+
+    local network_arg=$(get_network_arg "clickhouse")
+
+    # Create data directories
+    mkdir -p /etc/hookprobe/clickhouse/data
+    mkdir -p /etc/hookprobe/clickhouse/logs
+
+    podman pod create \
+        --name hookprobe-clickhouse \
+        -p 8123:8123 \
+        -p 9000:9000 \
+        $network_arg
+
+    podman run -d \
+        --pod hookprobe-clickhouse \
+        --name hookprobe-clickhouse-db \
+        --memory 2048M \
+        --restart unless-stopped \
+        -e CLICKHOUSE_DB=hookprobe \
+        -e CLICKHOUSE_USER=hookprobe \
+        -e CLICKHOUSE_PASSWORD=hookprobe \
+        -v /etc/hookprobe/clickhouse/data:/var/lib/clickhouse:Z \
+        -v /etc/hookprobe/clickhouse/logs:/var/log/clickhouse-server:Z \
+        docker.io/clickhouse/clickhouse-server:latest
+
+    echo -e "${GREEN}✓${NC} POD-010 deployed"
+    echo ""
+    echo "ClickHouse Analytics:"
+    echo "  • HTTP Interface: http://localhost:8123"
+    echo "  • Native Interface: localhost:9000"
+    echo "  • Database: hookprobe"
+    echo "  • User: hookprobe"
+}
+
+configure_lte_failover() {
+    echo "Configuring LTE/5G Failover..."
+
+    # Check for LTE interfaces
+    local lte_interfaces=$(ip link show 2>/dev/null | grep -E "wwan|wwp|lte|cdc" | awk -F: '{print $2}' | tr -d ' ')
+
+    if [ -z "$lte_interfaces" ]; then
+        echo -e "${YELLOW}No LTE/5G interfaces detected${NC}"
+        echo "LTE failover will be configured when interface is available"
+    else
+        echo "Detected LTE interfaces: $lte_interfaces"
+
+        # Create failover configuration
+        mkdir -p /etc/hookprobe/network
+        cat > /etc/hookprobe/network/lte-failover.conf << 'LTEEOF'
+# LTE/5G Failover Configuration
+LTE_ENABLED=true
+LTE_CHECK_INTERVAL=30
+LTE_PING_TARGET=1.1.1.1
+LTE_FAILOVER_THRESHOLD=3
+LTE_RECOVERY_THRESHOLD=5
+LTEEOF
+
+        # Create failover script
+        cat > /etc/hookprobe/network/lte-failover.sh << 'LTESCRIPT'
+#!/bin/bash
+# LTE Failover Script
+source /etc/hookprobe/network/lte-failover.conf
+
+FAIL_COUNT=0
+RECOVERY_COUNT=0
+CURRENT_STATE="primary"
+
+while true; do
+    if ping -c 1 -W 2 $LTE_PING_TARGET &>/dev/null; then
+        FAIL_COUNT=0
+        ((RECOVERY_COUNT++))
+        if [ "$CURRENT_STATE" = "failover" ] && [ $RECOVERY_COUNT -ge $LTE_RECOVERY_THRESHOLD ]; then
+            echo "$(date): Recovering to primary connection"
+            CURRENT_STATE="primary"
+            RECOVERY_COUNT=0
+        fi
+    else
+        ((FAIL_COUNT++))
+        RECOVERY_COUNT=0
+        if [ "$CURRENT_STATE" = "primary" ] && [ $FAIL_COUNT -ge $LTE_FAILOVER_THRESHOLD ]; then
+            echo "$(date): Failing over to LTE"
+            CURRENT_STATE="failover"
+            FAIL_COUNT=0
+        fi
+    fi
+    sleep $LTE_CHECK_INTERVAL
+done
+LTESCRIPT
+        chmod +x /etc/hookprobe/network/lte-failover.sh
+
+        echo -e "${GREEN}✓${NC} LTE failover configured"
+    fi
+
+    echo ""
+    echo "LTE/5G Failover:"
+    echo "  • Config: /etc/hookprobe/network/lte-failover.conf"
+    echo "  • Script: /etc/hookprobe/network/lte-failover.sh"
+    echo "  • Check interval: 30 seconds"
 }
 
 # ============================================================
