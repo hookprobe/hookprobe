@@ -1070,6 +1070,7 @@ create_networks() {
 
     # Create POD networks under the hookprobe namespace
     # Each POD gets its own subnet under 10.250.x.0/24
+    # Custom interface names for easy identification (max 15 chars)
 
     # Core networks (always created)
     echo "  Creating core POD networks..."
@@ -1078,27 +1079,30 @@ create_networks() {
     if ! podman network create \
         --subnet 10.250.3.0/24 \
         --gateway 10.250.3.1 \
+        --interface-name hkpr-db \
         $bridge_opt \
         hookprobe-database 2>/dev/null; then
-        podman network create hookprobe-database 2>/dev/null || network_failed=true
+        podman network create --interface-name hkpr-db hookprobe-database 2>/dev/null || network_failed=true
     fi
 
     # Cache network (POD-005)
     if ! podman network create \
         --subnet 10.250.5.0/24 \
         --gateway 10.250.5.1 \
+        --interface-name hkpr-cache \
         $bridge_opt \
         hookprobe-cache 2>/dev/null; then
-        podman network create hookprobe-cache 2>/dev/null || true
+        podman network create --interface-name hkpr-cache hookprobe-cache 2>/dev/null || true
     fi
 
     # Neuro network (POD-010)
     if ! podman network create \
         --subnet 10.250.10.0/24 \
         --gateway 10.250.10.1 \
+        --interface-name hkpr-neuro \
         $bridge_opt \
         hookprobe-neuro 2>/dev/null; then
-        podman network create hookprobe-neuro 2>/dev/null || true
+        podman network create --interface-name hkpr-neuro hookprobe-neuro 2>/dev/null || true
     fi
 
     # Optional networks based on selected components
@@ -1107,9 +1111,10 @@ create_networks() {
         if ! podman network create \
             --subnet 10.250.1.0/24 \
             --gateway 10.250.1.1 \
+            --interface-name hkpr-web \
             $bridge_opt \
             hookprobe-web 2>/dev/null; then
-            podman network create hookprobe-web 2>/dev/null || true
+            podman network create --interface-name hkpr-web hookprobe-web 2>/dev/null || true
         fi
     fi
 
@@ -1118,9 +1123,10 @@ create_networks() {
         if ! podman network create \
             --subnet 10.250.2.0/24 \
             --gateway 10.250.2.1 \
+            --interface-name hkpr-iam \
             $bridge_opt \
             hookprobe-iam 2>/dev/null; then
-            podman network create hookprobe-iam 2>/dev/null || true
+            podman network create --interface-name hkpr-iam hookprobe-iam 2>/dev/null || true
         fi
     fi
 
@@ -1129,9 +1135,10 @@ create_networks() {
         if ! podman network create \
             --subnet 10.250.4.0/24 \
             --gateway 10.250.4.1 \
+            --interface-name hkpr-mon \
             $bridge_opt \
             hookprobe-monitoring 2>/dev/null; then
-            podman network create hookprobe-monitoring 2>/dev/null || true
+            podman network create --interface-name hkpr-mon hookprobe-monitoring 2>/dev/null || true
         fi
     fi
 
@@ -1140,16 +1147,18 @@ create_networks() {
         if ! podman network create \
             --subnet 10.250.6.0/24 \
             --gateway 10.250.6.1 \
+            --interface-name hkpr-det \
             $bridge_opt \
             hookprobe-detection 2>/dev/null; then
-            podman network create hookprobe-detection 2>/dev/null || true
+            podman network create --interface-name hkpr-det hookprobe-detection 2>/dev/null || true
         fi
         if ! podman network create \
             --subnet 10.250.7.0/24 \
             --gateway 10.250.7.1 \
+            --interface-name hkpr-ai \
             $bridge_opt \
             hookprobe-ai 2>/dev/null; then
-            podman network create hookprobe-ai 2>/dev/null || true
+            podman network create --interface-name hkpr-ai hookprobe-ai 2>/dev/null || true
         fi
     fi
 
@@ -1160,28 +1169,29 @@ create_networks() {
         echo "  Pods will use host networking instead."
         USE_HOST_NETWORK=true
     else
-        echo -e "${GREEN}[x]${NC} POD networks created on bridge '$OVS_BRIDGE_NAME'"
+        echo -e "${GREEN}[x]${NC} POD networks created"
 
-        # Show network summary with VXLAN info
+        # Show network summary with interface names and VXLAN info
         echo ""
         echo "Network Summary:"
-        echo "  Network              Subnet           VNI    Port"
-        echo "  -------------------  ---------------  -----  ----"
+        echo "  Network              Interface    Subnet           VNI    Port"
+        echo "  -------------------  -----------  ---------------  -----  ----"
         for net in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep hookprobe); do
             local subnet=$(podman network inspect "$net" --format '{{range .Subnets}}{{.Subnet}}{{end}}' 2>/dev/null || echo "N/A")
+            local iface="N/A"
             local vni="N/A"
             local port="N/A"
             case "$net" in
-                hookprobe-web) vni="100"; port="4789" ;;
-                hookprobe-iam) vni="200"; port="4790" ;;
-                hookprobe-database) vni="300"; port="4791" ;;
-                hookprobe-monitoring) vni="400"; port="4792" ;;
-                hookprobe-cache) vni="500"; port="4793" ;;
-                hookprobe-detection) vni="600"; port="4794" ;;
-                hookprobe-ai) vni="700"; port="4795" ;;
-                hookprobe-neuro) vni="1000"; port="4800" ;;
+                hookprobe-web) iface="hkpr-web"; vni="100"; port="4789" ;;
+                hookprobe-iam) iface="hkpr-iam"; vni="200"; port="4790" ;;
+                hookprobe-database) iface="hkpr-db"; vni="300"; port="4791" ;;
+                hookprobe-monitoring) iface="hkpr-mon"; vni="400"; port="4792" ;;
+                hookprobe-cache) iface="hkpr-cache"; vni="500"; port="4793" ;;
+                hookprobe-detection) iface="hkpr-det"; vni="600"; port="4794" ;;
+                hookprobe-ai) iface="hkpr-ai"; vni="700"; port="4795" ;;
+                hookprobe-neuro) iface="hkpr-neuro"; vni="1000"; port="4800" ;;
             esac
-            printf "  %-19s  %-15s  %-5s  %s\n" "$net" "$subnet" "$vni" "$port"
+            printf "  %-19s  %-11s  %-15s  %-5s  %s\n" "$net" "$iface" "$subnet" "$vni" "$port"
         done
     fi
 }
