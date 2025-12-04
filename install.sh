@@ -15,6 +15,14 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Set TERM if not set (for non-interactive environments)
+export TERM="${TERM:-xterm}"
+
+# Safe clear function that won't fail
+safe_clear() {
+    command clear 2>/dev/null || printf '\033[2J\033[H'
+}
+
 # ============================================================
 # BRANDING & COLORS
 # ============================================================
@@ -653,7 +661,7 @@ show_main_menu() {
 # ============================================================
 
 show_capability_summary() {
-    clear
+    safe_clear
     show_banner
     print_header "SYSTEM CAPABILITY ANALYSIS" "$CYAN"
 
@@ -866,7 +874,7 @@ handle_capability_check() {
 # ============================================================
 
 show_install_menu() {
-    clear
+    safe_clear
     show_banner
     print_header "INSTALL HOOKPROBE" "$GREEN"
 
@@ -953,7 +961,7 @@ show_install_menu() {
 # ============================================================
 
 install_sentinel() {
-    clear
+    safe_clear
     show_banner
     print_header "INSTALL: SENTINEL" "$GREEN"
 
@@ -991,7 +999,7 @@ install_sentinel() {
 }
 
 install_guardian() {
-    clear
+    safe_clear
     show_banner
     print_header "INSTALL: GUARDIAN" "$GREEN"
 
@@ -1079,7 +1087,7 @@ WIFIEOF
 }
 
 install_fortress() {
-    clear
+    safe_clear
     show_banner
     print_header "INSTALL: FORTRESS" "$GREEN"
 
@@ -1146,7 +1154,7 @@ install_fortress() {
 }
 
 install_nexus() {
-    clear
+    safe_clear
     show_banner
     print_header "INSTALL: NEXUS" "$GREEN"
 
@@ -1240,7 +1248,7 @@ handle_install() {
 # ============================================================
 
 show_uninstall_menu() {
-    clear
+    safe_clear
     show_banner
     print_header "UNINSTALL / CLEANUP" "$RED"
 
@@ -1581,7 +1589,7 @@ main() {
     detect_capabilities
 
     while true; do
-        clear
+        safe_clear
         show_banner
         show_main_menu
 
