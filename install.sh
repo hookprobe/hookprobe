@@ -654,13 +654,10 @@ show_main_menu() {
 
     echo -e "${YELLOW}┌─ Main Menu ────────────────────────────────────────────────┐${NC}"
     echo -e "│                                                            │"
-    echo -e "│  ${BOLD}1${NC}) Check System Capabilities                              │"
-    echo -e "│     ${DIM}Analyze hardware and determine eligible tiers${NC}         │"
+    echo -e "│  ${BOLD}1${NC}) Check System & Install                                 │"
+    echo -e "│     ${DIM}Analyze hardware, select tier, and deploy${NC}              │"
     echo -e "│                                                            │"
-    echo -e "│  ${BOLD}2${NC}) Install HookProbe                                      │"
-    echo -e "│     ${DIM}Deploy Sentinel, Guardian, Fortress, or Nexus${NC}          │"
-    echo -e "│                                                            │"
-    echo -e "│  ${BOLD}3${NC}) Uninstall / Cleanup                                    │"
+    echo -e "│  ${BOLD}2${NC}) Uninstall / Cleanup                                    │"
     echo -e "│     ${DIM}Remove containers, networks, configurations${NC}            │"
     echo -e "│                                                            │"
     echo -e "│  ${BOLD}q${NC}) Quit                                                   │"
@@ -823,11 +820,14 @@ show_capability_summary() {
     print_section "Eligible Deployment Tiers"
     echo ""
 
+    local tier_num=1
+
     # NEXUS
     if [ "$CAN_NEXUS" = true ]; then
-        echo -e "  ${GREEN}████${NC} ${BOLD}${WHITE}NEXUS${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}████${NC} ${BOLD}${WHITE}NEXUS${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"The Central Command\"${NC}"
         echo -e "       ${DIM}Multi-tenant MSSP backend with full analytics${NC}"
+        tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ NEXUS [NOT AVAILABLE]${NC}"
         echo -e "       ${DIM}Requires: 8+ cores, 64GB+ RAM, 1TB+ storage${NC}"
@@ -836,9 +836,10 @@ show_capability_summary() {
 
     # FORTRESS
     if [ "$CAN_FORTRESS" = true ]; then
-        echo -e "  ${GREEN}███${NC}░ ${BOLD}${WHITE}FORTRESS${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}███${NC}░ ${BOLD}${WHITE}FORTRESS${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"Your Digital Stronghold\"${NC}"
         echo -e "       ${DIM}Full monitoring, dashboards, local AI${NC}"
+        tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ FORTRESS [NOT AVAILABLE]${NC}"
         echo -e "       ${DIM}Requires: 8GB+ RAM, 32GB+ storage, 2+ ethernet${NC}"
@@ -847,9 +848,10 @@ show_capability_summary() {
 
     # GUARDIAN
     if [ "$CAN_GUARDIAN" = true ]; then
-        echo -e "  ${GREEN}██${NC}░░ ${BOLD}${WHITE}GUARDIAN${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}██${NC}░░ ${BOLD}${WHITE}GUARDIAN${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"Protection on the Move\"${NC}"
         echo -e "       ${DIM}Secure gateway with IDS/IPS, WAF, lite AI${NC}"
+        tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ GUARDIAN [NOT AVAILABLE]${NC}"
         echo -e "       ${DIM}Requires: 3GB+ RAM, 16GB+ storage, 2+ NICs${NC}"
@@ -858,7 +860,7 @@ show_capability_summary() {
 
     # SENTINEL
     if [ "$CAN_SENTINEL" = true ]; then
-        echo -e "  ${GREEN}█${NC}░░░ ${BOLD}${WHITE}SENTINEL${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}█${NC}░░░ ${BOLD}${WHITE}SENTINEL${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"The Watchful Eye\"${NC}"
         echo -e "       ${DIM}Lightweight edge validator${NC}"
     else
@@ -866,7 +868,10 @@ show_capability_summary() {
         echo -e "       ${DIM}Requires: 512MB+ RAM, 8GB+ storage, 1+ NIC${NC}"
     fi
 
-    show_nav_footer
+    echo ""
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}Enter number to install${NC} | ${BOLD}b${NC}) Back | ${BOLD}m${NC}) Main Menu | ${BOLD}q${NC}) Quit"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
 }
 
 handle_capability_check() {
@@ -874,9 +879,30 @@ handle_capability_check() {
         show_capability_summary
         read -p "Select option: " choice
 
+        # Build list of available tiers in order
+        local available_tiers=()
+        [ "$CAN_NEXUS" = true ] && available_tiers+=("nexus")
+        [ "$CAN_FORTRESS" = true ] && available_tiers+=("fortress")
+        [ "$CAN_GUARDIAN" = true ] && available_tiers+=("guardian")
+        [ "$CAN_SENTINEL" = true ] && available_tiers+=("sentinel")
+
         case $choice in
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
+            [1-9])
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#available_tiers[@]} ]; then
+                    local tier="${available_tiers[$idx]}"
+                    case "$tier" in
+                        sentinel) install_sentinel; return ;;
+                        guardian) install_guardian; return ;;
+                        fortress) install_fortress; return ;;
+                        nexus) install_nexus; return ;;
+                    esac
+                else
+                    echo -e "${RED}Invalid selection${NC}"; sleep 1
+                fi
+                ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
         esac
     done
@@ -1617,8 +1643,7 @@ main() {
 
         case $choice in
             1) handle_capability_check ;;
-            2) handle_install ;;
-            3) handle_uninstall ;;
+            2) handle_uninstall ;;
             q|Q) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
         esac
