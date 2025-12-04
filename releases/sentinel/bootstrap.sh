@@ -16,7 +16,7 @@
 #   - Internet connectivity
 #
 # Security Features:
-#   - TLS-only MSSP communication
+#   - HTP (HookProbe Transport Protocol) for MSSP communication
 #   - Rate limiting / DDoS protection
 #   - Process sandboxing (seccomp, capabilities)
 #   - Automatic firewall rules
@@ -70,18 +70,16 @@ log_security() { echo -e "${CYAN}[SECURITY]${NC} $1"; }
 show_banner() {
     echo -e "${BLUE}"
     cat << "EOF"
-  ╔═══════════════════════════════════════════════════════╗
-  ║  ___ ___ _  _ _____ ___ _  _ ___ _                    ║
-  ║ / __| __| \| |_   _|_ _| \| | __| |                   ║
-  ║ \__ \ _|| .` | | |  | || .` | _|| |__                 ║
-  ║ |___/___|_|\_| |_| |___|_|\_|___|____|                ║
-  ║                                                       ║
-  ║           "The Watchful Eye"                          ║
-  ╚═══════════════════════════════════════════════════════╝
+     ___ ___ _  _ _____ ___ _  _ ___ _
+    / __| __| \| |_   _|_ _| \| | __| |
+    \__ \ _|| .` | | |  | || .` | _|| |__
+    |___/___|_|\_| |_| |___|_|\_|___|____|
+
+            "The Watchful Eye"
 EOF
     echo -e "${NC}"
     echo "  HookProbe Sentinel v${VERSION}"
-    echo "  Secure edge validator with attack protection"
+    echo "  Secure edge validator with HTP protocol"
     echo ""
 }
 
@@ -589,11 +587,11 @@ SENTINEL_NODE_ID=${NODE_ID}
 SENTINEL_REGION=${SENTINEL_REGION}
 SENTINEL_VERSION=${VERSION}
 
-# MSSP Backend (TLS required)
+# MSSP Backend (HTP - HookProbe Transport Protocol)
 MSSP_ENDPOINT=${MSSP_ENDPOINT}
 MSSP_PORT=${MSSP_PORT}
-MSSP_TLS=true
-MSSP_VERIFY_CERT=true
+MSSP_PROTOCOL=htp
+MSSP_HTP_VERSION=1.0
 
 # Health Endpoint
 HEALTH_PORT=${HEALTH_PORT}
@@ -606,6 +604,13 @@ RATE_LIMIT_BURST=200
 ENABLE_THREAT_DETECTION=true
 ENABLE_INTEGRITY_CHECK=true
 BLOCK_ON_ATTACK=true
+
+# QSecBit - Quantum-Safe Security Capabilities
+QSECBIT_ENABLED=true
+QSECBIT_ENTROPY_SOURCE=/dev/urandom
+QSECBIT_KEY_ROTATION_HOURS=24
+QSECBIT_HMAC_ALGO=sha3-256
+QSECBIT_SESSION_TIMEOUT=3600
 
 # Resource Limits
 MEMORY_LIMIT_MB=${MEMORY_LIMIT}
@@ -799,6 +804,74 @@ SERVICE
 }
 
 # ============================================================
+# UNINSTALL COMMAND
+# ============================================================
+
+create_uninstall_command() {
+    log_info "Creating uninstall command..."
+
+    # Create simple uninstall wrapper in /usr/local/bin
+    cat > /usr/local/bin/sentinel-uninstall << 'UNINSTALL'
+#!/bin/bash
+#
+# HookProbe Sentinel Uninstaller
+# Run: sudo sentinel-uninstall
+#
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Please run as root: sudo sentinel-uninstall${NC}"
+    exit 1
+fi
+
+echo -e "${YELLOW}HookProbe Sentinel Uninstaller${NC}"
+echo ""
+read -p "Are you sure you want to uninstall Sentinel? [y/N]: " confirm
+if [ "${confirm,,}" != "y" ]; then
+    echo "Cancelled."
+    exit 0
+fi
+
+echo -e "${YELLOW}Stopping service...${NC}"
+systemctl stop hookprobe-sentinel.service 2>/dev/null || true
+systemctl disable hookprobe-sentinel.service 2>/dev/null || true
+
+echo -e "${YELLOW}Removing service file...${NC}"
+rm -f /etc/systemd/system/hookprobe-sentinel.service
+systemctl daemon-reload
+
+echo -e "${YELLOW}Removing firewall rules...${NC}"
+iptables -D INPUT -j HOOKPROBE 2>/dev/null || true
+iptables -F HOOKPROBE 2>/dev/null || true
+iptables -X HOOKPROBE 2>/dev/null || true
+
+echo -e "${YELLOW}Removing fail2ban config...${NC}"
+rm -f /etc/fail2ban/jail.d/hookprobe-sentinel.conf 2>/dev/null
+rm -f /etc/fail2ban/filter.d/hookprobe-sentinel.conf 2>/dev/null
+systemctl restart fail2ban 2>/dev/null || true
+
+echo -e "${YELLOW}Removing installation files...${NC}"
+rm -rf /opt/hookprobe/sentinel
+rm -f /etc/hookprobe/sentinel.env
+rm -rf /var/lib/hookprobe/sentinel
+
+echo -e "${YELLOW}Removing uninstall command...${NC}"
+rm -f /usr/local/bin/sentinel-uninstall
+
+echo ""
+echo -e "${GREEN}Sentinel has been uninstalled successfully.${NC}"
+echo "Log files preserved in: /var/log/hookprobe/"
+UNINSTALL
+
+    chmod 755 /usr/local/bin/sentinel-uninstall
+    log_info "Uninstall command created: sentinel-uninstall"
+}
+
+# ============================================================
 # VERIFICATION
 # ============================================================
 
@@ -849,13 +922,14 @@ show_complete() {
 
     echo -e "${CYAN}MSSP Backend:${NC}"
     echo "  Endpoint:     ${MSSP_ENDPOINT}:${MSSP_PORT}"
-    echo "  TLS:          Enabled"
+    echo "  Protocol:     HTP (HookProbe Transport Protocol)"
     echo ""
 
     echo -e "${CYAN}Security Features:${NC}"
     echo "  Rate Limiting:     Enabled"
     echo "  Threat Detection:  Enabled"
     echo "  Integrity Check:   Enabled"
+    echo "  QSecBit:           Enabled (SHA3-256, 24h key rotation)"
     [ "$ENABLE_FIREWALL" = "yes" ] && echo "  Firewall Rules:    Configured"
     [ "$ENABLE_FAIL2BAN" = "yes" ] && echo "  Fail2ban:          Configured"
     echo ""
@@ -865,6 +939,7 @@ show_complete() {
     echo "  sudo systemctl status hookprobe-sentinel   # Check status"
     echo "  sudo journalctl -u hookprobe-sentinel -f   # View logs"
     echo "  curl http://localhost:${HEALTH_PORT}/health  # Health check"
+    echo "  sudo sentinel-uninstall                    # Uninstall"
     echo ""
 
     echo -e "${CYAN}Files:${NC}"
@@ -934,7 +1009,7 @@ Options:
   --help                Show this help
 
 Security Features:
-  • TLS-only MSSP communication
+  • HTP (HookProbe Transport Protocol) for MSSP
   • Rate limiting / DDoS protection
   • Threat pattern detection
   • File integrity monitoring
@@ -987,6 +1062,7 @@ main() {
     setup_firewall
     setup_fail2ban
     create_service
+    create_uninstall_command
     verify_installation
     show_complete
 

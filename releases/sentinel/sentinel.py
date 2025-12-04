@@ -64,6 +64,12 @@ BLOCK_ON_ATTACK = os.environ.get("BLOCK_ON_ATTACK", "true").lower() == "true"
 RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "100"))
 RATE_LIMIT_BURST = int(os.environ.get("RATE_LIMIT_BURST", "200"))
 
+# QSecBit - Quantum-Safe Security Capabilities
+QSECBIT_ENABLED = os.environ.get("QSECBIT_ENABLED", "true").lower() == "true"
+QSECBIT_HMAC_ALGO = os.environ.get("QSECBIT_HMAC_ALGO", "sha3-256")
+QSECBIT_KEY_ROTATION_HOURS = int(os.environ.get("QSECBIT_KEY_ROTATION_HOURS", "24"))
+QSECBIT_SESSION_TIMEOUT = int(os.environ.get("QSECBIT_SESSION_TIMEOUT", "3600"))
+
 # ============================================================
 # LOGGING
 # ============================================================
@@ -389,6 +395,10 @@ def main():
         log.info(f"  Rate Limit: {RATE_LIMIT_REQUESTS}/s (burst: {RATE_LIMIT_BURST})")
         log.info(f"  Threat Detection: {SECURITY_ENABLED}")
         log.info(f"  Block on Attack: {BLOCK_ON_ATTACK}")
+    log.info(f"QSecBit:  {'ENABLED' if QSECBIT_ENABLED else 'DISABLED'}")
+    if QSECBIT_ENABLED:
+        log.info(f"  HMAC Algorithm: {QSECBIT_HMAC_ALGO}")
+        log.info(f"  Key Rotation: {QSECBIT_KEY_ROTATION_HOURS}h")
     log.info("=" * 50)
 
     sentinel = Sentinel()
