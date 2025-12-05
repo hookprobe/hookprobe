@@ -2258,8 +2258,35 @@ setup_ovs_bridge() {
         fi
     fi
 
-    # If OVS still not available, fall back to host networking
+    # If OVS still not available
     if ! command -v ovs-vsctl &> /dev/null; then
+        # For Fortress/Nexus tiers, OVS is mandatory - stop installation
+        if [ "$EDGE_MODE" = "fortress" ] || [ "$EDGE_MODE" = "nexus" ]; then
+            echo ""
+            echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+            echo -e "${RED}  ERROR: Open vSwitch is required for Fortress installation${NC}"
+            echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            echo "Please install Open vSwitch manually before continuing:"
+            echo ""
+            echo "  Debian/Ubuntu:"
+            echo "    sudo apt-get install openvswitch-switch openvswitch-common"
+            echo ""
+            echo "  Fedora:"
+            echo "    sudo dnf install openvswitch"
+            echo ""
+            echo "  RHEL 8/9/10 (requires Fast Datapath subscription):"
+            echo "    sudo subscription-manager repos --enable=fast-datapath-for-rhel-9-x86_64-rpms"
+            echo "    sudo dnf install openvswitch"
+            echo ""
+            echo "  OpenSUSE:"
+            echo "    sudo zypper install openvswitch openvswitch-switch"
+            echo ""
+            echo "After installing, run the installer again."
+            echo ""
+            exit 1
+        fi
+        # For other tiers, fall back to host networking
         echo -e "${YELLOW}[!]${NC} OVS not available, using host network mode"
         USE_OVS_BRIDGE=false
         USE_HOST_NETWORK=true
@@ -2271,6 +2298,17 @@ setup_ovs_bridge() {
         # Try to load it (will fail in LXC)
         modprobe openvswitch 2>/dev/null || {
             if detect_container_environment; then
+                # For Fortress in container, still require OVS module on host
+                if [ "$EDGE_MODE" = "fortress" ] || [ "$EDGE_MODE" = "nexus" ]; then
+                    echo ""
+                    echo -e "${RED}ERROR: OVS kernel module required for Fortress${NC}"
+                    echo ""
+                    echo "In LXC/container environment, load the module on the host:"
+                    echo "  modprobe openvswitch"
+                    echo "  echo 'openvswitch' >> /etc/modules"
+                    echo ""
+                    exit 1
+                fi
                 echo -e "  ${YELLOW}[!]${NC} Cannot load OVS module in LXC container"
                 echo "  Load 'openvswitch' module on Proxmox host, or use host networking"
                 USE_OVS_BRIDGE=false
