@@ -32,9 +32,11 @@ HookProbe is an enterprise-grade, AI-powered cybersecurity platform featuring:
 - **Network**: 1Gbps NIC
 
 ### Software
-- **OS**: RHEL 10, Fedora 38+, or CentOS Stream 9
+- **OS**: Ubuntu 22.04+, Debian 11+/12+, Raspberry Pi OS (Bookworm)
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
+
+> **Note**: RHEL-based systems are not currently supported in v5.x. RHEL/Fedora support is planned for a future release.
 
 ### Network
 - **Subnet**: 10.200.0.0/16 must be available (not in use)
