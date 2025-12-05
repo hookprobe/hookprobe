@@ -44,7 +44,7 @@ Edge Devices (Customers)          Cloud Backend (MSSP)
 - **RAM**: 128 GB
 - **Storage**: 1 TB NVMe SSD
 - **Network**: 10 Gbps
-- **OS**: RHEL 9+, Ubuntu 22.04+, Fedora 40+
+- **OS**: Ubuntu 22.04+, Debian 11+/12+ (RHEL-based systems not yet supported in v5.x)
 
 ### Production (100+ customers)
 - **CPU**: 128+ cores per backend node
