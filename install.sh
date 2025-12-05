@@ -652,12 +652,13 @@ evaluate_deployment_tiers() {
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
     #   - RAM: 512MB - 3GB
-    #   - Storage: 8GB - 64GB (SD card, MMC, eMMC)
+    #   - Storage: 1GB+ (minimal footprint ~50MB)
     #   - Network: 1 interface (WAN only - modem or ethernet)
     #   - Internet: Required (no offline mode)
     # Purpose: Validates edge nodes, lightweight monitoring
+    # Target: RPi Zero, small SBCs, IoT gateways
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_RAM_MB" -ge 512 ] && [ "$SYS_STORAGE_GB" -ge 8 ]; then
+    if [ "$SYS_RAM_MB" -ge 512 ] && [ "$SYS_STORAGE_GB" -ge 1 ]; then
         if [ "$total_net" -ge 1 ]; then
             CAN_SENTINEL=true
         fi
@@ -941,7 +942,7 @@ show_capability_summary() {
         print_ok "Storage: ${SYS_STORAGE_GB}GB available ${GREEN}(Fortress-ready)${NC}"
     elif [ "$SYS_STORAGE_GB" -ge 16 ]; then
         print_ok "Storage: ${SYS_STORAGE_GB}GB available ${YELLOW}(Guardian-ready)${NC}"
-    elif [ "$SYS_STORAGE_GB" -ge 8 ]; then
+    elif [ "$SYS_STORAGE_GB" -ge 1 ]; then
         print_warn "Storage: ${SYS_STORAGE_GB}GB available ${YELLOW}(Sentinel only)${NC}"
     else
         print_fail "Storage: ${SYS_STORAGE_GB}GB available ${RED}(Insufficient)${NC}"
@@ -1117,7 +1118,7 @@ show_capability_summary() {
         echo -e "       ${DIM}Lightweight edge validator${NC}"
     else
         echo -e "  ${DIM}░░░░ SENTINEL [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 512MB+ RAM, 8GB+ storage, 1+ NIC${NC}"
+        echo -e "       ${DIM}Requires: 512MB+ RAM, 1GB+ storage, 1+ NIC${NC}"
     fi
 
     echo ""
@@ -1179,7 +1180,7 @@ show_install_menu() {
     if [ "$CAN_SENTINEL" = true ]; then
         echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}█${NC}░░░ ${BOLD}SENTINEL${NC} - ${ITALIC}\"The Watchful Eye\"${NC}"
         echo -e "        ${DIM}Lightweight validator for constrained devices${NC}"
-        echo -e "        ${DIM}RAM: 512MB-3GB | Storage: 8GB+ | Network: 1+ interface${NC}"
+        echo -e "        ${DIM}RAM: 512MB-3GB | Storage: 1GB+ | Network: 1+ interface${NC}"
         echo -e "        ${DIM}Features: Edge validation, health monitoring${NC}"
         echo ""
         options+=("sentinel")
@@ -1235,7 +1236,7 @@ show_install_menu() {
         echo ""
         echo -e "  ${YELLOW}Minimum requirements:${NC}"
         echo -e "    • RAM: 512MB+"
-        echo -e "    • Storage: 8GB+"
+        echo -e "    • Storage: 1GB+"
         echo -e "    • Network: 1+ interface"
         echo ""
         echo -e "  ${CYAN}For ultra-constrained devices, try Sentinel Lite:${NC}"
