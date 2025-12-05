@@ -57,16 +57,13 @@ HookProbe v5.0 introduces a **unified installation system** based on systemd ser
 
 ### Supported Operating Systems
 
-**RHEL-based**:
-- RHEL 10
-- Fedora 40+
-- CentOS Stream 9+
-- Rocky Linux 9+
-- AlmaLinux 9+
-
-**Debian-based**:
-- Debian 12+
+**Debian-based** (Supported in v5.x):
 - Ubuntu 22.04+ / 24.04+
+- Debian 11+ / 12+
+- Raspberry Pi OS (Bookworm)
+- Linux Mint, Pop!_OS, and other Ubuntu/Debian derivatives
+
+> **Note**: RHEL-based systems (RHEL, Fedora, CentOS, Rocky Linux, AlmaLinux) are **not currently supported** in HookProbe v5.x due to OpenVSwitch networking compatibility issues. We are working on nmcli-based networking for RHEL compatibility. RHEL/Fedora support is planned for a future release.
 
 ### Supported Architectures
 
@@ -183,10 +180,8 @@ sudo ./hookprobe-bootstrap.sh
 For advanced users who want more control:
 
 ```bash
-# 1. Install dependencies manually
-sudo dnf install -y podman openvswitch nftables python3-pip  # RHEL
-# OR
-sudo apt install -y podman openvswitch-switch nftables python3-pip  # Debian
+# 1. Install dependencies manually (Debian/Ubuntu)
+sudo apt install -y podman openvswitch-switch nftables python3-pip
 
 # 2. Install Python dependencies
 pip3 install -r requirements.txt
@@ -294,14 +289,7 @@ hookprobe-ctl metrics | grep xdp
 
 If you're running a firewall, allow HookProbe ports:
 
-**firewalld (RHEL-based)**:
-
-```bash
-sudo firewall-cmd --permanent --add-port=8888/tcp  # Agent health check
-sudo firewall-cmd --reload
-```
-
-**ufw (Debian-based)**:
+**ufw (Debian/Ubuntu)**:
 
 ```bash
 sudo ufw allow 8888/tcp  # Agent health check
