@@ -56,64 +56,107 @@ def get_mode():
 
 def scan_wifi():
     """Scan for available WiFi networks."""
+    import time
     networks = []
 
-    # Try multiple interfaces
+    # Method 1: Try wpa_cli (works when wpa_supplicant is running)
     for iface in ['wlan1', 'wlan0']:
-        # First, bring interface up and trigger scan
-        run_command(f'ip link set {iface} up 2>/dev/null')
-        run_command(f'iw dev {iface} scan trigger 2>/dev/null')
+        # Trigger scan via wpa_cli
+        run_command(f'wpa_cli -i {iface} scan 2>/dev/null', timeout=10)
+        time.sleep(3)  # Wait for scan to complete
 
-        # Wait briefly for scan
-        import time
-        time.sleep(2)
-
-        # Get scan results using iw
-        output, success = run_command(f'iw dev {iface} scan 2>/dev/null')
-
-        if success and output:
-            current_ssid = None
-            current_signal = -100
-
-            for line in output.split('\n'):
-                line = line.strip()
-                if line.startswith('BSS '):
-                    # Save previous network
-                    if current_ssid:
-                        networks.append({'ssid': current_ssid, 'signal': current_signal})
-                    current_ssid = None
-                    current_signal = -100
-                elif 'SSID:' in line:
-                    ssid = line.split('SSID:', 1)[1].strip()
-                    if ssid and ssid != '\\x00' and not ssid.startswith('\\x'):
-                        current_ssid = ssid
-                elif 'signal:' in line:
+        # Get scan results
+        output, success = run_command(f'wpa_cli -i {iface} scan_results 2>/dev/null', timeout=10)
+        if success and output and 'bssid' in output.lower():
+            lines = output.strip().split('\n')
+            for line in lines[1:]:  # Skip header
+                parts = line.split('\t')
+                if len(parts) >= 5:
                     try:
-                        sig = line.split('signal:', 1)[1].strip()
-                        current_signal = int(float(sig.split()[0]))
-                    except:
+                        signal = int(parts[2]) if parts[2].lstrip('-').isdigit() else -70
+                        ssid = parts[4] if len(parts) > 4 else ''
+                        if ssid and ssid != '\\x00' and not ssid.startswith('\\x'):
+                            networks.append({'ssid': ssid, 'signal': signal})
+                    except (ValueError, IndexError):
                         pass
-
-            # Don't forget last network
-            if current_ssid:
-                networks.append({'ssid': current_ssid, 'signal': current_signal})
-
-        # Try iwlist as fallback
-        if not networks:
-            output, success = run_command(f'iwlist {iface} scan 2>/dev/null')
-            if success and output:
-                for match in re.finditer(r'ESSID:"([^"]+)"', output):
-                    ssid = match.group(1)
-                    if ssid:
-                        # Try to find signal
-                        signal = -70  # default
-                        sig_match = re.search(rf'{re.escape(ssid)}.*?Signal level[=:](-?\d+)', output, re.DOTALL)
-                        if sig_match:
-                            signal = int(sig_match.group(1))
-                        networks.append({'ssid': ssid, 'signal': signal})
-
         if networks:
             break
+
+    # Method 2: Try iw scan (needs interface not in use by hostapd)
+    if not networks:
+        for iface in ['wlan1', 'wlan0']:
+            # Bring interface up
+            run_command(f'ip link set {iface} up 2>/dev/null')
+
+            # Direct scan (blocking, more reliable)
+            output, success = run_command(f'iw dev {iface} scan 2>/dev/null', timeout=15)
+
+            if success and output and 'BSS' in output:
+                current_ssid = None
+                current_signal = -100
+
+                for line in output.split('\n'):
+                    line = line.strip()
+                    if line.startswith('BSS '):
+                        if current_ssid:
+                            networks.append({'ssid': current_ssid, 'signal': current_signal})
+                        current_ssid = None
+                        current_signal = -100
+                    elif line.startswith('SSID:'):
+                        ssid = line.split(':', 1)[1].strip()
+                        if ssid and ssid != '\\x00' and not ssid.startswith('\\x'):
+                            current_ssid = ssid
+                    elif line.startswith('signal:'):
+                        try:
+                            sig = line.split(':', 1)[1].strip()
+                            current_signal = int(float(sig.split()[0]))
+                        except:
+                            pass
+
+                if current_ssid:
+                    networks.append({'ssid': current_ssid, 'signal': current_signal})
+
+            if networks:
+                break
+
+    # Method 3: Try iwlist as fallback
+    if not networks:
+        for iface in ['wlan1', 'wlan0']:
+            output, success = run_command(f'iwlist {iface} scan 2>/dev/null', timeout=15)
+            if success and output and 'ESSID' in output:
+                current_signal = -70
+                for line in output.split('\n'):
+                    line = line.strip()
+                    if 'Signal level=' in line:
+                        try:
+                            sig = re.search(r'Signal level[=:](-?\d+)', line)
+                            if sig:
+                                current_signal = int(sig.group(1))
+                        except:
+                            pass
+                    elif 'ESSID:' in line:
+                        match = re.search(r'ESSID:"([^"]*)"', line)
+                        if match and match.group(1):
+                            networks.append({'ssid': match.group(1), 'signal': current_signal})
+                            current_signal = -70
+
+            if networks:
+                break
+
+    # Method 4: Try nmcli if available
+    if not networks:
+        output, success = run_command('nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null', timeout=15)
+        if success and output:
+            for line in output.strip().split('\n'):
+                if ':' in line:
+                    parts = line.rsplit(':', 1)
+                    ssid = parts[0]
+                    try:
+                        signal = int(parts[1]) - 100 if parts[1].isdigit() else -70  # Convert % to dBm approx
+                    except:
+                        signal = -70
+                    if ssid:
+                        networks.append({'ssid': ssid, 'signal': signal})
 
     # Remove duplicates and sort by signal
     seen = set()
