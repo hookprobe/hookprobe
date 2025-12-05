@@ -79,13 +79,13 @@ HTP_NODE_ID=""
 HTP_SENTINEL_MODE="${HTP_SENTINEL_MODE:-false}"
 EDGE_MODE="${EDGE_MODE:-standalone}"  # standalone, validator, mssp-connected
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Colors - use $'...' syntax for ANSI escape sequences
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
 
 # ============================================================
 # COMMAND-LINE ARGUMENT PARSING
@@ -2224,31 +2224,76 @@ setup_ovs_bridge() {
         else
             # Normal installation (non-LXC)
             if command -v apt-get &> /dev/null; then
-                apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
+                # Debian/Ubuntu: openvswitch-switch and openvswitch-common
+                apt-get update -qq
+                apt-get install -y openvswitch-switch openvswitch-common 2>/dev/null || \
+                apt-get install -y openvswitch-switch 2>/dev/null
             elif command -v dnf &> /dev/null; then
-                # RHEL/Fedora - try multiple package names
-                # RHEL 8+: openvswitch may be versioned (openvswitch2.17, openvswitch3.1, etc.)
-                dnf install -y openvswitch 2>/dev/null || \
-                dnf install -y openvswitch3.1 2>/dev/null || \
-                dnf install -y openvswitch2.17 2>/dev/null || \
-                dnf install -y $(dnf search openvswitch 2>/dev/null | grep -oP '^openvswitch[\d.]+' | head -1) 2>/dev/null || {
-                    echo -e "  ${YELLOW}[!]${NC} OVS package not found in RHEL repos"
-                    echo "  Trying to enable NFV repo for Open vSwitch..."
-                    # Try enabling the NFV/Fast Datapath repository
-                    subscription-manager repos --enable=fast-datapath-for-rhel-9-x86_64-rpms 2>/dev/null || \
-                    subscription-manager repos --enable=fast-datapath-for-rhel-8-x86_64-rpms 2>/dev/null || true
-                    dnf install -y openvswitch 2>/dev/null || \
-                    dnf install -y openvswitch3.1 2>/dev/null || true
+                # Fedora/RHEL/CentOS: openvswitch package
+                # For RHEL/CentOS/Rocky/Alma - install EPEL first
+                if [ -f /etc/redhat-release ]; then
+                    if ! rpm -q epel-release &>/dev/null; then
+                        echo "  Installing EPEL repository for Open vSwitch..."
+                        dnf install -y epel-release 2>/dev/null || {
+                            # For RHEL specifically, EPEL needs to be installed differently
+                            local rhel_version=$(grep -oP '(?<=release )\d+' /etc/redhat-release | head -1)
+                            dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${rhel_version}.noarch.rpm" 2>/dev/null || true
+                        }
+                    fi
+                fi
+                # Install openvswitch (Fedora/RHEL/CentOS)
+                dnf install -y openvswitch 2>/dev/null || {
+                    echo -e "  ${YELLOW}[!]${NC} openvswitch not found, trying alternatives..."
+                    # Try DPDK version or versioned packages
+                    dnf install -y openvswitch-dpdk 2>/dev/null || \
+                    dnf install -y openvswitch3.1 2>/dev/null || \
+                    dnf install -y openvswitch2.17 2>/dev/null || true
                 }
             elif command -v yum &> /dev/null; then
+                # Older RHEL/CentOS - install EPEL first
+                if ! rpm -q epel-release &>/dev/null; then
+                    echo "  Installing EPEL repository for Open vSwitch..."
+                    yum install -y epel-release 2>/dev/null || true
+                fi
                 yum install -y openvswitch 2>/dev/null || \
                 yum install -y openvswitch2.17 2>/dev/null || true
+            elif command -v zypper &> /dev/null; then
+                # OpenSUSE: openvswitch and openvswitch-switch
+                zypper install -y openvswitch openvswitch-switch 2>/dev/null || \
+                zypper install -y openvswitch-dpdk openvswitch-dpdk-switch 2>/dev/null || true
             fi
         fi
     fi
 
-    # If OVS still not available, fall back to host networking
+    # If OVS still not available
     if ! command -v ovs-vsctl &> /dev/null; then
+        # For Fortress/Nexus tiers, OVS is mandatory - stop installation
+        if [ "$EDGE_MODE" = "fortress" ] || [ "$EDGE_MODE" = "nexus" ]; then
+            echo ""
+            echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+            echo -e "${RED}  ERROR: Open vSwitch is required for Fortress installation${NC}"
+            echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            echo "Please install Open vSwitch manually before continuing:"
+            echo ""
+            echo "  Debian/Ubuntu:"
+            echo "    sudo apt-get install openvswitch-switch openvswitch-common"
+            echo ""
+            echo "  Fedora:"
+            echo "    sudo dnf install openvswitch"
+            echo ""
+            echo "  RHEL/CentOS/Rocky/Alma (requires EPEL):"
+            echo "    sudo dnf install epel-release"
+            echo "    sudo dnf install openvswitch"
+            echo ""
+            echo "  OpenSUSE:"
+            echo "    sudo zypper install openvswitch openvswitch-switch"
+            echo ""
+            echo "After installing, run the installer again."
+            echo ""
+            exit 1
+        fi
+        # For other tiers, fall back to host networking
         echo -e "${YELLOW}[!]${NC} OVS not available, using host network mode"
         USE_OVS_BRIDGE=false
         USE_HOST_NETWORK=true
@@ -2260,6 +2305,17 @@ setup_ovs_bridge() {
         # Try to load it (will fail in LXC)
         modprobe openvswitch 2>/dev/null || {
             if detect_container_environment; then
+                # For Fortress in container, still require OVS module on host
+                if [ "$EDGE_MODE" = "fortress" ] || [ "$EDGE_MODE" = "nexus" ]; then
+                    echo ""
+                    echo -e "${RED}ERROR: OVS kernel module required for Fortress${NC}"
+                    echo ""
+                    echo "In LXC/container environment, load the module on the host:"
+                    echo "  modprobe openvswitch"
+                    echo "  echo 'openvswitch' >> /etc/modules"
+                    echo ""
+                    exit 1
+                fi
                 echo -e "  ${YELLOW}[!]${NC} Cannot load OVS module in LXC container"
                 echo "  Load 'openvswitch' module on Proxmox host, or use host networking"
                 USE_OVS_BRIDGE=false
