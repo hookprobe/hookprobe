@@ -466,10 +466,11 @@ install_waf_container() {
     fi
 
     # Create systemd service for WAF container (creates container on start)
+    # WAF listens on port 8888, proxies to Guardian WebUI or backend services
     cat > /etc/systemd/system/guardian-waf.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian WAF (ModSecurity)
-After=network.target podman.socket
+After=network.target podman.socket guardian-webui.service
 Requires=podman.socket
 
 [Service]
@@ -479,13 +480,14 @@ RestartSec=10
 ExecStartPre=-/usr/bin/podman stop guardian-waf
 ExecStartPre=-/usr/bin/podman rm guardian-waf
 ExecStart=/usr/bin/podman run --name guardian-waf \
-    --network host \
+    -p 8888:8080 \
     --cap-add NET_ADMIN \
     -v guardian-waf-logs:/var/log/modsecurity:Z \
+    -e PORT=8080 \
     -e PARANOIA=1 \
     -e ANOMALY_INBOUND=5 \
     -e ANOMALY_OUTBOUND=4 \
-    -e BACKEND=http://127.0.0.1:8080 \
+    -e BACKEND=http://192.168.4.1:8080 \
     docker.io/owasp/modsecurity-crs:nginx-alpine
 ExecStop=/usr/bin/podman stop guardian-waf
 
