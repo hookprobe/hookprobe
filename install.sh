@@ -150,15 +150,78 @@ detect_os() {
         SYS_OS_NAME=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
         SYS_OS_VERSION="$VERSION_ID"
         SYS_OS_PRETTY="$PRETTY_NAME"
-    elif [ -f /etc/redhat-release ]; then
-        SYS_OS_NAME="rhel"
-        SYS_OS_VERSION=$(cat /etc/redhat-release | sed 's/.*release \([0-9.]*\).*/\1/')
-        SYS_OS_PRETTY=$(cat /etc/redhat-release)
+        SYS_OS_ID_LIKE="$ID_LIKE"
     else
         SYS_OS_NAME="unknown"
         SYS_OS_VERSION="unknown"
         SYS_OS_PRETTY="Unknown Linux"
+        SYS_OS_ID_LIKE=""
     fi
+}
+
+# ============================================================
+# RHEL/CENTOS/FEDORA SUPPORT CHECK
+# ============================================================
+
+check_debian_based() {
+    # Check if the OS is Debian-based (Ubuntu, Debian, Raspberry Pi OS, etc.)
+    # RHEL-based systems (RHEL, CentOS, Fedora, Rocky, Alma) are NOT currently supported
+    # due to OpenVSwitch networking compatibility issues.
+    #
+    # Returns:
+    #   0 if Debian-based (supported)
+    #   1 if RHEL-based or unsupported (not supported)
+
+    case "$SYS_OS_NAME" in
+        ubuntu|debian|raspbian|pop|linuxmint|elementary|zorin|kali)
+            return 0  # Supported Debian-based
+            ;;
+        rhel|centos|fedora|rocky|almalinux|ol|scientific)
+            return 1  # RHEL-based - not currently supported
+            ;;
+        *)
+            # Check ID_LIKE for Debian-based derivatives
+            if [[ "$SYS_OS_ID_LIKE" == *"debian"* ]] || [[ "$SYS_OS_ID_LIKE" == *"ubuntu"* ]]; then
+                return 0  # Debian-based derivative
+            elif [[ "$SYS_OS_ID_LIKE" == *"rhel"* ]] || [[ "$SYS_OS_ID_LIKE" == *"fedora"* ]] || [[ "$SYS_OS_ID_LIKE" == *"centos"* ]]; then
+                return 1  # RHEL-based derivative
+            fi
+            # Default: allow unknown distributions to proceed
+            return 0
+            ;;
+    esac
+}
+
+show_rhel_not_supported() {
+    # Display a friendly message that RHEL-based systems are not yet supported.
+
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  RHEL-Based Systems Not Yet Supported${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  HookProbe v5.x currently supports ${CYAN}Debian-based${NC} systems only:"
+    echo ""
+    echo -e "    ${GREEN}✓${NC} Ubuntu 22.04+, 24.04+"
+    echo -e "    ${GREEN}✓${NC} Debian 11+, 12+"
+    echo -e "    ${GREEN}✓${NC} Raspberry Pi OS (Bookworm)"
+    echo ""
+    echo -e "  ${RED}Detected OS: ${SYS_OS_PRETTY}${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Why?${NC}"
+    echo "  The container networking stack (OpenVSwitch + CNI) has compatibility"
+    echo "  issues with RHEL/CentOS/Fedora/Rocky/AlmaLinux that we're actively"
+    echo "  working to resolve."
+    echo ""
+    echo -e "  ${CYAN}RHEL Support Roadmap:${NC}"
+    echo "  We are working on nmcli-based networking for RHEL compatibility."
+    echo "  RHEL/Fedora support is planned for a future release."
+    echo ""
+    echo "  Want to help? Contributions welcome at:"
+    echo "    https://github.com/hookprobe/hookprobe"
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
 }
 
 detect_architecture() {
@@ -544,6 +607,13 @@ detect_capabilities() {
     set +e
 
     detect_os
+
+    # Check for supported OS (Debian-based only in v5.x)
+    if ! check_debian_based; then
+        show_rhel_not_supported
+        exit 1
+    fi
+
     detect_architecture
     detect_kernel
     detect_cpu
@@ -582,12 +652,13 @@ evaluate_deployment_tiers() {
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
     #   - RAM: 512MB - 3GB
-    #   - Storage: 8GB - 64GB (SD card, MMC, eMMC)
+    #   - Storage: 1GB+ (minimal footprint ~50MB)
     #   - Network: 1 interface (WAN only - modem or ethernet)
     #   - Internet: Required (no offline mode)
     # Purpose: Validates edge nodes, lightweight monitoring
+    # Target: RPi Zero, small SBCs, IoT gateways
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_RAM_MB" -ge 512 ] && [ "$SYS_STORAGE_GB" -ge 8 ]; then
+    if [ "$SYS_RAM_MB" -ge 512 ] && [ "$SYS_STORAGE_GB" -ge 1 ]; then
         if [ "$total_net" -ge 1 ]; then
             CAN_SENTINEL=true
         fi
@@ -676,8 +747,7 @@ configure_hookprobe_bridge() {
     # Check if bridge-utils is available
     if ! command -v brctl &>/dev/null && ! command -v ip &>/dev/null; then
         echo -e "${YELLOW}Installing bridge-utils...${NC}"
-        apt-get install -y bridge-utils iproute2 2>/dev/null || \
-        yum install -y bridge-utils iproute2 2>/dev/null
+        apt-get install -y bridge-utils iproute2 2>/dev/null || true
     fi
 
     # Create HookProbe bridge if it doesn't exist
@@ -872,7 +942,7 @@ show_capability_summary() {
         print_ok "Storage: ${SYS_STORAGE_GB}GB available ${GREEN}(Fortress-ready)${NC}"
     elif [ "$SYS_STORAGE_GB" -ge 16 ]; then
         print_ok "Storage: ${SYS_STORAGE_GB}GB available ${YELLOW}(Guardian-ready)${NC}"
-    elif [ "$SYS_STORAGE_GB" -ge 8 ]; then
+    elif [ "$SYS_STORAGE_GB" -ge 1 ]; then
         print_warn "Storage: ${SYS_STORAGE_GB}GB available ${YELLOW}(Sentinel only)${NC}"
     else
         print_fail "Storage: ${SYS_STORAGE_GB}GB available ${RED}(Insufficient)${NC}"
@@ -1048,7 +1118,7 @@ show_capability_summary() {
         echo -e "       ${DIM}Lightweight edge validator${NC}"
     else
         echo -e "  ${DIM}░░░░ SENTINEL [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 512MB+ RAM, 8GB+ storage, 1+ NIC${NC}"
+        echo -e "       ${DIM}Requires: 512MB+ RAM, 1GB+ storage, 1+ NIC${NC}"
     fi
 
     echo ""
@@ -1110,7 +1180,7 @@ show_install_menu() {
     if [ "$CAN_SENTINEL" = true ]; then
         echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}█${NC}░░░ ${BOLD}SENTINEL${NC} - ${ITALIC}\"The Watchful Eye\"${NC}"
         echo -e "        ${DIM}Lightweight validator for constrained devices${NC}"
-        echo -e "        ${DIM}RAM: 512MB-3GB | Storage: 8GB+ | Network: 1+ interface${NC}"
+        echo -e "        ${DIM}RAM: 512MB-3GB | Storage: 1GB+ | Network: 1+ interface${NC}"
         echo -e "        ${DIM}Features: Edge validation, health monitoring${NC}"
         echo ""
         options+=("sentinel")
@@ -1166,7 +1236,7 @@ show_install_menu() {
         echo ""
         echo -e "  ${YELLOW}Minimum requirements:${NC}"
         echo -e "    • RAM: 512MB+"
-        echo -e "    • Storage: 8GB+"
+        echo -e "    • Storage: 1GB+"
         echo -e "    • Network: 1+ interface"
         echo ""
         echo -e "  ${CYAN}For ultra-constrained devices, try Sentinel Lite:${NC}"
