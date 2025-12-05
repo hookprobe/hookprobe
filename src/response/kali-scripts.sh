@@ -59,13 +59,14 @@ anti_xss_response() {
     echo "Pattern: $ATTACK_PATTERN"
 
     # 1. Update NAXSI WAF rules
-    if ! cat >> /reports/naxsi_custom_rules_${TIMESTAMP}.rules << EOF; then
-        echo "ERROR: Failed to create WAF rules" >&2
-        return 1
-    fi
+    cat >> /reports/naxsi_custom_rules_${TIMESTAMP}.rules << EOF
 # Auto-generated XSS blocking rule - ${TIMESTAMP}
 MainRule "str:${ATTACK_PATTERN}" "msg:XSS attack blocked" "mz:\$ARGS|\$BODY" "s:\$XSS:8" id:9${TIMESTAMP:0:6};
 EOF
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to create WAF rules" >&2
+        return 1
+    fi
     
     # 2. Add firewall rule to block attacker IP
     echo "Blocking IP: $ATTACK_IP"
