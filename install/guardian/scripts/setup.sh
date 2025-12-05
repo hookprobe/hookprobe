@@ -552,6 +552,12 @@ prompt_mode_selection() {
 # NETWORK CONFIGURATION PROMPTS
 # ============================================================
 prompt_network_config() {
+    # Skip if already configured via environment (from main install.sh)
+    if [ -n "${HOOKPROBE_WIFI_SSID:-}" ] && [ -n "${HOOKPROBE_WIFI_PASS:-}" ]; then
+        log_info "Using pre-configured WiFi settings: $HOOKPROBE_WIFI_SSID"
+        return
+    fi
+
     echo ""
     echo -e "${BOLD}Network Configuration${NC}"
     echo ""
