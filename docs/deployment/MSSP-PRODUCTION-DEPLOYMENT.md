@@ -42,8 +42,10 @@ This guide covers deploying the **HookProbe MSSP Cloud** to production at hookpr
 
 **Operating System**:
 - Ubuntu 22.04 LTS or 24.04 LTS (recommended)
-- Debian 12+
-- RHEL 9+ / Rocky Linux 9+ / AlmaLinux 9+
+- Debian 11+/12+
+- Raspberry Pi OS (Bookworm)
+
+> **Note**: RHEL-based systems are not currently supported in v5.x. RHEL support is planned for a future release.
 
 **Domain Configuration**:
 - DNS A record: `hookprobe.com` → server IP

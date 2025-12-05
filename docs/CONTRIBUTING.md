@@ -29,10 +29,12 @@ We appreciate all forms of contribution:
    - Networking concepts (VLANs, VXLAN, OVS)
 
 2. **Development Environment**:
-   - RHEL 10, Fedora 40+, or CentOS Stream 10
+   - Ubuntu 22.04+, Debian 11+/12+, or Raspberry Pi OS (Bookworm)
    - 16GB RAM minimum
    - Git installed
    - Text editor (vim, nano, VS Code, etc.)
+
+   > **Note**: RHEL-based systems are not currently supported for development in v5.x. RHEL support is planned for a future release.
 
 3. **Accounts**:
    - GitHub account

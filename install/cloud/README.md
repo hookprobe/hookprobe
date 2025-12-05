@@ -74,13 +74,15 @@ The **MSSP Cloud Backend** provides centralized security operations for multiple
 ### 1. Prerequisites
 
 ```bash
-# Supported OS
-- RHEL 10, Fedora 40+, CentOS Stream 9+
-- Debian 12+, Ubuntu 22.04+/24.04+
+# Supported OS (v5.x - Debian-based only)
+- Ubuntu 22.04+/24.04+
+- Debian 11+/12+
+- Raspberry Pi OS (Bookworm)
 - Proxmox VE 8.x+
 
+# Note: RHEL-based systems not yet supported in v5.x
+
 # Install Podman 4.x+
-sudo dnf install podman podman-compose  # RHEL/Fedora
 sudo apt install podman podman-compose  # Debian/Ubuntu
 ```
 
