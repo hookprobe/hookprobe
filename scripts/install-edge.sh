@@ -147,6 +147,10 @@ parse_arguments() {
                 ENABLE_IAM=false
                 shift
                 ;;
+            --enable-iam)
+                ENABLE_IAM=true
+                shift
+                ;;
             --non-interactive)
                 INTERACTIVE_MODE=false
                 shift
@@ -265,6 +269,7 @@ Options:
   --enable-ai          Enable AI detection (requires 8GB+ RAM)
   --enable-monitoring  Enable Grafana/VictoriaMetrics monitoring
   --enable-webserver   Enable Web Server (Django + Nginx + WAF)
+  --enable-iam         Enable IAM (Logto) installation
   --disable-iam        Skip IAM (Logto) installation
   --non-interactive    Skip interactive prompts (use defaults)
   --cf-token TOKEN     Cloudflare Tunnel token (for web server)
