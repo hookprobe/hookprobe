@@ -1,0 +1,105 @@
+{% extends 'sdn/base.html' %}
+{% block title %}VLANs{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem;">VLAN Management</h1>
+
+<!-- Create VLAN -->
+<div class="card">
+    <h2>Create New VLAN</h2>
+    <form method="post">
+        {% csrf_token %}
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>VLAN ID</label>
+                <input type="number" name="vlan_id" min="1" max="4094" placeholder="10" required>
+            </div>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" name="name" placeholder="IoT Lights" required>
+            </div>
+            <div class="form-group">
+                <label>Category</label>
+                <select name="category">
+                    <option value="">-- No Category --</option>
+                    {% for cat in categories %}
+                    <option value="{{ cat.id }}">{{ cat.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Subnet (CIDR)</label>
+                <input type="text" name="subnet" placeholder="192.168.10.0/24" required>
+            </div>
+            <div class="form-group">
+                <label>Gateway</label>
+                <input type="text" name="gateway" placeholder="192.168.10.1">
+            </div>
+        </div>
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>DHCP Start</label>
+                <input type="text" name="dhcp_start" placeholder="192.168.10.100">
+            </div>
+            <div class="form-group">
+                <label>DHCP End</label>
+                <input type="text" name="dhcp_end" placeholder="192.168.10.200">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success">Create VLAN</button>
+    </form>
+</div>
+
+<!-- VLAN List -->
+<div class="card">
+    <h2>Configured VLANs</h2>
+    {% if vlans %}
+    <table>
+        <thead>
+            <tr>
+                <th>VLAN ID</th>
+                <th>Name</th>
+                <th>Subnet</th>
+                <th>Gateway</th>
+                <th>DHCP Range</th>
+                <th>Category</th>
+                <th>Devices</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vlan in vlans %}
+            <tr>
+                <td><strong>{{ vlan.vlan_id }}</strong></td>
+                <td>{{ vlan.name }}</td>
+                <td><code>{{ vlan.subnet }}</code></td>
+                <td>{{ vlan.gateway }}</td>
+                <td>{{ vlan.dhcp_start }} - {{ vlan.dhcp_end }}</td>
+                <td>
+                    {% if vlan.category %}
+                    <span class="badge" style="background: {{ vlan.category.color }}20; color: {{ vlan.category.color }};">
+                        {{ vlan.category.name }}
+                    </span>
+                    {% else %}
+                    --
+                    {% endif %}
+                </td>
+                <td>{{ vlan.devices.count }}</td>
+                <td>
+                    {% if vlan.is_active %}
+                    <span class="badge badge-success">Active</span>
+                    {% else %}
+                    <span class="badge badge-warning">Inactive</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--gray-600);">No VLANs configured. Create one above.</p>
+    {% endif %}
+</div>
+{% endblock %}
