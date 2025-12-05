@@ -1213,6 +1213,12 @@ main() {
     detect_platform
     calculate_memory_limits
 
+    # Check for supported OS (Debian-based only in v5.x)
+    if ! check_debian_based; then
+        show_rhel_not_supported
+        exit 1
+    fi
+
     echo "Platform detected:"
     echo "  OS:              $PLATFORM_OS"
     echo "  Architecture:    $PLATFORM_ARCH"
@@ -1449,27 +1455,22 @@ main() {
 install_dependencies() {
     echo "Installing dependencies..."
 
-    # Detect package manager
-    if command -v apt-get &> /dev/null; then
-        PKG_MANAGER="apt-get"
-    elif command -v dnf &> /dev/null; then
-        PKG_MANAGER="dnf"
-    elif command -v yum &> /dev/null; then
-        PKG_MANAGER="yum"
-    else
-        echo -e "${RED}ERROR: No supported package manager found${NC}"
+    # HookProbe v5.x only supports Debian-based systems (apt-get)
+    # RHEL/Fedora support is planned for a future release
+    if ! command -v apt-get &> /dev/null; then
+        echo -e "${RED}ERROR: apt-get not found. HookProbe v5.x requires Debian-based systems.${NC}"
+        echo "Supported: Ubuntu, Debian, Raspberry Pi OS"
+        echo "RHEL/Fedora support coming in a future release."
         exit 1
     fi
+
+    PKG_MANAGER="apt-get"
 
     # Install Podman if not present
     if ! command -v podman &> /dev/null; then
         echo "Installing Podman..."
-        if [ "$PKG_MANAGER" = "apt-get" ]; then
-            apt-get update
-            apt-get install -y podman
-        else
-            $PKG_MANAGER install -y podman
-        fi
+        apt-get update
+        apt-get install -y podman
     fi
 
     # Detect LXC environment and configure podman accordingly
@@ -1505,11 +1506,7 @@ install_dependencies() {
     # Install Python 3.9+ if not present
     if ! command -v python3 &> /dev/null; then
         echo "Installing Python..."
-        if [ "$PKG_MANAGER" = "apt-get" ]; then
-            apt-get install -y python3 python3-pip
-        else
-            $PKG_MANAGER install -y python3 python3-pip
-        fi
+        apt-get install -y python3 python3-pip
     fi
 
     echo -e "${GREEN}✓${NC} Dependencies installed"
@@ -1683,21 +1680,13 @@ CONTAINERSEOF
     # Install crun if not present (better than runc for LXC)
     if ! command -v crun &>/dev/null; then
         echo -e "  ${CYAN}→${NC} Installing crun runtime..."
-        if command -v apt-get &>/dev/null; then
-            apt-get install -y crun 2>/dev/null || true
-        elif command -v dnf &>/dev/null; then
-            dnf install -y crun 2>/dev/null || true
-        fi
+        apt-get install -y crun 2>/dev/null || true
     fi
 
     # Install fuse-overlayfs for better overlay support
     if ! command -v fuse-overlayfs &>/dev/null && [ "$USE_VFS_STORAGE" != true ]; then
         echo -e "  ${CYAN}→${NC} Installing fuse-overlayfs..."
-        if command -v apt-get &>/dev/null; then
-            apt-get install -y fuse-overlayfs 2>/dev/null || true
-        elif command -v dnf &>/dev/null; then
-            dnf install -y fuse-overlayfs 2>/dev/null || true
-        fi
+        apt-get install -y fuse-overlayfs 2>/dev/null || true
     fi
 
     echo -e "  ${GREEN}[x]${NC} Podman configured for LXC"
@@ -1841,18 +1830,6 @@ check_and_upgrade_cni() {
             echo -e "${GREEN}✓${NC} CNI plugins upgraded via apt (alternative package)"
             return 0
         fi
-    elif command -v dnf &> /dev/null; then
-        # Fedora/RHEL 8+
-        if dnf install -y containernetworking-plugins 2>/dev/null; then
-            echo -e "${GREEN}✓${NC} CNI plugins upgraded via dnf"
-            return 0
-        fi
-    elif command -v yum &> /dev/null; then
-        # RHEL 7/CentOS
-        if yum install -y containernetworking-plugins 2>/dev/null; then
-            echo -e "${GREEN}✓${NC} CNI plugins upgraded via yum"
-            return 0
-        fi
     fi
 
     # Manual installation fallback
@@ -1879,8 +1856,7 @@ check_and_upgrade_cni() {
     echo ""
     echo "Please manually upgrade CNI plugins to version 1.0.0 or newer:"
     echo "  Option 1: apt install containernetworking-plugins"
-    echo "  Option 2: dnf install containernetworking-plugins"
-    echo "  Option 3: Download from https://github.com/containernetworking/plugins/releases"
+    echo "  Option 2: Download from https://github.com/containernetworking/plugins/releases"
     echo ""
     echo "Falling back to host networking mode..."
     USE_HOST_NETWORK=true
@@ -2222,54 +2198,14 @@ setup_ovs_bridge() {
                 }
             fi
         else
-            # Normal installation (non-LXC)
+            # Normal installation (non-LXC) - Debian/Ubuntu only
             if command -v apt-get &> /dev/null; then
                 # Debian/Ubuntu: openvswitch-switch and openvswitch-common
                 apt-get update -qq
                 apt-get install -y openvswitch-switch openvswitch-common 2>/dev/null || \
                 apt-get install -y openvswitch-switch 2>/dev/null
-            elif command -v dnf &> /dev/null; then
-                # Fedora/RHEL/CentOS: openvswitch package
-                # For RHEL/CentOS/Rocky/Alma - enable CRB and install EPEL first
-                if [ -f /etc/redhat-release ]; then
-                    # Enable CRB (CodeReady Builder) repository - required for EPEL dependencies
-                    echo "  Enabling CRB repository..."
-                    dnf config-manager --set-enabled crb 2>/dev/null || \
-                    dnf config-manager --set-enabled codeready-builder-for-rhel-10-x86_64-rpms 2>/dev/null || \
-                    dnf config-manager --set-enabled codeready-builder-for-rhel-9-x86_64-rpms 2>/dev/null || \
-                    dnf config-manager --set-enabled codeready-builder-for-rhel-8-x86_64-rpms 2>/dev/null || \
-                    dnf config-manager --set-enabled powertools 2>/dev/null || true
-
-                    if ! rpm -q epel-release &>/dev/null; then
-                        echo "  Installing EPEL repository for Open vSwitch..."
-                        dnf install -y epel-release 2>/dev/null || {
-                            # For RHEL specifically, EPEL needs to be installed differently
-                            local rhel_version=$(grep -oP '(?<=release )\d+' /etc/redhat-release | head -1)
-                            dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${rhel_version}.noarch.rpm" 2>/dev/null || true
-                        }
-                    fi
-                fi
-                # Install openvswitch (Fedora/RHEL/CentOS)
-                dnf install -y openvswitch 2>/dev/null || {
-                    echo -e "  ${YELLOW}[!]${NC} openvswitch not found, trying alternatives..."
-                    # Try DPDK version or versioned packages
-                    dnf install -y openvswitch-dpdk 2>/dev/null || \
-                    dnf install -y openvswitch3.1 2>/dev/null || \
-                    dnf install -y openvswitch2.17 2>/dev/null || true
-                }
-            elif command -v yum &> /dev/null; then
-                # Older RHEL/CentOS - install EPEL first
-                if ! rpm -q epel-release &>/dev/null; then
-                    echo "  Installing EPEL repository for Open vSwitch..."
-                    yum install -y epel-release 2>/dev/null || true
-                fi
-                yum install -y openvswitch 2>/dev/null || \
-                yum install -y openvswitch2.17 2>/dev/null || true
-            elif command -v zypper &> /dev/null; then
-                # OpenSUSE: openvswitch and openvswitch-switch
-                zypper install -y openvswitch openvswitch-switch 2>/dev/null || \
-                zypper install -y openvswitch-dpdk openvswitch-dpdk-switch 2>/dev/null || true
             fi
+            # Note: RHEL-based systems are checked at startup and will exit early
         fi
     fi
 
@@ -2286,17 +2222,6 @@ setup_ovs_bridge() {
             echo ""
             echo "  Debian/Ubuntu:"
             echo "    sudo apt-get install openvswitch-switch openvswitch-common"
-            echo ""
-            echo "  Fedora:"
-            echo "    sudo dnf install openvswitch"
-            echo ""
-            echo "  RHEL/CentOS/Rocky/Alma (requires CRB + EPEL):"
-            echo "    sudo dnf config-manager --set-enabled crb"
-            echo "    sudo dnf install epel-release"
-            echo "    sudo dnf install openvswitch"
-            echo ""
-            echo "  OpenSUSE:"
-            echo "    sudo zypper install openvswitch openvswitch-switch"
             echo ""
             echo "After installing, run the installer again."
             echo ""
