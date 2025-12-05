@@ -2229,16 +2229,19 @@ setup_ovs_bridge() {
                 apt-get install -y openvswitch-switch openvswitch-common 2>/dev/null || \
                 apt-get install -y openvswitch-switch 2>/dev/null
             elif command -v dnf &> /dev/null; then
-                # Fedora/RHEL: openvswitch package
-                # Check if it's RHEL (needs Fast Datapath repo) or Fedora (in base repos)
-                if [ -f /etc/redhat-release ] && grep -qi "red hat" /etc/redhat-release; then
-                    echo "  Detected RHEL, enabling Fast Datapath repository..."
-                    # Enable Fast Datapath repo for RHEL
-                    subscription-manager repos --enable=fast-datapath-for-rhel-10-x86_64-rpms 2>/dev/null || \
-                    subscription-manager repos --enable=fast-datapath-for-rhel-9-x86_64-rpms 2>/dev/null || \
-                    subscription-manager repos --enable=fast-datapath-for-rhel-8-x86_64-rpms 2>/dev/null || true
+                # Fedora/RHEL/CentOS: openvswitch package
+                # For RHEL/CentOS/Rocky/Alma - install EPEL first
+                if [ -f /etc/redhat-release ]; then
+                    if ! rpm -q epel-release &>/dev/null; then
+                        echo "  Installing EPEL repository for Open vSwitch..."
+                        dnf install -y epel-release 2>/dev/null || {
+                            # For RHEL specifically, EPEL needs to be installed differently
+                            local rhel_version=$(grep -oP '(?<=release )\d+' /etc/redhat-release | head -1)
+                            dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${rhel_version}.noarch.rpm" 2>/dev/null || true
+                        }
+                    fi
                 fi
-                # Install openvswitch (Fedora/RHEL)
+                # Install openvswitch (Fedora/RHEL/CentOS)
                 dnf install -y openvswitch 2>/dev/null || {
                     echo -e "  ${YELLOW}[!]${NC} openvswitch not found, trying alternatives..."
                     # Try DPDK version or versioned packages
@@ -2247,7 +2250,11 @@ setup_ovs_bridge() {
                     dnf install -y openvswitch2.17 2>/dev/null || true
                 }
             elif command -v yum &> /dev/null; then
-                # Older RHEL/CentOS
+                # Older RHEL/CentOS - install EPEL first
+                if ! rpm -q epel-release &>/dev/null; then
+                    echo "  Installing EPEL repository for Open vSwitch..."
+                    yum install -y epel-release 2>/dev/null || true
+                fi
                 yum install -y openvswitch 2>/dev/null || \
                 yum install -y openvswitch2.17 2>/dev/null || true
             elif command -v zypper &> /dev/null; then
@@ -2275,8 +2282,8 @@ setup_ovs_bridge() {
             echo "  Fedora:"
             echo "    sudo dnf install openvswitch"
             echo ""
-            echo "  RHEL 8/9/10 (requires Fast Datapath subscription):"
-            echo "    sudo subscription-manager repos --enable=fast-datapath-for-rhel-9-x86_64-rpms"
+            echo "  RHEL/CentOS/Rocky/Alma (requires EPEL):"
+            echo "    sudo dnf install epel-release"
             echo "    sudo dnf install openvswitch"
             echo ""
             echo "  OpenSUSE:"
