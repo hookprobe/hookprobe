@@ -1319,45 +1319,146 @@ install_guardian() {
     if [ "$SYS_WIFI_HOTSPOT" = true ]; then
         echo "  • WiFi: Hotspot available for LAN clients"
     fi
-    if [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ]; then
-        echo ""
-        echo -e "${CYAN}Bridge Configuration (WiFi deployment detected):${NC}"
-        echo "  • WiFi Bridges: $SYS_WIFI_BRIDGES"
-        if [ -n "$SYS_HOOKPROBE_BRIDGE" ]; then
-            echo -e "  • HookProbe Bridge: ${GREEN}$SYS_HOOKPROBE_BRIDGE (configured)${NC}"
-        else
-            echo -e "  • HookProbe Bridge: ${YELLOW}Will be created during install${NC}"
-        fi
-        echo "  • Route metric: 100 (HookProbe bridge priority)"
-    fi
     echo ""
 
-    # MSSP ID
-    echo -e "${RED}MSSP Registration Required${NC}"
-    echo "Guardian requires an MSSP ID for signature updates and management."
+    # ─────────────────────────────────────────────────────────────
+    # Installation Mode Selection
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "${BOLD}Select Installation Mode:${NC}"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
     echo ""
-    read -p "Enter your MSSP ID (or 'skip' to configure later): " mssp_id
+    echo -e "  ${BOLD}1)${NC} ${GREEN}Basic Mode${NC} - Simple WiFi hotspot with bridge"
+    echo -e "     ${DIM}• Single SSID, all devices on same network${NC}"
+    echo -e "     ${DIM}• WiFi + LAN bridged together${NC}"
+    echo -e "     ${DIM}• WAN DHCP client for internet${NC}"
+    echo -e "     ${DIM}• No MSSP connection required${NC}"
+    echo ""
+    echo -e "  ${BOLD}2)${NC} ${CYAN}SDN Mode${NC} - Full VLAN segmentation (requires MSSP)"
+    echo -e "     ${DIM}• MAC-based VLAN assignment via RADIUS${NC}"
+    echo -e "     ${DIM}• IoT device isolation by category${NC}"
+    echo -e "     ${DIM}• Per-category internet policies${NC}"
+    echo -e "     ${DIM}• Requires FreeRADIUS connection to MSSP${NC}"
+    echo ""
 
-    if [ "$mssp_id" != "skip" ] && [ -n "$mssp_id" ]; then
-        mkdir -p /etc/hookprobe/secrets
-        echo "$mssp_id" > /etc/hookprobe/secrets/mssp-id
-        chmod 600 /etc/hookprobe/secrets/mssp-id
-        echo -e "${GREEN}✓ MSSP ID saved${NC}"
-    fi
+    local guardian_mode="basic"
+    while true; do
+        read -p "Select mode [1]: " mode_choice
+        mode_choice=${mode_choice:-1}
 
-    # WiFi configuration
+        case $mode_choice in
+            1)
+                guardian_mode="basic"
+                break
+                ;;
+            2)
+                guardian_mode="sdn"
+                # Check MSSP connectivity for SDN mode
+                echo ""
+                echo -e "${YELLOW}Checking MSSP connectivity...${NC}"
+                local mssp_url="${HOOKPROBE_MSSP_URL:-https://nexus.hookprobe.com}"
+                if command -v curl &>/dev/null; then
+                    if curl -s --max-time 10 "$mssp_url/api/health" &>/dev/null; then
+                        echo -e "${GREEN}✓ MSSP server is reachable${NC}"
+                    else
+                        echo -e "${YELLOW}Warning: MSSP server not reachable at $mssp_url${NC}"
+                        echo -e "${YELLOW}SDN features require MSSP connection for RADIUS.${NC}"
+                        read -p "Continue with SDN mode anyway? (yes/no) [no]: " continue_sdn
+                        if [ "$continue_sdn" != "yes" ]; then
+                            echo "Falling back to Basic mode..."
+                            guardian_mode="basic"
+                        fi
+                    fi
+                fi
+                break
+                ;;
+            *)
+                echo -e "${RED}Invalid selection. Please choose 1 or 2.${NC}"
+                ;;
+        esac
+    done
+
+    echo ""
+    echo -e "${GREEN}✓ Selected mode: ${BOLD}$guardian_mode${NC}"
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
+    # WiFi Configuration
+    # ─────────────────────────────────────────────────────────────
+    local wifi_ssid="HookProbe-Guardian"
+    local wifi_pass=""
+
     if [ "$SYS_WIFI_HOTSPOT" = true ]; then
-        echo ""
         echo -e "${CYAN}WiFi Hotspot Configuration:${NC}"
-        read -p "Enable WiFi hotspot? (yes/no) [yes]: " enable_hotspot
-        enable_hotspot=${enable_hotspot:-yes}
+        read -p "WiFi SSID [HookProbe-Guardian]: " wifi_ssid_input
+        wifi_ssid=${wifi_ssid_input:-HookProbe-Guardian}
 
-        if [ "$enable_hotspot" = "yes" ]; then
-            read -p "WiFi SSID [HookProbe-Guardian]: " wifi_ssid
-            wifi_ssid=${wifi_ssid:-HookProbe-Guardian}
+        while true; do
             read -sp "WiFi Password (min 8 chars): " wifi_pass
             echo ""
+            if [ ${#wifi_pass} -ge 8 ]; then
+                break
+            else
+                echo -e "${RED}Password must be at least 8 characters${NC}"
+            fi
+        done
+        echo -e "${GREEN}✓ WiFi configuration saved${NC}"
+    fi
 
+    # ─────────────────────────────────────────────────────────────
+    # MSSP ID (for SDN mode)
+    # ─────────────────────────────────────────────────────────────
+    local mssp_id=""
+    if [ "$guardian_mode" = "sdn" ]; then
+        echo ""
+        echo -e "${CYAN}MSSP Registration:${NC}"
+        echo "SDN mode requires an MSSP ID for RADIUS and device management."
+        read -p "Enter your MSSP ID (or 'skip' to configure later): " mssp_id
+
+        if [ "$mssp_id" != "skip" ] && [ -n "$mssp_id" ]; then
+            mkdir -p /etc/hookprobe/secrets
+            echo "$mssp_id" > /etc/hookprobe/secrets/mssp-id
+            chmod 600 /etc/hookprobe/secrets/mssp-id
+            echo -e "${GREEN}✓ MSSP ID saved${NC}"
+        fi
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Ad blocking
+    # ─────────────────────────────────────────────────────────────
+    echo ""
+    read -p "Enable ad blocking? (yes/no) [yes]: " enable_adblock
+    enable_adblock=${enable_adblock:-yes}
+
+    # ─────────────────────────────────────────────────────────────
+    # Confirmation and Installation
+    # ─────────────────────────────────────────────────────────────
+    echo ""
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "${BOLD}Installation Summary:${NC}"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "  Mode:        ${BOLD}$guardian_mode${NC}"
+    echo -e "  WiFi SSID:   ${BOLD}$wifi_ssid${NC}"
+    echo -e "  Ad Blocking: ${BOLD}$enable_adblock${NC}"
+    if [ "$guardian_mode" = "sdn" ]; then
+        echo -e "  MSSP ID:     ${BOLD}${mssp_id:-not configured}${NC}"
+    fi
+    echo ""
+
+    read -p "Proceed with Guardian installation? (yes/no) [yes]: " confirm
+    confirm=${confirm:-yes}
+
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+        # Export configuration for setup script
+        export HOOKPROBE_TIER="guardian"
+        export GUARDIAN_MODE="$guardian_mode"
+        export HOOKPROBE_WIFI_SSID="$wifi_ssid"
+        export HOOKPROBE_WIFI_PASS="$wifi_pass"
+        export HOOKPROBE_ADBLOCK="$enable_adblock"
+
+        # Save WiFi configuration
+        if [ -n "$wifi_pass" ]; then
             mkdir -p /etc/hookprobe
             cat > /etc/hookprobe/wifi.conf << WIFIEOF
 WIFI_ENABLED=true
@@ -1366,27 +1467,16 @@ WIFI_PASS="$wifi_pass"
 WIFI_BAND="${SYS_WIFI_5GHZ:+5GHz}${SYS_WIFI_5GHZ:-2.4GHz}"
 WIFIEOF
             chmod 600 /etc/hookprobe/wifi.conf
-            echo -e "${GREEN}✓ WiFi configuration saved${NC}"
         fi
-    fi
 
-    # Ad blocking
-    echo ""
-    read -p "Enable ad blocking? (yes/no) [yes]: " enable_adblock
-    enable_adblock=${enable_adblock:-yes}
-
-    echo ""
-    read -p "Proceed with Guardian installation? (yes/no) [no]: " confirm
-    if [ "$confirm" = "yes" ]; then
-        echo ""
-        export HOOKPROBE_TIER="guardian"
-        export HOOKPROBE_ADBLOCK="$enable_adblock"
-        if [ -f "$SCRIPT_DIR/install/guardian/setup.sh" ]; then
-            bash "$SCRIPT_DIR/install/guardian/setup.sh"
-        elif [ -f "$SCRIPT_DIR/scripts/install-edge.sh" ]; then
-            bash "$SCRIPT_DIR/scripts/install-edge.sh" --tier guardian
+        # Run Guardian setup script
+        local guardian_setup="$SCRIPT_DIR/install/guardian/scripts/setup.sh"
+        if [ -f "$guardian_setup" ]; then
+            echo -e "${GREEN}Launching Guardian setup...${NC}"
+            bash "$guardian_setup"
         else
-            echo -e "${RED}Guardian installer not found${NC}"
+            echo -e "${RED}Guardian installer not found at: $guardian_setup${NC}"
+            echo -e "${YELLOW}Please ensure install/guardian/scripts/setup.sh exists${NC}"
         fi
     else
         echo "Installation cancelled."
