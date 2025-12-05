@@ -2230,8 +2230,16 @@ setup_ovs_bridge() {
                 apt-get install -y openvswitch-switch 2>/dev/null
             elif command -v dnf &> /dev/null; then
                 # Fedora/RHEL/CentOS: openvswitch package
-                # For RHEL/CentOS/Rocky/Alma - install EPEL first
+                # For RHEL/CentOS/Rocky/Alma - enable CRB and install EPEL first
                 if [ -f /etc/redhat-release ]; then
+                    # Enable CRB (CodeReady Builder) repository - required for EPEL dependencies
+                    echo "  Enabling CRB repository..."
+                    dnf config-manager --set-enabled crb 2>/dev/null || \
+                    dnf config-manager --set-enabled codeready-builder-for-rhel-10-x86_64-rpms 2>/dev/null || \
+                    dnf config-manager --set-enabled codeready-builder-for-rhel-9-x86_64-rpms 2>/dev/null || \
+                    dnf config-manager --set-enabled codeready-builder-for-rhel-8-x86_64-rpms 2>/dev/null || \
+                    dnf config-manager --set-enabled powertools 2>/dev/null || true
+
                     if ! rpm -q epel-release &>/dev/null; then
                         echo "  Installing EPEL repository for Open vSwitch..."
                         dnf install -y epel-release 2>/dev/null || {
@@ -2282,7 +2290,8 @@ setup_ovs_bridge() {
             echo "  Fedora:"
             echo "    sudo dnf install openvswitch"
             echo ""
-            echo "  RHEL/CentOS/Rocky/Alma (requires EPEL):"
+            echo "  RHEL/CentOS/Rocky/Alma (requires CRB + EPEL):"
+            echo "    sudo dnf config-manager --set-enabled crb"
             echo "    sudo dnf install epel-release"
             echo "    sudo dnf install openvswitch"
             echo ""
