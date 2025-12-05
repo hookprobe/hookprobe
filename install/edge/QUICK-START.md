@@ -6,10 +6,12 @@
 
 ## Prerequisites
 
-- RHEL-based (Fedora, CentOS, Rocky) or Debian-based (Ubuntu, Debian) Linux
+- **Debian-based Linux**: Ubuntu 22.04+, Debian 11+, Raspberry Pi OS (Bookworm)
 - x86_64 or ARM64 architecture
 - Root access (`sudo`)
 - Internet connection
+
+> **Note**: RHEL-based systems (Fedora, CentOS, Rocky, RHEL) are not currently supported in v5.x. We are working on nmcli-based networking for RHEL compatibility. Support coming in a future release.
 
 ---
 

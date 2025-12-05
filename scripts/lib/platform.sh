@@ -88,6 +88,79 @@ detect_platform() {
 }
 
 # ============================================================
+# RHEL/CENTOS/FEDORA SUPPORT CHECK
+# ============================================================
+
+check_debian_based() {
+    # Check if the OS is Debian-based (Ubuntu, Debian, Raspberry Pi OS, etc.)
+    # RHEL-based systems (RHEL, CentOS, Fedora, Rocky, Alma) are NOT currently supported
+    # due to OpenVSwitch networking compatibility issues.
+    #
+    # Returns:
+    #   0 if Debian-based (supported)
+    #   1 if RHEL-based or unsupported (not supported)
+
+    local os_id="${OS_ID:-$(. /etc/os-release 2>/dev/null && echo "$ID")}"
+
+    case "$os_id" in
+        ubuntu|debian|raspbian|pop|linuxmint|elementary|zorin|kali)
+            return 0  # Supported Debian-based
+            ;;
+        rhel|centos|fedora|rocky|almalinux|ol|scientific)
+            return 1  # RHEL-based - not currently supported
+            ;;
+        *)
+            # Check ID_LIKE for Debian-based derivatives
+            local os_like="${ID_LIKE:-$(. /etc/os-release 2>/dev/null && echo "$ID_LIKE")}"
+            if [[ "$os_like" == *"debian"* ]] || [[ "$os_like" == *"ubuntu"* ]]; then
+                return 0  # Debian-based derivative
+            elif [[ "$os_like" == *"rhel"* ]] || [[ "$os_like" == *"fedora"* ]] || [[ "$os_like" == *"centos"* ]]; then
+                return 1  # RHEL-based derivative
+            fi
+            # Default: allow unknown distributions to proceed
+            return 0
+            ;;
+    esac
+}
+
+show_rhel_not_supported() {
+    # Display a friendly message that RHEL-based systems are not yet supported.
+
+    local RED=$'\033[0;31m'
+    local YELLOW=$'\033[1;33m'
+    local CYAN=$'\033[0;36m'
+    local NC=$'\033[0m'
+
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  RHEL-Based Systems Not Yet Supported${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  HookProbe v5.x currently supports ${CYAN}Debian-based${NC} systems only:"
+    echo ""
+    echo -e "    ${CYAN}✓${NC} Ubuntu 22.04+, 24.04+"
+    echo -e "    ${CYAN}✓${NC} Debian 11+, 12+"
+    echo -e "    ${CYAN}✓${NC} Raspberry Pi OS (Bookworm)"
+    echo ""
+    echo -e "  ${RED}Detected OS: ${PLATFORM_OS:-$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")}${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Why?${NC}"
+    echo "  The container networking stack (OpenVSwitch + CNI) has compatibility"
+    echo "  issues with RHEL/CentOS/Fedora/Rocky/AlmaLinux that we're actively"
+    echo "  working to resolve."
+    echo ""
+    echo -e "  ${CYAN}RHEL Support Roadmap:${NC}"
+    echo "  We are working on nmcli-based networking for RHEL compatibility."
+    echo "  RHEL/Fedora support is planned for a future release."
+    echo ""
+    echo "  Want to help? Contributions welcome at:"
+    echo "    https://github.com/hookprobe/hookprobe"
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+# ============================================================
 # CGROUP DETECTION
 # ============================================================
 

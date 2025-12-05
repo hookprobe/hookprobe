@@ -17,7 +17,7 @@ assignees: ''
 <!-- e.g., v5.0.0 -->
 
 **Operating System:**
-<!-- e.g., RHEL 10, Fedora 40, CentOS Stream 9 -->
+<!-- e.g., Ubuntu 24.04, Debian 12, Raspberry Pi OS (Bookworm) -->
 
 **Podman Version:**
 ```bash
