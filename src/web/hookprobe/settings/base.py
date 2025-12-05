@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'apps.monitoring',
     'apps.security',
     'apps.vpn',               # IKEv2 VPN profile generation and management
+    'apps.sdn',               # MAC-based VLAN assignment for IoT segmentation
 ]
 
 MIDDLEWARE = [
