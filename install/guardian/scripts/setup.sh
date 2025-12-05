@@ -145,6 +145,15 @@ install_packages() {
     if command -v apt-get &>/dev/null; then
         PKG_MGR="apt"
         apt-get update -qq
+
+        # Create /etc/default/hostapd before installing hostapd
+        # This prevents the post-install script from failing
+        if [ ! -f /etc/default/hostapd ]; then
+            mkdir -p /etc/default
+            echo '# Defaults for hostapd initscript' > /etc/default/hostapd
+            echo 'DAEMON_CONF=""' >> /etc/default/hostapd
+        fi
+
         apt-get install -y -qq \
             hostapd \
             dnsmasq \
