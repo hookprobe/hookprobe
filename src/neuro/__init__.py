@@ -11,7 +11,7 @@ Core Components:
 - E2EE Transport: ChaCha20-Poly1305 with keys from neural weights
 """
 
-__version__ = "1.0.0-alpha"
+__version__ = "5.0.0"
 __author__ = "Andrei Toma"
 __license__ = "MIT"
 
