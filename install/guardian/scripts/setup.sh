@@ -378,24 +378,8 @@ install_suricata_container() {
     # Determine network interface to monitor
     local MONITOR_IFACE="br0"
 
-    # Pull and run Suricata
-    podman run -d \
-        --name guardian-suricata \
-        --network host \
-        --cap-add NET_ADMIN \
-        --cap-add NET_RAW \
-        --cap-add SYS_NICE \
-        -v guardian-suricata-logs:/var/log/suricata:Z \
-        -v guardian-suricata-rules:/var/lib/suricata:Z \
-        -e SURICATA_OPTIONS="-i $MONITOR_IFACE" \
-        --restart unless-stopped \
-        docker.io/jasonish/suricata:latest \
-        -i "$MONITOR_IFACE" 2>/dev/null || {
-            log_warn "Suricata container failed to start (may need network first)"
-        }
-
-    # Create systemd service for Suricata container
-    cat > /etc/systemd/system/guardian-suricata.service << 'EOF'
+    # Create systemd service for Suricata container (creates container on start)
+    cat > /etc/systemd/system/guardian-suricata.service << EOF
 [Unit]
 Description=HookProbe Guardian Suricata IDS
 After=network.target podman.socket
@@ -407,7 +391,14 @@ Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/podman stop guardian-suricata
 ExecStartPre=-/usr/bin/podman rm guardian-suricata
-ExecStart=/usr/bin/podman start -a guardian-suricata
+ExecStart=/usr/bin/podman run --name guardian-suricata \\
+    --network host \\
+    --cap-add NET_ADMIN \\
+    --cap-add NET_RAW \\
+    --cap-add SYS_NICE \\
+    -v guardian-suricata-logs:/var/log/suricata:Z \\
+    -v guardian-suricata-rules:/var/lib/suricata:Z \\
+    docker.io/jasonish/suricata:latest -i $MONITOR_IFACE
 ExecStop=/usr/bin/podman stop guardian-suricata
 
 [Install]
@@ -429,20 +420,7 @@ install_adguard_container() {
         return 0
     fi
 
-    # AdGuard DNS ports: 53 (DNS), 3000 (setup), 80 (dashboard after setup)
-    # Use alternative ports to avoid conflicts with dnsmasq
-    podman run -d \
-        --name guardian-adguard \
-        --network host \
-        -v guardian-adguard-work:/opt/adguardhome/work:Z \
-        -v guardian-adguard-conf:/opt/adguardhome/conf:Z \
-        -e ADGUARD_PORT_DNS=5353 \
-        --restart unless-stopped \
-        docker.io/adguard/adguardhome:latest 2>/dev/null || {
-            log_warn "AdGuard container failed to start"
-        }
-
-    # Create systemd service for AdGuard container
+    # Create systemd service for AdGuard container (creates container on start)
     cat > /etc/systemd/system/guardian-adguard.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian AdGuard Home
@@ -455,7 +433,11 @@ Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/podman stop guardian-adguard
 ExecStartPre=-/usr/bin/podman rm guardian-adguard
-ExecStart=/usr/bin/podman start -a guardian-adguard
+ExecStart=/usr/bin/podman run --name guardian-adguard \
+    --network host \
+    -v guardian-adguard-work:/opt/adguardhome/work:Z \
+    -v guardian-adguard-conf:/opt/adguardhome/conf:Z \
+    docker.io/adguard/adguardhome:latest
 ExecStop=/usr/bin/podman stop guardian-adguard
 
 [Install]
@@ -483,22 +465,7 @@ install_waf_container() {
         return 0
     fi
 
-    # Run OWASP ModSecurity WAF
-    podman run -d \
-        --name guardian-waf \
-        --network host \
-        --cap-add NET_ADMIN \
-        -v guardian-waf-logs:/var/log/modsecurity:Z \
-        -e PARANOIA=1 \
-        -e ANOMALY_INBOUND=5 \
-        -e ANOMALY_OUTBOUND=4 \
-        -e BACKEND=http://127.0.0.1:8080 \
-        --restart unless-stopped \
-        docker.io/owasp/modsecurity-crs:nginx-alpine 2>/dev/null || {
-            log_warn "WAF container failed to start"
-        }
-
-    # Create systemd service for WAF container
+    # Create systemd service for WAF container (creates container on start)
     cat > /etc/systemd/system/guardian-waf.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian WAF (ModSecurity)
@@ -511,7 +478,15 @@ Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/podman stop guardian-waf
 ExecStartPre=-/usr/bin/podman rm guardian-waf
-ExecStart=/usr/bin/podman start -a guardian-waf
+ExecStart=/usr/bin/podman run --name guardian-waf \
+    --network host \
+    --cap-add NET_ADMIN \
+    -v guardian-waf-logs:/var/log/modsecurity:Z \
+    -e PARANOIA=1 \
+    -e ANOMALY_INBOUND=5 \
+    -e ANOMALY_OUTBOUND=4 \
+    -e BACKEND=http://127.0.0.1:8080 \
+    docker.io/owasp/modsecurity-crs:nginx-alpine
 ExecStop=/usr/bin/podman stop guardian-waf
 
 [Install]
@@ -536,59 +511,35 @@ install_neuro_container() {
     # Create neuro working directory
     mkdir -p /opt/hookprobe/guardian/neuro
 
-    # Load MSSP configuration if available
-    local mssp_env=""
-    if [ -f /etc/hookprobe/secrets/mssp.env ]; then
-        source /etc/hookprobe/secrets/mssp.env
-        mssp_env="-e MSSP_ENDPOINT=$MSSP_ENDPOINT -e MSSP_PORT=$MSSP_PORT -e HTP_NODE_ID=$HTP_NODE_ID"
-    fi
-
-    # Run Neuro/QSecBit container
-    podman run -d \
-        --name guardian-neuro \
-        --network host \
-        -v /opt/hookprobe/guardian/neuro:/app/neuro:Z \
-        -v /etc/hookprobe/secrets:/secrets:ro \
-        -e QSECBIT_MODE="quantum-resistant" \
-        -e HTP_ENABLED="true" \
-        -e PYTHONPATH="/app" \
-        $mssp_env \
-        --restart unless-stopped \
-        docker.io/library/python:3.11-slim \
-        bash -c '
-            pip install --quiet numpy cryptography 2>/dev/null || pip install --quiet numpy
-            echo "HookProbe Neuro Protocol starting..."
-            echo "  Mode: guardian"
-            echo "  MSSP: ${MSSP_ENDPOINT:-not configured}"
-            python -c "
+    # Create the neuro agent script
+    cat > /opt/hookprobe/guardian/neuro/agent.py << 'PYEOF'
+#!/usr/bin/env python3
+"""QSecBit Lite Guardian Agent - Neuro Protocol"""
 import time
 import os
 import json
 from datetime import datetime
 
-print(\"QSecBit Lite Guardian Agent running...\")
+print("QSecBit Lite Guardian Agent running...")
 
-stats_file = \"/app/neuro/stats.json\"
+stats_file = "/app/neuro/stats.json"
 
 while True:
     try:
         stats = {
-            \"timestamp\": datetime.now().isoformat(),
-            \"mode\": \"guardian\",
-            \"status\": \"active\"
+            "timestamp": datetime.now().isoformat(),
+            "mode": "guardian",
+            "status": "active"
         }
         os.makedirs(os.path.dirname(stats_file), exist_ok=True)
-        with open(stats_file, \"w\") as f:
+        with open(stats_file, "w") as f:
             json.dump(stats, f)
     except Exception as e:
-        print(f\"Stats error: {e}\")
+        print(f"Stats error: {e}")
     time.sleep(30)
-"
-        ' 2>/dev/null || {
-            log_warn "Neuro container failed to start"
-        }
+PYEOF
 
-    # Create systemd service for Neuro container
+    # Create systemd service for Neuro container (creates container on start)
     cat > /etc/systemd/system/guardian-neuro.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian Neuro Protocol (QSecBit + HTP)
@@ -601,7 +552,15 @@ Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/podman stop guardian-neuro
 ExecStartPre=-/usr/bin/podman rm guardian-neuro
-ExecStart=/usr/bin/podman start -a guardian-neuro
+ExecStart=/usr/bin/podman run --name guardian-neuro \
+    --network host \
+    -v /opt/hookprobe/guardian/neuro:/app/neuro:Z \
+    -v /etc/hookprobe/secrets:/secrets:ro \
+    -e QSECBIT_MODE=quantum-resistant \
+    -e HTP_ENABLED=true \
+    -e PYTHONPATH=/app \
+    docker.io/library/python:3.11-slim \
+    python /app/neuro/agent.py
 ExecStop=/usr/bin/podman stop guardian-neuro
 
 [Install]
