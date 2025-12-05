@@ -448,7 +448,7 @@ class MSBPDeviceRegistry:
 if __name__ == '__main__':
     print("=== MSSP Device Registry Test ===\n")
 
-    registry = MSS PDeviceRegistry(db_path="/tmp/test_registry.db")
+    registry = MSSPDeviceRegistry(db_path="/tmp/test_registry.db")
 
     # 1. Register cloud (prerequisite)
     print("1. Registering MSSP Cloud...")
