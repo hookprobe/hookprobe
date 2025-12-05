@@ -1340,6 +1340,8 @@ install_guardian() {
     echo -e "     ${DIM}• Per-category internet policies${NC}"
     echo -e "     ${DIM}• Requires FreeRADIUS connection to MSSP${NC}"
     echo ""
+    echo -e "  ${DIM}b) Back to main menu${NC}"
+    echo ""
 
     local guardian_mode="basic"
     while true; do
@@ -1372,8 +1374,11 @@ install_guardian() {
                 fi
                 break
                 ;;
+            b|B)
+                return
+                ;;
             *)
-                echo -e "${RED}Invalid selection. Please choose 1 or 2.${NC}"
+                echo -e "${RED}Invalid selection. Please choose 1, 2, or b.${NC}"
                 ;;
         esac
     done
@@ -1836,6 +1841,9 @@ show_uninstall_menu() {
     echo -e "  ${BOLD}9${NC}) Complete Uninstall"
     echo -e "     ${RED}DESTRUCTIVE: Remove everything!${NC}"
     echo ""
+    echo -e "  ${BOLD}10${NC}) Guardian Complete Uninstall"
+    echo -e "      ${RED}Remove all Guardian components (containers, bridges, WiFi)${NC}"
+    echo ""
     show_nav_footer
 }
 
@@ -2005,6 +2013,61 @@ uninstall_complete() {
     fi
 }
 
+uninstall_guardian() {
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  GUARDIAN COMPLETE UNINSTALL                               ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    local guardian_uninstall="$SCRIPT_DIR/install/guardian/scripts/uninstall.sh"
+
+    if [ -f "$guardian_uninstall" ]; then
+        echo "Running Guardian uninstall script..."
+        echo ""
+        bash "$guardian_uninstall"
+    else
+        echo -e "${YELLOW}Guardian uninstall script not found at:${NC}"
+        echo "  $guardian_uninstall"
+        echo ""
+        echo "Performing manual cleanup..."
+        echo ""
+
+        # Stop Guardian services
+        for svc in guardian-webui guardian-suricata guardian-adguard guardian-qsecbit hostapd dnsmasq; do
+            systemctl stop "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+        done
+
+        # Remove Guardian systemd services
+        rm -f /etc/systemd/system/guardian-*.service
+        systemctl daemon-reload
+
+        # Remove Guardian containers
+        if command -v podman &>/dev/null; then
+            podman stop guardian-suricata guardian-adguard 2>/dev/null || true
+            podman rm -f guardian-suricata guardian-adguard 2>/dev/null || true
+            podman volume rm guardian-suricata-logs guardian-suricata-rules 2>/dev/null || true
+            podman volume rm guardian-adguard-work guardian-adguard-conf 2>/dev/null || true
+            podman network rm guardian-net 2>/dev/null || true
+        fi
+
+        # Remove network interfaces
+        for vlan in 10 20 30 40 50 60 70 80 999; do
+            ip link delete "br${vlan}" 2>/dev/null || true
+        done
+        ip link delete br0 2>/dev/null || true
+
+        # Remove configurations
+        rm -f /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.vlan
+        rm -f /etc/dnsmasq.d/guardian.conf
+        rm -f /etc/nftables.d/guardian*.nft
+        rm -f /etc/sysctl.d/99-guardian.conf
+        rm -rf /opt/hookprobe/guardian
+
+        echo -e "${GREEN}✓ Guardian cleanup complete${NC}"
+    fi
+}
+
 handle_uninstall() {
     while true; do
         show_uninstall_menu
@@ -2020,6 +2083,7 @@ handle_uninstall() {
             7) uninstall_bridges ;;
             8) uninstall_wifi ;;
             9) uninstall_complete ;;
+            10) uninstall_guardian ;;
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1; continue ;;
