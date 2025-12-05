@@ -79,13 +79,13 @@ HTP_NODE_ID=""
 HTP_SENTINEL_MODE="${HTP_SENTINEL_MODE:-false}"
 EDGE_MODE="${EDGE_MODE:-standalone}"  # standalone, validator, mssp-connected
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Colors - use $'...' syntax for ANSI escape sequences
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
 
 # ============================================================
 # COMMAND-LINE ARGUMENT PARSING
@@ -2224,25 +2224,36 @@ setup_ovs_bridge() {
         else
             # Normal installation (non-LXC)
             if command -v apt-get &> /dev/null; then
-                apt-get update -qq && apt-get install -y openvswitch-switch 2>/dev/null
+                # Debian/Ubuntu: openvswitch-switch and openvswitch-common
+                apt-get update -qq
+                apt-get install -y openvswitch-switch openvswitch-common 2>/dev/null || \
+                apt-get install -y openvswitch-switch 2>/dev/null
             elif command -v dnf &> /dev/null; then
-                # RHEL/Fedora - try multiple package names
-                # RHEL 8+: openvswitch may be versioned (openvswitch2.17, openvswitch3.1, etc.)
-                dnf install -y openvswitch 2>/dev/null || \
-                dnf install -y openvswitch3.1 2>/dev/null || \
-                dnf install -y openvswitch2.17 2>/dev/null || \
-                dnf install -y $(dnf search openvswitch 2>/dev/null | grep -oP '^openvswitch[\d.]+' | head -1) 2>/dev/null || {
-                    echo -e "  ${YELLOW}[!]${NC} OVS package not found in RHEL repos"
-                    echo "  Trying to enable NFV repo for Open vSwitch..."
-                    # Try enabling the NFV/Fast Datapath repository
+                # Fedora/RHEL: openvswitch package
+                # Check if it's RHEL (needs Fast Datapath repo) or Fedora (in base repos)
+                if [ -f /etc/redhat-release ] && grep -qi "red hat" /etc/redhat-release; then
+                    echo "  Detected RHEL, enabling Fast Datapath repository..."
+                    # Enable Fast Datapath repo for RHEL
+                    subscription-manager repos --enable=fast-datapath-for-rhel-10-x86_64-rpms 2>/dev/null || \
                     subscription-manager repos --enable=fast-datapath-for-rhel-9-x86_64-rpms 2>/dev/null || \
                     subscription-manager repos --enable=fast-datapath-for-rhel-8-x86_64-rpms 2>/dev/null || true
-                    dnf install -y openvswitch 2>/dev/null || \
-                    dnf install -y openvswitch3.1 2>/dev/null || true
+                fi
+                # Install openvswitch (Fedora/RHEL)
+                dnf install -y openvswitch 2>/dev/null || {
+                    echo -e "  ${YELLOW}[!]${NC} openvswitch not found, trying alternatives..."
+                    # Try DPDK version or versioned packages
+                    dnf install -y openvswitch-dpdk 2>/dev/null || \
+                    dnf install -y openvswitch3.1 2>/dev/null || \
+                    dnf install -y openvswitch2.17 2>/dev/null || true
                 }
             elif command -v yum &> /dev/null; then
+                # Older RHEL/CentOS
                 yum install -y openvswitch 2>/dev/null || \
                 yum install -y openvswitch2.17 2>/dev/null || true
+            elif command -v zypper &> /dev/null; then
+                # OpenSUSE: openvswitch and openvswitch-switch
+                zypper install -y openvswitch openvswitch-switch 2>/dev/null || \
+                zypper install -y openvswitch-dpdk openvswitch-dpdk-switch 2>/dev/null || true
             fi
         fi
     fi
