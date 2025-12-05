@@ -1,0 +1,103 @@
+{% extends 'sdn/base.html' %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem;">SDN Dashboard</h1>
+
+<div class="grid grid-3">
+    <div class="card">
+        <h2>VLANs</h2>
+        <p style="font-size: 2rem; font-weight: 700; color: var(--primary);">{{ vlans.count }}</p>
+        <p style="color: var(--gray-600);">Active VLANs</p>
+        <a href="{% url 'sdn:vlan_list' %}" class="btn btn-primary" style="margin-top: 1rem;">Manage VLANs</a>
+    </div>
+
+    <div class="card">
+        <h2>Devices</h2>
+        <p style="font-size: 2rem; font-weight: 700; color: var(--success);">{{ devices.count }}</p>
+        <p style="color: var(--gray-600);">Registered Devices</p>
+        <a href="{% url 'sdn:device_list' %}" class="btn btn-primary" style="margin-top: 1rem;">Manage Devices</a>
+    </div>
+
+    <div class="card">
+        <h2>Categories</h2>
+        <p style="font-size: 2rem; font-weight: 700; color: var(--warning);">{{ categories.count }}</p>
+        <p style="color: var(--gray-600);">Device Categories</p>
+        <a href="{% url 'sdn:category_list' %}" class="btn btn-primary" style="margin-top: 1rem;">Manage Categories</a>
+    </div>
+</div>
+
+<!-- Recent Devices -->
+<div class="card">
+    <h2>Recently Active Devices</h2>
+    {% if devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device</th>
+                <th>MAC Address</th>
+                <th>Category</th>
+                <th>VLAN</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for device in devices %}
+            <tr>
+                <td>{{ device.friendly_name }}</td>
+                <td><code>{{ device.mac_address }}</code></td>
+                <td>{{ device.category.name|default:"Uncategorized" }}</td>
+                <td>{{ device.get_vlan_id }}</td>
+                <td>{{ device.last_seen|default:"Never" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--gray-600);">No devices registered yet.</p>
+    {% endif %}
+</div>
+
+<!-- Guardians -->
+{% if guardians %}
+<div class="card">
+    <h2>Guardian Access Points</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Guardian</th>
+                <th>Hotspot SSID</th>
+                <th>Upstream</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for config in guardians %}
+            <tr>
+                <td>{{ config.guardian }}</td>
+                <td>{{ config.hotspot_ssid }}</td>
+                <td>
+                    {% if config.upstream_connected %}
+                    <span class="badge badge-success">{{ config.upstream_ssid }}</span>
+                    {% else %}
+                    <span class="badge badge-warning">Not Connected</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if config.is_active %}
+                    <span class="badge badge-success">Active</span>
+                    {% else %}
+                    <span class="badge badge-danger">Inactive</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="{% url 'sdn:guardian_setup' config.guardian.id %}" class="btn btn-primary btn-sm">Configure</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

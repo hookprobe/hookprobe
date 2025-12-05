@@ -1,0 +1,106 @@
+{% extends 'sdn/base.html' %}
+{% block title %}Edit Device{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem;">Edit Device: {{ device.friendly_name }}</h1>
+
+<div class="card">
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>MAC Address</label>
+                <input type="text" value="{{ device.mac_address }}" disabled>
+                <small style="color: var(--gray-600);">MAC address cannot be changed</small>
+            </div>
+            <div class="form-group">
+                <label>Friendly Name</label>
+                <input type="text" name="friendly_name" value="{{ device.friendly_name }}" required>
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Hostname</label>
+                <input type="text" name="hostname" value="{{ device.hostname }}" placeholder="device-hostname">
+            </div>
+            <div class="form-group">
+                <label>Category</label>
+                <select name="category">
+                    <option value="">-- No Category --</option>
+                    {% for cat in categories %}
+                    <option value="{{ cat.id }}" {% if device.category_id == cat.id %}selected{% endif %}>
+                        {{ cat.name }} (VLAN {{ cat.default_vlan }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Override VLAN (optional)</label>
+            <select name="vlan">
+                <option value="">-- Use Category Default --</option>
+                {% for vlan in vlans %}
+                <option value="{{ vlan.id }}" {% if device.vlan_id == vlan.id %}selected{% endif %}>
+                    VLAN {{ vlan.vlan_id }}: {{ vlan.name }}
+                </option>
+                {% endfor %}
+            </select>
+            <small style="color: var(--gray-600);">Override the category's default VLAN for this specific device</small>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Manufacturer</label>
+                <input type="text" name="manufacturer" value="{{ device.manufacturer }}" placeholder="Samsung, Philips, etc.">
+            </div>
+            <div class="form-group">
+                <label>Model</label>
+                <input type="text" name="model" value="{{ device.model }}" placeholder="Model name/number">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea name="notes" rows="3" placeholder="Additional notes about this device">{{ device.notes }}</textarea>
+        </div>
+
+        <div class="grid grid-2" style="margin-bottom: 1rem;">
+            <label class="checkbox-label">
+                <input type="checkbox" name="is_active" {% if device.is_active %}checked{% endif %}>
+                Device Active
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" name="is_blocked" {% if device.is_blocked %}checked{% endif %}>
+                Block Device (deny network access)
+            </label>
+        </div>
+
+        <div style="display: flex; gap: 1rem;">
+            <button type="submit" class="btn btn-success">Save Changes</button>
+            <a href="{% url 'sdn:device_list' %}" class="btn" style="background: var(--gray-200);">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<!-- Device Info -->
+<div class="card">
+    <h2>Device Information</h2>
+    <div class="grid grid-3">
+        <div>
+            <label>Current VLAN</label>
+            <p style="font-size: 1.5rem; font-weight: 600;">{{ device.get_vlan_id }}</p>
+        </div>
+        <div>
+            <label>Last Seen</label>
+            <p>{% if device.last_seen %}{{ device.last_seen }}{% else %}Never{% endif %}</p>
+        </div>
+        <div>
+            <label>Last IP</label>
+            <p>{% if device.last_ip %}{{ device.last_ip }}{% else %}Unknown{% endif %}</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

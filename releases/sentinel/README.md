@@ -9,7 +9,7 @@
 
 **Ultra-lightweight edge validator with security protection for constrained devices.**
 
-Version: 2.0.0 | Protocol: HTP (HookProbe Transport Protocol)
+Version: 5.0.0 | Protocol: HTP (HookProbe Transport Protocol)
 
 ---
 
@@ -138,7 +138,7 @@ curl http://localhost:9090/health
 # Example response:
 {
   "status": "healthy",
-  "version": "2.0.0",
+  "version": "5.0.0",
   "node_id": "sentinel-myhost-a1b2c3d4",
   "region": "us",
   "tier": "community",

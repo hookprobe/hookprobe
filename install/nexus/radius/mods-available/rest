@@ -1,0 +1,47 @@
+# HookProbe FreeRADIUS - REST Module Configuration
+# Integrates with Django SDN API for MAC-based VLAN assignment
+# Version: 5.0.0
+
+rest {
+    # TLS configuration for HTTPS
+    tls {
+        # For production, configure proper certificates
+        # ca_file = /etc/freeradius/certs/ca.pem
+        # certificate_file = /etc/freeradius/certs/client.pem
+        # private_key_file = /etc/freeradius/certs/client.key
+        check_cert = no
+        check_cert_cn = no
+    }
+
+    # Connection pool
+    pool {
+        start = 5
+        min = 3
+        max = 10
+        spare = 3
+        uses = 0
+        lifetime = 0
+        idle_timeout = 60
+    }
+
+    # Django SDN API endpoint
+    connect_uri = "http://localhost:8000/api/sdn"
+
+    # Authorization - Get VLAN assignment for MAC address
+    authorize {
+        uri = "${..connect_uri}/radius/authorize/"
+        method = 'post'
+        body = 'json'
+        data = '{"mac_address": "%{Calling-Station-Id}", "guardian_id": "%{NAS-Identifier}", "nas_ip": "%{NAS-IP-Address}"}'
+        tls = ${..tls}
+    }
+
+    # Accounting - Track session start/stop
+    accounting {
+        uri = "${..connect_uri}/radius/accounting/"
+        method = 'post'
+        body = 'json'
+        data = '{"mac_address": "%{Calling-Station-Id}", "acct_status_type": "%{Acct-Status-Type}", "framed_ip_address": "%{Framed-IP-Address}", "session_id": "%{Acct-Session-Id}"}'
+        tls = ${..tls}
+    }
+}
