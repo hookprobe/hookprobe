@@ -2,7 +2,7 @@
 """
 HookProbe Sentinel Security Module
 "The Watchful Eye" - Lightweight protection for edge validators
-Version: 2.0.0
+Version: 5.0.0
 
 Features:
 - Rate limiting with token bucket algorithm
@@ -529,7 +529,7 @@ __all__ = [
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
-    print("HookProbe Sentinel Security Module v2.0.0")
+    print("HookProbe Sentinel Security Module v5.0.0")
     print("-" * 40)
 
     security = SecurityManager({
