@@ -97,7 +97,7 @@ Response:
 ```json
 {
   "status": "healthy",
-  "version": "1.0.0",
+  "version": "5.0.0",
   "uptime": 3600,
   "last_validation": "2024-01-01T12:00:00Z"
 }
