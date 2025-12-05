@@ -280,6 +280,81 @@ make dsm-status      # View mesh connectivity
 
 ---
 
+## VPN & Remote Access
+
+**Access your protected network from anywhere in the world.**
+
+HookProbe VPN enables secure remote access to your Guardian or Fortress-protected network, even behind NAT/CGNAT:
+
+```
+📱 Your Phone (Anywhere)     💻 Your Laptop (Coffee Shop)
+         │                              │
+         └──────── IKEv2 VPN ───────────┘
+                      │
+              ┌───────▼───────┐
+              │    Nexus      │  ← MSSP Cloud (Public IP)
+              │  VPN Gateway  │
+              └───────┬───────┘
+                      │ HTP Tunnel
+              ┌───────▼───────┐
+              │   Guardian    │  ← Your Home (No Public IP needed!)
+              │   /Fortress   │
+              └───────┬───────┘
+                      │
+         ┌────────────┼────────────┐
+         📷          💡           📁
+      Cameras      Lights        NAS
+```
+
+**Why You Need It:**
+- **Travel security** — Route traffic through your home network
+- **Access local resources** — Cameras, NAS, smart home from anywhere
+- **No port forwarding** — Works with any ISP, even mobile carriers
+- **Native mobile support** — Uses iOS/Android built-in VPN clients
+
+📖 **[VPN Documentation →](docs/networking/VPN.md)**
+
+---
+
+## SDN & IoT Segmentation
+
+**Plug-and-play network segmentation for IoT devices.**
+
+Guardian transforms a $75 Raspberry Pi into an enterprise-grade SDN controller that automatically isolates your IoT devices:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  SINGLE SSID: "MyHome"                      │
+│     All devices connect to the same network name            │
+│                          │                                  │
+│              ┌───────────▼───────────┐                      │
+│              │      Guardian         │                      │
+│              │  MAC → VLAN Router    │                      │
+│              └───────────┬───────────┘                      │
+│                          │                                  │
+│    ┌─────────┬─────────┬─────────┬─────────┬─────────┐     │
+│  VLAN 10  VLAN 20  VLAN 30  VLAN 40  VLAN 999         │     │
+│  Lights   Thermo   Cameras  Voice   Quarantine        │     │
+│    💡       🌡️        📷       🔊       ❓               │     │
+│                                                             │
+│  ✗ Cameras can't see lights (isolated)                     │
+│  ✗ Compromised device can't spread                         │
+│  ✗ Unknown devices quarantined until registered            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why You Need It:**
+- **IoT devices are vulnerable** — Outdated firmware, weak security
+- **Lateral movement prevention** — Hacked camera can't attack your NAS
+- **Zero-config setup** — Plug in Guardian, connect via web UI, done
+- **Portable** — Take your network security anywhere
+
+**Multi-AP Expansion:** Extend coverage with USB WiFi adapters (up to 4 APs on RPi 5)
+
+📖 **[SDN Documentation →](docs/networking/SDN.md)** | **[Guardian Setup →](install/guardian/README.md)**
+
+---
+
 ## Architecture Overview
 
 ```
@@ -347,6 +422,9 @@ HookProbe v5.0 "Liberty" prioritizes **energy-efficient security** for edge depl
 | Document | Audience |
 |----------|----------|
 | **[Quick Start](QUICK-START.md)** | Everyone |
+| **[VPN Remote Access](docs/networking/VPN.md)** | Home/Business Users |
+| **[SDN & IoT Segmentation](docs/networking/SDN.md)** | Home/Business Users |
+| **[Guardian Setup](install/guardian/README.md)** | Raspberry Pi Users |
 | **[Neuro Protocol Spec](docs/architecture/hookprobe-neuro-protocol.md)** | Developers, Researchers |
 | **[HTP Analysis](docs/HTP_QUANTUM_CRYPTOGRAPHY.md)** | Security Engineers |
 | **[Qsecbit Algorithm](src/qsecbit/README.md)** | AI/ML Engineers |
