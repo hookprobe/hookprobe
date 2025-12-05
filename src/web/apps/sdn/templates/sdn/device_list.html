@@ -1,0 +1,105 @@
+{% extends 'sdn/base.html' %}
+{% block title %}Devices{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>Registered Devices</h1>
+</div>
+
+<!-- Quick Add Device -->
+<div class="card">
+    <h2>Quick Add Device</h2>
+    <form method="post" class="grid grid-3" style="align-items: end;">
+        {% csrf_token %}
+        <div class="form-group">
+            <label>MAC Address</label>
+            <input type="text" name="mac_address" placeholder="AA:BB:CC:DD:EE:FF"
+                pattern="([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})" required>
+        </div>
+        <div class="form-group">
+            <label>Device Name</label>
+            <input type="text" name="friendly_name" placeholder="Living Room Light" required>
+        </div>
+        <div class="form-group">
+            <label>Category</label>
+            <select name="category">
+                <option value="">-- Select Category --</option>
+                {% for cat in categories %}
+                <option value="{{ cat.id }}">{{ cat.name }} (VLAN {{ cat.default_vlan }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <button type="submit" class="btn btn-primary">Add Device</button>
+        </div>
+    </form>
+</div>
+
+<!-- Device List -->
+<div class="card">
+    <h2>All Devices ({{ devices.count }})</h2>
+    {% if devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>MAC Address</th>
+                <th>Category</th>
+                <th>VLAN</th>
+                <th>Status</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for device in devices %}
+            <tr>
+                <td>
+                    <strong>{{ device.friendly_name }}</strong>
+                    {% if device.hostname %}<br><small style="color: var(--gray-600);">{{ device.hostname }}</small>{% endif %}
+                </td>
+                <td><code>{{ device.mac_address }}</code></td>
+                <td>
+                    {% if device.category %}
+                    <span class="badge" style="background: {{ device.category.color }}20; color: {{ device.category.color }};">
+                        {{ device.category.name }}
+                    </span>
+                    {% else %}
+                    <span class="badge badge-warning">Uncategorized</span>
+                    {% endif %}
+                </td>
+                <td><strong>{{ device.get_vlan_id }}</strong></td>
+                <td>
+                    {% if device.is_blocked %}
+                    <span class="badge badge-danger">Blocked</span>
+                    {% elif device.is_active %}
+                    <span class="badge badge-success">Active</span>
+                    {% else %}
+                    <span class="badge badge-warning">Inactive</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if device.last_seen %}
+                    {{ device.last_seen|timesince }} ago
+                    {% if device.last_ip %}<br><small>{{ device.last_ip }}</small>{% endif %}
+                    {% else %}
+                    Never
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="{% url 'sdn:device_edit' device.id %}" class="btn btn-primary btn-sm">Edit</a>
+                    <form method="post" action="{% url 'sdn:device_delete' device.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-danger btn-sm"
+                            onclick="return confirm('Delete this device?')">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--gray-600);">No devices registered yet. Add your first device above.</p>
+    {% endif %}
+</div>
+{% endblock %}
