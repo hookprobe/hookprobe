@@ -1,0 +1,194 @@
+{% extends 'sdn/base.html' %}
+{% block title %}Guardian Setup{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem;">Guardian Network Setup</h1>
+
+{% if not config %}
+<div class="card">
+    <h2>No Guardian Selected</h2>
+    <p>Select a Guardian device to configure its network settings.</p>
+</div>
+{% else %}
+
+<div class="grid grid-2">
+    <!-- Upstream Connection -->
+    <div class="card">
+        <h2>Upstream WiFi Connection</h2>
+        <p style="color: var(--gray-600); margin-bottom: 1rem;">
+            Connect Guardian to your existing WiFi network for internet access.
+        </p>
+
+        {% if config.upstream_connected %}
+            <div class="alert alert-success">
+                Connected to: <strong>{{ config.upstream_ssid }}</strong>
+            </div>
+        {% endif %}
+
+        <!-- Scan Results -->
+        <form method="post" style="margin-bottom: 1rem;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="scan">
+            <button type="submit" class="btn btn-primary">Scan for Networks</button>
+        </form>
+
+        {% if scans %}
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="connect">
+
+            <div class="form-group">
+                <label>Select Network</label>
+                <select name="upstream_ssid" required>
+                    <option value="">-- Select WiFi Network --</option>
+                    {% for scan in scans %}
+                    <option value="{{ scan.ssid }}"
+                        {% if scan.ssid == config.upstream_ssid %}selected{% endif %}>
+                        {{ scan.ssid }} ({{ scan.signal_strength }} dBm) - {{ scan.security }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" name="upstream_password"
+                    value="{{ config.upstream_password }}" placeholder="WiFi Password">
+            </div>
+
+            <div class="form-group">
+                <label>Security Type</label>
+                <select name="upstream_security">
+                    <option value="wpa2" {% if config.upstream_security == 'wpa2' %}selected{% endif %}>WPA2-PSK</option>
+                    <option value="wpa3" {% if config.upstream_security == 'wpa3' %}selected{% endif %}>WPA3-SAE</option>
+                    <option value="open" {% if config.upstream_security == 'open' %}selected{% endif %}>Open</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-success">Connect</button>
+        </form>
+        {% else %}
+        <p style="color: var(--gray-600);">Click "Scan for Networks" to find available WiFi networks.</p>
+        {% endif %}
+
+        <!-- Available Networks Table -->
+        {% if scans %}
+        <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">Available Networks</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>SSID</th>
+                    <th>Signal</th>
+                    <th>Channel</th>
+                    <th>Security</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for scan in scans %}
+                <tr>
+                    <td>{{ scan.ssid }}</td>
+                    <td>
+                        <div class="signal-bar">
+                            <div class="signal-bar-fill" style="width: {{ scan.signal_strength|add:100 }}%;"></div>
+                        </div>
+                        {{ scan.signal_strength }} dBm
+                    </td>
+                    <td>{{ scan.channel }}</td>
+                    <td><span class="badge badge-info">{{ scan.security }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+
+    <!-- Hotspot Configuration -->
+    <div class="card">
+        <h2>Hotspot Configuration</h2>
+        <p style="color: var(--gray-600); margin-bottom: 1rem;">
+            Configure the Guardian's WiFi hotspot for your IoT devices.
+        </p>
+
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="hotspot">
+
+            <div class="form-group">
+                <label>Hotspot SSID</label>
+                <input type="text" name="hotspot_ssid" value="{{ config.hotspot_ssid }}"
+                    placeholder="HookProbe-Guardian" required>
+            </div>
+
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" name="hotspot_password" value="{{ config.hotspot_password }}"
+                    placeholder="Minimum 8 characters" required minlength="8">
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Channel</label>
+                    <select name="hotspot_channel">
+                        {% for ch in "1,6,11"|make_list %}
+                        <option value="{{ ch }}" {% if config.hotspot_channel == ch|add:0 %}selected{% endif %}>{{ ch }}</option>
+                        {% endfor %}
+                        <option value="1" {% if config.hotspot_channel == 1 %}selected{% endif %}>1</option>
+                        <option value="6" {% if config.hotspot_channel == 6 %}selected{% endif %}>6</option>
+                        <option value="11" {% if config.hotspot_channel == 11 %}selected{% endif %}>11</option>
+                        <option value="36" {% if config.hotspot_channel == 36 %}selected{% endif %}>36 (5GHz)</option>
+                        <option value="44" {% if config.hotspot_channel == 44 %}selected{% endif %}>44 (5GHz)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Band</label>
+                    <select name="hotspot_band">
+                        <option value="2.4GHz" {% if config.hotspot_band == '2.4GHz' %}selected{% endif %}>2.4 GHz</option>
+                        <option value="5GHz" {% if config.hotspot_band == '5GHz' %}selected{% endif %}>5 GHz</option>
+                        <option value="dual" {% if config.hotspot_band == 'dual' %}selected{% endif %}>Dual Band</option>
+                    </select>
+                </div>
+            </div>
+
+            <h3 style="margin-top: 1rem; margin-bottom: 0.5rem;">Bridge Settings</h3>
+
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="bridge_lan" {% if config.bridge_lan %}checked{% endif %}>
+                    Bridge LAN port (provides wired WAN access)
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="bridge_upstream" {% if config.bridge_upstream %}checked{% endif %}>
+                    Bridge to upstream WiFi (share internet)
+                </label>
+            </div>
+
+            <button type="submit" class="btn btn-success">Save Hotspot Settings</button>
+        </form>
+    </div>
+</div>
+
+<!-- VLAN Configuration -->
+<div class="card">
+    <h2>VLAN Settings</h2>
+    <div class="grid grid-3">
+        <div>
+            <label>Management VLAN</label>
+            <p style="font-size: 1.5rem; font-weight: 600;">{{ config.management_vlan }}</p>
+        </div>
+        <div>
+            <label>Quarantine VLAN (Unknown Devices)</label>
+            <p style="font-size: 1.5rem; font-weight: 600;">{{ config.quarantine_vlan }}</p>
+        </div>
+        <div>
+            <label>RADIUS Server</label>
+            <p style="font-size: 1rem;">{{ config.radius_server }}:{{ config.radius_port }}</p>
+        </div>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}

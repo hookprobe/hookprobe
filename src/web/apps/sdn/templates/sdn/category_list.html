@@ -1,0 +1,119 @@
+{% extends 'sdn/base.html' %}
+{% block title %}Device Categories{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem;">Device Categories</h1>
+
+<!-- Create Category -->
+<div class="card">
+    <h2>Create Category</h2>
+    <form method="post">
+        {% csrf_token %}
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" name="name" placeholder="Smart Lights" required>
+            </div>
+            <div class="form-group">
+                <label>Default VLAN ID</label>
+                <input type="number" name="default_vlan" min="1" max="4094" placeholder="10" required>
+            </div>
+            <div class="form-group">
+                <label>Color</label>
+                <input type="color" name="color" value="#607D8B">
+            </div>
+        </div>
+        <div class="grid grid-3" style="margin-bottom: 1rem;">
+            <label class="checkbox-label">
+                <input type="checkbox" name="allow_internet">
+                Allow Internet Access
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" name="allow_local_network">
+                Allow Local Network
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" name="isolate_clients" checked>
+                Isolate Clients
+            </label>
+        </div>
+        <button type="submit" class="btn btn-success">Create Category</button>
+    </form>
+</div>
+
+<!-- Category List -->
+<div class="card">
+    <h2>All Categories</h2>
+    {% if categories %}
+    <table>
+        <thead>
+            <tr>
+                <th>Category</th>
+                <th>Default VLAN</th>
+                <th>Internet</th>
+                <th>Local Network</th>
+                <th>Isolation</th>
+                <th>Devices</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for cat in categories %}
+            <tr>
+                <td>
+                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {{ cat.color }}; margin-right: 0.5rem;"></span>
+                    <strong>{{ cat.name }}</strong>
+                    {% if cat.description %}<br><small style="color: var(--gray-600);">{{ cat.description }}</small>{% endif %}
+                </td>
+                <td><strong>{{ cat.default_vlan }}</strong></td>
+                <td>
+                    {% if cat.allow_internet %}
+                    <span class="badge badge-success">Allowed</span>
+                    {% else %}
+                    <span class="badge badge-danger">Blocked</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if cat.allow_local_network %}
+                    <span class="badge badge-success">Allowed</span>
+                    {% else %}
+                    <span class="badge badge-danger">Blocked</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if cat.isolate_clients %}
+                    <span class="badge badge-info">Isolated</span>
+                    {% else %}
+                    <span class="badge badge-warning">Shared</span>
+                    {% endif %}
+                </td>
+                <td>{{ cat.devices.count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--gray-600);">No categories created yet.</p>
+    {% endif %}
+</div>
+
+<!-- Pre-defined Categories -->
+<div class="card">
+    <h2>Suggested Categories</h2>
+    <p style="color: var(--gray-600); margin-bottom: 1rem;">Common IoT device categories for easy setup:</p>
+    <table>
+        <thead>
+            <tr><th>Category</th><th>Suggested VLAN</th><th>Use Case</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Smart Lights</td><td>10</td><td>Philips Hue, LIFX, smart bulbs</td></tr>
+            <tr><td>Thermostats</td><td>20</td><td>Nest, Ecobee, smart HVAC</td></tr>
+            <tr><td>Cameras</td><td>30</td><td>Security cameras, video doorbells</td></tr>
+            <tr><td>Voice Assistants</td><td>40</td><td>Alexa, Google Home, HomePod</td></tr>
+            <tr><td>Appliances</td><td>50</td><td>Smart fridges, washers, ovens</td></tr>
+            <tr><td>Entertainment</td><td>60</td><td>Smart TVs, streaming devices</td></tr>
+            <tr><td>Robots</td><td>70</td><td>Vacuum robots, lawn mowers</td></tr>
+            <tr><td>Sensors</td><td>80</td><td>Motion, door/window, water sensors</td></tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}
