@@ -45,7 +45,7 @@ Fixes #
 - [ ] Automated tests added/updated
 
 **Test environment:**
-- OS: <!-- e.g., RHEL 10, Fedora 40 -->
+- OS: <!-- e.g., Ubuntu 24.04, Debian 12 -->
 - Podman version: <!-- e.g., 4.9.0 -->
 - Hardware: <!-- e.g., Intel N100, 16GB RAM -->
 
