@@ -1,0 +1,37 @@
+# HookProbe FreeRADIUS - Custom Policies
+# Version: 5.0.0
+
+# Rewrite Calling-Station-Id (MAC address) to consistent format
+# Input: Various formats (AA-BB-CC-DD-EE-FF, AABBCCDDEEFF, aa:bb:cc:dd:ee:ff)
+# Output: AA:BB:CC:DD:EE:FF (uppercase, colon-separated)
+
+policy rewrite_calling_station_id {
+    if (&Calling-Station-Id) {
+        # Remove all separators and convert to uppercase
+        update request {
+            &Calling-Station-Id := "%{tolower:%{Calling-Station-Id}}"
+        }
+
+        # Normalize to XX:XX:XX:XX:XX:XX format
+        if (&Calling-Station-Id =~ /^([0-9a-f]{2})[-:.]?([0-9a-f]{2})[-:.]?([0-9a-f]{2})[-:.]?([0-9a-f]{2})[-:.]?([0-9a-f]{2})[-:.]?([0-9a-f]{2})$/i) {
+            update request {
+                &Calling-Station-Id := "%{toupper:%{1}:%{2}:%{3}:%{4}:%{5}:%{6}}"
+            }
+        }
+    }
+}
+
+# Log authorization requests
+policy log_auth_request {
+    linelog
+}
+
+# Default VLAN for unknown devices
+policy quarantine_unknown {
+    update reply {
+        &Tunnel-Type := VLAN
+        &Tunnel-Medium-Type := IEEE-802
+        &Tunnel-Private-Group-Id := "999"
+        &Reply-Message := "Unknown device - assigned to quarantine VLAN"
+    }
+}

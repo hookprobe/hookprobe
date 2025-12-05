@@ -2,7 +2,7 @@
 """
 HookProbe Sentinel - "The Watchful Eye"
 Ultra-Lightweight Edge Validator with Security Protection
-Version: 2.0.0
+Version: 5.0.0
 
 Standalone validator for constrained devices:
 - Raspberry Pi 3/Zero/Pico
@@ -316,7 +316,7 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
 
         h = {
             'status': 'healthy',
-            'version': '2.0.0',
+            'version': '5.0.0',
             'node_id': NODE_ID,
             'region': REGION,
             'tier': TIER,
@@ -379,7 +379,7 @@ def main():
     global sentinel
 
     log.info("=" * 50)
-    log.info("HookProbe Sentinel v2.0.0")
+    log.info("HookProbe Sentinel v5.0.0")
     log.info("\"The Watchful Eye\"")
     log.info("=" * 50)
     log.info(f"Node:     {NODE_ID}")
