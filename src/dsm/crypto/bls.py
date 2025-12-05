@@ -3,6 +3,8 @@ BLS Signature Aggregation
 
 Boneh-Lynn-Shacham signatures for efficient consensus.
 Falls back to RSA multi-signature if BLS libraries not available.
+
+Status: v5.0 uses RSA fallback. Native BLS planned for v5.1.
 """
 
 import logging
@@ -68,10 +70,9 @@ def bls_sign(private_key: bytes, message: bytes) -> bytes:
     if _check_bls_available():
         try:
             from py_ecc.bls import G2ProofOfPossession as bls
-            # TODO: Implement actual BLS signing
-            # signature = bls.Sign(private_key, message)
-            # return signature
-            raise NotImplementedError("BLS signing not yet fully implemented")
+            # v5.1 planned: Native BLS signing
+            # For v5.0, use RSA fallback below
+            logger.info("BLS native signing planned for v5.1, using RSA fallback")
         except Exception as e:
             logger.warning(f"BLS signing failed: {e}, using RSA fallback")
 
@@ -116,10 +117,9 @@ def bls_aggregate(signatures: List[bytes]) -> bytes:
     if _check_bls_available():
         try:
             from py_ecc.bls import G2ProofOfPossession as bls
-            # TODO: Implement actual BLS aggregation
-            # aggregated = bls.Aggregate(signatures)
-            # return aggregated
-            raise NotImplementedError("BLS aggregation not yet fully implemented")
+            # v5.1 planned: Native BLS aggregation
+            # For v5.0, use RSA multi-sig fallback below
+            logger.info("BLS native aggregation planned for v5.1, using RSA fallback")
         except Exception as e:
             logger.warning(f"BLS aggregation failed: {e}, using RSA fallback")
 
@@ -159,9 +159,9 @@ def bls_verify(
     if _check_bls_available():
         try:
             from py_ecc.bls import G2ProofOfPossession as bls
-            # TODO: Implement actual BLS verification
-            # return bls.Verify(public_keys[0], message, aggregated_signature)
-            raise NotImplementedError("BLS verification not yet fully implemented")
+            # v5.1 planned: Native BLS verification
+            # For v5.0, use RSA verification fallback below
+            logger.info("BLS native verification planned for v5.1, using RSA fallback")
         except Exception as e:
             logger.warning(f"BLS verification failed: {e}, using RSA fallback")
 
@@ -218,9 +218,9 @@ def bls_verify_single(
     if _check_bls_available():
         try:
             from py_ecc.bls import G2ProofOfPossession as bls
-            # TODO: Implement actual BLS verification
-            # return bls.Verify(public_key, message, signature)
-            raise NotImplementedError("BLS single verification not yet fully implemented")
+            # v5.1 planned: Native BLS single verification
+            # For v5.0, use RSA verification fallback below
+            logger.info("BLS native single verification planned for v5.1, using RSA fallback")
         except Exception as e:
             logger.warning(f"BLS single verification failed: {e}, using RSA fallback")
 
