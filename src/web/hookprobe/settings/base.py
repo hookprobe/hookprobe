@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'apps.devices',
     'apps.monitoring',
     'apps.security',
+    'apps.vpn',               # IKEv2 VPN profile generation and management
 ]
 
 MIDDLEWARE = [
