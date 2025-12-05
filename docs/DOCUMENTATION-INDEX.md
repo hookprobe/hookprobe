@@ -74,6 +74,31 @@ Understanding HookProbe's security architecture.
 
 ---
 
+## 🌐 Networking & Remote Access
+
+VPN, SDN, and network segmentation documentation.
+
+### VPN Remote Access
+- **[VPN Overview](networking/VPN.md)** ⭐ **Access your network from anywhere**
+  - IKEv2 native VPN for iOS/Android/Windows/macOS
+  - Works behind NAT/CGNAT without port forwarding
+  - Certificate-based authentication via LogMe2
+  - HTP tunnel for edge device connectivity
+
+### SDN & IoT Segmentation
+- **[SDN Overview](networking/SDN.md)** ⭐ **Plug-and-play network segmentation**
+  - MAC-based VLAN assignment
+  - Automatic device categorization
+  - Inter-VLAN isolation for IoT security
+  - Quarantine VLAN for unknown devices
+
+### Guardian Edge Device
+- **[Guardian Setup](../install/guardian/README.md)** - Raspberry Pi 4/5 SDN appliance
+- **[Multi-AP Configuration](../install/guardian/README.md#multi-ap-configuration-usb-expansion)** - USB WiFi expansion
+- **[USB Adapter Compatibility](../install/guardian/README.md#recommended-usb-wifi-adapters)** - Tested adapters
+
+---
+
 ## 🛡️ Security Features
 
 Deep dive into HookProbe's security capabilities.
@@ -322,6 +347,9 @@ Technical reference and detailed specifications.
 Can't find what you're looking for? Here are common topics:
 
 - **Install HookProbe**: [Beginner's Guide](installation/BEGINNER-GUIDE.md) or [Quick Start](../QUICK-START.md)
+- **Setup VPN remote access**: [VPN Guide](networking/VPN.md)
+- **Segment IoT devices**: [SDN Guide](networking/SDN.md)
+- **Setup Guardian (Raspberry Pi)**: [Guardian Setup](../install/guardian/README.md)
 - **Configure network**: [Network Configuration](../install/edge/README.md#network)
 - **Setup GDPR compliance**: [GDPR Guide](GDPR.md)
 - **Add optional features**: [Optional Features](../README.md#optional-features)
