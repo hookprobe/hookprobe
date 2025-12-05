@@ -30,9 +30,9 @@ HookProbe is a **containerized cybersecurity platform** built for Single Board C
 **Project Type**: Infrastructure-as-Code / Security Operations Platform
 **Primary Language**: Bash (deployment scripts), Python (AI/security logic)
 **Deployment**: Podman containers with OVS networking
-**Supported OS**:
-- **RHEL-based**: RHEL 10, Fedora 40+, CentOS Stream 9+, Rocky Linux, AlmaLinux
-- **Debian-based**: Debian 12+, Ubuntu 22.04+/24.04+
+**Supported OS** (v5.x):
+- **Debian-based**: Ubuntu 22.04+/24.04+, Debian 11+/12+, Raspberry Pi OS (Bookworm)
+- **Note**: RHEL-based systems (RHEL, Fedora, CentOS, Rocky, Alma) are not yet supported in v5.x due to OVS networking issues. RHEL support is planned for a future release.
 **Architectures**: x86_64 (Intel/AMD), ARM64 (Raspberry Pi, Rockchip SBCs)
 **License**: MIT (v5.0+), transitioning from GPL
 
@@ -59,10 +59,12 @@ HookProbe is a **containerized cybersecurity platform** built for Single Board C
 
 **HookProbe v5.0** automatically detects and configures itself based on:
 
-1. **Operating System**: RHEL-based (dnf) vs Debian-based (apt)
+1. **Operating System**: Debian-based systems (apt) - Ubuntu, Debian, Raspberry Pi OS
 2. **Architecture**: x86_64 vs ARM64
 3. **Hardware Platform**: Intel N100, Raspberry Pi, Generic SBC, Virtual Machine
 4. **NIC Capabilities**: XDP-hw, XDP-drv, or XDP-skb mode selection
+
+> **Note**: v5.x only supports Debian-based systems. RHEL-based system support is planned for a future release.
 
 **Deployment Script** (`setup.sh`) performs comprehensive detection at startup:
 - OS family detection (via `/etc/os-release`)
