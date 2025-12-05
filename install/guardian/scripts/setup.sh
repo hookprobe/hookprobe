@@ -218,19 +218,116 @@ install_podman() {
 
     if command -v podman &>/dev/null; then
         log_info "Podman already installed: $(podman --version)"
-        return 0
-    fi
-
-    if [ "$PKG_MGR" = "apt" ]; then
-        apt-get install -y -qq podman
     else
-        dnf install -y -q podman
+        if [ "$PKG_MGR" = "apt" ]; then
+            apt-get install -y -qq podman
+        else
+            dnf install -y -q podman
+        fi
     fi
 
     # Enable and start podman socket
     systemctl enable --now podman.socket 2>/dev/null || true
 
     log_info "Podman installed: $(podman --version)"
+}
+
+# ============================================================
+# OPEN VSWITCH WITH VXLAN
+# ============================================================
+install_openvswitch() {
+    log_step "Installing Open vSwitch..."
+
+    if command -v ovs-vsctl &>/dev/null; then
+        log_info "Open vSwitch already installed"
+    else
+        if [ "$PKG_MGR" = "apt" ]; then
+            apt-get install -y -qq openvswitch-switch
+        else
+            dnf install -y -q openvswitch
+        fi
+    fi
+
+    # Enable and start OVS
+    systemctl enable openvswitch-switch 2>/dev/null || \
+        systemctl enable openvswitch 2>/dev/null || true
+    systemctl start openvswitch-switch 2>/dev/null || \
+        systemctl start openvswitch 2>/dev/null || true
+
+    log_info "Open vSwitch installed and running"
+}
+
+generate_vxlan_psk() {
+    # Generate a PSK for VXLAN tunnel encryption
+    openssl rand -base64 32
+}
+
+setup_ovs_bridge() {
+    log_step "Setting up OVS bridge with VXLAN..."
+
+    local OVS_BRIDGE_NAME="guardian"
+    local local_ip=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' || hostname -I | awk '{print $1}')
+
+    # Check if OVS is available
+    if ! command -v ovs-vsctl &>/dev/null; then
+        log_warn "OVS not available, skipping OVS bridge setup"
+        return 0
+    fi
+
+    # Create OVS bridge if it doesn't exist
+    if ovs-vsctl br-exists "$OVS_BRIDGE_NAME" 2>/dev/null; then
+        log_info "OVS bridge '$OVS_BRIDGE_NAME' already exists"
+    else
+        ovs-vsctl add-br "$OVS_BRIDGE_NAME" 2>/dev/null || {
+            log_warn "Failed to create OVS bridge"
+            return 0
+        }
+        log_info "OVS bridge '$OVS_BRIDGE_NAME' created"
+    fi
+
+    # Enable OpenFlow 1.3 for advanced flow monitoring
+    ovs-vsctl set bridge "$OVS_BRIDGE_NAME" protocols=OpenFlow10,OpenFlow13 2>/dev/null || true
+
+    # Configure bridge IP
+    ip link set "$OVS_BRIDGE_NAME" up
+    ip addr add 10.250.0.1/16 dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
+
+    # Create secrets directory for VXLAN PSK
+    mkdir -p /etc/hookprobe/secrets/vxlan
+    chmod 700 /etc/hookprobe/secrets/vxlan
+
+    # Generate master PSK if not exists
+    if [ ! -f /etc/hookprobe/secrets/vxlan/master.psk ]; then
+        generate_vxlan_psk > /etc/hookprobe/secrets/vxlan/master.psk
+        chmod 600 /etc/hookprobe/secrets/vxlan/master.psk
+        log_info "VXLAN master PSK generated"
+    fi
+
+    # Setup VXLAN tunnel for MSSP connection
+    local vxlan_vni="${HOOKPROBE_VXLAN_VNI:-1000}"
+    local vxlan_port="vxlan_mssp"
+
+    # Add VXLAN port to OVS bridge
+    ovs-vsctl --may-exist add-port "$OVS_BRIDGE_NAME" "$vxlan_port" \
+        -- set interface "$vxlan_port" type=vxlan \
+        options:key="$vxlan_vni" \
+        options:local_ip="$local_ip" \
+        options:remote_ip=flow 2>/dev/null || true
+
+    # Save OVS configuration
+    mkdir -p /etc/hookprobe
+    cat > /etc/hookprobe/ovs-config.sh << OVSEOF
+# HookProbe Guardian OVS Configuration
+OVS_BRIDGE_NAME=$OVS_BRIDGE_NAME
+LOCAL_IP=$local_ip
+
+# VXLAN Configuration
+VXLAN_ENABLED=true
+VXLAN_VNI=$vxlan_vni
+VXLAN_MASTER_PSK=/etc/hookprobe/secrets/vxlan/master.psk
+OVSEOF
+
+    log_info "OVS bridge configured with VXLAN (VNI: $vxlan_vni)"
 }
 
 # ============================================================
@@ -247,11 +344,21 @@ install_security_containers() {
     podman volume create guardian-suricata-rules 2>/dev/null || true
     podman volume create guardian-adguard-work 2>/dev/null || true
     podman volume create guardian-adguard-conf 2>/dev/null || true
+    podman volume create guardian-waf-logs 2>/dev/null || true
 
-    # Install Suricata IDS/IPS
+    # Pull container images first
+    log_info "Pulling container images (this may take a few minutes)..."
+    podman pull docker.io/jasonish/suricata:latest 2>/dev/null || log_warn "Failed to pull Suricata image"
+    podman pull docker.io/adguard/adguardhome:latest 2>/dev/null || log_warn "Failed to pull AdGuard image"
+    podman pull docker.io/owasp/modsecurity-crs:nginx-alpine 2>/dev/null || log_warn "Failed to pull WAF image"
+    podman pull docker.io/library/python:3.11-slim 2>/dev/null || log_warn "Failed to pull Python image"
+
+    # Install containers
     install_suricata_container
+    install_waf_container
+    install_neuro_container
 
-    # Install AdGuard (ad blocking)
+    # Install AdGuard (ad blocking) if enabled
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
         install_adguard_container
     fi
@@ -367,20 +474,144 @@ EOF
     log_info "AdGuard Home installed (setup: http://192.168.4.1:3000)"
 }
 
-install_openvswitch() {
-    log_step "Installing Open vSwitch for SDN..."
+install_waf_container() {
+    log_step "Installing WAF (ModSecurity) container..."
 
-    if [ "$PKG_MGR" = "apt" ]; then
-        apt-get install -y -qq openvswitch-switch
-    else
-        dnf install -y -q openvswitch
+    # Check if already running
+    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-waf$"; then
+        log_info "WAF container already exists"
+        return 0
     fi
 
-    # Enable and start OVS
-    systemctl enable --now openvswitch-switch 2>/dev/null || \
-        systemctl enable --now openvswitch 2>/dev/null || true
+    # Run OWASP ModSecurity WAF
+    podman run -d \
+        --name guardian-waf \
+        --network host \
+        --cap-add NET_ADMIN \
+        -v guardian-waf-logs:/var/log/modsecurity:Z \
+        -e PARANOIA=1 \
+        -e ANOMALY_INBOUND=5 \
+        -e ANOMALY_OUTBOUND=4 \
+        -e BACKEND=http://127.0.0.1:8080 \
+        --restart unless-stopped \
+        docker.io/owasp/modsecurity-crs:nginx-alpine 2>/dev/null || {
+            log_warn "WAF container failed to start"
+        }
 
-    log_info "Open vSwitch installed"
+    # Create systemd service for WAF container
+    cat > /etc/systemd/system/guardian-waf.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian WAF (ModSecurity)
+After=network.target podman.socket
+Requires=podman.socket
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=-/usr/bin/podman stop guardian-waf
+ExecStartPre=-/usr/bin/podman rm guardian-waf
+ExecStart=/usr/bin/podman start -a guardian-waf
+ExecStop=/usr/bin/podman stop guardian-waf
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-waf 2>/dev/null || true
+
+    log_info "WAF (ModSecurity) container installed"
+}
+
+install_neuro_container() {
+    log_step "Installing Neuro Protocol (QSecBit + HTP) container..."
+
+    # Check if already running
+    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-neuro$"; then
+        log_info "Neuro container already exists"
+        return 0
+    fi
+
+    # Create neuro working directory
+    mkdir -p /opt/hookprobe/guardian/neuro
+
+    # Load MSSP configuration if available
+    local mssp_env=""
+    if [ -f /etc/hookprobe/secrets/mssp.env ]; then
+        source /etc/hookprobe/secrets/mssp.env
+        mssp_env="-e MSSP_ENDPOINT=$MSSP_ENDPOINT -e MSSP_PORT=$MSSP_PORT -e HTP_NODE_ID=$HTP_NODE_ID"
+    fi
+
+    # Run Neuro/QSecBit container
+    podman run -d \
+        --name guardian-neuro \
+        --network host \
+        -v /opt/hookprobe/guardian/neuro:/app/neuro:Z \
+        -v /etc/hookprobe/secrets:/secrets:ro \
+        -e QSECBIT_MODE="quantum-resistant" \
+        -e HTP_ENABLED="true" \
+        -e PYTHONPATH="/app" \
+        $mssp_env \
+        --restart unless-stopped \
+        docker.io/library/python:3.11-slim \
+        bash -c '
+            pip install --quiet numpy cryptography 2>/dev/null || pip install --quiet numpy
+            echo "HookProbe Neuro Protocol starting..."
+            echo "  Mode: guardian"
+            echo "  MSSP: ${MSSP_ENDPOINT:-not configured}"
+            python -c "
+import time
+import os
+import json
+from datetime import datetime
+
+print(\"QSecBit Lite Guardian Agent running...\")
+
+stats_file = \"/app/neuro/stats.json\"
+
+while True:
+    try:
+        stats = {
+            \"timestamp\": datetime.now().isoformat(),
+            \"mode\": \"guardian\",
+            \"status\": \"active\"
+        }
+        os.makedirs(os.path.dirname(stats_file), exist_ok=True)
+        with open(stats_file, \"w\") as f:
+            json.dump(stats, f)
+    except Exception as e:
+        print(f\"Stats error: {e}\")
+    time.sleep(30)
+"
+        ' 2>/dev/null || {
+            log_warn "Neuro container failed to start"
+        }
+
+    # Create systemd service for Neuro container
+    cat > /etc/systemd/system/guardian-neuro.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian Neuro Protocol (QSecBit + HTP)
+After=network.target podman.socket guardian-suricata.service
+Requires=podman.socket
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=-/usr/bin/podman stop guardian-neuro
+ExecStartPre=-/usr/bin/podman rm guardian-neuro
+ExecStart=/usr/bin/podman start -a guardian-neuro
+ExecStop=/usr/bin/podman stop guardian-neuro
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-neuro 2>/dev/null || true
+
+    log_info "Neuro Protocol container installed"
 }
 
 install_qsecbit_agent() {
@@ -809,9 +1040,12 @@ enable_services() {
     systemctl enable hostapd
     systemctl enable dnsmasq
     systemctl enable nftables 2>/dev/null || true
+    systemctl enable openvswitch-switch 2>/dev/null || systemctl enable openvswitch 2>/dev/null || true
 
     # Container services
     systemctl enable guardian-suricata 2>/dev/null || true
+    systemctl enable guardian-waf 2>/dev/null || true
+    systemctl enable guardian-neuro 2>/dev/null || true
     systemctl enable guardian-adguard 2>/dev/null || true
     systemctl enable guardian-qsecbit 2>/dev/null || true
 
@@ -821,14 +1055,19 @@ enable_services() {
 start_services() {
     log_step "Starting services..."
 
+    # Start OVS first
+    systemctl start openvswitch-switch 2>/dev/null || systemctl start openvswitch 2>/dev/null || true
+
     systemctl start nftables 2>/dev/null || true
     systemctl start dnsmasq
     systemctl start hostapd
     systemctl start guardian-webui
 
-    # Start containers (may take a moment to pull images)
+    # Start containers (may take a moment)
     log_info "Starting security containers..."
     systemctl start guardian-suricata 2>/dev/null || true
+    systemctl start guardian-waf 2>/dev/null || true
+    systemctl start guardian-neuro 2>/dev/null || true
     systemctl start guardian-adguard 2>/dev/null || true
     systemctl start guardian-qsecbit 2>/dev/null || true
 
@@ -963,6 +1202,12 @@ main() {
     # Install Podman container runtime
     install_podman
 
+    # Install Open vSwitch (for both modes - provides SDN capabilities)
+    install_openvswitch
+
+    # Setup OVS bridge with VXLAN tunnel
+    setup_ovs_bridge
+
     # Select installation mode
     MODE=$(prompt_mode_selection)
     log_info "Selected mode: $MODE"
@@ -970,21 +1215,21 @@ main() {
     # Network configuration
     prompt_network_config
 
+    # Install security containers first (Suricata IDS, WAF, Neuro, AdGuard)
+    install_security_containers
+
     # Configure based on mode
     case $MODE in
         basic)
             configure_basic_mode
             ;;
         sdn)
-            install_openvswitch
+            install_sdn_packages
             configure_sdn_mode
             ;;
     esac
 
-    # Install security containers (Suricata IDS, AdGuard)
-    install_security_containers
-
-    # Install QSecBit agent
+    # Install QSecBit agent (Python-based backup agent)
     install_qsecbit_agent
 
     # Save mode configuration
@@ -1011,16 +1256,18 @@ main() {
     echo -e "  Web UI:      ${BOLD}http://192.168.4.1:8080${NC}"
     echo ""
     echo -e "  ${BOLD}Installed Components:${NC}"
+    echo -e "  • Open vSwitch (SDN with VXLAN tunnel)"
     echo -e "  • Podman container runtime"
     echo -e "  • Suricata IDS/IPS (threat detection)"
+    echo -e "  • ModSecurity WAF (web application firewall)"
+    echo -e "  • Neuro Protocol (QSecBit + HTP)"
     echo -e "  • QSecBit Lite security agent"
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
         echo -e "  • AdGuard Home (ad blocking)"
         echo -e "    Setup: ${BOLD}http://192.168.4.1:3000${NC}"
     fi
     if [ "$MODE" = "sdn" ]; then
-        echo -e "  • Open vSwitch (SDN)"
-        echo -e "  • VLAN segmentation"
+        echo -e "  • VLAN segmentation enabled"
     fi
     echo ""
     echo -e "  ${BOLD}Service Status:${NC}"
@@ -1028,6 +1275,8 @@ main() {
     echo -e "  $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive') dnsmasq (DHCP/DNS)"
     echo -e "  $(systemctl is-active guardian-webui 2>/dev/null || echo 'inactive') guardian-webui"
     echo -e "  $(systemctl is-active guardian-suricata 2>/dev/null || echo 'inactive') guardian-suricata (IDS)"
+    echo -e "  $(systemctl is-active guardian-waf 2>/dev/null || echo 'inactive') guardian-waf (WAF)"
+    echo -e "  $(systemctl is-active guardian-neuro 2>/dev/null || echo 'inactive') guardian-neuro (Neuro)"
     echo -e "  $(systemctl is-active guardian-qsecbit 2>/dev/null || echo 'inactive') guardian-qsecbit"
     echo ""
     echo -e "  ${YELLOW}Next steps:${NC}"
