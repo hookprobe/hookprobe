@@ -80,6 +80,8 @@ remove_systemd_services() {
     local services=(
         "guardian-webui"
         "guardian-suricata"
+        "guardian-waf"
+        "guardian-neuro"
         "guardian-adguard"
         "guardian-qsecbit"
     )
@@ -115,6 +117,8 @@ remove_containers() {
 
     local containers=(
         "guardian-suricata"
+        "guardian-waf"
+        "guardian-neuro"
         "guardian-adguard"
     )
 
@@ -131,6 +135,7 @@ remove_containers() {
     local volumes=(
         "guardian-suricata-logs"
         "guardian-suricata-rules"
+        "guardian-waf-logs"
         "guardian-adguard-work"
         "guardian-adguard-conf"
     )
@@ -279,6 +284,16 @@ remove_guardian_directories() {
     log_step "Removing Guardian directories..."
 
     rm -rf /opt/hookprobe/guardian
+
+    # Remove VXLAN secrets
+    rm -rf /etc/hookprobe/secrets/vxlan
+    rm -f /etc/hookprobe/ovs-config.sh
+
+    # Don't remove /etc/hookprobe if other components exist
+    if [ -d /etc/hookprobe ] && [ -z "$(ls -A /etc/hookprobe 2>/dev/null)" ]; then
+        rm -rf /etc/hookprobe
+        log_info "Removed /etc/hookprobe (was empty)"
+    fi
 
     # Don't remove /opt/hookprobe if other components exist
     if [ -d /opt/hookprobe ] && [ -z "$(ls -A /opt/hookprobe 2>/dev/null)" ]; then
