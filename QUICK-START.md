@@ -17,12 +17,14 @@
 **📘 [Complete Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)**
 
 If you've never used Linux before, start with our comprehensive beginner's guide that covers:
-- ✅ Downloading Linux (Fedora/Ubuntu) - **Step-by-step with screenshots**
+- ✅ Downloading Linux (Ubuntu) - **Step-by-step with screenshots**
 - ✅ Creating bootable USB drive - **Using Rufus or Etcher**
 - ✅ Installing Linux from scratch - **Complete walkthrough**
 - ✅ Partitioning your disk - **Recommended layouts**
 - ✅ Basic Linux setup - **Network, updates, tools**
 - ✅ Installing HookProbe - **One command installation**
+
+> **Note**: HookProbe v5.x currently supports **Debian-based systems only** (Ubuntu, Debian, Raspberry Pi OS). RHEL/Fedora support is planned for a future release.
 
 **Perfect for absolute beginners!** No Linux experience required.
 

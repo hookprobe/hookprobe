@@ -7,7 +7,7 @@
 - [ ] Hardware: Intel N100 or equivalent x86_64 processor
 - [ ] RAM: Minimum 16GB (recommended)
 - [ ] Storage: Minimum 500GB SSD
-- [ ] OS: RHEL 10, Fedora, or CentOS Stream installed
+- [ ] OS: Ubuntu 22.04+, Debian 11+/12+, or Raspberry Pi OS installed
 - [ ] Root access available
 - [ ] Internet connectivity for downloading images
 
@@ -506,7 +506,7 @@ crontab -e
 - [ ] Hardware: Intel N100 or equivalent x86_64 processor
 - [ ] RAM: Minimum 16GB (recommended)
 - [ ] Storage: Minimum 500GB SSD
-- [ ] OS: RHEL 10, Fedora, or CentOS Stream installed
+- [ ] OS: Ubuntu 22.04+, Debian 11+/12+, or Raspberry Pi OS installed
 - [ ] Root access available
 - [ ] Internet connectivity for downloading images
 
