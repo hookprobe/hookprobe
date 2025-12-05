@@ -202,6 +202,338 @@ install_sdn_packages() {
 }
 
 # ============================================================
+# PODMAN CONTAINER RUNTIME
+# ============================================================
+install_podman() {
+    log_step "Installing Podman container runtime..."
+
+    if command -v podman &>/dev/null; then
+        log_info "Podman already installed: $(podman --version)"
+        return 0
+    fi
+
+    if [ "$PKG_MGR" = "apt" ]; then
+        apt-get install -y -qq podman
+    else
+        dnf install -y -q podman
+    fi
+
+    # Enable and start podman socket
+    systemctl enable --now podman.socket 2>/dev/null || true
+
+    log_info "Podman installed: $(podman --version)"
+}
+
+# ============================================================
+# SECURITY CONTAINERS
+# ============================================================
+install_security_containers() {
+    log_step "Installing Guardian security containers..."
+
+    # Create Guardian pod network
+    podman network create guardian-net 2>/dev/null || true
+
+    # Create volumes
+    podman volume create guardian-suricata-logs 2>/dev/null || true
+    podman volume create guardian-suricata-rules 2>/dev/null || true
+    podman volume create guardian-adguard-work 2>/dev/null || true
+    podman volume create guardian-adguard-conf 2>/dev/null || true
+
+    # Install Suricata IDS/IPS
+    install_suricata_container
+
+    # Install AdGuard (ad blocking)
+    if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
+        install_adguard_container
+    fi
+
+    log_info "Security containers installed"
+}
+
+install_suricata_container() {
+    log_step "Installing Suricata IDS/IPS container..."
+
+    # Check if already running
+    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-suricata$"; then
+        log_info "Suricata container already exists"
+        return 0
+    fi
+
+    # Determine network interface to monitor
+    local MONITOR_IFACE="br0"
+
+    # Pull and run Suricata
+    podman run -d \
+        --name guardian-suricata \
+        --network host \
+        --cap-add NET_ADMIN \
+        --cap-add NET_RAW \
+        --cap-add SYS_NICE \
+        -v guardian-suricata-logs:/var/log/suricata:Z \
+        -v guardian-suricata-rules:/var/lib/suricata:Z \
+        -e SURICATA_OPTIONS="-i $MONITOR_IFACE" \
+        --restart unless-stopped \
+        docker.io/jasonish/suricata:latest \
+        -i "$MONITOR_IFACE" 2>/dev/null || {
+            log_warn "Suricata container failed to start (may need network first)"
+        }
+
+    # Create systemd service for Suricata container
+    cat > /etc/systemd/system/guardian-suricata.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian Suricata IDS
+After=network.target podman.socket
+Requires=podman.socket
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=-/usr/bin/podman stop guardian-suricata
+ExecStartPre=-/usr/bin/podman rm guardian-suricata
+ExecStart=/usr/bin/podman start -a guardian-suricata
+ExecStop=/usr/bin/podman stop guardian-suricata
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-suricata 2>/dev/null || true
+
+    log_info "Suricata IDS container installed"
+}
+
+install_adguard_container() {
+    log_step "Installing AdGuard Home (ad blocking)..."
+
+    # Check if already running
+    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-adguard$"; then
+        log_info "AdGuard container already exists"
+        return 0
+    fi
+
+    # AdGuard DNS ports: 53 (DNS), 3000 (setup), 80 (dashboard after setup)
+    # Use alternative ports to avoid conflicts with dnsmasq
+    podman run -d \
+        --name guardian-adguard \
+        --network host \
+        -v guardian-adguard-work:/opt/adguardhome/work:Z \
+        -v guardian-adguard-conf:/opt/adguardhome/conf:Z \
+        -e ADGUARD_PORT_DNS=5353 \
+        --restart unless-stopped \
+        docker.io/adguard/adguardhome:latest 2>/dev/null || {
+            log_warn "AdGuard container failed to start"
+        }
+
+    # Create systemd service for AdGuard container
+    cat > /etc/systemd/system/guardian-adguard.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian AdGuard Home
+After=network.target podman.socket
+Requires=podman.socket
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=-/usr/bin/podman stop guardian-adguard
+ExecStartPre=-/usr/bin/podman rm guardian-adguard
+ExecStart=/usr/bin/podman start -a guardian-adguard
+ExecStop=/usr/bin/podman stop guardian-adguard
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-adguard 2>/dev/null || true
+
+    # Update dnsmasq to forward to AdGuard
+    if [ -f /etc/dnsmasq.d/guardian.conf ]; then
+        sed -i 's/server=1.1.1.1/server=127.0.0.1#5353/' /etc/dnsmasq.d/guardian.conf
+        sed -i 's/server=8.8.8.8/server=127.0.0.1#5353/' /etc/dnsmasq.d/guardian.conf
+    fi
+
+    log_info "AdGuard Home installed (setup: http://192.168.4.1:3000)"
+}
+
+install_openvswitch() {
+    log_step "Installing Open vSwitch for SDN..."
+
+    if [ "$PKG_MGR" = "apt" ]; then
+        apt-get install -y -qq openvswitch-switch
+    else
+        dnf install -y -q openvswitch
+    fi
+
+    # Enable and start OVS
+    systemctl enable --now openvswitch-switch 2>/dev/null || \
+        systemctl enable --now openvswitch 2>/dev/null || true
+
+    log_info "Open vSwitch installed"
+}
+
+install_qsecbit_agent() {
+    log_step "Installing QSecBit agent..."
+
+    mkdir -p /opt/hookprobe/guardian/agent
+
+    # Create QSecBit agent script
+    cat > /opt/hookprobe/guardian/agent/qsecbit-lite.py << 'PYEOF'
+#!/usr/bin/env python3
+"""
+QSecBit Lite - Guardian Edition
+Quantum-resistant security agent for edge devices.
+Version: 5.0.0
+"""
+
+import os
+import json
+import time
+import logging
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('qsecbit-lite')
+
+class QSecBitLite:
+    """Lightweight security agent for Guardian."""
+
+    def __init__(self):
+        self.config_dir = Path('/opt/hookprobe/guardian')
+        self.data_dir = self.config_dir / 'data'
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.threat_log = self.data_dir / 'threats.json'
+        self.stats_file = self.data_dir / 'stats.json'
+
+    def check_suricata_alerts(self):
+        """Check Suricata for new alerts."""
+        alerts = []
+        eve_log = Path('/var/log/suricata/eve.json')
+
+        if eve_log.exists():
+            try:
+                # Read last 100 lines of eve.json
+                result = subprocess.run(
+                    ['tail', '-100', str(eve_log)],
+                    capture_output=True, text=True
+                )
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        try:
+                            event = json.loads(line)
+                            if event.get('event_type') == 'alert':
+                                alerts.append({
+                                    'timestamp': event.get('timestamp'),
+                                    'signature': event.get('alert', {}).get('signature'),
+                                    'severity': event.get('alert', {}).get('severity'),
+                                    'src_ip': event.get('src_ip'),
+                                    'dest_ip': event.get('dest_ip'),
+                                })
+                        except json.JSONDecodeError:
+                            pass
+            except Exception as e:
+                logger.error(f"Error reading Suricata alerts: {e}")
+
+        return alerts
+
+    def get_network_stats(self):
+        """Get network statistics."""
+        stats = {
+            'timestamp': datetime.now().isoformat(),
+            'interfaces': {},
+            'connections': 0,
+        }
+
+        # Get interface stats
+        try:
+            result = subprocess.run(
+                ['ip', '-s', 'link'],
+                capture_output=True, text=True
+            )
+            # Parse output (simplified)
+            stats['raw_interface_stats'] = result.stdout[:500]
+        except Exception as e:
+            logger.error(f"Error getting network stats: {e}")
+
+        # Get connection count
+        try:
+            result = subprocess.run(
+                ['ss', '-t', '-n'],
+                capture_output=True, text=True
+            )
+            stats['connections'] = len(result.stdout.strip().split('\n')) - 1
+        except Exception:
+            pass
+
+        return stats
+
+    def run(self):
+        """Main agent loop."""
+        logger.info("QSecBit Lite starting...")
+
+        while True:
+            try:
+                # Check for threats
+                alerts = self.check_suricata_alerts()
+                if alerts:
+                    logger.warning(f"Found {len(alerts)} alerts")
+                    # Log to threat file
+                    with open(self.threat_log, 'a') as f:
+                        for alert in alerts[-10:]:  # Last 10 alerts
+                            f.write(json.dumps(alert) + '\n')
+
+                # Collect stats
+                stats = self.get_network_stats()
+                with open(self.stats_file, 'w') as f:
+                    json.dump(stats, f, indent=2)
+
+            except Exception as e:
+                logger.error(f"Agent error: {e}")
+
+            time.sleep(30)  # Check every 30 seconds
+
+if __name__ == '__main__':
+    agent = QSecBitLite()
+    agent.run()
+PYEOF
+
+    chmod +x /opt/hookprobe/guardian/agent/qsecbit-lite.py
+
+    # Create systemd service
+    cat > /etc/systemd/system/guardian-qsecbit.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian QSecBit Agent
+After=network.target guardian-suricata.service
+Wants=guardian-suricata.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hookprobe/guardian/agent
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/agent/qsecbit-lite.py
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-qsecbit
+
+    log_info "QSecBit agent installed"
+}
+
+# ============================================================
 # BASIC MODE CONFIGURATION (Simple Bridge)
 # ============================================================
 configure_basic_mode() {
@@ -310,6 +642,7 @@ EOF
 
     # Configure NAT (masquerade outgoing traffic)
     log_info "Configuring NAT..."
+    mkdir -p /etc/nftables.d
     cat > /etc/nftables.d/guardian.nft << 'EOF'
 #!/usr/sbin/nft -f
 # HookProbe Guardian - Basic NAT
@@ -328,7 +661,6 @@ table inet guardian {
 EOF
 
     # Apply nftables rules
-    mkdir -p /etc/nftables.d
     nft -f /etc/nftables.d/guardian.nft 2>/dev/null || true
 
     log_info "Basic mode configuration complete"
@@ -469,6 +801,11 @@ enable_services() {
     systemctl enable dnsmasq
     systemctl enable nftables 2>/dev/null || true
 
+    # Container services
+    systemctl enable guardian-suricata 2>/dev/null || true
+    systemctl enable guardian-adguard 2>/dev/null || true
+    systemctl enable guardian-qsecbit 2>/dev/null || true
+
     log_info "Services enabled"
 }
 
@@ -479,6 +816,12 @@ start_services() {
     systemctl start dnsmasq
     systemctl start hostapd
     systemctl start guardian-webui
+
+    # Start containers (may take a moment to pull images)
+    log_info "Starting security containers..."
+    systemctl start guardian-suricata 2>/dev/null || true
+    systemctl start guardian-adguard 2>/dev/null || true
+    systemctl start guardian-qsecbit 2>/dev/null || true
 
     log_info "Services started"
 }
@@ -608,6 +951,9 @@ main() {
     # Install base packages
     install_packages
 
+    # Install Podman container runtime
+    install_podman
+
     # Select installation mode
     MODE=$(prompt_mode_selection)
     log_info "Selected mode: $MODE"
@@ -621,9 +967,16 @@ main() {
             configure_basic_mode
             ;;
         sdn)
+            install_openvswitch
             configure_sdn_mode
             ;;
     esac
+
+    # Install security containers (Suricata IDS, AdGuard)
+    install_security_containers
+
+    # Install QSecBit agent
+    install_qsecbit_agent
 
     # Save mode configuration
     mkdir -p /opt/hookprobe/guardian
@@ -643,14 +996,38 @@ main() {
     echo -e "${GREEN}║           Guardian Installation Complete!                   ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
+    echo -e "  ${BOLD}Configuration:${NC}"
     echo -e "  Mode:        ${BOLD}$MODE${NC}"
-    echo -e "  Hotspot:     ${BOLD}$HOOKPROBE_WIFI_SSID${NC}"
+    echo -e "  Hotspot:     ${BOLD}${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}${NC}"
     echo -e "  Web UI:      ${BOLD}http://192.168.4.1:8080${NC}"
     echo ""
+    echo -e "  ${BOLD}Installed Components:${NC}"
+    echo -e "  • Podman container runtime"
+    echo -e "  • Suricata IDS/IPS (threat detection)"
+    echo -e "  • QSecBit Lite security agent"
+    if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
+        echo -e "  • AdGuard Home (ad blocking)"
+        echo -e "    Setup: ${BOLD}http://192.168.4.1:3000${NC}"
+    fi
+    if [ "$MODE" = "sdn" ]; then
+        echo -e "  • Open vSwitch (SDN)"
+        echo -e "  • VLAN segmentation"
+    fi
+    echo ""
+    echo -e "  ${BOLD}Service Status:${NC}"
+    echo -e "  $(systemctl is-active hostapd 2>/dev/null || echo 'inactive') hostapd (WiFi AP)"
+    echo -e "  $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive') dnsmasq (DHCP/DNS)"
+    echo -e "  $(systemctl is-active guardian-webui 2>/dev/null || echo 'inactive') guardian-webui"
+    echo -e "  $(systemctl is-active guardian-suricata 2>/dev/null || echo 'inactive') guardian-suricata (IDS)"
+    echo -e "  $(systemctl is-active guardian-qsecbit 2>/dev/null || echo 'inactive') guardian-qsecbit"
+    echo ""
     echo -e "  ${YELLOW}Next steps:${NC}"
-    echo -e "  1. Connect to '$HOOKPROBE_WIFI_SSID' WiFi network"
+    echo -e "  1. Connect to '${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}' WiFi network"
     echo -e "  2. Open http://192.168.4.1:8080 in your browser"
     echo -e "  3. Configure upstream WiFi connection"
+    if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
+        echo -e "  4. Complete AdGuard setup: http://192.168.4.1:3000"
+    fi
     echo ""
 
     if [ "$MODE" = "sdn" ]; then
@@ -660,6 +1037,9 @@ main() {
         echo -e "  • VLANs: 10=Lights, 20=Thermo, 30=Cameras, etc."
         echo ""
     fi
+
+    echo -e "  ${DIM}Logs: journalctl -u guardian-suricata -u guardian-qsecbit -f${NC}"
+    echo ""
 }
 
 # Run main if not sourced
