@@ -2306,8 +2306,12 @@ EOF
 install_web_ui() {
     log_step "Installing Guardian Web UI..."
 
-    mkdir -p /opt/hookprobe/guardian
+    mkdir -p /opt/hookprobe/guardian/web
     cp "$GUARDIAN_ROOT/web/app.py" /opt/hookprobe/guardian/
+    # Copy logo emblem for web UI
+    if [ -f "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" ]; then
+        cp "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" /opt/hookprobe/guardian/web/hookprobe-emblem.png
+    fi
 
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
