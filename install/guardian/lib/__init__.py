@@ -2,7 +2,7 @@
 HookProbe Guardian Library
 
 Provides L2-L7 threat detection, mobile network protection, SDN control,
-RADIUS integration, network segmentation, WebSocket VPN, and QSecBit
+RADIUS integration, network segmentation, HTP file transfer, and QSecBit
 integration for the Guardian security appliance.
 
 Modules:
@@ -10,11 +10,11 @@ Modules:
 - mobile_network_protection: Hotel/public WiFi security
 - guardian_agent: QSecBit integration and unified reporting
 - htp_client: HookProbe Transport Protocol client for MSSP communication
+- htp_file: HTP-based secure file transfer (replaces WebSocket VPN)
 - openflow_controller: OpenFlow 1.3 SDN controller with OVS integration
 - radius_integration: RADIUS/FreeRADIUS MAC authentication and VLAN assignment
 - network_segmentation: nftables-based network segmentation and firewall
 - config: Unified configuration management with sensible defaults
-- websocket_vpn: WebSocket VPN with Noise Protocol encryption via MSSP
 
 Author: HookProbe Team
 Version: 5.0.0 Liberty
@@ -48,6 +48,21 @@ from .htp_client import (
     HTPConfig,
     HTPPacket,
     HTPPacketType
+)
+
+from .htp_file import (
+    HTPFileTransfer,
+    HTPFileServer,
+    FileOperation,
+    FileFlags,
+    FileErrorCode,
+    FileTransferHeader,
+    FileMetadata,
+    DirectoryEntry,
+    TransferState,
+    HTPFileError,
+    IntegrityError,
+    TransferError
 )
 
 from .openflow_controller import (
@@ -98,7 +113,7 @@ from .config import (
     RADIUSConfig,
     OpenFlowConfig,
     HTPConfig as HTPConfigSettings,
-    WebSocketVPNConfig,
+    HTPFileConfig,
     NetworkConfig,
     SecurityConfig,
     WebUIConfig,
@@ -110,16 +125,6 @@ from .config import (
     generate_default_config,
     DEFAULT_CONFIG_TEMPLATE,
     DEFAULT_CONFIG_PATH
-)
-
-from .websocket_vpn import (
-    WebSocketVPNClient,
-    WebSocketVPNService,
-    NoiseState,
-    VPNMessage,
-    MessageType,
-    ErrorCode,
-    FileInfo
 )
 
 __all__ = [
@@ -147,6 +152,20 @@ __all__ = [
     'HTPConfig',
     'HTPPacket',
     'HTPPacketType',
+
+    # HTP File Transfer
+    'HTPFileTransfer',
+    'HTPFileServer',
+    'FileOperation',
+    'FileFlags',
+    'FileErrorCode',
+    'FileTransferHeader',
+    'FileMetadata',
+    'DirectoryEntry',
+    'TransferState',
+    'HTPFileError',
+    'IntegrityError',
+    'TransferError',
 
     # OpenFlow Controller
     'OpenFlowController',
@@ -193,7 +212,7 @@ __all__ = [
     'RADIUSConfig',
     'OpenFlowConfig',
     'HTPConfigSettings',
-    'WebSocketVPNConfig',
+    'HTPFileConfig',
     'NetworkConfig',
     'SecurityConfig',
     'WebUIConfig',
@@ -205,15 +224,6 @@ __all__ = [
     'generate_default_config',
     'DEFAULT_CONFIG_TEMPLATE',
     'DEFAULT_CONFIG_PATH',
-
-    # WebSocket VPN
-    'WebSocketVPNClient',
-    'WebSocketVPNService',
-    'NoiseState',
-    'VPNMessage',
-    'MessageType',
-    'ErrorCode',
-    'FileInfo'
 ]
 
 __version__ = '5.0.0'

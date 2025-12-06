@@ -58,10 +58,10 @@ stop_services() {
         "guardian-suricata"
         "guardian-adguard"
         "guardian-qsecbit"
-        # New unified services
-        "guardian-vpn"
-        "guardian-sdn"
+        # Unified services
         "guardian-htp"
+        "guardian-htp-file"
+        "guardian-sdn"
         "guardian-layer-detector"
         "guardian-mobile-protection"
         "guardian-radius"
@@ -100,10 +100,10 @@ remove_systemd_services() {
         "guardian-neuro"
         "guardian-adguard"
         "guardian-qsecbit"
-        # New unified services
-        "guardian-vpn"
-        "guardian-sdn"
+        # Unified services
         "guardian-htp"
+        "guardian-htp-file"
+        "guardian-sdn"
         "guardian-layer-detector"
         "guardian-mobile-protection"
         "guardian-radius"
@@ -205,7 +205,7 @@ remove_network_interfaces() {
         ip link delete "$iface" 2>/dev/null || true
     done
 
-    # Remove main bridge (basic mode)
+    # Remove main bridge
     if ip link show br0 &>/dev/null; then
         log_info "Removing bridge: br0"
         ip link set br0 down 2>/dev/null || true
@@ -351,21 +351,30 @@ remove_radius_config() {
 }
 
 # ============================================================
-# REMOVE VPN STATE AND DATA
+# REMOVE HTP FILE TRANSFER STATE AND DATA
 # ============================================================
-remove_vpn_data() {
-    log_step "Removing VPN state and data..."
+remove_htp_data() {
+    log_step "Removing HTP file transfer state and data..."
 
-    # Remove VPN state file
+    # Remove HTP file transfer state
+    rm -f /opt/hookprobe/guardian/data/htp_file_state.json 2>/dev/null || true
+    rm -f /opt/hookprobe/guardian/data/htp_state.json 2>/dev/null || true
+
+    # Remove HTP session keys
+    rm -f /opt/hookprobe/guardian/data/htp_session_keys.json 2>/dev/null || true
+
+    # Remove any legacy VPN state files (from WebSocket VPN)
     rm -f /opt/hookprobe/guardian/data/vpn_state.json 2>/dev/null || true
-
-    # Remove VPN keys
     rm -f /opt/hookprobe/guardian/data/vpn_keypair.json 2>/dev/null || true
-
-    # Remove any Noise protocol keys
     rm -rf /opt/hookprobe/guardian/data/noise_keys 2>/dev/null || true
 
-    log_info "VPN data removed"
+    # Remove HTP transfer cache
+    rm -rf /opt/hookprobe/guardian/data/htp_transfers 2>/dev/null || true
+
+    # Remove file transfer base directory if empty
+    rmdir /srv/guardian 2>/dev/null || true
+
+    log_info "HTP file transfer data removed"
 }
 
 # ============================================================
@@ -470,7 +479,7 @@ main() {
     check_root
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
-    echo -e "  - Guardian systemd services (webui, suricata, vpn, sdn, htp, etc.)"
+    echo -e "  - Guardian systemd services (webui, suricata, htp, sdn, etc.)"
     echo -e "  - Podman containers (Suricata IDS, AdGuard, WAF, Zeek)"
     echo -e "  - Network bridges and VLAN interfaces (br0, br10-br999)"
     echo -e "  - OVS bridges and OpenFlow rules"
@@ -478,7 +487,7 @@ main() {
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
     echo -e "  - RADIUS/FreeRADIUS Guardian configuration"
     echo -e "  - Guardian configuration (/etc/guardian/guardian.yaml)"
-    echo -e "  - VPN state and encryption keys"
+    echo -e "  - HTP file transfer state and session keys"
     echo -e "  - nftables firewall rules"
     echo -e "  - Guardian Python library modules"
     echo -e "  - Guardian data directories"
@@ -504,7 +513,7 @@ main() {
     remove_sysctl_settings
     remove_guardian_config
     remove_radius_config
-    remove_vpn_data
+    remove_htp_data
     remove_systemd_services
     remove_guardian_directories
 
@@ -520,7 +529,7 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services (webui, vpn, sdn, htp, ids, etc.)"
+    echo -e "  • Guardian systemd services (webui, htp, sdn, ids, etc.)"
     echo -e "  • Podman containers and volumes"
     echo -e "  • Network bridges (br0, br10-br999)"
     echo -e "  • OVS bridges (br-guardian)"
@@ -528,7 +537,7 @@ main() {
     echo -e "  • hostapd and dnsmasq configuration"
     echo -e "  • RADIUS/FreeRADIUS configuration"
     echo -e "  • Guardian configuration (/etc/guardian/)"
-    echo -e "  • VPN state and keys"
+    echo -e "  • HTP file transfer state and session keys"
     echo -e "  • nftables rules"
     echo -e "  • Python library modules"
     echo -e "  • Guardian directories (/opt/hookprobe/guardian)"
