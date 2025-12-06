@@ -2082,8 +2082,24 @@ EOF
     cat > /etc/nftables.d/guardian.nft << 'EOF'
 #!/usr/sbin/nft -f
 # HookProbe Guardian - Basic NAT
+# IMPORTANT: Preserves existing connections (SSH, etc.)
+
+# Delete old table if exists (clean slate)
+table inet guardian
+delete table inet guardian
 
 table inet guardian {
+    # Input chain - allow established connections and SSH
+    chain input {
+        type filter hook input priority 0; policy accept;
+        # Always allow established/related connections (keeps SSH alive)
+        ct state established,related accept
+        # Allow SSH on all interfaces
+        tcp dport 22 accept
+        # Allow web UI
+        tcp dport 8080 accept
+    }
+
     chain forward {
         type filter hook forward priority 0; policy accept;
         ct state established,related accept
@@ -2096,8 +2112,14 @@ table inet guardian {
 }
 EOF
 
-    # Apply nftables rules
-    nft -f /etc/nftables.d/guardian.nft 2>/dev/null || true
+    # Apply nftables rules (preserving existing connections)
+    log_info "Applying firewall rules (preserving SSH connections)..."
+    nft -f /etc/nftables.d/guardian.nft 2>/dev/null || {
+        log_warn "nftables apply failed, trying iptables fallback..."
+        # Fallback to iptables if nftables fails
+        iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+    }
 
     log_info "Basic mode configuration complete"
 }
