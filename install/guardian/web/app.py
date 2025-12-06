@@ -55,103 +55,80 @@ def get_mode():
 
 
 def scan_wifi():
-    """Scan for available WiFi networks."""
+    """Scan for available WiFi networks using iw dev scan."""
     import time
     networks = []
 
-    # Method 1: Try wpa_cli (works when wpa_supplicant is running)
+    # Use iw dev wlan0 scan (or wlan1 if wlan0 is in AP mode)
     for iface in ['wlan1', 'wlan0']:
-        run_command(f'wpa_cli -i {iface} scan 2>/dev/null', timeout=10)
+        # Check if interface is in managed mode (not AP)
+        info_output, _ = run_command(f'iw dev {iface} info 2>/dev/null')
+        if 'type AP' in info_output:
+            continue  # Skip AP interfaces
+
+        # Bring interface up
+        run_command(f'ip link set {iface} up 2>/dev/null')
+
+        # Trigger scan and wait
+        run_command(f'iw dev {iface} scan trigger 2>/dev/null')
         time.sleep(3)
 
-        output, success = run_command(f'wpa_cli -i {iface} scan_results 2>/dev/null', timeout=10)
-        if success and output and 'bssid' in output.lower():
-            lines = output.strip().split('\n')
-            for line in lines[1:]:
-                parts = line.split('\t')
-                if len(parts) >= 5:
+        # Get scan results
+        output, success = run_command(f'iw dev {iface} scan 2>/dev/null', timeout=20)
+
+        if success and output and 'BSS' in output:
+            current_network = {}
+
+            for line in output.split('\n'):
+                line = line.strip()
+
+                if line.startswith('BSS '):
+                    # Save previous network
+                    if current_network.get('ssid'):
+                        networks.append(current_network)
+                    # Start new network - extract BSSID
+                    bssid_match = re.search(r'BSS ([0-9a-f:]+)', line)
+                    current_network = {
+                        'bssid': bssid_match.group(1) if bssid_match else '',
+                        'ssid': '',
+                        'signal': -100,
+                        'channel': 0,
+                        'frequency': '',
+                        'security': 'Open'
+                    }
+                elif line.startswith('SSID:'):
+                    ssid = line.split(':', 1)[1].strip()
+                    if ssid and not ssid.startswith('\\x'):
+                        current_network['ssid'] = ssid
+                elif line.startswith('signal:'):
                     try:
-                        signal = int(parts[2]) if parts[2].lstrip('-').isdigit() else -70
-                        ssid = parts[4] if len(parts) > 4 else ''
-                        if ssid and ssid != '\\x00' and not ssid.startswith('\\x'):
-                            networks.append({'ssid': ssid, 'signal': signal})
-                    except (ValueError, IndexError):
+                        sig = line.split(':', 1)[1].strip()
+                        current_network['signal'] = int(float(sig.split()[0]))
+                    except:
                         pass
+                elif line.startswith('freq:'):
+                    try:
+                        freq = line.split(':', 1)[1].strip()
+                        current_network['frequency'] = freq
+                        # Calculate channel from frequency
+                        freq_int = int(freq)
+                        if freq_int >= 2412 and freq_int <= 2484:
+                            current_network['channel'] = (freq_int - 2407) // 5
+                        elif freq_int >= 5180:
+                            current_network['channel'] = (freq_int - 5000) // 5
+                    except:
+                        pass
+                elif 'WPA' in line or 'RSN' in line:
+                    current_network['security'] = 'WPA2' if 'RSN' in line else 'WPA'
+                elif 'WEP' in line:
+                    current_network['security'] = 'WEP'
+
+            # Don't forget last network
+            if current_network.get('ssid'):
+                networks.append(current_network)
+
         if networks:
             break
-
-    # Method 2: Try iw scan
-    if not networks:
-        for iface in ['wlan1', 'wlan0']:
-            run_command(f'ip link set {iface} up 2>/dev/null')
-            output, success = run_command(f'iw dev {iface} scan 2>/dev/null', timeout=15)
-
-            if success and output and 'BSS' in output:
-                current_ssid = None
-                current_signal = -100
-
-                for line in output.split('\n'):
-                    line = line.strip()
-                    if line.startswith('BSS '):
-                        if current_ssid:
-                            networks.append({'ssid': current_ssid, 'signal': current_signal})
-                        current_ssid = None
-                        current_signal = -100
-                    elif line.startswith('SSID:'):
-                        ssid = line.split(':', 1)[1].strip()
-                        if ssid and ssid != '\\x00' and not ssid.startswith('\\x'):
-                            current_ssid = ssid
-                    elif line.startswith('signal:'):
-                        try:
-                            sig = line.split(':', 1)[1].strip()
-                            current_signal = int(float(sig.split()[0]))
-                        except:
-                            pass
-
-                if current_ssid:
-                    networks.append({'ssid': current_ssid, 'signal': current_signal})
-
-            if networks:
-                break
-
-    # Method 3: Try iwlist as fallback
-    if not networks:
-        for iface in ['wlan1', 'wlan0']:
-            output, success = run_command(f'iwlist {iface} scan 2>/dev/null', timeout=15)
-            if success and output and 'ESSID' in output:
-                current_signal = -70
-                for line in output.split('\n'):
-                    line = line.strip()
-                    if 'Signal level=' in line:
-                        try:
-                            sig = re.search(r'Signal level[=:](-?\d+)', line)
-                            if sig:
-                                current_signal = int(sig.group(1))
-                        except:
-                            pass
-                    elif 'ESSID:' in line:
-                        match = re.search(r'ESSID:"([^"]*)"', line)
-                        if match and match.group(1):
-                            networks.append({'ssid': match.group(1), 'signal': current_signal})
-                            current_signal = -70
-
-            if networks:
-                break
-
-    # Method 4: Try nmcli if available
-    if not networks:
-        output, success = run_command('nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null', timeout=15)
-        if success and output:
-            for line in output.strip().split('\n'):
-                if ':' in line:
-                    parts = line.rsplit(':', 1)
-                    ssid = parts[0]
-                    try:
-                        signal = int(parts[1]) - 100 if parts[1].isdigit() else -70
-                    except:
-                        signal = -70
-                    if ssid:
-                        networks.append({'ssid': ssid, 'signal': signal})
 
     # Remove duplicates and sort by signal
     seen = set()
@@ -163,6 +140,68 @@ def scan_wifi():
 
     unique_networks.sort(key=lambda x: x['signal'], reverse=True)
     return unique_networks[:20]
+
+
+def get_interface_info(iface):
+    """Get detailed info about a WiFi interface."""
+    info = {
+        'interface': iface,
+        'type': 'unknown',
+        'ssid': None,
+        'channel': None,
+        'frequency': None,
+        'signal': None,
+        'tx_power': None,
+        'mac': None
+    }
+
+    # Get interface info using iw dev
+    output, success = run_command(f'iw dev {iface} info 2>/dev/null')
+    if success and output:
+        for line in output.split('\n'):
+            line = line.strip()
+            if line.startswith('type '):
+                info['type'] = line.split('type ', 1)[1].strip()
+            elif line.startswith('ssid '):
+                info['ssid'] = line.split('ssid ', 1)[1].strip()
+            elif line.startswith('channel '):
+                try:
+                    ch = line.split('channel ', 1)[1].split()[0]
+                    info['channel'] = int(ch)
+                except:
+                    pass
+            elif 'freq' in line.lower():
+                try:
+                    freq_match = re.search(r'(\d+)\s*MHz', line)
+                    if freq_match:
+                        info['frequency'] = f"{freq_match.group(1)} MHz"
+                except:
+                    pass
+            elif line.startswith('txpower '):
+                info['tx_power'] = line.split('txpower ', 1)[1].strip()
+            elif line.startswith('addr '):
+                info['mac'] = line.split('addr ', 1)[1].strip()
+
+    # If managed mode, get link info for signal strength
+    if info['type'] == 'managed':
+        link_output, _ = run_command(f'iw dev {iface} link 2>/dev/null')
+        if link_output and 'Connected' in link_output:
+            info['connected'] = True
+            for line in link_output.split('\n'):
+                line = line.strip()
+                if line.startswith('signal:'):
+                    try:
+                        info['signal'] = line.split(':', 1)[1].strip()
+                    except:
+                        pass
+                elif line.startswith('SSID:'):
+                    info['ssid'] = line.split(':', 1)[1].strip()
+        else:
+            info['connected'] = False
+    elif info['type'] == 'AP':
+        info['connected'] = True  # AP is always "connected" if broadcasting
+
+    return info
 
 
 def get_current_config():
@@ -200,8 +239,29 @@ def get_status():
     """Get current system status."""
     status = {}
 
-    output, _ = run_command('iw wlan1 link 2>/dev/null')
-    status['upstream_connected'] = 'Connected' in output
+    # Get detailed interface info for wlan0 (typically hotspot) and wlan1 (typically upstream)
+    status['wlan0'] = get_interface_info('wlan0')
+    status['wlan1'] = get_interface_info('wlan1')
+
+    # Determine hotspot and upstream based on interface type
+    # wlan0 is usually AP (hotspot), wlan1 is usually managed (client/upstream)
+    if status['wlan0']['type'] == 'AP':
+        status['hotspot_interface'] = status['wlan0']
+        status['upstream_interface'] = status['wlan1']
+    elif status['wlan1']['type'] == 'AP':
+        status['hotspot_interface'] = status['wlan1']
+        status['upstream_interface'] = status['wlan0']
+    else:
+        # Fallback
+        status['hotspot_interface'] = status['wlan0']
+        status['upstream_interface'] = status['wlan1']
+
+    # Legacy compatibility
+    status['upstream_connected'] = (
+        status['upstream_interface']['type'] == 'managed' and
+        status['upstream_interface'].get('connected', False)
+    )
+    status['hotspot_active'] = status['hotspot_interface']['type'] == 'AP'
 
     output, _ = run_command('hostname -I')
     status['ip_addresses'] = output.split()
@@ -212,7 +272,9 @@ def get_status():
     output, _ = run_command('systemctl is-active dnsmasq')
     status['dnsmasq'] = output == 'active'
 
-    output, _ = run_command('iw dev wlan0 station dump 2>/dev/null | grep Station | wc -l')
+    # Get connected clients from AP interface
+    ap_iface = status['hotspot_interface']['interface']
+    output, _ = run_command(f'iw dev {ap_iface} station dump 2>/dev/null | grep Station | wc -l')
     status['clients'] = int(output) if output.isdigit() else 0
 
     status['mode'] = get_mode()
@@ -271,7 +333,15 @@ def get_qsecbit_data():
             'connections': 0,
             'timestamp': None,
             'interfaces': {},
+            'xdp_enabled': False,
+            'ebpf_programs': [],
             'rag': 'red'
+        },
+        'energy': {
+            'interfaces': {},
+            'total_tx_bytes': 0,
+            'total_rx_bytes': 0,
+            'rag': 'green'
         },
         'threats': {
             'count': 0,
@@ -289,6 +359,52 @@ def get_qsecbit_data():
             'rag': 'amber'
         }
     }
+
+    # Check XDP/eBPF status
+    xdp_output, _ = run_command('ip link show | grep xdp 2>/dev/null')
+    data['qsecbit']['xdp_enabled'] = bool(xdp_output)
+
+    # Get eBPF programs
+    ebpf_output, success = run_command('bpftool prog list 2>/dev/null | head -20')
+    if success and ebpf_output:
+        programs = []
+        for line in ebpf_output.split('\n'):
+            if line.strip() and ':' in line:
+                programs.append(line.strip()[:60])
+        data['qsecbit']['ebpf_programs'] = programs[:5]
+
+    # Get interface energy/traffic stats
+    for iface in ['wlan0', 'wlan1', 'br0', 'eth0']:
+        stats = {}
+        # TX bytes
+        tx_output, _ = run_command(f'cat /sys/class/net/{iface}/statistics/tx_bytes 2>/dev/null')
+        if tx_output and tx_output.isdigit():
+            stats['tx_bytes'] = int(tx_output)
+            data['energy']['total_tx_bytes'] += int(tx_output)
+        # RX bytes
+        rx_output, _ = run_command(f'cat /sys/class/net/{iface}/statistics/rx_bytes 2>/dev/null')
+        if rx_output and rx_output.isdigit():
+            stats['rx_bytes'] = int(rx_output)
+            data['energy']['total_rx_bytes'] += int(rx_output)
+        # TX packets
+        tx_pkt, _ = run_command(f'cat /sys/class/net/{iface}/statistics/tx_packets 2>/dev/null')
+        if tx_pkt and tx_pkt.isdigit():
+            stats['tx_packets'] = int(tx_pkt)
+        # RX packets
+        rx_pkt, _ = run_command(f'cat /sys/class/net/{iface}/statistics/rx_packets 2>/dev/null')
+        if rx_pkt and rx_pkt.isdigit():
+            stats['rx_packets'] = int(rx_pkt)
+        # TX errors
+        tx_err, _ = run_command(f'cat /sys/class/net/{iface}/statistics/tx_errors 2>/dev/null')
+        if tx_err and tx_err.isdigit():
+            stats['tx_errors'] = int(tx_err)
+        # RX errors
+        rx_err, _ = run_command(f'cat /sys/class/net/{iface}/statistics/rx_errors 2>/dev/null')
+        if rx_err and rx_err.isdigit():
+            stats['rx_errors'] = int(rx_err)
+
+        if stats:
+            data['energy']['interfaces'][iface] = stats
 
     # Neuro stats
     if NEURO_STATS.exists():
@@ -959,6 +1075,62 @@ HTML_TEMPLATE = '''
                         <div class="value">{{ qsecbit.threats.count }}</div>
                     </div>
                 </div>
+
+                <h3>XDP/eBPF Inspection</h3>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">XDP Status</div>
+                        <div class="value">
+                            <span class="badge {% if qsecbit.qsecbit.xdp_enabled %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if qsecbit.qsecbit.xdp_enabled %}Enabled{% else %}Disabled{% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">eBPF Programs</div>
+                        <div class="value">{{ qsecbit.qsecbit.ebpf_programs | length }}</div>
+                    </div>
+                </div>
+                {% if qsecbit.qsecbit.ebpf_programs %}
+                <div style="margin-top: 10px;">
+                    <pre style="background: #1f2937; color: #10b981; padding: 10px; border-radius: 8px; font-size: 11px; overflow-x: auto;">{% for prog in qsecbit.qsecbit.ebpf_programs %}{{ prog }}
+{% endfor %}</pre>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="card">
+                <h2>Interface Energy / Traffic Monitoring</h2>
+                <div style="margin-bottom: 15px;">
+                    <span class="rag-indicator rag-{{ qsecbit.energy.rag }}">
+                        <span class="rag-dot"></span>
+                        Total: {{ (qsecbit.energy.total_rx_bytes / 1048576) | round(2) }} MB RX / {{ (qsecbit.energy.total_tx_bytes / 1048576) | round(2) }} MB TX
+                    </span>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Interface</th>
+                            <th>RX Bytes</th>
+                            <th>TX Bytes</th>
+                            <th>RX Packets</th>
+                            <th>TX Packets</th>
+                            <th>Errors</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for iface, stats in qsecbit.energy.interfaces.items() %}
+                        <tr>
+                            <td><strong>{{ iface }}</strong></td>
+                            <td>{{ ((stats.rx_bytes or 0) / 1048576) | round(2) }} MB</td>
+                            <td>{{ ((stats.tx_bytes or 0) / 1048576) | round(2) }} MB</td>
+                            <td>{{ stats.rx_packets or 0 }}</td>
+                            <td>{{ stats.tx_packets or 0 }}</td>
+                            <td>{{ (stats.rx_errors or 0) + (stats.tx_errors or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
 
             <div class="card">
@@ -1089,14 +1261,26 @@ HTML_TEMPLATE = '''
 
                 {% if networks %}
                 <h3>Available Networks ({{ networks|length }})</h3>
-                <div class="networks">
-                    {% for net in networks %}
-                    <div class="network-item" onclick="document.getElementById('upstream-ssid').value='{{ net.ssid }}'">
-                        <span class="ssid">{{ net.ssid }}</span>
-                        <span class="signal">{{ net.signal }} dBm</span>
-                    </div>
-                    {% endfor %}
-                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>SSID</th>
+                            <th>Signal</th>
+                            <th>Channel</th>
+                            <th>Security</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for net in networks %}
+                        <tr style="cursor: pointer;" onclick="document.getElementById('upstream-ssid').value='{{ net.ssid }}'">
+                            <td><strong>{{ net.ssid }}</strong></td>
+                            <td>{{ net.signal }} dBm</td>
+                            <td>{{ net.channel or 'N/A' }}</td>
+                            <td>{{ net.security or 'Open' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
                 {% elif show_scan_result %}
                 <h3>Scan Results</h3>
                 <p style="color: #6b7280;">No networks found. Try scanning again.</p>
@@ -1104,31 +1288,65 @@ HTML_TEMPLATE = '''
             </div>
 
             <div class="card">
-                <h2>WiFi Status</h2>
+                <h2>Interface Status</h2>
+
+                <h3>Hotspot Interface ({{ status.hotspot_interface.interface }})</h3>
                 <div class="param-grid">
                     <div class="param-item">
-                        <div class="label">Hotspot</div>
+                        <div class="label">Type</div>
                         <div class="value">
-                            <span class="badge {% if status.hostapd %}badge-success{% else %}badge-danger{% endif %}">
-                                {% if status.hostapd %}Running{% else %}Stopped{% endif %}
+                            <span class="badge {% if status.hotspot_interface.type == 'AP' %}badge-success{% else %}badge-warning{% endif %}">
+                                {{ status.hotspot_interface.type | upper }}
                             </span>
                         </div>
                     </div>
                     <div class="param-item">
-                        <div class="label">Upstream</div>
-                        <div class="value">
-                            <span class="badge {% if status.upstream_connected %}badge-success{% else %}badge-warning{% endif %}">
-                                {% if status.upstream_connected %}Connected{% else %}Disconnected{% endif %}
-                            </span>
-                        </div>
+                        <div class="label">SSID</div>
+                        <div class="value">{{ status.hotspot_interface.ssid or config.hotspot_ssid }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Channel</div>
+                        <div class="value">{{ status.hotspot_interface.channel or 'N/A' }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">TX Power</div>
+                        <div class="value">{{ status.hotspot_interface.tx_power or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Connected Clients</div>
                         <div class="value">{{ status.clients }}</div>
                     </div>
+                </div>
+
+                <h3>Upstream Interface ({{ status.upstream_interface.interface }})</h3>
+                <div class="param-grid">
                     <div class="param-item">
-                        <div class="label">Hotspot SSID</div>
-                        <div class="value">{{ config.hotspot_ssid }}</div>
+                        <div class="label">Type</div>
+                        <div class="value">
+                            <span class="badge {% if status.upstream_interface.type == 'managed' %}badge-success{% else %}badge-warning{% endif %}">
+                                {{ status.upstream_interface.type | upper }}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Status</div>
+                        <div class="value">
+                            <span class="badge {% if status.upstream_connected %}badge-success{% else %}badge-danger{% endif %}">
+                                {% if status.upstream_connected %}Connected{% else %}Disconnected{% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">SSID</div>
+                        <div class="value">{{ status.upstream_interface.ssid or 'Not connected' }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Signal</div>
+                        <div class="value">{{ status.upstream_interface.signal or 'N/A' }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Channel</div>
+                        <div class="value">{{ status.upstream_interface.channel or 'N/A' }}</div>
                     </div>
                 </div>
             </div>
