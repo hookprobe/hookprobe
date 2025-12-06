@@ -8,7 +8,7 @@
 #   - WiFi + LAN bridge with VLAN segmentation
 #   - OpenFlow SDN with Open vSwitch
 #   - MAC-based device categorization via RADIUS
-#   - WebSocket VPN with Noise Protocol
+#   - HTP File Transfer with weight-bound encryption
 #
 
 set -e
@@ -2329,7 +2329,6 @@ install_guardian_lib() {
         log_info "Installing Python dependencies..."
         pip3 install --quiet --upgrade \
             pyyaml \
-            websockets \
             cryptography \
             aiohttp \
             dataclasses-json 2>/dev/null || true
@@ -2469,17 +2468,20 @@ htp:
   heartbeat_interval: 60
   compression: true
 
-# WebSocket VPN Configuration
-websocket_vpn:
+# HTP File Transfer Configuration
+htp_file:
   enabled: true
-  listen_port: 8765
-  noise_pattern: "XX"
+  chunk_size: 8192  # 8KB (optimized for SBC memory)
+  max_file_size_mb: 1024  # 1GB max file size
+  transfer_timeout: 300  # 5 minutes
+  compression_enabled: true
+  verify_hash: true
+  atomic_writes: true
+  base_path: "/srv/guardian"
   allowed_paths:
     - "/home"
-    - "/opt/hookprobe"
-    - "/var/log/hookprobe"
-  max_file_size: 104857600  # 100MB
-  chunk_size: 65536  # 64KB
+    - "/srv/files"
+    - "/var/log/guardian"
 
 # Network Configuration
 network:
@@ -2688,8 +2690,8 @@ show_guardian_banner() {
     echo -e "  ${GREEN}✓${NC} OpenFlow SDN Controller with OVS"
     echo -e "  ${GREEN}✓${NC} VLAN Segmentation (IoT Device Isolation)"
     echo -e "  ${GREEN}✓${NC} RADIUS MAC Authentication"
-    echo -e "  ${GREEN}✓${NC} WebSocket VPN via MSSP (Noise Protocol)"
-    echo -e "  ${GREEN}✓${NC} HTP Secure Communication"
+    echo -e "  ${GREEN}✓${NC} HTP File Transfer (weight-bound encryption)"
+    echo -e "  ${GREEN}✓${NC} HTP Secure MSSP Communication"
     echo ""
     echo -e "  ${DIM}Configuration file: /etc/guardian/guardian.yaml${NC}"
     echo ""
@@ -2854,7 +2856,7 @@ main() {
     echo -e "  • Open vSwitch Integration"
     echo -e "  • VLAN Segmentation (IoT Isolation)"
     echo -e "  • RADIUS MAC Authentication"
-    echo -e "  • WebSocket VPN via MSSP"
+    echo -e "  • HTP File Transfer via MSSP"
     echo ""
     echo -e "  ${BOLD}IoT VLANs:${NC}"
     echo -e "  • VLAN 10: Smart Lights"

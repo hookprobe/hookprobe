@@ -159,34 +159,38 @@ class HTPConfig:
 
 
 @dataclass
-class WebSocketVPNConfig:
-    """WebSocket VPN tunnel configuration"""
+class HTPFileConfig:
+    """HTP-based secure file transfer configuration"""
     enabled: bool = True
 
-    # Connection to MSSP
-    mssp_host: str = "mssp.hookprobe.com"
-    mssp_port: int = 443
-    websocket_path: str = "/ws/vpn"
+    # File transfer settings
+    chunk_size: int = 8192          # 8KB chunks (optimized for SBC memory)
+    max_file_size_mb: int = 1024    # 1GB max file size
+    transfer_timeout: int = 300     # 5 minutes timeout
+    max_concurrent_transfers: int = 16
 
-    # TLS settings
-    tls_enabled: bool = True
-    tls_verify: bool = True
-    tls_cert_path: str = ""
-    tls_key_path: str = ""
+    # Allowed paths for file access
+    base_path: str = "/srv/guardian"
+    allowed_paths: List[str] = field(default_factory=lambda: ["/home", "/srv/files", "/var/log/guardian"])
 
-    # Tunnel settings
-    tunnel_mtu: int = 1400
-    keepalive_interval: int = 25
-    reconnect_delay: int = 5
+    # Security settings
+    compression_enabled: bool = True
+    verify_hash: bool = True         # SHA256 integrity verification
+    atomic_writes: bool = True       # Write to temp, then rename
 
-    # File access settings
-    file_access_enabled: bool = True
-    allowed_paths: List[str] = field(default_factory=lambda: ["/home", "/srv/files"])
-    max_file_size_mb: int = 100
+    # Extension whitelist (empty = allow all)
+    allowed_extensions: List[str] = field(default_factory=lambda: [
+        ".txt", ".log", ".json", ".yaml", ".yml", ".csv",
+        ".conf", ".cfg", ".ini", ".xml", ".html", ".css", ".js",
+        ".py", ".sh", ".bash", ".md", ".rst"
+    ])
 
-    # User authentication
-    require_authentication: bool = True
-    auth_token_expiry: int = 3600  # seconds
+    # Size quotas per user/session
+    quota_enabled: bool = False
+    quota_mb_per_session: int = 500
+
+    # Read-only mode (for restricted access)
+    read_only: bool = False
 
 
 @dataclass
@@ -298,7 +302,7 @@ class GuardianConfig:
     vlan: VLANConfig = field(default_factory=VLANConfig)
     openflow: OpenFlowConfig = field(default_factory=OpenFlowConfig)
     htp: HTPConfig = field(default_factory=HTPConfig)
-    websocket_vpn: WebSocketVPNConfig = field(default_factory=WebSocketVPNConfig)
+    htp_file: HTPFileConfig = field(default_factory=HTPFileConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     webui: WebUIConfig = field(default_factory=WebUIConfig)
@@ -359,8 +363,8 @@ class GuardianConfig:
             config.openflow = OpenFlowConfig(**data['openflow'])
         if 'htp' in data:
             config.htp = HTPConfig(**data['htp'])
-        if 'websocket_vpn' in data:
-            config.websocket_vpn = WebSocketVPNConfig(**data['websocket_vpn'])
+        if 'htp_file' in data:
+            config.htp_file = HTPFileConfig(**data['htp_file'])
         if 'network' in data:
             config.network = NetworkConfig(**data['network'])
         if 'security' in data:
@@ -782,7 +786,7 @@ __all__ = [
     'VLANConfig',
     'OpenFlowConfig',
     'HTPConfig',
-    'WebSocketVPNConfig',
+    'HTPFileConfig',
     'NetworkConfig',
     'SecurityConfig',
     'WebUIConfig',
