@@ -1776,8 +1776,8 @@ HTML_TEMPLATE = '''
                 </p>
                 <div class="form-group">
                     <label>IP Address to Block</label>
-                    <div style="display: flex; gap: 10px;">
-                        <input type="text" id="block-ip-input" placeholder="e.g., 192.168.1.100" style="flex: 1;">
+                    <div class="test-input-row">
+                        <input type="text" id="block-ip-input" placeholder="e.g., 192.168.1.100">
                         <button type="button" class="btn btn-danger" onclick="blockIP()">Block IP</button>
                     </div>
                 </div>
