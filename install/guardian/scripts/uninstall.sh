@@ -1,13 +1,13 @@
 #!/bin/bash
 #
 # HookProbe Guardian Uninstall Script
-# Version: 5.0.0
+# Version: 5.5.0
 # License: MIT
 #
 # Removes all Guardian components:
 # - Podman containers (Suricata, AdGuard)
 # - Systemd services
-# - Network bridges and VLAN interfaces
+# - Network bridges
 # - hostapd and dnsmasq configurations
 # - nftables rules
 # - Guardian directories
@@ -61,10 +61,8 @@ stop_services() {
         # Unified services
         "guardian-htp"
         "guardian-htp-file"
-        "guardian-sdn"
         "guardian-layer-detector"
         "guardian-mobile-protection"
-        "guardian-radius"
         "guardian-aggregator"
         "guardian-xdp"
         "guardian-waf"
@@ -72,8 +70,6 @@ stop_services() {
         # System services
         "hostapd"
         "dnsmasq"
-        "freeradius"
-        "openvswitch-switch"
     )
 
     for service in "${services[@]}"; do
@@ -103,10 +99,8 @@ remove_systemd_services() {
         # Unified services
         "guardian-htp"
         "guardian-htp-file"
-        "guardian-sdn"
         "guardian-layer-detector"
         "guardian-mobile-protection"
-        "guardian-radius"
         "guardian-aggregator"
         "guardian-xdp"
         "guardian-zeek"
@@ -146,6 +140,7 @@ remove_containers() {
         "guardian-waf"
         "guardian-neuro"
         "guardian-adguard"
+        "guardian-zeek"
     )
 
     for container in "${containers[@]}"; do
@@ -164,6 +159,8 @@ remove_containers() {
         "guardian-waf-logs"
         "guardian-adguard-work"
         "guardian-adguard-conf"
+        "guardian-zeek-logs"
+        "guardian-zeek-spool"
     )
 
     for volume in "${volumes[@]}"; do
@@ -325,32 +322,6 @@ remove_guardian_config() {
 }
 
 # ============================================================
-# REMOVE RADIUS CONFIGURATION
-# ============================================================
-remove_radius_config() {
-    log_step "Removing RADIUS configuration..."
-
-    # Stop freeradius if running
-    systemctl stop freeradius 2>/dev/null || true
-
-    # Remove FreeRADIUS Guardian configurations
-    rm -f /etc/freeradius/3.0/clients.d/guardian.conf 2>/dev/null || true
-    rm -f /etc/freeradius/3.0/mods-enabled/sql-guardian 2>/dev/null || true
-    rm -f /etc/freeradius/3.0/sites-enabled/guardian 2>/dev/null || true
-
-    # Remove MAC-to-VLAN mappings
-    if [ -f /etc/freeradius/3.0/users ]; then
-        # Backup original users file
-        if grep -q "# HookProbe Guardian" /etc/freeradius/3.0/users 2>/dev/null; then
-            log_info "Removing Guardian entries from FreeRADIUS users file..."
-            sed -i '/# HookProbe Guardian/,/# End HookProbe Guardian/d' /etc/freeradius/3.0/users 2>/dev/null || true
-        fi
-    fi
-
-    log_info "RADIUS configuration removed"
-}
-
-# ============================================================
 # REMOVE HTP FILE TRANSFER STATE AND DATA
 # ============================================================
 remove_htp_data() {
@@ -508,20 +479,18 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Guardian Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                   Version 5.0.0 Liberty                    ║${NC}"
+    echo -e "${BOLD}${RED}║                       Version 5.5.0                        ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     check_root
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
-    echo -e "  - Guardian systemd services (webui, suricata, htp, sdn, etc.)"
+    echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, etc.)"
     echo -e "  - Podman containers (Suricata IDS, AdGuard, WAF, Zeek)"
-    echo -e "  - Network bridges and VLAN interfaces (br0, br10-br999)"
-    echo -e "  - OVS bridges and OpenFlow rules"
+    echo -e "  - Network bridges (br0)"
     echo -e "  - WiFi hotspot (hostapd) configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
-    echo -e "  - RADIUS/FreeRADIUS Guardian configuration"
     echo -e "  - Guardian configuration (/etc/guardian/guardian.yaml)"
     echo -e "  - HTP file transfer state and session keys"
     echo -e "  - nftables firewall rules"
@@ -548,7 +517,6 @@ main() {
     remove_dnsmasq_config
     remove_sysctl_settings
     remove_guardian_config
-    remove_radius_config
     remove_htp_data
     remove_systemd_services
     remove_guardian_directories
@@ -565,13 +533,10 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services (webui, htp, sdn, ids, etc.)"
+    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, etc.)"
     echo -e "  • Podman containers and volumes"
-    echo -e "  • Network bridges (br0, br10-br999)"
-    echo -e "  • OVS bridges (br-guardian)"
-    echo -e "  • VLAN interfaces"
+    echo -e "  • Network bridges (br0)"
     echo -e "  • hostapd and dnsmasq configuration"
-    echo -e "  • RADIUS/FreeRADIUS configuration"
     echo -e "  • Guardian configuration (/etc/guardian/)"
     echo -e "  • HTP file transfer state and session keys"
     echo -e "  • nftables rules"
