@@ -680,36 +680,35 @@ redef Notice::policy += {
 ZEEKEOF
 
     # Create systemd service for Zeek container
-    # Note: Only starts if eth0 interface exists (WAN monitoring)
-    cat > /etc/systemd/system/guardian-zeek.service << EOF
+    # Dynamically detects interface at start time for resilience
+    cat > /etc/systemd/system/guardian-zeek.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian Zeek Network Analyzer
 After=network-online.target podman.socket
 Wants=network-online.target
 Requires=podman.socket
-# Only start if we have an interface to monitor
-ConditionPathExists=/sys/class/net/${MONITOR_IFACE}
+# Allow start if either eth0 OR br0 exists (| prefix makes condition non-fatal)
+ConditionPathExists=|/sys/class/net/eth0
+ConditionPathExists=|/sys/class/net/br0
 
 [Service]
 Type=simple
 Restart=on-failure
 RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=3
+StartLimitIntervalSec=600
+StartLimitBurst=5
+# Memory limit to prevent OOM
+MemoryMax=512M
+MemoryHigh=384M
 # Wait for interface to be fully up
-ExecStartPre=/bin/sleep 10
+ExecStartPre=/bin/sleep 15
 ExecStartPre=-/usr/bin/podman stop guardian-zeek
 ExecStartPre=-/usr/bin/podman rm guardian-zeek
+# Detect interface dynamically at start time (prefer eth0, fallback to br0)
+ExecStartPre=/bin/bash -c 'if [ -e /sys/class/net/eth0 ]; then echo eth0 > /run/guardian-zeek-iface; elif [ -e /sys/class/net/br0 ]; then echo br0 > /run/guardian-zeek-iface; else echo none > /run/guardian-zeek-iface; fi'
 # Pull image if not present
 ExecStartPre=-/usr/bin/podman pull docker.io/zeek/zeek:latest
-ExecStart=/usr/bin/podman run --name guardian-zeek \\
-    --network host \\
-    --cap-add NET_ADMIN \\
-    --cap-add NET_RAW \\
-    -v guardian-zeek-logs:/usr/local/zeek/logs:Z \\
-    -v guardian-zeek-spool:/usr/local/zeek/spool:Z \\
-    -v /opt/hookprobe/guardian/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro \\
-    docker.io/zeek/zeek:latest zeek -i $MONITOR_IFACE local
+ExecStart=/bin/bash -c 'IFACE=$(cat /run/guardian-zeek-iface); if [ "$IFACE" = "none" ]; then echo "No interface available for Zeek"; exit 1; fi; exec /usr/bin/podman run --name guardian-zeek --network host --cap-add NET_ADMIN --cap-add NET_RAW --memory 512m -v guardian-zeek-logs:/usr/local/zeek/logs:Z -v guardian-zeek-spool:/usr/local/zeek/spool:Z -v /opt/hookprobe/guardian/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro docker.io/zeek/zeek:latest zeek -i $IFACE local'
 ExecStop=/usr/bin/podman stop -t 10 guardian-zeek
 
 [Install]
@@ -1006,17 +1005,24 @@ PYEOF
     cat > /etc/systemd/system/guardian-xdp.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian XDP DDoS Protection
-After=network.target
-# Only start if we have a suitable interface (eth0 or br0)
-ConditionPathExists=/sys/class/net/eth0
+After=network-online.target
+Wants=network-online.target
+# Allow start if either eth0 OR br0 exists (| prefix makes condition non-fatal)
+ConditionPathExists=|/sys/class/net/eth0
+ConditionPathExists=|/sys/class/net/br0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Wait for network interface to be ready
+ExecStartPre=/bin/sleep 5
 # Prefer eth0 for XDP (never use wlan interfaces!)
 ExecStartPre=/bin/bash -c 'if [ -e /sys/class/net/eth0 ]; then echo eth0 > /run/guardian-xdp-iface; elif [ -e /sys/class/net/br0 ]; then echo br0 > /run/guardian-xdp-iface; else echo none > /run/guardian-xdp-iface; fi'
-ExecStart=/bin/bash -c 'IFACE=$(cat /run/guardian-xdp-iface); if [ "$IFACE" != "none" ]; then /usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py load $IFACE; else echo "No suitable interface for XDP"; fi'
-ExecStop=/bin/bash -c 'IFACE=$(cat /run/guardian-xdp-iface 2>/dev/null || echo eth0); /usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py unload $IFACE'
+ExecStart=/bin/bash -c 'IFACE=$(cat /run/guardian-xdp-iface); if [ "$IFACE" != "none" ] && [ -e /sys/class/net/$IFACE ]; then /usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py load $IFACE && echo "XDP loaded on $IFACE"; else echo "No suitable interface for XDP (eth0/br0 not found)"; fi'
+ExecStop=/bin/bash -c 'IFACE=$(cat /run/guardian-xdp-iface 2>/dev/null || echo eth0); /usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py unload $IFACE 2>/dev/null || true'
+# Restart if failed to attach (interface may come up later)
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -2300,8 +2306,12 @@ EOF
 install_web_ui() {
     log_step "Installing Guardian Web UI..."
 
-    mkdir -p /opt/hookprobe/guardian
+    mkdir -p /opt/hookprobe/guardian/web
     cp "$GUARDIAN_ROOT/web/app.py" /opt/hookprobe/guardian/
+    # Copy logo emblem for web UI
+    if [ -f "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" ]; then
+        cp "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" /opt/hookprobe/guardian/web/hookprobe-emblem.png
+    fi
 
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
