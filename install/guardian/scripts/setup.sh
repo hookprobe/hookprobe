@@ -352,18 +352,31 @@ install_security_containers() {
     podman pull docker.io/adguard/adguardhome:latest 2>/dev/null || log_warn "Failed to pull AdGuard image"
     podman pull docker.io/owasp/modsecurity-crs:nginx-alpine 2>/dev/null || log_warn "Failed to pull WAF image"
     podman pull docker.io/library/python:3.11-slim 2>/dev/null || log_warn "Failed to pull Python image"
+    podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
 
-    # Install containers
+    # Install core security containers
     install_suricata_container
     install_waf_container
     install_neuro_container
+
+    # Install Zeek network analyzer
+    install_zeek_container
+
+    # Install XDP/eBPF DDoS protection
+    install_xdp_ddos_protection
+
+    # Install threat aggregator
+    install_threat_aggregator
+
+    # Install attack simulator
+    install_attack_simulator
 
     # Install AdGuard (ad blocking) if enabled
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
         install_adguard_container
     fi
 
-    log_info "Security containers installed"
+    log_info "Security containers and services installed"
 }
 
 install_suricata_container() {
@@ -573,6 +586,842 @@ EOF
     systemctl enable guardian-neuro 2>/dev/null || true
 
     log_info "Neuro Protocol container installed"
+}
+
+install_zeek_container() {
+    log_step "Installing Zeek Network Analysis container..."
+
+    # Check if already running
+    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-zeek$"; then
+        log_info "Zeek container already exists"
+        return 0
+    fi
+
+    # Create volumes for Zeek logs
+    podman volume create guardian-zeek-logs 2>/dev/null || true
+    podman volume create guardian-zeek-spool 2>/dev/null || true
+
+    # Pull Zeek image
+    log_info "Pulling Zeek image..."
+    podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
+
+    # Determine network interface to monitor
+    local MONITOR_IFACE="br0"
+
+    # Create Zeek local.zeek configuration
+    mkdir -p /opt/hookprobe/guardian/zeek
+    cat > /opt/hookprobe/guardian/zeek/local.zeek << 'ZEEKEOF'
+# Guardian Zeek Configuration
+@load base/frameworks/notice
+@load base/protocols/conn
+@load base/protocols/dns
+@load base/protocols/http
+@load base/protocols/ssl
+@load policy/frameworks/notice/extend-email/hostnames
+@load policy/protocols/conn/known-hosts
+@load policy/protocols/conn/known-services
+@load policy/protocols/dns/detect-external-names
+@load policy/protocols/http/detect-sqli
+@load policy/protocols/ssl/validate-certs
+@load policy/misc/detect-traceroute
+@load policy/misc/scan
+
+# Enable JSON logging for easier parsing
+redef LogAscii::use_json = T;
+
+# Detect port scans
+redef Scan::scan_threshold = 25;
+
+# Notice types to log
+redef Notice::policy += {
+    [$action = Notice::LOG,
+     $pred(n: Notice::Info) = { return T; }]
+};
+ZEEKEOF
+
+    # Create systemd service for Zeek container
+    cat > /etc/systemd/system/guardian-zeek.service << EOF
+[Unit]
+Description=HookProbe Guardian Zeek Network Analyzer
+After=network.target podman.socket
+Requires=podman.socket
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=-/usr/bin/podman stop guardian-zeek
+ExecStartPre=-/usr/bin/podman rm guardian-zeek
+ExecStart=/usr/bin/podman run --name guardian-zeek \\
+    --network host \\
+    --cap-add NET_ADMIN \\
+    --cap-add NET_RAW \\
+    -v guardian-zeek-logs:/usr/local/zeek/logs:Z \\
+    -v guardian-zeek-spool:/usr/local/zeek/spool:Z \\
+    -v /opt/hookprobe/guardian/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro \\
+    docker.io/zeek/zeek:latest zeek -i $MONITOR_IFACE local
+ExecStop=/usr/bin/podman stop guardian-zeek
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-zeek 2>/dev/null || true
+
+    log_info "Zeek Network Analyzer container installed"
+}
+
+install_xdp_ddos_protection() {
+    log_step "Installing XDP/eBPF DDoS protection..."
+
+    # Check if kernel supports XDP
+    if ! grep -q "CONFIG_XDP" /boot/config-$(uname -r) 2>/dev/null; then
+        log_warn "Kernel may not support XDP, attempting anyway..."
+    fi
+
+    # Install required packages
+    apt-get install -y clang llvm libelf-dev linux-headers-$(uname -r) bpftool 2>/dev/null || {
+        log_warn "Some XDP packages not available, limited functionality"
+    }
+
+    # Create XDP program directory
+    mkdir -p /opt/hookprobe/guardian/xdp
+
+    # Create XDP DDoS mitigation program (C code)
+    cat > /opt/hookprobe/guardian/xdp/ddos_mitigate.c << 'XDPEOF'
+/*
+ * HookProbe Guardian XDP DDoS Mitigation
+ * Drops packets from suspected DDoS sources
+ */
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
+#include <bpf/bpf_helpers.h>
+
+/* Rate limiting map - tracks packets per IP */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);    /* Source IP */
+    __type(value, __u64);  /* Packet count + timestamp */
+    __uint(max_entries, 10000);
+} rate_limit_map SEC(".maps");
+
+/* Blocklist map - IPs to drop */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);    /* Source IP */
+    __type(value, __u8);   /* Block flag */
+    __uint(max_entries, 1000);
+} blocklist_map SEC(".maps");
+
+/* Statistics */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, 4);
+} stats_map SEC(".maps");
+
+#define STATS_PASSED 0
+#define STATS_DROPPED 1
+#define STATS_RATE_LIMITED 2
+#define STATS_BLOCKLISTED 3
+
+#define RATE_LIMIT 1000  /* Max packets per second per IP */
+
+SEC("xdp")
+int xdp_ddos_filter(struct xdp_md *ctx)
+{
+    void *data_end = (void *)(long)ctx->data_end;
+    void *data = (void *)(long)ctx->data;
+    struct ethhdr *eth = data;
+    __u32 key;
+    __u64 *value;
+    __u8 *blocked;
+
+    /* Bounds check */
+    if ((void *)(eth + 1) > data_end)
+        return XDP_PASS;
+
+    /* Only process IPv4 */
+    if (eth->h_proto != __constant_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return XDP_PASS;
+
+    __u32 src_ip = ip->saddr;
+
+    /* Check blocklist */
+    blocked = bpf_map_lookup_elem(&blocklist_map, &src_ip);
+    if (blocked && *blocked) {
+        key = STATS_BLOCKLISTED;
+        value = bpf_map_lookup_elem(&stats_map, &key);
+        if (value)
+            __sync_fetch_and_add(value, 1);
+        return XDP_DROP;
+    }
+
+    /* Rate limiting */
+    __u64 *count = bpf_map_lookup_elem(&rate_limit_map, &src_ip);
+    __u64 now = bpf_ktime_get_ns();
+
+    if (count) {
+        __u64 last_time = *count >> 32;
+        __u64 pkt_count = *count & 0xFFFFFFFF;
+
+        /* Reset counter if more than 1 second passed */
+        if ((now - last_time) > 1000000000ULL) {
+            *count = (now << 32) | 1;
+        } else {
+            pkt_count++;
+            *count = (last_time << 32) | pkt_count;
+
+            if (pkt_count > RATE_LIMIT) {
+                key = STATS_RATE_LIMITED;
+                value = bpf_map_lookup_elem(&stats_map, &key);
+                if (value)
+                    __sync_fetch_and_add(value, 1);
+                return XDP_DROP;
+            }
+        }
+    } else {
+        __u64 new_count = (now << 32) | 1;
+        bpf_map_update_elem(&rate_limit_map, &src_ip, &new_count, BPF_ANY);
+    }
+
+    /* Packet passed */
+    key = STATS_PASSED;
+    value = bpf_map_lookup_elem(&stats_map, &key);
+    if (value)
+        __sync_fetch_and_add(value, 1);
+
+    return XDP_PASS;
+}
+
+char _license[] SEC("license") = "GPL";
+XDPEOF
+
+    # Create XDP manager script
+    cat > /opt/hookprobe/guardian/xdp/xdp_manager.py << 'PYEOF'
+#!/usr/bin/env python3
+"""
+XDP DDoS Protection Manager for Guardian
+Compiles, loads, and manages XDP programs
+"""
+import subprocess
+import os
+import json
+import time
+from pathlib import Path
+
+XDP_DIR = Path("/opt/hookprobe/guardian/xdp")
+XDP_SRC = XDP_DIR / "ddos_mitigate.c"
+XDP_OBJ = XDP_DIR / "ddos_mitigate.o"
+STATS_FILE = XDP_DIR / "xdp_stats.json"
+
+def compile_xdp():
+    """Compile XDP program"""
+    if not XDP_SRC.exists():
+        print("XDP source not found")
+        return False
+
+    cmd = [
+        "clang", "-O2", "-g", "-target", "bpf",
+        "-c", str(XDP_SRC), "-o", str(XDP_OBJ),
+        "-I/usr/include/bpf"
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        print("XDP program compiled successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Compilation failed: {e.stderr.decode()}")
+        return False
+
+def load_xdp(interface="br0"):
+    """Load XDP program on interface"""
+    if not XDP_OBJ.exists():
+        if not compile_xdp():
+            return False
+
+    # Detach any existing XDP program
+    subprocess.run(["ip", "link", "set", interface, "xdp", "off"], capture_output=True)
+
+    # Attach new XDP program
+    cmd = ["ip", "link", "set", interface, "xdp", "obj", str(XDP_OBJ), "sec", "xdp"]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"XDP program loaded on {interface}")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to load XDP: {e.stderr.decode()}")
+        return False
+
+def unload_xdp(interface="br0"):
+    """Unload XDP program from interface"""
+    subprocess.run(["ip", "link", "set", interface, "xdp", "off"], capture_output=True)
+    print(f"XDP program unloaded from {interface}")
+
+def get_stats():
+    """Get XDP statistics using bpftool"""
+    stats = {
+        "passed": 0,
+        "dropped": 0,
+        "rate_limited": 0,
+        "blocklisted": 0,
+        "xdp_loaded": False,
+        "timestamp": time.time()
+    }
+
+    # Check if XDP is loaded
+    result = subprocess.run(["ip", "link", "show"], capture_output=True, text=True)
+    stats["xdp_loaded"] = "xdp" in result.stdout
+
+    # Try to get map stats via bpftool
+    try:
+        result = subprocess.run(
+            ["bpftool", "map", "dump", "name", "stats_map", "-j"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            for entry in data:
+                key = entry.get("key", 0)
+                value = entry.get("value", 0)
+                if key == 0:
+                    stats["passed"] = value
+                elif key == 1:
+                    stats["dropped"] = value
+                elif key == 2:
+                    stats["rate_limited"] = value
+                elif key == 3:
+                    stats["blocklisted"] = value
+    except Exception as e:
+        pass
+
+    return stats
+
+def block_ip(ip_addr):
+    """Add IP to blocklist"""
+    try:
+        subprocess.run([
+            "bpftool", "map", "update", "name", "blocklist_map",
+            "key", ip_addr, "value", "1"
+        ], check=True, capture_output=True)
+        print(f"Blocked IP: {ip_addr}")
+        return True
+    except Exception as e:
+        print(f"Failed to block IP: {e}")
+        return False
+
+def save_stats():
+    """Save current stats to file"""
+    stats = get_stats()
+    with open(STATS_FILE, 'w') as f:
+        json.dump(stats, f, indent=2)
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: xdp_manager.py [compile|load|unload|stats|block <ip>]")
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    if cmd == "compile":
+        compile_xdp()
+    elif cmd == "load":
+        iface = sys.argv[2] if len(sys.argv) > 2 else "br0"
+        load_xdp(iface)
+    elif cmd == "unload":
+        iface = sys.argv[2] if len(sys.argv) > 2 else "br0"
+        unload_xdp(iface)
+    elif cmd == "stats":
+        print(json.dumps(get_stats(), indent=2))
+    elif cmd == "block" and len(sys.argv) > 2:
+        block_ip(sys.argv[2])
+    else:
+        print("Unknown command")
+PYEOF
+
+    chmod +x /opt/hookprobe/guardian/xdp/xdp_manager.py
+
+    # Create systemd service for XDP
+    cat > /etc/systemd/system/guardian-xdp.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian XDP DDoS Protection
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py load br0
+ExecStop=/usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py unload br0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-xdp 2>/dev/null || true
+
+    log_info "XDP/eBPF DDoS protection installed"
+}
+
+install_threat_aggregator() {
+    log_step "Installing Threat Aggregator service..."
+
+    # Create aggregator directory
+    mkdir -p /opt/hookprobe/guardian/aggregator
+    mkdir -p /var/log/hookprobe/threats
+
+    # Create threat aggregator script
+    cat > /opt/hookprobe/guardian/aggregator/threat_aggregator.py << 'PYEOF'
+#!/usr/bin/env python3
+"""
+HookProbe Guardian Threat Aggregator
+Collects and correlates alerts from all security tools
+"""
+import json
+import os
+import time
+import subprocess
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from collections import defaultdict
+
+SURICATA_LOG = "/var/lib/containers/storage/volumes/guardian-suricata-logs/_data/eve.json"
+ZEEK_LOG_DIR = "/var/lib/containers/storage/volumes/guardian-zeek-logs/_data/current"
+OUTPUT_FILE = "/var/log/hookprobe/threats/aggregated.json"
+ALERT_FILE = "/var/log/hookprobe/threats/active_alerts.json"
+
+class ThreatAggregator:
+    def __init__(self):
+        self.threats = []
+        self.stats = {
+            "suricata_alerts": 0,
+            "zeek_notices": 0,
+            "xdp_drops": 0,
+            "blocked_ips": [],
+            "active_attacks": [],
+            "severity_counts": {"high": 0, "medium": 0, "low": 0},
+            "last_update": None
+        }
+
+    def parse_suricata_eve(self, limit=100):
+        """Parse Suricata EVE JSON log"""
+        alerts = []
+        try:
+            if not os.path.exists(SURICATA_LOG):
+                return alerts
+
+            # Read last N lines
+            result = subprocess.run(
+                ["tail", "-n", str(limit), SURICATA_LOG],
+                capture_output=True, text=True
+            )
+
+            for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    if event.get("event_type") == "alert":
+                        alert = {
+                            "source": "suricata",
+                            "timestamp": event.get("timestamp"),
+                            "src_ip": event.get("src_ip"),
+                            "dest_ip": event.get("dest_ip"),
+                            "src_port": event.get("src_port"),
+                            "dest_port": event.get("dest_port"),
+                            "signature": event.get("alert", {}).get("signature"),
+                            "signature_id": event.get("alert", {}).get("signature_id"),
+                            "severity": event.get("alert", {}).get("severity", 3),
+                            "category": event.get("alert", {}).get("category"),
+                            "protocol": event.get("proto")
+                        }
+                        alerts.append(alert)
+                        self.stats["suricata_alerts"] += 1
+                except json.JSONDecodeError:
+                    continue
+        except Exception as e:
+            print(f"Error parsing Suricata logs: {e}")
+
+        return alerts
+
+    def parse_zeek_notices(self, limit=100):
+        """Parse Zeek notice.log"""
+        notices = []
+        try:
+            notice_log = Path(ZEEK_LOG_DIR) / "notice.log"
+            if not notice_log.exists():
+                return notices
+
+            result = subprocess.run(
+                ["tail", "-n", str(limit), str(notice_log)],
+                capture_output=True, text=True
+            )
+
+            for line in result.stdout.strip().split('\n'):
+                if not line or line.startswith('#'):
+                    continue
+                try:
+                    # Zeek JSON format
+                    event = json.loads(line)
+                    notice = {
+                        "source": "zeek",
+                        "timestamp": event.get("ts"),
+                        "src_ip": event.get("src"),
+                        "dest_ip": event.get("dst"),
+                        "note": event.get("note"),
+                        "msg": event.get("msg"),
+                        "severity": 2 if "Scan" in event.get("note", "") else 3
+                    }
+                    notices.append(notice)
+                    self.stats["zeek_notices"] += 1
+                except json.JSONDecodeError:
+                    continue
+        except Exception as e:
+            print(f"Error parsing Zeek logs: {e}")
+
+        return notices
+
+    def get_xdp_stats(self):
+        """Get XDP statistics"""
+        try:
+            result = subprocess.run(
+                ["python3", "/opt/hookprobe/guardian/xdp/xdp_manager.py", "stats"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                stats = json.loads(result.stdout)
+                self.stats["xdp_drops"] = stats.get("dropped", 0) + stats.get("rate_limited", 0)
+                return stats
+        except Exception as e:
+            print(f"Error getting XDP stats: {e}")
+        return {}
+
+    def detect_attacks(self, alerts):
+        """Detect ongoing attacks from alert patterns"""
+        attacks = []
+        ip_counts = defaultdict(int)
+        port_scan_ips = set()
+        ddos_ips = set()
+
+        for alert in alerts:
+            src_ip = alert.get("src_ip")
+            if not src_ip:
+                continue
+
+            ip_counts[src_ip] += 1
+
+            # Detect port scans
+            sig = alert.get("signature", "") or alert.get("note", "")
+            if any(x in sig.lower() for x in ["scan", "portscan", "reconnaissance"]):
+                port_scan_ips.add(src_ip)
+
+            # Detect DDoS patterns
+            if ip_counts[src_ip] > 50:
+                ddos_ips.add(src_ip)
+
+        # Create attack entries
+        for ip in port_scan_ips:
+            attacks.append({
+                "type": "port_scan",
+                "source_ip": ip,
+                "severity": "medium",
+                "description": f"Port scanning detected from {ip}",
+                "recommendation": "Consider blocking this IP"
+            })
+
+        for ip in ddos_ips:
+            attacks.append({
+                "type": "ddos_attempt",
+                "source_ip": ip,
+                "severity": "high",
+                "alert_count": ip_counts[ip],
+                "description": f"Possible DDoS from {ip} ({ip_counts[ip]} alerts)",
+                "recommendation": "IP should be rate-limited or blocked"
+            })
+
+        return attacks
+
+    def aggregate(self):
+        """Main aggregation routine"""
+        all_alerts = []
+
+        # Collect from all sources
+        all_alerts.extend(self.parse_suricata_eve())
+        all_alerts.extend(self.parse_zeek_notices())
+
+        # Get XDP stats
+        xdp_stats = self.get_xdp_stats()
+
+        # Detect attacks
+        attacks = self.detect_attacks(all_alerts)
+        self.stats["active_attacks"] = attacks
+
+        # Count severities
+        for alert in all_alerts:
+            sev = alert.get("severity", 3)
+            if sev <= 1:
+                self.stats["severity_counts"]["high"] += 1
+            elif sev == 2:
+                self.stats["severity_counts"]["medium"] += 1
+            else:
+                self.stats["severity_counts"]["low"] += 1
+
+        self.stats["last_update"] = datetime.now().isoformat()
+
+        # Save aggregated data
+        output = {
+            "stats": self.stats,
+            "recent_alerts": all_alerts[-50:],  # Last 50 alerts
+            "xdp_stats": xdp_stats,
+            "attacks": attacks
+        }
+
+        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+        with open(OUTPUT_FILE, 'w') as f:
+            json.dump(output, f, indent=2, default=str)
+
+        # Save active alerts separately for quick access
+        with open(ALERT_FILE, 'w') as f:
+            json.dump({
+                "alerts": all_alerts[-20:],
+                "attacks": attacks,
+                "timestamp": datetime.now().isoformat()
+            }, f, indent=2, default=str)
+
+        return output
+
+def main():
+    """Run aggregator continuously"""
+    print("HookProbe Guardian Threat Aggregator starting...")
+    aggregator = ThreatAggregator()
+
+    while True:
+        try:
+            result = aggregator.aggregate()
+            print(f"[{datetime.now()}] Aggregated: "
+                  f"Suricata={result['stats']['suricata_alerts']}, "
+                  f"Zeek={result['stats']['zeek_notices']}, "
+                  f"XDP drops={result['stats']['xdp_drops']}, "
+                  f"Active attacks={len(result['attacks'])}")
+        except Exception as e:
+            print(f"Aggregation error: {e}")
+
+        time.sleep(30)  # Update every 30 seconds
+
+if __name__ == "__main__":
+    main()
+PYEOF
+
+    chmod +x /opt/hookprobe/guardian/aggregator/threat_aggregator.py
+
+    # Create systemd service
+    cat > /etc/systemd/system/guardian-aggregator.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian Threat Aggregator
+After=network.target guardian-suricata.service guardian-zeek.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/aggregator/threat_aggregator.py
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-aggregator 2>/dev/null || true
+
+    log_info "Threat Aggregator service installed"
+}
+
+install_attack_simulator() {
+    log_step "Installing attack simulation tools..."
+
+    # Create simulator directory
+    mkdir -p /opt/hookprobe/guardian/simulator
+
+    # Create attack simulation script
+    cat > /opt/hookprobe/guardian/simulator/test_security.sh << 'BASHEOF'
+#!/bin/bash
+#
+# HookProbe Guardian Security Test Suite
+# Simulates various attacks to verify security stack is working
+#
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+TARGET="${1:-192.168.4.1}"
+REPORT_FILE="/var/log/hookprobe/threats/test_report.json"
+
+echo "=============================================="
+echo " HookProbe Guardian Security Test Suite"
+echo "=============================================="
+echo ""
+echo "Target: $TARGET"
+echo "Time: $(date)"
+echo ""
+
+# Check if nmap is installed
+if ! command -v nmap &> /dev/null; then
+    echo -e "${YELLOW}Installing nmap for security testing...${NC}"
+    apt-get update && apt-get install -y nmap
+fi
+
+# Initialize results
+RESULTS=()
+
+test_result() {
+    local test_name="$1"
+    local status="$2"
+    local details="$3"
+    RESULTS+=("{\"test\": \"$test_name\", \"status\": \"$status\", \"details\": \"$details\"}")
+    if [ "$status" = "PASS" ]; then
+        echo -e "${GREEN}[PASS]${NC} $test_name"
+    else
+        echo -e "${RED}[FAIL]${NC} $test_name - $details"
+    fi
+}
+
+echo ""
+echo "1. Testing Suricata IDS..."
+echo "   Running TCP SYN scan (should trigger alerts)..."
+nmap -sS -p 22,80,443,8080 $TARGET -T4 --max-retries 1 2>/dev/null || true
+sleep 2
+
+# Check Suricata logs
+if podman logs guardian-suricata 2>&1 | tail -20 | grep -q -i "alert\|signature"; then
+    test_result "Suricata_Detection" "PASS" "Alerts generated for port scan"
+else
+    test_result "Suricata_Detection" "FAIL" "No alerts detected"
+fi
+
+echo ""
+echo "2. Testing with aggressive scan..."
+nmap -A -p 1-1000 $TARGET -T5 --max-retries 1 2>/dev/null || true
+sleep 2
+
+echo ""
+echo "3. Testing UDP scan (potential DDoS pattern)..."
+nmap -sU -p 53,123,161 $TARGET --max-retries 1 2>/dev/null || true
+sleep 2
+
+echo ""
+echo "4. Testing vulnerability scan signatures..."
+nmap --script vuln -p 80,443,8080 $TARGET --max-retries 1 2>/dev/null || true
+sleep 2
+
+echo ""
+echo "5. Checking Zeek network analysis..."
+if podman ps | grep -q guardian-zeek; then
+    # Check if Zeek is logging
+    if podman exec guardian-zeek ls /usr/local/zeek/logs/current/ 2>/dev/null | grep -q "conn.log"; then
+        test_result "Zeek_Logging" "PASS" "Connection logging active"
+    else
+        test_result "Zeek_Logging" "FAIL" "No logs found"
+    fi
+else
+    test_result "Zeek_Logging" "FAIL" "Zeek container not running"
+fi
+
+echo ""
+echo "6. Checking XDP/eBPF status..."
+if ip link show | grep -q "xdp"; then
+    test_result "XDP_Active" "PASS" "XDP program loaded"
+else
+    test_result "XDP_Active" "FAIL" "XDP not loaded"
+fi
+
+echo ""
+echo "7. Checking threat aggregator..."
+if [ -f "/var/log/hookprobe/threats/aggregated.json" ]; then
+    ALERT_COUNT=$(cat /var/log/hookprobe/threats/aggregated.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['stats']['suricata_alerts'])" 2>/dev/null || echo "0")
+    if [ "$ALERT_COUNT" -gt 0 ]; then
+        test_result "Threat_Aggregation" "PASS" "$ALERT_COUNT alerts aggregated"
+    else
+        test_result "Threat_Aggregation" "FAIL" "No alerts aggregated"
+    fi
+else
+    test_result "Threat_Aggregation" "FAIL" "Aggregation file not found"
+fi
+
+echo ""
+echo "8. Testing WAF (if web server on port 80/8080)..."
+# SQL injection attempt
+curl -s "http://$TARGET:8080/?id=1'%20OR%20'1'='1" 2>/dev/null || true
+# XSS attempt
+curl -s "http://$TARGET:8080/?q=<script>alert(1)</script>" 2>/dev/null || true
+sleep 1
+
+if podman logs guardian-waf 2>&1 | tail -10 | grep -q -i "modsecurity\|blocked\|denied"; then
+    test_result "WAF_Detection" "PASS" "WAF blocking malicious requests"
+else
+    test_result "WAF_Detection" "FAIL" "WAF not detecting attacks"
+fi
+
+echo ""
+echo "=============================================="
+echo " Test Summary"
+echo "=============================================="
+
+# Count results
+PASS_COUNT=0
+FAIL_COUNT=0
+for r in "${RESULTS[@]}"; do
+    if echo "$r" | grep -q '"PASS"'; then
+        ((PASS_COUNT++))
+    else
+        ((FAIL_COUNT++))
+    fi
+done
+
+echo ""
+echo -e "Passed: ${GREEN}$PASS_COUNT${NC}"
+echo -e "Failed: ${RED}$FAIL_COUNT${NC}"
+echo ""
+
+# Generate JSON report
+mkdir -p /var/log/hookprobe/threats
+cat > "$REPORT_FILE" << EOF
+{
+    "test_time": "$(date -Iseconds)",
+    "target": "$TARGET",
+    "summary": {
+        "passed": $PASS_COUNT,
+        "failed": $FAIL_COUNT
+    },
+    "results": [$(IFS=,; echo "${RESULTS[*]}")]
+}
+EOF
+
+echo "Report saved to: $REPORT_FILE"
+echo ""
+echo "To view live threats, check:"
+echo "  - Suricata: podman logs -f guardian-suricata"
+echo "  - Zeek: podman exec guardian-zeek cat /usr/local/zeek/logs/current/notice.log"
+echo "  - Aggregated: cat /var/log/hookprobe/threats/aggregated.json"
+BASHEOF
+
+    chmod +x /opt/hookprobe/guardian/simulator/test_security.sh
+
+    log_info "Attack simulation tools installed"
+    log_info "Run tests with: /opt/hookprobe/guardian/simulator/test_security.sh"
 }
 
 install_qsecbit_agent() {
