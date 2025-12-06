@@ -2192,24 +2192,121 @@ configure_base_networking() {
     # eth0 should get its own IP from upstream router for WAN failover
     log_info "eth0 kept as WAN interface (not bridged) for failover support"
 
-    # Configure hostapd (simple mode)
+    # ─────────────────────────────────────────────────────────────
+    # Detect WiFi driver for hostapd
+    # ─────────────────────────────────────────────────────────────
+    log_info "Detecting WiFi driver for $WIFI_IFACE..."
+
+    # Get the driver in use
+    local WIFI_DRIVER="nl80211"  # Default
+    local PHY_NAME=$(iw dev "$WIFI_IFACE" info 2>/dev/null | grep -oP 'wiphy \K\d+')
+    local DRIVER_PATH="/sys/class/net/$WIFI_IFACE/device/driver"
+
+    if [ -L "$DRIVER_PATH" ]; then
+        local KERNEL_DRIVER=$(basename $(readlink "$DRIVER_PATH"))
+        log_info "Kernel driver: $KERNEL_DRIVER"
+
+        # Map kernel drivers to hostapd drivers
+        case "$KERNEL_DRIVER" in
+            rtl8*|r8*|88*|8188*|8192*|rtw*)
+                # Realtek USB adapters - try nl80211 first, some need rtl871xdrv
+                # Check if nl80211 is supported
+                if iw list 2>/dev/null | grep -q "nl80211"; then
+                    WIFI_DRIVER="nl80211"
+                else
+                    log_warn "Realtek adapter detected - may need rtl871xdrv driver"
+                    WIFI_DRIVER="nl80211"  # Still try nl80211 first
+                fi
+                ;;
+            mt76*|mt7*|mediatek*)
+                WIFI_DRIVER="nl80211"
+                ;;
+            ath9k*|ath10k*|ath*|carl9170*)
+                WIFI_DRIVER="nl80211"
+                ;;
+            brcmfmac|brcmsmac)
+                WIFI_DRIVER="nl80211"
+                ;;
+            *)
+                WIFI_DRIVER="nl80211"
+                ;;
+        esac
+    fi
+
+    log_info "Using hostapd driver: $WIFI_DRIVER"
+
+    # Determine best channel (avoid DFS channels)
+    local WIFI_CHANNEL=6
+
+    # Auto-detect country code from system regulatory domain
+    local COUNTRY_CODE="${HOOKPROBE_COUNTRY:-}"
+    if [ -z "$COUNTRY_CODE" ]; then
+        # Try to get from system regulatory domain
+        COUNTRY_CODE=$(iw reg get 2>/dev/null | grep -oP 'country \K[A-Z]{2}' | head -1)
+        # Fallback to timezone-based detection
+        if [ -z "$COUNTRY_CODE" ] || [ "$COUNTRY_CODE" = "00" ] || [ "$COUNTRY_CODE" = "99" ]; then
+            local TZ_COUNTRY=$(timedatectl 2>/dev/null | grep "Time zone" | grep -oP '/\K[^/]+(?=\s)' | head -1)
+            case "$TZ_COUNTRY" in
+                Bucharest) COUNTRY_CODE="RO" ;;
+                London) COUNTRY_CODE="GB" ;;
+                Paris|Berlin|Rome|Madrid|Amsterdam) COUNTRY_CODE="DE" ;;
+                New_York|Chicago|Los_Angeles) COUNTRY_CODE="US" ;;
+                *) COUNTRY_CODE="US" ;;
+            esac
+        fi
+    fi
+    log_info "Detected country code: $COUNTRY_CODE"
+
+    # Set regulatory domain and wait for it to apply
+    log_info "Setting regulatory domain to $COUNTRY_CODE..."
+    iw reg set "$COUNTRY_CODE" 2>/dev/null || true
+    sleep 2
+
+    # Verify regulatory domain was applied
+    local APPLIED_COUNTRY=$(iw reg get 2>/dev/null | grep -oP 'country \K[A-Z]{2}' | head -1)
+    if [ "$APPLIED_COUNTRY" != "$COUNTRY_CODE" ]; then
+        log_warn "Regulatory domain may not have applied correctly (got: $APPLIED_COUNTRY)"
+    fi
+
+    # Check available channels for this regulatory domain
+    log_info "Checking available channels for $COUNTRY_CODE..."
+    local AVAILABLE_CHANNELS=$(iw phy phy$PHY_NAME channels 2>/dev/null | grep -v "disabled\|radar\|no IR" | grep -oP '\[\K\d+(?=\])' | head -10)
+    if [ -n "$AVAILABLE_CHANNELS" ]; then
+        log_info "Available 2.4GHz channels: $(echo $AVAILABLE_CHANNELS | tr '\n' ' ')"
+        # Prefer channel 1, 6, or 11 for 2.4GHz (non-overlapping)
+        for ch in 6 1 11 7 13; do
+            if echo "$AVAILABLE_CHANNELS" | grep -qw "$ch"; then
+                WIFI_CHANNEL=$ch
+                break
+            fi
+        done
+    fi
+    log_info "Using channel: $WIFI_CHANNEL"
+
+    # Configure hostapd
     log_info "Configuring hostapd..."
     cat > /etc/hostapd/hostapd.conf << EOF
 # HookProbe Guardian - Base Network Configuration
-# Simple WiFi hotspot with bridge
+# Auto-generated - do not edit manually
 
 interface=$WIFI_IFACE
-driver=nl80211
+driver=$WIFI_DRIVER
 bridge=br0
 
 ssid=$HOTSPOT_SSID
 hw_mode=g
-channel=6
-country_code=US
+channel=$WIFI_CHANNEL
 
-# 802.11n support
+# Regulatory domain - IMPORTANT for proper operation
+country_code=$COUNTRY_CODE
+ieee80211d=1
+local_pwr_constraint=3
+
+# 802.11n support (disable if causing issues)
 ieee80211n=1
 wmm_enabled=1
+# HT capabilities - comment out if adapter doesn't support
+#ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40]
 
 # Security
 wpa=2
@@ -2217,17 +2314,44 @@ wpa_passphrase=$HOTSPOT_PASS
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=CCMP
 rsn_pairwise=CCMP
+auth_algs=1
 
-# Logging
+# Logging (verbose for debugging)
 logger_syslog=-1
 logger_syslog_level=2
+logger_stdout=-1
+logger_stdout_level=2
 
 # Performance
 max_num_sta=32
+ignore_broadcast_ssid=0
+
+# Workarounds for various drivers
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
 EOF
 
-    # Configure hostapd daemon
-    echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
+    # Test hostapd configuration before committing
+    log_info "Testing hostapd configuration..."
+
+    # Make sure interface is down for hostapd to configure it
+    ip link set "$WIFI_IFACE" down 2>/dev/null || true
+    sleep 1
+
+    # Run a quick syntax check
+    if hostapd -t /etc/hostapd/hostapd.conf 2>&1 | grep -qi "error\|invalid\|failed"; then
+        log_warn "Hostapd config test reported issues, checking..."
+        hostapd -t /etc/hostapd/hostapd.conf 2>&1 | head -20
+    else
+        log_info "Hostapd configuration syntax OK"
+    fi
+
+    # Configure hostapd daemon defaults
+    cat > /etc/default/hostapd << 'EOF'
+# Defaults for hostapd
+DAEMON_CONF="/etc/hostapd/hostapd.conf"
+DAEMON_OPTS=""
+EOF
 
     # Configure dnsmasq (DHCP + DNS)
     log_info "Configuring dnsmasq..."
@@ -2380,14 +2504,45 @@ configure_sdn_mode() {
     log_info "Installing SDN configuration..."
 
     mkdir -p /etc/hostapd
-    cp "$CONFIG_DIR/hostapd.conf" /etc/hostapd/hostapd.conf
     cp "$CONFIG_DIR/hostapd.vlan" /etc/hostapd/hostapd.vlan
     touch /etc/hostapd/hostapd.accept
     touch /etc/hostapd/hostapd.deny
 
+    # Preserve existing interface/driver/channel settings from base config
+    local EXISTING_IFACE=$(grep "^interface=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_DRIVER=$(grep "^driver=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_CHANNEL=$(grep "^channel=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_SSID=$(grep "^ssid=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_PASS=$(grep "^wpa_passphrase=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_COUNTRY=$(grep "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+
+    # Copy SDN hostapd config
+    cp "$CONFIG_DIR/hostapd.conf" /etc/hostapd/hostapd.conf
+
+    # Restore detected settings (don't overwrite with template values)
+    if [ -n "$EXISTING_IFACE" ]; then
+        sed -i "s/^interface=.*/interface=$EXISTING_IFACE/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_DRIVER" ]; then
+        sed -i "s/^driver=.*/driver=$EXISTING_DRIVER/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_CHANNEL" ]; then
+        sed -i "s/^channel=.*/channel=$EXISTING_CHANNEL/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_SSID" ]; then
+        sed -i "s/^ssid=.*/ssid=$EXISTING_SSID/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_PASS" ]; then
+        sed -i "s/^wpa_passphrase=.*/wpa_passphrase=$EXISTING_PASS/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_COUNTRY" ]; then
+        sed -i "s/^country_code=.*/country_code=$EXISTING_COUNTRY/" /etc/hostapd/hostapd.conf
+    fi
+
     # Update RADIUS server in hostapd config
     sed -i "s/auth_server_addr=.*/auth_server_addr=$RADIUS_SERVER/" /etc/hostapd/hostapd.conf
     sed -i "s/auth_server_shared_secret=.*/auth_server_shared_secret=$RADIUS_SECRET/" /etc/hostapd/hostapd.conf
+    sed -i "s/acct_server_shared_secret=.*/acct_server_shared_secret=$RADIUS_SECRET/" /etc/hostapd/hostapd.conf
 
     # Configure dnsmasq for VLANs
     cp "$CONFIG_DIR/dnsmasq.conf" /etc/dnsmasq.d/guardian.conf
@@ -2733,6 +2888,9 @@ EOF
 enable_services() {
     log_step "Enabling services..."
 
+    # Enable FreeRADIUS (required for MAC authentication before hostapd)
+    systemctl enable freeradius 2>/dev/null || true
+
     systemctl unmask hostapd 2>/dev/null || true
     systemctl enable hostapd
     systemctl enable dnsmasq
@@ -2761,8 +2919,105 @@ start_services() {
     systemctl start openvswitch-switch 2>/dev/null || systemctl start openvswitch 2>/dev/null || true
 
     systemctl start nftables 2>/dev/null || true
+
+    # ─────────────────────────────────────────────────────────────
+    # Start FreeRADIUS BEFORE hostapd (required for MAC authentication)
+    # ─────────────────────────────────────────────────────────────
+    if systemctl list-unit-files | grep -q freeradius; then
+        log_info "Starting FreeRADIUS for MAC authentication..."
+        systemctl start freeradius 2>/dev/null || {
+            log_warn "FreeRADIUS failed to start - MAC-based VLAN assignment may not work"
+        }
+        sleep 1
+    fi
+
     systemctl start dnsmasq
-    systemctl start hostapd
+
+    # ─────────────────────────────────────────────────────────────
+    # Start hostapd with enhanced error handling
+    # ─────────────────────────────────────────────────────────────
+    log_info "Starting hostapd WiFi access point..."
+
+    # Set regulatory domain from hostapd config before starting
+    local HOSTAPD_COUNTRY=$(grep "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    if [ -n "$HOSTAPD_COUNTRY" ]; then
+        log_info "Setting regulatory domain to $HOSTAPD_COUNTRY..."
+        iw reg set "$HOSTAPD_COUNTRY" 2>/dev/null || true
+        sleep 2
+    fi
+
+    # Make sure WiFi interface is ready
+    local WIFI_IFACE="${HOOKPROBE_WIFI_IFACE:-wlan1}"
+    if [ ! -d "/sys/class/net/$WIFI_IFACE" ]; then
+        WIFI_IFACE=$(ls /sys/class/net/ | grep -E '^wlan' | head -1)
+    fi
+
+    if [ -n "$WIFI_IFACE" ]; then
+        # Kill interfering processes
+        pkill -f "wpa_supplicant.*$WIFI_IFACE" 2>/dev/null || true
+        sleep 1
+
+        # Ensure interface is down (hostapd will bring it up)
+        ip link set "$WIFI_IFACE" down 2>/dev/null || true
+        sleep 1
+
+        # Try to start hostapd
+        if ! systemctl start hostapd; then
+            log_warn "Hostapd failed to start, attempting diagnostics..."
+
+            # Show hostapd error output
+            journalctl -u hostapd -n 20 --no-pager 2>/dev/null || true
+
+            # Try running hostapd directly for better error message
+            log_info "Running hostapd diagnostic..."
+            timeout 5 hostapd -d /etc/hostapd/hostapd.conf 2>&1 | head -30 || true
+
+            # Common fixes
+            log_info "Attempting common fixes..."
+
+            # Fix 1: Try without bridge first
+            if grep -q "bridge=br0" /etc/hostapd/hostapd.conf; then
+                log_info "  - Trying without bridge..."
+                sed -i 's/^bridge=br0/#bridge=br0/' /etc/hostapd/hostapd.conf
+                if systemctl start hostapd 2>/dev/null; then
+                    log_info "Hostapd started without bridge mode"
+                else
+                    # Restore bridge setting
+                    sed -i 's/^#bridge=br0/bridge=br0/' /etc/hostapd/hostapd.conf
+                fi
+            fi
+
+            # Fix 2: Try different channel
+            if ! systemctl is-active --quiet hostapd; then
+                log_info "  - Trying channel 1..."
+                sed -i 's/^channel=.*/channel=1/' /etc/hostapd/hostapd.conf
+                systemctl start hostapd 2>/dev/null || true
+            fi
+
+            # Fix 3: Disable HT capabilities for older adapters
+            if ! systemctl is-active --quiet hostapd; then
+                log_info "  - Disabling HT capabilities..."
+                sed -i 's/^ht_capab=.*/#ht_capab=[DISABLED]/' /etc/hostapd/hostapd.conf
+                sed -i 's/^ieee80211n=1/ieee80211n=0/' /etc/hostapd/hostapd.conf
+                systemctl start hostapd 2>/dev/null || true
+            fi
+
+            # Final check
+            if ! systemctl is-active --quiet hostapd; then
+                log_error "Hostapd could not be started. WiFi AP will not be available."
+                log_error "Check: journalctl -u hostapd -f"
+                log_error "Common issues:"
+                log_error "  1. WiFi adapter doesn't support AP mode"
+                log_error "  2. Another process is using the interface"
+                log_error "  3. Regulatory domain restrictions"
+            fi
+        else
+            log_info "Hostapd started successfully"
+        fi
+    else
+        log_warn "No WiFi interface found, skipping hostapd"
+    fi
+
     systemctl start guardian-webui
 
     # Start security containers and services
