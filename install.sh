@@ -2032,39 +2032,123 @@ uninstall_guardian() {
         echo "Performing manual cleanup..."
         echo ""
 
-        # Stop Guardian services
-        for svc in guardian-webui guardian-suricata guardian-adguard guardian-qsecbit hostapd dnsmasq; do
+        # Stop all Guardian services (core + security stack)
+        echo "Stopping Guardian services..."
+        local guardian_services=(
+            guardian-webui
+            guardian-suricata
+            guardian-zeek
+            guardian-waf
+            guardian-xdp
+            guardian-aggregator
+            guardian-neuro
+            guardian-adguard
+            guardian-qsecbit
+            hostapd
+            dnsmasq
+        )
+        for svc in "${guardian_services[@]}"; do
+            echo "  - Stopping $svc..."
             systemctl stop "$svc" 2>/dev/null || true
             systemctl disable "$svc" 2>/dev/null || true
         done
 
         # Remove Guardian systemd services
+        echo "Removing systemd service files..."
         rm -f /etc/systemd/system/guardian-*.service
         systemctl daemon-reload
 
-        # Remove Guardian containers
+        # Remove Guardian containers and volumes
         if command -v podman &>/dev/null; then
-            podman stop guardian-suricata guardian-adguard 2>/dev/null || true
-            podman rm -f guardian-suricata guardian-adguard 2>/dev/null || true
-            podman volume rm guardian-suricata-logs guardian-suricata-rules 2>/dev/null || true
-            podman volume rm guardian-adguard-work guardian-adguard-conf 2>/dev/null || true
+            echo "Removing Guardian containers..."
+            local containers=(
+                guardian-suricata
+                guardian-zeek
+                guardian-waf
+                guardian-neuro
+                guardian-adguard
+            )
+            for container in "${containers[@]}"; do
+                echo "  - Removing $container..."
+                podman stop "$container" 2>/dev/null || true
+                podman rm -f "$container" 2>/dev/null || true
+            done
+
+            echo "Removing Guardian volumes..."
+            local volumes=(
+                guardian-suricata-logs
+                guardian-suricata-rules
+                guardian-zeek-logs
+                guardian-zeek-spool
+                guardian-waf-logs
+                guardian-adguard-work
+                guardian-adguard-conf
+            )
+            for vol in "${volumes[@]}"; do
+                podman volume rm "$vol" 2>/dev/null || true
+            done
+
+            echo "Removing Guardian network..."
             podman network rm guardian-net 2>/dev/null || true
         fi
 
+        # Remove XDP/eBPF programs
+        echo "Removing XDP/eBPF programs..."
+        if command -v ip &>/dev/null; then
+            for iface in wlan0 eth0 br0; do
+                ip link set dev "$iface" xdp off 2>/dev/null || true
+            done
+        fi
+        rm -rf /opt/hookprobe/guardian/xdp
+
+        # Remove Threat Aggregator
+        echo "Removing Threat Aggregator..."
+        rm -rf /opt/hookprobe/guardian/aggregator
+
+        # Remove Attack Simulator
+        echo "Removing Attack Simulator..."
+        rm -rf /opt/hookprobe/guardian/simulator
+
         # Remove network interfaces
+        echo "Removing network interfaces..."
         for vlan in 10 20 30 40 50 60 70 80 999; do
             ip link delete "br${vlan}" 2>/dev/null || true
         done
         ip link delete br0 2>/dev/null || true
 
+        # Remove OVS bridges if present
+        if command -v ovs-vsctl &>/dev/null; then
+            echo "Removing OVS bridges..."
+            for br in $(ovs-vsctl list-br 2>/dev/null | grep -E "^(guardian|hp-)" || true); do
+                ovs-vsctl del-br "$br" 2>/dev/null || true
+            done
+        fi
+
         # Remove configurations
+        echo "Removing configuration files..."
         rm -f /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.vlan
         rm -f /etc/dnsmasq.d/guardian.conf
         rm -f /etc/nftables.d/guardian*.nft
         rm -f /etc/sysctl.d/99-guardian.conf
+
+        # Remove log directories
+        echo "Removing log directories..."
+        rm -rf /var/log/hookprobe/threats
+        rm -rf /var/log/zeek
+
+        # Remove Guardian installation directory
+        echo "Removing Guardian installation..."
         rm -rf /opt/hookprobe/guardian
 
+        echo ""
         echo -e "${GREEN}✓ Guardian cleanup complete${NC}"
+        echo ""
+        echo "The following may still be installed (shared components):"
+        echo "  - Podman container runtime"
+        echo "  - Open vSwitch"
+        echo "  - Python packages"
+        echo ""
+        echo "Run 'Complete Uninstall' (option 9) to remove everything."
     fi
 }
 

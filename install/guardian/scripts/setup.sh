@@ -388,8 +388,17 @@ install_suricata_container() {
         return 0
     fi
 
-    # Determine network interface to monitor
-    local MONITOR_IFACE="br0"
+    # Determine WAN interface to monitor (where malicious traffic originates)
+    # Priority: wlan0 (built-in WiFi as WAN), then eth0, then br0
+    local MONITOR_IFACE="wlan0"
+    if ip link show wlan0 &>/dev/null; then
+        MONITOR_IFACE="wlan0"
+    elif ip link show eth0 &>/dev/null; then
+        MONITOR_IFACE="eth0"
+    elif ip link show br0 &>/dev/null; then
+        MONITOR_IFACE="br0"
+    fi
+    log_info "Suricata will monitor interface: $MONITOR_IFACE"
 
     # Create systemd service for Suricata container (creates container on start)
     cat > /etc/systemd/system/guardian-suricata.service << EOF
@@ -605,8 +614,17 @@ install_zeek_container() {
     log_info "Pulling Zeek image..."
     podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
 
-    # Determine network interface to monitor
-    local MONITOR_IFACE="br0"
+    # Determine WAN interface to monitor (where malicious traffic originates)
+    # Priority: wlan0 (built-in WiFi as WAN), then eth0, then br0
+    local MONITOR_IFACE="wlan0"
+    if ip link show wlan0 &>/dev/null; then
+        MONITOR_IFACE="wlan0"
+    elif ip link show eth0 &>/dev/null; then
+        MONITOR_IFACE="eth0"
+    elif ip link show br0 &>/dev/null; then
+        MONITOR_IFACE="br0"
+    fi
+    log_info "Zeek will monitor interface: $MONITOR_IFACE"
 
     # Create Zeek local.zeek configuration
     mkdir -p /opt/hookprobe/guardian/zeek
@@ -2208,12 +2226,17 @@ enable_services() {
     systemctl enable nftables 2>/dev/null || true
     systemctl enable openvswitch-switch 2>/dev/null || systemctl enable openvswitch 2>/dev/null || true
 
-    # Container services
+    # Enable all Guardian security services
+    log_info "Enabling Guardian security stack..."
     systemctl enable guardian-suricata 2>/dev/null || true
+    systemctl enable guardian-zeek 2>/dev/null || true
     systemctl enable guardian-waf 2>/dev/null || true
+    systemctl enable guardian-xdp 2>/dev/null || true
+    systemctl enable guardian-aggregator 2>/dev/null || true
     systemctl enable guardian-neuro 2>/dev/null || true
     systemctl enable guardian-adguard 2>/dev/null || true
     systemctl enable guardian-qsecbit 2>/dev/null || true
+    systemctl enable guardian-webui 2>/dev/null || true
 
     log_info "Services enabled"
 }
@@ -2229,13 +2252,60 @@ start_services() {
     systemctl start hostapd
     systemctl start guardian-webui
 
-    # Start containers (may take a moment)
-    log_info "Starting security containers..."
+    # Start security containers and services
+    log_info "Starting security stack..."
+
+    # Core IDS/IPS
+    log_info "  - Starting Suricata IDS/IPS..."
     systemctl start guardian-suricata 2>/dev/null || true
+
+    # Network analysis
+    log_info "  - Starting Zeek Network Analysis..."
+    systemctl start guardian-zeek 2>/dev/null || true
+
+    # Web Application Firewall
+    log_info "  - Starting ModSecurity WAF..."
     systemctl start guardian-waf 2>/dev/null || true
-    systemctl start guardian-neuro 2>/dev/null || true
-    systemctl start guardian-adguard 2>/dev/null || true
+
+    # XDP/eBPF DDoS protection
+    log_info "  - Starting XDP DDoS Protection..."
+    systemctl start guardian-xdp 2>/dev/null || true
+
+    # Threat aggregator
+    log_info "  - Starting Threat Aggregator..."
+    systemctl start guardian-aggregator 2>/dev/null || true
+
+    # QSecBit agent
+    log_info "  - Starting QSecBit Agent..."
     systemctl start guardian-qsecbit 2>/dev/null || true
+
+    # Neuro protocol
+    log_info "  - Starting Neuro Protocol..."
+    systemctl start guardian-neuro 2>/dev/null || true
+
+    # AdGuard DNS (if enabled)
+    log_info "  - Starting AdGuard DNS..."
+    systemctl start guardian-adguard 2>/dev/null || true
+
+    # Wait a moment for containers to start
+    sleep 3
+
+    # Verify services are running
+    log_info "Verifying security stack status..."
+    local failed_services=""
+
+    for svc in guardian-suricata guardian-zeek guardian-waf guardian-xdp guardian-aggregator; do
+        if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+            failed_services="$failed_services $svc"
+        fi
+    done
+
+    if [ -n "$failed_services" ]; then
+        log_warn "Some services may need attention:$failed_services"
+        log_info "Check with: systemctl status <service-name>"
+    else
+        log_info "All security services started successfully"
+    fi
 
     log_info "Services started"
 }
