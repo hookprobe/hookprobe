@@ -5,7 +5,7 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.3.0
+Version: 5.4.0
 """
 
 import os
@@ -858,17 +858,19 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>HookProbe Guardian</title>
+    <title>HookProbe Guardian - Protection on the Move</title>
     <style>
         :root {
-            --hp-primary: #2563eb;
-            --hp-primary-dark: #1d4ed8;
+            --hp-primary: #F05B2D;
+            --hp-primary-dark: #d94d22;
             --hp-green: #10b981;
             --hp-amber: #f59e0b;
-            --hp-red: #ef4444;
-            --hp-dark: #1f2937;
-            --hp-light: #f3f4f6;
+            --hp-red: #8E1529;
+            --hp-dark: #0E162F;
+            --hp-light: #FEFDFF;
             --hp-border: #e5e7eb;
+            --hp-highlight: #F05B2D;
+            --hp-warning: #8E1529;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -878,13 +880,46 @@ HTML_TEMPLATE = '''
         }
 
         .header {
-            background: linear-gradient(135deg, var(--hp-dark) 0%, #374151 100%);
-            color: white;
-            padding: 20px;
+            background: linear-gradient(135deg, var(--hp-dark) 0%, #1a2847 100%);
+            color: #FEFDFF;
+            padding: 25px 20px;
             text-align: center;
         }
-        .header h1 { font-size: 24px; margin-bottom: 5px; }
-        .header .subtitle { font-size: 14px; opacity: 0.8; }
+        .header-content {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .header-logo {
+            width: 48px;
+            height: 48px;
+        }
+        .header-logo svg {
+            width: 100%;
+            height: 100%;
+            fill: #FEFDFF;
+        }
+        .header-text {
+            text-align: left;
+        }
+        .header h1 {
+            font-size: 26px;
+            margin-bottom: 4px;
+            color: #FEFDFF;
+        }
+        .header .tagline {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--hp-highlight);
+            margin-bottom: 2px;
+        }
+        .header .subtitle {
+            font-size: 13px;
+            opacity: 0.85;
+            color: #FEFDFF;
+        }
         .mode-badge {
             display: inline-block;
             padding: 4px 12px;
@@ -1219,8 +1254,22 @@ HTML_TEMPLATE = '''
 </head>
 <body>
     <div class="header">
-        <h1>HookProbe Guardian</h1>
-        <div class="subtitle">Portable SDN Security Gateway</div>
+        <div class="header-content">
+            <div class="header-logo">
+                <!-- HookProbe Logo SVG -->
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <path fill="#FEFDFF" d="M50 5C25.1 5 5 25.1 5 50s20.1 45 45 45 45-20.1 45-45S74.9 5 50 5zm0 80c-19.3 0-35-15.7-35-35s15.7-35 35-35 35 15.7 35 35-15.7 35-35 35z"/>
+                    <path fill="#FEFDFF" d="M50 20c-16.5 0-30 13.5-30 30s13.5 30 30 30 30-13.5 30-30-13.5-30-30-30zm0 50c-11 0-20-9-20-20s9-20 20-20 20 9 20 20-9 20-20 20z"/>
+                    <circle fill="#F05B2D" cx="50" cy="50" r="12"/>
+                    <path fill="#FEFDFF" d="M50 42c-4.4 0-8 3.6-8 8s3.6 8 8 8 8-3.6 8-8-3.6-8-8-8zm0 12c-2.2 0-4-1.8-4-4s1.8-4 4-4 4 1.8 4 4-1.8 4-4 4z"/>
+                </svg>
+            </div>
+            <div class="header-text">
+                <h1>HookProbe Guardian</h1>
+                <div class="tagline">Protection on the Move</div>
+                <div class="subtitle">Secure gateway with IDS/IPS, WAF, lite AI</div>
+            </div>
+        </div>
         <div class="mode-badge mode-{{ config.mode }}">
             {{ 'SDN Mode' if config.mode == 'sdn' else 'Basic Mode' }}
         </div>
@@ -1914,7 +1963,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.3.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.4.0 | Protection on the Move | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>
