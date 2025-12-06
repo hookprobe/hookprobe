@@ -1061,47 +1061,49 @@ def get_sdn_stats():
 
 
 def get_vpn_stats():
-    """Get WebSocket VPN statistics."""
+    """Get HTP file transfer statistics."""
     stats = {
         'connected': False,
         'mssp_host': 'mssp.hookprobe.com',
         'tunnel_state': 'disconnected',
-        'noise_handshake': False,
+        'htp_session': False,
         'rx_bytes': 0,
         'tx_bytes': 0,
         'rx_packets': 0,
         'tx_packets': 0,
         'last_activity': None,
         'uptime': None,
-        'allowed_paths': ['/home', '/opt/hookprobe', '/var/log/hookprobe'],
-        'active_sessions': 0,
+        'allowed_paths': ['/home', '/srv/files', '/var/log/guardian'],
+        'active_transfers': 0,
         'file_transfers': [],
+        'protocol': 'HTP',  # Using HTP instead of WebSocket
     }
 
-    # Check if VPN service is running
-    service_output, success = run_command('systemctl is-active guardian-vpn 2>/dev/null')
+    # Check if HTP service is running
+    service_output, success = run_command('systemctl is-active guardian-htp 2>/dev/null')
     if success and service_output.strip() == 'active':
         stats['connected'] = True
         stats['tunnel_state'] = 'connected'
+        stats['htp_session'] = True
 
-    # Get VPN state file if exists
-    vpn_state_file = Path('/opt/hookprobe/guardian/data/vpn_state.json')
-    if vpn_state_file.exists():
+    # Get HTP file transfer state file if exists
+    htp_state_file = Path('/opt/hookprobe/guardian/data/htp_file_state.json')
+    if htp_state_file.exists():
         try:
-            with open(vpn_state_file) as f:
-                vpn_state = json.load(f)
+            with open(htp_state_file) as f:
+                htp_state = json.load(f)
                 stats.update({
-                    'connected': vpn_state.get('connected', False),
-                    'tunnel_state': vpn_state.get('state', 'disconnected'),
-                    'noise_handshake': vpn_state.get('handshake_complete', False),
-                    'rx_bytes': vpn_state.get('rx_bytes', 0),
-                    'tx_bytes': vpn_state.get('tx_bytes', 0),
-                    'rx_packets': vpn_state.get('rx_packets', 0),
-                    'tx_packets': vpn_state.get('tx_packets', 0),
-                    'last_activity': vpn_state.get('last_activity'),
-                    'uptime': vpn_state.get('uptime'),
-                    'active_sessions': vpn_state.get('active_sessions', 0),
-                    'file_transfers': vpn_state.get('recent_transfers', [])[:10],
+                    'connected': htp_state.get('connected', False),
+                    'tunnel_state': htp_state.get('state', 'disconnected'),
+                    'htp_session': htp_state.get('session_active', False),
+                    'rx_bytes': htp_state.get('bytes_received', 0),
+                    'tx_bytes': htp_state.get('bytes_sent', 0),
+                    'rx_packets': htp_state.get('packets_received', 0),
+                    'tx_packets': htp_state.get('packets_sent', 0),
+                    'last_activity': htp_state.get('last_activity'),
+                    'uptime': htp_state.get('uptime'),
+                    'active_transfers': htp_state.get('active_transfers', 0),
+                    'file_transfers': htp_state.get('recent_transfers', [])[:10],
                 })
         except:
             pass
@@ -1113,9 +1115,9 @@ def get_vpn_stats():
             import yaml
             with open(config_file) as f:
                 config = yaml.safe_load(f)
-                if config and 'websocket_vpn' in config:
-                    vpn_config = config['websocket_vpn']
-                    stats['allowed_paths'] = vpn_config.get('allowed_paths', stats['allowed_paths'])
+                if config and 'htp_file' in config:
+                    htp_config = config['htp_file']
+                    stats['allowed_paths'] = htp_config.get('allowed_paths', stats['allowed_paths'])
                 if config and 'htp' in config:
                     stats['mssp_host'] = config['htp'].get('mssp_host', stats['mssp_host'])
         except:
@@ -2593,21 +2595,21 @@ HTML_TEMPLATE = '''
             {% endif %}
         </div>
 
-        <!-- VPN Tab -->
+        <!-- VPN Tab (HTP File Transfer) -->
         <div id="vpn" class="tab-content">
             <div class="card">
-                <h2>WebSocket VPN Status</h2>
-                <p style="color: #6b7280; margin-bottom: 20px;">Secure file access via MSSP using Noise Protocol encryption</p>
+                <h2>HTP File Transfer Status</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">Secure file access via MSSP using HTP (weight-bound encryption + PoSF authentication)</p>
                 <div class="status-grid">
                     <div class="status-item">
                         <div class="value" style="color: {% if vpn_stats.connected %}var(--hp-green){% else %}var(--hp-red){% endif %};" id="vpn-state">
                             {% if vpn_stats.connected %}Connected{% else %}Disconnected{% endif %}
                         </div>
-                        <div class="label">Tunnel State</div>
+                        <div class="label">HTP Session</div>
                     </div>
                     <div class="status-item">
-                        <div class="value" id="vpn-sessions">{{ vpn_stats.active_sessions }}</div>
-                        <div class="label">Active Sessions</div>
+                        <div class="value" id="vpn-sessions">{{ vpn_stats.active_transfers }}</div>
+                        <div class="label">Active Transfers</div>
                     </div>
                     <div class="status-item">
                         <div class="value" id="vpn-rx">{{ (vpn_stats.rx_bytes / 1024 / 1024)|round(2) }} MB</div>
@@ -2628,14 +2630,14 @@ HTML_TEMPLATE = '''
                         <div class="value">{{ vpn_stats.mssp_host }}</div>
                     </div>
                     <div class="param-item">
-                        <div class="label">Encryption</div>
-                        <div class="value">Noise Protocol (XX Pattern)</div>
+                        <div class="label">Protocol</div>
+                        <div class="value">HTP (Neuro Protocol)</div>
                     </div>
                     <div class="param-item">
-                        <div class="label">Handshake</div>
+                        <div class="label">HTP Session</div>
                         <div class="value">
-                            <span class="badge {% if vpn_stats.noise_handshake %}badge-success{% else %}badge-warning{% endif %}">
-                                {% if vpn_stats.noise_handshake %}Complete{% else %}Pending{% endif %}
+                            <span class="badge {% if vpn_stats.htp_session %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if vpn_stats.htp_session %}Active{% else %}Inactive{% endif %}
                             </span>
                         </div>
                     </div>
@@ -2656,7 +2658,7 @@ HTML_TEMPLATE = '''
 
             <div class="card">
                 <h2>Allowed Paths</h2>
-                <p style="color: #6b7280; margin-bottom: 15px;">Files accessible through the VPN tunnel</p>
+                <p style="color: #6b7280; margin-bottom: 15px;">Files accessible through HTP file transfer</p>
                 <div style="display: flex; flex-wrap: wrap; gap: 10px;">
                     {% for path in vpn_stats.allowed_paths %}
                     <div style="background: #1f2937; padding: 8px 15px; border-radius: 6px;">
@@ -3393,7 +3395,7 @@ def api_sdn():
 
 @app.route('/api/vpn')
 def api_vpn():
-    """Get WebSocket VPN statistics."""
+    """Get HTP file transfer statistics."""
     return jsonify(get_vpn_stats())
 
 

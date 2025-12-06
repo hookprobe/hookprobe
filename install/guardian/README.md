@@ -19,10 +19,10 @@ Guardian transforms Raspberry Pi 4/5 into a powerful software-defined networking
 - **SDN/VLAN Segmentation** — Isolate IoT devices by category
 - **L2-L7 Threat Detection** — Full OSI stack threat monitoring
 - **Mobile Network Protection** — Hotel/public WiFi security
-- **WebSocket VPN** — Secure file access via MSSP (Noise Protocol encryption)
+- **HTP File Transfer** — Secure file access via MSSP (weight-bound encryption)
 - **MAC-Based Assignment** — Automatic VLAN assignment via RADIUS
 - **Multi-AP Support** — Up to 4 access points with USB WiFi adapters
-- **HTP Communication** — Secure transport to MSSP cloud (mssp.hookprobe.com)
+- **HTP Protocol** — Secure transport to MSSP cloud (mssp.hookprobe.com)
 - **OpenFlow SDN** — Software-defined networking with OVS
 - **Unified Configuration** — Single YAML config at `/etc/guardian/guardian.yaml`
 - **Portable Security** — Take your network security anywhere
@@ -211,13 +211,13 @@ Guardian                                    mssp.hookprobe.com
 - Automatic reconnection
 - Bandwidth-adaptive streaming
 
-### WebSocket VPN (File Access via MSSP)
+### HTP File Transfer (File Access via MSSP)
 
-Guardian provides secure remote file access through the MSSP using WebSocket VPN with Noise Protocol encryption:
+Guardian provides secure remote file access through the MSSP using HTP (HookProbe Transport Protocol) with weight-bound encryption:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                  WEBSOCKET VPN ARCHITECTURE                       │
+│                  HTP FILE TRANSFER ARCHITECTURE                   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │   [User Browser]                                                  │
@@ -226,7 +226,7 @@ Guardian provides secure remote file access through the MSSP using WebSocket VPN
 │        ▼                                                          │
 │   ┌─────────────┐                                                │
 │   │    MSSP     │  (Relay only - cannot read content)            │
-│   │  WebSocket  │                                                │
+│   │    HTP      │                                                │
 │   │    Relay    │                                                │
 │   └──────┬──────┘                                                │
 │          │                                                        │
@@ -338,7 +338,7 @@ sudo ./install/guardian/scripts/setup.sh
 - OpenFlow SDN Controller with OVS
 - VLAN Segmentation (IoT Device Isolation)
 - RADIUS MAC Authentication
-- WebSocket VPN via MSSP (Noise Protocol)
+- HTP File Transfer via MSSP (weight-bound encryption)
 - HTP Secure Communication
 
 ### Configuration
@@ -355,7 +355,7 @@ sudo nano /etc/guardian/guardian.yaml
 - `vlans:` — VLAN definitions (10-80 for IoT, 999 for quarantine)
 - `openflow:` — SDN controller settings
 - `htp:` — MSSP connection settings
-- `websocket_vpn:` — VPN tunnel configuration
+- `htp_file:` — HTP file transfer configuration
 - `security:` — Threat detection thresholds
 - `webui:` — Web interface settings
 
@@ -366,7 +366,7 @@ sudo nano /etc/guardian/guardian.yaml
 sudo apt update
 sudo apt install -y hostapd dnsmasq bridge-utils vlan \
     freeradius python3-flask nftables openvswitch-switch \
-    python3-pyyaml python3-websockets python3-cryptography
+    python3-pyyaml python3-cryptography
 
 # 2. Configure hostapd with dynamic VLAN
 sudo cp install/guardian/config/hostapd.conf /etc/hostapd/
@@ -426,7 +426,7 @@ Guardian includes a comprehensive web UI for monitoring and configuration:
 - **OpenFlow Rules** — Active flow count
 
 #### VPN Tab
-- **WebSocket VPN Status** — Connection state to MSSP
+- **HTP File Transfer Status** — Connection state to MSSP
 - **Noise Protocol Handshake** — Encryption status
 - **Traffic Statistics** — RX/TX bytes and packets
 - **Active Sessions** — Current file access sessions
@@ -486,12 +486,13 @@ htp:
   mssp_host: "mssp.hookprobe.com"
   mssp_port: 8443
 
-websocket_vpn:
+htp_file:
   enabled: true
-  noise_pattern: "XX"
+  chunk_size: 8192
+  verify_hash: true
   allowed_paths:
     - "/home"
-    - "/opt/hookprobe"
+    - "/srv/files"
 
 security:
   threat_detection:
@@ -695,7 +696,7 @@ sudo ovs-ofctl dump-flows br-guardian
 | `radius_integration.py` | RADIUS/FreeRADIUS MAC authentication |
 | `network_segmentation.py` | nftables-based VLAN isolation |
 | `config.py` | Unified configuration management |
-| `websocket_vpn.py` | WebSocket VPN with Noise Protocol |
+| `htp_file.py` | HTP file transfer with weight-bound encryption |
 
 ---
 
