@@ -53,7 +53,7 @@ def run_command(cmd, timeout=30):
 
 
 def get_mode():
-    """Get current Guardian mode (always unified with SDN)."""
+    """Get current Guardian mode."""
     return 'guardian'
 
 
@@ -961,103 +961,89 @@ def get_mobile_protection_data():
     return data
 
 
-def get_sdn_stats():
-    """Get SDN-specific statistics with VLAN details and device info."""
-    stats = {
-        'vlans': [],
-        'devices': [],
-        'total_devices': 0,
-        'quarantined': 0,
-        'ovs_bridges': [],
-        'flows': 0,
-    }
+def get_connected_clients():
+    """Get list of clients connected to the Guardian hotspot."""
+    clients = []
 
-    # VLAN configuration from config file or defaults
-    vlan_config = {
-        10: {'name': 'Smart Lights', 'category': 'iot', 'color': '#fbbf24'},
-        20: {'name': 'Thermostats', 'category': 'iot', 'color': '#34d399'},
-        30: {'name': 'Cameras', 'category': 'security', 'color': '#f87171'},
-        40: {'name': 'Voice Assistants', 'category': 'iot', 'color': '#a78bfa'},
-        50: {'name': 'Appliances', 'category': 'iot', 'color': '#60a5fa'},
-        60: {'name': 'Entertainment', 'category': 'media', 'color': '#fb7185'},
-        70: {'name': 'Robots', 'category': 'iot', 'color': '#4ade80'},
-        80: {'name': 'Sensors', 'category': 'iot', 'color': '#22d3d8'},
-        999: {'name': 'Quarantine', 'category': 'quarantine', 'color': '#ef4444'},
-    }
+    # Get the hostapd interface
+    hostapd_iface = get_hostapd_interface()
+    if not hostapd_iface:
+        hostapd_iface = 'wlan1'  # Default fallback
 
-    # Get VLAN interfaces
-    for vlan_id, vlan_info in vlan_config.items():
-        iface_name = f'vlan{vlan_id}' if vlan_id < 999 else 'vlan999'
-        state_output, _ = run_command(f"ip -br link show {iface_name} 2>/dev/null")
-        state = 'DOWN'
-        if state_output:
-            parts = state_output.split()
-            if len(parts) >= 2:
-                state = parts[1]
+    # Method 1: Get connected stations from hostapd_cli
+    station_output, success = run_command(f'hostapd_cli -i {hostapd_iface} all_sta 2>/dev/null')
+    connected_macs = set()
 
-        # Count devices on this VLAN from DHCP leases
-        device_count = 0
-        devices_on_vlan = []
-        lease_output, _ = run_command(f'grep "192.168.{vlan_id if vlan_id < 100 else 99}\\." /var/lib/misc/dnsmasq.leases 2>/dev/null')
-        if lease_output:
-            for line in lease_output.strip().split('\n'):
-                if line:
-                    device_count += 1
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        devices_on_vlan.append({
-                            'mac': parts[1],
-                            'ip': parts[2],
-                            'hostname': parts[3] if len(parts) > 3 else 'unknown',
-                            'vlan': vlan_id
-                        })
+    if success and station_output:
+        current_mac = None
+        current_info = {}
+        for line in station_output.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # MAC address line (starts with hex)
+            if len(line) == 17 and line.count(':') == 5:
+                if current_mac:
+                    connected_macs.add(current_mac)
+                current_mac = line.lower()
+                current_info = {'mac': current_mac, 'connected_time': 'Connected'}
+            elif '=' in line and current_mac:
+                key, value = line.split('=', 1)
+                if key == 'connected_time':
+                    # Convert seconds to human readable
+                    try:
+                        secs = int(value)
+                        if secs < 60:
+                            current_info['connected_time'] = f'{secs}s'
+                        elif secs < 3600:
+                            current_info['connected_time'] = f'{secs // 60}m {secs % 60}s'
+                        else:
+                            current_info['connected_time'] = f'{secs // 3600}h {(secs % 3600) // 60}m'
+                    except:
+                        pass
 
-        stats['vlans'].append({
-            'id': vlan_id,
-            'name': vlan_info['name'],
-            'category': vlan_info['category'],
-            'color': vlan_info['color'],
-            'interface': iface_name,
-            'state': state,
-            'devices': device_count,
-            'subnet': f'192.168.{vlan_id if vlan_id < 100 else 99}.0/24'
-        })
+        if current_mac:
+            connected_macs.add(current_mac)
 
-        stats['devices'].extend(devices_on_vlan)
-        if vlan_id == 999:
-            stats['quarantined'] = device_count
+    # Method 2: Get DHCP leases for IP and hostname info
+    lease_output, _ = run_command('cat /var/lib/misc/dnsmasq.leases 2>/dev/null')
+    lease_info = {}
 
-    stats['total_devices'] = len(stats['devices'])
+    if lease_output:
+        for line in lease_output.strip().split('\n'):
+            if line:
+                parts = line.split()
+                if len(parts) >= 4:
+                    mac = parts[1].lower()
+                    lease_info[mac] = {
+                        'ip': parts[2],
+                        'hostname': parts[3] if parts[3] != '*' else '',
+                        'name': parts[4] if len(parts) > 4 and parts[4] != '*' else ''
+                    }
 
-    # Get OVS bridge info
-    ovs_output, success = run_command('ovs-vsctl list-br 2>/dev/null')
-    if success and ovs_output:
-        for br in ovs_output.strip().split('\n'):
-            if br:
-                port_output, _ = run_command(f'ovs-vsctl list-ports {br} 2>/dev/null')
-                ports = port_output.strip().split('\n') if port_output else []
-                stats['ovs_bridges'].append({
-                    'name': br,
-                    'ports': [p for p in ports if p]
-                })
+    # Combine information - prioritize connected stations from hostapd
+    for mac in connected_macs:
+        client = {
+            'mac': mac,
+            'ip': lease_info.get(mac, {}).get('ip', 'N/A'),
+            'hostname': lease_info.get(mac, {}).get('hostname', ''),
+            'name': lease_info.get(mac, {}).get('name', ''),
+            'connected_time': 'Connected'
+        }
+        clients.append(client)
 
-    # Get flow count
-    flow_output, _ = run_command('ovs-ofctl dump-flows br-guardian 2>/dev/null | wc -l')
-    stats['flows'] = int(flow_output) - 1 if flow_output.isdigit() else 0
+    # If hostapd_cli didn't return stations, fall back to DHCP leases
+    if not clients and lease_info:
+        for mac, info in lease_info.items():
+            clients.append({
+                'mac': mac,
+                'ip': info.get('ip', 'N/A'),
+                'hostname': info.get('hostname', ''),
+                'name': info.get('name', ''),
+                'connected_time': 'DHCP Lease'
+            })
 
-    # Get traffic stats per VLAN (if available)
-    for vlan in stats['vlans']:
-        traffic_output, _ = run_command(f"ip -s link show {vlan['interface']} 2>/dev/null")
-        if traffic_output:
-            rx_match = re.search(r'RX:.*?(\d+)', traffic_output, re.DOTALL)
-            tx_match = re.search(r'TX:.*?(\d+)', traffic_output, re.DOTALL)
-            vlan['rx_bytes'] = int(rx_match.group(1)) if rx_match else 0
-            vlan['tx_bytes'] = int(tx_match.group(1)) if tx_match else 0
-        else:
-            vlan['rx_bytes'] = 0
-            vlan['tx_bytes'] = 0
-
-    return stats
+    return clients
 
 
 def get_vpn_stats():
@@ -1570,7 +1556,7 @@ HTML_TEMPLATE = '''
     <div class="tabs">
         <div class="tab active" data-tab="dashboard">Dashboard</div>
         <div class="tab" data-tab="security">Security</div>
-        <div class="tab" data-tab="sdn">SDN</div>
+        <div class="tab" data-tab="clients">Clients</div>
         <div class="tab" data-tab="vpn">VPN</div>
         <div class="tab" data-tab="wifi">WiFi</div>
         <div class="tab" data-tab="system">System</div>
@@ -2467,76 +2453,26 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
-        <!-- SDN Tab -->
-        <div id="sdn" class="tab-content">
+        <!-- Clients Tab -->
+        <div id="clients" class="tab-content">
             <div class="card">
-                <h2>VLAN Segmentation</h2>
-                <p style="color: #6b7280; margin-bottom: 20px;">IoT device isolation using dynamic VLAN assignment</p>
+                <h2>Connected Clients</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">Manage devices connected to the Guardian hotspot</p>
                 <div class="status-grid">
                     <div class="status-item">
-                        <div class="value" id="sdn-total-vlans">{{ sdn_stats.vlans|length if sdn_stats else 0 }}</div>
-                        <div class="label">Active VLANs</div>
+                        <div class="value" id="clients-total">{{ clients|length if clients else 0 }}</div>
+                        <div class="label">Connected Clients</div>
                     </div>
                     <div class="status-item">
-                        <div class="value" id="sdn-total-devices">{{ sdn_stats.total_devices if sdn_stats else 0 }}</div>
-                        <div class="label">Total Devices</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value" style="color: var(--hp-amber);" id="sdn-quarantined">{{ sdn_stats.quarantined if sdn_stats else 0 }}</div>
-                        <div class="label">Quarantined</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value" id="sdn-flows">{{ sdn_stats.flows if sdn_stats else 0 }}</div>
-                        <div class="label">OpenFlow Rules</div>
+                        <div class="value" style="color: var(--hp-green);" id="clients-active">{{ clients|length if clients else 0 }}</div>
+                        <div class="label">Active</div>
                     </div>
                 </div>
             </div>
 
             <div class="card">
-                <h2>VLAN Overview</h2>
-                <div style="overflow-x: auto;">
-                    <table class="device-table">
-                        <thead>
-                            <tr>
-                                <th>VLAN ID</th>
-                                <th>Name</th>
-                                <th>Subnet</th>
-                                <th>Devices</th>
-                                <th>Traffic (RX/TX)</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="vlan-table-body">
-                            {% if sdn_stats and sdn_stats.vlans %}
-                            {% for vlan in sdn_stats.vlans %}
-                            <tr>
-                                <td>
-                                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {{ vlan.color }}; margin-right: 8px;"></span>
-                                    {{ vlan.id }}
-                                </td>
-                                <td>{{ vlan.name }}</td>
-                                <td><code>{{ vlan.subnet }}</code></td>
-                                <td>{{ vlan.devices }}</td>
-                                <td>{{ (vlan.rx_bytes / 1024)|round(1) }}KB / {{ (vlan.tx_bytes / 1024)|round(1) }}KB</td>
-                                <td>
-                                    <span class="badge {% if vlan.state == 'UP' %}badge-success{% else %}badge-warning{% endif %}">
-                                        {{ vlan.state }}
-                                    </span>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                            {% else %}
-                            <tr>
-                                <td colspan="6" style="text-align: center; color: #6b7280;">No VLANs configured</td>
-                            </tr>
-                            {% endif %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>Connected Devices</h2>
+                <h2>Client List</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">Click "Disconnect" to remove a client from the network</p>
                 <div style="overflow-x: auto;">
                     <table class="device-table">
                         <thead>
@@ -2544,55 +2480,35 @@ HTML_TEMPLATE = '''
                                 <th>MAC Address</th>
                                 <th>IP Address</th>
                                 <th>Hostname</th>
-                                <th>VLAN</th>
+                                <th>Connected</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="device-table-body">
-                            {% if sdn_stats and sdn_stats.devices %}
-                            {% for device in sdn_stats.devices %}
-                            <tr>
-                                <td><code>{{ device.mac }}</code></td>
-                                <td>{{ device.ip }}</td>
-                                <td>{{ device.hostname }}</td>
+                        <tbody id="clients-table-body">
+                            {% if clients %}
+                            {% for client in clients %}
+                            <tr id="client-row-{{ client.mac|replace(':', '-') }}">
+                                <td><code>{{ client.mac }}</code></td>
+                                <td>{{ client.ip }}</td>
+                                <td>{{ client.hostname or client.name or 'Unknown' }}</td>
+                                <td>{{ client.connected_time or 'N/A' }}</td>
                                 <td>
-                                    {% for vlan in sdn_stats.vlans if vlan.id == device.vlan %}
-                                    <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: {{ vlan.color }}; margin-right: 5px;"></span>
-                                    {{ vlan.name }} ({{ device.vlan }})
-                                    {% endfor %}
-                                </td>
-                                <td>
-                                    {% if device.vlan == 999 %}
-                                    <button class="btn btn-sm btn-primary" onclick="approveDevice('{{ device.mac }}')">Approve</button>
-                                    {% else %}
-                                    <button class="btn btn-sm btn-danger" onclick="quarantineDevice('{{ device.mac }}')">Quarantine</button>
-                                    {% endif %}
+                                    <button class="btn btn-sm btn-danger" onclick="disconnectClient('{{ client.mac }}', '{{ client.hostname or client.name or client.mac }}')">Disconnect</button>
                                 </td>
                             </tr>
                             {% endfor %}
                             {% else %}
-                            <tr>
-                                <td colspan="5" style="text-align: center; color: #6b7280;">No devices connected</td>
+                            <tr id="no-clients-row">
+                                <td colspan="5" style="text-align: center; color: #6b7280;">No clients connected</td>
                             </tr>
                             {% endif %}
                         </tbody>
                     </table>
                 </div>
-            </div>
-
-            {% if sdn_stats and sdn_stats.ovs_bridges %}
-            <div class="card">
-                <h2>Open vSwitch Bridges</h2>
-                <div class="param-grid">
-                    {% for bridge in sdn_stats.ovs_bridges %}
-                    <div class="param-item">
-                        <div class="label">{{ bridge.name }}</div>
-                        <div class="value">{{ bridge.ports|length }} ports</div>
-                    </div>
-                    {% endfor %}
+                <div style="margin-top: 15px;">
+                    <button class="btn btn-secondary" onclick="refreshClients()">Refresh Client List</button>
                 </div>
             </div>
-            {% endif %}
         </div>
 
         <!-- VPN Tab (HTP File Transfer) -->
@@ -2774,21 +2690,6 @@ HTML_TEMPLATE = '''
                 </form>
             </div>
 
-            {% if config.mode == 'sdn' and sdn_stats %}
-            <div class="card">
-                <h2>SDN Status</h2>
-                <div class="status-grid">
-                    <div class="status-item">
-                        <div class="value">{{ sdn_stats.vlans|length }}</div>
-                        <div class="label">Active VLANs</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value">{{ sdn_stats.devices }}</div>
-                        <div class="label">Total Devices</div>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
         </div>
     </div>
 
@@ -2943,22 +2844,25 @@ HTML_TEMPLATE = '''
                 });
         }
 
-        // SDN Device Management
-        function approveDevice(mac) {
-            if (!confirm(`Approve device ${mac} and assign to appropriate VLAN?`)) return;
+        // Client Management
+        function disconnectClient(mac, name) {
+            if (!confirm(`Disconnect client "${name}" (${mac}) from the network?`)) return;
 
-            fetch(`/api/sdn/device/${encodeURIComponent(mac)}`, {
+            fetch(`/api/clients/${encodeURIComponent(mac)}/disconnect`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'approve' })
+                headers: { 'Content-Type': 'application/json' }
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
                     alert(data.message);
-                    location.reload();
+                    // Remove the row from the table
+                    const row = document.getElementById('client-row-' + mac.replace(/:/g, '-'));
+                    if (row) row.remove();
+                    // Update client count
+                    refreshClients();
                 } else {
-                    alert('Error: ' + (data.error || 'Failed to approve device'));
+                    alert('Error: ' + (data.error || 'Failed to disconnect client'));
                 }
             })
             .catch(error => {
@@ -2966,41 +2870,35 @@ HTML_TEMPLATE = '''
             });
         }
 
-        function quarantineDevice(mac) {
-            if (!confirm(`Move device ${mac} to quarantine VLAN?`)) return;
-
-            fetch(`/api/sdn/device/${encodeURIComponent(mac)}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'quarantine' })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert(data.message);
-                    location.reload();
-                } else {
-                    alert('Error: ' + (data.error || 'Failed to quarantine device'));
-                }
-            })
-            .catch(error => {
-                alert('Error: ' + error.message);
-            });
-        }
-
-        // Refresh SDN Stats
-        function refreshSdnStats() {
-            fetch('/api/sdn')
+        // Refresh Clients List
+        function refreshClients() {
+            fetch('/api/clients')
                 .then(response => response.json())
                 .then(data => {
                     if (data) {
-                        document.getElementById('sdn-total-vlans').textContent = data.vlans ? data.vlans.length : 0;
-                        document.getElementById('sdn-total-devices').textContent = data.total_devices || 0;
-                        document.getElementById('sdn-quarantined').textContent = data.quarantined || 0;
-                        document.getElementById('sdn-flows').textContent = data.flows || 0;
+                        document.getElementById('clients-total').textContent = data.length || 0;
+                        document.getElementById('clients-active').textContent = data.length || 0;
+
+                        // Update table
+                        const tbody = document.getElementById('clients-table-body');
+                        if (data.length === 0) {
+                            tbody.innerHTML = '<tr id="no-clients-row"><td colspan="5" style="text-align: center; color: #6b7280;">No clients connected</td></tr>';
+                        } else {
+                            tbody.innerHTML = data.map(client => `
+                                <tr id="client-row-${client.mac.replace(/:/g, '-')}">
+                                    <td><code>${client.mac}</code></td>
+                                    <td>${client.ip}</td>
+                                    <td>${client.hostname || client.name || 'Unknown'}</td>
+                                    <td>${client.connected_time || 'N/A'}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-danger" onclick="disconnectClient('${client.mac}', '${client.hostname || client.name || client.mac}')">Disconnect</button>
+                                    </td>
+                                </tr>
+                            `).join('');
+                        }
                     }
                 })
-                .catch(error => console.error('Error fetching SDN stats:', error));
+                .catch(error => console.error('Error fetching clients:', error));
         }
 
         // Refresh VPN Stats
@@ -3020,8 +2918,8 @@ HTML_TEMPLATE = '''
                 .catch(error => console.error('Error fetching VPN stats:', error));
         }
 
-        // Auto-refresh SDN and VPN stats every 10 seconds
-        setInterval(refreshSdnStats, 10000);
+        // Auto-refresh clients and VPN stats every 10 seconds
+        setInterval(refreshClients, 10000);
         setInterval(refreshVpnStats, 10000);
 
         // Run Security Test
@@ -3263,7 +3161,7 @@ def serve_logo():
 def index():
     config = get_current_config()
     status = get_status()
-    sdn_stats = get_sdn_stats()
+    clients = get_connected_clients()
     vpn_stats = get_vpn_stats()
     containers = get_container_status()
     qsecbit = get_qsecbit_data()
@@ -3274,7 +3172,7 @@ def index():
         config=config,
         status=status,
         networks=[],
-        sdn_stats=sdn_stats,
+        clients=clients,
         vpn_stats=vpn_stats,
         containers=containers,
         qsecbit=qsecbit,
@@ -3386,258 +3284,52 @@ def api_scan():
     return jsonify(scan_wifi())
 
 
-@app.route('/api/sdn')
-def api_sdn():
-    """Get SDN/VLAN statistics."""
-    stats = get_sdn_stats()
-    return jsonify(stats)
+@app.route('/api/clients')
+def api_clients():
+    """Get connected clients list."""
+    clients = get_connected_clients()
+    return jsonify(clients)
+
+
+@app.route('/api/clients/<mac>/disconnect', methods=['POST'])
+def api_client_disconnect(mac):
+    """Disconnect a client from the network by MAC address."""
+    # Normalize MAC address
+    mac = mac.lower().replace('-', ':')
+
+    # Get the hostapd interface
+    hostapd_iface = get_hostapd_interface()
+    if not hostapd_iface:
+        hostapd_iface = 'wlan1'
+
+    # Use hostapd_cli to deauthenticate the client
+    output, success = run_command(f'hostapd_cli -i {hostapd_iface} deauthenticate {mac} 2>/dev/null')
+
+    if success or 'OK' in output:
+        return jsonify({
+            'success': True,
+            'message': f'Client {mac} has been disconnected'
+        })
+
+    # Try alternative method using iw (for stations not via hostapd)
+    output2, success2 = run_command(f'iw dev {hostapd_iface} station del {mac} 2>/dev/null')
+
+    if success2:
+        return jsonify({
+            'success': True,
+            'message': f'Client {mac} has been disconnected'
+        })
+
+    return jsonify({
+        'success': False,
+        'error': f'Failed to disconnect client {mac}. Client may have already disconnected.'
+    }), 400
 
 
 @app.route('/api/vpn')
 def api_vpn():
     """Get HTP file transfer statistics."""
     return jsonify(get_vpn_stats())
-
-
-# ============================================================================
-# MAC-to-VLAN Database Management
-# ============================================================================
-
-MAC_VLAN_DB = Path('/etc/guardian/mac_vlan.json')
-FREERADIUS_USERS = Path('/etc/freeradius/3.0/mods-config/files/authorize')
-
-def load_mac_db():
-    """Load MAC-to-VLAN database."""
-    if MAC_VLAN_DB.exists():
-        try:
-            with open(MAC_VLAN_DB) as f:
-                return json.load(f)
-        except:
-            pass
-    return {
-        'version': '1.0',
-        'default_vlan': 999,
-        'vlans': {
-            '10': {'name': 'Smart Lights'},
-            '20': {'name': 'Thermostats'},
-            '30': {'name': 'Cameras'},
-            '40': {'name': 'Voice Assistants'},
-            '50': {'name': 'Appliances'},
-            '60': {'name': 'Entertainment'},
-            '70': {'name': 'Robots'},
-            '80': {'name': 'Sensors'},
-            '100': {'name': 'Trusted'},
-            '999': {'name': 'Quarantine'}
-        },
-        'devices': {}
-    }
-
-def save_mac_db(db):
-    """Save MAC-to-VLAN database and update FreeRADIUS."""
-    try:
-        MAC_VLAN_DB.parent.mkdir(parents=True, exist_ok=True)
-        with open(MAC_VLAN_DB, 'w') as f:
-            json.dump(db, f, indent=2)
-
-        # Update FreeRADIUS users file
-        update_freeradius_users(db)
-        return True
-    except Exception as e:
-        print(f"Error saving MAC DB: {e}")
-        return False
-
-def update_freeradius_users(db):
-    """Update FreeRADIUS authorize file with MAC entries."""
-    try:
-        entries = []
-        entries.append("# HookProbe Guardian - Auto-generated MAC entries")
-        entries.append("# Do not edit manually - managed by Guardian web UI")
-        entries.append("")
-
-        # Add device entries (before DEFAULT)
-        for mac, info in db.get('devices', {}).items():
-            vlan = info.get('vlan', 999)
-            name = info.get('name', 'Unknown')
-            mac_normalized = mac.lower()
-            entries.append(f"# {name}")
-            entries.append(f'{mac_normalized} Cleartext-Password := "{mac_normalized}"')
-            entries.append(f"        Tunnel-Type = VLAN,")
-            entries.append(f"        Tunnel-Medium-Type = IEEE-802,")
-            entries.append(f"        Tunnel-Private-Group-Id = {vlan}")
-            entries.append("")
-
-        # Add DEFAULT entry (catches all unregistered devices → VLAN 999)
-        entries.append("# DEFAULT: Unregistered devices go to quarantine (VLAN 999)")
-        entries.append('DEFAULT Cleartext-Password := "%{User-Name}"')
-        entries.append("        Tunnel-Type = VLAN,")
-        entries.append("        Tunnel-Medium-Type = IEEE-802,")
-        entries.append("        Tunnel-Private-Group-Id = 999")
-
-        # Write to FreeRADIUS users file
-        if FREERADIUS_USERS.parent.exists():
-            with open(FREERADIUS_USERS, 'w') as f:
-                f.write('\n'.join(entries))
-
-            # Reload FreeRADIUS to apply changes
-            run_command('systemctl reload freeradius 2>/dev/null || true')
-
-        return True
-    except Exception as e:
-        print(f"Error updating FreeRADIUS: {e}")
-        return False
-
-def normalize_mac(mac):
-    """Normalize MAC address to lowercase colon-separated format."""
-    mac = mac.lower().replace('-', ':').replace('.', ':')
-    # Handle formats like aabbccddeeff
-    if ':' not in mac and len(mac) == 12:
-        mac = ':'.join(mac[i:i+2] for i in range(0, 12, 2))
-    return mac
-
-
-@app.route('/api/vlans')
-def api_vlans():
-    """Get available VLANs."""
-    db = load_mac_db()
-    return jsonify(db.get('vlans', {}))
-
-
-@app.route('/api/devices')
-def api_devices():
-    """Get all registered devices with VLAN assignments."""
-    db = load_mac_db()
-    devices = []
-
-    for mac, info in db.get('devices', {}).items():
-        devices.append({
-            'mac': mac,
-            'name': info.get('name', 'Unknown'),
-            'vlan': info.get('vlan', 999),
-            'vlan_name': db.get('vlans', {}).get(str(info.get('vlan', 999)), {}).get('name', 'Unknown'),
-            'added': info.get('added', ''),
-            'last_seen': info.get('last_seen', '')
-        })
-
-    return jsonify(devices)
-
-
-@app.route('/api/devices/<mac>', methods=['GET'])
-def api_device_get(mac):
-    """Get device info."""
-    mac = normalize_mac(mac)
-    db = load_mac_db()
-
-    if mac in db.get('devices', {}):
-        info = db['devices'][mac]
-        return jsonify({
-            'mac': mac,
-            'name': info.get('name', 'Unknown'),
-            'vlan': info.get('vlan', 999),
-            'vlan_name': db.get('vlans', {}).get(str(info.get('vlan', 999)), {}).get('name', 'Unknown')
-        })
-
-    return jsonify({
-        'mac': mac,
-        'name': 'Unknown',
-        'vlan': 999,
-        'vlan_name': 'Quarantine',
-        'registered': False
-    })
-
-
-@app.route('/api/devices/<mac>', methods=['DELETE'])
-def api_device_delete(mac):
-    """Remove device from database (returns to quarantine)."""
-    mac = normalize_mac(mac)
-    db = load_mac_db()
-
-    if mac in db.get('devices', {}):
-        del db['devices'][mac]
-        if save_mac_db(db):
-            return jsonify({'success': True, 'message': f'Device {mac} removed (now in quarantine)'})
-
-    return jsonify({'error': 'Device not found or failed to remove'}), 404
-
-
-@app.route('/api/sdn/device/<mac>', methods=['POST'])
-def api_sdn_device(mac):
-    """Update device VLAN assignment."""
-    action = request.form.get('action') or (request.json.get('action') if request.is_json else None)
-    vlan = request.form.get('vlan') or (request.json.get('vlan') if request.is_json else None)
-    name = request.form.get('name') or (request.json.get('name') if request.is_json else None)
-
-    if not action:
-        return jsonify({'error': 'Action required (approve/quarantine/assign)'}), 400
-
-    # Normalize MAC address
-    mac = normalize_mac(mac)
-    db = load_mac_db()
-
-    import time
-    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-
-    if action == 'quarantine':
-        # Move device to quarantine VLAN (999)
-        if mac in db.get('devices', {}):
-            db['devices'][mac]['vlan'] = 999
-            db['devices'][mac]['last_seen'] = timestamp
-        else:
-            db.setdefault('devices', {})[mac] = {
-                'name': name or 'Unknown',
-                'vlan': 999,
-                'added': timestamp,
-                'last_seen': timestamp
-            }
-
-        if save_mac_db(db):
-            return jsonify({'success': True, 'message': f'Device {mac} quarantined to VLAN 999'})
-        return jsonify({'error': 'Failed to quarantine device'}), 500
-
-    elif action == 'approve':
-        # Auto-detect VLAN based on MAC OUI or assign to trusted (100)
-        target_vlan = 100  # Default to trusted
-
-        # Try to detect device type from MAC OUI
-        try:
-            from lib.network_segmentation import get_vlan_for_mac
-            detected_vlan = get_vlan_for_mac(mac)
-            if detected_vlan and detected_vlan != 999:
-                target_vlan = detected_vlan
-        except:
-            pass
-
-        db.setdefault('devices', {})[mac] = {
-            'name': name or db.get('devices', {}).get(mac, {}).get('name', 'Approved Device'),
-            'vlan': target_vlan,
-            'added': db.get('devices', {}).get(mac, {}).get('added', timestamp),
-            'last_seen': timestamp
-        }
-
-        if save_mac_db(db):
-            vlan_name = db.get('vlans', {}).get(str(target_vlan), {}).get('name', 'Unknown')
-            return jsonify({'success': True, 'message': f'Device {mac} approved to VLAN {target_vlan} ({vlan_name})'})
-        return jsonify({'error': 'Failed to approve device'}), 500
-
-    elif action == 'assign' and vlan:
-        # Assign to specific VLAN
-        try:
-            vlan_id = int(vlan)
-
-            db.setdefault('devices', {})[mac] = {
-                'name': name or db.get('devices', {}).get(mac, {}).get('name', 'Unknown'),
-                'vlan': vlan_id,
-                'added': db.get('devices', {}).get(mac, {}).get('added', timestamp),
-                'last_seen': timestamp
-            }
-
-            if save_mac_db(db):
-                vlan_name = db.get('vlans', {}).get(str(vlan_id), {}).get('name', 'Unknown')
-                return jsonify({'success': True, 'message': f'Device {mac} assigned to VLAN {vlan_id} ({vlan_name})'})
-        except ValueError:
-            return jsonify({'error': 'Invalid VLAN ID'}), 400
-        return jsonify({'error': 'Failed to assign device'}), 500
-
-    return jsonify({'error': 'Invalid action'}), 400
 
 
 @app.route('/api/layer_threats')
