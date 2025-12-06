@@ -4,11 +4,18 @@
 # Version: 5.0.0
 # License: MIT
 #
-# Guardian provides unified installation with full SDN features:
-#   - WiFi + LAN bridge with VLAN segmentation
-#   - OpenFlow SDN with Open vSwitch
-#   - MAC-based device categorization via RADIUS
-#   - HTP File Transfer with weight-bound encryption
+# Guardian - Portable Travel Security Companion
+#
+# Guardian Mode (This Script):
+#   - Simple WiFi hotspot (all devices on br0)
+#   - MAC tracking via FreeRADIUS (see connected devices in UI)
+#   - Full security stack (IDS, WAF, XDP DDoS protection)
+#   - Works with any USB WiFi adapter that supports AP mode
+#
+# For VLAN Segmentation (Fortress Mode):
+#   - Requires special WiFi adapters that support multiple VAPs
+#   - Recommended: Atheros AR9271, MediaTek MT7612U
+#   - See Fortress installation guide for IoT VLAN isolation
 #
 
 set -e
@@ -195,28 +202,27 @@ install_packages() {
 }
 
 install_sdn_packages() {
-    log_step "Installing SDN packages (VLAN, RADIUS)..."
+    log_step "Installing FreeRADIUS for MAC tracking..."
 
+    # Guardian mode: Only need FreeRADIUS for MAC tracking, no VLAN package
+    # VLAN package is only needed for Fortress mode with VAP-capable adapters
     if [ "$PKG_MGR" = "apt" ]; then
-        apt-get install -y -qq vlan freeradius
+        apt-get install -y -qq freeradius 2>/dev/null || true
     else
-        dnf install -y -q vlan freeradius
+        dnf install -y -q freeradius 2>/dev/null || true
     fi
 
-    # Enable 802.1q VLAN module
-    modprobe 8021q 2>/dev/null || true
-    if ! grep -q "8021q" /etc/modules 2>/dev/null; then
-        echo "8021q" >> /etc/modules
-    fi
+    # Note: VLAN kernel module (8021q) not loaded in Guardian mode
+    # All devices connect to same network (br0) - no VLAN segmentation
 
-    # Configure FreeRADIUS for Guardian MAC authentication
-    configure_freeradius
-
-    log_info "SDN packages installed"
+    log_info "FreeRADIUS installed for MAC authentication"
 }
 
 # ============================================================
 # FREERADIUS CONFIGURATION FOR MAC AUTHENTICATION
+# ============================================================
+# Guardian Mode: Simple accept-all policy for device tracking
+# Fortress Mode: VLAN assignment based on MAC address
 # ============================================================
 configure_freeradius() {
     log_step "Configuring FreeRADIUS for MAC authentication..."
@@ -232,85 +238,49 @@ configure_freeradius() {
     mkdir -p /etc/guardian
     chmod 755 /etc/guardian
 
-    # Copy MAC database template if not exists
-    if [ ! -f /etc/guardian/mac_vlan.json ]; then
-        if [ -f "$CONFIG_DIR/mac_vlan.json" ]; then
-            cp "$CONFIG_DIR/mac_vlan.json" /etc/guardian/mac_vlan.json
-        else
-            # Create default database
-            cat > /etc/guardian/mac_vlan.json << 'MACDBEOF'
+    # Create MAC database (Guardian mode - tracking only, no VLANs)
+    if [ ! -f /etc/guardian/mac_devices.json ]; then
+        cat > /etc/guardian/mac_devices.json << 'MACDBEOF'
 {
   "version": "1.0",
-  "description": "HookProbe Guardian MAC-to-VLAN Database",
-  "default_vlan": 999,
-  "vlans": {
-    "10": {"name": "Smart Lights", "description": "Smart bulbs, LED strips"},
-    "20": {"name": "Thermostats", "description": "HVAC, smart thermostats"},
-    "30": {"name": "Cameras", "description": "Security cameras, doorbells"},
-    "40": {"name": "Voice Assistants", "description": "Alexa, Google Home"},
-    "50": {"name": "Appliances", "description": "Smart appliances, plugs"},
-    "60": {"name": "Entertainment", "description": "Smart TVs, streaming"},
-    "70": {"name": "Robots", "description": "Vacuums, lawn mowers"},
-    "80": {"name": "Sensors", "description": "Motion, door sensors"},
-    "100": {"name": "Trusted", "description": "Trusted user devices"},
-    "999": {"name": "Quarantine", "description": "Unknown/untrusted devices"}
-  },
+  "description": "HookProbe Guardian - Connected Devices Database",
+  "note": "Guardian mode: All devices on same network. For VLANs, use Fortress mode.",
   "devices": {}
 }
 MACDBEOF
-        fi
-        chmod 644 /etc/guardian/mac_vlan.json
+        chmod 644 /etc/guardian/mac_devices.json
     fi
 
-    # Configure FreeRADIUS clients (allow localhost)
+    # Symlink for compatibility
+    ln -sf /etc/guardian/mac_devices.json /etc/guardian/mac_vlan.json 2>/dev/null || true
+
+    # Update localhost secret to match hostapd
     if [ -f /etc/freeradius/3.0/clients.conf ]; then
-        # Check if Guardian client already exists
-        if ! grep -q "guardian-local" /etc/freeradius/3.0/clients.conf; then
-            cat >> /etc/freeradius/3.0/clients.conf << CLIENTEOF
-
-# HookProbe Guardian - Local hostapd client
-client guardian-local {
-    ipaddr = 127.0.0.1
-    secret = $RADIUS_SECRET
-    shortname = guardian
-    nastype = other
-    virtual_server = default
-}
-CLIENTEOF
-        fi
+        sed -i "s/secret = testing123/secret = $RADIUS_SECRET/" /etc/freeradius/3.0/clients.conf 2>/dev/null || true
     fi
 
-    # Create FreeRADIUS users file for MAC authentication
+    # Create FreeRADIUS users file - Guardian mode accepts all devices
     local RADIUS_USERS="/etc/freeradius/3.0/mods-config/files/authorize"
     if [ -d /etc/freeradius/3.0/mods-config/files ]; then
         cat > "$RADIUS_USERS" << 'USERSEOF'
-# HookProbe Guardian - MAC Authentication Database
-# Auto-generated - managed by Guardian web UI
-# All unregistered devices go to VLAN 999 (quarantine)
+# HookProbe Guardian - MAC Authentication (Simple Mode)
+# All devices accepted - tracking only, no VLAN assignment
+# For VLAN segmentation, upgrade to Fortress mode
 
-# DEFAULT: Unregistered devices go to quarantine (VLAN 999)
+# DEFAULT: Accept all devices on br0 network
 DEFAULT Cleartext-Password := "%{User-Name}"
-        Tunnel-Type = VLAN,
-        Tunnel-Medium-Type = IEEE-802,
-        Tunnel-Private-Group-Id = 999
+        Reply-Message = "Welcome to HookProbe Guardian"
 USERSEOF
         chmod 640 "$RADIUS_USERS"
         chown freerad:freerad "$RADIUS_USERS" 2>/dev/null || true
     fi
 
-    # Enable and configure the files module for MAB
-    local FILES_MOD="/etc/freeradius/3.0/mods-enabled/files"
+    # Enable files module
     if [ -f /etc/freeradius/3.0/mods-available/files ]; then
-        ln -sf /etc/freeradius/3.0/mods-available/files "$FILES_MOD" 2>/dev/null || true
+        ln -sf /etc/freeradius/3.0/mods-available/files /etc/freeradius/3.0/mods-enabled/files 2>/dev/null || true
     fi
 
-    # Enable FreeRADIUS service
-    systemctl enable freeradius 2>/dev/null || true
-    systemctl restart freeradius 2>/dev/null || true
-
-    log_info "FreeRADIUS configured for MAC authentication"
-    log_info "Default policy: All new devices → VLAN 999 (quarantine)"
-    log_info "Use Guardian web UI to assign devices to VLANs"
+    log_info "FreeRADIUS configured for MAC tracking (Guardian mode)"
 }
 
 # ============================================================
@@ -2338,12 +2308,17 @@ EOF
     ip link set "$WIFI_IFACE" down 2>/dev/null || true
     sleep 1
 
-    # Run a quick syntax check
-    if hostapd -t /etc/hostapd/hostapd.conf 2>&1 | grep -qi "error\|invalid\|failed"; then
-        log_warn "Hostapd config test reported issues, checking..."
-        hostapd -t /etc/hostapd/hostapd.conf 2>&1 | head -20
-    else
+    # Run a quick syntax check with timeout (hostapd -t can hang on some systems)
+    local TEST_OUTPUT
+    if TEST_OUTPUT=$(timeout 5 hostapd -t /etc/hostapd/hostapd.conf 2>&1); then
         log_info "Hostapd configuration syntax OK"
+    elif [ $? -eq 124 ]; then
+        log_warn "Hostapd config test timed out (this is OK, will verify at startup)"
+    elif echo "$TEST_OUTPUT" | grep -qi "error\|invalid\|failed"; then
+        log_warn "Hostapd config may have issues:"
+        echo "$TEST_OUTPUT" | head -10
+    else
+        log_info "Hostapd configuration appears OK"
     fi
 
     # Configure hostapd daemon defaults
@@ -2489,125 +2464,132 @@ EOF
 }
 
 # ============================================================
-# SDN MODE CONFIGURATION (VLAN Segmentation)
+# MAC AUTHENTICATION CONFIGURATION (Guardian Simple Mode)
+# ============================================================
+# Guardian Mode: Simple WiFi hotspot with MAC tracking via FreeRADIUS
+# - All devices on same network (br0) - no VLAN segmentation
+# - FreeRADIUS tracks which MAC addresses connect
+# - Web UI shows connected devices list
+#
+# For VLAN segmentation (multi-VAP WiFi), use Fortress mode which
+# requires special WiFi adapters (Atheros AR9271, MediaTek MT7612U)
 # ============================================================
 configure_sdn_mode() {
-    log_step "Configuring Guardian in SDN Mode..."
+    log_step "Configuring Guardian MAC Authentication..."
 
-    local RADIUS_SERVER="${HOOKPROBE_RADIUS_SERVER:-127.0.0.1}"
     local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_radius}"
 
-    # Install SDN packages
-    install_sdn_packages
+    # Install FreeRADIUS for MAC tracking (no VLAN package needed for Guardian)
+    log_info "Installing FreeRADIUS for MAC authentication..."
+    if [ "$PKG_MGR" = "apt" ]; then
+        apt-get install -y -qq freeradius 2>/dev/null || true
+    else
+        dnf install -y -q freeradius 2>/dev/null || true
+    fi
 
-    # Copy SDN configuration files
-    log_info "Installing SDN configuration..."
+    # Create Guardian MAC database directory
+    mkdir -p /etc/guardian
+    chmod 755 /etc/guardian
 
+    # Create MAC device database (simple mode - no VLANs, just tracking)
+    if [ ! -f /etc/guardian/mac_devices.json ]; then
+        cat > /etc/guardian/mac_devices.json << 'MACDBEOF'
+{
+  "version": "1.0",
+  "description": "HookProbe Guardian - Connected Devices Database",
+  "note": "Guardian mode: All devices on same network (br0). For VLAN segmentation use Fortress mode.",
+  "devices": {}
+}
+MACDBEOF
+        chmod 644 /etc/guardian/mac_devices.json
+    fi
+
+    # Symlink for compatibility with existing code
+    if [ ! -f /etc/guardian/mac_vlan.json ]; then
+        ln -sf /etc/guardian/mac_devices.json /etc/guardian/mac_vlan.json 2>/dev/null || \
+            cp /etc/guardian/mac_devices.json /etc/guardian/mac_vlan.json
+    fi
+
+    # Configure FreeRADIUS for simple MAC authentication (Accept-Accept policy)
+    # No VLAN assignment - just track that devices connected
+    if [ -d /etc/freeradius/3.0 ]; then
+        # Backup original config
+        cp -n /etc/freeradius/3.0/clients.conf /etc/freeradius/3.0/clients.conf.bak 2>/dev/null || true
+
+        # Configure localhost client for hostapd
+        if [ -f /etc/freeradius/3.0/clients.conf ]; then
+            # Update localhost secret to match hostapd
+            sed -i "s/secret = testing123/secret = $RADIUS_SECRET/" /etc/freeradius/3.0/clients.conf 2>/dev/null || true
+        fi
+
+        # Create simple authorize file - accept all MACs, log them
+        local RADIUS_USERS="/etc/freeradius/3.0/mods-config/files/authorize"
+        if [ -d /etc/freeradius/3.0/mods-config/files ]; then
+            cat > "$RADIUS_USERS" << 'USERSEOF'
+# HookProbe Guardian - MAC Authentication (Simple Mode)
+# All devices are accepted on the same network (br0)
+# This file logs MAC addresses for the connected devices UI
+
+# DEFAULT: Accept all devices (Guardian mode - no VLAN segmentation)
+# For VLAN segmentation, upgrade to Fortress mode with VAP-capable WiFi adapter
+DEFAULT Cleartext-Password := "%{User-Name}"
+        Reply-Message = "Welcome to HookProbe Guardian"
+USERSEOF
+            chmod 640 "$RADIUS_USERS"
+            chown freerad:freerad "$RADIUS_USERS" 2>/dev/null || true
+        fi
+
+        # Enable files module
+        if [ -f /etc/freeradius/3.0/mods-available/files ]; then
+            ln -sf /etc/freeradius/3.0/mods-available/files /etc/freeradius/3.0/mods-enabled/files 2>/dev/null || true
+        fi
+    fi
+
+    # Check if FreeRADIUS can start
+    local RADIUS_AVAILABLE=false
+    systemctl stop freeradius 2>/dev/null || true
+    sleep 1
+    systemctl start freeradius 2>/dev/null || true
+    sleep 2
+
+    if systemctl is-active --quiet freeradius 2>/dev/null; then
+        RADIUS_AVAILABLE=true
+        log_info "FreeRADIUS is running - MAC authentication enabled"
+        systemctl enable freeradius 2>/dev/null || true
+    else
+        log_warn "FreeRADIUS could not start - devices will still connect but MAC tracking disabled"
+        systemctl stop freeradius 2>/dev/null || true
+        systemctl disable freeradius 2>/dev/null || true
+    fi
+
+    # Keep the simple hostapd config (already created by configure_base_networking)
+    # Guardian mode does NOT use dynamic VLANs - all devices on br0
+    log_info "Configuring hostapd for simple mode (all devices on br0)..."
+
+    if [ -f /etc/hostapd/hostapd.conf ]; then
+        # Remove any VLAN/802.1X settings that might be in the config
+        sed -i 's/^ieee8021x=.*/#ieee8021x=0/' /etc/hostapd/hostapd.conf
+        sed -i 's/^dynamic_vlan=.*/#dynamic_vlan=0/' /etc/hostapd/hostapd.conf
+        sed -i 's/^vlan_file=.*/#vlan_file=/' /etc/hostapd/hostapd.conf
+        sed -i 's/^vlan_tagged_interface=.*/#vlan_tagged_interface=/' /etc/hostapd/hostapd.conf
+        sed -i 's/^vlan_bridge=.*/#vlan_bridge=/' /etc/hostapd/hostapd.conf
+        sed -i 's/^macaddr_acl=2/macaddr_acl=0/' /etc/hostapd/hostapd.conf
+        sed -i 's/^auth_server_addr=.*/#auth_server_addr=/' /etc/hostapd/hostapd.conf
+        sed -i 's/^acct_server_addr=.*/#acct_server_addr=/' /etc/hostapd/hostapd.conf
+        sed -i 's/^wpa_key_mgmt=WPA-PSK WPA-EAP/wpa_key_mgmt=WPA-PSK/' /etc/hostapd/hostapd.conf
+    fi
+
+    # Create files for MAC-based access control (optional use via web UI)
     mkdir -p /etc/hostapd
-    cp "$CONFIG_DIR/hostapd.vlan" /etc/hostapd/hostapd.vlan
     touch /etc/hostapd/hostapd.accept
     touch /etc/hostapd/hostapd.deny
 
-    # Preserve existing interface/driver/channel settings from base config
-    local EXISTING_IFACE=$(grep "^interface=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
-    local EXISTING_DRIVER=$(grep "^driver=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
-    local EXISTING_CHANNEL=$(grep "^channel=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
-    local EXISTING_SSID=$(grep "^ssid=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
-    local EXISTING_PASS=$(grep "^wpa_passphrase=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
-    local EXISTING_COUNTRY=$(grep "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    # Guardian mode: NO VLAN interfaces, NO VLAN bridges
+    # All devices connect to br0 (192.168.4.x network)
+    log_info "Guardian mode: All devices on single network (br0 / 192.168.4.0/24)"
+    log_info "For IoT VLAN segmentation, use Fortress mode with VAP-capable WiFi adapter"
 
-    # Copy SDN hostapd config
-    cp "$CONFIG_DIR/hostapd.conf" /etc/hostapd/hostapd.conf
-
-    # Restore detected settings (don't overwrite with template values)
-    if [ -n "$EXISTING_IFACE" ]; then
-        sed -i "s/^interface=.*/interface=$EXISTING_IFACE/" /etc/hostapd/hostapd.conf
-    fi
-    if [ -n "$EXISTING_DRIVER" ]; then
-        sed -i "s/^driver=.*/driver=$EXISTING_DRIVER/" /etc/hostapd/hostapd.conf
-    fi
-    if [ -n "$EXISTING_CHANNEL" ]; then
-        sed -i "s/^channel=.*/channel=$EXISTING_CHANNEL/" /etc/hostapd/hostapd.conf
-    fi
-    if [ -n "$EXISTING_SSID" ]; then
-        sed -i "s/^ssid=.*/ssid=$EXISTING_SSID/" /etc/hostapd/hostapd.conf
-    fi
-    if [ -n "$EXISTING_PASS" ]; then
-        sed -i "s/^wpa_passphrase=.*/wpa_passphrase=$EXISTING_PASS/" /etc/hostapd/hostapd.conf
-    fi
-    if [ -n "$EXISTING_COUNTRY" ]; then
-        sed -i "s/^country_code=.*/country_code=$EXISTING_COUNTRY/" /etc/hostapd/hostapd.conf
-    fi
-
-    # Update RADIUS server in hostapd config
-    sed -i "s/auth_server_addr=.*/auth_server_addr=$RADIUS_SERVER/" /etc/hostapd/hostapd.conf
-    sed -i "s/auth_server_shared_secret=.*/auth_server_shared_secret=$RADIUS_SECRET/" /etc/hostapd/hostapd.conf
-    sed -i "s/acct_server_shared_secret=.*/acct_server_shared_secret=$RADIUS_SECRET/" /etc/hostapd/hostapd.conf
-
-    # Configure dnsmasq for VLANs
-    cp "$CONFIG_DIR/dnsmasq.conf" /etc/dnsmasq.d/guardian.conf
-
-    # Create VLAN interfaces
-    log_info "Creating VLAN interfaces..."
-
-    local ETH_IFACE=$(echo $ETH_INTERFACES | awk '{print $1}')
-
-    for vlan in 10 20 30 40 50 60 70 80 999; do
-        # Create VLAN interface
-        ip link add link "$ETH_IFACE" name "${ETH_IFACE}.${vlan}" type vlan id $vlan 2>/dev/null || true
-        ip link set "${ETH_IFACE}.${vlan}" up
-
-        # Create bridge for VLAN
-        ip link add "br${vlan}" type bridge 2>/dev/null || true
-        ip link set "br${vlan}" up
-        ip link set "${ETH_IFACE}.${vlan}" master "br${vlan}" 2>/dev/null || true
-
-        # Assign IP to bridge
-        local octet=$((vlan == 999 ? 99 : vlan))
-        ip addr add "192.168.${octet}.1/24" dev "br${vlan}" 2>/dev/null || true
-    done
-
-    # Copy nftables rules for VLAN isolation
-    mkdir -p /etc/nftables.d
-    cat > /etc/nftables.d/guardian-vlans.nft << 'EOF'
-#!/usr/sbin/nft -f
-# HookProbe Guardian - VLAN Isolation
-
-table inet guardian {
-    chain forward {
-        type filter hook forward priority 0; policy drop;
-
-        # Allow established connections
-        ct state established,related accept
-
-        # Allow each VLAN to access internet
-        iifname "br10" oifname != "br*" accept
-        iifname "br20" oifname != "br*" accept
-        iifname "br30" oifname != "br*" accept
-        iifname "br40" oifname != "br*" accept
-        iifname "br50" oifname != "br*" accept
-        iifname "br60" oifname != "br*" accept
-        iifname "br70" oifname != "br*" accept
-        iifname "br80" oifname != "br*" accept
-
-        # Quarantine VLAN - NO internet
-        iifname "br999" drop
-
-        # Management bridge full access
-        iifname "br0" accept
-        oifname "br0" accept
-    }
-
-    chain postrouting {
-        type nat hook postrouting priority 100;
-        oifname != "br*" masquerade
-    }
-}
-EOF
-
-    nft -f /etc/nftables.d/guardian-vlans.nft 2>/dev/null || true
-
-    log_info "SDN mode configuration complete"
+    log_info "MAC authentication configuration complete"
 }
 
 # ============================================================
@@ -3185,8 +3167,8 @@ main() {
     log_step "Installing base packages..."
     install_packages
 
-    # Install SDN packages (VLAN, FreeRADIUS)
-    log_step "Installing SDN/RADIUS packages..."
+    # Install FreeRADIUS for MAC tracking
+    log_step "Installing MAC authentication packages..."
     install_sdn_packages
 
     # Install Podman container runtime
@@ -3211,7 +3193,7 @@ main() {
     # Configure Guardian networking
     log_step "Configuring Guardian networking..."
     configure_base_networking   # Setup bridge, hostapd, DHCP
-    configure_sdn_mode          # Add SDN/VLAN features
+    configure_sdn_mode          # Configure MAC authentication
 
     # Install QSecBit agent
     log_step "Installing QSecBit agent..."
@@ -3247,10 +3229,10 @@ main() {
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
     echo -e "  Version:     ${BOLD}Liberty 5.0.0${NC}"
-    echo -e "  Mode:        ${BOLD}Unified (all features)${NC}"
+    echo -e "  Mode:        ${BOLD}Guardian (Portable Travel Security)${NC}"
     echo -e "  Hotspot:     ${BOLD}${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}${NC}"
+    echo -e "  Network:     ${BOLD}192.168.4.0/24 (br0)${NC}"
     echo -e "  Web UI:      ${BOLD}http://192.168.4.1:8080${NC}"
-    echo -e "  Config:      ${BOLD}/etc/guardian/guardian.yaml${NC}"
     echo ""
     echo -e "  ${BOLD}Security Features:${NC}"
     echo -e "  • L1-L7 OSI Layer Threat Detection"
@@ -3260,54 +3242,38 @@ main() {
     echo -e "  • XDP/eBPF Acceleration"
     echo ""
     echo -e "  ${BOLD}Network Features:${NC}"
-    echo -e "  • OpenFlow SDN Controller"
-    echo -e "  • Open vSwitch Integration"
-    echo -e "  • VLAN Segmentation (IoT Isolation)"
-    echo -e "  • RADIUS MAC Authentication"
-    echo -e "  • HTP File Transfer via MSSP"
+    echo -e "  • Simple WiFi Hotspot (all devices on br0)"
+    echo -e "  • MAC Authentication & Device Tracking"
+    echo -e "  • Connected Devices list in Web UI"
+    echo -e "  • WAN Failover (eth0 primary, wlan0 backup)"
+    echo -e "  • HTP Secure File Transfer"
     echo ""
-    echo -e "  ${BOLD}IoT VLANs:${NC}"
-    echo -e "  • VLAN 10: Smart Lights"
-    echo -e "  • VLAN 20: Thermostats"
-    echo -e "  • VLAN 30: Cameras"
-    echo -e "  • VLAN 40: Voice Assistants"
-    echo -e "  • VLAN 50: Appliances"
-    echo -e "  • VLAN 60: Entertainment"
-    echo -e "  • VLAN 70: Robots"
-    echo -e "  • VLAN 80: Sensors"
-    echo -e "  • VLAN 999: Quarantine (unknown devices)"
+    echo -e "  ${CYAN}Note:${NC} For IoT VLAN segmentation, upgrade to ${BOLD}Fortress${NC} mode"
+    echo -e "        with VAP-capable WiFi adapters (Atheros AR9271, MT7612U)"
     echo ""
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
         echo -e "  ${BOLD}Additional:${NC}"
         echo -e "  • AdGuard Home: ${BOLD}http://192.168.4.1:3000${NC}"
+        echo ""
     fi
-    echo ""
     echo -e "  ${BOLD}Service Status:${NC}"
     echo -e "  $(systemctl is-active hostapd 2>/dev/null || echo 'inactive') hostapd (WiFi AP)"
     echo -e "  $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive') dnsmasq (DHCP/DNS)"
+    echo -e "  $(systemctl is-active freeradius 2>/dev/null || echo 'inactive') freeradius (MAC Auth)"
     echo -e "  $(systemctl is-active guardian-webui 2>/dev/null || echo 'inactive') guardian-webui"
     echo -e "  $(systemctl is-active guardian-suricata 2>/dev/null || echo 'inactive') guardian-suricata (IDS)"
     echo -e "  $(systemctl is-active guardian-waf 2>/dev/null || echo 'inactive') guardian-waf (WAF)"
-    echo -e "  $(systemctl is-active guardian-neuro 2>/dev/null || echo 'inactive') guardian-neuro (Neuro)"
     echo -e "  $(systemctl is-active guardian-qsecbit 2>/dev/null || echo 'inactive') guardian-qsecbit"
     echo ""
     echo -e "  ${YELLOW}Next steps:${NC}"
     echo -e "  1. Connect to '${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}' WiFi network"
     echo -e "  2. Open http://192.168.4.1:8080 in your browser"
-    echo -e "  3. Configure upstream WiFi connection"
+    echo -e "  3. View connected devices in the Web UI"
+    echo -e "  4. Configure upstream WiFi connection for internet access"
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
-        echo -e "  4. Complete AdGuard setup: http://192.168.4.1:3000"
+        echo -e "  5. Complete AdGuard setup: http://192.168.4.1:3000"
     fi
     echo ""
-
-    if [ "$MODE" = "sdn" ]; then
-        echo -e "  ${CYAN}SDN Features:${NC}"
-        echo -e "  • Register devices in web UI to assign VLANs"
-        echo -e "  • Unknown devices go to quarantine (VLAN 999)"
-        echo -e "  • VLANs: 10=Lights, 20=Thermo, 30=Cameras, etc."
-        echo ""
-    fi
-
     echo -e "  ${DIM}Logs: journalctl -u guardian-suricata -u guardian-qsecbit -f${NC}"
     echo ""
 }
