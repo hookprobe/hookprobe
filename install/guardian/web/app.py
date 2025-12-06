@@ -1307,6 +1307,43 @@ HTML_TEMPLATE = '''
 
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
+            <!-- Threat Distribution Chart - Top Priority -->
+            <div class="card">
+                <h2>Threat Distribution</h2>
+                <div id="threat-chart" style="margin-bottom: 20px;">
+                    <div style="display: flex; align-items: flex-end; height: 150px; gap: 20px; justify-content: center; padding: 20px 0;">
+                        <!-- High Severity Bar -->
+                        <div style="text-align: center; flex: 1; max-width: 120px;">
+                            <div id="chart-bar-high" style="background: linear-gradient(to top, var(--hp-red), #dc2626); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
+                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
+                                <div id="chart-value-high" style="font-size: 24px; font-weight: 700;">0</div>
+                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">High</div>
+                            </div>
+                        </div>
+                        <!-- Medium Severity Bar -->
+                        <div style="text-align: center; flex: 1; max-width: 120px;">
+                            <div id="chart-bar-medium" style="background: linear-gradient(to top, var(--hp-amber), #fbbf24); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
+                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
+                                <div id="chart-value-medium" style="font-size: 24px; font-weight: 700;">0</div>
+                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">Medium</div>
+                            </div>
+                        </div>
+                        <!-- Low Severity Bar -->
+                        <div style="text-align: center; flex: 1; max-width: 120px;">
+                            <div id="chart-bar-low" style="background: linear-gradient(to top, var(--hp-green), #34d399); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
+                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
+                                <div id="chart-value-low" style="font-size: 24px; font-weight: 700;">0</div>
+                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">Low</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <span id="chart-total" style="font-size: 14px; color: #6b7280;">Total Threats: <strong>0</strong></span>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="refreshThreatChart()" style="margin-left: 15px;">Refresh</button>
+                </div>
+            </div>
+
             <div class="card">
                 <h2>Security Overview</h2>
                 <div class="rag-grid">
@@ -1415,47 +1452,38 @@ HTML_TEMPLATE = '''
                     {% endfor %}
                 </div>
             </div>
-
-            <!-- Threat Visualization Chart -->
-            <div class="card">
-                <h2>Threat Distribution</h2>
-                <div id="threat-chart" style="margin-bottom: 20px;">
-                    <div style="display: flex; align-items: flex-end; height: 150px; gap: 20px; justify-content: center; padding: 20px 0;">
-                        <!-- High Severity Bar -->
-                        <div style="text-align: center; flex: 1; max-width: 120px;">
-                            <div id="chart-bar-high" style="background: linear-gradient(to top, var(--hp-red), #dc2626); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
-                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
-                                <div id="chart-value-high" style="font-size: 24px; font-weight: 700;">0</div>
-                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">High</div>
-                            </div>
-                        </div>
-                        <!-- Medium Severity Bar -->
-                        <div style="text-align: center; flex: 1; max-width: 120px;">
-                            <div id="chart-bar-medium" style="background: linear-gradient(to top, var(--hp-amber), #fbbf24); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
-                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
-                                <div id="chart-value-medium" style="font-size: 24px; font-weight: 700;">0</div>
-                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">Medium</div>
-                            </div>
-                        </div>
-                        <!-- Low Severity Bar -->
-                        <div style="text-align: center; flex: 1; max-width: 120px;">
-                            <div id="chart-bar-low" style="background: linear-gradient(to top, var(--hp-green), #34d399); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
-                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
-                                <div id="chart-value-low" style="font-size: 24px; font-weight: 700;">0</div>
-                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">Low</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <span id="chart-total" style="font-size: 14px; color: #6b7280;">Total Threats: <strong>0</strong></span>
-                    <button type="button" class="btn btn-sm btn-secondary" onclick="refreshThreatChart()" style="margin-left: 15px;">Refresh</button>
-                </div>
-            </div>
         </div>
 
         <!-- Security Tab -->
         <div id="security" class="tab-content">
+            <!-- Threat Analysis - Top Priority -->
+            <div class="card">
+                <h2>Threat Analysis</h2>
+                <div id="threat-visualization">
+                    <div class="param-grid">
+                        <div class="param-item" style="background: #fee2e2;">
+                            <div class="label">High Severity</div>
+                            <div class="value" id="threat-high" style="color: var(--hp-red);">0</div>
+                        </div>
+                        <div class="param-item" style="background: #fef3c7;">
+                            <div class="label">Medium Severity</div>
+                            <div class="value" id="threat-medium" style="color: var(--hp-amber);">0</div>
+                        </div>
+                        <div class="param-item" style="background: #d1fae5;">
+                            <div class="label">Low Severity</div>
+                            <div class="value" id="threat-low" style="color: var(--hp-green);">0</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">Total Threats</div>
+                            <div class="value" id="threat-total">0</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <button type="button" class="btn btn-secondary" onclick="refreshThreats()">Refresh Threats</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <h2>QSecBit Security Status</h2>
 
@@ -1774,34 +1802,6 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
                 <div id="test-results" style="margin-top: 15px;"></div>
-            </div>
-
-            <!-- Threat Visualization -->
-            <div class="card">
-                <h2>Threat Analysis</h2>
-                <div id="threat-visualization">
-                    <div class="param-grid">
-                        <div class="param-item" style="background: #fee2e2;">
-                            <div class="label">High Severity</div>
-                            <div class="value" id="threat-high" style="color: var(--hp-red);">0</div>
-                        </div>
-                        <div class="param-item" style="background: #fef3c7;">
-                            <div class="label">Medium Severity</div>
-                            <div class="value" id="threat-medium" style="color: var(--hp-amber);">0</div>
-                        </div>
-                        <div class="param-item" style="background: #d1fae5;">
-                            <div class="label">Low Severity</div>
-                            <div class="value" id="threat-low" style="color: var(--hp-green);">0</div>
-                        </div>
-                        <div class="param-item">
-                            <div class="label">Total Threats</div>
-                            <div class="value" id="threat-total">0</div>
-                        </div>
-                    </div>
-                    <div style="margin-top: 15px;">
-                        <button type="button" class="btn btn-secondary" onclick="refreshThreats()">Refresh Threats</button>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -2379,12 +2379,63 @@ HTML_TEMPLATE = '''
             refreshThreatChart();
         });
 
-        // Auto-refresh every 30 seconds (but not during scan)
-        setInterval(() => {
-            if (!isScanning) {
-                location.reload();
+        // Background refresh - updates data without reloading page
+        // This preserves user input (SSID, password fields, etc.)
+        function backgroundRefresh() {
+            // Don't refresh if user is scanning or running tests
+            if (isScanning || testPollInterval) {
+                return;
             }
-        }, 30000);
+
+            // Refresh threat data
+            refreshThreatChart();
+            refreshThreats();
+            refreshXdpStats();
+
+            // Refresh container status
+            fetch('/api/containers')
+                .then(response => response.json())
+                .then(containers => {
+                    // Update container badges in the UI
+                    for (const [key, container] of Object.entries(containers)) {
+                        const items = document.querySelectorAll('.container-item');
+                        items.forEach(item => {
+                            if (item.textContent.includes(container.label)) {
+                                const badge = item.querySelector('.badge');
+                                if (badge) {
+                                    badge.className = 'badge ' + (container.running ? 'badge-success' : 'badge-danger');
+                                    badge.textContent = container.running ? 'Running' : 'Stopped';
+                                }
+                            }
+                        });
+                    }
+                })
+                .catch(error => console.error('Error refreshing containers:', error));
+
+            // Refresh network status
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(status => {
+                    // Update client count if element exists
+                    const clientElements = document.querySelectorAll('.status-item .value');
+                    clientElements.forEach(el => {
+                        if (el.nextElementSibling && el.nextElementSibling.textContent.includes('Connected Clients')) {
+                            el.textContent = status.clients || '0';
+                        }
+                    });
+                })
+                .catch(error => console.error('Error refreshing status:', error));
+        }
+
+        // Auto-refresh every 30 seconds using background AJAX (preserves form input)
+        setInterval(backgroundRefresh, 30000);
+
+        // Also refresh when tab becomes visible again
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                backgroundRefresh();
+            }
+        });
     </script>
 </body>
 </html>
