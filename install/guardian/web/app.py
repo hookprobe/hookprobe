@@ -5,7 +5,7 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.1.0
+Version: 5.2.0
 """
 
 import os
@@ -183,19 +183,88 @@ def scan_wifi():
     return unique_networks[:20]
 
 
+def get_wireless_interfaces():
+    """Discover all wireless interfaces on the system."""
+    interfaces = []
+
+    # Method 1: Check /sys/class/net for wireless interfaces
+    output, success = run_command('ls -1 /sys/class/net/')
+    if success and output:
+        for iface in output.split('\n'):
+            iface = iface.strip()
+            if iface:
+                # Check if it's a wireless interface
+                wireless_path = f'/sys/class/net/{iface}/wireless'
+                phy_path = f'/sys/class/net/{iface}/phy80211'
+                check, _ = run_command(f'test -d {wireless_path} || test -d {phy_path} && echo yes')
+                if 'yes' in check:
+                    interfaces.append(iface)
+
+    # Method 2: Fallback to iw dev
+    if not interfaces:
+        output, success = run_command('iw dev 2>/dev/null')
+        if success and output:
+            for line in output.split('\n'):
+                if 'Interface' in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        interfaces.append(parts[1])
+
+    # Method 3: Final fallback - check common interface names
+    if not interfaces:
+        for iface in ['wlan0', 'wlan1', 'wlan2', 'wlp2s0', 'wlp3s0']:
+            check, success = run_command(f'ip link show {iface} 2>/dev/null')
+            if success and iface in check:
+                interfaces.append(iface)
+
+    return sorted(set(interfaces))
+
+
+def get_hostapd_interface():
+    """Get the interface configured in hostapd.conf."""
+    if HOSTAPD_CONF.exists():
+        try:
+            content = HOSTAPD_CONF.read_text()
+            for line in content.split('\n'):
+                if line.startswith('interface='):
+                    return line.split('=', 1)[1].strip()
+        except:
+            pass
+    return None
+
+
 def get_interface_info(iface):
     """Get detailed info about a WiFi interface."""
     info = {
         'interface': iface,
         'type': 'unknown',
+        'role': 'unknown',  # 'hotspot' or 'upstream' or 'unknown'
         'ssid': None,
         'channel': None,
         'frequency': None,
         'signal': None,
         'tx_power': None,
         'mac': None,
-        'connected': False
+        'connected': False,
+        'is_builtin': False,  # True if built-in WiFi (vs USB dongle)
+        'driver': None
     }
+
+    # Check if interface exists
+    check, success = run_command(f'ip link show {iface} 2>/dev/null')
+    if not success or iface not in check:
+        return info
+
+    # Try to determine if built-in or USB dongle
+    phy_output, _ = run_command(f'readlink /sys/class/net/{iface}/device 2>/dev/null')
+    if phy_output:
+        # USB devices typically have 'usb' in their path
+        info['is_builtin'] = 'usb' not in phy_output.lower()
+
+    # Get driver name
+    driver_output, _ = run_command(f'readlink /sys/class/net/{iface}/device/driver 2>/dev/null')
+    if driver_output:
+        info['driver'] = driver_output.split('/')[-1]
 
     # Get interface info using iw dev
     output, success = run_command(f'iw dev {iface} info 2>/dev/null')
@@ -223,6 +292,15 @@ def get_interface_info(iface):
                 info['tx_power'] = line.split('txpower ', 1)[1].strip()
             elif line.startswith('addr '):
                 info['mac'] = line.split('addr ', 1)[1].strip()
+
+    # Determine role based on hostapd config
+    hostapd_iface = get_hostapd_interface()
+    if hostapd_iface == iface:
+        info['role'] = 'hotspot'
+    elif info['type'] == 'AP':
+        info['role'] = 'hotspot'
+    elif info['type'] == 'managed':
+        info['role'] = 'upstream'
 
     # For AP mode - check if hostapd is running and interface has SSID
     if info['type'] == 'AP':
@@ -296,27 +374,85 @@ def get_current_config():
 
 
 def get_status():
-    """Get current system status."""
+    """Get current system status with dynamic interface detection."""
     status = {}
 
-    # Get detailed interface info for wlan0 (typically hotspot) and wlan1 (typically upstream)
-    status['wlan0'] = get_interface_info('wlan0')
-    status['wlan1'] = get_interface_info('wlan1')
+    # Discover all wireless interfaces dynamically
+    wireless_ifaces = get_wireless_interfaces()
+    status['wireless_interfaces'] = wireless_ifaces
 
-    # Determine hotspot and upstream based on interface type
-    # wlan0 is usually AP (hotspot), wlan1 is usually managed (client/upstream)
-    if status['wlan0']['type'] == 'AP':
-        status['hotspot_interface'] = status['wlan0']
-        status['upstream_interface'] = status['wlan1']
-    elif status['wlan1']['type'] == 'AP':
-        status['hotspot_interface'] = status['wlan1']
-        status['upstream_interface'] = status['wlan0']
-    else:
-        # Fallback
-        status['hotspot_interface'] = status['wlan0']
-        status['upstream_interface'] = status['wlan1']
+    # Get info for all discovered interfaces
+    all_interfaces = {}
+    for iface in wireless_ifaces:
+        all_interfaces[iface] = get_interface_info(iface)
 
-    # Legacy compatibility
+    # Also check wlan0/wlan1 even if not discovered (fallback)
+    for iface in ['wlan0', 'wlan1']:
+        if iface not in all_interfaces:
+            info = get_interface_info(iface)
+            if info['type'] != 'unknown':
+                all_interfaces[iface] = info
+
+    status['all_interfaces'] = all_interfaces
+
+    # Determine which interface is hotspot (AP) and which is upstream (managed)
+    # Priority: 1) Check hostapd.conf for configured interface
+    #           2) Check actual interface type (AP vs managed)
+    #           3) Fallback to naming convention
+
+    hostapd_iface = get_hostapd_interface()
+    hotspot_interface = None
+    upstream_interface = None
+
+    # First pass: Find AP interface (either from hostapd config or actual type)
+    for iface, info in all_interfaces.items():
+        if hostapd_iface and iface == hostapd_iface:
+            hotspot_interface = info
+        elif info['type'] == 'AP':
+            if not hotspot_interface:
+                hotspot_interface = info
+
+    # Second pass: Find upstream (managed) interface
+    for iface, info in all_interfaces.items():
+        if info['type'] == 'managed':
+            # Don't use the same interface as hotspot
+            if not hotspot_interface or info['interface'] != hotspot_interface['interface']:
+                upstream_interface = info
+                break
+
+    # Fallback: If we couldn't determine interfaces, use whatever we have
+    if not hotspot_interface and not upstream_interface:
+        # Just use first two interfaces found
+        iface_list = list(all_interfaces.values())
+        if len(iface_list) >= 1:
+            hotspot_interface = iface_list[0]
+        if len(iface_list) >= 2:
+            upstream_interface = iface_list[1]
+
+    # Create empty interface info if not found
+    empty_interface = {
+        'interface': 'none',
+        'type': 'unknown',
+        'role': 'unknown',
+        'ssid': None,
+        'channel': None,
+        'frequency': None,
+        'signal': None,
+        'tx_power': None,
+        'mac': None,
+        'connected': False,
+        'is_builtin': False,
+        'driver': None
+    }
+
+    status['hotspot_interface'] = hotspot_interface or empty_interface
+    status['upstream_interface'] = upstream_interface or empty_interface
+
+    # Legacy compatibility fields
+    status['wlan0'] = all_interfaces.get('wlan0', empty_interface)
+    status['wlan1'] = all_interfaces.get('wlan1', empty_interface)
+
+    # Determine connection status
     status['upstream_connected'] = (
         status['upstream_interface']['type'] == 'managed' and
         status['upstream_interface'].get('connected', False)
@@ -334,8 +470,11 @@ def get_status():
 
     # Get connected clients from AP interface
     ap_iface = status['hotspot_interface']['interface']
-    output, _ = run_command(f'iw dev {ap_iface} station dump 2>/dev/null | grep Station | wc -l')
-    status['clients'] = int(output) if output.isdigit() else 0
+    if ap_iface and ap_iface != 'none':
+        output, _ = run_command(f'iw dev {ap_iface} station dump 2>/dev/null | grep Station | wc -l')
+        status['clients'] = int(output) if output.isdigit() else 0
+    else:
+        status['clients'] = 0
 
     status['mode'] = get_mode()
 
@@ -1087,22 +1226,50 @@ HTML_TEMPLATE = '''
                         <div class="label">Connected Clients</div>
                     </div>
                     <div class="status-item">
-                        <span class="badge {% if status.hostapd %}badge-success{% else %}badge-danger{% endif %}">
-                            {% if status.hostapd %}Running{% else %}Stopped{% endif %}
+                        <span class="badge {% if status.hotspot_active %}badge-success{% else %}badge-danger{% endif %}">
+                            {% if status.hotspot_active %}Broadcasting{% else %}Stopped{% endif %}
                         </span>
-                        <div class="label">Hotspot</div>
+                        <div class="label">Hotspot ({{ status.hotspot_interface.interface }})</div>
+                        <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
+                            {{ status.hotspot_interface.ssid or config.hotspot_ssid }}
+                        </div>
                     </div>
                     <div class="status-item">
                         <span class="badge {% if status.upstream_connected %}badge-success{% else %}badge-warning{% endif %}">
                             {% if status.upstream_connected %}Connected{% else %}Disconnected{% endif %}
                         </span>
-                        <div class="label">Upstream WiFi</div>
+                        <div class="label">Upstream ({{ status.upstream_interface.interface }})</div>
+                        <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
+                            {% if status.upstream_connected %}
+                                {{ status.upstream_interface.ssid or 'Unknown' }}
+                            {% else %}
+                                Not connected
+                            {% endif %}
+                        </div>
                     </div>
                     <div class="status-item">
                         <span class="badge {% if status.dnsmasq %}badge-success{% else %}badge-danger{% endif %}">
                             {% if status.dnsmasq %}Running{% else %}Stopped{% endif %}
                         </span>
                         <div class="label">DHCP/DNS</div>
+                    </div>
+                </div>
+
+                <!-- Interface Details -->
+                <div style="margin-top: 15px; padding: 12px; background: var(--hp-light); border-radius: 8px; font-size: 13px;">
+                    <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong>Hotspot:</strong>
+                            {{ status.hotspot_interface.interface }}
+                            ({{ status.hotspot_interface.type | upper }})
+                            {% if status.hotspot_interface.is_builtin %}- Built-in{% else %}- USB{% endif %}
+                        </div>
+                        <div>
+                            <strong>Upstream:</strong>
+                            {{ status.upstream_interface.interface }}
+                            ({{ status.upstream_interface.type | upper }})
+                            {% if status.upstream_interface.is_builtin %}- Built-in{% else %}- USB{% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1455,15 +1622,39 @@ HTML_TEMPLATE = '''
             <div class="card">
                 <h2>Interface Status</h2>
 
+                <!-- Summary of detected interfaces -->
+                <div style="margin-bottom: 20px; padding: 12px; background: var(--hp-light); border-radius: 8px;">
+                    <strong>Detected Interfaces:</strong>
+                    {% if status.wireless_interfaces %}
+                        {{ status.wireless_interfaces | join(', ') }}
+                    {% else %}
+                        wlan0, wlan1 (default)
+                    {% endif %}
+                </div>
+
                 <h3>Hotspot Interface ({{ status.hotspot_interface.interface }})</h3>
                 <div class="param-grid">
                     <div class="param-item">
-                        <div class="label">Type</div>
+                        <div class="label">Mode</div>
                         <div class="value">
                             <span class="badge {% if status.hotspot_interface.type == 'AP' %}badge-success{% else %}badge-warning{% endif %}">
                                 {{ status.hotspot_interface.type | upper }}
                             </span>
                         </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Hardware</div>
+                        <div class="value">
+                            {% if status.hotspot_interface.is_builtin %}
+                                Built-in WiFi
+                            {% else %}
+                                USB Dongle
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Driver</div>
+                        <div class="value">{{ status.hotspot_interface.driver or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">SSID</div>
@@ -1478,6 +1669,10 @@ HTML_TEMPLATE = '''
                         <div class="value">{{ status.hotspot_interface.tx_power or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
+                        <div class="label">MAC Address</div>
+                        <div class="value">{{ status.hotspot_interface.mac or 'N/A' }}</div>
+                    </div>
+                    <div class="param-item">
                         <div class="label">Connected Clients</div>
                         <div class="value">{{ status.clients }}</div>
                     </div>
@@ -1486,12 +1681,26 @@ HTML_TEMPLATE = '''
                 <h3>Upstream Interface ({{ status.upstream_interface.interface }})</h3>
                 <div class="param-grid">
                     <div class="param-item">
-                        <div class="label">Type</div>
+                        <div class="label">Mode</div>
                         <div class="value">
                             <span class="badge {% if status.upstream_interface.type == 'managed' %}badge-success{% else %}badge-warning{% endif %}">
                                 {{ status.upstream_interface.type | upper }}
                             </span>
                         </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Hardware</div>
+                        <div class="value">
+                            {% if status.upstream_interface.is_builtin %}
+                                Built-in WiFi
+                            {% else %}
+                                USB Dongle
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Driver</div>
+                        <div class="value">{{ status.upstream_interface.driver or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Status</div>
@@ -1513,7 +1722,44 @@ HTML_TEMPLATE = '''
                         <div class="label">Channel</div>
                         <div class="value">{{ status.upstream_interface.channel or 'N/A' }}</div>
                     </div>
+                    <div class="param-item">
+                        <div class="label">MAC Address</div>
+                        <div class="value">{{ status.upstream_interface.mac or 'N/A' }}</div>
+                    </div>
                 </div>
+
+                <!-- Show all interfaces if more than 2 -->
+                {% if status.all_interfaces and status.all_interfaces|length > 2 %}
+                <h3>All Wireless Interfaces</h3>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Interface</th>
+                            <th>Mode</th>
+                            <th>Role</th>
+                            <th>Hardware</th>
+                            <th>SSID</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for iface, info in status.all_interfaces.items() %}
+                        <tr>
+                            <td><strong>{{ iface }}</strong></td>
+                            <td>{{ info.type | upper }}</td>
+                            <td>{{ info.role | capitalize }}</td>
+                            <td>{% if info.is_builtin %}Built-in{% else %}USB{% endif %}</td>
+                            <td>{{ info.ssid or 'N/A' }}</td>
+                            <td>
+                                <span class="badge {% if info.connected %}badge-success{% else %}badge-warning{% endif %}">
+                                    {% if info.connected %}Active{% else %}Inactive{% endif %}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
             </div>
         </div>
 
@@ -1597,7 +1843,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.1.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.2.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>
