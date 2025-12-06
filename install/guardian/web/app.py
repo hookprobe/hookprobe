@@ -5,7 +5,7 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.2.1
+Version: 5.3.0
 """
 
 import os
@@ -374,7 +374,12 @@ def get_current_config():
 
 
 def get_status():
-    """Get current system status with dynamic interface detection."""
+    """Get current system status with dynamic interface detection.
+
+    Network Topology:
+    - WAN (upstream/internet): wlan0 (built-in, managed mode) or eth0
+    - LAN (hotspot/clients): USB WiFi dongle (AP mode, broadcasts Guardian SSID)
+    """
     status = {}
 
     # Discover all wireless interfaces dynamically
@@ -395,39 +400,67 @@ def get_status():
 
     status['all_interfaces'] = all_interfaces
 
-    # Determine which interface is hotspot (AP) and which is upstream (managed)
-    # Priority: 1) Check hostapd.conf for configured interface
-    #           2) Check actual interface type (AP vs managed)
-    #           3) Fallback to naming convention
+    # Check eth0 status for WAN bridging
+    eth0_info = {
+        'interface': 'eth0',
+        'connected': False,
+        'ip': None,
+        'carrier': False
+    }
+    eth0_carrier, _ = run_command('cat /sys/class/net/eth0/carrier 2>/dev/null')
+    eth0_info['carrier'] = eth0_carrier.strip() == '1'
+    eth0_ip, _ = run_command("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}'")
+    if eth0_ip:
+        eth0_info['ip'] = eth0_ip.strip()
+        eth0_info['connected'] = True
+    status['eth0'] = eth0_info
+
+    # Determine WAN and LAN interfaces
+    # WAN = managed mode (connects to upstream WiFi) or eth0
+    # LAN = AP mode (broadcasts Guardian hotspot)
 
     hostapd_iface = get_hostapd_interface()
-    hotspot_interface = None
-    upstream_interface = None
+    lan_interface = None  # AP mode - broadcasts Guardian SSID
+    wan_interface = None  # Managed mode - connects to upstream
 
-    # First pass: Find AP interface (either from hostapd config or actual type)
+    # First pass: Find LAN interface (AP mode for hotspot)
+    # Priority: hostapd.conf > actual AP mode > USB dongle
     for iface, info in all_interfaces.items():
         if hostapd_iface and iface == hostapd_iface:
-            hotspot_interface = info
+            lan_interface = info
+            lan_interface['role'] = 'lan'
+            break
         elif info['type'] == 'AP':
-            if not hotspot_interface:
-                hotspot_interface = info
+            if not lan_interface:
+                lan_interface = info
+                lan_interface['role'] = 'lan'
 
-    # Second pass: Find upstream (managed) interface
+    # Second pass: Find WAN interface (managed mode for upstream)
+    # Prefer built-in WiFi (wlan0) for WAN
     for iface, info in all_interfaces.items():
         if info['type'] == 'managed':
-            # Don't use the same interface as hotspot
-            if not hotspot_interface or info['interface'] != hotspot_interface['interface']:
-                upstream_interface = info
+            # Don't use the same interface as LAN
+            if not lan_interface or info['interface'] != lan_interface['interface']:
+                wan_interface = info
+                wan_interface['role'] = 'wan'
                 break
 
-    # Fallback: If we couldn't determine interfaces, use whatever we have
-    if not hotspot_interface and not upstream_interface:
-        # Just use first two interfaces found
-        iface_list = list(all_interfaces.values())
-        if len(iface_list) >= 1:
-            hotspot_interface = iface_list[0]
-        if len(iface_list) >= 2:
-            upstream_interface = iface_list[1]
+    # If no WAN WiFi, check if eth0 is connected
+    if not wan_interface and eth0_info['connected']:
+        wan_interface = {
+            'interface': 'eth0',
+            'type': 'wired',
+            'role': 'wan',
+            'ssid': None,
+            'channel': None,
+            'frequency': None,
+            'signal': None,
+            'tx_power': None,
+            'mac': None,
+            'connected': True,
+            'is_builtin': True,
+            'driver': 'ethernet'
+        }
 
     # Create empty interface info if not found
     empty_interface = {
@@ -445,19 +478,26 @@ def get_status():
         'driver': None
     }
 
-    status['hotspot_interface'] = hotspot_interface or empty_interface
-    status['upstream_interface'] = upstream_interface or empty_interface
+    # Use WAN/LAN naming but keep legacy names for compatibility
+    status['lan_interface'] = lan_interface or empty_interface
+    status['wan_interface'] = wan_interface or empty_interface
 
-    # Legacy compatibility fields
+    # Legacy compatibility (hotspot = LAN, upstream = WAN)
+    status['hotspot_interface'] = status['lan_interface']
+    status['upstream_interface'] = status['wan_interface']
     status['wlan0'] = all_interfaces.get('wlan0', empty_interface)
     status['wlan1'] = all_interfaces.get('wlan1', empty_interface)
 
     # Determine connection status
-    status['upstream_connected'] = (
-        status['upstream_interface']['type'] == 'managed' and
-        status['upstream_interface'].get('connected', False)
+    status['wan_connected'] = (
+        status['wan_interface']['type'] in ['managed', 'wired'] and
+        status['wan_interface'].get('connected', False)
     )
-    status['hotspot_active'] = status['hotspot_interface']['type'] == 'AP'
+    status['lan_active'] = status['lan_interface']['type'] == 'AP'
+
+    # Legacy compatibility
+    status['upstream_connected'] = status['wan_connected']
+    status['hotspot_active'] = status['lan_active']
 
     output, _ = run_command('hostname -I')
     status['ip_addresses'] = output.split()
@@ -468,8 +508,8 @@ def get_status():
     output, _ = run_command('systemctl is-active dnsmasq')
     status['dnsmasq'] = output == 'active'
 
-    # Get connected clients from AP interface
-    ap_iface = status['hotspot_interface']['interface']
+    # Get connected clients from LAN/AP interface
+    ap_iface = status['lan_interface']['interface']
     if ap_iface and ap_iface != 'none':
         output, _ = run_command(f'iw dev {ap_iface} station dump 2>/dev/null | grep Station | wc -l')
         status['clients'] = int(output) if output.isdigit() else 0
@@ -1226,24 +1266,24 @@ HTML_TEMPLATE = '''
                         <div class="label">Connected Clients</div>
                     </div>
                     <div class="status-item">
-                        <span class="badge {% if status.hotspot_active %}badge-success{% else %}badge-danger{% endif %}">
-                            {% if status.hotspot_active %}Broadcasting{% else %}Stopped{% endif %}
+                        <span class="badge {% if status.lan_active %}badge-success{% else %}badge-danger{% endif %}">
+                            {% if status.lan_active %}Broadcasting{% else %}Stopped{% endif %}
                         </span>
-                        <div class="label">Hotspot ({{ status.hotspot_interface.interface }})</div>
+                        <div class="label">LAN / Hotspot</div>
                         <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
-                            {{ status.hotspot_interface.ssid or config.hotspot_ssid }}
+                            {{ status.lan_interface.interface }} - {{ status.lan_interface.ssid or config.hotspot_ssid }}
                         </div>
                     </div>
                     <div class="status-item">
-                        <span class="badge {% if status.upstream_connected %}badge-success{% else %}badge-warning{% endif %}">
-                            {% if status.upstream_connected %}Connected{% else %}Disconnected{% endif %}
+                        <span class="badge {% if status.wan_connected %}badge-success{% else %}badge-warning{% endif %}">
+                            {% if status.wan_connected %}Connected{% else %}Disconnected{% endif %}
                         </span>
-                        <div class="label">Upstream ({{ status.upstream_interface.interface }})</div>
+                        <div class="label">WAN / Internet</div>
                         <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
-                            {% if status.upstream_connected %}
-                                {{ status.upstream_interface.ssid or 'Unknown' }}
+                            {% if status.wan_connected %}
+                                {{ status.wan_interface.interface }} - {{ status.wan_interface.ssid or status.wan_interface.type | upper }}
                             {% else %}
-                                Not connected
+                                {{ status.wan_interface.interface }} - Not connected
                             {% endif %}
                         </div>
                     </div>
@@ -1259,17 +1299,22 @@ HTML_TEMPLATE = '''
                 <div style="margin-top: 15px; padding: 12px; background: var(--hp-light); border-radius: 8px; font-size: 13px;">
                     <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                         <div>
-                            <strong>Hotspot:</strong>
-                            {{ status.hotspot_interface.interface }}
-                            ({{ status.hotspot_interface.type | upper }})
-                            {% if status.hotspot_interface.is_builtin %}- Built-in{% else %}- USB{% endif %}
+                            <strong>LAN (Hotspot):</strong>
+                            {{ status.lan_interface.interface }}
+                            ({{ status.lan_interface.type | upper }})
+                            {% if status.lan_interface.is_builtin %}- Built-in{% else %}- USB Dongle{% endif %}
                         </div>
                         <div>
-                            <strong>Upstream:</strong>
-                            {{ status.upstream_interface.interface }}
-                            ({{ status.upstream_interface.type | upper }})
-                            {% if status.upstream_interface.is_builtin %}- Built-in{% else %}- USB{% endif %}
+                            <strong>WAN (Internet):</strong>
+                            {{ status.wan_interface.interface }}
+                            ({{ status.wan_interface.type | upper }})
+                            {% if status.wan_interface.type == 'wired' %}- Ethernet{% elif status.wan_interface.is_builtin %}- Built-in{% else %}- USB{% endif %}
                         </div>
+                        {% if status.eth0.carrier %}
+                        <div>
+                            <strong>eth0:</strong> Connected {% if status.eth0.ip %}({{ status.eth0.ip }}){% endif %}
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -1605,28 +1650,32 @@ HTML_TEMPLATE = '''
 
                 <!-- Summary of detected interfaces -->
                 <div style="margin-bottom: 20px; padding: 12px; background: var(--hp-light); border-radius: 8px;">
-                    <strong>Detected Interfaces:</strong>
+                    <strong>Detected WiFi:</strong>
                     {% if status.wireless_interfaces %}
                         {{ status.wireless_interfaces | join(', ') }}
                     {% else %}
                         wlan0, wlan1 (default)
                     {% endif %}
+                    {% if status.eth0.carrier %}
+                    <span style="margin-left: 15px;"><strong>Ethernet:</strong> eth0 (connected)</span>
+                    {% endif %}
                 </div>
 
-                <h3>Hotspot Interface ({{ status.hotspot_interface.interface }})</h3>
+                <h3>LAN Interface - Hotspot ({{ status.lan_interface.interface }})</h3>
+                <p style="color: #6b7280; font-size: 12px; margin-bottom: 10px;">Broadcasts Guardian SSID for client connections</p>
                 <div class="param-grid">
                     <div class="param-item">
                         <div class="label">Mode</div>
                         <div class="value">
-                            <span class="badge {% if status.hotspot_interface.type == 'AP' %}badge-success{% else %}badge-warning{% endif %}">
-                                {{ status.hotspot_interface.type | upper }}
+                            <span class="badge {% if status.lan_interface.type == 'AP' %}badge-success{% else %}badge-warning{% endif %}">
+                                {{ status.lan_interface.type | upper }}
                             </span>
                         </div>
                     </div>
                     <div class="param-item">
                         <div class="label">Hardware</div>
                         <div class="value">
-                            {% if status.hotspot_interface.is_builtin %}
+                            {% if status.lan_interface.is_builtin %}
                                 Built-in WiFi
                             {% else %}
                                 USB Dongle
@@ -1635,23 +1684,23 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="param-item">
                         <div class="label">Driver</div>
-                        <div class="value">{{ status.hotspot_interface.driver or 'N/A' }}</div>
+                        <div class="value">{{ status.lan_interface.driver or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">SSID</div>
-                        <div class="value">{{ status.hotspot_interface.ssid or config.hotspot_ssid }}</div>
+                        <div class="value">{{ status.lan_interface.ssid or config.hotspot_ssid }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Channel</div>
-                        <div class="value">{{ status.hotspot_interface.channel or 'N/A' }}</div>
+                        <div class="value">{{ status.lan_interface.channel or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">TX Power</div>
-                        <div class="value">{{ status.hotspot_interface.tx_power or 'N/A' }}</div>
+                        <div class="value">{{ status.lan_interface.tx_power or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">MAC Address</div>
-                        <div class="value">{{ status.hotspot_interface.mac or 'N/A' }}</div>
+                        <div class="value">{{ status.lan_interface.mac or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Connected Clients</div>
@@ -1659,20 +1708,23 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <h3>Upstream Interface ({{ status.upstream_interface.interface }})</h3>
+                <h3>WAN Interface - Internet ({{ status.wan_interface.interface }})</h3>
+                <p style="color: #6b7280; font-size: 12px; margin-bottom: 10px;">Connects to upstream network for internet access</p>
                 <div class="param-grid">
                     <div class="param-item">
                         <div class="label">Mode</div>
                         <div class="value">
-                            <span class="badge {% if status.upstream_interface.type == 'managed' %}badge-success{% else %}badge-warning{% endif %}">
-                                {{ status.upstream_interface.type | upper }}
+                            <span class="badge {% if status.wan_interface.type in ['managed', 'wired'] %}badge-success{% else %}badge-warning{% endif %}">
+                                {{ status.wan_interface.type | upper }}
                             </span>
                         </div>
                     </div>
                     <div class="param-item">
                         <div class="label">Hardware</div>
                         <div class="value">
-                            {% if status.upstream_interface.is_builtin %}
+                            {% if status.wan_interface.type == 'wired' %}
+                                Ethernet
+                            {% elif status.wan_interface.is_builtin %}
                                 Built-in WiFi
                             {% else %}
                                 USB Dongle
@@ -1681,33 +1733,50 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="param-item">
                         <div class="label">Driver</div>
-                        <div class="value">{{ status.upstream_interface.driver or 'N/A' }}</div>
+                        <div class="value">{{ status.wan_interface.driver or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Status</div>
                         <div class="value">
-                            <span class="badge {% if status.upstream_connected %}badge-success{% else %}badge-danger{% endif %}">
-                                {% if status.upstream_connected %}Connected{% else %}Disconnected{% endif %}
+                            <span class="badge {% if status.wan_connected %}badge-success{% else %}badge-danger{% endif %}">
+                                {% if status.wan_connected %}Connected{% else %}Disconnected{% endif %}
                             </span>
                         </div>
                     </div>
                     <div class="param-item">
-                        <div class="label">SSID</div>
-                        <div class="value">{{ status.upstream_interface.ssid or 'Not connected' }}</div>
+                        <div class="label">Network</div>
+                        <div class="value">{{ status.wan_interface.ssid or 'Not connected' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Signal</div>
-                        <div class="value">{{ status.upstream_interface.signal or 'N/A' }}</div>
+                        <div class="value">{{ status.wan_interface.signal or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Channel</div>
-                        <div class="value">{{ status.upstream_interface.channel or 'N/A' }}</div>
+                        <div class="value">{{ status.wan_interface.channel or 'N/A' }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">MAC Address</div>
-                        <div class="value">{{ status.upstream_interface.mac or 'N/A' }}</div>
+                        <div class="value">{{ status.wan_interface.mac or 'N/A' }}</div>
                     </div>
                 </div>
+
+                {% if status.eth0.carrier %}
+                <h3>Ethernet (eth0)</h3>
+                <p style="color: #6b7280; font-size: 12px; margin-bottom: 10px;">Can be bridged to WAN for wired internet</p>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">Status</div>
+                        <div class="value">
+                            <span class="badge badge-success">Connected</span>
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">IP Address</div>
+                        <div class="value">{{ status.eth0.ip or 'DHCP' }}</div>
+                    </div>
+                </div>
+                {% endif %}
 
                 <!-- Show all interfaces if more than 2 -->
                 {% if status.all_interfaces and status.all_interfaces|length > 2 %}
@@ -1824,7 +1893,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.2.1 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.3.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>
