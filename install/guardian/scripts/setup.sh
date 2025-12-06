@@ -2515,15 +2515,29 @@ configure_sdn_mode() {
 
     # Check if FreeRADIUS is available and working
     local RADIUS_AVAILABLE=false
+
+    # Try to start FreeRADIUS and check if it actually works
+    systemctl start freeradius 2>/dev/null || true
+    sleep 2
+
     if systemctl is-active --quiet freeradius 2>/dev/null; then
-        RADIUS_AVAILABLE=true
-        log_info "FreeRADIUS is running - enabling 802.1X/MAC authentication"
+        # Double-check RADIUS is actually responding
+        if timeout 3 bash -c "echo 'Status-Server' | nc -u 127.0.0.1 1812" &>/dev/null || \
+           [ -S /var/run/freeradius/freeradius.sock ]; then
+            RADIUS_AVAILABLE=true
+            log_info "FreeRADIUS is running - enabling 802.1X/MAC authentication"
+        else
+            log_warn "FreeRADIUS started but not responding - using simple mode"
+        fi
     else
         log_warn "FreeRADIUS not running - using simple WiFi mode (no 802.1X)"
         log_warn "MAC-to-VLAN assignment will be managed via web UI when RADIUS is available"
+        # Disable FreeRADIUS to prevent crash loops
+        systemctl stop freeradius 2>/dev/null || true
+        systemctl disable freeradius 2>/dev/null || true
     fi
 
-    # Only use complex RADIUS config if FreeRADIUS is available
+    # Only use complex RADIUS config if FreeRADIUS is available AND working
     if [ "$RADIUS_AVAILABLE" = true ]; then
         # Preserve existing interface/driver/channel settings from base config
         local EXISTING_IFACE=$(grep "^interface=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
@@ -2563,15 +2577,30 @@ configure_sdn_mode() {
     else
         # Keep the simple base hostapd config (already created by configure_base_networking)
         log_info "Keeping simple hostapd configuration (no RADIUS/802.1X)"
+
+        # Make absolutely sure no VLAN/RADIUS settings are in the config
+        if [ -f /etc/hostapd/hostapd.conf ]; then
+            sed -i 's/^ieee8021x=.*/#ieee8021x=0/' /etc/hostapd/hostapd.conf
+            sed -i 's/^dynamic_vlan=.*/#dynamic_vlan=0/' /etc/hostapd/hostapd.conf
+            sed -i 's/^vlan_file=.*/#vlan_file=/' /etc/hostapd/hostapd.conf
+            sed -i 's/^vlan_tagged_interface=.*/#vlan_tagged_interface=/' /etc/hostapd/hostapd.conf
+            sed -i 's/^macaddr_acl=2/macaddr_acl=0/' /etc/hostapd/hostapd.conf
+            sed -i 's/^auth_server_addr=.*/#auth_server_addr=/' /etc/hostapd/hostapd.conf
+            sed -i 's/^acct_server_addr=.*/#acct_server_addr=/' /etc/hostapd/hostapd.conf
+        fi
     fi
 
-    # Configure dnsmasq for VLANs
-    cp "$CONFIG_DIR/dnsmasq.conf" /etc/dnsmasq.d/guardian.conf
+    # Only configure VLANs if RADIUS is working (dynamic VLAN requires RADIUS)
+    if [ "$RADIUS_AVAILABLE" = true ]; then
+        # Configure dnsmasq for VLANs
+        if [ -f "$CONFIG_DIR/dnsmasq.conf" ]; then
+            cp "$CONFIG_DIR/dnsmasq.conf" /etc/dnsmasq.d/guardian.conf
+        fi
 
-    # Create VLAN interfaces
-    log_info "Creating VLAN interfaces..."
+        # Create VLAN interfaces
+        log_info "Creating VLAN interfaces..."
 
-    local ETH_IFACE=$(echo $ETH_INTERFACES | awk '{print $1}')
+        local ETH_IFACE=$(echo $ETH_INTERFACES | awk '{print $1}')
 
     for vlan in 10 20 30 40 50 60 70 80 999; do
         # Create VLAN interface
@@ -2627,6 +2656,12 @@ table inet guardian {
 EOF
 
     nft -f /etc/nftables.d/guardian-vlans.nft 2>/dev/null || true
+
+        log_info "VLAN isolation rules configured"
+    else
+        log_info "Skipping VLAN configuration (FreeRADIUS not available)"
+        log_info "WiFi will work in simple mode without dynamic VLAN assignment"
+    fi
 
     log_info "SDN mode configuration complete"
 }
