@@ -86,7 +86,9 @@ from .network_segmentation import (
     VLANCategory,
     SecurityZone,
     TrafficAction,
-    SERVICE_PORTS
+    SERVICE_PORTS,
+    IOT_VENDOR_VLANS,
+    get_vlan_for_mac
 )
 
 __all__ = [
@@ -151,7 +153,9 @@ __all__ = [
     'VLANCategory',
     'SecurityZone',
     'TrafficAction',
-    'SERVICE_PORTS'
+    'SERVICE_PORTS',
+    'IOT_VENDOR_VLANS',
+    'get_vlan_for_mac'
 ]
 
 __version__ = '5.0.0'
