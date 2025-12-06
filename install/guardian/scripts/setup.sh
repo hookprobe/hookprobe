@@ -209,7 +209,108 @@ install_sdn_packages() {
         echo "8021q" >> /etc/modules
     fi
 
+    # Configure FreeRADIUS for Guardian MAC authentication
+    configure_freeradius
+
     log_info "SDN packages installed"
+}
+
+# ============================================================
+# FREERADIUS CONFIGURATION FOR MAC AUTHENTICATION
+# ============================================================
+configure_freeradius() {
+    log_step "Configuring FreeRADIUS for MAC authentication..."
+
+    local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_radius}"
+
+    # Backup original config if exists
+    if [ -d /etc/freeradius/3.0 ]; then
+        cp -n /etc/freeradius/3.0/clients.conf /etc/freeradius/3.0/clients.conf.bak 2>/dev/null || true
+    fi
+
+    # Create Guardian MAC database directory
+    mkdir -p /etc/guardian
+    chmod 755 /etc/guardian
+
+    # Copy MAC database template if not exists
+    if [ ! -f /etc/guardian/mac_vlan.json ]; then
+        if [ -f "$CONFIG_DIR/mac_vlan.json" ]; then
+            cp "$CONFIG_DIR/mac_vlan.json" /etc/guardian/mac_vlan.json
+        else
+            # Create default database
+            cat > /etc/guardian/mac_vlan.json << 'MACDBEOF'
+{
+  "version": "1.0",
+  "description": "HookProbe Guardian MAC-to-VLAN Database",
+  "default_vlan": 999,
+  "vlans": {
+    "10": {"name": "Smart Lights", "description": "Smart bulbs, LED strips"},
+    "20": {"name": "Thermostats", "description": "HVAC, smart thermostats"},
+    "30": {"name": "Cameras", "description": "Security cameras, doorbells"},
+    "40": {"name": "Voice Assistants", "description": "Alexa, Google Home"},
+    "50": {"name": "Appliances", "description": "Smart appliances, plugs"},
+    "60": {"name": "Entertainment", "description": "Smart TVs, streaming"},
+    "70": {"name": "Robots", "description": "Vacuums, lawn mowers"},
+    "80": {"name": "Sensors", "description": "Motion, door sensors"},
+    "100": {"name": "Trusted", "description": "Trusted user devices"},
+    "999": {"name": "Quarantine", "description": "Unknown/untrusted devices"}
+  },
+  "devices": {}
+}
+MACDBEOF
+        fi
+        chmod 644 /etc/guardian/mac_vlan.json
+    fi
+
+    # Configure FreeRADIUS clients (allow localhost)
+    if [ -f /etc/freeradius/3.0/clients.conf ]; then
+        # Check if Guardian client already exists
+        if ! grep -q "guardian-local" /etc/freeradius/3.0/clients.conf; then
+            cat >> /etc/freeradius/3.0/clients.conf << CLIENTEOF
+
+# HookProbe Guardian - Local hostapd client
+client guardian-local {
+    ipaddr = 127.0.0.1
+    secret = $RADIUS_SECRET
+    shortname = guardian
+    nastype = other
+    virtual_server = default
+}
+CLIENTEOF
+        fi
+    fi
+
+    # Create FreeRADIUS users file for MAC authentication
+    local RADIUS_USERS="/etc/freeradius/3.0/mods-config/files/authorize"
+    if [ -d /etc/freeradius/3.0/mods-config/files ]; then
+        cat > "$RADIUS_USERS" << 'USERSEOF'
+# HookProbe Guardian - MAC Authentication Database
+# Auto-generated - managed by Guardian web UI
+# All unregistered devices go to VLAN 999 (quarantine)
+
+# DEFAULT: Unregistered devices go to quarantine (VLAN 999)
+DEFAULT Cleartext-Password := "%{User-Name}"
+        Tunnel-Type = VLAN,
+        Tunnel-Medium-Type = IEEE-802,
+        Tunnel-Private-Group-Id = 999
+USERSEOF
+        chmod 640 "$RADIUS_USERS"
+        chown freerad:freerad "$RADIUS_USERS" 2>/dev/null || true
+    fi
+
+    # Enable and configure the files module for MAB
+    local FILES_MOD="/etc/freeradius/3.0/mods-enabled/files"
+    if [ -f /etc/freeradius/3.0/mods-available/files ]; then
+        ln -sf /etc/freeradius/3.0/mods-available/files "$FILES_MOD" 2>/dev/null || true
+    fi
+
+    # Enable FreeRADIUS service
+    systemctl enable freeradius 2>/dev/null || true
+    systemctl restart freeradius 2>/dev/null || true
+
+    log_info "FreeRADIUS configured for MAC authentication"
+    log_info "Default policy: All new devices → VLAN 999 (quarantine)"
+    log_info "Use Guardian web UI to assign devices to VLANs"
 }
 
 # ============================================================
@@ -2027,6 +2128,58 @@ configure_base_networking() {
     # Stop services during configuration
     systemctl stop hostapd 2>/dev/null || true
     systemctl stop dnsmasq 2>/dev/null || true
+
+    # ─────────────────────────────────────────────────────────────
+    # Prepare WiFi interface for AP mode
+    # ─────────────────────────────────────────────────────────────
+    log_info "Preparing $WIFI_IFACE for AP mode..."
+
+    # Kill any wpa_supplicant processes using this interface
+    pkill -f "wpa_supplicant.*$WIFI_IFACE" 2>/dev/null || true
+    sleep 1
+
+    # Stop NetworkManager from managing this interface
+    if command -v nmcli &>/dev/null; then
+        nmcli device set "$WIFI_IFACE" managed no 2>/dev/null || true
+    fi
+
+    # Remove interface from any existing bridge
+    for br in $(ls /sys/class/net/*/brif 2>/dev/null | xargs -I{} dirname {} | xargs -I{} basename {}); do
+        ip link set "$WIFI_IFACE" nomaster 2>/dev/null || true
+    done
+
+    # Bring interface down
+    ip link set "$WIFI_IFACE" down 2>/dev/null || true
+    sleep 1
+
+    # Check if interface supports AP mode
+    if ! iw list 2>/dev/null | grep -A 15 "Supported interface modes" | grep -q "\* AP"; then
+        log_error "WiFi interface $WIFI_IFACE does not support AP mode"
+        log_error "Please use a USB WiFi adapter that supports AP mode (e.g., RTL8812AU, MT7612U)"
+        exit 1
+    fi
+
+    # Set interface type to AP mode
+    log_info "Setting $WIFI_IFACE to AP mode..."
+    iw dev "$WIFI_IFACE" set type __ap 2>/dev/null || {
+        # Try alternative method
+        iw dev "$WIFI_IFACE" set type ap 2>/dev/null || {
+            log_warn "Could not set AP mode with iw, hostapd will attempt to set it"
+        }
+    }
+
+    # Bring interface back up
+    ip link set "$WIFI_IFACE" up 2>/dev/null || true
+    sleep 1
+
+    # Verify interface is ready
+    local iface_mode=$(iw dev "$WIFI_IFACE" info 2>/dev/null | grep -oP 'type \K\w+' || echo "unknown")
+    log_info "Interface $WIFI_IFACE mode: $iface_mode"
+
+    # Unblock WiFi if rfkill blocked
+    if command -v rfkill &>/dev/null; then
+        rfkill unblock wifi 2>/dev/null || true
+    fi
 
     # Create bridge interface
     log_info "Creating bridge br0..."
