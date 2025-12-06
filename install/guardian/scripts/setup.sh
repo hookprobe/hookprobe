@@ -2338,12 +2338,17 @@ EOF
     ip link set "$WIFI_IFACE" down 2>/dev/null || true
     sleep 1
 
-    # Run a quick syntax check
-    if hostapd -t /etc/hostapd/hostapd.conf 2>&1 | grep -qi "error\|invalid\|failed"; then
-        log_warn "Hostapd config test reported issues, checking..."
-        hostapd -t /etc/hostapd/hostapd.conf 2>&1 | head -20
-    else
+    # Run a quick syntax check with timeout (hostapd -t can hang on some systems)
+    local TEST_OUTPUT
+    if TEST_OUTPUT=$(timeout 5 hostapd -t /etc/hostapd/hostapd.conf 2>&1); then
         log_info "Hostapd configuration syntax OK"
+    elif [ $? -eq 124 ]; then
+        log_warn "Hostapd config test timed out (this is OK, will verify at startup)"
+    elif echo "$TEST_OUTPUT" | grep -qi "error\|invalid\|failed"; then
+        log_warn "Hostapd config may have issues:"
+        echo "$TEST_OUTPUT" | head -10
+    else
+        log_info "Hostapd configuration appears OK"
     fi
 
     # Configure hostapd daemon defaults
