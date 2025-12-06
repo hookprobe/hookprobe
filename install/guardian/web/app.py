@@ -417,18 +417,73 @@ def get_qsecbit_data():
         except:
             pass
 
-    # QSecBit stats
+    # QSecBit stats (new v5.0 format from guardian_agent.py)
     if QSECBIT_STATS.exists():
         try:
             qsec = json.loads(QSECBIT_STATS.read_text())
-            data['qsecbit']['status'] = 'active'
-            data['qsecbit']['connections'] = qsec.get('connections', 0)
+
+            # Main QSecBit metrics
+            data['qsecbit']['status'] = qsec.get('status', 'active')
+            data['qsecbit']['score'] = qsec.get('score', 0.0)
             data['qsecbit']['timestamp'] = qsec.get('timestamp')
-            data['qsecbit']['interfaces'] = qsec.get('interfaces', {})
-            data['qsecbit']['raw_stats'] = qsec.get('raw_interface_stats', '')
-            data['qsecbit']['rag'] = 'green'
-        except:
-            pass
+            data['qsecbit']['mode'] = qsec.get('mode', 'guardian-edge')
+            data['qsecbit']['version'] = qsec.get('version', '5.0.0')
+
+            # RAG from agent
+            rag_status = qsec.get('rag_status', 'GREEN').lower()
+            data['qsecbit']['rag'] = rag_status
+            data['overall_status'] = rag_status  # Override overall status
+
+            # Components (drift, attack_probability, classifier_decay, quantum_drift, energy_anomaly)
+            components = qsec.get('components', {})
+            data['qsecbit']['drift'] = components.get('drift', 0.0)
+            data['qsecbit']['attack_probability'] = components.get('attack_probability', 0.0)
+            data['qsecbit']['classifier_decay'] = components.get('classifier_decay', 0.0)
+            data['qsecbit']['quantum_drift'] = components.get('quantum_drift', 0.0)
+            data['qsecbit']['energy_anomaly'] = components.get('energy_anomaly', 0.0)
+
+            # XDP stats from agent
+            xdp_stats = qsec.get('xdp', {})
+            data['qsecbit']['xdp_enabled'] = xdp_stats.get('xdp_enabled', False)
+            data['qsecbit']['xdp_stats'] = xdp_stats
+
+            # Energy stats from agent
+            energy_stats = qsec.get('energy', {})
+            data['qsecbit']['rapl_available'] = energy_stats.get('rapl_available', False)
+            data['energy']['total_rx_bytes'] = energy_stats.get('total_rx_bytes', 0)
+            data['energy']['total_tx_bytes'] = energy_stats.get('total_tx_bytes', 0)
+            if 'interfaces' in energy_stats:
+                data['energy']['interfaces'] = energy_stats['interfaces']
+
+            # Network stats from agent
+            network_stats = qsec.get('network', {})
+            data['qsecbit']['connections'] = network_stats.get('connections', 0)
+            data['qsecbit']['nic_info'] = network_stats.get('nic_info', {})
+
+            # Threats and alerts counts from agent
+            data['threats']['count'] = qsec.get('threats', 0)
+            data['suricata']['alert_count'] = qsec.get('suricata_alerts', 0)
+
+            # Update threat RAG based on count
+            threat_count = qsec.get('threats', 0)
+            if threat_count == 0:
+                data['threats']['rag'] = 'green'
+            elif threat_count < 5:
+                data['threats']['rag'] = 'amber'
+            else:
+                data['threats']['rag'] = 'red'
+
+            # Update Suricata RAG based on alert count
+            alert_count = qsec.get('suricata_alerts', 0)
+            if alert_count == 0:
+                data['suricata']['rag'] = 'green'
+            elif alert_count < 10:
+                data['suricata']['rag'] = 'amber'
+            else:
+                data['suricata']['rag'] = 'red'
+
+        except Exception as e:
+            pass  # Fall back to defaults
 
     # Threats
     if QSECBIT_THREATS.exists():
@@ -1056,23 +1111,73 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <h3>QSecBit Agent Parameters</h3>
+                <h3>QSecBit Score &amp; Status</h3>
                 <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">QSecBit Score</div>
+                        <div class="value" style="font-size: 24px; font-weight: bold;">
+                            {{ "%.3f" | format(qsecbit.qsecbit.score|default(0)) }}
+                        </div>
+                    </div>
                     <div class="param-item">
                         <div class="label">Status</div>
                         <div class="value">{{ qsecbit.qsecbit.status }}</div>
                     </div>
                     <div class="param-item">
-                        <div class="label">Active Connections</div>
+                        <div class="label">Mode</div>
+                        <div class="value">{{ qsecbit.qsecbit.mode|default('guardian-edge') }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Version</div>
+                        <div class="value">{{ qsecbit.qsecbit.version|default('5.0.0') }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Connections</div>
                         <div class="value">{{ qsecbit.qsecbit.connections }}</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Last Update</div>
                         <div class="value">{{ qsecbit.qsecbit.timestamp[:19] if qsecbit.qsecbit.timestamp else 'N/A' }}</div>
                     </div>
+                </div>
+
+                <h3>QSecBit Components (Weights)</h3>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">Drift (α=0.25)</div>
+                        <div class="value">{{ "%.4f" | format(qsecbit.qsecbit.drift|default(0)) }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Attack Probability (β=0.25)</div>
+                        <div class="value">{{ "%.4f" | format(qsecbit.qsecbit.attack_probability|default(0)) }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Classifier Decay (γ=0.20)</div>
+                        <div class="value">{{ "%.4f" | format(qsecbit.qsecbit.classifier_decay|default(0)) }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Quantum Drift (δ=0.15)</div>
+                        <div class="value">{{ "%.4f" | format(qsecbit.qsecbit.quantum_drift|default(0)) }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Energy Anomaly (ε=0.15)</div>
+                        <div class="value">{{ "%.4f" | format(qsecbit.qsecbit.energy_anomaly|default(0)) }}</div>
+                    </div>
                     <div class="param-item">
                         <div class="label">Threats Detected</div>
                         <div class="value">{{ qsecbit.threats.count }}</div>
+                    </div>
+                </div>
+
+                <h3>RAPL Energy Monitoring</h3>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">RAPL Available</div>
+                        <div class="value">
+                            <span class="badge {% if qsecbit.qsecbit.rapl_available %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if qsecbit.qsecbit.rapl_available %}Yes{% else %}No{% endif %}
+                            </span>
+                        </div>
                     </div>
                 </div>
 
