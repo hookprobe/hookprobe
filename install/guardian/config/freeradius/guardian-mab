@@ -1,0 +1,60 @@
+#!/bin/bash
+# HookProbe Guardian - FreeRADIUS MAC Authentication Bypass (MAB) Script
+# This script is called by FreeRADIUS to lookup MAC→VLAN mappings
+#
+# Usage: Called by rlm_exec with MAC address as argument
+# Output: FreeRADIUS attribute=value pairs on stdout
+#
+# Default behavior: Unknown MACs → VLAN 999 (quarantine)
+
+MAC_DB="/etc/guardian/mac_vlan.json"
+DEFAULT_VLAN=999
+
+# Get MAC address (passed as username)
+MAC="$1"
+
+# Normalize MAC address (lowercase, colon-separated)
+MAC=$(echo "$MAC" | tr '[:upper:]' '[:lower:]' | sed 's/[-.]/:/' | sed 's/\(..\)/\1:/g' | sed 's/:$//')
+
+# Check if database exists
+if [ ! -f "$MAC_DB" ]; then
+    # Return default VLAN (quarantine)
+    echo "Tunnel-Type := VLAN"
+    echo "Tunnel-Medium-Type := IEEE-802"
+    echo "Tunnel-Private-Group-Id := $DEFAULT_VLAN"
+    exit 0
+fi
+
+# Lookup MAC in database using Python (handles JSON properly)
+VLAN=$(python3 -c "
+import json
+import sys
+try:
+    with open('$MAC_DB') as f:
+        db = json.load(f)
+    mac = '$MAC'.lower()
+    # Try exact match
+    if mac in db.get('devices', {}):
+        print(db['devices'][mac].get('vlan', $DEFAULT_VLAN))
+    else:
+        # Try without colons
+        mac_clean = mac.replace(':', '')
+        for k, v in db.get('devices', {}).items():
+            if k.replace(':', '').lower() == mac_clean:
+                print(v.get('vlan', $DEFAULT_VLAN))
+                sys.exit(0)
+        print($DEFAULT_VLAN)
+except Exception as e:
+    print($DEFAULT_VLAN, file=sys.stderr)
+    print($DEFAULT_VLAN)
+" 2>/dev/null)
+
+# Default to quarantine if lookup failed
+VLAN=${VLAN:-$DEFAULT_VLAN}
+
+# Output RADIUS attributes for VLAN assignment
+echo "Tunnel-Type := VLAN"
+echo "Tunnel-Medium-Type := IEEE-802"
+echo "Tunnel-Private-Group-Id := $VLAN"
+
+exit 0
