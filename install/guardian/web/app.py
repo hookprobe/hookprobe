@@ -5,7 +5,7 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.0.0
+Version: 5.1.0
 """
 
 import os
@@ -61,15 +61,13 @@ def scan_wifi():
 
     # Method 1: Try wpa_cli (works when wpa_supplicant is running)
     for iface in ['wlan1', 'wlan0']:
-        # Trigger scan via wpa_cli
         run_command(f'wpa_cli -i {iface} scan 2>/dev/null', timeout=10)
-        time.sleep(3)  # Wait for scan to complete
+        time.sleep(3)
 
-        # Get scan results
         output, success = run_command(f'wpa_cli -i {iface} scan_results 2>/dev/null', timeout=10)
         if success and output and 'bssid' in output.lower():
             lines = output.strip().split('\n')
-            for line in lines[1:]:  # Skip header
+            for line in lines[1:]:
                 parts = line.split('\t')
                 if len(parts) >= 5:
                     try:
@@ -82,13 +80,10 @@ def scan_wifi():
         if networks:
             break
 
-    # Method 2: Try iw scan (needs interface not in use by hostapd)
+    # Method 2: Try iw scan
     if not networks:
         for iface in ['wlan1', 'wlan0']:
-            # Bring interface up
             run_command(f'ip link set {iface} up 2>/dev/null')
-
-            # Direct scan (blocking, more reliable)
             output, success = run_command(f'iw dev {iface} scan 2>/dev/null', timeout=15)
 
             if success and output and 'BSS' in output:
@@ -152,7 +147,7 @@ def scan_wifi():
                     parts = line.rsplit(':', 1)
                     ssid = parts[0]
                     try:
-                        signal = int(parts[1]) - 100 if parts[1].isdigit() else -70  # Convert % to dBm approx
+                        signal = int(parts[1]) - 100 if parts[1].isdigit() else -70
                     except:
                         signal = -70
                     if ssid:
@@ -222,6 +217,22 @@ def get_status():
 
     status['mode'] = get_mode()
 
+    # System info
+    output, _ = run_command('uptime -p 2>/dev/null || uptime')
+    status['uptime'] = output
+
+    output, _ = run_command("free -m | awk '/Mem:/ {printf \"%.0f%%\", $3/$2*100}'")
+    status['memory_usage'] = output
+
+    output, _ = run_command("df -h / | awk 'NR==2 {print $5}'")
+    status['disk_usage'] = output
+
+    output, _ = run_command("cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null")
+    if output and output.isdigit():
+        status['cpu_temp'] = f"{int(output) / 1000:.1f}°C"
+    else:
+        status['cpu_temp'] = 'N/A'
+
     return status
 
 
@@ -239,51 +250,93 @@ def get_container_status():
 
     for key, container in containers.items():
         container['running'] = container['name'] in running
-
-        # Get service status as fallback
         svc_output, _ = run_command(f'systemctl is-active {container["name"]}')
         container['service_active'] = svc_output == 'active'
 
     return containers
 
 
-def get_security_data():
-    """Get all security-related data."""
+def get_qsecbit_data():
+    """Get comprehensive QSecBit/Neuro security data with RAG status."""
     data = {
-        'neuro': None,
-        'qsecbit': None,
-        'threats': [],
-        'suricata_alerts': [],
-        'ovs': None,
+        'overall_status': 'green',  # RAG status
+        'neuro': {
+            'status': 'inactive',
+            'mode': 'unknown',
+            'timestamp': None,
+            'rag': 'red'
+        },
+        'qsecbit': {
+            'status': 'inactive',
+            'connections': 0,
+            'timestamp': None,
+            'interfaces': {},
+            'rag': 'red'
+        },
+        'threats': {
+            'count': 0,
+            'recent': [],
+            'rag': 'green'
+        },
+        'suricata': {
+            'alerts': [],
+            'alert_count': 0,
+            'rag': 'green'
+        },
+        'ovs': {
+            'config': None,
+            'bridges': None,
+            'rag': 'amber'
+        }
     }
 
     # Neuro stats
     if NEURO_STATS.exists():
         try:
-            data['neuro'] = json.loads(NEURO_STATS.read_text())
+            neuro = json.loads(NEURO_STATS.read_text())
+            data['neuro']['status'] = neuro.get('status', 'unknown')
+            data['neuro']['mode'] = neuro.get('mode', 'unknown')
+            data['neuro']['timestamp'] = neuro.get('timestamp')
+            data['neuro']['rag'] = 'green' if neuro.get('status') == 'active' else 'amber'
         except:
             pass
 
     # QSecBit stats
     if QSECBIT_STATS.exists():
         try:
-            data['qsecbit'] = json.loads(QSECBIT_STATS.read_text())
+            qsec = json.loads(QSECBIT_STATS.read_text())
+            data['qsecbit']['status'] = 'active'
+            data['qsecbit']['connections'] = qsec.get('connections', 0)
+            data['qsecbit']['timestamp'] = qsec.get('timestamp')
+            data['qsecbit']['interfaces'] = qsec.get('interfaces', {})
+            data['qsecbit']['raw_stats'] = qsec.get('raw_interface_stats', '')
+            data['qsecbit']['rag'] = 'green'
         except:
             pass
 
-    # Recent threats
+    # Threats
     if QSECBIT_THREATS.exists():
         try:
             threats = []
-            for line in QSECBIT_THREATS.read_text().strip().split('\n')[-10:]:
-                if line:
-                    threats.append(json.loads(line))
-            data['threats'] = threats
+            content = QSECBIT_THREATS.read_text().strip()
+            if content:
+                for line in content.split('\n')[-20:]:
+                    if line:
+                        threats.append(json.loads(line))
+            data['threats']['recent'] = threats[-10:]
+            data['threats']['count'] = len(threats)
+            # RAG based on threat count
+            if len(threats) == 0:
+                data['threats']['rag'] = 'green'
+            elif len(threats) < 5:
+                data['threats']['rag'] = 'amber'
+            else:
+                data['threats']['rag'] = 'red'
         except:
             pass
 
-    # Suricata alerts from eve.json
-    output, success = run_command('podman exec guardian-suricata tail -50 /var/log/suricata/eve.json 2>/dev/null')
+    # Suricata alerts
+    output, success = run_command('podman exec guardian-suricata tail -100 /var/log/suricata/eve.json 2>/dev/null')
     if success and output:
         alerts = []
         for line in output.split('\n'):
@@ -296,10 +349,20 @@ def get_security_data():
                         'severity': event.get('alert', {}).get('severity', 0),
                         'src_ip': event.get('src_ip', ''),
                         'dest_ip': event.get('dest_ip', ''),
+                        'category': event.get('alert', {}).get('category', ''),
                     })
             except:
                 pass
-        data['suricata_alerts'] = alerts[-10:]  # Last 10 alerts
+        data['suricata']['alerts'] = alerts[-15:]
+        data['suricata']['alert_count'] = len(alerts)
+        # RAG based on severity
+        high_sev = sum(1 for a in alerts if a.get('severity', 0) <= 2)
+        if high_sev > 0:
+            data['suricata']['rag'] = 'red'
+        elif len(alerts) > 0:
+            data['suricata']['rag'] = 'amber'
+        else:
+            data['suricata']['rag'] = 'green'
 
     # OVS config
     if OVS_CONFIG.exists():
@@ -309,14 +372,24 @@ def get_security_data():
                 if '=' in line and not line.startswith('#'):
                     key, val = line.split('=', 1)
                     ovs_data[key.strip()] = val.strip()
-            data['ovs'] = ovs_data
+            data['ovs']['config'] = ovs_data
+            data['ovs']['rag'] = 'green'
         except:
             pass
 
-    # OVS bridge info
     output, _ = run_command('ovs-vsctl show 2>/dev/null')
     if output:
-        data['ovs_bridges'] = output
+        data['ovs']['bridges'] = output
+        data['ovs']['rag'] = 'green'
+
+    # Calculate overall RAG
+    rags = [data['neuro']['rag'], data['qsecbit']['rag'], data['threats']['rag'], data['suricata']['rag']]
+    if 'red' in rags:
+        data['overall_status'] = 'red'
+    elif 'amber' in rags:
+        data['overall_status'] = 'amber'
+    else:
+        data['overall_status'] = 'green'
 
     return data
 
@@ -348,7 +421,7 @@ def get_sdn_stats():
     return stats
 
 
-# HTML Template with Tabs
+# HTML Template with Tabs - Reorganized
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -360,9 +433,9 @@ HTML_TEMPLATE = '''
         :root {
             --hp-primary: #2563eb;
             --hp-primary-dark: #1d4ed8;
-            --hp-secondary: #10b981;
-            --hp-warning: #f59e0b;
-            --hp-danger: #ef4444;
+            --hp-green: #10b981;
+            --hp-amber: #f59e0b;
+            --hp-red: #ef4444;
             --hp-dark: #1f2937;
             --hp-light: #f3f4f6;
             --hp-border: #e5e7eb;
@@ -392,7 +465,7 @@ HTML_TEMPLATE = '''
             margin-top: 10px;
         }
         .mode-basic { background: var(--hp-primary); }
-        .mode-sdn { background: var(--hp-secondary); }
+        .mode-sdn { background: var(--hp-green); }
 
         /* Tabs */
         .tabs {
@@ -450,6 +523,57 @@ HTML_TEMPLATE = '''
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
+
+        /* RAG Indicators */
+        .rag-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .rag-green { background: #dcfce7; color: #166534; }
+        .rag-amber { background: #fef3c7; color: #92400e; }
+        .rag-red { background: #fee2e2; color: #991b1b; }
+        .rag-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        .rag-green .rag-dot { background: #22c55e; }
+        .rag-amber .rag-dot { background: #f59e0b; }
+        .rag-red .rag-dot { background: #ef4444; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* RAG Summary Cards */
+        .rag-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .rag-card {
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            border: 2px solid;
+        }
+        .rag-card.green { background: #f0fdf4; border-color: #22c55e; }
+        .rag-card.amber { background: #fffbeb; border-color: #f59e0b; }
+        .rag-card.red { background: #fef2f2; border-color: #ef4444; }
+        .rag-card .title { font-size: 12px; color: #6b7280; text-transform: uppercase; margin-bottom: 8px; }
+        .rag-card .value { font-size: 24px; font-weight: 700; }
+        .rag-card.green .value { color: #166534; }
+        .rag-card.amber .value { color: #92400e; }
+        .rag-card.red .value { color: #991b1b; }
+        .rag-card .status { font-size: 13px; margin-top: 5px; }
 
         .status-grid {
             display: grid;
@@ -533,8 +657,8 @@ HTML_TEMPLATE = '''
         .btn-primary { background: var(--hp-primary); color: white; }
         .btn-primary:hover { background: var(--hp-primary-dark); }
         .btn-secondary { background: #6b7280; color: white; }
-        .btn-success { background: var(--hp-secondary); color: white; }
-        .btn-danger { background: var(--hp-danger); color: white; }
+        .btn-success { background: var(--hp-green); color: white; }
+        .btn-danger { background: var(--hp-red); color: white; }
         .btn-sm { padding: 8px 16px; font-size: 13px; }
         .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
 
@@ -610,21 +734,25 @@ HTML_TEMPLATE = '''
             font-size: 13px;
         }
         .alert-item:last-child { border-bottom: none; }
-        .alert-item .signature { font-weight: 500; color: var(--hp-danger); }
+        .alert-item .signature { font-weight: 500; }
+        .alert-item.sev-high .signature { color: var(--hp-red); }
+        .alert-item.sev-medium .signature { color: var(--hp-amber); }
+        .alert-item.sev-low .signature { color: var(--hp-green); }
         .alert-item .meta { color: #6b7280; font-size: 12px; margin-top: 4px; }
 
-        /* JSON Display */
-        .json-display {
-            background: #1f2937;
-            color: #10b981;
-            padding: 15px;
-            border-radius: 8px;
-            font-family: monospace;
-            font-size: 13px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
+        /* Param Grid */
+        .param-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
         }
+        .param-item {
+            padding: 12px;
+            background: var(--hp-light);
+            border-radius: 8px;
+        }
+        .param-item .label { font-size: 11px; color: #6b7280; text-transform: uppercase; }
+        .param-item .value { font-size: 16px; font-weight: 600; color: var(--hp-dark); margin-top: 4px; }
 
         .flash {
             padding: 15px 20px;
@@ -633,6 +761,12 @@ HTML_TEMPLATE = '''
         }
         .flash-success { background: #dcfce7; color: #166534; }
         .flash-error { background: #fee2e2; color: #991b1b; }
+
+        .section-divider {
+            border-top: 1px solid var(--hp-border);
+            margin: 25px 0;
+            padding-top: 25px;
+        }
 
         .footer {
             text-align: center;
@@ -646,6 +780,7 @@ HTML_TEMPLATE = '''
             .tabs { flex-wrap: nowrap; }
             .tab { padding: 12px 15px; font-size: 14px; }
             .status-grid { grid-template-columns: repeat(2, 1fr); }
+            .rag-grid { grid-template-columns: repeat(2, 1fr); }
             .btn-group { flex-direction: column; }
             .btn { width: 100%; }
         }
@@ -665,7 +800,7 @@ HTML_TEMPLATE = '''
         <div class="tab active" data-tab="dashboard">Dashboard</div>
         <div class="tab" data-tab="security">Security</div>
         <div class="tab" data-tab="wifi">WiFi</div>
-        <div class="tab" data-tab="settings">Settings</div>
+        <div class="tab" data-tab="system">System</div>
     </div>
 
     <div class="container">
@@ -680,7 +815,41 @@ HTML_TEMPLATE = '''
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
             <div class="card">
-                <h2>System Status</h2>
+                <h2>Security Overview</h2>
+                <div class="rag-grid">
+                    <div class="rag-card {{ qsecbit.overall_status }}">
+                        <div class="title">Overall Status</div>
+                        <div class="value">
+                            {% if qsecbit.overall_status == 'green' %}SECURE
+                            {% elif qsecbit.overall_status == 'amber' %}CAUTION
+                            {% else %}ALERT{% endif %}
+                        </div>
+                        <div class="status">
+                            {% if qsecbit.overall_status == 'green' %}All systems normal
+                            {% elif qsecbit.overall_status == 'amber' %}Review recommended
+                            {% else %}Immediate attention{% endif %}
+                        </div>
+                    </div>
+                    <div class="rag-card {{ qsecbit.threats.rag }}">
+                        <div class="title">Threats</div>
+                        <div class="value">{{ qsecbit.threats.count }}</div>
+                        <div class="status">Detected</div>
+                    </div>
+                    <div class="rag-card {{ qsecbit.suricata.rag }}">
+                        <div class="title">IDS Alerts</div>
+                        <div class="value">{{ qsecbit.suricata.alert_count }}</div>
+                        <div class="status">Recent</div>
+                    </div>
+                    <div class="rag-card {{ qsecbit.neuro.rag }}">
+                        <div class="title">Neuro Protocol</div>
+                        <div class="value">{{ qsecbit.neuro.status | upper }}</div>
+                        <div class="status">{{ qsecbit.neuro.mode }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Network Status</h2>
                 <div class="status-grid">
                     <div class="status-item">
                         <div class="value">{{ status.clients }}</div>
@@ -720,66 +889,113 @@ HTML_TEMPLATE = '''
                     {% endfor %}
                 </div>
             </div>
-
-            {% if config.mode == 'sdn' and sdn_stats %}
-            <div class="card">
-                <h2>SDN Status</h2>
-                <div class="status-grid">
-                    <div class="status-item">
-                        <div class="value">{{ sdn_stats.vlans|length }}</div>
-                        <div class="label">Active VLANs</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value">{{ sdn_stats.devices }}</div>
-                        <div class="label">Total Devices</div>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
         </div>
 
         <!-- Security Tab -->
         <div id="security" class="tab-content">
             <div class="card">
-                <h2>QSecBit / Neuro Protocol</h2>
+                <h2>QSecBit Security Status</h2>
 
-                <h3>Neuro Stats</h3>
-                {% if security_data.neuro %}
-                <div class="json-display">{{ security_data.neuro | tojson(indent=2) }}</div>
-                {% else %}
-                <p style="color: #6b7280;">No Neuro data available. Container may be starting...</p>
-                {% endif %}
+                <!-- RAG Summary -->
+                <div class="rag-grid">
+                    <div class="rag-card {{ qsecbit.neuro.rag }}">
+                        <div class="title">Neuro Protocol</div>
+                        <div class="value">{{ qsecbit.neuro.status | upper }}</div>
+                    </div>
+                    <div class="rag-card {{ qsecbit.qsecbit.rag }}">
+                        <div class="title">QSecBit Agent</div>
+                        <div class="value">{{ qsecbit.qsecbit.status | upper }}</div>
+                    </div>
+                    <div class="rag-card {{ qsecbit.threats.rag }}">
+                        <div class="title">Threat Level</div>
+                        <div class="value">
+                            {% if qsecbit.threats.rag == 'green' %}LOW
+                            {% elif qsecbit.threats.rag == 'amber' %}MEDIUM
+                            {% else %}HIGH{% endif %}
+                        </div>
+                    </div>
+                    <div class="rag-card {{ qsecbit.suricata.rag }}">
+                        <div class="title">IDS Status</div>
+                        <div class="value">
+                            {% if qsecbit.suricata.rag == 'green' %}CLEAR
+                            {% elif qsecbit.suricata.rag == 'amber' %}ALERTS
+                            {% else %}CRITICAL{% endif %}
+                        </div>
+                    </div>
+                </div>
 
-                <h3>QSecBit Agent Stats</h3>
-                {% if security_data.qsecbit %}
-                <div class="json-display">{{ security_data.qsecbit | tojson(indent=2) }}</div>
-                {% else %}
-                <p style="color: #6b7280;">No QSecBit data available.</p>
-                {% endif %}
+                <h3>Neuro Protocol Parameters</h3>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">Status</div>
+                        <div class="value">{{ qsecbit.neuro.status }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Mode</div>
+                        <div class="value">{{ qsecbit.neuro.mode }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Last Update</div>
+                        <div class="value">{{ qsecbit.neuro.timestamp[:19] if qsecbit.neuro.timestamp else 'N/A' }}</div>
+                    </div>
+                </div>
+
+                <h3>QSecBit Agent Parameters</h3>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">Status</div>
+                        <div class="value">{{ qsecbit.qsecbit.status }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Active Connections</div>
+                        <div class="value">{{ qsecbit.qsecbit.connections }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Last Update</div>
+                        <div class="value">{{ qsecbit.qsecbit.timestamp[:19] if qsecbit.qsecbit.timestamp else 'N/A' }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Threats Detected</div>
+                        <div class="value">{{ qsecbit.threats.count }}</div>
+                    </div>
+                </div>
             </div>
 
             <div class="card">
                 <h2>Suricata IDS Alerts</h2>
-                {% if security_data.suricata_alerts %}
+                <div style="margin-bottom: 15px;">
+                    <span class="rag-indicator rag-{{ qsecbit.suricata.rag }}">
+                        <span class="rag-dot"></span>
+                        {{ qsecbit.suricata.alert_count }} alerts detected
+                    </span>
+                </div>
+                {% if qsecbit.suricata.alerts %}
                 <div class="alert-list">
-                    {% for alert in security_data.suricata_alerts %}
-                    <div class="alert-item">
+                    {% for alert in qsecbit.suricata.alerts %}
+                    <div class="alert-item {% if alert.severity <= 2 %}sev-high{% elif alert.severity == 3 %}sev-medium{% else %}sev-low{% endif %}">
                         <div class="signature">{{ alert.signature }}</div>
                         <div class="meta">
                             {{ alert.timestamp }} | Severity: {{ alert.severity }} |
-                            {{ alert.src_ip }} → {{ alert.dest_ip }}
+                            {{ alert.src_ip }} &rarr; {{ alert.dest_ip }}
+                            {% if alert.category %}| {{ alert.category }}{% endif %}
                         </div>
                     </div>
                     {% endfor %}
                 </div>
                 {% else %}
-                <p style="color: #6b7280;">No alerts detected. Your network is secure!</p>
+                <p style="color: #6b7280;">No alerts detected. Network is secure.</p>
                 {% endif %}
             </div>
 
             <div class="card">
                 <h2>Threat Log</h2>
-                {% if security_data.threats %}
+                <div style="margin-bottom: 15px;">
+                    <span class="rag-indicator rag-{{ qsecbit.threats.rag }}">
+                        <span class="rag-dot"></span>
+                        {{ qsecbit.threats.count }} threats logged
+                    </span>
+                </div>
+                {% if qsecbit.threats.recent %}
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -790,7 +1006,7 @@ HTML_TEMPLATE = '''
                         </tr>
                     </thead>
                     <tbody>
-                        {% for threat in security_data.threats %}
+                        {% for threat in qsecbit.threats.recent %}
                         <tr>
                             <td>{{ threat.timestamp[:19] if threat.timestamp else 'N/A' }}</td>
                             <td>{{ threat.signature or 'Unknown' }}</td>
@@ -807,23 +1023,52 @@ HTML_TEMPLATE = '''
 
             <div class="card">
                 <h2>OVS / VXLAN Configuration</h2>
-                {% if security_data.ovs %}
-                <div class="json-display">{{ security_data.ovs | tojson(indent=2) }}</div>
-                {% else %}
-                <p style="color: #6b7280;">OVS configuration not available.</p>
+                <div style="margin-bottom: 15px;">
+                    <span class="rag-indicator rag-{{ qsecbit.ovs.rag }}">
+                        <span class="rag-dot"></span>
+                        {% if qsecbit.ovs.config %}Configured{% else %}Not configured{% endif %}
+                    </span>
+                </div>
+                {% if qsecbit.ovs.config %}
+                <div class="param-grid">
+                    {% for key, value in qsecbit.ovs.config.items() %}
+                    <div class="param-item">
+                        <div class="label">{{ key }}</div>
+                        <div class="value">{{ value }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
                 {% endif %}
 
-                {% if security_data.ovs_bridges %}
+                {% if qsecbit.ovs.bridges %}
                 <h3>OVS Bridges</h3>
-                <div class="json-display">{{ security_data.ovs_bridges }}</div>
+                <pre style="background: #1f2937; color: #10b981; padding: 15px; border-radius: 8px; font-size: 12px; overflow-x: auto;">{{ qsecbit.ovs.bridges }}</pre>
                 {% endif %}
             </div>
         </div>
 
-        <!-- WiFi Tab -->
+        <!-- WiFi Tab - All WiFi Settings -->
         <div id="wifi" class="tab-content">
             <div class="card">
-                <h2>Connect to Upstream WiFi</h2>
+                <h2>Hotspot Settings</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">
+                    Configure the WiFi hotspot that clients connect to.
+                </p>
+                <form method="post" action="/hotspot">
+                    <div class="form-group">
+                        <label>Hotspot Name (SSID)</label>
+                        <input type="text" name="ssid" value="{{ config.hotspot_ssid }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Password (min 8 characters)</label>
+                        <input type="password" name="password" value="{{ config.hotspot_password }}" minlength="8" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Hotspot Settings</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Upstream WiFi Connection</h2>
                 <p style="color: #6b7280; margin-bottom: 15px;">
                     Connect Guardian to an existing WiFi network for internet access.
                 </p>
@@ -838,7 +1083,7 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="btn-group">
                         <button type="submit" class="btn btn-primary">Connect</button>
-                        <a href="/scan" class="btn btn-secondary">Scan Networks</a>
+                        <a href="/scan#wifi" class="btn btn-secondary">Scan Networks</a>
                     </div>
                 </form>
 
@@ -857,22 +1102,84 @@ HTML_TEMPLATE = '''
                 <p style="color: #6b7280;">No networks found. Try scanning again.</p>
                 {% endif %}
             </div>
+
+            <div class="card">
+                <h2>WiFi Status</h2>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">Hotspot</div>
+                        <div class="value">
+                            <span class="badge {% if status.hostapd %}badge-success{% else %}badge-danger{% endif %}">
+                                {% if status.hostapd %}Running{% else %}Stopped{% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Upstream</div>
+                        <div class="value">
+                            <span class="badge {% if status.upstream_connected %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if status.upstream_connected %}Connected{% else %}Disconnected{% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Connected Clients</div>
+                        <div class="value">{{ status.clients }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Hotspot SSID</div>
+                        <div class="value">{{ config.hotspot_ssid }}</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <!-- Settings Tab -->
-        <div id="settings" class="tab-content">
+        <!-- System Tab -->
+        <div id="system" class="tab-content">
             <div class="card">
-                <h2>Hotspot Settings</h2>
-                <form method="post" action="/hotspot">
-                    <div class="form-group">
-                        <label>Hotspot Name (SSID)</label>
-                        <input type="text" name="ssid" value="{{ config.hotspot_ssid }}" required>
+                <h2>System Information</h2>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">Mode</div>
+                        <div class="value">{{ config.mode | upper }}</div>
                     </div>
-                    <div class="form-group">
-                        <label>Password (min 8 characters)</label>
-                        <input type="password" name="password" value="{{ config.hotspot_password }}" minlength="8" required>
+                    <div class="param-item">
+                        <div class="label">IP Addresses</div>
+                        <div class="value">{{ status.ip_addresses | join(', ') }}</div>
                     </div>
-                    <button type="submit" class="btn btn-primary">Save Settings</button>
+                    <div class="param-item">
+                        <div class="label">Uptime</div>
+                        <div class="value">{{ status.uptime }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Memory Usage</div>
+                        <div class="value">{{ status.memory_usage }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Disk Usage</div>
+                        <div class="value">{{ status.disk_usage }}</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">CPU Temperature</div>
+                        <div class="value">{{ status.cpu_temp }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Container Management</h2>
+                <div class="container-grid" style="margin-bottom: 20px;">
+                    {% for key, container in containers.items() %}
+                    <div class="container-item">
+                        <span class="name">{{ container.label }}</span>
+                        <span class="badge {% if container.running %}badge-success{% else %}badge-danger{% endif %}">
+                            {% if container.running %}Running{% else %}Stopped{% endif %}
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <form method="post" action="/action">
+                    <button type="submit" name="action" value="restart_containers" class="btn btn-secondary">Restart All Containers</button>
                 </form>
             </div>
 
@@ -881,27 +1188,33 @@ HTML_TEMPLATE = '''
                 <form method="post" action="/action">
                     <div class="btn-group">
                         <button type="submit" name="action" value="restart_hostapd" class="btn btn-primary">Restart Hotspot</button>
-                        <button type="submit" name="action" value="restart_containers" class="btn btn-secondary">Restart Containers</button>
                         <button type="submit" name="action" value="restart_network" class="btn btn-secondary">Restart Network</button>
-                        <button type="submit" name="action" value="reboot" class="btn btn-danger" onclick="return confirm('Reboot Guardian?')">Reboot</button>
+                        <button type="submit" name="action" value="restart_services" class="btn btn-secondary">Restart All Services</button>
+                        <button type="submit" name="action" value="reboot" class="btn btn-danger" onclick="return confirm('Reboot Guardian?')">Reboot System</button>
                     </div>
                 </form>
             </div>
 
+            {% if config.mode == 'sdn' and sdn_stats %}
             <div class="card">
-                <h2>System Info</h2>
-                <table class="data-table">
-                    <tr><td><strong>Mode</strong></td><td>{{ config.mode | upper }}</td></tr>
-                    <tr><td><strong>IP Addresses</strong></td><td>{{ status.ip_addresses | join(', ') }}</td></tr>
-                    <tr><td><strong>Hotspot SSID</strong></td><td>{{ config.hotspot_ssid }}</td></tr>
-                    <tr><td><strong>Upstream WiFi</strong></td><td>{{ config.upstream_ssid or 'Not configured' }}</td></tr>
-                </table>
+                <h2>SDN Status</h2>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <div class="value">{{ sdn_stats.vlans|length }}</div>
+                        <div class="label">Active VLANs</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value">{{ sdn_stats.devices }}</div>
+                        <div class="label">Total Devices</div>
+                    </div>
+                </div>
             </div>
+            {% endif %}
         </div>
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.0.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.1.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>
@@ -912,6 +1225,7 @@ HTML_TEMPLATE = '''
                 document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 tab.classList.add('active');
                 document.getElementById(tab.dataset.tab).classList.add('active');
+                window.location.hash = tab.dataset.tab;
             });
         });
 
@@ -921,6 +1235,9 @@ HTML_TEMPLATE = '''
             const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
             if (tab) tab.click();
         }
+
+        // Auto-refresh every 30 seconds
+        setTimeout(() => location.reload(), 30000);
     </script>
 </body>
 </html>
@@ -933,7 +1250,7 @@ def index():
     status = get_status()
     sdn_stats = get_sdn_stats()
     containers = get_container_status()
-    security_data = get_security_data()
+    qsecbit = get_qsecbit_data()
     return render_template_string(
         HTML_TEMPLATE,
         config=config,
@@ -941,7 +1258,7 @@ def index():
         networks=[],
         sdn_stats=sdn_stats,
         containers=containers,
-        security_data=security_data,
+        qsecbit=qsecbit,
         show_scan_result=False
     )
 
@@ -952,7 +1269,7 @@ def scan():
     status = get_status()
     sdn_stats = get_sdn_stats()
     containers = get_container_status()
-    security_data = get_security_data()
+    qsecbit = get_qsecbit_data()
     networks = scan_wifi()
     return render_template_string(
         HTML_TEMPLATE,
@@ -961,7 +1278,7 @@ def scan():
         networks=networks,
         sdn_stats=sdn_stats,
         containers=containers,
-        security_data=security_data,
+        qsecbit=qsecbit,
         show_scan_result=True
     )
 
@@ -973,7 +1290,7 @@ def connect():
 
     if not ssid:
         flash('Please enter a network name', 'error')
-        return redirect('/')
+        return redirect('/#wifi')
 
     wpa_conf = f'''
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
@@ -994,7 +1311,7 @@ network={{
     except Exception as e:
         flash(f'Failed to connect: {e}', 'error')
 
-    return redirect('/')
+    return redirect('/#wifi')
 
 
 @app.route('/hotspot', methods=['POST'])
@@ -1004,7 +1321,7 @@ def hotspot():
 
     if not ssid or len(password) < 8:
         flash('Invalid SSID or password (min 8 chars)', 'error')
-        return redirect('/')
+        return redirect('/#wifi')
 
     try:
         content = HOSTAPD_CONF.read_text()
@@ -1016,7 +1333,7 @@ def hotspot():
     except Exception as e:
         flash(f'Failed to update: {e}', 'error')
 
-    return redirect('/')
+    return redirect('/#wifi')
 
 
 @app.route('/action', methods=['POST'])
@@ -1032,11 +1349,14 @@ def action():
     elif action == 'restart_network':
         run_command('systemctl restart networking')
         flash('Network restarted', 'success')
+    elif action == 'restart_services':
+        run_command('systemctl restart hostapd dnsmasq guardian-suricata guardian-waf guardian-neuro guardian-adguard guardian-webui')
+        flash('All services restarting...', 'success')
     elif action == 'reboot':
         run_command('reboot')
         flash('Rebooting...', 'success')
 
-    return redirect('/')
+    return redirect('/#system')
 
 
 @app.route('/api/status')
@@ -1046,7 +1366,7 @@ def api_status():
 
 @app.route('/api/security')
 def api_security():
-    return jsonify(get_security_data())
+    return jsonify(get_qsecbit_data())
 
 
 @app.route('/api/containers')
