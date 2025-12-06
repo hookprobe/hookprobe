@@ -4,9 +4,11 @@
 # Version: 5.0.0
 # License: MIT
 #
-# Installation modes:
-#   - Basic: Simple bridge (WiFi + LAN), DHCP client, no SDN
-#   - SDN:   Full VLAN segmentation with FreeRADIUS (requires MSSP)
+# Guardian provides unified installation with full SDN features:
+#   - WiFi + LAN bridge with VLAN segmentation
+#   - OpenFlow SDN with Open vSwitch
+#   - MAC-based device categorization via RADIUS
+#   - WebSocket VPN with Noise Protocol
 #
 
 set -e
@@ -2002,10 +2004,10 @@ EOF
 }
 
 # ============================================================
-# BASIC MODE CONFIGURATION (Simple Bridge)
+# BASE NETWORK CONFIGURATION (Bridge, Hostapd, DHCP)
 # ============================================================
-configure_basic_mode() {
-    log_step "Configuring Guardian in Basic Mode..."
+configure_base_networking() {
+    log_step "Configuring base networking..."
 
     local HOTSPOT_SSID="${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}"
     local HOTSPOT_PASS="${HOOKPROBE_WIFI_PASS:-hookprobe123}"
@@ -2040,7 +2042,7 @@ configure_basic_mode() {
     # Configure hostapd (simple mode)
     log_info "Configuring hostapd..."
     cat > /etc/hostapd/hostapd.conf << EOF
-# HookProbe Guardian - Basic Mode
+# HookProbe Guardian - Base Network Configuration
 # Simple WiFi hotspot with bridge
 
 interface=$WIFI_IFACE
@@ -2166,7 +2168,7 @@ DHCPCD_EOF
     mkdir -p /etc/nftables.d
     cat > /etc/nftables.d/guardian.nft << 'EOF'
 #!/usr/sbin/nft -f
-# HookProbe Guardian - Basic NAT
+# HookProbe Guardian - NAT Rules
 # IMPORTANT: Preserves existing connections (SSH, etc.)
 
 # Delete old table if exists (clean slate)
@@ -2206,7 +2208,7 @@ EOF
         iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
     }
 
-    log_info "Basic mode configuration complete"
+    log_info "Base networking configuration complete"
 }
 
 # ============================================================
@@ -2796,10 +2798,10 @@ main() {
     log_step "Installing security containers..."
     install_security_containers
 
-    # Configure unified mode (combines basic networking + SDN features)
-    log_step "Configuring unified Guardian mode..."
-    configure_basic_mode   # Setup basic networking first
-    configure_sdn_mode     # Then add SDN/VLAN features on top
+    # Configure Guardian networking
+    log_step "Configuring Guardian networking..."
+    configure_base_networking   # Setup bridge, hostapd, DHCP
+    configure_sdn_mode          # Add SDN/VLAN features
 
     # Install QSecBit agent
     log_step "Installing QSecBit agent..."

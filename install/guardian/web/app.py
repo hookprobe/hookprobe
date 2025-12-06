@@ -53,14 +53,8 @@ def run_command(cmd, timeout=30):
 
 
 def get_mode():
-    """Get current Guardian mode (basic or sdn)."""
-    if MODE_FILE.exists():
-        return MODE_FILE.read_text().strip()
-    if HOSTAPD_CONF.exists():
-        content = HOSTAPD_CONF.read_text()
-        if 'dynamic_vlan=1' in content:
-            return 'sdn'
-    return 'basic'
+    """Get current Guardian mode (always unified with SDN)."""
+    return 'guardian'
 
 
 def scan_wifi():
@@ -1208,8 +1202,7 @@ HTML_TEMPLATE = '''
             text-transform: uppercase;
             margin-top: 10px;
         }
-        .mode-basic { background: var(--hp-primary); }
-        .mode-sdn { background: var(--hp-green); }
+        .mode-guardian { background: var(--hp-green); }
 
         /* Tabs */
         .tabs {
@@ -1566,8 +1559,8 @@ HTML_TEMPLATE = '''
                 <div class="subtitle">Secure gateway with IDS/IPS, WAF, lite AI</div>
             </div>
         </div>
-        <div class="mode-badge mode-{{ config.mode }}">
-            {{ 'SDN Mode' if config.mode == 'sdn' else 'Basic Mode' }}
+        <div class="mode-badge mode-guardian">
+            Guardian Mode
         </div>
     </div>
 

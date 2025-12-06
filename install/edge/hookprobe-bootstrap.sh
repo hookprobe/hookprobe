@@ -248,8 +248,8 @@ show_device_menu() {
         echo -e "  ${BOLD}1)${NC} ${GREEN}Guardian${NC} - Portable SDN Gateway"
     fi
     echo -e "     ${DIM}• WiFi Access Point with VLAN segmentation${NC}"
-    echo -e "     ${DIM}• MAC-based device categorization${NC}"
-    echo -e "     ${DIM}• Basic mode (bridge) or SDN mode (RADIUS)${NC}"
+    echo -e "     ${DIM}• MAC-based device categorization via RADIUS${NC}"
+    echo -e "     ${DIM}• OpenFlow SDN with IoT isolation${NC}"
     echo -e "     ${DIM}• Perfect for: Travel, home IoT, small office${NC}"
     echo ""
 
