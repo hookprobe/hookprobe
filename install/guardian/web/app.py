@@ -5,7 +5,13 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.4.0
+Version: 5.5.0
+
+Changes in 5.5.0:
+- Added L2-L7 OSI layer threat detection and reporting
+- Added mobile network protection for hotel/public WiFi
+- QSecBit integration with layer-specific metrics
+- New Security tab with layer breakdown visualization
 """
 
 import os
@@ -29,6 +35,8 @@ LOGO_FILE = Path('/opt/hookprobe/guardian/web/hookprobe-emblem.png')
 NEURO_STATS = Path('/opt/hookprobe/guardian/neuro/stats.json')
 QSECBIT_STATS = Path('/opt/hookprobe/guardian/data/stats.json')
 QSECBIT_THREATS = Path('/opt/hookprobe/guardian/data/threats.json')
+LAYER_STATS = Path('/opt/hookprobe/guardian/data/layer_stats.json')
+MOBILE_PROTECTION = Path('/opt/hookprobe/guardian/data/mobile_protection_state.json')
 OVS_CONFIG = Path('/etc/hookprobe/ovs-config.sh')
 
 
@@ -838,6 +846,127 @@ def get_qsecbit_data():
     return data
 
 
+def get_layer_threat_data():
+    """Get L2-L7 layer threat breakdown data."""
+    data = {
+        'timestamp': None,
+        'rag_status': 'green',
+        'layers': {
+            'L2_DATA_LINK': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'blocked': 0},
+            'L3_NETWORK': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'blocked': 0},
+            'L4_TRANSPORT': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'blocked': 0},
+            'L5_SESSION': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'blocked': 0},
+            'L6_PRESENTATION': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'blocked': 0},
+            'L7_APPLICATION': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'blocked': 0},
+        },
+        'summary': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0},
+        'top_threat_types': {},
+        'detection_coverage': {
+            'L2_DATA_LINK': ['ARP Spoofing', 'MAC Flooding', 'Evil Twin', 'VLAN Hopping', 'Rogue DHCP'],
+            'L3_NETWORK': ['IP Spoofing', 'ICMP Attacks', 'Routing Attacks', 'Fragmentation'],
+            'L4_TRANSPORT': ['Port Scans', 'SYN Flood', 'TCP Anomalies', 'UDP Flood'],
+            'L5_SESSION': ['SSL Attacks', 'Session Hijacking', 'Auth Bypass', 'Brute Force'],
+            'L6_PRESENTATION': ['Encoding Attacks', 'Format Exploits', 'Crypto Attacks'],
+            'L7_APPLICATION': ['Web Attacks', 'DNS Threats', 'Malware C2', 'Protocol Abuse']
+        }
+    }
+
+    # Read layer stats file
+    if LAYER_STATS.exists():
+        try:
+            layer_data = json.loads(LAYER_STATS.read_text())
+            data['timestamp'] = layer_data.get('timestamp')
+            data['rag_status'] = layer_data.get('rag_status', 'green')
+
+            # Map layer data
+            for layer_name, stats in layer_data.get('layers', {}).items():
+                if layer_name in data['layers']:
+                    data['layers'][layer_name] = {
+                        'total': stats.get('total_threats', 0),
+                        'critical': stats.get('critical', 0),
+                        'high': stats.get('high', 0),
+                        'medium': stats.get('medium', 0),
+                        'low': stats.get('low', 0),
+                        'blocked': stats.get('blocked', 0),
+                        'threat_types': stats.get('threat_types', {})
+                    }
+
+            data['summary'] = layer_data.get('summary', data['summary'])
+            data['top_threat_types'] = layer_data.get('top_threat_types', {})
+        except Exception:
+            pass
+
+    # Calculate total if not present
+    if data['summary']['total'] == 0:
+        for layer_stats in data['layers'].values():
+            data['summary']['total'] += layer_stats.get('total', 0)
+            data['summary']['critical'] += layer_stats.get('critical', 0)
+            data['summary']['high'] += layer_stats.get('high', 0)
+            data['summary']['medium'] += layer_stats.get('medium', 0)
+            data['summary']['low'] += layer_stats.get('low', 0)
+
+    return data
+
+
+def get_mobile_protection_data():
+    """Get mobile network protection status for hotel/public WiFi."""
+    data = {
+        'status': 'inactive',
+        'trust_level': 'UNKNOWN',
+        'network_ssid': None,
+        'vpn_active': False,
+        'vpn_recommended': True,
+        'protection_score': 0.0,
+        'rag_status': 'amber',
+        'anomalies': [],
+        'security_checks': [],
+        'captive_portal': 'NONE'
+    }
+
+    # Read mobile protection state
+    if MOBILE_PROTECTION.exists():
+        try:
+            mobile_data = json.loads(MOBILE_PROTECTION.read_text())
+
+            # Get known networks count
+            data['known_networks_count'] = len(mobile_data.get('known_networks', {}))
+            data['trusted_ssids'] = mobile_data.get('trusted_ssids', [])
+
+            # Check if there's a current network in stats
+            if QSECBIT_STATS.exists():
+                qsec_data = json.loads(QSECBIT_STATS.read_text())
+                mobile_stats = qsec_data.get('mobile_protection', {})
+                if mobile_stats:
+                    data['status'] = 'active'
+                    data['trust_level'] = mobile_stats.get('trust_level', 'UNKNOWN')
+                    data['network_ssid'] = mobile_stats.get('network_ssid')
+                    data['vpn_active'] = mobile_stats.get('vpn_active', False)
+                    data['protection_score'] = mobile_stats.get('protection_score', 0.0)
+                    data['anomalies'] = mobile_stats.get('anomalies', [])
+
+                    # Calculate RAG
+                    score = data['protection_score']
+                    if score >= 0.8:
+                        data['rag_status'] = 'green'
+                    elif score >= 0.5:
+                        data['rag_status'] = 'amber'
+                    else:
+                        data['rag_status'] = 'red'
+
+                    # VPN recommendation
+                    data['vpn_recommended'] = data['trust_level'] in ['UNKNOWN', 'SUSPICIOUS', 'HOSTILE']
+
+        except Exception:
+            pass
+
+    # Check VPN status
+    output, success = run_command('ip link show wg0 2>/dev/null')
+    if success and 'UP' in output:
+        data['vpn_active'] = True
+
+    return data
+
+
 def get_sdn_stats():
     """Get SDN-specific statistics."""
     if get_mode() != 'sdn':
@@ -1474,6 +1603,171 @@ HTML_TEMPLATE = '''
 
         <!-- Security Tab -->
         <div id="security" class="tab-content">
+            <!-- Mobile Network Protection - For Hotels/Public WiFi -->
+            <div class="card">
+                <h2>Mobile Network Protection</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">
+                    Protection status for hotel WiFi, airports, and public networks.
+                </p>
+                <div class="rag-grid">
+                    <div class="rag-card {{ mobile_protection.rag_status }}">
+                        <div class="title">Network Trust</div>
+                        <div class="value">{{ mobile_protection.trust_level }}</div>
+                        <div class="status">{{ mobile_protection.network_ssid or 'Not connected' }}</div>
+                    </div>
+                    <div class="rag-card {% if mobile_protection.vpn_active %}green{% else %}amber{% endif %}">
+                        <div class="title">VPN Status</div>
+                        <div class="value">{% if mobile_protection.vpn_active %}ACTIVE{% else %}INACTIVE{% endif %}</div>
+                        <div class="status">{% if mobile_protection.vpn_recommended and not mobile_protection.vpn_active %}Recommended{% else %}OK{% endif %}</div>
+                    </div>
+                    <div class="rag-card {{ mobile_protection.rag_status }}">
+                        <div class="title">Protection Score</div>
+                        <div class="value">{{ "%.0f" | format(mobile_protection.protection_score * 100) }}%</div>
+                        <div class="status">{{ mobile_protection.status | capitalize }}</div>
+                    </div>
+                </div>
+                {% if mobile_protection.anomalies %}
+                <div style="margin-top: 15px; padding: 12px; background: #fef2f2; border-radius: 8px; border-left: 4px solid var(--hp-red);">
+                    <strong style="color: var(--hp-red);">Anomalies Detected:</strong>
+                    <ul style="margin: 8px 0 0 20px; color: #991b1b;">
+                        {% for anomaly in mobile_protection.anomalies %}
+                        <li>{{ anomaly }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- L2-L7 Layer Threat Breakdown -->
+            <div class="card">
+                <h2>OSI Layer Threat Detection (L2-L7)</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">
+                    Multi-layer threat detection across the OSI model for comprehensive protection.
+                </p>
+
+                <!-- Layer Breakdown Grid -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px;">
+                    <!-- L2 Data Link -->
+                    <div class="param-item" style="{% if layer_threats.layers.L2_DATA_LINK.critical > 0 %}background: #fee2e2; border-left: 4px solid var(--hp-red);{% elif layer_threats.layers.L2_DATA_LINK.high > 0 %}background: #fef3c7; border-left: 4px solid var(--hp-amber);{% else %}background: #d1fae5; border-left: 4px solid var(--hp-green);{% endif %}">
+                        <div class="label">L2 Data Link</div>
+                        <div class="value" id="layer-l2">{{ layer_threats.layers.L2_DATA_LINK.total }}</div>
+                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">ARP, MAC, VLAN</div>
+                    </div>
+                    <!-- L3 Network -->
+                    <div class="param-item" style="{% if layer_threats.layers.L3_NETWORK.critical > 0 %}background: #fee2e2; border-left: 4px solid var(--hp-red);{% elif layer_threats.layers.L3_NETWORK.high > 0 %}background: #fef3c7; border-left: 4px solid var(--hp-amber);{% else %}background: #d1fae5; border-left: 4px solid var(--hp-green);{% endif %}">
+                        <div class="label">L3 Network</div>
+                        <div class="value" id="layer-l3">{{ layer_threats.layers.L3_NETWORK.total }}</div>
+                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">IP, ICMP, Routing</div>
+                    </div>
+                    <!-- L4 Transport -->
+                    <div class="param-item" style="{% if layer_threats.layers.L4_TRANSPORT.critical > 0 %}background: #fee2e2; border-left: 4px solid var(--hp-red);{% elif layer_threats.layers.L4_TRANSPORT.high > 0 %}background: #fef3c7; border-left: 4px solid var(--hp-amber);{% else %}background: #d1fae5; border-left: 4px solid var(--hp-green);{% endif %}">
+                        <div class="label">L4 Transport</div>
+                        <div class="value" id="layer-l4">{{ layer_threats.layers.L4_TRANSPORT.total }}</div>
+                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">TCP, UDP, Ports</div>
+                    </div>
+                    <!-- L5 Session -->
+                    <div class="param-item" style="{% if layer_threats.layers.L5_SESSION.critical > 0 %}background: #fee2e2; border-left: 4px solid var(--hp-red);{% elif layer_threats.layers.L5_SESSION.high > 0 %}background: #fef3c7; border-left: 4px solid var(--hp-amber);{% else %}background: #d1fae5; border-left: 4px solid var(--hp-green);{% endif %}">
+                        <div class="label">L5 Session</div>
+                        <div class="value" id="layer-l5">{{ layer_threats.layers.L5_SESSION.total }}</div>
+                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">SSL, Auth, Session</div>
+                    </div>
+                    <!-- L6 Presentation -->
+                    <div class="param-item" style="{% if layer_threats.layers.L6_PRESENTATION.critical > 0 %}background: #fee2e2; border-left: 4px solid var(--hp-red);{% elif layer_threats.layers.L6_PRESENTATION.high > 0 %}background: #fef3c7; border-left: 4px solid var(--hp-amber);{% else %}background: #d1fae5; border-left: 4px solid var(--hp-green);{% endif %}">
+                        <div class="label">L6 Presentation</div>
+                        <div class="value" id="layer-l6">{{ layer_threats.layers.L6_PRESENTATION.total }}</div>
+                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">Encoding, Crypto</div>
+                    </div>
+                    <!-- L7 Application -->
+                    <div class="param-item" style="{% if layer_threats.layers.L7_APPLICATION.critical > 0 %}background: #fee2e2; border-left: 4px solid var(--hp-red);{% elif layer_threats.layers.L7_APPLICATION.high > 0 %}background: #fef3c7; border-left: 4px solid var(--hp-amber);{% else %}background: #d1fae5; border-left: 4px solid var(--hp-green);{% endif %}">
+                        <div class="label">L7 Application</div>
+                        <div class="value" id="layer-l7">{{ layer_threats.layers.L7_APPLICATION.total }}</div>
+                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">HTTP, DNS, App</div>
+                    </div>
+                </div>
+
+                <!-- Detection Coverage -->
+                <h3>Detection Coverage</h3>
+                <table class="data-table" style="font-size: 12px;">
+                    <thead>
+                        <tr>
+                            <th>Layer</th>
+                            <th>Threats</th>
+                            <th>Critical</th>
+                            <th>High</th>
+                            <th>Med</th>
+                            <th>Low</th>
+                            <th>Blocked</th>
+                            <th>Detection Types</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>L2</strong> Data Link</td>
+                            <td>{{ layer_threats.layers.L2_DATA_LINK.total }}</td>
+                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L2_DATA_LINK.critical }}</td>
+                            <td style="color: #dc2626;">{{ layer_threats.layers.L2_DATA_LINK.high }}</td>
+                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L2_DATA_LINK.medium }}</td>
+                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L2_DATA_LINK.low }}</td>
+                            <td>{{ layer_threats.layers.L2_DATA_LINK.blocked }}</td>
+                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L2_DATA_LINK | join(', ') }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>L3</strong> Network</td>
+                            <td>{{ layer_threats.layers.L3_NETWORK.total }}</td>
+                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L3_NETWORK.critical }}</td>
+                            <td style="color: #dc2626;">{{ layer_threats.layers.L3_NETWORK.high }}</td>
+                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L3_NETWORK.medium }}</td>
+                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L3_NETWORK.low }}</td>
+                            <td>{{ layer_threats.layers.L3_NETWORK.blocked }}</td>
+                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L3_NETWORK | join(', ') }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>L4</strong> Transport</td>
+                            <td>{{ layer_threats.layers.L4_TRANSPORT.total }}</td>
+                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L4_TRANSPORT.critical }}</td>
+                            <td style="color: #dc2626;">{{ layer_threats.layers.L4_TRANSPORT.high }}</td>
+                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L4_TRANSPORT.medium }}</td>
+                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L4_TRANSPORT.low }}</td>
+                            <td>{{ layer_threats.layers.L4_TRANSPORT.blocked }}</td>
+                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L4_TRANSPORT | join(', ') }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>L5</strong> Session</td>
+                            <td>{{ layer_threats.layers.L5_SESSION.total }}</td>
+                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L5_SESSION.critical }}</td>
+                            <td style="color: #dc2626;">{{ layer_threats.layers.L5_SESSION.high }}</td>
+                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L5_SESSION.medium }}</td>
+                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L5_SESSION.low }}</td>
+                            <td>{{ layer_threats.layers.L5_SESSION.blocked }}</td>
+                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L5_SESSION | join(', ') }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>L6</strong> Presentation</td>
+                            <td>{{ layer_threats.layers.L6_PRESENTATION.total }}</td>
+                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L6_PRESENTATION.critical }}</td>
+                            <td style="color: #dc2626;">{{ layer_threats.layers.L6_PRESENTATION.high }}</td>
+                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L6_PRESENTATION.medium }}</td>
+                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L6_PRESENTATION.low }}</td>
+                            <td>{{ layer_threats.layers.L6_PRESENTATION.blocked }}</td>
+                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L6_PRESENTATION | join(', ') }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>L7</strong> Application</td>
+                            <td>{{ layer_threats.layers.L7_APPLICATION.total }}</td>
+                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L7_APPLICATION.critical }}</td>
+                            <td style="color: #dc2626;">{{ layer_threats.layers.L7_APPLICATION.high }}</td>
+                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L7_APPLICATION.medium }}</td>
+                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L7_APPLICATION.low }}</td>
+                            <td>{{ layer_threats.layers.L7_APPLICATION.blocked }}</td>
+                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L7_APPLICATION | join(', ') }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div style="margin-top: 15px;">
+                    <button type="button" class="btn btn-secondary" onclick="refreshLayerThreats()">Refresh Layer Data</button>
+                </div>
+            </div>
+
             <!-- Threat Analysis - Top Priority -->
             <div class="card">
                 <h2>Threat Analysis</h2>
@@ -2120,7 +2414,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.4.0 | Protection on the Move | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.5.0 | Protection on the Move | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>
@@ -2360,6 +2654,40 @@ HTML_TEMPLATE = '''
                 });
         }
 
+        // Refresh Layer Threats (L2-L7)
+        function refreshLayerThreats() {
+            fetch('/api/layer_threats')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.layers) {
+                        // Update layer counts
+                        document.getElementById('layer-l2').textContent = data.layers.L2_DATA_LINK?.total || '0';
+                        document.getElementById('layer-l3').textContent = data.layers.L3_NETWORK?.total || '0';
+                        document.getElementById('layer-l4').textContent = data.layers.L4_TRANSPORT?.total || '0';
+                        document.getElementById('layer-l5').textContent = data.layers.L5_SESSION?.total || '0';
+                        document.getElementById('layer-l6').textContent = data.layers.L6_PRESENTATION?.total || '0';
+                        document.getElementById('layer-l7').textContent = data.layers.L7_APPLICATION?.total || '0';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching layer threats:', error);
+                });
+        }
+
+        // Refresh Mobile Protection Status
+        function refreshMobileProtection() {
+            fetch('/api/mobile_protection')
+                .then(response => response.json())
+                .then(data => {
+                    // Update mobile protection display via page reload for now
+                    // (full update would require more DOM manipulation)
+                    console.log('Mobile protection data:', data);
+                })
+                .catch(error => {
+                    console.error('Error fetching mobile protection:', error);
+                });
+        }
+
         // Refresh Threat Chart
         function refreshThreatChart() {
             fetch('/api/threats')
@@ -2395,6 +2723,7 @@ HTML_TEMPLATE = '''
             refreshXdpStats();
             refreshThreats();
             refreshThreatChart();
+            refreshLayerThreats();
         });
 
         // Background refresh - updates data without reloading page
@@ -2409,6 +2738,7 @@ HTML_TEMPLATE = '''
             refreshThreatChart();
             refreshThreats();
             refreshXdpStats();
+            refreshLayerThreats();
 
             // Refresh container status
             fetch('/api/containers')
@@ -2476,6 +2806,8 @@ def index():
     sdn_stats = get_sdn_stats()
     containers = get_container_status()
     qsecbit = get_qsecbit_data()
+    layer_threats = get_layer_threat_data()
+    mobile_protection = get_mobile_protection_data()
     return render_template_string(
         HTML_TEMPLATE,
         config=config,
@@ -2484,6 +2816,8 @@ def index():
         sdn_stats=sdn_stats,
         containers=containers,
         qsecbit=qsecbit,
+        layer_threats=layer_threats,
+        mobile_protection=mobile_protection,
         show_scan_result=False
     )
 
@@ -2596,6 +2930,18 @@ def api_sdn():
     if stats:
         return jsonify(stats)
     return jsonify({'error': 'SDN mode not enabled'}), 400
+
+
+@app.route('/api/layer_threats')
+def api_layer_threats():
+    """Get L2-L7 layer threat breakdown."""
+    return jsonify(get_layer_threat_data())
+
+
+@app.route('/api/mobile_protection')
+def api_mobile_protection():
+    """Get mobile network protection status."""
+    return jsonify(get_mobile_protection_data())
 
 
 @app.route('/api/threats')
