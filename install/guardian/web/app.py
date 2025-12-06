@@ -3399,41 +3399,240 @@ def api_vpn():
     return jsonify(get_vpn_stats())
 
 
+# ============================================================================
+# MAC-to-VLAN Database Management
+# ============================================================================
+
+MAC_VLAN_DB = Path('/etc/guardian/mac_vlan.json')
+FREERADIUS_USERS = Path('/etc/freeradius/3.0/mods-config/files/authorize')
+
+def load_mac_db():
+    """Load MAC-to-VLAN database."""
+    if MAC_VLAN_DB.exists():
+        try:
+            with open(MAC_VLAN_DB) as f:
+                return json.load(f)
+        except:
+            pass
+    return {
+        'version': '1.0',
+        'default_vlan': 999,
+        'vlans': {
+            '10': {'name': 'Smart Lights'},
+            '20': {'name': 'Thermostats'},
+            '30': {'name': 'Cameras'},
+            '40': {'name': 'Voice Assistants'},
+            '50': {'name': 'Appliances'},
+            '60': {'name': 'Entertainment'},
+            '70': {'name': 'Robots'},
+            '80': {'name': 'Sensors'},
+            '100': {'name': 'Trusted'},
+            '999': {'name': 'Quarantine'}
+        },
+        'devices': {}
+    }
+
+def save_mac_db(db):
+    """Save MAC-to-VLAN database and update FreeRADIUS."""
+    try:
+        MAC_VLAN_DB.parent.mkdir(parents=True, exist_ok=True)
+        with open(MAC_VLAN_DB, 'w') as f:
+            json.dump(db, f, indent=2)
+
+        # Update FreeRADIUS users file
+        update_freeradius_users(db)
+        return True
+    except Exception as e:
+        print(f"Error saving MAC DB: {e}")
+        return False
+
+def update_freeradius_users(db):
+    """Update FreeRADIUS authorize file with MAC entries."""
+    try:
+        entries = []
+        entries.append("# HookProbe Guardian - Auto-generated MAC entries")
+        entries.append("# Do not edit manually - managed by Guardian web UI")
+        entries.append("")
+
+        # Add device entries (before DEFAULT)
+        for mac, info in db.get('devices', {}).items():
+            vlan = info.get('vlan', 999)
+            name = info.get('name', 'Unknown')
+            mac_normalized = mac.lower()
+            entries.append(f"# {name}")
+            entries.append(f'{mac_normalized} Cleartext-Password := "{mac_normalized}"')
+            entries.append(f"        Tunnel-Type = VLAN,")
+            entries.append(f"        Tunnel-Medium-Type = IEEE-802,")
+            entries.append(f"        Tunnel-Private-Group-Id = {vlan}")
+            entries.append("")
+
+        # Add DEFAULT entry (catches all unregistered devices → VLAN 999)
+        entries.append("# DEFAULT: Unregistered devices go to quarantine (VLAN 999)")
+        entries.append('DEFAULT Cleartext-Password := "%{User-Name}"')
+        entries.append("        Tunnel-Type = VLAN,")
+        entries.append("        Tunnel-Medium-Type = IEEE-802,")
+        entries.append("        Tunnel-Private-Group-Id = 999")
+
+        # Write to FreeRADIUS users file
+        if FREERADIUS_USERS.parent.exists():
+            with open(FREERADIUS_USERS, 'w') as f:
+                f.write('\n'.join(entries))
+
+            # Reload FreeRADIUS to apply changes
+            run_command('systemctl reload freeradius 2>/dev/null || true')
+
+        return True
+    except Exception as e:
+        print(f"Error updating FreeRADIUS: {e}")
+        return False
+
+def normalize_mac(mac):
+    """Normalize MAC address to lowercase colon-separated format."""
+    mac = mac.lower().replace('-', ':').replace('.', ':')
+    # Handle formats like aabbccddeeff
+    if ':' not in mac and len(mac) == 12:
+        mac = ':'.join(mac[i:i+2] for i in range(0, 12, 2))
+    return mac
+
+
+@app.route('/api/vlans')
+def api_vlans():
+    """Get available VLANs."""
+    db = load_mac_db()
+    return jsonify(db.get('vlans', {}))
+
+
+@app.route('/api/devices')
+def api_devices():
+    """Get all registered devices with VLAN assignments."""
+    db = load_mac_db()
+    devices = []
+
+    for mac, info in db.get('devices', {}).items():
+        devices.append({
+            'mac': mac,
+            'name': info.get('name', 'Unknown'),
+            'vlan': info.get('vlan', 999),
+            'vlan_name': db.get('vlans', {}).get(str(info.get('vlan', 999)), {}).get('name', 'Unknown'),
+            'added': info.get('added', ''),
+            'last_seen': info.get('last_seen', '')
+        })
+
+    return jsonify(devices)
+
+
+@app.route('/api/devices/<mac>', methods=['GET'])
+def api_device_get(mac):
+    """Get device info."""
+    mac = normalize_mac(mac)
+    db = load_mac_db()
+
+    if mac in db.get('devices', {}):
+        info = db['devices'][mac]
+        return jsonify({
+            'mac': mac,
+            'name': info.get('name', 'Unknown'),
+            'vlan': info.get('vlan', 999),
+            'vlan_name': db.get('vlans', {}).get(str(info.get('vlan', 999)), {}).get('name', 'Unknown')
+        })
+
+    return jsonify({
+        'mac': mac,
+        'name': 'Unknown',
+        'vlan': 999,
+        'vlan_name': 'Quarantine',
+        'registered': False
+    })
+
+
+@app.route('/api/devices/<mac>', methods=['DELETE'])
+def api_device_delete(mac):
+    """Remove device from database (returns to quarantine)."""
+    mac = normalize_mac(mac)
+    db = load_mac_db()
+
+    if mac in db.get('devices', {}):
+        del db['devices'][mac]
+        if save_mac_db(db):
+            return jsonify({'success': True, 'message': f'Device {mac} removed (now in quarantine)'})
+
+    return jsonify({'error': 'Device not found or failed to remove'}), 404
+
+
 @app.route('/api/sdn/device/<mac>', methods=['POST'])
 def api_sdn_device(mac):
     """Update device VLAN assignment."""
     action = request.form.get('action') or (request.json.get('action') if request.is_json else None)
     vlan = request.form.get('vlan') or (request.json.get('vlan') if request.is_json else None)
+    name = request.form.get('name') or (request.json.get('name') if request.is_json else None)
 
     if not action:
         return jsonify({'error': 'Action required (approve/quarantine/assign)'}), 400
 
     # Normalize MAC address
-    mac = mac.lower().replace('-', ':')
+    mac = normalize_mac(mac)
+    db = load_mac_db()
+
+    import time
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
 
     if action == 'quarantine':
         # Move device to quarantine VLAN (999)
-        output, success = run_command(f'python3 -c "from lib.radius_integration import MACAuthService; s = MACAuthService(); s.update_device_vlan(\'{mac}\', 999)"')
-        if success:
-            return jsonify({'success': True, 'message': f'Device {mac} quarantined'})
+        if mac in db.get('devices', {}):
+            db['devices'][mac]['vlan'] = 999
+            db['devices'][mac]['last_seen'] = timestamp
+        else:
+            db.setdefault('devices', {})[mac] = {
+                'name': name or 'Unknown',
+                'vlan': 999,
+                'added': timestamp,
+                'last_seen': timestamp
+            }
+
+        if save_mac_db(db):
+            return jsonify({'success': True, 'message': f'Device {mac} quarantined to VLAN 999'})
         return jsonify({'error': 'Failed to quarantine device'}), 500
 
     elif action == 'approve':
-        # Auto-detect VLAN based on MAC OUI or assign to default
-        output, success = run_command(f'python3 -c "from lib.network_segmentation import get_vlan_for_mac; print(get_vlan_for_mac(\'{mac}\'))"')
-        target_vlan = int(output.strip()) if success and output.strip().isdigit() else 10
-        output2, success2 = run_command(f'python3 -c "from lib.radius_integration import MACAuthService; s = MACAuthService(); s.update_device_vlan(\'{mac}\', {target_vlan})"')
-        if success2:
-            return jsonify({'success': True, 'message': f'Device {mac} approved to VLAN {target_vlan}'})
+        # Auto-detect VLAN based on MAC OUI or assign to trusted (100)
+        target_vlan = 100  # Default to trusted
+
+        # Try to detect device type from MAC OUI
+        try:
+            from lib.network_segmentation import get_vlan_for_mac
+            detected_vlan = get_vlan_for_mac(mac)
+            if detected_vlan and detected_vlan != 999:
+                target_vlan = detected_vlan
+        except:
+            pass
+
+        db.setdefault('devices', {})[mac] = {
+            'name': name or db.get('devices', {}).get(mac, {}).get('name', 'Approved Device'),
+            'vlan': target_vlan,
+            'added': db.get('devices', {}).get(mac, {}).get('added', timestamp),
+            'last_seen': timestamp
+        }
+
+        if save_mac_db(db):
+            vlan_name = db.get('vlans', {}).get(str(target_vlan), {}).get('name', 'Unknown')
+            return jsonify({'success': True, 'message': f'Device {mac} approved to VLAN {target_vlan} ({vlan_name})'})
         return jsonify({'error': 'Failed to approve device'}), 500
 
     elif action == 'assign' and vlan:
         # Assign to specific VLAN
         try:
             vlan_id = int(vlan)
-            output, success = run_command(f'python3 -c "from lib.radius_integration import MACAuthService; s = MACAuthService(); s.update_device_vlan(\'{mac}\', {vlan_id})"')
-            if success:
-                return jsonify({'success': True, 'message': f'Device {mac} assigned to VLAN {vlan_id}'})
+
+            db.setdefault('devices', {})[mac] = {
+                'name': name or db.get('devices', {}).get(mac, {}).get('name', 'Unknown'),
+                'vlan': vlan_id,
+                'added': db.get('devices', {}).get(mac, {}).get('added', timestamp),
+                'last_seen': timestamp
+            }
+
+            if save_mac_db(db):
+                vlan_name = db.get('vlans', {}).get(str(vlan_id), {}).get('name', 'Unknown')
+                return jsonify({'success': True, 'message': f'Device {mac} assigned to VLAN {vlan_id} ({vlan_name})'})
         except ValueError:
             return jsonify({'error': 'Invalid VLAN ID'}), 400
         return jsonify({'error': 'Failed to assign device'}), 500
