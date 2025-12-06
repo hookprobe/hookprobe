@@ -2673,10 +2673,15 @@ create_default_config() {
     cat > "$CONFIG_FILE" << 'YAMLEOF'
 # HookProbe Guardian Configuration
 # Version: 5.0.0 Liberty
-# Generated automatically during installation
-# Modify this file to customize Guardian behavior
+# Mode: Guardian (Portable Travel Security)
+#
+# Guardian mode provides simple WiFi hotspot with security features.
+# All devices connect to the same network (br0 / 192.168.4.0/24).
+#
+# For VLAN segmentation and IoT isolation, use Fortress mode
+# with VAP-capable WiFi adapters (Atheros AR9271, MediaTek MT7612U).
 
-# RADIUS Configuration
+# RADIUS Configuration (for MAC tracking)
 radius:
   enabled: true
   port: 1812
@@ -2686,67 +2691,17 @@ radius:
   session_timeout: 3600
   mac_auth:
     enabled: true
-    unknown_vlan: 999  # Quarantine VLAN for unknown devices
+    # Guardian mode: tracks devices, no VLAN assignment
+    # Fortress mode: assigns devices to VLANs
 
-# VLAN Configuration
-vlans:
-  smart_lights:
-    id: 10
-    name: "Smart Lights"
-    subnet: "192.168.10.0/24"
-    gateway: "192.168.10.1"
-  thermostats:
-    id: 20
-    name: "Thermostats"
-    subnet: "192.168.20.0/24"
-    gateway: "192.168.20.1"
-  cameras:
-    id: 30
-    name: "Cameras"
-    subnet: "192.168.30.0/24"
-    gateway: "192.168.30.1"
-  voice_assistants:
-    id: 40
-    name: "Voice Assistants"
-    subnet: "192.168.40.0/24"
-    gateway: "192.168.40.1"
-  appliances:
-    id: 50
-    name: "Appliances"
-    subnet: "192.168.50.0/24"
-    gateway: "192.168.50.1"
-  entertainment:
-    id: 60
-    name: "Entertainment"
-    subnet: "192.168.60.0/24"
-    gateway: "192.168.60.1"
-  robots:
-    id: 70
-    name: "Robots"
-    subnet: "192.168.70.0/24"
-    gateway: "192.168.70.1"
-  sensors:
-    id: 80
-    name: "Sensors"
-    subnet: "192.168.80.0/24"
-    gateway: "192.168.80.1"
-  quarantine:
-    id: 999
-    name: "Quarantine"
-    subnet: "192.168.99.0/24"
-    gateway: "192.168.99.1"
-    internet_access: false
-
-# OpenFlow SDN Configuration
-openflow:
-  enabled: true
-  controller_port: 6653
-  ovs_bridge: "br-guardian"
-  dpid: "0x1"
-  default_table: 0
-  miss_send_len: 128
-  flow_hard_timeout: 0
-  flow_idle_timeout: 300
+# Network Configuration (Guardian Simple Mode)
+network:
+  mode: "guardian"  # guardian = simple, fortress = vlan segmentation
+  lan_interface: "br0"
+  lan_subnet: "192.168.4.0/24"
+  lan_gateway: "192.168.4.1"
+  dhcp_start: "192.168.4.100"
+  dhcp_end: "192.168.4.200"
 
 # HTP (HookProbe Transport Protocol) Configuration
 htp:
@@ -2773,13 +2728,12 @@ htp_file:
     - "/srv/files"
     - "/var/log/guardian"
 
-# Network Configuration
-network:
-  wan_interface: "eth0"
-  lan_interface: "br0"
-  wifi_interface: "wlan0"
-  management_subnet: "192.168.4.0/24"
-  management_gateway: "192.168.4.1"
+# WAN Configuration (Internet uplink)
+wan:
+  interface: "eth0"
+  failover_interface: "wlan0"  # USB WiFi can connect to upstream network
+  metric_primary: 100
+  metric_backup: 600
 
 # Security Configuration
 security:
@@ -2824,7 +2778,7 @@ YAMLEOF
     chmod 640 "$CONFIG_FILE"
 
     log_info "Configuration created: $CONFIG_FILE"
-    log_info "Edit this file to customize RADIUS, VLANs, and other settings"
+    log_info "Edit this file to customize Guardian settings"
 }
 
 # ============================================================
@@ -2908,7 +2862,7 @@ start_services() {
     if systemctl list-unit-files | grep -q freeradius; then
         log_info "Starting FreeRADIUS for MAC authentication..."
         systemctl start freeradius 2>/dev/null || {
-            log_warn "FreeRADIUS failed to start - MAC-based VLAN assignment may not work"
+            log_warn "FreeRADIUS failed to start - MAC tracking will be unavailable"
         }
         sleep 1
     fi
@@ -3067,23 +3021,26 @@ show_guardian_banner() {
     echo ""
     echo -e "${BOLD}${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${GREEN}║         HookProbe Guardian - Liberty 5.0.0                  ║${NC}"
-    echo -e "${BOLD}${GREEN}║         Unified Security Gateway Installation              ║${NC}"
+    echo -e "${BOLD}${GREEN}║       Portable Travel Security Companion                   ║${NC}"
     echo -e "${BOLD}${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${BOLD}${WHITE}Complete Protection Suite:${NC}"
+    echo -e "  ${BOLD}${WHITE}Security Features:${NC}"
     echo ""
     echo -e "  ${GREEN}✓${NC} L1-L7 OSI Layer Threat Detection"
     echo -e "  ${GREEN}✓${NC} QSecBit AI-Powered Security Scoring"
     echo -e "  ${GREEN}✓${NC} Suricata IDS/IPS (Intrusion Detection/Prevention)"
     echo -e "  ${GREEN}✓${NC} ModSecurity WAF (Web Application Firewall)"
     echo -e "  ${GREEN}✓${NC} XDP/eBPF High-Performance Packet Processing"
-    echo -e "  ${GREEN}✓${NC} OpenFlow SDN Controller with OVS"
-    echo -e "  ${GREEN}✓${NC} VLAN Segmentation (IoT Device Isolation)"
-    echo -e "  ${GREEN}✓${NC} RADIUS MAC Authentication"
-    echo -e "  ${GREEN}✓${NC} HTP File Transfer (weight-bound encryption)"
-    echo -e "  ${GREEN}✓${NC} HTP Secure MSSP Communication"
+    echo -e "  ${GREEN}✓${NC} MAC Authentication & Device Tracking"
+    echo -e "  ${GREEN}✓${NC} HTP Secure File Transfer"
     echo ""
-    echo -e "  ${DIM}Configuration file: /etc/guardian/guardian.yaml${NC}"
+    echo -e "  ${BOLD}${WHITE}Network Features:${NC}"
+    echo ""
+    echo -e "  ${GREEN}✓${NC} Simple WiFi Hotspot (all devices on br0)"
+    echo -e "  ${GREEN}✓${NC} WAN Failover (eth0 primary, wlan0 backup)"
+    echo -e "  ${GREEN}✓${NC} Connected Devices Tracking via Web UI"
+    echo ""
+    echo -e "  ${DIM}For VLAN segmentation, use Fortress mode with VAP-capable adapters${NC}"
     echo ""
 }
 
