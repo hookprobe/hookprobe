@@ -1168,8 +1168,8 @@ HTML_TEMPLATE = '''
             flex-wrap: wrap;
         }
         .header-logo {
-            width: 60px;
-            height: 60px;
+            width: 120px;
+            height: 120px;
         }
         .header-logo img {
             width: 100%;
