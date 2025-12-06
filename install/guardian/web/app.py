@@ -5,7 +5,7 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.2.0
+Version: 5.2.1
 """
 
 import os
@@ -1587,36 +1587,17 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="btn-group">
                         <button type="submit" class="btn btn-primary">Connect</button>
-                        <a href="/scan#wifi" class="btn btn-secondary">Scan Networks</a>
+                        <button type="button" id="scan-btn" class="btn btn-secondary" onclick="scanNetworks()">Scan Networks</button>
                     </div>
                 </form>
 
-                {% if networks %}
-                <h3>Available Networks ({{ networks|length }})</h3>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>SSID</th>
-                            <th>Signal</th>
-                            <th>Channel</th>
-                            <th>Security</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for net in networks %}
-                        <tr style="cursor: pointer;" onclick="document.getElementById('upstream-ssid').value='{{ net.ssid }}'">
-                            <td><strong>{{ net.ssid }}</strong></td>
-                            <td>{{ net.signal }} dBm</td>
-                            <td>{{ net.channel or 'N/A' }}</td>
-                            <td>{{ net.security or 'Open' }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-                {% elif show_scan_result %}
-                <h3>Scan Results</h3>
-                <p style="color: #6b7280;">No networks found. Try scanning again.</p>
-                {% endif %}
+                <!-- Scan Results Container -->
+                <div id="scan-results" style="margin-top: 20px;">
+                    <div id="scan-status" style="display: none; padding: 15px; background: var(--hp-light); border-radius: 8px; margin-bottom: 15px;">
+                        <span id="scan-status-text">Scanning for networks...</span>
+                    </div>
+                    <div id="networks-container"></div>
+                </div>
             </div>
 
             <div class="card">
@@ -1843,7 +1824,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.2.0 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.2.1 | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>
@@ -1865,8 +1846,84 @@ HTML_TEMPLATE = '''
             if (tab) tab.click();
         }
 
-        // Auto-refresh every 30 seconds
-        setTimeout(() => location.reload(), 30000);
+        // WiFi Network Scanning (on-demand via AJAX)
+        let isScanning = false;
+
+        function scanNetworks() {
+            if (isScanning) return;
+            isScanning = true;
+
+            const btn = document.getElementById('scan-btn');
+            const statusDiv = document.getElementById('scan-status');
+            const statusText = document.getElementById('scan-status-text');
+            const container = document.getElementById('networks-container');
+
+            // Show scanning status
+            btn.disabled = true;
+            btn.textContent = 'Scanning...';
+            statusDiv.style.display = 'block';
+            statusText.textContent = 'Scanning for WiFi networks... This may take up to 30 seconds.';
+            container.innerHTML = '';
+
+            fetch('/api/scan')
+                .then(response => response.json())
+                .then(networks => {
+                    isScanning = false;
+                    btn.disabled = false;
+                    btn.textContent = 'Scan Networks';
+
+                    if (networks && networks.length > 0) {
+                        statusText.textContent = `Found ${networks.length} network(s). Click on a network to select it.`;
+                        let html = `
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>SSID</th>
+                                        <th>Signal</th>
+                                        <th>Channel</th>
+                                        <th>Security</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                        `;
+                        networks.forEach(net => {
+                            html += `
+                                <tr style="cursor: pointer;" onclick="selectNetwork('${net.ssid.replace(/'/g, "\\'")}')">
+                                    <td><strong>${net.ssid}</strong></td>
+                                    <td>${net.signal} dBm</td>
+                                    <td>${net.channel || 'N/A'}</td>
+                                    <td>${net.security || 'Open'}</td>
+                                </tr>
+                            `;
+                        });
+                        html += '</tbody></table>';
+                        container.innerHTML = html;
+                    } else {
+                        statusText.textContent = 'No networks found. Try scanning again.';
+                        container.innerHTML = '<p style="color: #6b7280; margin-top: 10px;">No WiFi networks were detected. Make sure WiFi is enabled and try again.</p>';
+                    }
+                })
+                .catch(error => {
+                    isScanning = false;
+                    btn.disabled = false;
+                    btn.textContent = 'Scan Networks';
+                    statusText.textContent = 'Scan failed. Please try again.';
+                    container.innerHTML = '<p style="color: #ef4444; margin-top: 10px;">Error scanning for networks: ' + error.message + '</p>';
+                });
+        }
+
+        function selectNetwork(ssid) {
+            document.getElementById('upstream-ssid').value = ssid;
+            // Highlight the selection
+            document.getElementById('upstream-ssid').focus();
+        }
+
+        // Auto-refresh every 30 seconds (but not during scan)
+        setInterval(() => {
+            if (!isScanning) {
+                location.reload();
+            }
+        }, 30000);
     </script>
 </body>
 </html>
@@ -1894,22 +1951,8 @@ def index():
 
 @app.route('/scan')
 def scan():
-    config = get_current_config()
-    status = get_status()
-    sdn_stats = get_sdn_stats()
-    containers = get_container_status()
-    qsecbit = get_qsecbit_data()
-    networks = scan_wifi()
-    return render_template_string(
-        HTML_TEMPLATE,
-        config=config,
-        status=status,
-        networks=networks,
-        sdn_stats=sdn_stats,
-        containers=containers,
-        qsecbit=qsecbit,
-        show_scan_result=True
-    )
+    """Redirect to WiFi tab - scanning is now done via AJAX."""
+    return redirect('/#wifi')
 
 
 @app.route('/connect', methods=['POST'])
