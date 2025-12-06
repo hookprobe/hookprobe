@@ -205,7 +205,7 @@ remove_network_interfaces() {
         ip link delete "$iface" 2>/dev/null || true
     done
 
-    # Remove main bridge (basic mode)
+    # Remove main bridge
     if ip link show br0 &>/dev/null; then
         log_info "Removing bridge: br0"
         ip link set br0 down 2>/dev/null || true

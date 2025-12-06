@@ -1302,7 +1302,9 @@ install_guardian() {
     echo ""
     echo -e "${YELLOW}What will be installed:${NC}"
     echo "  • QSecBit quantum-resistant security"
-    echo "  • OpenFlow software-defined networking"
+    echo "  • OpenFlow SDN with VLAN segmentation"
+    echo "  • MAC-based device categorization via RADIUS"
+    echo "  • WebSocket VPN with Noise Protocol"
     echo "  • Web Application Firewall (WAF)"
     echo "  • IDS/IPS (Suricata/Zeek)"
     echo "  • Lite AI threat detection"
@@ -1315,76 +1317,10 @@ install_guardian() {
     else
         echo "  • WAN: Internet uplink (DHCP or static)"
     fi
-    echo "  • LAN: Protected network"
+    echo "  • LAN: Protected network with VLAN isolation"
     if [ "$SYS_WIFI_HOTSPOT" = true ]; then
-        echo "  • WiFi: Hotspot available for LAN clients"
+        echo "  • WiFi: Hotspot with dynamic VLAN assignment"
     fi
-    echo ""
-
-    # ─────────────────────────────────────────────────────────────
-    # Installation Mode Selection
-    # ─────────────────────────────────────────────────────────────
-    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
-    echo -e "${BOLD}Select Installation Mode:${NC}"
-    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
-    echo ""
-    echo -e "  ${BOLD}1)${NC} ${GREEN}Basic Mode${NC} - Simple WiFi hotspot with bridge"
-    echo -e "     ${DIM}• Single SSID, all devices on same network${NC}"
-    echo -e "     ${DIM}• WiFi + LAN bridged together${NC}"
-    echo -e "     ${DIM}• WAN DHCP client for internet${NC}"
-    echo -e "     ${DIM}• No MSSP connection required${NC}"
-    echo ""
-    echo -e "  ${BOLD}2)${NC} ${CYAN}SDN Mode${NC} - Full VLAN segmentation (requires MSSP)"
-    echo -e "     ${DIM}• MAC-based VLAN assignment via RADIUS${NC}"
-    echo -e "     ${DIM}• IoT device isolation by category${NC}"
-    echo -e "     ${DIM}• Per-category internet policies${NC}"
-    echo -e "     ${DIM}• Requires FreeRADIUS connection to MSSP${NC}"
-    echo ""
-    echo -e "  ${DIM}b) Back to main menu${NC}"
-    echo ""
-
-    local guardian_mode="basic"
-    while true; do
-        read -p "Select mode [1]: " mode_choice
-        mode_choice=${mode_choice:-1}
-
-        case $mode_choice in
-            1)
-                guardian_mode="basic"
-                break
-                ;;
-            2)
-                guardian_mode="sdn"
-                # Check MSSP connectivity for SDN mode
-                echo ""
-                echo -e "${YELLOW}Checking MSSP connectivity...${NC}"
-                local mssp_url="${HOOKPROBE_MSSP_URL:-https://nexus.hookprobe.com}"
-                if command -v curl &>/dev/null; then
-                    if curl -s --max-time 10 "$mssp_url/api/health" &>/dev/null; then
-                        echo -e "${GREEN}✓ MSSP server is reachable${NC}"
-                    else
-                        echo -e "${YELLOW}Warning: MSSP server not reachable at $mssp_url${NC}"
-                        echo -e "${YELLOW}SDN features require MSSP connection for RADIUS.${NC}"
-                        read -p "Continue with SDN mode anyway? (yes/no) [no]: " continue_sdn
-                        if [ "$continue_sdn" != "yes" ]; then
-                            echo "Falling back to Basic mode..."
-                            guardian_mode="basic"
-                        fi
-                    fi
-                fi
-                break
-                ;;
-            b|B)
-                return
-                ;;
-            *)
-                echo -e "${RED}Invalid selection. Please choose 1, 2, or b.${NC}"
-                ;;
-        esac
-    done
-
-    echo ""
-    echo -e "${GREEN}✓ Selected mode: ${BOLD}$guardian_mode${NC}"
     echo ""
 
     # ─────────────────────────────────────────────────────────────
@@ -1411,21 +1347,19 @@ install_guardian() {
     fi
 
     # ─────────────────────────────────────────────────────────────
-    # MSSP ID (for SDN mode)
+    # MSSP ID (for RADIUS and device management)
     # ─────────────────────────────────────────────────────────────
     local mssp_id=""
-    if [ "$guardian_mode" = "sdn" ]; then
-        echo ""
-        echo -e "${CYAN}MSSP Registration:${NC}"
-        echo "SDN mode requires an MSSP ID for RADIUS and device management."
-        read -p "Enter your MSSP ID (or 'skip' to configure later): " mssp_id
+    echo ""
+    echo -e "${CYAN}MSSP Registration:${NC}"
+    echo "Guardian requires an MSSP ID for RADIUS and device management."
+    read -p "Enter your MSSP ID (or 'skip' to configure later): " mssp_id
 
-        if [ "$mssp_id" != "skip" ] && [ -n "$mssp_id" ]; then
-            mkdir -p /etc/hookprobe/secrets
-            echo "$mssp_id" > /etc/hookprobe/secrets/mssp-id
-            chmod 600 /etc/hookprobe/secrets/mssp-id
-            echo -e "${GREEN}✓ MSSP ID saved${NC}"
-        fi
+    if [ "$mssp_id" != "skip" ] && [ -n "$mssp_id" ]; then
+        mkdir -p /etc/hookprobe/secrets
+        echo "$mssp_id" > /etc/hookprobe/secrets/mssp-id
+        chmod 600 /etc/hookprobe/secrets/mssp-id
+        echo -e "${GREEN}✓ MSSP ID saved${NC}"
     fi
 
     # ─────────────────────────────────────────────────────────────
@@ -1442,12 +1376,9 @@ install_guardian() {
     echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
     echo -e "${BOLD}Installation Summary:${NC}"
     echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
-    echo -e "  Mode:        ${BOLD}$guardian_mode${NC}"
     echo -e "  WiFi SSID:   ${BOLD}$wifi_ssid${NC}"
     echo -e "  Ad Blocking: ${BOLD}$enable_adblock${NC}"
-    if [ "$guardian_mode" = "sdn" ]; then
-        echo -e "  MSSP ID:     ${BOLD}${mssp_id:-not configured}${NC}"
-    fi
+    echo -e "  MSSP ID:     ${BOLD}${mssp_id:-not configured}${NC}"
     echo ""
 
     read -p "Proceed with Guardian installation? (yes/no) [yes]: " confirm
@@ -1457,7 +1388,6 @@ install_guardian() {
         echo ""
         # Export configuration for setup script
         export HOOKPROBE_TIER="guardian"
-        export GUARDIAN_MODE="$guardian_mode"
         export HOOKPROBE_WIFI_SSID="$wifi_ssid"
         export HOOKPROBE_WIFI_PASS="$wifi_pass"
         export HOOKPROBE_ADBLOCK="$enable_adblock"
@@ -1812,40 +1742,31 @@ show_uninstall_menu() {
     show_banner
     print_header "UNINSTALL / CLEANUP" "$RED"
 
-    echo -e "${YELLOW}Select components to remove:${NC}"
+    echo -e "${YELLOW}Uninstall by Tier:${NC}"
     echo ""
-    echo -e "  ${BOLD}1${NC}) Stop All Services"
-    echo -e "     ${DIM}Stop HookProbe containers and systemd services${NC}"
+    echo -e "  ${BOLD}1${NC}) ${GREEN}█${NC}░░░ Sentinel Uninstall"
+    echo -e "     ${DIM}Service, firewall rules (iptables), fail2ban config${NC}"
     echo ""
-    echo -e "  ${BOLD}2${NC}) Remove Containers"
-    echo -e "     ${DIM}Remove all HookProbe containers (preserves data)${NC}"
+    echo -e "  ${BOLD}2${NC}) ${GREEN}██${NC}░░ Guardian Uninstall"
+    echo -e "     ${DIM}Containers, bridges, WiFi, VPN, SDN, IDS/IPS${NC}"
     echo ""
-    echo -e "  ${BOLD}3${NC}) Remove Container Images"
-    echo -e "     ${DIM}Remove downloaded container images${NC}"
+    echo -e "  ${BOLD}3${NC}) ${GREEN}███${NC}░ Fortress Uninstall"
+    echo -e "     ${DIM}Guardian + monitoring stack (Grafana, VictoriaMetrics, n8n)${NC}"
     echo ""
-    echo -e "  ${BOLD}4${NC}) Remove Volumes & Data"
-    echo -e "     ${RED}WARNING: Deletes databases, logs, analytics${NC}"
+    echo -e "  ${BOLD}4${NC}) ${GREEN}████${NC} Nexus Uninstall"
+    echo -e "     ${DIM}MSSP backend, ClickHouse, multi-tenant SOC${NC}"
     echo ""
-    echo -e "  ${BOLD}5${NC}) Remove Pod Networks"
-    echo -e "     ${DIM}Remove Podman networks created by HookProbe${NC}"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "${YELLOW}Cleanup Utilities:${NC}"
     echo ""
-    echo -e "  ${BOLD}6${NC}) Remove OVS Bridges"
-    echo -e "     ${DIM}Remove Open vSwitch bridges and flows${NC}"
+    echo -e "  ${BOLD}5${NC}) Stop All Services"
+    echo -e "     ${DIM}Stop all HookProbe containers and systemd services${NC}"
     echo ""
-    echo -e "  ${BOLD}7${NC}) Remove Linux Bridges"
-    echo -e "     ${DIM}Remove Linux network bridges${NC}"
+    echo -e "  ${BOLD}6${NC}) Clean Everything Else"
+    echo -e "     ${RED}OVS bridges, Linux bridges, VXLANs, WiFi, volumes, containers, images${NC}"
     echo ""
-    echo -e "  ${BOLD}8${NC}) Reset WiFi Configuration"
-    echo -e "     ${DIM}Remove hotspot config, restore defaults${NC}"
-    echo ""
-    echo -e "  ${BOLD}9${NC}) Complete Uninstall"
-    echo -e "     ${RED}DESTRUCTIVE: Remove everything!${NC}"
-    echo ""
-    echo -e "  ${BOLD}10${NC}) Guardian Complete Uninstall"
-    echo -e "      ${RED}Remove all Guardian components (containers, bridges, WiFi, VPN, SDN)${NC}"
-    echo ""
-    echo -e "  ${BOLD}11${NC}) Sentinel Complete Uninstall"
-    echo -e "      ${RED}Remove Sentinel validator (service, firewall rules, fail2ban)${NC}"
+    echo -e "  ${BOLD}7${NC}) ${RED}NUCLEAR: Complete System Wipe${NC}"
+    echo -e "     ${RED}Remove ALL HookProbe components from ALL tiers!${NC}"
     echo ""
     show_nav_footer
 }
@@ -2315,23 +2236,298 @@ uninstall_sentinel() {
     fi
 }
 
+uninstall_fortress() {
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  FORTRESS COMPLETE UNINSTALL                               ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will remove:${NC}"
+    echo "  • All Guardian components"
+    echo "  • VictoriaMetrics (metrics storage)"
+    echo "  • Grafana (dashboards)"
+    echo "  • n8n (automation)"
+    echo "  • HookProbe Dashboard"
+    echo ""
+    read -p "Are you sure? Type 'yes' to confirm: " confirm
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+        # First uninstall Guardian components
+        uninstall_guardian
+
+        # Stop Fortress-specific services
+        echo "Stopping Fortress-specific services..."
+        for svc in hookprobe-fortress grafana victoriametrics n8n; do
+            systemctl stop "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+        done
+
+        # Remove Fortress containers
+        if command -v podman &>/dev/null; then
+            echo "Removing Fortress containers..."
+            for container in grafana victoriametrics n8n hookprobe-dashboard; do
+                podman stop "$container" 2>/dev/null || true
+                podman rm -f "$container" 2>/dev/null || true
+            done
+
+            # Remove Fortress volumes
+            echo "Removing Fortress volumes..."
+            for vol in grafana-data victoriametrics-data n8n-data; do
+                podman volume rm -f "$vol" 2>/dev/null || true
+            done
+        fi
+
+        # Remove Fortress directories
+        rm -rf /opt/hookprobe/fortress 2>/dev/null || true
+        rm -rf /var/lib/hookprobe/fortress 2>/dev/null || true
+
+        echo ""
+        echo -e "${GREEN}✓ Fortress uninstall complete${NC}"
+    else
+        echo "Cancelled."
+    fi
+}
+
+uninstall_nexus() {
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  NEXUS COMPLETE UNINSTALL                                  ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will remove:${NC}"
+    echo "  • MSSP backend services"
+    echo "  • ClickHouse (analytics database)"
+    echo "  • Multi-tenant SOC components"
+    echo "  • All edge agent registrations"
+    echo ""
+    echo -e "${RED}WARNING: This will disconnect all managed edge devices!${NC}"
+    echo ""
+    read -p "Are you sure? Type 'DELETE-NEXUS' to confirm: " confirm
+    if [ "$confirm" = "DELETE-NEXUS" ]; then
+        echo ""
+
+        # Stop Nexus services
+        echo "Stopping Nexus services..."
+        for svc in hookprobe-nexus clickhouse hookprobe-mssp hookprobe-soc; do
+            systemctl stop "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+        done
+
+        # Remove Nexus containers
+        if command -v podman &>/dev/null; then
+            echo "Removing Nexus containers..."
+            for container in clickhouse hookprobe-mssp hookprobe-soc hookprobe-api hookprobe-web; do
+                podman stop "$container" 2>/dev/null || true
+                podman rm -f "$container" 2>/dev/null || true
+            done
+
+            # Remove Nexus volumes
+            echo "Removing Nexus volumes..."
+            for vol in clickhouse-data nexus-data mssp-data soc-data; do
+                podman volume rm -f "$vol" 2>/dev/null || true
+            done
+        fi
+
+        # Remove Nexus directories
+        rm -rf /opt/hookprobe/nexus 2>/dev/null || true
+        rm -rf /var/lib/hookprobe/nexus 2>/dev/null || true
+        rm -rf /var/lib/clickhouse 2>/dev/null || true
+
+        # Remove systemd service files
+        rm -f /etc/systemd/system/hookprobe-nexus.service
+        rm -f /etc/systemd/system/hookprobe-mssp.service
+        systemctl daemon-reload
+
+        echo ""
+        echo -e "${GREEN}✓ Nexus uninstall complete${NC}"
+    else
+        echo "Cancelled."
+    fi
+}
+
+uninstall_cleanup_everything() {
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  CLEANUP EVERYTHING ELSE                                   ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will clean up leftover components:${NC}"
+    echo "  • OVS bridges (Open vSwitch)"
+    echo "  • Linux bridges"
+    echo "  • VXLAN tunnels"
+    echo "  • WiFi/hostapd configuration"
+    echo "  • Podman volumes and networks"
+    echo "  • Container images"
+    echo "  • Orphaned network interfaces"
+    echo ""
+    read -p "Proceed with cleanup? (yes/no) [no]: " confirm
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # OVS Bridges
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Removing OVS Bridges ==="
+        if command -v ovs-vsctl &>/dev/null; then
+            for br in $(ovs-vsctl list-br 2>/dev/null || true); do
+                echo "  Removing OVS bridge: $br"
+                ovs-vsctl del-br "$br" 2>/dev/null || true
+            done
+            echo -e "${GREEN}✓ OVS bridges removed${NC}"
+        else
+            echo "  OVS not installed, skipping"
+        fi
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # Linux Bridges
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Removing Linux Bridges ==="
+        for br in $(ip -brief link show type bridge 2>/dev/null | awk '{print $1}' || true); do
+            if [[ "$br" =~ ^(br|hookprobe|hp-|guardian|fortress) ]]; then
+                echo "  Removing bridge: $br"
+                ip link set "$br" down 2>/dev/null || true
+                ip link delete "$br" 2>/dev/null || true
+            fi
+        done
+        echo -e "${GREEN}✓ Linux bridges removed${NC}"
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # VXLAN Tunnels
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Removing VXLAN Tunnels ==="
+        for vxlan in $(ip -brief link show type vxlan 2>/dev/null | awk '{print $1}' || true); do
+            echo "  Removing VXLAN: $vxlan"
+            ip link set "$vxlan" down 2>/dev/null || true
+            ip link delete "$vxlan" 2>/dev/null || true
+        done
+        echo -e "${GREEN}✓ VXLAN tunnels removed${NC}"
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # VLAN Interfaces
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Removing VLAN Interfaces ==="
+        for vlan in $(ip -brief link show type vlan 2>/dev/null | awk '{print $1}' || true); do
+            echo "  Removing VLAN interface: $vlan"
+            ip link set "$vlan" down 2>/dev/null || true
+            ip link delete "$vlan" 2>/dev/null || true
+        done
+        echo -e "${GREEN}✓ VLAN interfaces removed${NC}"
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # WiFi Configuration
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Resetting WiFi Configuration ==="
+        systemctl stop hostapd 2>/dev/null || true
+        systemctl disable hostapd 2>/dev/null || true
+        rm -f /etc/hostapd/hostapd.conf 2>/dev/null || true
+        rm -f /etc/hostapd/hostapd.vlan 2>/dev/null || true
+        rm -f /etc/hostapd/hostapd.accept 2>/dev/null || true
+        rm -f /etc/hostapd/hostapd.deny 2>/dev/null || true
+        rm -f /etc/default/hostapd 2>/dev/null || true
+
+        systemctl stop dnsmasq 2>/dev/null || true
+        rm -f /etc/dnsmasq.d/guardian*.conf 2>/dev/null || true
+        rm -f /etc/dnsmasq.d/hookprobe*.conf 2>/dev/null || true
+
+        echo -e "${GREEN}✓ WiFi configuration reset${NC}"
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # Podman Cleanup
+        # ─────────────────────────────────────────────────────────────
+        if command -v podman &>/dev/null; then
+            echo "=== Podman Cleanup ==="
+
+            # Stop and remove all containers
+            echo "Stopping all containers..."
+            podman stop -a 2>/dev/null || true
+            podman rm -af 2>/dev/null || true
+
+            # Remove all volumes
+            echo "Removing all volumes..."
+            podman volume rm -af 2>/dev/null || true
+
+            # Remove all networks except default
+            echo "Removing custom networks..."
+            for net in $(podman network ls --format '{{.Name}}' 2>/dev/null | grep -v "^podman$" || true); do
+                podman network rm "$net" 2>/dev/null || true
+            done
+
+            # Remove images
+            echo "Removing container images..."
+            podman rmi -af 2>/dev/null || true
+
+            # System prune
+            echo "Pruning podman system..."
+            podman system prune -af 2>/dev/null || true
+
+            # Remove podman network interface
+            ip link set podman0 down 2>/dev/null || true
+            ip link delete podman0 2>/dev/null || true
+
+            # Remove veth interfaces
+            for veth in $(ip link show 2>/dev/null | grep -oP 'veth[^@:]+' | sort -u || true); do
+                ip link delete "$veth" 2>/dev/null || true
+            done
+
+            echo -e "${GREEN}✓ Podman cleanup complete${NC}"
+        fi
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # Network Namespaces
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Cleaning Network Namespaces ==="
+        for netns in $(ip netns list 2>/dev/null | awk '{print $1}' || true); do
+            if [[ "$netns" =~ ^(netns-|cni-|hookprobe) ]]; then
+                echo "  Removing netns: $netns"
+                ip netns delete "$netns" 2>/dev/null || true
+            fi
+        done
+        echo -e "${GREEN}✓ Network namespaces cleaned${NC}"
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # CNI Configuration
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Removing CNI Configuration ==="
+        rm -rf /etc/cni/net.d/*.conflist 2>/dev/null || true
+        rm -rf /var/lib/cni/networks/* 2>/dev/null || true
+        echo -e "${GREEN}✓ CNI configuration removed${NC}"
+        echo ""
+
+        # ─────────────────────────────────────────────────────────────
+        # nftables Rules
+        # ─────────────────────────────────────────────────────────────
+        echo "=== Cleaning nftables Rules ==="
+        rm -f /etc/nftables.d/guardian*.nft 2>/dev/null || true
+        rm -f /etc/nftables.d/hookprobe*.nft 2>/dev/null || true
+        nft flush ruleset 2>/dev/null || true
+        echo -e "${GREEN}✓ nftables rules cleaned${NC}"
+        echo ""
+
+        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║  Cleanup complete!                                         ║${NC}"
+        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+    else
+        echo "Cancelled."
+    fi
+}
+
 handle_uninstall() {
     while true; do
         show_uninstall_menu
         read -p "Select option: " choice
 
         case $choice in
-            1) uninstall_stop_services ;;
-            2) uninstall_containers ;;
-            3) uninstall_images ;;
-            4) uninstall_volumes ;;
-            5) uninstall_networks ;;
-            6) uninstall_ovs ;;
-            7) uninstall_bridges ;;
-            8) uninstall_wifi ;;
-            9) uninstall_complete ;;
-            10) uninstall_guardian ;;
-            11) uninstall_sentinel ;;
+            1) uninstall_sentinel ;;
+            2) uninstall_guardian ;;
+            3) uninstall_fortress ;;
+            4) uninstall_nexus ;;
+            5) uninstall_stop_services ;;
+            6) uninstall_cleanup_everything ;;
+            7) uninstall_complete ;;
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1; continue ;;
