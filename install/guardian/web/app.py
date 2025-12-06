@@ -558,21 +558,34 @@ def get_status():
 
 
 def get_container_status():
-    """Get status of all security containers."""
+    """Get status of all security containers and services."""
     containers = {
-        'suricata': {'name': 'guardian-suricata', 'label': 'Suricata IDS', 'running': False},
-        'waf': {'name': 'guardian-waf', 'label': 'ModSecurity WAF', 'running': False},
-        'neuro': {'name': 'guardian-neuro', 'label': 'Neuro Protocol', 'running': False},
-        'adguard': {'name': 'guardian-adguard', 'label': 'AdGuard Home', 'running': False},
+        'suricata': {'name': 'guardian-suricata', 'label': 'Suricata IDS/IPS', 'running': False, 'type': 'container'},
+        'zeek': {'name': 'guardian-zeek', 'label': 'Zeek Network Analysis', 'running': False, 'type': 'container'},
+        'waf': {'name': 'guardian-waf', 'label': 'ModSecurity WAF', 'running': False, 'type': 'container'},
+        'neuro': {'name': 'guardian-neuro', 'label': 'Neuro Protocol', 'running': False, 'type': 'container'},
+        'adguard': {'name': 'guardian-adguard', 'label': 'AdGuard DNS', 'running': False, 'type': 'container'},
+        'xdp': {'name': 'guardian-xdp', 'label': 'XDP DDoS Protection', 'running': False, 'type': 'service'},
+        'aggregator': {'name': 'guardian-aggregator', 'label': 'Threat Aggregator', 'running': False, 'type': 'service'},
     }
 
+    # Check podman containers
     output, _ = run_command('podman ps --format "{{.Names}}" 2>/dev/null')
     running = output.split('\n') if output else []
 
     for key, container in containers.items():
-        container['running'] = container['name'] in running
+        if container['type'] == 'container':
+            container['running'] = container['name'] in running
+        # Check systemd service status
         svc_output, _ = run_command(f'systemctl is-active {container["name"]}')
         container['service_active'] = svc_output == 'active'
+        if container['type'] == 'service':
+            container['running'] = container['service_active']
+
+    # Check XDP loaded on interface
+    xdp_output, _ = run_command('ip link show | grep xdp')
+    if xdp_output:
+        containers['xdp']['running'] = True
 
     return containers
 
