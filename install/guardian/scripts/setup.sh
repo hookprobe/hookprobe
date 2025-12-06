@@ -2301,6 +2301,239 @@ EOF
 }
 
 # ============================================================
+# GUARDIAN LIBRARY INSTALLATION
+# ============================================================
+install_guardian_lib() {
+    log_step "Installing Guardian Python library..."
+
+    local LIB_SRC="$GUARDIAN_ROOT/lib"
+    local LIB_DEST="/opt/hookprobe/guardian/lib"
+
+    # Create destination directory
+    mkdir -p "$LIB_DEST"
+
+    # Check if lib directory exists in source
+    if [ -d "$LIB_SRC" ]; then
+        log_info "Copying Guardian library modules..."
+
+        # Copy all Python modules
+        cp "$LIB_SRC"/*.py "$LIB_DEST/" 2>/dev/null || true
+
+        # List installed modules
+        local modules_installed=$(ls -1 "$LIB_DEST"/*.py 2>/dev/null | wc -l)
+        log_info "Installed $modules_installed Python modules"
+
+        # Install Python dependencies
+        log_info "Installing Python dependencies..."
+        pip3 install --quiet --upgrade \
+            pyyaml \
+            websockets \
+            cryptography \
+            aiohttp \
+            dataclasses-json 2>/dev/null || true
+
+    else
+        log_warn "Guardian library source not found at $LIB_SRC"
+        log_info "Creating minimal library structure..."
+
+        # Create minimal __init__.py
+        cat > "$LIB_DEST/__init__.py" << 'PYEOF'
+"""
+HookProbe Guardian Library
+Version: 5.0.0 Liberty
+"""
+__version__ = '5.0.0'
+PYEOF
+    fi
+
+    # Set permissions
+    chmod -R 755 "$LIB_DEST"
+
+    # Add to Python path
+    local PYTHON_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/lib/python3/dist-packages")
+    if [ -d "$PYTHON_SITE" ]; then
+        echo "/opt/hookprobe/guardian" > "$PYTHON_SITE/guardian.pth" 2>/dev/null || true
+        log_info "Added Guardian to Python path"
+    fi
+
+    log_info "Guardian library installation complete"
+}
+
+# ============================================================
+# CONFIGURATION FILE CREATION
+# ============================================================
+create_default_config() {
+    log_step "Creating Guardian configuration..."
+
+    local CONFIG_DIR="/etc/guardian"
+    local CONFIG_FILE="$CONFIG_DIR/guardian.yaml"
+
+    # Create configuration directory
+    mkdir -p "$CONFIG_DIR"
+
+    # Skip if config already exists
+    if [ -f "$CONFIG_FILE" ]; then
+        log_info "Configuration file already exists: $CONFIG_FILE"
+        return 0
+    fi
+
+    log_info "Creating default configuration file..."
+
+    cat > "$CONFIG_FILE" << 'YAMLEOF'
+# HookProbe Guardian Configuration
+# Version: 5.0.0 Liberty
+# Generated automatically during installation
+# Modify this file to customize Guardian behavior
+
+# RADIUS Configuration
+radius:
+  enabled: true
+  port: 1812
+  accounting_port: 1813
+  secret: "changeme_radius_secret"
+  nas_identifier: "guardian"
+  session_timeout: 3600
+  mac_auth:
+    enabled: true
+    unknown_vlan: 999  # Quarantine VLAN for unknown devices
+
+# VLAN Configuration
+vlans:
+  smart_lights:
+    id: 10
+    name: "Smart Lights"
+    subnet: "192.168.10.0/24"
+    gateway: "192.168.10.1"
+  thermostats:
+    id: 20
+    name: "Thermostats"
+    subnet: "192.168.20.0/24"
+    gateway: "192.168.20.1"
+  cameras:
+    id: 30
+    name: "Cameras"
+    subnet: "192.168.30.0/24"
+    gateway: "192.168.30.1"
+  voice_assistants:
+    id: 40
+    name: "Voice Assistants"
+    subnet: "192.168.40.0/24"
+    gateway: "192.168.40.1"
+  appliances:
+    id: 50
+    name: "Appliances"
+    subnet: "192.168.50.0/24"
+    gateway: "192.168.50.1"
+  entertainment:
+    id: 60
+    name: "Entertainment"
+    subnet: "192.168.60.0/24"
+    gateway: "192.168.60.1"
+  robots:
+    id: 70
+    name: "Robots"
+    subnet: "192.168.70.0/24"
+    gateway: "192.168.70.1"
+  sensors:
+    id: 80
+    name: "Sensors"
+    subnet: "192.168.80.0/24"
+    gateway: "192.168.80.1"
+  quarantine:
+    id: 999
+    name: "Quarantine"
+    subnet: "192.168.99.0/24"
+    gateway: "192.168.99.1"
+    internet_access: false
+
+# OpenFlow SDN Configuration
+openflow:
+  enabled: true
+  controller_port: 6653
+  ovs_bridge: "br-guardian"
+  dpid: "0x1"
+  default_table: 0
+  miss_send_len: 128
+  flow_hard_timeout: 0
+  flow_idle_timeout: 300
+
+# HTP (HookProbe Transport Protocol) Configuration
+htp:
+  enabled: true
+  mssp_host: "mssp.hookprobe.com"
+  mssp_port: 8443
+  use_tls: true
+  reconnect_interval: 30
+  heartbeat_interval: 60
+  compression: true
+
+# WebSocket VPN Configuration
+websocket_vpn:
+  enabled: true
+  listen_port: 8765
+  noise_pattern: "XX"
+  allowed_paths:
+    - "/home"
+    - "/opt/hookprobe"
+    - "/var/log/hookprobe"
+  max_file_size: 104857600  # 100MB
+  chunk_size: 65536  # 64KB
+
+# Network Configuration
+network:
+  wan_interface: "eth0"
+  lan_interface: "br0"
+  wifi_interface: "wlan0"
+  management_subnet: "192.168.4.0/24"
+  management_gateway: "192.168.4.1"
+
+# Security Configuration
+security:
+  threat_detection:
+    enabled: true
+    layers: ["L2", "L3", "L4", "L5", "L6", "L7"]
+  qsecbit:
+    enabled: true
+    amber_threshold: 0.45
+    red_threshold: 0.70
+  suricata:
+    enabled: true
+    eve_log: "/var/log/suricata/eve.json"
+  waf:
+    enabled: true
+    modsecurity_rules: "/etc/modsecurity/crs"
+  xdp:
+    enabled: true
+    interface: "eth0"
+
+# Web UI Configuration
+webui:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+  theme: "dark"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  log_dir: "/var/log/hookprobe"
+  max_size_mb: 100
+  backup_count: 5
+  syslog:
+    enabled: false
+    host: "localhost"
+    port: 514
+YAMLEOF
+
+    # Set secure permissions
+    chmod 640 "$CONFIG_FILE"
+
+    log_info "Configuration created: $CONFIG_FILE"
+    log_info "Edit this file to customize RADIUS, VLANs, and other settings"
+}
+
+# ============================================================
 # WEB UI INSTALLATION
 # ============================================================
 install_web_ui() {
@@ -2434,68 +2667,53 @@ start_services() {
 }
 
 # ============================================================
-# MODE SELECTION MENU
+# UNIFIED GUARDIAN INSTALLATION
 # ============================================================
-show_mode_menu() {
+show_guardian_banner() {
     echo ""
-    echo -e "${BOLD}${WHITE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${WHITE}║          HookProbe Guardian - Installation Mode            ║${NC}"
-    echo -e "${BOLD}${WHITE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${BOLD}${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}║         HookProbe Guardian - Liberty 5.0.0                  ║${NC}"
+    echo -e "${BOLD}${GREEN}║         Unified Security Gateway Installation              ║${NC}"
+    echo -e "${BOLD}${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${BOLD}1)${NC} ${GREEN}Basic Mode${NC} - Simple WiFi hotspot with bridge"
-    echo -e "     ${DIM}• Single SSID, all devices on same network${NC}"
-    echo -e "     ${DIM}• WiFi + LAN bridged together${NC}"
-    echo -e "     ${DIM}• WAN DHCP client for internet${NC}"
-    echo -e "     ${DIM}• No MSSP required${NC}"
+    echo -e "  ${BOLD}${WHITE}Complete Protection Suite:${NC}"
     echo ""
-    echo -e "  ${BOLD}2)${NC} ${CYAN}SDN Mode${NC} - Full VLAN segmentation (requires MSSP)"
-    echo -e "     ${DIM}• MAC-based VLAN assignment${NC}"
-    echo -e "     ${DIM}• IoT device isolation${NC}"
-    echo -e "     ${DIM}• Per-category internet policies${NC}"
-    echo -e "     ${DIM}• Requires FreeRADIUS connection${NC}"
+    echo -e "  ${GREEN}✓${NC} L1-L7 OSI Layer Threat Detection"
+    echo -e "  ${GREEN}✓${NC} QSecBit AI-Powered Security Scoring"
+    echo -e "  ${GREEN}✓${NC} Suricata IDS/IPS (Intrusion Detection/Prevention)"
+    echo -e "  ${GREEN}✓${NC} ModSecurity WAF (Web Application Firewall)"
+    echo -e "  ${GREEN}✓${NC} XDP/eBPF High-Performance Packet Processing"
+    echo -e "  ${GREEN}✓${NC} OpenFlow SDN Controller with OVS"
+    echo -e "  ${GREEN}✓${NC} VLAN Segmentation (IoT Device Isolation)"
+    echo -e "  ${GREEN}✓${NC} RADIUS MAC Authentication"
+    echo -e "  ${GREEN}✓${NC} WebSocket VPN via MSSP (Noise Protocol)"
+    echo -e "  ${GREEN}✓${NC} HTP Secure Communication"
+    echo ""
+    echo -e "  ${DIM}Configuration file: /etc/guardian/guardian.yaml${NC}"
     echo ""
 }
 
-prompt_mode_selection() {
-    local mode=""
+confirm_installation() {
+    show_guardian_banner
 
-    # Check if mode was passed as environment variable
-    if [ -n "${GUARDIAN_MODE:-}" ]; then
-        mode="$GUARDIAN_MODE"
+    echo -e "${YELLOW}This will install Guardian with all security features.${NC}"
+    echo ""
+
+    # Check MSSP connectivity
+    if check_mssp_connectivity; then
+        echo -e "  ${GREEN}✓${NC} MSSP connectivity: ${GREEN}Available${NC}"
     else
-        show_mode_menu
-
-        while true; do
-            read -p "Select installation mode [1]: " choice
-            choice=${choice:-1}
-
-            case $choice in
-                1)
-                    mode="basic"
-                    break
-                    ;;
-                2)
-                    mode="sdn"
-                    # Check RADIUS connectivity
-                    if ! check_mssp_connectivity; then
-                        echo ""
-                        echo -e "${YELLOW}Warning: MSSP not reachable. SDN features require MSSP connection.${NC}"
-                        read -p "Continue with SDN mode anyway? (yes/no) [no]: " continue_sdn
-                        if [ "$continue_sdn" != "yes" ]; then
-                            echo "Falling back to Basic mode..."
-                            mode="basic"
-                        fi
-                    fi
-                    break
-                    ;;
-                *)
-                    echo -e "${RED}Invalid selection. Please choose 1 or 2.${NC}"
-                    ;;
-            esac
-        done
+        echo -e "  ${YELLOW}!${NC} MSSP connectivity: ${YELLOW}Offline${NC} (VPN features disabled until connected)"
     fi
+    echo ""
 
-    echo "$mode"
+    read -p "Continue with installation? (yes/no) [yes]: " confirm
+    confirm=${confirm:-yes}
+
+    if [ "$confirm" != "yes" ] && [ "$confirm" != "y" ]; then
+        echo "Installation cancelled."
+        exit 0
+    fi
 }
 
 # ============================================================
@@ -2536,17 +2754,13 @@ prompt_network_config() {
 # MAIN INSTALLATION
 # ============================================================
 main() {
-    echo ""
-    echo -e "${BOLD}${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${GREEN}║                  HookProbe Guardian Setup                   ║${NC}"
-    echo -e "${BOLD}${GREEN}║              Portable SDN Security Gateway                  ║${NC}"
-    echo -e "${BOLD}${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-
     # Prerequisites
     check_root
     detect_platform
     detect_interfaces
+
+    # Show banner and confirm
+    confirm_installation
 
     # Check WiFi AP support
     if [ "$WIFI_AP_SUPPORT" != "true" ]; then
@@ -2556,77 +2770,104 @@ main() {
     fi
 
     # Install base packages
+    log_step "Installing base packages..."
     install_packages
 
+    # Install SDN packages (VLAN, FreeRADIUS)
+    log_step "Installing SDN/RADIUS packages..."
+    install_sdn_packages
+
     # Install Podman container runtime
+    log_step "Installing container runtime..."
     install_podman
 
-    # Install Open vSwitch (for both modes - provides SDN capabilities)
+    # Install Open vSwitch
+    log_step "Installing Open vSwitch..."
     install_openvswitch
 
     # Setup OVS bridge with VXLAN tunnel
+    log_step "Configuring OVS bridge..."
     setup_ovs_bridge
 
-    # Select installation mode
-    MODE=$(prompt_mode_selection)
-    log_info "Selected mode: $MODE"
-
-    # Network configuration
+    # Network configuration prompt
     prompt_network_config
 
-    # Install security containers first (Suricata IDS, WAF, Neuro, AdGuard)
+    # Install security containers (Suricata IDS, WAF, Neuro, AdGuard)
+    log_step "Installing security containers..."
     install_security_containers
 
-    # Configure based on mode
-    case $MODE in
-        basic)
-            configure_basic_mode
-            ;;
-        sdn)
-            install_sdn_packages
-            configure_sdn_mode
-            ;;
-    esac
+    # Configure unified mode (combines basic networking + SDN features)
+    log_step "Configuring unified Guardian mode..."
+    configure_basic_mode   # Setup basic networking first
+    configure_sdn_mode     # Then add SDN/VLAN features on top
 
-    # Install QSecBit agent (Python-based backup agent)
+    # Install QSecBit agent
+    log_step "Installing QSecBit agent..."
     install_qsecbit_agent
 
-    # Save mode configuration
+    # Install Guardian Python library
+    log_step "Installing Guardian library..."
+    install_guardian_lib
+
+    # Create default configuration file
+    log_step "Creating configuration file..."
+    create_default_config
+
+    # Save mode configuration (always unified now)
     mkdir -p /opt/hookprobe/guardian
-    echo "$MODE" > /opt/hookprobe/guardian/mode.conf
-    log_info "Mode saved: $MODE"
+    echo "unified" > /opt/hookprobe/guardian/mode.conf
+    log_info "Mode: unified (all features enabled)"
 
     # Install Web UI
+    log_step "Installing Web UI..."
     install_web_ui
 
     # Enable and start services
+    log_step "Starting services..."
     enable_services
     start_services
 
     # Final summary
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║           Guardian Installation Complete!                   ║${NC}"
+    echo -e "${GREEN}║       Guardian Liberty 5.0.0 Installation Complete!        ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
-    echo -e "  Mode:        ${BOLD}$MODE${NC}"
+    echo -e "  Version:     ${BOLD}Liberty 5.0.0${NC}"
+    echo -e "  Mode:        ${BOLD}Unified (all features)${NC}"
     echo -e "  Hotspot:     ${BOLD}${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}${NC}"
     echo -e "  Web UI:      ${BOLD}http://192.168.4.1:8080${NC}"
+    echo -e "  Config:      ${BOLD}/etc/guardian/guardian.yaml${NC}"
     echo ""
-    echo -e "  ${BOLD}Installed Components:${NC}"
-    echo -e "  • Open vSwitch (SDN with VXLAN tunnel)"
-    echo -e "  • Podman container runtime"
-    echo -e "  • Suricata IDS/IPS (threat detection)"
-    echo -e "  • ModSecurity WAF (web application firewall)"
-    echo -e "  • Neuro Protocol (QSecBit + HTP)"
-    echo -e "  • QSecBit Lite security agent"
+    echo -e "  ${BOLD}Security Features:${NC}"
+    echo -e "  • L1-L7 OSI Layer Threat Detection"
+    echo -e "  • QSecBit AI Security Scoring"
+    echo -e "  • Suricata IDS/IPS"
+    echo -e "  • ModSecurity WAF"
+    echo -e "  • XDP/eBPF Acceleration"
+    echo ""
+    echo -e "  ${BOLD}Network Features:${NC}"
+    echo -e "  • OpenFlow SDN Controller"
+    echo -e "  • Open vSwitch Integration"
+    echo -e "  • VLAN Segmentation (IoT Isolation)"
+    echo -e "  • RADIUS MAC Authentication"
+    echo -e "  • WebSocket VPN via MSSP"
+    echo ""
+    echo -e "  ${BOLD}IoT VLANs:${NC}"
+    echo -e "  • VLAN 10: Smart Lights"
+    echo -e "  • VLAN 20: Thermostats"
+    echo -e "  • VLAN 30: Cameras"
+    echo -e "  • VLAN 40: Voice Assistants"
+    echo -e "  • VLAN 50: Appliances"
+    echo -e "  • VLAN 60: Entertainment"
+    echo -e "  • VLAN 70: Robots"
+    echo -e "  • VLAN 80: Sensors"
+    echo -e "  • VLAN 999: Quarantine (unknown devices)"
+    echo ""
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
-        echo -e "  • AdGuard Home (ad blocking)"
-        echo -e "    Setup: ${BOLD}http://192.168.4.1:3000${NC}"
-    fi
-    if [ "$MODE" = "sdn" ]; then
-        echo -e "  • VLAN segmentation enabled"
+        echo -e "  ${BOLD}Additional:${NC}"
+        echo -e "  • AdGuard Home: ${BOLD}http://192.168.4.1:3000${NC}"
     fi
     echo ""
     echo -e "  ${BOLD}Service Status:${NC}"
