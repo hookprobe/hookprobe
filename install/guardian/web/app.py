@@ -880,6 +880,7 @@ HTML_TEMPLATE = '''
         /* Tabs */
         .tabs {
             display: flex;
+            justify-content: center;
             background: white;
             border-bottom: 1px solid var(--hp-border);
             overflow-x: auto;
