@@ -1,31 +1,47 @@
 # HookProbe Guardian
 
-> **"Protection on the Move"** - Portable SDN security gateway
+> **"Protection on the Move"** - Portable security gateway for travelers
 
 <p align="center">
   <strong>Liberty Cybersecurity for the Masses</strong><br>
-  <em>Enterprise Security at $75 · L2-L7 Threat Detection · Neural Resonance Authentication</em>
+  <em>Enterprise Security at $75 · L2-L7 Threat Detection · Travel Companion</em>
 </p>
 
 ---
 
 ## Overview
 
-Guardian transforms Raspberry Pi 4/5 into a powerful software-defined networking (SDN) appliance. It provides enterprise-grade network segmentation, IoT isolation, and comprehensive L2-L7 threat detection in a portable, plug-and-play package.
+Guardian transforms Raspberry Pi 4/5 into a portable security gateway. Perfect for securing your devices on hotel WiFi, coffee shops, airports, and any untrusted network. Guardian creates a secure WiFi hotspot that protects all your connected devices.
 
 **Version 5.0.0 Liberty** — Affordable cybersecurity for everyone.
 
 **Key Capabilities:**
-- **SDN/VLAN Segmentation** — Isolate IoT devices by category
+- **Secure WiFi Hotspot** — Create your own protected network anywhere
 - **L2-L7 Threat Detection** — Full OSI stack threat monitoring
 - **Mobile Network Protection** — Hotel/public WiFi security
-- **HTP File Transfer** — Secure file access via MSSP (weight-bound encryption)
-- **MAC-Based Assignment** — Automatic VLAN assignment via RADIUS
-- **Multi-AP Support** — Up to 4 access points with USB WiFi adapters
+- **IDS/IPS Protection** — Suricata-based intrusion detection
+- **DNS Filtering** — Block malicious domains with AdGuard
 - **HTP Protocol** — Secure transport to MSSP cloud (mssp.hookprobe.com)
-- **OpenFlow SDN** — Software-defined networking with OVS
-- **Unified Configuration** — Single YAML config at `/etc/guardian/guardian.yaml`
+- **Web Dashboard** — Monitor threats and manage devices
 - **Portable Security** — Take your network security anywhere
+
+> **Note:** For advanced VLAN segmentation and SDN features, see [HookProbe Fortress](../fortress/). Guardian focuses on simplicity and portability.
+
+---
+
+## Guardian vs Fortress
+
+| Feature | Guardian | Fortress |
+|---------|----------|----------|
+| **Use Case** | Travel, portable | Home/Office, permanent |
+| **WiFi Mode** | Single AP hotspot | Multi-VLAN with RADIUS |
+| **Network** | Simple NAT | SDN/OpenFlow |
+| **Device Isolation** | Firewall rules | VLAN segmentation |
+| **WiFi Adapters** | Any USB adapter | Atheros AR9271, MT7612U* |
+| **Setup** | 5 minutes | 30 minutes |
+| **Complexity** | Simple | Advanced |
+
+\* *VLAN-capable adapters required for dynamic VLAN assignment*
 
 ---
 
@@ -48,9 +64,21 @@ Guardian democratizes enterprise security:
 | Platform | Raspberry Pi 4 (4GB) | Raspberry Pi 5 (8GB) |
 | RAM | 3GB | 4-8GB |
 | Storage | 16GB microSD | 32GB+ microSD (A2 rated) |
-| Network | 1x WiFi + 1x Ethernet | 2x WiFi + 1x Ethernet |
+| Network | 1x WiFi (built-in) + 1x USB WiFi | 2x WiFi interfaces |
 | Internet | Required | Required |
-| MSSP ID | Required | Required |
+
+### WiFi Adapter Recommendations
+
+**For Guardian (Simple Hotspot):**
+- Any USB WiFi adapter with AP mode support
+- Built-in WiFi (wlan0) for uplink, USB WiFi (wlan1) for hotspot
+- Examples: TP-Link TL-WN722N, Panda PAU09, Alfa AWUS036ACH
+
+**For Fortress (VLAN Segmentation):**
+- Requires adapters supporting multiple VAPs (Virtual Access Points)
+- **Atheros AR9271** — Best compatibility, open source driver
+- **MediaTek MT7612U** — 5GHz support, good performance
+- **Ralink RT5572** — Dual-band, reliable
 
 ---
 
@@ -68,6 +96,41 @@ Guardian democratizes enterprise security:
 ---
 
 ## Features
+
+### Secure WiFi Hotspot
+
+Guardian creates a protected WiFi network for your devices:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GUARDIAN TRAVEL SETUP                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Hotel/Airport WiFi ──► wlan0 (Uplink) ──► Guardian            │
+│                                              │                   │
+│                                              ▼                   │
+│                                        ┌──────────┐             │
+│                                        │ Security │             │
+│                                        │  Stack   │             │
+│                                        │ IDS/IPS  │             │
+│                                        │   WAF    │             │
+│                                        │   DNS    │             │
+│                                        └──────────┘             │
+│                                              │                   │
+│   Your Devices ◄────── wlan1 (Hotspot) ◄────┘                   │
+│   - Laptop             "HookProbe-Guardian"                      │
+│   - Phone              192.168.4.0/24                           │
+│   - Tablet                                                       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- WPA2 encrypted hotspot
+- NAT isolation from untrusted network
+- All traffic scanned by IDS/IPS
+- DNS filtering blocks malicious domains
+- Web dashboard at http://192.168.4.1:8080
 
 ### L2-L7 Threat Detection
 
