@@ -53,12 +53,27 @@ stop_services() {
     log_step "Stopping Guardian services..."
 
     local services=(
+        # Core services
         "guardian-webui"
         "guardian-suricata"
         "guardian-adguard"
         "guardian-qsecbit"
+        # New unified services
+        "guardian-vpn"
+        "guardian-sdn"
+        "guardian-htp"
+        "guardian-layer-detector"
+        "guardian-mobile-protection"
+        "guardian-radius"
+        "guardian-aggregator"
+        "guardian-xdp"
+        "guardian-waf"
+        "guardian-zeek"
+        # System services
         "hostapd"
         "dnsmasq"
+        "freeradius"
+        "openvswitch-switch"
     )
 
     for service in "${services[@]}"; do
@@ -78,12 +93,23 @@ remove_systemd_services() {
     log_step "Removing systemd services..."
 
     local services=(
+        # Core services
         "guardian-webui"
         "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
         "guardian-adguard"
         "guardian-qsecbit"
+        # New unified services
+        "guardian-vpn"
+        "guardian-sdn"
+        "guardian-htp"
+        "guardian-layer-detector"
+        "guardian-mobile-protection"
+        "guardian-radius"
+        "guardian-aggregator"
+        "guardian-xdp"
+        "guardian-zeek"
     )
 
     for service in "${services[@]}"; do
@@ -278,11 +304,85 @@ remove_sysctl_settings() {
 }
 
 # ============================================================
+# REMOVE GUARDIAN CONFIGURATION
+# ============================================================
+remove_guardian_config() {
+    log_step "Removing Guardian configuration..."
+
+    # Remove main configuration file
+    if [ -f "/etc/guardian/guardian.yaml" ]; then
+        log_info "Removing /etc/guardian/guardian.yaml..."
+        rm -f "/etc/guardian/guardian.yaml"
+    fi
+
+    # Remove guardian config directory if empty
+    if [ -d "/etc/guardian" ] && [ -z "$(ls -A /etc/guardian 2>/dev/null)" ]; then
+        rm -rf "/etc/guardian"
+        log_info "Removed /etc/guardian (was empty)"
+    fi
+
+    log_info "Guardian configuration removed"
+}
+
+# ============================================================
+# REMOVE RADIUS CONFIGURATION
+# ============================================================
+remove_radius_config() {
+    log_step "Removing RADIUS configuration..."
+
+    # Stop freeradius if running
+    systemctl stop freeradius 2>/dev/null || true
+
+    # Remove FreeRADIUS Guardian configurations
+    rm -f /etc/freeradius/3.0/clients.d/guardian.conf 2>/dev/null || true
+    rm -f /etc/freeradius/3.0/mods-enabled/sql-guardian 2>/dev/null || true
+    rm -f /etc/freeradius/3.0/sites-enabled/guardian 2>/dev/null || true
+
+    # Remove MAC-to-VLAN mappings
+    if [ -f /etc/freeradius/3.0/users ]; then
+        # Backup original users file
+        if grep -q "# HookProbe Guardian" /etc/freeradius/3.0/users 2>/dev/null; then
+            log_info "Removing Guardian entries from FreeRADIUS users file..."
+            sed -i '/# HookProbe Guardian/,/# End HookProbe Guardian/d' /etc/freeradius/3.0/users 2>/dev/null || true
+        fi
+    fi
+
+    log_info "RADIUS configuration removed"
+}
+
+# ============================================================
+# REMOVE VPN STATE AND DATA
+# ============================================================
+remove_vpn_data() {
+    log_step "Removing VPN state and data..."
+
+    # Remove VPN state file
+    rm -f /opt/hookprobe/guardian/data/vpn_state.json 2>/dev/null || true
+
+    # Remove VPN keys
+    rm -f /opt/hookprobe/guardian/data/vpn_keypair.json 2>/dev/null || true
+
+    # Remove any Noise protocol keys
+    rm -rf /opt/hookprobe/guardian/data/noise_keys 2>/dev/null || true
+
+    log_info "VPN data removed"
+}
+
+# ============================================================
 # REMOVE GUARDIAN DIRECTORIES
 # ============================================================
 remove_guardian_directories() {
     log_step "Removing Guardian directories..."
 
+    # Remove Guardian Python library
+    rm -rf /opt/hookprobe/guardian/lib
+    log_info "Removed Guardian library modules"
+
+    # Remove Guardian data directory
+    rm -rf /opt/hookprobe/guardian/data
+    log_info "Removed Guardian data directory"
+
+    # Remove full Guardian directory
     rm -rf /opt/hookprobe/guardian
 
     # Remove VXLAN secrets
@@ -300,6 +400,10 @@ remove_guardian_directories() {
         rm -rf /opt/hookprobe
         log_info "Removed /opt/hookprobe (was empty)"
     fi
+
+    # Remove Python path entry
+    local PYTHON_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/lib/python3/dist-packages")
+    rm -f "$PYTHON_SITE/guardian.pth" 2>/dev/null || true
 
     log_info "Guardian directories removed"
 }
@@ -359,18 +463,24 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Guardian Uninstaller                ║${NC}"
+    echo -e "${BOLD}${RED}║                   Version 5.0.0 Liberty                    ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     check_root
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
-    echo -e "  - Guardian systemd services"
-    echo -e "  - Podman containers (Suricata IDS, AdGuard)"
-    echo -e "  - Network bridges and VLAN interfaces"
+    echo -e "  - Guardian systemd services (webui, suricata, vpn, sdn, htp, etc.)"
+    echo -e "  - Podman containers (Suricata IDS, AdGuard, WAF, Zeek)"
+    echo -e "  - Network bridges and VLAN interfaces (br0, br10-br999)"
+    echo -e "  - OVS bridges and OpenFlow rules"
     echo -e "  - WiFi hotspot (hostapd) configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
+    echo -e "  - RADIUS/FreeRADIUS Guardian configuration"
+    echo -e "  - Guardian configuration (/etc/guardian/guardian.yaml)"
+    echo -e "  - VPN state and encryption keys"
     echo -e "  - nftables firewall rules"
+    echo -e "  - Guardian Python library modules"
     echo -e "  - Guardian data directories"
     echo ""
 
@@ -392,6 +502,9 @@ main() {
     remove_hostapd_config
     remove_dnsmasq_config
     remove_sysctl_settings
+    remove_guardian_config
+    remove_radius_config
+    remove_vpn_data
     remove_systemd_services
     remove_guardian_directories
 
@@ -407,14 +520,18 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services"
+    echo -e "  • Guardian systemd services (webui, vpn, sdn, htp, ids, etc.)"
     echo -e "  • Podman containers and volumes"
     echo -e "  • Network bridges (br0, br10-br999)"
+    echo -e "  • OVS bridges (br-guardian)"
     echo -e "  • VLAN interfaces"
-    echo -e "  • hostapd configuration"
-    echo -e "  • dnsmasq configuration"
+    echo -e "  • hostapd and dnsmasq configuration"
+    echo -e "  • RADIUS/FreeRADIUS configuration"
+    echo -e "  • Guardian configuration (/etc/guardian/)"
+    echo -e "  • VPN state and keys"
     echo -e "  • nftables rules"
-    echo -e "  • Guardian directories"
+    echo -e "  • Python library modules"
+    echo -e "  • Guardian directories (/opt/hookprobe/guardian)"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
     echo -e "  ${DIM}Reboot: sudo reboot${NC}"
