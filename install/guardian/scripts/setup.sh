@@ -4,9 +4,11 @@
 # Version: 5.0.0
 # License: MIT
 #
-# Installation modes:
-#   - Basic: Simple bridge (WiFi + LAN), DHCP client, no SDN
-#   - SDN:   Full VLAN segmentation with FreeRADIUS (requires MSSP)
+# Guardian provides unified installation with full SDN features:
+#   - WiFi + LAN bridge with VLAN segmentation
+#   - OpenFlow SDN with Open vSwitch
+#   - MAC-based device categorization via RADIUS
+#   - HTP File Transfer with weight-bound encryption
 #
 
 set -e
@@ -2002,10 +2004,10 @@ EOF
 }
 
 # ============================================================
-# BASIC MODE CONFIGURATION (Simple Bridge)
+# BASE NETWORK CONFIGURATION (Bridge, Hostapd, DHCP)
 # ============================================================
-configure_basic_mode() {
-    log_step "Configuring Guardian in Basic Mode..."
+configure_base_networking() {
+    log_step "Configuring base networking..."
 
     local HOTSPOT_SSID="${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}"
     local HOTSPOT_PASS="${HOOKPROBE_WIFI_PASS:-hookprobe123}"
@@ -2040,7 +2042,7 @@ configure_basic_mode() {
     # Configure hostapd (simple mode)
     log_info "Configuring hostapd..."
     cat > /etc/hostapd/hostapd.conf << EOF
-# HookProbe Guardian - Basic Mode
+# HookProbe Guardian - Base Network Configuration
 # Simple WiFi hotspot with bridge
 
 interface=$WIFI_IFACE
@@ -2166,7 +2168,7 @@ DHCPCD_EOF
     mkdir -p /etc/nftables.d
     cat > /etc/nftables.d/guardian.nft << 'EOF'
 #!/usr/sbin/nft -f
-# HookProbe Guardian - Basic NAT
+# HookProbe Guardian - NAT Rules
 # IMPORTANT: Preserves existing connections (SSH, etc.)
 
 # Delete old table if exists (clean slate)
@@ -2206,7 +2208,7 @@ EOF
         iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
     }
 
-    log_info "Basic mode configuration complete"
+    log_info "Base networking configuration complete"
 }
 
 # ============================================================
@@ -2327,7 +2329,6 @@ install_guardian_lib() {
         log_info "Installing Python dependencies..."
         pip3 install --quiet --upgrade \
             pyyaml \
-            websockets \
             cryptography \
             aiohttp \
             dataclasses-json 2>/dev/null || true
@@ -2467,17 +2468,20 @@ htp:
   heartbeat_interval: 60
   compression: true
 
-# WebSocket VPN Configuration
-websocket_vpn:
+# HTP File Transfer Configuration
+htp_file:
   enabled: true
-  listen_port: 8765
-  noise_pattern: "XX"
+  chunk_size: 8192  # 8KB (optimized for SBC memory)
+  max_file_size_mb: 1024  # 1GB max file size
+  transfer_timeout: 300  # 5 minutes
+  compression_enabled: true
+  verify_hash: true
+  atomic_writes: true
+  base_path: "/srv/guardian"
   allowed_paths:
     - "/home"
-    - "/opt/hookprobe"
-    - "/var/log/hookprobe"
-  max_file_size: 104857600  # 100MB
-  chunk_size: 65536  # 64KB
+    - "/srv/files"
+    - "/var/log/guardian"
 
 # Network Configuration
 network:
@@ -2686,8 +2690,8 @@ show_guardian_banner() {
     echo -e "  ${GREEN}✓${NC} OpenFlow SDN Controller with OVS"
     echo -e "  ${GREEN}✓${NC} VLAN Segmentation (IoT Device Isolation)"
     echo -e "  ${GREEN}✓${NC} RADIUS MAC Authentication"
-    echo -e "  ${GREEN}✓${NC} WebSocket VPN via MSSP (Noise Protocol)"
-    echo -e "  ${GREEN}✓${NC} HTP Secure Communication"
+    echo -e "  ${GREEN}✓${NC} HTP File Transfer (weight-bound encryption)"
+    echo -e "  ${GREEN}✓${NC} HTP Secure MSSP Communication"
     echo ""
     echo -e "  ${DIM}Configuration file: /etc/guardian/guardian.yaml${NC}"
     echo ""
@@ -2796,10 +2800,10 @@ main() {
     log_step "Installing security containers..."
     install_security_containers
 
-    # Configure unified mode (combines basic networking + SDN features)
-    log_step "Configuring unified Guardian mode..."
-    configure_basic_mode   # Setup basic networking first
-    configure_sdn_mode     # Then add SDN/VLAN features on top
+    # Configure Guardian networking
+    log_step "Configuring Guardian networking..."
+    configure_base_networking   # Setup bridge, hostapd, DHCP
+    configure_sdn_mode          # Add SDN/VLAN features
 
     # Install QSecBit agent
     log_step "Installing QSecBit agent..."
@@ -2852,7 +2856,7 @@ main() {
     echo -e "  • Open vSwitch Integration"
     echo -e "  • VLAN Segmentation (IoT Isolation)"
     echo -e "  • RADIUS MAC Authentication"
-    echo -e "  • WebSocket VPN via MSSP"
+    echo -e "  • HTP File Transfer via MSSP"
     echo ""
     echo -e "  ${BOLD}IoT VLANs:${NC}"
     echo -e "  • VLAN 10: Smart Lights"
