@@ -416,36 +416,47 @@ def get_status():
     status['eth0'] = eth0_info
 
     # Determine WAN and LAN interfaces
-    # WAN = managed mode (connects to upstream WiFi) or eth0
-    # LAN = AP mode (broadcasts Guardian hotspot)
+    # WAN = wlan0 (built-in) in managed mode, or eth0
+    # LAN = USB dongle (for Guardian hotspot), regardless of current mode
 
     hostapd_iface = get_hostapd_interface()
-    lan_interface = None  # AP mode - broadcasts Guardian SSID
-    wan_interface = None  # Managed mode - connects to upstream
+    lan_interface = None  # USB dongle - broadcasts Guardian SSID
+    wan_interface = None  # Built-in wlan0 - connects to upstream
 
-    # First pass: Find LAN interface (AP mode for hotspot)
-    # Priority: hostapd.conf > actual AP mode > USB dongle
+    # Step 1: Find WAN interface (built-in wlan0 in managed mode)
+    # wlan0 is typically the built-in WiFi used for upstream connection
+    if 'wlan0' in all_interfaces:
+        wlan0_info = all_interfaces['wlan0']
+        if wlan0_info['type'] == 'managed' or wlan0_info['is_builtin']:
+            wan_interface = wlan0_info.copy()
+            wan_interface['role'] = 'wan'
+
+    # Step 2: Find LAN interface (USB dongle for hotspot)
+    # Any non-built-in interface (USB dongle) is used for LAN/hotspot
     for iface, info in all_interfaces.items():
-        if hostapd_iface and iface == hostapd_iface:
-            lan_interface = info
+        # Skip the WAN interface
+        if wan_interface and iface == wan_interface['interface']:
+            continue
+
+        # USB dongle = LAN (for hotspot)
+        if not info['is_builtin']:
+            lan_interface = info.copy()
             lan_interface['role'] = 'lan'
             break
-        elif info['type'] == 'AP':
-            if not lan_interface:
-                lan_interface = info
-                lan_interface['role'] = 'lan'
 
-    # Second pass: Find WAN interface (managed mode for upstream)
-    # Prefer built-in WiFi (wlan0) for WAN
-    for iface, info in all_interfaces.items():
-        if info['type'] == 'managed':
-            # Don't use the same interface as LAN
-            if not lan_interface or info['interface'] != lan_interface['interface']:
-                wan_interface = info
-                wan_interface['role'] = 'wan'
-                break
+        # Or if hostapd is configured for this interface
+        if hostapd_iface and iface == hostapd_iface:
+            lan_interface = info.copy()
+            lan_interface['role'] = 'lan'
+            break
 
-    # If no WAN WiFi, check if eth0 is connected
+        # Or if it's in AP mode
+        if info['type'] == 'AP':
+            lan_interface = info.copy()
+            lan_interface['role'] = 'lan'
+            break
+
+    # Step 3: Fallback - if no WAN WiFi found, check eth0
     if not wan_interface and eth0_info['connected']:
         wan_interface = {
             'interface': 'eth0',
@@ -461,6 +472,15 @@ def get_status():
             'is_builtin': True,
             'driver': 'ethernet'
         }
+
+    # Step 4: If still no LAN, use any remaining interface
+    if not lan_interface:
+        for iface, info in all_interfaces.items():
+            if wan_interface and iface == wan_interface['interface']:
+                continue
+            lan_interface = info.copy()
+            lan_interface['role'] = 'lan'
+            break
 
     # Create empty interface info if not found
     empty_interface = {
