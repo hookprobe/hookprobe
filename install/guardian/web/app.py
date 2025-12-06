@@ -1100,6 +1100,28 @@ HTML_TEMPLATE = '''
         .badge-warning::before { background: #f59e0b; }
 
         .form-group { margin-bottom: 16px; }
+        .test-input-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .test-input-row input {
+            flex: 1;
+            min-width: 150px;
+        }
+        .test-input-row button {
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+        @media (max-width: 480px) {
+            .test-input-row {
+                flex-direction: column;
+            }
+            .test-input-row input,
+            .test-input-row button {
+                width: 100%;
+            }
+        }
         label {
             display: block;
             margin-bottom: 6px;
@@ -1794,8 +1816,8 @@ HTML_TEMPLATE = '''
                 </p>
                 <div class="form-group">
                     <label>Target IP (default: Guardian itself)</label>
-                    <div style="display: flex; gap: 10px;">
-                        <input type="text" id="test-target" value="192.168.4.1" style="flex: 1;">
+                    <div class="test-input-row">
+                        <input type="text" id="test-target" value="192.168.4.1">
                         <button type="button" class="btn btn-primary" onclick="runSecurityTest()">Run Test</button>
                     </div>
                 </div>
