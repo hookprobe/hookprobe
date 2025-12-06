@@ -407,15 +407,24 @@ install_suricata_container() {
     cat > /etc/systemd/system/guardian-suricata.service << EOF
 [Unit]
 Description=HookProbe Guardian Suricata IDS
-After=network.target podman.socket
+After=network-online.target podman.socket
+Wants=network-online.target
 Requires=podman.socket
+# Only start if we have an interface to monitor
+ConditionPathExists=/sys/class/net/${MONITOR_IFACE}
 
 [Service]
 Type=simple
-Restart=always
-RestartSec=10
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+# Wait for interface to be fully up
+ExecStartPre=/bin/sleep 10
 ExecStartPre=-/usr/bin/podman stop guardian-suricata
 ExecStartPre=-/usr/bin/podman rm guardian-suricata
+# Pull image if not present
+ExecStartPre=-/usr/bin/podman pull docker.io/jasonish/suricata:latest
 ExecStart=/usr/bin/podman run --name guardian-suricata \\
     --network host \\
     --cap-add NET_ADMIN \\
@@ -424,7 +433,7 @@ ExecStart=/usr/bin/podman run --name guardian-suricata \\
     -v guardian-suricata-logs:/var/log/suricata:Z \\
     -v guardian-suricata-rules:/var/lib/suricata:Z \\
     docker.io/jasonish/suricata:latest -i $MONITOR_IFACE
-ExecStop=/usr/bin/podman stop guardian-suricata
+ExecStop=/usr/bin/podman stop -t 10 guardian-suricata
 
 [Install]
 WantedBy=multi-user.target
@@ -495,15 +504,22 @@ install_waf_container() {
     cat > /etc/systemd/system/guardian-waf.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian WAF (ModSecurity)
-After=network.target podman.socket guardian-webui.service
+After=network-online.target podman.socket guardian-webui.service
+Wants=network-online.target
 Requires=podman.socket
 
 [Service]
 Type=simple
-Restart=always
-RestartSec=10
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+# Wait for network and webui to be ready
+ExecStartPre=/bin/sleep 5
 ExecStartPre=-/usr/bin/podman stop guardian-waf
 ExecStartPre=-/usr/bin/podman rm guardian-waf
+# Pull image if not present
+ExecStartPre=-/usr/bin/podman pull docker.io/owasp/modsecurity-crs:nginx-alpine
 ExecStart=/usr/bin/podman run --name guardian-waf \
     -p 8888:8080 \
     --cap-add NET_ADMIN \
@@ -514,7 +530,7 @@ ExecStart=/usr/bin/podman run --name guardian-waf \
     -e ANOMALY_OUTBOUND=4 \
     -e BACKEND=http://192.168.4.1:8080 \
     docker.io/owasp/modsecurity-crs:nginx-alpine
-ExecStop=/usr/bin/podman stop guardian-waf
+ExecStop=/usr/bin/podman stop -t 10 guardian-waf
 
 [Install]
 WantedBy=multi-user.target
@@ -664,18 +680,28 @@ redef Notice::policy += {
 ZEEKEOF
 
     # Create systemd service for Zeek container
+    # Note: Only starts if eth0 interface exists (WAN monitoring)
     cat > /etc/systemd/system/guardian-zeek.service << EOF
 [Unit]
 Description=HookProbe Guardian Zeek Network Analyzer
-After=network.target podman.socket
+After=network-online.target podman.socket
+Wants=network-online.target
 Requires=podman.socket
+# Only start if we have an interface to monitor
+ConditionPathExists=/sys/class/net/${MONITOR_IFACE}
 
 [Service]
 Type=simple
-Restart=always
-RestartSec=10
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+# Wait for interface to be fully up
+ExecStartPre=/bin/sleep 10
 ExecStartPre=-/usr/bin/podman stop guardian-zeek
 ExecStartPre=-/usr/bin/podman rm guardian-zeek
+# Pull image if not present
+ExecStartPre=-/usr/bin/podman pull docker.io/zeek/zeek:latest
 ExecStart=/usr/bin/podman run --name guardian-zeek \\
     --network host \\
     --cap-add NET_ADMIN \\
@@ -684,7 +710,7 @@ ExecStart=/usr/bin/podman run --name guardian-zeek \\
     -v guardian-zeek-spool:/usr/local/zeek/spool:Z \\
     -v /opt/hookprobe/guardian/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro \\
     docker.io/zeek/zeek:latest zeek -i $MONITOR_IFACE local
-ExecStop=/usr/bin/podman stop guardian-zeek
+ExecStop=/usr/bin/podman stop -t 10 guardian-zeek
 
 [Install]
 WantedBy=multi-user.target
@@ -2000,11 +2026,10 @@ configure_basic_mode() {
     ip link set br0 up
     ip addr add $BRIDGE_IP/24 dev br0 2>/dev/null || true
 
-    # Add ethernet to bridge if available
-    if [ -n "$ETH_IFACE" ]; then
-        ip link set "$ETH_IFACE" master br0 2>/dev/null || true
-        log_info "Added $ETH_IFACE to bridge"
-    fi
+    # NOTE: eth0 is NOT added to bridge - it's a WAN interface for failover
+    # Only the LAN-side (USB WiFi dongle) is bridged via hostapd
+    # eth0 should get its own IP from upstream router for WAN failover
+    log_info "eth0 kept as WAN interface (not bridged) for failover support"
 
     # Configure hostapd (simple mode)
     log_info "Configuring hostapd..."
