@@ -388,15 +388,18 @@ install_suricata_container() {
         return 0
     fi
 
-    # Determine WAN interface to monitor (where malicious traffic originates)
-    # Priority: wlan0 (built-in WiFi as WAN), then eth0, then br0
-    local MONITOR_IFACE="wlan0"
-    if ip link show wlan0 &>/dev/null; then
-        MONITOR_IFACE="wlan0"
-    elif ip link show eth0 &>/dev/null; then
+    # Determine interface to monitor for IDS
+    # IMPORTANT: Never use wlan* interfaces directly - promiscuous mode interferes with hostapd
+    # Priority: eth0 (ethernet), br0 (bridge), then skip if only WiFi
+    local MONITOR_IFACE=""
+    if ip link show eth0 &>/dev/null && [ -d /sys/class/net/eth0 ]; then
         MONITOR_IFACE="eth0"
-    elif ip link show br0 &>/dev/null; then
+    elif ip link show br0 &>/dev/null && [ -d /sys/class/net/br0 ]; then
         MONITOR_IFACE="br0"
+    else
+        log_warn "No suitable interface for Suricata (eth0/br0 not found)"
+        log_warn "WiFi interfaces cannot be used for IDS monitoring"
+        MONITOR_IFACE="eth0"  # Default, may not work but won't break WiFi
     fi
     log_info "Suricata will monitor interface: $MONITOR_IFACE"
 
@@ -614,15 +617,18 @@ install_zeek_container() {
     log_info "Pulling Zeek image..."
     podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
 
-    # Determine WAN interface to monitor (where malicious traffic originates)
-    # Priority: wlan0 (built-in WiFi as WAN), then eth0, then br0
-    local MONITOR_IFACE="wlan0"
-    if ip link show wlan0 &>/dev/null; then
-        MONITOR_IFACE="wlan0"
-    elif ip link show eth0 &>/dev/null; then
+    # Determine interface to monitor for network analysis
+    # IMPORTANT: Never use wlan* interfaces directly - promiscuous mode interferes with hostapd
+    # Priority: eth0 (ethernet), br0 (bridge), then skip if only WiFi
+    local MONITOR_IFACE=""
+    if ip link show eth0 &>/dev/null && [ -d /sys/class/net/eth0 ]; then
         MONITOR_IFACE="eth0"
-    elif ip link show br0 &>/dev/null; then
+    elif ip link show br0 &>/dev/null && [ -d /sys/class/net/br0 ]; then
         MONITOR_IFACE="br0"
+    else
+        log_warn "No suitable interface for Zeek (eth0/br0 not found)"
+        log_warn "WiFi interfaces cannot be used for network monitoring"
+        MONITOR_IFACE="eth0"  # Default, may not work but won't break WiFi
     fi
     log_info "Zeek will monitor interface: $MONITOR_IFACE"
 
@@ -969,16 +975,22 @@ PYEOF
     chmod +x /opt/hookprobe/guardian/xdp/xdp_manager.py
 
     # Create systemd service for XDP
+    # IMPORTANT: XDP should only attach to ethernet interfaces, never wireless
+    # Wireless interfaces (wlan*) don't work well with XDP and can break WiFi
     cat > /etc/systemd/system/guardian-xdp.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian XDP DDoS Protection
 After=network.target
+# Only start if we have a suitable interface (eth0 or br0)
+ConditionPathExists=/sys/class/net/eth0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py load br0
-ExecStop=/usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py unload br0
+# Prefer eth0 for XDP (never use wlan interfaces!)
+ExecStartPre=/bin/bash -c 'if [ -e /sys/class/net/eth0 ]; then echo eth0 > /run/guardian-xdp-iface; elif [ -e /sys/class/net/br0 ]; then echo br0 > /run/guardian-xdp-iface; else echo none > /run/guardian-xdp-iface; fi'
+ExecStart=/bin/bash -c 'IFACE=$(cat /run/guardian-xdp-iface); if [ "$IFACE" != "none" ]; then /usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py load $IFACE; else echo "No suitable interface for XDP"; fi'
+ExecStop=/bin/bash -c 'IFACE=$(cat /run/guardian-xdp-iface 2>/dev/null || echo eth0); /usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py unload $IFACE'
 
 [Install]
 WantedBy=multi-user.target
