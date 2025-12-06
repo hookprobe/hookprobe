@@ -59,33 +59,25 @@ def scan_wifi():
     import time
     networks = []
 
-    # Use iw dev wlan0 scan (or wlan1 if wlan0 is in AP mode)
-    for iface in ['wlan1', 'wlan0']:
-        # Check if interface is in managed mode (not AP)
-        info_output, _ = run_command(f'iw dev {iface} info 2>/dev/null')
-        if 'type AP' in info_output:
-            continue  # Skip AP interfaces
+    # Try scanning with wlan0 first (primary interface), then wlan1
+    for iface in ['wlan0', 'wlan1']:
+        # Bring interface up first (needs sudo)
+        run_command(f'sudo ip link set {iface} up 2>/dev/null')
 
-        # Bring interface up
-        run_command(f'ip link set {iface} up 2>/dev/null')
+        # Try scan with sudo - iw dev <iface> scan requires root privileges
+        output, success = run_command(f'sudo iw dev {iface} scan 2>/dev/null', timeout=30)
 
-        # Trigger scan and wait
-        run_command(f'iw dev {iface} scan trigger 2>/dev/null')
-        time.sleep(3)
-
-        # Get scan results
-        output, success = run_command(f'iw dev {iface} scan 2>/dev/null', timeout=20)
-
-        if success and output and 'BSS' in output:
-            current_network = {}
+        # Debug: Check if we got output
+        if output and 'BSS' in output:
+            current_network = None
 
             for line in output.split('\n'):
-                line = line.strip()
-
+                # Check for new BSS entry (network)
                 if line.startswith('BSS '):
-                    # Save previous network
-                    if current_network.get('ssid'):
+                    # Save previous network if it has SSID
+                    if current_network and current_network.get('ssid'):
                         networks.append(current_network)
+
                     # Start new network - extract BSSID
                     bssid_match = re.search(r'BSS ([0-9a-f:]+)', line)
                     current_network = {
@@ -96,39 +88,88 @@ def scan_wifi():
                         'frequency': '',
                         'security': 'Open'
                     }
-                elif line.startswith('SSID:'):
-                    ssid = line.split(':', 1)[1].strip()
-                    if ssid and not ssid.startswith('\\x'):
-                        current_network['ssid'] = ssid
-                elif line.startswith('signal:'):
-                    try:
-                        sig = line.split(':', 1)[1].strip()
-                        current_network['signal'] = int(float(sig.split()[0]))
-                    except:
-                        pass
-                elif line.startswith('freq:'):
-                    try:
-                        freq = line.split(':', 1)[1].strip()
-                        current_network['frequency'] = freq
-                        # Calculate channel from frequency
-                        freq_int = int(freq)
-                        if freq_int >= 2412 and freq_int <= 2484:
-                            current_network['channel'] = (freq_int - 2407) // 5
-                        elif freq_int >= 5180:
-                            current_network['channel'] = (freq_int - 5000) // 5
-                    except:
-                        pass
-                elif 'WPA' in line or 'RSN' in line:
-                    current_network['security'] = 'WPA2' if 'RSN' in line else 'WPA'
-                elif 'WEP' in line:
-                    current_network['security'] = 'WEP'
+                elif current_network is not None:
+                    # Parse indented lines (network properties)
+                    line = line.strip()
+
+                    if line.startswith('SSID:'):
+                        ssid = line.split(':', 1)[1].strip()
+                        if ssid and not ssid.startswith('\\x'):
+                            current_network['ssid'] = ssid
+                    elif line.startswith('signal:'):
+                        try:
+                            # Format: "signal: -55.00 dBm"
+                            sig_str = line.split(':', 1)[1].strip()
+                            sig_val = sig_str.split()[0]  # Get "-55.00"
+                            current_network['signal'] = int(float(sig_val))
+                        except:
+                            pass
+                    elif line.startswith('freq:'):
+                        try:
+                            # Format: "freq: 2442.0"
+                            freq_str = line.split(':', 1)[1].strip()
+                            freq_val = float(freq_str)
+                            current_network['frequency'] = str(int(freq_val))
+                            # Calculate channel from frequency
+                            if freq_val >= 2412 and freq_val <= 2484:
+                                current_network['channel'] = int((freq_val - 2407) / 5)
+                            elif freq_val >= 5180:
+                                current_network['channel'] = int((freq_val - 5000) / 5)
+                        except:
+                            pass
+                    elif line.startswith('DS Parameter set:'):
+                        # Format: "DS Parameter set: channel 7"
+                        try:
+                            ch_match = re.search(r'channel\s+(\d+)', line)
+                            if ch_match:
+                                current_network['channel'] = int(ch_match.group(1))
+                        except:
+                            pass
+                    elif line.startswith('RSN:'):
+                        current_network['security'] = 'WPA2'
+                    elif line.startswith('WPA:'):
+                        if current_network['security'] == 'Open':
+                            current_network['security'] = 'WPA'
+                    elif 'WEP' in line:
+                        if current_network['security'] == 'Open':
+                            current_network['security'] = 'WEP'
 
             # Don't forget last network
-            if current_network.get('ssid'):
+            if current_network and current_network.get('ssid'):
                 networks.append(current_network)
 
+        # If we got networks, stop trying other interfaces
         if networks:
             break
+
+    # Fallback: Try iwlist scan if iw didn't work (needs sudo)
+    if not networks:
+        for iface in ['wlan0', 'wlan1']:
+            output, success = run_command(f'sudo iwlist {iface} scan 2>/dev/null', timeout=30)
+            if success and output and 'ESSID' in output:
+                current_signal = -70
+                for line in output.split('\n'):
+                    line = line.strip()
+                    if 'Signal level=' in line:
+                        try:
+                            sig = re.search(r'Signal level[=:](-?\d+)', line)
+                            if sig:
+                                current_signal = int(sig.group(1))
+                        except:
+                            pass
+                    elif 'ESSID:' in line:
+                        match = re.search(r'ESSID:"([^"]*)"', line)
+                        if match and match.group(1):
+                            networks.append({
+                                'ssid': match.group(1),
+                                'signal': current_signal,
+                                'channel': 0,
+                                'security': 'Unknown'
+                            })
+                            current_signal = -70
+
+            if networks:
+                break
 
     # Remove duplicates and sort by signal
     seen = set()
@@ -152,7 +193,8 @@ def get_interface_info(iface):
         'frequency': None,
         'signal': None,
         'tx_power': None,
-        'mac': None
+        'mac': None,
+        'connected': False
     }
 
     # Get interface info using iw dev
@@ -182,24 +224,42 @@ def get_interface_info(iface):
             elif line.startswith('addr '):
                 info['mac'] = line.split('addr ', 1)[1].strip()
 
-    # If managed mode, get link info for signal strength
-    if info['type'] == 'managed':
+    # For AP mode - check if hostapd is running and interface has SSID
+    if info['type'] == 'AP':
+        info['connected'] = True  # AP is broadcasting
+        # If SSID not in iw output, check hostapd config
+        if not info['ssid']:
+            if HOSTAPD_CONF.exists():
+                try:
+                    content = HOSTAPD_CONF.read_text()
+                    for line in content.split('\n'):
+                        if line.startswith('ssid='):
+                            info['ssid'] = line.split('=', 1)[1].strip()
+                            break
+                except:
+                    pass
+
+    # For managed mode - check if connected to a network
+    elif info['type'] == 'managed':
         link_output, _ = run_command(f'iw dev {iface} link 2>/dev/null')
-        if link_output and 'Connected' in link_output:
-            info['connected'] = True
-            for line in link_output.split('\n'):
-                line = line.strip()
-                if line.startswith('signal:'):
-                    try:
-                        info['signal'] = line.split(':', 1)[1].strip()
-                    except:
-                        pass
-                elif line.startswith('SSID:'):
-                    info['ssid'] = line.split(':', 1)[1].strip()
+        if link_output:
+            if 'Connected to' in link_output or 'SSID:' in link_output:
+                info['connected'] = True
+                for line in link_output.split('\n'):
+                    line = line.strip()
+                    if line.startswith('signal:'):
+                        try:
+                            info['signal'] = line.split(':', 1)[1].strip()
+                        except:
+                            pass
+                    elif line.startswith('SSID:'):
+                        info['ssid'] = line.split(':', 1)[1].strip()
+            elif 'Not connected' in link_output:
+                info['connected'] = False
+            else:
+                info['connected'] = False
         else:
             info['connected'] = False
-    elif info['type'] == 'AP':
-        info['connected'] = True  # AP is always "connected" if broadcasting
 
     return info
 
