@@ -3,22 +3,41 @@
 > **"Protection on the Move"** - Portable SDN security gateway
 
 <p align="center">
-  <strong>Plug-and-Play Network Segmentation</strong><br>
-  <em>MAC-Based VLAN · Multi-AP Support · Enterprise Security for $75</em>
+  <strong>Liberty Cybersecurity for the Masses</strong><br>
+  <em>Enterprise Security at $75 · L2-L7 Threat Detection · Neural Resonance Authentication</em>
 </p>
 
 ---
 
 ## Overview
 
-Guardian transforms Raspberry Pi 4/5 into a powerful software-defined networking (SDN) appliance. It provides enterprise-grade network segmentation, IoT isolation, and security monitoring in a portable, plug-and-play package.
+Guardian transforms Raspberry Pi 4/5 into a powerful software-defined networking (SDN) appliance. It provides enterprise-grade network segmentation, IoT isolation, and comprehensive L2-L7 threat detection in a portable, plug-and-play package.
+
+**Version 5.0.0 Liberty** — Affordable cybersecurity for everyone.
 
 **Key Capabilities:**
 - **SDN/VLAN Segmentation** — Isolate IoT devices by category
+- **L2-L7 Threat Detection** — Full OSI stack threat monitoring
+- **Mobile Network Protection** — Hotel/public WiFi security
+- **WebSocket VPN** — Secure file access via MSSP (Noise Protocol encryption)
 - **MAC-Based Assignment** — Automatic VLAN assignment via RADIUS
 - **Multi-AP Support** — Up to 4 access points with USB WiFi adapters
-- **VPN Gateway** — Remote access to protected network
+- **HTP Communication** — Secure transport to MSSP cloud (mssp.hookprobe.com)
+- **OpenFlow SDN** — Software-defined networking with OVS
+- **Unified Configuration** — Single YAML config at `/etc/guardian/guardian.yaml`
 - **Portable Security** — Take your network security anywhere
+
+---
+
+## Liberty Mission
+
+**"Cybersecurity for the Masses"**
+
+Guardian democratizes enterprise security:
+- **$75 hardware cost** (Raspberry Pi 4/5)
+- **Zero licensing fees** (MIT License)
+- **Full feature parity** with $10,000+ commercial appliances
+- **Open source** — audit, modify, contribute
 
 ---
 
@@ -41,14 +60,38 @@ Guardian transforms Raspberry Pi 4/5 into a powerful software-defined networking
 |----------|--------|-------|
 | **Raspberry Pi 5** ⭐ | Recommended | Best performance, USB 3.0 |
 | **Raspberry Pi 4** | Supported | Great value, proven reliable |
+| **Intel N100** | Supported | Mini PC option, 2.5GbE |
 | Raspberry Pi 4 CM | Supported | For custom builds |
 | Radxa Rock 5B | Supported | Alternative to Pi 5 |
 | Orange Pi 5 | Supported | Budget alternative |
-| Banana Pi M7 | Supported | 2.5GbE option |
 
 ---
 
 ## Features
+
+### L2-L7 Threat Detection
+
+Guardian monitors threats across all OSI layers:
+
+| Layer | Detection Types | Examples |
+|-------|----------------|----------|
+| **L2 Data Link** | ARP Spoofing, MAC Flooding, Evil Twin, VLAN Hopping, Rogue DHCP | Man-in-the-Middle via ARP cache poisoning |
+| **L3 Network** | IP Spoofing, ICMP Attacks, Routing Attacks, Fragmentation | Ping of Death, IP source spoofing |
+| **L4 Transport** | Port Scans, SYN Flood, TCP Anomalies, UDP Flood | Network reconnaissance, DDoS attacks |
+| **L5 Session** | SSL Attacks, Session Hijacking, Auth Bypass, Brute Force | SSL stripping, credential stuffing |
+| **L6 Presentation** | Encoding Attacks, Format Exploits, Crypto Attacks | XXE, weak cipher exploitation |
+| **L7 Application** | Web Attacks (SQLi, XSS), DNS Threats, Malware C2, Protocol Abuse | SQL injection, DNS tunneling |
+
+### Mobile Network Protection
+
+Specialized protection for hotel WiFi, airports, and public networks:
+
+- **Captive Portal Detection** — Safe handling of login portals
+- **Evil Twin Detection** — Identifies rogue access points
+- **SSL/TLS Interception Detection** — Alerts on HTTPS interception
+- **DNS Security Verification** — Detects DNS hijacking
+- **Network Trust Classification** — TRUSTED, VERIFIED, UNKNOWN, SUSPICIOUS, HOSTILE
+- **VPN Recommendations** — Automatic VPN suggestions based on trust level
 
 ### SDN & VLAN Segmentation
 
@@ -71,6 +114,152 @@ Guardian automatically segments your network by device type:
 - Rogue IoT device can't exfiltrate data
 - Unknown devices isolated until registered
 - Per-category internet policies
+
+### OpenFlow SDN Integration
+
+Guardian uses Open vSwitch (OVS) for software-defined networking:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     GUARDIAN SDN ARCHITECTURE                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌──────────────────────────────────────────────────────────┐ │
+│   │                 GUARDIAN SDN CONTROLLER                   │ │
+│   │            (OpenFlow 1.3 + REST API)                     │ │
+│   └──────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│                    OpenFlow Protocol                             │
+│                              │                                   │
+│   ┌──────────────────────────────────────────────────────────┐ │
+│   │                  OPEN VSWITCH (OVS)                       │ │
+│   │     ┌─────────────────────────────────────────────────┐  │ │
+│   │     │                   br-guardian                    │  │ │
+│   │     │  ┌────────┬────────┬────────┬────────┬───────┐  │  │ │
+│   │     │  │ vlan10 │ vlan20 │ vlan30 │ vlan40 │  ...  │  │  │ │
+│   │     │  │ lights │ thermo │ camera │ voice  │       │  │  │ │
+│   │     │  └────────┴────────┴────────┴────────┴───────┘  │  │ │
+│   │     └─────────────────────────────────────────────────┘  │ │
+│   └──────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│              ┌───────────────┼───────────────┐                  │
+│              │               │               │                  │
+│           wlan0           eth0           wlan1                  │
+│         (Hotspot)       (Bridge)       (Uplink)                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**OpenFlow Features:**
+- Dynamic flow rules based on MAC/IP/VLAN
+- Automatic device classification
+- QoS traffic shaping per VLAN
+- Real-time flow statistics
+- Threat-based flow blocking
+
+### RADIUS Integration
+
+MAC-based authentication with FreeRADIUS:
+
+```
+Client Device                Guardian                    FreeRADIUS
+     │                          │                            │
+     ├── Connect to WiFi ──────►│                            │
+     │                          ├── Access-Request ─────────►│
+     │                          │   (MAC: aa:bb:cc:dd:ee:ff) │
+     │                          │                            │
+     │                          │◄── Access-Accept ──────────┤
+     │                          │   (VLAN: 30-Cameras)       │
+     │◄── DHCP: 192.168.30.x ──┤                            │
+     │                          │                            │
+```
+
+**RADIUS Features:**
+- MAC-based VLAN assignment
+- Device registration via web portal
+- Guest network with captive portal
+- Accounting for traffic tracking
+- Integration with MSSP device registry
+
+### HookProbe Transport Protocol (HTP)
+
+Secure communication with MSSP cloud via UDP:
+
+```
+Guardian                                    mssp.hookprobe.com
+    │                                              │
+    ├──── HTP HELLO [node_id, W_fingerprint] ─────►│
+    │                                              │
+    │◄─── HTP CHALLENGE [nonce] ──────────────────┤
+    │                                              │
+    ├──── HTP ATTEST [PoSF signature] ────────────►│
+    │                                              │
+    │◄─── HTP ACCEPT [session_secret] ────────────┤
+    │                                              │
+    ├──── HTP DATA [encrypted telemetry] ─────────►│
+    │                                              │
+    ├──── HTP HEARTBEAT [every 30s] ──────────────►│
+    │                                              │
+```
+
+**HTP Port**: UDP 4719
+
+**HTP Features:**
+- Keyless authentication (neural resonance)
+- NAT/CGNAT traversal
+- ChaCha20-Poly1305 encryption
+- Anti-replay protection
+- Automatic reconnection
+- Bandwidth-adaptive streaming
+
+### WebSocket VPN (File Access via MSSP)
+
+Guardian provides secure remote file access through the MSSP using WebSocket VPN with Noise Protocol encryption:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  WEBSOCKET VPN ARCHITECTURE                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│   [User Browser]                                                  │
+│        │                                                          │
+│        │ WSS/TLS (User ↔ MSSP)                                   │
+│        ▼                                                          │
+│   ┌─────────────┐                                                │
+│   │    MSSP     │  (Relay only - cannot read content)            │
+│   │  WebSocket  │                                                │
+│   │    Relay    │                                                │
+│   └──────┬──────┘                                                │
+│          │                                                        │
+│          │ WSS/HTP (MSSP ↔ Guardian)                             │
+│          ▼                                                        │
+│   ┌─────────────┐        ┌─────────────────────┐                 │
+│   │  Guardian   │◄──────►│  Noise Protocol     │                 │
+│   │   VPN       │        │  XX Pattern         │                 │
+│   │  Service    │        │  X25519 + ChaCha20  │                 │
+│   └──────┬──────┘        └─────────────────────┘                 │
+│          │                                                        │
+│          ▼                                                        │
+│   ┌─────────────────────────────────────────┐                    │
+│   │           Local File System              │                    │
+│   │  /home  /opt/hookprobe  /var/log         │                    │
+│   └─────────────────────────────────────────┘                    │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**VPN Features:**
+- **End-to-End Encryption** — MSSP cannot read file contents (Noise XX pattern)
+- **X25519 Key Exchange** — Secure ephemeral key agreement
+- **ChaCha20-Poly1305** — Authenticated encryption for all data
+- **Path Restrictions** — Configurable allowed directories
+- **File Operations** — List, read, write, stat files remotely
+- **Chunked Transfer** — Large file support with 64KB chunks
+
+**Supported Operations:**
+- `FILE_LIST` — List directory contents
+- `FILE_READ` — Read file contents
+- `FILE_WRITE` — Write file contents
+- `FILE_STAT` — Get file metadata (size, permissions, mtime)
 
 ### Multi-AP Configuration (USB Expansion)
 
@@ -103,72 +292,72 @@ Extend coverage with USB WiFi adapters:
 | **Panda PAU09** | RT5572 | Dual | ✅ Native | $30 | Long range |
 | **Alfa AWUS036ACS** | RTL8811AU | Dual | ✅ DKMS | $28 | Compact |
 
-**Requirements for USB adapters:**
-- Must support AP mode (not all adapters do!)
-- Linux driver support (native or DKMS)
-- 5GHz recommended for less interference
-- USB 3.0 preferred for best throughput
-
-### Maximum Configuration: 4 Access Points
-
-With Raspberry Pi 5 and USB hub:
-
-```bash
-# Check available wireless interfaces
-iw dev
-
-# Expected output with 4 adapters:
-# phy#0 → wlan0 (built-in, 2.4GHz)
-# phy#1 → wlan1 (USB, 5GHz uplink)
-# phy#2 → wlan2 (USB, 5GHz AP)
-# phy#3 → wlan3 (USB, 2.4GHz AP)
-```
-
-**Coverage:**
-- Single AP: ~1,500 sq ft
-- Dual AP: ~3,000 sq ft
-- Quad AP: ~6,000 sq ft
-
-### VPN Remote Access
-
-Access your Guardian-protected network from anywhere:
-
-- **IKEv2 VPN** for mobile devices (iOS/Android native)
-- **HTP Tunnel** for Guardian-to-Nexus communication
-- **Certificate-based authentication** via LogMe2 IAM
-- **Works behind NAT/CGNAT** — no port forwarding needed
-
 ### Security Stack
 
 | Component | Purpose |
 |-----------|---------|
-| **Qsecbit** | AI-powered threat detection |
+| **Layer Threat Detector** | L2-L7 OSI threat detection |
+| **Mobile Protection** | Hotel/public WiFi security |
+| **QSecBit** | AI-powered threat scoring |
 | **Suricata IDS/IPS** | Network intrusion detection & prevention |
 | **Zeek** | Network traffic analysis & logging |
 | **ModSecurity WAF** | Web application firewall |
 | **XDP/eBPF** | Kernel-level DDoS protection |
 | **Threat Aggregator** | Correlates alerts from all security tools |
 | **nftables** | VLAN isolation firewall |
+| **Open vSwitch** | OpenFlow SDN switching |
 | **hostapd** | WiFi with dynamic VLAN |
 | **FreeRADIUS** | MAC-based authentication |
 | **dnsmasq** | Per-VLAN DHCP/DNS |
 | **AdGuard DNS** | Ad blocking & DNS privacy |
-| **Neuro Protocol** | Secure HTP tunnel communication |
+| **HTP Client** | Secure MSSP communication |
 
 ---
 
 ## Installation
 
-### Quick Install (SDN Mode)
+### Quick Install (Unified)
+
+Guardian Liberty 5.0.0 uses a unified installation that includes all features:
 
 ```bash
 # Clone HookProbe
 git clone https://github.com/hookprobe/hookprobe
 cd hookprobe
 
-# Run Guardian SDN setup
-sudo ./install/guardian/scripts/setup-guardian-sdn.sh
+# Run unified Guardian setup
+sudo ./install/guardian/scripts/setup.sh
 ```
+
+**Included Features:**
+- L1-L7 OSI Layer Threat Detection
+- QSecBit AI-Powered Security Scoring
+- Suricata IDS/IPS
+- ModSecurity WAF
+- XDP/eBPF High-Performance Packet Processing
+- OpenFlow SDN Controller with OVS
+- VLAN Segmentation (IoT Device Isolation)
+- RADIUS MAC Authentication
+- WebSocket VPN via MSSP (Noise Protocol)
+- HTP Secure Communication
+
+### Configuration
+
+After installation, customize Guardian via the configuration file:
+
+```bash
+# Edit configuration
+sudo nano /etc/guardian/guardian.yaml
+```
+
+**Key Configuration Sections:**
+- `radius:` — RADIUS server settings, MAC auth, secrets
+- `vlans:` — VLAN definitions (10-80 for IoT, 999 for quarantine)
+- `openflow:` — SDN controller settings
+- `htp:` — MSSP connection settings
+- `websocket_vpn:` — VPN tunnel configuration
+- `security:` — Threat detection thresholds
+- `webui:` — Web interface settings
 
 ### Manual Installation
 
@@ -176,7 +365,8 @@ sudo ./install/guardian/scripts/setup-guardian-sdn.sh
 # 1. Install dependencies
 sudo apt update
 sudo apt install -y hostapd dnsmasq bridge-utils vlan \
-    freeradius python3-flask nftables
+    freeradius python3-flask nftables openvswitch-switch \
+    python3-pyyaml python3-websockets python3-cryptography
 
 # 2. Configure hostapd with dynamic VLAN
 sudo cp install/guardian/config/hostapd.conf /etc/hostapd/
@@ -185,31 +375,20 @@ sudo cp install/guardian/config/hostapd.vlan /etc/hostapd/
 # 3. Configure dnsmasq for per-VLAN DHCP
 sudo cp install/guardian/config/dnsmasq.conf /etc/dnsmasq.d/guardian.conf
 
-# 4. Enable services
-sudo systemctl enable hostapd dnsmasq
-sudo systemctl start hostapd dnsmasq
-```
+# 4. Configure Open vSwitch
+sudo ovs-vsctl add-br br-guardian
+sudo ovs-vsctl set-controller br-guardian tcp:127.0.0.1:6653
 
-### Adding USB WiFi Adapters
+# 5. Install Guardian Python library
+sudo cp -r install/guardian/lib /opt/hookprobe/guardian/
 
-```bash
-# 1. Plug in USB WiFi adapter
-# 2. Check if detected
-iw dev
+# 6. Create configuration
+sudo mkdir -p /etc/guardian
+sudo cp install/guardian/config/guardian.yaml /etc/guardian/
 
-# 3. Install driver if needed (for RTL8812BU)
-sudo apt install -y dkms
-git clone https://github.com/morrownr/88x2bu-20210702.git
-cd 88x2bu-20210702
-sudo ./install-driver.sh
-
-# 4. Configure additional AP
-sudo cp /etc/hostapd/hostapd.conf /etc/hostapd/hostapd-wlan2.conf
-# Edit to use wlan2 interface
-
-# 5. Start additional AP
-sudo systemctl enable hostapd@wlan2
-sudo systemctl start hostapd@wlan2
+# 7. Enable services
+sudo systemctl enable hostapd dnsmasq openvswitch-switch
+sudo systemctl start hostapd dnsmasq openvswitch-switch
 ```
 
 ---
@@ -224,18 +403,36 @@ Guardian includes a comprehensive web UI for monitoring and configuration:
 
 #### Dashboard Tab
 - **Security Overview** — RAG status for overall security, threats, IDS alerts
+- **Threat Distribution Chart** — Visual bar chart of threat severity
 - **Network Status** — WAN/LAN interface status, connected clients
 - **Security Containers** — Status of all security services
-- **Threat Distribution Chart** — Visual bar chart of threat severity
 
 #### Security Tab
+- **Mobile Network Protection** — Trust level, VPN status, protection score
+- **L2-L7 Layer Threats** — OSI layer breakdown visualization
+- **Detection Coverage** — Threats by layer with severity counts
 - **QSecBit Status** — AI threat detection status
 - **Suricata Alerts** — Real-time IDS/IPS alerts with severity
 - **Threat Log** — Historical threat data
 - **IP Blocking (XDP)** — Block malicious IPs at kernel level
 - **XDP Protection Stats** — Packets passed/dropped/rate-limited
-- **Security Testing** — Run automated security tests
-- **Threat Analysis** — Severity breakdown visualization
+
+#### SDN Tab
+- **VLAN Segmentation** — Overview of IoT device isolation
+- **VLAN Overview Table** — All VLANs with device counts, traffic stats
+- **Connected Devices** — MAC addresses, IPs, hostnames, VLAN assignment
+- **Device Actions** — Approve/quarantine devices
+- **OVS Bridge Status** — Open vSwitch bridge and port information
+- **OpenFlow Rules** — Active flow count
+
+#### VPN Tab
+- **WebSocket VPN Status** — Connection state to MSSP
+- **Noise Protocol Handshake** — Encryption status
+- **Traffic Statistics** — RX/TX bytes and packets
+- **Active Sessions** — Current file access sessions
+- **Allowed Paths** — Directories accessible via VPN
+- **Recent File Transfers** — Log of file operations
+- **VPN Actions** — Reconnect/disconnect controls
 
 #### WiFi Tab
 - **Hotspot Settings** — Configure SSID and password
@@ -247,107 +444,97 @@ Guardian includes a comprehensive web UI for monitoring and configuration:
 - **Container Management** — Start/stop security containers
 - **System Actions** — Restart services, reboot
 
-### Screenshots
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  HookProbe Guardian Setup                                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  System Status                                              │
-│  ┌─────────────┬─────────────┬─────────────┐              │
-│  │  12         │  ● Running  │  ● Connected│              │
-│  │  Clients    │   Hotspot   │   Upstream  │              │
-│  └─────────────┴─────────────┴─────────────┘              │
-│                                                             │
-│  Connect to Upstream WiFi                                   │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ Network: [HomeWiFi              ▼]                  │   │
-│  │ Password: [••••••••••           ]                   │   │
-│  │ [Connect]  [Scan Networks]                          │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  Hotspot Settings                                          │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ SSID: [HookProbe-Guardian       ]                   │   │
-│  │ Password: [••••••••••           ]                   │   │
-│  │ [x] Bridge LAN port                                 │   │
-│  │ [x] Bridge to upstream                              │   │
-│  │ [Save Settings]                                     │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
-
 ---
 
 ## Configuration Files
 
 | File | Purpose |
 |------|---------|
-| `/etc/hostapd/hostapd.conf` | Main AP configuration |
+| `/etc/guardian/guardian.yaml` | **Main configuration file** |
+| `/etc/hostapd/hostapd.conf` | WiFi AP configuration |
 | `/etc/hostapd/hostapd.vlan` | VLAN-to-interface mapping |
-| `/etc/hostapd/hostapd.accept` | Allowed MAC addresses |
 | `/etc/dnsmasq.d/guardian.conf` | DHCP per VLAN |
-| `/etc/wpa_supplicant/wpa_supplicant-wlan1.conf` | Upstream WiFi |
+| `/etc/freeradius/3.0/users` | MAC-to-VLAN mappings |
 | `/etc/nftables.d/guardian-vlans.nft` | VLAN isolation rules |
+| `/etc/openvswitch/conf.db` | OVS configuration |
+| `/opt/hookprobe/guardian/lib/` | Python library modules |
 
----
+### guardian.yaml Structure
 
-## Service Management
+```yaml
+# /etc/guardian/guardian.yaml
+radius:
+  enabled: true
+  secret: "your_radius_secret"
+  mac_auth:
+    enabled: true
+    unknown_vlan: 999
 
-```bash
-# Core services
-sudo systemctl status hostapd          # WiFi AP
-sudo systemctl status dnsmasq          # DHCP/DNS
-sudo systemctl status guardian-sdn     # SDN agent
-sudo systemctl status guardian-webui   # Web interface
+vlans:
+  smart_lights: { id: 10, subnet: "192.168.10.0/24" }
+  thermostats: { id: 20, subnet: "192.168.20.0/24" }
+  cameras: { id: 30, subnet: "192.168.30.0/24" }
+  # ... etc
 
-# Security services
-sudo systemctl status guardian-suricata     # IDS/IPS
-sudo systemctl status guardian-zeek         # Network analysis
-sudo systemctl status guardian-waf          # Web firewall
-sudo systemctl status guardian-xdp          # DDoS protection
-sudo systemctl status guardian-aggregator   # Threat correlation
-sudo systemctl status guardian-neuro        # HTP tunnel
-sudo systemctl status guardian-adguard      # DNS filtering
+openflow:
+  enabled: true
+  controller_port: 6653
+  ovs_bridge: "br-guardian"
 
-# View connected clients
-iw dev wlan0 station dump
+htp:
+  enabled: true
+  mssp_host: "mssp.hookprobe.com"
+  mssp_port: 8443
 
-# View DHCP leases
-cat /var/lib/dnsmasq/dnsmasq.leases
+websocket_vpn:
+  enabled: true
+  noise_pattern: "XX"
+  allowed_paths:
+    - "/home"
+    - "/opt/hookprobe"
 
-# View firewall rules
-sudo nft list ruleset
-
-# View Suricata alerts
-cat /var/log/suricata/fast.log
-
-# View Zeek logs
-cat /var/log/zeek/current/conn.log
-
-# View aggregated threats
-cat /var/log/hookprobe/threats/aggregated.json
+security:
+  threat_detection:
+    enabled: true
+    layers: ["L2", "L3", "L4", "L5", "L6", "L7"]
+  qsecbit:
+    amber_threshold: 0.45
+    red_threshold: 0.70
 ```
 
 ---
 
-## Network Topology
+## Network Architecture
 
-### Basic Setup (Single AP)
+### Component Communication
 
 ```
-Internet ──► Router ──► Guardian (eth0)
-                            │
-                       wlan0 (AP)
-                            │
-              ┌─────────────┼─────────────┐
-              │             │             │
-           VLAN 10       VLAN 20       VLAN 30
-           Lights       Thermo        Cameras
+┌─────────────────────────────────────────────────────────────────┐
+│                    HOOKPROBE NETWORK                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌─────────┐     HTP (UDP 4719)     ┌──────────────────────┐  │
+│   │ Guardian ├──────────────────────►│  mssp.hookprobe.com  │  │
+│   │  (Edge)  │                        │       (MSSP)         │  │
+│   └─────────┘                         └──────────┬───────────┘  │
+│        │                                         │               │
+│        │                                         │ HTP           │
+│        │                                         │               │
+│   ┌────┴────┐     HTP (UDP 4719)     ┌──────────┴───────────┐  │
+│   │ Fortress ├──────────────────────►│       Nexus          │  │
+│   │ (Local)  │                        │   (Aggregator)       │  │
+│   └─────────┘                         └──────────────────────┘  │
+│        │                                         │               │
+│        │                                         │               │
+│   ┌────┴────┐                        ┌──────────┴───────────┐  │
+│   │Validator ├──────────────────────►│   DSM Validators     │  │
+│   │ (Node)   │     HTP (UDP 4719)    │   (Consensus)        │  │
+│   └─────────┘                         └──────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Extended Setup (Dual AP + LAN Bridge)
+### Local Network Topology
 
 ```
 Internet ──► Router ──► Guardian wlan1 (client mode)
@@ -357,20 +544,73 @@ Internet ──► Router ──► Guardian wlan1 (client mode)
            wlan0          eth0         wlan2
          (2.4GHz AP)   (LAN bridge)   (5GHz AP)
               │             │             │
-         IoT devices   Wired devices  Phones/laptops
+         ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
+         │  OVS    │   │  OVS    │   │  OVS    │
+         │br-guard │   │br-guard │   │br-guard │
+         └────┬────┘   └────┬────┘   └────┬────┘
+              │             │             │
+      ┌───────┼───────┬─────┼─────┬───────┼───────┐
+      │       │       │     │     │       │       │
+   VLAN10  VLAN20  VLAN30  ...  VLAN60  VLAN70  VLAN999
+   Lights  Thermo  Camera      Phones  Robots  Quarantine
 ```
 
 ---
 
 ## Ports Used
 
-| Port | Protocol | Service |
-|------|----------|---------|
-| 53 | UDP/TCP | DNS (dnsmasq) |
-| 67 | UDP | DHCP server |
-| 1812 | UDP | RADIUS authentication |
-| 1813 | UDP | RADIUS accounting |
-| 8080 | TCP | Guardian web UI |
+| Port | Protocol | Service | Direction |
+|------|----------|---------|-----------|
+| 53 | UDP/TCP | DNS (dnsmasq) | Inbound |
+| 67 | UDP | DHCP server | Inbound |
+| 1812 | UDP | RADIUS authentication | Inbound |
+| 1813 | UDP | RADIUS accounting | Inbound |
+| 4719 | UDP | HTP (MSSP communication) | Outbound |
+| 6653 | TCP | OpenFlow controller | Local |
+| 8080 | TCP | Guardian web UI | Inbound |
+
+---
+
+## Service Management
+
+```bash
+# Core services
+sudo systemctl status hostapd          # WiFi AP
+sudo systemctl status dnsmasq          # DHCP/DNS
+sudo systemctl status freeradius       # RADIUS
+sudo systemctl status openvswitch-switch  # OVS
+sudo systemctl status guardian-sdn     # SDN controller
+sudo systemctl status guardian-webui   # Web interface
+sudo systemctl status guardian-htp     # HTP client
+
+# Security services
+sudo systemctl status guardian-layer-detector  # L2-L7 threats
+sudo systemctl status guardian-mobile-protection  # WiFi security
+sudo systemctl status guardian-suricata     # IDS/IPS
+sudo systemctl status guardian-zeek         # Network analysis
+sudo systemctl status guardian-waf          # Web firewall
+sudo systemctl status guardian-xdp          # DDoS protection
+sudo systemctl status guardian-aggregator   # Threat correlation
+sudo systemctl status guardian-adguard      # DNS filtering
+
+# View connected clients
+iw dev wlan0 station dump
+
+# View DHCP leases
+cat /var/lib/dnsmasq/dnsmasq.leases
+
+# View OVS flows
+sudo ovs-ofctl dump-flows br-guardian
+
+# View firewall rules
+sudo nft list ruleset
+
+# View layer threats
+cat /opt/hookprobe/guardian/data/layer_stats.json
+
+# View HTP connection status
+sudo journalctl -u guardian-htp -f
+```
 
 ---
 
@@ -403,61 +643,72 @@ radtest testing password 127.0.0.1 0 hookprobe_radius
 sudo journalctl -u hostapd | grep -i vlan
 ```
 
-### No Internet on VLANs
+### HTP Connection Failed
 
 ```bash
-# Check IP forwarding
-cat /proc/sys/net/ipv4/ip_forward  # Should be 1
+# Check HTP client status
+sudo systemctl status guardian-htp
 
-# Check NAT rules
-sudo nft list table inet guardian
+# Test UDP connectivity to MSSP
+nc -u -v mssp.hookprobe.com 4719
 
-# Check upstream connection
-ping -I wlan1 8.8.8.8
+# Check HTP logs
+sudo journalctl -u guardian-htp -n 100
+
+# Verify network allows UDP 4719 outbound
+sudo nft list ruleset | grep 4719
 ```
 
-### USB Adapter Not Detected
+### OVS Not Working
 
 ```bash
-# Check USB devices
-lsusb
+# Check OVS status
+sudo systemctl status openvswitch-switch
 
-# Check kernel messages
-dmesg | tail -20
+# List bridges
+sudo ovs-vsctl show
 
-# Check if driver loaded
-lsmod | grep 88x2bu  # or your adapter's driver
+# Check controller connection
+sudo ovs-vsctl get-controller br-guardian
+
+# View flow table
+sudo ovs-ofctl dump-flows br-guardian
 ```
-
----
-
-## Upgrading to Fortress
-
-For sites needing local monitoring dashboards:
-
-```bash
-sudo ./install.sh --tier fortress
-```
-
-**Fortress adds:**
-- Local Grafana dashboards
-- ClickHouse security analytics
-- Full Suricata IDS
-- n8n workflow automation
-
-**Requirements:** 8GB+ RAM, 64GB+ storage
 
 ---
 
 ## Related Documentation
 
 - **[SDN Guide](../../docs/networking/SDN.md)** — Full SDN documentation
-- **[VPN Guide](../../docs/networking/VPN.md)** — Remote access setup
-- **[Qsecbit](../../src/qsecbit/README.md)** — AI threat detection
-- **[HTP Protocol](../../docs/architecture/hookprobe-neuro-protocol.md)** — Transport protocol
+- **[HTP Protocol](../../docs/architecture/hookprobe-neuro-protocol.md)** — Transport protocol spec
+- **[QSecBit](../../src/qsecbit/README.md)** — AI threat detection
+
+### Python Library Modules (`lib/`)
+
+| Module | Purpose |
+|--------|---------|
+| `layer_threat_detector.py` | L2-L7 OSI layer threat detection engine |
+| `mobile_network_protection.py` | Hotel/public WiFi security |
+| `guardian_agent.py` | QSecBit integration and unified reporting |
+| `htp_client.py` | HookProbe Transport Protocol client |
+| `openflow_controller.py` | OpenFlow 1.3 SDN controller |
+| `radius_integration.py` | RADIUS/FreeRADIUS MAC authentication |
+| `network_segmentation.py` | nftables-based VLAN isolation |
+| `config.py` | Unified configuration management |
+| `websocket_vpn.py` | WebSocket VPN with Noise Protocol |
 
 ---
 
-**HookProbe Guardian** — *Protection on the Move*
+## Version History
 
-Version: 5.4.0 | MIT License
+| Version | Codename | Features |
+|---------|----------|----------|
+| 5.0.0 | **Liberty** | L2-L7 threat detection, mobile protection, OpenFlow SDN, HTP client |
+| 4.0.0 | Sentinel | Basic VLAN segmentation, Suricata IDS |
+| 3.0.0 | Pioneer | Multi-AP support, RADIUS |
+
+---
+
+**HookProbe Guardian** — *Liberty Cybersecurity for the Masses*
+
+Version: 5.0.0 Liberty | MIT License
