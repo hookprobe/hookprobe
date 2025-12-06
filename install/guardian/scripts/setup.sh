@@ -2076,6 +2076,60 @@ EOF
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-guardian.conf
     sysctl -p /etc/sysctl.d/99-guardian.conf
 
+    # Configure route metrics for WAN failover (eth0 primary, wlan0 backup)
+    log_info "Configuring WAN failover with route metrics..."
+
+    # Configure dhcpcd for route metrics (Raspberry Pi standard)
+    if [ -f /etc/dhcpcd.conf ]; then
+        # Remove any existing guardian metrics config
+        sed -i '/# Guardian WAN failover/,/^$/d' /etc/dhcpcd.conf
+
+        # Add route metrics - lower metric = higher priority
+        # Industry standard: wired=100, wireless=600, failover timeout=10s
+        cat >> /etc/dhcpcd.conf << 'DHCPCD_EOF'
+
+# Guardian WAN failover configuration
+# eth0 = primary (metric 100), wlan0 = backup (metric 600)
+
+interface eth0
+metric 100
+# Faster failover detection
+timeout 10
+option rapid_commit
+
+interface wlan0
+metric 600
+timeout 10
+option rapid_commit
+
+# Prefer wired over wireless for default route
+allowinterfaces eth0 wlan0
+
+DHCPCD_EOF
+        log_info "Route metrics configured: eth0=100 (primary), wlan0=600 (backup)"
+    fi
+
+    # Also set metrics via ip route for immediate effect
+    if ip link show eth0 &>/dev/null && ip addr show eth0 | grep -q "inet "; then
+        # Get current gateway for eth0
+        ETH_GW=$(ip route | grep "default.*eth0" | awk '{print $3}' | head -1)
+        if [ -n "$ETH_GW" ]; then
+            ip route del default via $ETH_GW dev eth0 2>/dev/null || true
+            ip route add default via $ETH_GW dev eth0 metric 100 2>/dev/null || true
+            log_info "Set eth0 route metric to 100"
+        fi
+    fi
+
+    if ip link show wlan0 &>/dev/null && ip addr show wlan0 | grep -q "inet "; then
+        # Get current gateway for wlan0
+        WLAN_GW=$(ip route | grep "default.*wlan0" | awk '{print $3}' | head -1)
+        if [ -n "$WLAN_GW" ]; then
+            ip route del default via $WLAN_GW dev wlan0 2>/dev/null || true
+            ip route add default via $WLAN_GW dev wlan0 metric 600 2>/dev/null || true
+            log_info "Set wlan0 route metric to 600"
+        fi
+    fi
+
     # Configure NAT (masquerade outgoing traffic)
     log_info "Configuring NAT..."
     mkdir -p /etc/nftables.d
