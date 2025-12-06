@@ -1,0 +1,32 @@
+# HookProbe Guardian - FreeRADIUS Policy Configuration
+# Place in: /etc/freeradius/3.0/policy.d/guardian
+#
+# This policy handles MAC Authentication Bypass (MAB) for Guardian
+# All unknown devices are placed in VLAN 999 (quarantine) by default
+
+# Guardian MAC Authentication Policy
+guardian-mab {
+    # Check if this is a MAC auth request (username looks like MAC address)
+    if (&User-Name =~ /^([0-9a-fA-F]{2}[:-]?){5}[0-9a-fA-F]{2}$/) {
+        update control {
+            # Mark as MAB request
+            &Guardian-MAB := "true"
+        }
+
+        # Lookup MAC in Guardian database
+        # This calls the guardian-mab script
+        update reply {
+            &Tunnel-Type := VLAN
+            &Tunnel-Medium-Type := IEEE-802
+        }
+    }
+}
+
+# Default VLAN assignment for unknown devices
+guardian-default-vlan {
+    update reply {
+        &Tunnel-Type := VLAN
+        &Tunnel-Medium-Type := IEEE-802
+        &Tunnel-Private-Group-Id := 999
+    }
+}

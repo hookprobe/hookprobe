@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "description": "HookProbe Guardian MAC-to-VLAN Database",
+  "default_vlan": 999,
+  "vlans": {
+    "10": {"name": "Smart Lights", "description": "Smart bulbs, LED strips, switches"},
+    "20": {"name": "Thermostats", "description": "HVAC, smart thermostats"},
+    "30": {"name": "Cameras", "description": "Security cameras, doorbells"},
+    "40": {"name": "Voice Assistants", "description": "Alexa, Google Home, Siri"},
+    "50": {"name": "Appliances", "description": "Smart appliances, plugs"},
+    "60": {"name": "Entertainment", "description": "Smart TVs, streaming devices"},
+    "70": {"name": "Robots", "description": "Vacuums, lawn mowers"},
+    "80": {"name": "Sensors", "description": "Motion, door, water sensors"},
+    "100": {"name": "Trusted", "description": "Trusted user devices"},
+    "999": {"name": "Quarantine", "description": "Unknown/untrusted devices"}
+  },
+  "devices": {
+  }
+}
