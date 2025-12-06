@@ -2316,8 +2316,12 @@ EOF
         log_info "Hostapd configuration syntax OK"
     fi
 
-    # Configure hostapd daemon
-    echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
+    # Configure hostapd daemon defaults
+    cat > /etc/default/hostapd << 'EOF'
+# Defaults for hostapd
+DAEMON_CONF="/etc/hostapd/hostapd.conf"
+DAEMON_OPTS=""
+EOF
 
     # Configure dnsmasq (DHCP + DNS)
     log_info "Configuring dnsmasq..."
@@ -2470,14 +2474,45 @@ configure_sdn_mode() {
     log_info "Installing SDN configuration..."
 
     mkdir -p /etc/hostapd
-    cp "$CONFIG_DIR/hostapd.conf" /etc/hostapd/hostapd.conf
     cp "$CONFIG_DIR/hostapd.vlan" /etc/hostapd/hostapd.vlan
     touch /etc/hostapd/hostapd.accept
     touch /etc/hostapd/hostapd.deny
 
+    # Preserve existing interface/driver/channel settings from base config
+    local EXISTING_IFACE=$(grep "^interface=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_DRIVER=$(grep "^driver=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_CHANNEL=$(grep "^channel=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_SSID=$(grep "^ssid=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_PASS=$(grep "^wpa_passphrase=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    local EXISTING_COUNTRY=$(grep "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+
+    # Copy SDN hostapd config
+    cp "$CONFIG_DIR/hostapd.conf" /etc/hostapd/hostapd.conf
+
+    # Restore detected settings (don't overwrite with template values)
+    if [ -n "$EXISTING_IFACE" ]; then
+        sed -i "s/^interface=.*/interface=$EXISTING_IFACE/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_DRIVER" ]; then
+        sed -i "s/^driver=.*/driver=$EXISTING_DRIVER/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_CHANNEL" ]; then
+        sed -i "s/^channel=.*/channel=$EXISTING_CHANNEL/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_SSID" ]; then
+        sed -i "s/^ssid=.*/ssid=$EXISTING_SSID/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_PASS" ]; then
+        sed -i "s/^wpa_passphrase=.*/wpa_passphrase=$EXISTING_PASS/" /etc/hostapd/hostapd.conf
+    fi
+    if [ -n "$EXISTING_COUNTRY" ]; then
+        sed -i "s/^country_code=.*/country_code=$EXISTING_COUNTRY/" /etc/hostapd/hostapd.conf
+    fi
+
     # Update RADIUS server in hostapd config
     sed -i "s/auth_server_addr=.*/auth_server_addr=$RADIUS_SERVER/" /etc/hostapd/hostapd.conf
     sed -i "s/auth_server_shared_secret=.*/auth_server_shared_secret=$RADIUS_SECRET/" /etc/hostapd/hostapd.conf
+    sed -i "s/acct_server_shared_secret=.*/acct_server_shared_secret=$RADIUS_SECRET/" /etc/hostapd/hostapd.conf
 
     # Configure dnsmasq for VLANs
     cp "$CONFIG_DIR/dnsmasq.conf" /etc/dnsmasq.d/guardian.conf
@@ -2823,6 +2858,9 @@ EOF
 enable_services() {
     log_step "Enabling services..."
 
+    # Enable FreeRADIUS (required for MAC authentication before hostapd)
+    systemctl enable freeradius 2>/dev/null || true
+
     systemctl unmask hostapd 2>/dev/null || true
     systemctl enable hostapd
     systemctl enable dnsmasq
@@ -2851,6 +2889,18 @@ start_services() {
     systemctl start openvswitch-switch 2>/dev/null || systemctl start openvswitch 2>/dev/null || true
 
     systemctl start nftables 2>/dev/null || true
+
+    # ─────────────────────────────────────────────────────────────
+    # Start FreeRADIUS BEFORE hostapd (required for MAC authentication)
+    # ─────────────────────────────────────────────────────────────
+    if systemctl list-unit-files | grep -q freeradius; then
+        log_info "Starting FreeRADIUS for MAC authentication..."
+        systemctl start freeradius 2>/dev/null || {
+            log_warn "FreeRADIUS failed to start - MAC-based VLAN assignment may not work"
+        }
+        sleep 1
+    fi
+
     systemctl start dnsmasq
 
     # ─────────────────────────────────────────────────────────────
