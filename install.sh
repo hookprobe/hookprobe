@@ -2058,44 +2058,87 @@ uninstall_guardian() {
         rm -f /etc/systemd/system/guardian-*.service
         systemctl daemon-reload
 
-        # Remove Guardian containers and volumes
+        # Complete Podman cleanup
         if command -v podman &>/dev/null; then
-            echo "Removing Guardian containers..."
-            local containers=(
-                guardian-suricata
-                guardian-zeek
-                guardian-waf
-                guardian-neuro
-                guardian-adguard
-            )
-            for container in "${containers[@]}"; do
-                echo "  - Removing $container..."
-                podman stop "$container" 2>/dev/null || true
-                podman rm -f "$container" 2>/dev/null || true
+            echo ""
+            echo "=== Complete Podman Cleanup ==="
+
+            # Stop ALL running containers
+            echo "Stopping all containers..."
+            podman stop -a 2>/dev/null || true
+
+            # Remove ALL containers (including stopped)
+            echo "Removing all containers..."
+            podman rm -af 2>/dev/null || true
+
+            # Remove ALL volumes
+            echo "Removing all volumes..."
+            podman volume rm -af 2>/dev/null || true
+
+            # Remove ALL podman networks (except default)
+            echo "Removing podman networks..."
+            for net in $(podman network ls --format '{{.Name}}' 2>/dev/null | grep -v "^podman$" || true); do
+                echo "  - Removing network: $net"
+                podman network rm "$net" 2>/dev/null || true
             done
 
-            echo "Removing Guardian volumes..."
-            local volumes=(
-                guardian-suricata-logs
-                guardian-suricata-rules
-                guardian-zeek-logs
-                guardian-zeek-spool
-                guardian-waf-logs
-                guardian-adguard-work
-                guardian-adguard-conf
+            # Remove guardian-related images
+            echo "Removing container images..."
+            local images_to_remove=(
+                "docker.io/owasp/modsecurity-crs"
+                "docker.io/jasonish/suricata"
+                "docker.io/zeek/zeek"
+                "docker.io/adguard/adguardhome"
+                "modsecurity"
+                "suricata"
+                "zeek"
+                "adguard"
+                "snort"
             )
-            for vol in "${volumes[@]}"; do
-                podman volume rm "$vol" 2>/dev/null || true
+            for img_pattern in "${images_to_remove[@]}"; do
+                for img in $(podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -i "$img_pattern" || true); do
+                    echo "  - Removing image: $img"
+                    podman rmi -f "$img" 2>/dev/null || true
+                done
             done
 
-            echo "Removing Guardian network..."
-            podman network rm guardian-net 2>/dev/null || true
+            # Prune unused images, networks, volumes
+            echo "Pruning unused podman resources..."
+            podman system prune -af 2>/dev/null || true
+
+            # Remove podman network interfaces (podman0, veth*)
+            echo "Removing podman network interfaces..."
+            ip link set podman0 down 2>/dev/null || true
+            ip link delete podman0 2>/dev/null || true
+
+            # Remove all veth interfaces related to podman
+            for veth in $(ip link show 2>/dev/null | grep -oP 'veth[^@:]+' | sort -u || true); do
+                echo "  - Removing $veth..."
+                ip link delete "$veth" 2>/dev/null || true
+            done
+
+            # Clean up network namespaces
+            echo "Cleaning up network namespaces..."
+            for netns in $(ip netns list 2>/dev/null | grep -E "netns-|cni-" | awk '{print $1}' || true); do
+                echo "  - Removing netns: $netns"
+                ip netns delete "$netns" 2>/dev/null || true
+            done
+
+            # Remove CNI configuration
+            echo "Removing CNI configuration..."
+            rm -rf /etc/cni/net.d/87-podman-bridge.conflist 2>/dev/null || true
+            rm -rf /etc/cni/net.d/*guardian* 2>/dev/null || true
+
+            # Reset podman storage (nuclear option)
+            echo "Resetting podman storage..."
+            podman system reset -f 2>/dev/null || true
         fi
 
         # Remove XDP/eBPF programs
+        echo ""
         echo "Removing XDP/eBPF programs..."
         if command -v ip &>/dev/null; then
-            for iface in wlan0 eth0 br0; do
+            for iface in wlan0 wlan1 eth0 br0; do
                 ip link set dev "$iface" xdp off 2>/dev/null || true
             done
         fi
@@ -2108,6 +2151,10 @@ uninstall_guardian() {
         # Remove Attack Simulator
         echo "Removing Attack Simulator..."
         rm -rf /opt/hookprobe/guardian/simulator
+
+        # Remove Zeek configuration
+        echo "Removing Zeek configuration..."
+        rm -rf /opt/hookprobe/guardian/zeek
 
         # Remove network interfaces
         echo "Removing network interfaces..."
@@ -2127,28 +2174,62 @@ uninstall_guardian() {
         # Remove configurations
         echo "Removing configuration files..."
         rm -f /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.vlan
+        rm -f /etc/hostapd/hostapd.accept /etc/hostapd/hostapd.deny
         rm -f /etc/dnsmasq.d/guardian.conf
         rm -f /etc/nftables.d/guardian*.nft
         rm -f /etc/sysctl.d/99-guardian.conf
+        rm -f /etc/default/hostapd
+
+        # Remove dhcpcd guardian configuration
+        if [ -f /etc/dhcpcd.conf ]; then
+            echo "Removing dhcpcd guardian configuration..."
+            sed -i '/# Guardian WAN failover/,/^$/d' /etc/dhcpcd.conf
+        fi
 
         # Remove log directories
         echo "Removing log directories..."
         rm -rf /var/log/hookprobe/threats
         rm -rf /var/log/zeek
+        rm -rf /var/log/suricata
+
+        # Remove container storage
+        echo "Removing container storage..."
+        rm -rf /var/lib/containers/storage/volumes/guardian-* 2>/dev/null || true
 
         # Remove Guardian installation directory
         echo "Removing Guardian installation..."
         rm -rf /opt/hookprobe/guardian
 
+        # Final verification
         echo ""
-        echo -e "${GREEN}✓ Guardian cleanup complete${NC}"
+        echo "=== Verification ==="
+        echo "Checking for remaining containers..."
+        if command -v podman &>/dev/null; then
+            local remaining=$(podman ps -a --format '{{.Names}}' 2>/dev/null | wc -l)
+            if [ "$remaining" -gt 0 ]; then
+                echo -e "${YELLOW}Warning: $remaining container(s) still exist${NC}"
+                podman ps -a 2>/dev/null
+            else
+                echo -e "${GREEN}✓ No containers remaining${NC}"
+            fi
+        fi
+
+        echo "Checking for podman interfaces..."
+        if ip link show podman0 &>/dev/null; then
+            echo -e "${YELLOW}Warning: podman0 interface still exists${NC}"
+        else
+            echo -e "${GREEN}✓ podman0 interface removed${NC}"
+        fi
+
         echo ""
-        echo "The following may still be installed (shared components):"
-        echo "  - Podman container runtime"
-        echo "  - Open vSwitch"
-        echo "  - Python packages"
+        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║  Guardian cleanup complete                                  ║${NC}"
+        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
-        echo "Run 'Complete Uninstall' (option 9) to remove everything."
+        echo "If any issues remain, you can manually run:"
+        echo "  sudo podman system reset -f"
+        echo "  sudo rm -rf /var/lib/containers"
+        echo ""
     fi
 }
 
