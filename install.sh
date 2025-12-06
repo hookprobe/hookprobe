@@ -1842,7 +1842,10 @@ show_uninstall_menu() {
     echo -e "     ${RED}DESTRUCTIVE: Remove everything!${NC}"
     echo ""
     echo -e "  ${BOLD}10${NC}) Guardian Complete Uninstall"
-    echo -e "      ${RED}Remove all Guardian components (containers, bridges, WiFi)${NC}"
+    echo -e "      ${RED}Remove all Guardian components (containers, bridges, WiFi, VPN, SDN)${NC}"
+    echo ""
+    echo -e "  ${BOLD}11${NC}) Sentinel Complete Uninstall"
+    echo -e "      ${RED}Remove Sentinel validator (service, firewall rules, fail2ban)${NC}"
     echo ""
     show_nav_footer
 }
@@ -2233,6 +2236,85 @@ uninstall_guardian() {
     fi
 }
 
+uninstall_sentinel() {
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  SENTINEL COMPLETE UNINSTALL                               ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    local sentinel_uninstall="$SCRIPT_DIR/install/sentinel/uninstall.sh"
+
+    if [ -f "$sentinel_uninstall" ]; then
+        echo "Running Sentinel uninstall script..."
+        echo ""
+        bash "$sentinel_uninstall"
+    else
+        echo -e "${YELLOW}Sentinel uninstall script not found at:${NC}"
+        echo "  $sentinel_uninstall"
+        echo ""
+        echo "Performing manual cleanup..."
+        echo ""
+
+        # Stop Sentinel service
+        echo "Stopping Sentinel service..."
+        systemctl stop hookprobe-sentinel 2>/dev/null || true
+        systemctl disable hookprobe-sentinel 2>/dev/null || true
+
+        # Remove systemd service file
+        echo "Removing systemd service..."
+        rm -f /etc/systemd/system/hookprobe-sentinel.service
+        systemctl daemon-reload
+
+        # Remove firewall rules
+        echo "Removing firewall rules..."
+        iptables -D INPUT -j HOOKPROBE 2>/dev/null || true
+        iptables -F HOOKPROBE 2>/dev/null || true
+        iptables -X HOOKPROBE 2>/dev/null || true
+
+        # Remove fail2ban config
+        echo "Removing fail2ban configuration..."
+        rm -f /etc/fail2ban/jail.d/hookprobe-sentinel.conf 2>/dev/null || true
+        rm -f /etc/fail2ban/filter.d/hookprobe-sentinel.conf 2>/dev/null || true
+        systemctl restart fail2ban 2>/dev/null || true
+
+        # Remove configuration
+        echo "Removing configuration..."
+        rm -f /etc/hookprobe/sentinel.env 2>/dev/null || true
+        rm -f /etc/hookprobe/secrets/mssp-token 2>/dev/null || true
+
+        # Remove installation directory
+        echo "Removing installation directory..."
+        rm -rf /opt/hookprobe/sentinel
+
+        # Remove data directory
+        echo "Removing data directory..."
+        rm -rf /var/lib/hookprobe/sentinel
+
+        # Remove uninstall command
+        rm -f /usr/local/bin/sentinel-uninstall 2>/dev/null || true
+
+        # Clean up empty directories
+        [ -d /etc/hookprobe/secrets ] && [ -z "$(ls -A /etc/hookprobe/secrets 2>/dev/null)" ] && rmdir /etc/hookprobe/secrets 2>/dev/null || true
+        [ -d /etc/hookprobe ] && [ -z "$(ls -A /etc/hookprobe 2>/dev/null)" ] && rmdir /etc/hookprobe 2>/dev/null || true
+        [ -d /var/lib/hookprobe ] && [ -z "$(ls -A /var/lib/hookprobe 2>/dev/null)" ] && rmdir /var/lib/hookprobe 2>/dev/null || true
+        [ -d /opt/hookprobe ] && [ -z "$(ls -A /opt/hookprobe 2>/dev/null)" ] && rmdir /opt/hookprobe 2>/dev/null || true
+
+        echo ""
+        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║  Sentinel cleanup complete                                  ║${NC}"
+        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo "Removed:"
+        echo "  • hookprobe-sentinel service"
+        echo "  • Firewall rules (HOOKPROBE chain)"
+        echo "  • Fail2ban configuration"
+        echo "  • Configuration files"
+        echo "  • Installation directory"
+        echo "  • Data directory"
+        echo ""
+    fi
+}
+
 handle_uninstall() {
     while true; do
         show_uninstall_menu
@@ -2249,6 +2331,7 @@ handle_uninstall() {
             8) uninstall_wifi ;;
             9) uninstall_complete ;;
             10) uninstall_guardian ;;
+            11) uninstall_sentinel ;;
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1; continue ;;
