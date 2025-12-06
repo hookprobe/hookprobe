@@ -429,14 +429,50 @@ remove_packages() {
         return 0
     fi
 
+    # Check for apt lock
     if command -v apt-get &>/dev/null; then
-        apt-get remove -y hostapd dnsmasq 2>/dev/null || true
-        apt-get autoremove -y 2>/dev/null || true
+        # Check if apt is locked
+        if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
+            log_warn "apt is locked by another process"
+            log_info "Waiting up to 30 seconds for lock to release..."
+            local wait_count=0
+            while fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1 && [ $wait_count -lt 6 ]; do
+                sleep 5
+                wait_count=$((wait_count + 1))
+            done
+            if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
+                log_warn "apt still locked - skipping package removal"
+                log_info "You can manually remove packages later with:"
+                log_info "  sudo apt-get remove hostapd dnsmasq"
+                return 0
+            fi
+        fi
+
+        # Try to remove packages with timeout
+        log_info "Removing hostapd..."
+        timeout 60 apt-get remove -y --quiet hostapd 2>/dev/null || {
+            log_warn "Failed to remove hostapd - skipping"
+        }
+
+        log_info "Removing dnsmasq..."
+        timeout 60 apt-get remove -y --quiet dnsmasq 2>/dev/null || {
+            log_warn "Failed to remove dnsmasq - skipping"
+        }
+
+        log_info "Running autoremove..."
+        timeout 120 apt-get autoremove -y --quiet 2>/dev/null || {
+            log_warn "Autoremove failed - skipping"
+        }
+
     elif command -v dnf &>/dev/null; then
-        dnf remove -y hostapd dnsmasq 2>/dev/null || true
+        timeout 60 dnf remove -y hostapd dnsmasq 2>/dev/null || {
+            log_warn "Package removal failed"
+            log_info "You can manually remove packages later with:"
+            log_info "  sudo dnf remove hostapd dnsmasq"
+        }
     fi
 
-    log_info "Packages removed"
+    log_info "Package removal complete"
 }
 
 # ============================================================
