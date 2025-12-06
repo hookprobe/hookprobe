@@ -1415,6 +1415,43 @@ HTML_TEMPLATE = '''
                     {% endfor %}
                 </div>
             </div>
+
+            <!-- Threat Visualization Chart -->
+            <div class="card">
+                <h2>Threat Distribution</h2>
+                <div id="threat-chart" style="margin-bottom: 20px;">
+                    <div style="display: flex; align-items: flex-end; height: 150px; gap: 20px; justify-content: center; padding: 20px 0;">
+                        <!-- High Severity Bar -->
+                        <div style="text-align: center; flex: 1; max-width: 120px;">
+                            <div id="chart-bar-high" style="background: linear-gradient(to top, var(--hp-red), #dc2626); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
+                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
+                                <div id="chart-value-high" style="font-size: 24px; font-weight: 700;">0</div>
+                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">High</div>
+                            </div>
+                        </div>
+                        <!-- Medium Severity Bar -->
+                        <div style="text-align: center; flex: 1; max-width: 120px;">
+                            <div id="chart-bar-medium" style="background: linear-gradient(to top, var(--hp-amber), #fbbf24); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
+                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
+                                <div id="chart-value-medium" style="font-size: 24px; font-weight: 700;">0</div>
+                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">Medium</div>
+                            </div>
+                        </div>
+                        <!-- Low Severity Bar -->
+                        <div style="text-align: center; flex: 1; max-width: 120px;">
+                            <div id="chart-bar-low" style="background: linear-gradient(to top, var(--hp-green), #34d399); width: 100%; border-radius: 8px 8px 0 0; min-height: 10px; transition: height 0.5s ease;" data-height="10"></div>
+                            <div style="background: #1f2937; color: white; padding: 8px; border-radius: 0 0 8px 8px;">
+                                <div id="chart-value-low" style="font-size: 24px; font-weight: 700;">0</div>
+                                <div style="font-size: 11px; text-transform: uppercase; opacity: 0.8;">Low</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <span id="chart-total" style="font-size: 14px; color: #6b7280;">Total Threats: <strong>0</strong></span>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="refreshThreatChart()" style="margin-left: 15px;">Refresh</button>
+                </div>
+            </div>
         </div>
 
         <!-- Security Tab -->
@@ -1676,6 +1713,95 @@ HTML_TEMPLATE = '''
                 <h3>OVS Bridges</h3>
                 <pre style="background: #1f2937; color: #10b981; padding: 15px; border-radius: 8px; font-size: 12px; overflow-x: auto;">{{ qsecbit.ovs.bridges }}</pre>
                 {% endif %}
+            </div>
+
+            <!-- IP Blocking -->
+            <div class="card">
+                <h2>IP Blocking (XDP)</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">
+                    Block malicious IPs at the kernel level using XDP/eBPF for maximum performance.
+                </p>
+                <div class="form-group">
+                    <label>IP Address to Block</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="block-ip-input" placeholder="e.g., 192.168.1.100" style="flex: 1;">
+                        <button type="button" class="btn btn-danger" onclick="blockIP()">Block IP</button>
+                    </div>
+                </div>
+                <div id="block-ip-result" style="margin-top: 10px;"></div>
+
+                <!-- XDP Stats -->
+                <div id="xdp-stats" style="margin-top: 20px;">
+                    <h3>XDP Protection Stats</h3>
+                    <div class="param-grid" id="xdp-stats-grid">
+                        <div class="param-item">
+                            <div class="label">Packets Passed</div>
+                            <div class="value" id="xdp-passed">-</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">Packets Dropped</div>
+                            <div class="value" id="xdp-dropped">-</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">Rate Limited</div>
+                            <div class="value" id="xdp-rate-limited">-</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">Blocklisted</div>
+                            <div class="value" id="xdp-blocklisted">-</div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-secondary" onclick="refreshXdpStats()" style="margin-top: 10px;">Refresh Stats</button>
+                </div>
+            </div>
+
+            <!-- Security Testing -->
+            <div class="card">
+                <h2>Security Testing</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">
+                    Run automated security tests to verify IDS/IPS, WAF, and XDP protection are working correctly.
+                </p>
+                <div class="form-group">
+                    <label>Target IP (default: Guardian itself)</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="test-target" value="192.168.4.1" style="flex: 1;">
+                        <button type="button" class="btn btn-primary" onclick="runSecurityTest()">Run Test</button>
+                    </div>
+                </div>
+                <div id="test-status" style="margin-top: 15px; display: none;">
+                    <div class="alert-item" style="background: var(--hp-light); padding: 15px; border-radius: 8px;">
+                        <span id="test-status-text">Test running...</span>
+                    </div>
+                </div>
+                <div id="test-results" style="margin-top: 15px;"></div>
+            </div>
+
+            <!-- Threat Visualization -->
+            <div class="card">
+                <h2>Threat Analysis</h2>
+                <div id="threat-visualization">
+                    <div class="param-grid">
+                        <div class="param-item" style="background: #fee2e2;">
+                            <div class="label">High Severity</div>
+                            <div class="value" id="threat-high" style="color: var(--hp-red);">0</div>
+                        </div>
+                        <div class="param-item" style="background: #fef3c7;">
+                            <div class="label">Medium Severity</div>
+                            <div class="value" id="threat-medium" style="color: var(--hp-amber);">0</div>
+                        </div>
+                        <div class="param-item" style="background: #d1fae5;">
+                            <div class="label">Low Severity</div>
+                            <div class="value" id="threat-low" style="color: var(--hp-green);">0</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">Total Threats</div>
+                            <div class="value" id="threat-total">0</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <button type="button" class="btn btn-secondary" onclick="refreshThreats()">Refresh Threats</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2070,6 +2196,189 @@ HTML_TEMPLATE = '''
             document.getElementById('upstream-ssid').focus();
         }
 
+        // IP Blocking
+        function blockIP() {
+            const ip = document.getElementById('block-ip-input').value.trim();
+            const resultDiv = document.getElementById('block-ip-result');
+
+            if (!ip) {
+                resultDiv.innerHTML = '<span style="color: #ef4444;">Please enter an IP address</span>';
+                return;
+            }
+
+            // Simple IP validation
+            const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+            if (!ipRegex.test(ip)) {
+                resultDiv.innerHTML = '<span style="color: #ef4444;">Invalid IP address format</span>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<span style="color: #6b7280;">Blocking IP...</span>';
+
+            fetch('/api/block_ip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: ip })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    resultDiv.innerHTML = '<span style="color: #22c55e;">IP ' + ip + ' blocked successfully</span>';
+                    document.getElementById('block-ip-input').value = '';
+                    refreshXdpStats();
+                } else {
+                    resultDiv.innerHTML = '<span style="color: #ef4444;">Error: ' + (data.error || 'Unknown error') + '</span>';
+                }
+            })
+            .catch(error => {
+                resultDiv.innerHTML = '<span style="color: #ef4444;">Error: ' + error.message + '</span>';
+            });
+        }
+
+        // Refresh XDP Stats
+        function refreshXdpStats() {
+            fetch('/api/xdp_stats')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.stats) {
+                        document.getElementById('xdp-passed').textContent = data.stats.passed || '0';
+                        document.getElementById('xdp-dropped').textContent = data.stats.dropped || '0';
+                        document.getElementById('xdp-rate-limited').textContent = data.stats.rate_limited || '0';
+                        document.getElementById('xdp-blocklisted').textContent = data.stats.blocklisted || '0';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching XDP stats:', error);
+                });
+        }
+
+        // Run Security Test
+        let testPollInterval = null;
+
+        function runSecurityTest() {
+            const target = document.getElementById('test-target').value.trim();
+            const statusDiv = document.getElementById('test-status');
+            const statusText = document.getElementById('test-status-text');
+            const resultsDiv = document.getElementById('test-results');
+
+            statusDiv.style.display = 'block';
+            statusText.textContent = 'Starting security test...';
+            resultsDiv.innerHTML = '';
+
+            fetch('/api/security_test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target: target })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    statusText.textContent = 'Test running... Polling for results.';
+                    // Poll for results
+                    testPollInterval = setInterval(pollTestResults, 3000);
+                } else {
+                    statusText.textContent = 'Failed to start test: ' + (data.error || 'Unknown error');
+                }
+            })
+            .catch(error => {
+                statusText.textContent = 'Error starting test: ' + error.message;
+            });
+        }
+
+        function pollTestResults() {
+            fetch('/api/security_test_result')
+                .then(response => response.json())
+                .then(data => {
+                    const statusText = document.getElementById('test-status-text');
+                    const resultsDiv = document.getElementById('test-results');
+
+                    if (data.status === 'completed') {
+                        clearInterval(testPollInterval);
+                        statusText.textContent = 'Test completed!';
+
+                        let html = '<div style="background: var(--hp-light); padding: 15px; border-radius: 8px; margin-top: 10px;">';
+                        html += '<h4 style="margin-bottom: 10px;">Test Results</h4>';
+
+                        if (data.results) {
+                            for (const [test, result] of Object.entries(data.results)) {
+                                const passed = result.passed;
+                                const icon = passed ? '&#10003;' : '&#10007;';
+                                const color = passed ? '#22c55e' : '#ef4444';
+                                html += '<div style="margin-bottom: 8px;"><span style="color: ' + color + ';">' + icon + '</span> ' + test + ': ' + result.message + '</div>';
+                            }
+                        }
+                        html += '</div>';
+                        resultsDiv.innerHTML = html;
+
+                        // Refresh threat data after test
+                        refreshThreats();
+                    } else if (data.status === 'running') {
+                        statusText.textContent = 'Test running... ' + (data.progress || '');
+                    } else if (data.status === 'error') {
+                        clearInterval(testPollInterval);
+                        statusText.textContent = 'Test failed: ' + (data.error || 'Unknown error');
+                    }
+                })
+                .catch(error => {
+                    clearInterval(testPollInterval);
+                    document.getElementById('test-status-text').textContent = 'Error polling results: ' + error.message;
+                });
+        }
+
+        // Refresh Threats
+        function refreshThreats() {
+            fetch('/api/threats')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.stats) {
+                        document.getElementById('threat-high').textContent = data.stats.high || '0';
+                        document.getElementById('threat-medium').textContent = data.stats.medium || '0';
+                        document.getElementById('threat-low').textContent = data.stats.low || '0';
+                        document.getElementById('threat-total').textContent = data.stats.total || '0';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching threats:', error);
+                });
+        }
+
+        // Refresh Threat Chart
+        function refreshThreatChart() {
+            fetch('/api/threats')
+                .then(response => response.json())
+                .then(data => {
+                    const stats = data.stats || {};
+                    const high = parseInt(stats.high) || 0;
+                    const medium = parseInt(stats.medium) || 0;
+                    const low = parseInt(stats.low) || 0;
+                    const total = high + medium + low;
+
+                    // Update values
+                    document.getElementById('chart-value-high').textContent = high;
+                    document.getElementById('chart-value-medium').textContent = medium;
+                    document.getElementById('chart-value-low').textContent = low;
+                    document.getElementById('chart-total').innerHTML = 'Total Threats: <strong>' + total + '</strong>';
+
+                    // Update bar heights (max 100px, min 10px)
+                    const maxVal = Math.max(high, medium, low, 1);
+                    const scale = 100 / maxVal;
+
+                    document.getElementById('chart-bar-high').style.height = Math.max(10, high * scale) + 'px';
+                    document.getElementById('chart-bar-medium').style.height = Math.max(10, medium * scale) + 'px';
+                    document.getElementById('chart-bar-low').style.height = Math.max(10, low * scale) + 'px';
+                })
+                .catch(error => {
+                    console.error('Error refreshing threat chart:', error);
+                });
+        }
+
+        // Initial load of security stats
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshXdpStats();
+            refreshThreats();
+            refreshThreatChart();
+        });
+
         // Auto-refresh every 30 seconds (but not during scan)
         setInterval(() => {
             if (!isScanning) {
@@ -2168,13 +2477,13 @@ def action():
         run_command('systemctl restart hostapd')
         flash('Hotspot restarted', 'success')
     elif action == 'restart_containers':
-        run_command('systemctl restart guardian-suricata guardian-waf guardian-neuro guardian-adguard')
+        run_command('systemctl restart guardian-suricata guardian-zeek guardian-waf guardian-neuro guardian-adguard guardian-xdp guardian-aggregator')
         flash('Containers restarting...', 'success')
     elif action == 'restart_network':
         run_command('systemctl restart networking')
         flash('Network restarted', 'success')
     elif action == 'restart_services':
-        run_command('systemctl restart hostapd dnsmasq guardian-suricata guardian-waf guardian-neuro guardian-adguard guardian-webui')
+        run_command('systemctl restart hostapd dnsmasq guardian-suricata guardian-zeek guardian-waf guardian-neuro guardian-adguard guardian-xdp guardian-aggregator guardian-webui')
         flash('All services restarting...', 'success')
     elif action == 'reboot':
         run_command('reboot')
@@ -2209,6 +2518,132 @@ def api_sdn():
     if stats:
         return jsonify(stats)
     return jsonify({'error': 'SDN mode not enabled'}), 400
+
+
+@app.route('/api/threats')
+def api_threats():
+    """Get aggregated threat data."""
+    try:
+        threat_file = '/var/log/hookprobe/threats/aggregated.json'
+        if os.path.exists(threat_file):
+            with open(threat_file, 'r') as f:
+                return jsonify(json.load(f))
+        return jsonify({'error': 'No threat data available', 'stats': {}})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/block_ip', methods=['POST'])
+def api_block_ip():
+    """Block an IP address via XDP."""
+    ip = request.form.get('ip') or request.json.get('ip') if request.is_json else None
+    if not ip:
+        return jsonify({'error': 'IP address required'}), 400
+
+    # Validate IP format
+    import re
+    if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
+        return jsonify({'error': 'Invalid IP address format'}), 400
+
+    # Block via XDP
+    output, success = run_command(f'python3 /opt/hookprobe/guardian/xdp/xdp_manager.py block {ip}')
+    if success:
+        return jsonify({'success': True, 'message': f'IP {ip} blocked', 'output': output})
+    return jsonify({'error': 'Failed to block IP', 'output': output}), 500
+
+
+@app.route('/api/unblock_ip', methods=['POST'])
+def api_unblock_ip():
+    """Unblock an IP address."""
+    ip = request.form.get('ip') or request.json.get('ip') if request.is_json else None
+    if not ip:
+        return jsonify({'error': 'IP address required'}), 400
+
+    # Remove from blocklist via bpftool
+    output, success = run_command(f'bpftool map delete name blocklist_map key {ip}')
+    if success:
+        return jsonify({'success': True, 'message': f'IP {ip} unblocked'})
+    return jsonify({'error': 'Failed to unblock IP', 'output': output}), 500
+
+
+@app.route('/api/xdp_stats')
+def api_xdp_stats():
+    """Get XDP DDoS protection statistics."""
+    output, success = run_command('python3 /opt/hookprobe/guardian/xdp/xdp_manager.py stats')
+    if success:
+        try:
+            return jsonify(json.loads(output))
+        except:
+            return jsonify({'error': 'Failed to parse XDP stats'})
+    return jsonify({'error': 'XDP not available'})
+
+
+@app.route('/api/security_test', methods=['POST'])
+def api_security_test():
+    """Run security test suite."""
+    target = request.form.get('target', '192.168.4.1')
+
+    # Run test in background and return immediately
+    output, success = run_command(
+        f'/opt/hookprobe/guardian/simulator/test_security.sh {target} > /var/log/hookprobe/threats/test_output.log 2>&1 &',
+        timeout=5
+    )
+    return jsonify({
+        'success': True,
+        'message': 'Security test started',
+        'log_file': '/var/log/hookprobe/threats/test_output.log',
+        'report_file': '/var/log/hookprobe/threats/test_report.json'
+    })
+
+
+@app.route('/api/security_test_result')
+def api_security_test_result():
+    """Get security test results."""
+    report_file = '/var/log/hookprobe/threats/test_report.json'
+    log_file = '/var/log/hookprobe/threats/test_output.log'
+
+    result = {'status': 'unknown', 'report': None, 'log': None}
+
+    if os.path.exists(report_file):
+        try:
+            with open(report_file, 'r') as f:
+                result['report'] = json.load(f)
+                result['status'] = 'complete'
+        except:
+            result['status'] = 'error'
+
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, 'r') as f:
+                result['log'] = f.read()[-5000:]  # Last 5KB
+        except:
+            pass
+
+    return jsonify(result)
+
+
+@app.route('/api/service/<service_name>/<action>', methods=['POST'])
+def api_service_control(service_name, action):
+    """Control Guardian services (start/stop/restart)."""
+    allowed_services = [
+        'guardian-suricata', 'guardian-zeek', 'guardian-waf',
+        'guardian-xdp', 'guardian-aggregator', 'guardian-neuro',
+        'guardian-adguard', 'guardian-qsecbit'
+    ]
+
+    if service_name not in allowed_services:
+        return jsonify({'error': 'Service not allowed'}), 403
+
+    if action not in ['start', 'stop', 'restart', 'status']:
+        return jsonify({'error': 'Invalid action'}), 400
+
+    output, success = run_command(f'sudo systemctl {action} {service_name}')
+
+    if action == 'status':
+        is_active, _ = run_command(f'systemctl is-active {service_name}')
+        return jsonify({'service': service_name, 'active': is_active == 'active', 'output': output})
+
+    return jsonify({'success': success, 'service': service_name, 'action': action, 'output': output})
 
 
 if __name__ == '__main__':
