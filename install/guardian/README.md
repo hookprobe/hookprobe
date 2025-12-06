@@ -143,11 +143,17 @@ Access your Guardian-protected network from anywhere:
 | Component | Purpose |
 |-----------|---------|
 | **Qsecbit** | AI-powered threat detection |
+| **Suricata IDS/IPS** | Network intrusion detection & prevention |
+| **Zeek** | Network traffic analysis & logging |
+| **ModSecurity WAF** | Web application firewall |
+| **XDP/eBPF** | Kernel-level DDoS protection |
+| **Threat Aggregator** | Correlates alerts from all security tools |
 | **nftables** | VLAN isolation firewall |
 | **hostapd** | WiFi with dynamic VLAN |
 | **FreeRADIUS** | MAC-based authentication |
 | **dnsmasq** | Per-VLAN DHCP/DNS |
-| **Suricata** | Intrusion detection (lite) |
+| **AdGuard DNS** | Ad blocking & DNS privacy |
+| **Neuro Protocol** | Secure HTP tunnel communication |
 
 ---
 
@@ -210,17 +216,36 @@ sudo systemctl start hostapd@wlan2
 
 ## Web Interface
 
-Guardian includes a simple web UI for configuration:
+Guardian includes a comprehensive web UI for monitoring and configuration:
 
-**URL:** `http://192.168.1.1:8080`
+**URL:** `http://192.168.4.1:8080`
 
 ### Features
 
-- **Dashboard** — Connected devices, VLAN stats
-- **Network Setup** — Scan and connect to upstream WiFi
-- **Device Management** — Register and categorize devices
-- **VLAN Configuration** — Create custom VLANs
-- **System Status** — AP status, client count
+#### Dashboard Tab
+- **Security Overview** — RAG status for overall security, threats, IDS alerts
+- **Network Status** — WAN/LAN interface status, connected clients
+- **Security Containers** — Status of all security services
+- **Threat Distribution Chart** — Visual bar chart of threat severity
+
+#### Security Tab
+- **QSecBit Status** — AI threat detection status
+- **Suricata Alerts** — Real-time IDS/IPS alerts with severity
+- **Threat Log** — Historical threat data
+- **IP Blocking (XDP)** — Block malicious IPs at kernel level
+- **XDP Protection Stats** — Packets passed/dropped/rate-limited
+- **Security Testing** — Run automated security tests
+- **Threat Analysis** — Severity breakdown visualization
+
+#### WiFi Tab
+- **Hotspot Settings** — Configure SSID and password
+- **Upstream WiFi** — Scan and connect to networks
+- **Interface Status** — WAN/LAN interface details
+
+#### System Tab
+- **System Information** — Uptime, memory, disk, temperature
+- **Container Management** — Start/stop security containers
+- **System Actions** — Restart services, reboot
 
 ### Screenshots
 
@@ -277,6 +302,15 @@ sudo systemctl status dnsmasq          # DHCP/DNS
 sudo systemctl status guardian-sdn     # SDN agent
 sudo systemctl status guardian-webui   # Web interface
 
+# Security services
+sudo systemctl status guardian-suricata     # IDS/IPS
+sudo systemctl status guardian-zeek         # Network analysis
+sudo systemctl status guardian-waf          # Web firewall
+sudo systemctl status guardian-xdp          # DDoS protection
+sudo systemctl status guardian-aggregator   # Threat correlation
+sudo systemctl status guardian-neuro        # HTP tunnel
+sudo systemctl status guardian-adguard      # DNS filtering
+
 # View connected clients
 iw dev wlan0 station dump
 
@@ -285,6 +319,15 @@ cat /var/lib/dnsmasq/dnsmasq.leases
 
 # View firewall rules
 sudo nft list ruleset
+
+# View Suricata alerts
+cat /var/log/suricata/fast.log
+
+# View Zeek logs
+cat /var/log/zeek/current/conn.log
+
+# View aggregated threats
+cat /var/log/hookprobe/threats/aggregated.json
 ```
 
 ---
@@ -415,6 +458,6 @@ sudo ./install.sh --tier fortress
 
 ---
 
-**HookProbe Guardian** — *Enterprise Security in Your Pocket*
+**HookProbe Guardian** — *Protection on the Move*
 
-Version: 5.0.0 | MIT License
+Version: 5.4.0 | MIT License
