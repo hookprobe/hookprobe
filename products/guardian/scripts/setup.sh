@@ -591,7 +591,7 @@ EOF
 }
 
 install_dns_shield() {
-    log_step "Installing DNS Shield (ad blocking via dnsmasq)..."
+    log_step "Installing dnsXai Ad Block (beta) - ML-powered DNS protection..."
 
     local SHIELD_DIR="/opt/hookprobe/guardian/dns-shield"
     local SCRIPTS_DIR="/opt/hookprobe/guardian/scripts"
@@ -703,8 +703,9 @@ TIMER
     # Configure dnsmasq to use blocklist
     configure_dnsmasq_dns_shield
 
-    log_info "DNS Shield installed"
+    log_info "dnsXai Ad Block (beta) installed"
     log_info "  Blocklist: StevenBlack Unified Hosts"
+    log_info "  ML Classification: Domain anomaly detection"
     log_info "  Shield Level: 3 (Strong Protection)"
     log_info "  Auto-update: Weekly"
 }
@@ -2941,7 +2942,6 @@ enable_services() {
     systemctl enable guardian-xdp 2>/dev/null || true
     systemctl enable guardian-aggregator 2>/dev/null || true
     systemctl enable guardian-neuro 2>/dev/null || true
-    systemctl enable guardian-adguard 2>/dev/null || true
     systemctl enable guardian-qsecbit 2>/dev/null || true
     systemctl enable guardian-webui 2>/dev/null || true
 
@@ -3076,9 +3076,8 @@ start_services() {
     log_info "  - Starting Neuro Protocol..."
     systemctl start guardian-neuro 2>/dev/null || true
 
-    # AdGuard DNS (if enabled)
-    log_info "  - Starting AdGuard DNS..."
-    systemctl start guardian-adguard 2>/dev/null || true
+    # dnsXai Ad Block (integrated with dnsmasq, no separate service needed)
+    log_info "  - dnsXai Ad Block: Active (via dnsmasq)"
 
     # Wait a moment for containers to start
     sleep 3
@@ -3120,6 +3119,7 @@ show_guardian_banner() {
     echo -e "  ${GREEN}✓${NC} Suricata IDS/IPS (Intrusion Detection/Prevention)"
     echo -e "  ${GREEN}✓${NC} ModSecurity WAF (Web Application Firewall)"
     echo -e "  ${GREEN}✓${NC} XDP/eBPF High-Performance Packet Processing"
+    echo -e "  ${GREEN}✓${NC} dnsXai Ad Block (beta) - ML DNS Protection"
     echo -e "  ${GREEN}✓${NC} MAC Authentication & Device Tracking"
     echo -e "  ${GREEN}✓${NC} HTP Secure File Transfer"
     echo ""
@@ -3303,7 +3303,8 @@ main() {
     echo ""
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
         echo -e "  ${BOLD}Additional:${NC}"
-        echo -e "  • AdGuard Home: ${BOLD}http://192.168.4.1:3000${NC} (admin / hookprobe123)"
+        echo -e "  • dnsXai Ad Block (beta): Integrated in Web UI - dnsXai tab"
+        echo -e "    ML-powered domain classification, CNAME uncloaking, threat detection"
         echo ""
     fi
     echo -e "  ${BOLD}Service Status:${NC}"
