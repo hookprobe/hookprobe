@@ -1147,6 +1147,21 @@ a:hover {
     align-self: flex-start;
 }
 
+.device-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--spacing-sm);
+}
+
+.device-actions .badge {
+    margin-bottom: var(--spacing-xs);
+}
+
+.device-actions .btn {
+    white-space: nowrap;
+}
+
 /* ===== Footer ===== */
 .footer {
     background: var(--bg-dark);
