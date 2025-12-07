@@ -1,0 +1,207 @@
+<!-- Config Tab Content -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+    <h2>Network Configuration</h2>
+    <p class="text-muted">WiFi settings, hotspot configuration, and network management</p>
+</div>
+
+<!-- Network Status -->
+<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+    <div class="stat-card success">
+        <div class="stat-value" style="font-size: 1.25rem;" id="wan-status">Connected</div>
+        <div class="stat-label">WAN Status</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" style="font-size: 1.25rem;" id="lan-ssid">Guardian-AP</div>
+        <div class="stat-label">Hotspot SSID</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" style="font-size: 1.25rem;" id="lan-clients">0</div>
+        <div class="stat-label">Connected Clients</div>
+    </div>
+</div>
+
+<!-- WiFi Scanner -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+            </svg>
+            WiFi Networks
+        </h3>
+        <button class="btn btn-sm btn-primary" id="scan-wifi-btn" onclick="scanWifiNetworks()">
+            Scan Networks
+        </button>
+    </div>
+    <div class="card-body">
+        <div class="device-grid" id="wifi-networks-list">
+            <div class="empty-state">
+                <p class="text-muted">Click "Scan Networks" to discover available WiFi networks</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Connect to Network -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Connect to Network</h3>
+    </div>
+    <div class="card-body">
+        <form id="wifi-connect-form" onsubmit="connectToWifi(event)">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Network Name (SSID)</label>
+                    <input type="text" class="form-input" id="wifi-ssid" placeholder="Enter network name" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="wifi-password" placeholder="Enter password">
+                </div>
+            </div>
+            <div class="card-footer" style="border-top: none; padding-top: var(--spacing-lg);">
+                <button type="submit" class="btn btn-primary">Connect</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Hotspot Configuration -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M12 11c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 2c0-3.31-2.69-6-6-6s-6 2.69-6 6c0 2.22 1.21 4.15 3 5.19l1-1.74c-1.19-.7-2-1.97-2-3.45 0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.48-.81 2.75-2 3.45l1 1.74c1.79-1.04 3-2.97 3-5.19zM12 3C6.48 3 2 7.48 2 13c0 3.7 2.01 6.92 4.99 8.65l1-1.73C5.61 18.53 4 15.96 4 13c0-4.42 3.58-8 8-8s8 3.58 8 8c0 2.96-1.61 5.53-4 6.92l1 1.73c2.99-1.73 5-4.95 5-8.65 0-5.52-4.48-10-10-10z"/>
+            </svg>
+            Hotspot Settings
+        </h3>
+    </div>
+    <div class="card-body">
+        <form id="hotspot-form" onsubmit="updateHotspot(event)">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+                <div class="form-group">
+                    <label class="form-label">Hotspot SSID</label>
+                    <input type="text" class="form-input" id="hotspot-ssid" placeholder="Guardian-AP" value="Guardian-AP">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="hotspot-password" placeholder="Minimum 8 characters">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Channel</label>
+                    <select class="form-select" id="hotspot-channel">
+                        <option value="auto">Auto</option>
+                        <option value="1">1</option>
+                        <option value="6">6</option>
+                        <option value="11">11</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Security</label>
+                    <select class="form-select" id="hotspot-security">
+                        <option value="wpa2">WPA2-PSK</option>
+                        <option value="wpa3">WPA3-SAE</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-top: var(--spacing-md);">
+                <label class="toggle">
+                    <input type="checkbox" class="toggle-input" id="hotspot-hidden">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Hidden Network</span>
+                </label>
+            </div>
+            <div class="card-footer" style="border-top: none; padding-top: var(--spacing-lg);">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="restartHotspot()">Restart Hotspot</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Network Interfaces -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Network Interfaces</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Interface</th>
+                        <th>IP Address</th>
+                        <th>MAC Address</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="interfaces-body">
+                    <tr>
+                        <td><strong>eth0</strong></td>
+                        <td class="font-mono">192.168.1.100</td>
+                        <td class="font-mono">aa:bb:cc:dd:ee:ff</td>
+                        <td><span class="badge badge-success">UP</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>wlan0</strong></td>
+                        <td class="font-mono">10.200.1.1</td>
+                        <td class="font-mono">11:22:33:44:55:66</td>
+                        <td><span class="badge badge-success">UP</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+async function connectToWifi(e) {
+    e.preventDefault();
+    const ssid = document.getElementById('wifi-ssid').value;
+    const password = document.getElementById('wifi-password').value;
+
+    try {
+        const result = await apiPost('/config/wifi/connect', { ssid, password });
+        if (result.success) {
+            showToast('Connecting to ' + ssid, 'success');
+        } else {
+            showToast(result.error || 'Failed to connect', 'error');
+        }
+    } catch (error) {
+        showToast('Connection failed', 'error');
+    }
+}
+
+async function updateHotspot(e) {
+    e.preventDefault();
+    const data = {
+        ssid: document.getElementById('hotspot-ssid').value,
+        password: document.getElementById('hotspot-password').value,
+        channel: document.getElementById('hotspot-channel').value,
+        security: document.getElementById('hotspot-security').value,
+        hidden: document.getElementById('hotspot-hidden').checked
+    };
+
+    try {
+        const result = await apiPost('/config/hotspot', data);
+        if (result.success) {
+            showToast('Hotspot settings updated', 'success');
+        } else {
+            showToast(result.error || 'Failed to update settings', 'error');
+        }
+    } catch (error) {
+        showToast('Update failed', 'error');
+    }
+}
+
+async function restartHotspot() {
+    try {
+        const result = await apiPost('/config/hotspot/restart');
+        if (result.success) {
+            showToast('Hotspot restarting...', 'info');
+        }
+    } catch (error) {
+        showToast('Failed to restart hotspot', 'error');
+    }
+}
+</script>
