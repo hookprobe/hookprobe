@@ -20,16 +20,13 @@ HookProbe uses **Podman** instead of Docker for enhanced security and flexibilit
 
 ## Installation
 
-### RHEL/CentOS/Fedora
-```bash
-sudo dnf install podman podman-compose
-```
-
-### Ubuntu/Debian
+### Ubuntu/Debian (Supported)
 ```bash
 sudo apt-get update
 sudo apt-get install podman podman-compose
 ```
+
+> **Note**: RHEL-based systems are not supported due to OpenVSwitch availability limitations.
 
 ### Verify Installation
 ```bash

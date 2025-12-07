@@ -272,8 +272,8 @@ sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/
 sudo systemctl restart sshd
 
 # Enable automatic security updates
-sudo dnf install -y dnf-automatic
-sudo systemctl enable --now dnf-automatic.timer
+sudo apt install -y unattended-upgrades
+sudo dpkg-reconfigure -plow unattended-upgrades
 ```
 
 ### Container Hardening

@@ -37,9 +37,6 @@ podman exec hookprobe-internal-mail echo "Test" | mail -s "Test" your-email@exam
 
 **Install Podman (if not installed):**
 ```bash
-# RHEL/CentOS/Fedora
-sudo dnf install podman podman-compose
-
 # Ubuntu/Debian
 sudo apt-get install podman podman-compose
 
@@ -47,6 +44,8 @@ sudo apt-get install podman podman-compose
 podman --version
 podman-compose --version
 ```
+
+> **Note**: RHEL-based systems are not supported due to OpenVSwitch availability limitations.
 
 ### 2. Network Setup
 

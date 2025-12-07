@@ -36,7 +36,7 @@ HookProbe is an enterprise-grade, AI-powered cybersecurity platform featuring:
 - **Root Access**: Required for installation
 - **Internet**: Required for downloading container images
 
-> **Note**: RHEL-based systems are not currently supported in v5.x. RHEL/Fedora support is planned for a future release.
+> **Note**: RHEL-based systems (Fedora, CentOS, Rocky, RHEL) are not supported due to OpenVSwitch availability limitations. Support planned for future release.
 
 ### Network
 - **Subnet**: 10.200.0.0/16 must be available (not in use)
