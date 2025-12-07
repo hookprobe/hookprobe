@@ -6,7 +6,7 @@ from . import config_bp
 from utils import run_command
 
 
-@config_bp.route('/api/wifi/scan', methods=['POST'])
+@config_bp.route('/wifi/scan', methods=['POST'])
 def api_wifi_scan():
     """Scan for available WiFi networks."""
     try:
@@ -49,7 +49,7 @@ def api_wifi_scan():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@config_bp.route('/api/wifi/connect', methods=['POST'])
+@config_bp.route('/wifi/connect', methods=['POST'])
 def api_wifi_connect():
     """Connect to a WiFi network."""
     data = request.get_json()
@@ -78,7 +78,7 @@ network={{
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@config_bp.route('/api/hotspot', methods=['GET', 'POST'])
+@config_bp.route('/hotspot', methods=['GET', 'POST'])
 def api_hotspot():
     """Get or update hotspot configuration."""
     if request.method == 'GET':
@@ -137,7 +137,7 @@ rsn_pairwise=CCMP
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@config_bp.route('/api/hotspot/restart', methods=['POST'])
+@config_bp.route('/hotspot/restart', methods=['POST'])
 def api_hotspot_restart():
     """Restart the hotspot."""
     try:
@@ -147,7 +147,7 @@ def api_hotspot_restart():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@config_bp.route('/api/interfaces')
+@config_bp.route('/interfaces')
 def api_interfaces():
     """Get network interface information."""
     try:
