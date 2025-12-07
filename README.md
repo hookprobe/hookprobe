@@ -62,10 +62,10 @@
 | Component | Role | Hardware | What It Does |
 |-----------|------|----------|--------------|
 | **Sentinel** | Validator | IoT, 256MB | DSM mesh validation, health monitoring |
-| **Guardian** | Travel | RPi, 1.5GB | Portable WiFi hotspot, L2-L7 detection |
-| **Fortress** | Edge Router | Mini PC, 4GB | VLAN segmentation, local AI, SDN |
-| **Nexus** | ML/AI Compute | Server, 16GB+ | Federated learning, regional coordination |
-| **MSSP** | Cloud Brain | Auto-scale | Global threat model, fleet management |
+| **Guardian** | Travel | RPi, 1.5GB | Portable WiFi hotspot, L2-L7 detection, dnsXai |
+| **Fortress** | Edge Router | Mini PC, 4GB | VLAN segmentation, local AI, SDN, dnsXai Advanced |
+| **Nexus** | ML/AI Compute | Server, 16GB+ | Federated learning, dnsXai training, mesh super-node |
+| **MSSP** | Cloud Brain | Auto-scale | Global threat model, fleet management, dnsXai global |
 
 **How Herd Immunity Works:**
 1. Nexus A detects attack → Creates Qsecbit signature (not raw data)
@@ -87,13 +87,15 @@ hookprobe/
 │   └── neuro/         # Neural Resonance (TER → Weight → PoSF)
 │
 ├── products/          # 📦 Product Tiers
-│   ├── sentinel/      # DSM Validator (512MB)
-│   ├── guardian/      # Travel Companion (3GB)
-│   ├── fortress/      # Edge Router (8GB)
-│   ├── nexus/         # ML/AI Compute (64GB+)
-│   └── mssp/          # Cloud Federation
+│   ├── sentinel/      # DSM Validator (256MB)
+│   ├── guardian/      # Travel Companion (1.5GB) + Flask Web UI
+│   ├── fortress/      # Edge Router (4GB) + Advanced Features
+│   ├── nexus/         # ML/AI Compute (16GB+)
+│   └── mssp/          # Cloud Federation + Django Portal
 │
 ├── shared/            # 🔧 Shared Infrastructure
+│   ├── dnsXai/        # AI-Powered DNS Protection (NEW!)
+│   ├── mesh/          # Unified Mesh Communication (NEW!)
 │   ├── dsm/           # Decentralized Security Mesh
 │   └── response/      # Automated Threat Response
 │
@@ -101,12 +103,16 @@ hookprobe/
 │   ├── install/       # Installation scripts
 │   └── addons/        # n8n, LTE, webserver
 │
+├── infrastructure/    # 🏗️ Infrastructure Templates (NEW!)
+│   ├── pod-009-email/ # Email server infrastructure
+│   └── pod-010-dsm/   # DSM infrastructure
+│
 └── docs/              # 📚 Documentation
 ```
 
 ---
 
-## The Three Pillars
+## The Four Pillars
 
 ### Pillar 1: Neural Resonance Protocol — Living Cryptography
 
@@ -309,6 +315,49 @@ Intel I226 NIC (XDP-DRV mode):
 
 ---
 
+### Pillar 4: dnsXai — AI-Powered DNS Protection
+
+**Traditional blockers miss. dnsXai catches.**
+
+dnsXai is HookProbe's next-generation DNS protection using machine learning to classify unknown domains in real-time.
+
+#### Why dnsXai?
+
+| Traditional Blockers | dnsXai |
+|---------------------|--------|
+| Static blocklists only | ML-based classification for unknown domains |
+| Miss CNAME cloaking | Detects first-party tracker masquerading |
+| Isolated protection | Federated learning across mesh network |
+| Manual updates | Self-learning and auto-updating |
+| Binary block/allow | Confidence-based decisions with 8 categories |
+
+#### Features
+
+- **ML Classification** — 20-feature neural classifier (<1ms inference on Raspberry Pi)
+- **CNAME Uncloaking** — Detects `track.yoursite.com → adobe.demdex.net`
+- **5 Protection Levels** — Base (~130K domains) to Full (~250K domains)
+- **Federated Learning** — Privacy-preserving collective intelligence
+- **Qsecbit Integration** — Contributes 8% to security score
+
+#### Protection Levels
+
+| Level | Name | Blocks |
+|-------|------|--------|
+| 1 | Base | Ads + Malware |
+| 2 | Enhanced | + Fakenews |
+| 3 | Strong | + Gambling |
+| 4 | Maximum | + Adult Content |
+| 5 | Full | + Social Trackers |
+
+#### Key Files
+- `shared/dnsXai/engine.py` — ML classifier with 20 features
+- `shared/dnsXai/mesh_intelligence.py` — Federated learning
+- `shared/dnsXai/integration.py` — Product integration
+
+📖 **[Complete dnsXai Documentation →](shared/dnsXai/README.md)**
+
+---
+
 ## Quick Start
 
 ### For Everyone (Non-Technical)
@@ -498,6 +547,8 @@ HookProbe v5.0 "Liberty" prioritizes **energy-efficient security** for edge depl
 |----------|----------|
 | **[Architecture](ARCHITECTURE.md)** | Everyone |
 | **[Quick Start](QUICK-START.md)** | Everyone |
+| **[dnsXai DNS Protection](shared/dnsXai/README.md)** | Everyone |
+| **[Mesh Architecture](shared/mesh/ARCHITECTURE.md)** | Developers |
 | **[Guardian Setup](products/guardian/README.md)** | Raspberry Pi Users |
 | **[Fortress Setup](products/fortress/README.md)** | Mini PC Users |
 | **[Nexus Setup](products/nexus/README.md)** | Server/Cloud |
@@ -509,6 +560,7 @@ HookProbe v5.0 "Liberty" prioritizes **energy-efficient security** for edge depl
 | **[VPN Remote Access](docs/networking/VPN.md)** | Home/Business Users |
 | **[SDN & IoT Segmentation](docs/networking/SDN.md)** | Home/Business Users |
 | **[Installation Guide](docs/installation/INSTALLATION.md)** | System Admins |
+| **[CLAUDE.md AI Guide](CLAUDE.md)** | AI Assistants |
 
 ---
 

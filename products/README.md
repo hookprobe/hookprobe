@@ -58,11 +58,13 @@ products/
 | **Hardware** | IoT gateway | RPi 4/5 | Mini PC | Server | Cloud |
 | **Use Case** | Validate | Travel | Home/Office | Regional | Global |
 | **L2-L7 Detection** | - | ✓ | ✓ | ✓ | - |
+| **dnsXai Protection** | - | ✓ | ✓ | ✓ | ✓ |
 | **WiFi Hotspot** | - | ✓ | ✓ | - | - |
 | **VLAN Segmentation** | - | - | ✓ | - | - |
 | **OpenFlow SDN** | - | - | ✓ | - | - |
 | **Local AI** | - | - | ✓ | ✓ | - |
 | **ML Training** | - | - | - | ✓ | ✓ |
+| **Mesh Networking** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Fleet Management** | - | - | - | Regional | Global |
 | **Multi-Tenant** | - | - | - | - | ✓ |
 | **Price** | $25 | $75 | $200 | $2000+ | SaaS |
@@ -102,9 +104,11 @@ For travelers securing devices on hotel WiFi, airports, and public networks.
 ### Features
 - Secure WiFi hotspot creation
 - L2-L7 OSI threat detection
+- **dnsXai AI-powered DNS protection** — ML-based ad/tracker blocking
 - Mobile network protection (evil twin, MITM)
 - IDS/IPS (Suricata)
-- Web dashboard
+- **Mesh networking** — Collective threat intelligence
+- Web dashboard (Flask-based with modular UI)
 - HTP secure uplink
 
 ### Installation
@@ -128,9 +132,11 @@ For home/office permanent installations requiring advanced security.
 
 ### Features
 - Everything in Guardian, plus:
+- **dnsXai Advanced** — Full ML classifier with CNAME uncloaking
 - **VLAN segmentation** — Isolate IoT devices
 - **OpenFlow SDN** — Advanced traffic control
 - **Local AI inference** — On-device threat detection
+- **Mesh coordinator** — Regional threat aggregation
 - **n8n automation** — Workflow orchestration
 - **Grafana dashboards** — Real-time metrics
 - **Victoria Metrics** — Time-series database
@@ -154,10 +160,12 @@ For regional hubs performing heavy computation and federated learning.
 
 ### Features
 - Aggregates Qsecbit scores from edge nodes
+- **dnsXai Federated Learning** — Trains and distributes ML models
 - Lightweight inference locally
 - Adversarial AI (red-teams itself)
 - Reports weakness vectors to MSSP
 - Receives hardened models from MSSP
+- **Mesh super-node** — NAT traversal relay for edge nodes
 - Nexus-to-Nexus mesh communication
 - GPU acceleration (NVIDIA)
 
@@ -193,10 +201,12 @@ sudo ./install.sh --tier nexus \
 The cloud federation platform at mssp.hookprobe.com.
 
 ### Features
-- Customer portal
+- Customer portal (Django-based)
 - Fleet management (all tiers)
+- **dnsXai Global Intelligence** — Aggregated threat blocklists
 - Global threat model
 - AI/ML training pipeline
+- **Mesh coordination** — Global node discovery and relay registry
 - Multi-tenant architecture
 - Privacy-preserving aggregation
 
@@ -254,6 +264,32 @@ sudo ./install.sh --tier fortress --migrate
 
 ---
 
-**HookProbe Products** — *Federated Cybersecurity for Every Scale*
+## Shared Infrastructure
+
+All products leverage shared infrastructure from `shared/`:
+
+| Module | Purpose | Used By |
+|--------|---------|---------|
+| **dnsXai** | AI-powered DNS protection with ML classification | Guardian, Fortress, Nexus, MSSP |
+| **mesh** | Unified mesh communication with NAT traversal | All tiers |
+| **dsm** | Decentralized Security Mesh consensus | All tiers |
+| **response** | Automated threat mitigation (Kali on-demand) | Guardian, Fortress |
+
+### dnsXai Features by Tier
+
+| Feature | Guardian | Fortress | Nexus | MSSP |
+|---------|----------|----------|-------|------|
+| ML Classification | ✓ | ✓ | ✓ | ✓ |
+| CNAME Uncloaking | ✓ | ✓ | ✓ | ✓ |
+| Blocklist Updates | ✓ | ✓ | ✓ | ✓ |
+| Federated Learning | ✓ | ✓ | Train | Coordinate |
+| Custom Whitelist | ✓ | ✓ | ✓ | Global |
+| Protection Levels | 5 | 5 | 5 | N/A |
+
+See `shared/dnsXai/README.md` for full documentation.
+
+---
+
+**HookProbe Products v5.0** — *Federated Cybersecurity for Every Scale*
 
 MIT License
