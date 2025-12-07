@@ -1,0 +1,173 @@
+<!-- Security Tab Content -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+    <h2>Security Overview</h2>
+    <p class="text-muted">L2-L7 threat detection, XDP/eBPF protection, and QSecBit metrics</p>
+</div>
+
+<!-- Security Stats -->
+<div class="stats-grid">
+    <div class="stat-card danger">
+        <div class="stat-value" id="security-total-threats">0</div>
+        <div class="stat-label">Total Threats</div>
+    </div>
+    <div class="stat-card success">
+        <div class="stat-value" id="security-blocked">0</div>
+        <div class="stat-label">Blocked</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" id="security-xdp-drops">0</div>
+        <div class="stat-label">XDP Drops</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" id="security-active-rules">0</div>
+        <div class="stat-label">Active Rules</div>
+    </div>
+</div>
+
+<!-- QSecBit Score Card -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+            QSecBit Security Score
+        </h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; align-items: center; gap: var(--spacing-xl); flex-wrap: wrap;">
+            <div style="text-align: center; min-width: 150px;">
+                <div id="qsecbit-score-display" style="font-size: 4rem; font-weight: 700; line-height: 1; color: var(--hp-green);">0.00</div>
+                <div class="text-muted" style="margin-top: var(--spacing-sm);">Current Score</div>
+            </div>
+            <div style="flex: 1; min-width: 250px;">
+                <div class="progress" style="height: 16px; margin-bottom: var(--spacing-md);">
+                    <div class="progress-bar success" id="qsecbit-progress" style="width: 0%;"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8125rem; color: var(--text-secondary);">
+                    <span style="color: var(--hp-green);">Green (&lt;0.45)</span>
+                    <span style="color: var(--hp-amber);">Amber (0.45-0.70)</span>
+                    <span style="color: var(--hp-red);">Red (&gt;0.70)</span>
+                </div>
+            </div>
+        </div>
+        <p class="text-muted" style="margin-top: var(--spacing-lg); font-size: 0.875rem;">
+            QSecBit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
+        </p>
+    </div>
+</div>
+
+<!-- Layer Detection Cards -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z"/>
+            </svg>
+            Detection Coverage by Layer
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadSecurityData()">
+            Refresh
+        </button>
+    </div>
+    <div class="card-body">
+        <div class="layer-grid" id="layer-cards">
+            <!-- L2 -->
+            <div class="layer-card">
+                <div class="layer-card-header">
+                    <div>
+                        <span class="layer-badge">L2</span>
+                        <span class="layer-name">Data Link</span>
+                    </div>
+                    <span class="layer-threat-count">0 threats</span>
+                </div>
+                <div class="layer-stats">
+                    <span class="layer-stat critical">0 Crit</span>
+                    <span class="layer-stat high">0 High</span>
+                    <span class="layer-stat medium">0 Med</span>
+                    <span class="layer-stat low">0 Low</span>
+                    <span class="layer-stat blocked">0 Blocked</span>
+                </div>
+                <div class="layer-types">
+                    <strong>Detection:</strong> ARP Spoofing, MAC Flooding, VLAN Hopping
+                </div>
+            </div>
+
+            <!-- L3 -->
+            <div class="layer-card">
+                <div class="layer-card-header">
+                    <div>
+                        <span class="layer-badge">L3</span>
+                        <span class="layer-name">Network</span>
+                    </div>
+                    <span class="layer-threat-count">0 threats</span>
+                </div>
+                <div class="layer-stats">
+                    <span class="layer-stat critical">0 Crit</span>
+                    <span class="layer-stat high">0 High</span>
+                    <span class="layer-stat medium">0 Med</span>
+                    <span class="layer-stat low">0 Low</span>
+                    <span class="layer-stat blocked">0 Blocked</span>
+                </div>
+                <div class="layer-types">
+                    <strong>Detection:</strong> IP Spoofing, ICMP Flood, Smurf Attack
+                </div>
+            </div>
+
+            <!-- L4 -->
+            <div class="layer-card">
+                <div class="layer-card-header">
+                    <div>
+                        <span class="layer-badge">L4</span>
+                        <span class="layer-name">Transport</span>
+                    </div>
+                    <span class="layer-threat-count">0 threats</span>
+                </div>
+                <div class="layer-stats">
+                    <span class="layer-stat critical">0 Crit</span>
+                    <span class="layer-stat high">0 High</span>
+                    <span class="layer-stat medium">0 Med</span>
+                    <span class="layer-stat low">0 Low</span>
+                    <span class="layer-stat blocked">0 Blocked</span>
+                </div>
+                <div class="layer-types">
+                    <strong>Detection:</strong> SYN Flood, Port Scan, TCP Reset
+                </div>
+            </div>
+
+            <!-- L5-L7 dynamically loaded -->
+        </div>
+    </div>
+</div>
+
+<!-- XDP/eBPF Status -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/>
+            </svg>
+            XDP/eBPF Protection
+        </h3>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Mode</div>
+                <div style="font-weight: 600; color: var(--hp-green);" id="xdp-mode">XDP-DRV</div>
+            </div>
+            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Interface</div>
+                <div style="font-weight: 600;" id="xdp-interface">eth0</div>
+            </div>
+            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Packets Processed</div>
+                <div style="font-weight: 600;" id="xdp-packets">0</div>
+            </div>
+            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Drop Rate</div>
+                <div style="font-weight: 600; color: var(--hp-red);" id="xdp-drop-rate">0%</div>
+            </div>
+        </div>
+    </div>
+</div>

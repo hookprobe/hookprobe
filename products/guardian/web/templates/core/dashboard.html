@@ -1,0 +1,166 @@
+<!-- Dashboard Tab Content -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+    <h2>System Overview</h2>
+    <p class="text-muted">Real-time monitoring of your Guardian security gateway</p>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card success">
+        <div class="stat-value" id="stat-clients">{{ connected_clients }}</div>
+        <div class="stat-label">Connected Clients</div>
+    </div>
+    <div class="stat-card danger">
+        <div class="stat-value" id="stat-threats-blocked">{{ threats.blocked|default(0) }}</div>
+        <div class="stat-label">Threats Blocked</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" id="stat-uptime">{{ system.uptime }}</div>
+        <div class="stat-label">Uptime</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" id="stat-qsecbit">{{ "%.2f"|format(threats.qsecbit_score|default(0)) }}</div>
+        <div class="stat-label">QSecBit Score</div>
+    </div>
+</div>
+
+<!-- Tiles Grid - Forty Style -->
+<div class="tiles-grid">
+    <!-- Security Tile -->
+    <div class="tile" onclick="navigateTo('security')">
+        <div class="tile-image" style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="64" height="64" fill="white" viewBox="0 0 24 24">
+                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+            </svg>
+        </div>
+        <div class="tile-content">
+            <h3 class="tile-title">Security</h3>
+            <p class="tile-description">L2-L7 threat detection, XDP/eBPF protection, and QSecBit metrics</p>
+            <span class="tile-link">View Details <span>&rarr;</span></span>
+        </div>
+    </div>
+
+    <!-- dnsXai Tile -->
+    <div class="tile" onclick="navigateTo('dnsxai')">
+        <div class="tile-image" style="background: linear-gradient(135deg, #F05B2D 0%, #d14a1f 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="64" height="64" fill="white" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+            </svg>
+        </div>
+        <div class="tile-content">
+            <h3 class="tile-title">dnsXai</h3>
+            <p class="tile-description">AI-powered DNS protection with ML classification and CNAME uncloaking</p>
+            <span class="tile-link">Manage Protection <span>&rarr;</span></span>
+        </div>
+    </div>
+
+    <!-- Clients Tile -->
+    <div class="tile" onclick="navigateTo('clients')">
+        <div class="tile-image" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="64" height="64" fill="white" viewBox="0 0 24 24">
+                <path d="M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1zm-1 9h-4v-7h4v7z"/>
+            </svg>
+        </div>
+        <div class="tile-content">
+            <h3 class="tile-title">Connected Clients</h3>
+            <p class="tile-description">Monitor and manage devices connected to your secure network</p>
+            <span class="tile-link">View Clients <span>&rarr;</span></span>
+        </div>
+    </div>
+
+    <!-- Config Tile -->
+    <div class="tile" onclick="navigateTo('config')">
+        <div class="tile-image" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="64" height="64" fill="white" viewBox="0 0 24 24">
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+            </svg>
+        </div>
+        <div class="tile-content">
+            <h3 class="tile-title">Network Config</h3>
+            <p class="tile-description">WiFi settings, hotspot configuration, and network management</p>
+            <span class="tile-link">Configure <span>&rarr;</span></span>
+        </div>
+    </div>
+
+    <!-- VPN Tile -->
+    <div class="tile" onclick="navigateTo('vpn')">
+        <div class="tile-image" style="background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="64" height="64" fill="white" viewBox="0 0 24 24">
+                <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+            </svg>
+        </div>
+        <div class="tile-content">
+            <h3 class="tile-title">VPN</h3>
+            <p class="tile-description">Secure tunnel management with WireGuard and OpenVPN support</p>
+            <span class="tile-link">Manage VPN <span>&rarr;</span></span>
+        </div>
+    </div>
+
+    <!-- System Tile -->
+    <div class="tile" onclick="navigateTo('system')">
+        <div class="tile-image" style="background: linear-gradient(135deg, #6b7280 0%, #374151 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="64" height="64" fill="white" viewBox="0 0 24 24">
+                <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+            </svg>
+        </div>
+        <div class="tile-content">
+            <h3 class="tile-title">System</h3>
+            <p class="tile-description">System settings, updates, logs, and service management</p>
+            <span class="tile-link">Settings <span>&rarr;</span></span>
+        </div>
+    </div>
+</div>
+
+<!-- Container Status -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+            </svg>
+            Service Status
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadDashboardData()">
+            Refresh
+        </button>
+    </div>
+    <div class="card-body">
+        <div class="device-grid" id="containers-grid">
+            <!-- Populated by JavaScript -->
+            <div class="skeleton" style="height: 80px;"></div>
+            <div class="skeleton" style="height: 80px;"></div>
+            <div class="skeleton" style="height: 80px;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- System Resources -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>
+            </svg>
+            System Resources
+        </h3>
+    </div>
+    <div class="card-body">
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+            <div style="text-align: center;">
+                <div class="text-muted mb-1" style="font-size: 0.8125rem;">Memory Usage</div>
+                <div class="stat-value" style="font-size: 1.5rem;" id="system-memory">{{ system.memory.percent }}%</div>
+                <div class="progress mt-1">
+                    <div class="progress-bar" id="memory-progress" style="width: {{ system.memory.percent }}%;"></div>
+                </div>
+            </div>
+            <div style="text-align: center;">
+                <div class="text-muted mb-1" style="font-size: 0.8125rem;">CPU Load</div>
+                <div class="stat-value" style="font-size: 1.5rem;" id="system-load">{{ "%.2f"|format(system.load[0]) }}</div>
+            </div>
+            <div style="text-align: center;">
+                <div class="text-muted mb-1" style="font-size: 0.8125rem;">Temperature</div>
+                <div class="stat-value" style="font-size: 1.5rem;" id="system-temperature">{{ "%.1f"|format(system.temperature) }}°C</div>
+            </div>
+        </div>
+    </div>
+</div>

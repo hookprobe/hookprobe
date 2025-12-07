@@ -1,0 +1,415 @@
+<!-- HTP Secure Tunnel Tab Content -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+    <h2>HTP Secure Tunnel</h2>
+    <p class="text-muted">HookProbe Transport Protocol with post-quantum encryption + PoSF authentication</p>
+</div>
+
+<!-- HTP Connection Status -->
+<div class="card" style="background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-darker) 100%); color: var(--text-white);">
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-lg);">
+        <div style="display: flex; align-items: center; gap: var(--spacing-md);">
+            <div style="width: 64px; height: 64px; border-radius: 50%; background: rgba(139, 92, 246, 0.2); display: flex; align-items: center; justify-content: center;" id="htp-status-icon">
+                <svg width="32" height="32" fill="currentColor" viewBox="0 0 24 24" style="color: var(--hp-purple);">
+                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+                </svg>
+            </div>
+            <div>
+                <div style="font-size: 1.5rem; font-weight: 700;" id="htp-status">Disconnected</div>
+                <div style="color: var(--text-light);" id="htp-status-sub">Connect to MSSP for secure communications</div>
+            </div>
+        </div>
+        <div style="display: flex; gap: var(--spacing-sm);">
+            <button class="btn btn-success" onclick="htpConnect()" id="htp-connect-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 6px;">
+                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+                </svg>
+                Connect
+            </button>
+            <button class="btn btn-secondary" onclick="htpDisconnect()" id="htp-disconnect-btn" style="display: none;">Disconnect</button>
+        </div>
+    </div>
+</div>
+
+<!-- Connection Details -->
+<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+    <div class="stat-card">
+        <div class="stat-value" style="font-size: 0.95rem;" id="htp-server">Not connected</div>
+        <div class="stat-label">MSSP Server</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" style="font-size: 0.95rem;" id="htp-node">-</div>
+        <div class="stat-label">Node ID</div>
+    </div>
+    <div class="stat-card success">
+        <div class="stat-value" style="font-size: 0.95rem;" id="htp-ip">N/A</div>
+        <div class="stat-label">Public IP</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" style="font-size: 0.85rem;" id="htp-encryption">-</div>
+        <div class="stat-label">Encryption</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="htp-posf" style="font-size: 0.95rem;">-</div>
+        <div class="stat-label">PoSF Status</div>
+    </div>
+</div>
+
+<!-- Protocol Features -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
+            HTP Protocol Features
+        </h3>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--spacing-lg);">
+            <!-- Kyber -->
+            <div style="padding: var(--spacing-lg); background: var(--bg-light); border-radius: var(--radius-lg);">
+                <div style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+                    <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(155, 89, 182, 0.2); display: flex; align-items: center; justify-content: center;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="#9b59b6">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83" stroke="#9b59b6" stroke-width="2" fill="none"/>
+                        </svg>
+                    </div>
+                    <strong>Post-Quantum Crypto</strong>
+                </div>
+                <p class="text-muted" style="font-size: 0.875rem; margin: 0;">Kyber-1024 lattice-based key encapsulation resistant to quantum computing attacks</p>
+            </div>
+
+            <!-- ChaCha20 -->
+            <div style="padding: var(--spacing-lg); background: var(--bg-light); border-radius: var(--radius-lg);">
+                <div style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+                    <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(52, 152, 219, 0.2); display: flex; align-items: center; justify-content: center;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="#3498db">
+                            <rect x="3" y="11" width="18" height="11" rx="2"/>
+                            <path d="M7 11V7a5 5 0 0110 0v4" stroke="#3498db" stroke-width="2" fill="none"/>
+                        </svg>
+                    </div>
+                    <strong>ChaCha20-Poly1305</strong>
+                </div>
+                <p class="text-muted" style="font-size: 0.875rem; margin: 0;">High-performance authenticated encryption for secure data transport</p>
+            </div>
+
+            <!-- PoSF -->
+            <div style="padding: var(--spacing-lg); background: var(--bg-light); border-radius: var(--radius-lg);">
+                <div style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+                    <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(46, 204, 113, 0.2); display: flex; align-items: center; justify-content: center;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2">
+                            <path d="M9 12l2 2 4-4"/>
+                            <circle cx="12" cy="12" r="10"/>
+                        </svg>
+                    </div>
+                    <strong>PoSF Authentication</strong>
+                </div>
+                <p class="text-muted" style="font-size: 0.875rem; margin: 0;">Proof of Secure Function with TPM-bound attestation for device verification</p>
+            </div>
+
+            <!-- Mesh -->
+            <div style="padding: var(--spacing-lg); background: var(--bg-light); border-radius: var(--radius-lg);">
+                <div style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+                    <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(231, 76, 60, 0.2); display: flex; align-items: center; justify-content: center;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="#e74c3c">
+                            <circle cx="5" cy="5" r="2"/>
+                            <circle cx="19" cy="5" r="2"/>
+                            <circle cx="5" cy="19" r="2"/>
+                            <circle cx="19" cy="19" r="2"/>
+                            <circle cx="12" cy="12" r="2"/>
+                        </svg>
+                    </div>
+                    <strong>Federated Mesh</strong>
+                </div>
+                <p class="text-muted" style="font-size: 0.875rem; margin: 0;">Weight-bound neural resonance protocol for distributed security intelligence</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- PoSF Status -->
+<div class="card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+            </svg>
+            Proof of Secure Function (PoSF)
+        </h3>
+        <button class="btn btn-sm btn-primary" onclick="verifyPosf()">Verify Now</button>
+    </div>
+    <div class="card-body">
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
+            <div class="stat-card">
+                <div class="stat-value" id="posf-verified">-</div>
+                <div class="stat-label">Verified</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="posf-tpm">-</div>
+                <div class="stat-label">TPM Bound</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="posf-chain">0</div>
+                <div class="stat-label">Chain Height</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="posf-validators">0</div>
+                <div class="stat-label">Validators</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 0.85rem;" id="posf-attestation">Never</div>
+                <div class="stat-label">Last Attestation</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MSSP Registration -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+            </svg>
+            MSSP Registration
+        </h3>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-bottom: var(--spacing-lg);">Register this Guardian node with your MSSP to enable secure tunnel communications and federated threat intelligence.</p>
+
+        <form id="mssp-register-form" onsubmit="registerMssp(event)">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+                <div class="form-group">
+                    <label class="form-label">MSSP Endpoint</label>
+                    <input type="text" class="form-input" id="mssp-endpoint" value="mssp.hookprobe.com" placeholder="mssp.hookprobe.com">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Registration Code</label>
+                    <input type="text" class="form-input" id="mssp-code" placeholder="Enter your registration code">
+                </div>
+            </div>
+            <p class="text-muted" style="font-size: 0.85rem; margin-bottom: var(--spacing-md);">Obtain your registration code from your MSSP administrator</p>
+            <button type="submit" class="btn btn-primary">Register with MSSP</button>
+        </form>
+    </div>
+</div>
+
+<!-- Encryption Details -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <rect x="3" y="11" width="18" height="11" rx="2"/>
+                <path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
+            Encryption Details
+        </h3>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="data-table" style="margin-bottom: var(--spacing-lg);">
+                <tbody>
+                    <tr>
+                        <td style="color: var(--text-muted); width: 180px;">Protocol</td>
+                        <td>HTP (HookProbe Transport Protocol)</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--text-muted);">Key Exchange</td>
+                        <td>Kyber-1024 (Post-Quantum Lattice-based)</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--text-muted);">Symmetric Cipher</td>
+                        <td>ChaCha20-Poly1305 (AEAD)</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--text-muted);">Authentication</td>
+                        <td>PoSF (Proof of Secure Function)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h4 style="margin-bottom: var(--spacing-md);">Security Features</h4>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-sm);">
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                <span style="width: 8px; height: 8px; background: var(--hp-primary); border-radius: 50%;"></span>
+                Weight-bound encryption
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                <span style="width: 8px; height: 8px; background: var(--hp-primary); border-radius: 50%;"></span>
+                Neural resonance protocol
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                <span style="width: 8px; height: 8px; background: var(--hp-primary); border-radius: 50%;"></span>
+                Quantum-resistant keys
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                <span style="width: 8px; height: 8px; background: var(--hp-primary); border-radius: 50%;"></span>
+                TPM-bound attestation
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                <span style="width: 8px; height: 8px; background: var(--hp-primary); border-radius: 50%;"></span>
+                Federated mesh intelligence
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                <span style="width: 8px; height: 8px; background: var(--hp-primary); border-radius: 50%;"></span>
+                Zero-knowledge validation
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// HTP Tab Functions
+async function loadHtpData() {
+    try {
+        const status = await apiGet('/vpn/api/status');
+        updateHtpStatus(status);
+    } catch (error) {
+        console.error('Failed to load HTP status:', error);
+    }
+
+    try {
+        const posf = await apiGet('/vpn/api/posf/status');
+        updatePosfStatus(posf);
+    } catch (error) {
+        console.error('Failed to load PoSF status:', error);
+    }
+}
+
+function updateHtpStatus(data) {
+    const statusEl = document.getElementById('htp-status');
+    const statusSub = document.getElementById('htp-status-sub');
+    const statusIcon = document.getElementById('htp-status-icon');
+    const connectBtn = document.getElementById('htp-connect-btn');
+    const disconnectBtn = document.getElementById('htp-disconnect-btn');
+
+    if (data.connected) {
+        statusEl.textContent = 'Connected';
+        statusSub.textContent = 'Secure tunnel active via HTP';
+        statusIcon.style.background = 'rgba(46, 204, 113, 0.2)';
+        statusIcon.querySelector('svg').style.color = 'var(--success)';
+        connectBtn.style.display = 'none';
+        disconnectBtn.style.display = 'inline-flex';
+
+        document.getElementById('htp-server').textContent = data.server || 'mssp.hookprobe.com';
+        document.getElementById('htp-node').textContent = data.mssp_node || '-';
+        document.getElementById('htp-ip').textContent = data.public_ip || 'N/A';
+        document.getElementById('htp-encryption').textContent = 'Kyber + ChaCha20';
+        document.getElementById('htp-posf').textContent = data.posf_verified ? 'Verified' : 'Pending';
+    } else {
+        statusEl.textContent = 'Disconnected';
+        statusSub.textContent = 'Connect to MSSP for secure communications';
+        statusIcon.style.background = 'rgba(139, 92, 246, 0.2)';
+        statusIcon.querySelector('svg').style.color = 'var(--hp-purple)';
+        connectBtn.style.display = 'inline-flex';
+        disconnectBtn.style.display = 'none';
+
+        document.getElementById('htp-server').textContent = 'Not connected';
+        document.getElementById('htp-node').textContent = '-';
+        document.getElementById('htp-ip').textContent = 'N/A';
+        document.getElementById('htp-encryption').textContent = '-';
+        document.getElementById('htp-posf').textContent = '-';
+    }
+}
+
+function updatePosfStatus(data) {
+    document.getElementById('posf-verified').textContent = data.verified ? 'Yes' : 'No';
+    document.getElementById('posf-tpm').textContent = data.tpm_bound ? 'Yes' : 'No';
+    document.getElementById('posf-chain').textContent = data.chain_height || '0';
+    document.getElementById('posf-validators').textContent = data.validator_count || '0';
+    document.getElementById('posf-attestation').textContent = data.last_attestation || 'Never';
+
+    const verifiedEl = document.getElementById('posf-verified');
+    verifiedEl.parentElement.classList.toggle('success', data.verified);
+}
+
+async function htpConnect() {
+    const endpoint = document.getElementById('mssp-endpoint').value || 'mssp.hookprobe.com';
+
+    showToast('Connecting to MSSP via HTP...', 'info');
+
+    try {
+        const result = await apiPost('/vpn/api/connect', { endpoint: endpoint });
+        if (result.success) {
+            showToast('Connected to MSSP via HTP', 'success');
+            loadHtpData();
+        } else {
+            showToast('Connection failed: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showToast('Connection failed: ' + error.message, 'error');
+    }
+}
+
+async function htpDisconnect() {
+    if (!confirm('Are you sure you want to disconnect from MSSP?')) {
+        return;
+    }
+
+    showToast('Disconnecting from MSSP...', 'info');
+
+    try {
+        const result = await apiPost('/vpn/api/disconnect');
+        if (result.success) {
+            showToast('Disconnected from MSSP', 'success');
+            loadHtpData();
+        } else {
+            showToast('Disconnect failed: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showToast('Disconnect failed: ' + error.message, 'error');
+    }
+}
+
+async function verifyPosf() {
+    showToast('Running PoSF verification...', 'info');
+
+    try {
+        const result = await apiPost('/vpn/api/posf/verify');
+        if (result.success) {
+            showToast('PoSF verification complete', 'success');
+            loadHtpData();
+        } else {
+            showToast('Verification failed: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showToast('Verification failed: ' + error.message, 'error');
+    }
+}
+
+async function registerMssp(event) {
+    event.preventDefault();
+
+    const endpoint = document.getElementById('mssp-endpoint').value;
+    const code = document.getElementById('mssp-code').value;
+
+    if (!code) {
+        showToast('Please enter a registration code', 'warning');
+        return;
+    }
+
+    showToast('Registering with MSSP...', 'info');
+
+    try {
+        const result = await apiPost('/vpn/api/mssp/register', {
+            endpoint: endpoint,
+            registration_code: code
+        });
+
+        if (result.success) {
+            showToast('Successfully registered with MSSP', 'success');
+            document.getElementById('mssp-code').value = '';
+        } else {
+            showToast('Registration failed: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showToast('Registration failed: ' + error.message, 'error');
+    }
+}
+
+// Load HTP data when tab is shown
+loadHtpData();
+</script>
