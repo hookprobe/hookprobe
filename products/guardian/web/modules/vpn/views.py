@@ -12,7 +12,7 @@ HTP_CONFIG_DIR = '/opt/hookprobe/guardian/htp'
 HTP_STATE_FILE = f'{HTP_CONFIG_DIR}/state.json'
 
 
-@vpn_bp.route('/api/status')
+@vpn_bp.route('/status')
 def api_status():
     """Get HTP tunnel connection status."""
     try:
@@ -49,7 +49,7 @@ def api_status():
         return jsonify({'error': str(e)}), 500
 
 
-@vpn_bp.route('/api/connect', methods=['POST'])
+@vpn_bp.route('/connect', methods=['POST'])
 def api_connect():
     """Connect to MSSP via HTP tunnel."""
     data = request.get_json() or {}
@@ -81,7 +81,7 @@ def api_connect():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@vpn_bp.route('/api/disconnect', methods=['POST'])
+@vpn_bp.route('/disconnect', methods=['POST'])
 def api_disconnect():
     """Disconnect HTP tunnel."""
     try:
@@ -96,7 +96,7 @@ def api_disconnect():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@vpn_bp.route('/api/mssp/register', methods=['POST'])
+@vpn_bp.route('/mssp/register', methods=['POST'])
 def api_mssp_register():
     """Register this Guardian node with MSSP."""
     data = request.get_json()
@@ -122,7 +122,7 @@ def api_mssp_register():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@vpn_bp.route('/api/posf/status')
+@vpn_bp.route('/posf/status')
 def api_posf_status():
     """Get Proof of Secure Function (PoSF) status."""
     try:
@@ -140,7 +140,7 @@ def api_posf_status():
         return jsonify({'error': str(e)}), 500
 
 
-@vpn_bp.route('/api/posf/verify', methods=['POST'])
+@vpn_bp.route('/posf/verify', methods=['POST'])
 def api_posf_verify():
     """Trigger PoSF verification."""
     try:
@@ -152,7 +152,7 @@ def api_posf_verify():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@vpn_bp.route('/api/encryption/info')
+@vpn_bp.route('/encryption/info')
 def api_encryption_info():
     """Get encryption information."""
     return jsonify({
