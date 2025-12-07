@@ -29,29 +29,48 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 
 ### All Guardian Features, Plus:
 
+### dnsXai Advanced
+- **Full ML Classifier** — All 20 features enabled with higher accuracy
+- **CNAME Uncloaking** — Deep chain resolution (5+ levels)
+- **Federated Learning Hub** — Trains local models, shares with mesh
+- **Advanced Analytics** — ClickHouse integration for DNS query analysis
+- **Custom Blocklists** — Import enterprise blocklists
+- **Per-VLAN Policies** — Different protection levels per network segment
+
+### Mesh Coordinator
+- **Regional Hub** — Aggregates threat intel from Guardian nodes
+- **NAT Relay** — Provides relay services for nodes behind NAT
+- **Tunnel Endpoint** — Cloudflare/ngrok tunnel for public accessibility
+- **Promotion Manager** — Automatic promotion to coordinator role
+
 ### Monitoring & Analytics
 - **Victoria Metrics**: Time-series database
-- **Grafana**: Dashboards and visualization
+- **Grafana**: Dashboards and visualization (pre-built dnsXai dashboards)
 - **ClickHouse**: Analytics database (optional)
 
 ### Automation
 - **n8n**: Workflow automation
 - **MCP Integration**: Model Context Protocol
 - **Webhook support**: Event-driven actions
+- **dnsXai Workflows**: Auto-update blocklists, threat notifications
 
 ### Web Interface
 - Admin dashboard
 - Real-time metrics
 - Alert management
 - Configuration UI
+- **dnsXai Control Panel** — Full DNS protection management
 
 ### Advanced Security
 - Local AI threat detection
 - Full IDS/IPS with logging
 - Security analytics
 - Threat hunting capabilities
+- **dnsXai contributes 8%** to Qsecbit score
 
 ### Network
+- **VLAN Segmentation** — Isolate IoT devices
+- **OpenFlow SDN** — Advanced traffic control
 - LTE/5G failover (optional)
 - Multi-WAN support
 - Advanced traffic analysis
