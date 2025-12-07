@@ -1147,6 +1147,21 @@ a:hover {
     align-self: flex-start;
 }
 
+.device-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--spacing-sm);
+}
+
+.device-actions .badge {
+    margin-bottom: var(--spacing-xs);
+}
+
+.device-actions .btn {
+    white-space: nowrap;
+}
+
 /* ===== Footer ===== */
 .footer {
     background: var(--bg-dark);
@@ -1447,4 +1462,122 @@ a:hover {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* ===== ML/AI Feature Styles ===== */
+
+/* Classification Results */
+.classify-result {
+    padding: var(--spacing-lg);
+    border-radius: var(--radius-md);
+    background: var(--bg-light);
+    border-left: 4px solid var(--border-color);
+}
+
+.classify-result.success {
+    border-left-color: var(--hp-green);
+    background: rgba(16, 185, 129, 0.08);
+}
+
+.classify-result.warning {
+    border-left-color: var(--hp-amber);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.classify-result.danger {
+    border-left-color: var(--hp-red);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.classify-domain {
+    font-family: var(--font-mono);
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: var(--spacing-sm);
+}
+
+.classify-verdict {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+}
+
+.classify-score {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-sm);
+}
+
+.classify-reasons {
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+    font-size: 0.875rem;
+}
+
+.classify-reasons ul {
+    margin: var(--spacing-sm) 0 0;
+    padding-left: var(--spacing-lg);
+}
+
+.classify-reasons li {
+    margin-bottom: var(--spacing-xs);
+    color: var(--text-secondary);
+}
+
+/* Threat List */
+.threat-item {
+    padding: var(--spacing-md);
+    background: var(--bg-light);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--spacing-sm);
+    border-left: 3px solid var(--hp-amber);
+}
+
+.threat-item:hover {
+    background: var(--bg-card);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.threat-domain {
+    font-weight: 600;
+    margin-bottom: var(--spacing-xs);
+    word-break: break-all;
+}
+
+.threat-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 0.8125rem;
+}
+
+.threat-meta .confidence {
+    color: var(--text-secondary);
+}
+
+/* ML Status Indicators */
+#ml-status-badge .badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+}
+
+/* Icon in card headers */
+.card-title .icon {
+    vertical-align: middle;
+    margin-right: var(--spacing-xs);
+    opacity: 0.7;
+}
+
+/* Federated Learning Animation */
+@keyframes pulse-green {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.federated-active {
+    animation: pulse-green 2s ease-in-out infinite;
+    color: var(--hp-green);
 }

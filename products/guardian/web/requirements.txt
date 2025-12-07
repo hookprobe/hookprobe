@@ -1,0 +1,13 @@
+# Guardian Web UI Python Dependencies
+# For dnsXai ML/AI features
+
+# Web framework
+flask>=3.0.0,<4.0.0
+
+# ML/AI for dnsXai
+numpy>=1.24.0,<2.0.0
+scikit-learn>=1.3.0,<2.0.0
+joblib>=1.3.0,<2.0.0
+
+# Optional: For advanced ML features
+# pandas>=2.0.0,<3.0.0  # Only needed if extending with time-series analysis
