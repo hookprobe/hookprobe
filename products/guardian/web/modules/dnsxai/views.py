@@ -402,16 +402,17 @@ def api_ml_status():
 
 @dnsxai_bp.route('/ml/train', methods=['POST'])
 def api_ml_train():
-    """Train ML model on browsing history."""
+    """Train ML model on browsing history with seed data for ad detection."""
     if not ML_AVAILABLE:
         return jsonify({
             'success': False,
-            'error': 'ML libraries not installed'
+            'error': 'ML libraries not installed. Install with: pip3 install scikit-learn numpy'
         }), 400
 
     try:
         data = request.get_json() or {}
         source = data.get('source', 'auto')  # 'auto', 'history', 'custom'
+        use_seed_data = data.get('use_seed_data', True)  # Include known ad/safe domains
 
         domains = []
 
@@ -425,19 +426,26 @@ def api_ml_train():
                 limit=data.get('limit', 5000)
             )
 
-        if len(domains) < 10:
-            return jsonify({
-                'success': False,
-                'error': f'Not enough domains for training ({len(domains)} found, need at least 10)'
-            }), 400
+        # Note: Even with 0 browsing domains, training can work with seed data
+        # The classifier will use known ad/safe domains as baseline
 
         # Train the classifier
         classifier = get_classifier()
-        result = classifier.train(domains)
+        result = classifier.train(domains, use_seed_data=use_seed_data)
+
+        # Enhance result message
+        if result.get('success'):
+            user_count = result.get('user_domains', 0)
+            seed_count = result.get('seed_domains', 0)
+            if user_count > 0:
+                result['message'] = f'Trained on {user_count} browsing domains + {seed_count} known patterns'
+            else:
+                result['message'] = f'Trained on {seed_count} known ad/safe patterns. Browse websites to improve accuracy.'
 
         return jsonify(result)
 
     except Exception as e:
+        logging.error(f"ML training error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
