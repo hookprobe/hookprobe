@@ -1,7 +1,7 @@
 # dnsXai - AI-Powered DNS Protection
 
 <p align="center">
-  <img src="../../docs/images/dnsxai-logo.png" alt="dnsXai Logo" width="200">
+  <img src="../../assets/dnsXai-logo.png" alt="dnsXai Logo" width="430">
 </p>
 
 <p align="center">
