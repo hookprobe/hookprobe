@@ -1,7 +1,7 @@
-# Makefile for HookProbe
+# Makefile for HookProbe v5.0
 # Provides convenient commands for common development tasks
 
-.PHONY: help install test lint format clean deploy undeploy status
+.PHONY: help install test lint format clean deploy status
 
 # Default target
 .DEFAULT_GOAL := help
@@ -25,20 +25,15 @@ help: ## Show this help message
 install: ## Install Python dependencies
 	@echo "$(CYAN)Installing Python dependencies...$(NC)"
 	pip install -r requirements.txt
-	@echo "$(GREEN)✓ Dependencies installed$(NC)"
+	@echo "$(GREEN)Dependencies installed$(NC)"
 
 install-dev: ## Install development dependencies
 	@echo "$(CYAN)Installing development dependencies...$(NC)"
-	pip install -r requirements-dev.txt
-	@echo "$(GREEN)✓ Development dependencies installed$(NC)"
+	pip install pytest pytest-cov flake8 black isort bandit
+	@echo "$(GREEN)Development dependencies installed$(NC)"
 
-install-hooks: ## Install pre-commit hooks
-	@echo "$(CYAN)Installing pre-commit hooks...$(NC)"
-	pre-commit install
-	@echo "$(GREEN)✓ Pre-commit hooks installed$(NC)"
-
-setup: install install-dev install-hooks ## Complete development environment setup
-	@echo "$(GREEN)✓ Development environment ready!$(NC)"
+setup: install install-dev ## Complete development environment setup
+	@echo "$(GREEN)Development environment ready!$(NC)"
 
 # ============================================================
 # TESTING
@@ -46,19 +41,19 @@ setup: install install-dev install-hooks ## Complete development environment set
 
 test: ## Run all tests
 	@echo "$(CYAN)Running tests...$(NC)"
-	pytest
+	pytest tests/
 
 test-verbose: ## Run tests with verbose output
 	@echo "$(CYAN)Running tests (verbose)...$(NC)"
-	pytest -vv
+	pytest tests/ -vv
 
 test-coverage: ## Run tests with coverage report
 	@echo "$(CYAN)Running tests with coverage...$(NC)"
-	pytest --cov=Scripts/autonomous --cov-report=html --cov-report=term
+	pytest tests/ --cov=core --cov=shared --cov-report=html --cov-report=term
 
 test-fast: ## Run fast tests only (skip slow tests)
 	@echo "$(CYAN)Running fast tests...$(NC)"
-	pytest -m "not slow"
+	pytest tests/ -m "not slow"
 
 # ============================================================
 # CODE QUALITY
@@ -67,24 +62,21 @@ test-fast: ## Run fast tests only (skip slow tests)
 lint: ## Run all linters
 	@echo "$(CYAN)Running linters...$(NC)"
 	@echo "$(YELLOW)Checking shell scripts...$(NC)"
-	-find Scripts -name "*.sh" -type f -exec shellcheck {} \;
+	-find products/ deploy/ scripts/ -name "*.sh" -type f -exec shellcheck {} \;
 	@echo "$(YELLOW)Checking Python code...$(NC)"
-	-flake8 Scripts/autonomous/qsecbit.py
-	-pylint Scripts/autonomous/qsecbit.py
-	@echo "$(GREEN)✓ Linting complete$(NC)"
+	-flake8 core/ shared/ tests/
+	@echo "$(GREEN)Linting complete$(NC)"
 
-lint-fix: ## Run linters with auto-fix
-	@echo "$(CYAN)Running linters with auto-fix...$(NC)"
-	black Scripts/autonomous/qsecbit.py
-	isort Scripts/autonomous/qsecbit.py
-	@echo "$(GREEN)✓ Auto-fixes applied$(NC)"
-
-format: lint-fix ## Format code (alias for lint-fix)
+format: ## Format Python code
+	@echo "$(CYAN)Formatting Python code...$(NC)"
+	black core/ shared/ tests/
+	isort core/ shared/ tests/
+	@echo "$(GREEN)Formatting complete$(NC)"
 
 security: ## Run security checks
 	@echo "$(CYAN)Running security checks...$(NC)"
-	bandit -r Scripts/ -ll
-	@echo "$(GREEN)✓ Security scan complete$(NC)"
+	bandit -r core/ shared/ -ll
+	@echo "$(GREEN)Security scan complete$(NC)"
 
 check: lint test ## Run linters and tests
 
@@ -92,28 +84,25 @@ check: lint test ## Run linters and tests
 # DEPLOYMENT
 # ============================================================
 
-deploy: ## Deploy HookProbe (requires root)
-	@echo "$(CYAN)Deploying HookProbe...$(NC)"
-	@echo "$(YELLOW)This requires root privileges$(NC)"
-	cd Scripts/autonomous/install && sudo ./setup.sh
+deploy-sentinel: ## Deploy Sentinel tier
+	@echo "$(CYAN)Deploying Sentinel...$(NC)"
+	sudo ./install.sh --tier sentinel
 
-deploy-n8n: ## Deploy n8n automation (POD 008)
-	@echo "$(CYAN)Deploying n8n...$(NC)"
-	@echo "$(YELLOW)This requires root privileges$(NC)"
-	cd Scripts/autonomous/install && sudo ./n8n_setup.sh
+deploy-guardian: ## Deploy Guardian tier
+	@echo "$(CYAN)Deploying Guardian...$(NC)"
+	sudo ./install.sh --tier guardian
 
-undeploy: ## Remove HookProbe deployment
-	@echo "$(CYAN)Removing HookProbe deployment...$(NC)"
-	@echo "$(RED)This will remove all PODs and containers$(NC)"
-	@read -p "Are you sure? [y/N] " -n 1 -r; \
-	echo; \
-	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		cd Scripts/autonomous/install && sudo ./uninstall.sh; \
-	fi
+deploy-fortress: ## Deploy Fortress tier
+	@echo "$(CYAN)Deploying Fortress...$(NC)"
+	sudo ./install.sh --tier fortress
 
-undeploy-n8n: ## Remove n8n deployment (POD 008)
-	@echo "$(CYAN)Removing n8n deployment...$(NC)"
-	cd Scripts/autonomous/install && sudo ./n8n_uninstall.sh
+deploy-nexus: ## Deploy Nexus tier
+	@echo "$(CYAN)Deploying Nexus...$(NC)"
+	sudo ./install.sh --tier nexus
+
+deploy-mssp: ## Deploy MSSP tier
+	@echo "$(CYAN)Deploying MSSP...$(NC)"
+	sudo ./install.sh --tier mssp
 
 # ============================================================
 # STATUS AND MONITORING
@@ -122,34 +111,21 @@ undeploy-n8n: ## Remove n8n deployment (POD 008)
 status: ## Show deployment status
 	@echo "$(CYAN)HookProbe Deployment Status$(NC)"
 	@echo ""
-	@echo "$(YELLOW)PODs:$(NC)"
-	@podman pod ps || echo "$(RED)Podman not available or no PODs running$(NC)"
+	@echo "$(YELLOW)Services:$(NC)"
+	@systemctl list-units 'hookprobe-*' --no-pager 2>/dev/null || echo "No HookProbe services found"
 	@echo ""
 	@echo "$(YELLOW)Containers:$(NC)"
-	@podman ps -a || echo "$(RED)No containers$(NC)"
-	@echo ""
-	@echo "$(YELLOW)OVS Bridge:$(NC)"
-	@ovs-vsctl show || echo "$(RED)OVS not available$(NC)"
+	@podman ps -a 2>/dev/null || echo "Podman not available"
 
-logs: ## Show recent logs from all containers
-	@echo "$(CYAN)Recent container logs:$(NC)"
-	@for pod in $$(podman pod ps --format "{{.Name}}" 2>/dev/null); do \
-		echo "$(YELLOW)$$pod:$(NC)"; \
-		podman pod logs --tail 10 $$pod 2>/dev/null || echo "$(RED)No logs$(NC)"; \
-		echo ""; \
-	done
+logs: ## Show recent logs
+	@echo "$(CYAN)Recent HookProbe logs:$(NC)"
+	@journalctl -u 'hookprobe-*' --no-pager -n 50 2>/dev/null || echo "No logs found"
 
 health: ## Check service health
 	@echo "$(CYAN)Service Health Check$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Django:$(NC)"
-	@curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "Not responding"
-	@echo ""
-	@echo "$(YELLOW)Grafana:$(NC)"
-	@curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ || echo "Not responding"
-	@echo ""
-	@echo "$(YELLOW)Qsecbit:$(NC)"
-	@curl -s -o /dev/null -w "%{http_code}" http://localhost:8888/health || echo "Not responding"
+	@echo "$(YELLOW)Health Endpoint:$(NC)"
+	@curl -s http://localhost:9090/health 2>/dev/null || echo "Health endpoint not responding"
 	@echo ""
 
 # ============================================================
@@ -161,64 +137,31 @@ clean: ## Clean up generated files
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	find . -type f -name "*.pyo" -delete 2>/dev/null || true
-	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	rm -rf htmlcov/ .coverage coverage.xml 2>/dev/null || true
-	@echo "$(GREEN)✓ Cleanup complete$(NC)"
-
-clean-all: clean ## Deep clean including deployment artifacts
-	@echo "$(CYAN)Deep cleaning...$(NC)"
-	@echo "$(RED)This will remove test artifacts and build files$(NC)"
-	rm -rf build/ dist/ *.egg-info/ 2>/dev/null || true
-	rm -rf .mypy_cache/ .tox/ .nox/ 2>/dev/null || true
-	@echo "$(GREEN)✓ Deep clean complete$(NC)"
-
-# ============================================================
-# DOCUMENTATION
-# ============================================================
-
-docs: ## Generate documentation
-	@echo "$(CYAN)Generating documentation...$(NC)"
-	@echo "$(YELLOW)Documentation generation not yet implemented$(NC)"
-	@echo "$(YELLOW)See README.md and CLAUDE.md for now$(NC)"
-
-# ============================================================
-# DEVELOPMENT
-# ============================================================
-
-dev-shell: ## Start development shell with venv activated
-	@echo "$(CYAN)Starting development shell...$(NC)"
-	@echo "$(YELLOW)Run 'deactivate' to exit$(NC)"
-	@if [ -d "venv" ]; then \
-		. venv/bin/activate && exec $$SHELL; \
-	else \
-		echo "$(RED)No venv found. Run 'make venv' first$(NC)"; \
-	fi
-
-venv: ## Create Python virtual environment
-	@echo "$(CYAN)Creating virtual environment...$(NC)"
-	python3 -m venv venv
-	@echo "$(GREEN)✓ Virtual environment created$(NC)"
-	@echo "$(YELLOW)Activate with: source venv/bin/activate$(NC)"
+	@echo "$(GREEN)Cleanup complete$(NC)"
 
 # ============================================================
 # VALIDATION
 # ============================================================
 
-validate: ## Validate configuration files
-	@echo "$(CYAN)Validating configuration files...$(NC)"
-	@bash -n Scripts/autonomous/install/network-config.sh && echo "$(GREEN)✓ network-config.sh is valid$(NC)" || echo "$(RED)✗ network-config.sh has syntax errors$(NC)"
-	@bash -n Scripts/autonomous/install/setup.sh && echo "$(GREEN)✓ setup.sh is valid$(NC)" || echo "$(RED)✗ setup.sh has syntax errors$(NC)"
-	@bash -n Scripts/autonomous/install/uninstall.sh && echo "$(GREEN)✓ uninstall.sh is valid$(NC)" || echo "$(RED)✗ uninstall.sh has syntax errors$(NC)"
+validate: ## Validate shell scripts
+	@echo "$(CYAN)Validating shell scripts...$(NC)"
+	@bash -n install.sh && echo "$(GREEN)install.sh is valid$(NC)" || echo "$(RED)install.sh has syntax errors$(NC)"
+	@find products/ -name "setup.sh" -exec bash -n {} \; -exec echo "$(GREEN){} is valid$(NC)" \;
+	@find products/ -name "uninstall.sh" -exec bash -n {} \; -exec echo "$(GREEN){} is valid$(NC)" \;
+
+validate-repo: ## Run repository cleanup validator
+	@echo "$(CYAN)Running repository cleanup validator...$(NC)"
+	./scripts/repo-cleanup-validator.sh
 
 # ============================================================
-# RELEASE
+# VERSION INFO
 # ============================================================
 
 version: ## Show version information
 	@echo "$(CYAN)HookProbe Version Information$(NC)"
 	@echo "Version: 5.0.0"
 	@echo "License: MIT"
-	@echo "Python: $$(python3 --version)"
+	@echo "Python: $$(python3 --version 2>/dev/null || echo 'Not installed')"
 	@echo "Podman: $$(podman --version 2>/dev/null || echo 'Not installed')"
-	@echo "OVS: $$(ovs-vsctl --version 2>/dev/null | head -1 || echo 'Not installed')"
