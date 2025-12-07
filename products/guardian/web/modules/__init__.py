@@ -14,24 +14,24 @@ def register_blueprints(app: Flask):
 
     # Security module - QSecBit, threats, layer stats
     from .security import security_bp
-    app.register_blueprint(security_bp, url_prefix='/security')
+    app.register_blueprint(security_bp, url_prefix='/api')
 
     # dnsXai module - AI-powered ad blocking
     from .dnsxai import dnsxai_bp
-    app.register_blueprint(dnsxai_bp, url_prefix='/dnsxai')
+    app.register_blueprint(dnsxai_bp, url_prefix='/api/dnsxai')
 
     # Config module - WiFi, network configuration
     from .config import config_bp
-    app.register_blueprint(config_bp, url_prefix='/config')
+    app.register_blueprint(config_bp, url_prefix='/api/config')
 
     # Clients module - Connected devices
     from .clients import clients_bp
-    app.register_blueprint(clients_bp, url_prefix='/clients')
+    app.register_blueprint(clients_bp, url_prefix='/api/clients')
 
     # VPN module - VPN management
     from .vpn import vpn_bp
-    app.register_blueprint(vpn_bp, url_prefix='/vpn')
+    app.register_blueprint(vpn_bp, url_prefix='/api/vpn')
 
     # System module - System settings
     from .system import system_bp
-    app.register_blueprint(system_bp, url_prefix='/system')
+    app.register_blueprint(system_bp, url_prefix='/api/system')
