@@ -144,8 +144,8 @@ a:hover {
 }
 
 .header-logo {
-    width: 48px;
-    height: 48px;
+    width: 96px;
+    height: 96px;
     border-radius: var(--radius-md);
     object-fit: contain;
 }
@@ -1580,4 +1580,18 @@ a:hover {
 .federated-active {
     animation: pulse-green 2s ease-in-out infinite;
     color: var(--hp-green);
+}
+
+/* Pause buttons - white style */
+.pause-btn {
+    background: var(--text-white);
+    color: var(--bg-dark);
+    border-color: var(--text-white);
+    font-weight: 600;
+}
+
+.pause-btn:hover {
+    background: rgba(255, 255, 255, 0.85);
+    border-color: rgba(255, 255, 255, 0.85);
+    color: var(--bg-darker);
 }

@@ -123,6 +123,7 @@
 <div class="card">
     <div class="card-header">
         <h3 class="card-title">Network Interfaces</h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadConfigData()">Refresh</button>
     </div>
     <div class="card-body">
         <div class="table-container">
@@ -137,16 +138,7 @@
                 </thead>
                 <tbody id="interfaces-body">
                     <tr>
-                        <td><strong>eth0</strong></td>
-                        <td class="font-mono">192.168.1.100</td>
-                        <td class="font-mono">aa:bb:cc:dd:ee:ff</td>
-                        <td><span class="badge badge-success">UP</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>wlan0</strong></td>
-                        <td class="font-mono">10.200.1.1</td>
-                        <td class="font-mono">11:22:33:44:55:66</td>
-                        <td><span class="badge badge-success">UP</span></td>
+                        <td colspan="4" class="empty-state">Loading interfaces...</td>
                     </tr>
                 </tbody>
             </table>
