@@ -481,17 +481,20 @@ async function trainDnsxaiML() {
         const result = await apiPost('/dnsxai/ml/train', {
             source: 'auto',
             hours: 24,
-            limit: 5000
+            limit: 5000,
+            use_seed_data: true  // Include known ad/tracking domains
         });
 
         if (result.success) {
-            showToast(`ML Model trained on ${result.samples_trained} domains`, 'success');
+            // Use enhanced message if available
+            const message = result.message || `ML Model trained on ${result.samples_trained} domains`;
+            showToast(message, 'success');
             loadDnsxaiData();
         } else {
             showToast(result.error || 'Training failed', 'error');
         }
     } catch (error) {
-        showToast('Failed to train ML model', 'error');
+        showToast('Failed to train ML model: ' + (error.message || 'Unknown error'), 'error');
     } finally {
         if (trainBtn) {
             trainBtn.disabled = false;
