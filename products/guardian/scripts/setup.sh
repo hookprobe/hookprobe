@@ -136,7 +136,10 @@ install_packages() {
             echo 'DAEMON_CONF=""' >> /etc/default/hostapd
         fi
 
-        apt-get install -y -qq \
+        # Install packages non-interactively (auto-keep existing configs)
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
             hostapd \
             dnsmasq \
             bridge-utils \
@@ -197,7 +200,10 @@ install_podman() {
         log_info "Podman already installed: $(podman --version)"
     else
         if [ "$PKG_MGR" = "apt" ]; then
-            apt-get install -y -qq podman
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                -o Dpkg::Options::="--force-confdef" \
+                -o Dpkg::Options::="--force-confold" \
+                podman
         else
             dnf install -y -q podman
         fi
@@ -219,7 +225,10 @@ install_openvswitch() {
         log_info "Open vSwitch already installed"
     else
         if [ "$PKG_MGR" = "apt" ]; then
-            apt-get install -y -qq openvswitch-switch
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                -o Dpkg::Options::="--force-confdef" \
+                -o Dpkg::Options::="--force-confold" \
+                openvswitch-switch
         else
             dnf install -y -q openvswitch
         fi
@@ -966,7 +975,10 @@ install_xdp_ddos_protection() {
     fi
 
     # Install required packages
-    apt-get install -y clang llvm libelf-dev linux-headers-$(uname -r) bpftool 2>/dev/null || {
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        clang llvm libelf-dev linux-headers-$(uname -r) bpftool 2>/dev/null || {
         log_warn "Some XDP packages not available, limited functionality"
     }
 
@@ -1579,7 +1591,10 @@ echo ""
 # Check if nmap is installed
 if ! command -v nmap &> /dev/null; then
     echo -e "${YELLOW}Installing nmap for security testing...${NC}"
-    apt-get update && apt-get install -y nmap
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        nmap
 fi
 
 # Initialize results
