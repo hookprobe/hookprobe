@@ -441,7 +441,7 @@ remove_packages() {
             if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
                 log_warn "apt still locked - skipping package removal"
                 log_info "You can manually remove packages later with:"
-                log_info "  sudo apt-get remove hostapd dnsmasq"
+                log_info "  sudo apt-get remove --purge hostapd dnsmasq"
                 return 0
             fi
         fi
@@ -449,14 +449,25 @@ remove_packages() {
         # Remove hostapd if installed
         if dpkg -l hostapd 2>/dev/null | grep -q "^ii"; then
             log_info "Removing hostapd..."
-            # Ensure service is stopped
+
+            # Kill any running hostapd processes first
+            pkill -9 hostapd 2>/dev/null || true
+
+            # Try to stop/disable service (ignore errors - service may not exist)
             systemctl stop hostapd 2>/dev/null || true
             systemctl disable hostapd 2>/dev/null || true
-            if timeout 60 apt-get remove -y hostapd 2>&1; then
+            systemctl unmask hostapd 2>/dev/null || true
+
+            # Remove with purge and auto-yes for config prompts
+            if DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y hostapd 2>/dev/null; then
                 log_info "hostapd removed successfully"
             else
-                log_warn "Failed to remove hostapd - it may be in use or protected"
-                log_info "Try manually: sudo systemctl stop hostapd && sudo apt-get remove hostapd"
+                # Fallback: try dpkg directly
+                log_warn "apt-get failed, trying dpkg..."
+                dpkg --remove --force-remove-reinstreq hostapd 2>/dev/null || {
+                    log_warn "Failed to remove hostapd package"
+                    log_info "Manual removal: sudo dpkg --purge --force-all hostapd"
+                }
             fi
         else
             log_info "hostapd is not installed - skipping"
@@ -465,19 +476,38 @@ remove_packages() {
         # Remove dnsmasq if installed
         if dpkg -l dnsmasq 2>/dev/null | grep -q "^ii"; then
             log_info "Removing dnsmasq..."
+
+            # Kill any running dnsmasq processes first
+            pkill -9 dnsmasq 2>/dev/null || true
+
+            # Try to stop/disable service (ignore errors - service may not exist)
             systemctl stop dnsmasq 2>/dev/null || true
             systemctl disable dnsmasq 2>/dev/null || true
-            if timeout 60 apt-get remove -y dnsmasq 2>&1; then
+            systemctl unmask dnsmasq 2>/dev/null || true
+
+            # Remove with purge and auto-yes for config prompts
+            if DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y dnsmasq 2>/dev/null; then
                 log_info "dnsmasq removed successfully"
             else
-                log_warn "Failed to remove dnsmasq"
+                # Fallback: try dpkg directly
+                log_warn "apt-get failed, trying dpkg..."
+                dpkg --remove --force-remove-reinstreq dnsmasq 2>/dev/null || {
+                    log_warn "Failed to remove dnsmasq package"
+                    log_info "Manual removal: sudo dpkg --purge --force-all dnsmasq"
+                }
             fi
         else
             log_info "dnsmasq is not installed - skipping"
         fi
 
+        # Also try to remove dnsmasq-base if present
+        if dpkg -l dnsmasq-base 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing dnsmasq-base..."
+            DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y dnsmasq-base 2>/dev/null || true
+        fi
+
         log_info "Running autoremove..."
-        timeout 120 apt-get autoremove -y 2>/dev/null || {
+        DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || {
             log_warn "Autoremove failed - skipping"
         }
 
@@ -485,19 +515,25 @@ remove_packages() {
         # Check if packages are installed on RHEL/Fedora
         if rpm -q hostapd &>/dev/null; then
             log_info "Removing hostapd..."
+            pkill -9 hostapd 2>/dev/null || true
             systemctl stop hostapd 2>/dev/null || true
-            timeout 60 dnf remove -y hostapd || log_warn "Failed to remove hostapd"
+            systemctl disable hostapd 2>/dev/null || true
+            dnf remove -y hostapd 2>/dev/null || log_warn "Failed to remove hostapd"
         else
             log_info "hostapd is not installed - skipping"
         fi
 
         if rpm -q dnsmasq &>/dev/null; then
             log_info "Removing dnsmasq..."
+            pkill -9 dnsmasq 2>/dev/null || true
             systemctl stop dnsmasq 2>/dev/null || true
-            timeout 60 dnf remove -y dnsmasq || log_warn "Failed to remove dnsmasq"
+            systemctl disable dnsmasq 2>/dev/null || true
+            dnf remove -y dnsmasq 2>/dev/null || log_warn "Failed to remove dnsmasq"
         else
             log_info "dnsmasq is not installed - skipping"
         fi
+    else
+        log_warn "No supported package manager found (apt/dnf)"
     fi
 
     log_info "Package removal complete"
