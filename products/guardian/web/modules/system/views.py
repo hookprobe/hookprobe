@@ -57,7 +57,7 @@ def api_restart_service(name):
         return jsonify({'success': False, 'error': 'Service not allowed'}), 403
 
     try:
-        output, success = run_command(f'systemctl restart {name}')
+        output, success = run_command(f'sudo systemctl restart {name}')
         if success:
             return jsonify({'success': True})
         return jsonify({'success': False, 'error': output}), 500
@@ -71,7 +71,7 @@ def api_restart_all():
     try:
         services = ['dnsmasq', 'hostapd', 'suricata', 'guardian-agent']
         for service in services:
-            run_command(f'systemctl restart {service} 2>/dev/null || true')
+            run_command(f'sudo systemctl restart {service} 2>/dev/null || true')
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -105,7 +105,7 @@ def api_logs():
 def api_reboot():
     """Reboot the system."""
     try:
-        run_command('shutdown -r +1 "Guardian rebooting..."')
+        run_command('sudo shutdown -r +1 "Guardian rebooting..."')
         return jsonify({'success': True, 'message': 'Rebooting in 1 minute'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -115,7 +115,7 @@ def api_reboot():
 def api_shutdown():
     """Shutdown the system."""
     try:
-        run_command('shutdown -h +1 "Guardian shutting down..."')
+        run_command('sudo shutdown -h +1 "Guardian shutting down..."')
         return jsonify({'success': True, 'message': 'Shutting down in 1 minute'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
