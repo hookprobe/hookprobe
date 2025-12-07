@@ -589,8 +589,161 @@ install_adguard_container() {
         return 0
     fi
 
-    # Create systemd service for AdGuard container (creates container on start)
-    cat > /etc/systemd/system/guardian-adguard.service << 'EOF'
+    # Create pre-configured AdGuard config directory
+    local ADGUARD_CONF_DIR="/opt/hookprobe/guardian/adguard/conf"
+    local ADGUARD_WORK_DIR="/opt/hookprobe/guardian/adguard/work"
+    mkdir -p "$ADGUARD_CONF_DIR" "$ADGUARD_WORK_DIR"
+
+    # Generate bcrypt hash for default password (hookprobe123)
+    # Pre-computed bcrypt hash for "hookprobe123"
+    local ADMIN_PASS_HASH='$2a$10$QxTX8YXNrqw8D5QmFtXh0.8mK8YpVKNVGLqvYqxLQRaX5QJhDpvDi'
+
+    # Create pre-configured AdGuardHome.yaml (skips setup wizard)
+    cat > "$ADGUARD_CONF_DIR/AdGuardHome.yaml" << EOF
+bind_host: 0.0.0.0
+bind_port: 3000
+users:
+  - name: admin
+    password: ${ADMIN_PASS_HASH}
+auth_attempts: 5
+block_auth_min: 15
+http_proxy: ""
+language: en
+theme: auto
+dns:
+  bind_hosts:
+    - 0.0.0.0
+  port: 5353
+  anonymize_client_ip: false
+  ratelimit: 0
+  ratelimit_whitelist: []
+  refuse_any: true
+  upstream_dns:
+    - https://dns.cloudflare.com/dns-query
+    - https://dns.google/dns-query
+    - 1.1.1.1
+    - 8.8.8.8
+  upstream_dns_file: ""
+  bootstrap_dns:
+    - 1.1.1.1
+    - 8.8.8.8
+  all_servers: false
+  fastest_addr: true
+  fastest_timeout: 1s
+  allowed_clients: []
+  disallowed_clients: []
+  blocked_hosts:
+    - version.bind
+    - id.server
+    - hostname.bind
+  trusted_proxies:
+    - 127.0.0.0/8
+    - ::1/128
+  cache_size: 4194304
+  cache_ttl_min: 0
+  cache_ttl_max: 0
+  cache_optimistic: true
+  bogus_nxdomain: []
+  aaaa_disabled: false
+  enable_dnssec: true
+  edns_client_subnet:
+    custom_ip: ""
+    enabled: false
+    use_custom: false
+  max_goroutines: 300
+  handle_ddr: true
+  ipset: []
+  ipset_file: ""
+  filtering_enabled: true
+  filters_update_interval: 24
+  parental_enabled: false
+  safebrowsing_enabled: true
+  safebrowsing_cache_size: 1048576
+  safesearch_enabled: false
+  safesearch_cache_size: 1048576
+  parental_cache_size: 1048576
+  cache_time: 30
+  blocked_services:
+    schedule:
+      time_zone: UTC
+    ids: []
+  upstream_timeout: 10s
+  private_networks: []
+  use_private_ptr_resolvers: true
+  local_ptr_upstreams: []
+  use_dns64: false
+  dns64_prefixes: []
+  serve_http3: false
+  use_http3_upstreams: false
+tls:
+  enabled: false
+  server_name: ""
+  force_https: false
+  port_https: 443
+  port_dns_over_tls: 853
+  port_dns_over_quic: 784
+  port_dnscrypt: 0
+  dnscrypt_config_file: ""
+  allow_unencrypted_doh: false
+  certificate_chain: ""
+  private_key: ""
+  certificate_path: ""
+  private_key_path: ""
+  strict_sni_check: false
+querylog:
+  enabled: true
+  file_enabled: true
+  interval: 24h
+  size_memory: 1000
+  ignored: []
+statistics:
+  enabled: true
+  interval: 24h
+  ignored: []
+filters:
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
+    name: AdGuard DNS filter
+    id: 1
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt
+    name: AdAway Default Blocklist
+    id: 2
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_24.txt
+    name: 1Hosts (Lite)
+    id: 3
+whitelist_filters: []
+user_rules: []
+dhcp:
+  enabled: false
+clients:
+  runtime_sources:
+    whois: true
+    arp: true
+    rdns: true
+    dhcp: true
+    hosts: true
+  persistent: []
+log_file: ""
+log_max_backups: 0
+log_max_size: 100
+log_max_age: 3
+log_compress: false
+log_localtime: false
+verbose: false
+os:
+  group: ""
+  user: ""
+  rlimit_nofile: 0
+schema_version: 24
+EOF
+
+    # Set permissions
+    chmod 644 "$ADGUARD_CONF_DIR/AdGuardHome.yaml"
+
+    # Create systemd service for AdGuard container
+    cat > /etc/systemd/system/guardian-adguard.service << EOF
 [Unit]
 Description=HookProbe Guardian AdGuard Home
 After=network.target podman.socket
@@ -602,10 +755,10 @@ Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/podman stop guardian-adguard
 ExecStartPre=-/usr/bin/podman rm guardian-adguard
-ExecStart=/usr/bin/podman run --name guardian-adguard \
-    --network host \
-    -v guardian-adguard-work:/opt/adguardhome/work:Z \
-    -v guardian-adguard-conf:/opt/adguardhome/conf:Z \
+ExecStart=/usr/bin/podman run --name guardian-adguard \\
+    --network host \\
+    -v ${ADGUARD_WORK_DIR}:/opt/adguardhome/work:Z \\
+    -v ${ADGUARD_CONF_DIR}:/opt/adguardhome/conf:Z \\
     docker.io/adguard/adguardhome:latest
 ExecStop=/usr/bin/podman stop guardian-adguard
 
@@ -616,13 +769,15 @@ EOF
     systemctl daemon-reload
     systemctl enable guardian-adguard 2>/dev/null || true
 
-    # Update dnsmasq to forward to AdGuard
+    # Update dnsmasq to forward to AdGuard (port 5353)
     if [ -f /etc/dnsmasq.d/guardian.conf ]; then
         sed -i 's/server=1.1.1.1/server=127.0.0.1#5353/' /etc/dnsmasq.d/guardian.conf
         sed -i 's/server=8.8.8.8/server=127.0.0.1#5353/' /etc/dnsmasq.d/guardian.conf
     fi
 
-    log_info "AdGuard Home installed (setup: http://192.168.4.1:3000)"
+    log_info "AdGuard Home installed (pre-configured)"
+    log_info "  Web UI: http://192.168.4.1:3000"
+    log_info "  Login: admin / hookprobe123"
 }
 
 install_waf_container() {
@@ -2144,9 +2299,11 @@ configure_base_networking() {
 
     local HOTSPOT_SSID="${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}"
     local HOTSPOT_PASS="${HOOKPROBE_WIFI_PASS:-hookprobe123}"
+    # /27 subnet for Guardian (30 usable addresses - sufficient for travel companion)
     local BRIDGE_IP="192.168.4.1"
-    local DHCP_START="192.168.4.100"
-    local DHCP_END="192.168.4.200"
+    local DHCP_START="192.168.4.2"
+    local DHCP_END="192.168.4.30"
+    local NETMASK="255.255.255.224"
 
     # Determine interfaces
     local WIFI_IFACE=$(echo $WIFI_INTERFACES | awk '{print $1}')
@@ -2217,7 +2374,7 @@ configure_base_networking() {
     log_info "Creating bridge br0..."
     ip link add br0 type bridge 2>/dev/null || true
     ip link set br0 up
-    ip addr add $BRIDGE_IP/24 dev br0 2>/dev/null || true
+    ip addr add $BRIDGE_IP/27 dev br0 2>/dev/null || true
 
     # NOTE: eth0 is NOT added to bridge - it's a WAN interface for failover
     # Only the LAN-side (USB WiFi dongle) is bridged via hostapd
@@ -2399,8 +2556,8 @@ EOF
 interface=br0
 bind-interfaces
 
-# DHCP range
-dhcp-range=$DHCP_START,$DHCP_END,255.255.255.0,24h
+# DHCP range (/27 subnet - 30 usable addresses)
+dhcp-range=$DHCP_START,$DHCP_END,$NETMASK,24h
 
 # Gateway
 dhcp-option=3,$BRIDGE_IP
@@ -2566,7 +2723,7 @@ configure_guardian_hostapd() {
 
     # Guardian mode: NO VLAN interfaces, NO VLAN bridges
     # All devices connect to br0 (192.168.4.x network)
-    log_info "Guardian mode: All devices on single network (br0 / 192.168.4.0/24)"
+    log_info "Guardian mode: All devices on single network (br0 / 192.168.4.0/27)"
     log_info "For IoT VLAN segmentation, use Fortress mode with VAP-capable WiFi adapter"
 
     log_info "Hostapd configuration complete"
@@ -2656,7 +2813,7 @@ create_default_config() {
 # Mode: Guardian (Portable Travel Security)
 #
 # Guardian mode provides simple WiFi hotspot with security features.
-# All devices connect to the same network (br0 / 192.168.4.0/24).
+# All devices connect to the same network (br0 / 192.168.4.0/27).
 #
 # For VLAN segmentation and IoT isolation, use Fortress mode
 # with VAP-capable WiFi adapters (Atheros AR9271, MediaTek MT7612U).
@@ -2665,10 +2822,10 @@ create_default_config() {
 network:
   mode: "guardian"  # guardian = simple, fortress = vlan segmentation
   lan_interface: "br0"
-  lan_subnet: "192.168.4.0/24"
+  lan_subnet: "192.168.4.0/27"
   lan_gateway: "192.168.4.1"
-  dhcp_start: "192.168.4.100"
-  dhcp_end: "192.168.4.200"
+  dhcp_start: "192.168.4.2"
+  dhcp_end: "192.168.4.30"
 
 # HTP (HookProbe Transport Protocol) Configuration
 htp:
@@ -3145,7 +3302,7 @@ main() {
     echo -e "  Version:     ${BOLD}Liberty 5.0.0${NC}"
     echo -e "  Mode:        ${BOLD}Guardian (Portable Travel Security)${NC}"
     echo -e "  Hotspot:     ${BOLD}${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}${NC}"
-    echo -e "  Network:     ${BOLD}192.168.4.0/24 (br0)${NC}"
+    echo -e "  Network:     ${BOLD}192.168.4.0/27 (br0, 30 devices max)${NC}"
     echo -e "  Web UI:      ${BOLD}http://192.168.4.1:8080${NC}"
     echo ""
     echo -e "  ${BOLD}Security Features:${NC}"
@@ -3167,7 +3324,7 @@ main() {
     echo ""
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
         echo -e "  ${BOLD}Additional:${NC}"
-        echo -e "  • AdGuard Home: ${BOLD}http://192.168.4.1:3000${NC}"
+        echo -e "  • AdGuard Home: ${BOLD}http://192.168.4.1:3000${NC} (admin / hookprobe123)"
         echo ""
     fi
     echo -e "  ${BOLD}Service Status:${NC}"
@@ -3183,9 +3340,6 @@ main() {
     echo -e "  2. Open http://192.168.4.1:8080 in your browser"
     echo -e "  3. View connected devices in the Web UI"
     echo -e "  4. Configure upstream WiFi connection for internet access"
-    if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
-        echo -e "  5. Complete AdGuard setup: http://192.168.4.1:3000"
-    fi
     echo ""
     echo -e "  ${DIM}Logs: journalctl -u guardian-suricata -u guardian-qsecbit -f${NC}"
     echo ""
