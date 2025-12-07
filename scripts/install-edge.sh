@@ -1,7 +1,17 @@
 #!/bin/bash
 #
-# install-edge.sh - HookProbe Edge Unified Installer
+# install-edge.sh - HookProbe Edge Unified Installer (LEGACY)
 # Part of HookProbe unified installation system
+#
+# DEPRECATION NOTICE:
+#   This script is maintained for backward compatibility.
+#   For new installations, please use the product-specific installers:
+#
+#   - Guardian: products/guardian/scripts/setup.sh
+#   - Fortress: products/fortress/setup.sh
+#   - Nexus:    products/nexus/setup.sh
+#
+#   Or use the main installer: sudo ./install.sh --tier <tier>
 #
 # ONE unified installer with auto-detection for:
 #   - Raspberry Pi 4/5 (4GB+ RAM)
