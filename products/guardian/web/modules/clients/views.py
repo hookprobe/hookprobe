@@ -3,7 +3,7 @@ Clients Module Views - Connected Devices Management
 """
 from flask import jsonify
 from . import clients_bp
-from ...utils import run_command
+from utils import run_command
 
 
 @clients_bp.route('/api/list')
