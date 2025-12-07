@@ -2144,9 +2144,11 @@ configure_base_networking() {
 
     local HOTSPOT_SSID="${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}"
     local HOTSPOT_PASS="${HOOKPROBE_WIFI_PASS:-hookprobe123}"
+    # /27 subnet for Guardian (30 usable addresses - sufficient for travel companion)
     local BRIDGE_IP="192.168.4.1"
-    local DHCP_START="192.168.4.100"
-    local DHCP_END="192.168.4.200"
+    local DHCP_START="192.168.4.2"
+    local DHCP_END="192.168.4.30"
+    local NETMASK="255.255.255.224"
 
     # Determine interfaces
     local WIFI_IFACE=$(echo $WIFI_INTERFACES | awk '{print $1}')
@@ -2217,7 +2219,7 @@ configure_base_networking() {
     log_info "Creating bridge br0..."
     ip link add br0 type bridge 2>/dev/null || true
     ip link set br0 up
-    ip addr add $BRIDGE_IP/24 dev br0 2>/dev/null || true
+    ip addr add $BRIDGE_IP/27 dev br0 2>/dev/null || true
 
     # NOTE: eth0 is NOT added to bridge - it's a WAN interface for failover
     # Only the LAN-side (USB WiFi dongle) is bridged via hostapd
@@ -2399,8 +2401,8 @@ EOF
 interface=br0
 bind-interfaces
 
-# DHCP range
-dhcp-range=$DHCP_START,$DHCP_END,255.255.255.0,24h
+# DHCP range (/27 subnet - 30 usable addresses)
+dhcp-range=$DHCP_START,$DHCP_END,$NETMASK,24h
 
 # Gateway
 dhcp-option=3,$BRIDGE_IP
@@ -2566,7 +2568,7 @@ configure_guardian_hostapd() {
 
     # Guardian mode: NO VLAN interfaces, NO VLAN bridges
     # All devices connect to br0 (192.168.4.x network)
-    log_info "Guardian mode: All devices on single network (br0 / 192.168.4.0/24)"
+    log_info "Guardian mode: All devices on single network (br0 / 192.168.4.0/27)"
     log_info "For IoT VLAN segmentation, use Fortress mode with VAP-capable WiFi adapter"
 
     log_info "Hostapd configuration complete"
@@ -2656,7 +2658,7 @@ create_default_config() {
 # Mode: Guardian (Portable Travel Security)
 #
 # Guardian mode provides simple WiFi hotspot with security features.
-# All devices connect to the same network (br0 / 192.168.4.0/24).
+# All devices connect to the same network (br0 / 192.168.4.0/27).
 #
 # For VLAN segmentation and IoT isolation, use Fortress mode
 # with VAP-capable WiFi adapters (Atheros AR9271, MediaTek MT7612U).
@@ -2665,10 +2667,10 @@ create_default_config() {
 network:
   mode: "guardian"  # guardian = simple, fortress = vlan segmentation
   lan_interface: "br0"
-  lan_subnet: "192.168.4.0/24"
+  lan_subnet: "192.168.4.0/27"
   lan_gateway: "192.168.4.1"
-  dhcp_start: "192.168.4.100"
-  dhcp_end: "192.168.4.200"
+  dhcp_start: "192.168.4.2"
+  dhcp_end: "192.168.4.30"
 
 # HTP (HookProbe Transport Protocol) Configuration
 htp:
@@ -3145,7 +3147,7 @@ main() {
     echo -e "  Version:     ${BOLD}Liberty 5.0.0${NC}"
     echo -e "  Mode:        ${BOLD}Guardian (Portable Travel Security)${NC}"
     echo -e "  Hotspot:     ${BOLD}${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}${NC}"
-    echo -e "  Network:     ${BOLD}192.168.4.0/24 (br0)${NC}"
+    echo -e "  Network:     ${BOLD}192.168.4.0/27 (br0, 30 devices max)${NC}"
     echo -e "  Web UI:      ${BOLD}http://192.168.4.1:8080${NC}"
     echo ""
     echo -e "  ${BOLD}Security Features:${NC}"

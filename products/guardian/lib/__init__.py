@@ -2,8 +2,8 @@
 HookProbe Guardian Library
 
 Provides L2-L7 threat detection, mobile network protection, SDN control,
-RADIUS integration, network segmentation, HTP file transfer, and QSecBit
-integration for the Guardian security appliance.
+network segmentation, HTP file transfer, and QSecBit integration for the
+Guardian security appliance.
 
 Modules:
 - layer_threat_detector: OSI layer-based threat detection engine
@@ -12,8 +12,8 @@ Modules:
 - htp_client: HookProbe Transport Protocol client for MSSP communication
 - htp_file: HTP-based secure file transfer (replaces WebSocket VPN)
 - openflow_controller: OpenFlow 1.3 SDN controller with OVS integration
-- radius_integration: RADIUS/FreeRADIUS MAC authentication and VLAN assignment
 - network_segmentation: nftables-based network segmentation and firewall
+- mesh_integration: HTP mesh network for device tracking (replaces RADIUS)
 - config: Unified configuration management with sensible defaults
 
 Author: HookProbe Team
@@ -80,20 +80,8 @@ from .openflow_controller import (
     OFPPort
 )
 
-from .radius_integration import (
-    RADIUSClient,
-    RADIUSServer,
-    RADIUSClientConfig,
-    RADIUSPacket,
-    MACAuthService,
-    MACAuthEntry,
-    RADIUSCode,
-    RADIUSAttribute,
-    TunnelType,
-    TunnelMedium,
-    NASPortType,
-    ServiceType
-)
+# RADIUS integration removed - Guardian now uses HTP mesh for device tracking
+# See mesh_integration.py for the new approach
 
 from .network_segmentation import (
     NFTablesManager,
@@ -111,7 +99,6 @@ from .network_segmentation import (
 
 from .config import (
     GuardianConfig,
-    RADIUSConfig,
     OpenFlowConfig,
     HTPConfig as HTPConfigSettings,
     HTPFileConfig,
@@ -181,19 +168,7 @@ __all__ = [
     'OFPFlowModCommand',
     'OFPPort',
 
-    # RADIUS Integration
-    'RADIUSClient',
-    'RADIUSServer',
-    'RADIUSClientConfig',
-    'RADIUSPacket',
-    'MACAuthService',
-    'MACAuthEntry',
-    'RADIUSCode',
-    'RADIUSAttribute',
-    'TunnelType',
-    'TunnelMedium',
-    'NASPortType',
-    'ServiceType',
+    # RADIUS Integration removed - using HTP mesh instead
 
     # Network Segmentation
     'NFTablesManager',
@@ -210,7 +185,6 @@ __all__ = [
 
     # Configuration
     'GuardianConfig',
-    'RADIUSConfig',
     'OpenFlowConfig',
     'HTPConfigSettings',
     'HTPFileConfig',
