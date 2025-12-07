@@ -7,6 +7,7 @@
 # Removes all Guardian components:
 # - Podman containers (Suricata, WAF, Zeek)
 # - DNS Shield blocklists
+# - dnsXai ML models, training data, and Python packages (scikit-learn, joblib)
 # - Systemd services
 # - Network bridges
 # - hostapd and dnsmasq configurations
@@ -350,10 +351,10 @@ remove_htp_data() {
 }
 
 # ============================================================
-# REMOVE DNS SHIELD
+# REMOVE DNS SHIELD AND ML COMPONENTS
 # ============================================================
 remove_dns_shield() {
-    log_step "Removing DNS Shield blocklists and configuration..."
+    log_step "Removing DNS Shield, dnsXai ML, and configuration..."
 
     # Stop and disable timer
     systemctl stop dns-shield-update.timer 2>/dev/null || true
@@ -366,6 +367,12 @@ remove_dns_shield() {
     # Remove dnsmasq DNS Shield config
     rm -f /etc/dnsmasq.d/dns-shield.conf 2>/dev/null || true
 
+    # Remove ML data directory (dnsXai models, training data)
+    if [ -d "/opt/hookprobe/guardian/dns-shield/ml" ]; then
+        log_info "Removing dnsXai ML models and training data..."
+        rm -rf /opt/hookprobe/guardian/dns-shield/ml 2>/dev/null || true
+    fi
+
     # Remove DNS Shield directory and all blocklists
     rm -rf /opt/hookprobe/guardian/dns-shield 2>/dev/null || true
 
@@ -375,7 +382,7 @@ remove_dns_shield() {
 
     systemctl daemon-reload 2>/dev/null || true
 
-    log_info "DNS Shield removed"
+    log_info "DNS Shield and dnsXai ML removed"
 }
 
 # ============================================================
@@ -543,6 +550,36 @@ remove_packages() {
 }
 
 # ============================================================
+# REMOVE ML PYTHON PACKAGES
+# ============================================================
+remove_ml_packages() {
+    log_step "Removing ML Python packages (dnsXai)..."
+
+    # Check if pip3 is available
+    if ! command -v pip3 &>/dev/null; then
+        log_info "pip3 not installed, skipping ML package removal"
+        return 0
+    fi
+
+    # ML packages installed by Guardian setup
+    local ml_packages=(
+        "scikit-learn"
+        "joblib"
+    )
+
+    for pkg in "${ml_packages[@]}"; do
+        if pip3 show "$pkg" &>/dev/null; then
+            log_info "Removing ML package: $pkg"
+            pip3 uninstall -y "$pkg" 2>/dev/null || \
+            pip3 uninstall --break-system-packages -y "$pkg" 2>/dev/null || \
+            log_warn "Could not remove $pkg - may need manual removal"
+        fi
+    done
+
+    log_info "ML Python packages removed"
+}
+
+# ============================================================
 # RESTORE NETWORK
 # ============================================================
 restore_network() {
@@ -585,6 +622,8 @@ main() {
     echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, etc.)"
     echo -e "  - Podman containers (Suricata IDS, WAF, Zeek)"
     echo -e "  - DNS Shield blocklists and configuration"
+    echo -e "  - dnsXai ML models and training data"
+    echo -e "  - ML Python packages (scikit-learn, joblib)"
     echo -e "  - Network bridges (br0)"
     echo -e "  - WiFi hotspot (hostapd) configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
@@ -619,6 +658,9 @@ main() {
     remove_systemd_services
     remove_guardian_directories
 
+    # Remove ML Python packages (dnsXai)
+    remove_ml_packages
+
     # Restore network
     restore_network
 
@@ -634,6 +676,7 @@ main() {
     echo -e "  • Guardian systemd services (webui, htp, xdp, ids, etc.)"
     echo -e "  • Podman containers and volumes"
     echo -e "  • DNS Shield blocklists and configuration"
+    echo -e "  • dnsXai ML models, training data, and Python packages"
     echo -e "  • Network bridges (br0)"
     echo -e "  • hostapd and dnsmasq configuration"
     echo -e "  • Guardian configuration (/etc/guardian/)"
