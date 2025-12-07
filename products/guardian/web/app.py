@@ -567,7 +567,7 @@ def get_container_status():
         'zeek': {'name': 'guardian-zeek', 'label': 'Zeek Network Analysis', 'running': False, 'type': 'container'},
         'waf': {'name': 'guardian-waf', 'label': 'ModSecurity WAF', 'running': False, 'type': 'container'},
         'neuro': {'name': 'guardian-neuro', 'label': 'Neuro Protocol', 'running': False, 'type': 'container'},
-        'adguard': {'name': 'guardian-adguard', 'label': 'AdGuard DNS', 'running': False, 'type': 'container'},
+        'dns_shield': {'name': 'dns-shield', 'label': 'DNS Shield', 'running': False, 'type': 'service'},
         'xdp': {'name': 'guardian-xdp', 'label': 'XDP DDoS Protection', 'running': False, 'type': 'service'},
         'aggregator': {'name': 'guardian-aggregator', 'label': 'Threat Aggregator', 'running': False, 'type': 'service'},
     }
@@ -589,6 +589,12 @@ def get_container_status():
     xdp_output, _ = run_command('ip link show | grep xdp')
     if xdp_output:
         containers['xdp']['running'] = True
+
+    # Check DNS Shield status (dnsmasq running + blocklist exists)
+    import os
+    dnsmasq_status, _ = run_command('systemctl is-active dnsmasq')
+    blocklist_exists = os.path.exists('/opt/hookprobe/guardian/dns-shield/blocked-hosts')
+    containers['dns_shield']['running'] = (dnsmasq_status == 'active' and blocklist_exists)
 
     return containers
 
@@ -1610,7 +1616,7 @@ HTML_TEMPLATE = '''
         <div class="tab active" data-tab="dashboard">Dashboard</div>
         <div class="tab" data-tab="security">Security</div>
         <div class="tab" data-tab="clients">Clients</div>
-        <div class="tab" data-tab="adguard">AdGuard</div>
+        <div class="tab" data-tab="dns-shield">DNS Shield</div>
         <div class="tab" data-tab="vpn">VPN</div>
         <div class="tab" data-tab="wifi">WiFi</div>
         <div class="tab" data-tab="system">System</div>
@@ -2565,84 +2571,96 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
-        <!-- AdGuard Tab -->
-        <div id="adguard" class="tab-content">
+        <!-- DNS Shield Tab -->
+        <div id="dns-shield" class="tab-content">
             <div class="card">
-                <h2>AdGuard Home DNS</h2>
-                <p style="color: #6b7280; margin-bottom: 20px;">Network-wide ad blocking and DNS filtering</p>
+                <h2>DNS Shield</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">Network-wide ad blocking powered by StevenBlack's Unified Hosts</p>
                 <div class="status-grid">
                     <div class="status-item">
-                        <div class="value" style="color: {% if containers.adguard.running %}var(--hp-green){% else %}var(--hp-red){% endif %};">
-                            {% if containers.adguard.running %}Running{% else %}Stopped{% endif %}
+                        <div class="value" id="shield-level-display">-</div>
+                        <div class="label">Shield Level</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value" id="shield-domains">-</div>
+                        <div class="label">Domains Blocked</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value" id="shield-last-update">-</div>
+                        <div class="label">Last Update</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value" id="shield-source">-</div>
+                        <div class="label">Blocklist Source</div>
+                    </div>
+                </div>
+                <!-- Shield Level Visualization -->
+                <div style="margin-top: 20px; padding: 15px; background: var(--hp-light); border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <span style="font-weight: 600; font-size: 14px;">Protection Level:</span>
+                        <div id="shield-bar" style="display: flex; gap: 4px;">
+                            <span class="shield-block" data-level="1" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
+                            <span class="shield-block" data-level="2" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
+                            <span class="shield-block" data-level="3" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
+                            <span class="shield-block" data-level="4" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
+                            <span class="shield-block" data-level="5" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
                         </div>
-                        <div class="label">Service Status</div>
                     </div>
-                    <div class="status-item">
-                        <div class="value" id="adguard-queries">-</div>
-                        <div class="label">DNS Queries (24h)</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value" id="adguard-blocked">-</div>
-                        <div class="label">Blocked (24h)</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value" id="adguard-percent">-</div>
-                        <div class="label">Block Rate</div>
+                    <div style="font-size: 12px; color: #6b7280;">
+                        1=Base | 2=+Fakenews | 3=+Gambling | 4=+Adult | 5=Full
                     </div>
                 </div>
             </div>
 
             <div class="card">
-                <h2>AdGuard Dashboard</h2>
-                <p style="color: #6b7280; margin-bottom: 15px;">Access the full AdGuard Home interface for detailed configuration</p>
-                <div style="background: var(--hp-light); border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 13px;">
-                    <strong>Default Login:</strong> admin / hookprobe123
-                </div>
-                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
-                    <a href="http://192.168.4.1:3000" target="_blank" class="btn btn-primary">
-                        Open AdGuard Dashboard
-                    </a>
-                    <button class="btn btn-secondary" onclick="refreshAdGuardStats()">
-                        Refresh Stats
-                    </button>
-                </div>
-                <div style="background: var(--hp-light); border-radius: 8px; padding: 15px;">
-                    <h3 style="margin-bottom: 10px; font-size: 14px;">Quick Access</h3>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
-                        <a href="http://192.168.4.1:3000/#filters" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
-                            → Filters & Blocklists
-                        </a>
-                        <a href="http://192.168.4.1:3000/#dns" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
-                            → DNS Settings
-                        </a>
-                        <a href="http://192.168.4.1:3000/#clients" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
-                            → Client Settings
-                        </a>
-                        <a href="http://192.168.4.1:3000/#logs" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
-                            → Query Log
-                        </a>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>DNS Configuration</h2>
+                <h2>Shield Configuration</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">Adjust protection level and manage whitelist</p>
                 <div class="param-grid">
                     <div class="param-item">
-                        <div class="label">AdGuard Port</div>
-                        <div class="value">3000 (Web), 53 (DNS)</div>
+                        <div class="label">Config File</div>
+                        <div class="value" style="font-family: monospace; font-size: 11px;">/opt/hookprobe/guardian/dns-shield/shield.conf</div>
                     </div>
                     <div class="param-item">
-                        <div class="label">Container</div>
-                        <div class="value">guardian-adguard</div>
+                        <div class="label">Whitelist</div>
+                        <div class="value" style="font-family: monospace; font-size: 11px;">/opt/hookprobe/guardian/dns-shield/whitelist.txt</div>
                     </div>
                     <div class="param-item">
                         <div class="label">DNS Server</div>
-                        <div class="value">192.168.4.1:53</div>
+                        <div class="value">192.168.4.1:53 (dnsmasq)</div>
                     </div>
                     <div class="param-item">
                         <div class="label">Upstream DNS</div>
-                        <div class="value">1.1.1.1, 8.8.8.8</div>
+                        <div class="value">1.1.1.1, 8.8.8.8, 9.9.9.9</div>
+                    </div>
+                </div>
+                <div style="margin-top: 15px; padding: 12px; background: var(--hp-light); border-radius: 8px; font-size: 13px;">
+                    <strong>To change shield level:</strong><br>
+                    Edit <code>/opt/hookprobe/guardian/dns-shield/shield.conf</code> and set <code>SHIELD_LEVEL=1-5</code>, then run <code>update-blocklists.sh</code>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Blocklist Categories</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-green);">
+                        <div style="font-weight: 600; margin-bottom: 5px;">Level 1: Base</div>
+                        <div style="font-size: 12px; color: #6b7280;">Adware + Malware (~130K domains)</div>
+                    </div>
+                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-blue);">
+                        <div style="font-weight: 600; margin-bottom: 5px;">Level 2: Enhanced</div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Fakenews (~132K domains)</div>
+                    </div>
+                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-primary);">
+                        <div style="font-weight: 600; margin-bottom: 5px;">Level 3: Strong</div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Gambling (~135K domains)</div>
+                    </div>
+                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-amber);">
+                        <div style="font-weight: 600; margin-bottom: 5px;">Level 4: Maximum</div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Adult content (~200K domains)</div>
+                    </div>
+                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-red);">
+                        <div style="font-weight: 600; margin-bottom: 5px;">Level 5: Full Shield</div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Social media (~250K domains)</div>
                     </div>
                 </div>
             </div>
@@ -2651,13 +2669,14 @@ HTML_TEMPLATE = '''
                 <h2>Service Controls</h2>
                 <div class="btn-group" style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <form method="POST" action="/action" style="display: inline;">
-                        <input type="hidden" name="action" value="restart_adguard">
-                        <button type="submit" class="btn btn-warning">Restart AdGuard</button>
+                        <input type="hidden" name="action" value="update_blocklist">
+                        <button type="submit" class="btn btn-primary">Update Blocklist Now</button>
                     </form>
                     <form method="POST" action="/action" style="display: inline;">
                         <input type="hidden" name="action" value="flush_dns">
                         <button type="submit" class="btn btn-secondary">Flush DNS Cache</button>
                     </form>
+                    <button class="btn btn-secondary" onclick="refreshDNSShieldStats()">Refresh Stats</button>
                 </div>
             </div>
         </div>
@@ -3052,28 +3071,41 @@ HTML_TEMPLATE = '''
                 .catch(error => console.error('Error fetching clients:', error));
         }
 
-        // Refresh AdGuard Stats
-        function refreshAdGuardStats() {
-            fetch('/api/adguard')
+        // Refresh DNS Shield Stats
+        function refreshDNSShieldStats() {
+            fetch('/api/dns-shield')
                 .then(response => response.json())
                 .then(data => {
                     if (data) {
-                        document.getElementById('adguard-queries').textContent = data.num_dns_queries || '0';
-                        document.getElementById('adguard-blocked').textContent = data.num_blocked_filtering || '0';
-                        document.getElementById('adguard-percent').textContent = (data.blocked_percent || 0).toFixed(1) + '%';
+                        document.getElementById('shield-level-display').textContent = data.shield_level_name || 'Unknown';
+                        document.getElementById('shield-domains').textContent = (data.domains_blocked || 0).toLocaleString();
+                        document.getElementById('shield-last-update').textContent = data.last_update ? new Date(data.last_update).toLocaleDateString() : 'Never';
+                        document.getElementById('shield-source').textContent = data.blocklist_source || 'N/A';
+
+                        // Update shield bar visualization
+                        const level = data.shield_level || 0;
+                        document.querySelectorAll('.shield-block').forEach(block => {
+                            const blockLevel = parseInt(block.dataset.level);
+                            if (blockLevel <= level) {
+                                block.style.background = level >= 4 ? 'var(--hp-amber)' : 'var(--hp-green)';
+                            } else {
+                                block.style.background = '#e5e7eb';
+                            }
+                        });
                     }
                 })
                 .catch(error => {
-                    console.error('Error fetching AdGuard stats:', error);
-                    document.getElementById('adguard-queries').textContent = 'N/A';
-                    document.getElementById('adguard-blocked').textContent = 'N/A';
-                    document.getElementById('adguard-percent').textContent = 'N/A';
+                    console.error('Error fetching DNS Shield stats:', error);
+                    document.getElementById('shield-level-display').textContent = 'N/A';
+                    document.getElementById('shield-domains').textContent = 'N/A';
+                    document.getElementById('shield-last-update').textContent = 'N/A';
+                    document.getElementById('shield-source').textContent = 'N/A';
                 });
         }
 
-        // Load AdGuard stats on tab switch
-        document.querySelectorAll('.tab[data-tab="adguard"]').forEach(tab => {
-            tab.addEventListener('click', refreshAdGuardStats);
+        // Load DNS Shield stats on tab switch
+        document.querySelectorAll('.tab[data-tab="dns-shield"]').forEach(tab => {
+            tab.addEventListener('click', refreshDNSShieldStats);
         });
 
         // Refresh VPN Stats
@@ -3435,15 +3467,15 @@ def action():
     elif action == 'reboot':
         run_command('reboot')
         flash('Rebooting...', 'success')
-    elif action == 'restart_adguard':
-        run_command('systemctl restart guardian-adguard')
-        flash('AdGuard restarting...', 'success')
-        return redirect('/#adguard')
+    elif action == 'update_blocklist':
+        run_command('/opt/hookprobe/guardian/scripts/update-blocklists.sh --force')
+        flash('Blocklist update started...', 'success')
+        return redirect('/#dns-shield')
     elif action == 'flush_dns':
         # Flush DNS cache by restarting dnsmasq
         run_command('systemctl restart dnsmasq')
         flash('DNS cache flushed', 'success')
-        return redirect('/#adguard')
+        return redirect('/#dns-shield')
 
     return redirect('/#system')
 
@@ -3516,38 +3548,35 @@ def api_vpn():
     return jsonify(get_vpn_stats())
 
 
-@app.route('/api/adguard')
-def api_adguard():
-    """Get AdGuard Home statistics from its API."""
+@app.route('/api/dns-shield')
+def api_dns_shield():
+    """Get DNS Shield statistics from stats.json."""
+    import json
+    import os
+
+    stats_file = '/opt/hookprobe/guardian/dns-shield/stats.json'
+
     try:
-        import urllib.request
-        import urllib.error
-        # AdGuard Home API endpoint
-        url = 'http://127.0.0.1:3000/control/stats'
-        req = urllib.request.Request(url, headers={'User-Agent': 'Guardian/1.0'})
-        with urllib.request.urlopen(req, timeout=3) as response:
-            import json
-            data = json.loads(response.read().decode())
-            # Calculate blocked percentage
-            total = data.get('num_dns_queries', 0)
-            blocked = data.get('num_blocked_filtering', 0)
-            if total > 0:
-                data['blocked_percent'] = (blocked / total) * 100
-            else:
-                data['blocked_percent'] = 0
-            return jsonify(data)
-    except urllib.error.URLError:
-        return jsonify({
-            'num_dns_queries': 0,
-            'num_blocked_filtering': 0,
-            'blocked_percent': 0,
-            'error': 'AdGuard not reachable'
-        })
+        if os.path.exists(stats_file):
+            with open(stats_file, 'r') as f:
+                data = json.load(f)
+                return jsonify(data)
+        else:
+            return jsonify({
+                'shield_level': 0,
+                'shield_level_name': 'Not Configured',
+                'domains_blocked': 0,
+                'last_update': None,
+                'blocklist_source': 'N/A',
+                'error': 'DNS Shield not initialized'
+            })
     except Exception as e:
         return jsonify({
-            'num_dns_queries': 0,
-            'num_blocked_filtering': 0,
-            'blocked_percent': 0,
+            'shield_level': 0,
+            'shield_level_name': 'Error',
+            'domains_blocked': 0,
+            'last_update': None,
+            'blocklist_source': 'N/A',
             'error': str(e)
         })
 
