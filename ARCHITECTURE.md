@@ -2,6 +2,8 @@
 
 > **Federated Cybersecurity Mesh: Privacy-Preserving Collective Defense**
 
+**Full Documentation**: [docs/architecture/HOOKPROBE-ARCHITECTURE.md](docs/architecture/HOOKPROBE-ARCHITECTURE.md)
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                          HOOKPROBE FEDERATED MESH                               │
