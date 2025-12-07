@@ -137,6 +137,7 @@ declare -g CAN_SENTINEL=false
 declare -g CAN_GUARDIAN=false
 declare -g CAN_FORTRESS=false
 declare -g CAN_NEXUS=false
+declare -g CAN_MSSP=false
 
 # ============================================================
 # DETECTION FUNCTIONS
@@ -643,6 +644,7 @@ evaluate_deployment_tiers() {
     CAN_GUARDIAN=false
     CAN_FORTRESS=false
     CAN_NEXUS=false
+    CAN_MSSP=false
 
     local total_net=$((SYS_ETH_COUNT + SYS_WIFI_COUNT))
 
@@ -729,6 +731,29 @@ evaluate_deployment_tiers() {
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if [ "$SYS_CPU_CORES" -ge 8 ] && [ "$SYS_RAM_MB" -ge 65536 ] && [ "$SYS_STORAGE_GB" -ge 1000 ]; then
         CAN_NEXUS=true
+    fi
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # MSSP - "The Central Brain"
+    # Cloud-based MSSP platform for POC and production
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Requirements:
+    #   - CPU: 16+ cores
+    #   - RAM: 64GB+ (128GB recommended)
+    #   - Storage: 500GB+
+    #   - Network: Public IP required
+    # Features: Multi-tenant MSSP backend, Django web portal,
+    #           PostgreSQL, ClickHouse, VictoriaMetrics, Grafana,
+    #           Logto IAM, n8n automation, HTP validator endpoint
+    # Purpose: Central coordination of Sentinel/Guardian/Fortress/Nexus
+    # Platforms: Cloud instances, dedicated servers
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if [ "$SYS_CPU_CORES" -ge 16 ] && [ "$SYS_RAM_MB" -ge 65536 ] && [ "$SYS_STORAGE_GB" -ge 500 ]; then
+        CAN_MSSP=true
+    fi
+    # Allow MSSP on smaller systems for POC (32GB RAM, 8 cores)
+    if [ "$SYS_CPU_CORES" -ge 8 ] && [ "$SYS_RAM_MB" -ge 32768 ] && [ "$SYS_STORAGE_GB" -ge 200 ]; then
+        CAN_MSSP=true  # POC mode with reduced resources
     fi
 }
 
@@ -1075,11 +1100,23 @@ show_capability_summary() {
 
     local tier_num=1
 
+    # MSSP
+    if [ "$CAN_MSSP" = true ]; then
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}█████${NC} ${BOLD}${WHITE}MSSP${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "       ${ITALIC}\"The Central Brain\"${NC}"
+        echo -e "       ${DIM}Cloud MSSP platform with Django portal, all PODs${NC}"
+        tier_num=$((tier_num + 1))
+    else
+        echo -e "  ${DIM}░░░░░ MSSP [NOT AVAILABLE]${NC}"
+        echo -e "       ${DIM}Requires: 16+ cores, 64GB+ RAM, 500GB+ storage${NC}"
+    fi
+    echo ""
+
     # NEXUS
     if [ "$CAN_NEXUS" = true ]; then
         echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}████${NC} ${BOLD}${WHITE}NEXUS${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"The Central Command\"${NC}"
-        echo -e "       ${DIM}Multi-tenant MSSP backend with full analytics${NC}"
+        echo -e "       ${DIM}ML/AI compute hub with edge orchestration${NC}"
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ NEXUS [NOT AVAILABLE]${NC}"
@@ -1134,6 +1171,7 @@ handle_capability_check() {
 
         # Build list of available tiers in order
         local available_tiers=()
+        [ "$CAN_MSSP" = true ] && available_tiers+=("mssp")
         [ "$CAN_NEXUS" = true ] && available_tiers+=("nexus")
         [ "$CAN_FORTRESS" = true ] && available_tiers+=("fortress")
         [ "$CAN_GUARDIAN" = true ] && available_tiers+=("guardian")
@@ -1151,6 +1189,7 @@ handle_capability_check() {
                         guardian) install_guardian; return ;;
                         fortress) install_fortress; return ;;
                         nexus) install_nexus; return ;;
+                        mssp) install_mssp; return ;;
                     esac
                 else
                     echo -e "${RED}Invalid selection${NC}"; sleep 1
@@ -1694,6 +1733,82 @@ install_nexus() {
     fi
 }
 
+install_mssp() {
+    safe_clear
+    show_banner
+    print_header "INSTALL: MSSP" "$GREEN"
+
+    echo -e "${GREEN}█████${NC} ${BOLD}${WHITE}MSSP${NC} - ${ITALIC}\"The Central Brain\"${NC}"
+    echo ""
+    echo "MSSP is the cloud-based Managed Security Service Provider platform"
+    echo "that coordinates and aggregates intelligence from all edge tiers."
+    echo ""
+    echo -e "${YELLOW}What will be installed:${NC}"
+    echo "  • Django web portal with MSSP dashboard"
+    echo "  • PostgreSQL database (app data)"
+    echo "  • ClickHouse analytics (security events)"
+    echo "  • VictoriaMetrics (time-series metrics)"
+    echo "  • Grafana dashboards"
+    echo "  • Logto IAM (OAuth 2.0 / OIDC)"
+    echo "  • Valkey cache (Redis-compatible)"
+    echo "  • n8n workflow automation"
+    echo "  • HTP validator endpoint (UDP/TCP 4478)"
+    echo "  • Qsecbit global aggregation"
+    echo ""
+    echo -e "${YELLOW}POD-based Architecture:${NC}"
+    echo "  • POD-001: DMZ (Nginx + Django)"
+    echo "  • POD-002: IAM (Logto)"
+    echo "  • POD-003: Database (PostgreSQL)"
+    echo "  • POD-004: Cache (Valkey)"
+    echo "  • POD-005: Monitoring (ClickHouse, VictoriaMetrics, Grafana)"
+    echo "  • POD-006: Security (Qsecbit)"
+    echo "  • POD-008: Automation (n8n)"
+    echo ""
+    echo -e "${YELLOW}Network Architecture:${NC}"
+    echo "  • OVS bridge with OpenFlow 1.3/1.4"
+    echo "  • VXLAN mesh tunnels (VNI 201-208)"
+    echo "  • PSK-encrypted inter-POD communication"
+    echo ""
+    echo -e "${YELLOW}Resource Usage:${NC}"
+    echo "  • RAM: ~32GB baseline (64GB+ recommended)"
+    echo "  • Storage: ~250GB for containers and data"
+    echo "  • CPU: Moderate-high utilization"
+    echo ""
+    echo -e "${RED}Production Deployment${NC}"
+    echo "This tier is intended for POC and production MSSP deployments."
+    echo "Ensure you have:"
+    echo "  • Static public IP address"
+    echo "  • DNS records configured (or use localhost for POC)"
+    echo "  • Firewall rules allowing ports 80, 443, 4478"
+    echo ""
+
+    local mssp_domain=""
+    local admin_email=""
+
+    read -p "Enter MSSP domain (or 'localhost' for POC) [localhost]: " mssp_domain
+    mssp_domain="${mssp_domain:-localhost}"
+
+    read -p "Enter admin email [admin@hookprobe.local]: " admin_email
+    admin_email="${admin_email:-admin@hookprobe.local}"
+
+    echo ""
+    read -p "Proceed with MSSP installation? (yes/no) [no]: " confirm
+    if [ "$confirm" = "yes" ]; then
+        echo ""
+        export HOOKPROBE_TIER="mssp"
+        export MSSP_DOMAIN="$mssp_domain"
+        export MSSP_ADMIN_EMAIL="$admin_email"
+
+        if [ -f "$SCRIPT_DIR/products/mssp/setup.sh" ]; then
+            bash "$SCRIPT_DIR/products/mssp/setup.sh" --domain "$mssp_domain" --admin-email "$admin_email"
+        else
+            echo -e "${RED}MSSP installer not found at $SCRIPT_DIR/products/mssp/setup.sh${NC}"
+        fi
+    else
+        echo "Installation cancelled."
+    fi
+}
+
 handle_install() {
     while true; do
         local options_output
@@ -1717,6 +1832,7 @@ handle_install() {
                         guardian) install_guardian ;;
                         fortress) install_fortress ;;
                         nexus) install_nexus ;;
+                        mssp) install_mssp ;;
                     esac
                     echo ""
                     read -p "Press Enter to continue..."
@@ -1754,18 +1870,21 @@ show_uninstall_menu() {
     echo -e "     ${DIM}Guardian + monitoring stack (Grafana, VictoriaMetrics, n8n)${NC}"
     echo ""
     echo -e "  ${BOLD}4${NC}) ${GREEN}████${NC} Nexus Uninstall"
-    echo -e "     ${DIM}MSSP backend, ClickHouse, multi-tenant SOC${NC}"
+    echo -e "     ${DIM}ML/AI compute hub, ClickHouse, edge orchestration${NC}"
+    echo ""
+    echo -e "  ${BOLD}5${NC}) ${GREEN}█████${NC} MSSP Uninstall"
+    echo -e "     ${DIM}Central brain, Django portal, all PODs, databases${NC}"
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
     echo -e "${YELLOW}Cleanup Utilities:${NC}"
     echo ""
-    echo -e "  ${BOLD}5${NC}) Stop All Services"
+    echo -e "  ${BOLD}6${NC}) Stop All Services"
     echo -e "     ${DIM}Stop all HookProbe containers and systemd services${NC}"
     echo ""
-    echo -e "  ${BOLD}6${NC}) Clean Everything Else"
+    echo -e "  ${BOLD}7${NC}) Clean Everything Else"
     echo -e "     ${RED}OVS bridges, Linux bridges, VXLANs, WiFi, volumes, containers, images${NC}"
     echo ""
-    echo -e "  ${BOLD}7${NC}) ${RED}NUCLEAR: Complete System Wipe${NC}"
+    echo -e "  ${BOLD}8${NC}) ${RED}NUCLEAR: Complete System Wipe${NC}"
     echo -e "     ${RED}Remove ALL HookProbe components from ALL tiers!${NC}"
     echo ""
     show_nav_footer
@@ -2343,6 +2462,92 @@ uninstall_nexus() {
     fi
 }
 
+uninstall_mssp() {
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  MSSP COMPLETE UNINSTALL                                   ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will remove:${NC}"
+    echo "  • Django web portal and all PODs"
+    echo "  • PostgreSQL database (all app data)"
+    echo "  • ClickHouse analytics (all security events)"
+    echo "  • VictoriaMetrics (all metrics)"
+    echo "  • Grafana dashboards"
+    echo "  • Logto IAM configuration"
+    echo "  • Valkey cache"
+    echo "  • n8n workflows"
+    echo "  • HTP validator endpoint"
+    echo "  • OVS bridge and VXLAN tunnels"
+    echo ""
+    echo -e "${RED}WARNING: This will disconnect all managed edge devices!${NC}"
+    echo -e "${RED}WARNING: All MSSP data will be lost!${NC}"
+    echo ""
+    read -p "Are you sure? Type 'DELETE-MSSP' to confirm: " confirm
+    if [ "$confirm" = "DELETE-MSSP" ]; then
+        echo ""
+
+        # Use the MSSP uninstall script if available
+        if [ -f "$SCRIPT_DIR/products/mssp/uninstall.sh" ]; then
+            bash "$SCRIPT_DIR/products/mssp/uninstall.sh" --complete --force
+        else
+            # Fallback: manual cleanup
+            echo "Stopping MSSP services..."
+            systemctl stop hookprobe-mssp 2>/dev/null || true
+            systemctl disable hookprobe-mssp 2>/dev/null || true
+
+            # Stop all MSSP containers
+            if command -v podman &>/dev/null; then
+                echo "Stopping MSSP containers..."
+                for container in mssp-htp mssp-n8n mssp-qsecbit mssp-nginx mssp-celery mssp-django mssp-logto mssp-grafana mssp-clickhouse mssp-victoriametrics mssp-valkey mssp-postgres; do
+                    podman stop "$container" 2>/dev/null || true
+                    podman rm -f "$container" 2>/dev/null || true
+                done
+
+                # Remove MSSP networks
+                echo "Removing MSSP networks..."
+                for net in mssp-pod-001-dmz mssp-pod-002-iam mssp-pod-003-db mssp-pod-004-cache mssp-pod-005-monitoring mssp-pod-006-security mssp-pod-007-response mssp-pod-008-automation mssp-external; do
+                    podman network rm "$net" 2>/dev/null || true
+                done
+
+                # Remove custom images
+                for img in localhost/mssp-django localhost/mssp-qsecbit localhost/mssp-htp; do
+                    podman rmi "$img" 2>/dev/null || true
+                done
+            fi
+
+            # Remove OVS bridge
+            if command -v ovs-vsctl &>/dev/null; then
+                echo "Removing OVS bridge..."
+                for vni in 201 202 203 204 205 206 207 208; do
+                    ovs-vsctl del-port mssp-bridge "vxlan_${vni}" 2>/dev/null || true
+                done
+                ovs-vsctl del-port mssp-bridge vxlan_edge 2>/dev/null || true
+                ip link set mssp-bridge down 2>/dev/null || true
+                ovs-vsctl del-br mssp-bridge 2>/dev/null || true
+            fi
+
+            # Remove directories
+            echo "Removing MSSP directories..."
+            rm -rf /opt/hookprobe/mssp 2>/dev/null || true
+            rm -rf /var/lib/hookprobe/mssp 2>/dev/null || true
+            rm -rf /var/log/hookprobe/mssp 2>/dev/null || true
+            rm -rf /etc/hookprobe/mssp 2>/dev/null || true
+            rm -rf /etc/hookprobe/secrets/mssp 2>/dev/null || true
+
+            # Remove systemd files
+            rm -f /etc/systemd/system/hookprobe-mssp.service
+            rm -f /usr/local/bin/hookprobe-mssp-start
+            rm -f /usr/local/bin/hookprobe-mssp-stop
+            systemctl daemon-reload
+        fi
+
+        echo ""
+        echo -e "${GREEN}✓ MSSP uninstall complete${NC}"
+    else
+        echo "Cancelled."
+    fi
+}
+
 uninstall_cleanup_everything() {
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${RED}║  CLEANUP EVERYTHING ELSE                                   ║${NC}"
@@ -2525,9 +2730,10 @@ handle_uninstall() {
             2) uninstall_guardian ;;
             3) uninstall_fortress ;;
             4) uninstall_nexus ;;
-            5) uninstall_stop_services ;;
-            6) uninstall_cleanup_everything ;;
-            7) uninstall_complete ;;
+            5) uninstall_mssp ;;
+            6) uninstall_stop_services ;;
+            7) uninstall_cleanup_everything ;;
+            8) uninstall_complete ;;
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1; continue ;;
@@ -2555,7 +2761,8 @@ ${BOLD}Tiers:${NC}
   sentinel    Lightweight validator (512MB+ RAM)
   guardian    Travel-secure gateway (3GB+ RAM, 2+ NICs)
   fortress    Full-featured edge (8GB+ RAM, 2+ ethernet)
-  nexus       Multi-tenant MSSP (64GB+ RAM, 8+ cores)
+  nexus       ML/AI compute hub (64GB+ RAM, 8+ cores)
+  mssp        Central brain MSSP (64GB+ RAM, 16+ cores)
 
 ${BOLD}Examples:${NC}
   sudo ./install.sh --check
@@ -2597,6 +2804,12 @@ automated_install() {
         nexus)
             [ "$CAN_NEXUS" = true ] && install_nexus || {
                 echo -e "${RED}System does not meet Nexus requirements${NC}"
+                exit 1
+            }
+            ;;
+        mssp)
+            [ "$CAN_MSSP" = true ] && install_mssp || {
+                echo -e "${RED}System does not meet MSSP requirements${NC}"
                 exit 1
             }
             ;;
