@@ -653,14 +653,15 @@ evaluate_deployment_tiers() {
     # Ultra-lightweight validator for constrained devices
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
-    #   - RAM: 512MB - 3GB
+    #   - RAM: 256MB minimum (512MB comfortable)
     #   - Storage: 1GB+ (minimal footprint ~50MB)
     #   - Network: 1 interface (WAN only - modem or ethernet)
     #   - Internet: Required (no offline mode)
+    # Actual usage: ~150-250MB (single Python service)
     # Purpose: Validates edge nodes, lightweight monitoring
     # Target: RPi Zero, small SBCs, IoT gateways
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_RAM_MB" -ge 512 ] && [ "$SYS_STORAGE_GB" -ge 1 ]; then
+    if [ "$SYS_RAM_MB" -ge 256 ] && [ "$SYS_STORAGE_GB" -ge 1 ]; then
         if [ "$total_net" -ge 1 ]; then
             CAN_SENTINEL=true
         fi
@@ -671,15 +672,16 @@ evaluate_deployment_tiers() {
     # Travel-secure router / Home gateway
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
-    #   - RAM: 3GB+
-    #   - Storage: 16GB - 64GB+
+    #   - RAM: 1.5GB+ (2GB recommended)
+    #   - Storage: 8GB+ (16GB recommended)
     #   - Network: 2+ interfaces (2 eth OR 1 eth + 1 wifi)
     #   - Internet: Required (MSSP connectivity)
     #   - Bridge: HookProbe bridge required for WiFi deployments
+    # Actual usage: ~500-800MB (14% on 4GB RPi4)
     # Features: QSecBit, OpenFlow, WAF, IDS/IPS, Lite AI
     # Platforms: Raspberry Pi 4/5, Radxa, Banana Pi, etc.
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_RAM_MB" -ge 3072 ] && [ "$SYS_STORAGE_GB" -ge 16 ]; then
+    if [ "$SYS_RAM_MB" -ge 1536 ] && [ "$SYS_STORAGE_GB" -ge 8 ]; then
         # Need at least 2 network interfaces for WAN + LAN
         if [ "$SYS_ETH_COUNT" -ge 2 ] || ([ "$SYS_ETH_COUNT" -ge 1 ] && [ "$SYS_WIFI_COUNT" -ge 1 ]); then
             CAN_GUARDIAN=true
@@ -695,16 +697,17 @@ evaluate_deployment_tiers() {
     # Full-featured edge with local monitoring
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
-    #   - RAM: 8GB+
-    #   - Storage: 32GB+
+    #   - RAM: 4GB+ (8GB recommended)
+    #   - Storage: 16GB+ (32GB recommended)
     #   - Network: 2+ ethernet ports (optional LTE/5G)
     #   - Bridge: HookProbe bridge mandatory for traffic routing
     #   - Kernel: 5.x+ recommended
+    # Actual usage: ~2-3GB (Guardian + monitoring stack)
     # Features: All Guardian + Victoria Metrics, Grafana,
     #           n8n automation, web dashboard, local AI
     # Platforms: Intel N100, NUC, mini PCs, small servers
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 32 ]; then
+    if [ "$SYS_RAM_MB" -ge 4096 ] && [ "$SYS_STORAGE_GB" -ge 16 ]; then
         # Primary: 2+ ethernet ports
         if [ "$SYS_ETH_COUNT" -ge 2 ]; then
             CAN_FORTRESS=true
@@ -717,19 +720,19 @@ evaluate_deployment_tiers() {
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # NEXUS - "The Central Command"
-    # Multi-tenant MSSP command center
+    # ML/AI compute hub for edge orchestration
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
-    #   - CPU: 8+ cores
-    #   - RAM: 64GB+
-    #   - Storage: 1TB+
-    #   - GPU: Recommended for AI workloads
-    # Features: Multi-tenant SOC, ClickHouse analytics,
-    #           long-term retention, edge orchestration,
-    #           GPU-accelerated threat detection
+    #   - CPU: 4+ cores (8+ recommended for ML)
+    #   - RAM: 16GB+ (32GB+ recommended for ML workloads)
+    #   - Storage: 100GB+ (500GB+ recommended)
+    #   - GPU: Optional, recommended for AI workloads
+    # Actual usage: ~4-8GB base, 16-32GB with ML
+    # Features: ClickHouse analytics, long-term retention,
+    #           edge orchestration, GPU-accelerated threat detection
     # Platforms: Datacenter servers, cloud instances
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_CPU_CORES" -ge 8 ] && [ "$SYS_RAM_MB" -ge 65536 ] && [ "$SYS_STORAGE_GB" -ge 1000 ]; then
+    if [ "$SYS_CPU_CORES" -ge 4 ] && [ "$SYS_RAM_MB" -ge 16384 ] && [ "$SYS_STORAGE_GB" -ge 100 ]; then
         CAN_NEXUS=true
     fi
 
@@ -738,21 +741,22 @@ evaluate_deployment_tiers() {
     # Cloud-based MSSP platform for POC and production
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Requirements:
-    #   - CPU: 16+ cores
-    #   - RAM: 64GB+ (128GB recommended)
-    #   - Storage: 500GB+
+    #   - CPU: 4+ cores (8+ recommended)
+    #   - RAM: 16GB+ (32GB+ recommended for production)
+    #   - Storage: 100GB+ (500GB+ recommended)
     #   - Network: Public IP required
+    # Actual usage: ~8-12GB for all PODs
     # Features: Multi-tenant MSSP backend, Django web portal,
     #           PostgreSQL, ClickHouse, VictoriaMetrics, Grafana,
     #           Logto IAM, n8n automation, HTP validator endpoint
     # Purpose: Central coordination of Sentinel/Guardian/Fortress/Nexus
     # Platforms: Cloud instances, dedicated servers
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if [ "$SYS_CPU_CORES" -ge 16 ] && [ "$SYS_RAM_MB" -ge 65536 ] && [ "$SYS_STORAGE_GB" -ge 500 ]; then
+    if [ "$SYS_CPU_CORES" -ge 4 ] && [ "$SYS_RAM_MB" -ge 16384 ] && [ "$SYS_STORAGE_GB" -ge 100 ]; then
         CAN_MSSP=true
     fi
-    # Allow MSSP on smaller systems for POC (32GB RAM, 8 cores)
-    if [ "$SYS_CPU_CORES" -ge 8 ] && [ "$SYS_RAM_MB" -ge 32768 ] && [ "$SYS_STORAGE_GB" -ge 200 ]; then
+    # Allow MSSP on smaller systems for lightweight POC (8GB RAM)
+    if [ "$SYS_CPU_CORES" -ge 2 ] && [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 50 ]; then
         CAN_MSSP=true  # POC mode with reduced resources
     fi
 }
@@ -1108,7 +1112,7 @@ show_capability_summary() {
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░░ MSSP [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 16+ cores, 64GB+ RAM, 500GB+ storage${NC}"
+        echo -e "       ${DIM}Requires: 4+ cores, 16GB+ RAM, 100GB+ storage${NC}"
     fi
     echo ""
 
@@ -1120,7 +1124,7 @@ show_capability_summary() {
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ NEXUS [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 8+ cores, 64GB+ RAM, 1TB+ storage${NC}"
+        echo -e "       ${DIM}Requires: 4+ cores, 16GB+ RAM, 100GB+ storage${NC}"
     fi
     echo ""
 
@@ -1132,7 +1136,7 @@ show_capability_summary() {
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ FORTRESS [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 8GB+ RAM, 32GB+ storage, 2+ ethernet${NC}"
+        echo -e "       ${DIM}Requires: 4GB+ RAM, 16GB+ storage, 2+ ethernet${NC}"
     fi
     echo ""
 
@@ -1144,7 +1148,7 @@ show_capability_summary() {
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ GUARDIAN [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 3GB+ RAM, 16GB+ storage, 2+ NICs${NC}"
+        echo -e "       ${DIM}Requires: 1.5GB+ RAM, 8GB+ storage, 2+ NICs${NC}"
     fi
     echo ""
 
@@ -1155,7 +1159,7 @@ show_capability_summary() {
         echo -e "       ${DIM}Lightweight edge validator${NC}"
     else
         echo -e "  ${DIM}░░░░ SENTINEL [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 512MB+ RAM, 1GB+ storage, 1+ NIC${NC}"
+        echo -e "       ${DIM}Requires: 256MB+ RAM, 1GB+ storage, 1+ NIC${NC}"
     fi
 
     echo ""
@@ -2758,11 +2762,11 @@ ${BOLD}Usage:${NC}
   $0 --tier <TIER>          Automated installation
 
 ${BOLD}Tiers:${NC}
-  sentinel    Lightweight validator (512MB+ RAM)
-  guardian    Travel-secure gateway (3GB+ RAM, 2+ NICs)
-  fortress    Full-featured edge (8GB+ RAM, 2+ ethernet)
-  nexus       ML/AI compute hub (64GB+ RAM, 8+ cores)
-  mssp        Central brain MSSP (64GB+ RAM, 16+ cores)
+  sentinel    Lightweight validator (256MB+ RAM)
+  guardian    Travel-secure gateway (1.5GB+ RAM, 2+ NICs)
+  fortress    Full-featured edge (4GB+ RAM, 2+ ethernet)
+  nexus       ML/AI compute hub (16GB+ RAM, 4+ cores)
+  mssp        Central brain MSSP (16GB+ RAM, 4+ cores)
 
 ${BOLD}Examples:${NC}
   sudo ./install.sh --check
