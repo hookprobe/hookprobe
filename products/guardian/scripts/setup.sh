@@ -149,8 +149,10 @@ install_packages() {
             wireless-tools \
             wpasupplicant \
             python3 \
+            python3-pip \
             python3-flask \
             python3-requests \
+            python3-numpy \
             net-tools \
             curl
     elif command -v dnf &>/dev/null; then
@@ -165,8 +167,10 @@ install_packages() {
             wireless-tools \
             wpa_supplicant \
             python3 \
+            python3-pip \
             python3-flask \
             python3-requests \
+            python3-numpy \
             net-tools \
             curl
     else
@@ -595,6 +599,7 @@ install_dns_shield() {
 
     # Create required directories
     mkdir -p "$SHIELD_DIR"
+    mkdir -p "$SHIELD_DIR/ml"  # ML data directory for dnsXai
     mkdir -p "$SCRIPTS_DIR"
     mkdir -p /var/log/hookprobe
 
@@ -2872,12 +2877,25 @@ YAMLEOF
 install_web_ui() {
     log_step "Installing Guardian Web UI..."
 
+    # Copy entire web directory structure (modular Flask app)
     mkdir -p /opt/hookprobe/guardian/web
+    cp -r "$GUARDIAN_ROOT/web/"* /opt/hookprobe/guardian/web/
+
+    # Also copy app.py to guardian root for backwards compatibility
     cp "$GUARDIAN_ROOT/web/app.py" /opt/hookprobe/guardian/
+
     # Copy logo emblem for web UI
     if [ -f "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" ]; then
         cp "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" /opt/hookprobe/guardian/web/hookprobe-emblem.png
     fi
+
+    log_info "Copied web UI: app.py, modules/, templates/, static/, utils.py, config.py"
+
+    # Install ML libraries for dnsXai AI features
+    log_info "Installing ML libraries for dnsXai..."
+    pip3 install --quiet --break-system-packages scikit-learn joblib 2>/dev/null || \
+    pip3 install --quiet scikit-learn joblib 2>/dev/null || \
+    log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
 
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
@@ -2887,8 +2905,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/hookprobe/guardian
-ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/app.py
+WorkingDirectory=/opt/hookprobe/guardian/web
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/web/app.py
 Restart=always
 RestartSec=5
 User=root
