@@ -357,7 +357,7 @@ make dsm-status      # View mesh connectivity
 
 **Access your protected network from anywhere in the world.**
 
-HookProbe VPN enables secure remote access to your Guardian or Fortress-protected network, even behind NAT/CGNAT:
+HookProbe VPN enables secure remote access to your Fortress-protected network, even behind NAT/CGNAT. VPN services are managed by the **MSSP** cloud layer:
 
 ```
 📱 Your Phone (Anywhere)     💻 Your Laptop (Coffee Shop)
@@ -365,13 +365,13 @@ HookProbe VPN enables secure remote access to your Guardian or Fortress-protecte
          └──────── IKEv2 VPN ───────────┘
                       │
               ┌───────▼───────┐
-              │    Nexus      │  ← MSSP Cloud (Public IP)
-              │  VPN Gateway  │
+              │     MSSP      │  ← Cloud VPN Gateway (Public IP)
+              │  Federation   │
               └───────┬───────┘
                       │ HTP Tunnel
               ┌───────▼───────┐
-              │   Guardian    │  ← Your Home (No Public IP needed!)
-              │   /Fortress   │
+              │   Fortress    │  ← Your Home/Office (No Public IP needed!)
+              │  Edge Router  │
               └───────┬───────┘
                       │
          ┌────────────┼────────────┐
@@ -385,6 +385,8 @@ HookProbe VPN enables secure remote access to your Guardian or Fortress-protecte
 - **No port forwarding** — Works with any ISP, even mobile carriers
 - **Native mobile support** — Uses iOS/Android built-in VPN clients
 
+> **Note:** Guardian (Raspberry Pi) is for portable travel WiFi hotspot with threat detection. For VPN and advanced networking features, use Fortress (Mini PC, 8GB+ RAM).
+
 📖 **[VPN Documentation →](docs/networking/VPN.md)**
 
 ---
@@ -393,25 +395,25 @@ HookProbe VPN enables secure remote access to your Guardian or Fortress-protecte
 
 **Plug-and-play network segmentation for IoT devices.**
 
-Guardian transforms a $75 Raspberry Pi into an enterprise-grade SDN controller that automatically isolates your IoT devices:
+**Fortress** transforms a Mini PC into an enterprise-grade SDN controller with VLAN segmentation, automatically isolating your IoT devices:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                  SINGLE SSID: "MyHome"                      │
+│                  SINGLE SSID: "MyNetwork"                   │
 │     All devices connect to the same network name            │
 │                          │                                  │
 │              ┌───────────▼───────────┐                      │
-│              │      Guardian         │                      │
+│              │      Fortress         │  ← Mini PC, 8GB RAM  │
 │              │  MAC → VLAN Router    │                      │
 │              └───────────┬───────────┘                      │
 │                          │                                  │
 │    ┌─────────┬─────────┬─────────┬─────────┬─────────┐     │
-│  VLAN 10  VLAN 20  VLAN 30  VLAN 40  VLAN 999         │     │
-│  Lights   Thermo   Cameras  Voice   Quarantine        │     │
-│    💡       🌡️        📷       🔊       ❓               │     │
+│  VLAN 10  VLAN 20  VLAN 30  VLAN 40  VLAN 99          │     │
+│  Mgmt     Trusted    IoT      Guest  Quarantine       │     │
+│    🔐       💻        📷       📱       ❓              │     │
 │                                                             │
-│  ✗ Cameras can't see lights (isolated)                     │
-│  ✗ Compromised device can't spread                         │
+│  ✗ IoT devices can't see trusted devices (isolated)        │
+│  ✗ Compromised device can't spread laterally               │
 │  ✗ Unknown devices quarantined until registered            │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -419,12 +421,12 @@ Guardian transforms a $75 Raspberry Pi into an enterprise-grade SDN controller t
 **Why You Need It:**
 - **IoT devices are vulnerable** — Outdated firmware, weak security
 - **Lateral movement prevention** — Hacked camera can't attack your NAS
-- **Zero-config setup** — Plug in Guardian, connect via web UI, done
-- **Portable** — Take your network security anywhere
+- **Zero-config setup** — Connect via web UI, assign devices to VLANs
+- **MACsec encryption** — Layer 2 encryption for wired connections
 
-**Multi-AP Expansion:** Extend coverage with USB WiFi adapters (up to 4 APs on RPi 5)
+> **Guardian vs Fortress:** Guardian (Raspberry Pi) provides portable WiFi hotspot with threat detection but **no VLAN segmentation** due to RPi hardware limitations. For IoT isolation and advanced SDN features, use Fortress.
 
-📖 **[SDN Documentation →](docs/networking/SDN.md)** | **[Guardian Setup →](products/guardian/README.md)**
+📖 **[SDN Documentation →](docs/networking/SDN.md)** | **[Fortress Setup →](products/fortress/README.md)**
 
 ---
 

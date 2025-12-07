@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # install.sh - HookProbe Unified Installer
-# Version: 6.2
+# Version: 5.0.0
 # License: MIT
 #
 # Capability-based installation menu with branded deployment tiers:
