@@ -20,7 +20,7 @@ Guardian transforms Raspberry Pi 4/5 into a portable security gateway. Perfect f
 - **L2-L7 Threat Detection** — Full OSI stack threat monitoring
 - **Mobile Network Protection** — Hotel/public WiFi security
 - **IDS/IPS Protection** — Suricata-based intrusion detection
-- **DNS Filtering** — Block malicious domains with AdGuard
+- **DNS Filtering** — dnsXai Ad Block (beta) with ML-powered threat detection
 - **Connected Devices** — Track all devices on your network
 - **Web Dashboard** — Monitor threats and manage devices
 - **Portable Security** — Take your network security anywhere
@@ -198,7 +198,7 @@ Guardian tracks all devices connected to your hotspot:
 | **hostapd** | WiFi access point |
 | **FreeRADIUS** | MAC authentication & tracking |
 | **dnsmasq** | DHCP/DNS server |
-| **AdGuard DNS** | Ad blocking & DNS privacy |
+| **dnsXai Ad Block** | ML-powered DNS protection & ad blocking (beta) |
 
 ### HTP Secure Communication
 
