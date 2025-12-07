@@ -5,7 +5,8 @@
 # License: MIT
 #
 # Removes all Guardian components:
-# - Podman containers (Suricata, AdGuard)
+# - Podman containers (Suricata, WAF, Zeek)
+# - DNS Shield blocklists
 # - Systemd services
 # - Network bridges
 # - hostapd and dnsmasq configurations
@@ -56,7 +57,7 @@ stop_services() {
         # Core services
         "guardian-webui"
         "guardian-suricata"
-        "guardian-adguard"
+        "dns-shield-update"
         "guardian-qsecbit"
         # Unified services
         "guardian-htp"
@@ -94,7 +95,7 @@ remove_systemd_services() {
         "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
-        "guardian-adguard"
+        "dns-shield-update"
         "guardian-qsecbit"
         # Unified services
         "guardian-htp"
@@ -139,7 +140,6 @@ remove_containers() {
         "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
-        "guardian-adguard"
         "guardian-zeek"
     )
 
@@ -157,8 +157,6 @@ remove_containers() {
         "guardian-suricata-logs"
         "guardian-suricata-rules"
         "guardian-waf-logs"
-        "guardian-adguard-work"
-        "guardian-adguard-conf"
         "guardian-zeek-logs"
         "guardian-zeek-spool"
     )
@@ -349,6 +347,35 @@ remove_htp_data() {
 }
 
 # ============================================================
+# REMOVE DNS SHIELD
+# ============================================================
+remove_dns_shield() {
+    log_step "Removing DNS Shield blocklists and configuration..."
+
+    # Stop and disable timer
+    systemctl stop dns-shield-update.timer 2>/dev/null || true
+    systemctl disable dns-shield-update.timer 2>/dev/null || true
+
+    # Remove systemd files
+    rm -f /etc/systemd/system/dns-shield-update.service 2>/dev/null || true
+    rm -f /etc/systemd/system/dns-shield-update.timer 2>/dev/null || true
+
+    # Remove dnsmasq DNS Shield config
+    rm -f /etc/dnsmasq.d/dns-shield.conf 2>/dev/null || true
+
+    # Remove DNS Shield directory and all blocklists
+    rm -rf /opt/hookprobe/guardian/dns-shield 2>/dev/null || true
+
+    # Remove DNS Shield logs
+    rm -f /var/log/hookprobe/dns-shield.log 2>/dev/null || true
+    rm -f /var/log/hookprobe/dnsmasq-queries.log 2>/dev/null || true
+
+    systemctl daemon-reload 2>/dev/null || true
+
+    log_info "DNS Shield removed"
+}
+
+# ============================================================
 # REMOVE GUARDIAN DIRECTORIES
 # ============================================================
 remove_guardian_directories() {
@@ -517,7 +544,8 @@ main() {
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
     echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, etc.)"
-    echo -e "  - Podman containers (Suricata IDS, AdGuard, WAF, Zeek)"
+    echo -e "  - Podman containers (Suricata IDS, WAF, Zeek)"
+    echo -e "  - DNS Shield blocklists and configuration"
     echo -e "  - Network bridges (br0)"
     echo -e "  - WiFi hotspot (hostapd) configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
@@ -548,6 +576,7 @@ main() {
     remove_sysctl_settings
     remove_guardian_config
     remove_htp_data
+    remove_dns_shield
     remove_systemd_services
     remove_guardian_directories
 
@@ -565,6 +594,7 @@ main() {
     echo -e "  ${BOLD}Removed:${NC}"
     echo -e "  • Guardian systemd services (webui, htp, xdp, ids, etc.)"
     echo -e "  • Podman containers and volumes"
+    echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • Network bridges (br0)"
     echo -e "  • hostapd and dnsmasq configuration"
     echo -e "  • Guardian configuration (/etc/guardian/)"
