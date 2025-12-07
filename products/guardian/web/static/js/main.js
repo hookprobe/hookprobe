@@ -99,7 +99,7 @@ function loadTabData(tabName) {
             loadClientsData();
             break;
         case 'config':
-            // Config loaded on demand
+            loadConfigData();
             break;
         case 'vpn':
             loadVpnData();
@@ -274,11 +274,16 @@ function loadInitialData() {
 
 async function loadDashboardData() {
     try {
-        const [status, threats, containers] = await Promise.all([
+        const [status, threats, containers, dhcp] = await Promise.all([
             apiGet('/status'),
             apiGet('/threats'),
-            apiGet('/containers')
+            apiGet('/containers'),
+            apiGet('/clients/dhcp').catch(() => ({ leases: [] }))
         ]);
+
+        // Use DHCP leases count for connected clients (more reliable)
+        const clientCount = (dhcp.leases || []).length;
+        status.connected_clients = clientCount;
 
         updateDashboardStats(status, threats);
         updateContainerStatus(containers);
@@ -608,12 +613,25 @@ async function loadClientsData() {
             apiGet('/clients/list'),
             apiGet('/clients/dhcp')
         ]);
-        updateClientsList(clients);
-        updateDhcpLeases(dhcp.leases || []);
+
+        const leases = dhcp.leases || [];
+        const activeClients = Array.isArray(clients) ? clients.filter(c => c.status === 'connected') : [];
+
+        // Render DHCP leases as responsive cards
+        updateDhcpLeasesGrid(leases, activeClients);
 
         // Update stats
-        updateElement('clients-total', (dhcp.leases || []).length);
-        updateElement('clients-active', Array.isArray(clients) ? clients.filter(c => c.status === 'connected').length : 0);
+        updateElement('clients-total', leases.length);
+        updateElement('clients-active', activeClients.length);
+
+        // Calculate "New Today" - leases with expire time > 23 hours (fresh leases)
+        const now = Date.now() / 1000;
+        const oneDayAgo = now - 86400;
+        const newToday = leases.filter(l => {
+            // If lease expires in more than 23 hours, it was likely assigned today
+            return l.expires_in > 82800;
+        }).length;
+        updateElement('clients-new', newToday);
     } catch (error) {
         console.error('Failed to load clients:', error);
     }
@@ -648,31 +666,58 @@ function updateClientsList(clients) {
     `).join('');
 }
 
-function updateDhcpLeases(leases) {
-    const tbody = document.getElementById('dhcp-leases-body');
-    if (!tbody) return;
+function updateDhcpLeasesGrid(leases, activeClients = []) {
+    const grid = document.getElementById('dhcp-leases-grid');
+    if (!grid) return;
 
     if (!leases || leases.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No active DHCP leases</td></tr>';
+        grid.innerHTML = `
+            <div class="empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" style="color: var(--text-light);">
+                    <path d="M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1z"/>
+                </svg>
+                <h3>No DHCP Leases</h3>
+                <p class="text-muted">Devices will appear here when they connect to your network</p>
+            </div>`;
         return;
     }
 
-    tbody.innerHTML = leases.map(lease => {
+    // Create a set of active MACs for quick lookup
+    const activeMacs = new Set(activeClients.map(c => c.mac?.toLowerCase()));
+
+    grid.innerHTML = leases.map(lease => {
         const expiresIn = formatLeaseTime(lease.expires_in);
+        const isActive = activeMacs.has(lease.mac?.toLowerCase());
+        const statusBadge = isActive ? 'badge-success' : 'badge-info';
+        const statusText = isActive ? 'Active' : 'Lease';
+
         return `
-            <tr>
-                <td>${lease.hostname || 'Unknown'}</td>
-                <td class="font-mono">${lease.ip}</td>
-                <td class="font-mono">${lease.mac}</td>
-                <td>${expiresIn}</td>
-                <td>
+            <div class="device-card">
+                <div class="device-icon ${isActive ? 'text-success' : ''}">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
+                    </svg>
+                </div>
+                <div class="device-info">
+                    <div class="device-name">${lease.hostname || 'Unknown Device'}</div>
+                    <div class="device-ip font-mono">${lease.ip}</div>
+                    <div class="device-mac text-muted font-mono" style="font-size: 0.75rem;">${lease.mac}</div>
+                    <div class="text-muted" style="font-size: 0.75rem; margin-top: 2px;">Expires: ${expiresIn}</div>
+                </div>
+                <div class="device-actions">
+                    <span class="badge ${statusBadge}">${statusText}</span>
                     <button class="btn btn-sm btn-danger" onclick="disconnectClient('${lease.ip}')" title="Block this client">
                         Disconnect
                     </button>
-                </td>
-            </tr>
+                </div>
+            </div>
         `;
     }).join('');
+}
+
+function updateDhcpLeases(leases) {
+    // Legacy function - now calls the grid version
+    updateDhcpLeasesGrid(leases, []);
 }
 
 function formatLeaseTime(seconds) {
@@ -749,6 +794,67 @@ function updateSystemInfo(system) {
 
     // Update progress bars
     updateProgressBar('memory-progress', system.memory?.percent || 0);
+
+    // Update disk usage
+    if (system.disk) {
+        updateElement('disk-usage', `${system.disk.used} / ${system.disk.total} (${system.disk.percent}%)`);
+        updateProgressBar('disk-progress', system.disk.percent || 0);
+    }
+}
+
+async function loadConfigData() {
+    try {
+        const [interfaces, hotspot, dhcp] = await Promise.all([
+            apiGet('/config/interfaces').catch(() => ({ interfaces: [] })),
+            apiGet('/config/hotspot').catch(() => ({})),
+            apiGet('/clients/dhcp').catch(() => ({ leases: [] }))
+        ]);
+
+        updateNetworkInterfaces(interfaces.interfaces || []);
+        updateHotspotConfig(hotspot);
+        updateElement('lan-clients', (dhcp.leases || []).length);
+    } catch (error) {
+        console.error('Failed to load config:', error);
+    }
+}
+
+function updateNetworkInterfaces(interfaces) {
+    const tbody = document.getElementById('interfaces-body');
+    if (!tbody) return;
+
+    if (!interfaces || interfaces.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No network interfaces found</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = interfaces.map(iface => `
+        <tr>
+            <td><strong>${iface.name}</strong></td>
+            <td class="font-mono">${iface.ip || 'N/A'}</td>
+            <td class="font-mono">${iface.mac || 'N/A'}</td>
+            <td><span class="badge ${iface.status === 'UP' ? 'badge-success' : 'badge-danger'}">${iface.status}</span></td>
+        </tr>
+    `).join('');
+}
+
+function updateHotspotConfig(config) {
+    if (config.ssid) {
+        updateElement('lan-ssid', config.ssid);
+        const ssidInput = document.getElementById('hotspot-ssid');
+        if (ssidInput) ssidInput.value = config.ssid;
+    }
+    if (config.channel) {
+        const channelSelect = document.getElementById('hotspot-channel');
+        if (channelSelect) channelSelect.value = config.channel;
+    }
+    if (config.security) {
+        const securitySelect = document.getElementById('hotspot-security');
+        if (securitySelect) securitySelect.value = config.security;
+    }
+    if (config.hidden !== undefined) {
+        const hiddenCheckbox = document.getElementById('hotspot-hidden');
+        if (hiddenCheckbox) hiddenCheckbox.checked = config.hidden;
+    }
 }
 
 // ============================================
