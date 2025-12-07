@@ -46,9 +46,9 @@ HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterpris
 
 | Component | Minimum | Recommended | Enterprise |
 |-----------|---------|-------------|------------|
-| **CPU** | 4+ cores (2020+) | 6+ cores | 8+ cores |
-| **RAM** | 8GB | 16GB | 32GB+ |
-| **Storage** | 256GB SSD | 500GB SSD | 1TB+ NVMe SSD |
+| **CPU** | 2+ cores (2020+) | 4+ cores | 8+ cores |
+| **RAM** | 4GB | 8GB | 16GB+ |
+| **Storage** | 32GB SSD | 128GB SSD | 512GB+ NVMe SSD |
 | **Network** | 1Gbps NIC | 2.5Gbps NIC | 10Gbps+ NIC |
 
 ### Supported CPU Architectures
@@ -89,8 +89,8 @@ HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterpris
   - Low power, compact
 
 **ARM64 Options:**
-- Raspberry Pi 5 (8GB)
-  - $80-100
+- Raspberry Pi 5 (4GB)
+  - $60-80
   - Great community support
   - Perfect for learning
 
@@ -121,7 +121,7 @@ HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterpris
 - Nvidia Jetson Orin Nano
   - GPU acceleration
   - AI workloads
-  - 8GB RAM
+  - 4-8GB RAM
 
 - Radxa ROCK 5B
   - 8-16GB RAM
@@ -142,7 +142,7 @@ HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterpris
 
 **ARM64 Options:**
 - Nvidia Jetson AGX Orin
-  - Up to 64GB RAM
+  - Up to 32GB RAM
   - Enterprise-grade
   - GPU acceleration
 
@@ -199,7 +199,7 @@ HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterpris
 Budget?
 ├─ Under $200
 │  ├─ Want x86_64? → Intel N100 Mini PC ✓
-│  └─ Want ARM64? → Raspberry Pi 5 (8GB) ✓
+│  └─ Want ARM64? → Raspberry Pi 5 (4GB) ✓
 │
 ├─ $200-$500
 │  ├─ Want x86_64? → Intel NUC 12/13 (i5) ✓
@@ -227,9 +227,9 @@ Need most support? → Raspberry Pi / Intel NUC ✓
 | **GPU Acceleration** | ⚠️ Limited | ⚠️ Limited | ❌ No | ❌ No | ✅ Yes |
 
 \* With Intel I226/I211 or compatible NIC
-\** May need 8GB+ RAM for all PODs
+\** May need 4GB+ RAM for all PODs
 
-**Bottom Line: Any modern hardware (2020+) with 8GB+ RAM will work!**
+**Bottom Line: Any modern hardware (2020+) with 4GB+ RAM will work!**
 
 ---
 

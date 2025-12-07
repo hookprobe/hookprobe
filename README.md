@@ -61,10 +61,10 @@
 
 | Component | Role | Hardware | What It Does |
 |-----------|------|----------|--------------|
-| **Sentinel** | Validator | IoT, 512MB | DSM mesh validation, health monitoring |
-| **Guardian** | Travel | RPi, 3GB | Portable WiFi hotspot, L2-L7 detection |
-| **Fortress** | Edge Router | Mini PC, 8GB | VLAN segmentation, local AI, SDN |
-| **Nexus** | ML/AI Compute | Server, 64GB+ | Federated learning, regional coordination |
+| **Sentinel** | Validator | IoT, 256MB | DSM mesh validation, health monitoring |
+| **Guardian** | Travel | RPi, 1.5GB | Portable WiFi hotspot, L2-L7 detection |
+| **Fortress** | Edge Router | Mini PC, 4GB | VLAN segmentation, local AI, SDN |
+| **Nexus** | ML/AI Compute | Server, 16GB+ | Federated learning, regional coordination |
 | **MSSP** | Cloud Brain | Auto-scale | Global threat model, fleet management |
 
 **How Herd Immunity Works:**
