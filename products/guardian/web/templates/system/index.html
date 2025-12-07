@@ -1,0 +1,235 @@
+<!-- System Tab Content -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+    <h2>System Settings</h2>
+    <p class="text-muted">System configuration, updates, logs, and service management</p>
+</div>
+
+<!-- System Info -->
+<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+    <div class="stat-card">
+        <div class="stat-value" style="font-size: 1.25rem;" id="system-hostname">guardian</div>
+        <div class="stat-label">Hostname</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" id="system-uptime">0:00</div>
+        <div class="stat-label">Uptime</div>
+    </div>
+    <div class="stat-card success">
+        <div class="stat-value" id="system-load">0.00</div>
+        <div class="stat-label">Load Average</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" id="system-memory">0%</div>
+        <div class="stat-label">Memory Usage</div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+            </svg>
+            Quick Actions
+        </h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-md);">
+            <button class="btn btn-primary" onclick="restartServices()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                Restart Services
+            </button>
+            <button class="btn btn-secondary" onclick="checkUpdates()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58s9.14-3.47 12.65 0L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/>
+                </svg>
+                Check Updates
+            </button>
+            <button class="btn btn-secondary" onclick="viewLogs()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                </svg>
+                View Logs
+            </button>
+            <button class="btn btn-danger" onclick="confirmReboot()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/>
+                </svg>
+                Reboot System
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Services -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">System Services</h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadSystemData()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="services-body">
+                    <tr>
+                        <td><strong>dnsmasq</strong> - DNS/DHCP Server</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('dnsmasq')">Restart</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>hostapd</strong> - WiFi Access Point</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('hostapd')">Restart</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>suricata</strong> - IDS/IPS Engine</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('suricata')">Restart</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>guardian-agent</strong> - Security Agent</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('guardian-agent')">Restart</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Storage -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Storage</h3>
+    </div>
+    <div class="card-body">
+        <div style="margin-bottom: var(--spacing-md);">
+            <div style="display: flex; justify-content: space-between; margin-bottom: var(--spacing-xs);">
+                <span>Root Filesystem</span>
+                <span id="disk-usage">0 / 0 GB (0%)</span>
+            </div>
+            <div class="progress">
+                <div class="progress-bar" id="disk-progress" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Logs Preview -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Recent Logs</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshLogs()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <pre id="logs-preview" style="background: var(--bg-darkest); color: var(--hp-green); padding: var(--spacing-md); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 0.8125rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;">Loading logs...</pre>
+    </div>
+</div>
+
+<!-- Reboot Modal -->
+<div class="modal-overlay" id="reboot-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Confirm Reboot</h3>
+            <button class="modal-close" onclick="closeModal('reboot-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Are you sure you want to reboot the system? All connected clients will be temporarily disconnected.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('reboot-modal')">Cancel</button>
+            <button class="btn btn-danger" onclick="rebootSystem()">Reboot Now</button>
+        </div>
+    </div>
+</div>
+
+<script>
+async function restartServices() {
+    try {
+        showToast('Restarting services...', 'info');
+        const result = await apiPost('/system/restart-services');
+        if (result.success) {
+            showToast('Services restarted successfully', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to restart services', 'error');
+    }
+}
+
+async function checkUpdates() {
+    try {
+        showToast('Checking for updates...', 'info');
+        const result = await apiGet('/system/updates');
+        if (result.available) {
+            showToast(`Updates available: ${result.count} packages`, 'warning');
+        } else {
+            showToast('System is up to date', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to check updates', 'error');
+    }
+}
+
+function viewLogs() {
+    // Navigate to logs section or open modal
+    document.getElementById('logs-preview').scrollIntoView({ behavior: 'smooth' });
+    refreshLogs();
+}
+
+async function refreshLogs() {
+    try {
+        const result = await apiGet('/system/logs');
+        document.getElementById('logs-preview').textContent = result.logs || 'No logs available';
+    } catch (error) {
+        document.getElementById('logs-preview').textContent = 'Failed to load logs';
+    }
+}
+
+function confirmReboot() {
+    openModal('reboot-modal');
+}
+
+async function rebootSystem() {
+    closeModal('reboot-modal');
+    try {
+        showToast('System is rebooting...', 'warning');
+        await apiPost('/system/reboot');
+    } catch (error) {
+        // Expected - connection will be lost
+    }
+}
+
+async function restartService(service) {
+    try {
+        const result = await apiPost(`/system/service/${service}/restart`);
+        if (result.success) {
+            showToast(`${service} restarted`, 'success');
+        }
+    } catch (error) {
+        showToast(`Failed to restart ${service}`, 'error');
+    }
+}
+
+// Load logs on tab view
+if (Guardian && Guardian.currentTab === 'system') {
+    refreshLogs();
+}
+</script>
