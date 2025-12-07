@@ -10,8 +10,8 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
-| RAM | 8GB | 16GB |
-| Storage | 32GB | 64GB |
+| RAM | 4GB | 8GB |
+| Storage | 16GB | 32GB |
 | Network | 2 ethernet | 2+ ethernet |
 | CPU Cores | 4 | 8 |
 | Internet | Required | Required |
@@ -23,7 +23,7 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 - AMD Ryzen Mini PCs
 - Small form factor servers
 - Proxmox VMs (with passthrough)
-- Any x86_64 with 8GB+ RAM
+- Any x86_64 with 4GB+ RAM
 
 ## Features
 
@@ -79,13 +79,13 @@ sudo ./install.sh --tier fortress \
 
 | Component | RAM | Storage |
 |-----------|-----|---------|
-| Core services | ~2GB | ~5GB |
-| Victoria Metrics | ~1GB | ~10GB |
-| Grafana | ~512MB | ~500MB |
-| n8n | ~512MB | ~1GB |
-| ClickHouse (optional) | ~2GB | ~20GB |
+| Core services | ~1GB | ~3GB |
+| Victoria Metrics | ~512MB | ~5GB |
+| Grafana | ~256MB | ~500MB |
+| n8n | ~256MB | ~500MB |
+| ClickHouse (optional) | ~1GB | ~10GB |
 
-**Total**: ~4-6GB RAM under normal operation
+**Total**: ~2-3GB RAM under normal operation
 
 ## Configuration Files
 

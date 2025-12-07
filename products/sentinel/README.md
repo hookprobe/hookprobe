@@ -10,8 +10,8 @@ Sentinel is a lightweight validator service designed for constrained devices wit
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
-| RAM | 512MB | 1GB |
-| Storage | 8GB | 16GB |
+| RAM | 256MB | 512MB |
+| Storage | 4GB | 8GB |
 | Network | 1 interface | 1 interface |
 | Internet | Required | Required |
 

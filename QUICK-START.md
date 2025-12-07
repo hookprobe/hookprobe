@@ -10,17 +10,17 @@ HookProbe has 5 tiers. Choose based on your hardware:
 
 | Tier | Hardware | Purpose | Install Time |
 |------|----------|---------|--------------|
-| **Sentinel** | LXC/VM (512MB RAM) | Lightweight validator | 5 min |
+| **Sentinel** | LXC/VM (256MB RAM) | Lightweight validator | 5 min |
 | **Guardian** | Raspberry Pi 4/5 | Portable travel hotspot | 10 min |
 | **Fortress** | Mini PC (N100) | Full SDN with VLANs | 15 min |
-| **Nexus** | Server (64GB+ RAM) | ML/AI compute hub | 30 min |
+| **Nexus** | Server (16GB+ RAM) | ML/AI compute hub | 30 min |
 | **MSSP** | Cloud/Datacenter | Federation & VPN gateway | 45 min |
 
 ---
 
 ## Sentinel: Lightweight Validator
 
-**For**: IoT gateways, LXC containers, low-power devices (512MB RAM)
+**For**: IoT gateways, LXC containers, low-power devices (256MB RAM)
 
 ### What it does
 - Validates your edge node with MSSP
@@ -131,7 +131,7 @@ sudo systemctl restart hookprobe-guardian
 
 ## Fortress: Full SDN with VLANs
 
-**For**: Intel N100/N200 Mini PC, NUC (8GB+ RAM) - home/office security
+**For**: Intel N100/N200 Mini PC, NUC (4GB+ RAM) - home/office security
 
 ### What it does
 - Full VLAN segmentation for IoT devices
@@ -141,8 +141,8 @@ sudo systemctl restart hookprobe-guardian
 
 ### Hardware Needed
 - Intel N100/N200 or similar Mini PC
-- 8GB+ RAM
-- 64GB+ SSD
+- 4GB+ RAM
+- 32GB+ SSD
 - 2+ Ethernet ports (or USB adapter)
 
 ### Install
@@ -179,7 +179,7 @@ The installer creates default VLANs:
 
 ## Nexus: ML/AI Compute Hub
 
-**For**: Servers with 64GB+ RAM, optional GPU - analytics and ML
+**For**: Servers with 16GB+ RAM, optional GPU - analytics and ML
 
 ### What it does
 - GPU-accelerated threat detection
@@ -188,8 +188,8 @@ The installer creates default VLANs:
 - ML model training
 
 ### Hardware Needed
-- Server with 64GB+ RAM
-- 1TB+ NVMe SSD
+- Server with 16GB+ RAM
+- 256GB+ NVMe SSD
 - Optional: NVIDIA GPU for ML acceleration
 
 ### Install
@@ -221,7 +221,7 @@ sudo ./install.sh --enable-gpu
 ### Install
 
 ```bash
-# 1. On your cloud server (64GB+ RAM recommended)
+# 1. On your cloud server (16GB+ RAM recommended)
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
 sudo ./install.sh --tier mssp
