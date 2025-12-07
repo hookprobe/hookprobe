@@ -42,8 +42,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Python packaging (not our products/*/lib/ directories)
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -262,10 +263,9 @@ yarn.lock
 *.sqlite3
 *.db-journal
 
-# Core dumps
-core
-core.*
+# Core dumps (not our core/ directory)
 *.core
+core.[0-9]*
 
 # Local configuration overrides
 local.conf
