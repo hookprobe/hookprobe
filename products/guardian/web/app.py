@@ -5,9 +5,9 @@ HookProbe Guardian - Local Web UI
 Simple Flask app for on-device configuration.
 Runs on http://192.168.4.1:8080
 
-Version: 5.5.0
+Version: 5.0.0
 
-Changes in 5.5.0:
+Changes in 5.0.0:
 - Added L2-L7 OSI layer threat detection and reporting
 - Added mobile network protection for hotel/public WiFi
 - QSecBit integration with layer-specific metrics
@@ -2694,7 +2694,7 @@ HTML_TEMPLATE = '''
     </div>
 
     <div class="footer">
-        <p>HookProbe Guardian v5.5.0 | Protection on the Move | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
+        <p>HookProbe Guardian v5.0.0 | Protection on the Move | <a href="https://hookprobe.com" target="_blank">hookprobe.com</a></p>
     </div>
 
     <script>

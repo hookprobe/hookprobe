@@ -221,7 +221,10 @@ git clone https://github.com/hookprobe/hookprobe
 cd hookprobe
 
 # Run Guardian setup
-sudo ./install/guardian/scripts/setup.sh
+sudo ./products/guardian/scripts/setup.sh
+
+# Or use the main installer
+sudo ./install.sh --tier guardian
 ```
 
 **What gets installed:**

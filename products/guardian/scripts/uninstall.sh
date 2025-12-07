@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Guardian Uninstall Script
-# Version: 5.5.0
+# Version: 5.0.0
 # License: MIT
 #
 # Removes all Guardian components:
@@ -479,7 +479,7 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Guardian Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                       Version 5.5.0                        ║${NC}"
+    echo -e "${BOLD}${RED}║                       Version 5.0.0                        ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
