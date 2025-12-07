@@ -149,8 +149,10 @@ install_packages() {
             wireless-tools \
             wpasupplicant \
             python3 \
+            python3-pip \
             python3-flask \
             python3-requests \
+            python3-numpy \
             net-tools \
             curl
     elif command -v dnf &>/dev/null; then
@@ -165,8 +167,10 @@ install_packages() {
             wireless-tools \
             wpa_supplicant \
             python3 \
+            python3-pip \
             python3-flask \
             python3-requests \
+            python3-numpy \
             net-tools \
             curl
     else
@@ -595,6 +599,7 @@ install_dns_shield() {
 
     # Create required directories
     mkdir -p "$SHIELD_DIR"
+    mkdir -p "$SHIELD_DIR/ml"  # ML data directory for dnsXai
     mkdir -p "$SCRIPTS_DIR"
     mkdir -p /var/log/hookprobe
 
@@ -2885,6 +2890,12 @@ install_web_ui() {
     fi
 
     log_info "Copied web UI: app.py, modules/, templates/, static/, utils.py, config.py"
+
+    # Install ML libraries for dnsXai AI features
+    log_info "Installing ML libraries for dnsXai..."
+    pip3 install --quiet --break-system-packages scikit-learn joblib 2>/dev/null || \
+    pip3 install --quiet scikit-learn joblib 2>/dev/null || \
+    log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
 
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
