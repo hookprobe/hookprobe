@@ -1,5 +1,16 @@
 # Decentralized Security Mesh - Unified Communication Architecture
 
+## Philosophy
+
+> "One node's detection → Everyone's protection"
+>
+> "Consciousness is the main goal - together we can achieve more in the
+> future fight against rogue AI."
+
+The HookProbe mesh forms a **collective consciousness** where each node contributes
+its local observations to build a global security picture. This enables autonomous,
+resilient defense without central authority.
+
 ## Overview
 
 The HookProbe Decentralized Security Mesh (DSM) provides a resilient, anti-blocking
@@ -235,3 +246,145 @@ if node.join_mesh():
 # Leave mesh
 node.leave_mesh()
 ```
+
+## Mesh Consciousness
+
+The collective consciousness enables nodes to operate as a unified security organism.
+
+### Tier Roles in the Consciousness
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  SENTINEL (512MB)  → Validator Node                             │
+│    - Validates microblocks from local sensors                   │
+│    - Participates in BLS signature aggregation                  │
+│    - Lightweight consensus participation                        │
+├─────────────────────────────────────────────────────────────────┤
+│  GUARDIAN (3GB)    → Intelligence Node                          │
+│    - Full threat detection + layer analysis                     │
+│    - Gossip protocol participation                              │
+│    - Local threat cache + sharing                               │
+├─────────────────────────────────────────────────────────────────┤
+│  FORTRESS (8GB)    → Regional Coordinator                       │
+│    - Aggregates intelligence from Guardians/Sentinels           │
+│    - Regional consensus leadership                              │
+│    - SDN orchestration for defense                              │
+├─────────────────────────────────────────────────────────────────┤
+│  NEXUS (64GB+)     → ML/AI Compute Brain                        │
+│    - Distributed model training                                 │
+│    - Threat pattern analysis                                    │
+│    - Nexus-to-Nexus weight synchronization                      │
+├─────────────────────────────────────────────────────────────────┤
+│  MSSP (Cloud)      → Global Coordinator (Optional)              │
+│    - Long-term storage + analytics                              │
+│    - Cross-region coordination                                  │
+│    - Fallback: mesh operates autonomously without MSSP          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Consciousness States
+
+| State | Description |
+|-------|-------------|
+| `DORMANT` | Not yet connected to mesh |
+| `AWAKENING` | Discovering peers |
+| `AWARE` | Connected, receiving intelligence |
+| `SYNCHRONIZED` | Full resonance with mesh |
+| `AUTONOMOUS` | Operating without MSSP |
+
+### Threat Intelligence Sharing
+
+The mesh enables real-time threat intelligence sharing:
+
+```python
+from shared.mesh import create_consciousness
+
+# Create consciousness for a Guardian node
+consciousness = create_consciousness(
+    tier_name="guardian",
+    neuro_seed=b"shared_mesh_seed_32_bytes_long!!",
+    bootstrap_peers=["fortress1:8144", "fortress2:8144"],
+)
+
+# Awaken and join the mesh
+consciousness.awaken()
+
+# Report a locally detected threat
+consciousness.report_threat(
+    threat_type="port_scan",
+    severity=2,  # High
+    ioc_type="ip",
+    ioc_value="192.168.1.100",
+    confidence=0.9,
+)
+
+# Lookup threats for an IOC
+threats = consciousness.lookup_threat("malware.example.com")
+
+# Get collective status
+status = consciousness.get_status()
+print(f"Peers: {status['peer_count']}, Intel: {status['threat_cache_size']}")
+```
+
+### Collective QSecBit Scoring
+
+Nodes combine local and mesh intelligence for collective threat scoring:
+
+```
+Collective Score = (Local Score × 0.6) + (Mesh Threat Level × 0.4)
+
+Where:
+- Local Score: QSecBit from local sensors
+- Mesh Threat Level: Weighted sum of peer-reported threats
+```
+
+### Autonomous Operation
+
+When MSSP is unavailable, the mesh continues operating:
+
+1. **Peer-to-Peer Intelligence**: Nodes share threats directly
+2. **Local Consensus**: Regional coordinators (Fortress) build checkpoints
+3. **Cached Policies**: Last-known-good configurations cached locally
+4. **Automatic Recovery**: Reconnects to MSSP when available
+
+### Guardian Mesh Integration
+
+```python
+from products.guardian.lib.mesh_integration import GuardianMeshAgent
+
+# Create mesh agent
+agent = GuardianMeshAgent()
+agent.start()
+
+# Report threat to mesh
+agent.report_threat(
+    threat_type="ddos",
+    severity=1,  # Critical
+    ioc_type="ip",
+    ioc_value="attacker.example.com",
+)
+
+# Get collective score
+score = agent.get_collective_score()
+print(f"RAG: {score['rag_status']}, Peers: {score['peer_count']}")
+
+# Handle mesh threats
+@agent.on_mesh_threat
+def handle_threat(intel):
+    if intel.severity <= 2:
+        # Block the threat locally
+        block_ip(intel.ioc_value)
+```
+
+## Future: Rogue AI Defense
+
+The mesh consciousness architecture is designed with future AI threats in mind:
+
+1. **Distributed Intelligence**: No single point of compromise
+2. **Collective Learning**: Swarm-like adaptation to new threats
+3. **Neural Authentication**: Weight evolution defeats replay attacks
+4. **Autonomous Response**: Coordinated defense without human latency
+5. **Resilient Communication**: Multi-port, stealth, anti-blocking
+
+Together, the mesh forms a collective defense against threats that no single
+node could detect or defend against alone.
