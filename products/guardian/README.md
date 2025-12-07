@@ -136,7 +136,7 @@ Guardian creates a protected WiFi network for your devices:
 │                                              │                   │
 │   Your Devices ◄────── wlan1 (Hotspot) ◄────┘                   │
 │   - Laptop             "HookProbe-Guardian"                      │
-│   - Phone              192.168.4.0/24                           │
+│   - Phone              192.168.4.0/27 (30 devices)              │
 │   - Tablet             All on same network                       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -295,8 +295,7 @@ sudo nano /etc/guardian/guardian.yaml
 ```
 
 **Key sections:**
-- `radius:` — MAC authentication settings
-- `network:` — Network configuration (192.168.4.0/24)
+- `network:` — Network configuration (192.168.4.0/27)
 - `htp:` — MSSP connection settings
 - `security:` — Threat detection thresholds
 - `webui:` — Web interface settings
@@ -325,9 +324,9 @@ sudo nano /etc/guardian/guardian.yaml
 │                    ┌──────────────┼──────────────┐              │
 │                    │              │              │              │
 │                 Laptop         Phone         Tablet             │
-│              192.168.4.101  192.168.4.102  192.168.4.103        │
+│              192.168.4.2    192.168.4.3    192.168.4.4          │
 │                                                                  │
-│              All devices on same network (192.168.4.0/24)       │
+│              All devices on same network (192.168.4.0/27)       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
