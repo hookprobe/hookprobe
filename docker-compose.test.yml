@@ -1,4 +1,4 @@
-# docker-compose.test.yml
+# podman-compose.test.yml
 # Multi-arch testing environment for HookProbe using Podman
 # Supports: linux/amd64, linux/arm64 (Raspberry Pi 4)
 #
@@ -9,20 +9,15 @@
 # Usage:
 #   podman-compose -f docker-compose.test.yml up
 #   podman-compose -f docker-compose.test.yml down -v
-#
-# Run tests:
-#   ./scripts/run-unit-tests.sh
-#   ./scripts/run-integration-tests.sh
-#   ./scripts/run-performance-tests.sh
 
 version: '3.8'
 
 services:
-  # Web application test service
+  # Web application test service (MSSP Dashboard)
   web-test:
     platform: linux/arm64
     build:
-      context: ./src/web
+      context: ./products/mssp/web
       dockerfile: Dockerfile.test
     container_name: hookprobe-web-test
     environment:
@@ -62,7 +57,7 @@ services:
     mem_limit: 1g
     cpus: "2.0"
     volumes:
-      - ./src/web:/app:ro
+      - ./products/mssp/web:/app:ro
       - test-static:/app/staticfiles
       - test-media:/app/media
     command: ["sleep", "infinity"]  # Keep container running for manual tests
