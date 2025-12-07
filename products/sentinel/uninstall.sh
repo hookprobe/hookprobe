@@ -323,7 +323,7 @@ main() {
     echo -e "  • Data: $DATA_DIR"
     echo ""
     echo -e "  ${DIM}To reinstall Sentinel:${NC}"
-    echo -e "  ${DIM}curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash${NC}"
+    echo -e "  ${DIM}curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | sudo bash${NC}"
     echo ""
 }
 

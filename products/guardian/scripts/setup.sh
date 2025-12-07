@@ -1560,14 +1560,14 @@ BASHEOF
 }
 
 install_qsecbit_agent() {
-    log_step "Installing QSecBit agent (full version from src/qsecbit)..."
+    log_step "Installing QSecBit agent (full version from core/qsecbit)..."
 
     # Create directories
     mkdir -p /opt/hookprobe/guardian/qsecbit
     mkdir -p /opt/hookprobe/guardian/data
 
     # Copy QSecBit modules from source (if available)
-    local QSECBIT_SRC="/home/xsoc/hookprobe/src/qsecbit"
+    local QSECBIT_SRC="/home/xsoc/hookprobe/core/qsecbit"
     if [ -d "$QSECBIT_SRC" ]; then
         log_info "Copying QSecBit modules from source..."
         cp -r "$QSECBIT_SRC"/*.py /opt/hookprobe/guardian/qsecbit/ 2>/dev/null || true

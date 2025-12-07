@@ -37,8 +37,8 @@ echo -e "${BLUE}📦 Building test image...${NC}"
 $CONTAINER_CMD build \
   --arch arm64 \
   -t hookprobe-web-test:latest \
-  -f src/web/Dockerfile.test \
-  src/web || {
+  -f products/mssp/web/Dockerfile.test \
+  products/mssp/web || {
     echo -e "${RED}❌ Build failed${NC}"
     exit 1
   }

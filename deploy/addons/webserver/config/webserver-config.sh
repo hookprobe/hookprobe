@@ -70,7 +70,7 @@ CONTAINER_NETWORK="${CONTAINER_NETWORK:-hookprobe-pod-001}"
 # Installation Paths
 # ============================================================================
 INSTALL_DIR="${INSTALL_DIR:-/opt/hookprobe}"
-WEB_DIR="${WEB_DIR:-${INSTALL_DIR}/src/web}"
+WEB_DIR="${WEB_DIR:-${INSTALL_DIR}/web}"
 VENV_DIR="${VENV_DIR:-${WEB_DIR}/venv}"
 LOG_DIR="${LOG_DIR:-/var/log/hookprobe}"
 STATIC_DIR="${STATIC_DIR:-${WEB_DIR}/staticfiles}"
