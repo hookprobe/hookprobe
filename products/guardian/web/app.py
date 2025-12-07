@@ -2595,6 +2595,9 @@ HTML_TEMPLATE = '''
             <div class="card">
                 <h2>AdGuard Dashboard</h2>
                 <p style="color: #6b7280; margin-bottom: 15px;">Access the full AdGuard Home interface for detailed configuration</p>
+                <div style="background: var(--hp-light); border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 13px;">
+                    <strong>Default Login:</strong> admin / hookprobe123
+                </div>
                 <div style="display: flex; gap: 10px; margin-bottom: 20px;">
                     <a href="http://192.168.4.1:3000" target="_blank" class="btn btn-primary">
                         Open AdGuard Dashboard
