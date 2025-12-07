@@ -56,17 +56,23 @@ def api_status():
 @core_bp.route('/api/containers')
 def api_containers():
     """Get container status for all Guardian services."""
-    containers = {
-        'dnsmasq': {'label': 'DNS Server', 'running': False, 'status': 'Unknown'},
-        'nginx': {'label': 'Web Server', 'running': False, 'status': 'Unknown'},
-        'suricata': {'label': 'IDS/IPS', 'running': False, 'status': 'Unknown'},
-        'kali': {'label': 'Kali Tools', 'running': False, 'status': 'Unknown'},
-        'guardian': {'label': 'Guardian Agent', 'running': False, 'status': 'Unknown'}
+    # Map: key = display key, container_name = actual podman container name
+    container_config = {
+        'suricata': {'label': 'IDS/IPS (Suricata)', 'container': 'guardian-suricata'},
+        'waf': {'label': 'WAF (ModSecurity)', 'container': 'guardian-waf'},
+        'neuro': {'label': 'Neural Engine', 'container': 'guardian-neuro'},
+        'zeek': {'label': 'Network Monitor (Zeek)', 'container': 'guardian-zeek'},
     }
 
-    for name in containers:
-        status = get_container_status(f'guardian-{name}')
-        containers[name].update(status)
+    containers = {}
+    for key, config in container_config.items():
+        containers[key] = {
+            'label': config['label'],
+            'running': False,
+            'status': 'Unknown'
+        }
+        status = get_container_status(config['container'])
+        containers[key].update(status)
 
     return jsonify(containers)
 
