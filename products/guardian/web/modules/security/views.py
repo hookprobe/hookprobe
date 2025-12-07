@@ -3,7 +3,7 @@ Security Module Views - QSecBit, Threats, XDP Stats
 """
 from flask import jsonify
 from . import security_bp
-from ...utils import run_command, load_json_file
+from utils import run_command, load_json_file
 
 
 @security_bp.route('/api/xdp_stats')
