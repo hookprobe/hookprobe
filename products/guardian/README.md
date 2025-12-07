@@ -79,8 +79,8 @@ Guardian democratizes enterprise security:
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
-| Platform | Raspberry Pi 4 (4GB) | Raspberry Pi 5 (8GB) |
-| RAM | 3GB | 4-8GB |
+| Platform | Raspberry Pi 4 (2GB) | Raspberry Pi 5 (4GB) |
+| RAM | 1.5GB | 2-4GB |
 | Storage | 16GB microSD | 32GB+ microSD (A2 rated) |
 | Network | 1x WiFi (built-in) + 1x USB WiFi | 2x WiFi interfaces |
 | Internet | Required | Required |

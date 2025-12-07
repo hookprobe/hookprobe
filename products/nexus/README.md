@@ -12,9 +12,9 @@ Nexus is an ML/AI compute hub for advanced threat detection, analytics, and inte
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
-| CPU Cores | 8 | 16+ |
-| RAM | 64GB | 128GB |
-| Storage | 1TB | 4TB+ NVMe |
+| CPU Cores | 4 | 8+ |
+| RAM | 16GB | 32GB |
+| Storage | 256GB | 1TB+ NVMe |
 | Network | 1Gbps | 10Gbps |
 | GPU | Optional | NVIDIA recommended |
 
