@@ -9,33 +9,49 @@ from utils import run_command
 @clients_bp.route('/api/list')
 def api_clients_list():
     """Get list of connected clients."""
+    import re
     try:
         clients = []
 
-        # Get from ARP table
-        output, success = run_command("ip neigh show | grep -v FAILED")
-        if success:
+        # Get from ARP table - filter to active entries only
+        output, success = run_command("ip neigh show | grep -E 'REACHABLE|STALE|DELAY'")
+        if success and output:
             for line in output.split('\n'):
                 if not line.strip():
                     continue
                 parts = line.split()
-                if len(parts) >= 5:
+                if len(parts) >= 4:
                     ip = parts[0]
-                    mac = parts[4] if parts[4] != 'REACHABLE' else parts[3]
+                    # Find MAC address (format: xx:xx:xx:xx:xx:xx)
+                    mac = None
+                    for part in parts:
+                        if re.match(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$', part):
+                            mac = part.lower()
+                            break
+
+                    if not mac:
+                        continue
+
+                    # Determine status from state
+                    status = 'connected'
+                    if 'STALE' in line:
+                        status = 'idle'
+                    elif 'DELAY' in line:
+                        status = 'connecting'
 
                     # Try to get hostname from DHCP leases
                     hostname = 'Unknown'
-                    lease_output, _ = run_command(f"grep '{mac}' /var/lib/misc/dnsmasq.leases 2>/dev/null")
+                    lease_output, _ = run_command(f"grep -i '{mac}' /var/lib/misc/dnsmasq.leases 2>/dev/null")
                     if lease_output:
                         lease_parts = lease_output.split()
                         if len(lease_parts) >= 4:
-                            hostname = lease_parts[3]
+                            hostname = lease_parts[3] if lease_parts[3] != '*' else 'Unknown'
 
                     clients.append({
                         'ip': ip,
                         'mac': mac,
                         'hostname': hostname,
-                        'status': 'connected'
+                        'status': status
                     })
 
         return jsonify(clients)
