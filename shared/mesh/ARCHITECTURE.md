@@ -709,6 +709,205 @@ elif endpoint.connectivity == ConnectivityType.RELAYED:
     print(f"Relayed via {endpoint.relay_node}")
 ```
 
+## Tunnel Integration (No Public IP Required)
+
+For environments where public IPs are scarce, Fortress/Nexus nodes can use
+tunnel services to get a stable FQDN that works as a relay/signaling endpoint.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    TUNNEL-BASED PUBLIC PRESENCE                         │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Fortress (No Public IP)          Cloudflare Edge (Public)            │
+│   ┌─────────────────────┐          ┌─────────────────────┐              │
+│   │  Local Network      │          │                     │              │
+│   │  ┌───────────────┐  │ tunnel   │  fortress-01.       │              │
+│   │  │ cloudflared   │──┼─────────►│  hookprobe.com      │              │
+│   │  │ (or ngrok)    │  │          │                     │              │
+│   │  └───────┬───────┘  │          │  • Stable FQDN      │              │
+│   │          │          │          │  • DDoS protection  │              │
+│   │  ┌───────▼───────┐  │          │  • Free tier        │              │
+│   │  │ Relay Server  │  │          │  • TLS termination  │              │
+│   │  │ :3478         │  │          │                     │              │
+│   │  └───────────────┘  │          └─────────────────────┘              │
+│   └─────────────────────┘                    │                          │
+│                                              │                          │
+│   Other Mesh Nodes ◄─────────────────────────┘                          │
+│   (Can now reach this Fortress via FQDN)                               │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Supported Tunnel Providers
+
+| Provider | Free Tier | Setup Difficulty | Best For |
+|----------|-----------|------------------|----------|
+| **Cloudflare Tunnel** | Yes (unlimited) | Medium | Production deployments |
+| **ngrok** | Yes (limited) | Easy | Testing, small deployments |
+| **Tailscale Funnel** | Yes | Easy | Existing Tailscale users |
+| **Custom** | - | Varies | Enterprise with own infrastructure |
+
+### Tunnel Setup (Fortress/Nexus)
+
+```python
+from shared.mesh import TunnelManager, TunnelConfig
+
+# Configure tunnel (from environment or explicit)
+config = TunnelConfig(
+    provider=TunnelProvider.CLOUDFLARE,
+    cloudflare_token="your-tunnel-token",
+    cloudflare_hostname="fortress-01.hookprobe.com",
+    local_relay_port=3478,
+    local_signaling_port=8144,
+)
+
+# Start tunnel manager
+tunnel = TunnelManager(
+    node_id="fortress-01",
+    tier="fortress",
+    region="us-west",
+    config=config
+)
+
+# Callbacks for status changes
+tunnel.on_connected = lambda ep: print(f"Tunnel connected: {ep.fqdn}")
+tunnel.on_approved = lambda ep: print(f"Tunnel approved by admin")
+
+# Start tunnel
+if tunnel.start():
+    print(f"FQDN: {tunnel.get_fqdn()}")
+    # Now this Fortress can be used as a relay by other mesh nodes
+```
+
+### MSSP Tunnel Registry (Admin Managed)
+
+Tunnel registrations require admin approval for security:
+
+```python
+from shared.mesh import TunnelRegistry, TunnelEndpoint
+
+# MSSP side - manage tunnel registrations
+registry = TunnelRegistry("/var/lib/hookprobe/tunnels.json")
+
+# Get pending approvals (admin dashboard)
+pending = registry.get_pending_approvals()
+for ep in pending:
+    print(f"Pending: {ep.node_id} -> {ep.fqdn}")
+    # Admin reviews and approves/rejects
+
+# Approve a tunnel registration
+registry.approve("fortress-01", approver="admin@hookprobe.com")
+
+# Get approved relay endpoints
+relays = registry.get_approved_endpoints(region="us-west")
+for relay in relays:
+    print(f"Relay: {relay.fqdn} ({relay.tier})")
+```
+
+### Client Registration Flow
+
+```python
+from shared.mesh import TunnelRegistrationClient
+
+# Fortress node registers with MSSP
+client = TunnelRegistrationClient(
+    mssp_endpoint="https://mssp.hookprobe.com",
+    node_id="fortress-01"
+)
+
+# Register tunnel endpoint
+success, status = client.register(tunnel.get_endpoint())
+if status == RegistrationStatus.PENDING:
+    print("Awaiting admin approval...")
+
+# Periodic heartbeat
+while True:
+    client.heartbeat()
+
+    # Check if approved
+    status = client.check_status()
+    if status == RegistrationStatus.APPROVED:
+        print("Tunnel approved! Now acting as relay.")
+        break
+
+    time.sleep(60)
+
+# Other nodes can discover this relay
+approved_relays = client.get_approved_relays(region="us-west")
+```
+
+### Environment Variables
+
+```bash
+# Cloudflare Tunnel
+TUNNEL_PROVIDER=cloudflare
+CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...
+CLOUDFLARE_HOSTNAME=fortress-01.hookprobe.com
+
+# ngrok
+TUNNEL_PROVIDER=ngrok
+NGROK_AUTHTOKEN=2abc...
+NGROK_DOMAIN=fortress-01.ngrok.io
+
+# Tailscale Funnel
+TUNNEL_PROVIDER=tailscale
+TAILSCALE_FUNNEL=true
+
+# Local ports
+LOCAL_RELAY_PORT=3478
+LOCAL_SIGNALING_PORT=8144
+LOCAL_WEBSOCKET_PORT=8080
+```
+
+### Complete Architecture with Tunnels
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    COMPLETE MESH RESILIENCE STACK                       │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐              │
+│   │   MSSP      │     │ MSSP Replica│     │ MSSP Replica│              │
+│   │ (US-WEST)   │◄───►│ (EU-WEST)   │◄───►│ (AP-EAST)   │              │
+│   └──────┬──────┘     └──────┬──────┘     └──────┬──────┘              │
+│          │                   │                   │                      │
+│          └───────────────────┼───────────────────┘                      │
+│                              │                                          │
+│   ┌──────────────────────────▼──────────────────────────┐              │
+│   │              Tunnel Registry (Admin Managed)         │              │
+│   │  • fortress-01.hookprobe.com (Cloudflare, US-WEST)  │              │
+│   │  • fortress-02.hookprobe.com (ngrok, EU-WEST)       │              │
+│   │  • nexus-01.hookprobe.com (Tailscale, AP-EAST)      │              │
+│   └──────────────────────────┬──────────────────────────┘              │
+│                              │                                          │
+│   ┌──────────────────────────▼──────────────────────────┐              │
+│   │                Tunnel-Enabled Relays                 │              │
+│   │                                                      │              │
+│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │              │
+│   │  │  Fortress   │  │  Fortress   │  │   Nexus     │  │              │
+│   │  │ (No Pub IP) │  │ (No Pub IP) │  │ (No Pub IP) │  │              │
+│   │  │ cloudflared │  │   ngrok     │  │ tailscale   │  │              │
+│   │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │              │
+│   └─────────┼────────────────┼────────────────┼─────────┘              │
+│             │                │                │                         │
+│             └────────────────┼────────────────┘                         │
+│                              │                                          │
+│   ┌──────────────────────────▼──────────────────────────┐              │
+│   │              Leaf Nodes (Behind NAT)                 │              │
+│   │                                                      │              │
+│   │   Guardian    Sentinel    Guardian    Sentinel      │              │
+│   │   (NAT)       (CGNAT)     (NAT)       (CGNAT)       │              │
+│   │                                                      │              │
+│   │   Connect via:                                       │              │
+│   │   1. ICE hole punching (if possible)                │              │
+│   │   2. Tunnel relay (via Cloudflare/ngrok/Tailscale)  │              │
+│   │   3. Direct to MSSP (if available)                  │              │
+│   └─────────────────────────────────────────────────────┘              │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Future: Rogue AI Defense
 
 The mesh consciousness architecture is designed with future AI threats in mind:
