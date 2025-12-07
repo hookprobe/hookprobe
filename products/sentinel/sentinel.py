@@ -145,11 +145,29 @@ except Exception as e:
     log.warning(f"Failed to load security module: {e}")
 
 # ============================================================
+# MESH MODULE (optional - loads if available)
+# ============================================================
+
+MESH_ENABLED = os.environ.get("ENABLE_MESH", "true").lower() == "true"
+mesh_agent = None
+
+if MESH_ENABLED:
+    try:
+        from lib.mesh_integration import SentinelMeshAgent, SentinelMeshConfig
+        mesh_config = SentinelMeshConfig.from_env()
+        mesh_agent = SentinelMeshAgent(mesh_config)
+        log.info("Mesh module loaded")
+    except ImportError:
+        log.info("Mesh module not available - running standalone")
+    except Exception as e:
+        log.warning(f"Failed to load mesh module: {e}")
+
+# ============================================================
 # SENTINEL VALIDATOR
 # ============================================================
 
 class Sentinel:
-    """Lightweight edge device validator with security protection"""
+    """Lightweight edge device validator with security protection and mesh connectivity"""
 
     def __init__(self):
         self.cache = LRUCache(CACHE_MAX, CACHE_TTL)
@@ -158,6 +176,20 @@ class Sentinel:
         self.stats = {'ok': 0, 'fail': 0, 'err': 0, 'blocked': 0, 'start': time.time()}
         self.edges = []
         self.security = security_manager
+        self.mesh = mesh_agent
+
+        # Start mesh agent if available
+        if self.mesh:
+            self.mesh.start()
+            # Register threat handler
+            self.mesh.on_threat(self._handle_mesh_threat)
+
+    def _handle_mesh_threat(self, intel):
+        """Handle threat intelligence from mesh"""
+        log.info(f"[MESH] Threat received: {intel.threat_type} - {intel.ioc_value[:20]}... (severity: {intel.severity})")
+        # Could trigger local blocking if severity is critical
+        if intel.severity <= 1 and self.security:
+            self.security.threat_detector._block_ip(intel.ioc_value, f"mesh:{intel.threat_type}")
 
     def validate(self, data: bytes, addr: tuple) -> dict:
         """Validate HTP message from edge device with security checks"""
@@ -170,6 +202,10 @@ class Sentinel:
                 if not allowed:
                     self.stats['blocked'] += 1
                     log.warning(f"[SECURITY] Blocked {client_ip}: {reason}")
+                    # Share threat with mesh
+                    if self.mesh:
+                        self.mesh.report_threat(client_ip, "malicious_request", severity=2,
+                                              context={"reason": reason})
                     return {'valid': False, 'reason': 'blocked', 'security': reason}
 
             if len(data) < 32:
@@ -226,6 +262,10 @@ class Sentinel:
 
         self.rates[edge_id[:16]] += 1
         if self.rates[edge_id[:16]] > RATE_LIMITS.get(TIER, 100):
+            # Report rate limit abuse to mesh (potential DDoS)
+            if self.mesh and addr:
+                self.mesh.report_threat(addr[0], "rate_abuse", severity=3,
+                                      context={"edge_id": edge_id[:16]})
             return {'valid': False, 'reason': 'rate'}
 
         return {'valid': True, 'edge_id': edge_id, 'ts': ts, 'sentinel': NODE_ID}
@@ -313,6 +353,7 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
     def _health(self):
         s = sentinel.stats
         sec_stats = sentinel.security.get_stats() if sentinel.security else {}
+        mesh_status = sentinel.mesh.get_status() if sentinel.mesh else {}
 
         h = {
             'status': 'healthy',
@@ -331,6 +372,13 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
                 'attacks_detected': sec_stats.get('attacks_detected', 0),
                 'blocked_ips': len(sec_stats.get('blocked_ips', [])),
                 'integrity_ok': len(sec_stats.get('integrity_changes', [])) == 0
+            },
+            'mesh': {
+                'enabled': sentinel.mesh is not None,
+                'state': mesh_status.get('state', 'disabled'),
+                'peers': mesh_status.get('peers', 0),
+                'threats_received': mesh_status.get('stats', {}).get('threats_received', 0),
+                'threats_shared': mesh_status.get('stats', {}).get('threats_shared', 0),
             }
         }
         self.send_response(200)
@@ -399,6 +447,10 @@ def main():
     if QSECBIT_ENABLED:
         log.info(f"  HMAC Algorithm: {QSECBIT_HMAC_ALGO}")
         log.info(f"  Key Rotation: {QSECBIT_KEY_ROTATION_HOURS}h")
+    log.info(f"Mesh:     {'ENABLED' if mesh_agent else 'DISABLED'}")
+    if mesh_agent:
+        log.info(f"  Role: SENTINEL (Validator)")
+        log.info(f"  Max Peers: {mesh_agent.config.max_peers}")
     log.info("=" * 50)
 
     sentinel = Sentinel()
@@ -422,6 +474,8 @@ def main():
     # Graceful shutdown
     def shutdown(sig, frame):
         log.info("Shutting down...")
+        if sentinel.mesh:
+            sentinel.mesh.stop()
         sock.close()
         http.shutdown()
         sys.exit(0)
