@@ -388,15 +388,17 @@ function updateLayerCards(layers) {
 
 async function loadDnsxaiData() {
     try {
-        const [stats, whitelist, sources] = await Promise.all([
+        const [stats, whitelist, sources, mlStatus] = await Promise.all([
             apiGet('/dnsxai/stats'),
             apiGet('/dnsxai/whitelist'),
-            apiGet('/dnsxai/sources')
+            apiGet('/dnsxai/sources'),
+            apiGet('/dnsxai/ml/status').catch(() => ({ available: false }))
         ]);
 
         updateDnsxaiStats(stats);
         updateDnsxaiWhitelist(whitelist.whitelist || []);
         updateDnsxaiSources(sources.sources || []);
+        updateDnsxaiMLStatus(mlStatus, stats);
     } catch (error) {
         console.error('Failed to load dnsXai:', error);
     }
@@ -409,12 +411,155 @@ function updateDnsxaiStats(stats) {
     updateElement('dnsxai-blocklist-size', formatNumber(stats.blocklist_domains || 0));
     updateElement('dnsxai-ml-hits', stats.ml_blocks || 0);
     updateElement('dnsxai-cname-hits', stats.cname_uncloaked || 0);
+    updateElement('dnsxai-blocklist-hits', formatNumber(stats.blocked || 0));
 
     // Update level slider
     const slider = document.getElementById('dnsxai-level-slider');
     if (slider && stats.level !== undefined) {
         slider.value = stats.level;
         updateDnsxaiLevelDisplay(stats.level);
+    }
+}
+
+function updateDnsxaiMLStatus(mlStatus, stats) {
+    // Update ML status indicators
+    const mlStatusEl = document.getElementById('ml-status-badge');
+    const mlTrainBtn = document.getElementById('ml-train-btn');
+    const mlTrainingSamples = document.getElementById('ml-training-samples');
+    const mlConfidence = document.getElementById('ml-confidence');
+    const federatedStatus = document.getElementById('federated-status');
+
+    if (mlStatusEl) {
+        if (!mlStatus.available) {
+            mlStatusEl.innerHTML = '<span class="badge badge-warning">ML Not Installed</span>';
+            mlStatusEl.title = 'Install numpy and scikit-learn for ML features';
+        } else if (mlStatus.classifier?.is_trained) {
+            mlStatusEl.innerHTML = '<span class="badge badge-success">ML Active</span>';
+        } else {
+            mlStatusEl.innerHTML = '<span class="badge badge-info">ML Ready</span>';
+        }
+    }
+
+    if (mlTrainingSamples && mlStatus.classifier) {
+        mlTrainingSamples.textContent = formatNumber(mlStatus.classifier.training_samples || 0);
+    }
+
+    if (mlConfidence && mlStatus.classifier) {
+        const confidence = mlStatus.classifier.is_trained ?
+            Math.min(100, Math.round((mlStatus.classifier.training_samples || 0) / 50)) : 0;
+        mlConfidence.textContent = `${confidence}%`;
+    }
+
+    if (federatedStatus && mlStatus.federated) {
+        federatedStatus.textContent = mlStatus.federated.federation_active ? 'Connected' : 'Local Only';
+    }
+
+    // Update CNAME stats if available
+    if (mlStatus.uncloaker) {
+        updateElement('dnsxai-cname-hits', mlStatus.uncloaker.total_uncloaked || 0);
+    }
+
+    // Enable/disable training button
+    if (mlTrainBtn) {
+        mlTrainBtn.disabled = !mlStatus.available;
+    }
+}
+
+async function trainDnsxaiML() {
+    const trainBtn = document.getElementById('ml-train-btn');
+    if (trainBtn) {
+        trainBtn.disabled = true;
+        trainBtn.textContent = 'Training...';
+    }
+
+    try {
+        const result = await apiPost('/dnsxai/ml/train', {
+            source: 'auto',
+            hours: 24,
+            limit: 5000
+        });
+
+        if (result.success) {
+            showToast(`ML Model trained on ${result.samples_trained} domains`, 'success');
+            loadDnsxaiData();
+        } else {
+            showToast(result.error || 'Training failed', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to train ML model', 'error');
+    } finally {
+        if (trainBtn) {
+            trainBtn.disabled = false;
+            trainBtn.textContent = 'Train Model';
+        }
+    }
+}
+
+async function classifyDomain(domain) {
+    if (!domain) {
+        const input = document.getElementById('ml-classify-input');
+        domain = input ? input.value.trim() : '';
+    }
+
+    if (!domain) {
+        showToast('Enter a domain to classify', 'error');
+        return;
+    }
+
+    try {
+        const result = await apiPost('/dnsxai/ml/classify', { domain });
+
+        const resultEl = document.getElementById('ml-classify-result');
+        if (resultEl) {
+            const threatClass = result.classification === 'malicious' ? 'danger' :
+                               result.classification === 'suspicious' ? 'warning' : 'success';
+
+            resultEl.innerHTML = `
+                <div class="classify-result ${threatClass}">
+                    <div class="classify-domain">${domain}</div>
+                    <div class="classify-verdict">
+                        <span class="badge badge-${threatClass}">${result.classification.toUpperCase()}</span>
+                        <span class="text-muted">Confidence: ${Math.round(result.confidence * 100)}%</span>
+                    </div>
+                    <div class="classify-score">Threat Score: ${(result.threat_score * 100).toFixed(1)}%</div>
+                    ${result.reasons && result.reasons.length > 0 ? `
+                        <div class="classify-reasons">
+                            <strong>Reasons:</strong>
+                            <ul>${result.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+    } catch (error) {
+        showToast('Classification failed', 'error');
+    }
+}
+
+async function loadMLThreats() {
+    try {
+        const result = await apiGet('/dnsxai/ml/threats');
+        const container = document.getElementById('ml-threats-list');
+
+        if (!container) return;
+
+        if (!result.threats || result.threats.length === 0) {
+            container.innerHTML = '<div class="empty-state"><p>No threats detected yet</p></div>';
+            return;
+        }
+
+        container.innerHTML = result.threats.map(threat => `
+            <div class="threat-item">
+                <div class="threat-domain font-mono">${threat.domain}</div>
+                <div class="threat-meta">
+                    <span class="badge badge-${threat.type === 'ml_detected' ? 'warning' : 'info'}">${threat.type}</span>
+                    <span class="text-muted">${new Date(threat.timestamp).toLocaleTimeString()}</span>
+                    <span class="confidence">Confidence: ${Math.round(threat.confidence * 100)}%</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Failed to load ML threats:', error);
     }
 }
 
@@ -459,8 +604,16 @@ function updateDnsxaiSources(sources) {
 
 async function loadClientsData() {
     try {
-        const clients = await apiGet('/clients');
+        const [clients, dhcp] = await Promise.all([
+            apiGet('/clients/list'),
+            apiGet('/clients/dhcp')
+        ]);
         updateClientsList(clients);
+        updateDhcpLeases(dhcp.leases || []);
+
+        // Update stats
+        updateElement('clients-total', (dhcp.leases || []).length);
+        updateElement('clients-active', Array.isArray(clients) ? clients.filter(c => c.status === 'connected').length : 0);
     } catch (error) {
         console.error('Failed to load clients:', error);
     }
@@ -470,7 +623,7 @@ function updateClientsList(clients) {
     const grid = document.getElementById('clients-grid');
     if (!grid) return;
 
-    if (!clients || clients.length === 0) {
+    if (!clients || clients.length === 0 || (clients.error)) {
         grid.innerHTML = '<div class="empty-state"><p>No clients connected</p></div>';
         return;
     }
@@ -484,12 +637,83 @@ function updateClientsList(clients) {
             </div>
             <div class="device-info">
                 <div class="device-name">${client.hostname || 'Unknown Device'}</div>
-                <div class="device-ip font-mono">${client.ip}</div>
+                <div class="device-ip font-mono">${client.ip || 'N/A'}</div>
                 <div class="device-mac text-muted font-mono">${client.mac || 'N/A'}</div>
             </div>
-            <span class="badge badge-success">Connected</span>
+            <div class="device-actions">
+                <span class="badge ${client.status === 'connected' ? 'badge-success' : 'badge-info'}">${client.status === 'connected' ? 'Connected' : 'DHCP Lease'}</span>
+                ${client.ip && client.ip !== 'N/A' ? `<button class="btn btn-sm btn-danger" onclick="disconnectClient('${client.ip}')" title="Block this client">Disconnect</button>` : ''}
+            </div>
         </div>
     `).join('');
+}
+
+function updateDhcpLeases(leases) {
+    const tbody = document.getElementById('dhcp-leases-body');
+    if (!tbody) return;
+
+    if (!leases || leases.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No active DHCP leases</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = leases.map(lease => {
+        const expiresIn = formatLeaseTime(lease.expires_in);
+        return `
+            <tr>
+                <td>${lease.hostname || 'Unknown'}</td>
+                <td class="font-mono">${lease.ip}</td>
+                <td class="font-mono">${lease.mac}</td>
+                <td>${expiresIn}</td>
+                <td>
+                    <button class="btn btn-sm btn-danger" onclick="disconnectClient('${lease.ip}')" title="Block this client">
+                        Disconnect
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function formatLeaseTime(seconds) {
+    if (!seconds || seconds <= 0) return 'Expired';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+}
+
+async function disconnectClient(ip) {
+    if (!confirm(`Disconnect client ${ip}? This will block the device from accessing the network.`)) {
+        return;
+    }
+
+    try {
+        const result = await apiPost(`/clients/block/${ip}`);
+        if (result.success) {
+            showToast(`Client ${ip} has been disconnected`, 'success');
+            loadClientsData(); // Refresh the list
+        } else {
+            showToast(result.error || 'Failed to disconnect client', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to disconnect client', 'error');
+    }
+}
+
+async function unblockClient(ip) {
+    try {
+        const result = await apiPost(`/clients/unblock/${ip}`);
+        if (result.success) {
+            showToast(`Client ${ip} has been unblocked`, 'success');
+            loadClientsData();
+        } else {
+            showToast(result.error || 'Failed to unblock client', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to unblock client', 'error');
+    }
 }
 
 async function loadVpnData() {
