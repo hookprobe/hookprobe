@@ -1,14 +1,14 @@
 #!/bin/bash
 #
 # HookProbe Guardian Setup Script
-# Version: 5.0.0
+# Version: 5.5.0
 # License: MIT
 #
 # Guardian - Portable Travel Security Companion
 #
 # Guardian Mode (This Script):
-#   - Simple WiFi hotspot (all devices on br0)
-#   - MAC tracking via FreeRADIUS (see connected devices in UI)
+#   - Simple WiFi hotspot (all devices on same network)
+#   - Client tracking via hostapd (see connected devices in UI)
 #   - Full security stack (IDS, WAF, XDP DDoS protection)
 #   - Works with any USB WiFi adapter that supports AP mode
 #
@@ -100,33 +100,6 @@ detect_interfaces() {
     log_info "WiFi AP mode: $WIFI_AP_SUPPORT"
 }
 
-# ============================================================
-# RADIUS CONNECTIVITY CHECK
-# ============================================================
-check_radius_connectivity() {
-    local radius_server="${1:-127.0.0.1}"
-    local radius_port="${2:-1812}"
-    local timeout=5
-
-    log_step "Checking RADIUS connectivity to $radius_server:$radius_port..."
-
-    # Check if we can reach the RADIUS server
-    if command -v nc &>/dev/null; then
-        if nc -z -w $timeout "$radius_server" "$radius_port" 2>/dev/null; then
-            log_info "RADIUS server is reachable"
-            return 0
-        fi
-    elif command -v timeout &>/dev/null; then
-        if timeout $timeout bash -c "echo >/dev/udp/$radius_server/$radius_port" 2>/dev/null; then
-            log_info "RADIUS server is reachable"
-            return 0
-        fi
-    fi
-
-    log_warn "RADIUS server not reachable"
-    return 1
-}
-
 check_mssp_connectivity() {
     local mssp_url="${HOOKPROBE_MSSP_URL:-https://nexus.hookprobe.com}"
     local timeout=10
@@ -201,86 +174,17 @@ install_packages() {
     log_info "Packages installed"
 }
 
-install_sdn_packages() {
-    log_step "Installing FreeRADIUS for MAC tracking..."
-
-    # Guardian mode: Only need FreeRADIUS for MAC tracking, no VLAN package
-    # VLAN package is only needed for Fortress mode with VAP-capable adapters
-    if [ "$PKG_MGR" = "apt" ]; then
-        apt-get install -y -qq freeradius 2>/dev/null || true
-    else
-        dnf install -y -q freeradius 2>/dev/null || true
-    fi
-
-    # Note: VLAN kernel module (8021q) not loaded in Guardian mode
-    # All devices connect to same network (br0) - no VLAN segmentation
-
-    log_info "FreeRADIUS installed for MAC authentication"
-}
-
 # ============================================================
-# FREERADIUS CONFIGURATION FOR MAC AUTHENTICATION
+# GUARDIAN CONFIGURATION DIRECTORY
 # ============================================================
-# Guardian Mode: Simple accept-all policy for device tracking
-# Fortress Mode: VLAN assignment based on MAC address
-# ============================================================
-configure_freeradius() {
-    log_step "Configuring FreeRADIUS for MAC authentication..."
+setup_guardian_config() {
+    log_step "Setting up Guardian configuration directory..."
 
-    local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_radius}"
-
-    # Backup original config if exists
-    if [ -d /etc/freeradius/3.0 ]; then
-        cp -n /etc/freeradius/3.0/clients.conf /etc/freeradius/3.0/clients.conf.bak 2>/dev/null || true
-    fi
-
-    # Create Guardian MAC database directory
+    # Create Guardian config directory
     mkdir -p /etc/guardian
     chmod 755 /etc/guardian
 
-    # Create MAC database (Guardian mode - tracking only, no VLANs)
-    if [ ! -f /etc/guardian/mac_devices.json ]; then
-        cat > /etc/guardian/mac_devices.json << 'MACDBEOF'
-{
-  "version": "1.0",
-  "description": "HookProbe Guardian - Connected Devices Database",
-  "note": "Guardian mode: All devices on same network. For VLANs, use Fortress mode.",
-  "devices": {}
-}
-MACDBEOF
-        chmod 644 /etc/guardian/mac_devices.json
-    fi
-
-    # Symlink for compatibility
-    ln -sf /etc/guardian/mac_devices.json /etc/guardian/mac_vlan.json 2>/dev/null || true
-
-    # Update localhost secret to match hostapd
-    if [ -f /etc/freeradius/3.0/clients.conf ]; then
-        sed -i "s/secret = testing123/secret = $RADIUS_SECRET/" /etc/freeradius/3.0/clients.conf 2>/dev/null || true
-    fi
-
-    # Create FreeRADIUS users file - Guardian mode accepts all devices
-    local RADIUS_USERS="/etc/freeradius/3.0/mods-config/files/authorize"
-    if [ -d /etc/freeradius/3.0/mods-config/files ]; then
-        cat > "$RADIUS_USERS" << 'USERSEOF'
-# HookProbe Guardian - MAC Authentication (Simple Mode)
-# All devices accepted - tracking only, no VLAN assignment
-# For VLAN segmentation, upgrade to Fortress mode
-
-# DEFAULT: Accept all devices on br0 network
-DEFAULT Cleartext-Password := "%{User-Name}"
-        Reply-Message = "Welcome to HookProbe Guardian"
-USERSEOF
-        chmod 640 "$RADIUS_USERS"
-        chown freerad:freerad "$RADIUS_USERS" 2>/dev/null || true
-    fi
-
-    # Enable files module
-    if [ -f /etc/freeradius/3.0/mods-available/files ]; then
-        ln -sf /etc/freeradius/3.0/mods-available/files /etc/freeradius/3.0/mods-enabled/files 2>/dev/null || true
-    fi
-
-    log_info "FreeRADIUS configured for MAC tracking (Guardian mode)"
+    log_info "Guardian configuration directory created"
 }
 
 # ============================================================
@@ -2464,106 +2368,24 @@ EOF
 }
 
 # ============================================================
-# MAC AUTHENTICATION CONFIGURATION (Guardian Simple Mode)
+# HOSTAPD CONFIGURATION (Guardian Simple Mode)
 # ============================================================
-# Guardian Mode: Simple WiFi hotspot with MAC tracking via FreeRADIUS
+# Guardian Mode: Simple WiFi hotspot - client tracking via hostapd_cli
 # - All devices on same network (br0) - no VLAN segmentation
-# - FreeRADIUS tracks which MAC addresses connect
+# - hostapd_cli tracks connected stations
 # - Web UI shows connected devices list
 #
-# For VLAN segmentation (multi-VAP WiFi), use Fortress mode which
-# requires special WiFi adapters (Atheros AR9271, MediaTek MT7612U)
+# For VLAN segmentation, use Fortress mode which requires
+# special WiFi adapters (Atheros AR9271, MediaTek MT7612U)
 # ============================================================
-configure_sdn_mode() {
-    log_step "Configuring Guardian MAC Authentication..."
+configure_guardian_hostapd() {
+    log_step "Configuring Guardian hostapd..."
 
-    local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_radius}"
-
-    # Install FreeRADIUS for MAC tracking (no VLAN package needed for Guardian)
-    log_info "Installing FreeRADIUS for MAC authentication..."
-    if [ "$PKG_MGR" = "apt" ]; then
-        apt-get install -y -qq freeradius 2>/dev/null || true
-    else
-        dnf install -y -q freeradius 2>/dev/null || true
-    fi
-
-    # Create Guardian MAC database directory
+    # Create Guardian config directory
     mkdir -p /etc/guardian
     chmod 755 /etc/guardian
 
-    # Create MAC device database (simple mode - no VLANs, just tracking)
-    if [ ! -f /etc/guardian/mac_devices.json ]; then
-        cat > /etc/guardian/mac_devices.json << 'MACDBEOF'
-{
-  "version": "1.0",
-  "description": "HookProbe Guardian - Connected Devices Database",
-  "note": "Guardian mode: All devices on same network (br0). For VLAN segmentation use Fortress mode.",
-  "devices": {}
-}
-MACDBEOF
-        chmod 644 /etc/guardian/mac_devices.json
-    fi
-
-    # Symlink for compatibility with existing code
-    if [ ! -f /etc/guardian/mac_vlan.json ]; then
-        ln -sf /etc/guardian/mac_devices.json /etc/guardian/mac_vlan.json 2>/dev/null || \
-            cp /etc/guardian/mac_devices.json /etc/guardian/mac_vlan.json
-    fi
-
-    # Configure FreeRADIUS for simple MAC authentication (Accept-Accept policy)
-    # No VLAN assignment - just track that devices connected
-    if [ -d /etc/freeradius/3.0 ]; then
-        # Backup original config
-        cp -n /etc/freeradius/3.0/clients.conf /etc/freeradius/3.0/clients.conf.bak 2>/dev/null || true
-
-        # Configure localhost client for hostapd
-        if [ -f /etc/freeradius/3.0/clients.conf ]; then
-            # Update localhost secret to match hostapd
-            sed -i "s/secret = testing123/secret = $RADIUS_SECRET/" /etc/freeradius/3.0/clients.conf 2>/dev/null || true
-        fi
-
-        # Create simple authorize file - accept all MACs, log them
-        local RADIUS_USERS="/etc/freeradius/3.0/mods-config/files/authorize"
-        if [ -d /etc/freeradius/3.0/mods-config/files ]; then
-            cat > "$RADIUS_USERS" << 'USERSEOF'
-# HookProbe Guardian - MAC Authentication (Simple Mode)
-# All devices are accepted on the same network (br0)
-# This file logs MAC addresses for the connected devices UI
-
-# DEFAULT: Accept all devices (Guardian mode - no VLAN segmentation)
-# For VLAN segmentation, upgrade to Fortress mode with VAP-capable WiFi adapter
-DEFAULT Cleartext-Password := "%{User-Name}"
-        Reply-Message = "Welcome to HookProbe Guardian"
-USERSEOF
-            chmod 640 "$RADIUS_USERS"
-            chown freerad:freerad "$RADIUS_USERS" 2>/dev/null || true
-        fi
-
-        # Enable files module
-        if [ -f /etc/freeradius/3.0/mods-available/files ]; then
-            ln -sf /etc/freeradius/3.0/mods-available/files /etc/freeradius/3.0/mods-enabled/files 2>/dev/null || true
-        fi
-    fi
-
-    # Check if FreeRADIUS can start
-    local RADIUS_AVAILABLE=false
-    systemctl stop freeradius 2>/dev/null || true
-    sleep 1
-    systemctl start freeradius 2>/dev/null || true
-    sleep 2
-
-    if systemctl is-active --quiet freeradius 2>/dev/null; then
-        RADIUS_AVAILABLE=true
-        log_info "FreeRADIUS is running - MAC authentication enabled"
-        systemctl enable freeradius 2>/dev/null || true
-    else
-        log_warn "FreeRADIUS could not start - devices will still connect but MAC tracking disabled"
-        systemctl stop freeradius 2>/dev/null || true
-        systemctl disable freeradius 2>/dev/null || true
-    fi
-
-    # Keep the simple hostapd config (already created by configure_base_networking)
-    # Guardian mode does NOT use dynamic VLANs - all devices on br0
+    # Guardian mode: Simple hostapd config - all devices on br0
     log_info "Configuring hostapd for simple mode (all devices on br0)..."
 
     if [ -f /etc/hostapd/hostapd.conf ]; then
@@ -2589,7 +2411,7 @@ USERSEOF
     log_info "Guardian mode: All devices on single network (br0 / 192.168.4.0/24)"
     log_info "For IoT VLAN segmentation, use Fortress mode with VAP-capable WiFi adapter"
 
-    log_info "MAC authentication configuration complete"
+    log_info "Hostapd configuration complete"
 }
 
 # ============================================================
@@ -2680,19 +2502,6 @@ create_default_config() {
 #
 # For VLAN segmentation and IoT isolation, use Fortress mode
 # with VAP-capable WiFi adapters (Atheros AR9271, MediaTek MT7612U).
-
-# RADIUS Configuration (for MAC tracking)
-radius:
-  enabled: true
-  port: 1812
-  accounting_port: 1813
-  secret: "changeme_radius_secret"
-  nas_identifier: "guardian"
-  session_timeout: 3600
-  mac_auth:
-    enabled: true
-    # Guardian mode: tracks devices, no VLAN assignment
-    # Fortress mode: assigns devices to VLANs
 
 # Network Configuration (Guardian Simple Mode)
 network:
@@ -2824,9 +2633,6 @@ EOF
 enable_services() {
     log_step "Enabling services..."
 
-    # Enable FreeRADIUS (required for MAC authentication before hostapd)
-    systemctl enable freeradius 2>/dev/null || true
-
     systemctl unmask hostapd 2>/dev/null || true
     systemctl enable hostapd
     systemctl enable dnsmasq
@@ -2855,17 +2661,6 @@ start_services() {
     systemctl start openvswitch-switch 2>/dev/null || systemctl start openvswitch 2>/dev/null || true
 
     systemctl start nftables 2>/dev/null || true
-
-    # ─────────────────────────────────────────────────────────────
-    # Start FreeRADIUS BEFORE hostapd (required for MAC authentication)
-    # ─────────────────────────────────────────────────────────────
-    if systemctl list-unit-files | grep -q freeradius; then
-        log_info "Starting FreeRADIUS for MAC authentication..."
-        systemctl start freeradius 2>/dev/null || {
-            log_warn "FreeRADIUS failed to start - MAC tracking will be unavailable"
-        }
-        sleep 1
-    fi
 
     systemctl start dnsmasq
 
@@ -3124,9 +2919,9 @@ main() {
     log_step "Installing base packages..."
     install_packages
 
-    # Install FreeRADIUS for MAC tracking
-    log_step "Installing MAC authentication packages..."
-    install_sdn_packages
+    # Setup Guardian config directory
+    log_step "Setting up Guardian configuration..."
+    setup_guardian_config
 
     # Install Podman container runtime
     log_step "Installing container runtime..."
@@ -3149,8 +2944,8 @@ main() {
 
     # Configure Guardian networking
     log_step "Configuring Guardian networking..."
-    configure_base_networking   # Setup bridge, hostapd, DHCP
-    configure_sdn_mode          # Configure MAC authentication
+    configure_base_networking       # Setup bridge, hostapd, DHCP
+    configure_guardian_hostapd      # Configure hostapd for simple mode
 
     # Install QSecBit agent
     log_step "Installing QSecBit agent..."
@@ -3216,7 +3011,6 @@ main() {
     echo -e "  ${BOLD}Service Status:${NC}"
     echo -e "  $(systemctl is-active hostapd 2>/dev/null || echo 'inactive') hostapd (WiFi AP)"
     echo -e "  $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive') dnsmasq (DHCP/DNS)"
-    echo -e "  $(systemctl is-active freeradius 2>/dev/null || echo 'inactive') freeradius (MAC Auth)"
     echo -e "  $(systemctl is-active guardian-webui 2>/dev/null || echo 'inactive') guardian-webui"
     echo -e "  $(systemctl is-active guardian-suricata 2>/dev/null || echo 'inactive') guardian-suricata (IDS)"
     echo -e "  $(systemctl is-active guardian-waf 2>/dev/null || echo 'inactive') guardian-waf (WAF)"
