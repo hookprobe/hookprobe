@@ -70,7 +70,6 @@ stop_services() {
         "guardian-waf"
         "guardian-zeek"
         "guardian-neuro"
-        "guardian-adguard"
         # System services
         "hostapd"
         "dnsmasq"
@@ -108,7 +107,6 @@ remove_systemd_services() {
         "guardian-aggregator"
         "guardian-xdp"
         "guardian-zeek"
-        "guardian-adguard"
     )
 
     for service in "${services[@]}"; do
