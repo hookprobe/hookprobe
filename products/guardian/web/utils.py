@@ -168,6 +168,20 @@ def get_system_info():
     except (IOError, ValueError):
         pass
 
+    # Disk usage
+    try:
+        statvfs = os.statvfs('/')
+        total = statvfs.f_frsize * statvfs.f_blocks
+        free = statvfs.f_frsize * statvfs.f_bavail
+        used = total - free
+        info['disk'] = {
+            'total': total,
+            'used': used,
+            'percent': int((used / total * 100) if total > 0 else 0)
+        }
+    except (OSError, ValueError):
+        pass
+
     # CPU temperature (Raspberry Pi)
     try:
         with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
