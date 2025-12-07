@@ -1,0 +1,210 @@
+<!-- dnsXai Tab Content -->
+
+<!-- Quick Actions / Kill Switch -->
+<div class="quick-actions">
+    <div class="quick-actions-status">
+        <div class="quick-actions-icon active" id="quick-actions-icon">
+            <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+            </svg>
+        </div>
+        <div class="quick-actions-info">
+            <h4>Quick Controls</h4>
+            <span class="status-label active" id="quick-actions-label">Protection Active</span>
+        </div>
+    </div>
+    <div class="quick-actions-buttons">
+        <button class="btn btn-sm btn-secondary" onclick="pauseDnsxai(5)" title="Pause for 5 minutes">5m</button>
+        <button class="btn btn-sm btn-secondary" onclick="pauseDnsxai(15)" title="Pause for 15 minutes">15m</button>
+        <button class="btn btn-sm btn-secondary" onclick="pauseDnsxai(30)" title="Pause for 30 minutes">30m</button>
+        <button class="btn btn-danger" id="killswitch-btn" onclick="toggleDnsxaiKillSwitch()">DISABLE</button>
+    </div>
+</div>
+
+<!-- Pause Timer -->
+<div class="alert alert-warning" id="pause-timer" style="display: none;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+    </svg>
+    <span>Protection Paused - <span id="pause-countdown">--:--</span></span>
+    <button class="btn btn-sm btn-success" onclick="resumeDnsxai()" style="margin-left: auto;">Resume Now</button>
+</div>
+
+<!-- Quick Whitelist -->
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <div class="input-group">
+        <input type="text" class="form-input" id="quick-whitelist-input" placeholder="Quick whitelist: enter domain and press Enter" onkeypress="if(event.key==='Enter') quickWhitelist()">
+        <button class="btn btn-success" onclick="quickWhitelist()">Whitelist</button>
+    </div>
+</div>
+
+<!-- Header -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+    <div style="display: flex; align-items: center; gap: var(--spacing-md);">
+        <h2>dnsXai</h2>
+        <span class="badge badge-primary" style="background: linear-gradient(135deg, var(--hp-primary), #ff8c42); color: white;">AI-POWERED</span>
+    </div>
+    <p class="text-muted">Next-generation DNS protection with machine learning</p>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value" id="dnsxai-queries">0</div>
+        <div class="stat-label">Total Queries</div>
+    </div>
+    <div class="stat-card success">
+        <div class="stat-value" id="dnsxai-blocked">0</div>
+        <div class="stat-label">Blocked</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" id="dnsxai-block-rate">0%</div>
+        <div class="stat-label">Block Rate</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" id="dnsxai-blocklist-size">0</div>
+        <div class="stat-label">Blocklist Size</div>
+    </div>
+</div>
+
+<!-- Detection Breakdown -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Detection Methods</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--spacing-md);">
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-green);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="dnsxai-blocklist-hits">0</div>
+                <div class="text-muted" style="font-size: 0.8125rem;">Blocklist</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-primary);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="dnsxai-ml-hits">0</div>
+                <div class="text-muted" style="font-size: 0.8125rem;">ML Detected</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-amber);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="dnsxai-cname-hits">0</div>
+                <div class="text-muted" style="font-size: 0.8125rem;">CNAME Uncloaked</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Protection Level -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Protection Level</h3>
+    </div>
+    <div class="card-body">
+        <div class="slider-container">
+            <input type="range" class="slider" id="dnsxai-level-slider" min="0" max="5" value="3" oninput="updateDnsxaiLevelDisplay(this.value)" onchange="setDnsxaiLevel(this.value)">
+            <div class="slider-labels">
+                <span>OFF</span>
+                <span>BASE</span>
+                <span>ENHANCED</span>
+                <span>STRONG</span>
+                <span>MAX</span>
+                <span>FULL</span>
+            </div>
+        </div>
+        <div style="text-align: center; margin-top: var(--spacing-lg); padding: var(--spacing-lg); background: var(--bg-light); border-radius: var(--radius-lg);">
+            <div class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-xs);">Current Protection</div>
+            <div id="dnsxai-level-name" style="font-size: 1.75rem; font-weight: 700; color: var(--hp-green);">Strong</div>
+        </div>
+    </div>
+</div>
+
+<!-- Whitelist Management -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Whitelisted Domains</h3>
+        <div class="card-actions">
+            <span class="badge badge-info" id="dnsxai-whitelist-count">0 domains</span>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="input-group" style="margin-bottom: var(--spacing-md);">
+            <input type="text" class="form-input" id="dnsxai-whitelist-input" placeholder="Enter domain to whitelist">
+            <button class="btn btn-primary" onclick="addDnsxaiWhitelist()">Add</button>
+        </div>
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th style="width: 100px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="dnsxai-whitelist-body">
+                    <tr><td colspan="2" class="empty-state">No whitelisted domains</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Blocklist Sources -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Blocklist Sources</h3>
+        <button class="btn btn-sm btn-primary" onclick="openModal('add-source-modal')">Add Source</button>
+    </div>
+    <div class="card-body">
+        <div id="dnsxai-sources-list">
+            <!-- Populated by JavaScript -->
+        </div>
+    </div>
+    <div class="card-footer">
+        <button class="btn btn-secondary" onclick="apiPost('/dnsxai/update').then(() => showToast('Blocklists updated', 'success'))">Update Blocklists</button>
+    </div>
+</div>
+
+<!-- Add Source Modal -->
+<div class="modal-overlay" id="add-source-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Add Blocklist Source</h3>
+            <button class="modal-close" onclick="closeModal('add-source-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">Source Name</label>
+                <input type="text" class="form-input" id="source-name" placeholder="e.g., StevenBlack Hosts">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Source URL</label>
+                <input type="text" class="form-input" id="source-url" placeholder="https://raw.githubusercontent.com/...">
+                <span class="form-help">URL to a hosts file or domain list</span>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('add-source-modal')">Cancel</button>
+            <button class="btn btn-primary" onclick="addDnsxaiSource()">Add Source</button>
+        </div>
+    </div>
+</div>
+
+<script>
+async function addDnsxaiSource() {
+    const name = document.getElementById('source-name').value.trim();
+    const url = document.getElementById('source-url').value.trim();
+
+    if (!url) {
+        showToast('Please enter a URL', 'error');
+        return;
+    }
+
+    try {
+        const result = await apiPost('/dnsxai/sources', { name, url });
+        if (result.success) {
+            closeModal('add-source-modal');
+            document.getElementById('source-name').value = '';
+            document.getElementById('source-url').value = '';
+            loadDnsxaiData();
+            showToast('Source added successfully', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to add source', 'error');
+    }
+}
+</script>
