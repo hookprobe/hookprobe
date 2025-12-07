@@ -37,39 +37,9 @@ class ConfigValidationError(Exception):
     pass
 
 
-@dataclass
-class RADIUSConfig:
-    """RADIUS server configuration"""
-    # Local RADIUS server settings
-    enabled: bool = True
-    bind_address: str = "0.0.0.0"
-    auth_port: int = 1812
-    acct_port: int = 1813
-    secret: str = ""  # Auto-generated if empty
-
-    # External RADIUS server (optional)
-    external_enabled: bool = False
-    external_server: str = ""
-    external_secret: str = ""
-    external_auth_port: int = 1812
-    external_acct_port: int = 1813
-    external_timeout: float = 5.0
-    external_retries: int = 3
-
-    # FreeRADIUS integration
-    freeradius_enabled: bool = True
-    freeradius_config_dir: str = "/etc/freeradius/3.0"
-    django_api_url: str = "http://localhost:8000/api/radius/authorize"
-    django_api_token: str = ""
-
-    # MAC Authentication Bypass (MAB)
-    mab_enabled: bool = True
-    default_vlan: int = 999  # Quarantine
-
-    def __post_init__(self):
-        # Generate secret if not provided
-        if not self.secret:
-            self.secret = secrets.token_hex(16)
+# RADIUS configuration removed - Guardian uses HTP mesh for device tracking
+# Device categorization is now handled via DHCP lease monitoring
+# See mesh_integration.py for the new approach
 
 
 @dataclass
@@ -298,7 +268,6 @@ class GuardianConfig:
     name: str = "Guardian Liberty"
 
     # Component configurations
-    radius: RADIUSConfig = field(default_factory=RADIUSConfig)
     vlan: VLANConfig = field(default_factory=VLANConfig)
     openflow: OpenFlowConfig = field(default_factory=OpenFlowConfig)
     htp: HTPConfig = field(default_factory=HTPConfig)
@@ -317,11 +286,6 @@ class GuardianConfig:
     def validate(self) -> List[str]:
         """Validate configuration and return list of errors"""
         errors = []
-
-        # Validate RADIUS
-        if self.radius.enabled and self.radius.external_enabled:
-            if not self.radius.external_server:
-                errors.append("External RADIUS enabled but no server specified")
 
         # Validate VLANs
         if self.vlan.enabled:
@@ -354,9 +318,7 @@ class GuardianConfig:
         """Create configuration from dictionary"""
         config = cls()
 
-        # Update nested configs
-        if 'radius' in data:
-            config.radius = RADIUSConfig(**data['radius'])
+        # Update nested configs (RADIUS removed - using HTP mesh instead)
         if 'vlan' in data:
             config.vlan = VLANConfig(**data['vlan'])
         if 'openflow' in data:
@@ -539,33 +501,11 @@ version: "5.0.0"
 name: "Guardian Liberty"
 
 # ============================================================================
-# RADIUS Configuration
+# Device Tracking
 # ============================================================================
-radius:
-  enabled: true
-  bind_address: "0.0.0.0"
-  auth_port: 1812
-  acct_port: 1813
-  secret: ""  # Auto-generated if empty
-
-  # External RADIUS server (optional - for enterprise integration)
-  external_enabled: false
-  external_server: ""
-  external_secret: ""
-  external_auth_port: 1812
-  external_acct_port: 1813
-  external_timeout: 5.0
-  external_retries: 3
-
-  # FreeRADIUS integration
-  freeradius_enabled: true
-  freeradius_config_dir: "/etc/freeradius/3.0"
-  django_api_url: "http://localhost:8000/api/radius/authorize"
-  django_api_token: ""
-
-  # MAC Authentication Bypass
-  mab_enabled: true
-  default_vlan: 999  # Unknown devices go to Quarantine
+# RADIUS has been removed from Guardian - device tracking is now handled
+# via DHCP lease monitoring and HTP mesh integration.
+# See mesh_integration.py for the new approach.
 
 # ============================================================================
 # VLAN Segmentation
