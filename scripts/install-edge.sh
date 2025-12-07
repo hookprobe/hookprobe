@@ -2724,7 +2724,7 @@ deploy_web_pod() {
 
     # Build Django container from Containerfile
     echo "  Building Django container (this may take a few minutes on ARM64)..."
-    local containerfile="$REPO_ROOT/install/addons/webserver/Containerfile"
+    local containerfile="$REPO_ROOT/deploy/addons/webserver/Containerfile"
     if [ -f "$containerfile" ]; then
         echo "  Found Containerfile: $containerfile"
         podman build \
@@ -2838,7 +2838,7 @@ URLSEOF
     mkdir -p "$nginx_conf_dir"
 
     # Copy nginx config if available, otherwise create inline
-    local nginx_conf_src="$REPO_ROOT/install/addons/webserver/nginx/default.conf"
+    local nginx_conf_src="$REPO_ROOT/deploy/addons/webserver/nginx/default.conf"
     if [ -f "$nginx_conf_src" ]; then
         cp "$nginx_conf_src" "$nginx_conf_dir/default.conf"
     else
@@ -3030,9 +3030,9 @@ deploy_neuro_pod() {
     mkdir -p /opt/hookprobe/neuro
 
     # Copy neuro source if available
-    if [ -d "$REPO_ROOT/src/neuro" ]; then
-        cp -r "$REPO_ROOT/src/neuro" /opt/hookprobe/
-        cp -r "$REPO_ROOT/src/qsecbit" /opt/hookprobe/ 2>/dev/null || true
+    if [ -d "$REPO_ROOT/core/neuro" ]; then
+        cp -r "$REPO_ROOT/core/neuro" /opt/hookprobe/
+        cp -r "$REPO_ROOT/core/qsecbit" /opt/hookprobe/ 2>/dev/null || true
         echo "  Neuro source code installed"
     fi
 
@@ -3125,9 +3125,9 @@ deploy_sentinel_pod() {
     mkdir -p /opt/hookprobe/validator/logs
 
     # Copy validator source if available
-    if [ -d "$REPO_ROOT/src/neuro" ]; then
-        cp -r "$REPO_ROOT/src/neuro" /opt/hookprobe/validator/
-        cp -r "$REPO_ROOT/src/qsecbit" /opt/hookprobe/validator/ 2>/dev/null || true
+    if [ -d "$REPO_ROOT/core/neuro" ]; then
+        cp -r "$REPO_ROOT/core/neuro" /opt/hookprobe/validator/
+        cp -r "$REPO_ROOT/core/qsecbit" /opt/hookprobe/validator/ 2>/dev/null || true
     fi
 
     # Create validator entrypoint script

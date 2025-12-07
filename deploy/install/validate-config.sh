@@ -168,7 +168,7 @@ validate_shellcheck() {
 validate_edge_config() {
     log_section "Edge Configuration Validation"
 
-    local edge_config="$REPO_ROOT/install/edge/config.sh"
+    local edge_config="$REPO_ROOT/deploy/edge/config.sh"
 
     if [ ! -f "$edge_config" ]; then
         log_warning "Edge config not found: $edge_config"
@@ -207,7 +207,7 @@ validate_edge_config() {
 validate_cloud_config() {
     log_section "Cloud Configuration Validation"
 
-    local cloud_config="$REPO_ROOT/install/cloud/config.sh"
+    local cloud_config="$REPO_ROOT/deploy/cloud/config.sh"
 
     if [ ! -f "$cloud_config" ]; then
         log_warning "Cloud config not found: $cloud_config"
@@ -244,7 +244,7 @@ validate_cloud_config() {
 validate_webserver_config() {
     log_section "Web Server Configuration Validation"
 
-    local webserver_config="$REPO_ROOT/install/addons/webserver/config/webserver-config.sh"
+    local webserver_config="$REPO_ROOT/deploy/addons/webserver/config/webserver-config.sh"
 
     if [ ! -f "$webserver_config" ]; then
         log_warning "Web server config not found: $webserver_config"
@@ -393,7 +393,7 @@ validate_version_consistency() {
 validate_python_requirements() {
     log_section "Python Requirements Validation"
 
-    local requirements_file="$REPO_ROOT/src/web/requirements.txt"
+    local requirements_file="$REPO_ROOT/products/mssp/web/requirements.txt"
 
     if [ ! -f "$requirements_file" ]; then
         log_warning "requirements.txt not found: $requirements_file"
@@ -419,7 +419,7 @@ validate_python_requirements() {
 validate_containerfile() {
     log_section "Containerfile Validation"
 
-    local containerfile="$REPO_ROOT/install/addons/webserver/Containerfile"
+    local containerfile="$REPO_ROOT/deploy/addons/webserver/Containerfile"
 
     if [ ! -f "$containerfile" ]; then
         log_info "Containerfile not found (skipping)"
