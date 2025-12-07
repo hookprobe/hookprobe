@@ -477,14 +477,11 @@ install_security_containers() {
     # Create volumes
     podman volume create guardian-suricata-logs 2>/dev/null || true
     podman volume create guardian-suricata-rules 2>/dev/null || true
-    podman volume create guardian-adguard-work 2>/dev/null || true
-    podman volume create guardian-adguard-conf 2>/dev/null || true
     podman volume create guardian-waf-logs 2>/dev/null || true
 
     # Pull container images first
     log_info "Pulling container images (this may take a few minutes)..."
     podman pull docker.io/jasonish/suricata:latest 2>/dev/null || log_warn "Failed to pull Suricata image"
-    podman pull docker.io/adguard/adguardhome:latest 2>/dev/null || log_warn "Failed to pull AdGuard image"
     podman pull docker.io/owasp/modsecurity-crs:nginx-alpine 2>/dev/null || log_warn "Failed to pull WAF image"
     podman pull docker.io/library/python:3.11-slim 2>/dev/null || log_warn "Failed to pull Python image"
     podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
@@ -506,9 +503,9 @@ install_security_containers() {
     # Install attack simulator
     install_attack_simulator
 
-    # Install AdGuard (ad blocking) if enabled
+    # Install DNS Shield (ad blocking) if enabled
     if [ "${HOOKPROBE_ADBLOCK:-yes}" = "yes" ]; then
-        install_adguard_container
+        install_dns_shield
     fi
 
     log_info "Security containers and services installed"
@@ -580,204 +577,151 @@ EOF
     log_info "Suricata IDS container installed"
 }
 
-install_adguard_container() {
-    log_step "Installing AdGuard Home (ad blocking)..."
+install_dns_shield() {
+    log_step "Installing DNS Shield (ad blocking via dnsmasq)..."
 
-    # Check if already running
-    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-adguard$"; then
-        log_info "AdGuard container already exists"
-        return 0
+    local SHIELD_DIR="/opt/hookprobe/guardian/dns-shield"
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # Create DNS Shield directory
+    mkdir -p "$SHIELD_DIR"
+    mkdir -p /var/log/hookprobe
+
+    # Copy update script if not present
+    if [ -f "$SCRIPT_DIR/update-blocklists.sh" ]; then
+        cp "$SCRIPT_DIR/update-blocklists.sh" /opt/hookprobe/guardian/scripts/
+        chmod +x /opt/hookprobe/guardian/scripts/update-blocklists.sh
     fi
 
-    # Create pre-configured AdGuard config directory
-    local ADGUARD_CONF_DIR="/opt/hookprobe/guardian/adguard/conf"
-    local ADGUARD_WORK_DIR="/opt/hookprobe/guardian/adguard/work"
-    mkdir -p "$ADGUARD_CONF_DIR" "$ADGUARD_WORK_DIR"
+    # Create default configuration
+    cat > "$SHIELD_DIR/shield.conf" << 'SHIELDCONF'
+# DNS Shield Configuration
+# ========================
+# Shield Level determines which blocklist variant to use:
+#
+#   1 = Base (Adware + Malware) - ~130,000 domains
+#   2 = Base + Fakenews - ~132,000 domains
+#   3 = Base + Fakenews + Gambling - ~135,000 domains
+#   4 = Base + Fakenews + Gambling + Porn - ~200,000 domains
+#   5 = Full Protection (All categories) - ~250,000 domains
+#
+# Higher levels = more blocking, may affect some legitimate sites
+SHIELD_LEVEL=3
 
-    # Generate bcrypt hash for default password (hookprobe123)
-    # Pre-computed bcrypt hash for "hookprobe123"
-    local ADMIN_PASS_HASH='$2a$10$QxTX8YXNrqw8D5QmFtXh0.8mK8YpVKNVGLqvYqxLQRaX5QJhDpvDi'
+# Custom whitelist (one domain per line)
+WHITELIST_FILE="/opt/hookprobe/guardian/dns-shield/whitelist.txt"
 
-    # Create pre-configured AdGuardHome.yaml (skips setup wizard)
-    cat > "$ADGUARD_CONF_DIR/AdGuardHome.yaml" << EOF
-bind_host: 0.0.0.0
-bind_port: 3000
-users:
-  - name: admin
-    password: ${ADMIN_PASS_HASH}
-auth_attempts: 5
-block_auth_min: 15
-http_proxy: ""
-language: en
-theme: auto
-dns:
-  bind_hosts:
-    - 0.0.0.0
-  port: 5353
-  anonymize_client_ip: false
-  ratelimit: 0
-  ratelimit_whitelist: []
-  refuse_any: true
-  upstream_dns:
-    - https://dns.cloudflare.com/dns-query
-    - https://dns.google/dns-query
-    - 1.1.1.1
-    - 8.8.8.8
-  upstream_dns_file: ""
-  bootstrap_dns:
-    - 1.1.1.1
-    - 8.8.8.8
-  all_servers: false
-  fastest_addr: true
-  fastest_timeout: 1s
-  allowed_clients: []
-  disallowed_clients: []
-  blocked_hosts:
-    - version.bind
-    - id.server
-    - hostname.bind
-  trusted_proxies:
-    - 127.0.0.0/8
-    - ::1/128
-  cache_size: 4194304
-  cache_ttl_min: 0
-  cache_ttl_max: 0
-  cache_optimistic: true
-  bogus_nxdomain: []
-  aaaa_disabled: false
-  enable_dnssec: true
-  edns_client_subnet:
-    custom_ip: ""
-    enabled: false
-    use_custom: false
-  max_goroutines: 300
-  handle_ddr: true
-  ipset: []
-  ipset_file: ""
-  filtering_enabled: true
-  filters_update_interval: 24
-  parental_enabled: false
-  safebrowsing_enabled: true
-  safebrowsing_cache_size: 1048576
-  safesearch_enabled: false
-  safesearch_cache_size: 1048576
-  parental_cache_size: 1048576
-  cache_time: 30
-  blocked_services:
-    schedule:
-      time_zone: UTC
-    ids: []
-  upstream_timeout: 10s
-  private_networks: []
-  use_private_ptr_resolvers: true
-  local_ptr_upstreams: []
-  use_dns64: false
-  dns64_prefixes: []
-  serve_http3: false
-  use_http3_upstreams: false
-tls:
-  enabled: false
-  server_name: ""
-  force_https: false
-  port_https: 443
-  port_dns_over_tls: 853
-  port_dns_over_quic: 784
-  port_dnscrypt: 0
-  dnscrypt_config_file: ""
-  allow_unencrypted_doh: false
-  certificate_chain: ""
-  private_key: ""
-  certificate_path: ""
-  private_key_path: ""
-  strict_sni_check: false
-querylog:
-  enabled: true
-  file_enabled: true
-  interval: 24h
-  size_memory: 1000
-  ignored: []
-statistics:
-  enabled: true
-  interval: 24h
-  ignored: []
-filters:
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
-    name: AdGuard DNS filter
-    id: 1
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt
-    name: AdAway Default Blocklist
-    id: 2
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_24.txt
-    name: 1Hosts (Lite)
-    id: 3
-whitelist_filters: []
-user_rules: []
-dhcp:
-  enabled: false
-clients:
-  runtime_sources:
-    whois: true
-    arp: true
-    rdns: true
-    dhcp: true
-    hosts: true
-  persistent: []
-log_file: ""
-log_max_backups: 0
-log_max_size: 100
-log_max_age: 3
-log_compress: false
-log_localtime: false
-verbose: false
-os:
-  group: ""
-  user: ""
-  rlimit_nofile: 0
-schema_version: 24
-EOF
+# Auto-update schedule (handled by systemd timer)
+AUTO_UPDATE_DAYS=7
 
-    # Set permissions
-    chmod 644 "$ADGUARD_CONF_DIR/AdGuardHome.yaml"
+# Block response (0.0.0.0 is faster)
+BLOCK_TARGET="0.0.0.0"
+SHIELDCONF
 
-    # Create systemd service for AdGuard container
-    cat > /etc/systemd/system/guardian-adguard.service << EOF
+    # Create empty whitelist
+    cat > "$SHIELD_DIR/whitelist.txt" << 'WHITELIST'
+# DNS Shield Whitelist
+# ====================
+# Add domains here (one per line) to bypass blocking
+# Example:
+# example.com
+WHITELIST
+
+    # Initialize stats
+    cat > "$SHIELD_DIR/stats.json" << 'STATS'
+{
+    "shield_level": 3,
+    "shield_level_name": "Strong (+ Gambling)",
+    "domains_blocked": 0,
+    "last_update": null,
+    "update_count": 0,
+    "blocklist_source": "StevenBlack Unified Hosts",
+    "version": "1.0.0"
+}
+STATS
+
+    # Create systemd service for blocklist updates
+    cat > /etc/systemd/system/dns-shield-update.service << 'SERVICE'
 [Unit]
-Description=HookProbe Guardian AdGuard Home
-After=network.target podman.socket
-Requires=podman.socket
+Description=DNS Shield Blocklist Update
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
-Restart=always
-RestartSec=10
-ExecStartPre=-/usr/bin/podman stop guardian-adguard
-ExecStartPre=-/usr/bin/podman rm guardian-adguard
-ExecStart=/usr/bin/podman run --name guardian-adguard \\
-    --network host \\
-    -v ${ADGUARD_WORK_DIR}:/opt/adguardhome/work:Z \\
-    -v ${ADGUARD_CONF_DIR}:/opt/adguardhome/conf:Z \\
-    docker.io/adguard/adguardhome:latest
-ExecStop=/usr/bin/podman stop guardian-adguard
+Type=oneshot
+ExecStart=/opt/hookprobe/guardian/scripts/update-blocklists.sh --silent
+Nice=10
+IOSchedulingClass=idle
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SERVICE
+
+    # Create systemd timer for weekly updates
+    cat > /etc/systemd/system/dns-shield-update.timer << 'TIMER'
+[Unit]
+Description=DNS Shield Weekly Blocklist Update
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
 
     systemctl daemon-reload
-    systemctl enable guardian-adguard 2>/dev/null || true
+    systemctl enable dns-shield-update.timer 2>/dev/null || true
 
-    # Update dnsmasq to forward to AdGuard (port 5353)
-    if [ -f /etc/dnsmasq.d/guardian.conf ]; then
-        sed -i 's/server=1.1.1.1/server=127.0.0.1#5353/' /etc/dnsmasq.d/guardian.conf
-        sed -i 's/server=8.8.8.8/server=127.0.0.1#5353/' /etc/dnsmasq.d/guardian.conf
+    # Download blocklist now (with network check)
+    log_info "Downloading initial blocklist..."
+    if ping -c 1 -W 2 raw.githubusercontent.com &>/dev/null; then
+        /opt/hookprobe/guardian/scripts/update-blocklists.sh --silent || {
+            log_warn "Initial blocklist download failed - will retry on next boot"
+        }
+    else
+        log_warn "No internet connection - blocklist will download when available"
     fi
 
-    log_info "AdGuard Home installed (pre-configured)"
-    log_info "  Web UI: http://192.168.4.1:3000"
-    log_info "  Login: admin / hookprobe123"
+    # Configure dnsmasq to use blocklist
+    configure_dnsmasq_dns_shield
+
+    log_info "DNS Shield installed"
+    log_info "  Blocklist: StevenBlack Unified Hosts"
+    log_info "  Shield Level: 3 (Strong Protection)"
+    log_info "  Auto-update: Weekly"
+}
+
+configure_dnsmasq_dns_shield() {
+    # Create dnsmasq include config for DNS Shield
+    cat > /etc/dnsmasq.d/dns-shield.conf << 'DNSCONF'
+# DNS Shield - dnsmasq configuration
+# Auto-generated by Guardian setup
+
+# Include blocklist (if exists)
+conf-file=/opt/hookprobe/guardian/dns-shield/blocked-hosts
+
+# Upstream DNS servers (with DNSSEC)
+server=1.1.1.1
+server=8.8.8.8
+server=9.9.9.9
+
+# Enable DNSSEC validation
+dnssec
+trust-anchor=.,20326,8,2,E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D
+
+# Cache settings optimized for blocking
+cache-size=10000
+min-cache-ttl=300
+
+# Log queries for stats (optional)
+log-queries=extra
+log-facility=/var/log/hookprobe/dnsmasq-queries.log
+DNSCONF
+
+    # Restart dnsmasq to apply
+    systemctl restart dnsmasq 2>/dev/null || true
 }
 
 install_waf_container() {
