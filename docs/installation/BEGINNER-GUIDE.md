@@ -235,81 +235,92 @@ Need most support? → Raspberry Pi / Intel NUC ✓
 
 ## Choosing Your Linux Distribution
 
-HookProbe supports two Linux families:
+HookProbe v5.x supports **Debian-based systems only**:
 
-### Option 1: Fedora (RHEL-based) - Recommended for Beginners
-
-**Why Choose Fedora:**
-- ✅ Easy installation wizard
-- ✅ Automatic hardware detection
-- ✅ Modern software versions
-- ✅ Great for Intel N100 and newer hardware
-- ✅ Strong community support
-- ✅ Free and open source
-
-**Best For:** Intel N100, modern hardware, beginners
-
-### Option 2: Ubuntu (Debian-based) - Most Popular
+### Ubuntu (Recommended)
 
 **Why Choose Ubuntu:**
 - ✅ Largest community (most help available online)
 - ✅ Extensive documentation
 - ✅ Long-term support (LTS) versions
 - ✅ Compatible with most hardware
+- ✅ OpenVSwitch fully supported
 - ✅ Free and open source
 
 **Best For:** Most users, maximum compatibility
+
+**Supported versions**: Ubuntu 22.04 LTS, Ubuntu 24.04 LTS
+
+### Debian
+
+**Why Choose Debian:**
+- ✅ Rock-solid stability
+- ✅ Minimal bloat
+- ✅ Long-term support
+- ✅ Great for servers
+
+**Supported versions**: Debian 11 (Bullseye), Debian 12 (Bookworm)
+
+### Raspberry Pi OS
+
+**For ARM64 devices:**
+- ✅ Optimized for Raspberry Pi 4/5
+- ✅ Based on Debian
+- ✅ Easy to flash and setup
+
+**Supported version**: Raspberry Pi OS (Bookworm, 64-bit)
+
+> **Note**: RHEL-based systems (Fedora, CentOS, Rocky, RHEL) are not supported due to OpenVSwitch availability limitations. Support planned for future release.
 
 ### Quick Decision Guide
 
 ```
 ┌─────────────────────────────────────────┐
-│  Do you have Intel N100 or very new    │
-│  hardware (2023+)?                      │
+│  What hardware are you using?           │
 └─────────────┬───────────────────────────┘
               │
-         Yes  │  No
+   Raspberry  │  Intel/AMD
+   Pi 4/5     │  (N100, etc)
               │
     ┌─────────▼─────────┐
     │                   │
-┌───▼────┐        ┌─────▼──────┐
-│ Fedora │        │  Ubuntu    │
-│   40+  │        │  22.04 LTS │
-└────────┘        └────────────┘
+┌───▼────────┐    ┌─────▼──────┐
+│ RPi OS     │    │  Ubuntu    │
+│ (Bookworm) │    │  22.04 LTS │
+└────────────┘    └────────────┘
 ```
 
 ---
 
 ## Downloading Linux
 
-### Fedora Workstation (Recommended for N100)
-
-1. **Visit:** https://fedoraproject.org/workstation/download
-2. **Click:** "Download Fedora Workstation"
-3. **Version:** Fedora 40 or newer
-4. **File Size:** ~2-3 GB
-5. **Save to:** Your Downloads folder
-
-**Direct Link:** https://download.fedoraproject.org/pub/fedora/linux/releases/40/Workstation/x86_64/iso/
-
-### Ubuntu Desktop (Most Popular)
+### Ubuntu Desktop (Recommended)
 
 1. **Visit:** https://ubuntu.com/download/desktop
-2. **Click:** "Download Ubuntu 24.04 LTS"
-3. **Version:** Ubuntu 24.04 LTS (Long-Term Support)
-4. **File Size:** ~4-5 GB
-5. **Save to:** Your Downloads folder
+2. **Click:** "Download Ubuntu 22.04 LTS" or "24.04 LTS"
+3. **File Size:** ~5 GB
+4. **Save to:** Your Downloads folder
 
 **Direct Link:** https://ubuntu.com/download/desktop
 
-### Alternative: Rocky Linux (For Enterprise)
+### Raspberry Pi OS (For Raspberry Pi 4/5)
 
-If you need enterprise-grade stability:
+1. **Visit:** https://www.raspberrypi.com/software/operating-systems/
+2. **Click:** "Raspberry Pi OS (64-bit)"
+3. **Version:** Bookworm (latest)
+4. **File Size:** ~1 GB
+5. **Use:** Raspberry Pi Imager for easy flashing
 
-1. **Visit:** https://rockylinux.org/download
-2. **Choose:** Rocky Linux 9.x
-3. **Variant:** Minimal or DVD
-4. **File Size:** ~2-10 GB (depending on variant)
+**Direct Link:** https://www.raspberrypi.com/software/
+
+### Debian (For Servers)
+
+If you need maximum stability:
+
+1. **Visit:** https://www.debian.org/download
+2. **Choose:** Debian 12 (Bookworm)
+3. **Variant:** netinst or DVD
+4. **File Size:** ~400 MB - 4 GB
 
 ---
 
@@ -380,61 +391,56 @@ You'll need:
 3. **Boot Order:** USB drive first
 4. **Save & Exit:** F10 (usually)
 
-### Fedora Installation (Detailed)
+### Ubuntu Installation (Detailed)
 
 **Step 1:** Boot from USB
 1. Insert USB drive
 2. Restart computer
 3. Select USB drive from boot menu
-4. Choose "Start Fedora Workstation"
+4. Choose "Try or Install Ubuntu"
 
 **Step 2:** Start Installation
-1. Click "Install to Hard Drive"
+1. Click "Install Ubuntu"
 2. **Language:** Select your language
 3. Click "Continue"
 
-**Step 3:** Installation Summary
+**Step 3:** Installation Options
 
-**Date & Time:**
-- Set your timezone
-- Enable "Network Time"
-
-**Keyboard:**
-- Add your keyboard layout
+**Keyboard Layout:**
+- Select your keyboard layout
 - Test in the box below
+- Click "Continue"
 
-**Installation Destination (IMPORTANT):**
-1. Click "Installation Destination"
-2. Select your hard drive
-3. **Storage Configuration:**
+**Installation Type (IMPORTANT):**
+1. Select "Normal installation"
+2. Check "Download updates while installing"
+3. Check "Install third-party software..."
 
-   **Option A: Automatic (Recommended for Beginners)**
-   - Select "Automatic"
-   - Click "Done"
-   - Fedora handles partitioning
+**Disk Setup:**
+
+   **Option A: Erase Disk (Recommended for Beginners)**
+   - Select "Erase disk and install Ubuntu"
+   - Click "Install Now"
+   - Ubuntu handles partitioning automatically
 
    **Option B: Custom (For Advanced Users)**
+   - Select "Something else"
    - See [Advanced Partitioning](#advanced-partitioning) below
 
-**Network & Host Name:**
-1. Turn on network switch
-2. Set hostname: `hookprobe` or your choice
-3. Click "Apply"
-
-**Step 4:** Begin Installation
-1. Click "Begin Installation"
-2. Wait 10-20 minutes
-3. **Create User Account:**
-   - Full name: Your name
+**Step 4:** Configure System
+1. **Timezone:** Select your location on map
+2. **Your Details:**
+   - Your name: Enter your name
+   - Computer name: `hookprobe` or your choice
    - Username: `admin` (or your choice)
-   - **Make this user administrator:** ✓ Check this!
    - Password: Create strong password
    - **WRITE DOWN YOUR PASSWORD!**
 
 **Step 5:** Complete Installation
-1. Click "Finish Installation"
-2. Remove USB drive
-3. Click "Restart Now"
+1. Wait 10-20 minutes
+2. Click "Restart Now"
+3. Remove USB drive when prompted
+4. Press Enter to continue
 
 ### Ubuntu Installation (Detailed)
 
@@ -519,13 +525,6 @@ Only use manual partitioning if you need specific configurations.
 
 ### How to Create Partitions
 
-**Fedora:**
-1. Installation Destination → Custom
-2. Click "+" to add partition
-3. Enter mount point and size
-4. Repeat for each partition
-5. Click "Done"
-
 **Ubuntu:**
 1. Select "Something else"
 2. Select drive
@@ -542,14 +541,7 @@ Only use manual partitioning if you need specific configurations.
 
 ### First Boot
 
-**Step 1:** Initial Setup (Fedora)
-1. Login with your password
-2. Complete welcome wizard:
-   - Privacy settings
-   - Online accounts (optional)
-   - Skip tour
-
-**Step 2:** Initial Setup (Ubuntu)
+**Step 1:** Initial Setup
 1. Login with your password
 2. Complete welcome wizard:
    - Connect online accounts (optional)
@@ -559,17 +551,10 @@ Only use manual partitioning if you need specific configurations.
 ### Update Your System
 
 **Step 1:** Open Terminal
-- **Fedora:** Press `Super` key → type "Terminal"
-- **Ubuntu:** Press `Ctrl+Alt+T`
+- Press `Ctrl+Alt+T` (or search for "Terminal" in applications)
 
 **Step 2:** Update System
 
-**Fedora:**
-```bash
-sudo dnf update -y
-```
-
-**Ubuntu:**
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
@@ -592,17 +577,6 @@ ip addr show
 
 **Step 3:** Set Static IP (Recommended)
 
-**Fedora:**
-```bash
-nmcli connection show
-nmcli connection modify "Wired connection 1" ipv4.addresses 192.168.1.100/24
-nmcli connection modify "Wired connection 1" ipv4.gateway 192.168.1.1
-nmcli connection modify "Wired connection 1" ipv4.dns "8.8.8.8 8.8.4.4"
-nmcli connection modify "Wired connection 1" ipv4.method manual
-nmcli connection up "Wired connection 1"
-```
-
-**Ubuntu:**
 ```bash
 sudo nano /etc/netplan/01-netcfg.yaml
 ```
@@ -627,12 +601,6 @@ sudo netplan apply
 
 ### Install Essential Tools
 
-**Fedora:**
-```bash
-sudo dnf install -y git curl wget htop vim
-```
-
-**Ubuntu:**
 ```bash
 sudo apt install -y git curl wget htop vim
 ```
@@ -682,13 +650,12 @@ sudo ./install.sh
 # Login as root
 su -
 # Add user to sudoers
-usermod -aG wheel username  # Fedora
-usermod -aG sudo username   # Ubuntu
+usermod -aG sudo username
 ```
 
 **Problem:** "Cannot connect to network"
 - Check ethernet cable is connected
-- Try DHCP first: `sudo dhclient` (Ubuntu) or `sudo dhclient eth0` (Fedora)
+- Try DHCP first: `sudo dhclient`
 - Check firewall isn't blocking
 
 **Problem:** "USB drive not bootable"
@@ -712,16 +679,12 @@ sudo ./install.sh
 
 **Problem:** "Git not found"
 ```bash
-# Fedora
-sudo dnf install git
-
-# Ubuntu
 sudo apt install git
 ```
 
 **Problem:** "Cannot access services"
-- Check firewall: `sudo systemctl status firewalld` (Fedora)
-- Open ports if needed
+- Check firewall: `sudo ufw status`
+- Open ports if needed: `sudo ufw allow 3000/tcp`
 - Verify services are running: `sudo podman ps`
 
 ---
@@ -745,7 +708,7 @@ After successful installation:
 **Linux Basics:**
 - Linux Journey: https://linuxjourney.com
 - Ubuntu Tutorial: https://ubuntu.com/tutorials
-- Fedora Documentation: https://docs.fedoraproject.org
+- Debian Documentation: https://www.debian.org/doc/
 
 **Networking:**
 - Basic networking concepts
@@ -760,16 +723,16 @@ After successful installation:
 ### Video Tutorials
 
 Search YouTube for:
-- "Install Fedora 40 tutorial"
 - "Install Ubuntu 24.04 tutorial"
+- "Install Debian 12 tutorial"
 - "Linux for beginners"
 - "How to create bootable USB"
 
 ### Getting Help
 
 - **HookProbe Issues:** https://github.com/hookprobe/hookprobe/issues
-- **Fedora Forums:** https://ask.fedoraproject.org
 - **Ubuntu Forums:** https://ubuntuforums.org
+- **Debian Forums:** https://forums.debian.net
 - **Reddit:** r/linux4noobs, r/linuxquestions
 
 ---
@@ -780,8 +743,7 @@ Search YouTube for:
 
 ```bash
 # Update system
-sudo dnf update -y              # Fedora
-sudo apt update && apt upgrade  # Ubuntu
+sudo apt update && sudo apt upgrade -y
 
 # Check disk space
 df -h

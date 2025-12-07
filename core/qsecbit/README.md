@@ -129,7 +129,7 @@ qsecbit/
 **Cloud Backend** (Multi-Tenant MSSP):
 ```
 ┌──────────────────────────────────────────────┐
-│  Proxmox / RHEL / Ubuntu Server              │
+│  Proxmox / Ubuntu Server / Debian            │
 │  ┌──────────────┐    ┌──────────────────┐   │
 │  │  Qsecbit     │───→│  Apache Doris    │   │
 │  │  (N-Pods)    │    │  (1000+ tenants) │   │
@@ -698,7 +698,7 @@ For 99% of deployments, **XDP-drv** is the fastest practical mode.
 ### System Requirements
 
 **Minimum (Edge Deployment)**:
-- OS: RHEL 10, Fedora 40+, CentOS Stream 9+, Ubuntu 22.04+
+- OS: Ubuntu 22.04+, Debian 11+/12+, Raspberry Pi OS (Bookworm)
 - CPU: 2 cores (ARM64 or x86_64)
 - RAM: 4GB minimum, 8GB recommended
 - Storage: 20GB (0-90 day retention)
@@ -730,12 +730,6 @@ pip install clickhouse-driver>=0.2.6
 
 # Apache Doris (cloud backend)
 pip install pymysql>=1.1.0
-```
-
-**XDP/eBPF Support** (RHEL/Fedora):
-```bash
-dnf install -y bcc python3-bcc kernel-devel
-dnf install -y clang llvm
 ```
 
 **XDP/eBPF Support** (Ubuntu/Debian):
@@ -1023,8 +1017,8 @@ config = QsecbitConfig(
 # Check BCC installation
 python3 -c "from bcc import BPF; print('BCC OK')"
 
-# Install if missing (RHEL/Fedora)
-dnf install -y bcc python3-bcc kernel-devel
+# Install if missing (Ubuntu/Debian)
+apt-get install -y bpfcc-tools python3-bpfcc linux-headers-$(uname -r)
 
 # Check kernel support
 uname -r  # Should be 4.8+ for XDP
