@@ -419,28 +419,58 @@ remove_packages() {
             fi
         fi
 
-        # Try to remove packages with timeout
-        log_info "Removing hostapd..."
-        timeout 60 apt-get remove -y --quiet hostapd 2>/dev/null || {
-            log_warn "Failed to remove hostapd - skipping"
-        }
+        # Remove hostapd if installed
+        if dpkg -l hostapd 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing hostapd..."
+            # Ensure service is stopped
+            systemctl stop hostapd 2>/dev/null || true
+            systemctl disable hostapd 2>/dev/null || true
+            if timeout 60 apt-get remove -y hostapd 2>&1; then
+                log_info "hostapd removed successfully"
+            else
+                log_warn "Failed to remove hostapd - it may be in use or protected"
+                log_info "Try manually: sudo systemctl stop hostapd && sudo apt-get remove hostapd"
+            fi
+        else
+            log_info "hostapd is not installed - skipping"
+        fi
 
-        log_info "Removing dnsmasq..."
-        timeout 60 apt-get remove -y --quiet dnsmasq 2>/dev/null || {
-            log_warn "Failed to remove dnsmasq - skipping"
-        }
+        # Remove dnsmasq if installed
+        if dpkg -l dnsmasq 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing dnsmasq..."
+            systemctl stop dnsmasq 2>/dev/null || true
+            systemctl disable dnsmasq 2>/dev/null || true
+            if timeout 60 apt-get remove -y dnsmasq 2>&1; then
+                log_info "dnsmasq removed successfully"
+            else
+                log_warn "Failed to remove dnsmasq"
+            fi
+        else
+            log_info "dnsmasq is not installed - skipping"
+        fi
 
         log_info "Running autoremove..."
-        timeout 120 apt-get autoremove -y --quiet 2>/dev/null || {
+        timeout 120 apt-get autoremove -y 2>/dev/null || {
             log_warn "Autoremove failed - skipping"
         }
 
     elif command -v dnf &>/dev/null; then
-        timeout 60 dnf remove -y hostapd dnsmasq 2>/dev/null || {
-            log_warn "Package removal failed"
-            log_info "You can manually remove packages later with:"
-            log_info "  sudo dnf remove hostapd dnsmasq"
-        }
+        # Check if packages are installed on RHEL/Fedora
+        if rpm -q hostapd &>/dev/null; then
+            log_info "Removing hostapd..."
+            systemctl stop hostapd 2>/dev/null || true
+            timeout 60 dnf remove -y hostapd || log_warn "Failed to remove hostapd"
+        else
+            log_info "hostapd is not installed - skipping"
+        fi
+
+        if rpm -q dnsmasq &>/dev/null; then
+            log_info "Removing dnsmasq..."
+            systemctl stop dnsmasq 2>/dev/null || true
+            timeout 60 dnf remove -y dnsmasq || log_warn "Failed to remove dnsmasq"
+        else
+            log_info "dnsmasq is not installed - skipping"
+        fi
     fi
 
     log_info "Package removal complete"

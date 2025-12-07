@@ -1437,23 +1437,59 @@ HTML_TEMPLATE = '''
             border-radius: 4px;
         }
 
-        /* Data Table */
+        /* Data Table - Responsive */
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 14px;
+            font-size: 12px;
         }
         .data-table th, .data-table td {
-            padding: 12px;
+            padding: 8px 10px;
             text-align: left;
             border-bottom: 1px solid var(--hp-border);
+            white-space: nowrap;
         }
         .data-table th {
             background: var(--hp-light);
             font-weight: 600;
             color: var(--hp-dark);
+            font-size: 11px;
+            text-transform: uppercase;
         }
         .data-table tr:hover { background: #f9fafb; }
+
+        /* Device/Client Table - Responsive with smaller font */
+        .device-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+        }
+        .device-table th, .device-table td {
+            padding: 6px 8px;
+            text-align: left;
+            border-bottom: 1px solid var(--hp-border);
+        }
+        .device-table th {
+            background: var(--hp-light);
+            font-weight: 600;
+            color: var(--hp-dark);
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+        .device-table tr:hover { background: #f9fafb; }
+        .device-table code {
+            font-size: 10px;
+            padding: 2px 4px;
+            background: #f3f4f6;
+            border-radius: 3px;
+        }
+
+        /* Table wrapper for horizontal scroll on mobile */
+        .table-responsive {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin-bottom: 1rem;
+        }
 
         /* Container Status */
         .container-grid {
@@ -1524,13 +1560,30 @@ HTML_TEMPLATE = '''
         }
         .footer a { color: var(--hp-primary); text-decoration: none; }
 
+        @media (max-width: 768px) {
+            .data-table { font-size: 11px; }
+            .data-table th, .data-table td { padding: 6px 8px; }
+            .data-table th { font-size: 10px; }
+            .device-table { font-size: 10px; }
+            .device-table th, .device-table td { padding: 5px 6px; }
+            .device-table code { font-size: 9px; }
+            .param-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
         @media (max-width: 600px) {
-            .tabs { flex-wrap: nowrap; }
-            .tab { padding: 12px 15px; font-size: 14px; }
+            .tabs { flex-wrap: nowrap; overflow-x: auto; }
+            .tab { padding: 12px 15px; font-size: 14px; white-space: nowrap; }
             .status-grid { grid-template-columns: repeat(2, 1fr); }
             .rag-grid { grid-template-columns: repeat(2, 1fr); }
             .btn-group { flex-direction: column; }
             .btn { width: 100%; }
+            .data-table { font-size: 10px; }
+            .data-table th, .data-table td { padding: 5px 6px; }
+            .device-table { font-size: 9px; }
+            .device-table th, .device-table td { padding: 4px 5px; }
+            .device-table code { font-size: 8px; padding: 1px 3px; }
+            .container-grid { grid-template-columns: 1fr; }
+            .param-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1557,6 +1610,7 @@ HTML_TEMPLATE = '''
         <div class="tab active" data-tab="dashboard">Dashboard</div>
         <div class="tab" data-tab="security">Security</div>
         <div class="tab" data-tab="clients">Clients</div>
+        <div class="tab" data-tab="adguard">AdGuard</div>
         <div class="tab" data-tab="vpn">VPN</div>
         <div class="tab" data-tab="wifi">WiFi</div>
         <div class="tab" data-tab="system">System</div>
@@ -2511,6 +2565,103 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
+        <!-- AdGuard Tab -->
+        <div id="adguard" class="tab-content">
+            <div class="card">
+                <h2>AdGuard Home DNS</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">Network-wide ad blocking and DNS filtering</p>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <div class="value" style="color: {% if containers.adguard.running %}var(--hp-green){% else %}var(--hp-red){% endif %};">
+                            {% if containers.adguard.running %}Running{% else %}Stopped{% endif %}
+                        </div>
+                        <div class="label">Service Status</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value" id="adguard-queries">-</div>
+                        <div class="label">DNS Queries (24h)</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value" id="adguard-blocked">-</div>
+                        <div class="label">Blocked (24h)</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="value" id="adguard-percent">-</div>
+                        <div class="label">Block Rate</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>AdGuard Dashboard</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">Access the full AdGuard Home interface for detailed configuration</p>
+                <div style="background: var(--hp-light); border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 13px;">
+                    <strong>Default Login:</strong> admin / hookprobe123
+                </div>
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <a href="http://192.168.4.1:3000" target="_blank" class="btn btn-primary">
+                        Open AdGuard Dashboard
+                    </a>
+                    <button class="btn btn-secondary" onclick="refreshAdGuardStats()">
+                        Refresh Stats
+                    </button>
+                </div>
+                <div style="background: var(--hp-light); border-radius: 8px; padding: 15px;">
+                    <h3 style="margin-bottom: 10px; font-size: 14px;">Quick Access</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
+                        <a href="http://192.168.4.1:3000/#filters" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
+                            → Filters & Blocklists
+                        </a>
+                        <a href="http://192.168.4.1:3000/#dns" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
+                            → DNS Settings
+                        </a>
+                        <a href="http://192.168.4.1:3000/#clients" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
+                            → Client Settings
+                        </a>
+                        <a href="http://192.168.4.1:3000/#logs" target="_blank" style="color: var(--hp-primary); text-decoration: none; font-size: 13px;">
+                            → Query Log
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>DNS Configuration</h2>
+                <div class="param-grid">
+                    <div class="param-item">
+                        <div class="label">AdGuard Port</div>
+                        <div class="value">3000 (Web), 53 (DNS)</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Container</div>
+                        <div class="value">guardian-adguard</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">DNS Server</div>
+                        <div class="value">192.168.4.1:53</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="label">Upstream DNS</div>
+                        <div class="value">1.1.1.1, 8.8.8.8</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Service Controls</h2>
+                <div class="btn-group" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <form method="POST" action="/action" style="display: inline;">
+                        <input type="hidden" name="action" value="restart_adguard">
+                        <button type="submit" class="btn btn-warning">Restart AdGuard</button>
+                    </form>
+                    <form method="POST" action="/action" style="display: inline;">
+                        <input type="hidden" name="action" value="flush_dns">
+                        <button type="submit" class="btn btn-secondary">Flush DNS Cache</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
         <!-- VPN Tab (HTP File Transfer) -->
         <div id="vpn" class="tab-content">
             <div class="card">
@@ -2901,6 +3052,30 @@ HTML_TEMPLATE = '''
                 .catch(error => console.error('Error fetching clients:', error));
         }
 
+        // Refresh AdGuard Stats
+        function refreshAdGuardStats() {
+            fetch('/api/adguard')
+                .then(response => response.json())
+                .then(data => {
+                    if (data) {
+                        document.getElementById('adguard-queries').textContent = data.num_dns_queries || '0';
+                        document.getElementById('adguard-blocked').textContent = data.num_blocked_filtering || '0';
+                        document.getElementById('adguard-percent').textContent = (data.blocked_percent || 0).toFixed(1) + '%';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching AdGuard stats:', error);
+                    document.getElementById('adguard-queries').textContent = 'N/A';
+                    document.getElementById('adguard-blocked').textContent = 'N/A';
+                    document.getElementById('adguard-percent').textContent = 'N/A';
+                });
+        }
+
+        // Load AdGuard stats on tab switch
+        document.querySelectorAll('.tab[data-tab="adguard"]').forEach(tab => {
+            tab.addEventListener('click', refreshAdGuardStats);
+        });
+
         // Refresh VPN Stats
         function refreshVpnStats() {
             fetch('/api/vpn')
@@ -3260,6 +3435,15 @@ def action():
     elif action == 'reboot':
         run_command('reboot')
         flash('Rebooting...', 'success')
+    elif action == 'restart_adguard':
+        run_command('systemctl restart guardian-adguard')
+        flash('AdGuard restarting...', 'success')
+        return redirect('/#adguard')
+    elif action == 'flush_dns':
+        # Flush DNS cache by restarting dnsmasq
+        run_command('systemctl restart dnsmasq')
+        flash('DNS cache flushed', 'success')
+        return redirect('/#adguard')
 
     return redirect('/#system')
 
@@ -3330,6 +3514,42 @@ def api_client_disconnect(mac):
 def api_vpn():
     """Get HTP file transfer statistics."""
     return jsonify(get_vpn_stats())
+
+
+@app.route('/api/adguard')
+def api_adguard():
+    """Get AdGuard Home statistics from its API."""
+    try:
+        import urllib.request
+        import urllib.error
+        # AdGuard Home API endpoint
+        url = 'http://127.0.0.1:3000/control/stats'
+        req = urllib.request.Request(url, headers={'User-Agent': 'Guardian/1.0'})
+        with urllib.request.urlopen(req, timeout=3) as response:
+            import json
+            data = json.loads(response.read().decode())
+            # Calculate blocked percentage
+            total = data.get('num_dns_queries', 0)
+            blocked = data.get('num_blocked_filtering', 0)
+            if total > 0:
+                data['blocked_percent'] = (blocked / total) * 100
+            else:
+                data['blocked_percent'] = 0
+            return jsonify(data)
+    except urllib.error.URLError:
+        return jsonify({
+            'num_dns_queries': 0,
+            'num_blocked_filtering': 0,
+            'blocked_percent': 0,
+            'error': 'AdGuard not reachable'
+        })
+    except Exception as e:
+        return jsonify({
+            'num_dns_queries': 0,
+            'num_blocked_filtering': 0,
+            'blocked_percent': 0,
+            'error': str(e)
+        })
 
 
 @app.route('/api/layer_threats')
