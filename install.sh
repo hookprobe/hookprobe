@@ -1240,7 +1240,7 @@ show_install_menu() {
         echo -e "    • Network: 1+ interface"
         echo ""
         echo -e "  ${CYAN}For ultra-constrained devices, try Sentinel Lite:${NC}"
-        echo -e "  ${DIM}curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash${NC}"
+        echo -e "  ${DIM}curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | sudo bash${NC}"
         echo ""
     fi
 
@@ -1277,13 +1277,13 @@ install_sentinel() {
     read -p "Proceed with Sentinel installation? (yes/no) [no]: " confirm
     if [ "$confirm" = "yes" ]; then
         echo ""
-        if [ -f "$SCRIPT_DIR/releases/sentinel/bootstrap.sh" ]; then
-            bash "$SCRIPT_DIR/releases/sentinel/bootstrap.sh"
+        if [ -f "$SCRIPT_DIR/products/sentinel/bootstrap.sh" ]; then
+            bash "$SCRIPT_DIR/products/sentinel/bootstrap.sh"
         elif [ -f "$SCRIPT_DIR/install-sentinel-lite.sh" ]; then
             bash "$SCRIPT_DIR/install-sentinel-lite.sh"
         else
             echo -e "${YELLOW}Downloading Sentinel installer...${NC}"
-            curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | bash
+            curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | bash
         fi
     else
         echo "Installation cancelled."
@@ -1405,13 +1405,13 @@ WIFIEOF
         fi
 
         # Run Guardian setup script
-        local guardian_setup="$SCRIPT_DIR/install/guardian/scripts/setup.sh"
+        local guardian_setup="$SCRIPT_DIR/products/guardian/scripts/setup.sh"
         if [ -f "$guardian_setup" ]; then
             echo -e "${GREEN}Launching Guardian setup...${NC}"
             bash "$guardian_setup"
         else
             echo -e "${RED}Guardian installer not found at: $guardian_setup${NC}"
-            echo -e "${YELLOW}Please ensure install/guardian/scripts/setup.sh exists${NC}"
+            echo -e "${YELLOW}Please ensure products/guardian/scripts/setup.sh exists${NC}"
         fi
     else
         echo "Installation cancelled."
@@ -1631,8 +1631,8 @@ CFEOF
         [ "$enable_lte" = "yes" ] && extra_args="$extra_args --enable-lte"
         [ "$logto_local" = true ] && extra_args="$extra_args --enable-iam"
 
-        if [ -f "$SCRIPT_DIR/install/fortress/setup.sh" ]; then
-            bash "$SCRIPT_DIR/install/fortress/setup.sh" $extra_args
+        if [ -f "$SCRIPT_DIR/products/fortress/setup.sh" ]; then
+            bash "$SCRIPT_DIR/products/fortress/setup.sh" $extra_args
         elif [ -f "$SCRIPT_DIR/scripts/install-edge.sh" ]; then
             bash "$SCRIPT_DIR/scripts/install-edge.sh" --tier fortress $extra_args
         else
@@ -1682,10 +1682,10 @@ install_nexus() {
     if [ "$confirm" = "yes" ]; then
         echo ""
         export HOOKPROBE_TIER="nexus"
-        if [ -f "$SCRIPT_DIR/install/nexus/setup.sh" ]; then
-            bash "$SCRIPT_DIR/install/nexus/setup.sh"
-        elif [ -f "$SCRIPT_DIR/install/cloud/setup.sh" ]; then
-            bash "$SCRIPT_DIR/install/cloud/setup.sh" --tier nexus
+        if [ -f "$SCRIPT_DIR/products/nexus/setup.sh" ]; then
+            bash "$SCRIPT_DIR/products/nexus/setup.sh"
+        elif [ -f "$SCRIPT_DIR/deploy/cloud/setup.sh" ]; then
+            bash "$SCRIPT_DIR/deploy/cloud/setup.sh" --tier nexus
         else
             echo -e "${RED}Nexus installer not found${NC}"
         fi
@@ -1943,7 +1943,7 @@ uninstall_guardian() {
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    local guardian_uninstall="$SCRIPT_DIR/install/guardian/scripts/uninstall.sh"
+    local guardian_uninstall="$SCRIPT_DIR/products/guardian/scripts/uninstall.sh"
 
     if [ -f "$guardian_uninstall" ]; then
         echo "Running Guardian uninstall script..."
@@ -2163,7 +2163,7 @@ uninstall_sentinel() {
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    local sentinel_uninstall="$SCRIPT_DIR/install/sentinel/uninstall.sh"
+    local sentinel_uninstall="$SCRIPT_DIR/products/sentinel/uninstall.sh"
 
     if [ -f "$sentinel_uninstall" ]; then
         echo "Running Sentinel uninstall script..."
