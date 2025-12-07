@@ -131,36 +131,36 @@ check_requirements() {
 
     local errors=0
 
-    # Check RAM (minimum 64GB)
+    # Check RAM (minimum 8GB for POC, 16GB+ recommended)
     local ram_mb=$(free -m | awk '/^Mem:/{print $2}')
-    if [ "$ram_mb" -lt 65536 ]; then
-        log_warning "RAM: ${ram_mb}MB (64GB recommended, 32GB minimum for POC)"
-        if [ "$ram_mb" -lt 32768 ]; then
-            log_error "Insufficient RAM. MSSP requires at least 32GB for POC."
+    if [ "$ram_mb" -lt 16384 ]; then
+        log_warning "RAM: ${ram_mb}MB (16GB+ recommended for production)"
+        if [ "$ram_mb" -lt 8192 ]; then
+            log_error "Insufficient RAM. MSSP requires at least 8GB for POC."
             ((errors++))
         fi
     else
         log_success "RAM: ${ram_mb}MB (OK)"
     fi
 
-    # Check CPU cores (minimum 8)
+    # Check CPU cores (minimum 2 for POC, 4+ recommended)
     local cpu_cores=$(nproc)
-    if [ "$cpu_cores" -lt 8 ]; then
-        log_warning "CPU: ${cpu_cores} cores (8+ recommended)"
-        if [ "$cpu_cores" -lt 4 ]; then
-            log_error "Insufficient CPU cores. MSSP requires at least 4 cores."
+    if [ "$cpu_cores" -lt 4 ]; then
+        log_warning "CPU: ${cpu_cores} cores (4+ recommended)"
+        if [ "$cpu_cores" -lt 2 ]; then
+            log_error "Insufficient CPU cores. MSSP requires at least 2 cores."
             ((errors++))
         fi
     else
         log_success "CPU: ${cpu_cores} cores (OK)"
     fi
 
-    # Check storage (minimum 200GB)
+    # Check storage (minimum 50GB for POC, 100GB+ recommended)
     local storage_gb=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
-    if [ "$storage_gb" -lt 200 ]; then
-        log_warning "Storage: ${storage_gb}GB available (500GB recommended)"
-        if [ "$storage_gb" -lt 100 ]; then
-            log_error "Insufficient storage. MSSP requires at least 100GB."
+    if [ "$storage_gb" -lt 100 ]; then
+        log_warning "Storage: ${storage_gb}GB available (100GB+ recommended)"
+        if [ "$storage_gb" -lt 50 ]; then
+            log_error "Insufficient storage. MSSP requires at least 50GB."
             ((errors++))
         fi
     else
