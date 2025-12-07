@@ -4,7 +4,7 @@ Core Module Views - Dashboard and Main Page
 import os
 from flask import render_template, jsonify, current_app
 from . import core_bp
-from ...utils import (
+from utils import (
     run_command, load_json_file, get_container_status,
     get_network_stats, get_system_info, format_bytes
 )
