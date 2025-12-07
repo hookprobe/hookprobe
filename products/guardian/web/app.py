@@ -1731,6 +1731,96 @@ HTML_TEMPLATE = '''
             .dnsxai-stat-card { padding: 12px; }
             .dnsxai-stat-card > div:first-child { font-size: 20px; }
         }
+
+        /* Detection Coverage Responsive Styles */
+        .detection-coverage-container {
+            width: 100%;
+        }
+        .detection-table-desktop {
+            display: table;
+        }
+        .detection-cards-mobile {
+            display: none;
+        }
+        .detection-types-row td {
+            border-top: none !important;
+        }
+
+        /* Mobile Card Styles */
+        .detection-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            border-left: 4px solid var(--hp-primary);
+        }
+        .detection-card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .layer-badge {
+            background: var(--hp-primary);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 13px;
+        }
+        .layer-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: #1f2937;
+        }
+        .threat-count {
+            margin-left: auto;
+            font-size: 12px;
+            color: #6b7280;
+            background: #f3f4f6;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .detection-card-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .detection-card-stats .stat {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        .detection-card-stats .stat.critical { background: #fee2e2; color: var(--hp-red); }
+        .detection-card-stats .stat.high { background: #fecaca; color: #dc2626; }
+        .detection-card-stats .stat.medium { background: #fef3c7; color: var(--hp-amber); }
+        .detection-card-stats .stat.low { background: #d1fae5; color: var(--hp-green); }
+        .detection-card-stats .stat.blocked { background: #e0e7ff; color: #4f46e5; }
+        .detection-card-types {
+            font-size: 11px;
+            color: #64748b;
+            background: #f8fafc;
+            padding: 10px;
+            border-radius: 6px;
+            line-height: 1.6;
+        }
+        .detection-card-types strong {
+            color: #475569;
+        }
+
+        /* Responsive breakpoints for detection coverage */
+        @media (max-width: 900px) {
+            .detection-table-desktop {
+                display: none;
+            }
+            .detection-cards-mobile {
+                display: block;
+            }
+        }
     </style>
 </head>
 <body>
@@ -2004,84 +2094,222 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <!-- Detection Coverage -->
+                <!-- Detection Coverage - Responsive Design -->
                 <h3>Detection Coverage</h3>
-                <table class="data-table" style="font-size: 12px;">
-                    <thead>
-                        <tr>
-                            <th>Layer</th>
-                            <th>Threats</th>
-                            <th>Critical</th>
-                            <th>High</th>
-                            <th>Med</th>
-                            <th>Low</th>
-                            <th>Blocked</th>
-                            <th>Detection Types</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><strong>L2</strong> Data Link</td>
-                            <td>{{ layer_threats.layers.L2_DATA_LINK.total }}</td>
-                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L2_DATA_LINK.critical }}</td>
-                            <td style="color: #dc2626;">{{ layer_threats.layers.L2_DATA_LINK.high }}</td>
-                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L2_DATA_LINK.medium }}</td>
-                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L2_DATA_LINK.low }}</td>
-                            <td>{{ layer_threats.layers.L2_DATA_LINK.blocked }}</td>
-                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L2_DATA_LINK | join(', ') }}</td>
-                        </tr>
-                        <tr>
-                            <td><strong>L3</strong> Network</td>
-                            <td>{{ layer_threats.layers.L3_NETWORK.total }}</td>
-                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L3_NETWORK.critical }}</td>
-                            <td style="color: #dc2626;">{{ layer_threats.layers.L3_NETWORK.high }}</td>
-                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L3_NETWORK.medium }}</td>
-                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L3_NETWORK.low }}</td>
-                            <td>{{ layer_threats.layers.L3_NETWORK.blocked }}</td>
-                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L3_NETWORK | join(', ') }}</td>
-                        </tr>
-                        <tr>
-                            <td><strong>L4</strong> Transport</td>
-                            <td>{{ layer_threats.layers.L4_TRANSPORT.total }}</td>
-                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L4_TRANSPORT.critical }}</td>
-                            <td style="color: #dc2626;">{{ layer_threats.layers.L4_TRANSPORT.high }}</td>
-                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L4_TRANSPORT.medium }}</td>
-                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L4_TRANSPORT.low }}</td>
-                            <td>{{ layer_threats.layers.L4_TRANSPORT.blocked }}</td>
-                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L4_TRANSPORT | join(', ') }}</td>
-                        </tr>
-                        <tr>
-                            <td><strong>L5</strong> Session</td>
-                            <td>{{ layer_threats.layers.L5_SESSION.total }}</td>
-                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L5_SESSION.critical }}</td>
-                            <td style="color: #dc2626;">{{ layer_threats.layers.L5_SESSION.high }}</td>
-                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L5_SESSION.medium }}</td>
-                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L5_SESSION.low }}</td>
-                            <td>{{ layer_threats.layers.L5_SESSION.blocked }}</td>
-                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L5_SESSION | join(', ') }}</td>
-                        </tr>
-                        <tr>
-                            <td><strong>L6</strong> Presentation</td>
-                            <td>{{ layer_threats.layers.L6_PRESENTATION.total }}</td>
-                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L6_PRESENTATION.critical }}</td>
-                            <td style="color: #dc2626;">{{ layer_threats.layers.L6_PRESENTATION.high }}</td>
-                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L6_PRESENTATION.medium }}</td>
-                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L6_PRESENTATION.low }}</td>
-                            <td>{{ layer_threats.layers.L6_PRESENTATION.blocked }}</td>
-                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L6_PRESENTATION | join(', ') }}</td>
-                        </tr>
-                        <tr>
-                            <td><strong>L7</strong> Application</td>
-                            <td>{{ layer_threats.layers.L7_APPLICATION.total }}</td>
-                            <td style="color: var(--hp-red);">{{ layer_threats.layers.L7_APPLICATION.critical }}</td>
-                            <td style="color: #dc2626;">{{ layer_threats.layers.L7_APPLICATION.high }}</td>
-                            <td style="color: var(--hp-amber);">{{ layer_threats.layers.L7_APPLICATION.medium }}</td>
-                            <td style="color: var(--hp-green);">{{ layer_threats.layers.L7_APPLICATION.low }}</td>
-                            <td>{{ layer_threats.layers.L7_APPLICATION.blocked }}</td>
-                            <td style="font-size: 11px;">{{ layer_threats.detection_coverage.L7_APPLICATION | join(', ') }}</td>
-                        </tr>
-                    </tbody>
-                </table>
+                <div class="detection-coverage-container">
+                    <!-- Desktop Table View -->
+                    <table class="data-table detection-table-desktop" style="font-size: 12px;">
+                        <thead>
+                            <tr>
+                                <th>Layer</th>
+                                <th>Threats</th>
+                                <th>Critical</th>
+                                <th>High</th>
+                                <th>Med</th>
+                                <th>Low</th>
+                                <th>Blocked</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>L2</strong> Data Link</td>
+                                <td>{{ layer_threats.layers.L2_DATA_LINK.total }}</td>
+                                <td style="color: var(--hp-red);">{{ layer_threats.layers.L2_DATA_LINK.critical }}</td>
+                                <td style="color: #dc2626;">{{ layer_threats.layers.L2_DATA_LINK.high }}</td>
+                                <td style="color: var(--hp-amber);">{{ layer_threats.layers.L2_DATA_LINK.medium }}</td>
+                                <td style="color: var(--hp-green);">{{ layer_threats.layers.L2_DATA_LINK.low }}</td>
+                                <td>{{ layer_threats.layers.L2_DATA_LINK.blocked }}</td>
+                            </tr>
+                            <tr class="detection-types-row">
+                                <td colspan="7" style="background: #f1f5f9; padding: 8px 12px; font-size: 11px; color: #64748b;">
+                                    <strong>Detection:</strong> {{ layer_threats.detection_coverage.L2_DATA_LINK | join(', ') }}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>L3</strong> Network</td>
+                                <td>{{ layer_threats.layers.L3_NETWORK.total }}</td>
+                                <td style="color: var(--hp-red);">{{ layer_threats.layers.L3_NETWORK.critical }}</td>
+                                <td style="color: #dc2626;">{{ layer_threats.layers.L3_NETWORK.high }}</td>
+                                <td style="color: var(--hp-amber);">{{ layer_threats.layers.L3_NETWORK.medium }}</td>
+                                <td style="color: var(--hp-green);">{{ layer_threats.layers.L3_NETWORK.low }}</td>
+                                <td>{{ layer_threats.layers.L3_NETWORK.blocked }}</td>
+                            </tr>
+                            <tr class="detection-types-row">
+                                <td colspan="7" style="background: #f1f5f9; padding: 8px 12px; font-size: 11px; color: #64748b;">
+                                    <strong>Detection:</strong> {{ layer_threats.detection_coverage.L3_NETWORK | join(', ') }}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>L4</strong> Transport</td>
+                                <td>{{ layer_threats.layers.L4_TRANSPORT.total }}</td>
+                                <td style="color: var(--hp-red);">{{ layer_threats.layers.L4_TRANSPORT.critical }}</td>
+                                <td style="color: #dc2626;">{{ layer_threats.layers.L4_TRANSPORT.high }}</td>
+                                <td style="color: var(--hp-amber);">{{ layer_threats.layers.L4_TRANSPORT.medium }}</td>
+                                <td style="color: var(--hp-green);">{{ layer_threats.layers.L4_TRANSPORT.low }}</td>
+                                <td>{{ layer_threats.layers.L4_TRANSPORT.blocked }}</td>
+                            </tr>
+                            <tr class="detection-types-row">
+                                <td colspan="7" style="background: #f1f5f9; padding: 8px 12px; font-size: 11px; color: #64748b;">
+                                    <strong>Detection:</strong> {{ layer_threats.detection_coverage.L4_TRANSPORT | join(', ') }}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>L5</strong> Session</td>
+                                <td>{{ layer_threats.layers.L5_SESSION.total }}</td>
+                                <td style="color: var(--hp-red);">{{ layer_threats.layers.L5_SESSION.critical }}</td>
+                                <td style="color: #dc2626;">{{ layer_threats.layers.L5_SESSION.high }}</td>
+                                <td style="color: var(--hp-amber);">{{ layer_threats.layers.L5_SESSION.medium }}</td>
+                                <td style="color: var(--hp-green);">{{ layer_threats.layers.L5_SESSION.low }}</td>
+                                <td>{{ layer_threats.layers.L5_SESSION.blocked }}</td>
+                            </tr>
+                            <tr class="detection-types-row">
+                                <td colspan="7" style="background: #f1f5f9; padding: 8px 12px; font-size: 11px; color: #64748b;">
+                                    <strong>Detection:</strong> {{ layer_threats.detection_coverage.L5_SESSION | join(', ') }}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>L6</strong> Presentation</td>
+                                <td>{{ layer_threats.layers.L6_PRESENTATION.total }}</td>
+                                <td style="color: var(--hp-red);">{{ layer_threats.layers.L6_PRESENTATION.critical }}</td>
+                                <td style="color: #dc2626;">{{ layer_threats.layers.L6_PRESENTATION.high }}</td>
+                                <td style="color: var(--hp-amber);">{{ layer_threats.layers.L6_PRESENTATION.medium }}</td>
+                                <td style="color: var(--hp-green);">{{ layer_threats.layers.L6_PRESENTATION.low }}</td>
+                                <td>{{ layer_threats.layers.L6_PRESENTATION.blocked }}</td>
+                            </tr>
+                            <tr class="detection-types-row">
+                                <td colspan="7" style="background: #f1f5f9; padding: 8px 12px; font-size: 11px; color: #64748b;">
+                                    <strong>Detection:</strong> {{ layer_threats.detection_coverage.L6_PRESENTATION | join(', ') }}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>L7</strong> Application</td>
+                                <td>{{ layer_threats.layers.L7_APPLICATION.total }}</td>
+                                <td style="color: var(--hp-red);">{{ layer_threats.layers.L7_APPLICATION.critical }}</td>
+                                <td style="color: #dc2626;">{{ layer_threats.layers.L7_APPLICATION.high }}</td>
+                                <td style="color: var(--hp-amber);">{{ layer_threats.layers.L7_APPLICATION.medium }}</td>
+                                <td style="color: var(--hp-green);">{{ layer_threats.layers.L7_APPLICATION.low }}</td>
+                                <td>{{ layer_threats.layers.L7_APPLICATION.blocked }}</td>
+                            </tr>
+                            <tr class="detection-types-row">
+                                <td colspan="7" style="background: #f1f5f9; padding: 8px 12px; font-size: 11px; color: #64748b;">
+                                    <strong>Detection:</strong> {{ layer_threats.detection_coverage.L7_APPLICATION | join(', ') }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <!-- Mobile Card View - Shown on small screens -->
+                    <div class="detection-cards-mobile">
+                        <!-- L2 -->
+                        <div class="detection-card">
+                            <div class="detection-card-header">
+                                <span class="layer-badge">L2</span>
+                                <span class="layer-name">Data Link</span>
+                                <span class="threat-count">{{ layer_threats.layers.L2_DATA_LINK.total }} threats</span>
+                            </div>
+                            <div class="detection-card-stats">
+                                <span class="stat critical">{{ layer_threats.layers.L2_DATA_LINK.critical }} Crit</span>
+                                <span class="stat high">{{ layer_threats.layers.L2_DATA_LINK.high }} High</span>
+                                <span class="stat medium">{{ layer_threats.layers.L2_DATA_LINK.medium }} Med</span>
+                                <span class="stat low">{{ layer_threats.layers.L2_DATA_LINK.low }} Low</span>
+                                <span class="stat blocked">{{ layer_threats.layers.L2_DATA_LINK.blocked }} Blocked</span>
+                            </div>
+                            <div class="detection-card-types">
+                                <strong>Detection Types:</strong> {{ layer_threats.detection_coverage.L2_DATA_LINK | join(', ') }}
+                            </div>
+                        </div>
+                        <!-- L3 -->
+                        <div class="detection-card">
+                            <div class="detection-card-header">
+                                <span class="layer-badge">L3</span>
+                                <span class="layer-name">Network</span>
+                                <span class="threat-count">{{ layer_threats.layers.L3_NETWORK.total }} threats</span>
+                            </div>
+                            <div class="detection-card-stats">
+                                <span class="stat critical">{{ layer_threats.layers.L3_NETWORK.critical }} Crit</span>
+                                <span class="stat high">{{ layer_threats.layers.L3_NETWORK.high }} High</span>
+                                <span class="stat medium">{{ layer_threats.layers.L3_NETWORK.medium }} Med</span>
+                                <span class="stat low">{{ layer_threats.layers.L3_NETWORK.low }} Low</span>
+                                <span class="stat blocked">{{ layer_threats.layers.L3_NETWORK.blocked }} Blocked</span>
+                            </div>
+                            <div class="detection-card-types">
+                                <strong>Detection Types:</strong> {{ layer_threats.detection_coverage.L3_NETWORK | join(', ') }}
+                            </div>
+                        </div>
+                        <!-- L4 -->
+                        <div class="detection-card">
+                            <div class="detection-card-header">
+                                <span class="layer-badge">L4</span>
+                                <span class="layer-name">Transport</span>
+                                <span class="threat-count">{{ layer_threats.layers.L4_TRANSPORT.total }} threats</span>
+                            </div>
+                            <div class="detection-card-stats">
+                                <span class="stat critical">{{ layer_threats.layers.L4_TRANSPORT.critical }} Crit</span>
+                                <span class="stat high">{{ layer_threats.layers.L4_TRANSPORT.high }} High</span>
+                                <span class="stat medium">{{ layer_threats.layers.L4_TRANSPORT.medium }} Med</span>
+                                <span class="stat low">{{ layer_threats.layers.L4_TRANSPORT.low }} Low</span>
+                                <span class="stat blocked">{{ layer_threats.layers.L4_TRANSPORT.blocked }} Blocked</span>
+                            </div>
+                            <div class="detection-card-types">
+                                <strong>Detection Types:</strong> {{ layer_threats.detection_coverage.L4_TRANSPORT | join(', ') }}
+                            </div>
+                        </div>
+                        <!-- L5 -->
+                        <div class="detection-card">
+                            <div class="detection-card-header">
+                                <span class="layer-badge">L5</span>
+                                <span class="layer-name">Session</span>
+                                <span class="threat-count">{{ layer_threats.layers.L5_SESSION.total }} threats</span>
+                            </div>
+                            <div class="detection-card-stats">
+                                <span class="stat critical">{{ layer_threats.layers.L5_SESSION.critical }} Crit</span>
+                                <span class="stat high">{{ layer_threats.layers.L5_SESSION.high }} High</span>
+                                <span class="stat medium">{{ layer_threats.layers.L5_SESSION.medium }} Med</span>
+                                <span class="stat low">{{ layer_threats.layers.L5_SESSION.low }} Low</span>
+                                <span class="stat blocked">{{ layer_threats.layers.L5_SESSION.blocked }} Blocked</span>
+                            </div>
+                            <div class="detection-card-types">
+                                <strong>Detection Types:</strong> {{ layer_threats.detection_coverage.L5_SESSION | join(', ') }}
+                            </div>
+                        </div>
+                        <!-- L6 -->
+                        <div class="detection-card">
+                            <div class="detection-card-header">
+                                <span class="layer-badge">L6</span>
+                                <span class="layer-name">Presentation</span>
+                                <span class="threat-count">{{ layer_threats.layers.L6_PRESENTATION.total }} threats</span>
+                            </div>
+                            <div class="detection-card-stats">
+                                <span class="stat critical">{{ layer_threats.layers.L6_PRESENTATION.critical }} Crit</span>
+                                <span class="stat high">{{ layer_threats.layers.L6_PRESENTATION.high }} High</span>
+                                <span class="stat medium">{{ layer_threats.layers.L6_PRESENTATION.medium }} Med</span>
+                                <span class="stat low">{{ layer_threats.layers.L6_PRESENTATION.low }} Low</span>
+                                <span class="stat blocked">{{ layer_threats.layers.L6_PRESENTATION.blocked }} Blocked</span>
+                            </div>
+                            <div class="detection-card-types">
+                                <strong>Detection Types:</strong> {{ layer_threats.detection_coverage.L6_PRESENTATION | join(', ') }}
+                            </div>
+                        </div>
+                        <!-- L7 -->
+                        <div class="detection-card">
+                            <div class="detection-card-header">
+                                <span class="layer-badge">L7</span>
+                                <span class="layer-name">Application</span>
+                                <span class="threat-count">{{ layer_threats.layers.L7_APPLICATION.total }} threats</span>
+                            </div>
+                            <div class="detection-card-stats">
+                                <span class="stat critical">{{ layer_threats.layers.L7_APPLICATION.critical }} Crit</span>
+                                <span class="stat high">{{ layer_threats.layers.L7_APPLICATION.high }} High</span>
+                                <span class="stat medium">{{ layer_threats.layers.L7_APPLICATION.medium }} Med</span>
+                                <span class="stat low">{{ layer_threats.layers.L7_APPLICATION.low }} Low</span>
+                                <span class="stat blocked">{{ layer_threats.layers.L7_APPLICATION.blocked }} Blocked</span>
+                            </div>
+                            <div class="detection-card-types">
+                                <strong>Detection Types:</strong> {{ layer_threats.detection_coverage.L7_APPLICATION | join(', ') }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div style="margin-top: 15px;">
                     <button type="button" class="btn btn-secondary" onclick="refreshLayerThreats()">Refresh Layer Data</button>
                 </div>
@@ -2713,6 +2941,59 @@ HTML_TEMPLATE = '''
 
         <!-- dnsXai Tab - AI-Powered DNS Protection -->
         <div id="dnsxai" class="tab-content">
+            <!-- Quick Pause / Kill Switch - Always Visible -->
+            <div id="dnsxai-killswitch" class="card" style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155;">
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 15px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div id="killswitch-icon" style="width: 48px; height: 48px; border-radius: 50%; background: var(--hp-green); display: flex; align-items: center; justify-content: center; transition: all 0.3s;">
+                            <svg width="24" height="24" fill="white" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+                        </div>
+                        <div>
+                            <div style="color: white; font-weight: 600; font-size: 16px;">Quick Controls</div>
+                            <div id="killswitch-status" style="color: #10b981; font-size: 13px;">Protection Active</div>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                        <!-- Pause Buttons -->
+                        <button class="btn btn-sm" style="background: #374151; color: white; border: none;" onclick="pauseDnsxai(5)" title="Pause for 5 minutes">
+                            <span style="font-size: 11px;">⏸ 5m</span>
+                        </button>
+                        <button class="btn btn-sm" style="background: #374151; color: white; border: none;" onclick="pauseDnsxai(15)" title="Pause for 15 minutes">
+                            <span style="font-size: 11px;">⏸ 15m</span>
+                        </button>
+                        <button class="btn btn-sm" style="background: #374151; color: white; border: none;" onclick="pauseDnsxai(30)" title="Pause for 30 minutes">
+                            <span style="font-size: 11px;">⏸ 30m</span>
+                        </button>
+                        <div style="width: 1px; height: 24px; background: #4b5563; margin: 0 4px;"></div>
+                        <!-- Kill Switch -->
+                        <button id="killswitch-btn" class="btn btn-sm" style="background: var(--hp-red); color: white; border: none; font-weight: 600;" onclick="toggleKillSwitch()">
+                            <span id="killswitch-btn-text">⚡ DISABLE</span>
+                        </button>
+                    </div>
+                </div>
+                <!-- Pause Timer (hidden by default) -->
+                <div id="dnsxai-pause-timer" style="display: none; margin-top: 15px; padding: 12px; background: rgba(245, 158, 11, 0.2); border-radius: 8px; border-left: 4px solid var(--hp-amber);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <span style="color: var(--hp-amber); font-weight: 600;">⏱ Protection Paused</span>
+                            <span id="pause-countdown" style="color: white; margin-left: 10px;">--:--</span>
+                        </div>
+                        <button class="btn btn-sm" style="background: var(--hp-green); color: white; border: none;" onclick="resumeDnsxai()">
+                            ▶ Resume Now
+                        </button>
+                    </div>
+                </div>
+                <!-- Quick Whitelist -->
+                <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                    <input type="text" id="quick-whitelist-input" placeholder="Quick whitelist: enter domain"
+                           style="flex: 1; min-width: 180px; padding: 8px 12px; border: 1px solid #4b5563; border-radius: 6px; background: #1e293b; color: white; font-size: 13px;"
+                           onkeypress="if(event.key==='Enter') quickWhitelist()">
+                    <button class="btn btn-sm" style="background: #059669; color: white; border: none;" onclick="quickWhitelist()">
+                        + Whitelist
+                    </button>
+                </div>
+            </div>
+
             <!-- dnsXai Header with AI Badge -->
             <div class="card">
                 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 20px;">
@@ -3534,6 +3815,218 @@ HTML_TEMPLATE = '''
             });
         }
 
+        // ============================================
+        // KILL SWITCH / QUICK PAUSE FUNCTIONS
+        // ============================================
+        let dnsxaiPauseTimer = null;
+        let dnsxaiPauseEndTime = null;
+        let dnsxaiDisabled = false;
+
+        // Pause dnsXai for specified minutes
+        function pauseDnsxai(minutes) {
+            fetch('/api/dnsxai/pause', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'pause', minutes: minutes })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    dnsxaiPauseEndTime = Date.now() + (minutes * 60 * 1000);
+                    updateKillswitchUI('paused', minutes);
+                    startPauseCountdown();
+                    showNotification('Protection paused for ' + minutes + ' minutes', 'warning');
+                } else {
+                    showNotification(data.error || 'Failed to pause protection', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error pausing dnsXai:', error);
+                showNotification('Failed to pause protection', 'error');
+            });
+        }
+
+        // Resume dnsXai protection
+        function resumeDnsxai() {
+            if (dnsxaiPauseTimer) {
+                clearInterval(dnsxaiPauseTimer);
+                dnsxaiPauseTimer = null;
+            }
+            dnsxaiPauseEndTime = null;
+
+            fetch('/api/dnsxai/pause', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'resume' })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    dnsxaiDisabled = false;
+                    updateKillswitchUI('active');
+                    showNotification('Protection resumed', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to resume protection', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error resuming dnsXai:', error);
+                showNotification('Failed to resume protection', 'error');
+            });
+        }
+
+        // Toggle kill switch (enable/disable)
+        function toggleKillSwitch() {
+            const action = dnsxaiDisabled ? 'enable' : 'disable';
+
+            fetch('/api/dnsxai/pause', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: action })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    dnsxaiDisabled = !dnsxaiDisabled;
+                    if (dnsxaiPauseTimer) {
+                        clearInterval(dnsxaiPauseTimer);
+                        dnsxaiPauseTimer = null;
+                    }
+                    dnsxaiPauseEndTime = null;
+                    updateKillswitchUI(dnsxaiDisabled ? 'disabled' : 'active');
+                    showNotification(dnsxaiDisabled ? 'Protection DISABLED' : 'Protection ENABLED', dnsxaiDisabled ? 'error' : 'success');
+                } else {
+                    showNotification(data.error || 'Failed to toggle protection', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error toggling kill switch:', error);
+                showNotification('Failed to toggle protection', 'error');
+            });
+        }
+
+        // Quick whitelist from kill switch bar
+        function quickWhitelist() {
+            const input = document.getElementById('quick-whitelist-input');
+            const domain = input.value.trim().toLowerCase();
+
+            if (!domain) {
+                showNotification('Please enter a domain', 'error');
+                return;
+            }
+
+            fetch('/api/dnsxai/whitelist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain: domain })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    input.value = '';
+                    loadWhitelist();
+                    showNotification('✓ ' + domain + ' added to whitelist', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to whitelist domain', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error quick whitelisting:', error);
+                showNotification('Failed to whitelist domain', 'error');
+            });
+        }
+
+        // Update kill switch UI state
+        function updateKillswitchUI(state, minutes) {
+            const icon = document.getElementById('killswitch-icon');
+            const status = document.getElementById('killswitch-status');
+            const btn = document.getElementById('killswitch-btn');
+            const btnText = document.getElementById('killswitch-btn-text');
+            const timer = document.getElementById('dnsxai-pause-timer');
+            const statusDot = document.getElementById('dnsxai-status-dot');
+            const statusText = document.getElementById('dnsxai-status-text');
+
+            if (state === 'active') {
+                icon.style.background = 'var(--hp-green)';
+                status.textContent = 'Protection Active';
+                status.style.color = '#10b981';
+                btn.style.background = 'var(--hp-red)';
+                btnText.textContent = '⚡ DISABLE';
+                timer.style.display = 'none';
+                if (statusDot) statusDot.style.background = 'var(--hp-green)';
+                if (statusText) { statusText.textContent = 'Active'; statusText.style.color = 'var(--hp-green)'; }
+            } else if (state === 'paused') {
+                icon.style.background = 'var(--hp-amber)';
+                status.textContent = 'Paused for ' + minutes + 'm';
+                status.style.color = 'var(--hp-amber)';
+                btn.style.background = 'var(--hp-green)';
+                btnText.textContent = '▶ ENABLE';
+                timer.style.display = 'block';
+                if (statusDot) statusDot.style.background = 'var(--hp-amber)';
+                if (statusText) { statusText.textContent = 'Paused'; statusText.style.color = 'var(--hp-amber)'; }
+            } else if (state === 'disabled') {
+                icon.style.background = 'var(--hp-red)';
+                status.textContent = 'Protection DISABLED';
+                status.style.color = 'var(--hp-red)';
+                btn.style.background = 'var(--hp-green)';
+                btnText.textContent = '▶ ENABLE';
+                timer.style.display = 'none';
+                if (statusDot) statusDot.style.background = 'var(--hp-red)';
+                if (statusText) { statusText.textContent = 'Disabled'; statusText.style.color = 'var(--hp-red)'; }
+            }
+        }
+
+        // Start pause countdown timer
+        function startPauseCountdown() {
+            const countdownEl = document.getElementById('pause-countdown');
+
+            if (dnsxaiPauseTimer) {
+                clearInterval(dnsxaiPauseTimer);
+            }
+
+            dnsxaiPauseTimer = setInterval(() => {
+                if (!dnsxaiPauseEndTime) {
+                    clearInterval(dnsxaiPauseTimer);
+                    return;
+                }
+
+                const remaining = dnsxaiPauseEndTime - Date.now();
+
+                if (remaining <= 0) {
+                    clearInterval(dnsxaiPauseTimer);
+                    dnsxaiPauseTimer = null;
+                    dnsxaiPauseEndTime = null;
+                    resumeDnsxai();
+                    return;
+                }
+
+                const mins = Math.floor(remaining / 60000);
+                const secs = Math.floor((remaining % 60000) / 1000);
+                countdownEl.textContent = mins + ':' + (secs < 10 ? '0' : '') + secs + ' remaining';
+            }, 1000);
+        }
+
+        // Check pause status on load
+        function checkPauseStatus() {
+            fetch('/api/dnsxai/pause')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'paused' && data.remaining_seconds > 0) {
+                        dnsxaiPauseEndTime = Date.now() + (data.remaining_seconds * 1000);
+                        dnsxaiDisabled = false;
+                        updateKillswitchUI('paused', Math.ceil(data.remaining_seconds / 60));
+                        startPauseCountdown();
+                    } else if (data.status === 'disabled') {
+                        dnsxaiDisabled = true;
+                        updateKillswitchUI('disabled');
+                    } else {
+                        dnsxaiDisabled = false;
+                        updateKillswitchUI('active');
+                    }
+                })
+                .catch(error => console.error('Error checking pause status:', error));
+        }
+
         // Load whitelist
         function loadWhitelist() {
             fetch('/api/dnsxai/whitelist')
@@ -4110,6 +4603,10 @@ HTML_TEMPLATE = '''
             refreshThreats();
             refreshThreatChart();
             refreshLayerThreats();
+            // Initialize dnsXai status
+            checkPauseStatus();
+            loadWhitelist();
+            loadBlocklistSources();
         });
 
         // Background refresh - updates data without reloading page
@@ -4695,6 +5192,109 @@ def api_dnsxai_recent():
         return jsonify({'blocks': []})
     except Exception:
         return jsonify({'blocks': []})
+
+
+# dnsXai pause state file
+DNSXAI_PAUSE_FILE = '/opt/hookprobe/guardian/dnsxai/pause_state.json'
+
+
+@app.route('/api/dnsxai/pause', methods=['GET', 'POST'])
+def api_dnsxai_pause():
+    """Pause/resume/enable/disable dnsXai protection."""
+    import time
+
+    def get_pause_state():
+        """Load current pause state."""
+        if os.path.exists(DNSXAI_PAUSE_FILE):
+            try:
+                with open(DNSXAI_PAUSE_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {'status': 'active', 'pause_until': 0}
+
+    def save_pause_state(state):
+        """Save pause state."""
+        os.makedirs(os.path.dirname(DNSXAI_PAUSE_FILE), exist_ok=True)
+        with open(DNSXAI_PAUSE_FILE, 'w') as f:
+            json.dump(state, f)
+
+    def apply_protection_state(enabled):
+        """Apply protection state to dnsmasq/dnsXai."""
+        try:
+            if enabled:
+                # Re-enable DNS blocking
+                run_command('systemctl start dnsxai 2>/dev/null || true')
+                # Ensure dnsmasq uses blocklist config
+                run_command('systemctl restart dnsmasq')
+            else:
+                # Temporarily disable DNS blocking
+                run_command('systemctl stop dnsxai 2>/dev/null || true')
+                # Remove blocklist from dnsmasq temporarily
+                run_command('systemctl restart dnsmasq')
+            return True
+        except Exception:
+            return False
+
+    if request.method == 'GET':
+        # Return current pause status
+        state = get_pause_state()
+        now = time.time()
+
+        if state['status'] == 'paused':
+            remaining = state.get('pause_until', 0) - now
+            if remaining <= 0:
+                # Pause expired, resume protection
+                state = {'status': 'active', 'pause_until': 0}
+                save_pause_state(state)
+                apply_protection_state(True)
+                return jsonify({'status': 'active', 'remaining_seconds': 0})
+            return jsonify({'status': 'paused', 'remaining_seconds': int(remaining)})
+        elif state['status'] == 'disabled':
+            return jsonify({'status': 'disabled', 'remaining_seconds': 0})
+        else:
+            return jsonify({'status': 'active', 'remaining_seconds': 0})
+
+    # POST - modify pause state
+    try:
+        data = request.get_json()
+        action = data.get('action', '')
+        now = time.time()
+
+        if action == 'pause':
+            minutes = data.get('minutes', 5)
+            if not isinstance(minutes, int) or minutes < 1 or minutes > 1440:
+                return jsonify({'success': False, 'error': 'Invalid minutes (1-1440)'}), 400
+
+            pause_until = now + (minutes * 60)
+            state = {'status': 'paused', 'pause_until': pause_until}
+            save_pause_state(state)
+            apply_protection_state(False)
+            return jsonify({'success': True, 'status': 'paused', 'minutes': minutes})
+
+        elif action == 'resume':
+            state = {'status': 'active', 'pause_until': 0}
+            save_pause_state(state)
+            apply_protection_state(True)
+            return jsonify({'success': True, 'status': 'active'})
+
+        elif action == 'disable':
+            state = {'status': 'disabled', 'pause_until': 0}
+            save_pause_state(state)
+            apply_protection_state(False)
+            return jsonify({'success': True, 'status': 'disabled'})
+
+        elif action == 'enable':
+            state = {'status': 'active', 'pause_until': 0}
+            save_pause_state(state)
+            apply_protection_state(True)
+            return jsonify({'success': True, 'status': 'active'})
+
+        else:
+            return jsonify({'success': False, 'error': 'Invalid action'}), 400
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/layer_threats')
