@@ -141,7 +141,7 @@ rsn_pairwise=CCMP
 def api_hotspot_restart():
     """Restart the hotspot."""
     try:
-        run_command('systemctl restart hostapd')
+        run_command('sudo systemctl restart hostapd')
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
