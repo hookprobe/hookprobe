@@ -29,7 +29,8 @@ show_menu() {
     echo "1) Uninstall Edge Deployment (PODs 001-007)"
     echo "2) Uninstall Cloud Backend"
     echo "3) Uninstall n8n Only (POD 008)"
-    echo "4) Uninstall Everything"
+    echo "4) Uninstall Guardian"
+    echo "5) Uninstall Everything"
     echo ""
     echo "q) Cancel"
     echo ""
@@ -55,9 +56,14 @@ main() {
             bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh"
             ;;
         4)
+            echo -e "${YELLOW}Uninstalling Guardian...${NC}"
+            bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh"
+            ;;
+        5)
             echo -e "${RED}WARNING: This will remove EVERYTHING${NC}"
             read -p "Are you sure? (type 'yes'): " confirm
             if [ "$confirm" = "yes" ]; then
+                bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" 2>/dev/null || true
                 bash "$SCRIPT_DIR/deploy/edge/uninstall.sh" 2>/dev/null || true
                 bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh" 2>/dev/null || true
                 bash "$SCRIPT_DIR/deploy/cloud/uninstall.sh" 2>/dev/null || true
