@@ -1,0 +1,257 @@
+name: Repository Cleanup Validation
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  # Run weekly to catch stale files
+  schedule:
+    - cron: '0 0 * * 0'  # Every Sunday at midnight
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: 'Run full deep scan'
+        required: false
+        default: 'true'
+        type: boolean
+
+jobs:
+  validate-repo-structure:
+    name: Validate Repository Structure
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Run Quick Validation
+        id: quick-check
+        run: |
+          chmod +x scripts/repo-cleanup-validator.sh
+          echo "## Quick Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ./scripts/repo-cleanup-validator.sh --quick 2>&1 | tee validation-quick.log || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Run Full Validation
+        id: full-check
+        if: github.event_name == 'pull_request' || github.event.inputs.full_scan == 'true' || github.event_name == 'schedule'
+        run: |
+          echo "## Full Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ./scripts/repo-cleanup-validator.sh --verbose 2>&1 | tee validation-full.log || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for Required Files
+        run: |
+          echo "Checking critical installation files..."
+
+          required_files=(
+            "install.sh"
+            "uninstall.sh"
+            "products/guardian/scripts/setup.sh"
+            "products/fortress/setup.sh"
+            "products/nexus/setup.sh"
+            "products/sentinel/bootstrap.sh"
+          )
+
+          missing=0
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::Missing required file: $file"
+              missing=$((missing + 1))
+            else
+              echo "Found: $file"
+            fi
+          done
+
+          if [ $missing -gt 0 ]; then
+            echo "::error::$missing required installation files are missing!"
+            exit 1
+          fi
+
+      - name: Validate Shell Scripts Syntax
+        run: |
+          echo "Validating shell script syntax..."
+          errors=0
+
+          for script in $(find . -name "*.sh" -type f ! -path "./.git/*"); do
+            if ! bash -n "$script" 2>/dev/null; then
+              echo "::error::Syntax error in $script"
+              errors=$((errors + 1))
+            fi
+          done
+
+          if [ $errors -gt 0 ]; then
+            echo "::error::$errors shell scripts have syntax errors"
+            exit 1
+          fi
+
+          echo "All shell scripts have valid syntax"
+
+      - name: Check for Deprecated Paths
+        run: |
+          echo "Checking for deprecated path references..."
+
+          deprecated_patterns=(
+            "src/neuro"
+            "src/qsecbit"
+            "src/dsm"
+            "install/guardian"
+            "install/fortress"
+            "install/nexus"
+            "releases/sentinel"
+          )
+
+          found=0
+          for pattern in "${deprecated_patterns[@]}"; do
+            if grep -r "$pattern" --include="*.sh" --include="*.py" --include="*.yml" . 2>/dev/null | grep -v ".git" | grep -v "DEPRECATED"; then
+              echo "::warning::Found deprecated path reference: $pattern"
+              found=$((found + 1))
+            fi
+          done
+
+          if [ $found -gt 0 ]; then
+            echo "::warning::Found $found deprecated path references that should be updated"
+          fi
+
+      - name: Check Internal Links in Markdown
+        run: |
+          echo "Checking markdown internal links..."
+
+          broken=0
+          while IFS= read -r mdfile; do
+            # Extract local links
+            grep -oE '\[([^]]+)\]\(([^)]+)\)' "$mdfile" 2>/dev/null | while read -r link; do
+              path=$(echo "$link" | sed -E 's/\[([^]]+)\]\(([^)]+)\)/\2/')
+
+              # Skip external, mailto, anchor-only
+              [[ "$path" == http* ]] && continue
+              [[ "$path" == mailto:* ]] && continue
+              [[ "$path" == "#"* ]] && continue
+
+              # Remove anchor
+              path="${path%%#*}"
+              [ -z "$path" ] && continue
+
+              # Resolve path
+              mddir=$(dirname "$mdfile")
+              if [[ "$path" == /* ]]; then
+                full_path=".$path"
+              else
+                full_path="$mddir/$path"
+              fi
+
+              if [ ! -e "$full_path" ]; then
+                echo "::warning::Broken link in $mdfile: $path"
+              fi
+            done
+          done < <(find . -name "*.md" -type f ! -path "./.git/*")
+
+      - name: Upload Validation Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-logs
+          path: |
+            validation-quick.log
+            validation-full.log
+          retention-days: 7
+
+  check-orphaned-files:
+    name: Check for Orphaned Files
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect Orphaned Files
+        id: orphans
+        run: |
+          echo "Scanning for potentially orphaned files..."
+
+          # Create list of all shell/python files
+          find . -type f \( -name "*.sh" -o -name "*.py" \) \
+            ! -path "./.git/*" \
+            ! -path "./__pycache__/*" \
+            -printf "%P\n" | sort > all_files.txt
+
+          # Known entry points and standalone files
+          cat > standalone.txt << 'EOF'
+          install.sh
+          uninstall.sh
+          install-sentinel-lite.sh
+          install-validator.sh
+          scripts/repo-cleanup-validator.sh
+          scripts/run-unit-tests.sh
+          scripts/install-edge.sh
+          EOF
+
+          # Files referenced in other files
+          grep -rhoE '[a-zA-Z0-9_/-]+\.(sh|py)' . \
+            --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.md" \
+            2>/dev/null | sort -u > referenced.txt
+
+          # Combine
+          cat standalone.txt >> referenced.txt
+          sort -u referenced.txt -o referenced.txt
+
+          # Find orphans
+          orphan_count=0
+          echo "## Potentially Orphaned Files" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          while IFS= read -r file; do
+            basename=$(basename "$file")
+
+            # Skip test files, __init__.py, conftest.py
+            [[ "$file" == tests/* ]] && continue
+            [[ "$basename" == "__init__.py" ]] && continue
+            [[ "$basename" == "conftest.py" ]] && continue
+            [[ "$basename" == *_test.py ]] && continue
+
+            if ! grep -qF "$basename" referenced.txt 2>/dev/null; then
+              echo "- $file" >> $GITHUB_STEP_SUMMARY
+              orphan_count=$((orphan_count + 1))
+            fi
+          done < all_files.txt
+
+          if [ $orphan_count -eq 0 ]; then
+            echo "No orphaned files detected." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Found $orphan_count potentially orphaned files. Review and remove if not needed."
+          fi
+
+          echo "orphan_count=$orphan_count" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        if: steps.orphans.outputs.orphan_count > 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const orphanCount = '${{ steps.orphans.outputs.orphan_count }}';
+            if (parseInt(orphanCount) > 0) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## Repository Cleanup Check
+
+                Found **${orphanCount}** potentially orphaned files that may not be referenced by any script.
+
+                Please review the workflow summary for details and remove unused files to keep the repository clean.
+
+                Run locally with:
+                \`\`\`bash
+                ./scripts/repo-cleanup-validator.sh --verbose
+                \`\`\`
+                `
+              });
+            }
