@@ -15,22 +15,24 @@ The HookProbe Attack Mitigation System provides **automated threat detection and
 ## 📋 Prerequisites
 
 ### System Requirements
-- **OS**: RHEL 10 / Fedora / CentOS Stream (same as HookProbe)
-- **HookProbe**: v4.0 installed and running
+- **OS**: Ubuntu 22.04+, Debian 11+/12+, Raspberry Pi OS (Bookworm)
+- **HookProbe**: v5.0+ installed and running
 - **Root Access**: Required for iptables and system configuration
 - **Email**: MTA configured (postfix/sendmail) for notifications
+
+> **Note**: RHEL-based systems are not supported due to OpenVSwitch availability limitations. Support planned for future release.
 
 ### Dependencies
 ```bash
 # Install required packages
-sudo dnf install -y \
+sudo apt install -y \
     iptables \
     jq \
     curl \
     tar \
     gzip \
-    mailx \
-    cronie
+    bsd-mailx \
+    cron
 ```
 
 ---
@@ -197,7 +199,7 @@ echo "Test email from HookProbe" | mail -s "Test" qsecbit@hookprobe.com
 
 **Configure postfix (if not already configured):**
 ```bash
-sudo dnf install -y postfix mailx
+sudo apt install -y postfix bsd-mailx
 sudo systemctl enable --now postfix
 
 # Configure as relay or smarthost

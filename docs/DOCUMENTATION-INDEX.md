@@ -20,7 +20,7 @@ Perfect for first-time users and those new to Linux/HookProbe.
 
 ### For Complete Beginners
 - **[Beginner's Guide](installation/BEGINNER-GUIDE.md)** ⭐ **START HERE if new to Linux**
-  - Download and install Linux (Fedora/Ubuntu)
+  - Download and install Linux (Ubuntu/Debian)
   - Create bootable USB drive
   - Partition disk for HookProbe
   - Complete Linux installation
