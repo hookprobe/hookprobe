@@ -1,2110 +1,1068 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
 **Version**: 5.0
-**Last Updated**: 2025-11-22
+**Last Updated**: 2025-12-07
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
 
-## 📋 Table of Contents
+## Quick Lookup: When User Wants To...
+
+| User Request | Go To | Key Files |
+|-------------|-------|-----------|
+| **Run tests** | `pytest tests/` | `pytest.ini`, `tests/test_*.py` |
+| **Check code quality** | `make lint` | `.pre-commit-config.yaml`, `Makefile` |
+| **Deploy Sentinel** | `./install.sh --tier sentinel` | `products/sentinel/` |
+| **Deploy Guardian** | `./install.sh --tier guardian` | `products/guardian/` |
+| **Deploy Fortress** | `./install.sh --tier fortress` | `products/fortress/` |
+| **Deploy Nexus** | `./install.sh --tier nexus` | `products/nexus/` |
+| **Modify Qsecbit algorithm** | Edit core logic | `core/qsecbit/qsecbit.py` |
+| **Add XDP/eBPF rules** | Edit XDP manager | `core/qsecbit/xdp_manager.py` |
+| **Work with HTP protocol** | Core transport | `core/htp/transport/htp.py` |
+| **Add DNS/Ad blocking** | dnsXai module | `shared/dnsXai/` |
+| **Work with mesh networking** | Mesh module | `shared/mesh/` |
+| **Configure n8n automation** | Deploy addon | `deploy/addons/n8n/` |
+| **Add LTE/5G failover** | Check addon docs | `deploy/addons/lte/README.md` |
+| **Debug CI/CD failures** | Check workflows | `.github/workflows/` |
+| **Understand architecture** | Read mesh docs | `shared/mesh/ARCHITECTURE.md` |
+| **Add new security feature** | Check shared response | `shared/response/` |
+| **Modify DSM consensus** | Check shared DSM | `shared/dsm/` |
+| **GDPR compliance** | Check privacy module | `core/qsecbit/gdpr_privacy.py` |
+| **Guardian web UI** | Flask app | `products/guardian/web/` |
+| **MSSP web portal** | Django app | `products/mssp/web/` |
+| **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
+| **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
+
+---
+
+## Table of Contents
 
 - [Project Overview](#project-overview)
 - [Codebase Structure](#codebase-structure)
-- [Architecture Fundamentals](#architecture-fundamentals)
-- [Development Workflows](#development-workflows)
+- [Core Modules](#core-modules)
+- [Shared Infrastructure](#shared-infrastructure)
+- [Product Tiers](#product-tiers)
+- [Testing Guide](#testing-guide)
+- [CI/CD Workflows](#cicd-workflows)
+- [Development Tooling](#development-tooling)
+- [Scenario-Based Guidance](#scenario-based-guidance)
 - [Key Conventions](#key-conventions)
-- [Common Tasks](#common-tasks)
 - [Security Considerations](#security-considerations)
-- [Testing Guidelines](#testing-guidelines)
-- [Important Files Reference](#important-files-reference)
 - [Troubleshooting](#troubleshooting)
 
 ---
 
-## 🎯 Project Overview
+## Project Overview
 
 ### What is HookProbe?
 
-HookProbe is a **containerized cybersecurity platform** built for Single Board Computers (SBCs) and edge infrastructure. It provides enterprise-grade security capabilities through AI-driven threat detection and automated response systems.
+HookProbe is a **federated cybersecurity mesh** built for edge computing and distributed security. It provides:
 
-**Project Type**: Infrastructure-as-Code / Security Operations Platform
-**Primary Language**: Bash (deployment scripts), Python (AI/security logic)
+- **AI-Powered Threat Detection**: Qsecbit algorithm for real-time security analysis
+- **Federated Defense**: Privacy-preserving collective intelligence
+- **Multi-Tier Products**: Sentinel, Guardian, Fortress, Nexus, MSSP
+- **Zero Trust Mesh**: HTP protocol with post-quantum cryptography
+- **AI DNS Protection**: dnsXai for ML-based ad/tracker blocking
+- **Mesh Consciousness**: Collective threat intelligence sharing
+
+**Project Type**: Federated Security Platform / Infrastructure-as-Code
+**Primary Languages**: Python (core logic), Bash (deployment)
+**Web Frameworks**: Flask (Guardian), Django (MSSP)
 **Deployment**: Podman containers with OVS networking
-**Supported OS** (v5.x):
-- **Debian-based**: Ubuntu 22.04+/24.04+, Debian 11+/12+, Raspberry Pi OS (Bookworm)
-- **Note**: RHEL-based systems (RHEL, Fedora, CentOS, Rocky, Alma) are not supported due to OpenVSwitch availability limitations (OVS available on RHEL 9 but not RHEL 10). Support planned for future release.
-**Architectures**: x86_64 (Intel/AMD), ARM64 (Raspberry Pi, Rockchip SBCs)
-**License**: MIT (v5.0+), transitioning from GPL
+**License**: MIT (v5.0+)
 
-### Key Capabilities
+### Product Tiers
 
-1. **AI-Powered Threat Detection**: Qsecbit algorithm for real-time security analysis
-2. **Automated Response**: Kali Linux on-demand mitigation
-3. **Multi-Layer Defense**: WAF, IDS/IPS, honeypots, behavioral analysis
-4. **Complete Observability**: Grafana, VictoriaMetrics, Loki stack
-5. **Zero Trust Network**: PSK-encrypted VXLAN, OpenFlow ACLs, L2 hardening
-6. **Optional Automation**: n8n workflow engine (POD 008)
-
-### Critical Context for AI Assistants
-
-⚠️ **This is NOT a traditional software application**. It is:
-- Infrastructure deployment automation
-- Security orchestration platform
-- Network configuration system
-- Container orchestration setup
-
-**DO NOT** treat this like a web app, API service, or typical software project.
-
-### Platform Detection and Compatibility
-
-**HookProbe v5.0** automatically detects and configures itself based on:
-
-1. **Operating System**: Debian-based systems (apt) - Ubuntu, Debian, Raspberry Pi OS
-2. **Architecture**: x86_64 vs ARM64
-3. **Hardware Platform**: Intel N100, Raspberry Pi, Generic SBC, Virtual Machine
-4. **NIC Capabilities**: XDP-hw, XDP-drv, or XDP-skb mode selection
-
-> **Note**: v5.x only supports Debian-based systems. RHEL-based systems are not supported due to OpenVSwitch availability limitations. Support planned for future release.
-
-**Deployment Script** (`setup.sh`) performs comprehensive detection at startup:
-- OS family detection (via `/etc/os-release`)
-- Hardware platform identification (CPU model, SBC detection)
-- Virtualization detection (KVM, VMware, LXC, Docker, etc.)
-- NIC driver detection and XDP capability assessment
-- Platform-specific package installation (dnf vs apt)
-
-**Supported Deployment Targets**:
-- **Physical Hardware**: Intel N100 Mini PCs, Raspberry Pi 4/5, Rockchip SBCs, x86_64 desktops
-- **Virtual Machines**: KVM, VMware, VirtualBox, Proxmox VMs
-- **Cloud**: AWS, Azure, GCP (with appropriate OS)
-
-**Unsupported**:
-- ARMv7 (32-bit ARM) - Use ARM64 (ARMv8) instead
-- Docker containers (networking conflicts with OVS)
-- LXC containers (networking limitations)
+| Tier | RAM | Use Case | Location |
+|------|-----|----------|----------|
+| **Sentinel** | 256MB | IoT Validator | `products/sentinel/` |
+| **Guardian** | 1.5GB | Travel/Portable | `products/guardian/` |
+| **Fortress** | 4GB | Edge Router | `products/fortress/` |
+| **Nexus** | 16GB+ | ML/AI Compute | `products/nexus/` |
+| **MSSP** | 16GB+ | Central Brain | `products/mssp/` |
 
 ---
 
-## 📁 Codebase Structure
+## Codebase Structure
 
 ```
 hookprobe/
-├── install.sh                        # ⭐ MAIN INSTALLER (interactive menu)
-├── uninstall.sh                      # ⭐ MAIN UNINSTALLER (interactive menu)
-├── README.md                         # Main documentation
+├── CLAUDE.md                         # This file (AI assistant guide)
 ├── LICENSE                           # MIT License
-├── CHANGELOG.md                      # Version history
+├── Makefile                          # Development commands
+├── pytest.ini                        # Test configuration
+├── .pre-commit-config.yaml           # Pre-commit hooks
+├── .shellcheckrc                     # ShellCheck config
+├── .editorconfig                     # Editor config
+├── 3rd-party-licenses.md             # Third-party licenses
+├── hookprobe-r&d.md                  # R&D documentation
 │
-├── install/                          # 🎯 Installation scripts (top-level, obvious)
-│   ├── edge/                         # Edge deployment (SBCs, Intel N100)
-│   │   ├── setup.sh                  # MAIN EDGE INSTALLER
-│   │   ├── uninstall.sh              # Edge cleanup
-│   │   ├── config.sh                 # Network & service configuration
-│   │   ├── checklist.md              # Pre/post validation
-│   │   ├── update.sh                 # Container updates
-│   │   └── README.md                 # Edge deployment guide
+├── core/                             # CORE INTELLIGENCE
+│   ├── __init__.py
+│   ├── htp/                          # HookProbe Transport Protocol
+│   │   ├── transport/
+│   │   │   ├── htp.py               # Main HTP implementation
+│   │   │   ├── htp_vpn.py           # VPN integration
+│   │   │   ├── htp_file.py          # File transfer protocol
+│   │   │   └── htp_file_integration_example.py
+│   │   └── crypto/
+│   │       ├── hybrid_kem.py        # Kyber post-quantum crypto
+│   │       ├── transport.py         # ChaCha20-Poly1305
+│   │       └── transport_v2.py      # Enhanced transport
 │   │
-│   ├── cloud/                        # Cloud backend (MSSP)
-│   │   ├── setup.sh                  # Cloud installer
-│   │   ├── uninstall.sh              # Cloud cleanup
-│   │   ├── config.sh                 # Multi-tenant config
-│   │   └── README.md                 # Cloud deployment guide
+│   ├── qsecbit/                      # Quantified Security Metric
+│   │   ├── qsecbit.py               # Main algorithm (RAG scoring)
+│   │   ├── qsecbit-agent.py         # Agent daemon
+│   │   ├── energy_monitor.py        # RAPL power monitoring
+│   │   ├── xdp_manager.py           # XDP/eBPF DDoS mitigation
+│   │   ├── nic_detector.py          # NIC capability detection
+│   │   ├── gdpr_privacy.py          # Privacy-preserving module
+│   │   └── README.md                # Qsecbit documentation
 │   │
-│   ├── addons/                       # Optional components
-│   │   ├── n8n/                      # Workflow automation
+│   └── neuro/                        # Neural Resonance Protocol
+│       ├── README.md                # Neuro protocol docs
+│       ├── requirements.txt         # Python dependencies
+│       ├── attestation/
+│       │   └── device_identity.py   # Device attestation
+│       ├── audit/
+│       │   └── merkle_log.py        # Audit logging
+│       ├── core/
+│       │   ├── ter.py               # Telemetry Event Record
+│       │   ├── posf.py              # Proof of Secure Function
+│       │   └── replay.py            # Replay protection
+│       ├── identity/
+│       │   └── hardware_fingerprint.py  # Hardware identity
+│       ├── network/
+│       │   └── nat_traversal.py     # NAT traversal
+│       ├── neural/
+│       │   ├── engine.py            # Neural weight evolution
+│       │   └── fixedpoint.py        # Q16.16 fixed-point math
+│       ├── storage/
+│       │   └── dreamlog.py          # Offline TER storage
+│       └── validation/
+│           └── validator_network.py  # Validator network
+│
+├── shared/                           # SHARED INFRASTRUCTURE
+│   ├── README.md
+│   │
+│   ├── dnsXai/                       # AI-POWERED DNS PROTECTION
+│   │   ├── README.md                # Comprehensive documentation
+│   │   ├── __init__.py
+│   │   ├── engine.py                # ML classifier engine
+│   │   ├── integration.py           # Product integration
+│   │   ├── mesh_intelligence.py     # Federated learning
+│   │   └── update-blocklist.sh      # Blocklist updater
+│   │
+│   ├── dsm/                          # Decentralized Security Mesh
+│   │   ├── README.md
+│   │   ├── requirements.txt
+│   │   ├── consensus.py             # BLS signature aggregation
+│   │   ├── gossip.py                # P2P threat announcement
+│   │   ├── ledger.py                # Microblock chain
+│   │   ├── validator.py             # Validator logic
+│   │   ├── merkle.py                # Merkle tree verification
+│   │   ├── node.py                  # Edge node microblocks
+│   │   ├── identity.py              # Node identity management
+│   │   └── crypto/
+│   │       ├── attestation.py       # Remote attestation
+│   │       ├── bls.py               # BLS signatures
+│   │       └── tpm.py               # TPM integration
+│   │
+│   ├── mesh/                         # MESH COMMUNICATION LAYER
+│   │   ├── ARCHITECTURE.md          # Unified mesh architecture
+│   │   ├── __init__.py
+│   │   ├── channel_selector.py      # Intelligent channel selection
+│   │   ├── consciousness.py         # Mesh consciousness
+│   │   ├── nat_traversal.py         # NAT/CGNAT traversal
+│   │   ├── neuro_encoder.py         # Neural resonance auth
+│   │   ├── port_manager.py          # Multi-port management
+│   │   ├── relay.py                 # Relay network
+│   │   ├── resilient_channel.py     # Reliable messaging
+│   │   ├── tunnel.py                # Tunnel providers
+│   │   └── unified_transport.py     # High-level transport API
+│   │
+│   └── response/                     # Automated Threat Response
+│       ├── README.md
+│       ├── MITIGATION_INSTALLATION_GUIDE.md
+│       ├── attack-mitigation-orchestrator.sh
+│       ├── kali-scripts.sh          # Kali mitigation
+│       ├── mitigation-maintenance.sh
+│       └── hookprobe-mitigation-systemd.conf
+│
+├── products/                         # PRODUCT TIERS
+│   ├── README.md                    # Product tier overview
+│   │
+│   ├── sentinel/                     # DSM Validator (256MB)
+│   │   └── README.md
+│   │
+│   ├── guardian/                     # Travel Companion (1.5GB)
+│   │   ├── README.md
+│   │   ├── config/                  # WiFi/network configs
+│   │   │   ├── dnsmasq.conf
+│   │   │   ├── hostapd.conf
+│   │   │   ├── hostapd-5ghz.conf
+│   │   │   ├── hostapd.vlan
+│   │   │   ├── mac_vlan.json
+│   │   │   └── wpa_supplicant.conf
+│   │   ├── lib/                     # Core Python modules
+│   │   │   ├── guardian_agent.py    # Main agent
+│   │   │   ├── config.py            # Configuration
+│   │   │   ├── htp_client.py        # HTP client
+│   │   │   ├── layer_threat_detector.py  # L2-L7 detection
+│   │   │   ├── mesh_integration.py  # Mesh connectivity
+│   │   │   ├── mobile_network_protection.py
+│   │   │   ├── network_segmentation.py
+│   │   │   └── openflow_controller.py
+│   │   ├── scripts/
 │   │   │   ├── setup.sh
 │   │   │   ├── uninstall.sh
-│   │   │   ├── config.sh
+│   │   │   └── update-blocklists.sh
+│   │   └── web/                     # Flask Web UI
+│   │       ├── app.py               # Main Flask app
+│   │       ├── config.py
+│   │       ├── utils.py
+│   │       ├── modules/             # Blueprint modules
+│   │       │   ├── clients/         # Connected clients
+│   │       │   ├── config/          # Network config
+│   │       │   ├── core/            # Dashboard
+│   │       │   ├── dnsxai/          # DNS protection UI
+│   │       │   ├── security/        # Security metrics
+│   │       │   ├── system/          # System status
+│   │       │   └── vpn/             # VPN management
+│   │       ├── static/              # CSS/JS assets
+│   │       └── templates/           # Jinja2 templates
+│   │
+│   ├── fortress/                     # Edge Router (4GB)
+│   │   ├── README.md
+│   │   └── setup.sh
+│   │
+│   ├── nexus/                        # ML/AI Compute (16GB+)
+│   │   └── (minimal - future expansion)
+│   │
+│   └── mssp/                         # Cloud MSSP Platform
+│       ├── README.md
+│       ├── device_registry.py       # Device management
+│       ├── geolocation.py           # Location services
+│       ├── setup.sh
+│       ├── uninstall.sh
+│       ├── lib/
+│       │   └── htp_validator.py     # HTP validation
+│       ├── scripts/
+│       │   └── health-check.sh
+│       └── web/                     # Django Web Portal
+│           ├── README.md
+│           ├── .env.example
+│           ├── Dockerfile.test
+│           └── apps/               # Django apps
+│               ├── admin_dashboard/ # Admin UI
+│               ├── cms/             # Content management
+│               ├── common/          # Shared utilities
+│               ├── dashboard/       # Main dashboard
+│               ├── devices/         # Device management
+│               ├── merchandise/     # Product catalog
+│               ├── monitoring/      # System monitoring
+│               ├── mssp_dashboard/  # MSSP-specific views
+│               ├── sdn/             # SDN management
+│               ├── security/        # Security features
+│               └── vpn/             # VPN services
+│
+├── deploy/                           # DEPLOYMENT SCRIPTS
+│   ├── README.md
+│   │
+│   ├── edge/                         # Edge deployment
+│   │   ├── README.md
+│   │   ├── QUICK-START.md
+│   │   ├── checklist.md
+│   │   ├── provision.sh             # Node provisioning
+│   │   ├── cleanup.sh               # Cleanup script
+│   │   ├── update.sh                # Update script
+│   │   ├── uninstall.sh
+│   │   ├── hookprobe-ctl            # CLI control tool
+│   │   ├── hookprobe-bootstrap.sh   # Bootstrap script
+│   │   └── systemd/                 # Systemd services
+│   │       ├── hookprobe-agent.service
+│   │       ├── hookprobe-provision.service
+│   │       ├── hookprobe-update.service
+│   │       ├── hookprobe-update.timer
+│   │       └── hookprobe-uninstall.service
+│   │
+│   ├── cloud/                        # Cloud deployment
+│   │   ├── README.md
+│   │   ├── config.sh
+│   │   ├── setup.sh
+│   │   └── uninstall.sh
+│   │
+│   ├── addons/                       # Optional addons
+│   │   ├── n8n/                     # Workflow automation
+│   │   │   ├── README.md
+│   │   │   ├── AUTOMATION.md
 │   │   │   ├── integration-checklist.md
+│   │   │   ├── setup.sh
+│   │   │   ├── config.sh
+│   │   │   ├── uninstall.sh
+│   │   │   ├── integrations/        # ClickHouse, Qsecbit
+│   │   │   ├── tests/               # Integration tests
+│   │   │   └── workflows/           # Pre-built workflows
+│   │   ├── lte/                     # LTE/5G connectivity
 │   │   │   └── README.md
-│   │   ├── lte/                      # LTE/5G connectivity
-│   │   │   └── README.md
-│   │   └── clickhouse/               # Analytics database
+│   │   └── webserver/               # Web server addon
+│   │       ├── README.md
+│   │       ├── QUICKSTART.md
+│   │       ├── DEPLOYMENT_GUIDE.md
+│   │       ├── SUMMARY.md
+│   │       ├── Containerfile
+│   │       ├── entrypoint.sh
+│   │       ├── setup-webserver.sh
+│   │       ├── setup-webserver-podman.sh
+│   │       ├── config/
+│   │       └── nginx/
 │   │
-│   └── common/                       # Shared utilities
+│   └── install/
+│       ├── README.md
+│       └── validate-config.sh
 │
-├── src/                              # 🔧 Source code
-│   ├── qsecbit/                      # AI threat analysis engine
-│   │   ├── qsecbit.py                # Main algorithm
-│   │   ├── energy_monitor.py        # RAPL monitoring
-│   │   ├── xdp_manager.py            # XDP/eBPF DDoS
-│   │   ├── nic_detector.py           # NIC capabilities
-│   │   ├── gdpr_privacy.py           # Privacy module
-│   │   ├── requirements.txt
+├── infrastructure/                   # INFRASTRUCTURE TEMPLATES
+│   ├── README.md
+│   ├── pod-009-email/               # Email server infrastructure
+│   │   ├── README.md
+│   │   ├── DEPLOYMENT.md
+│   │   ├── PODMAN.md
+│   │   ├── docker-compose.yml
+│   │   ├── dmz-gateway/             # Postfix, DKIM, SPF/DMARC
+│   │   ├── internal-server/         # Internal mail server
+│   │   ├── cloudflare/              # Cloudflare config
+│   │   ├── django-integration/      # Django email settings
+│   │   ├── firewall-rules/          # iptables rules
+│   │   └── monitoring/              # Suricata SMTP rules
+│   └── pod-010-dsm/                 # DSM infrastructure
+│       ├── README.md
+│       └── docker-compose.yml
+│
+├── scripts/                          # MAINTENANCE SCRIPTS
+│   ├── gdpr-retention.sh            # GDPR data retention
+│   ├── run-integration-tests.sh
+│   ├── run-performance-tests.sh
+│   └── lib/
+│       ├── platform.sh              # Platform detection
+│       ├── requirements.sh          # Dependency checks
+│       └── instructions.sh          # Installation instructions
+│
+├── tests/                            # TEST SUITES
+│   ├── __init__.py
+│   ├── test_qsecbit.py              # Qsecbit algorithm tests
+│   ├── test_htp_e2e.py              # HTP end-to-end tests
+│   ├── test_htp_keyless.py          # Keyless protocol tests
+│   └── test_htp_security_enhancements.py
+│
+├── docs/                             # DOCUMENTATION
+│   ├── CLAUDE.md                    # Copy of this file
+│   ├── CONTRIBUTING.md              # Contribution guide
+│   ├── SECURITY.md                  # Security policy
+│   ├── DOCUMENTATION-INDEX.md       # Doc navigation
+│   ├── GDPR.md                      # GDPR compliance
+│   ├── CI-CD.md                     # CI/CD documentation
+│   ├── CHANGELOG-CICD.md            # CI/CD changelog
+│   ├── IAM-INTEGRATION-GUIDE.md     # IAM integration
+│   ├── DASHBOARD-IMPLEMENTATION-PLAN.md
+│   ├── HTP_SECURITY_ENHANCEMENTS.md
+│   ├── HTP_QUANTUM_CRYPTOGRAPHY.md
+│   ├── HTP_KEYLESS_PROTOCOL_ANALYSIS.md
+│   ├── architecture/
+│   │   └── HOOKPROBE-ARCHITECTURE.md
+│   ├── components/
 │   │   └── README.md
-│   │
-│   ├── response/                     # Automated response
-│   │   ├── kali-scripts.sh           # Kali mitigation
-│   │   ├── attack-mitigation-orchestrator.sh
-│   │   ├── mitigation-maintenance.sh
-│   │   └── README.md
-│   │
-│   └── web/                          # Web interfaces
-│       └── templates/
-│
-├── config/                           # 📝 Configuration templates
-│   ├── gdpr-config.sh                # GDPR settings
-│   └── mitigation-config.conf        # Response config
-│
-├── docs/                             # 📚 Documentation
+│   ├── dashboards/
+│   │   ├── README.md
+│   │   ├── admin-dashboard.md
+│   │   └── mssp-dashboard.md
+│   ├── deployment/
+│   │   └── MSSP-PRODUCTION-DEPLOYMENT.md
+│   ├── guides/
+│   │   ├── ai-business.md
+│   │   ├── clickhouse-integration.md
+│   │   └── clickhouse-quick-start.md
 │   ├── installation/
 │   │   ├── INSTALLATION.md
+│   │   ├── BEGINNER-GUIDE.md
 │   │   └── cloud-deployment.md
-│   ├── architecture/
-│   │   └── security-model.md
-│   ├── guides/
-│   │   ├── clickhouse-integration.md
-│   │   ├── clickhouse-quick-start.md
-│   │   └── ai-business.md
-│   ├── CONTRIBUTING.md
-│   ├── SECURITY.md
-│   ├── CLAUDE.md                     # AI assistant guide (this file)
-│   └── GDPR.md
+│   └── networking/
+│       ├── VPN.md
+│       └── SDN.md
 │
-├── examples/                         # 💡 Example workflows
-│   ├── n8n-workflows/
-│   │   └── AI-blogging-workflow.md
-│   ├── grafana-dashboards/
-│   └── response-playbooks/
+├── config/                           # CONFIGURATION TEMPLATES
+│   ├── dsm-phase1.yaml              # DSM phase 1 config
+│   ├── neuro-phase1.yaml            # Neuro phase 1 config
+│   ├── mitigation-config.conf       # Mitigation config
+│   └── gdpr-config.sh               # GDPR config
 │
-├── scripts/                          # 🔨 Maintenance utilities
-│   └── gdpr-retention.sh             # Automated cleanup
+├── assets/                           # IMAGES AND BRANDING
+│   ├── readme.md
+│   ├── hookprobe-logo.svg
+│   ├── hookprobe-emblem.svg
+│   ├── hookprobe-emblem-small.png
+│   ├── hookprobe-protocol.png
+│   ├── hookprobe-neuro-resonant-protocol.png
+│   ├── hookprobe-future-ram-cine.png
+│   ├── hookprobe-r&d.png
+│   ├── qsecbit-catcher.png
+│   └── xSOC-HLD-v1.2.png
 │
-├── assets/                           # 🎨 Images & diagrams
-│   └── *.png
-│
-├── tests/                            # 🧪 Test suites
-│
-├── requirements.txt                  # Python dependencies
-├── 3rd-party-licenses.md            # Dependency licenses
-└── hookprobe-r&d.md                  # R&D roadmap
-
+└── .github/                          # CI/CD CONFIGURATION
+    ├── dependabot.yml
+    ├── markdown-link-check-config.json
+    ├── PULL_REQUEST_TEMPLATE.md
+    ├── workflows/
+    │   ├── app-tests.yml            # Application tests
+    │   ├── python-lint.yml          # Python linting
+    │   ├── container-tests.yml      # Container tests
+    │   ├── installation-test.yml    # Installation tests
+    │   ├── arm64-tests.yml          # ARM64 tests
+    │   ├── documentation.yml        # Doc validation
+    │   ├── ci-status.yml            # CI status
+    │   └── config-validation.yml    # Config validation
+    ├── actions/
+    │   ├── setup-python/            # Python setup action
+    │   └── setup-podman/            # Podman setup action
+    └── ISSUE_TEMPLATE/
+        ├── bug_report.md
+        ├── feature_request.md
+        └── security_vulnerability.md
 ```
-
-### File Type Distribution
-
-| Type | Purpose | Key Files |
-|------|---------|-----------|
-| **Bash Scripts** | Deployment automation | `setup.sh`, `uninstall.sh`, `config.sh`, `kali-scripts.sh` |
-| **Python** | AI/security logic | `qsecbit.py` |
-| **Markdown** | Documentation | `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, all `*/README.md` |
-| **Config** | Service configuration | `*.conf`, `config.sh` |
-
-**NO TypeScript, JavaScript, Java, or traditional application code.**
 
 ---
 
-## 🏗️ Architecture Fundamentals
+## Core Modules
 
-### POD-Based Architecture
+### Qsecbit - Quantified Security Metric
 
-HookProbe uses a **7-POD containerized architecture** (+ optional 8th POD for automation):
+**Location**: `core/qsecbit/`
 
-| POD | VNI | Network | Purpose | Key Services |
-|-----|-----|---------|---------|--------------|
-| **001** | 201 | 10.200.1.0/24 | Web DMZ | Django CMS, Nginx, NAXSI WAF, ModSecurity, Cloudflare Tunnel |
-| **002** | 202 | 10.200.2.0/24 | IAM/Auth | Keycloak, PostgreSQL |
-| **003** | 203 | 10.200.3.0/24 | Database | PostgreSQL, NFS, RADIUS |
-| **004** | 204 | 10.200.4.0/24 | Cache | Redis, Valkey |
-| **005** | 205 | 10.200.5.0/24 | Monitoring | Grafana, VictoriaMetrics, VictoriaLogs, Vector, node_exporter |
-| **006** | 206 | 10.200.6.0/24 | Security | Zeek, Snort3, Qsecbit |
-| **007** | 207 | 10.200.7.0/24 | Honeypot/Response | Honeypots, Kali Linux, Mitigation Engine |
-| **008** | 208 | 10.200.8.0/24 | Automation (Optional) | n8n, PostgreSQL, Redis, MCP Server |
+The brain of HookProbe's threat detection.
 
-### Network Architecture
+| File | Purpose |
+|------|---------|
+| `qsecbit.py` | Main orchestrator - resilience metric calculation |
+| `qsecbit-agent.py` | Agent daemon for continuous monitoring |
+| `energy_monitor.py` | RAPL + per-PID power tracking |
+| `xdp_manager.py` | XDP/eBPF DDoS mitigation at kernel level |
+| `nic_detector.py` | NIC capability detection (XDP-hw/drv/skb) |
+| `gdpr_privacy.py` | Privacy-preserving data anonymization |
 
-```
-┌─────────────────────┐
-│   Physical Host     │
-│   (Intel N100)      │
-│   eth0: 192.168.x.x │
-└──────────┬──────────┘
-           │
-    ┌──────▼──────┐
-    │ OVS Bridge  │
-    │ qsec-bridge │
-    │ 10.200.0.1  │
-    └──────┬──────┘
-           │
-    ┌──────▼──────────┐
-    │ PSK VXLAN (VNI) │
-    │ Encrypted Layer │
-    └──────┬──────────┘
-           │
-    ┌──────▼──────────────┐
-    │ OpenFlow ACLs       │
-    │ L2 Anti-Spoof       │
-    │ Firewall (nftables) │
-    └──────┬──────────────┘
-           │
-    ┌──────┴────────┬─────────┬─────────┐
-    │               │         │         │
-┌───▼───┐      ┌───▼───┐ ┌───▼───┐ ┌───▼───┐
-│POD 001│      │POD 002│ │POD 003│ │POD 004│
-│  DMZ  │ ...  │  IAM  │ │  DB   │ │ Cache │ ...
-└───────┘      └───────┘ └───────┘ └───────┘
+**Algorithm**:
+```python
+# The Formula
+Qsecbit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
+
+# Default Weights (without energy monitoring)
+α = 0.30  # System drift (Mahalanobis distance)
+β = 0.30  # Attack probability (ML-predicted)
+γ = 0.20  # Classifier decay
+δ = 0.20  # Quantum drift
+
+# With dnsXai integration
+Qsecbit = 0.30·threats + 0.20·mobile + 0.25·ids + 0.15·xdp + 0.02·network + 0.08·dnsxai
 ```
 
-### Six-Layer Security Model
+**RAG Status**:
 
-1. **Layer 1 (Kernel)**: XDP/eBPF for DDoS mitigation
-2. **Layer 2 (Network)**: VXLAN encryption + OVS ACLs
-3. **Layer 3 (Firewall)**: nftables with default-deny
-4. **Layer 4 (Application)**: WAF (NAXSI/ModSecurity)
-5. **Layer 5 (Detection)**: IDS/IPS (Zeek/Snort3/Suricata)
-6. **Layer 6 (AI Response)**: Qsecbit + Kali Linux automation
+| Status | Range | Meaning | Action |
+|--------|-------|---------|--------|
+| **GREEN** | < 0.45 | Normal | Learning baseline |
+| **AMBER** | 0.45-0.70 | Warning | Kali spins up |
+| **RED** | > 0.70 | Critical | Full mitigation |
 
-### Qsecbit: Cyber Resilience Metric
+### HTP - HookProbe Transport Protocol
 
-**Qsecbit (Quantum Security Bit)** is HookProbe's **cyber resilience metric** - not just a threat detector.
+**Location**: `core/htp/`
 
-**Location**: `src/qsecbit/` (modular package in v5.0)
+Secure, keyless transport with post-quantum cryptography.
 
-**What is Qsecbit?**
+| Directory | Purpose |
+|-----------|---------|
+| `transport/` | Main HTP implementation, VPN, file transfer |
+| `crypto/` | Kyber hybrid KEM, ChaCha20-Poly1305 |
 
-Qsecbit measures the **smallest unit where AI-driven attack and defense reach equilibrium** through continuous error correction. It quantifies how well your system absorbs and recovers from threats.
+**Key Features**:
+- Keyless authentication via entropy echo
+- Post-quantum Kyber KEM
+- Adaptive streaming
+- VPN integration
 
-**Algorithm Components** (v5.0):
+### Neuro - Neural Resonance Protocol
 
-**Without Energy Monitoring** (default):
-- **System Drift** (30%): Mahalanobis distance from baseline telemetry
-- **Attack Probability** (30%): ML-predicted threat level
-- **Classifier Decay** (20%): Rate of change in ML confidence
-- **Quantum Drift** (20%): System entropy deviation
+**Location**: `core/neuro/`
 
-**With Energy Monitoring** (Intel CPUs with RAPL):
-- **System Drift** (25%): Mahalanobis distance from baseline telemetry
-- **Attack Probability** (25%): ML-predicted threat level
-- **Classifier Decay** (20%): Rate of change in ML confidence
-- **Quantum Drift** (15%): System entropy deviation
-- **Energy Anomaly** (15%): Power consumption anomaly score (NEW in v5.0)
+Living cryptography where neural networks become keys.
 
-**RAG Status (Red/Amber/Green)**:
-- **GREEN** (< 0.45): Normal operation - system resilient
-- **AMBER** (0.45-0.70): Warning - Kali Linux spins up, defensive capacity declining
-- **RED** (> 0.70): Critical - Automated response engaged, system under stress
+| Directory | Purpose |
+|-----------|---------|
+| `core/` | TER, PoSF signatures, replay protection |
+| `neural/` | Weight evolution, fixed-point math |
+| `attestation/` | Device identity |
+| `identity/` | Hardware fingerprinting |
+| `storage/` | Offline TER storage (dreamlog) |
+| `validation/` | Validator network |
+| `audit/` | Merkle log for auditing |
 
-**Resilience Metrics**:
-- **Convergence Rate**: How quickly system returns to GREEN after RED/AMBER
-- **Trend Analysis**: IMPROVING, STABLE, or DEGRADING
-- **Attack-Defense Equilibrium**: Balance point between offense and defense
+**Core Innovation**:
+```
+Traditional: "Do you know the password?"
+Neuro: "Can you prove your sensor history through weight evolution?"
 
-**Automated Actions**:
-- Update WAF rules
-- Block attacker IPs at kernel level (XDP/eBPF)
-- Capture forensics
-- Generate incident reports
-- Email alerts to qsecbit@hookprobe.com
+W(t+1) = W(t) - η_mod × ∇L(W(t), TER)
+```
 
-**v5.0 Modular Architecture**:
-- `qsecbit.py` - Main orchestrator (resilience metric calculation)
-- `energy_monitor.py` - RAPL + per-PID power tracking + network direction-aware energy efficiency
-- `xdp_manager.py` - XDP/eBPF DDoS mitigation
-- `nic_detector.py` - NIC capability detection
+---
 
-### Network Direction-Aware Energy Efficiency (NEW v5.0)
+## Shared Infrastructure
 
-Qsecbit v5.0 introduces **deployment role-based network analysis** for enhanced threat detection:
+### dnsXai - AI-Powered DNS Protection
 
-**Key Insight**: Network traffic patterns differ based on deployment role (server vs endpoint). Analyzing energy consumption **per packet** combined with **traffic direction** enables detection of:
+**Location**: `shared/dnsXai/`
 
-- **Compromised Endpoints**: USER_ENDPOINT with abnormal outbound traffic (spam, DDoS)
-- **Servers Under Attack**: PUBLIC_SERVER with inbound flood (DDoS)
-- **Data Exfiltration**: PUBLIC_SERVER with abnormal outbound spike
-- **Cryptomining + Network**: High energy-per-packet correlated with network activity
+Next-generation DNS protection with machine learning.
 
-**Metrics**:
-- **EPP (Energy-Per-Packet)**: mJ/packet - High EPP (>5 mJ) indicates inefficient processing
-- **OUT/IN Ratio**: Traffic direction - Role-aware anomaly detection
-- **Packet Burst**: Packets/interval - DDoS or exfiltration detection
-
-**Deployment Roles**:
-- `DeploymentRole.PUBLIC_SERVER`: Expects IN > OUT (web servers, APIs)
-- `DeploymentRole.USER_ENDPOINT`: Expects OUT > IN (clients, workstations)
-
-**See**: `src/qsecbit/README.md` for complete documentation with detection scenarios.
-
-### XDP/eBPF DDoS Mitigation
-
-**Qsecbit v5.0** includes kernel-level DDoS mitigation via XDP (eXpress Data Path):
-
-**XDP Modes and Layers**:
-
-XDP operates at different layers of the network stack, providing varying levels of performance:
-
-| **Mode** | **Where it runs** | **Kernel bypass** | **Layer** | **Performance** | **Notes** |
-|----------|------------------|-------------------|-----------|-----------------|-----------|
-| **XDP-hw** | NIC hardware ASIC | Full | Layer 0 | Ultra-fast | Rare; requires programmable NICs (Mellanox SmartNIC, Intel IPU) |
-| **XDP-drv** | NIC driver | Full | Layer 1 | Fastest practical | Native driver mode, requires driver support |
-| **XDP-skb** | Generic SKB layer | Partial | Layer 1.5 | Moderate | Universal fallback, works on all NICs |
-
-**Key Differences**:
-- **XDP-hw (Layer 0)**: Packet processing happens directly in NIC hardware ASIC before reaching CPU. Extremely rare, requires specialized SmartNICs.
-- **XDP-drv (Layer 1)**: Packet processing in NIC driver before Linux kernel network stack. Full kernel bypass. Requires XDP-capable driver.
-- **XDP-skb (Layer 1.5)**: Packet processing after kernel allocates socket buffers (SKBs). Partial bypass. Universal compatibility.
+| File | Purpose |
+|------|---------|
+| `engine.py` | ML classifier (20 features, 8 categories) |
+| `integration.py` | Product integration utilities |
+| `mesh_intelligence.py` | Federated learning across mesh |
+| `update-blocklist.sh` | Blocklist updater script |
 
 **Features**:
-- **Automatic NIC Detection**: Detects primary interface and driver capabilities
-- **Intelligent Mode Selection**: XDP-DRV (native) for capable NICs, XDP-SKB (generic) fallback
-- **Rate Limiting**: 1000 packets/sec per source IP
-- **Dynamic IP Blocking**: Real-time attacker blacklisting at kernel level
-- **Protocol Flood Detection**: TCP SYN, UDP, ICMP monitoring
-- **Malformed Packet Filtering**: Automatic drop of invalid packets
-- **Real-Time Statistics**: Total packets, drops, floods tracked and stored
+- ML-based classification for unknown domains
+- CNAME uncloaking (detects first-party tracker masquerading)
+- Federated learning across mesh network
+- 5-tier protection levels (~130K to ~250K domains)
+- <1ms inference on Raspberry Pi
 
-**Enable XDP** (environment variable):
-```bash
-export XDP_ENABLED=true
+**Protection Levels**:
+
+| Level | Name | Protection |
+|-------|------|------------|
+| 1 | Base | Ads + Malware |
+| 2 | Enhanced | + Fakenews |
+| 3 | Strong | + Gambling |
+| 4 | Maximum | + Adult Content |
+| 5 | Full | + Social Trackers |
+
+### Mesh - Unified Communication Layer
+
+**Location**: `shared/mesh/`
+
+Resilient, anti-blocking mesh communication.
+
+| File | Purpose |
+|------|---------|
+| `ARCHITECTURE.md` | **COMPREHENSIVE** mesh architecture documentation |
+| `consciousness.py` | Mesh consciousness states |
+| `nat_traversal.py` | STUN/ICE/hole punching |
+| `port_manager.py` | Multi-port failover |
+| `resilient_channel.py` | Reliable messaging |
+| `neuro_encoder.py` | Neural resonance authentication |
+| `channel_selector.py` | Intelligent channel selection |
+| `relay.py` | TURN-style relay network |
+| `tunnel.py` | Cloudflare/ngrok/Tailscale tunnels |
+| `unified_transport.py` | High-level API |
+
+**Port Selection**:
+```
+PRIMARY:    8144/UDP + 8144/TCP
+FALLBACK:   443/UDP (QUIC cover) + 443/TCP (TLS-wrapped)
+STEALTH:    853/UDP (DoQ cover) + 853/TCP (DoT cover)
+EMERGENCY:  80/TCP (WebSocket) + ICMP tunnel
 ```
 
-**Supported NICs** (See NIC Compatibility Matrix below for complete list):
-- **XDP-DRV (Layer 1)**: Intel I211/I226, X710, E810, Mellanox ConnectX-4/5/6/7
-- **XDP-SKB (Layer 1.5)**: Raspberry Pi (bcmgenet), Realtek (r8152, r8169), Intel X520
-- **XDP-HW (Layer 0)**: Mellanox ConnectX-5/6/7, BlueField-2/3 SmartNICs
+**Consciousness States**:
+- `DORMANT` → `AWAKENING` → `AWARE` → `SYNCHRONIZED` → `AUTONOMOUS`
 
-### NIC Compatibility Matrix
+### DSM - Decentralized Security Mesh
 
-**Hardware Requirements for Optimal XDP Performance**:
+**Location**: `shared/dsm/`
 
-| **Platform** | **NIC Model** | **Driver** | **XDP-SKB** | **XDP-DRV** | **XDP-HW** | **Max Throughput** | **Recommended** |
-|-------------|---------------|------------|-------------|-------------|------------|-------------------|----------------|
-| **Raspberry Pi 4/5** | Broadcom SoC | bcmgenet | ✅ | ❌ | ❌ | 1 Gbps | ⚠️ Development only |
-| **Raspberry Pi** | Realtek USB | r8152 | ✅ | ❌ | ❌ | 1 Gbps | ⚠️ Limited performance |
-| **Desktop** | Realtek PCIe | r8169 | ✅ | ❌ | ❌ | 2.5 Gbps | ⚠️ Not for production |
-| **Intel N100** | **I211** | **igb** | ✅ | ✅ | ❌ | **1 Gbps** | ✅ **Entry-level edge** |
-| **Intel N100** | **I226** | **igc** | ✅ | ✅ | ❌ | **2.5 Gbps** | ✅ **Best value edge** |
-| **Intel Server** | X520 (82599) | ixgbe | ✅ | ❌ | ❌ | 10 Gbps | ⚠️ AF_XDP only |
-| **Intel Server** | **X710** | **i40e** | ✅ | ✅ | ❌ | **40 Gbps** | ✅ **Cloud backend** |
-| **Intel Server** | **E810** | **ice** | ✅ | ✅ | ❌ | **100 Gbps** | ✅ **Enterprise** |
-| **Mellanox** | **ConnectX-3** | **mlx4_en** | ✅ | ❌ | ❌ | **40 Gbps** | ✅ **Cloud backend** |
-| **Mellanox** | **ConnectX-4/5/6/7** | **mlx5_core** | ✅ | ✅ | ✅ | **200 Gbps** | ✅ **Gold standard** |
-| **Mellanox SmartNIC** | **BlueField-2/3** | **mlx5_core** | ✅ | ✅ | ✅ | **400 Gbps** | ✅ **Enterprise** |
+Byzantine fault-tolerant consensus layer.
 
-**Legend**:
-- ✅ **Supported** / **Recommended**
-- ❌ **Not supported**
-- ⚠️ **Limited** (SKB mode only, higher CPU usage)
+| File | Purpose |
+|------|---------|
+| `consensus.py` | BLS signature aggregation (2/3 quorum) |
+| `gossip.py` | P2P threat announcement |
+| `ledger.py` | Microblock chain storage |
+| `validator.py` | Checkpoint verification |
+| `node.py` | Edge node microblock creation |
+| `merkle.py` | Merkle tree verification |
+| `identity.py` | Node identity management |
 
-**XDP-HW Note**: Hardware offload (XDP-hw) is extremely rare and only supported by:
-- Mellanox ConnectX-5/6/7 (limited offload capabilities)
-- Mellanox BlueField-2/3 SmartNICs (full programmable pipeline)
-- Intel IPU (Infrastructure Processing Unit)
-- Netronome Agilio SmartNICs
+### Response - Automated Threat Mitigation
 
-For 99% of deployments, **XDP-drv (Layer 1)** is the fastest practical mode.
+**Location**: `shared/response/`
 
-**Hardware Recommendations**:
+Kali Linux on-demand for automated response.
 
-1. **Budget Edge Deployment** (< $300):
-   - **SBC**: Intel N100 (8GB RAM)
-   - **NIC**: Intel I226-V (built-in, 2.5Gbps)
-   - **XDP Mode**: XDP-DRV ✅
-   - **Performance**: 2.5 Gbps line rate filtering
-
-2. **Production Edge** ($300-$1000):
-   - **Option A**: Mini PC with Intel I211/I226
-   - **Option B**: Raspberry Pi 5 + USB adapter (⚠️ SKB only)
-   - **XDP Mode**: XDP-DRV ✅ (Option A), XDP-SKB (Option B)
-
-3. **Cloud Backend** ($2000+):
-   - **Server**: Dell/HP with Intel X710 or Mellanox ConnectX-5
-   - **XDP Mode**: XDP-DRV ✅ + Hardware Offload
-   - **Performance**: 40-100 Gbps line rate
-
-⚠️ **Important Notes**:
-- **Raspberry Pi**: Only supports XDP-SKB (software mode). For production DDoS mitigation at scale, use Intel N100 with I226 NIC.
-- **Intel N100**: Best value for edge deployment. Built-in I226 NIC supports full XDP-DRV mode.
-- **Mellanox ConnectX**: Enterprise-grade. Full XDP-DRV, AF_XDP, and hardware offload for maximum performance.
-
-**See**: `src/qsecbit/README.md` for complete XDP/eBPF documentation.
+| File | Purpose |
+|------|---------|
+| `attack-mitigation-orchestrator.sh` | Main orchestrator |
+| `kali-scripts.sh` | Kali tooling |
+| `mitigation-maintenance.sh` | Maintenance tasks |
 
 ---
 
-## 🔧 Development Workflows
+## Product Tiers
 
-### Primary Workflow: Infrastructure Changes
+### Guardian - Travel Companion
 
-**HookProbe development is NOT traditional software development.** Changes typically involve:
+**Location**: `products/guardian/`
 
-1. **Network Configuration** (`config.sh`)
-2. **Deployment Logic** (`setup.sh`)
-3. **Security Rules** (OpenFlow, nftables, WAF)
-4. **AI Logic** (`qsecbit/qsecbit.py`)
-5. **Response Scripts** (`kali-scripts.sh`)
-6. **Documentation** (Markdown files)
+Portable security gateway for travelers.
 
-### Making Changes to Deployment Scripts
+**Architecture**:
+- **Backend**: `lib/` - Python modules for agent, detection, mesh
+- **Web UI**: `web/` - Flask app with modular blueprints
+- **Config**: `config/` - WiFi (hostapd), DHCP (dnsmasq)
 
-**IMPORTANT**: Always test deployment changes in a **clean environment**.
+**Web UI Modules** (`web/modules/`):
+- `core/` - Main dashboard
+- `clients/` - Connected devices
+- `dnsxai/` - DNS protection settings
+- `security/` - Security metrics
+- `config/` - Network configuration
+- `system/` - System status
+- `vpn/` - VPN management
 
-```bash
-# 1. Make changes to setup.sh or config.sh
-nano install/edge/setup.sh
-
-# 2. Test deployment (requires root)
-cd install/edge/
-sudo ./setup.sh
-
-# 3. Verify all PODs are running
-podman pod ps
-podman ps -a
-
-# 4. Check service health
-curl http://localhost/admin          # Django
-curl http://localhost:3000           # Grafana
-curl http://localhost:8888/health    # Qsecbit
-
-# 5. Test functionality
-# - Access Grafana dashboards
-# - Check security monitoring
-# - Verify network isolation
-
-# 6. Clean up test environment
-sudo ./uninstall.sh
-
-# 7. Verify complete removal
-podman pod ps  # Should be empty
-ovs-vsctl show # Should show minimal config
+**Key Libraries**:
+```python
+from products.guardian.lib.guardian_agent import GuardianAgent
+from products.guardian.lib.mesh_integration import GuardianMeshAgent
+from products.guardian.lib.layer_threat_detector import LayerThreatDetector
 ```
 
-### Making Changes to Qsecbit Algorithm
+### MSSP - Cloud Federation Platform
 
-**Location**: `src/qsecbit/qsecbit.py`
+**Location**: `products/mssp/`
 
-**Testing Workflow**:
+Multi-tenant cloud platform at mssp.hookprobe.com.
 
+**Architecture**:
+- **Backend**: Django with multiple apps
+- **API**: REST APIs with DRF
+- **Services**: VPN, SDN, monitoring, CMS
+
+**Django Apps** (`web/apps/`):
+
+| App | Purpose |
+|-----|---------|
+| `admin_dashboard/` | Admin UI, AI content services |
+| `cms/` | Content management system |
+| `dashboard/` | Main user dashboard |
+| `devices/` | Device management API |
+| `monitoring/` | System monitoring |
+| `mssp_dashboard/` | MSSP-specific views |
+| `sdn/` | SDN management API |
+| `security/` | Security features API |
+| `vpn/` | VPN services (profiles, certs) |
+| `merchandise/` | Product catalog |
+
+**Management Commands**:
 ```bash
-# 1. Modify qsecbit.py
-nano src/qsecbit/qsecbit.py
-
-# 2. Run unit tests (if available)
-cd src/qsecbit/
-python3 -m pytest tests/
-
-# 3. Test with synthetic data
-python3 qsecbit.py --test
-
-# 4. Deploy and test in container
-podman build -t qsecbit:test -f Containerfile.qsecbit .
-podman run --rm qsecbit:test
-
-# 5. Monitor real-world performance
-# - Check Grafana "Qsecbit Analysis" dashboard
-# - Review alerts in Loki logs
-# - Verify RAG status accuracy
-# - Monitor XDP statistics (if enabled)
+python manage.py seed_demo_data    # CMS demo content
+python manage.py seed_ai_content   # AI-generated content
+python manage.py seed_merchandise  # Product catalog
 ```
 
-### Making Documentation Changes
+---
 
-```bash
-# 1. Edit markdown files
-nano README.md
+## Testing Guide
 
-# 2. Verify markdown syntax
-markdownlint README.md
+### Test Location
 
-# 3. Check links
-markdown-link-check README.md
+All tests are in `tests/`:
 
-# 4. Preview (if possible)
-# Use VS Code, GitHub preview, or grip
-
-# 5. Commit with clear message
-git add README.md
-git commit -m "docs: update deployment instructions for LTE setup"
+```
+tests/
+├── __init__.py
+├── test_qsecbit.py              # Qsecbit algorithm tests
+├── test_htp_e2e.py              # HTP end-to-end tests
+├── test_htp_keyless.py          # Keyless protocol tests
+└── test_htp_security_enhancements.py
 ```
 
-### Git Workflow
+### Running Tests
 
-**Branch Naming Convention**:
+```bash
+# Run all tests
+pytest tests/
+
+# Run with verbose output
+pytest tests/ -vv
+
+# Run with coverage
+pytest tests/ --cov=core --cov=shared --cov-report=html
+
+# Run specific test file
+pytest tests/test_qsecbit.py
+
+# Run by marker
+pytest tests/ -m "unit"           # Unit tests only
+pytest tests/ -m "integration"    # Integration tests
+pytest tests/ -m "not slow"       # Skip slow tests
+
+# Using Makefile
+make test                         # Run all tests
+make test-verbose                 # Verbose output
+make test-coverage                # With coverage
+make test-fast                    # Skip slow tests
+```
+
+### Test Markers
+
+```python
+@pytest.mark.unit          # Unit tests
+@pytest.mark.integration   # Integration tests
+@pytest.mark.slow          # Long-running tests
+@pytest.mark.security      # Security-related tests
+@pytest.mark.network       # Network configuration tests
+@pytest.mark.htp           # HTP protocol tests
+@pytest.mark.qsecbit       # Qsecbit algorithm tests
+```
+
+### Coverage Requirements
+
+- **Minimum**: 30% (configured in `pytest.ini`)
+- **Coverage paths**: `core/`, `shared/`
+- **Report formats**: HTML + terminal
+
+---
+
+## CI/CD Workflows
+
+**Location**: `.github/workflows/`
+
+| Workflow | File | Purpose |
+|----------|------|---------|
+| **Python Lint** | `python-lint.yml` | Black, flake8, bandit |
+| **App Tests** | `app-tests.yml` | Django, Nginx, addon validation |
+| **Container Tests** | `container-tests.yml` | Container build/run |
+| **Installation Test** | `installation-test.yml` | Install script validation |
+| **ARM64 Tests** | `arm64-tests.yml` | ARM64 architecture |
+| **Documentation** | `documentation.yml` | Markdown link checking |
+| **Config Validation** | `config-validation.yml` | Config file validation |
+| **CI Status** | `ci-status.yml` | Overall CI health check |
+
+### Debugging CI Failures
+
+```bash
+# Python lint failures
+make lint
+black --check core/ shared/
+flake8 core/ shared/
+
+# Test failures
+pytest tests/ -vv --tb=long
+
+# Shell script failures
+make validate
+shellcheck products/**/*.sh deploy/**/*.sh
+```
+
+---
+
+## Development Tooling
+
+### Makefile Commands
+
+```bash
+# Setup
+make install          # Install Python dependencies
+make install-dev      # Install dev dependencies
+make setup            # Complete dev environment
+
+# Testing
+make test             # Run all tests
+make test-verbose     # Verbose output
+make test-coverage    # With coverage report
+make test-fast        # Skip slow tests
+
+# Code Quality
+make lint             # Run all linters
+make format           # Format Python code
+make security         # Security scan (bandit)
+make check            # Lint + test
+
+# Deployment
+make deploy-sentinel  # Deploy Sentinel tier
+make deploy-guardian  # Deploy Guardian tier
+make deploy-fortress  # Deploy Fortress tier
+make deploy-nexus     # Deploy Nexus tier
+make deploy-mssp      # Deploy MSSP tier
+
+# Status
+make status           # Show deployment status
+make logs             # Show recent logs
+make health           # Service health check
+
+# Cleanup
+make clean            # Remove generated files
+make validate         # Validate shell scripts
+make validate-repo    # Repository cleanup validator
+make version          # Show version info
+```
+
+### Pre-commit Hooks
+
+Configuration: `.pre-commit-config.yaml`
+
+**Installed Hooks**:
+- `trailing-whitespace`, `end-of-file-fixer`
+- `check-yaml`, `check-json`
+- `detect-private-key`
+- `shellcheck` - Bash linting
+- `black`, `isort` - Python formatting
+- `flake8`, `bandit` - Python linting/security
+- `markdownlint`, `yamllint`
+
+**Installation**:
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+---
+
+## Scenario-Based Guidance
+
+### Adding DNS Protection Features
+
+```bash
+# 1. Read dnsXai documentation
+cat shared/dnsXai/README.md
+
+# 2. Check current engine
+cat shared/dnsXai/engine.py
+
+# 3. Add new detection logic
+nano shared/dnsXai/engine.py
+
+# 4. Update mesh intelligence
+nano shared/dnsXai/mesh_intelligence.py
+
+# 5. Test integration
+python -m shared.dnsXai.engine --classify test-domain.com
+```
+
+### Working with Mesh Communication
+
+```bash
+# 1. Read mesh architecture (ESSENTIAL!)
+cat shared/mesh/ARCHITECTURE.md
+
+# 2. Check NAT traversal
+cat shared/mesh/nat_traversal.py
+
+# 3. Check consciousness states
+cat shared/mesh/consciousness.py
+
+# 4. Work with unified transport
+cat shared/mesh/unified_transport.py
+```
+
+### Adding Guardian Web UI Feature
+
+```bash
+# 1. Create new blueprint module
+mkdir products/guardian/web/modules/new_feature
+touch products/guardian/web/modules/new_feature/__init__.py
+touch products/guardian/web/modules/new_feature/views.py
+
+# 2. Register blueprint in app.py
+nano products/guardian/web/app.py
+
+# 3. Create templates
+mkdir products/guardian/web/templates/new_feature
+nano products/guardian/web/templates/new_feature/index.html
+```
+
+### Adding MSSP Django App
+
+```bash
+# 1. Create Django app
+cd products/mssp/web
+python manage.py startapp new_app apps/new_app
+
+# 2. Add to INSTALLED_APPS
+nano settings.py
+
+# 3. Create models, views, urls
+nano apps/new_app/models.py
+nano apps/new_app/views.py
+nano apps/new_app/urls.py
+
+# 4. Run migrations
+python manage.py makemigrations
+python manage.py migrate
+```
+
+### Working with Infrastructure
+
+```bash
+# 1. Check infrastructure docs
+cat infrastructure/README.md
+
+# 2. Email infrastructure
+cat infrastructure/pod-009-email/README.md
+cat infrastructure/pod-009-email/docker-compose.yml
+
+# 3. DSM infrastructure
+cat infrastructure/pod-010-dsm/README.md
+```
+
+---
+
+## Key Conventions
+
+### File Naming
+
+| Type | Convention | Example |
+|------|------------|---------|
+| Python modules | `lowercase_underscore.py` | `qsecbit.py` |
+| Shell scripts | `kebab-case.sh` | `install-edge.sh` |
+| Config files | `kebab-case.conf/yaml` | `mitigation-config.conf` |
+| Documentation | `UPPERCASE.md` | `README.md`, `CLAUDE.md` |
+
+### Code Style
+
+**Python** (PEP 8):
+- Black formatting (line length 100)
+- isort for imports (profile: black)
+- Type hints for function signatures
+- Google-style docstrings
+
+**Bash**:
+```bash
+#!/bin/bash
+set -e  # Exit on error
+set -u  # Exit on undefined variable
+
+# UPPERCASE for config variables
+POSTGRES_PASSWORD="..."
+
+# lowercase for local variables
+local container_ip="10.200.1.10"
+```
+
+### Git Conventions
+
+**Branch naming**:
 - `feature/` - New features
 - `fix/` - Bug fixes
-- `docs/` - Documentation updates
-- `security/` - Security enhancements
-- `refactor/` - Code refactoring
+- `docs/` - Documentation
+- `security/` - Security updates
+- `claude/` - AI-generated branches
 
-**Commit Message Format**:
+**Commit format**:
 ```
 type(scope): brief description
 
-Detailed explanation (if needed)
+Detailed explanation
 
 Fixes: #123
 ```
 
-**Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `security`
-
-**Example Commits**:
-```bash
-git commit -m "feat(security): add XDP rate limiting for DNS"
-git commit -m "fix(setup): correct PostgreSQL connection string in POD 003"
-git commit -m "docs(readme): add troubleshooting section for n8n integration"
-git commit -m "security(waf): update ModSecurity rules to CRS 4.0"
-```
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `security`
 
 ---
 
-## 📝 Key Conventions
-
-### Bash Script Conventions
-
-**Required Headers**:
-```bash
-#!/bin/bash
-#
-# script-name.sh - Brief description
-# Version: X.Y.Z
-# License: MIT
-#
-
-set -e  # Exit on error
-set -u  # Exit on undefined variable
-```
-
-**Variable Naming**:
-- `UPPERCASE_WITH_UNDERSCORES` for configuration variables
-- `lowercase_with_underscores` for local variables
-- Descriptive names (no abbreviations unless obvious)
-
-**Good Examples**:
-```bash
-POSTGRES_PASSWORD="..."
-POD_NAME="hookprobe-web-dmz"
-container_ip="10.200.1.10"
-```
-
-**Bad Examples**:
-```bash
-pp="..."           # Too cryptic
-pod="..."          # Too generic
-ctr_ip="..."       # Unnecessary abbreviation
-```
-
-**Function Conventions**:
-```bash
-# Use descriptive function names
-create_vxlan_tunnel() {
-    local vni=$1
-    local remote_ip=$2
-
-    # Implementation
-}
-
-# Add comments for complex logic
-# This function creates encrypted VXLAN tunnel with PSK
-setup_secure_networking() {
-    # ...
-}
-```
-
-**Error Handling**:
-```bash
-# Check command success
-if ! podman pod create --name "$POD_NAME"; then
-    echo "ERROR: Failed to create pod $POD_NAME"
-    exit 1
-fi
-
-# Verify file exists
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Configuration file not found: $CONFIG_FILE"
-    exit 1
-fi
-```
-
-### Python Conventions (Qsecbit)
-
-**Follow PEP 8** with these specifics:
-
-```python
-#!/usr/bin/env python3
-"""
-Module docstring explaining purpose.
-
-Author: Name
-License: MIT
-"""
-
-import os
-from typing import Optional, Dict, List
-import numpy as np
-
-# Constants in UPPER_CASE
-DEFAULT_THRESHOLD = 0.45
-API_ENDPOINT = "http://localhost:8888"
-
-
-class QsecbitAnalyzer:
-    """Class-level docstring."""
-
-    def __init__(self, config: Dict):
-        """Initialize with configuration."""
-        self.config = config
-
-    def analyze_threat(self, data: Dict) -> Optional[float]:
-        """
-        Analyze threat data and return score.
-
-        Args:
-            data: Telemetry data dictionary
-
-        Returns:
-            Threat score between 0.0 and 1.0, or None if error
-        """
-        try:
-            # Implementation
-            pass
-        except Exception as e:
-            print(f"Error analyzing data: {e}")
-            return None
-```
-
-**Type Hints**: Always use type hints for function signatures
-**Docstrings**: Google-style docstrings for all public functions
-**Error Handling**: Explicit try/except with meaningful messages
-
-### Configuration File Conventions
-
-**config.sh Structure**:
-
-1. **Physical Host Config** (Lines 10-20)
-2. **OVS Bridge Config** (Lines 20-30)
-3. **VXLAN Encryption** (Lines 30-40)
-4. **VNI Definitions** (Lines 40-50)
-5. **IP Subnets** (Lines 50-200)
-6. **Container Images** (Lines 200-250)
-7. **Service Credentials** (Lines 250-300)
-8. **Feature Flags** (Lines 300-350)
-
-**Always include**:
-- Section headers with `# ===...===`
-- Inline comments for non-obvious settings
-- Default values with CHANGE_ME markers
-- Examples for complex configurations
-
-### Documentation Conventions
-
-**Markdown Style**:
-- Use ATX-style headers (`#`, `##`, not underlines)
-- Maximum line length: 100 characters (exceptions for links/tables)
-- Use fenced code blocks with language specifiers
-- Include table of contents for files > 200 lines
-- Add horizontal rules (`---`) between major sections
-
-**Code Examples**:
-- Always include language identifier: ` ```bash `, ` ```python `
-- Show complete, working examples
-- Include expected output when helpful
-- Add comments for complex commands
-
-**Links**:
-- Use relative links for internal documentation
-- Use absolute URLs for external resources
-- Verify all links work before committing
-
----
-
-## 🔨 Common Tasks
-
-### Task 1: Add a New Service to a POD
-
-**Example**: Add Elasticsearch to POD 005 (Monitoring)
-
-```bash
-# 1. Edit config.sh
-nano install/edge/config.sh
-
-# Add IP allocation
-IP_ELASTICSEARCH="10.200.5.15"
-
-# Add container image
-IMAGE_ELASTICSEARCH="docker.io/elasticsearch:8.11.0"
-
-# 2. Edit setup.sh
-nano install/edge/setup.sh
-
-# Find POD 005 creation section (search for "POD 005")
-# Add container creation:
-
-echo "Creating Elasticsearch container..."
-podman run -d \
-  --name hookprobe-monitoring-elasticsearch \
-  --pod hookprobe-pod-005-monitoring \
-  --ip "$IP_ELASTICSEARCH" \
-  -e "discovery.type=single-node" \
-  -e "xpack.security.enabled=false" \
-  -v elasticsearch-data:/usr/share/elasticsearch/data \
-  "$IMAGE_ELASTICSEARCH"
-
-# 3. Add OpenFlow rules (if needed for inter-POD communication)
-# 4. Add firewall rules (if exposing to other PODs)
-# 5. Update documentation
-# 6. Test deployment
-```
-
-### Task 2: Modify Qsecbit Thresholds
-
-```bash
-# Edit qsecbit.py configuration
-nano src/qsecbit/qsecbit.py
-
-# Modify QsecbitConfig dataclass:
-@dataclass
-class QsecbitConfig:
-    # Change thresholds
-    amber_threshold: float = 0.40  # Was 0.45
-    red_threshold: float = 0.65    # Was 0.70
-
-    # Adjust component weights
-    alpha: float = 0.35   # System drift (was 0.30)
-    beta: float = 0.25    # Attack probability (was 0.30)
-    gamma: float = 0.20   # Classifier decay
-    delta: float = 0.20   # Quantum drift
-
-# Redeploy Qsecbit container
-podman restart hookprobe-pod-006-security-qsecbit
-
-# Monitor impact in Grafana
-```
-
-### Task 3: Update WAF Rules
-
-```bash
-# 1. Edit ModSecurity configuration
-# Note: Configuration is typically in container volume or ConfigMap
-# For HookProbe, rules are updated via setup.sh
-
-# 2. Edit setup.sh to add new rule
-nano install/edge/setup.sh
-
-# Find ModSecurity container section
-# Add custom rule file mounting:
-
-podman run -d \
-  --name hookprobe-waf-modsecurity \
-  --pod hookprobe-pod-001-web \
-  -v /opt/hookprobe/waf/custom-rules.conf:/etc/modsecurity/custom-rules.conf:ro \
-  "$IMAGE_MODSECURITY"
-
-# 3. Create custom rules file
-cat > /opt/hookprobe/waf/custom-rules.conf << 'EOF'
-# Block known bad user agents
-SecRule REQUEST_HEADERS:User-Agent "@contains sqlmap" \
-    "id:1001,phase:1,deny,status:403,msg:'SQLMap detected'"
-
-# Rate limiting
-SecAction "id:1002,phase:1,nolog,pass,\
-    setvar:ip.requests=+1,\
-    expirevar:ip.requests=60"
-
-SecRule IP:REQUESTS "@gt 100" \
-    "id:1003,phase:1,deny,status:429,msg:'Rate limit exceeded'"
-EOF
-
-# 4. Restart WAF container
-podman restart hookprobe-waf-modsecurity
-
-# 5. Monitor blocks in Grafana
-```
-
-### Task 4: Add install/addons/lte/5G Failover
-
-See `install/addons/lte/README.md` for complete guide. Quick summary:
-
-```bash
-# 1. Install hardware (Quectel RM520N-GL or similar)
-# 2. Install ModemManager
-dnf install -y ModemManager NetworkManager
-
-# 3. Edit config.sh
-nano install/edge/config.sh
-
-# Add LTE config:
-LTE_ENABLED=true
-LTE_INTERFACE="wwan0"
-LTE_APN="internet.provider.com"
-LTE_PRIORITY=100  # Higher number = lower priority
-
-# 4. Redeploy with LTE support
-sudo ./setup.sh
-
-# 5. Configure connection
-nmcli connection add type gsm ifname '*' \
-  con-name lte-wan apn "$LTE_APN" \
-  connection.autoconnect yes
-
-# 6. Monitor in Grafana
-```
-
-### Task 5: Deploy n8n Workflow Automation (POD 008)
-
-```bash
-# 1. Ensure main deployment (PODs 001-007) is complete
-podman pod ps | grep hookprobe
-
-# 2. Configure n8n
-cd install/edge/
-nano n8n_config.sh
-
-# Change credentials:
-N8N_BASIC_AUTH_USER="admin"
-N8N_BASIC_AUTH_PASSWORD="STRONG_PASSWORD_HERE"
-N8N_DB_POSTGRESDB_PASSWORD="DB_PASSWORD_HERE"
-
-# Optional: Add AI API keys
-OPENAI_API_KEY="sk-..."
-ANTHROPIC_API_KEY="sk-ant-..."
-
-# 3. Deploy POD 008
-chmod +x n8n_setup.sh
-sudo ./n8n_setup.sh
-
-# 4. Access n8n
-# http://YOUR_IP:5678
-# Login with credentials from step 2
-
-# 5. Import workflows (see install/addons/n8n/README.md)
-```
-
-### Task 6: Update Container Images
-
-```bash
-# 1. Edit config.sh with new versions
-nano install/edge/config.sh
-
-# Example: Update Grafana
-IMAGE_GRAFANA="docker.io/grafana/grafana:11.5.0"  # Was 11.4.0
-
-# 2. Pull new images
-podman pull "$IMAGE_GRAFANA"
-
-# 3. Recreate affected containers
-podman stop hookprobe-monitoring-grafana
-podman rm hookprobe-monitoring-grafana
-
-# Run create command from setup.sh
-podman run -d \
-  --name hookprobe-monitoring-grafana \
-  --pod hookprobe-pod-005-monitoring \
-  --ip "$IP_GRAFANA" \
-  -v grafana-data:/var/lib/grafana \
-  "$IMAGE_GRAFANA"
-
-# 4. Verify
-curl http://localhost:3000
-```
-
-### Task 7: Integrate ClickHouse for High-Performance Analytics
-
-**Why**: ClickHouse provides 100-1000x faster queries for security event analysis compared to PostgreSQL or file-based logs. It's essential for:
-- Real-time threat hunting
-- Historical Qsecbit analysis
-- Attack correlation across multiple sources
-- Forensics investigations
-
-**See Complete Guide**: `docs/ClickHouse-Integration-Analysis.md`
-**Quick Start**: `docs/ClickHouse-Quick-Start.md`
-
-**Quick Deployment** (30 minutes):
-
-```bash
-# 1. Update config.sh
-nano install/edge/config.sh
-
-# Add ClickHouse configuration:
-IP_CLICKHOUSE="10.200.5.15"
-IMAGE_CLICKHOUSE="docker.io/clickhouse/clickhouse-server:24.11"
-VOLUME_CLICKHOUSE_DATA="hookprobe-clickhouse-v5"
-CLICKHOUSE_PASSWORD="STRONG_PASSWORD_HERE"
-
-# 2. Deploy ClickHouse container (see Quick-Start guide)
-# 3. Create database schemas
-# 4. Integrate with Qsecbit
-# 5. Add Grafana datasource
-# 6. Create security dashboards
-
-# Verify deployment:
-curl http://10.200.5.15:8123/ping
-podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "SELECT version()"
-
-# Test query:
-podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
-SELECT count() FROM security.security_events
-"
-```
-
-**Benefits**:
-- **100-1000x faster** analytical queries
-- **90% storage reduction** (10-20x compression)
-- **Unified security platform** - all events queryable in one system
-- **Sub-second forensics** on billions of events
-- **Better Grafana dashboards** with complex visualizations
-
-**Data Sources to Migrate**:
-1. Zeek IDS logs → ClickHouse network_flows table
-2. Snort3 alerts → ClickHouse security_events table
-3. ModSecurity WAF → ClickHouse waf_events table
-4. Qsecbit scores → ClickHouse qsecbit_scores table
-5. Honeypot data → ClickHouse honeypot_attacks table
-
-**Common Queries**:
-
-```sql
--- Top attacking IPs (last 24h)
-SELECT
-    src_ip,
-    count() AS attacks,
-    countIf(blocked=1) AS blocked
-FROM security.security_events
-WHERE timestamp >= now() - INTERVAL 24 HOUR
-GROUP BY src_ip
-ORDER BY attacks DESC
-LIMIT 10;
-
--- Qsecbit RAG status trend (last 7 days)
-SELECT
-    toDate(timestamp) AS day,
-    rag_status,
-    count() AS samples,
-    avg(score) AS avg_score
-FROM security.qsecbit_scores
-WHERE timestamp >= now() - INTERVAL 7 DAY
-GROUP BY day, rag_status
-ORDER BY day DESC;
-
--- Multi-vector attack correlation
-SELECT
-    src_ip,
-    uniq(source_type) AS attack_vectors,
-    groupArray(attack_type) AS attack_types,
-    count() AS total_events
-FROM security.security_events
-WHERE timestamp >= now() - INTERVAL 1 HOUR
-GROUP BY src_ip
-HAVING attack_vectors >= 3
-ORDER BY total_events DESC;
-```
-
-**Performance Comparison**:
-
-| Query Type | PostgreSQL/Files | ClickHouse | Improvement |
-|------------|------------------|------------|-------------|
-| Count (24h, 10M rows) | 15-30 sec | 0.1 sec | **150-300x** |
-| Top attackers (30d, 1B rows) | Timeout | 2-5 sec | **∞** |
-| Attack correlation | Manual (hours) | 2-5 sec | **1000x+** |
-| Qsecbit trends (90d) | Not possible | 0.5 sec | **∞** |
-
-**Monitoring ClickHouse**:
-
-```bash
-# Check health
-podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "SELECT 1"
-
-# Database size
-podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
-SELECT
-    database,
-    formatReadableSize(sum(bytes_on_disk)) AS size,
-    sum(rows) AS rows
-FROM system.parts
-GROUP BY database
-"
-
-# Slow queries
-podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
-SELECT
-    query,
-    query_duration_ms
-FROM system.query_log
-WHERE query_duration_ms > 1000
-ORDER BY event_time DESC
-LIMIT 10
-"
-```
-
-**Important Notes**:
-- ClickHouse is columnar OLAP database - NOT a replacement for PostgreSQL (keep for Django/Keycloak)
-- Keep VictoriaMetrics for metrics (it's excellent at that)
-- ClickHouse complements existing stack, doesn't replace it
-- Compression is automatic - 10-20x better than gzip
-- TTL handles old data deletion automatically
-- Partitioning by date is critical for performance
-
----
-
-## 🔒 Security Considerations
-
-### When Modifying Code
-
-**CRITICAL SECURITY RULES**:
-
-1. **NEVER hardcode credentials** in scripts
-   - Use variables from `config.sh`
-   - Generate strong random values: `openssl rand -base64 32`
-
-2. **NEVER disable security features** without explicit justification
-   - Don't comment out firewall rules
-   - Don't disable VXLAN encryption
-   - Don't skip SSL/TLS verification
-
-3. **ALWAYS validate user input** in Python scripts
-   - Sanitize file paths (no `../` traversal)
-   - Validate IP addresses and ports
-   - Escape shell commands
-
-4. **AVOID command injection** vulnerabilities
-   ```bash
-   # BAD - command injection risk
-   podman run --name $USER_INPUT ...
-
-   # GOOD - quoted and validated
-   CONTAINER_NAME="hookprobe-${SERVICE_NAME}"
-   podman run --name "$CONTAINER_NAME" ...
-   ```
-
-5. **CHECK for secrets before committing**
-   ```bash
-   # Before git commit
-   git diff | grep -i "password\|secret\|key\|token"
-   ```
-
-### Default Credentials
-
-**ALL default credentials MUST be changed in production**:
-
-| Service | Default User | Default Pass | Config Location |
-|---------|-------------|--------------|-----------------|
-| Django Admin | admin | admin | POD 001 - Change via admin panel |
-| Grafana | admin | admin | POD 005 - Change on first login |
-| PostgreSQL | hookprobe_admin | CHANGE_ME_... | `config.sh:128` |
-| Keycloak | admin | CHANGE_ME_... | `config.sh:146` |
-| Redis | (no auth) | - | Add AUTH in production |
-
-**Always document credential changes** in deployment notes.
+## Security Considerations
+
+### Critical Rules
+
+1. **NEVER hardcode credentials**
+2. **NEVER disable security features**
+3. **ALWAYS validate input** in Python
+4. **AVOID command injection**
+5. **CHECK for secrets** before commit
 
 ### Sensitive Files
 
-**Files containing secrets** (NEVER commit with real values):
-- `install/edge/config.sh` - All credentials
-- `install/edge/n8n_config.sh` - n8n credentials
-
-**Safe to commit**:
-- `setup.sh`, `uninstall.sh` - Logic only
-- `qsecbit.py` - Algorithm only
-- Documentation files
+| File | Contains | Safe to Commit |
+|------|----------|----------------|
+| `deploy/*/config.sh` | Credentials | NO (with real values) |
+| `*.py` | Logic only | YES |
+| `*.sh` | Logic only | YES |
+| `.env` files | Secrets | NO |
+| `products/mssp/web/.env.example` | Template | YES |
 
 ### Security Testing
 
-**Before committing security changes**:
-
 ```bash
-# 1. Static analysis
-shellcheck install/edge/*.sh
+# Static analysis
+shellcheck deploy/**/*.sh
 
 # Python security scan
-pip install bandit
-bandit -r Scripts/autonomous/
+bandit -r core/ shared/ -ll
 
-# 2. Container scanning
-trivy image hookprobe-django:v5
-trivy image hookprobe-qsecbit:v5
-
-# 3. Network security test
-nmap -sV localhost
-nmap -sV 10.200.1.0/24
-
-# 4. WAF testing
-nikto -h http://localhost
-
-# 5. Penetration testing (if changes affect security)
-# Consider using OWASP ZAP or Burp Suite
+# Check for secrets
+make security
 ```
 
 ---
 
-## 🔐 GDPR Compliance and Privacy
-
-### Overview
-
-**HookProbe v5.0 is GDPR-compliant by design and by default.** As an AI assistant working with this codebase, you should understand the privacy features and compliance requirements.
-
-### GDPR Compliance Framework
-
-HookProbe implements comprehensive GDPR compliance through:
-
-1. **Configuration Module**: `install/edge/gdpr-config.sh`
-2. **Retention Script**: `install/edge/gdpr-retention.sh`
-3. **Privacy Module**: `src/qsecbit/gdpr_privacy.py`
-4. **Documentation**: `GDPR.md` (comprehensive guide)
-
-### Key Privacy Features
-
-**Privacy by Design (Article 25)**:
-- IP anonymization (last octet masked: 192.168.1.0)
-- MAC anonymization (device ID masked: AA:BB:CC:00:00:00)
-- No payload collection (headers only)
-- Short retention periods (30-365 days)
-- Encrypted storage and transit
-
-**Data Minimization (Article 5(1)(c))**:
-```bash
-ANONYMIZE_IP_ADDRESSES=true          # Default: ON
-ANONYMIZE_MAC_ADDRESSES=true         # Default: ON
-COLLECT_FULL_PAYLOAD=false           # Default: OFF (privacy violation)
-COLLECT_USER_LOCATION=false          # Default: OFF
-```
-
-**Data Subject Rights (Chapter III)**:
-- Right of Access (Article 15) - JSON export
-- Right to Erasure (Article 17) - Account deletion + log anonymization
-- Right to Portability (Article 20) - Machine-readable export
-- Right to Rectification (Article 16) - Profile correction
-- Right to Object (Article 21) - Opt-out
-
-### When Making Code Changes
-
-**CRITICAL PRIVACY RULES**:
-
-1. **NEVER disable anonymization** without explicit justification
-   ```bash
-   # ❌ BAD - disables privacy protection
-   ANONYMIZE_IP_ADDRESSES=false
-
-   # ✅ GOOD - keep anonymization enabled
-   ANONYMIZE_IP_ADDRESSES=true
-   ```
-
-2. **NEVER enable payload collection** (privacy violation)
-   ```bash
-   # ❌ BAD - violates GDPR data minimization
-   COLLECT_FULL_PAYLOAD=true
-
-   # ✅ GOOD - headers only
-   COLLECT_FULL_PAYLOAD=false
-   ```
-
-3. **NEVER extend retention periods** without legal basis
-   ```bash
-   # ❌ BAD - excessive retention (privacy risk)
-   RETENTION_NETWORK_FLOWS_DAYS=3650  # 10 years!
-
-   # ✅ GOOD - minimal retention
-   RETENTION_NETWORK_FLOWS_DAYS=30  # 30 days
-   ```
-
-4. **ALWAYS consider privacy impact** when adding data collection
-   - Is this data really necessary?
-   - Can we anonymize it?
-   - What's the minimum retention period?
-   - What's the legal basis for processing?
-
-### Privacy-Preserving Code Examples
-
-**Using the GDPR privacy module**:
-
-```python
-from qsecbit.gdpr_privacy import PrivacyPreserver
-
-# Initialize privacy preserver
-privacy = PrivacyPreserver()
-
-# Anonymize IP addresses
-anonymized_ip = privacy.anonymize_ipv4("192.168.1.123")
-# Result: "192.168.1.0"
-
-# Anonymize MAC addresses
-anonymized_mac = privacy.anonymize_mac("AA:BB:CC:11:22:33")
-# Result: "AA:BB:CC:00:00:00"
-
-# Anonymize network flow data
-flow = {
-    'src_ip': '192.168.1.100',
-    'dst_ip': '8.8.8.8',
-    'src_mac': 'AA:BB:CC:11:22:33',
-    'url': 'https://example.com/page?user=john@doe.com'
-}
-anonymized_flow = privacy.anonymize_network_flow(flow)
-# Result: IPs/MACs anonymized, query params stripped
-```
-
-**Bash script GDPR integration**:
-
-```bash
-# Source GDPR configuration
-source "$(dirname "${BASH_SOURCE[0]}")/gdpr-config.sh"
-
-# Check if GDPR is enabled
-if is_gdpr_enabled; then
-    # Apply anonymization
-    log_gdpr_event "DATA_COLLECTION" "Collecting anonymized network data"
-fi
-
-# Get retention period for specific data type
-retention_days=$(get_retention_days "network_flows")
-echo "Network flows will be retained for $retention_days days"
-```
-
-### Common GDPR-Related Tasks
-
-**Task: Add new data collection**
-
-```bash
-# 1. Determine if collection is necessary (data minimization)
-# 2. Check legal basis (legitimate interest, contract, etc.)
-# 3. Add to gdpr-config.sh with appropriate retention
-# 4. Implement anonymization if possible
-# 5. Update GDPR.md data inventory
-# 6. Update compliance report
-```
-
-**Task: Modify retention periods**
-
-```bash
-# 1. Edit gdpr-config.sh
-nano install/edge/gdpr-config.sh
-
-# 2. Change retention period (with justification)
-RETENTION_SECURITY_LOGS_DAYS=90  # Was 30, now 90 for threat trend analysis
-
-# 3. Update GDPR.md with justification
-# 4. Document in commit message
-git commit -m "gdpr: increase security log retention to 90 days for threat analysis"
-```
-
-**Task: Implement new data subject right**
-
-```python
-# 1. Add functionality to privacy module
-# 2. Add to gdpr-config.sh
-# 3. Update GDPR.md with procedure
-# 4. Add to compliance checklist
-```
-
-### GDPR Testing
-
-**Verify anonymization is working**:
-
-```bash
-# Test IP anonymization
-python3 -c "
-from Scripts.autonomous.qsecbit.gdpr_privacy import anonymize_ip
-print(anonymize_ip('192.168.1.123'))
-# Should output: 192.168.1.0
-"
-
-# Check Zeek logs for anonymized IPs
-tail /opt/zeek/logs/conn.log | grep "\.0$"
-# Should see .0 IPs
-```
-
-**Test data retention**:
-
-```bash
-# Run retention script manually
-sudo /opt/hookprobe/scripts/gdpr-retention.sh
-
-# Check logs
-tail -f /var/log/hookprobe/gdpr-retention.log
-
-# Verify old data deleted
-# (check ClickHouse, PostgreSQL, log files)
-```
-
-**Generate compliance report**:
-
-```bash
-sudo /opt/hookprobe/scripts/gdpr-retention.sh
-cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).txt
-```
-
-### Documentation Updates
-
-**When adding new features, update**:
-
-1. **GDPR.md** - If feature processes personal data
-   - Add to data inventory section
-   - Document retention period
-   - Update legal basis justification
-
-2. **gdpr-config.sh** - Add configuration options
-   ```bash
-   # New Feature: DNS query logging
-   RETENTION_DNS_LOGS_DAYS=30
-   ANONYMIZE_DNS_QUERIES=true
-   ```
-
-3. **gdpr-retention.sh** - Add cleanup logic
-   ```bash
-   delete_old_dns_logs() {
-       local retention_days="$RETENTION_DNS_LOGS_DAYS"
-       # ... deletion logic
-   }
-   ```
-
-4. **SECURITY.md** - Update privacy controls section
-
-5. **README.md** - Update GDPR Compliance section if user-facing
-
-### Privacy Impact Assessment
-
-**Before implementing features that process personal data**:
-
-1. **Necessity**: Is this data really needed?
-2. **Minimization**: Can we collect less?
-3. **Anonymization**: Can we anonymize it?
-4. **Retention**: What's the minimum retention?
-5. **Legal Basis**: Why are we processing this? (legitimate interest, contract, etc.)
-6. **Risks**: What are the privacy risks?
-7. **Safeguards**: How do we mitigate risks?
-
-**Document answers in**:
-- Commit messages
-- Code comments
-- GDPR.md updates
-
-### GDPR Compliance Checklist for Code Changes
-
-**Before committing code that handles personal data**:
-
-- [ ] Reviewed data minimization requirements
-- [ ] Implemented anonymization (if applicable)
-- [ ] Set appropriate retention period
-- [ ] Documented legal basis for processing
-- [ ] Updated GDPR.md data inventory
-- [ ] Added to gdpr-retention.sh cleanup (if applicable)
-- [ ] Tested privacy controls work correctly
-- [ ] Verified no payload collection enabled
-- [ ] Checked encryption is used (at rest and in transit)
-- [ ] Added GDPR audit logging (if applicable)
-
-### Resources
-
-- **GDPR.md** - Comprehensive compliance guide (legal and technical)
-- **gdpr-config.sh** - Configuration reference
-- **gdpr-retention.sh** - Automated retention script
-- **gdpr_privacy.py** - Privacy-preserving Python module
-- **Official GDPR**: https://gdpr-info.eu/
-
-### Contact
-
-- **Data Protection Officer**: dpo@hookprobe.com
-- **Security Contact**: qsecbit@hookprobe.com
-- **GitHub Issues**: https://github.com/hookprobe/hookprobe/issues
-
-### Example: Adding a New Security Feature
-
-```bash
-# Scenario: Adding HTTP request logging to ModSecurity
-
-# 1. Determine necessity
-# - Needed for WAF threat analysis (legitimate interest)
-
-# 2. Data minimization
-# - Log URL path only, not query parameters (may contain PII)
-# - Anonymize source IP
-
-# 3. Configuration
-cat >> gdpr-config.sh <<'EOF'
-# HTTP request logging
-RETENTION_HTTP_REQUESTS_DAYS=30
-ANONYMIZE_HTTP_QUERY_PARAMS=true
-EOF
-
-# 4. Retention cleanup
-cat >> gdpr-retention.sh <<'EOF'
-delete_old_http_logs() {
-    local retention_days="$RETENTION_HTTP_REQUESTS_DAYS"
-    find /var/log/modsecurity/ -name "*.log" -mtime +${retention_days} -delete
-}
-EOF
-
-# 5. Privacy module integration
-python3 <<'EOF'
-from qsecbit.gdpr_privacy import PrivacyPreserver
-
-# Anonymize URL
-url = "https://example.com/login?user=admin&token=abc123"
-anonymized_url = privacy.anonymize_url(url)
-# Result: "https://example.com/login" (query stripped)
-EOF
-
-# 6. Update documentation
-echo "- HTTP request logs: 30 days retention, URLs anonymized" >> GDPR.md
-
-# 7. Commit with GDPR context
-git commit -m "feat(waf): add HTTP request logging with GDPR compliance
-
-- Log URL paths for threat analysis (legitimate interest)
-- Strip query parameters (may contain PII)
-- Anonymize source IPs
-- 30-day retention period
-- Automated cleanup via gdpr-retention.sh"
-```
-
----
-
-## 🧪 Testing Guidelines
-
-### Pre-Deployment Testing
-
-**ALWAYS test in a clean environment**:
-
-```bash
-# 1. Clean existing deployment
-sudo ./install/edge/uninstall.sh
-
-# 2. Verify cleanup
-podman pod ps  # Should be empty
-podman ps -a   # Should be empty
-ovs-vsctl show # Should show minimal state
-
-# 3. Fresh deployment
-sudo ./install/edge/setup.sh
-
-# 4. Monitor deployment
-# Watch for errors in output
-# Check all PODs start successfully
-
-# 5. Validation checklist (see below)
-```
-
-### Post-Deployment Validation
-
-**Use the deployment checklist**: `install/edge/checklist.md`
-
-**Quick validation**:
-
-```bash
-# 1. Verify all PODs are running
-podman pod ps
-# Should show 7 PODs (or 8 if n8n deployed)
-
-# 2. Check all containers are healthy
-podman ps -a | grep -v "Up"
-# Should show no stopped containers
-
-# 3. Test web services
-curl -I http://localhost/             # Django (80)
-curl -I http://localhost:3000/        # Grafana (3000)
-curl http://localhost:8888/health     # Qsecbit (8888)
-
-# 4. Test database connectivity
-podman exec hookprobe-pod-003-db-persistent-postgres \
-  pg_isready -U hookprobe_admin
-
-# 5. Verify network isolation
-podman exec hookprobe-pod-001-web-dmz-django \
-  ping -c 1 10.200.5.10  # Should reach monitoring POD
-
-# 6. Check OVS configuration
-ovs-vsctl show
-ovs-ofctl dump-flows qsec-bridge
-
-# 7. Review logs for errors
-podman logs hookprobe-pod-001-web-dmz-django 2>&1 | grep -i error
-```
-
-### n8n Integration Testing
-
-After deploying POD 008:
-
-```bash
-# 1. Verify n8n is accessible
-curl http://localhost:5678
-
-# 2. Check database connection
-podman exec hookprobe-pod-008-n8n-postgres pg_isready
-
-# 3. Test MCP server (if AI features enabled)
-curl http://localhost:8889/health
-
-# 4. Import test workflow
-# - Access n8n UI
-# - Import workflow from install/addons/n8n/workflows/
-# - Execute test run
-# - Verify no errors
-
-# See install/addons/n8n/integration-checklist.md for complete validation
-```
-
-### Qsecbit Algorithm Testing
-
-```bash
-# 1. Unit tests (if available)
-cd Scripts/autonomous/
-python3 -m pytest test_qsecbit.py
-
-# 2. Synthetic data test
-python3 qsecbit.py --test-mode
-
-# 3. Live monitoring
-# - Access Grafana (http://localhost:3000)
-# - Open "Qsecbit Analysis" dashboard
-# - Verify metrics are updating
-# - Check RAG status is calculated
-
-# 4. Alert testing
-# - Trigger test alert (if test mode available)
-# - Verify email notification sent
-# - Check Kali container spins up on AMBER/RED
-```
-
-### Security Testing
-
-**Regression tests for security changes**:
-
-```bash
-# 1. Verify VXLAN encryption is active
-ovs-vsctl list interface | grep -A 10 vxlan
-# Should show encryption enabled
-
-# 2. Test firewall rules
-nmap -sV localhost
-# Should only show intended open ports
-
-# 3. Test WAF blocking
-curl -X POST http://localhost/ \
-  -d "username=admin' OR '1'='1"
-# Should be blocked by WAF
-
-# 4. Verify network isolation
-podman exec hookprobe-pod-001-web-dmz-django \
-  ping -c 1 10.200.7.10
-# Should FAIL (web DMZ cannot reach honeypot)
-
-# 5. Test rate limiting
-for i in {1..100}; do
-  curl http://localhost/ &
-done
-# Should hit rate limit
-```
-
----
-
-## 📚 Important Files Reference
-
-### Critical Configuration Files
-
-| File | Purpose | When to Edit |
-|------|---------|--------------|
-| `install/edge/config.sh` | **MAIN CONFIGURATION** - All network, IPs, credentials, images | Every deployment |
-| `install/edge/setup.sh` | **MAIN DEPLOYMENT SCRIPT** - Creates all PODs, containers, networks | Adding services, changing deployment logic |
-| `src/qsecbit/qsecbit.py` | **AI THREAT ENGINE** - Qsecbit algorithm + XDP/eBPF DDoS mitigation | Adjusting thresholds, changing analysis logic, XDP configuration |
-| `src/qsecbit/README.md` | **QSECBIT DOCUMENTATION** - Complete guide to qsecbit module | Understanding qsecbit architecture, NIC compatibility |
-| `install/edge/kali-scripts.sh` | **AUTOMATED RESPONSE** - Kali Linux mitigation scripts | Adding new attack responses |
-
-### Optional Feature Configuration
-
-| File | Purpose | When to Edit |
-|------|---------|--------------|
-| `install/edge/n8n_config.sh` | n8n POD 008 configuration | Deploying workflow automation |
-| `install/edge/n8n_setup.sh` | n8n deployment script | Customizing n8n setup |
-| `install/addons/lte/README.md` | install/addons/lte/5G connectivity guide | Adding cellular failover |
-
-### Documentation Files
-
-| File | Purpose | Audience |
-|------|---------|----------|
-| `README.md` | **MAIN DOCUMENTATION** - Overview, features, quick start | End users, new contributors |
-| `CONTRIBUTING.md` | Contribution guidelines, coding standards, PR process | Contributors |
-| `SECURITY.md` | Security policy, vulnerability reporting, hardening guide | Security researchers, operators |
-| `CLAUDE.md` | **THIS FILE** - AI assistant guide | AI assistants working with codebase |
-| `CHANGELOG.md` | Version history and release notes | Users tracking versions |
-
-### Deployment Documentation
-
-| File | Purpose | Audience |
-|------|---------|----------|
-| `install/edge/README.md` | Detailed deployment guide | System administrators |
-| `install/edge/checklist.md` | Pre/post deployment validation | Operators |
-| `install/addons/n8n/README.md` | n8n integration guide | Automation users |
-| `install/addons/n8n/integration-checklist.md` | n8n validation checklist | n8n operators |
-| `docs/SecurityMitigationPlan.md` | Detailed security architecture | Security architects |
-
-### Maintenance Scripts
-
-| File | Purpose | When to Run |
-|------|---------|-------------|
-| `install/edge/uninstall.sh` | Clean removal of all PODs/containers | Testing, troubleshooting, fresh install |
-| `install/edge/n8n_uninstall.sh` | Remove POD 008 only | Removing n8n |
-| `src/response/mitigation-maintenance.sh` | Honeypot cleanup and maintenance | Scheduled (weekly/monthly) |
-
----
-
-## 🔍 Troubleshooting
-
-### Common Issues and Solutions
-
-#### Issue 1: PODs Won't Start
-
-**Symptoms**: `podman pod ps` shows no PODs or some PODs missing
-
-**Diagnosis**:
-```bash
-# Check Podman errors
-podman pod ps -a
-podman ps -a | grep Exit
-
-# View container logs
-podman logs <container-name>
-
-# Check system resources
-df -h  # Disk space
-free -h  # Memory
-```
-
-**Solutions**:
-```bash
-# Clean up and retry
-sudo ./uninstall.sh
-sudo ./setup.sh
-
-# If disk full, clean Podman storage
-podman system prune -a --volumes
-
-# If memory issue, increase swap or reduce PODs
-```
-
-#### Issue 2: Network Connectivity Between PODs Fails
-
-**Symptoms**: Containers cannot ping each other, service errors
-
-**Diagnosis**:
-```bash
-# Check OVS bridge status
-ovs-vsctl show
-
-# Verify VXLAN tunnels
-ovs-vsctl list interface | grep vxlan
-
-# Check OpenFlow rules
-ovs-ofctl dump-flows qsec-bridge
-
-# Test connectivity
-podman exec <container> ping <target-ip>
-```
-
-**Solutions**:
-```bash
-# Restart OVS
-systemctl restart openvswitch
-
-# Recreate bridge
-ovs-vsctl del-br qsec-bridge
-# Then re-run setup.sh
-
-# Check firewall isn't blocking
-nft list ruleset | grep 10.200
-```
-
-#### Issue 3: Qsecbit Not Responding
-
-**Symptoms**: `/health` endpoint fails, no metrics in Grafana
-
-**Diagnosis**:
-```bash
-# Check container status
-podman ps -a | grep qsecbit
-
-# View logs
-podman logs hookprobe-pod-006-security-qsecbit
-
-# Test manually
-curl http://10.200.6.12:8888/health
-```
-
-**Solutions**:
-```bash
-# Restart container
-podman restart hookprobe-pod-006-security-qsecbit
-
-# Check Python dependencies
-podman exec hookprobe-pod-006-security-qsecbit \
-  pip list | grep -E "numpy|scipy"
-
-# Verify configuration
-podman exec hookprobe-pod-006-security-qsecbit \
-  python3 -c "import qsecbit; print(qsecbit.__version__)"
-```
-
-#### Issue 4: Web Services Not Accessible
-
-**Symptoms**: Cannot access Django, Grafana from browser
-
-**Diagnosis**:
-```bash
-# Check services are listening
-ss -tlnp | grep -E "80|3000|8888"
-
-# Test locally
-curl http://localhost/
-curl http://localhost:3000/
-
-# Check Nginx/Django logs
-podman logs hookprobe-pod-001-web-dmz-nginx
-podman logs hookprobe-pod-001-web-dmz-django
-```
-
-**Solutions**:
-```bash
-# Verify firewall allows access
-firewall-cmd --list-all
-
-# Add rules if needed
-firewall-cmd --permanent --add-port=80/tcp
-firewall-cmd --permanent --add-port=3000/tcp
-firewall-cmd --reload
-
-# Check SELinux (if enabled)
-getenforce  # If Enforcing, check for denials
-ausearch -m avc -ts recent
-```
-
-#### Issue 5: Database Connection Errors
-
-**Symptoms**: Services fail with "connection refused" or "authentication failed"
-
-**Diagnosis**:
-```bash
-# Check PostgreSQL is running
-podman exec hookprobe-pod-003-db-persistent-postgres pg_isready
-
-# Verify credentials
-grep POSTGRES_ install/edge/config.sh
-
-# Test connection
-podman exec hookprobe-pod-003-db-persistent-postgres \
-  psql -U hookprobe_admin -d hookprobe_db -c "SELECT 1;"
-```
-
-**Solutions**:
-```bash
-# Reset PostgreSQL password
-podman exec hookprobe-pod-003-db-persistent-postgres \
-  psql -U postgres -c \
-  "ALTER USER hookprobe_admin PASSWORD 'NEW_PASSWORD';"
-
-# Update config.sh with new password
-# Recreate dependent containers
-
-# Check PostgreSQL logs
-podman logs hookprobe-pod-003-db-persistent-postgres
-```
-
-#### Issue 6: High Memory/CPU Usage
-
-**Symptoms**: System slow, services unresponsive
-
-**Diagnosis**:
-```bash
-# Check resource usage
-podman stats
-
-# Identify heavy containers
-podman ps --format "{{.Names}}" | while read container; do
-  echo "$container:"
-  podman stats --no-stream "$container"
-done
-
-# Check system load
-top
-htop  # If available
-```
-
-**Solutions**:
-```bash
-# Add resource limits to containers
-# Edit setup.sh and add --memory and --cpus flags:
-
-podman run -d \
-  --memory="2g" \
-  --cpus="2" \
-  --name <container> \
-  ...
-
-# Restart affected containers
-podman restart <container>
-
-# Consider hardware upgrade if persistent
-```
+## Troubleshooting
+
+### Common Issues
+
+| Issue | Diagnosis | Solution |
+|-------|-----------|----------|
+| Tests fail | Check pytest output | `pytest tests/ -vv --tb=long` |
+| Lint errors | Run formatters | `make format` |
+| Import errors | Check dependencies | `pip install -r requirements.txt` |
+| CI failure | Run locally first | `make check` |
+| Container issues | Check podman | `podman ps -a && podman logs <name>` |
+| Guardian web 404 | Check blueprints | Verify module registered in `app.py` |
+| MSSP Django errors | Check migrations | `python manage.py migrate` |
 
 ### Getting Help
 
-**Order of escalation**:
-
-1. **Check this CLAUDE.md** - Comprehensive troubleshooting
-2. **Review Documentation** - README.md, SECURITY.md, setup guides
-3. **Check Logs** - `podman logs <container-name>`
-4. **Search Issues** - https://github.com/hookprobe/hookprobe/issues
-5. **Ask Community** - GitHub Discussions
-6. **Report Bug** - GitHub Issues (use template from CONTRIBUTING.md)
-7. **Contact Security** - qsecbit@hookprobe.com (security issues only)
+1. **Check docs**: `docs/` directory, especially `DOCUMENTATION-INDEX.md`
+2. **Read architecture**: `shared/mesh/ARCHITECTURE.md`
+3. **Review tests**: `tests/` directory
+4. **Search issues**: GitHub Issues
+5. **Contact**: qsecbit@hookprobe.com (security only)
 
 ---
 
-## 🚀 Quick Reference Commands
+## Quick Reference
 
-### Deployment Commands
+### Essential Paths
 
-```bash
-# Fresh install
-cd install/edge/
-sudo ./setup.sh
-
-# Add n8n (POD 008)
-sudo ./n8n_setup.sh
-
-# Remove everything
-sudo ./uninstall.sh
-
-# Remove only n8n
-sudo ./n8n_uninstall.sh
+```
+core/qsecbit/qsecbit.py          # Main security algorithm
+core/htp/transport/htp.py        # HTP protocol
+shared/dnsXai/engine.py          # DNS protection
+shared/mesh/ARCHITECTURE.md      # Mesh architecture (MUST READ)
+shared/mesh/unified_transport.py # Mesh transport API
+products/guardian/web/app.py     # Guardian Flask app
+products/mssp/web/apps/          # MSSP Django apps
+tests/                           # All tests
+.github/workflows/               # CI/CD
 ```
 
-### Monitoring Commands
+### Essential Commands
 
 ```bash
-# List all PODs
-podman pod ps
+make test           # Run tests
+make lint           # Check code quality
+make format         # Format code
+pytest tests/ -vv   # Verbose tests
+./install.sh --tier <tier>  # Deploy
 
-# List all containers
-podman ps -a
+# Guardian web UI (Flask)
+cd products/guardian/web && python app.py
 
-# Check specific container
-podman logs <container-name>
-podman inspect <container-name>
-
-# Resource usage
-podman stats
-
-# Network status
-ovs-vsctl show
-ovs-ofctl dump-flows qsec-bridge
-```
-
-### Service Access
-
-```bash
-# Web services
-curl http://localhost/              # Django
-curl http://localhost:3000/         # Grafana
-curl http://localhost:8888/health   # Qsecbit
-curl http://localhost:5678/         # n8n (if deployed)
-
-# Database
-podman exec hookprobe-pod-003-db-persistent-postgres \
-  psql -U hookprobe_admin -d hookprobe_db
-
-# Redis
-podman exec hookprobe-pod-004-cache-redis redis-cli ping
-```
-
-### Maintenance Commands
-
-```bash
-# Update container images
-podman pull <image-name>
-
-# Restart services
-podman restart <container-name>
-podman pod restart <pod-name>
-
-# Clean up
-podman system prune
-podman volume prune
-
-# Backup
-tar -czf hookprobe-backup-$(date +%Y%m%d).tar.gz \
-  /opt/hookprobe/ /var/lib/hookprobe/
+# MSSP web portal (Django)
+cd products/mssp/web && python manage.py runserver
 ```
 
 ---
 
-## 📊 Metrics and Monitoring
-
-### Key Metrics to Monitor
-
-**System Health**:
-- CPU usage per POD/container
-- Memory usage per POD/container
-- Disk I/O and space
-- Network throughput
-
-**Security Metrics**:
-- Qsecbit RAG status (GREEN/AMBER/RED)
-- WAF blocks per minute
-- IDS/IPS alerts
-- Honeypot attack attempts
-- Failed authentication attempts
-
-**Service Availability**:
-- Django response time
-- Database query performance
-- Redis hit/miss ratio
-- Grafana dashboard load time
-
-### Grafana Dashboards
-
-**Default Dashboards**:
-1. **System Overview** - All PODs health and resources
-2. **Qsecbit Analysis** - Threat scores, RAG status, trends
-3. **WAF Activity** - Blocked attacks, patterns, top attackers
-4. **Network Traffic** - Flow analysis, bandwidth, top talkers
-5. **Security Events** - IDS/IPS alerts, honeypot activity
-6. **Database Performance** - Query stats, connection pools
-7. **LTE Status** - Signal strength, data usage (if enabled)
-
-**Access Grafana**: http://localhost:3000 (admin/admin - change this!)
-
----
-
-## 🎯 Best Practices for AI Assistants
-
-### When Working with This Codebase
-
-1. **ALWAYS read configuration before suggesting changes**
-   - Review `config.sh` for current settings
-   - Check `setup.sh` for deployment logic
-   - Understand existing architecture before modifying
-
-2. **NEVER assume traditional software patterns**
-   - This is infrastructure-as-code, not an application
-   - No MVC, REST APIs, or typical web frameworks
-   - Focus on deployment, networking, containers
-
-3. **ALWAYS consider security implications**
-   - This is a security platform - security is paramount
-   - Never suggest removing or weakening security features
-   - Validate all changes against security best practices
-
-4. **TEST before committing**
-   - Run `./setup.sh` in clean environment
-   - Verify all PODs start successfully
-   - Check services are accessible
-   - Run `./uninstall.sh` to verify cleanup
-
-5. **DOCUMENT all changes**
-   - Update README.md if user-facing
-   - Update CLAUDE.md if affecting AI workflows
-   - Add inline comments for complex logic
-   - Update CHANGELOG.md
-
-6. **FOLLOW existing conventions**
-   - Use established variable naming
-   - Match existing code style
-   - Keep bash scripts consistent
-   - Follow PEP 8 for Python
-
-7. **RESPECT the architecture**
-   - Don't merge PODs without justification
-   - Don't break network isolation
-   - Don't bypass security layers
-   - Maintain six-layer defense model
-
-### When User Requests Are Unclear
-
-**ASK clarifying questions**:
-- "Which POD should this service be added to?"
-- "What security requirements does this have?"
-- "Should this be accessible from other PODs?"
-- "What are the resource requirements?"
-
-**DON'T assume**:
-- Default to most secure option
-- Document assumptions made
-- Provide alternatives when possible
-
-### When Making Suggestions
-
-**DO**:
-- Explain the reasoning behind suggestions
-- Consider security, performance, maintainability
-- Provide complete, tested examples
-- Reference existing code patterns
-- Explain trade-offs
-
-**DON'T**:
-- Suggest incomplete solutions
-- Ignore security considerations
-- Recommend untested approaches
-- Break existing functionality
-- Add unnecessary complexity
-
----
-
-## 📞 Support and Resources
-
-### Documentation Hierarchy
-
-1. **This file (CLAUDE.md)** - AI assistant guide
-2. **README.md** - User documentation and quick start
-3. **SECURITY.md** - Security policy and hardening
-4. **CONTRIBUTING.md** - Contribution guidelines
-5. **Component READMEs** - Specific feature documentation
-   - `install/edge/README.md`
-   - `install/addons/n8n/README.md`
-   - `install/addons/lte/README.md`
-
-### External Resources
-
-- **GitHub Repository**: https://github.com/hookprobe/hookprobe
-- **Issue Tracker**: https://github.com/hookprobe/hookprobe/issues
-- **Security Contact**: qsecbit@hookprobe.com
-- **License**: MIT (see LICENSE file)
-
-### Related Technologies
-
-- **Podman**: https://docs.podman.io/
-- **Open vSwitch**: https://docs.openvswitch.org/
-- **VXLAN**: RFC 7348
-- **nftables**: https://wiki.nftables.org/
-- **Grafana**: https://grafana.com/docs/
-- **VictoriaMetrics**: https://docs.victoriametrics.com/
-- **Zeek**: https://docs.zeek.org/
-- **Snort3**: https://www.snort.org/documents
-- **n8n**: https://docs.n8n.io/
-
----
-
-## 🔄 Version History
-
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | 2025-11-22 | Initial CLAUDE.md creation |
-
----
-
-## ✅ AI Assistant Checklist
-
-Before completing work on this codebase:
-
-- [ ] Read and understood this CLAUDE.md file
-- [ ] Reviewed relevant configuration files
-- [ ] Tested changes in clean environment
-- [ ] Verified security implications
-- [ ] Updated documentation
-- [ ] Followed coding conventions
-- [ ] Committed with clear message
-- [ ] Considered impact on all PODs
-- [ ] Validated deployment still works
-- [ ] Checked for exposed secrets
-- [ ] **GDPR Compliance** (if handling personal data):
-  - [ ] Verified anonymization is enabled (IP/MAC)
-  - [ ] Confirmed no payload collection (`COLLECT_FULL_PAYLOAD=false`)
-  - [ ] Set appropriate retention period (30-365 days max)
-  - [ ] Documented legal basis for processing
-  - [ ] Updated GDPR.md data inventory
-  - [ ] Added to gdpr-retention.sh cleanup (if applicable)
-  - [ ] Tested privacy controls work correctly
-
----
-
-**HookProbe v5.0** - Democratizing Cybersecurity Through Edge Computing
-**Built with ❤️ for the security community**
-
-*For questions about this guide, open an issue or contribute improvements via PR.*
-
----
-
-**END OF CLAUDE.MD**
+**HookProbe v5.0** - Federated Cybersecurity Mesh
+*One node's detection -> Everyone's protection*
