@@ -18,6 +18,15 @@ from .resilient_channel import ResilientChannel, ChannelState, ChannelMetrics
 from .unified_transport import UnifiedTransport, MeshPacket, PacketType
 from .neuro_encoder import NeuroResonanceEncoder, ResonanceState
 from .channel_selector import ChannelSelector, SelectionStrategy
+from .consciousness import (
+    MeshConsciousness,
+    TierRole,
+    ConsciousnessState,
+    ThreatIntelligence,
+    ThreatCache,
+    PeerNode,
+    create_consciousness,
+)
 
 __all__ = [
     # Port Management
@@ -38,6 +47,14 @@ __all__ = [
     # Channel Selection
     'ChannelSelector',
     'SelectionStrategy',
+    # Consciousness
+    'MeshConsciousness',
+    'TierRole',
+    'ConsciousnessState',
+    'ThreatIntelligence',
+    'ThreatCache',
+    'PeerNode',
+    'create_consciousness',
 ]
 
 __version__ = '5.0.0'
