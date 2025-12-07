@@ -45,18 +45,20 @@ Your smart home or business has dozens of IoT devices:
 
 ### The HookProbe Solution: Portable Plug-and-Play SDN
 
-**Guardian transforms a $75 Raspberry Pi into an enterprise-grade SDN controller.**
+**Fortress transforms a mini PC into an enterprise-grade SDN controller with full VLAN segmentation.**
+
+> **Note**: Guardian (Raspberry Pi) provides a simpler single-network hotspot for travel use. For VLAN-based IoT segmentation, use **Fortress** on an Intel N100 or similar mini PC with better networking capabilities.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │                     YOUR HOME/BUSINESS                              │
 │                                                                    │
 │  ┌──────────────────────────────────────────────────────────────┐ │
-│  │                    GUARDIAN (RPi 4/5)                        │ │
+│  │                   FORTRESS (Mini PC)                         │ │
 │  │                                                              │ │
 │  │  ┌─────────────┐   Single SSID: "MyHome"                    │ │
 │  │  │   WiFi AP   │   All devices connect to same network      │ │
-│  │  │  (hostapd)  │   Guardian auto-assigns to VLANs           │ │
+│  │  │  (hostapd)  │   Fortress auto-assigns to VLANs           │ │
 │  │  └──────┬──────┘                                            │ │
 │  │         │                                                    │ │
 │  │  ┌──────▼──────┐                                            │ │
@@ -93,9 +95,9 @@ Your smart home or business has dozens of IoT devices:
 
 ### 1. True Plug-and-Play
 
-- **5-minute setup** — Plug in Guardian, connect to web UI, done
+- **30-minute setup** — Plug in Fortress, connect to web UI, configure VLANs
 - **No networking expertise** — Web interface guides you through everything
-- **Works with existing router** — Guardian bridges to your upstream WiFi
+- **Works with existing router** — Fortress bridges to your upstream network
 - **No infrastructure changes** — No new switches, cables, or router configuration
 
 ### 2. Single SSID, Multiple VLANs
@@ -107,22 +109,22 @@ Your smart home or business has dozens of IoT devices:
 
 ### 3. Enterprise Security for $75
 
-| Feature | Enterprise Cost | HookProbe Guardian |
+| Feature | Enterprise Cost | HookProbe Fortress |
 |---------|-----------------|-------------------|
 | VLAN-capable switch | $200-500 | Built-in |
 | RADIUS server | $5,000+/year | Built-in |
 | Network management | $10,000+/year | Free web UI |
-| Professional setup | $2,000+ | DIY in 5 minutes |
-| **Total** | **$17,000+** | **$75** |
+| Professional setup | $2,000+ | DIY in 30 minutes |
+| **Total** | **$17,000+** | **$150-300** |
 
 ### 4. Portable Security
 
-**Take your network security with you:**
+**Fortress provides permanent enterprise-grade security:**
 
-- **Moving house?** Unplug Guardian, plug in at new location
-- **Traveling?** Guardian secures hotel/Airbnb WiFi
-- **Remote office?** Instant secure network anywhere
-- **Events/Pop-ups?** Temporary secure network in minutes
+- **Home/Office?** Full VLAN segmentation for all IoT devices
+- **Multi-floor buildings?** Multi-AP support with unified VLANs
+- **Small business?** Enterprise networking without enterprise prices
+- **Need portable?** Use **Guardian** for travel — simple hotspot without VLANs
 
 ### 5. Defense in Depth
 
@@ -140,7 +142,7 @@ Layer 5: HTP tunnel to MSSP (professional monitoring)
 
 ### MAC-Based VLAN Assignment
 
-When a device connects to Guardian's WiFi:
+When a device connects to Fortress WiFi:
 
 ```
 1. Device sends association request with MAC address
@@ -181,11 +183,11 @@ When a device connects to Guardian's WiFi:
 
 ## Pre-Configured VLAN Structure
 
-Guardian comes with sensible defaults:
+Fortress comes with sensible defaults:
 
 | VLAN ID | Name | Subnet | Internet | Use Case |
 |---------|------|--------|----------|----------|
-| 1 | Management | 192.168.1.0/24 | Full | Guardian admin, trusted devices |
+| 1 | Management | 192.168.1.0/24 | Full | Fortress admin, trusted devices |
 | 10 | Lights | 192.168.10.0/24 | Cloud only | Smart bulbs, LED strips |
 | 20 | Climate | 192.168.20.0/24 | Cloud only | Thermostats, sensors |
 | 30 | Cameras | 192.168.30.0/24 | Cloud only | Security cameras, doorbells |
@@ -206,7 +208,7 @@ Guardian comes with sensible defaults:
 
 ```
 ┌─────────────────────────────────────────┐
-│  Raspberry Pi 4/5 with built-in WiFi    │
+│  Intel N100 Mini PC or similar          │
 │                                         │
 │  ┌─────────┐    ┌─────────┐            │
 │  │ wlan0   │    │  eth0   │            │
@@ -221,13 +223,13 @@ Guardian comes with sensible defaults:
 
 **Covers**: ~30m radius, ~20-30 simultaneous devices
 
-### Extended Setup (Multi-AP with USB)
+### Extended Setup (Multi-AP with USB/PCIe)
 
-For larger homes, businesses, or better coverage, add USB WiFi adapters:
+For larger homes, businesses, or better coverage, add WiFi adapters:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Raspberry Pi 5 with USB WiFi Adapters                           │
+│  Intel N100/Mini PC with WiFi Adapters                           │
 │                                                                  │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐ │
 │  │ wlan0   │  │ wlan1   │  │ wlan2   │  │ wlan3   │  │  eth0  │ │
@@ -255,35 +257,35 @@ For larger homes, businesses, or better coverage, add USB WiFi adapters:
 - Linux driver availability
 - 5GHz support recommended for less interference
 
-### Maximum Configuration (4 APs)
+### Maximum Configuration (4+ APs)
 
-Raspberry Pi 5 has 2x USB 3.0 + 2x USB 2.0 ports. With a powered USB hub:
+Mini PCs with USB 3.0 + PCIe slots can support multiple WiFi adapters:
 
 ```
-                    Raspberry Pi 5
+                    Intel N100 Mini PC
                          │
         ┌────────────────┼────────────────┐
         │                │                │
-   USB 3.0 Hub      USB 3.0 Port      Built-in
-        │                │              wlan0
-   ┌────┴────┐           │           (2.4GHz AP)
-   │         │           │
- wlan2     wlan3       wlan1
-(5GHz AP) (5GHz AP)  (Uplink to
-                      Internet)
+   USB 3.0 Hub      PCIe WiFi         Built-in
+        │              Card             Ethernet
+   ┌────┴────┐          │              (Uplink)
+   │         │          │
+ wlan1     wlan2      wlan0
+(USB AP)  (USB AP)   (PCIe AP)
 ```
 
 **This gives you:**
-- **4 access points** (1 built-in + 3 USB)
+- **Multiple access points** (PCIe + USB adapters)
 - **Whole-building coverage** for homes up to 5,000 sq ft
 - **Band steering** (2.4GHz for IoT, 5GHz for phones/laptops)
 - **Redundancy** if one AP fails
+- **PCIe performance** — Better than USB for high-throughput
 
 ---
 
 ## Web Interface
 
-Guardian's web UI runs at `http://192.168.1.1:8080`
+Fortress web UI runs at `http://192.168.1.1:8080`
 
 ### Dashboard
 - Overview of connected devices
@@ -332,7 +334,7 @@ iptables -A FORWARD -s 192.168.10.0/24 -d 54.93.162.185 -j ACCEPT  # Hue cloud
 iptables -A FORWARD -s 192.168.10.0/24 -j DROP                      # Block all else
 ```
 
-Guardian auto-detects many IoT devices and applies appropriate policies.
+Fortress auto-detects many IoT devices and applies appropriate policies.
 
 ---
 
@@ -340,10 +342,10 @@ Guardian auto-detects many IoT devices and applies appropriate policies.
 
 ### MSSP Monitoring
 
-Guardian connects to Fortress/Nexus via HTP tunnel:
+Fortress connects to MSSP backend via HTP tunnel:
 
 ```
-Guardian (Edge) ──HTP──→ Fortress/Nexus (MSSP)
+Fortress (Edge) ──HTP──→ MSSP (Cloud)
                               │
                     ┌─────────┴─────────┐
                     │                   │
@@ -359,7 +361,7 @@ Guardian (Edge) ──HTP──→ Fortress/Nexus (MSSP)
 
 ### Qsecbit Integration
 
-Guardian runs Qsecbit for local threat detection:
+Fortress runs Qsecbit for local threat detection:
 
 ```
 Device behavior anomaly detected:
@@ -374,7 +376,7 @@ Device behavior anomaly detected:
 
 ## Comparison with Alternatives
 
-| Feature | Consumer Router | UniFi | Cisco Meraki | **HookProbe Guardian** |
+| Feature | Consumer Router | UniFi | Cisco Meraki | **HookProbe Fortress** |
 |---------|----------------|-------|--------------|----------------------|
 | VLAN support | ❌ | ✅ | ✅ | ✅ |
 | MAC-based assignment | ❌ | ✅ | ✅ | ✅ |
@@ -390,35 +392,36 @@ Device behavior anomaly detected:
 
 ## Quick Start
 
-### 1. Flash Guardian Image
+### 1. Install Fortress
 
 ```bash
-# Download Guardian image
-wget https://hookprobe.com/releases/guardian-5.0.0.img.xz
+# Clone HookProbe
+git clone https://github.com/hookprobe/hookprobe
+cd hookprobe
 
-# Flash to SD card (replace /dev/sdX with your SD card)
-xzcat guardian-5.0.0.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
+# Install Fortress tier
+sudo ./install.sh --tier fortress
 ```
 
 ### 2. Boot and Connect
 
-1. Insert SD card into Raspberry Pi 4/5
-2. Connect Ethernet (optional) or power only
-3. Pi boots and creates WiFi network: `HookProbe-Guardian-Setup`
+1. Connect Fortress device to your network via Ethernet
+2. Boot and wait for services to start (~2 minutes)
+3. Device creates WiFi network: `HookProbe-Fortress-Setup`
 4. Connect to this network with your phone/laptop
 
 ### 3. Configure via Web UI
 
 1. Open browser to `http://192.168.1.1:8080`
-2. Select your home WiFi network
-3. Enter WiFi password
-4. Set Guardian hotspot name and password
+2. Select your upstream network (WAN)
+3. Configure VLAN settings
+4. Set Fortress hotspot name and password
 5. Done! Connect your IoT devices to new hotspot
 
 ### 4. Register Devices
 
-1. Connect each IoT device to Guardian WiFi
-2. Open Guardian web UI → Devices
+1. Connect each IoT device to Fortress WiFi
+2. Open Fortress web UI → Devices
 3. New devices appear in "Quarantine"
 4. Click device → Assign category → Save
 5. Device automatically moves to correct VLAN
@@ -429,9 +432,9 @@ xzcat guardian-5.0.0.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
 
 | Issue | Solution |
 |-------|----------|
-| Can't connect to Guardian WiFi | Check power, wait 2 min for boot |
+| Can't connect to Fortress WiFi | Check power, wait 2 min for boot |
 | Web UI not loading | Try `http://192.168.1.1:8080` |
-| No internet on devices | Check upstream WiFi connection |
+| No internet on devices | Check upstream network connection |
 | Device not getting IP | Check DHCP server, restart dnsmasq |
 | Device in wrong VLAN | Re-register device, restart hostapd |
 
@@ -440,9 +443,9 @@ xzcat guardian-5.0.0.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
 ## Related Documentation
 
 - **[VPN Remote Access](VPN.md)** — Access your SDN-protected network remotely
-- **[Guardian Installation](../../install/guardian/README.md)** — Detailed setup guide
-- **[USB AP Configuration](../../install/guardian/README.md#multi-ap)** — Extending with USB adapters
-- **[Qsecbit AI Detection](../../src/qsecbit/README.md)** — Threat detection algorithms
+- **[Fortress Installation](../../products/fortress/README.md)** — Detailed setup guide
+- **[Guardian for Travel](../../products/guardian/README.md)** — Portable hotspot (no VLANs)
+- **[Qsecbit AI Detection](../../core/qsecbit/README.md)** — Threat detection algorithms
 
 ---
 

@@ -92,10 +92,10 @@ VPN, SDN, and network segmentation documentation.
   - Inter-VLAN isolation for IoT security
   - Quarantine VLAN for unknown devices
 
-### Guardian Edge Device
-- **[Guardian Setup](../install/guardian/README.md)** - Raspberry Pi 4/5 SDN appliance
-- **[Multi-AP Configuration](../install/guardian/README.md#multi-ap-configuration-usb-expansion)** - USB WiFi expansion
-- **[USB Adapter Compatibility](../install/guardian/README.md#recommended-usb-wifi-adapters)** - Tested adapters
+### Edge Devices
+- **[Guardian Setup](../products/guardian/README.md)** - Portable travel hotspot (Raspberry Pi)
+- **[Fortress Setup](../products/fortress/README.md)** - Full SDN with VLAN segmentation (Mini PC)
+- **[Sentinel Setup](../products/sentinel/README.md)** - Lightweight edge validator
 
 ---
 
@@ -321,8 +321,8 @@ Technical reference and detailed specifications.
 
 ## 📖 Documentation Updates
 
-**Last Updated**: 2025-01-26
-**Version**: 5.0.1
+**Last Updated**: 2025-12-07
+**Version**: 5.0.0
 **Status**: Production Ready
 
 ### Recent Additions
@@ -349,7 +349,7 @@ Can't find what you're looking for? Here are common topics:
 - **Install HookProbe**: [Beginner's Guide](installation/BEGINNER-GUIDE.md) or [Quick Start](../QUICK-START.md)
 - **Setup VPN remote access**: [VPN Guide](networking/VPN.md)
 - **Segment IoT devices**: [SDN Guide](networking/SDN.md)
-- **Setup Guardian (Raspberry Pi)**: [Guardian Setup](../install/guardian/README.md)
+- **Setup Guardian (Raspberry Pi)**: [Guardian Setup](../products/guardian/README.md)
 - **Configure network**: [Network Configuration](../install/edge/README.md#network)
 - **Setup GDPR compliance**: [GDPR Guide](GDPR.md)
 - **Add optional features**: [Optional Features](../README.md#optional-features)
@@ -410,6 +410,6 @@ hookprobe/
 
 Built with ❤️ for the security community
 
-**Version**: 5.0.1
-**Last Updated**: 2025-01-26
+**Version**: 5.0.0
+**Last Updated**: 2025-12-07
 **Maintained by**: HookProbe Team
