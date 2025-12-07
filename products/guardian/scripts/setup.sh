@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Guardian Setup Script
-# Version: 5.5.0
+# Version: 5.0.0
 # License: MIT
 #
 # Guardian - Portable Travel Security Companion

@@ -42,7 +42,7 @@ Your Guardian or Fortress device protects your home or business network, but:
 │                     │ Encrypted Tunnel                         │
 │                     ▼                                          │
 │         ┌───────────────────┐                                  │
-│         │      Nexus        │  ← MSSP Cloud (Public IP)        │
+│         │      MSSP         │  ← MSSP Cloud (Public IP)        │
 │         │   VPN Gateway     │                                  │
 │         └─────────┬─────────┘                                  │
 │                   │ HTP Tunnel                                 │
@@ -98,8 +98,8 @@ Your Guardian or Fortress device protects your home or business network, but:
 HookProbe VPN uses a **two-segment architecture** for maximum compatibility:
 
 ```
-Segment 1: Phone ←──IKEv2──→ Nexus (Standard VPN Protocol)
-Segment 2: Nexus ←──HTP────→ Guardian (HookProbe Transport Protocol)
+Segment 1: Phone ←──IKEv2──→ MSSP (Standard VPN Protocol)
+Segment 2: MSSP ←──HTP────→ Guardian/Fortress (HookProbe Transport Protocol)
 ```
 
 **Why this design?**
@@ -111,7 +111,7 @@ Segment 2: Nexus ←──HTP────→ Guardian (HookProbe Transport Proto
 
 ### Protocol Stack
 
-| Layer | Segment 1 (Phone→Nexus) | Segment 2 (Nexus→Guardian) |
+| Layer | Segment 1 (Phone→MSSP) | Segment 2 (MSSP→Edge) |
 |-------|-------------------------|----------------------------|
 | Encryption | AES-256-GCM | ChaCha20-Poly1305 |
 | Auth | EAP-TLS (X.509 certs) | Neural Resonance |
@@ -135,9 +135,9 @@ Segment 2: Nexus ←──HTP────→ Guardian (HookProbe Transport Proto
 
 ### For Administrators (MSSP)
 
-1. **Deploy VPN Gateway** on Nexus:
+1. **Deploy VPN Gateway** on MSSP:
    ```bash
-   cd /opt/hookprobe/install/nexus/vpn
+   cd /opt/hookprobe/products/mssp/vpn
    sudo ./setup-vpn-gateway.sh
    ```
 
@@ -257,18 +257,18 @@ VPNProfile.objects.create(
 | Symptom | Likely Cause | Solution |
 |---------|--------------|----------|
 | "Authentication failed" | Certificate expired | Regenerate VPN profile |
-| "Server unreachable" | Nexus firewall | Open UDP 500, 4500 |
+| "Server unreachable" | MSSP firewall | Open UDP 500, 4500 |
 | "Connection timeout" | NAT issues | Check HTP tunnel status |
 | Slow speeds | Bandwidth limit | Check user quota |
 
 ### Checking VPN Status
 
 ```bash
-# On Nexus (VPN Gateway)
+# On MSSP (VPN Gateway)
 sudo swanctl --list-sas      # Active VPN sessions
 sudo swanctl --list-conns    # Configured connections
 
-# On Guardian (Edge Device)
+# On Guardian/Fortress (Edge Device)
 systemctl status hookprobe-htp  # HTP tunnel status
 ```
 
@@ -289,8 +289,9 @@ tail -f /var/log/hookprobe/htp.log
 
 ## Related Documentation
 
-- **[SDN & VLAN Segmentation](SDN.md)** — Network segmentation for IoT devices
-- **[Guardian Setup](../../install/guardian/README.md)** — Edge device deployment
+- **[SDN & VLAN Segmentation](SDN.md)** — Network segmentation for IoT devices (Fortress)
+- **[Guardian Setup](../../products/guardian/README.md)** — Portable travel hotspot
+- **[Fortress Setup](../../products/fortress/README.md)** — Full SDN edge device
 - **[HTP Protocol](../architecture/hookprobe-neuro-protocol.md)** — Transport protocol details
 - **[IAM Integration](../IAM-INTEGRATION-GUIDE.md)** — LogMe2 SSO setup
 

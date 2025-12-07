@@ -49,8 +49,8 @@ sudo ./install.sh --tier sentinel
 ### Manual Install
 
 ```bash
-cd install/sentinel
-sudo ./setup.sh
+cd products/sentinel
+sudo ./scripts/setup.sh
 ```
 
 ## Configuration
