@@ -2872,12 +2872,19 @@ YAMLEOF
 install_web_ui() {
     log_step "Installing Guardian Web UI..."
 
+    # Copy entire web directory structure (modular Flask app)
     mkdir -p /opt/hookprobe/guardian/web
+    cp -r "$GUARDIAN_ROOT/web/"* /opt/hookprobe/guardian/web/
+
+    # Also copy app.py to guardian root for backwards compatibility
     cp "$GUARDIAN_ROOT/web/app.py" /opt/hookprobe/guardian/
+
     # Copy logo emblem for web UI
     if [ -f "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" ]; then
         cp "$GUARDIAN_ROOT/../assets/hookprobe-emblem-small.png" /opt/hookprobe/guardian/web/hookprobe-emblem.png
     fi
+
+    log_info "Copied web UI: app.py, modules/, templates/, static/, utils.py, config.py"
 
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
@@ -2887,8 +2894,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/hookprobe/guardian
-ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/app.py
+WorkingDirectory=/opt/hookprobe/guardian/web
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/web/app.py
 Restart=always
 RestartSec=5
 User=root
