@@ -3,7 +3,7 @@ Config Module Views - WiFi, Network Configuration
 """
 from flask import jsonify, request
 from . import config_bp
-from ...utils import run_command
+from utils import run_command
 
 
 @config_bp.route('/api/wifi/scan', methods=['POST'])
