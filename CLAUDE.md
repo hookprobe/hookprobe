@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.0
-**Last Updated**: 2025-11-22
+**Version**: 1.1
+**Last Updated**: 2025-12-07
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -10,6 +10,7 @@
 
 - [Project Overview](#project-overview)
 - [Codebase Structure](#codebase-structure)
+- [File Navigation Guide for AI Assistants](#-file-navigation-guide-for-ai-assistants)
 - [Architecture Fundamentals](#architecture-fundamentals)
 - [Development Workflows](#development-workflows)
 - [Key Conventions](#key-conventions)
@@ -90,17 +91,19 @@ hookprobe/
 ├── Scripts/
 │   ├── autonomous/
 │   │   ├── install/
-│   │   │   ├── setup.sh              # MAIN DEPLOYMENT SCRIPT
-│   │   │   ├── network-config.sh     # NETWORK & SERVICE CONFIGURATION
+│   │   │   ├── setup.sh              # ⭐ MAIN DEPLOYMENT SCRIPT
+│   │   │   ├── network-config.sh     # ⭐ NETWORK & SERVICE CONFIGURATION
 │   │   │   ├── uninstall.sh          # Cleanup script
 │   │   │   ├── kali-response-scripts.sh  # Automated response logic
-│   │   │   ├── n8n_setup.sh          # Optional POD 008 deployment
-│   │   │   ├── n8n_network-config.sh # n8n configuration
 │   │   │   ├── README.md             # Deployment guide
 │   │   │   └── checklist.md          # Pre/post deployment checklist
-│   │   └── qsecbit/
-│   │       ├── qsecbit.py            # AI THREAT ANALYSIS ENGINE + XDP/eBPF
-│   │       └── README.md             # Qsecbit documentation
+│   │   └── qsecbit/                  # ⭐ AI THREAT ENGINE (v5.0 modular)
+│   │       ├── qsecbit.py            # Main orchestrator + resilience metric
+│   │       ├── energy_monitor.py     # RAPL power monitoring
+│   │       ├── xdp_manager.py        # XDP/eBPF DDoS mitigation
+│   │       ├── nic_detector.py       # NIC capability detection
+│   │       ├── __init__.py           # Python package init
+│   │       └── README.md             # Complete qsecbit documentation
 │   ├── backend/
 │   │   └── install/
 │   │       ├── backend-setup.sh      # MSSP cloud backend deployment
@@ -110,6 +113,8 @@ hookprobe/
 │   │   ├── attack-mitigation-orchestrator.sh
 │   │   ├── mitigation-maintenance.sh
 │   │   ├── mitigation-config.conf
+│   │   ├── hookprobe-mitigation-systemd.conf
+│   │   ├── MITIGATION_INSTALLATION_GUIDE.md
 │   │   └── README.md
 │   └── webApp/
 │       └── templates/
@@ -118,31 +123,53 @@ hookprobe/
 ├── Documents/
 │   ├── backend/
 │   │   └── README.md                 # MSSP cloud backend guide
+│   ├── autonomous/
+│   │   └── ai-business.md            # AI/automation context
 │   ├── SecurityMitigationPlan.md     # Detailed security architecture
 │   ├── ClickHouse-Integration-Analysis.md  # OLAP database integration guide
-│   ├── ClickHouse-Quick-Start.md     # Quick deployment guide
-│   └── autonomous/
-│       └── ai-business.md            # AI/automation context
-├── n8n/
+│   └── ClickHouse-Quick-Start.md     # Quick deployment guide
+├── n8n/                              # ⭐ POD 008 automation (separate from install/)
+│   ├── n8n_setup.sh                  # n8n deployment script
+│   ├── n8n_network-config.sh         # n8n configuration
+│   ├── n8n_uninstall.sh              # n8n cleanup
 │   ├── README.md                     # n8n integration guide
 │   ├── AI-blogging-workflow.md       # Workflow automation examples
-│   ├── integration-checklist.md      # Validation checklist
-│   ├── n8n_setup.sh                  # Deployment script (copy)
-│   ├── n8n_uninstall.sh
-│   └── n8n_network-config.sh         # Configuration (copy)
+│   └── integration-checklist.md      # Validation checklist
 ├── LTE/
 │   └── README.md                     # LTE/5G connectivity guide
+├── tests/                            # ⭐ Unit tests (pytest)
+│   ├── __init__.py
+│   └── test_qsecbit.py               # Qsecbit algorithm tests
 ├── images/
 │   └── *.png                         # Documentation images
-├── README.md                         # MAIN DOCUMENTATION
+├── .github/                          # ⭐ CI/CD and contribution workflows
+│   ├── workflows/
+│   │   ├── python-lint.yml           # Python linting (flake8, black)
+│   │   ├── shellcheck.yml            # Bash script validation
+│   │   └── markdown-link-check.yml   # Documentation link validation
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.md
+│   │   ├── feature_request.md
+│   │   └── security_vulnerability.md
+│   ├── PULL_REQUEST_TEMPLATE.md
+│   ├── dependabot.yml                # Dependency updates
+│   └── markdown-link-check-config.json
+├── README.md                         # ⭐ MAIN DOCUMENTATION
 ├── CONTRIBUTING.md                   # Contribution guidelines
 ├── SECURITY.md                       # Security policy
-├── CLAUDE.md                         # AI ASSISTANT GUIDE (this file)
+├── CLAUDE.md                         # ⭐ AI ASSISTANT GUIDE (this file)
 ├── CHANGELOG.md                      # Version history
 ├── LICENSE                           # MIT License
-├── requirements.txt                  # Python dependencies
+├── requirements.txt                  # Python runtime dependencies
+├── requirements-dev.txt              # Python development dependencies
 ├── 3rd-party-licenses.md            # Dependency licenses
-└── hookprobe-r&d.md                 # R&D roadmap
+├── hookprobe-r&d.md                 # R&D roadmap
+├── pytest.ini                        # Pytest configuration
+├── Makefile                          # Build automation
+├── .editorconfig                     # Editor configuration
+├── .gitignore                        # Git ignore patterns
+├── .pre-commit-config.yaml           # Pre-commit hooks
+└── .shellcheckrc                     # ShellCheck configuration
 
 ```
 
@@ -151,11 +178,147 @@ hookprobe/
 | Type | Purpose | Key Files |
 |------|---------|-----------|
 | **Bash Scripts** | Deployment automation | `setup.sh`, `uninstall.sh`, `network-config.sh`, `kali-response-scripts.sh` |
-| **Python** | AI/security logic | `qsecbit.py` |
+| **Python** | AI/security logic | `qsecbit.py`, `energy_monitor.py`, `xdp_manager.py`, `nic_detector.py` |
 | **Markdown** | Documentation | `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, all `*/README.md` |
-| **Config** | Service configuration | `*.conf`, `network-config.sh` |
+| **Config** | Service configuration | `*.conf`, `network-config.sh`, `pytest.ini`, `.pre-commit-config.yaml` |
+| **YAML** | CI/CD workflows | `.github/workflows/*.yml`, `.pre-commit-config.yaml` |
+| **Tests** | Unit testing | `tests/test_qsecbit.py` |
 
 **NO TypeScript, JavaScript, Java, or traditional application code.**
+
+---
+
+## 🧭 File Navigation Guide for AI Assistants
+
+**This section helps you quickly find the right files for any task.**
+
+### When User Wants to... → Go to This File
+
+#### Deployment & Configuration
+| User Request | Primary File(s) | Notes |
+|--------------|----------------|-------|
+| Deploy HookProbe | `Scripts/autonomous/install/setup.sh` | Main deployment orchestrator |
+| Change network settings | `Scripts/autonomous/install/network-config.sh` | All IPs, VNIs, credentials |
+| Uninstall HookProbe | `Scripts/autonomous/install/uninstall.sh` | Clean removal |
+| Deploy n8n (POD 008) | `n8n/n8n_setup.sh` | **NOT** in Scripts/autonomous/install/ |
+| Configure n8n | `n8n/n8n_network-config.sh` | **NOT** in Scripts/autonomous/install/ |
+| Deploy MSSP backend | `Scripts/backend/install/backend-setup.sh` | Multi-tenant cloud deployment |
+
+#### Security & AI
+| User Request | Primary File(s) | Notes |
+|--------------|----------------|-------|
+| Modify qsecbit algorithm | `Scripts/autonomous/qsecbit/qsecbit.py` | Main orchestrator |
+| Change energy monitoring | `Scripts/autonomous/qsecbit/energy_monitor.py` | RAPL power tracking |
+| Configure XDP/eBPF | `Scripts/autonomous/qsecbit/xdp_manager.py` | DDoS mitigation |
+| Check NIC capabilities | `Scripts/autonomous/qsecbit/nic_detector.py` | Hardware detection |
+| Understand qsecbit | `Scripts/autonomous/qsecbit/README.md` | Complete documentation |
+| Add automated response | `Scripts/autonomous/install/kali-response-scripts.sh` | Kali Linux mitigation |
+| Configure honeypot | `Scripts/honeypot/mitigation-config.conf` | Honeypot settings |
+| Setup honeypot orchestration | `Scripts/honeypot/attack-mitigation-orchestrator.sh` | Attack handling |
+
+#### Documentation
+| User Request | Primary File(s) | Notes |
+|--------------|----------------|-------|
+| Understand the project | `README.md` | Start here for overview |
+| Learn security architecture | `Documents/SecurityMitigationPlan.md` | Detailed security design |
+| Setup ClickHouse | `Documents/ClickHouse-Quick-Start.md` | Fast deployment guide |
+| Understand ClickHouse integration | `Documents/ClickHouse-Integration-Analysis.md` | Complete analysis |
+| Add LTE/5G failover | `LTE/README.md` | Cellular connectivity guide |
+| Integrate n8n workflows | `n8n/README.md` | Workflow automation guide |
+| Report security issue | `.github/ISSUE_TEMPLATE/security_vulnerability.md` | Security template |
+| Contribute code | `CONTRIBUTING.md` | Contribution guidelines |
+
+#### Testing & CI/CD
+| User Request | Primary File(s) | Notes |
+|--------------|----------------|-------|
+| Run tests | `pytest.ini` + `tests/test_qsecbit.py` | Use: `pytest tests/` |
+| Check test coverage | `Makefile` | Use: `make test` or `make coverage` |
+| Fix linting errors | `.github/workflows/python-lint.yml` | CI pipeline config |
+| Fix shellcheck errors | `.shellcheckrc` | ShellCheck configuration |
+| Setup pre-commit hooks | `.pre-commit-config.yaml` | Git hooks |
+| Understand CI failures | `.github/workflows/` | All CI/CD pipelines |
+
+#### Development Tools
+| User Request | Primary File(s) | Notes |
+|--------------|----------------|-------|
+| Build the project | `Makefile` | Use: `make help` |
+| Install dev dependencies | `requirements-dev.txt` | Use: `pip install -r requirements-dev.txt` |
+| Install runtime dependencies | `requirements.txt` | Use: `pip install -r requirements.txt` |
+| Configure editor | `.editorconfig` | EditorConfig settings |
+
+---
+
+### Common Scenarios & File Paths
+
+#### Scenario 1: User asks "Add feature X to qsecbit"
+```
+1. Read: Scripts/autonomous/qsecbit/README.md (understand architecture)
+2. Read: Scripts/autonomous/qsecbit/qsecbit.py (main logic)
+3. Edit: Scripts/autonomous/qsecbit/qsecbit.py (implement feature)
+4. Edit: Scripts/autonomous/qsecbit/__init__.py (if adding new module)
+5. Update: tests/test_qsecbit.py (add tests)
+6. Update: Scripts/autonomous/qsecbit/README.md (document changes)
+```
+
+#### Scenario 2: User asks "Deploy HookProbe with n8n"
+```
+1. Run: Scripts/autonomous/install/setup.sh (PODs 001-007)
+2. Verify: podman pod ps (check PODs running)
+3. Edit: n8n/n8n_network-config.sh (configure n8n credentials)
+4. Run: n8n/n8n_setup.sh (deploy POD 008)
+5. Test: curl http://localhost:5678 (verify n8n accessible)
+6. Read: n8n/integration-checklist.md (validation)
+```
+
+#### Scenario 3: User asks "Fix failing tests"
+```
+1. Run: pytest tests/ (see failures)
+2. Read: tests/test_qsecbit.py (understand tests)
+3. Read: pytest.ini (test configuration)
+4. Edit: Scripts/autonomous/qsecbit/qsecbit.py (fix code)
+5. Run: pytest tests/ -v (verify fixes)
+6. Check: .github/workflows/python-lint.yml (ensure CI will pass)
+```
+
+#### Scenario 4: User asks "Update WAF rules"
+```
+1. Read: Scripts/autonomous/install/setup.sh (find ModSecurity section)
+2. Read: README.md (understand POD 001 architecture)
+3. Edit: Scripts/autonomous/install/setup.sh (add custom rules mounting)
+4. Create: /opt/hookprobe/waf/custom-rules.conf (custom rules)
+5. Run: podman restart hookprobe-waf-modsecurity
+6. Monitor: Grafana dashboard (verify blocking)
+```
+
+#### Scenario 5: User asks "Enable XDP on Intel N100"
+```
+1. Read: Scripts/autonomous/qsecbit/README.md (XDP documentation)
+2. Check: Scripts/autonomous/qsecbit/nic_detector.py (NIC detection)
+3. Set: export XDP_ENABLED=true
+4. Read: Scripts/autonomous/qsecbit/xdp_manager.py (XDP logic)
+5. Deploy: Scripts/autonomous/install/setup.sh (redeploy with XDP)
+6. Verify: XDP statistics in qsecbit logs
+```
+
+---
+
+### Directory Purpose Quick Reference
+
+| Directory | Purpose | When to Use |
+|-----------|---------|-------------|
+| `Scripts/autonomous/install/` | **Core deployment** | Deploying/configuring PODs 001-007 |
+| `Scripts/autonomous/qsecbit/` | **AI threat engine** | Modifying qsecbit algorithm, XDP, energy monitoring |
+| `Scripts/backend/install/` | **MSSP cloud backend** | Multi-tenant cloud deployment |
+| `Scripts/honeypot/` | **Attack mitigation** | Honeypot configuration, orchestration |
+| `Scripts/webApp/` | **Web interface** | Web-based qsecbit visualization |
+| `n8n/` | **Workflow automation** | POD 008 deployment, n8n workflows |
+| `Documents/` | **Technical documentation** | Architecture, security, ClickHouse guides |
+| `LTE/` | **Cellular connectivity** | LTE/5G failover configuration |
+| `tests/` | **Unit tests** | Testing qsecbit algorithm |
+| `.github/` | **CI/CD & templates** | GitHub workflows, issue templates, PR templates |
+| `images/` | **Documentation assets** | Screenshots, diagrams for README.md |
+
+---
 
 ---
 
@@ -485,6 +648,65 @@ git commit -m "fix(setup): correct PostgreSQL connection string in POD 003"
 git commit -m "docs(readme): add troubleshooting section for n8n integration"
 git commit -m "security(waf): update ModSecurity rules to CRS 4.0"
 ```
+
+### CI/CD Workflows
+
+**HookProbe uses GitHub Actions for automated testing and validation.**
+
+#### GitHub Workflows (`.github/workflows/`)
+
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| **Python Lint** | `python-lint.yml` | Push, PR | Runs `flake8` and `black` on Python files |
+| **ShellCheck** | `shellcheck.yml` | Push, PR | Validates bash scripts for errors |
+| **Markdown Link Check** | `markdown-link-check.yml` | Push, PR | Checks all documentation links |
+
+**When CI Fails - Quick Fixes**:
+
+```bash
+# Python linting failures
+black Scripts/autonomous/qsecbit/*.py
+flake8 Scripts/autonomous/qsecbit/*.py --max-line-length=100
+
+# ShellCheck failures
+shellcheck Scripts/autonomous/install/*.sh
+# Fix issues reported, or disable specific checks in .shellcheckrc
+
+# Markdown link check failures
+markdown-link-check README.md
+# Fix broken links or add to ignore list in .github/markdown-link-check-config.json
+```
+
+#### Pre-commit Hooks (`.pre-commit-config.yaml`)
+
+**Automatically runs before each commit**:
+
+```bash
+# Install pre-commit hooks
+pip install pre-commit
+pre-commit install
+
+# Run manually
+pre-commit run --all-files
+
+# Skip hooks (not recommended)
+git commit --no-verify -m "message"
+```
+
+**Configured Hooks**:
+- `trailing-whitespace`: Remove trailing spaces
+- `end-of-file-fixer`: Ensure files end with newline
+- `check-yaml`: Validate YAML syntax
+- `shellcheck`: Bash script validation
+- `flake8`: Python linting
+- `black`: Python formatting
+
+#### Dependabot (`.github/dependabot.yml`)
+
+**Automatically creates PRs for dependency updates**:
+- Python packages (`requirements.txt`, `requirements-dev.txt`)
+- GitHub Actions versions
+- Checks weekly for updates
 
 ---
 
@@ -1212,7 +1434,10 @@ done
 |------|---------|--------------|
 | `Scripts/autonomous/install/network-config.sh` | **MAIN CONFIGURATION** - All network, IPs, credentials, images | Every deployment |
 | `Scripts/autonomous/install/setup.sh` | **MAIN DEPLOYMENT SCRIPT** - Creates all PODs, containers, networks | Adding services, changing deployment logic |
-| `Scripts/autonomous/qsecbit/qsecbit.py` | **AI THREAT ENGINE** - Qsecbit algorithm + XDP/eBPF DDoS mitigation | Adjusting thresholds, changing analysis logic, XDP configuration |
+| `Scripts/autonomous/qsecbit/qsecbit.py` | **AI THREAT ENGINE** - Main orchestrator + resilience metric | Adjusting thresholds, changing analysis logic |
+| `Scripts/autonomous/qsecbit/energy_monitor.py` | **ENERGY MONITORING** - RAPL power tracking (v5.0) | Modifying energy anomaly detection |
+| `Scripts/autonomous/qsecbit/xdp_manager.py` | **XDP/eBPF DDoS** - Kernel-level mitigation (v5.0) | Configuring XDP, rate limiting, IP blocking |
+| `Scripts/autonomous/qsecbit/nic_detector.py` | **NIC DETECTION** - Hardware capability detection (v5.0) | Adding NIC drivers, XDP mode selection |
 | `Scripts/autonomous/qsecbit/README.md` | **QSECBIT DOCUMENTATION** - Complete guide to qsecbit module | Understanding qsecbit architecture, NIC compatibility |
 | `Scripts/autonomous/install/kali-response-scripts.sh` | **AUTOMATED RESPONSE** - Kali Linux mitigation scripts | Adding new attack responses |
 
@@ -1220,9 +1445,22 @@ done
 
 | File | Purpose | When to Edit |
 |------|---------|--------------|
-| `Scripts/autonomous/install/n8n_network-config.sh` | n8n POD 008 configuration | Deploying workflow automation |
-| `Scripts/autonomous/install/n8n_setup.sh` | n8n deployment script | Customizing n8n setup |
+| `n8n/n8n_network-config.sh` | n8n POD 008 configuration | Deploying workflow automation |
+| `n8n/n8n_setup.sh` | n8n deployment script | Customizing n8n setup |
 | `LTE/README.md` | LTE/5G connectivity guide | Adding cellular failover |
+
+### Testing & Development Files
+
+| File | Purpose | When to Edit |
+|------|---------|--------------|
+| `tests/test_qsecbit.py` | **UNIT TESTS** - Qsecbit algorithm tests | Adding new tests, fixing failures |
+| `pytest.ini` | Pytest configuration | Changing test settings, markers |
+| `Makefile` | Build automation | Adding build targets, dev workflows |
+| `requirements.txt` | Runtime Python dependencies | Adding/updating production dependencies |
+| `requirements-dev.txt` | Development Python dependencies | Adding testing/linting tools |
+| `.pre-commit-config.yaml` | Pre-commit hooks | Configuring code quality checks |
+| `.shellcheckrc` | ShellCheck configuration | Customizing bash linting rules |
+| `.editorconfig` | Editor configuration | Standardizing code formatting |
 
 ### Documentation Files
 
@@ -1694,6 +1932,7 @@ tar -czf hookprobe-backup-$(date +%Y%m%d).tar.gz \
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2025-11-22 | Initial CLAUDE.md creation |
+| 1.1 | 2025-12-07 | **Major Update**: Fixed folder structure, added file navigation guide, documented CI/CD workflows, added qsecbit v5.0 modular files, documented tests/ and .github/ directories |
 
 ---
 
