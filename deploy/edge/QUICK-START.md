@@ -11,7 +11,7 @@
 - Root access (`sudo`)
 - Internet connection
 
-> **Note**: RHEL-based systems (Fedora, CentOS, Rocky, RHEL) are not currently supported in v5.x. We are working on nmcli-based networking for RHEL compatibility. Support coming in a future release.
+> **Note**: RHEL-based systems (Fedora, CentOS, Rocky, RHEL) are not supported due to OpenVSwitch availability limitations. Support planned for future release.
 
 ---
 

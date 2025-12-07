@@ -63,7 +63,7 @@ HookProbe v5.0 introduces a **unified installation system** based on systemd ser
 - Raspberry Pi OS (Bookworm)
 - Linux Mint, Pop!_OS, and other Ubuntu/Debian derivatives
 
-> **Note**: RHEL-based systems (RHEL, Fedora, CentOS, Rocky Linux, AlmaLinux) are **not currently supported** in HookProbe v5.x due to OpenVSwitch networking compatibility issues. We are working on nmcli-based networking for RHEL compatibility. RHEL/Fedora support is planned for a future release.
+> **Note**: RHEL-based systems (RHEL, Fedora, CentOS, Rocky Linux, AlmaLinux) are **not supported** due to OpenVSwitch availability limitations (OVS available on RHEL 9 but not RHEL 10). Support planned for future release.
 
 ### Supported Architectures
 
