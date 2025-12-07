@@ -1,5 +1,5 @@
 # HookProbe Python Dependencies
-# Used by: Scripts/autonomous/qsecbit.py
+# Used by: core/qsecbit/, shared/, products/
 
 # Core numerical and scientific computing
 numpy>=1.24.0,<2.0.0
