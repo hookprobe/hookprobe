@@ -18,11 +18,12 @@ Guardian transforms Raspberry Pi 4/5 into a portable security gateway. Perfect f
 **Key Capabilities:**
 - **Secure WiFi Hotspot** — Create your own protected network anywhere
 - **L2-L7 Threat Detection** — Full OSI stack threat monitoring
+- **dnsXai AI Protection** — ML-based ad/tracker blocking with CNAME uncloaking
 - **Mobile Network Protection** — Hotel/public WiFi security
 - **IDS/IPS Protection** — Suricata-based intrusion detection
-- **DNS Filtering** — dnsXai Ad Block (beta) with ML-powered threat detection
+- **Mesh Networking** — Collective threat intelligence sharing
 - **Connected Devices** — Track all devices on your network
-- **Web Dashboard** — Monitor threats and manage devices
+- **Web Dashboard** — Monitor threats and manage devices (Flask-based)
 - **Portable Security** — Take your network security anywhere
 
 ---
@@ -188,17 +189,40 @@ Guardian tracks all devices connected to your hotspot:
 |-----------|---------|
 | **Layer Threat Detector** | L2-L7 OSI threat detection |
 | **Mobile Protection** | Hotel/public WiFi security |
-| **QSecBit** | AI-powered threat scoring |
+| **dnsXai** | AI-powered DNS protection with ML classification |
+| **QSecBit** | AI-powered threat scoring (8% dnsXai weight) |
 | **Suricata IDS/IPS** | Network intrusion detection & prevention |
 | **Zeek** | Network traffic analysis & logging |
 | **ModSecurity WAF** | Web application firewall |
 | **XDP/eBPF** | Kernel-level DDoS protection |
+| **Mesh Agent** | Collective threat intelligence sharing |
 | **Threat Aggregator** | Correlates alerts from all security tools |
 | **nftables** | Firewall rules |
 | **hostapd** | WiFi access point |
 | **FreeRADIUS** | MAC authentication & tracking |
 | **dnsmasq** | DHCP/DNS server |
-| **dnsXai Ad Block** | ML-powered DNS protection & ad blocking (beta) |
+
+### dnsXai AI DNS Protection
+
+Guardian includes dnsXai for next-generation DNS protection:
+
+- **ML Classification** — 20-feature neural classifier for unknown domains
+- **CNAME Uncloaking** — Detects first-party tracker masquerading
+- **5 Protection Levels** — From basic ads/malware to full social tracker blocking
+- **Federated Learning** — Privacy-preserving collective intelligence
+- **<1ms Inference** — Lightweight enough for Raspberry Pi
+- **~130K-250K domains** — Comprehensive blocklist coverage
+
+**Protection Levels:**
+| Level | Name | Blocks |
+|-------|------|--------|
+| 1 | Base | Ads + Malware |
+| 2 | Enhanced | + Fakenews |
+| 3 | Strong | + Gambling |
+| 4 | Maximum | + Adult Content |
+| 5 | Full | + Social Trackers |
+
+Configure via Web UI at **DNS Protection** tab or `/api/dnsxai/level`.
 
 ### HTP Secure Communication
 
@@ -208,6 +232,15 @@ Guardian connects to the MSSP cloud for threat intelligence:
 - **ChaCha20-Poly1305** — Authenticated encryption
 - **NAT/CGNAT Traversal** — Works behind any firewall
 - **Automatic Reconnection** — Resilient connection
+
+### Mesh Networking
+
+Guardian participates in the HookProbe mesh network:
+
+- **Collective Threat Intel** — Share/receive threat indicators
+- **Consciousness States** — DORMANT → AWAKENING → AWARE → SYNCHRONIZED
+- **NAT Traversal** — STUN/ICE hole punching for P2P connectivity
+- **Relay Fallback** — Uses Fortress/Nexus relays when direct connection fails
 
 ---
 
@@ -268,6 +301,13 @@ sudo ./install.sh --tier guardian
 - L2-L7 Layer Threats — OSI layer breakdown
 - Suricata Alerts — Real-time IDS alerts
 - XDP Protection — DDoS mitigation stats
+
+### DNS Protection Tab (dnsXai)
+- Protection Level — 5 configurable levels
+- Block Statistics — Ads, trackers, malware blocked
+- Whitelist Management — Custom domain whitelists
+- ML Confidence — Classification confidence scores
+- CNAME Uncloaking — Detected masqueraded trackers
 
 ### Devices Tab
 - Connected Devices — All devices on your network
