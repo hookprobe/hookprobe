@@ -1,14 +1,26 @@
 """
 dnsXai Module Views - AI-powered DNS Protection
 Integrates with Guardian DNS Shield (dnsmasq blocklist)
+Features: ML classification, CNAME uncloaking, federated learning, real-time detection
 """
 import os
 import re
 import time
+import logging
 from flask import jsonify, request
 from . import dnsxai_bp
 from utils import load_json_file, save_json_file, load_text_file, save_text_file, run_command
 
+# ML Engine imports
+try:
+    from .ml_engine import (
+        get_classifier, get_uncloaker, get_federated, get_detector,
+        DomainFeatureExtractor
+    )
+    ML_AVAILABLE = True
+except ImportError as e:
+    ML_AVAILABLE = False
+    logging.warning(f"ML engine not available: {e}")
 
 # DNS Shield paths (actual system paths)
 DNS_SHIELD_DIR = '/opt/hookprobe/guardian/dns-shield'
@@ -113,7 +125,7 @@ def is_protection_active():
 
 @dnsxai_bp.route('/stats')
 def api_stats():
-    """Get dnsXai statistics from DNS Shield."""
+    """Get dnsXai statistics from DNS Shield with ML metrics."""
     # Get real-time stats from dnsmasq log
     stats = get_dns_stats()
 
@@ -123,10 +135,28 @@ def api_stats():
     # Get current level
     stats['level'] = get_shield_level()
 
-    # Load persisted stats for ML and CNAME (future features)
-    persisted = load_json_file(DNS_SHIELD_STATS, {})
-    stats['ml_blocks'] = persisted.get('ml_blocks', 0)
-    stats['cname_uncloaked'] = persisted.get('cname_uncloaked', 0)
+    # Get ML stats if available
+    if ML_AVAILABLE:
+        try:
+            detector = get_detector()
+            ml_stats = detector.get_stats()
+            stats['ml_blocks'] = ml_stats.get('ml_detections', 0)
+            stats['cname_uncloaked'] = ml_stats.get('cname_uncloaked', 0)
+            stats['ml_available'] = True
+            stats['ml_trained'] = ml_stats.get('classifier_status', {}).get('is_trained', False)
+            stats['ml_training_samples'] = ml_stats.get('classifier_status', {}).get('training_samples', 0)
+            stats['threats_detected'] = ml_stats.get('threats_detected', 0)
+        except Exception as e:
+            stats['ml_blocks'] = 0
+            stats['cname_uncloaked'] = 0
+            stats['ml_available'] = False
+            stats['ml_error'] = str(e)
+    else:
+        # Fallback to persisted stats
+        persisted = load_json_file(DNS_SHIELD_STATS, {})
+        stats['ml_blocks'] = persisted.get('ml_blocks', 0)
+        stats['cname_uncloaked'] = persisted.get('cname_uncloaked', 0)
+        stats['ml_available'] = False
 
     # Get pause state to determine if active
     pause_state = load_json_file(DNS_SHIELD_PAUSE, {'status': 'active', 'pause_until': 0})
@@ -338,3 +368,346 @@ def api_update():
         return jsonify({'success': False, 'error': output or 'Update failed'}), 500
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# ML/AI ENDPOINTS
+# =============================================================================
+
+@dnsxai_bp.route('/ml/status')
+def api_ml_status():
+    """Get ML engine status and capabilities."""
+    if not ML_AVAILABLE:
+        return jsonify({
+            'available': False,
+            'error': 'ML libraries not installed (numpy, scikit-learn required)'
+        })
+
+    try:
+        classifier = get_classifier()
+        uncloaker = get_uncloaker()
+        federated = get_federated()
+        detector = get_detector()
+
+        return jsonify({
+            'available': True,
+            'classifier': classifier.get_status(),
+            'uncloaker': uncloaker.get_stats(),
+            'federated': federated.get_stats(),
+            'detector': detector.get_stats()
+        })
+    except Exception as e:
+        return jsonify({'available': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/ml/train', methods=['POST'])
+def api_ml_train():
+    """Train ML model on browsing history."""
+    if not ML_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'ML libraries not installed'
+        }), 400
+
+    try:
+        data = request.get_json() or {}
+        source = data.get('source', 'auto')  # 'auto', 'history', 'custom'
+
+        domains = []
+
+        if source == 'custom':
+            # Use provided domains
+            domains = data.get('domains', [])
+        else:
+            # Parse browsing history from dnsmasq log
+            domains = _parse_browsing_history(
+                hours=data.get('hours', 24),
+                limit=data.get('limit', 5000)
+            )
+
+        if len(domains) < 10:
+            return jsonify({
+                'success': False,
+                'error': f'Not enough domains for training ({len(domains)} found, need at least 10)'
+            }), 400
+
+        # Train the classifier
+        classifier = get_classifier()
+        result = classifier.train(domains)
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/ml/classify', methods=['POST'])
+def api_ml_classify():
+    """Classify a domain using ML."""
+    if not ML_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'ML libraries not installed'
+        }), 400
+
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+
+        if not domain:
+            return jsonify({'success': False, 'error': 'Domain required'}), 400
+
+        classifier = get_classifier()
+        result = classifier.predict(domain)
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/ml/analyze', methods=['POST'])
+def api_ml_analyze():
+    """Real-time threat analysis for a domain."""
+    if not ML_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'ML libraries not installed'
+        }), 400
+
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+        cname_chain = data.get('cname_chain', [])
+
+        if not domain:
+            return jsonify({'success': False, 'error': 'Domain required'}), 400
+
+        detector = get_detector()
+        result = detector.analyze_query(domain, cname_chain=cname_chain)
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/ml/history')
+def api_ml_history():
+    """Get browsing history for ML training."""
+    try:
+        hours = request.args.get('hours', 24, type=int)
+        limit = request.args.get('limit', 1000, type=int)
+
+        domains = _parse_browsing_history(hours=hours, limit=limit)
+
+        # Get unique domains with counts
+        from collections import Counter
+        domain_counts = Counter(domains)
+
+        return jsonify({
+            'success': True,
+            'total_queries': len(domains),
+            'unique_domains': len(domain_counts),
+            'top_domains': domain_counts.most_common(50),
+            'hours': hours
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/ml/threats')
+def api_ml_threats():
+    """Get recent ML-detected threats."""
+    if not ML_AVAILABLE:
+        return jsonify({'threats': [], 'error': 'ML not available'})
+
+    try:
+        detector = get_detector()
+        stats = detector.get_stats()
+
+        return jsonify({
+            'success': True,
+            'threats': stats.get('recent_threats', []),
+            'total_detected': stats.get('threats_detected', 0),
+            'ml_detections': stats.get('ml_detections', 0),
+            'cname_uncloaked': stats.get('cname_uncloaked', 0)
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# CNAME UNCLOAKING ENDPOINTS
+# =============================================================================
+
+@dnsxai_bp.route('/cname/check', methods=['POST'])
+def api_cname_check():
+    """Check if a CNAME is hiding a tracker."""
+    if not ML_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'ML libraries not installed'
+        }), 400
+
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+        cname_target = data.get('cname_target', '').strip().lower()
+
+        if not domain or not cname_target:
+            return jsonify({'success': False, 'error': 'Domain and cname_target required'}), 400
+
+        uncloaker = get_uncloaker()
+        result = uncloaker.check_cname(domain, cname_target)
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/cname/stats')
+def api_cname_stats():
+    """Get CNAME uncloaking statistics."""
+    if not ML_AVAILABLE:
+        return jsonify({'success': False, 'stats': {}})
+
+    try:
+        uncloaker = get_uncloaker()
+        return jsonify({
+            'success': True,
+            **uncloaker.get_stats()
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# FEDERATED LEARNING ENDPOINTS
+# =============================================================================
+
+@dnsxai_bp.route('/federated/status')
+def api_federated_status():
+    """Get federated learning status."""
+    if not ML_AVAILABLE:
+        return jsonify({'available': False})
+
+    try:
+        federated = get_federated()
+        return jsonify({
+            'success': True,
+            **federated.get_stats()
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/federated/export')
+def api_federated_export():
+    """Export local updates for federation."""
+    if not ML_AVAILABLE:
+        return jsonify({'updates': []})
+
+    try:
+        federated = get_federated()
+        return jsonify({
+            'success': True,
+            'updates': federated.get_exportable_updates()
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/federated/import', methods=['POST'])
+def api_federated_import():
+    """Import updates from other nodes."""
+    if not ML_AVAILABLE:
+        return jsonify({'success': False, 'error': 'ML not available'}), 400
+
+    try:
+        data = request.get_json()
+        updates = data.get('updates', [])
+
+        federated = get_federated()
+        imported = 0
+
+        for update in updates:
+            if federated.apply_update(update):
+                imported += 1
+
+        return jsonify({
+            'success': True,
+            'imported': imported,
+            'total': len(updates)
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def _parse_browsing_history(hours: int = 24, limit: int = 5000) -> list:
+    """
+    Parse browsing history from dnsmasq query log.
+    Returns list of domains queried in the past N hours.
+    """
+    domains = []
+
+    try:
+        if not os.path.exists(DNSMASQ_QUERY_LOG):
+            return domains
+
+        import datetime
+        cutoff_time = datetime.datetime.now() - datetime.timedelta(hours=hours)
+
+        # Read log file (limit to last 10MB for performance)
+        file_size = os.path.getsize(DNSMASQ_QUERY_LOG)
+        read_size = min(file_size, 10 * 1024 * 1024)
+
+        with open(DNSMASQ_QUERY_LOG, 'r') as f:
+            if file_size > read_size:
+                f.seek(file_size - read_size)
+                f.readline()  # Skip partial line
+
+            # Parse log entries
+            # Format: "Dec  7 10:30:45 dnsmasq[123]: query[A] example.com from 192.168.1.100"
+            domain_pattern = re.compile(r'query\[[A-Z]+\]\s+(\S+)\s+from')
+
+            for line in f:
+                if len(domains) >= limit:
+                    break
+
+                match = domain_pattern.search(line)
+                if match:
+                    domain = match.group(1).lower().strip('.')
+
+                    # Skip internal/local domains
+                    if not domain or domain.endswith('.local') or domain.endswith('.lan'):
+                        continue
+                    if domain in ('localhost', 'broadcasthost'):
+                        continue
+
+                    domains.append(domain)
+
+    except Exception as e:
+        logging.error(f"Failed to parse browsing history: {e}")
+
+    return domains
