@@ -4,7 +4,7 @@
 # "The Watchful Eye" - Secure, lightweight validator for edge devices
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel/bootstrap.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | sudo bash
 #   # OR with options:
 #   curl -sSL ... | sudo bash -s -- --mssp-endpoint my-mssp.example.com
 #
@@ -28,7 +28,7 @@ set -e
 
 VERSION="2.0.0"
 GITHUB_REPO="https://github.com/hookprobe/hookprobe.git"
-GITHUB_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main/releases/sentinel"
+GITHUB_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel"
 
 # Colors
 RED='\033[0;31m'
