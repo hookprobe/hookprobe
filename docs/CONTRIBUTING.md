@@ -34,7 +34,7 @@ We appreciate all forms of contribution:
    - Git installed
    - Text editor (vim, nano, VS Code, etc.)
 
-   > **Note**: RHEL-based systems are not currently supported for development in v5.x. RHEL support is planned for a future release.
+   > **Note**: RHEL-based systems are not supported due to OpenVSwitch availability limitations. Support planned for future release.
 
 3. **Accounts**:
    - GitHub account
@@ -419,7 +419,7 @@ What should happen.
 What actually happens.
 
 **Environment**
-- OS: RHEL 10
+- OS: Ubuntu 22.04
 - HookProbe Version: 5.0.0
 - Podman Version: 4.9.0
 

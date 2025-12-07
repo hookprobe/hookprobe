@@ -320,7 +320,7 @@ Documentation Hierarchy:
 - [ ] Enable SSL/HTTPS
 - [ ] Strong database passwords
 - [ ] Configure firewall
-- [ ] Enable SELinux (RHEL/Fedora)
+- [ ] Configure AppArmor (Ubuntu/Debian)
 - [ ] Set up log rotation
 - [ ] Regular backups
 - [ ] Security updates
