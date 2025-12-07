@@ -3,7 +3,7 @@ System Module Views - System Settings and Management
 """
 from flask import jsonify, request
 from . import system_bp
-from ...utils import run_command, get_system_info, format_bytes
+from utils import run_command, get_system_info, format_bytes
 
 
 @system_bp.route('/api/info')
