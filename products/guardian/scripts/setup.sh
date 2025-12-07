@@ -581,16 +581,18 @@ install_dns_shield() {
     log_step "Installing DNS Shield (ad blocking via dnsmasq)..."
 
     local SHIELD_DIR="/opt/hookprobe/guardian/dns-shield"
+    local SCRIPTS_DIR="/opt/hookprobe/guardian/scripts"
     local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    # Create DNS Shield directory
+    # Create required directories
     mkdir -p "$SHIELD_DIR"
+    mkdir -p "$SCRIPTS_DIR"
     mkdir -p /var/log/hookprobe
 
-    # Copy update script if not present
+    # Copy update script
     if [ -f "$SCRIPT_DIR/update-blocklists.sh" ]; then
-        cp "$SCRIPT_DIR/update-blocklists.sh" /opt/hookprobe/guardian/scripts/
-        chmod +x /opt/hookprobe/guardian/scripts/update-blocklists.sh
+        cp "$SCRIPT_DIR/update-blocklists.sh" "$SCRIPTS_DIR/"
+        chmod +x "$SCRIPTS_DIR/update-blocklists.sh"
     fi
 
     # Create default configuration
