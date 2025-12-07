@@ -1,335 +1,338 @@
 # HookProbe Quick Start Guide
 
-<p align="center">
-  <strong>The Future of Cybersecurity</strong><br>
-  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em><br><br>
-  <strong>Enterprise-Grade AI Security for $150 · Democratizing Cybersecurity for Millions</strong>
-</p>
+**Version 5.0.0** | Get started in 15 minutes
 
 ---
 
-**Get enterprise-grade security running in 15 minutes** — protecting your network with the same capabilities that cost enterprises $400,000+/year.
+## Choose Your Deployment
+
+HookProbe has 5 tiers. Choose based on your hardware:
+
+| Tier | Hardware | Purpose | Install Time |
+|------|----------|---------|--------------|
+| **Sentinel** | LXC/VM (512MB RAM) | Lightweight validator | 5 min |
+| **Guardian** | Raspberry Pi 4/5 | Portable travel hotspot | 10 min |
+| **Fortress** | Mini PC (N100) | Full SDN with VLANs | 15 min |
+| **Nexus** | Server (64GB+ RAM) | ML/AI compute hub | 30 min |
+| **MSSP** | Cloud/Datacenter | Federation & VPN gateway | 45 min |
 
 ---
 
-## 🆕 First Time with Linux?
+## Sentinel: Lightweight Validator
 
-**📘 [Complete Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)**
+**For**: IoT gateways, LXC containers, low-power devices (512MB RAM)
 
-If you've never used Linux before, start with our comprehensive beginner's guide that covers:
-- ✅ Downloading Linux (Ubuntu) - **Step-by-step with screenshots**
-- ✅ Creating bootable USB drive - **Using Rufus or Etcher**
-- ✅ Installing Linux from scratch - **Complete walkthrough**
-- ✅ Partitioning your disk - **Recommended layouts**
-- ✅ Basic Linux setup - **Network, updates, tools**
-- ✅ Installing HookProbe - **One command installation**
+### What it does
+- Validates your edge node with MSSP
+- Health monitoring endpoint (port 9090)
+- Minimal footprint (~50MB)
 
-> **Note**: HookProbe v5.x currently supports **Debian-based systems only** (Ubuntu, Debian, Raspberry Pi OS). RHEL/Fedora support is planned for a future release.
-
-**Perfect for absolute beginners!** No Linux experience required.
-
----
-
-## 🚀 Installation in 3 Steps (For Linux Users)
-
-Already have Linux? HookProbe v5.0 introduces an **interactive installation wizard** that eliminates manual configuration. Just run one command and answer a few prompts!
-
-### Step 1: Clone Repository
+### Install on LXC Container
 
 ```bash
+# 1. Create LXC container (Proxmox example)
+pct create 100 local:vztmpl/debian-12-standard_12.0-1_amd64.tar.zst \
+  --hostname sentinel-01 \
+  --memory 512 \
+  --cores 1 \
+  --net0 name=eth0,bridge=vmbr0,ip=dhcp
+
+# 2. Start and enter container
+pct start 100
+pct enter 100
+
+# 3. Install Sentinel
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
+sudo ./install.sh --tier sentinel
 ```
 
-### Step 2: Run Interactive Installer
+### Configure MSSP Connection
 
 ```bash
-sudo ./install.sh
+# Edit configuration
+sudo nano /etc/hookprobe/sentinel.conf
+
+# Set your MSSP details:
+MSSP_URL=https://your-mssp.example.com
+MSSP_ID=your-tenant-id
+
+# Restart service
+sudo systemctl restart hookprobe-sentinel
 ```
 
-### Step 3: Follow the Wizard
+### Verify
 
-The interactive installer will automatically:
-
-1. **Detect Network Interfaces** - Scans your hardware (eth0, wlan0, etc.)
-2. **Configure Networks** - Prompts for IP addresses, automatically sets up bridges, VNIs, and VXLANs
-3. **Generate Security** - Creates secure passwords and encryption keys (no manual editing!)
-4. **Deploy PODs** - Installs and configures all 7 security PODs
-5. **Verify Deployment** - Runs health checks
-
-**⏱️ Installation completes in 15-20 minutes!**
+```bash
+curl http://localhost:9090/health
+# Should return: {"status": "healthy", "version": "5.0.0"}
+```
 
 ---
 
-## ✨ What's New in v5.0
+## Guardian: Portable Travel Hotspot
 
-### Simplified Installation Process
+**For**: Raspberry Pi 4/5 (4GB+ RAM) - portable WiFi security
 
-**Before v5.0** (Manual):
-```bash
-# Old process - manual editing required
-git clone repo
-nano config.sh          # Manual editing
-  - Set HOST_IP
-  - Set passwords
-  - Set PSK keys
-  - Configure VXLANs
-sudo ./setup.sh
-```
+### What it does
+- Secure WiFi hotspot for travel
+- DNS filtering and ad blocking
+- IDS/IPS protection
+- Connects to MSSP for validation
 
-**v5.0** (Automated):
-```bash
-# New process - fully interactive
-git clone repo
-sudo ./install.sh       # Interactive wizard does everything!
-  ✓ Detects interfaces automatically
-  ✓ Prompts for IP (with validation)
-  ✓ Generates passwords securely
-  ✓ Creates encryption keys
-  ✓ Configures all PODs
-  ✓ Deploys containers
-```
+### Hardware Needed
+- Raspberry Pi 4 or 5 (4GB RAM minimum)
+- MicroSD card (32GB+)
+- Power supply
+- Optional: USB WiFi adapter for dual-band
 
-**Benefits:**
-- ✅ **No manual file editing** - wizard handles everything
-- ✅ **Automatic network detection** - finds interfaces for you
-- ✅ **Secure by default** - generates cryptographically secure passwords
-- ✅ **Error validation** - validates inputs before proceeding
-- ✅ **Guided process** - clear prompts and explanations
-- ✅ **Professional configuration** - production-ready settings
-
-## 📋 Configuration Menu
-
-When you run `./install.sh`, you'll see:
-
-```
-HookProbe Installer
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Main Deployments:
-  1) Edge Deployment (x86_64: N100/Core/AMD | ARM: Pi/Jetson/Radxa)
-  2) Cloud Backend (MSSP Multi-Tenant)
-
-Configuration:
-  c) Run Configuration Wizard
-
-Optional Add-ons:
-  3) Install n8n Workflow Automation (POD 008)
-  4) Install LTE/5G Connectivity
-  5) Install ClickHouse Analytics
-
-Maintenance:
-  6) Uninstall HookProbe
-  7) Update Containers
-
-  q) Quit
-```
-
-## 🎯 Deployment Options
-
-### Edge Deployment (Home/Office)
+### Install
 
 ```bash
-sudo ./install.sh
-# Select option 1
-# Follow configuration wizard
-# Installation completes in 15-20 minutes
+# 1. Flash Raspberry Pi OS Lite (64-bit) to SD card
+# Use Raspberry Pi Imager: https://www.raspberrypi.com/software/
+
+# 2. Boot Pi, connect via SSH or keyboard
+
+# 3. Install Guardian
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+sudo ./install.sh --tier guardian
 ```
 
-**Minimum Requirements:**
-- **CPU**: x86_64 (N100/N200, Core i3+, Ryzen) or ARM64 (Pi 4+, Jetson, Radxa)
-- **RAM**: 16GB (8GB for development/learning)
-- **Storage**: 500GB SSD
-- **Network**: 1Gbps NIC (2.5Gbps recommended for x86_64)
-
-### Cloud Backend (MSSP)
+### Register with MSSP
 
 ```bash
-sudo ./install.sh
-# Select option 2
-# Configure multi-tenant settings
-# Deployment completes in 30-40 minutes
+# Get your device ID
+cat /etc/hookprobe/device-id
+
+# Register at your MSSP dashboard
+# Your MSSP admin will provide:
+# - MSSP_URL
+# - MSSP_ID (your tenant ID)
+# - VPN credentials (optional)
+
+# Configure
+sudo nano /etc/hookprobe/guardian.conf
+# Add: MSSP_URL=https://your-mssp.example.com
+# Add: MSSP_ID=your-tenant-id
+
+sudo systemctl restart hookprobe-guardian
 ```
 
-**Minimum Requirements:**
-- Intel Xeon / AMD EPYC
-- 32GB RAM
-- 1TB NVMe SSD
-- 10Gbps NIC
+### Access
 
-## 🔧 Configuration Wizard Details
-
-The wizard automatically configures:
-
-### Network Settings
-- WAN interface selection
-- Host IP address
-- Bridge configuration
-- POD network ranges
-- VNI numbers for VXLAN
-
-### Security
-- VXLAN PSK encryption keys
-- Grafana admin password
-- PostgreSQL credentials
-- Redis authentication
-- Keycloak admin access
-
-### Features
-- Cloudflare Tunnel (optional)
-- XDP/eBPF DDoS protection
-- GDPR compliance settings
-
-## 📊 After Installation
-
-### Access Services
-
-| Service | URL | Default Credentials |
-|---------|-----|---------------------|
-| **Grafana** | http://YOUR_IP:3000 | admin / [configured] |
-| **Logto Admin** | http://YOUR_IP:3002 | admin / [configured] |
-| **Qsecbit API** | http://YOUR_IP:8888 | - |
-
-⚠️ **Important:** Passwords are configured during installation wizard. Note them down securely!
-
-### Verify Installation
-
-```bash
-# Check POD status
-sudo podman ps
-
-# Check logs
-sudo journalctl -u hookprobe-agent -f
-
-# Test Grafana
-curl -I http://localhost:3000
-
-# View configuration
-cat install/edge/config.sh  # (protected file, root only)
-```
-
-## 🔄 Adding Features Later
-
-### Install n8n Workflow Automation
-
-```bash
-sudo ./install.sh
-# Select option 3
-# Follow configuration for POD 008
-```
-
-### Update Containers
-
-```bash
-sudo ./install.sh
-# Select option 7
-# Updates all container images
-```
-
-## 🧪 CI/CD & Quality Assurance
-
-HookProbe v5.0 includes comprehensive CI/CD testing to ensure reliable deployments:
-
-### Automated Testing
-
-Every commit is automatically tested:
-
-- ✅ **Installation Tests** - Validates installer and configuration wizard
-- ✅ **Container Tests** - Verifies Podman, OVS, and networking
-- ✅ **Python Linting** - Ensures code quality (flake8, pylint, bandit)
-- ✅ **ShellCheck** - Validates shell scripts
-- ✅ **Link Validation** - Checks documentation links
-
-### CI/CD Status Badges
-
-Check the build status on the README:
-
-[![Installation Tests](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/installation-test.yml)
-[![Container Tests](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml/badge.svg)](https://github.com/hookprobe/hookprobe/actions/workflows/container-tests.yml)
-
-### Running Tests Locally
-
-Before deploying, you can run tests locally:
-
-```bash
-# Syntax validation
-bash -n install.sh
-find install/ -name "*.sh" -exec bash -n {} \;
-
-# Test configuration wizard
-sudo ./install.sh
-# Select option 'c' for configuration
-
-# Verify Podman and OVS
-podman --version
-sudo ovs-vsctl --version
-```
-
-### Complete CI/CD Documentation
-
-See [docs/CI-CD.md](docs/CI-CD.md) for:
-- Complete testing strategy
-- Contributing guidelines
-- Troubleshooting CI/CD issues
-- Local test commands
+| Interface | URL |
+|-----------|-----|
+| Web Admin | http://192.168.4.1:8080 |
+| Hotspot | Connect to "HookProbe-Guardian" WiFi |
 
 ---
 
-## 📚 Next Steps
+## Fortress: Full SDN with VLANs
 
-1. **Review Security Settings** - Check [SECURITY.md](docs/SECURITY.md)
-2. **Configure Grafana Dashboards** - Import security templates
-3. **Set Up Alerts** - Configure Grafana alerting
-4. **Enable Cloudflare Tunnel** - For remote access (optional)
-5. **Review GDPR Settings** - See [GDPR.md](docs/GDPR.md)
-6. **Check CI/CD Status** - Review automated test results
+**For**: Intel N100/N200 Mini PC, NUC (8GB+ RAM) - home/office security
 
-## 🆘 Troubleshooting
+### What it does
+- Full VLAN segmentation for IoT devices
+- MACsec encryption
+- OpenFlow SDN controller
+- Advanced monitoring with Grafana
 
-### Configuration Not Saved
+### Hardware Needed
+- Intel N100/N200 or similar Mini PC
+- 8GB+ RAM
+- 64GB+ SSD
+- 2+ Ethernet ports (or USB adapter)
 
-```bash
-# Re-run configuration wizard
-sudo ./install.sh
-# Select option 'c'
-```
-
-### Network Interface Not Detected
+### Install
 
 ```bash
-# Check interfaces manually
-ip link show
+# 1. Install Debian 12 or Ubuntu 24.04 on your Mini PC
 
-# Verify drivers loaded
-lsmod | grep -E "igb|igc|i40e"
+# 2. Install Fortress
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+sudo ./install.sh --tier fortress
 ```
 
-### Deployment Failed
+### Configure VLANs
 
-```bash
-# Check logs
-sudo journalctl -u hookprobe-agent -n 100
+The installer creates default VLANs:
 
-# Review installation log
-cat /var/log/hookprobe-install.log
-```
+| VLAN | Purpose | Subnet |
+|------|---------|--------|
+| 10 | IoT Devices | 192.168.10.0/24 |
+| 20 | Cameras | 192.168.20.0/24 |
+| 30 | Guest | 192.168.30.0/24 |
+| 40 | Trusted | 192.168.40.0/24 |
+| 99 | Quarantine | 192.168.99.0/24 |
 
-## 📖 Full Documentation
+### Access
 
-- [Complete Installation Guide](docs/installation/INSTALLATION.md)
-- [Edge Deployment Checklist](install/edge/checklist.md)
-- [Cloud Deployment Guide](docs/installation/cloud-deployment.md)
-- [Architecture Overview](docs/architecture/security-model.md)
-
-## 💡 Key Advantages
-
-✅ **No Manual Configuration** - Wizard handles everything
-✅ **Auto-Detection** - Finds network interfaces automatically
-✅ **Secure by Default** - Generates random passwords
-✅ **Single Command** - `./install.sh` does it all
-✅ **Guided Process** - Step-by-step prompts
-✅ **Professional** - Production-ready configuration
+| Interface | URL |
+|-----------|-----|
+| Admin Dashboard | https://YOUR_IP:8443 |
+| Grafana | http://YOUR_IP:3000 |
 
 ---
 
-**Need Help?** See [CONTRIBUTING.md](docs/CONTRIBUTING.md) or open an issue.
+## Nexus: ML/AI Compute Hub
+
+**For**: Servers with 64GB+ RAM, optional GPU - analytics and ML
+
+### What it does
+- GPU-accelerated threat detection
+- ClickHouse analytics database
+- Long-term data retention (2+ years)
+- ML model training
+
+### Hardware Needed
+- Server with 64GB+ RAM
+- 1TB+ NVMe SSD
+- Optional: NVIDIA GPU for ML acceleration
+
+### Install
+
+```bash
+# 1. Install Debian 12 or Ubuntu 24.04
+
+# 2. Install Nexus
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+sudo ./install.sh --tier nexus
+
+# 3. Optional: Enable GPU
+sudo ./install.sh --enable-gpu
+```
+
+---
+
+## MSSP: Cloud Federation
+
+**For**: Cloud/datacenter - manages all edge devices
+
+### What it does
+- VPN gateway for remote access
+- Multi-tenant management
+- Central policy distribution
+- Federation hub for all tiers
+
+### Install
+
+```bash
+# 1. On your cloud server (64GB+ RAM recommended)
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+sudo ./install.sh --tier mssp
+
+# 2. Configure domain and certificates
+sudo ./install.sh --configure-tls
+```
+
+### Generate Tenant IDs
+
+```bash
+# Create tenant for your devices
+hookprobe-ctl tenant create \
+  --name "My Home" \
+  --id home-001
+
+# This generates:
+# - MSSP_ID: home-001
+# - MSSP_URL: https://your-mssp-domain.com
+# - VPN credentials
+```
+
+---
+
+## How Tiers Connect
+
+```
+                    ┌─────────────────────┐
+                    │       MSSP          │
+                    │  (Cloud Federation) │
+                    │  - VPN Gateway      │
+                    │  - Tenant Mgmt      │
+                    └─────────┬───────────┘
+                              │ HTP Tunnel
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   Guardian    │    │   Fortress    │    │    Nexus      │
+│ (Travel WiFi) │    │ (Home SDN)    │    │ (ML/AI Hub)   │
+└───────┬───────┘    └───────┬───────┘    └───────────────┘
+        │                    │
+        ▼                    ▼
+┌───────────────┐    ┌───────────────┐
+│   Sentinel    │    │   Sentinel    │
+│  (Validator)  │    │  (Validator)  │
+└───────────────┘    └───────────────┘
+```
+
+---
+
+## Validation Flow
+
+1. **Sentinel** connects to MSSP with `MSSP_ID`
+2. **Guardian/Fortress** register their `device-id` with MSSP
+3. **MSSP** validates devices and issues certificates
+4. **VPN** access enabled after validation
+
+### Check Validation Status
+
+```bash
+# On any edge device
+hookprobe-ctl status
+
+# Expected output:
+# Status: VALIDATED
+# MSSP: connected
+# Last sync: 2025-12-07 10:30:00
+```
+
+---
+
+## Common Commands
+
+```bash
+# Check service status
+sudo systemctl status hookprobe-*
+
+# View logs
+sudo journalctl -u hookprobe-guardian -f
+
+# Restart services
+sudo systemctl restart hookprobe-guardian
+
+# Check MSSP connection
+hookprobe-ctl mssp status
+
+# Update to latest version
+cd hookprobe && git pull && sudo ./install.sh --upgrade
+```
+
+---
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Can't reach MSSP | Check firewall, ensure UDP 4719 (HTP) is open |
+| Validation failed | Verify MSSP_ID and MSSP_URL in config |
+| Service won't start | Check logs: `journalctl -u hookprobe-* -n 50` |
+| No internet on hotspot | Check upstream connection on Guardian |
+
+---
+
+## Next Steps
+
+- **[Full Documentation](docs/DOCUMENTATION-INDEX.md)** - Complete guides
+- **[Architecture Guide](ARCHITECTURE.md)** - Understand the system
+- **[VPN Setup](docs/networking/VPN.md)** - Remote access
+- **[SDN Guide](docs/networking/SDN.md)** - VLAN segmentation (Fortress)
+
+---
+
+**Need Help?** Open an issue at https://github.com/hookprobe/hookprobe/issues
