@@ -3164,7 +3164,7 @@ confirm_installation() {
     if check_mssp_connectivity; then
         echo -e "  ${GREEN}✓${NC} MSSP connectivity: ${GREEN}Available${NC}"
     else
-        echo -e "  ${YELLOW}!${NC} MSSP connectivity: ${YELLOW}Offline${NC} (VPN features disabled until connected)"
+        echo -e "  ${YELLOW}!${NC} MSSP connectivity: ${YELLOW}Offline${NC} (HTP Mesh features disabled until connected)"
     fi
     echo ""
 
