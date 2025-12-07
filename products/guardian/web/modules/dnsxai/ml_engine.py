@@ -41,6 +41,69 @@ CNAME_CACHE_PATH = f'{ML_DATA_DIR}/cname_cache.json'
 FEDERATED_PATH = f'{ML_DATA_DIR}/federated_updates.json'
 THREAT_LOG_PATH = f'{ML_DATA_DIR}/threat_detections.json'
 
+# Known ad/tracking domains for ML training seed data
+# These help the model learn what ads look like even with no browsing history
+KNOWN_AD_DOMAINS = [
+    # Google Ads
+    'pagead2.googlesyndication.com', 'googleadservices.com', 'doubleclick.net',
+    'googleads.g.doubleclick.net', 'www.googleadservices.com', 'adservice.google.com',
+    'tpc.googlesyndication.com', 'www.googletagservices.com',
+    # YouTube Ads (injected in streams)
+    'r1---sn-aigllnez.googlevideo.com', 'r2---sn-aigllnez.googlevideo.com',
+    'yt3.ggpht.com', 'i.ytimg.com', 'www.youtube.com/api/stats/ads',
+    'www.youtube.com/pagead', 'www.youtube.com/ptracking',
+    # Facebook/Meta Ads
+    'pixel.facebook.com', 'an.facebook.com', 'www.facebook.com/tr',
+    'connect.facebook.net', 'staticxx.facebook.com',
+    # Twitter/X Ads
+    'ads-twitter.com', 'analytics.twitter.com', 't.co',
+    # Amazon Ads
+    'aax.amazon-adsystem.com', 'fls-na.amazon-adsystem.com',
+    # Microsoft/Bing Ads
+    'bat.bing.com', 'c.bing.com', 'a.ads.msn.com',
+    # Other major ad networks
+    'cdn.taboola.com', 'trc.taboola.com',
+    'widgets.outbrain.com', 'log.outbrain.com',
+    'ads.pubmatic.com', 'image6.pubmatic.com',
+    'ib.adnxs.com', 'prebid.adnxs.com',
+    'sync.sharethis.com', 'l.sharethis.com',
+    'static.criteo.net', 'dis.criteo.com',
+    'pixel.quantserve.com', 'edge.quantserve.com',
+    'sb.scorecardresearch.com', 'b.scorecardresearch.com',
+    'www.summerhamster.com', 'loadus.exelator.com',
+    # Tracking pixels
+    'track.hubspot.com', 'forms.hubspot.com',
+    'pixel.advertising.com', 'pixel.rubiconproject.com',
+    'beacon.krxd.net', 'cdn.krxd.net',
+    # Mobile ad networks
+    'app.adjust.com', 'app-measurement.com',
+    'settings.crashlytics.com', 'app.appsflyer.com',
+    # Analytics (often used for tracking)
+    'ssl.google-analytics.com', 'www.google-analytics.com',
+    'cdn.segment.com', 'api.segment.io',
+    'cdn.amplitude.com', 'api.amplitude.com',
+    'cdn.mxpnl.com', 'api.mixpanel.com',
+    # Malicious/suspicious patterns (DGA-like)
+    'xkcd93jd82.xyz', 'asjd83jd.top', 'dk3j9dk.click', '8fjd9dk3.work',
+    'randomdomain123456.tk', 'suspicious-site-test.ml',
+]
+
+# Known safe/legitimate domains for training baseline
+KNOWN_SAFE_DOMAINS = [
+    # Major websites (definitely not ads)
+    'www.google.com', 'www.youtube.com', 'www.github.com', 'www.stackoverflow.com',
+    'www.wikipedia.org', 'www.reddit.com', 'www.amazon.com', 'www.netflix.com',
+    'www.microsoft.com', 'www.apple.com', 'www.cloudflare.com',
+    # CDNs (legitimate content delivery)
+    'cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com',
+    # APIs (legitimate services)
+    'api.github.com', 'api.stripe.com', 'api.twilio.com',
+    # Email services
+    'smtp.gmail.com', 'imap.gmail.com', 'outlook.office365.com',
+    # Common infrastructure
+    'dns.google', 'cloudflare-dns.com', '1.1.1.1', '8.8.8.8',
+]
+
 # Known tracker CNAME patterns (for uncloaking)
 KNOWN_TRACKER_CNAMES = {
     'doubleclick.net': 'Google Ads',
@@ -297,13 +360,15 @@ class DNSMLClassifier:
         except Exception as e:
             logger.error(f"Failed to save ML model: {e}")
 
-    def train(self, domains: List[str], labels: Optional[List[int]] = None) -> Dict[str, Any]:
+    def train(self, domains: List[str], labels: Optional[List[int]] = None,
+              use_seed_data: bool = True) -> Dict[str, Any]:
         """
         Train the classifier on domain data.
 
         Args:
-            domains: List of domain names
+            domains: List of domain names from user browsing
             labels: Optional labels (1=safe, -1=malicious). If None, uses unsupervised learning.
+            use_seed_data: Whether to include known ad/safe domains for better training
 
         Returns:
             Training result with stats
@@ -314,10 +379,26 @@ class DNSMLClassifier:
                 'error': 'ML libraries not installed (numpy, scikit-learn required)'
             }
 
-        if len(domains) < 10:
+        # Add seed data to improve training
+        training_domains = list(domains) if domains else []
+        seed_count = 0
+
+        if use_seed_data:
+            # Add known ad/tracking domains (these are "anomalies" we want to detect)
+            training_domains.extend(KNOWN_AD_DOMAINS)
+            seed_count += len(KNOWN_AD_DOMAINS)
+
+            # Add known safe domains (baseline for "normal" behavior)
+            training_domains.extend(KNOWN_SAFE_DOMAINS)
+            seed_count += len(KNOWN_SAFE_DOMAINS)
+
+            logger.info(f"Added {seed_count} seed domains for training")
+
+        if len(training_domains) < 10:
             return {
                 'success': False,
-                'error': 'Need at least 10 domains for training'
+                'error': f'Need at least 10 domains for training (found {len(training_domains)}). '
+                         f'Browse some websites first, or enable seed data.'
             }
 
         with self._lock:
@@ -326,7 +407,7 @@ class DNSMLClassifier:
                 feature_vectors = []
                 valid_domains = []
 
-                for domain in domains:
+                for domain in training_domains:
                     try:
                         features = self.feature_extractor.extract_features(domain)
                         vector = self.feature_extractor.to_vector(features)
@@ -347,11 +428,18 @@ class DNSMLClassifier:
                 self.scaler = StandardScaler()
                 X_scaled = self.scaler.fit_transform(X)
 
+                # Calculate contamination based on known ad ratio
+                # If we have seed data, we know roughly how many are ads
+                if use_seed_data and seed_count > 0:
+                    ad_ratio = len(KNOWN_AD_DOMAINS) / len(valid_domains)
+                    contamination = min(0.3, max(0.05, ad_ratio))  # Between 5-30%
+                else:
+                    contamination = 0.1
+
                 # Train Isolation Forest (anomaly detection)
-                # Contamination = expected ratio of anomalies (suspicious domains)
                 self.model = IsolationForest(
                     n_estimators=100,
-                    contamination=0.1,  # Assume 10% might be suspicious
+                    contamination=contamination,
                     random_state=42,
                     n_jobs=-1
                 )
@@ -367,11 +455,17 @@ class DNSMLClassifier:
                 # Save training data for federated learning
                 self._save_training_data(valid_domains)
 
+                # Calculate user vs seed breakdown
+                user_domains = len(domains) if domains else 0
+
                 return {
                     'success': True,
                     'samples_trained': len(valid_domains),
+                    'user_domains': user_domains,
+                    'seed_domains': seed_count,
                     'features': X.shape[1],
                     'model_type': 'IsolationForest',
+                    'contamination': round(contamination, 3),
                     'last_trained': self.last_trained
                 }
 
