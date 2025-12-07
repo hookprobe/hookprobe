@@ -6,10 +6,10 @@ The products/ directory contains the five tiers of HookProbe deployment, from li
 
 ```
 products/
-├── sentinel/   # DSM Validator (IoT, 512MB RAM)
-├── guardian/   # Travel Companion (RPi, 3GB RAM)
-├── fortress/   # Edge Router (Mini PC, 8GB RAM)
-├── nexus/      # ML/AI Compute (Server, 64GB+ RAM)
+├── sentinel/   # DSM Validator (IoT, 256MB RAM)
+├── guardian/   # Travel Companion (RPi, 1.5GB RAM)
+├── fortress/   # Edge Router (Mini PC, 4GB RAM)
+├── nexus/      # ML/AI Compute (Server, 16GB+ RAM)
 └── mssp/       # Cloud Federation (mssp.hookprobe.com)
 ```
 
@@ -31,7 +31,7 @@ products/
 │                                      │ HTP                                      │
 │   ┌──────────────────────────────────┴───────────────────────────────────────┐ │
 │   │                              NEXUS                                        │ │
-│   │               ML/AI Heavy Computation · 64GB+ RAM                         │ │
+│   │               ML/AI Heavy Computation · 16GB+ RAM                         │ │
 │   │         On-prem or Cloud · Federated Learning · Regional Hub             │ │
 │   └──────────────────────────────────────────────────────────────────────────┘ │
 │                                      ▲                                          │
@@ -41,7 +41,7 @@ products/
 │   ┌───────────┐              ┌───────────┐              ┌───────────┐          │
 │   │ FORTRESS  │              │ GUARDIAN  │              │ SENTINEL  │          │
 │   │Edge Router│              │  Travel   │              │ Validator │          │
-│   │   8GB     │              │   3GB     │              │  512MB    │          │
+│   │   4GB     │              │  1.5GB    │              │  256MB    │          │
 │   │ Mini PC   │              │   RPi     │              │   IoT     │          │
 │   └───────────┘              └───────────┘              └───────────┘          │
 │                                                                                 │
@@ -54,7 +54,7 @@ products/
 
 | Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
 |---------|----------|----------|----------|-------|------|
-| **RAM** | 512MB | 3GB | 8GB | 64GB+ | Auto-scale |
+| **RAM** | 256MB | 1.5GB | 4GB | 16GB+ | Auto-scale |
 | **Hardware** | IoT gateway | RPi 4/5 | Mini PC | Server | Cloud |
 | **Use Case** | Validate | Travel | Home/Office | Regional | Global |
 | **L2-L7 Detection** | - | ✓ | ✓ | ✓ | - |
@@ -224,15 +224,15 @@ Only derived intelligence flows up
 ## Choosing Your Tier
 
 ```
-Do you have >64GB RAM and need ML training?
+Do you have >16GB RAM and need ML training?
 ├── YES → Nexus
 └── NO
     └── Do you need VLAN segmentation or SDN?
-        ├── YES → Fortress (8GB RAM)
+        ├── YES → Fortress (4GB RAM)
         └── NO
             └── Do you need WiFi hotspot and L2-L7 detection?
-                ├── YES → Guardian (3GB RAM)
-                └── NO → Sentinel (512MB RAM)
+                ├── YES → Guardian (1.5GB RAM)
+                └── NO → Sentinel (256MB RAM)
 ```
 
 ---

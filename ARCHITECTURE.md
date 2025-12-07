@@ -82,7 +82,7 @@ We flip the SOC model inside-out with a federated architecture where:
 │   │   Validator   │    │    Travel     │    │  Edge Router  │                  │
 │   └───────────────┘    └───────────────┘    └───────────────┘                  │
 │                                                                                 │
-│   RAM: 512MB            RAM: 3GB             RAM: 8GB                           │
+│   RAM: 256MB            RAM: 1.5GB           RAM: 4GB                           │
 │   IoT gateways          RPi 4/5              Mini PC/Server                     │
 │   LTE devices           Portable             Permanent install                  │
 │                                                                                 │
@@ -105,7 +105,7 @@ We flip the SOC model inside-out with a federated architecture where:
 │   │                     ML/AI Heavy Computation                             │  │
 │   └─────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                 │
-│   RAM: 64GB+            GPU: NVIDIA recommended                                 │
+│   RAM: 16GB+            GPU: NVIDIA recommended                                 │
 │   Datacenter/Cloud      On-prem or hosted                                       │
 │                                                                                 │
 │   • Lightweight inference locally                                               │
