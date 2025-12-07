@@ -6,7 +6,7 @@ import json
 import time
 from flask import jsonify, request, current_app
 from . import dnsxai_bp
-from ...utils import load_json_file, save_json_file, load_text_file, save_text_file, run_command
+from utils import load_json_file, save_json_file, load_text_file, save_text_file, run_command
 
 
 def get_dnsxai_config():
