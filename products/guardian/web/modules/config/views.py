@@ -10,39 +10,63 @@ from utils import run_command
 def api_wifi_scan():
     """Scan for available WiFi networks."""
     try:
-        output, success = run_command('sudo iwlist wlan0 scan 2>/dev/null | grep -E "ESSID|Quality|Encryption"', timeout=30)
+        # Use full iwlist output to get more details including IE info
+        output, success = run_command('sudo iwlist wlan0 scan 2>/dev/null', timeout=30)
 
         networks = []
         current = {}
 
         for line in output.split('\n'):
             line = line.strip()
-            if 'ESSID:' in line:
+
+            # New cell = new network
+            if 'Cell ' in line and 'Address:' in line:
                 if current and current.get('ssid'):
                     networks.append(current)
+                current = {'ssid': '', 'signal': 0, 'security': ''}
+
+            elif 'ESSID:' in line:
                 ssid = line.split('ESSID:')[1].strip('"')
-                current = {'ssid': ssid, 'signal': 0, 'security': ''}
+                current['ssid'] = ssid
+
             elif 'Quality=' in line:
                 # Extract signal quality
                 quality_part = line.split('Quality=')[1].split()[0]
                 if '/' in quality_part:
                     num, denom = quality_part.split('/')
                     current['signal'] = int(int(num) / int(denom) * 100)
+
             elif 'Encryption key:on' in line:
-                current['security'] = 'WPA'
+                # Default to WPA if encryption is on
+                if not current.get('security'):
+                    current['security'] = 'WPA'
+
             elif 'Encryption key:off' in line:
                 current['security'] = ''
+
+            # Detect specific security types
+            elif 'IE: IEEE 802.11i/WPA2' in line or 'WPA2' in line:
+                current['security'] = 'WPA2'
+            elif 'IE: WPA Version' in line:
+                if current.get('security') != 'WPA2':
+                    current['security'] = 'WPA'
+            elif 'WPA3' in line or 'SAE' in line:
+                current['security'] = 'WPA3'
 
         if current and current.get('ssid'):
             networks.append(current)
 
-        # Remove duplicates and empty SSIDs
-        seen = set()
-        unique = []
+        # Remove duplicates and empty SSIDs, keep strongest signal for each SSID
+        seen = {}
         for net in networks:
-            if net['ssid'] and net['ssid'] not in seen:
-                seen.add(net['ssid'])
-                unique.append(net)
+            ssid = net.get('ssid', '')
+            if ssid:
+                if ssid not in seen or net['signal'] > seen[ssid]['signal']:
+                    seen[ssid] = net
+
+        unique = list(seen.values())
+        # Sort by signal strength
+        unique.sort(key=lambda x: x['signal'], reverse=True)
 
         return jsonify({'success': True, 'networks': unique})
     except Exception as e:
