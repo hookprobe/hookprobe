@@ -10,7 +10,7 @@ from utils import run_command
 def api_wifi_scan():
     """Scan for available WiFi networks."""
     try:
-        output, success = run_command('iwlist wlan0 scan 2>/dev/null | grep -E "ESSID|Quality|Encryption"', timeout=30)
+        output, success = run_command('sudo iwlist wlan0 scan 2>/dev/null | grep -E "ESSID|Quality|Encryption"', timeout=30)
 
         networks = []
         current = {}
@@ -72,7 +72,7 @@ network={{
         with open('/tmp/wpa_supplicant.conf', 'w') as f:
             f.write(config)
 
-        run_command('wpa_cli -i wlan0 reconfigure')
+        run_command('sudo wpa_cli -i wlan0 reconfigure')
         return jsonify({'success': True, 'message': f'Connecting to {ssid}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
