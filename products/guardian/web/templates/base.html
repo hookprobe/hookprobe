@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#242943">
+    <meta name="description" content="HookProbe Guardian - Secure Gateway with IDS/IPS, WAF, AI-powered protection">
+
+    <title>{% block title %}HookProbe Guardian{% endblock %}</title>
+
+    <!-- Preconnect for fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{% filter urlencode %}<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23242943'/><path d='M50 20L25 35v30l25 15 25-15V35L50 20z' fill='%23F05B2D'/></svg>{% endfilter %}">
+
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-inner">
+            <!-- Brand -->
+            <div class="header-brand">
+                <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NSIgZmlsbD0iIzI0Mjk0MyIvPjxwYXRoIGQ9Ik01MCAyMEwyNSAzNXYzMGwyNSAxNSAyNS0xNVYzNUw1MCAyMHoiIGZpbGw9IiNGMDVCMkQiLz48cGF0aCBkPSJNNTAgMjhMMzIgMzh2MjBsMTggMTAgMTgtMTBWMzhMNTAgMjh6IiBmaWxsPSIjZmZmIiBvcGFjaXR5PSIuMyIvPjwvc3ZnPg==" alt="HookProbe" class="header-logo">
+                <div class="header-title">
+                    <h1>Guardian</h1>
+                    <span class="tagline">Protection on the Move</span>
+                </div>
+            </div>
+
+            <!-- Status Badge -->
+            <div class="header-status" id="header-status">
+                <span class="status-dot"></span>
+                <span class="status-text">Active</span>
+            </div>
+
+            <!-- Mobile Menu Toggle -->
+            <button class="menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+
+            <!-- Main Navigation -->
+            <nav class="nav-main" role="navigation">
+                <button class="nav-item active" data-tab="dashboard">Dashboard</button>
+                <button class="nav-item" data-tab="security">Security</button>
+                <button class="nav-item" data-tab="dnsxai">dnsXai</button>
+                <button class="nav-item" data-tab="clients">Clients</button>
+                <button class="nav-item" data-tab="config">Config</button>
+                <button class="nav-item" data-tab="vpn">VPN</button>
+                <button class="nav-item" data-tab="system">System</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages" style="max-width: 1400px; margin: 0 auto; padding: var(--spacing-md) var(--spacing-xl);">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Dashboard Tab -->
+        <section id="tab-dashboard" class="tab-panel active">
+            {% include 'core/dashboard.html' %}
+        </section>
+
+        <!-- Security Tab -->
+        <section id="tab-security" class="tab-panel">
+            {% include 'security/metrics.html' %}
+        </section>
+
+        <!-- dnsXai Tab -->
+        <section id="tab-dnsxai" class="tab-panel">
+            {% include 'dnsxai/index.html' %}
+        </section>
+
+        <!-- Clients Tab -->
+        <section id="tab-clients" class="tab-panel">
+            {% include 'clients/index.html' %}
+        </section>
+
+        <!-- Config Tab -->
+        <section id="tab-config" class="tab-panel">
+            {% include 'config/networks.html' %}
+        </section>
+
+        <!-- VPN Tab -->
+        <section id="tab-vpn" class="tab-panel">
+            {% include 'vpn/index.html' %}
+        </section>
+
+        <!-- System Tab -->
+        <section id="tab-system" class="tab-panel">
+            {% include 'system/index.html' %}
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NSIgZmlsbD0iIzI0Mjk0MyIvPjxwYXRoIGQ9Ik01MCAyMEwyNSAzNXYzMGwyNSAxNSAyNS0xNVYzNUw1MCAyMHoiIGZpbGw9IiNGMDVCMkQiLz48L3N2Zz4=" alt="HookProbe" class="footer-logo">
+                <span>HookProbe Guardian v5.0</span>
+            </div>
+            <div class="footer-text">
+                Federated Cybersecurity Mesh - One node's detection, everyone's protection
+            </div>
+            <div class="footer-links">
+                <a href="https://hookprobe.com" target="_blank" class="footer-link">Website</a>
+                <a href="https://github.com/hookprobe/hookprobe" target="_blank" class="footer-link">GitHub</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Main JavaScript -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+
+    <style>
+        /* Tab Panel Styles */
+        .tab-panel {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+        .tab-panel.active {
+            display: block;
+        }
+    </style>
+</body>
+</html>
