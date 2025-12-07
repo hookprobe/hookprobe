@@ -93,17 +93,13 @@ install_system_dependencies() {
     log_info "Installing system dependencies..."
 
     if command -v dnf &>/dev/null; then
-        # Fedora/RHEL/Rocky/Alma
-        dnf install -y \
-            python3.11 \
-            python3.11-devel \
-            python3-pip \
-            postgresql-devel \
-            gcc \
-            nginx \
-            || true
+        # RHEL-based systems not supported due to OpenVSwitch limitations
+        log_error "RHEL-based systems (Fedora, CentOS, Rocky, RHEL) are not supported."
+        log_error "Please use Ubuntu 22.04+, Debian 11+, or Raspberry Pi OS (Bookworm)."
+        log_error "RHEL support is planned for a future release."
+        exit 1
     elif command -v apt-get &>/dev/null; then
-        # Debian/Ubuntu
+        # Debian/Ubuntu (Supported)
         apt-get update
         apt-get install -y \
             python3.11 \

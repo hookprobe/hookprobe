@@ -45,7 +45,7 @@ This is a **major architectural transformation** moving from GPL-licensed compon
   - Qsecbit auto-detects deployment type (DEPLOYMENT_TYPE env var)
 - **Kafka** (Apache 2.0) - High-throughput edge data ingestion
 - **Backend Deployment Scripts**:
-  - `backend-setup.sh` - Cross-platform (RHEL/Ubuntu/Fedora/Proxmox)
+  - `backend-setup.sh` - Cross-platform (Ubuntu/Debian/Proxmox)
   - `backend-network-config.sh` - Multi-tenant configuration
   - `backend-uninstall.sh` - Clean removal
   - Complete documentation in `docs/installation/cloud-deployment.md`
