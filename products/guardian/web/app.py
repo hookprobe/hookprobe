@@ -1591,6 +1591,146 @@ HTML_TEMPLATE = '''
             .container-grid { grid-template-columns: 1fr; }
             .param-grid { grid-template-columns: 1fr; }
         }
+
+        /* dnsXai Toggle Switch */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 26px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #374151;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--hp-green);
+        }
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+
+        /* dnsXai Slider Styling */
+        #dnsxai-level-slider {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        #dnsxai-level-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            border: 3px solid var(--hp-primary);
+            margin-top: -8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        #dnsxai-level-slider::-moz-range-thumb {
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            border: 3px solid var(--hp-primary);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+
+        /* Modal */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            padding: 20px;
+        }
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 1px solid var(--hp-border);
+        }
+        .modal-header h3 { margin: 0; }
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        .modal-body { padding: 20px; }
+        .modal-footer { padding: 15px 20px; border-top: 1px solid var(--hp-border); }
+
+        /* Animations */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+
+        /* Badge variants */
+        .badge-info { background: #3b82f6; color: white; }
+        .badge-warning { background: var(--hp-amber); color: white; }
+        .badge-danger { background: var(--hp-red); color: white; }
+        .badge-secondary { background: #6b7280; color: white; }
+
+        /* dnsXai Responsive */
+        @media (max-width: 768px) {
+            .dnsxai-stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .dnsxai-stat-card { padding: 15px; }
+            .dnsxai-stat-card > div:first-child { font-size: 22px; }
+            #dnsxai-level-display { padding: 15px; }
+            #dnsxai-level-name { font-size: 20px; }
+        }
+        @media (max-width: 480px) {
+            .dnsxai-stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .dnsxai-stat-card { padding: 12px; }
+            .dnsxai-stat-card > div:first-child { font-size: 20px; }
+        }
     </style>
 </head>
 <body>
@@ -1616,7 +1756,7 @@ HTML_TEMPLATE = '''
         <div class="tab active" data-tab="dashboard">Dashboard</div>
         <div class="tab" data-tab="security">Security</div>
         <div class="tab" data-tab="clients">Clients</div>
-        <div class="tab" data-tab="dns-shield">DNS Shield</div>
+        <div class="tab" data-tab="dnsxai">dnsXai</div>
         <div class="tab" data-tab="vpn">VPN</div>
         <div class="tab" data-tab="wifi">WiFi</div>
         <div class="tab" data-tab="system">System</div>
@@ -2571,112 +2711,315 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
-        <!-- DNS Shield Tab -->
-        <div id="dns-shield" class="tab-content">
+        <!-- dnsXai Tab - AI-Powered DNS Protection -->
+        <div id="dnsxai" class="tab-content">
+            <!-- dnsXai Header with AI Badge -->
             <div class="card">
-                <h2>DNS Shield</h2>
-                <p style="color: #6b7280; margin-bottom: 20px;">Network-wide ad blocking powered by StevenBlack's Unified Hosts</p>
-                <div class="status-grid">
-                    <div class="status-item">
-                        <div class="value" id="shield-level-display">-</div>
-                        <div class="label">Shield Level</div>
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 20px;">
+                    <div>
+                        <h2 style="display: flex; align-items: center; gap: 10px; margin: 0;">
+                            dnsXai
+                            <span style="background: linear-gradient(135deg, var(--hp-primary), #ff8c42); color: white; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">AI-POWERED</span>
+                        </h2>
+                        <p style="color: #6b7280; margin: 8px 0 0 0; font-size: 14px;">Next-generation DNS protection with machine learning</p>
                     </div>
-                    <div class="status-item">
-                        <div class="value" id="shield-domains">-</div>
-                        <div class="label">Domains Blocked</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value" id="shield-last-update">-</div>
-                        <div class="label">Last Update</div>
-                    </div>
-                    <div class="status-item">
-                        <div class="value" id="shield-source">-</div>
-                        <div class="label">Blocklist Source</div>
+                    <div id="dnsxai-status" style="display: flex; align-items: center; gap: 8px;">
+                        <span id="dnsxai-status-dot" style="width: 12px; height: 12px; background: var(--hp-green); border-radius: 50%; animation: pulse 2s infinite;"></span>
+                        <span id="dnsxai-status-text" style="font-weight: 600; color: var(--hp-green);">Active</span>
                     </div>
                 </div>
-                <!-- Shield Level Visualization -->
-                <div style="margin-top: 20px; padding: 15px; background: var(--hp-light); border-radius: 8px;">
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                        <span style="font-weight: 600; font-size: 14px;">Protection Level:</span>
-                        <div id="shield-bar" style="display: flex; gap: 4px;">
-                            <span class="shield-block" data-level="1" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
-                            <span class="shield-block" data-level="2" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
-                            <span class="shield-block" data-level="3" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
-                            <span class="shield-block" data-level="4" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
-                            <span class="shield-block" data-level="5" style="width: 24px; height: 24px; background: #e5e7eb; border-radius: 4px;"></span>
+
+                <!-- Stats Grid - Responsive -->
+                <div class="dnsxai-stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px;">
+                    <div class="dnsxai-stat-card" style="background: linear-gradient(135deg, #1e3a5f 0%, #0d1f33 100%); padding: 20px; border-radius: 12px; text-align: center;">
+                        <div id="dnsxai-queries" style="font-size: 28px; font-weight: 700; color: white;">0</div>
+                        <div style="color: #94a3b8; font-size: 12px; text-transform: uppercase; margin-top: 5px;">Total Queries</div>
+                    </div>
+                    <div class="dnsxai-stat-card" style="background: linear-gradient(135deg, #064e3b 0%, #022c22 100%); padding: 20px; border-radius: 12px; text-align: center;">
+                        <div id="dnsxai-blocked" style="font-size: 28px; font-weight: 700; color: #10b981;">0</div>
+                        <div style="color: #94a3b8; font-size: 12px; text-transform: uppercase; margin-top: 5px;">Blocked</div>
+                    </div>
+                    <div class="dnsxai-stat-card" style="background: linear-gradient(135deg, #7c2d12 0%, #431407 100%); padding: 20px; border-radius: 12px; text-align: center;">
+                        <div id="dnsxai-block-rate" style="font-size: 28px; font-weight: 700; color: var(--hp-primary);">0%</div>
+                        <div style="color: #94a3b8; font-size: 12px; text-transform: uppercase; margin-top: 5px;">Block Rate</div>
+                    </div>
+                    <div class="dnsxai-stat-card" style="background: linear-gradient(135deg, #1e1b4b 0%, #0f0d24 100%); padding: 20px; border-radius: 12px; text-align: center;">
+                        <div id="dnsxai-blocklist-size" style="font-size: 28px; font-weight: 700; color: #a78bfa;">0</div>
+                        <div style="color: #94a3b8; font-size: 12px; text-transform: uppercase; margin-top: 5px;">Blocklist Size</div>
+                    </div>
+                </div>
+
+                <!-- ML Detection Breakdown -->
+                <div style="margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px;">
+                    <div style="background: var(--hp-light); padding: 12px; border-radius: 8px; text-align: center; border-left: 3px solid var(--hp-green);">
+                        <div id="dnsxai-blocklist-hits" style="font-size: 18px; font-weight: 600;">0</div>
+                        <div style="font-size: 11px; color: #6b7280;">Blocklist</div>
+                    </div>
+                    <div style="background: var(--hp-light); padding: 12px; border-radius: 8px; text-align: center; border-left: 3px solid var(--hp-primary);">
+                        <div id="dnsxai-ml-hits" style="font-size: 18px; font-weight: 600;">0</div>
+                        <div style="font-size: 11px; color: #6b7280;">ML Detected</div>
+                    </div>
+                    <div style="background: var(--hp-light); padding: 12px; border-radius: 8px; text-align: center; border-left: 3px solid var(--hp-amber);">
+                        <div id="dnsxai-cname-hits" style="font-size: 18px; font-weight: 600;">0</div>
+                        <div style="font-size: 11px; color: #6b7280;">CNAME Uncloaked</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Protection Level Slider -->
+            <div class="card">
+                <h2>Protection Level</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">Drag the slider to adjust your protection level</p>
+
+                <div class="dnsxai-slider-container" style="padding: 20px 10px;">
+                    <!-- Slider Track -->
+                    <div style="position: relative; height: 8px; background: linear-gradient(to right, #10b981, #22c55e, #84cc16, #f59e0b, #ef4444); border-radius: 4px; margin-bottom: 30px;">
+                        <input type="range" id="dnsxai-level-slider" min="0" max="5" value="3"
+                               style="position: absolute; top: -8px; left: 0; width: 100%; height: 24px; -webkit-appearance: none; background: transparent; cursor: pointer;"
+                               onchange="setDnsxaiLevel(this.value)" oninput="updateSliderPreview(this.value)">
+                    </div>
+
+                    <!-- Level Labels -->
+                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: #6b7280; margin-top: -15px;">
+                        <span style="text-align: center; width: 50px;">OFF</span>
+                        <span style="text-align: center; width: 50px;">BASE</span>
+                        <span style="text-align: center; width: 50px;">ENHANCED</span>
+                        <span style="text-align: center; width: 50px;">STRONG</span>
+                        <span style="text-align: center; width: 50px;">MAX</span>
+                        <span style="text-align: center; width: 50px;">FULL</span>
+                    </div>
+                </div>
+
+                <!-- Current Level Display -->
+                <div id="dnsxai-level-display" style="background: var(--hp-light); padding: 20px; border-radius: 12px; text-align: center; margin-top: 15px;">
+                    <div style="font-size: 14px; color: #6b7280; margin-bottom: 8px;">Current Protection</div>
+                    <div id="dnsxai-level-name" style="font-size: 24px; font-weight: 700; color: var(--hp-green);">Strong</div>
+                    <div id="dnsxai-level-desc" style="font-size: 13px; color: #6b7280; margin-top: 8px;">Ads + Malware + Fakenews + Gambling blocked</div>
+                </div>
+
+                <!-- Level Cards - Responsive Grid -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 20px;">
+                    <div class="dnsxai-level-card" data-level="1" onclick="setDnsxaiLevel(1)" style="padding: 15px; background: var(--hp-light); border-radius: 8px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="width: 10px; height: 10px; background: #10b981; border-radius: 50%;"></span>
+                            <span style="font-weight: 600;">Base</span>
                         </div>
+                        <div style="font-size: 12px; color: #6b7280;">Ads + Malware</div>
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 5px;">~130K domains</div>
                     </div>
-                    <div style="font-size: 12px; color: #6b7280;">
-                        1=Base | 2=+Fakenews | 3=+Gambling | 4=+Adult | 5=Full
+                    <div class="dnsxai-level-card" data-level="2" onclick="setDnsxaiLevel(2)" style="padding: 15px; background: var(--hp-light); border-radius: 8px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="width: 10px; height: 10px; background: #22c55e; border-radius: 50%;"></span>
+                            <span style="font-weight: 600;">Enhanced</span>
+                        </div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Fakenews</div>
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 5px;">~132K domains</div>
+                    </div>
+                    <div class="dnsxai-level-card" data-level="3" onclick="setDnsxaiLevel(3)" style="padding: 15px; background: var(--hp-light); border-radius: 8px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="width: 10px; height: 10px; background: #84cc16; border-radius: 50%;"></span>
+                            <span style="font-weight: 600;">Strong</span>
+                        </div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Gambling</div>
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 5px;">~135K domains</div>
+                    </div>
+                    <div class="dnsxai-level-card" data-level="4" onclick="setDnsxaiLevel(4)" style="padding: 15px; background: var(--hp-light); border-radius: 8px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="width: 10px; height: 10px; background: #f59e0b; border-radius: 50%;"></span>
+                            <span style="font-weight: 600;">Maximum</span>
+                        </div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Adult</div>
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 5px;">~200K domains</div>
+                    </div>
+                    <div class="dnsxai-level-card" data-level="5" onclick="setDnsxaiLevel(5)" style="padding: 15px; background: var(--hp-light); border-radius: 8px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="width: 10px; height: 10px; background: #ef4444; border-radius: 50%;"></span>
+                            <span style="font-weight: 600;">Full</span>
+                        </div>
+                        <div style="font-size: 12px; color: #6b7280;">+ Social Trackers</div>
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 5px;">~250K domains</div>
                     </div>
                 </div>
             </div>
 
+            <!-- Blocklist Sources -->
             <div class="card">
-                <h2>Shield Configuration</h2>
-                <p style="color: #6b7280; margin-bottom: 15px;">Adjust protection level and manage whitelist</p>
-                <div class="param-grid">
-                    <div class="param-item">
-                        <div class="label">Config File</div>
-                        <div class="value" style="font-family: monospace; font-size: 11px;">/opt/hookprobe/guardian/dns-shield/shield.conf</div>
-                    </div>
-                    <div class="param-item">
-                        <div class="label">Whitelist</div>
-                        <div class="value" style="font-family: monospace; font-size: 11px;">/opt/hookprobe/guardian/dns-shield/whitelist.txt</div>
-                    </div>
-                    <div class="param-item">
-                        <div class="label">DNS Server</div>
-                        <div class="value">192.168.4.1:53 (dnsmasq)</div>
-                    </div>
-                    <div class="param-item">
-                        <div class="label">Upstream DNS</div>
-                        <div class="value">1.1.1.1, 8.8.8.8, 9.9.9.9</div>
-                    </div>
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px;">
+                    <h2 style="margin: 0;">Blocklist Sources</h2>
+                    <button class="btn btn-sm btn-primary" onclick="showAddSourceModal()">+ Add Source</button>
                 </div>
-                <div style="margin-top: 15px; padding: 12px; background: var(--hp-light); border-radius: 8px; font-size: 13px;">
-                    <strong>To change shield level:</strong><br>
-                    Edit <code>/opt/hookprobe/guardian/dns-shield/shield.conf</code> and set <code>SHIELD_LEVEL=1-5</code>, then run <code>update-blocklists.sh</code>
+                <p style="color: #6b7280; margin-bottom: 15px;">Manage blocklist sources for ad and tracker blocking</p>
+
+                <div id="dnsxai-sources-list" style="display: flex; flex-direction: column; gap: 10px;">
+                    <!-- Sources will be loaded via AJAX -->
+                    <div style="text-align: center; padding: 20px; color: #6b7280;">Loading sources...</div>
                 </div>
+
+                <div style="margin-top: 15px; display: flex; flex-wrap: wrap; gap: 10px;">
+                    <button class="btn btn-primary" onclick="updateBlocklist()" id="btn-update-blocklist">
+                        <span id="btn-update-text">Update All Sources</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="refreshDnsxaiStats()">Refresh Stats</button>
+                </div>
+                <div id="dnsxai-update-status" style="display: none; margin-top: 10px; padding: 10px; border-radius: 8px;"></div>
             </div>
 
+            <!-- Whitelist Management -->
             <div class="card">
-                <h2>Blocklist Categories</h2>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-green);">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Level 1: Base</div>
-                        <div style="font-size: 12px; color: #6b7280;">Adware + Malware (~130K domains)</div>
-                    </div>
-                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-blue);">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Level 2: Enhanced</div>
-                        <div style="font-size: 12px; color: #6b7280;">+ Fakenews (~132K domains)</div>
-                    </div>
-                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-primary);">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Level 3: Strong</div>
-                        <div style="font-size: 12px; color: #6b7280;">+ Gambling (~135K domains)</div>
-                    </div>
-                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-amber);">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Level 4: Maximum</div>
-                        <div style="font-size: 12px; color: #6b7280;">+ Adult content (~200K domains)</div>
-                    </div>
-                    <div style="padding: 12px; background: var(--hp-light); border-radius: 8px; border-left: 3px solid var(--hp-red);">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Level 5: Full Shield</div>
-                        <div style="font-size: 12px; color: #6b7280;">+ Social media (~250K domains)</div>
-                    </div>
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px;">
+                    <h2 style="margin: 0;">Whitelist</h2>
+                    <span id="dnsxai-whitelist-count" style="background: var(--hp-light); padding: 4px 12px; border-radius: 12px; font-size: 12px;">0 domains</span>
+                </div>
+                <p style="color: #6b7280; margin-bottom: 15px;">Domains that will never be blocked</p>
+
+                <!-- Add to Whitelist Form -->
+                <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+                    <input type="text" id="dnsxai-whitelist-input" placeholder="Enter domain (e.g., example.com)"
+                           style="flex: 1; min-width: 200px; padding: 10px 15px; border: 1px solid var(--hp-border); border-radius: 8px; background: var(--hp-light);"
+                           onkeypress="if(event.key==='Enter') addToWhitelist()">
+                    <button class="btn btn-primary" onclick="addToWhitelist()">Add Domain</button>
+                </div>
+
+                <!-- Whitelist Table -->
+                <div id="dnsxai-whitelist-container" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--hp-border); border-radius: 8px;">
+                    <table class="device-table" style="margin: 0;">
+                        <thead style="position: sticky; top: 0; background: var(--hp-dark);">
+                            <tr>
+                                <th style="padding: 12px;">Domain</th>
+                                <th style="padding: 12px; width: 100px; text-align: center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dnsxai-whitelist-body">
+                            <tr><td colspan="2" style="text-align: center; padding: 20px; color: #6b7280;">Loading whitelist...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
+            <!-- AI Features Card -->
+            <div class="card">
+                <h2>AI Features</h2>
+                <p style="color: #6b7280; margin-bottom: 15px;">Machine learning capabilities for advanced protection</p>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                    <!-- ML Classification Toggle -->
+                    <div style="background: var(--hp-light); padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: 600; margin-bottom: 4px;">ML Classification</div>
+                            <div style="font-size: 12px; color: #6b7280;">Detect unknown ad domains</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="dnsxai-ml-toggle" checked onchange="toggleDnsxaiFeature('ml', this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <!-- CNAME Uncloaking Toggle -->
+                    <div style="background: var(--hp-light); padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: 600; margin-bottom: 4px;">CNAME Uncloaking</div>
+                            <div style="font-size: 12px; color: #6b7280;">Detect first-party tracker masking</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="dnsxai-cname-toggle" checked onchange="toggleDnsxaiFeature('cname', this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <!-- Federated Learning Toggle -->
+                    <div style="background: var(--hp-light); padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: 600; margin-bottom: 4px;">Federated Learning</div>
+                            <div style="font-size: 12px; color: #6b7280;">Share intelligence with mesh (privacy-safe)</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="dnsxai-federated-toggle" onchange="toggleDnsxaiFeature('federated', this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Confidence Threshold -->
+                <div style="margin-top: 20px; background: var(--hp-light); padding: 15px; border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div>
+                            <div style="font-weight: 600;">ML Confidence Threshold</div>
+                            <div style="font-size: 12px; color: #6b7280;">Minimum confidence to block (higher = fewer false positives)</div>
+                        </div>
+                        <span id="dnsxai-confidence-value" style="font-weight: 600; font-size: 18px;">75%</span>
+                    </div>
+                    <input type="range" id="dnsxai-confidence-slider" min="50" max="95" value="75"
+                           style="width: 100%; cursor: pointer;"
+                           oninput="document.getElementById('dnsxai-confidence-value').textContent = this.value + '%'"
+                           onchange="setDnsxaiConfidence(this.value)">
+                </div>
+            </div>
+
+            <!-- Service Controls -->
             <div class="card">
                 <h2>Service Controls</h2>
-                <div class="btn-group" style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <form method="POST" action="/action" style="display: inline;">
-                        <input type="hidden" name="action" value="update_blocklist">
-                        <button type="submit" class="btn btn-primary">Update Blocklist Now</button>
-                    </form>
-                    <form method="POST" action="/action" style="display: inline;">
-                        <input type="hidden" name="action" value="flush_dns">
-                        <button type="submit" class="btn btn-secondary">Flush DNS Cache</button>
-                    </form>
-                    <button class="btn btn-secondary" onclick="refreshDNSShieldStats()">Refresh Stats</button>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                    <button class="btn btn-secondary" onclick="flushDnsCache()">Flush DNS Cache</button>
+                    <button class="btn btn-secondary" onclick="restartDnsxai()">Restart Service</button>
+                    <button class="btn btn-secondary" onclick="testDomain()">Test Domain</button>
+                </div>
+
+                <!-- Test Domain Input (hidden by default) -->
+                <div id="dnsxai-test-panel" style="display: none; margin-top: 15px; padding: 15px; background: var(--hp-light); border-radius: 8px;">
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <input type="text" id="dnsxai-test-domain" placeholder="Enter domain to test"
+                               style="flex: 1; min-width: 200px; padding: 10px 15px; border: 1px solid var(--hp-border); border-radius: 8px;">
+                        <button class="btn btn-primary" onclick="classifyDomain()">Classify</button>
+                    </div>
+                    <div id="dnsxai-test-result" style="margin-top: 10px; display: none;"></div>
+                </div>
+            </div>
+
+            <!-- Recent Blocks -->
+            <div class="card">
+                <h2>Recent Blocks</h2>
+                <div style="overflow-x: auto;">
+                    <table class="device-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Domain</th>
+                                <th>Category</th>
+                                <th>Method</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dnsxai-recent-blocks">
+                            <tr><td colspan="5" style="text-align: center; padding: 20px; color: #6b7280;">Loading recent blocks...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Source Modal -->
+        <div id="dnsxai-source-modal" class="modal" style="display: none;">
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h3>Add Blocklist Source</h3>
+                    <button class="modal-close" onclick="hideAddSourceModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Source URL</label>
+                        <input type="url" id="dnsxai-new-source-url" placeholder="https://example.com/blocklist.txt"
+                               style="width: 100%; padding: 10px; border: 1px solid var(--hp-border); border-radius: 8px;">
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Source Name (optional)</label>
+                        <input type="text" id="dnsxai-new-source-name" placeholder="My Custom Blocklist"
+                               style="width: 100%; padding: 10px; border: 1px solid var(--hp-border); border-radius: 8px;">
+                    </div>
+                    <p style="font-size: 12px; color: #6b7280;">Supports hosts format, domain lists, and AdBlock format</p>
+                </div>
+                <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px;">
+                    <button class="btn btn-secondary" onclick="hideAddSourceModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="addBlocklistSource()">Add Source</button>
                 </div>
             </div>
         </div>
@@ -3071,41 +3414,519 @@ HTML_TEMPLATE = '''
                 .catch(error => console.error('Error fetching clients:', error));
         }
 
-        // Refresh DNS Shield Stats
-        function refreshDNSShieldStats() {
-            fetch('/api/dns-shield')
+        // ============================================
+        // dnsXai - AI-Powered DNS Protection Functions
+        // ============================================
+
+        const dnsxaiLevels = {
+            0: { name: 'Off', desc: 'No protection - all domains allowed', color: '#6b7280' },
+            1: { name: 'Base', desc: 'Ads + Malware blocked', color: '#10b981' },
+            2: { name: 'Enhanced', desc: 'Ads + Malware + Fakenews blocked', color: '#22c55e' },
+            3: { name: 'Strong', desc: 'Ads + Malware + Fakenews + Gambling blocked', color: '#84cc16' },
+            4: { name: 'Maximum', desc: 'Ads + Malware + Fakenews + Gambling + Adult blocked', color: '#f59e0b' },
+            5: { name: 'Full', desc: 'All categories blocked including social trackers', color: '#ef4444' }
+        };
+
+        // Refresh dnsXai Stats
+        function refreshDnsxaiStats() {
+            fetch('/api/dnsxai/stats')
                 .then(response => response.json())
                 .then(data => {
                     if (data) {
-                        document.getElementById('shield-level-display').textContent = data.shield_level_name || 'Unknown';
-                        document.getElementById('shield-domains').textContent = (data.domains_blocked || 0).toLocaleString();
-                        document.getElementById('shield-last-update').textContent = data.last_update ? new Date(data.last_update).toLocaleDateString() : 'Never';
-                        document.getElementById('shield-source').textContent = data.blocklist_source || 'N/A';
+                        // Update main stats
+                        document.getElementById('dnsxai-queries').textContent = (data.total_queries || 0).toLocaleString();
+                        document.getElementById('dnsxai-blocked').textContent = (data.blocked_count || 0).toLocaleString();
+                        document.getElementById('dnsxai-block-rate').textContent = ((data.block_rate || 0) * 100).toFixed(1) + '%';
+                        document.getElementById('dnsxai-blocklist-size').textContent = (data.blocklist_size || 0).toLocaleString();
 
-                        // Update shield bar visualization
-                        const level = data.shield_level || 0;
-                        document.querySelectorAll('.shield-block').forEach(block => {
-                            const blockLevel = parseInt(block.dataset.level);
-                            if (blockLevel <= level) {
-                                block.style.background = level >= 4 ? 'var(--hp-amber)' : 'var(--hp-green)';
-                            } else {
-                                block.style.background = '#e5e7eb';
-                            }
-                        });
+                        // Update detection breakdown
+                        document.getElementById('dnsxai-blocklist-hits').textContent = (data.blocked_blocklist || 0).toLocaleString();
+                        document.getElementById('dnsxai-ml-hits').textContent = (data.blocked_ml || 0).toLocaleString();
+                        document.getElementById('dnsxai-cname-hits').textContent = (data.blocked_cname || 0).toLocaleString();
+
+                        // Update level
+                        const level = data.protection_level || 3;
+                        document.getElementById('dnsxai-level-slider').value = level;
+                        updateLevelDisplay(level);
+
+                        // Update toggles
+                        document.getElementById('dnsxai-ml-toggle').checked = data.ml_enabled !== false;
+                        document.getElementById('dnsxai-cname-toggle').checked = data.cname_enabled !== false;
+                        document.getElementById('dnsxai-federated-toggle').checked = data.federated_enabled === true;
+
+                        // Update confidence
+                        if (data.ml_confidence_threshold) {
+                            const conf = Math.round(data.ml_confidence_threshold * 100);
+                            document.getElementById('dnsxai-confidence-slider').value = conf;
+                            document.getElementById('dnsxai-confidence-value').textContent = conf + '%';
+                        }
+
+                        // Update status
+                        const statusDot = document.getElementById('dnsxai-status-dot');
+                        const statusText = document.getElementById('dnsxai-status-text');
+                        if (data.enabled !== false) {
+                            statusDot.style.background = 'var(--hp-green)';
+                            statusText.textContent = 'Active';
+                            statusText.style.color = 'var(--hp-green)';
+                        } else {
+                            statusDot.style.background = '#6b7280';
+                            statusText.textContent = 'Disabled';
+                            statusText.style.color = '#6b7280';
+                        }
                     }
                 })
+                .catch(error => console.error('Error fetching dnsXai stats:', error));
+
+            // Load whitelist
+            loadWhitelist();
+
+            // Load sources
+            loadBlocklistSources();
+
+            // Load recent blocks
+            loadRecentBlocks();
+        }
+
+        // Update slider preview (while dragging)
+        function updateSliderPreview(level) {
+            updateLevelDisplay(parseInt(level));
+        }
+
+        // Update level display
+        function updateLevelDisplay(level) {
+            const info = dnsxaiLevels[level];
+            document.getElementById('dnsxai-level-name').textContent = info.name;
+            document.getElementById('dnsxai-level-name').style.color = info.color;
+            document.getElementById('dnsxai-level-desc').textContent = info.desc;
+
+            // Update level cards highlighting
+            document.querySelectorAll('.dnsxai-level-card').forEach(card => {
+                const cardLevel = parseInt(card.dataset.level);
+                if (cardLevel === level) {
+                    card.style.borderColor = info.color;
+                    card.style.background = 'rgba(255,255,255,0.1)';
+                } else {
+                    card.style.borderColor = 'transparent';
+                    card.style.background = 'var(--hp-light)';
+                }
+            });
+        }
+
+        // Set protection level via AJAX
+        function setDnsxaiLevel(level) {
+            fetch('/api/dnsxai/level', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ level: parseInt(level) })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateLevelDisplay(parseInt(level));
+                    showNotification('Protection level updated to ' + dnsxaiLevels[level].name, 'success');
+                } else {
+                    showNotification('Failed to update protection level', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error setting level:', error);
+                showNotification('Failed to update protection level', 'error');
+            });
+        }
+
+        // Load whitelist
+        function loadWhitelist() {
+            fetch('/api/dnsxai/whitelist')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.getElementById('dnsxai-whitelist-body');
+                    const countEl = document.getElementById('dnsxai-whitelist-count');
+
+                    if (data.whitelist && data.whitelist.length > 0) {
+                        countEl.textContent = data.whitelist.length + ' domains';
+                        tbody.innerHTML = data.whitelist.map(domain => `
+                            <tr>
+                                <td style="padding: 12px; font-family: monospace;">${domain}</td>
+                                <td style="padding: 12px; text-align: center;">
+                                    <button class="btn btn-sm btn-danger" onclick="removeFromWhitelist('${domain}')">Remove</button>
+                                </td>
+                            </tr>
+                        `).join('');
+                    } else {
+                        countEl.textContent = '0 domains';
+                        tbody.innerHTML = '<tr><td colspan="2" style="text-align: center; padding: 20px; color: #6b7280;">No whitelisted domains</td></tr>';
+                    }
+                })
+                .catch(error => console.error('Error loading whitelist:', error));
+        }
+
+        // Add to whitelist
+        function addToWhitelist() {
+            const input = document.getElementById('dnsxai-whitelist-input');
+            const domain = input.value.trim().toLowerCase();
+
+            if (!domain) {
+                showNotification('Please enter a domain', 'error');
+                return;
+            }
+
+            fetch('/api/dnsxai/whitelist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain: domain })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    input.value = '';
+                    loadWhitelist();
+                    showNotification('Domain added to whitelist', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to add domain', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error adding to whitelist:', error);
+                showNotification('Failed to add domain', 'error');
+            });
+        }
+
+        // Remove from whitelist
+        function removeFromWhitelist(domain) {
+            fetch('/api/dnsxai/whitelist', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain: domain })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadWhitelist();
+                    showNotification('Domain removed from whitelist', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to remove domain', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error removing from whitelist:', error);
+                showNotification('Failed to remove domain', 'error');
+            });
+        }
+
+        // Load blocklist sources
+        function loadBlocklistSources() {
+            fetch('/api/dnsxai/sources')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('dnsxai-sources-list');
+
+                    if (data.sources && data.sources.length > 0) {
+                        container.innerHTML = data.sources.map((source, idx) => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: var(--hp-light); border-radius: 8px; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 200px;">
+                                    <div style="font-weight: 600; margin-bottom: 4px;">${source.name || 'Custom Source'}</div>
+                                    <div style="font-size: 11px; color: #6b7280; word-break: break-all;">${source.url}</div>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <span style="font-size: 12px; color: #6b7280;">${source.domains ? source.domains.toLocaleString() + ' domains' : ''}</span>
+                                    <button class="btn btn-sm btn-danger" onclick="removeBlocklistSource('${source.url}')">Remove</button>
+                                </div>
+                            </div>
+                        `).join('');
+                    } else {
+                        container.innerHTML = '<div style="text-align: center; padding: 20px; color: #6b7280;">No blocklist sources configured</div>';
+                    }
+                })
+                .catch(error => console.error('Error loading sources:', error));
+        }
+
+        // Show add source modal
+        function showAddSourceModal() {
+            document.getElementById('dnsxai-source-modal').style.display = 'flex';
+        }
+
+        // Hide add source modal
+        function hideAddSourceModal() {
+            document.getElementById('dnsxai-source-modal').style.display = 'none';
+            document.getElementById('dnsxai-new-source-url').value = '';
+            document.getElementById('dnsxai-new-source-name').value = '';
+        }
+
+        // Add blocklist source
+        function addBlocklistSource() {
+            const url = document.getElementById('dnsxai-new-source-url').value.trim();
+            const name = document.getElementById('dnsxai-new-source-name').value.trim();
+
+            if (!url) {
+                showNotification('Please enter a source URL', 'error');
+                return;
+            }
+
+            fetch('/api/dnsxai/sources', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url, name: name })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    hideAddSourceModal();
+                    loadBlocklistSources();
+                    showNotification('Blocklist source added', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to add source', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error adding source:', error);
+                showNotification('Failed to add source', 'error');
+            });
+        }
+
+        // Remove blocklist source
+        function removeBlocklistSource(url) {
+            if (!confirm('Remove this blocklist source?')) return;
+
+            fetch('/api/dnsxai/sources', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadBlocklistSources();
+                    showNotification('Blocklist source removed', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to remove source', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error removing source:', error);
+                showNotification('Failed to remove source', 'error');
+            });
+        }
+
+        // Update blocklist
+        function updateBlocklist() {
+            const btn = document.getElementById('btn-update-blocklist');
+            const btnText = document.getElementById('btn-update-text');
+            const statusDiv = document.getElementById('dnsxai-update-status');
+
+            btn.disabled = true;
+            btnText.textContent = 'Updating...';
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = 'var(--hp-light)';
+            statusDiv.textContent = 'Updating blocklists from all sources...';
+
+            fetch('/api/dnsxai/update', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btnText.textContent = 'Update All Sources';
+
+                    if (data.success) {
+                        statusDiv.style.background = 'rgba(16, 185, 129, 0.2)';
+                        statusDiv.textContent = 'Blocklist updated successfully! ' + (data.domains || 0).toLocaleString() + ' domains loaded.';
+                        refreshDnsxaiStats();
+                    } else {
+                        statusDiv.style.background = 'rgba(239, 68, 68, 0.2)';
+                        statusDiv.textContent = 'Update failed: ' + (data.error || 'Unknown error');
+                    }
+
+                    setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+                })
                 .catch(error => {
-                    console.error('Error fetching DNS Shield stats:', error);
-                    document.getElementById('shield-level-display').textContent = 'N/A';
-                    document.getElementById('shield-domains').textContent = 'N/A';
-                    document.getElementById('shield-last-update').textContent = 'N/A';
-                    document.getElementById('shield-source').textContent = 'N/A';
+                    btn.disabled = false;
+                    btnText.textContent = 'Update All Sources';
+                    statusDiv.style.background = 'rgba(239, 68, 68, 0.2)';
+                    statusDiv.textContent = 'Update failed: ' + error.message;
                 });
         }
 
-        // Load DNS Shield stats on tab switch
-        document.querySelectorAll('.tab[data-tab="dns-shield"]').forEach(tab => {
-            tab.addEventListener('click', refreshDNSShieldStats);
+        // Toggle dnsXai feature
+        function toggleDnsxaiFeature(feature, enabled) {
+            fetch('/api/dnsxai/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [feature + '_enabled']: enabled })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification(feature.toUpperCase() + ' ' + (enabled ? 'enabled' : 'disabled'), 'success');
+                } else {
+                    showNotification('Failed to update setting', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error toggling feature:', error);
+                showNotification('Failed to update setting', 'error');
+            });
+        }
+
+        // Set ML confidence threshold
+        function setDnsxaiConfidence(value) {
+            fetch('/api/dnsxai/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ml_confidence_threshold: value / 100 })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification('Confidence threshold updated', 'success');
+                }
+            })
+            .catch(error => console.error('Error setting confidence:', error));
+        }
+
+        // Load recent blocks
+        function loadRecentBlocks() {
+            fetch('/api/dnsxai/recent')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.getElementById('dnsxai-recent-blocks');
+
+                    if (data.blocks && data.blocks.length > 0) {
+                        tbody.innerHTML = data.blocks.map(block => `
+                            <tr>
+                                <td>${new Date(block.timestamp).toLocaleTimeString()}</td>
+                                <td style="font-family: monospace; font-size: 12px;">${block.domain}</td>
+                                <td><span class="badge badge-${getCategoryBadge(block.category)}">${block.category}</span></td>
+                                <td>${block.method}</td>
+                                <td>${(block.confidence * 100).toFixed(0)}%</td>
+                            </tr>
+                        `).join('');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #6b7280;">No recent blocks</td></tr>';
+                    }
+                })
+                .catch(error => console.error('Error loading recent blocks:', error));
+        }
+
+        // Get badge class for category
+        function getCategoryBadge(category) {
+            const badges = {
+                'ADVERTISING': 'warning',
+                'TRACKING': 'danger',
+                'MALWARE': 'danger',
+                'ANALYTICS': 'info',
+                'SOCIAL_TRACKER': 'warning'
+            };
+            return badges[category] || 'secondary';
+        }
+
+        // Flush DNS cache
+        function flushDnsCache() {
+            fetch('/api/dnsxai/flush', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showNotification('DNS cache flushed', 'success');
+                    } else {
+                        showNotification('Failed to flush DNS cache', 'error');
+                    }
+                })
+                .catch(error => showNotification('Failed to flush DNS cache', 'error'));
+        }
+
+        // Restart dnsXai service
+        function restartDnsxai() {
+            if (!confirm('Restart dnsXai service? DNS resolution may be briefly interrupted.')) return;
+
+            fetch('/api/dnsxai/restart', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showNotification('Service restarted', 'success');
+                        setTimeout(refreshDnsxaiStats, 2000);
+                    } else {
+                        showNotification('Failed to restart service', 'error');
+                    }
+                })
+                .catch(error => showNotification('Failed to restart service', 'error'));
+        }
+
+        // Test domain panel
+        function testDomain() {
+            const panel = document.getElementById('dnsxai-test-panel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // Classify a domain
+        function classifyDomain() {
+            const domain = document.getElementById('dnsxai-test-domain').value.trim();
+            const resultDiv = document.getElementById('dnsxai-test-result');
+
+            if (!domain) {
+                showNotification('Please enter a domain', 'error');
+                return;
+            }
+
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<div style="color: #6b7280;">Classifying...</div>';
+
+            fetch('/api/dnsxai/classify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain: domain })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    resultDiv.innerHTML = `<div style="color: var(--hp-red);">Error: ${data.error}</div>`;
+                } else {
+                    const blocked = data.blocked;
+                    resultDiv.innerHTML = `
+                        <div style="padding: 15px; background: ${blocked ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'}; border-radius: 8px; border-left: 4px solid ${blocked ? 'var(--hp-red)' : 'var(--hp-green)'};">
+                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 8px;">
+                                ${blocked ? 'BLOCKED' : 'ALLOWED'}
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; font-size: 13px;">
+                                <div><strong>Domain:</strong> ${data.domain}</div>
+                                <div><strong>Category:</strong> ${data.category}</div>
+                                <div><strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%</div>
+                                <div><strong>Method:</strong> ${data.method}</div>
+                            </div>
+                            ${data.cname_chain && data.cname_chain.length > 1 ? `
+                                <div style="margin-top: 10px; font-size: 12px;">
+                                    <strong>CNAME Chain:</strong> ${data.cname_chain.join(' → ')}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                resultDiv.innerHTML = `<div style="color: var(--hp-red);">Error: ${error.message}</div>`;
+            });
+        }
+
+        // Show notification
+        function showNotification(message, type) {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = 'notification notification-' + type;
+            notification.textContent = message;
+            notification.style.cssText = `
+                position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+                border-radius: 8px; z-index: 10000; animation: slideIn 0.3s ease;
+                background: ${type === 'success' ? 'var(--hp-green)' : type === 'error' ? 'var(--hp-red)' : 'var(--hp-primary)'};
+                color: white; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            `;
+            document.body.appendChild(notification);
+
+            // Remove after 3 seconds
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // Load dnsXai stats on tab switch
+        document.querySelectorAll('.tab[data-tab="dnsxai"]').forEach(tab => {
+            tab.addEventListener('click', refreshDnsxaiStats);
         });
 
         // Refresh VPN Stats
@@ -3548,37 +4369,332 @@ def api_vpn():
     return jsonify(get_vpn_stats())
 
 
-@app.route('/api/dns-shield')
-def api_dns_shield():
-    """Get DNS Shield statistics from stats.json."""
-    import json
-    import os
+# ============================================
+# dnsXai API Endpoints - AI-Powered DNS Protection
+# ============================================
 
-    stats_file = '/opt/hookprobe/guardian/dns-shield/stats.json'
+DNSXAI_CONFIG_FILE = '/opt/hookprobe/guardian/dnsxai/config.json'
+DNSXAI_STATS_FILE = '/opt/hookprobe/guardian/dnsxai/stats.json'
+DNSXAI_WHITELIST_FILE = '/opt/hookprobe/guardian/dnsxai/whitelist.txt'
+DNSXAI_SOURCES_FILE = '/opt/hookprobe/guardian/dnsxai/sources.json'
 
+def load_dnsxai_config():
+    """Load dnsXai configuration."""
+    default_config = {
+        'enabled': True,
+        'protection_level': 3,
+        'ml_enabled': True,
+        'cname_enabled': True,
+        'federated_enabled': False,
+        'ml_confidence_threshold': 0.75,
+        'blocklist_sources': [
+            {'name': 'OISD Big', 'url': 'https://big.oisd.nl/'},
+            {'name': 'StevenBlack', 'url': 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts'},
+            {'name': 'AdGuard CNAME', 'url': 'https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/combined_disguised_trackers.txt'},
+            {'name': 'Hagezi Pro', 'url': 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/pro.txt'}
+        ]
+    }
     try:
-        if os.path.exists(stats_file):
-            with open(stats_file, 'r') as f:
-                data = json.load(f)
-                return jsonify(data)
-        else:
+        if os.path.exists(DNSXAI_CONFIG_FILE):
+            with open(DNSXAI_CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                return {**default_config, **config}
+    except Exception:
+        pass
+    return default_config
+
+def save_dnsxai_config(config):
+    """Save dnsXai configuration."""
+    try:
+        os.makedirs(os.path.dirname(DNSXAI_CONFIG_FILE), exist_ok=True)
+        with open(DNSXAI_CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+@app.route('/api/dnsxai/stats')
+def api_dnsxai_stats():
+    """Get dnsXai statistics."""
+    config = load_dnsxai_config()
+    stats = {
+        'enabled': config.get('enabled', True),
+        'protection_level': config.get('protection_level', 3),
+        'ml_enabled': config.get('ml_enabled', True),
+        'cname_enabled': config.get('cname_enabled', True),
+        'federated_enabled': config.get('federated_enabled', False),
+        'ml_confidence_threshold': config.get('ml_confidence_threshold', 0.75),
+        'total_queries': 0,
+        'blocked_count': 0,
+        'blocked_blocklist': 0,
+        'blocked_ml': 0,
+        'blocked_cname': 0,
+        'block_rate': 0,
+        'blocklist_size': 0
+    }
+
+    # Load stats from stats file if exists
+    try:
+        if os.path.exists(DNSXAI_STATS_FILE):
+            with open(DNSXAI_STATS_FILE, 'r') as f:
+                file_stats = json.load(f)
+                stats.update(file_stats)
+    except Exception:
+        pass
+
+    # Calculate block rate
+    if stats['total_queries'] > 0:
+        stats['blocked_count'] = stats.get('blocked_blocklist', 0) + stats.get('blocked_ml', 0) + stats.get('blocked_cname', 0)
+        stats['block_rate'] = stats['blocked_count'] / stats['total_queries']
+
+    return jsonify(stats)
+
+@app.route('/api/dnsxai/config', methods=['GET', 'POST'])
+def api_dnsxai_config():
+    """Get or update dnsXai configuration."""
+    if request.method == 'GET':
+        return jsonify(load_dnsxai_config())
+
+    # POST - Update config
+    try:
+        config = load_dnsxai_config()
+        data = request.get_json()
+
+        # Update allowed fields
+        for key in ['enabled', 'protection_level', 'ml_enabled', 'cname_enabled',
+                    'federated_enabled', 'ml_confidence_threshold']:
+            if key in data:
+                config[key] = data[key]
+
+        if save_dnsxai_config(config):
+            return jsonify({'success': True, 'config': config})
+        return jsonify({'success': False, 'error': 'Failed to save config'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/level', methods=['POST'])
+def api_dnsxai_level():
+    """Set protection level."""
+    try:
+        data = request.get_json()
+        level = int(data.get('level', 3))
+
+        if level < 0 or level > 5:
+            return jsonify({'success': False, 'error': 'Level must be 0-5'}), 400
+
+        config = load_dnsxai_config()
+        config['protection_level'] = level
+
+        if save_dnsxai_config(config):
+            # Update shield level in legacy config for compatibility
+            run_command(f'echo "SHIELD_LEVEL={level}" > /opt/hookprobe/guardian/dnsxai/shield.conf')
+            return jsonify({'success': True, 'level': level})
+        return jsonify({'success': False, 'error': 'Failed to save config'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/whitelist', methods=['GET', 'POST', 'DELETE'])
+def api_dnsxai_whitelist():
+    """Manage whitelist."""
+    os.makedirs(os.path.dirname(DNSXAI_WHITELIST_FILE), exist_ok=True)
+
+    if request.method == 'GET':
+        whitelist = []
+        try:
+            if os.path.exists(DNSXAI_WHITELIST_FILE):
+                with open(DNSXAI_WHITELIST_FILE, 'r') as f:
+                    whitelist = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        except Exception:
+            pass
+        return jsonify({'whitelist': whitelist})
+
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            domain = data.get('domain', '').strip().lower()
+
+            if not domain:
+                return jsonify({'success': False, 'error': 'Domain required'}), 400
+
+            # Load existing whitelist
+            whitelist = set()
+            if os.path.exists(DNSXAI_WHITELIST_FILE):
+                with open(DNSXAI_WHITELIST_FILE, 'r') as f:
+                    whitelist = set(line.strip() for line in f if line.strip() and not line.startswith('#'))
+
+            whitelist.add(domain)
+
+            with open(DNSXAI_WHITELIST_FILE, 'w') as f:
+                f.write('# dnsXai Whitelist\n')
+                for d in sorted(whitelist):
+                    f.write(f'{d}\n')
+
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    if request.method == 'DELETE':
+        try:
+            data = request.get_json()
+            domain = data.get('domain', '').strip().lower()
+
+            if not domain:
+                return jsonify({'success': False, 'error': 'Domain required'}), 400
+
+            whitelist = set()
+            if os.path.exists(DNSXAI_WHITELIST_FILE):
+                with open(DNSXAI_WHITELIST_FILE, 'r') as f:
+                    whitelist = set(line.strip() for line in f if line.strip() and not line.startswith('#'))
+
+            whitelist.discard(domain)
+
+            with open(DNSXAI_WHITELIST_FILE, 'w') as f:
+                f.write('# dnsXai Whitelist\n')
+                for d in sorted(whitelist):
+                    f.write(f'{d}\n')
+
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/sources', methods=['GET', 'POST', 'DELETE'])
+def api_dnsxai_sources():
+    """Manage blocklist sources."""
+    if request.method == 'GET':
+        config = load_dnsxai_config()
+        return jsonify({'sources': config.get('blocklist_sources', [])})
+
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            url = data.get('url', '').strip()
+            name = data.get('name', '').strip() or 'Custom Source'
+
+            if not url:
+                return jsonify({'success': False, 'error': 'URL required'}), 400
+
+            config = load_dnsxai_config()
+            sources = config.get('blocklist_sources', [])
+
+            # Check if already exists
+            if any(s['url'] == url for s in sources):
+                return jsonify({'success': False, 'error': 'Source already exists'}), 400
+
+            sources.append({'name': name, 'url': url})
+            config['blocklist_sources'] = sources
+
+            if save_dnsxai_config(config):
+                return jsonify({'success': True})
+            return jsonify({'success': False, 'error': 'Failed to save config'}), 500
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    if request.method == 'DELETE':
+        try:
+            data = request.get_json()
+            url = data.get('url', '').strip()
+
+            if not url:
+                return jsonify({'success': False, 'error': 'URL required'}), 400
+
+            config = load_dnsxai_config()
+            sources = config.get('blocklist_sources', [])
+            sources = [s for s in sources if s['url'] != url]
+            config['blocklist_sources'] = sources
+
+            if save_dnsxai_config(config):
+                return jsonify({'success': True})
+            return jsonify({'success': False, 'error': 'Failed to save config'}), 500
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/update', methods=['POST'])
+def api_dnsxai_update():
+    """Trigger blocklist update."""
+    try:
+        output, success = run_command('/opt/hookprobe/shared/dnsXai/update-blocklist.sh --force')
+        if success:
+            # Get domain count from stats
+            domains = 0
+            if os.path.exists(DNSXAI_STATS_FILE):
+                with open(DNSXAI_STATS_FILE, 'r') as f:
+                    stats = json.load(f)
+                    domains = stats.get('blocklist_size', 0)
+            return jsonify({'success': True, 'domains': domains, 'output': output})
+        return jsonify({'success': False, 'error': 'Update failed', 'output': output}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/flush', methods=['POST'])
+def api_dnsxai_flush():
+    """Flush DNS cache."""
+    try:
+        run_command('systemctl restart dnsmasq')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/restart', methods=['POST'])
+def api_dnsxai_restart():
+    """Restart dnsXai service."""
+    try:
+        run_command('systemctl restart dnsxai')
+        run_command('systemctl restart dnsmasq')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/dnsxai/classify', methods=['POST'])
+def api_dnsxai_classify():
+    """Classify a domain using dnsXai engine."""
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+
+        if not domain:
+            return jsonify({'error': 'Domain required'}), 400
+
+        # Try to use the dnsXai engine
+        try:
+            import sys
+            sys.path.insert(0, '/opt/hookprobe/shared')
+            from dnsXai import DNSXai
+            dnsxai = DNSXai()
+            result = dnsxai.classify_domain(domain)
+            return jsonify(result.to_dict())
+        except ImportError:
+            # Fallback: simple blocklist check
+            config = load_dnsxai_config()
+            blocklist_file = '/opt/hookprobe/guardian/dnsxai/blocklist.txt'
+            blocked = False
+            if os.path.exists(blocklist_file):
+                with open(blocklist_file, 'r') as f:
+                    blocklist = set(line.strip() for line in f if line.strip() and not line.startswith('#'))
+                    blocked = domain in blocklist or any(domain.endswith('.' + d) for d in blocklist)
+
             return jsonify({
-                'shield_level': 0,
-                'shield_level_name': 'Not Configured',
-                'domains_blocked': 0,
-                'last_update': None,
-                'blocklist_source': 'N/A',
-                'error': 'DNS Shield not initialized'
+                'domain': domain,
+                'category': 'ADVERTISING' if blocked else 'LEGITIMATE',
+                'confidence': 1.0 if blocked else 0.5,
+                'method': 'blocklist' if blocked else 'default',
+                'blocked': blocked,
+                'cname_chain': []
             })
     except Exception as e:
-        return jsonify({
-            'shield_level': 0,
-            'shield_level_name': 'Error',
-            'domains_blocked': 0,
-            'last_update': None,
-            'blocklist_source': 'N/A',
-            'error': str(e)
-        })
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/dnsxai/recent')
+def api_dnsxai_recent():
+    """Get recent blocked domains."""
+    try:
+        recent_file = '/opt/hookprobe/guardian/dnsxai/recent_blocks.json'
+        if os.path.exists(recent_file):
+            with open(recent_file, 'r') as f:
+                data = json.load(f)
+                return jsonify({'blocks': data.get('blocks', [])[-20:]})
+        return jsonify({'blocks': []})
+    except Exception:
+        return jsonify({'blocks': []})
 
 
 @app.route('/api/layer_threats')
