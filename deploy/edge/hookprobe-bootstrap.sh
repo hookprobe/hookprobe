@@ -342,7 +342,7 @@ install_guardian() {
         bash "$guardian_setup"
     else
         log_error "Guardian setup script not found: $guardian_setup"
-        log_info "Expected location: install/guardian/scripts/setup.sh"
+        log_info "Expected location: products/guardian/scripts/setup.sh"
         exit 1
     fi
 }
@@ -511,11 +511,11 @@ setup_directories() {
 install_files() {
     log_info "Installing HookProbe files..."
 
-    local repo_root="$SCRIPT_DIR/../../.."
+    local repo_root="$SCRIPT_DIR/../.."
 
-    # Copy scripts
-    cp -r "$repo_root/Scripts/autonomous/install/"* "$BASE_DIR/scripts/" 2>/dev/null || true
-    cp -r "$repo_root/Scripts/autonomous/qsecbit/"* "$BASE_DIR/agent/" 2>/dev/null || true
+    # Copy scripts (from deploy/edge/)
+    cp -r "$repo_root/deploy/edge/"*.sh "$BASE_DIR/scripts/" 2>/dev/null || true
+    cp -r "$repo_root/core/qsecbit/"* "$BASE_DIR/agent/" 2>/dev/null || true
 
     # Copy systemd units
     cp "$SCRIPT_DIR/systemd/"*.service "$SYSTEMD_DIR/" 2>/dev/null || log_warning "systemd units not found in expected location"
@@ -525,9 +525,9 @@ install_files() {
     chmod +x "$BASE_DIR"/scripts/*.sh 2>/dev/null || true
     chmod +x "$BASE_DIR"/agent/*.py 2>/dev/null || true
 
-    # Copy configuration
-    if [ -f "$repo_root/Scripts/autonomous/install/network-config.sh" ]; then
-        cp "$repo_root/Scripts/autonomous/install/network-config.sh" "$CONFIG_DIR/"
+    # Copy configuration (if exists)
+    if [ -f "$repo_root/deploy/edge/network-config.sh" ]; then
+        cp "$repo_root/deploy/edge/network-config.sh" "$CONFIG_DIR/"
         chmod 600 "$CONFIG_DIR/network-config.sh"  # Contains secrets
     fi
 

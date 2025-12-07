@@ -136,18 +136,18 @@ apply_updates() {
 
     # Copy updated files
     log "Copying updated scripts..."
-    cp -r "$repo_dir/Scripts/autonomous/install/"* "$HOOKPROBE_BASE/scripts/"
-    cp -r "$repo_dir/Scripts/autonomous/qsecbit/"* "$HOOKPROBE_BASE/agent/"
+    cp -r "$repo_dir/deploy/edge/"* "$HOOKPROBE_BASE/scripts/" 2>/dev/null || true
+    cp -r "$repo_dir/core/qsecbit/"* "$HOOKPROBE_BASE/agent/" 2>/dev/null || true
 
     # Make scripts executable
-    chmod +x "$HOOKPROBE_BASE"/scripts/*.sh
-    chmod +x "$HOOKPROBE_BASE"/agent/*.py
+    chmod +x "$HOOKPROBE_BASE"/scripts/*.sh 2>/dev/null || true
+    chmod +x "$HOOKPROBE_BASE"/agent/*.py 2>/dev/null || true
 
     # Update systemd units
     log "Updating systemd units..."
-    if [ -d "$repo_dir/Scripts/autonomous/install/systemd" ]; then
-        cp "$repo_dir/Scripts/autonomous/install/systemd/"*.service /etc/systemd/system/
-        cp "$repo_dir/Scripts/autonomous/install/systemd/"*.timer /etc/systemd/system/
+    if [ -d "$repo_dir/deploy/edge/systemd" ]; then
+        cp "$repo_dir/deploy/edge/systemd/"*.service /etc/systemd/system/
+        cp "$repo_dir/deploy/edge/systemd/"*.timer /etc/systemd/system/
         systemctl daemon-reload
     fi
 
