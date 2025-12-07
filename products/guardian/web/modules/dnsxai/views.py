@@ -69,7 +69,7 @@ def api_set_level():
 
     if save_dnsxai_config(config):
         # Apply changes
-        run_command('systemctl restart dnsxai 2>/dev/null || true')
+        run_command('sudo systemctl restart dnsxai 2>/dev/null || true')
         return jsonify({'success': True, 'level': level})
     return jsonify({'success': False, 'error': 'Failed to save config'}), 500
 
@@ -95,7 +95,7 @@ def api_whitelist():
         if domain not in whitelist:
             whitelist.append(domain)
             if save_text_file(whitelist_file, whitelist):
-                run_command('systemctl restart dnsmasq')
+                run_command('sudo systemctl restart dnsmasq')
                 return jsonify({'success': True})
         return jsonify({'success': False, 'error': 'Domain already whitelisted'}), 400
 
@@ -103,7 +103,7 @@ def api_whitelist():
         if domain in whitelist:
             whitelist.remove(domain)
             if save_text_file(whitelist_file, whitelist):
-                run_command('systemctl restart dnsmasq')
+                run_command('sudo systemctl restart dnsmasq')
                 return jsonify({'success': True})
         return jsonify({'success': False, 'error': 'Domain not found'}), 404
 
@@ -165,11 +165,11 @@ def api_pause():
 
     def apply_state(enabled):
         if enabled:
-            run_command('systemctl start dnsxai 2>/dev/null || true')
-            run_command('systemctl restart dnsmasq')
+            run_command('sudo systemctl start dnsxai 2>/dev/null || true')
+            run_command('sudo systemctl restart dnsmasq')
         else:
-            run_command('systemctl stop dnsxai 2>/dev/null || true')
-            run_command('systemctl restart dnsmasq')
+            run_command('sudo systemctl stop dnsxai 2>/dev/null || true')
+            run_command('sudo systemctl restart dnsmasq')
 
     if request.method == 'GET':
         state = get_state()
