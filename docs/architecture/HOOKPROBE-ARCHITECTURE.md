@@ -560,7 +560,7 @@ Attacker's campaign fails before reaching 80% of targets
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │ TIER 2: EDGE NODES                                                               │
 ├─────────────────────────────────────────────────────────────────────────────────┤
-│   SENTINEL (512MB)     │   GUARDIAN (3GB)      │   FORTRESS (8GB)               │
+│   SENTINEL (256MB)     │   GUARDIAN (1.5GB)    │   FORTRESS (4GB)               │
 │   DSM Validator        │   Travel Companion    │   Edge Router                  │
 │   IoT gateways         │   RPi 4/5             │   Mini PC/Server               │
 │   /products/sentinel/  │   /products/guardian/ │   /products/fortress/          │
@@ -569,7 +569,7 @@ Attacker's campaign fails before reaching 80% of targets
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │ TIER 3: COMPUTE NODES                                                            │
 ├─────────────────────────────────────────────────────────────────────────────────┤
-│   NEXUS (64GB+) - ML/AI Heavy Computation                                        │
+│   NEXUS (16GB+) - ML/AI Heavy Computation                                        │
 │   Location: /products/nexus/                                                     │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
@@ -585,7 +585,7 @@ Attacker's campaign fails before reaching 80% of targets
 
 | Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
 |---------|----------|----------|----------|-------|------|
-| **RAM** | 512MB | 3GB | 8GB | 64GB+ | Scales |
+| **RAM** | 256MB | 1.5GB | 4GB | 16GB+ | Scales |
 | **Role** | Validator | Edge | Edge+ | Compute | Brain |
 | **L2-L7 Detection** | - | Yes | Yes | Yes | - |
 | **WiFi Hotspot** | - | Yes | Yes | - | - |
@@ -726,16 +726,16 @@ dsm:
 ```bash
 # Choose your tier based on hardware:
 
-# IoT/LTE devices (512MB RAM)
+# IoT/LTE devices (256MB RAM)
 sudo ./install.sh --tier sentinel
 
-# Raspberry Pi travel setup (3GB RAM)
+# Raspberry Pi travel setup (1.5GB RAM)
 sudo ./install.sh --tier guardian
 
-# Mini PC/Server (8GB RAM)
+# Mini PC/Server (4GB RAM)
 sudo ./install.sh --tier fortress
 
-# Datacenter/Cloud (64GB+ RAM)
+# Datacenter/Cloud (16GB+ RAM)
 sudo ./install.sh --tier nexus
 
 # MSSP Cloud deployment
@@ -788,10 +788,10 @@ hookprobe/
 │   └── neuro/                     # Neural Resonance Protocol
 │
 ├── products/                       # Product Tiers
-│   ├── sentinel/                  # DSM Validator (IoT, 512MB)
-│   ├── guardian/                  # Travel Companion (RPi, 3GB)
-│   ├── fortress/                  # Edge Router (Mini PC, 8GB)
-│   ├── nexus/                     # ML/AI Compute (Server, 64GB+)
+│   ├── sentinel/                  # DSM Validator (IoT, 256MB)
+│   ├── guardian/                  # Travel Companion (RPi, 1.5GB)
+│   ├── fortress/                  # Edge Router (Mini PC, 4GB)
+│   ├── nexus/                     # ML/AI Compute (Server, 16GB+)
 │   └── mssp/                      # Cloud Federation
 │
 ├── shared/                         # Shared Infrastructure

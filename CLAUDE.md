@@ -64,11 +64,11 @@ HookProbe is a **federated cybersecurity mesh** built for edge computing and dis
 
 | Tier | RAM | Use Case | Location |
 |------|-----|----------|----------|
-| **Sentinel** | 512MB | IoT Validator | `products/sentinel/` |
-| **Guardian** | 3GB | Travel/Portable | `products/guardian/` |
-| **Fortress** | 8GB | Edge Router | `products/fortress/` |
-| **Nexus** | 64GB+ | ML/AI Compute | `products/nexus/` |
-| **MSSP** | Cloud | Central Brain | `products/mssp/` |
+| **Sentinel** | 256MB | IoT Validator | `products/sentinel/` |
+| **Guardian** | 1.5GB | Travel/Portable | `products/guardian/` |
+| **Fortress** | 4GB | Edge Router | `products/fortress/` |
+| **Nexus** | 16GB+ | ML/AI Compute | `products/nexus/` |
+| **MSSP** | 16GB+ | Central Brain | `products/mssp/` |
 
 ---
 
@@ -119,8 +119,8 @@ hookprobe/
 │           └── validator_network.py  # Validator network
 │
 ├── products/                         # PRODUCT TIERS
-│   ├── sentinel/                     # DSM Validator (512MB)
-│   ├── guardian/                     # Travel Companion (3GB)
+│   ├── sentinel/                     # DSM Validator (256MB)
+│   ├── guardian/                     # Travel Companion (1.5GB)
 │   │   ├── lib/
 │   │   │   ├── guardian_agent.py    # Main agent
 │   │   │   ├── htp_client.py        # HTP client
@@ -129,9 +129,9 @@ hookprobe/
 │   │   └── scripts/
 │   │       ├── setup.sh
 │   │       └── uninstall.sh
-│   ├── fortress/                     # Edge Router (8GB)
+│   ├── fortress/                     # Edge Router (4GB)
 │   │   └── setup.sh
-│   ├── nexus/                        # ML/AI Compute (64GB+)
+│   ├── nexus/                        # ML/AI Compute (16GB+)
 │   │   └── vpn/                     # VPN integration
 │   └── mssp/                         # Cloud MSSP
 │       ├── device_registry.py
