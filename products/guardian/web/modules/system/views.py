@@ -6,7 +6,7 @@ from . import system_bp
 from utils import run_command, get_system_info, format_bytes
 
 
-@system_bp.route('/api/info')
+@system_bp.route('/info')
 def api_info():
     """Get system information."""
     try:
@@ -31,7 +31,7 @@ def api_info():
         return jsonify({'error': str(e)}), 500
 
 
-@system_bp.route('/api/services')
+@system_bp.route('/services')
 def api_services():
     """Get service status."""
     services = ['dnsmasq', 'hostapd', 'suricata', 'guardian-agent', 'nginx']
@@ -49,7 +49,7 @@ def api_services():
     return jsonify({'services': result})
 
 
-@system_bp.route('/api/service/<name>/restart', methods=['POST'])
+@system_bp.route('/service/<name>/restart', methods=['POST'])
 def api_restart_service(name):
     """Restart a service."""
     allowed = ['dnsmasq', 'hostapd', 'suricata', 'guardian-agent', 'nginx', 'dnsxai']
@@ -65,7 +65,7 @@ def api_restart_service(name):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@system_bp.route('/api/restart-services', methods=['POST'])
+@system_bp.route('/restart-services', methods=['POST'])
 def api_restart_all():
     """Restart all Guardian services."""
     try:
@@ -77,7 +77,7 @@ def api_restart_all():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@system_bp.route('/api/updates')
+@system_bp.route('/updates')
 def api_updates():
     """Check for system updates."""
     try:
@@ -91,7 +91,7 @@ def api_updates():
         return jsonify({'error': str(e)}), 500
 
 
-@system_bp.route('/api/logs')
+@system_bp.route('/logs')
 def api_logs():
     """Get recent system logs."""
     try:
@@ -101,7 +101,7 @@ def api_logs():
         return jsonify({'logs': str(e)})
 
 
-@system_bp.route('/api/reboot', methods=['POST'])
+@system_bp.route('/reboot', methods=['POST'])
 def api_reboot():
     """Reboot the system."""
     try:
@@ -111,7 +111,7 @@ def api_reboot():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@system_bp.route('/api/shutdown', methods=['POST'])
+@system_bp.route('/shutdown', methods=['POST'])
 def api_shutdown():
     """Shutdown the system."""
     try:

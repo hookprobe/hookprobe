@@ -6,7 +6,7 @@ from . import clients_bp
 from utils import run_command
 
 
-@clients_bp.route('/api/list')
+@clients_bp.route('/list')
 def api_clients_list():
     """Get list of connected clients."""
     try:
@@ -88,7 +88,7 @@ def api_clients_list():
         return jsonify({'error': str(e)}), 500
 
 
-@clients_bp.route('/api/dhcp')
+@clients_bp.route('/dhcp')
 def api_dhcp_leases():
     """Get DHCP leases."""
     try:
@@ -119,7 +119,7 @@ def api_dhcp_leases():
         return jsonify({'error': str(e)}), 500
 
 
-@clients_bp.route('/api/block/<ip>', methods=['POST'])
+@clients_bp.route('/block/<ip>', methods=['POST'])
 def api_block_client(ip):
     """Block a client by IP."""
     import re
@@ -133,7 +133,7 @@ def api_block_client(ip):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@clients_bp.route('/api/unblock/<ip>', methods=['POST'])
+@clients_bp.route('/unblock/<ip>', methods=['POST'])
 def api_unblock_client(ip):
     """Unblock a client by IP."""
     import re
