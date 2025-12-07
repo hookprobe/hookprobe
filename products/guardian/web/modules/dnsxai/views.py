@@ -29,7 +29,7 @@ def save_dnsxai_config(config):
     return save_json_file(config_file, config)
 
 
-@dnsxai_bp.route('/api/stats')
+@dnsxai_bp.route('/stats')
 def api_stats():
     """Get dnsXai statistics."""
     stats_file = current_app.config.get('DNSXAI_STATS', '/opt/hookprobe/guardian/dnsxai/stats.json')
@@ -54,7 +54,7 @@ def api_stats():
     return jsonify(stats)
 
 
-@dnsxai_bp.route('/api/level', methods=['POST'])
+@dnsxai_bp.route('/level', methods=['POST'])
 def api_set_level():
     """Set protection level."""
     data = request.get_json()
@@ -74,7 +74,7 @@ def api_set_level():
     return jsonify({'success': False, 'error': 'Failed to save config'}), 500
 
 
-@dnsxai_bp.route('/api/whitelist', methods=['GET', 'POST', 'DELETE'])
+@dnsxai_bp.route('/whitelist', methods=['GET', 'POST', 'DELETE'])
 def api_whitelist():
     """Manage whitelisted domains."""
     whitelist_file = current_app.config.get('DNSXAI_WHITELIST', '/opt/hookprobe/guardian/dnsxai/whitelist.txt')
@@ -110,7 +110,7 @@ def api_whitelist():
     return jsonify({'success': False, 'error': 'Invalid method'}), 405
 
 
-@dnsxai_bp.route('/api/sources', methods=['GET', 'POST', 'DELETE'])
+@dnsxai_bp.route('/sources', methods=['GET', 'POST', 'DELETE'])
 def api_sources():
     """Manage blocklist sources."""
     config = get_dnsxai_config()
@@ -152,7 +152,7 @@ def api_sources():
         return jsonify({'success': False, 'error': 'Failed to save config'}), 500
 
 
-@dnsxai_bp.route('/api/pause', methods=['GET', 'POST'])
+@dnsxai_bp.route('/pause', methods=['GET', 'POST'])
 def api_pause():
     """Pause/resume dnsXai protection."""
     pause_file = current_app.config.get('DNSXAI_PAUSE', '/opt/hookprobe/guardian/dnsxai/pause_state.json')
@@ -223,7 +223,7 @@ def api_pause():
     return jsonify({'success': False, 'error': 'Invalid action'}), 400
 
 
-@dnsxai_bp.route('/api/update', methods=['POST'])
+@dnsxai_bp.route('/update', methods=['POST'])
 def api_update():
     """Trigger blocklist update."""
     try:

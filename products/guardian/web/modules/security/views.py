@@ -6,7 +6,7 @@ from . import security_bp
 from utils import run_command, load_json_file
 
 
-@security_bp.route('/api/xdp_stats')
+@security_bp.route('/xdp_stats')
 def api_xdp_stats():
     """Get XDP/eBPF statistics."""
     try:
@@ -44,7 +44,7 @@ def api_xdp_stats():
         return jsonify({'error': str(e)}), 500
 
 
-@security_bp.route('/api/qsecbit')
+@security_bp.route('/qsecbit')
 def api_qsecbit():
     """Get current QSecBit score and components."""
     try:
@@ -72,7 +72,7 @@ def api_qsecbit():
         return jsonify({'error': str(e)}), 500
 
 
-@security_bp.route('/api/block_ip', methods=['POST'])
+@security_bp.route('/block_ip', methods=['POST'])
 def api_block_ip():
     """Block an IP address via XDP."""
     from flask import request
@@ -98,7 +98,7 @@ def api_block_ip():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@security_bp.route('/api/unblock_ip', methods=['POST'])
+@security_bp.route('/unblock_ip', methods=['POST'])
 def api_unblock_ip():
     """Unblock an IP address."""
     from flask import request
