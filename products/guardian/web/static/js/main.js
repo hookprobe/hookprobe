@@ -459,8 +459,16 @@ function updateDnsxaiSources(sources) {
 
 async function loadClientsData() {
     try {
-        const clients = await apiGet('/clients');
+        const [clients, dhcp] = await Promise.all([
+            apiGet('/clients/list'),
+            apiGet('/clients/dhcp')
+        ]);
         updateClientsList(clients);
+        updateDhcpLeases(dhcp.leases || []);
+
+        // Update stats
+        updateElement('clients-total', (dhcp.leases || []).length);
+        updateElement('clients-active', Array.isArray(clients) ? clients.filter(c => c.status === 'connected').length : 0);
     } catch (error) {
         console.error('Failed to load clients:', error);
     }
@@ -470,7 +478,7 @@ function updateClientsList(clients) {
     const grid = document.getElementById('clients-grid');
     if (!grid) return;
 
-    if (!clients || clients.length === 0) {
+    if (!clients || clients.length === 0 || (clients.error)) {
         grid.innerHTML = '<div class="empty-state"><p>No clients connected</p></div>';
         return;
     }
@@ -484,12 +492,83 @@ function updateClientsList(clients) {
             </div>
             <div class="device-info">
                 <div class="device-name">${client.hostname || 'Unknown Device'}</div>
-                <div class="device-ip font-mono">${client.ip}</div>
+                <div class="device-ip font-mono">${client.ip || 'N/A'}</div>
                 <div class="device-mac text-muted font-mono">${client.mac || 'N/A'}</div>
             </div>
-            <span class="badge badge-success">Connected</span>
+            <div class="device-actions">
+                <span class="badge ${client.status === 'connected' ? 'badge-success' : 'badge-info'}">${client.status === 'connected' ? 'Connected' : 'DHCP Lease'}</span>
+                ${client.ip && client.ip !== 'N/A' ? `<button class="btn btn-sm btn-danger" onclick="disconnectClient('${client.ip}')" title="Block this client">Disconnect</button>` : ''}
+            </div>
         </div>
     `).join('');
+}
+
+function updateDhcpLeases(leases) {
+    const tbody = document.getElementById('dhcp-leases-body');
+    if (!tbody) return;
+
+    if (!leases || leases.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No active DHCP leases</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = leases.map(lease => {
+        const expiresIn = formatLeaseTime(lease.expires_in);
+        return `
+            <tr>
+                <td>${lease.hostname || 'Unknown'}</td>
+                <td class="font-mono">${lease.ip}</td>
+                <td class="font-mono">${lease.mac}</td>
+                <td>${expiresIn}</td>
+                <td>
+                    <button class="btn btn-sm btn-danger" onclick="disconnectClient('${lease.ip}')" title="Block this client">
+                        Disconnect
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function formatLeaseTime(seconds) {
+    if (!seconds || seconds <= 0) return 'Expired';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+}
+
+async function disconnectClient(ip) {
+    if (!confirm(`Disconnect client ${ip}? This will block the device from accessing the network.`)) {
+        return;
+    }
+
+    try {
+        const result = await apiPost(`/clients/block/${ip}`);
+        if (result.success) {
+            showToast(`Client ${ip} has been disconnected`, 'success');
+            loadClientsData(); // Refresh the list
+        } else {
+            showToast(result.error || 'Failed to disconnect client', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to disconnect client', 'error');
+    }
+}
+
+async function unblockClient(ip) {
+    try {
+        const result = await apiPost(`/clients/unblock/${ip}`);
+        if (result.success) {
+            showToast(`Client ${ip} has been unblocked`, 'success');
+            loadClientsData();
+        } else {
+            showToast(result.error || 'Failed to unblock client', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to unblock client', 'error');
+    }
 }
 
 async function loadVpnData() {
