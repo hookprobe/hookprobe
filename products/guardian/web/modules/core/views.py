@@ -23,9 +23,10 @@ def api_status():
     try:
         system = get_system_info()
 
-        # Get connected clients count
-        output, success = run_command("ip neigh show | grep -v FAILED | wc -l")
-        connected_clients = int(output) if success and output.isdigit() else 0
+        # Get connected clients count (only REACHABLE/STALE on LAN interface)
+        lan_iface = current_app.config.get('LAN_INTERFACE', 'wlan0')
+        output, success = run_command(f"ip neigh show dev {lan_iface} | grep -E 'REACHABLE|STALE|DELAY' | wc -l")
+        connected_clients = int(output.strip()) if success and output.strip().isdigit() else 0
 
         # Get network interface stats
         wan_stats = get_network_stats(current_app.config.get('WAN_INTERFACE', 'eth0'))
