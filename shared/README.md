@@ -6,13 +6,184 @@ The shared/ directory contains infrastructure components used by multiple produc
 
 ```
 shared/
+├── dnsXai/    # AI-Powered DNS Protection
+│   ├── engine.py           # ML classifier (20 features, 8 categories)
+│   ├── integration.py      # Product integration
+│   └── mesh_intelligence.py # Federated learning
+│
+├── mesh/      # Unified Mesh Communication
+│   ├── ARCHITECTURE.md     # Complete mesh documentation
+│   ├── nat_traversal.py    # STUN/ICE/hole punching
+│   ├── consciousness.py    # Mesh consciousness states
+│   ├── unified_transport.py # High-level API
+│   └── relay.py            # TURN-style relay
+│
 ├── dsm/       # Decentralized Security Mesh
-│   ├── consensus/   # BLS signature aggregation
-│   ├── gossip/      # P2P threat announcement
-│   └── ledger/      # Microblock chain
+│   ├── consensus.py        # BLS signature aggregation
+│   ├── gossip.py           # P2P threat announcement
+│   └── ledger.py           # Microblock chain
 │
 └── response/  # Automated Threat Response
+    └── attack-mitigation-orchestrator.sh
 ```
+
+---
+
+## dnsXai — AI-Powered DNS Protection
+
+**Location:** `shared/dnsXai/`
+
+Next-generation DNS protection with machine learning. Traditional blockers miss, dnsXai catches.
+
+### Why dnsXai?
+
+| Traditional Blockers | dnsXai |
+|---------------------|--------|
+| Static blocklists only | ML-based classification for unknown domains |
+| Miss CNAME cloaking | Detects first-party tracker masquerading |
+| Isolated protection | Federated learning across mesh network |
+| Manual updates | Self-learning and auto-updating |
+| Binary block/allow | Confidence-based decisions with 8 categories |
+
+### Features
+
+- **ML Classification** — 20-feature neural classifier for unknown domains
+- **CNAME Uncloaking** — Detects `track.yoursite.com → adobe.demdex.net`
+- **5 Protection Levels** — Base (ads/malware) to Full (social trackers)
+- **Federated Learning** — Privacy-preserving collective intelligence
+- **<1ms Inference** — Lightweight enough for Raspberry Pi
+- **~130K-250K domains** — Comprehensive blocklist coverage
+
+### Protection Levels
+
+| Level | Name | Blocks | Domains |
+|-------|------|--------|---------|
+| 1 | **Base** | Ads + Malware | ~130K |
+| 2 | **Enhanced** | + Fakenews | ~132K |
+| 3 | **Strong** | + Gambling | ~135K |
+| 4 | **Maximum** | + Adult Content | ~200K |
+| 5 | **Full** | + Social Trackers | ~250K |
+
+### Qsecbit Integration
+
+dnsXai contributes **8%** to the Qsecbit security score:
+
+```
+Qsecbit = 0.30·threats + 0.20·mobile + 0.25·ids + 0.15·xdp + 0.02·network + 0.08·dnsxai
+```
+
+High ad/tracker ratio indicates potential malware or compromised network.
+
+### Components
+
+| File | Purpose |
+|------|---------|
+| `engine.py` | ML classifier with feature extraction |
+| `integration.py` | Product integration utilities |
+| `mesh_intelligence.py` | Federated learning across mesh |
+| `update-blocklist.sh` | Blocklist update script |
+
+### Usage
+
+```python
+from shared.dnsXai import DNSXai, ProtectionLevel
+
+# Create instance
+dnsxai = DNSXai()
+
+# Set protection level
+dnsxai.set_protection_level(ProtectionLevel.STRONG)
+
+# Classify a domain
+result = dnsxai.classify_domain("suspicious-tracker.com")
+print(f"Category: {result.category}, Blocked: {result.blocked}")
+```
+
+See `shared/dnsXai/README.md` for full documentation.
+
+---
+
+## Mesh — Unified Communication Layer
+
+**Location:** `shared/mesh/`
+
+Resilient, anti-blocking mesh communication for all HookProbe nodes.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    MESH COMMUNICATION FLOW                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Guardian A ◄──── Direct P2P (preferred) ────► Guardian B      │
+│        │                                              │          │
+│        │         [If NAT blocks direct]               │          │
+│        └──────────► Fortress Relay ◄─────────────────┘          │
+│                          │                                       │
+│                          │    [If all else fails]               │
+│                          ▼                                       │
+│                    MSSP Cloud Relay                              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Port Selection
+
+```
+PRIMARY:    8144/UDP + 8144/TCP
+FALLBACK:   443/UDP (QUIC cover) + 443/TCP (TLS-wrapped)
+STEALTH:    853/UDP (DoQ cover) + 853/TCP (DoT cover)
+EMERGENCY:  80/TCP (WebSocket) + ICMP tunnel
+```
+
+### Consciousness States
+
+Mesh nodes progress through awareness levels:
+
+| State | Description |
+|-------|-------------|
+| **DORMANT** | Offline, no mesh activity |
+| **AWAKENING** | Discovering peers, establishing connections |
+| **AWARE** | Connected to mesh, receiving updates |
+| **SYNCHRONIZED** | Full participation, sharing threat intel |
+| **AUTONOMOUS** | Self-coordinating, can operate without MSSP |
+
+### Components
+
+| File | Purpose |
+|------|---------|
+| `ARCHITECTURE.md` | **MUST READ** — Complete mesh documentation |
+| `nat_traversal.py` | STUN/ICE/hole punching for P2P |
+| `consciousness.py` | Mesh consciousness state machine |
+| `port_manager.py` | Multi-port failover management |
+| `resilient_channel.py` | Reliable messaging with retries |
+| `channel_selector.py` | Intelligent channel selection |
+| `relay.py` | TURN-style relay for blocked nodes |
+| `tunnel.py` | Cloudflare/ngrok/Tailscale tunnels |
+| `unified_transport.py` | High-level transport API |
+| `neuro_encoder.py` | Neural resonance authentication |
+
+### Usage
+
+```python
+from shared.mesh import UnifiedTransport
+
+# Create transport
+transport = UnifiedTransport(node_id="guardian-001")
+
+# Connect to mesh
+await transport.connect()
+
+# Send threat indicator to mesh
+await transport.broadcast({
+    "type": "threat_indicator",
+    "ioc": "malicious-domain.com",
+    "confidence": 0.95
+})
+```
+
+See `shared/mesh/ARCHITECTURE.md` for full documentation.
 
 ---
 
@@ -92,20 +263,30 @@ Shut down when threat cleared
 
 ---
 
-## Integration
+## Integration Matrix
 
-Both components are used across all products:
+All components are used across HookProbe products:
 
-| Product | DSM Usage | Response Usage |
-|---------|-----------|----------------|
-| Sentinel | Validation only | - |
-| Guardian | Participate | Auto-mitigate |
-| Fortress | Participate | Auto-mitigate + custom |
-| Nexus | Coordinate | Regional response |
-| MSSP | Aggregate | Global coordination |
+| Product | dnsXai | Mesh | DSM | Response |
+|---------|--------|------|-----|----------|
+| **Sentinel** | - | Participate | Validate | - |
+| **Guardian** | ✓ Full | Participate | Participate | Auto-mitigate |
+| **Fortress** | ✓ Advanced | Coordinate | Participate | Auto + Custom |
+| **Nexus** | ✓ Train | Super-node | Coordinate | Regional |
+| **MSSP** | ✓ Global | Coordinate | Aggregate | Global |
+
+### dnsXai Features by Tier
+
+| Feature | Guardian | Fortress | Nexus | MSSP |
+|---------|----------|----------|-------|------|
+| ML Classification | ✓ | ✓ | ✓ | ✓ |
+| CNAME Uncloaking | ✓ | ✓ | ✓ | ✓ |
+| Federated Learning | Participate | Hub | Train | Coordinate |
+| Per-VLAN Policies | - | ✓ | - | - |
+| Analytics (ClickHouse) | - | Optional | ✓ | ✓ |
 
 ---
 
-**HookProbe Shared** — *Common Infrastructure*
+**HookProbe Shared Infrastructure v5.0** — *Common Components*
 
 MIT License
