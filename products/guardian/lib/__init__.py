@@ -50,7 +50,8 @@ from .htp_client import (
     HTPPacketType
 )
 
-from .htp_file import (
+# HTP File Transfer - imported from core (single source of truth)
+from core.htp.transport.htp_file import (
     HTPFileTransfer,
     HTPFileServer,
     FileOperation,
