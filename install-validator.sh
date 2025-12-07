@@ -320,11 +320,12 @@ install_hookprobe_validator() {
     mkdir -p $DATA_DIR/merkle-log
 
     # Copy source files (assume we're in hookprobe repo)
-    if [ -d "src" ]; then
-        cp -r src/* $INSTALL_DIR/
+    if [ -d "core" ]; then
+        cp -r core/* $INSTALL_DIR/
+        cp -r shared/* $INSTALL_DIR/
         echo -e "${GREEN}✓ Source files installed${NC}"
     else
-        echo -e "${RED}✗ Source directory not found${NC}"
+        echo -e "${RED}✗ Core directory not found${NC}"
         exit 1
     fi
 

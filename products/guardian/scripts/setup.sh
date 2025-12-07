@@ -308,6 +308,164 @@ OVSEOF
 }
 
 # ============================================================
+# MACSEC (802.1AE) LAYER 2 ENCRYPTION (OPTIONAL)
+# ============================================================
+# MACsec provides Layer 2 encryption for wired connections.
+# Guardian mode: MACsec is optional, primarily for travel setups
+# where wired connections need protection (e.g., untrusted LANs).
+# ============================================================
+setup_macsec() {
+    log_step "Setting up MACsec (802.1AE) Layer 2 encryption..."
+
+    local MACSEC_ENABLED="${HOOKPROBE_MACSEC_ENABLED:-false}"
+
+    if [ "$MACSEC_ENABLED" != "true" ]; then
+        log_info "MACsec disabled (set HOOKPROBE_MACSEC_ENABLED=true to enable)"
+        return 0
+    fi
+
+    # Check for MACsec kernel support
+    if ! modprobe macsec 2>/dev/null; then
+        log_warn "MACsec kernel module not available"
+        log_warn "MACsec requires Linux kernel 4.6+ with CONFIG_MACSEC=y"
+        return 0
+    fi
+
+    # Create MACsec secrets directory
+    mkdir -p /etc/hookprobe/secrets/macsec
+    chmod 700 /etc/hookprobe/secrets/macsec
+
+    # Generate MACsec CAK (Connectivity Association Key) - 128-bit (32 hex chars)
+    if [ ! -f /etc/hookprobe/secrets/macsec/cak.key ]; then
+        openssl rand -hex 16 > /etc/hookprobe/secrets/macsec/cak.key
+        chmod 600 /etc/hookprobe/secrets/macsec/cak.key
+        log_info "MACsec CAK generated"
+    fi
+
+    # Generate MACsec CKN (Connectivity Key Name) - 128-bit (32 hex chars)
+    if [ ! -f /etc/hookprobe/secrets/macsec/ckn.key ]; then
+        openssl rand -hex 16 > /etc/hookprobe/secrets/macsec/ckn.key
+        chmod 600 /etc/hookprobe/secrets/macsec/ckn.key
+        log_info "MACsec CKN generated"
+    fi
+
+    local CAK=$(cat /etc/hookprobe/secrets/macsec/cak.key)
+    local CKN=$(cat /etc/hookprobe/secrets/macsec/ckn.key)
+
+    # Create MACsec configuration
+    cat > /etc/hookprobe/macsec.conf << MACSECEOF
+# HookProbe Guardian MACsec Configuration
+# 802.1AE Layer 2 Encryption
+
+# MACsec encrypts wired Ethernet traffic at Layer 2
+# Use when connecting to untrusted networks via Ethernet
+
+MACSEC_ENABLED=$MACSEC_ENABLED
+MACSEC_CIPHER=gcm-aes-128
+MACSEC_REPLAY_PROTECT=true
+MACSEC_REPLAY_WINDOW=32
+
+# Keys are stored separately for security
+MACSEC_CAK_FILE=/etc/hookprobe/secrets/macsec/cak.key
+MACSEC_CKN_FILE=/etc/hookprobe/secrets/macsec/ckn.key
+MACSECEOF
+
+    # Create wpa_supplicant MACsec config for each ethernet interface
+    for iface in $ETH_INTERFACES; do
+        cat > "/etc/hookprobe/macsec-${iface}.conf" << WPASECEOF
+# MACsec configuration for $iface
+ctrl_interface=/var/run/wpa_supplicant
+eapol_version=3
+ap_scan=0
+
+network={
+    key_mgmt=NONE
+    eapol_flags=0
+    macsec_policy=1
+    macsec_integ_only=0
+    mka_cak=$CAK
+    mka_ckn=$CKN
+}
+WPASECEOF
+        chmod 600 "/etc/hookprobe/macsec-${iface}.conf"
+    done
+
+    # Create MACsec management script
+    cat > /usr/local/bin/guardian-macsec << 'MACSECSCRIPT'
+#!/bin/bash
+# HookProbe Guardian MACsec Management
+# Provides Layer 2 encryption for wired connections
+
+MACSEC_DIR="/etc/hookprobe"
+
+case "$1" in
+    enable)
+        IFACE="${2:-eth0}"
+        if [ -f "$MACSEC_DIR/macsec-${IFACE}.conf" ]; then
+            echo "Enabling MACsec on $IFACE..."
+            wpa_supplicant -i "$IFACE" -D macsec_linux \
+                -c "$MACSEC_DIR/macsec-${IFACE}.conf" -B
+            echo "MACsec enabled on $IFACE"
+            echo "Note: Both endpoints need the same CAK/CKN keys"
+        else
+            echo "Error: No MACsec config for $IFACE"
+            echo "Available configs:"
+            ls -1 "$MACSEC_DIR"/macsec-*.conf 2>/dev/null | sed 's/.*macsec-/  /' | sed 's/.conf//'
+            exit 1
+        fi
+        ;;
+    disable)
+        IFACE="${2:-eth0}"
+        pkill -f "wpa_supplicant.*${IFACE}" 2>/dev/null
+        ip link del "macsec0" 2>/dev/null || true
+        echo "MACsec disabled on $IFACE"
+        ;;
+    status)
+        echo "=== MACsec Status ==="
+        if ip macsec show 2>/dev/null | grep -q .; then
+            ip macsec show
+        else
+            echo "No active MACsec interfaces"
+        fi
+        echo ""
+        echo "=== MKA Sessions ==="
+        if ps aux | grep -v grep | grep -q "wpa_supplicant.*macsec"; then
+            ps aux | grep -v grep | grep "wpa_supplicant.*macsec"
+        else
+            echo "No active MKA sessions"
+        fi
+        ;;
+    keys)
+        echo "=== MACsec Keys ==="
+        echo "Share these keys with the other endpoint for MACsec to work:"
+        echo ""
+        echo "CAK (Connectivity Association Key):"
+        cat /etc/hookprobe/secrets/macsec/cak.key 2>/dev/null || echo "  Not generated"
+        echo ""
+        echo "CKN (Connectivity Key Name):"
+        cat /etc/hookprobe/secrets/macsec/ckn.key 2>/dev/null || echo "  Not generated"
+        ;;
+    *)
+        echo "Usage: $0 {enable|disable|status|keys} [interface]"
+        echo ""
+        echo "Commands:"
+        echo "  enable <iface>   Enable MACsec on interface (default: eth0)"
+        echo "  disable <iface>  Disable MACsec on interface"
+        echo "  status           Show MACsec status"
+        echo "  keys             Display MACsec keys (for sharing)"
+        exit 1
+        ;;
+esac
+MACSECSCRIPT
+
+    chmod +x /usr/local/bin/guardian-macsec
+
+    log_info "MACsec (802.1AE) configured"
+    log_info "  Enable with: guardian-macsec enable eth0"
+    log_info "  View keys:   guardian-macsec keys"
+}
+
+# ============================================================
 # SECURITY CONTAINERS
 # ============================================================
 install_security_containers() {
@@ -1464,14 +1622,14 @@ BASHEOF
 }
 
 install_qsecbit_agent() {
-    log_step "Installing QSecBit agent (full version from src/qsecbit)..."
+    log_step "Installing QSecBit agent (full version from core/qsecbit)..."
 
     # Create directories
     mkdir -p /opt/hookprobe/guardian/qsecbit
     mkdir -p /opt/hookprobe/guardian/data
 
     # Copy QSecBit modules from source (if available)
-    local QSECBIT_SRC="/home/xsoc/hookprobe/src/qsecbit"
+    local QSECBIT_SRC="/home/xsoc/hookprobe/core/qsecbit"
     if [ -d "$QSECBIT_SRC" ]; then
         log_info "Copying QSecBit modules from source..."
         cp -r "$QSECBIT_SRC"/*.py /opt/hookprobe/guardian/qsecbit/ 2>/dev/null || true
@@ -2934,6 +3092,10 @@ main() {
     # Setup OVS bridge with VXLAN tunnel
     log_step "Configuring OVS bridge..."
     setup_ovs_bridge
+
+    # Setup MACsec (optional - disabled by default, enable with HOOKPROBE_MACSEC_ENABLED=true)
+    # Note: MACsec may not work on all Raspberry Pi models due to kernel configuration
+    setup_macsec
 
     # Network configuration prompt
     prompt_network_config

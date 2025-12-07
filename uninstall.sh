@@ -44,23 +44,23 @@ main() {
     case $choice in
         1)
             echo -e "${YELLOW}Uninstalling Edge Deployment...${NC}"
-            bash "$SCRIPT_DIR/install/edge/uninstall.sh"
+            bash "$SCRIPT_DIR/deploy/edge/uninstall.sh"
             ;;
         2)
             echo -e "${YELLOW}Uninstalling Cloud Backend...${NC}"
-            bash "$SCRIPT_DIR/install/cloud/uninstall.sh"
+            bash "$SCRIPT_DIR/deploy/cloud/uninstall.sh"
             ;;
         3)
             echo -e "${YELLOW}Uninstalling n8n...${NC}"
-            bash "$SCRIPT_DIR/install/addons/n8n/uninstall.sh"
+            bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh"
             ;;
         4)
             echo -e "${RED}WARNING: This will remove EVERYTHING${NC}"
             read -p "Are you sure? (type 'yes'): " confirm
             if [ "$confirm" = "yes" ]; then
-                bash "$SCRIPT_DIR/install/edge/uninstall.sh" 2>/dev/null || true
-                bash "$SCRIPT_DIR/install/addons/n8n/uninstall.sh" 2>/dev/null || true
-                bash "$SCRIPT_DIR/install/cloud/uninstall.sh" 2>/dev/null || true
+                bash "$SCRIPT_DIR/deploy/edge/uninstall.sh" 2>/dev/null || true
+                bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh" 2>/dev/null || true
+                bash "$SCRIPT_DIR/deploy/cloud/uninstall.sh" 2>/dev/null || true
                 echo -e "${GREEN}✓ Complete uninstall finished${NC}"
             else
                 echo "Cancelled."
