@@ -14,6 +14,7 @@ Key Features:
 - NAT/CGNAT traversal with STUN/ICE/TURN
 - Emergent relay network for mesh continuity
 - Mesh promotion protocol when MSSP unavailable
+- Tunnel integration (Cloudflare, ngrok, Tailscale) for public FQDN without public IP
 """
 
 from .port_manager import PortManager, PortConfig, TransportMode
@@ -51,6 +52,16 @@ from .relay import (
     RelayNetwork,
     RelayNodeInfo,
     RelayStats,
+)
+from .tunnel import (
+    TunnelProvider,
+    TunnelStatus,
+    RegistrationStatus,
+    TunnelEndpoint,
+    TunnelConfig,
+    TunnelManager,
+    TunnelRegistry,
+    TunnelRegistrationClient,
 )
 
 __all__ = [
@@ -100,6 +111,15 @@ __all__ = [
     'RelayNetwork',
     'RelayNodeInfo',
     'RelayStats',
+    # Tunnel
+    'TunnelProvider',
+    'TunnelStatus',
+    'RegistrationStatus',
+    'TunnelEndpoint',
+    'TunnelConfig',
+    'TunnelManager',
+    'TunnelRegistry',
+    'TunnelRegistrationClient',
 ]
 
 __version__ = '5.0.0'
