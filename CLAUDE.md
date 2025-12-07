@@ -1,6 +1,6 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.1
+**Version**: 5.0
 **Last Updated**: 2025-12-07
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
