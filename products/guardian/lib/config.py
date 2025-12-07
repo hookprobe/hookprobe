@@ -298,10 +298,9 @@ class GuardianConfig:
             if not self.htp.mssp_host:
                 errors.append("HTP enabled but no MSSP host specified")
 
-        # Validate WebSocket VPN
-        if self.websocket_vpn.enabled:
-            if not self.websocket_vpn.mssp_host:
-                errors.append("WebSocket VPN enabled but no MSSP host specified")
+        # HTP File Transfer validation (replaces WebSocket VPN)
+        if self.htp_file.enabled and not self.htp.enabled:
+            errors.append("HTP File Transfer requires HTP to be enabled")
 
         return errors
 
@@ -610,30 +609,8 @@ htp:
   telemetry_interval: 60
   threat_report_enabled: true
 
-# ============================================================================
-# WebSocket VPN (Remote File Access via MSSP)
-# ============================================================================
-websocket_vpn:
-  enabled: true
-  mssp_host: "mssp.hookprobe.com"
-  mssp_port: 443
-  websocket_path: "/ws/vpn"
-
-  tls_enabled: true
-  tls_verify: true
-
-  tunnel_mtu: 1400
-  keepalive_interval: 25
-
-  # File access settings
-  file_access_enabled: true
-  allowed_paths:
-    - "/home"
-    - "/srv/files"
-  max_file_size_mb: 100
-
-  require_authentication: true
-  auth_token_expiry: 3600
+# WebSocket VPN removed - Guardian now uses HTP Mesh for secure file transfer
+# See htp_file section above for file transfer configuration
 
 # ============================================================================
 # Network Configuration

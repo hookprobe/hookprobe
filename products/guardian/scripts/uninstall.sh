@@ -5,7 +5,8 @@
 # License: MIT
 #
 # Removes all Guardian components:
-# - Podman containers (Suricata, AdGuard)
+# - Podman containers (Suricata, WAF, Zeek)
+# - DNS Shield blocklists
 # - Systemd services
 # - Network bridges
 # - hostapd and dnsmasq configurations
@@ -56,7 +57,7 @@ stop_services() {
         # Core services
         "guardian-webui"
         "guardian-suricata"
-        "guardian-adguard"
+        "dns-shield-update"
         "guardian-qsecbit"
         # Unified services
         "guardian-htp"
@@ -94,7 +95,7 @@ remove_systemd_services() {
         "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
-        "guardian-adguard"
+        "dns-shield-update"
         "guardian-qsecbit"
         # Unified services
         "guardian-htp"
@@ -139,7 +140,6 @@ remove_containers() {
         "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
-        "guardian-adguard"
         "guardian-zeek"
     )
 
@@ -157,8 +157,6 @@ remove_containers() {
         "guardian-suricata-logs"
         "guardian-suricata-rules"
         "guardian-waf-logs"
-        "guardian-adguard-work"
-        "guardian-adguard-conf"
         "guardian-zeek-logs"
         "guardian-zeek-spool"
     )
@@ -334,7 +332,7 @@ remove_htp_data() {
     # Remove HTP session keys
     rm -f /opt/hookprobe/guardian/data/htp_session_keys.json 2>/dev/null || true
 
-    # Remove any legacy VPN state files (from WebSocket VPN)
+    # Remove legacy WebSocket VPN state files (deprecated - replaced by HTP Mesh)
     rm -f /opt/hookprobe/guardian/data/vpn_state.json 2>/dev/null || true
     rm -f /opt/hookprobe/guardian/data/vpn_keypair.json 2>/dev/null || true
     rm -rf /opt/hookprobe/guardian/data/noise_keys 2>/dev/null || true
@@ -346,6 +344,35 @@ remove_htp_data() {
     rmdir /srv/guardian 2>/dev/null || true
 
     log_info "HTP file transfer data removed"
+}
+
+# ============================================================
+# REMOVE DNS SHIELD
+# ============================================================
+remove_dns_shield() {
+    log_step "Removing DNS Shield blocklists and configuration..."
+
+    # Stop and disable timer
+    systemctl stop dns-shield-update.timer 2>/dev/null || true
+    systemctl disable dns-shield-update.timer 2>/dev/null || true
+
+    # Remove systemd files
+    rm -f /etc/systemd/system/dns-shield-update.service 2>/dev/null || true
+    rm -f /etc/systemd/system/dns-shield-update.timer 2>/dev/null || true
+
+    # Remove dnsmasq DNS Shield config
+    rm -f /etc/dnsmasq.d/dns-shield.conf 2>/dev/null || true
+
+    # Remove DNS Shield directory and all blocklists
+    rm -rf /opt/hookprobe/guardian/dns-shield 2>/dev/null || true
+
+    # Remove DNS Shield logs
+    rm -f /var/log/hookprobe/dns-shield.log 2>/dev/null || true
+    rm -f /var/log/hookprobe/dnsmasq-queries.log 2>/dev/null || true
+
+    systemctl daemon-reload 2>/dev/null || true
+
+    log_info "DNS Shield removed"
 }
 
 # ============================================================
@@ -414,7 +441,7 @@ remove_packages() {
             if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
                 log_warn "apt still locked - skipping package removal"
                 log_info "You can manually remove packages later with:"
-                log_info "  sudo apt-get remove hostapd dnsmasq"
+                log_info "  sudo apt-get remove --purge hostapd dnsmasq"
                 return 0
             fi
         fi
@@ -422,14 +449,25 @@ remove_packages() {
         # Remove hostapd if installed
         if dpkg -l hostapd 2>/dev/null | grep -q "^ii"; then
             log_info "Removing hostapd..."
-            # Ensure service is stopped
+
+            # Kill any running hostapd processes first
+            pkill -9 hostapd 2>/dev/null || true
+
+            # Try to stop/disable service (ignore errors - service may not exist)
             systemctl stop hostapd 2>/dev/null || true
             systemctl disable hostapd 2>/dev/null || true
-            if timeout 60 apt-get remove -y hostapd 2>&1; then
+            systemctl unmask hostapd 2>/dev/null || true
+
+            # Remove with purge and auto-yes for config prompts
+            if DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y hostapd 2>/dev/null; then
                 log_info "hostapd removed successfully"
             else
-                log_warn "Failed to remove hostapd - it may be in use or protected"
-                log_info "Try manually: sudo systemctl stop hostapd && sudo apt-get remove hostapd"
+                # Fallback: try dpkg directly
+                log_warn "apt-get failed, trying dpkg..."
+                dpkg --remove --force-remove-reinstreq hostapd 2>/dev/null || {
+                    log_warn "Failed to remove hostapd package"
+                    log_info "Manual removal: sudo dpkg --purge --force-all hostapd"
+                }
             fi
         else
             log_info "hostapd is not installed - skipping"
@@ -438,19 +476,38 @@ remove_packages() {
         # Remove dnsmasq if installed
         if dpkg -l dnsmasq 2>/dev/null | grep -q "^ii"; then
             log_info "Removing dnsmasq..."
+
+            # Kill any running dnsmasq processes first
+            pkill -9 dnsmasq 2>/dev/null || true
+
+            # Try to stop/disable service (ignore errors - service may not exist)
             systemctl stop dnsmasq 2>/dev/null || true
             systemctl disable dnsmasq 2>/dev/null || true
-            if timeout 60 apt-get remove -y dnsmasq 2>&1; then
+            systemctl unmask dnsmasq 2>/dev/null || true
+
+            # Remove with purge and auto-yes for config prompts
+            if DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y dnsmasq 2>/dev/null; then
                 log_info "dnsmasq removed successfully"
             else
-                log_warn "Failed to remove dnsmasq"
+                # Fallback: try dpkg directly
+                log_warn "apt-get failed, trying dpkg..."
+                dpkg --remove --force-remove-reinstreq dnsmasq 2>/dev/null || {
+                    log_warn "Failed to remove dnsmasq package"
+                    log_info "Manual removal: sudo dpkg --purge --force-all dnsmasq"
+                }
             fi
         else
             log_info "dnsmasq is not installed - skipping"
         fi
 
+        # Also try to remove dnsmasq-base if present
+        if dpkg -l dnsmasq-base 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing dnsmasq-base..."
+            DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y dnsmasq-base 2>/dev/null || true
+        fi
+
         log_info "Running autoremove..."
-        timeout 120 apt-get autoremove -y 2>/dev/null || {
+        DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || {
             log_warn "Autoremove failed - skipping"
         }
 
@@ -458,19 +515,25 @@ remove_packages() {
         # Check if packages are installed on RHEL/Fedora
         if rpm -q hostapd &>/dev/null; then
             log_info "Removing hostapd..."
+            pkill -9 hostapd 2>/dev/null || true
             systemctl stop hostapd 2>/dev/null || true
-            timeout 60 dnf remove -y hostapd || log_warn "Failed to remove hostapd"
+            systemctl disable hostapd 2>/dev/null || true
+            dnf remove -y hostapd 2>/dev/null || log_warn "Failed to remove hostapd"
         else
             log_info "hostapd is not installed - skipping"
         fi
 
         if rpm -q dnsmasq &>/dev/null; then
             log_info "Removing dnsmasq..."
+            pkill -9 dnsmasq 2>/dev/null || true
             systemctl stop dnsmasq 2>/dev/null || true
-            timeout 60 dnf remove -y dnsmasq || log_warn "Failed to remove dnsmasq"
+            systemctl disable dnsmasq 2>/dev/null || true
+            dnf remove -y dnsmasq 2>/dev/null || log_warn "Failed to remove dnsmasq"
         else
             log_info "dnsmasq is not installed - skipping"
         fi
+    else
+        log_warn "No supported package manager found (apt/dnf)"
     fi
 
     log_info "Package removal complete"
@@ -517,7 +580,8 @@ main() {
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
     echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, etc.)"
-    echo -e "  - Podman containers (Suricata IDS, AdGuard, WAF, Zeek)"
+    echo -e "  - Podman containers (Suricata IDS, WAF, Zeek)"
+    echo -e "  - DNS Shield blocklists and configuration"
     echo -e "  - Network bridges (br0)"
     echo -e "  - WiFi hotspot (hostapd) configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
@@ -548,6 +612,7 @@ main() {
     remove_sysctl_settings
     remove_guardian_config
     remove_htp_data
+    remove_dns_shield
     remove_systemd_services
     remove_guardian_directories
 
@@ -565,6 +630,7 @@ main() {
     echo -e "  ${BOLD}Removed:${NC}"
     echo -e "  • Guardian systemd services (webui, htp, xdp, ids, etc.)"
     echo -e "  • Podman containers and volumes"
+    echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • Network bridges (br0)"
     echo -e "  • hostapd and dnsmasq configuration"
     echo -e "  • Guardian configuration (/etc/guardian/)"
