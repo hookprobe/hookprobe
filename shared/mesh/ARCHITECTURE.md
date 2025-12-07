@@ -376,6 +376,339 @@ def handle_threat(intel):
         block_ip(intel.ioc_value)
 ```
 
+## NAT/CGNAT Traversal
+
+A critical challenge for decentralized mesh: most nodes are behind NAT/CGNAT
+and don't have public IPs. When MSSP is unavailable, nodes can't find each other.
+
+### The NAT Problem
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        THE NAT/CGNAT CHALLENGE                          │
+│                                                                         │
+│   ┌─────────────┐                              ┌─────────────┐          │
+│   │   Sentinel  │                              │   Guardian  │          │
+│   │  10.0.1.50  │                              │ 192.168.1.x │          │
+│   └──────┬──────┘                              └──────┬──────┘          │
+│          │                                            │                 │
+│   ┌──────▼──────┐                              ┌──────▼──────┐          │
+│   │  NAT/CGNAT  │                              │  NAT/CGNAT  │          │
+│   │ (No Public) │                              │ (No Public) │          │
+│   └──────┬──────┘                              └──────┬──────┘          │
+│          │                                            │                 │
+│          └────────────────┬───────────────────────────┘                 │
+│                           │                                             │
+│                   ┌───────▼───────┐                                     │
+│                   │     MSSP      │ ◄── Single point of failure!        │
+│                   │  (Public IP)  │                                     │
+│                   └───────────────┘                                     │
+│                                                                         │
+│   Problem: If MSSP goes down, NAT nodes can't communicate P2P          │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Solution: Multi-Layer NAT Traversal
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    NAT TRAVERSAL SOLUTION STACK                         │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Layer 1: STUN Discovery                                              │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │  • Discover public IP/port via STUN servers                      │  │
+│   │  • Detect NAT type (Open, Cone, Symmetric, Blocked)              │  │
+│   │  • HookProbe STUN servers + public fallbacks (Google, Cloudflare)│  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                              ↓                                          │
+│   Layer 2: ICE Connectivity                                            │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │  • Gather candidates: host, server-reflexive, relay              │  │
+│   │  • Exchange candidates via signaling (MSSP or promoted node)     │  │
+│   │  • Connectivity checks to find working path                      │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                              ↓                                          │
+│   Layer 3: UDP Hole Punching                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │  • Simultaneous packet exchange to punch NAT holes               │  │
+│   │  • Works for Full Cone, Restricted Cone, Port Restricted         │  │
+│   │  • Coordinated via rendezvous timestamp                          │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                              ↓                                          │
+│   Layer 4: Relay Network                                               │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │  • Fortress/Nexus nodes with public IPs become relays            │  │
+│   │  • TURN-style allocation for symmetric NAT traversal             │  │
+│   │  • Load-balanced relay selection                                 │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### NAT Type Detection
+
+```python
+from shared.mesh import STUNClient, NATType
+
+stun = STUNClient()
+nat_type = stun.detect_nat_type()
+
+# NAT Types:
+# - OPEN:            No NAT, public IP (can be relay/coordinator)
+# - FULL_CONE:       Any external host can send (best for P2P)
+# - RESTRICTED_CONE: Only hosts we've sent to can reply
+# - PORT_RESTRICTED: Only host:port we've sent to can reply
+# - SYMMETRIC:       Different mapping per destination (needs relay)
+# - BLOCKED:         UDP blocked entirely
+```
+
+### ICE Connectivity Establishment
+
+```python
+from shared.mesh import ICEAgent, ICECandidate
+
+# Initialize ICE agent
+ice = ICEAgent(node_id="guardian-01")
+
+# Gather local candidates
+local_candidates = ice.gather_candidates(local_port=8144)
+
+# Exchange candidates with peer (via signaling)
+# ... send local_candidates, receive remote_candidates ...
+
+ice.set_remote_candidates(remote_candidates)
+
+# Find working connection
+result = ice.check_connectivity(timeout=5.0)
+if result:
+    local_cand, remote_cand = result
+    print(f"Connected via {remote_cand.type}: {remote_cand.ip}:{remote_cand.port}")
+```
+
+## Mesh Promotion Protocol (Innovation)
+
+When MSSP is unavailable, the mesh doesn't die - it **promotes** nodes with
+public IPs to become temporary coordinators.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    MESH PROMOTION PROTOCOL                              │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Normal Operation:                                                     │
+│  ┌────────┐     ┌────────┐     ┌────────┐                              │
+│  │Sentinel├────►│  MSSP  │◄────┤Guardian│     (Star topology)          │
+│  └────────┘     └────┬───┘     └────────┘                              │
+│                      │                                                  │
+│                      ▼                                                  │
+│                  [Central]                                              │
+│                                                                         │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  MSSP Unavailable - Mesh Promotion:                                    │
+│                                                                         │
+│  ┌────────┐     ┌─────────┐     ┌────────┐                              │
+│  │Sentinel├────►│ Fortress│◄────┤Guardian│     (Promoted coordinator)  │
+│  └────────┘     │(PROMOTED)│     └────────┘                             │
+│                 └────┬────┘                                             │
+│       ┌──────────────┼──────────────┐                                  │
+│       ▼              ▼              ▼                                  │
+│  ┌────────┐     ┌────────┐     ┌────────┐                              │
+│  │Guardian│     │ Nexus  │     │Sentinel│    (Mesh continues!)         │
+│  └────────┘     │(PROMOTED)│     └────────┘                             │
+│                 └────────┘                                              │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Promotion Levels
+
+| Level | Role | Requirements | Capabilities |
+|-------|------|--------------|--------------|
+| `LEAF` | Regular node | Any | Consumes relay/coordination |
+| `BRIDGE` | Local relay | Public IP + Cone NAT | Relay for local network |
+| `COORDINATOR` | Peer discovery | Public IP + Full Cone | Rendezvous point |
+| `SUPER_NODE` | Mini-MSSP | Public IP + Fortress/Nexus | Full coordination |
+
+### Promotion Logic
+
+```python
+from shared.mesh import MeshPromotionManager, MeshPromotion
+
+# Create promotion manager
+promotion = MeshPromotionManager(
+    node_id="fortress-01",
+    tier="fortress",
+    region="us-west"
+)
+
+# Check if we can be promoted
+can_promote, level = promotion.check_promotability()
+if can_promote:
+    promotion.promote(level)
+    print(f"Promoted to {level.name}")
+
+# Get promotion info for advertising
+my_info = promotion.get_my_promotion_info()
+# ... broadcast to mesh ...
+```
+
+## Emergent Relay Network
+
+When nodes can't connect directly, Fortress/Nexus nodes with public IPs
+automatically form a relay network.
+
+```python
+from shared.mesh import RelayServer, RelayClient, RelayNetwork
+
+# Fortress node runs relay server
+if tier == "fortress" and has_public_ip:
+    relay_server = RelayServer(
+        listen_port=3478,
+        max_allocations=100,
+        node_id="fortress-relay-01"
+    )
+    relay_server.start()
+
+# Nodes behind NAT use relay
+relay_client = RelayClient(
+    client_id="guardian-01",
+    relay_addr=("relay.example.com", 3478)
+)
+relay_client.allocate(lifetime=600)
+relay_client.create_permission(peer_addr)
+relay_client.send_to_peer(peer_addr, data)
+```
+
+### Relay Network Discovery
+
+```python
+from shared.mesh import RelayNetwork, RelayNodeInfo
+
+# Relay network manager
+network = RelayNetwork(node_id="guardian-01")
+
+# Register known relays
+network.register_node(RelayNodeInfo(
+    node_id="fortress-01",
+    public_ip="203.0.113.1",
+    public_port=3478,
+    region="us-west",
+    tier="fortress",
+    capacity=100,
+    current_load=25,
+    latency_ms=50
+))
+
+# Get best relay (load-balanced, region-aware)
+best_relay = network.get_best_relay(prefer_region="us-west")
+```
+
+## MSSP High Availability
+
+To ensure mesh continuity, MSSP should be designed for high availability:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    MSSP HIGH AVAILABILITY ARCHITECTURE                  │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │                        Global Load Balancer                      │  │
+│   │                     (Anycast or Geo-DNS)                         │  │
+│   └──────────────────────────┬──────────────────────────────────────┘  │
+│                              │                                          │
+│     ┌────────────────────────┼────────────────────────┐                 │
+│     │                        │                        │                 │
+│   ┌─▼─────────┐        ┌─────▼─────┐        ┌────────▼──┐               │
+│   │ MSSP-US   │◄──────►│ MSSP-EU   │◄──────►│ MSSP-AP   │               │
+│   │ (Primary) │        │ (Replica) │        │ (Replica) │               │
+│   └─────┬─────┘        └─────┬─────┘        └─────┬─────┘               │
+│         │                    │                    │                     │
+│   ┌─────▼─────┐        ┌─────▼─────┐        ┌─────▼─────┐               │
+│   │ Database  │◄──────►│ Database  │◄──────►│ Database  │               │
+│   │ (Replica) │        │ (Replica) │        │ (Replica) │               │
+│   └───────────┘        └───────────┘        └───────────┘               │
+│                                                                         │
+│   Features:                                                            │
+│   • Multi-region deployment (US, EU, AP)                               │
+│   • Active-active with leader election                                 │
+│   • Automatic failover < 30 seconds                                    │
+│   • Geographic load balancing                                          │
+│   • Mesh continues via promotion if ALL regions fail                   │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Recommended MSSP Deployment
+
+1. **Multi-Region**: Deploy in at least 3 geographic regions
+2. **Anycast**: Use anycast IP for automatic failover
+3. **Health Checks**: Active probes every 10 seconds
+4. **Failover Time**: < 30 seconds to backup region
+5. **Data Replication**: Synchronous within region, async across regions
+
+## Complete Resilience Stack
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    MESH RESILIENCE HIERARCHY                            │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Level 1: MSSP Available (Normal Operation)                           │
+│   └── Central coordination, full capabilities                          │
+│                                                                         │
+│   Level 2: MSSP Unavailable, Promoted Coordinators Active              │
+│   └── Fortress/Nexus nodes with public IPs coordinate                  │
+│   └── Full mesh connectivity via ICE + hole punching                   │
+│                                                                         │
+│   Level 3: Most Nodes Behind Symmetric NAT                             │
+│   └── Relay network for nodes that can't punch holes                   │
+│   └── Load-balanced relay selection                                    │
+│                                                                         │
+│   Level 4: Extreme Censorship/Network Isolation                        │
+│   └── Domain fronting via CDN (Cloudflare, AWS)                        │
+│   └── Tor/I2P integration for overlay routing                          │
+│   └── Sneakernet checkpoint exchange as last resort                    │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+## Usage: Complete NAT Traversal
+
+```python
+from shared.mesh import NATTraversalManager, MeshConsciousness
+
+# Initialize NAT traversal
+nat = NATTraversalManager(
+    node_id="guardian-01",
+    tier="guardian",
+    region="us-west"
+)
+nat.initialize()
+
+print(f"Public endpoint: {nat.public_endpoint}")
+print(f"NAT type: {nat.nat_type.name}")
+
+# Get ICE candidates for peer exchange
+my_candidates = nat.get_my_candidates()
+
+# Connect to peer
+endpoint = nat.connect_to_peer(
+    peer_id="sentinel-02",
+    peer_candidates=their_candidates,
+    coordinator=promoted_node  # Fallback coordinator
+)
+
+if endpoint.connectivity == ConnectivityType.DIRECT:
+    print("Direct P2P connection!")
+elif endpoint.connectivity == ConnectivityType.HOLE_PUNCHED:
+    print("NAT hole punched!")
+elif endpoint.connectivity == ConnectivityType.RELAYED:
+    print(f"Relayed via {endpoint.relay_node}")
+```
+
 ## Future: Rogue AI Defense
 
 The mesh consciousness architecture is designed with future AI threats in mind:
@@ -385,6 +718,10 @@ The mesh consciousness architecture is designed with future AI threats in mind:
 3. **Neural Authentication**: Weight evolution defeats replay attacks
 4. **Autonomous Response**: Coordinated defense without human latency
 5. **Resilient Communication**: Multi-port, stealth, anti-blocking
+6. **NAT Resilience**: Mesh survives without central coordination
+7. **Emergent Hierarchy**: Automatic promotion when leaders fail
 
 Together, the mesh forms a collective defense against threats that no single
-node could detect or defend against alone.
+node could detect or defend against alone. The mesh is designed to be
+**unkillable** - it adapts, promotes, relays, and continues operating even
+under extreme network conditions.
