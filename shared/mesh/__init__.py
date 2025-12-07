@@ -11,6 +11,9 @@ Key Features:
 - Stealth mode with traffic obfuscation
 - Neural resonance encoding for channel authentication
 - Automatic channel switching on blocking detection
+- NAT/CGNAT traversal with STUN/ICE/TURN
+- Emergent relay network for mesh continuity
+- Mesh promotion protocol when MSSP unavailable
 """
 
 from .port_manager import PortManager, PortConfig, TransportMode
@@ -26,6 +29,28 @@ from .consciousness import (
     ThreatCache,
     PeerNode,
     create_consciousness,
+)
+from .nat_traversal import (
+    NATType,
+    ConnectivityType,
+    MeshPromotion,
+    STUNClient,
+    STUNResult,
+    ICEAgent,
+    ICECandidate,
+    UDPHolePuncher,
+    MeshPromotionManager,
+    RendezvousPoint,
+    NATTraversalManager,
+    PeerEndpoint,
+    PromotedNode,
+)
+from .relay import (
+    RelayServer,
+    RelayClient,
+    RelayNetwork,
+    RelayNodeInfo,
+    RelayStats,
 )
 
 __all__ = [
@@ -55,6 +80,26 @@ __all__ = [
     'ThreatCache',
     'PeerNode',
     'create_consciousness',
+    # NAT Traversal
+    'NATType',
+    'ConnectivityType',
+    'MeshPromotion',
+    'STUNClient',
+    'STUNResult',
+    'ICEAgent',
+    'ICECandidate',
+    'UDPHolePuncher',
+    'MeshPromotionManager',
+    'RendezvousPoint',
+    'NATTraversalManager',
+    'PeerEndpoint',
+    'PromotedNode',
+    # Relay
+    'RelayServer',
+    'RelayClient',
+    'RelayNetwork',
+    'RelayNodeInfo',
+    'RelayStats',
 ]
 
 __version__ = '5.0.0'
