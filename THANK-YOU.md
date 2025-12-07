@@ -45,7 +45,7 @@ HookProbe isn't just software—it's a movement to make enterprise-grade cyberse
 
 **Complete Beginners (New to Linux)**:
 1. 📘 **[Start with the Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)**
-   - Download Linux (Fedora/Ubuntu)
+   - Download Linux (Ubuntu/Debian)
    - Create bootable USB
    - Install Linux step-by-step
    - Install HookProbe with wizard

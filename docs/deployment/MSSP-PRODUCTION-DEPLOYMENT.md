@@ -45,7 +45,7 @@ This guide covers deploying the **HookProbe MSSP Cloud** to production at hookpr
 - Debian 11+/12+
 - Raspberry Pi OS (Bookworm)
 
-> **Note**: RHEL-based systems are not currently supported in v5.x. RHEL support is planned for a future release.
+> **Note**: RHEL-based systems are not supported due to OpenVSwitch availability limitations. Support planned for future release.
 
 **Domain Configuration**:
 - DNS A record: `hookprobe.com` → server IP
