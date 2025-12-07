@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>The Future of Cybersecurity</strong><br>
-  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+  <strong>Federated Cybersecurity Mesh</strong><br>
+  <em>Privacy-Preserving Collective Defense · One Node's Detection → Everyone's Protection</em>
 </p>
 
 <p align="center">
@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <strong>Enterprise-Grade AI Security for $150 · Democratizing Cybersecurity for Millions</strong>
+  <strong>Enterprise-Grade AI Security for $75-$150 · Democratizing Cybersecurity for Millions</strong>
 </p>
 
 ---
@@ -30,6 +30,79 @@
 | $100K+ enterprise cost | $150 hardware, $0 software (MIT license) |
 | Manual response (hours) | AI-autonomous response (<30 seconds) |
 | 90% of world unprotected | Enterprise security for everyone |
+
+---
+
+## The Federated Mesh Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          HOOKPROBE FEDERATED MESH                               │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                              ┌──────────────┐                                   │
+│                              │     MSSP     │  ← Central Brain                  │
+│                              │   (Cloud)    │    Analytics, Training, Portal    │
+│                              └──────┬───────┘                                   │
+│                    ┌────────────────┼────────────────┐                          │
+│                    │      HTP Mesh + Qsecbit         │ ← Trust Fabric           │
+│                    └────────────────┼────────────────┘                          │
+│          ┌──────────────────────────┼──────────────────────────┐               │
+│    ┌─────┴─────┐              ┌─────┴─────┐              ┌─────┴─────┐         │
+│    │   NEXUS   │ ◄──────────► │   NEXUS   │ ◄──────────► │   NEXUS   │ ← ML/AI │
+│    └─────┬─────┘              └─────┬─────┘              └─────┴─────┘         │
+│    ┌─────┴─────┐              ┌─────┴─────┐              ┌───────────┐         │
+│    │ Guardian  │              │ Fortress  │              │ Sentinel  │ ← Edge  │
+│    │ Fortress  │              │ Guardian  │              │ Guardian  │         │
+│    └───────────┘              └───────────┘              └───────────┘         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The Core Innovation**: Customer A's attack becomes Customer B's immunity — without exposing A's data.
+
+| Component | Role | Hardware | What It Does |
+|-----------|------|----------|--------------|
+| **Sentinel** | Validator | IoT, 512MB | DSM mesh validation, health monitoring |
+| **Guardian** | Travel | RPi, 3GB | Portable WiFi hotspot, L2-L7 detection |
+| **Fortress** | Edge Router | Mini PC, 8GB | VLAN segmentation, local AI, SDN |
+| **Nexus** | ML/AI Compute | Server, 64GB+ | Federated learning, regional coordination |
+| **MSSP** | Cloud Brain | Auto-scale | Global threat model, fleet management |
+
+**How Herd Immunity Works:**
+1. Nexus A detects attack → Creates Qsecbit signature (not raw data)
+2. MSSP aggregates → Trains hardened model
+3. All Nexuses receive update → Preemptively block attack
+4. Nexus D protected BEFORE attack reaches it
+
+📖 **[Full Architecture →](ARCHITECTURE.md)**
+
+---
+
+## Repository Structure
+
+```
+hookprobe/
+├── core/              # 🧠 Core Intelligence
+│   ├── htp/           # HookProbe Transport Protocol (UDP 4719)
+│   ├── qsecbit/       # Quantified Security Metric (0.0-1.0)
+│   └── neuro/         # Neural Resonance (TER → Weight → PoSF)
+│
+├── products/          # 📦 Product Tiers
+│   ├── sentinel/      # DSM Validator (512MB)
+│   ├── guardian/      # Travel Companion (3GB)
+│   ├── fortress/      # Edge Router (8GB)
+│   ├── nexus/         # ML/AI Compute (64GB+)
+│   └── mssp/          # Cloud Federation
+│
+├── shared/            # 🔧 Shared Infrastructure
+│   ├── dsm/           # Decentralized Security Mesh
+│   └── response/      # Automated Threat Response
+│
+├── deploy/            # 🚀 Deployment
+│   ├── install/       # Installation scripts
+│   └── addons/        # n8n, LTE, webserver
+│
+└── docs/              # 📚 Documentation
+```
 
 ---
 
@@ -72,9 +145,9 @@ where:
 ```
 
 #### Key Files
-- `src/neuro/core/ter.py` — TER generation (314 lines)
-- `src/neuro/neural/engine.py` — Deterministic weight evolution
-- `src/neuro/core/posf.py` — Proof-of-Sensor-Fusion signatures
+- `core/neuro/core/ter.py` — TER generation
+- `core/neuro/neural/engine.py` — Deterministic weight evolution
+- `core/neuro/core/posf.py` — Proof-of-Sensor-Fusion signatures
 
 📖 **[Full Neuro Protocol Specification →](docs/architecture/hookprobe-neuro-protocol.md)**
 
@@ -154,8 +227,8 @@ session_key = SHA256(session_secret + weight_fingerprint)
 ```
 
 #### Key Files
-- `src/neuro/transport/htp.py` — Complete HTP implementation (492 lines)
-- `src/neuro/identity/hardware_fingerprint.py` — Device identity without TPM
+- `core/htp/transport/htp.py` — Complete HTP implementation
+- `core/neuro/identity/hardware_fingerprint.py` — Device identity without TPM
 
 📖 **[HTP Quantum Cryptography Analysis →](docs/HTP_QUANTUM_CRYPTOGRAPHY.md)**
 📖 **[HTP Security Enhancements →](docs/HTP_SECURITY_ENHANCEMENTS.md)**
@@ -228,11 +301,11 @@ Intel I226 NIC (XDP-DRV mode):
 ```
 
 #### Key Files
-- `src/qsecbit/qsecbit.py` — Core resilience algorithm
-- `src/qsecbit/energy.py` — RAPL power monitoring
-- `src/qsecbit/xdp/` — Kernel-level XDP/eBPF programs
+- `core/qsecbit/qsecbit.py` — Core resilience algorithm
+- `core/qsecbit/energy_monitor.py` — RAPL power monitoring
+- `core/qsecbit/xdp_manager.py` — Kernel-level XDP/eBPF programs
 
-📖 **[Complete Qsecbit Algorithm →](src/qsecbit/README.md)**
+📖 **[Complete Qsecbit Algorithm →](core/qsecbit/README.md)**
 
 ---
 
@@ -351,7 +424,7 @@ Guardian transforms a $75 Raspberry Pi into an enterprise-grade SDN controller t
 
 **Multi-AP Expansion:** Extend coverage with USB WiFi adapters (up to 4 APs on RPi 5)
 
-📖 **[SDN Documentation →](docs/networking/SDN.md)** | **[Guardian Setup →](install/guardian/README.md)**
+📖 **[SDN Documentation →](docs/networking/SDN.md)** | **[Guardian Setup →](products/guardian/README.md)**
 
 ---
 
@@ -421,14 +494,18 @@ HookProbe v5.0 "Liberty" prioritizes **energy-efficient security** for edge depl
 
 | Document | Audience |
 |----------|----------|
+| **[Architecture](ARCHITECTURE.md)** | Everyone |
 | **[Quick Start](QUICK-START.md)** | Everyone |
-| **[VPN Remote Access](docs/networking/VPN.md)** | Home/Business Users |
-| **[SDN & IoT Segmentation](docs/networking/SDN.md)** | Home/Business Users |
-| **[Guardian Setup](install/guardian/README.md)** | Raspberry Pi Users |
+| **[Guardian Setup](products/guardian/README.md)** | Raspberry Pi Users |
+| **[Fortress Setup](products/fortress/README.md)** | Mini PC Users |
+| **[Nexus Setup](products/nexus/README.md)** | Server/Cloud |
+| **[Core Intelligence](core/README.md)** | Developers |
 | **[Neuro Protocol Spec](docs/architecture/hookprobe-neuro-protocol.md)** | Developers, Researchers |
 | **[HTP Analysis](docs/HTP_QUANTUM_CRYPTOGRAPHY.md)** | Security Engineers |
-| **[Qsecbit Algorithm](src/qsecbit/README.md)** | AI/ML Engineers |
+| **[Qsecbit Algorithm](core/qsecbit/README.md)** | AI/ML Engineers |
 | **[DSM Whitepaper](docs/architecture/dsm-whitepaper.md)** | Architects |
+| **[VPN Remote Access](docs/networking/VPN.md)** | Home/Business Users |
+| **[SDN & IoT Segmentation](docs/networking/SDN.md)** | Home/Business Users |
 | **[Installation Guide](docs/installation/INSTALLATION.md)** | System Admins |
 
 ---
