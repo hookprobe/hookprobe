@@ -117,7 +117,7 @@ Click on a device to view comprehensive details:
 │  CPU: 8 cores             Interface: eth0               │
 │  RAM: 16GB (60% used)     IP: 192.168.1.100             │
 │  Disk: 512GB SSD          Uptime: 15 days               │
-│  OS: Fedora 41            Bandwidth: 2.5 Gbps           │
+│  OS: Ubuntu 22.04         Bandwidth: 2.5 Gbps           │
 │                                                          │
 │  POD Status (7/7 Running)                                │
 │  ─────────────────────────                              │

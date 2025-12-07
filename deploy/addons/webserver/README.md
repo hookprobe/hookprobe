@@ -311,8 +311,8 @@ The web server runs within the POD-001 (Web DMZ) network space:
 - [ ] **Enable SSL/HTTPS** with valid certificate
 - [ ] **Strong database password** for PostgreSQL
 - [ ] **Configure firewall** to allow only HTTP/HTTPS
-- [ ] **Regular security updates** (`dnf update`, `pip install -U`)
-- [ ] **Enable SELinux** (if on RHEL/Fedora)
+- [ ] **Regular security updates** (`apt update && apt upgrade`, `pip install -U`)
+- [ ] **Configure AppArmor** (enabled by default on Ubuntu/Debian)
 - [ ] **Configure CORS** for API access
 - [ ] **Set up log rotation** for Django/Nginx logs
 
@@ -323,12 +323,8 @@ The web server runs within the POD-001 (Web DMZ) network space:
 chmod 600 /opt/hookprobe/src/web/.env
 chown root:root /opt/hookprobe/src/web/.env
 
-# Enable SELinux (RHEL/Fedora)
-setenforce 1
-setsebool -P httpd_can_network_connect 1
-
 # Configure fail2ban for brute-force protection
-dnf install fail2ban
+apt install fail2ban
 systemctl enable --now fail2ban
 ```
 

@@ -80,7 +80,7 @@ The **MSSP Cloud Backend** provides centralized security operations for multiple
 - Raspberry Pi OS (Bookworm)
 - Proxmox VE 8.x+
 
-# Note: RHEL-based systems not yet supported in v5.x
+# Note: RHEL-based systems not supported due to OVS limitations
 
 # Install Podman 4.x+
 sudo apt install podman podman-compose  # Debian/Ubuntu
