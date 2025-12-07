@@ -5,7 +5,7 @@ Uses HookProbe Transport Protocol with weight-bound encryption + PoSF authentica
 import os
 from flask import jsonify, request
 from . import vpn_bp
-from ...utils import run_command, load_json_file, save_json_file
+from utils import run_command, load_json_file, save_json_file
 
 
 HTP_CONFIG_DIR = '/opt/hookprobe/guardian/htp'
