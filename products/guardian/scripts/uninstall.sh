@@ -334,7 +334,7 @@ remove_htp_data() {
     # Remove HTP session keys
     rm -f /opt/hookprobe/guardian/data/htp_session_keys.json 2>/dev/null || true
 
-    # Remove any legacy VPN state files (from WebSocket VPN)
+    # Remove legacy WebSocket VPN state files (deprecated - replaced by HTP Mesh)
     rm -f /opt/hookprobe/guardian/data/vpn_state.json 2>/dev/null || true
     rm -f /opt/hookprobe/guardian/data/vpn_keypair.json 2>/dev/null || true
     rm -rf /opt/hookprobe/guardian/data/noise_keys 2>/dev/null || true
