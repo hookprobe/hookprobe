@@ -1390,22 +1390,6 @@ install_guardian() {
     fi
 
     # ─────────────────────────────────────────────────────────────
-    # MSSP ID (for RADIUS and device management)
-    # ─────────────────────────────────────────────────────────────
-    local mssp_id=""
-    echo ""
-    echo -e "${CYAN}MSSP Registration:${NC}"
-    echo "Guardian requires an MSSP ID for RADIUS and device management."
-    read -p "Enter your MSSP ID (or 'skip' to configure later): " mssp_id
-
-    if [ "$mssp_id" != "skip" ] && [ -n "$mssp_id" ]; then
-        mkdir -p /etc/hookprobe/secrets
-        echo "$mssp_id" > /etc/hookprobe/secrets/mssp-id
-        chmod 600 /etc/hookprobe/secrets/mssp-id
-        echo -e "${GREEN}✓ MSSP ID saved${NC}"
-    fi
-
-    # ─────────────────────────────────────────────────────────────
     # Ad blocking
     # ─────────────────────────────────────────────────────────────
     echo ""
@@ -1421,7 +1405,6 @@ install_guardian() {
     echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
     echo -e "  WiFi SSID:   ${BOLD}$wifi_ssid${NC}"
     echo -e "  Ad Blocking: ${BOLD}$enable_adblock${NC}"
-    echo -e "  MSSP ID:     ${BOLD}${mssp_id:-not configured}${NC}"
     echo ""
 
     read -p "Proceed with Guardian installation? (yes/no) [yes]: " confirm
