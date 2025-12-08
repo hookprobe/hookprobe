@@ -174,7 +174,7 @@ Deploy HookProbe on your own infrastructure to protect your business.
 Offer HookProbe-based security services to customers.
 
 **License**: Commercial License Required
-**Contact**: licensing@hookprobe.com
+**Contact**: qsecbit@hookprobe.com
 **Why**: The AGPL network copyleft clause applies - offering modified software as a service requires source disclosure OR commercial license
 
 ### Scenario 4: Integration / OEM (Commercial License Required)
@@ -182,7 +182,7 @@ Offer HookProbe-based security services to customers.
 Embed HookProbe technology in your products.
 
 **License**: Commercial License Required
-**Contact**: licensing@hookprobe.com
+**Contact**: qsecbit@hookprobe.com
 **Includes**: White-label rights, priority support, SLA guarantees
 
 ### Scenario 5: Contributing to HookProbe (CLA)
@@ -191,7 +191,7 @@ Submit improvements back to the project.
 
 **Process**: Sign Contributor License Agreement (CLA)
 **Benefit**: Contributions may be dual-licensed (AGPL + commercial)
-**Contact**: contribute@hookprobe.com
+**Contact**: qsecbit@hookprobe.com
 
 ---
 
@@ -217,7 +217,7 @@ Submit improvements back to the project.
 - **Includes**: Full access for non-commercial research
 - **Pricing**: Free for qualifying institutions
 
-**Contact**: licensing@hookprobe.com
+**Contact**: qsecbit@hookprobe.com
 
 ---
 
@@ -243,7 +243,7 @@ For proprietary components: Modifications require commercial license.
 **A**: Blocklist management scripts are AGPL-licensed and free to use. The AI classifier requires proper licensing.
 
 ### Q: How do I verify I'm compliant?
-**A**: Contact compliance@hookprobe.com for a license audit.
+**A**: Contact qsecbit@hookprobe.com for a license audit.
 
 ---
 
@@ -257,13 +257,9 @@ All third-party components are GPL-free and commercially compatible.
 
 ## Contact
 
-| Purpose | Contact |
-|---------|---------|
-| Commercial Licensing | licensing@hookprobe.com |
-| Compliance Questions | compliance@hookprobe.com |
-| Contributor Agreement | contribute@hookprobe.com |
-| Security Issues | qsecbit@hookprobe.com |
-| General Inquiries | hello@hookprobe.com |
+For all licensing inquiries, compliance questions, contributor agreements, security issues, and general questions:
+
+**Email**: qsecbit@hookprobe.com
 
 ---
 
