@@ -59,26 +59,30 @@ def api_status():
 
 @core_bp.route('/api/containers')
 def api_containers():
-    """Get container status for all Guardian services."""
-    # Map: key = display key, container_name = actual podman container name
-    container_config = {
-        'suricata': {'label': 'IDS/IPS (Suricata)', 'container': 'guardian-suricata'},
-        'waf': {'label': 'WAF (ModSecurity)', 'container': 'guardian-waf'},
-        'neuro': {'label': 'Neural Engine', 'container': 'guardian-neuro'},
-        'zeek': {'label': 'Network Monitor (Zeek)', 'container': 'guardian-zeek'},
+    """Get service status for all Guardian services (systemd services, not containers)."""
+    # Service configuration: key = display key, service = systemd service name
+    service_config = {
+        'hostapd': {'label': 'WiFi Access Point', 'service': 'hostapd'},
+        'dnsmasq': {'label': 'DNS/DHCP Server', 'service': 'dnsmasq'},
+        'dhcpcd': {'label': 'DHCP Client', 'service': 'dhcpcd'},
+        'guardian': {'label': 'Guardian Agent', 'service': 'guardian-agent'},
     }
 
-    containers = {}
-    for key, config in container_config.items():
-        containers[key] = {
-            'label': config['label'],
-            'running': False,
-            'status': 'Unknown'
-        }
-        status = get_container_status(config['container'])
-        containers[key].update(status)
+    services = {}
+    for key, config in service_config.items():
+        service_name = config['service']
+        # Check systemd service status
+        output, success = run_command(['systemctl', 'is-active', service_name])
+        status = output.strip() if success else 'unknown'
+        is_running = status == 'active'
 
-    return jsonify(containers)
+        services[key] = {
+            'label': config['label'],
+            'running': is_running,
+            'status': 'Running' if is_running else status.capitalize()
+        }
+
+    return jsonify(services)
 
 
 @core_bp.route('/api/threats')

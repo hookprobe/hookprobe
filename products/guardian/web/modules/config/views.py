@@ -188,32 +188,69 @@ def api_interfaces():
     """Get network interface information."""
     try:
         interfaces = []
-        output, _ = run_command("ip -o addr show | grep -v '127.0.0.1' | awk '{print $2, $4}'")
 
-        for line in output.split('\n'):
-            parts = line.split()
-            if len(parts) >= 2:
-                iface = parts[0].rstrip(':')
-                ip = parts[1].split('/')[0]
+        # Get list of interfaces from /sys/class/net
+        import os
+        net_dir = '/sys/class/net'
+        if os.path.exists(net_dir):
+            for iface in os.listdir(net_dir):
+                # Skip loopback
+                if iface == 'lo':
+                    continue
 
-                # Get MAC
-                mac_output, _ = run_command(f"cat /sys/class/net/{iface}/address 2>/dev/null")
-                mac = mac_output.strip() if mac_output else 'N/A'
+                try:
+                    # Get IP address
+                    ip_output, _ = run_command(['ip', 'addr', 'show', iface])
+                    ip = 'N/A'
+                    for line in ip_output.split('\n'):
+                        line = line.strip()
+                        if line.startswith('inet ') and 'inet6' not in line:
+                            # Format: inet 192.168.1.1/24 ...
+                            ip = line.split()[1].split('/')[0]
+                            break
 
-                # Get status
-                state_output, _ = run_command(f"cat /sys/class/net/{iface}/operstate 2>/dev/null")
-                state = state_output.strip().upper() if state_output else 'UNKNOWN'
+                    # Get MAC address
+                    mac_path = f'/sys/class/net/{iface}/address'
+                    mac = 'N/A'
+                    if os.path.exists(mac_path):
+                        with open(mac_path, 'r') as f:
+                            mac = f.read().strip()
 
-                interfaces.append({
-                    'name': iface,
-                    'ip': ip,
-                    'mac': mac,
-                    'status': state
-                })
+                    # Get status
+                    state_path = f'/sys/class/net/{iface}/operstate'
+                    state = 'UNKNOWN'
+                    if os.path.exists(state_path):
+                        with open(state_path, 'r') as f:
+                            state = f.read().strip().upper()
+
+                    # Get interface type/role
+                    role = 'Unknown'
+                    if iface == 'eth0':
+                        role = 'WAN (Primary)'
+                    elif iface == 'wlan0':
+                        role = 'WAN (Fallback)'
+                    elif iface == 'wlan1':
+                        role = 'LAN (AP)'
+                    elif iface.startswith('br'):
+                        role = 'Bridge'
+
+                    interfaces.append({
+                        'name': iface,
+                        'ip': ip,
+                        'mac': mac,
+                        'status': state,
+                        'role': role
+                    })
+                except Exception:
+                    continue
+
+        # Sort: eth0 first, then wlan0, wlan1, others
+        priority = {'eth0': 0, 'wlan0': 1, 'wlan1': 2}
+        interfaces.sort(key=lambda x: priority.get(x['name'], 99))
 
         return jsonify({'interfaces': interfaces})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'interfaces': []}), 500
 
 
 # =============================================================================
@@ -223,7 +260,7 @@ def api_interfaces():
 @config_bp.route('/offline/status')
 def api_offline_status():
     """
-    Get offline mode status.
+    Get offline mode status with fallback to direct detection.
 
     Returns comprehensive status including:
     - Current state (offline_ready, online, etc.)
@@ -231,19 +268,107 @@ def api_offline_status():
     - WAN connectivity status
     - Last channel scan results
     """
+    import os
+
+    # Build status from direct detection as fallback
+    status = {
+        'success': True,
+        'state': 'online',
+        'wan_connected': False,
+        'wan_ip': None,
+        'wan_interface': None,
+        'ap_ssid': 'HookProbe-Guardian',
+        'current_channel': '--',
+        'current_band': '2.4GHz',
+        'clients_connected': 0,
+        'networks_detected': 0,
+        'last_channel_score': 0
+    }
+
+    # Check eth0 first (primary WAN)
+    eth0_ip = _get_interface_ip('eth0')
+    if eth0_ip and not eth0_ip.startswith('169.254.'):
+        status['wan_connected'] = True
+        status['wan_ip'] = eth0_ip
+        status['wan_interface'] = 'eth0'
+        status['state'] = 'online'
+
+    # Check wlan0 if eth0 not connected (fallback WAN)
+    if not status['wan_connected']:
+        wlan0_ip = _get_interface_ip('wlan0')
+        if wlan0_ip and not wlan0_ip.startswith('169.254.'):
+            status['wan_connected'] = True
+            status['wan_ip'] = wlan0_ip
+            status['wan_interface'] = 'wlan0'
+            status['state'] = 'online'
+            # Try to get SSID
+            ssid_out, _ = run_command(['iwgetid', 'wlan0', '-r'])
+            if ssid_out:
+                status['wan_ssid'] = ssid_out.strip()
+
+    # Get AP info from hostapd config
+    try:
+        if os.path.exists('/etc/hostapd/hostapd.conf'):
+            with open('/etc/hostapd/hostapd.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('ssid='):
+                        status['ap_ssid'] = line.split('=', 1)[1].strip()
+                    elif line.startswith('channel='):
+                        status['current_channel'] = line.split('=', 1)[1].strip()
+    except Exception:
+        pass
+
+    # Try to get more info from offline mode manager if available
     try:
         from offline_mode_manager import OfflineModeManager
         manager = OfflineModeManager()
         manager.load_state()
-        status = manager.get_status()
-        return jsonify({'success': True, **status})
-    except ImportError:
-        return jsonify({
-            'success': False,
-            'error': 'Offline mode manager not available'
-        }), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        manager_status = manager.get_status()
+        # Merge manager status but keep our WAN detection
+        for key in ['networks_detected', 'last_channel_score', 'clients_connected']:
+            if key in manager_status:
+                status[key] = manager_status[key]
+    except Exception:
+        pass
+
+    # Also include scan data in nested format for UI compatibility
+    status['scan'] = {
+        'networks_detected': status.get('networks_detected', 0),
+        'channel_score': status.get('last_channel_score', 0)
+    }
+
+    # Include WAN data in nested format
+    status['wan'] = {
+        'connected': status.get('wan_connected', False),
+        'ip': status.get('wan_ip'),
+        'ssid': status.get('wan_ssid'),
+        'interface': status.get('wan_interface')
+    }
+
+    # Include AP data in nested format
+    status['ap'] = {
+        'ssid': status.get('ap_ssid', 'HookProbe-Guardian'),
+        'channel': status.get('current_channel', '--'),
+        'band': status.get('current_band', '2.4GHz'),
+        'clients': status.get('clients_connected', 0)
+    }
+
+    return jsonify(status)
+
+
+def _get_interface_ip(interface):
+    """Helper to get IP address of an interface."""
+    import os
+    try:
+        output, success = run_command(['ip', 'addr', 'show', interface])
+        if success and output:
+            for line in output.split('\n'):
+                line = line.strip()
+                if line.startswith('inet ') and 'inet6' not in line:
+                    return line.split()[1].split('/')[0]
+    except Exception:
+        pass
+    return None
 
 
 @config_bp.route('/offline/init', methods=['POST'])
@@ -286,49 +411,145 @@ def api_offline_scan():
     - Channel scores (lower is better)
     - Recommended channels for 2.4GHz and 5GHz
     """
+    import os
+
+    # Try different interfaces - wlan1 first (AP), then wlan0 (WAN)
+    interfaces_to_try = []
+    net_dir = '/sys/class/net'
+    if os.path.exists(net_dir):
+        for iface in ['wlan1', 'wlan0']:
+            if os.path.exists(f'{net_dir}/{iface}'):
+                interfaces_to_try.append(iface)
+
+    if not interfaces_to_try:
+        return jsonify({
+            'success': False,
+            'error': 'No wireless interfaces available'
+        }), 500
+
+    # Try WiFi channel scanner first
     try:
         from wifi_channel_scanner import WiFiChannelScanner
-        # Use wlan1 (AP interface) for channel scanning since that's the AP interface
-        # Scanning from the AP interface gives better insight into what the AP will experience
-        scanner = WiFiChannelScanner(interface='wlan1')
-        result = scanner.scan()
 
+        for iface in interfaces_to_try:
+            try:
+                scanner = WiFiChannelScanner(interface=iface)
+                result = scanner.scan()
+
+                return jsonify({
+                    'success': True,
+                    'networks': [
+                        {
+                            'ssid': n.ssid,
+                            'bssid': n.bssid,
+                            'channel': n.channel,
+                            'signal_strength': n.signal_strength,
+                            'signal_quality': n.signal_quality,
+                            'security': n.security,
+                            'band': n.band.value
+                        }
+                        for n in result.networks
+                    ],
+                    'channel_scores': {
+                        str(ch): {
+                            'score': round(s.score, 1),
+                            'networks_count': s.networks_count,
+                            'adjacent_interference': round(s.adjacent_interference, 1),
+                            'is_non_overlapping': s.is_non_overlapping
+                        }
+                        for ch, s in result.channel_scores.items()
+                    },
+                    'recommended': {
+                        '2.4GHz': result.recommended_channel_2_4,
+                        '5GHz': result.recommended_channel_5
+                    },
+                    'scan_timestamp': result.scan_timestamp
+                })
+            except Exception:
+                continue
+
+        # If all interfaces failed, return error
         return jsonify({
-            'success': True,
-            'networks': [
-                {
-                    'ssid': n.ssid,
-                    'bssid': n.bssid,
-                    'channel': n.channel,
-                    'signal_strength': n.signal_strength,
-                    'signal_quality': n.signal_quality,
-                    'security': n.security,
-                    'band': n.band.value
-                }
-                for n in result.networks
-            ],
-            'channel_scores': {
-                str(ch): {
-                    'score': round(s.score, 1),
-                    'networks_count': s.networks_count,
-                    'adjacent_interference': round(s.adjacent_interference, 1),
-                    'is_non_overlapping': s.is_non_overlapping
-                }
-                for ch, s in result.channel_scores.items()
-            },
-            'recommended': {
-                '2.4GHz': result.recommended_channel_2_4,
-                '5GHz': result.recommended_channel_5
-            },
-            'scan_timestamp': result.scan_timestamp
-        })
+            'success': False,
+            'error': 'Channel scan failed on all interfaces'
+        }), 500
+
     except ImportError:
+        # Fallback: use basic iwlist scan
+        for iface in interfaces_to_try:
+            try:
+                output, success = run_command(['sudo', 'iwlist', iface, 'scan'], timeout=30)
+                if not success or not output:
+                    continue
+
+                # Parse basic scan results
+                networks = []
+                channel_counts = {1: 0, 6: 0, 11: 0}
+                current = {}
+
+                for line in output.split('\n'):
+                    line = line.strip()
+                    if 'Cell ' in line and 'Address:' in line:
+                        if current.get('ssid'):
+                            networks.append(current)
+                            ch = current.get('channel', 6)
+                            if ch in channel_counts:
+                                channel_counts[ch] += 1
+                        current = {}
+                    elif 'ESSID:' in line:
+                        current['ssid'] = line.split('ESSID:')[1].strip('"')
+                    elif 'Channel:' in line:
+                        try:
+                            current['channel'] = int(line.split(':')[1])
+                        except (ValueError, IndexError):
+                            pass
+                    elif 'Quality=' in line:
+                        try:
+                            quality = line.split('Quality=')[1].split()[0]
+                            if '/' in quality:
+                                num, denom = quality.split('/')
+                                current['signal_quality'] = int(int(num) / int(denom) * 100)
+                        except (ValueError, IndexError):
+                            pass
+
+                if current.get('ssid'):
+                    networks.append(current)
+                    ch = current.get('channel', 6)
+                    if ch in channel_counts:
+                        channel_counts[ch] += 1
+
+                # Calculate simple channel scores (lower = better)
+                channel_scores = {}
+                for ch in [1, 6, 11]:
+                    count = channel_counts.get(ch, 0)
+                    score = count * 25  # Simple scoring
+                    channel_scores[str(ch)] = {
+                        'score': score,
+                        'networks_count': count,
+                        'adjacent_interference': 0,
+                        'is_non_overlapping': True
+                    }
+
+                # Find best channel
+                best_channel = min([1, 6, 11], key=lambda c: channel_counts.get(c, 0))
+
+                return jsonify({
+                    'success': True,
+                    'networks': networks,
+                    'channel_scores': channel_scores,
+                    'recommended': {
+                        '2.4GHz': best_channel,
+                        '5GHz': None
+                    },
+                    'scan_timestamp': None
+                })
+            except Exception:
+                continue
+
         return jsonify({
             'success': False,
             'error': 'WiFi channel scanner not available'
         }), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @config_bp.route('/offline/channel', methods=['POST'])
@@ -514,36 +735,18 @@ def api_offline_fix_eth0():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@config_bp.route('/offline/route-metrics', methods=['GET', 'POST'])
+@config_bp.route('/offline/route-metrics', methods=['GET'])
 def api_offline_route_metrics():
     """
-    Get or configure route metrics.
-
-    GET: Returns current route metrics and interface status
-    POST: Reconfigures route metrics (eth0 priority over wlan)
+    Get route metrics showing eth0 as primary and wlan0 as fallback.
 
     Route metric priority (lower = higher priority):
-    - eth0: 100 (always preferred when connected)
-    - wlan upstream: 200
-    - wlan AP: 600 (no default route)
+    - eth0: 100 (Primary - always preferred when connected)
+    - wlan0: 200 (Fallback - used when eth0 unavailable)
     """
     try:
-        from offline_mode_manager import OfflineModeManager
-
-        manager = OfflineModeManager()
-
-        if request.method == 'POST':
-            # Reconfigure metrics
-            success = manager.configure_route_metrics()
-            return jsonify({
-                'success': success,
-                'message': 'Route metrics configured' if success else 'Configuration failed'
-            })
-
-        # GET - return current status
         # Get current routes
-        from utils import run_command
-        output, _ = run_command("ip route show default")
+        output, _ = run_command(['ip', 'route', 'show', 'default'])
 
         routes = []
         for line in output.split('\n'):
@@ -552,7 +755,15 @@ def api_offline_route_metrics():
             parts = line.split()
             route = {'raw': line}
             if 'dev' in parts:
-                route['interface'] = parts[parts.index('dev') + 1]
+                iface = parts[parts.index('dev') + 1]
+                route['interface'] = iface
+                # Set role based on interface
+                if iface == 'eth0':
+                    route['role'] = 'Primary'
+                elif iface == 'wlan0':
+                    route['role'] = 'Fallback'
+                else:
+                    route['role'] = 'Other'
             if 'via' in parts:
                 route['gateway'] = parts[parts.index('via') + 1]
             if 'metric' in parts:
@@ -561,25 +772,204 @@ def api_offline_route_metrics():
                 route['metric'] = 0  # No metric = highest priority
             routes.append(route)
 
-        # Sort by metric
+        # Sort by metric and filter to only show eth0 and wlan0
+        routes = [r for r in routes if r.get('interface') in ['eth0', 'wlan0']]
         routes.sort(key=lambda x: x.get('metric', 0))
 
         return jsonify({
             'success': True,
             'routes': routes,
             'config': {
-                'eth0_metric': manager.config.eth0_metric,
-                'wlan_upstream_metric': manager.config.wlan_upstream_metric,
-                'wlan_ap_metric': manager.config.wlan_ap_metric
+                'eth0_metric': 100,
+                'wlan0_metric': 200
             }
         })
-    except ImportError:
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'routes': []}), 500
+
+
+@config_bp.route('/eth0/config', methods=['GET', 'POST'])
+def api_eth0_config():
+    """
+    Get or set eth0 configuration (DHCP or manual).
+
+    GET: Returns current eth0 configuration
+    POST: Set eth0 to DHCP or manual IP configuration
+
+    Request body for manual config:
+    {
+        "mode": "manual",
+        "ip": "192.168.1.100",
+        "netmask": "255.255.255.0",
+        "gateway": "192.168.1.1",
+        "dns": "8.8.8.8"
+    }
+
+    Request body for DHCP:
+    {
+        "mode": "dhcp"
+    }
+    """
+    import os
+
+    if request.method == 'GET':
+        # Get current eth0 config
+        config = {
+            'mode': 'dhcp',
+            'ip': _get_interface_ip('eth0') or '',
+            'netmask': '255.255.255.0',
+            'gateway': '',
+            'dns': ''
+        }
+
+        # Check dhcpcd.conf for static config
+        try:
+            if os.path.exists('/etc/dhcpcd.conf'):
+                with open('/etc/dhcpcd.conf', 'r') as f:
+                    content = f.read()
+                    if 'interface eth0' in content and 'static ip_address' in content:
+                        config['mode'] = 'static'
+                        # Parse static config (simplified)
+                        for line in content.split('\n'):
+                            if 'static ip_address=' in line:
+                                ip_cidr = line.split('=')[1].strip()
+                                if '/' in ip_cidr:
+                                    config['ip'] = ip_cidr.split('/')[0]
+                            elif 'static routers=' in line:
+                                config['gateway'] = line.split('=')[1].strip()
+                            elif 'static domain_name_servers=' in line:
+                                config['dns'] = line.split('=')[1].strip()
+        except Exception:
+            pass
+
+        # Get default gateway if not set
+        if not config['gateway']:
+            gw_out, _ = run_command(['ip', 'route', 'show', 'default', 'dev', 'eth0'])
+            if gw_out:
+                parts = gw_out.split()
+                if 'via' in parts:
+                    config['gateway'] = parts[parts.index('via') + 1]
+
+        # Return config at root level for JS compatibility
         return jsonify({
-            'success': False,
-            'error': 'Offline mode manager not available'
-        }), 500
+            'success': True,
+            'mode': config['mode'],
+            'ip': config['ip'],
+            'netmask': config['netmask'],
+            'gateway': config['gateway'],
+            'dns': config['dns']
+        })
+
+    # POST - set configuration
+    data = request.get_json() or {}
+    mode = data.get('mode', 'dhcp')
+
+    try:
+        if mode == 'dhcp':
+            # Remove static config from dhcpcd.conf
+            _set_eth0_dhcp()
+            return jsonify({'success': True, 'message': 'eth0 set to DHCP'})
+        elif mode == 'static':
+            ip = data.get('ip', '').strip()
+            netmask = data.get('netmask', '255.255.255.0').strip()
+            gateway = data.get('gateway', '').strip()
+            dns = data.get('dns', '8.8.8.8').strip()
+
+            if not ip:
+                return jsonify({'success': False, 'error': 'IP address required'}), 400
+
+            # Calculate CIDR prefix from netmask
+            prefix = _netmask_to_cidr(netmask)
+
+            success = _set_eth0_static(ip, prefix, gateway, dns)
+            if success:
+                return jsonify({'success': True, 'message': f'eth0 set to {ip}/{prefix}'})
+            else:
+                return jsonify({'success': False, 'error': 'Failed to configure'}), 500
+        else:
+            return jsonify({'success': False, 'error': 'Invalid mode'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _netmask_to_cidr(netmask):
+    """Convert netmask to CIDR prefix."""
+    try:
+        parts = [int(x) for x in netmask.split('.')]
+        binary = ''.join([bin(x)[2:].zfill(8) for x in parts])
+        return binary.count('1')
+    except Exception:
+        return 24
+
+
+def _set_eth0_dhcp():
+    """Set eth0 to DHCP mode."""
+    import os
+
+    dhcpcd_conf = '/etc/dhcpcd.conf'
+    if not os.path.exists(dhcpcd_conf):
+        return True
+
+    # Read current config
+    with open(dhcpcd_conf, 'r') as f:
+        lines = f.readlines()
+
+    # Remove eth0 static config
+    new_lines = []
+    skip_eth0_section = False
+    for line in lines:
+        if line.strip() == 'interface eth0':
+            skip_eth0_section = True
+            continue
+        if skip_eth0_section:
+            if line.startswith('static ') or line.strip() == '':
+                continue
+            else:
+                skip_eth0_section = False
+        new_lines.append(line)
+
+    # Write back
+    with open('/tmp/dhcpcd.conf.new', 'w') as f:
+        f.writelines(new_lines)
+    run_command(['sudo', 'cp', '/tmp/dhcpcd.conf.new', dhcpcd_conf])
+
+    # Restart networking
+    run_command(['sudo', 'dhcpcd', '-n', 'eth0'])
+    return True
+
+
+def _set_eth0_static(ip, prefix, gateway, dns):
+    """Set eth0 to static IP."""
+    import os
+
+    dhcpcd_conf = '/etc/dhcpcd.conf'
+
+    # First remove any existing eth0 config
+    _set_eth0_dhcp()
+
+    # Add static config
+    static_config = f"""
+interface eth0
+static ip_address={ip}/{prefix}
+"""
+    if gateway:
+        static_config += f"static routers={gateway}\n"
+    if dns:
+        static_config += f"static domain_name_servers={dns}\n"
+
+    # Append to dhcpcd.conf
+    with open('/tmp/eth0_static.conf', 'w') as f:
+        f.write(static_config)
+
+    run_command(['sudo', 'bash', '-c', f'cat /tmp/eth0_static.conf >> {dhcpcd_conf}'])
+
+    # Apply static IP immediately
+    run_command(['sudo', 'ip', 'addr', 'flush', 'dev', 'eth0'])
+    run_command(['sudo', 'ip', 'addr', 'add', f'{ip}/{prefix}', 'dev', 'eth0'])
+    if gateway:
+        run_command(['sudo', 'ip', 'route', 'add', 'default', 'via', gateway, 'dev', 'eth0', 'metric', '100'])
+
+    return True
 
 
 @config_bp.route('/offline/wan-detect')
