@@ -401,155 +401,211 @@ def api_offline_init():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@config_bp.route('/offline/scan', methods=['POST'])
-def api_offline_scan():
+@config_bp.route('/offline/survey')
+def api_offline_survey():
     """
-    Scan RF environment for channel congestion.
+    Get channel utilization from iw survey dump.
 
-    Returns:
-    - Detected networks with signal strength
-    - Channel scores (lower is better)
-    - Recommended channels for 2.4GHz and 5GHz
+    This works while AP is running WITHOUT disconnecting clients.
+    Returns noise and utilization data for the current channel.
     """
     import os
 
-    # Try different interfaces - wlan1 first (AP), then wlan0 (WAN)
-    interfaces_to_try = []
+    # Find AP interface
+    ap_interface = 'wlan1'
     net_dir = '/sys/class/net'
-    if os.path.exists(net_dir):
-        for iface in ['wlan1', 'wlan0']:
-            if os.path.exists(f'{net_dir}/{iface}'):
-                interfaces_to_try.append(iface)
+    if os.path.exists(f'{net_dir}/wlan1'):
+        ap_interface = 'wlan1'
+    elif os.path.exists(f'{net_dir}/wlan0'):
+        ap_interface = 'wlan0'
 
-    if not interfaces_to_try:
-        return jsonify({
-            'success': False,
-            'error': 'No wireless interfaces available'
-        }), 500
-
-    # Try WiFi channel scanner first
     try:
-        from wifi_channel_scanner import WiFiChannelScanner
+        # Get survey dump - works while AP is running
+        output, success = run_command(['sudo', 'iw', 'dev', ap_interface, 'survey', 'dump'])
 
-        for iface in interfaces_to_try:
-            try:
-                scanner = WiFiChannelScanner(interface=iface)
-                result = scanner.scan()
+        if not success or not output:
+            return jsonify({'success': False, 'error': 'Survey dump failed'}), 500
 
-                return jsonify({
-                    'success': True,
-                    'networks': [
-                        {
-                            'ssid': n.ssid,
-                            'bssid': n.bssid,
-                            'channel': n.channel,
-                            'signal_strength': n.signal_strength,
-                            'signal_quality': n.signal_quality,
-                            'security': n.security,
-                            'band': n.band.value
-                        }
-                        for n in result.networks
-                    ],
-                    'channel_scores': {
-                        str(ch): {
-                            'score': round(s.score, 1),
-                            'networks_count': s.networks_count,
-                            'adjacent_interference': round(s.adjacent_interference, 1),
-                            'is_non_overlapping': s.is_non_overlapping
-                        }
-                        for ch, s in result.channel_scores.items()
-                    },
-                    'recommended': {
-                        '2.4GHz': result.recommended_channel_2_4,
-                        '5GHz': result.recommended_channel_5
-                    },
-                    'scan_timestamp': result.scan_timestamp
-                })
-            except Exception:
-                continue
+        # Parse survey output
+        channels = []
+        current = {}
 
-        # If all interfaces failed, return error
-        return jsonify({
-            'success': False,
-            'error': 'Channel scan failed on all interfaces'
-        }), 500
-
-    except ImportError:
-        # Fallback: use basic iwlist scan
-        for iface in interfaces_to_try:
-            try:
-                output, success = run_command(['sudo', 'iwlist', iface, 'scan'], timeout=30)
-                if not success or not output:
-                    continue
-
-                # Parse basic scan results
-                networks = []
-                channel_counts = {1: 0, 6: 0, 11: 0}
+        for line in output.split('\n'):
+            line = line.strip()
+            if line.startswith('Survey data from'):
+                if current:
+                    channels.append(current)
                 current = {}
+            elif 'frequency:' in line:
+                try:
+                    freq = int(line.split(':')[1].strip().split()[0])
+                    current['frequency'] = freq
+                    if 2400 <= freq <= 2500:
+                        current['channel'] = (freq - 2407) // 5
+                        current['band'] = '2.4GHz'
+                    elif freq >= 5000:
+                        current['channel'] = (freq - 5000) // 5
+                        current['band'] = '5GHz'
+                except (ValueError, IndexError):
+                    pass
+            elif 'noise:' in line:
+                try:
+                    current['noise'] = int(line.split(':')[1].strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+            elif 'channel active time:' in line:
+                try:
+                    current['active_time'] = int(line.split(':')[1].strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+            elif 'channel busy time:' in line:
+                try:
+                    current['busy_time'] = int(line.split(':')[1].strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+            elif '[in use]' in line:
+                current['in_use'] = True
 
-                for line in output.split('\n'):
-                    line = line.strip()
-                    if 'Cell ' in line and 'Address:' in line:
-                        if current.get('ssid'):
-                            networks.append(current)
-                            ch = current.get('channel', 6)
-                            if ch in channel_counts:
-                                channel_counts[ch] += 1
-                        current = {}
-                    elif 'ESSID:' in line:
-                        current['ssid'] = line.split('ESSID:')[1].strip('"')
-                    elif 'Channel:' in line:
-                        try:
-                            current['channel'] = int(line.split(':')[1])
-                        except (ValueError, IndexError):
-                            pass
-                    elif 'Quality=' in line:
-                        try:
-                            quality = line.split('Quality=')[1].split()[0]
-                            if '/' in quality:
-                                num, denom = quality.split('/')
-                                current['signal_quality'] = int(int(num) / int(denom) * 100)
-                        except (ValueError, IndexError):
-                            pass
+        if current:
+            channels.append(current)
 
-                if current.get('ssid'):
-                    networks.append(current)
-                    ch = current.get('channel', 6)
-                    if ch in channel_counts:
-                        channel_counts[ch] += 1
+        # Calculate utilization
+        for ch in channels:
+            if ch.get('active_time') and ch.get('busy_time'):
+                ch['utilization'] = round((ch['busy_time'] / ch['active_time']) * 100, 1)
+            else:
+                ch['utilization'] = 0
 
-                # Calculate simple channel scores (lower = better)
-                channel_scores = {}
-                for ch in [1, 6, 11]:
-                    count = channel_counts.get(ch, 0)
-                    score = count * 25  # Simple scoring
-                    channel_scores[str(ch)] = {
-                        'score': score,
-                        'networks_count': count,
-                        'adjacent_interference': 0,
-                        'is_non_overlapping': True
-                    }
-
-                # Find best channel
-                best_channel = min([1, 6, 11], key=lambda c: channel_counts.get(c, 0))
-
-                return jsonify({
-                    'success': True,
-                    'networks': networks,
-                    'channel_scores': channel_scores,
-                    'recommended': {
-                        '2.4GHz': best_channel,
-                        '5GHz': None
-                    },
-                    'scan_timestamp': None
-                })
-            except Exception:
-                continue
+        # Find current channel
+        current_channel = next((ch for ch in channels if ch.get('in_use')), None)
 
         return jsonify({
-            'success': False,
-            'error': 'WiFi channel scanner not available'
-        }), 500
+            'success': True,
+            'interface': ap_interface,
+            'channels': channels,
+            'current': current_channel,
+            'source': 'survey_dump'
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/scan', methods=['POST'])
+def api_offline_scan():
+    """
+    Get channel data using non-disruptive methods.
+
+    Uses 'iw survey dump' for channel utilization data while AP is running.
+    Does NOT disconnect clients. For full RF scan, use /offline/rescan.
+    """
+    import os
+    import json
+
+    # Get stored scan results from state file (from boot)
+    state_file = '/var/lib/guardian/offline_state.json'
+    stored_data = None
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                stored_data = json.load(f)
+        except Exception:
+            pass
+
+    # Get current channel from hostapd config
+    current_channel = 6
+    try:
+        if os.path.exists('/etc/hostapd/hostapd.conf'):
+            with open('/etc/hostapd/hostapd.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('channel='):
+                        current_channel = int(line.split('=')[1].strip())
+                        break
+    except Exception:
+        pass
+
+    # Get channel utilization via survey (non-disruptive)
+    ap_interface = 'wlan1' if os.path.exists('/sys/class/net/wlan1') else 'wlan0'
+    survey_data = {}
+
+    try:
+        output, success = run_command(['sudo', 'iw', 'dev', ap_interface, 'survey', 'dump'])
+        if success and output:
+            current = {}
+            for line in output.split('\n'):
+                line = line.strip()
+                if line.startswith('Survey data from'):
+                    if current.get('channel'):
+                        survey_data[current['channel']] = current
+                    current = {}
+                elif 'frequency:' in line:
+                    try:
+                        freq = int(line.split(':')[1].strip().split()[0])
+                        if 2400 <= freq <= 2500:
+                            current['channel'] = (freq - 2407) // 5
+                    except (ValueError, IndexError):
+                        pass
+                elif 'noise:' in line:
+                    try:
+                        current['noise'] = int(line.split(':')[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                elif 'channel busy time:' in line:
+                    try:
+                        current['busy_time'] = int(line.split(':')[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                elif 'channel active time:' in line:
+                    try:
+                        current['active_time'] = int(line.split(':')[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+            if current.get('channel'):
+                survey_data[current['channel']] = current
+    except Exception:
+        pass
+
+    # Build channel scores from survey data
+    channel_scores = {}
+    for ch in [1, 6, 11]:
+        if ch in survey_data:
+            sd = survey_data[ch]
+            noise_score = max(0, (sd.get('noise', -90) + 90) * 2)
+            busy_pct = 0
+            if sd.get('active_time') and sd.get('busy_time'):
+                busy_pct = (sd['busy_time'] / sd['active_time']) * 100
+            score = noise_score + busy_pct
+            channel_scores[str(ch)] = {
+                'score': round(score, 1),
+                'noise': sd.get('noise', 0),
+                'utilization': round(busy_pct, 1),
+                'networks_count': stored_data.get('networks_detected', 0) if stored_data else 0,
+                'adjacent_interference': 0,
+                'is_non_overlapping': True
+            }
+        else:
+            channel_scores[str(ch)] = {
+                'score': 0, 'noise': 0, 'utilization': 0,
+                'networks_count': 0, 'adjacent_interference': 0, 'is_non_overlapping': True
+            }
+
+    # Mark current channel
+    if str(current_channel) in channel_scores:
+        channel_scores[str(current_channel)]['current'] = True
+
+    # Find best channel
+    best_channel = min([1, 6, 11], key=lambda c: channel_scores.get(str(c), {}).get('score', 100))
+
+    return jsonify({
+        'success': True,
+        'networks': [],
+        'channel_scores': channel_scores,
+        'recommended': {'2.4GHz': best_channel, '5GHz': None},
+        'current_channel': current_channel,
+        'scan_timestamp': stored_data.get('last_scan_time') if stored_data else None,
+        'networks_detected': stored_data.get('networks_detected', 0) if stored_data else 0,
+        'source': 'survey_dump'
+    })
 
 
 @config_bp.route('/offline/channel', methods=['POST'])
