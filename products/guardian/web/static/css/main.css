@@ -121,7 +121,7 @@ a:hover {
 /* ===== Header / Banner (Forty-style) ===== */
 .header {
     background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-darker) 100%);
-    padding: var(--spacing-lg) var(--spacing-xl);
+    padding: var(--spacing-md) var(--spacing-xl);
     position: sticky;
     top: 0;
     z-index: 1000;
@@ -144,8 +144,8 @@ a:hover {
 }
 
 .header-logo {
-    width: 64px;
-    height: 64px;
+    width: 100px;
+    height: 100px;
     border-radius: var(--radius-md);
     object-fit: contain;
 }
