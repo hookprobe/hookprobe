@@ -189,3 +189,81 @@ def api_unblock_client(ip):
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@clients_bp.route('/disconnect/<mac>', methods=['POST'])
+def api_disconnect_client(mac):
+    """
+    Disconnect a client by MAC address.
+
+    This:
+    1. Deauthenticates the client from WiFi
+    2. Removes their DHCP lease
+    """
+    import re
+    import os
+
+    # Validate MAC format
+    if not re.match(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$', mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    mac = mac.lower()
+    results = []
+
+    try:
+        # 1. Deauth client from WiFi using hostapd_cli
+        for iface in ['wlan0', 'wlan1']:
+            output, success = run_command(['hostapd_cli', '-i', iface, 'deauthenticate', mac])
+            if success:
+                results.append(f'Deauthenticated from {iface}')
+                break
+
+        # 2. Remove DHCP lease from dnsmasq
+        lease_paths = [
+            '/var/lib/misc/dnsmasq.leases',
+            '/var/lib/dnsmasq/dnsmasq.leases',
+            '/tmp/dnsmasq.leases'
+        ]
+
+        lease_removed = False
+        for lease_file in lease_paths:
+            if os.path.exists(lease_file):
+                try:
+                    with open(lease_file, 'r') as f:
+                        lines = f.readlines()
+
+                    # Filter out the lease for this MAC
+                    new_lines = [l for l in lines if mac not in l.lower()]
+
+                    if len(new_lines) < len(lines):
+                        # Write updated leases
+                        with open('/tmp/dnsmasq_leases_new.tmp', 'w') as f:
+                            f.writelines(new_lines)
+                        run_command(['sudo', 'cp', '/tmp/dnsmasq_leases_new.tmp', lease_file])
+                        lease_removed = True
+                        results.append('DHCP lease removed')
+                        break
+                except (IOError, PermissionError):
+                    continue
+
+        if not lease_removed:
+            results.append('No DHCP lease found')
+
+        # 3. Clear ARP entry
+        run_command(['sudo', 'ip', 'neigh', 'del', mac, 'nud', 'all'])
+
+        return jsonify({
+            'success': True,
+            'mac': mac,
+            'actions': results,
+            'message': 'Client disconnected'
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@clients_bp.route('/kick/<mac>', methods=['POST'])
+def api_kick_client(mac):
+    """Alias for disconnect - kick a client from the network."""
+    return api_disconnect_client(mac)

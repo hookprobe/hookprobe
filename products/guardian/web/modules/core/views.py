@@ -60,34 +60,63 @@ def api_status():
 @core_bp.route('/api/containers')
 def api_containers():
     """Get service status for all Guardian services (systemd services, not containers)."""
+    import subprocess
+
     # Service configuration: key = display key, services = list of possible service names to try
     service_config = {
         'hostapd': {'label': 'WiFi Access Point', 'services': ['hostapd']},
         'dnsmasq': {'label': 'DNS/DHCP Server', 'services': ['dnsmasq']},
         'dhcpcd': {'label': 'DHCP Client', 'services': ['dhcpcd', 'dhcpcd5', 'dhclient', 'NetworkManager']},
-        'guardian': {'label': 'Guardian Agent', 'services': ['guardian-agent', 'hookprobe-agent', 'guardian']},
+        'guardian': {'label': 'Guardian Agent', 'services': ['guardian-agent', 'hookprobe-agent', 'guardian', 'guardian-web']},
     }
 
     services = {}
     for key, config in service_config.items():
         is_running = False
-        status = 'inactive'
+        status = 'not installed'
+        found_service = False
 
         # Try each possible service name
         for service_name in config['services']:
-            output, success = run_command(['systemctl', 'is-active', service_name])
-            service_status = output.strip() if success else 'unknown'
-            if service_status == 'active':
-                is_running = True
-                status = 'active'
-                break
-            elif service_status != 'unknown' and status == 'inactive':
-                status = service_status
+            try:
+                # Use subprocess directly to capture output regardless of exit code
+                # systemctl is-active returns non-zero for inactive/failed but output is valid
+                result = subprocess.run(
+                    ['systemctl', 'is-active', service_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                service_status = result.stdout.strip().lower()
+
+                # Valid statuses from systemctl is-active
+                if service_status in ['active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading']:
+                    found_service = True
+                    if service_status == 'active':
+                        is_running = True
+                        status = 'active'
+                        break
+                    elif status == 'not installed':
+                        status = service_status
+            except (subprocess.TimeoutExpired, Exception):
+                continue
+
+        # Format status for display
+        if is_running:
+            display_status = 'Running'
+        elif status == 'inactive':
+            display_status = 'Stopped'
+        elif status == 'failed':
+            display_status = 'Failed'
+        elif status == 'not installed':
+            display_status = 'Not Installed'
+        else:
+            display_status = status.capitalize()
 
         services[key] = {
             'label': config['label'],
             'running': is_running,
-            'status': 'Running' if is_running else status.capitalize()
+            'status': display_status
         }
 
     return jsonify(services)
