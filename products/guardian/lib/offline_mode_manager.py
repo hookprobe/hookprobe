@@ -70,6 +70,16 @@ class OfflineModeConfig:
     dhcp_range_end: str = "192.168.4.30"
     dhcp_lease_time: str = "24h"
 
+    # Route metrics (lower = higher priority)
+    # eth0 should always have priority over WiFi
+    eth0_metric: int = 100                # Highest priority
+    wlan_upstream_metric: int = 200       # WiFi upstream
+    wlan_ap_metric: int = 600             # AP interface (no default route)
+
+    # DHCP client settings
+    dhcp_timeout: int = 30                # DHCP request timeout
+    dhcp_retry_count: int = 3             # Retries before fallback
+
     # Timeouts
     wan_check_timeout: int = 10           # Seconds to wait for WAN check
     scan_timeout: int = 30                # Seconds for RF scan
@@ -79,6 +89,7 @@ class OfflineModeConfig:
     hostapd_config_path: str = "/etc/hostapd/hostapd.conf"
     dnsmasq_config_path: str = "/etc/dnsmasq.conf"
     wpa_supplicant_config: str = "/etc/wpa_supplicant/wpa_supplicant.conf"
+    dhcpcd_config_path: str = "/etc/dhcpcd.conf"
     state_file: str = "/var/lib/guardian/offline_state.json"
 
     # Auto-scan on congestion detection
@@ -282,6 +293,299 @@ class OfflineModeManager:
                     status['ssid'] = output
 
         return status
+
+    # =========================================================================
+    # ROUTE METRICS AND DHCP CONFIGURATION
+    # =========================================================================
+
+    def configure_route_metrics(self) -> bool:
+        """
+        Configure proper route metrics for eth0 and wlan interfaces.
+
+        On Raspberry Pi, without explicit metrics:
+        - Both eth0 and wlan0 may get the same metric
+        - This causes 169.254.x.x (link-local) addresses
+        - eth0 should have priority (lower metric = higher priority)
+
+        Route metric priority:
+        - eth0: 100 (highest priority)
+        - wlan upstream: 200
+        - wlan AP: 600 (no default route needed)
+        """
+        logger.info("Configuring route metrics...")
+
+        success = True
+
+        # Generate dhcpcd.conf with proper metrics
+        dhcpcd_config = self._generate_dhcpcd_config()
+
+        try:
+            # Backup existing config
+            if Path(self.config.dhcpcd_config_path).exists():
+                self._run_command(
+                    f"sudo cp {self.config.dhcpcd_config_path} "
+                    f"{self.config.dhcpcd_config_path}.guardian-backup"
+                )
+
+            # Write new config
+            temp_path = "/tmp/dhcpcd.conf.guardian"
+            with open(temp_path, 'w') as f:
+                f.write(dhcpcd_config)
+
+            _, copy_success = self._run_command(
+                f"sudo cp {temp_path} {self.config.dhcpcd_config_path}"
+            )
+
+            if not copy_success:
+                logger.error("Failed to write dhcpcd.conf")
+                success = False
+        except Exception as e:
+            logger.error(f"Failed to configure dhcpcd: {e}")
+            success = False
+
+        # Apply metrics to existing routes immediately
+        self._apply_route_metrics()
+
+        return success
+
+    def _generate_dhcpcd_config(self) -> str:
+        """Generate dhcpcd.conf with proper route metrics"""
+        return f"""# Guardian dhcpcd Configuration
+# Generated: {datetime.now().isoformat()}
+# Purpose: Proper route metrics for eth0/wlan priority
+
+# Global settings
+hostname
+clientid
+persistent
+option rapid_commit
+option domain_name_servers, domain_name, domain_search, host_name
+option classless_static_routes
+option interface_mtu
+require dhcp_server_identifier
+slaac private
+noipv4ll  # Disable link-local (169.254.x.x) fallback on timeout
+
+# ============================================
+# Interface-specific configuration
+# ============================================
+
+# eth0 - Highest priority (metric {self.config.eth0_metric})
+# Should always be preferred when cable is connected
+interface eth0
+metric {self.config.eth0_metric}
+# Wait for DHCP before falling back
+timeout {self.config.dhcp_timeout}
+
+# wlan0 - Used as AP, no DHCP client needed
+# Exclude from DHCP client
+interface {self.config.ap_interface}
+nohook wpa_supplicant
+# Static IP for AP mode
+static ip_address={self.config.ap_ip}/27
+nogateway  # Don't add default route for AP interface
+
+# wlan1 - Upstream WiFi (if available)
+interface {self.config.wan_interface}
+metric {self.config.wlan_upstream_metric}
+timeout {self.config.dhcp_timeout}
+
+# ============================================
+# Fallback configuration
+# ============================================
+# If no DHCP response after timeout, don't use link-local
+# This prevents 169.254.x.x addresses
+fallback static_eth0
+
+profile static_eth0
+# No static fallback - just don't get an address
+# This is better than 169.254.x.x which breaks routing
+"""
+
+    def _apply_route_metrics(self):
+        """Apply route metrics to existing routes immediately"""
+        # Get current default routes
+        output, success = self._run_command("ip route show default")
+        if not success or not output:
+            return
+
+        # Parse and fix routes
+        for line in output.split('\n'):
+            if not line.strip():
+                continue
+
+            # Extract interface
+            parts = line.split()
+            if 'dev' not in parts:
+                continue
+
+            try:
+                dev_idx = parts.index('dev')
+                interface = parts[dev_idx + 1]
+                gateway = parts[parts.index('via') + 1] if 'via' in parts else None
+            except (IndexError, ValueError):
+                continue
+
+            # Determine correct metric
+            if interface == 'eth0':
+                metric = self.config.eth0_metric
+            elif interface == self.config.ap_interface:
+                # AP interface shouldn't have default route
+                logger.info(f"Removing default route from AP interface {interface}")
+                self._run_command(f"sudo ip route del default dev {interface} 2>/dev/null")
+                continue
+            elif 'wlan' in interface:
+                metric = self.config.wlan_upstream_metric
+            else:
+                continue
+
+            # Check if metric is already set
+            if f'metric {metric}' in line:
+                continue
+
+            # Remove old route and add with correct metric
+            logger.info(f"Setting metric {metric} for {interface}")
+            self._run_command(f"sudo ip route del default dev {interface} 2>/dev/null")
+            if gateway:
+                self._run_command(
+                    f"sudo ip route add default via {gateway} dev {interface} metric {metric}"
+                )
+
+    def fix_eth0_dhcp(self) -> Tuple[bool, Optional[str]]:
+        """
+        Fix eth0 DHCP issues (169.254.x.x addresses).
+
+        Returns:
+            (success, ip_address) - Whether fix worked and the new IP
+        """
+        logger.info("Attempting to fix eth0 DHCP...")
+
+        # Check if eth0 exists and is up
+        output, success = self._run_command("ip link show eth0")
+        if not success:
+            logger.warning("eth0 interface not found")
+            return False, None
+
+        # Check current IP
+        output, _ = self._run_command(
+            "ip addr show eth0 | grep 'inet ' | awk '{print $2}'"
+        )
+        current_ip = output.split('/')[0] if output else None
+
+        # Check if it's a link-local address
+        if current_ip and current_ip.startswith('169.254.'):
+            logger.info(f"eth0 has link-local address {current_ip}, attempting DHCP")
+
+            # Release any existing lease
+            self._run_command("sudo dhclient -r eth0 2>/dev/null")
+            self._run_command("sudo ip addr flush dev eth0 2>/dev/null")
+
+            # Bring interface down and up
+            self._run_command("sudo ip link set eth0 down")
+            time.sleep(1)
+            self._run_command("sudo ip link set eth0 up")
+            time.sleep(2)
+
+            # Try dhclient with timeout
+            _, success = self._run_command(
+                f"sudo timeout {self.config.dhcp_timeout} dhclient -v eth0",
+                timeout=self.config.dhcp_timeout + 5
+            )
+
+            if not success:
+                # Try dhcpcd as fallback
+                logger.info("dhclient failed, trying dhcpcd...")
+                self._run_command("sudo dhcpcd -n eth0")
+                time.sleep(5)
+
+            # Check new IP
+            output, _ = self._run_command(
+                "ip addr show eth0 | grep 'inet ' | awk '{print $2}'"
+            )
+            new_ip = output.split('/')[0] if output else None
+
+            if new_ip and not new_ip.startswith('169.254.'):
+                logger.info(f"eth0 DHCP fix successful: {new_ip}")
+                return True, new_ip
+            else:
+                logger.warning(f"eth0 DHCP fix failed, still has: {new_ip}")
+                return False, new_ip
+
+        elif current_ip:
+            logger.info(f"eth0 already has valid IP: {current_ip}")
+            return True, current_ip
+        else:
+            # No IP at all, try DHCP
+            logger.info("eth0 has no IP, requesting DHCP...")
+            self._run_command("sudo ip link set eth0 up")
+            time.sleep(1)
+            self._run_command(f"sudo timeout {self.config.dhcp_timeout} dhclient eth0")
+            time.sleep(3)
+
+            output, _ = self._run_command(
+                "ip addr show eth0 | grep 'inet ' | awk '{print $2}'"
+            )
+            new_ip = output.split('/')[0] if output else None
+
+            if new_ip and not new_ip.startswith('169.254.'):
+                return True, new_ip
+            return False, new_ip
+
+    def detect_wan_interface(self) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Detect the best WAN interface and its IP.
+
+        Priority:
+        1. eth0 with valid (non-169.254) IP
+        2. wlan with upstream connection
+        3. None
+
+        Returns:
+            (interface, ip) - Best WAN interface and its IP
+        """
+        interfaces_priority = [
+            ('eth0', self.config.eth0_metric),
+            (self.config.wan_interface, self.config.wlan_upstream_metric),
+        ]
+
+        for interface, _ in interfaces_priority:
+            # Check if interface exists
+            output, success = self._run_command(f"ip link show {interface} 2>/dev/null")
+            if not success:
+                continue
+
+            # Get IP
+            output, _ = self._run_command(
+                f"ip addr show {interface} | grep 'inet ' | awk '{{print $2}}'"
+            )
+            if not output:
+                continue
+
+            ip = output.split('/')[0]
+
+            # Skip link-local addresses
+            if ip.startswith('169.254.'):
+                logger.warning(f"{interface} has link-local address {ip}")
+                continue
+
+            # Skip AP interface IP
+            if ip == self.config.ap_ip:
+                continue
+
+            # Check if we can reach gateway
+            gw_output, _ = self._run_command(
+                f"ip route show dev {interface} | grep default | awk '{{print $3}}'"
+            )
+            if gw_output:
+                _, ping_success = self._run_command(
+                    f"ping -c 1 -W 2 -I {interface} {gw_output}",
+                    timeout=5
+                )
+                if ping_success:
+                    logger.info(f"Found working WAN interface: {interface} ({ip})")
+                    return interface, ip
+
+        return None, None
 
     # =========================================================================
     # CHANNEL SELECTION
@@ -549,24 +853,38 @@ domain-needed
         self.state.state = OfflineState.INITIALIZING
         self.save_state()
 
-        # Step 1: Check if we already have WAN
-        logger.info("Step 1: Checking existing WAN connectivity...")
-        if self.check_wan_connectivity():
-            wan_status = self.get_wan_status()
-            logger.info(f"WAN already connected via {wan_status.get('interface')}")
-            self.state.wan_connected = True
-            self.state.wan_ip = wan_status.get('ip')
-            self.state.wan_ssid = wan_status.get('ssid')
-            # Still start AP for local clients
-        else:
-            logger.info("No WAN connectivity detected")
-            self.state.wan_connected = False
+        # Step 0: Configure route metrics (eth0 priority over wlan)
+        logger.info("Step 0: Configuring route metrics (eth0 priority)...")
+        self.configure_route_metrics()
 
-            # Check if wpa_supplicant has config (from Pi Imager)
-            has_config, ssid = self.check_wpa_supplicant_configured()
-            if has_config:
-                logger.info(f"wpa_supplicant configured for '{ssid}' but not connected")
-                logger.info("Will start AP first, user can connect upstream via web UI")
+        # Step 1: Check eth0 first and fix DHCP if needed
+        logger.info("Step 1: Checking eth0 connectivity...")
+        eth0_success, eth0_ip = self.fix_eth0_dhcp()
+        if eth0_success and eth0_ip:
+            logger.info(f"eth0 connected with IP: {eth0_ip}")
+            self.state.wan_connected = True
+            self.state.wan_ip = eth0_ip
+            self.state.wan_ssid = None  # Ethernet, no SSID
+        else:
+            # Check WAN connectivity via any interface
+            logger.info("Step 1b: Checking other WAN interfaces...")
+            wan_iface, wan_ip = self.detect_wan_interface()
+            if wan_iface and wan_ip:
+                logger.info(f"WAN connected via {wan_iface}: {wan_ip}")
+                self.state.wan_connected = True
+                self.state.wan_ip = wan_ip
+                if 'wlan' in wan_iface:
+                    output, _ = self._run_command(f"iwgetid {wan_iface} -r")
+                    self.state.wan_ssid = output if output else None
+            else:
+                logger.info("No WAN connectivity detected")
+                self.state.wan_connected = False
+
+                # Check if wpa_supplicant has config (from Pi Imager)
+                has_config, ssid = self.check_wpa_supplicant_configured()
+                if has_config:
+                    logger.info(f"wpa_supplicant configured for '{ssid}' but not connected")
+                    logger.info("Will start AP first, user can connect upstream via web UI")
 
         # Step 2: Scan RF environment
         logger.info("Step 2: Scanning RF environment for optimal channel...")
