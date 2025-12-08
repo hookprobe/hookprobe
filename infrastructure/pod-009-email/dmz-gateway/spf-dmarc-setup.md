@@ -181,8 +181,8 @@ Send a test email to:
 
 1. **Create Email Aliases** (on internal mail server):
 ```
-dmarc-reports@hookprobe.com  →  security-team@hookprobe.com
-dmarc-failures@hookprobe.com  →  security-team@hookprobe.com
+dmarc-reports@hookprobe.com  →  qsecbit@hookprobe.com
+dmarc-failures@hookprobe.com  →  qsecbit@hookprobe.com
 ```
 
 2. **Use DMARC Analyzer** (Optional):

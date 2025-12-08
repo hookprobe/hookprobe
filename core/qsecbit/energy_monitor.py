@@ -14,7 +14,7 @@ Algorithm:
 7. Network direction-aware energy efficiency analysis (NEW v5.0)
 
 Author: Andrei Toma
-License: MIT
+License: Proprietary - see LICENSE in this directory
 Version: 5.0
 """
 

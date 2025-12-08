@@ -2,7 +2,7 @@
 #
 # gdpr-retention.sh - HookProbe v5.0 GDPR Data Retention & Deletion
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Automatically enforces data retention policies and anonymization
 # Run daily via cron: 0 2 * * * /opt/hookprobe/scripts/gdpr-retention.sh

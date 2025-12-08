@@ -5,7 +5,7 @@ A resilience metric that measures the smallest unit where AI-driven attack
 and defense reach equilibrium through continuous error correction.
 
 Author: Andrei Toma
-License: MIT
+License: Proprietary - see LICENSE in this directory
 Version: 5.0
 """
 
