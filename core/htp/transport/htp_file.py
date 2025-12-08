@@ -4,7 +4,7 @@ HTP File Transfer Extension for HookProbe Transport Protocol
 
 Version: 1.0-Liberty
 Author: HookProbe Team
-License: MIT
+License: AGPL-3.0 - see LICENSE file
 
 This module extends HTP with CRUD file operations while maintaining
 all security properties of the Neuro Protocol:

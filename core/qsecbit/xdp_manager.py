@@ -2,7 +2,7 @@
 XDP/eBPF DDoS Mitigation Manager
 
 Author: Andrei Toma
-License: MIT
+License: Proprietary - see LICENSE in this directory
 Version: 5.0
 """
 
