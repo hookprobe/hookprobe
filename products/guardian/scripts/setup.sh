@@ -2755,6 +2755,80 @@ PYEOF
 }
 
 # ============================================================
+# OFFLINE MODE SERVICE INSTALLATION
+# ============================================================
+install_offline_mode_service() {
+    log_step "Installing Offline Mode service..."
+
+    # Create state directory
+    mkdir -p /var/lib/guardian
+    chmod 755 /var/lib/guardian
+
+    # Backup existing dhcpcd.conf if not already backed up
+    if [ -f /etc/dhcpcd.conf ] && [ ! -f /etc/dhcpcd.conf.guardian.bak ]; then
+        cp /etc/dhcpcd.conf /etc/dhcpcd.conf.guardian.bak
+        log_info "Backed up dhcpcd.conf"
+    fi
+
+    # Install systemd service from config directory
+    local SERVICE_SRC="$CONFIG_DIR/systemd/guardian-offline.service"
+    local SERVICE_DEST="/etc/systemd/system/guardian-offline.service"
+
+    if [ -f "$SERVICE_SRC" ]; then
+        cp "$SERVICE_SRC" "$SERVICE_DEST"
+        chmod 644 "$SERVICE_DEST"
+        log_info "Installed guardian-offline.service"
+    else
+        # Create service inline if source not found
+        log_info "Creating guardian-offline.service..."
+        cat > "$SERVICE_DEST" << 'EOF'
+[Unit]
+Description=Guardian Offline Mode - Smart WiFi AP Initialization
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-pre.target
+Before=network.target hostapd.service dnsmasq.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 2
+
+# Initialize offline mode with smart channel selection
+# This runs before hostapd starts and:
+# 1. Scans RF environment for congestion
+# 2. Selects optimal channel (1, 6, or 11 for 2.4GHz)
+# 3. Generates hostapd.conf with best channel
+# 4. Sets up bridge interface
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/offline_mode_manager.py init
+
+# Ensure we have proper permissions
+User=root
+Group=root
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-offline
+
+# Security hardening
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        chmod 644 "$SERVICE_DEST"
+    fi
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    log_info "Offline mode service installed"
+}
+
+# ============================================================
 # CONFIGURATION FILE CREATION
 # ============================================================
 create_default_config() {
@@ -2936,6 +3010,7 @@ enable_services() {
 
     # Enable all Guardian security services
     log_info "Enabling Guardian security stack..."
+    systemctl enable guardian-offline 2>/dev/null || true
     systemctl enable guardian-suricata 2>/dev/null || true
     systemctl enable guardian-zeek 2>/dev/null || true
     systemctl enable guardian-waf 2>/dev/null || true
@@ -3253,6 +3328,10 @@ main() {
     log_step "Installing Guardian library..."
     install_guardian_lib
 
+    # Install Offline Mode service (smart channel selection, route metrics)
+    log_step "Installing Offline Mode service..."
+    install_offline_mode_service
+
     # Create default configuration file
     log_step "Creating configuration file..."
     create_default_config
@@ -3293,9 +3372,12 @@ main() {
     echo ""
     echo -e "  ${BOLD}Network Features:${NC}"
     echo -e "  • Simple WiFi Hotspot (all devices on br0)"
+    echo -e "  • Offline Mode - Works without WAN connection"
+    echo -e "  • Smart Channel Selection (scans for least congested)"
     echo -e "  • MAC Authentication & Device Tracking"
     echo -e "  • Connected Devices list in Web UI"
     echo -e "  • WAN Failover (eth0 primary, wlan0 backup)"
+    echo -e "  • Route Metrics (eth0:100, wlan:200 for proper priority)"
     echo -e "  • HTP Secure File Transfer"
     echo ""
     echo -e "  ${CYAN}Note:${NC} For IoT VLAN segmentation, upgrade to ${BOLD}Fortress${NC} mode"
