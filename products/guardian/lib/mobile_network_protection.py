@@ -26,11 +26,12 @@ import socket
 import ssl
 import time
 import subprocess
+import shlex
 import hashlib
 import urllib.request
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Tuple, Any, Set
+from typing import Optional, Dict, List, Tuple, Any, Set, Union
 from enum import Enum
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -176,11 +177,17 @@ class MobileNetworkProtection:
         # Load saved state
         self._load_state()
 
-    def _run_command(self, cmd: str, timeout: int = 10) -> Tuple[str, bool]:
-        """Run shell command safely"""
+    def _run_command(self, cmd: Union[str, List[str]], timeout: int = 10) -> Tuple[str, bool]:
+        """Run command safely without shell=True to prevent command injection"""
         try:
+            # Convert string to list for safe execution
+            if isinstance(cmd, str):
+                cmd_list = shlex.split(cmd)
+            else:
+                cmd_list = cmd
+
             result = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                cmd_list, capture_output=True,
                 text=True, timeout=timeout
             )
             return result.stdout.strip(), result.returncode == 0
