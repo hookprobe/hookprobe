@@ -7,7 +7,7 @@
 # Actions: Honeypot redirection, SNAT rules, Email alerts
 #
 # Author: HookProbe Team
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 
 set -euo pipefail

@@ -4,7 +4,7 @@ Qsecbit Package - Quantum Security Bit: Cyber Resilience Metric
 A modular cyber resilience metric for AI-driven threat detection.
 
 Author: Andrei Toma
-License: MIT
+License: Proprietary - see LICENSE in this directory
 Version: 5.0
 """
 
@@ -37,7 +37,7 @@ from .energy_monitor import (
 
 __version__ = "5.0.0"
 __author__ = "Andrei Toma"
-__license__ = "MIT"
+__license__ = "Proprietary"
 
 __all__ = [
     # Core qsecbit classes
