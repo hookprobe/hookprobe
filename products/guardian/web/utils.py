@@ -131,6 +131,8 @@ def get_system_info():
         'memory': {'total': 0, 'used': 0, 'percent': 0},
         'disk': {'total': 0, 'used': 0, 'percent': 0},
         'cpu_percent': 0,
+        'cpu_cores': [],
+        'cpu_count': 0,
         'temperature': 0
     }
 
@@ -148,7 +150,41 @@ def get_system_info():
     except (IOError, ValueError):
         pass
 
-    # Load average
+    # CPU count and per-core usage from /proc/stat
+    try:
+        with open('/proc/stat', 'r') as f:
+            lines = f.readlines()
+
+        cpu_cores = []
+        for line in lines:
+            if line.startswith('cpu') and not line.startswith('cpu '):
+                # Per-core line: cpu0, cpu1, etc.
+                parts = line.split()
+                core_num = int(parts[0][3:])  # Extract number from cpu0, cpu1, etc.
+                # user, nice, system, idle, iowait, irq, softirq, steal
+                values = [int(x) for x in parts[1:8]] if len(parts) >= 8 else [0] * 7
+                idle = values[3] + values[4]  # idle + iowait
+                total = sum(values)
+                # Calculate usage percentage
+                usage = max(0, min(100, 100 - (idle * 100 // total))) if total > 0 else 0
+                cpu_cores.append({
+                    'core': core_num,
+                    'usage': usage
+                })
+            elif line.startswith('cpu '):
+                # Total CPU line
+                parts = line.split()
+                values = [int(x) for x in parts[1:8]] if len(parts) >= 8 else [0] * 7
+                idle = values[3] + values[4]
+                total = sum(values)
+                info['cpu_percent'] = max(0, min(100, 100 - (idle * 100 // total))) if total > 0 else 0
+
+        info['cpu_cores'] = cpu_cores
+        info['cpu_count'] = len(cpu_cores)
+    except (IOError, ValueError, IndexError):
+        pass
+
+    # Load average (kept for reference)
     try:
         with open('/proc/loadavg', 'r') as f:
             parts = f.read().split()
