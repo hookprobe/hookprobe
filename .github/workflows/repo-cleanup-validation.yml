@@ -184,31 +184,31 @@ jobs:
 
           # Known entry points and standalone files
           cat > standalone.txt << 'EOF'
-          install.sh
-          uninstall.sh
-          install-sentinel-lite.sh
-          install-validator.sh
-          scripts/repo-cleanup-validator.sh
-          scripts/run-unit-tests.sh
-          scripts/run-integration-tests.sh
-          scripts/run-performance-tests.sh
-          scripts/install-edge.sh
-          scripts/gdpr-retention.sh
-          products/guardian/web/app.py
-          products/mssp/setup.sh
-          products/mssp/uninstall.sh
-          products/sentinel/sentinel.py
-          products/sentinel/sentinel_security.py
-          deploy/edge/provision.sh
-          deploy/edge/cleanup.sh
-          deploy/edge/update.sh
-          deploy/cloud/setup.sh
-          deploy/cloud/config.sh
-          deploy/addons/n8n/setup.sh
-          deploy/addons/n8n/config.sh
-          deploy/addons/webserver/setup-webserver.sh
-          deploy/addons/webserver/entrypoint.sh
-          EOF
+install.sh
+uninstall.sh
+install-sentinel-lite.sh
+install-validator.sh
+scripts/repo-cleanup-validator.sh
+scripts/run-unit-tests.sh
+scripts/run-integration-tests.sh
+scripts/run-performance-tests.sh
+scripts/install-edge.sh
+scripts/gdpr-retention.sh
+products/guardian/web/app.py
+products/mssp/setup.sh
+products/mssp/uninstall.sh
+products/sentinel/sentinel.py
+products/sentinel/sentinel_security.py
+deploy/edge/provision.sh
+deploy/edge/cleanup.sh
+deploy/edge/update.sh
+deploy/cloud/setup.sh
+deploy/cloud/config.sh
+deploy/addons/n8n/setup.sh
+deploy/addons/n8n/config.sh
+deploy/addons/webserver/setup-webserver.sh
+deploy/addons/webserver/entrypoint.sh
+EOF
 
           # Files referenced in other files
           grep -rhoE '[a-zA-Z0-9_/-]+\.(sh|py)' . \
