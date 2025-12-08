@@ -1,3 +1,17 @@
+HookProbe - Federated Cybersecurity Mesh
+Copyright (C) 2024-2025 HookProbe Contributors
+
+This file is part of HookProbe.
+
+HookProbe is dual-licensed:
+- Open source components: GNU Affero General Public License v3.0 (AGPL-3.0)
+- Proprietary components: Commercial License (see LICENSING.md)
+
+This LICENSE file applies to the AGPL-licensed portions of HookProbe.
+For full licensing details, see LICENSING.md.
+
+================================================================================
+
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 
