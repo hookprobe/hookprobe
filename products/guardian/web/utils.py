@@ -5,16 +5,23 @@ Shared helper functions used across modules
 import json
 import os
 import subprocess
+import shlex
 from functools import wraps
+from typing import Union, List
 from flask import current_app, jsonify
 
 
-def run_command(cmd, timeout=30):
-    """Execute a shell command safely and return output."""
+def run_command(cmd: Union[str, List[str]], timeout: int = 30):
+    """Execute a command safely without shell=True to prevent command injection."""
     try:
+        # Convert string to list for safe execution
+        if isinstance(cmd, str):
+            cmd_list = shlex.split(cmd)
+        else:
+            cmd_list = cmd
+
         result = subprocess.run(
-            cmd,
-            shell=True,
+            cmd_list,
             capture_output=True,
             text=True,
             timeout=timeout
