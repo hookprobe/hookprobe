@@ -169,6 +169,77 @@
     </div>
 </div>
 
+<!-- Deep Packet Inspection -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-5 14H4v-4h11v4zm0-5H4V9h11v4zm5 5h-4V9h4v9z"/>
+            </svg>
+            Deep Packet Inspection
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadPacketStats()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--spacing-md); margin-bottom: var(--spacing-lg);">
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-primary);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-analyzed">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">Connections</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-green);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-ads-detected">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">Ads Detected</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-amber);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-sni-blocks">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">SNI Blocks</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-red);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-ip-blocks">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">IP Blocks</div>
+            </div>
+        </div>
+        <div style="margin-bottom: var(--spacing-md);">
+            <div class="text-muted" style="font-size: 0.75rem; margin-bottom: var(--spacing-xs);">Detection Methods</div>
+            <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-xs);">
+                <span class="badge badge-success">TLS SNI Inspection</span>
+                <span class="badge badge-info">IP Reputation</span>
+                <span class="badge badge-warning">Traffic Patterns</span>
+                <span class="badge badge-primary">JA3 Fingerprinting</span>
+            </div>
+        </div>
+        <!-- IP/Domain Check -->
+        <div style="margin-top: var(--spacing-lg); padding-top: var(--spacing-lg); border-top: 1px solid var(--border-color);">
+            <div class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-sm);">Check IP or Domain</div>
+            <div class="input-group">
+                <input type="text" class="form-input" id="packet-check-input" placeholder="Enter IP (e.g., 142.250.1.1) or domain (e.g., ads.example.com)">
+                <button class="btn btn-primary" onclick="checkPacketTarget()">Check</button>
+            </div>
+            <div id="packet-check-result" style="margin-top: var(--spacing-md);"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Packet Detections -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+            </svg>
+            Recent Packet Detections
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadPacketDetections()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div id="packet-detections-list">
+            <div class="empty-state">
+                <p class="text-muted">No packet-level ad detections yet. Browse the web to generate traffic analysis.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Protection Level -->
 <div class="card">
     <div class="card-header">
@@ -338,31 +409,42 @@ async function loadBlockedDomains() {
     container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading...</p></div>';
 
     try {
-        // Get ML threats for detailed info
-        const mlThreats = await apiGet('/dnsxai/ml/threats').catch(() => ({ threats: [] }));
-        const stats = await apiGet('/dnsxai/stats');
+        // Get blocked domains from dnsmasq log and ML threats in parallel
+        const [blockedResult, mlThreats] = await Promise.all([
+            apiGet('/dnsxai/blocked?limit=50').catch(() => ({ domains: [] })),
+            apiGet('/dnsxai/ml/threats').catch(() => ({ threats: [] }))
+        ]);
 
         // Build blocked domains list
         blockedDomainsCache = [];
 
-        // Add ML detected threats
-        if (mlThreats.threats) {
-            mlThreats.threats.forEach(t => {
+        // Add blocklist blocked domains first
+        if (blockedResult.domains) {
+            blockedResult.domains.forEach(d => {
                 blockedDomainsCache.push({
-                    domain: t.domain,
-                    type: t.type === 'cname_uncloaked' ? 'cname' : 'ml',
-                    typeBadge: t.type === 'cname_uncloaked' ? 'CNAME' : 'ML',
-                    confidence: t.confidence,
-                    time: t.timestamp
+                    domain: d.domain,
+                    type: 'blocklist',
+                    typeBadge: 'BLOCKED',
+                    timestamp: d.timestamp,
+                    time: d.time
                 });
             });
         }
 
-        // Add some demo blocklist entries if we have blocked count but few ML detections
-        const blockedCount = stats.blocked || 0;
-        if (blockedCount > blockedDomainsCache.length) {
-            // Note: In production, this would come from actual log parsing
-            // For now, show what we have from ML detections
+        // Add ML detected threats
+        if (mlThreats.threats) {
+            mlThreats.threats.forEach(t => {
+                // Avoid duplicates
+                if (!blockedDomainsCache.find(d => d.domain === t.domain)) {
+                    blockedDomainsCache.push({
+                        domain: t.domain,
+                        type: t.type === 'cname_uncloaked' ? 'cname' : 'ml',
+                        typeBadge: t.type === 'cname_uncloaked' ? 'CNAME' : 'ML',
+                        confidence: t.confidence,
+                        time: t.timestamp
+                    });
+                }
+            });
         }
 
         renderBlockedDomains();
@@ -444,4 +526,190 @@ async function whitelistFromBlocked(domain) {
         showToast('Failed to whitelist domain', 'error');
     }
 }
+
+// =========================================================================
+// PACKET-LEVEL DETECTION FUNCTIONS
+// =========================================================================
+
+async function loadPacketStats() {
+    try {
+        const result = await apiGet('/dnsxai/packet/status');
+
+        if (result.success && result.available) {
+            updateElement('packet-analyzed', result.packets_analyzed || 0);
+            updateElement('packet-ads-detected', result.ads_detected || 0);
+            updateElement('packet-sni-blocks', result.sni_blocks || 0);
+            updateElement('packet-ip-blocks', result.ip_blocks || 0);
+        }
+    } catch (error) {
+        console.error('Failed to load packet stats:', error);
+    }
+}
+
+async function loadPacketDetections() {
+    const container = document.getElementById('packet-detections-list');
+    container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading...</p></div>';
+
+    try {
+        const result = await apiGet('/dnsxai/packet/detections?limit=10');
+
+        if (!result.success || !result.detections || result.detections.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <p class="text-muted">No packet-level ad detections yet.</p>
+                    <p class="text-muted" style="font-size: 0.8125rem;">Browse the web to generate traffic analysis.</p>
+                </div>
+            `;
+            return;
+        }
+
+        const html = `
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>IP/Domain</th>
+                            <th>Method</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${result.detections.map(d => `
+                            <tr>
+                                <td class="font-mono" style="word-break: break-all;">
+                                    ${d.sni || d.ip}
+                                </td>
+                                <td>
+                                    ${(d.methods || []).map(m => `<span class="badge badge-secondary">${m}</span>`).join(' ')}
+                                </td>
+                                <td>
+                                    <span class="${d.confidence > 0.7 ? 'text-danger' : d.confidence > 0.4 ? 'text-warning' : ''}">
+                                        ${Math.round((d.confidence || 0) * 100)}%
+                                    </span>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        container.innerHTML = html;
+    } catch (error) {
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load detections</p></div>';
+    }
+}
+
+async function checkPacketTarget() {
+    const input = document.getElementById('packet-check-input').value.trim();
+    const resultContainer = document.getElementById('packet-check-result');
+
+    if (!input) {
+        showToast('Enter an IP address or domain', 'warning');
+        return;
+    }
+
+    resultContainer.innerHTML = '<p class="text-muted">Checking...</p>';
+
+    try {
+        // Determine if input is IP or domain
+        const isIP = /^(\d{1,3}\.){3}\d{1,3}$/.test(input);
+
+        // Use combined check endpoint
+        const result = await apiPost('/dnsxai/packet/combined/check', {
+            domain: isIP ? '' : input,
+            ip: isIP ? input : ''
+        });
+
+        if (!result.success) {
+            resultContainer.innerHTML = `<p class="text-danger">Error: ${result.error}</p>`;
+            return;
+        }
+
+        // Build result display
+        const isAd = result.is_ad;
+        const confidence = Math.round((result.confidence || 0) * 100);
+        const methods = result.methods_used || [];
+
+        let html = `
+            <div style="padding: var(--spacing-md); background: var(--bg-${isAd ? 'light' : 'tertiary'}); border-radius: var(--radius-md); border-left: 4px solid var(--hp-${isAd ? 'red' : 'green'});">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
+                    <strong>${input}</strong>
+                    <span class="badge ${isAd ? 'badge-danger' : 'badge-success'}">
+                        ${isAd ? 'AD/TRACKER' : 'CLEAN'}
+                    </span>
+                </div>
+                <div class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-sm);">
+                    Confidence: <strong>${confidence}%</strong>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-xs);">
+                    ${methods.map(m => `<span class="badge badge-secondary">${m.replace('_', ' ')}</span>`).join('')}
+                </div>
+        `;
+
+        // Add details
+        if (result.details) {
+            if (result.details.sni_check?.is_ad) {
+                html += `
+                    <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
+                        SNI Pattern: <code>${result.details.sni_check.matched_pattern}</code>
+                    </div>
+                `;
+            }
+            if (result.details.ip_check?.is_ad) {
+                html += `
+                    <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
+                        IP Network: ${result.details.ip_check.info}
+                    </div>
+                `;
+            }
+            if (result.details.ml_classification?.is_suspicious) {
+                html += `
+                    <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
+                        ML Classification: ${result.details.ml_classification.classification}
+                        (${result.details.ml_classification.reasons?.join(', ') || 'suspicious pattern'})
+                    </div>
+                `;
+            }
+        }
+
+        html += '</div>';
+
+        // Add block button if it's an ad
+        if (isAd && isIP) {
+            html += `
+                <div style="margin-top: var(--spacing-sm);">
+                    <button class="btn btn-sm btn-danger" onclick="blockAdIP('${input}')">Block This IP</button>
+                </div>
+            `;
+        }
+
+        resultContainer.innerHTML = html;
+
+    } catch (error) {
+        resultContainer.innerHTML = `<p class="text-danger">Check failed: ${error.message}</p>`;
+    }
+}
+
+async function blockAdIP(ip) {
+    try {
+        const result = await apiPost('/dnsxai/packet/ip/block', { ip, reason: 'User blocked via UI' });
+        if (result.success) {
+            showToast(`IP ${ip} blocked`, 'success');
+            loadPacketStats();
+        } else {
+            showToast(result.error || 'Failed to block IP', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to block IP', 'error');
+    }
+}
+
+// Load packet stats on page load
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        loadPacketStats();
+        loadPacketDetections();
+    }, 1000);
+});
 </script>
