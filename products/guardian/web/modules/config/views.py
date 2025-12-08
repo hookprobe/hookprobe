@@ -18,10 +18,11 @@ if str(lib_path) not in sys.path:
 
 @config_bp.route('/wifi/scan', methods=['POST'])
 def api_wifi_scan():
-    """Scan for available WiFi networks."""
+    """Scan for available WiFi networks using wlan0 (WAN interface)."""
     try:
+        # wlan0 is the WAN interface used to connect to upstream networks
         # Use full iwlist output to get more details including IE info
-        output, success = run_command('sudo iwlist wlan0 scan 2>/dev/null', timeout=30)
+        output, success = run_command(['sudo', 'iwlist', 'wlan0', 'scan'], timeout=30)
 
         networks = []
         current = {}
@@ -106,7 +107,8 @@ network={{
         with open('/tmp/wpa_supplicant.conf', 'w') as f:
             f.write(config)
 
-        run_command('sudo wpa_cli -i wlan0 reconfigure')
+        # wlan0 is the WAN interface
+        run_command(['sudo', 'wpa_cli', '-i', 'wlan0', 'reconfigure'])
         return jsonify({'success': True, 'message': f'Connecting to {ssid}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -286,7 +288,9 @@ def api_offline_scan():
     """
     try:
         from wifi_channel_scanner import WiFiChannelScanner
-        scanner = WiFiChannelScanner(interface='wlan0')
+        # Use wlan1 (AP interface) for channel scanning since that's the AP interface
+        # Scanning from the AP interface gives better insight into what the AP will experience
+        scanner = WiFiChannelScanner(interface='wlan1')
         result = scanner.scan()
 
         return jsonify({
