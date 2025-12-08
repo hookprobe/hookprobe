@@ -24,9 +24,10 @@ import time
 import signal
 import argparse
 import subprocess
+import shlex
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass, field
 
 # Add parent directory to path for imports
@@ -136,11 +137,17 @@ class GuardianAgent:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{timestamp}] {message}")
 
-    def _run_command(self, cmd: str, timeout: int = 10) -> tuple:
-        """Run shell command safely"""
+    def _run_command(self, cmd: Union[str, List[str]], timeout: int = 10) -> tuple:
+        """Run command safely without shell=True to prevent command injection"""
         try:
+            # Convert string to list for safe execution
+            if isinstance(cmd, str):
+                cmd_list = shlex.split(cmd)
+            else:
+                cmd_list = cmd
+
             result = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                cmd_list, capture_output=True,
                 text=True, timeout=timeout
             )
             return result.stdout.strip(), result.returncode == 0
