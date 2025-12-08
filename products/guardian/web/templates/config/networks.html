@@ -1,13 +1,13 @@
 <!-- Config Tab Content -->
 <div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
     <h2>Network Configuration</h2>
-    <p class="text-muted">WiFi settings, hotspot configuration, and network management</p>
+    <p class="text-muted">WiFi settings, hotspot configuration, and offline mode management</p>
 </div>
 
 <!-- Network Status -->
 <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-    <div class="stat-card success">
-        <div class="stat-value" style="font-size: 1.25rem;" id="wan-status">Connected</div>
+    <div class="stat-card" id="wan-status-card">
+        <div class="stat-value" style="font-size: 1.25rem;" id="wan-status">Checking...</div>
         <div class="stat-label">WAN Status</div>
     </div>
     <div class="stat-card info">
@@ -17,6 +17,110 @@
     <div class="stat-card warning">
         <div class="stat-value" style="font-size: 1.25rem;" id="lan-clients">0</div>
         <div class="stat-label">Connected Clients</div>
+    </div>
+    <div class="stat-card" id="offline-mode-card">
+        <div class="stat-value" style="font-size: 1.25rem;" id="offline-mode-status">--</div>
+        <div class="stat-label">Mode</div>
+    </div>
+</div>
+
+<!-- Offline Mode Status -->
+<div class="card" id="offline-mode-section">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+            Offline Mode
+        </h3>
+        <div style="display: flex; gap: var(--spacing-sm);">
+            <button class="btn btn-sm btn-secondary" onclick="refreshOfflineStatus()">Refresh</button>
+            <button class="btn btn-sm btn-primary" onclick="initOfflineMode()">Initialize</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: var(--spacing-md);">
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 1rem;" id="offline-channel">--</div>
+                <div class="stat-label">AP Channel</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 1rem;" id="offline-band">--</div>
+                <div class="stat-label">Band</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 1rem;" id="offline-networks">--</div>
+                <div class="stat-label">Networks Detected</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 1rem;" id="offline-score">--</div>
+                <div class="stat-label">Channel Score</div>
+            </div>
+        </div>
+
+        <!-- Channel Analysis -->
+        <div style="margin-top: var(--spacing-lg);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
+                <h4 style="margin: 0;">Channel Congestion (2.4GHz)</h4>
+                <button class="btn btn-sm btn-secondary" onclick="scanChannels()">Scan Channels</button>
+            </div>
+            <div id="channel-analysis" class="device-grid" style="grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));">
+                <div class="empty-state">
+                    <p class="text-muted">Click "Scan Channels" to analyze RF environment</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div style="margin-top: var(--spacing-lg); padding-top: var(--spacing-md); border-top: 1px solid var(--border-color);">
+            <h4 style="margin-bottom: var(--spacing-sm);">Quick Actions</h4>
+            <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-sm);">
+                <button class="btn btn-secondary" onclick="autoSelectChannel()">
+                    Auto-Select Best Channel
+                </button>
+                <button class="btn btn-secondary" onclick="fixEth0Dhcp()">
+                    Fix eth0 DHCP
+                </button>
+                <button class="btn btn-secondary" onclick="configureRouteMetrics()">
+                    Configure Route Metrics
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Route Metrics -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h.71C7.37 7.69 9.48 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3s-1.34 3-3 3z"/>
+            </svg>
+            Route Metrics (Interface Priority)
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadRouteMetrics()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-bottom: var(--spacing-md);">
+            Lower metric = higher priority. eth0 should always be preferred when connected.
+        </p>
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Interface</th>
+                        <th>Gateway</th>
+                        <th>Metric</th>
+                        <th>Priority</th>
+                    </tr>
+                </thead>
+                <tbody id="route-metrics-body">
+                    <tr>
+                        <td colspan="4" class="empty-state">Loading routes...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
@@ -147,6 +251,258 @@
 </div>
 
 <script>
+// =========================================================================
+// OFFLINE MODE FUNCTIONS
+// =========================================================================
+
+async function refreshOfflineStatus() {
+    try {
+        const result = await apiGet('/config/offline/status');
+        if (result.success) {
+            updateOfflineStatusUI(result);
+        }
+    } catch (error) {
+        console.error('Failed to get offline status:', error);
+    }
+}
+
+function updateOfflineStatusUI(data) {
+    // Update mode status
+    const modeEl = document.getElementById('offline-mode-status');
+    const modeCard = document.getElementById('offline-mode-card');
+    const state = data.state || 'unknown';
+
+    modeEl.textContent = state.replace(/_/g, ' ').toUpperCase();
+
+    // Color based on state
+    modeCard.className = 'stat-card';
+    if (state === 'online') {
+        modeCard.classList.add('success');
+    } else if (state === 'offline_ready') {
+        modeCard.classList.add('warning');
+    } else if (state === 'error') {
+        modeCard.classList.add('danger');
+    } else {
+        modeCard.classList.add('info');
+    }
+
+    // Update WAN status
+    const wanEl = document.getElementById('wan-status');
+    const wanCard = document.getElementById('wan-status-card');
+    if (data.wan && data.wan.connected) {
+        wanEl.textContent = data.wan.ip || 'Connected';
+        wanCard.className = 'stat-card success';
+    } else {
+        wanEl.textContent = 'Disconnected';
+        wanCard.className = 'stat-card danger';
+    }
+
+    // Update AP info
+    if (data.ap) {
+        document.getElementById('lan-ssid').textContent = data.ap.ssid || 'Guardian-AP';
+        document.getElementById('lan-clients').textContent = data.ap.clients || 0;
+        document.getElementById('offline-channel').textContent = data.ap.channel || '--';
+        document.getElementById('offline-band').textContent = data.ap.band || '--';
+    }
+
+    // Update scan info
+    if (data.scan) {
+        document.getElementById('offline-networks').textContent = data.scan.networks_detected || '--';
+        document.getElementById('offline-score').textContent =
+            data.scan.channel_score ? data.scan.channel_score.toFixed(1) : '--';
+    }
+}
+
+async function initOfflineMode() {
+    showToast('Initializing offline mode...', 'info');
+    try {
+        const result = await apiPost('/config/offline/init');
+        if (result.success) {
+            showToast('Offline mode initialized', 'success');
+            updateOfflineStatusUI(result.status);
+        } else {
+            showToast(result.error || 'Initialization failed', 'error');
+        }
+    } catch (error) {
+        showToast('Initialization failed', 'error');
+    }
+}
+
+async function scanChannels() {
+    const container = document.getElementById('channel-analysis');
+    container.innerHTML = '<div class="empty-state"><p class="text-muted">Scanning...</p></div>';
+
+    try {
+        const result = await apiPost('/config/offline/scan');
+        if (result.success) {
+            renderChannelAnalysis(result);
+            showToast('Channel scan complete', 'success');
+        } else {
+            container.innerHTML = '<div class="empty-state"><p class="text-muted">Scan failed</p></div>';
+            showToast(result.error || 'Scan failed', 'error');
+        }
+    } catch (error) {
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Scan failed</p></div>';
+        showToast('Channel scan failed', 'error');
+    }
+}
+
+function renderChannelAnalysis(data) {
+    const container = document.getElementById('channel-analysis');
+    const scores = data.channel_scores || {};
+    const recommended = data.recommended ? data.recommended['2.4GHz'] : null;
+
+    // Only show 2.4GHz non-overlapping channels (1, 6, 11)
+    const channels = [1, 6, 11];
+    let html = '';
+
+    channels.forEach(ch => {
+        const score = scores[ch] || { score: 0, networks_count: 0 };
+        const isRecommended = ch === recommended;
+        const congestionLevel = score.score < 20 ? 'low' : score.score < 50 ? 'medium' : 'high';
+
+        const cardClass = isRecommended ? 'stat-card success' :
+                         congestionLevel === 'low' ? 'stat-card' :
+                         congestionLevel === 'medium' ? 'stat-card warning' : 'stat-card danger';
+
+        html += `
+            <div class="${cardClass}" style="cursor: pointer; text-align: center;"
+                 onclick="selectChannel(${ch})" title="Click to select channel ${ch}">
+                <div class="stat-value" style="font-size: 1.5rem;">CH ${ch}</div>
+                <div class="stat-label">
+                    ${score.networks_count} networks<br>
+                    Score: ${score.score.toFixed(0)}
+                    ${isRecommended ? '<br><strong>BEST</strong>' : ''}
+                </div>
+            </div>
+        `;
+    });
+
+    // Add detected networks summary
+    const networks = data.networks || [];
+    html += `
+        <div class="stat-card info" style="text-align: center;">
+            <div class="stat-value" style="font-size: 1.5rem;">${networks.length}</div>
+            <div class="stat-label">Total Networks<br>Detected</div>
+        </div>
+    `;
+
+    container.innerHTML = html;
+
+    // Update recommended in header
+    if (data.recommended) {
+        document.getElementById('offline-channel').textContent = recommended || '--';
+    }
+}
+
+async function selectChannel(channel) {
+    if (!confirm(`Change AP to channel ${channel}? This will briefly disconnect clients.`)) {
+        return;
+    }
+
+    showToast(`Switching to channel ${channel}...`, 'info');
+    try {
+        const result = await apiPost('/config/offline/channel', { channel });
+        if (result.success) {
+            showToast(`Switched to channel ${channel}`, 'success');
+            refreshOfflineStatus();
+        } else {
+            showToast(result.error || 'Channel change failed', 'error');
+        }
+    } catch (error) {
+        showToast('Channel change failed', 'error');
+    }
+}
+
+async function autoSelectChannel() {
+    showToast('Scanning for best channel...', 'info');
+    try {
+        const result = await apiPost('/config/offline/channel', { channel: 'auto' });
+        if (result.success) {
+            showToast(`Auto-selected channel ${result.channel}`, 'success');
+            refreshOfflineStatus();
+            scanChannels();
+        } else {
+            showToast(result.error || 'Auto-select failed', 'error');
+        }
+    } catch (error) {
+        showToast('Auto-select failed', 'error');
+    }
+}
+
+async function fixEth0Dhcp() {
+    showToast('Fixing eth0 DHCP...', 'info');
+    try {
+        const result = await apiPost('/config/offline/fix-eth0');
+        if (result.success) {
+            showToast(result.message || 'eth0 DHCP fixed', 'success');
+            refreshOfflineStatus();
+            loadRouteMetrics();
+        } else {
+            showToast(result.message || 'DHCP fix failed', 'error');
+        }
+    } catch (error) {
+        showToast('DHCP fix failed', 'error');
+    }
+}
+
+async function configureRouteMetrics() {
+    showToast('Configuring route metrics...', 'info');
+    try {
+        const result = await apiPost('/config/offline/route-metrics');
+        if (result.success) {
+            showToast('Route metrics configured', 'success');
+            loadRouteMetrics();
+        } else {
+            showToast(result.error || 'Configuration failed', 'error');
+        }
+    } catch (error) {
+        showToast('Configuration failed', 'error');
+    }
+}
+
+async function loadRouteMetrics() {
+    try {
+        const result = await apiGet('/config/offline/route-metrics');
+        if (result.success) {
+            renderRouteMetrics(result);
+        }
+    } catch (error) {
+        console.error('Failed to load route metrics:', error);
+    }
+}
+
+function renderRouteMetrics(data) {
+    const tbody = document.getElementById('route-metrics-body');
+    const routes = data.routes || [];
+
+    if (routes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No default routes configured</td></tr>';
+        return;
+    }
+
+    let html = '';
+    routes.forEach((route, index) => {
+        const priority = index === 0 ? 'Primary' : `Fallback ${index}`;
+        const priorityClass = index === 0 ? 'badge-success' : 'badge-secondary';
+
+        html += `
+            <tr>
+                <td><strong>${route.interface || 'unknown'}</strong></td>
+                <td><code>${route.gateway || 'N/A'}</code></td>
+                <td>${route.metric || 0}</td>
+                <td><span class="badge ${priorityClass}">${priority}</span></td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = html;
+}
+
+// =========================================================================
+// WIFI & HOTSPOT FUNCTIONS
+// =========================================================================
+
 async function connectToWifi(e) {
     e.preventDefault();
     const ssid = document.getElementById('wifi-ssid').value;
@@ -196,4 +552,13 @@ async function restartHotspot() {
         showToast('Failed to restart hotspot', 'error');
     }
 }
+
+// Load offline status on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Delay to ensure tab is visible
+    setTimeout(() => {
+        refreshOfflineStatus();
+        loadRouteMetrics();
+    }, 500);
+});
 </script>
