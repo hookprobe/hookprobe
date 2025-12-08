@@ -157,10 +157,12 @@ a:hover {
 }
 
 .header-title h1 {
-    font-size: 1.125rem;
+    font-size: 1.5rem;
     color: var(--text-white);
     margin: 0;
     line-height: 1.2;
+    font-weight: 600;
+    letter-spacing: 0.5px;
 }
 
 .header-title .tagline {
