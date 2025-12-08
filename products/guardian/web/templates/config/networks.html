@@ -62,15 +62,20 @@
         <div style="margin-top: var(--spacing-lg);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
                 <h4 style="margin: 0;">WiFi Channel</h4>
-                <button class="btn btn-sm btn-primary" onclick="autoSelectChannel()">
-                    Find Best Channel
+                <button class="btn btn-sm btn-secondary" onclick="refreshChannelData()">
+                    Refresh
                 </button>
             </div>
             <p class="text-muted" style="font-size: 0.8125rem; margin-bottom: var(--spacing-md);">
-                The AP automatically selects the least congested channel on startup. Click "Find Best Channel" to rescan and switch to a better channel if needed.
+                Channel is automatically selected at AP startup. Current utilization shown below (live data, no disconnection).
             </p>
             <div id="channel-analysis" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-sm);">
                 <!-- Populated by JavaScript -->
+            </div>
+            <div style="margin-top: var(--spacing-md); padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm); border-left: 3px solid var(--hp-amber);">
+                <small class="text-muted">
+                    <strong>Note:</strong> Changing channels will briefly restart the AP and disconnect clients for a few seconds.
+                </small>
             </div>
         </div>
     </div>
@@ -427,22 +432,19 @@ async function initOfflineMode() {
     }
 }
 
-async function scanChannels() {
+async function refreshChannelData() {
     const container = document.getElementById('channel-analysis');
-    container.innerHTML = '<div class="empty-state"><p class="text-muted">Scanning...</p></div>';
+    container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading channel data...</p></div>';
 
     try {
         const result = await apiPost('/config/offline/scan');
         if (result.success) {
             renderChannelAnalysis(result);
-            showToast('Channel scan complete', 'success');
         } else {
-            container.innerHTML = '<div class="empty-state"><p class="text-muted">Scan failed</p></div>';
-            showToast(result.error || 'Scan failed', 'error');
+            container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load channel data</p></div>';
         }
     } catch (error) {
-        container.innerHTML = '<div class="empty-state"><p class="text-muted">Scan failed</p></div>';
-        showToast('Channel scan failed', 'error');
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load channel data</p></div>';
     }
 }
 
@@ -450,47 +452,52 @@ function renderChannelAnalysis(data) {
     const container = document.getElementById('channel-analysis');
     const scores = data.channel_scores || {};
     const recommended = data.recommended ? data.recommended['2.4GHz'] : null;
+    const currentChannel = data.current_channel || 6;
 
     // Only show 2.4GHz non-overlapping channels (1, 6, 11)
     const channels = [1, 6, 11];
     let html = '';
 
     channels.forEach(ch => {
-        const score = scores[ch] || { score: 0, networks_count: 0 };
-        const isRecommended = ch === recommended;
-        const congestionLevel = score.score < 20 ? 'low' : score.score < 50 ? 'medium' : 'high';
+        const score = scores[ch] || scores[String(ch)] || { score: 0, utilization: 0 };
+        const isCurrent = ch === currentChannel;
+        const isRecommended = ch === recommended && !isCurrent;
 
-        const cardClass = isRecommended ? 'stat-card success' :
-                         congestionLevel === 'low' ? 'stat-card' :
-                         congestionLevel === 'medium' ? 'stat-card warning' : 'stat-card danger';
+        // Determine card style based on utilization
+        let cardClass = 'stat-card';
+        if (isCurrent) {
+            cardClass = 'stat-card success';
+        } else if (isRecommended) {
+            cardClass = 'stat-card info';
+        } else if (score.utilization > 50) {
+            cardClass = 'stat-card danger';
+        } else if (score.utilization > 25) {
+            cardClass = 'stat-card warning';
+        }
+
+        const utilization = score.utilization || 0;
+        const noise = score.noise || '--';
 
         html += `
             <div class="${cardClass}" style="cursor: pointer; text-align: center;"
-                 onclick="selectChannel(${ch})" title="Click to select channel ${ch}">
+                 onclick="selectChannel(${ch})" title="Click to switch to channel ${ch}">
                 <div class="stat-value" style="font-size: 1.5rem;">CH ${ch}</div>
                 <div class="stat-label">
-                    ${score.networks_count} networks<br>
-                    Score: ${score.score.toFixed(0)}
-                    ${isRecommended ? '<br><strong>BEST</strong>' : ''}
+                    ${isCurrent ? '<strong style="color: var(--hp-green);">ACTIVE</strong><br>' : ''}
+                    ${isRecommended ? '<strong style="color: var(--hp-primary);">BEST</strong><br>' : ''}
+                    ${utilization > 0 ? `${utilization.toFixed(0)}% busy` : 'No data'}
+                    ${noise !== '--' ? `<br>${noise} dBm` : ''}
                 </div>
             </div>
         `;
     });
 
-    // Add detected networks summary
-    const networks = data.networks || [];
-    html += `
-        <div class="stat-card info" style="text-align: center;">
-            <div class="stat-value" style="font-size: 1.5rem;">${networks.length}</div>
-            <div class="stat-label">Total Networks<br>Detected</div>
-        </div>
-    `;
-
     container.innerHTML = html;
 
-    // Update recommended in header
-    if (data.recommended) {
-        document.getElementById('offline-channel').textContent = recommended || '--';
+    // Update header stats
+    document.getElementById('offline-channel').textContent = currentChannel;
+    if (data.networks_detected !== undefined) {
+        document.getElementById('offline-networks').textContent = data.networks_detected || 'N/A';
     }
 }
 
@@ -514,33 +521,9 @@ async function selectChannel(channel) {
 }
 
 async function autoSelectChannel() {
-    const container = document.getElementById('channel-analysis');
-    container.innerHTML = '<div class="empty-state" style="text-align: center;"><p class="text-muted">Scanning RF environment...</p></div>';
-    showToast('Scanning for best channel...', 'info');
-
-    try {
-        // First scan to get channel data
-        const scanResult = await apiPost('/config/offline/scan');
-        if (scanResult.success) {
-            // Show the scan results
-            renderChannelAnalysis(scanResult);
-
-            // Then auto-select the best channel
-            const selectResult = await apiPost('/config/offline/channel', { channel: 'auto' });
-            if (selectResult.success) {
-                showToast(`Switched to channel ${selectResult.channel} (least congested)`, 'success');
-                refreshOfflineStatus();
-            } else {
-                showToast(selectResult.error || 'Channel switch failed', 'error');
-            }
-        } else {
-            container.innerHTML = '<div class="empty-state"><p class="text-muted">No channel data available</p></div>';
-            showToast(scanResult.error || 'Scan failed', 'error');
-        }
-    } catch (error) {
-        container.innerHTML = '<div class="empty-state"><p class="text-muted">Scan failed</p></div>';
-        showToast('Auto-select failed', 'error');
-    }
+    // This function is kept for backwards compatibility but now just refreshes data
+    // Channel changes are done via selectChannel() which has a confirmation dialog
+    refreshChannelData();
 }
 
 async function loadRouteMetrics() {
@@ -713,17 +696,10 @@ async function saveEth0Config(e) {
     }
 }
 
-// Load initial channel display
+// Load initial channel display with actual data
 function initChannelDisplay() {
-    const container = document.getElementById('channel-analysis');
-    // Show placeholder with current channel info
-    const channels = [1, 6, 11];
-    container.innerHTML = channels.map(ch => `
-        <div class="stat-card" style="text-align: center; padding: var(--spacing-sm);">
-            <div style="font-size: 1.25rem; font-weight: 700;">CH ${ch}</div>
-            <div class="text-muted" style="font-size: 0.75rem;">--</div>
-        </div>
-    `).join('');
+    // Load channel data immediately
+    refreshChannelData();
 }
 
 // Load offline status on page load
