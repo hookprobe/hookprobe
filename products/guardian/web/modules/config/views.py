@@ -185,17 +185,43 @@ def api_hotspot_restart():
 
 @config_bp.route('/interfaces')
 def api_interfaces():
-    """Get network interface information."""
+    """Get network interface information (physical interfaces only)."""
     try:
         interfaces = []
+
+        # Virtual/bridge interfaces to hide from the UI
+        # These are internal networking interfaces not relevant to users
+        HIDDEN_INTERFACES = {
+            'lo',           # Loopback
+            'podman0',      # Podman default bridge
+            'docker0',      # Docker default bridge
+            'virbr0',       # Libvirt default bridge
+            'guardian',     # OVS bridge for VXLAN/SDN
+            'br-guardian',  # OVS bridge variant
+            'br-sdn',       # SDN bridge
+        }
+
+        # Prefixes for virtual interfaces to skip
+        VIRTUAL_PREFIXES = (
+            'veth',         # Container virtual ethernet
+            'cni',          # Container network interface
+            'flannel',      # Kubernetes networking
+            'cali',         # Calico networking
+            'tunl',         # Tunnel interfaces
+            'dummy',        # Dummy interfaces
+        )
 
         # Get list of interfaces from /sys/class/net
         import os
         net_dir = '/sys/class/net'
         if os.path.exists(net_dir):
             for iface in os.listdir(net_dir):
-                # Skip loopback
-                if iface == 'lo':
+                # Skip hidden interfaces
+                if iface in HIDDEN_INTERFACES:
+                    continue
+
+                # Skip virtual interface prefixes
+                if iface.startswith(VIRTUAL_PREFIXES):
                     continue
 
                 try:
@@ -233,6 +259,10 @@ def api_interfaces():
                         role = 'LAN (AP)'
                     elif iface.startswith('br'):
                         role = 'Bridge'
+                    elif iface.startswith('enp') or iface.startswith('eno'):
+                        role = 'Ethernet'
+                    elif iface.startswith('wlp'):
+                        role = 'WiFi'
 
                     interfaces.append({
                         'name': iface,
