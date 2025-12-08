@@ -229,11 +229,11 @@ class OfflineModeManager:
         """Lazy load WiFi scanner"""
         if self._scanner is None:
             try:
-                from wifi_channel_scanner import WiFiChannelScanner
+                from shared.wireless import WiFiChannelScanner
                 self._scanner = WiFiChannelScanner(interface=self.config.ap_interface)
             except ImportError:
-                # Try relative import
                 try:
+                    # Fallback for local imports
                     from .wifi_channel_scanner import WiFiChannelScanner
                     self._scanner = WiFiChannelScanner(interface=self.config.ap_interface)
                 except ImportError:

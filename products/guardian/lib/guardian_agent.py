@@ -34,12 +34,17 @@ from dataclasses import dataclass, field
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from layer_threat_detector import LayerThreatDetector, OSILayer, ThreatSeverity
-    from mobile_network_protection import MobileNetworkProtection, NetworkTrustLevel
+    from core.threat_detection import LayerThreatDetector, OSILayer, ThreatSeverity
+    from shared.mobile_security import MobileNetworkProtection, NetworkTrustLevel
 except ImportError:
-    # Fallback for when running standalone
-    LayerThreatDetector = None
-    MobileNetworkProtection = None
+    try:
+        # Fallback for local imports
+        from .layer_threat_detector import LayerThreatDetector, OSILayer, ThreatSeverity
+        from .mobile_network_protection import MobileNetworkProtection, NetworkTrustLevel
+    except ImportError:
+        # Last resort fallback
+        LayerThreatDetector = None
+        MobileNetworkProtection = None
 
 
 @dataclass
