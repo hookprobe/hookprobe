@@ -22,8 +22,9 @@ License: MIT
 import subprocess
 import re
 import logging
+import shlex
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from enum import Enum
 from collections import defaultdict
 
@@ -109,11 +110,17 @@ class WiFiChannelScanner:
         self.networks: List[DetectedNetwork] = []
         self.channel_usage: Dict[int, List[DetectedNetwork]] = defaultdict(list)
 
-    def _run_command(self, cmd: str, timeout: int = 30) -> Tuple[str, bool]:
-        """Run shell command safely"""
+    def _run_command(self, cmd: Union[str, List[str]], timeout: int = 30) -> Tuple[str, bool]:
+        """Run command safely without shell=True to prevent command injection"""
         try:
+            # Convert string to list for safe execution
+            if isinstance(cmd, str):
+                cmd_list = shlex.split(cmd)
+            else:
+                cmd_list = cmd
+
             result = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                cmd_list, capture_output=True,
                 text=True, timeout=timeout
             )
             return result.stdout.strip(), result.returncode == 0
