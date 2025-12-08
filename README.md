@@ -564,13 +564,45 @@ HookProbe v5.0 "Liberty" prioritizes **energy-efficient security** for edge depl
 
 ---
 
+## Licensing
+
+HookProbe uses a **dual licensing model** to balance open-source community benefits with intellectual property protection.
+
+### Open Source (AGPL v3.0)
+
+| Component | Location |
+|-----------|----------|
+| Deployment scripts | `deploy/` |
+| Guardian product | `products/guardian/` |
+| Threat response | `shared/response/` |
+| Mesh communication | `shared/mesh/` |
+| HTP base protocol | `core/htp/` |
+| Documentation | `docs/` |
+
+### Proprietary (Commercial License Required for SaaS/OEM)
+
+| Innovation | Location |
+|------------|----------|
+| Qsecbit AI Algorithm | `core/qsecbit/` |
+| Neural Resonance Protocol | `core/neuro/` |
+| dnsXai ML Classifier | `shared/dnsXai/` |
+| DSM Consensus | `shared/dsm/` |
+| MSSP Cloud Platform | `products/mssp/` |
+
+**Free for**: Personal use, internal business protection
+**Commercial license for**: MSSPs, SaaS providers, OEM integrations
+
+See **[LICENSING.md](LICENSING.md)** for full details. Contact: qsecbit@hookprobe.com
+
+---
+
 ## Join the Movement
 
 **For Users**: Deploy a $75 edge node. Your threats train the global AI. Protection improves daily.
 
-**For Developers**: MIT license. Build PODs, integrate services, research novel crypto+AI.
+**For Developers**: AGPL open source. Build PODs, integrate services, research novel crypto+AI.
 
-**For MSSPs**: 10x customers on same infrastructure. Neural cryptography no competitor has.
+**For MSSPs**: Commercial licenses available. 10x customers on same infrastructure.
 
 **For Researchers**: New cryptographic primitives. Continuous authentication. Academia partnership.
 
@@ -595,10 +627,10 @@ By 2030:
 
 <p align="center">
   <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em><br>
-  <strong>HookProbe v5.0 "Liberty"</strong> · MIT License<br><br>
+  <strong>HookProbe v5.0 "Liberty"</strong> · <a href="LICENSING.md">Dual Licensed (AGPL v3.0 + Commercial)</a><br><br>
   <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
   <a href="https://hookprobe.com">Website</a> ·
-  <a href="mailto:qsecbit@hookprobe.com">Security</a>
+  <a href="mailto:qsecbit@hookprobe.com">Licensing</a>
 </p>
 
 ---

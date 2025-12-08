@@ -1,0 +1,73 @@
+HookProbe MSSP Cloud Platform - Proprietary License
+Copyright (C) 2024-2025 HookProbe Contributors
+All Rights Reserved.
+
+================================================================================
+
+PROPRIETARY SOFTWARE LICENSE
+
+This software and associated documentation files (the "Software") are
+proprietary to HookProbe and its contributors. The Software is protected by
+copyright law and international treaties.
+
+GRANT OF LICENSE
+
+This Software is licensed ONLY under commercial terms. Personal and internal
+business use is NOT permitted without a commercial license agreement.
+
+RESTRICTIONS
+
+You may NOT:
+
+1. USE the Software without a valid commercial license
+2. Redistribute, sublicense, or transfer the Software to third parties
+3. Offer the Software as a service (SaaS) to third parties
+4. Modify, adapt, or create derivative works of the Software
+5. Reverse engineer, decompile, or disassemble the Software
+6. Remove or alter any proprietary notices, labels, or marks
+7. Use the Software in any manner that competes with HookProbe
+
+COMMERCIAL LICENSE REQUIRED FOR ALL USE:
+
+The MSSP Cloud Platform is commercial-only software. A valid license agreement
+is required for:
+
+- Self-hosted MSSP deployments
+- Multi-tenant security service offerings
+- White-label security platforms
+- OEM/embedding in commercial products
+- Any form of redistribution or use
+
+PROTECTED INNOVATIONS:
+
+This directory contains the following proprietary innovations:
+- Complete MSSP Django web portal
+- Multi-tenant dashboard and management
+- Device registry and fleet management
+- Customer onboarding workflows
+- VPN service provisioning APIs
+- SDN management APIs
+- Security dashboard and monitoring
+- AI-generated content services
+- Merchandise/product catalog system
+- Geolocation services
+- All Django apps and REST APIs
+- Database schemas and business logic
+
+DISCLAIMER
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+CONTACT
+
+For commercial licensing inquiries: qsecbit@hookprobe.com
+For more information: see LICENSING.md in the project root
+
+================================================================================
+HookProbe v5.0 "Liberty" - Federated Cybersecurity Mesh
