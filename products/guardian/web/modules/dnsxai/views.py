@@ -22,6 +22,17 @@ except ImportError as e:
     ML_AVAILABLE = False
     logging.warning(f"ML engine not available: {e}")
 
+# Packet Inspector imports
+try:
+    from .packet_inspector import (
+        get_packet_detector, get_dns_analyzer,
+        PacketAdDetector, DNSResponseAnalyzer
+    )
+    PACKET_INSPECTOR_AVAILABLE = True
+except ImportError as e:
+    PACKET_INSPECTOR_AVAILABLE = False
+    logging.warning(f"Packet inspector not available: {e}")
+
 # DNS Shield paths (actual system paths)
 DNS_SHIELD_DIR = '/opt/hookprobe/guardian/dns-shield'
 DNS_SHIELD_CONFIG = f'{DNS_SHIELD_DIR}/shield.conf'
@@ -803,3 +814,285 @@ def _parse_browsing_history(hours: int = 24, limit: int = 5000) -> list:
         logging.error(f"Failed to parse browsing history: {e}")
 
     return domains
+
+
+# =============================================================================
+# PACKET-LEVEL AD DETECTION ENDPOINTS
+# =============================================================================
+
+@dnsxai_bp.route('/packet/status')
+def api_packet_status():
+    """Get packet-level ad detection status and statistics."""
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'available': False,
+            'error': 'Packet inspector not available'
+        })
+
+    try:
+        detector = get_packet_detector()
+        stats = detector.get_stats()
+
+        return jsonify({
+            'success': True,
+            'available': True,
+            **stats
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/check/domain', methods=['POST'])
+def api_packet_check_domain():
+    """
+    Check if a domain matches known ad/tracker patterns.
+    Uses SNI pattern matching against known ad networks.
+    """
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
+
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+
+        if not domain:
+            return jsonify({'success': False, 'error': 'Domain required'}), 400
+
+        detector = get_packet_detector()
+        result = detector.check_sni(domain)
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/check/ip', methods=['POST'])
+def api_packet_check_ip():
+    """
+    Check if an IP belongs to a known ad network.
+    Uses IP reputation database with known ad network CIDR ranges.
+    """
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
+
+    try:
+        data = request.get_json()
+        ip = data.get('ip', '').strip()
+
+        if not ip:
+            return jsonify({'success': False, 'error': 'IP address required'}), 400
+
+        detector = get_packet_detector()
+        result = detector.check_ip(ip)
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/analyze/dns', methods=['POST'])
+def api_packet_analyze_dns():
+    """
+    Analyze a DNS response for ad indicators.
+    Checks domain patterns, resolved IPs, and CNAME chains.
+    """
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
+
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+        ip_addresses = data.get('ips', [])
+        cnames = data.get('cnames', [])
+        ttl = data.get('ttl', 0)
+
+        if not domain:
+            return jsonify({'success': False, 'error': 'Domain required'}), 400
+
+        analyzer = get_dns_analyzer()
+        result = analyzer.analyze_dns_response(
+            domain=domain,
+            ip_addresses=ip_addresses,
+            cnames=cnames,
+            ttl=ttl
+        )
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/analyze/connection', methods=['POST'])
+def api_packet_analyze_connection():
+    """
+    Analyze a network connection for ad/tracking activity.
+    Full analysis including IP reputation, SNI, and traffic patterns.
+    """
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
+
+    try:
+        data = request.get_json()
+        dst_ip = data.get('dst_ip', '').strip()
+        dst_port = data.get('dst_port', 443)
+        payload_size = data.get('payload_size', 0)
+        content_type = data.get('content_type')
+
+        if not dst_ip:
+            return jsonify({'success': False, 'error': 'Destination IP required'}), 400
+
+        detector = get_packet_detector()
+        result = detector.analyze_connection(
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            payload_size=payload_size,
+            content_type=content_type
+        )
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/detections')
+def api_packet_detections():
+    """Get recent packet-level ad detections."""
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({'success': False, 'detections': [], 'error': 'Packet inspector not available'})
+
+    try:
+        limit = request.args.get('limit', 50, type=int)
+
+        detector = get_packet_detector()
+        detections = detector.get_recent_detections(limit)
+
+        return jsonify({
+            'success': True,
+            'detections': detections,
+            'count': len(detections)
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/ip/block', methods=['POST'])
+def api_packet_block_ip():
+    """Add an IP to the blocked ad network list."""
+    if not PACKET_INSPECTOR_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
+
+    try:
+        data = request.get_json()
+        ip = data.get('ip', '').strip()
+        reason = data.get('reason', 'User blocked')
+
+        if not ip:
+            return jsonify({'success': False, 'error': 'IP address required'}), 400
+
+        detector = get_packet_detector()
+        detector.ip_db.add_blocked_ip(ip, reason)
+
+        return jsonify({
+            'success': True,
+            'message': f'IP {ip} added to blocked list'
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@dnsxai_bp.route('/packet/combined/check', methods=['POST'])
+def api_combined_ad_check():
+    """
+    Combined ML + Packet analysis for comprehensive ad detection.
+    Uses both domain classification and packet-level analysis.
+    """
+    try:
+        data = request.get_json()
+        domain = data.get('domain', '').strip().lower()
+        ip = data.get('ip', '').strip()
+
+        if not domain and not ip:
+            return jsonify({'success': False, 'error': 'Domain or IP required'}), 400
+
+        result = {
+            'domain': domain,
+            'ip': ip,
+            'is_ad': False,
+            'confidence': 0.0,
+            'methods_used': [],
+            'details': {}
+        }
+
+        total_score = 0.0
+        method_count = 0
+
+        # ML classification (if available and domain provided)
+        if ML_AVAILABLE and domain:
+            try:
+                classifier = get_classifier()
+                ml_result = classifier.predict(domain)
+                result['details']['ml_classification'] = ml_result
+                result['methods_used'].append('ml_classification')
+
+                if ml_result.get('is_suspicious'):
+                    total_score += ml_result.get('threat_score', 0) * 0.4
+                    method_count += 1
+            except Exception as e:
+                logging.warning(f"ML classification failed: {e}")
+
+        # Packet-level analysis (if available)
+        if PACKET_INSPECTOR_AVAILABLE:
+            detector = get_packet_detector()
+
+            # Check domain against SNI patterns
+            if domain:
+                sni_result = detector.check_sni(domain)
+                result['details']['sni_check'] = sni_result
+                result['methods_used'].append('sni_pattern')
+
+                if sni_result.get('is_ad'):
+                    total_score += 0.6
+                    method_count += 1
+
+            # Check IP reputation
+            if ip:
+                ip_result = detector.check_ip(ip)
+                result['details']['ip_check'] = ip_result
+                result['methods_used'].append('ip_reputation')
+
+                if ip_result.get('is_ad'):
+                    total_score += 0.5
+                    method_count += 1
+
+        # Calculate final score
+        if method_count > 0:
+            result['confidence'] = min(total_score, 1.0)
+            result['is_ad'] = result['confidence'] > 0.4
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
