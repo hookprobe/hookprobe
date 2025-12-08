@@ -78,12 +78,6 @@
                 <button class="btn btn-secondary" onclick="autoSelectChannel()">
                     Auto-Select Best Channel
                 </button>
-                <button class="btn btn-secondary" onclick="fixEth0Dhcp()">
-                    Fix eth0 DHCP
-                </button>
-                <button class="btn btn-secondary" onclick="configureRouteMetrics()">
-                    Configure Route Metrics
-                </button>
             </div>
         </div>
     </div>
@@ -247,6 +241,64 @@
                 </tbody>
             </table>
         </div>
+    </div>
+</div>
+
+<!-- eth0 Configuration -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/>
+            </svg>
+            eth0 Configuration (WAN Primary)
+        </h3>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-bottom: var(--spacing-md);">
+            Configure eth0 as DHCP (automatic) or set a static IP address. eth0 is the primary WAN interface with highest priority.
+        </p>
+        <form id="eth0-config-form" onsubmit="saveEth0Config(event)">
+            <div style="margin-bottom: var(--spacing-md);">
+                <label class="form-label">IP Configuration Mode</label>
+                <div style="display: flex; gap: var(--spacing-lg);">
+                    <label class="toggle" style="cursor: pointer;">
+                        <input type="radio" name="eth0-mode" value="dhcp" id="eth0-mode-dhcp" checked onchange="toggleEth0Mode()">
+                        <span style="margin-left: var(--spacing-xs);">DHCP (Automatic)</span>
+                    </label>
+                    <label class="toggle" style="cursor: pointer;">
+                        <input type="radio" name="eth0-mode" value="static" id="eth0-mode-static" onchange="toggleEth0Mode()">
+                        <span style="margin-left: var(--spacing-xs);">Static (Manual)</span>
+                    </label>
+                </div>
+            </div>
+            <div id="eth0-static-config" style="display: none;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--spacing-md);">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">IP Address</label>
+                        <input type="text" class="form-input" id="eth0-ip" placeholder="192.168.1.100" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Subnet Mask</label>
+                        <input type="text" class="form-input" id="eth0-netmask" placeholder="255.255.255.0" value="255.255.255.0">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Gateway</label>
+                        <input type="text" class="form-input" id="eth0-gateway" placeholder="192.168.1.1" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">DNS Server</label>
+                        <input type="text" class="form-input" id="eth0-dns" placeholder="8.8.8.8" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                    </div>
+                </div>
+            </div>
+            <div id="eth0-current-config" style="margin-top: var(--spacing-md); padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <small class="text-muted">Current: <span id="eth0-current-mode">Loading...</span> - <span id="eth0-current-ip">--</span></small>
+            </div>
+            <div class="card-footer" style="border-top: none; padding-top: var(--spacing-lg);">
+                <button type="submit" class="btn btn-primary">Apply Configuration</button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -484,37 +536,6 @@ async function autoSelectChannel() {
     }
 }
 
-async function fixEth0Dhcp() {
-    showToast('Fixing eth0 DHCP...', 'info');
-    try {
-        const result = await apiPost('/config/offline/fix-eth0');
-        if (result.success) {
-            showToast(result.message || 'eth0 DHCP fixed', 'success');
-            refreshOfflineStatus();
-            loadRouteMetrics();
-        } else {
-            showToast(result.message || 'DHCP fix failed', 'error');
-        }
-    } catch (error) {
-        showToast('DHCP fix failed', 'error');
-    }
-}
-
-async function configureRouteMetrics() {
-    showToast('Configuring route metrics...', 'info');
-    try {
-        const result = await apiPost('/config/offline/route-metrics');
-        if (result.success) {
-            showToast('Route metrics configured', 'success');
-            loadRouteMetrics();
-        } else {
-            showToast(result.error || 'Configuration failed', 'error');
-        }
-    } catch (error) {
-        showToast('Configuration failed', 'error');
-    }
-}
-
 async function loadRouteMetrics() {
     try {
         const result = await apiGet('/config/offline/route-metrics');
@@ -536,9 +557,10 @@ function renderRouteMetrics(data) {
     }
 
     let html = '';
-    routes.forEach((route, index) => {
-        const priority = index === 0 ? 'Primary' : `Fallback ${index}`;
-        const priorityClass = index === 0 ? 'badge-success' : 'badge-secondary';
+    routes.forEach((route) => {
+        // Use role from API: 'Primary' for eth0, 'Fallback' for wlan0
+        const priority = route.role || 'Unknown';
+        const priorityClass = priority === 'Primary' ? 'badge-success' : 'badge-secondary';
 
         html += `
             <tr>
@@ -607,12 +629,90 @@ async function restartHotspot() {
     }
 }
 
+// =========================================================================
+// ETH0 CONFIGURATION FUNCTIONS
+// =========================================================================
+
+function toggleEth0Mode() {
+    const staticMode = document.getElementById('eth0-mode-static').checked;
+    const staticConfig = document.getElementById('eth0-static-config');
+    staticConfig.style.display = staticMode ? 'block' : 'none';
+}
+
+async function loadEth0Config() {
+    try {
+        const result = await apiGet('/config/eth0/config');
+        if (result.success) {
+            // Update current status display
+            const modeEl = document.getElementById('eth0-current-mode');
+            const ipEl = document.getElementById('eth0-current-ip');
+
+            modeEl.textContent = result.mode === 'dhcp' ? 'DHCP' : 'Static';
+            ipEl.textContent = result.ip || '--';
+
+            // Set radio button based on current mode
+            if (result.mode === 'static') {
+                document.getElementById('eth0-mode-static').checked = true;
+                document.getElementById('eth0-static-config').style.display = 'block';
+                // Fill in current values if static
+                if (result.ip) document.getElementById('eth0-ip').value = result.ip;
+                if (result.netmask) document.getElementById('eth0-netmask').value = result.netmask;
+                if (result.gateway) document.getElementById('eth0-gateway').value = result.gateway;
+                if (result.dns) document.getElementById('eth0-dns').value = result.dns;
+            } else {
+                document.getElementById('eth0-mode-dhcp').checked = true;
+                document.getElementById('eth0-static-config').style.display = 'none';
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load eth0 config:', error);
+    }
+}
+
+async function saveEth0Config(e) {
+    e.preventDefault();
+
+    const mode = document.getElementById('eth0-mode-static').checked ? 'static' : 'dhcp';
+    const data = { mode };
+
+    if (mode === 'static') {
+        data.ip = document.getElementById('eth0-ip').value;
+        data.netmask = document.getElementById('eth0-netmask').value;
+        data.gateway = document.getElementById('eth0-gateway').value;
+        data.dns = document.getElementById('eth0-dns').value;
+
+        // Validate required fields for static
+        if (!data.ip || !data.gateway) {
+            showToast('IP address and gateway are required for static configuration', 'error');
+            return;
+        }
+    }
+
+    showToast('Applying eth0 configuration...', 'info');
+
+    try {
+        const result = await apiPost('/config/eth0/config', data);
+        if (result.success) {
+            showToast(result.message || 'eth0 configuration applied', 'success');
+            // Reload config and status
+            loadEth0Config();
+            refreshOfflineStatus();
+            loadRouteMetrics();
+        } else {
+            showToast(result.error || 'Configuration failed', 'error');
+        }
+    } catch (error) {
+        showToast('Configuration failed', 'error');
+    }
+}
+
 // Load offline status on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Delay to ensure tab is visible
     setTimeout(() => {
         refreshOfflineStatus();
         loadRouteMetrics();
+        loadEth0Config();
     }, 500);
 });
 </script>
