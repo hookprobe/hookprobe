@@ -805,6 +805,8 @@ def api_offline_route_metrics():
         output, _ = run_command(['ip', 'route', 'show', 'default'])
 
         routes = []
+        seen_interfaces = set()  # Track interfaces to deduplicate
+
         for line in output.split('\n'):
             if not line.strip():
                 continue
@@ -812,6 +814,20 @@ def api_offline_route_metrics():
             route = {'raw': line}
             if 'dev' in parts:
                 iface = parts[parts.index('dev') + 1]
+
+                # Skip bridge interfaces, virtual interfaces, and containers
+                if iface.startswith(('br', 'docker', 'podman', 'veth', 'virbr', 'guardian')):
+                    continue
+
+                # Only show eth0 and wlan0
+                if iface not in ['eth0', 'wlan0']:
+                    continue
+
+                # Skip duplicates - keep only first (lowest metric) route per interface
+                if iface in seen_interfaces:
+                    continue
+                seen_interfaces.add(iface)
+
                 route['interface'] = iface
                 # Set role based on interface
                 if iface == 'eth0':
@@ -820,16 +836,18 @@ def api_offline_route_metrics():
                     route['role'] = 'Fallback'
                 else:
                     route['role'] = 'Other'
+
             if 'via' in parts:
                 route['gateway'] = parts[parts.index('via') + 1]
             if 'metric' in parts:
                 route['metric'] = int(parts[parts.index('metric') + 1])
             else:
                 route['metric'] = 0  # No metric = highest priority
-            routes.append(route)
 
-        # Sort by metric and filter to only show eth0 and wlan0
-        routes = [r for r in routes if r.get('interface') in ['eth0', 'wlan0']]
+            if route.get('interface'):
+                routes.append(route)
+
+        # Sort by metric
         routes.sort(key=lambda x: x.get('metric', 0))
 
         return jsonify({
