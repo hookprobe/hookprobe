@@ -70,6 +70,8 @@ stop_services() {
         "guardian-waf"
         "guardian-zeek"
         "guardian-neuro"
+        # Offline mode service
+        "guardian-offline"
         # System services
         "hostapd"
         "dnsmasq"
@@ -107,6 +109,8 @@ remove_systemd_services() {
         "guardian-aggregator"
         "guardian-xdp"
         "guardian-zeek"
+        # Offline mode service
+        "guardian-offline"
     )
 
     for service in "${services[@]}"; do
@@ -284,6 +288,32 @@ remove_dnsmasq_config() {
     fi
 
     log_info "dnsmasq configuration removed"
+}
+
+# ============================================================
+# REMOVE OFFLINE MODE CONFIGURATION
+# ============================================================
+remove_offline_mode_config() {
+    log_step "Removing offline mode configuration..."
+
+    # Remove offline state files
+    rm -f /var/lib/guardian/offline_state.json 2>/dev/null || true
+    rm -f /opt/hookprobe/guardian/data/offline_state.json 2>/dev/null || true
+    rmdir /var/lib/guardian 2>/dev/null || true
+
+    # Remove generated hostapd configs from offline mode
+    rm -f /etc/hostapd/hostapd.conf.offline 2>/dev/null || true
+
+    # Restore original dhcpcd.conf if backed up
+    if [ -f /etc/dhcpcd.conf.guardian.bak ]; then
+        mv /etc/dhcpcd.conf.guardian.bak /etc/dhcpcd.conf
+        log_info "Restored original dhcpcd.conf"
+    fi
+
+    # Remove route metric configurations added by offline mode
+    # These are typically in dhcpcd.conf, so restoring backup handles this
+
+    log_info "Offline mode configuration removed"
 }
 
 # ============================================================
@@ -649,6 +679,7 @@ main() {
     remove_nftables_rules
     remove_hostapd_config
     remove_dnsmasq_config
+    remove_offline_mode_config
     remove_sysctl_settings
     remove_guardian_config
     remove_htp_data
@@ -671,12 +702,13 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, etc.)"
+    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, offline, etc.)"
     echo -e "  • Podman containers and volumes"
     echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • dnsXai ML models, training data, and Python packages"
     echo -e "  • Network bridges (br0)"
     echo -e "  • hostapd and dnsmasq configuration"
+    echo -e "  • Offline mode configuration and dhcpcd settings"
     echo -e "  • Guardian configuration (/etc/guardian/)"
     echo -e "  • HTP file transfer state and session keys"
     echo -e "  • nftables rules"
