@@ -2,7 +2,7 @@
 #
 # HookProbe Nexus Setup Script
 # Version: 5.0.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Nexus - ML/AI Heavy Computation Hub
 #
@@ -645,7 +645,7 @@ install_qsecbit_agent() {
 """
 QSecBit Nexus Agent - ML-Enhanced Implementation
 Version: 5.0.0
-License: MIT
+License: AGPL-3.0
 
 Nexus-enhanced QSecBit with:
 - ML-based anomaly detection

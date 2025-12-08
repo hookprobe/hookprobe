@@ -3,7 +3,7 @@
 # kali-response-scripts.sh
 # Automated attack mitigation scripts for Kali Linux container
 #
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 
 set -e  # Exit on error

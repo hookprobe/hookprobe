@@ -38,6 +38,7 @@
 ## Table of Contents
 
 - [Project Overview](#project-overview)
+- [Licensing](#licensing)
 - [Codebase Structure](#codebase-structure)
 - [Core Modules](#core-modules)
 - [Shared Infrastructure](#shared-infrastructure)
@@ -69,7 +70,7 @@ HookProbe is a **federated cybersecurity mesh** built for edge computing and dis
 **Primary Languages**: Python (core logic), Bash (deployment)
 **Web Frameworks**: Flask (Guardian), Django (MSSP)
 **Deployment**: Podman containers with OVS networking
-**License**: MIT (v5.0+)
+**License**: Dual Licensed (AGPL v3.0 + Commercial) - see [Licensing](#licensing)
 
 ### Product Tiers
 
@@ -83,12 +84,56 @@ HookProbe is a **federated cybersecurity mesh** built for edge computing and dis
 
 ---
 
+## Licensing
+
+HookProbe uses a **dual licensing model**. Understanding what license applies to which component is critical for AI assistants helping with the codebase.
+
+### Open Source Components (AGPL v3.0)
+
+These directories are open source and can be freely modified:
+
+| Component | Location | License |
+|-----------|----------|---------|
+| Deployment Scripts | `deploy/` | AGPL v3.0 |
+| Guardian Product | `products/guardian/` | AGPL v3.0 |
+| Threat Response | `shared/response/` | AGPL v3.0 |
+| Mesh Communication | `shared/mesh/` | AGPL v3.0 |
+| HTP Base Protocol | `core/htp/` | AGPL v3.0 |
+| Documentation | `docs/` | AGPL v3.0 |
+
+### Proprietary Components (Commercial License)
+
+These directories contain proprietary innovations. Commercial license required for SaaS/OEM use:
+
+| Innovation | Location | License |
+|------------|----------|---------|
+| **Qsecbit AI Algorithm** | `core/qsecbit/` | Proprietary |
+| **Neural Resonance Protocol** | `core/neuro/` | Proprietary |
+| **dnsXai ML Classifier** | `shared/dnsXai/` | Proprietary |
+| **DSM Consensus** | `shared/dsm/` | Proprietary |
+| **MSSP Cloud Platform** | `products/mssp/` | Proprietary |
+
+### Usage Guidelines
+
+| Use Case | License Required |
+|----------|------------------|
+| Personal/Home use | Free (AGPL + personal use of proprietary) |
+| Internal business protection | Free (AGPL + internal use of proprietary) |
+| MSSP/SaaS offering | Commercial License Required |
+| OEM/Product embedding | Commercial License Required |
+
+**Full details**: See `LICENSING.md` in project root
+**Contact**: qsecbit@hookprobe.com
+
+---
+
 ## Codebase Structure
 
 ```
 hookprobe/
 ├── CLAUDE.md                         # This file (AI assistant guide)
-├── LICENSE                           # MIT License
+├── LICENSE                           # AGPL v3.0 License
+├── LICENSING.md                      # Full licensing details (dual license)
 ├── Makefile                          # Development commands
 ├── pytest.ini                        # Test configuration
 ├── .pre-commit-config.yaml           # Pre-commit hooks

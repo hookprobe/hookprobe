@@ -2,7 +2,7 @@
 #
 # install.sh - HookProbe Unified Installer
 # Version: 5.0.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Capability-based installation menu with branded deployment tiers:
 #   - Sentinel   : Lightweight validator for constrained devices

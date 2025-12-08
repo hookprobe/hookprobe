@@ -3,7 +3,7 @@
 # backend-uninstall.sh
 # HookProbe MSSP Cloud Backend Removal
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 
 set -euo pipefail

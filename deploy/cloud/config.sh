@@ -3,7 +3,7 @@
 # backend-network-config.sh
 # HookProbe MSSP Cloud Backend Configuration
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # This configuration is for the centralized MSSP backend that receives
 # data from multiple edge HookProbe deployments.

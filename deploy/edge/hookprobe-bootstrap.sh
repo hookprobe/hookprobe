@@ -2,7 +2,7 @@
 #
 # hookprobe-bootstrap.sh - HookProbe Unified Bootstrap Installer
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # This script installs HookProbe as systemd services with automatic provisioning,
 # monitoring, and update capabilities.
