@@ -771,7 +771,7 @@ function updateDhcpLeasesGrid(leases, activeClients = []) {
                 </div>
                 <div class="device-actions">
                     <span class="badge ${statusBadge}">${statusText}</span>
-                    <button class="btn btn-sm btn-danger" onclick="disconnectClient('${lease.ip}')" title="Block this client">
+                    <button class="btn btn-sm btn-danger" onclick="disconnectClientByMac('${lease.mac}')" title="Disconnect and remove lease">
                         Disconnect
                     </button>
                 </div>
@@ -803,6 +803,24 @@ async function disconnectClient(ip) {
         const result = await apiPost(`/clients/block/${ip}`);
         if (result.success) {
             showToast(`Client ${ip} has been disconnected`, 'success');
+            loadClientsData(); // Refresh the list
+        } else {
+            showToast(result.error || 'Failed to disconnect client', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to disconnect client', 'error');
+    }
+}
+
+async function disconnectClientByMac(mac) {
+    if (!confirm(`Disconnect device ${mac}? This will deauthenticate from WiFi and remove the DHCP lease.`)) {
+        return;
+    }
+
+    try {
+        const result = await apiPost(`/clients/disconnect/${mac}`);
+        if (result.success) {
+            showToast(result.message || 'Client disconnected', 'success');
             loadClientsData(); // Refresh the list
         } else {
             showToast(result.error || 'Failed to disconnect client', 'error');
@@ -853,8 +871,27 @@ async function loadSystemData() {
 function updateSystemInfo(system) {
     updateElement('system-hostname', system.hostname || 'guardian');
     updateElement('system-uptime', system.uptime || '0:00');
-    updateElement('system-load', system.load ? system.load[0].toFixed(2) : '0.00');
-    updateElement('system-memory', `${system.memory?.percent || 0}%`);
+
+    // Load average - show all three values
+    if (system.load && Array.isArray(system.load)) {
+        const loadStr = system.load.map(l => l.toFixed(2)).join(' / ');
+        updateElement('system-load', loadStr);
+    } else {
+        updateElement('system-load', '0.00 / 0.00 / 0.00');
+    }
+
+    // Memory - show percentage and used/total
+    if (system.memory) {
+        const percent = system.memory.percent || 0;
+        const usedMB = Math.round((system.memory.used || 0) / (1024 * 1024));
+        const totalMB = Math.round((system.memory.total || 0) / (1024 * 1024));
+        updateElement('system-memory', `${percent}%`);
+        updateElement('system-memory-detail', `${usedMB} / ${totalMB} MB`);
+    } else {
+        updateElement('system-memory', '0%');
+        updateElement('system-memory-detail', '-- / -- MB');
+    }
+
     updateElement('system-temperature', `${(system.temperature || 0).toFixed(1)}°C`);
 
     // Update progress bars
