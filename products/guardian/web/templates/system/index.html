@@ -15,12 +15,24 @@
         <div class="stat-label">Uptime</div>
     </div>
     <div class="stat-card success">
-        <div class="stat-value" style="font-size: 1rem;" id="system-load">0.00</div>
-        <div class="stat-label">Load (1/5/15 min)</div>
+        <div class="stat-value" style="font-size: 1rem;" id="system-cpu">0%</div>
+        <div class="stat-label">CPU<br><span id="system-cpu-cores" style="font-size: 0.75rem; opacity: 0.8;">0 cores</span></div>
     </div>
     <div class="stat-card warning">
-        <div class="stat-value" style="font-size: 1rem;" id="system-memory">--</div>
-        <div class="stat-label">Memory<br><span id="system-memory-detail" style="font-size: 0.75rem; opacity: 0.8;">--</span></div>
+        <div class="stat-value" style="font-size: 1rem;" id="system-memory">0%</div>
+        <div class="stat-label">Memory<br><span id="system-memory-detail" style="font-size: 0.75rem; opacity: 0.8;">0 / 0 MB</span></div>
+    </div>
+</div>
+
+<!-- CPU Cores -->
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <div class="card-header">
+        <h3 class="card-title">CPU Usage by Core</h3>
+    </div>
+    <div class="card-body">
+        <div id="cpu-cores-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: var(--spacing-sm);">
+            <!-- Populated by JavaScript -->
+        </div>
     </div>
 </div>
 
