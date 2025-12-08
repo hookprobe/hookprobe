@@ -12,19 +12,42 @@ def api_info():
     try:
         info = get_system_info()
 
-        # Get disk usage
-        output, success = run_command("df -B1 / | tail -1 | awk '{print $2, $3, $5}'")
-        if success and output:
-            parts = output.split()
-            if len(parts) >= 3:
-                total = int(parts[0])
-                used = int(parts[1])
-                percent = int(parts[2].rstrip('%'))
-                info['disk'] = {
-                    'total': format_bytes(total),
-                    'used': format_bytes(used),
-                    'percent': percent
-                }
+        # Ensure load is a list of floats (fallback if not populated)
+        if not info.get('load') or info['load'] == [0, 0, 0]:
+            try:
+                with open('/proc/loadavg', 'r') as f:
+                    parts = f.read().split()
+                    info['load'] = [float(parts[0]), float(parts[1]), float(parts[2])]
+            except (IOError, ValueError, IndexError):
+                info['load'] = [0.0, 0.0, 0.0]
+
+        # Ensure memory has data (fallback if not populated)
+        if not info.get('memory') or info['memory'].get('percent', 0) == 0:
+            try:
+                with open('/proc/meminfo', 'r') as f:
+                    meminfo = {}
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            meminfo[parts[0].rstrip(':')] = int(parts[1]) * 1024
+                    total = meminfo.get('MemTotal', 0)
+                    available = meminfo.get('MemAvailable', meminfo.get('MemFree', 0))
+                    used = total - available
+                    info['memory'] = {
+                        'total': total,
+                        'used': used,
+                        'percent': int((used / total * 100) if total > 0 else 0)
+                    }
+            except (IOError, ValueError):
+                pass
+
+        # Disk usage is already in get_system_info with raw bytes
+        # Just ensure percent is set
+        if info.get('disk') and info['disk'].get('percent') is None:
+            total = info['disk'].get('total', 0)
+            used = info['disk'].get('used', 0)
+            if total > 0:
+                info['disk']['percent'] = int((used / total * 100))
 
         return jsonify(info)
     except Exception as e:
