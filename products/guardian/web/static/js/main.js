@@ -872,12 +872,27 @@ function updateSystemInfo(system) {
     updateElement('system-hostname', system.hostname || 'guardian');
     updateElement('system-uptime', system.uptime || '0:00');
 
-    // Load average - show all three values
-    if (system.load && Array.isArray(system.load)) {
-        const loadStr = system.load.map(l => l.toFixed(2)).join(' / ');
-        updateElement('system-load', loadStr);
-    } else {
-        updateElement('system-load', '0.00 / 0.00 / 0.00');
+    // CPU usage - show total percentage and core count
+    const cpuPercent = system.cpu_percent || 0;
+    const cpuCount = system.cpu_count || 0;
+    updateElement('system-cpu', `${cpuPercent}%`);
+    updateElement('system-cpu-cores', `${cpuCount} core${cpuCount !== 1 ? 's' : ''}`);
+
+    // CPU cores grid - show per-core usage
+    const coresGrid = document.getElementById('cpu-cores-grid');
+    if (coresGrid && system.cpu_cores && system.cpu_cores.length > 0) {
+        coresGrid.innerHTML = system.cpu_cores.map(core => {
+            const usage = core.usage || 0;
+            const colorClass = usage > 80 ? 'danger' : usage > 50 ? 'warning' : 'success';
+            return `
+                <div class="stat-card ${colorClass}" style="padding: var(--spacing-sm); text-align: center;">
+                    <div style="font-size: 1.25rem; font-weight: 600;">${usage}%</div>
+                    <div style="font-size: 0.75rem; opacity: 0.8;">Core ${core.core}</div>
+                </div>
+            `;
+        }).join('');
+    } else if (coresGrid) {
+        coresGrid.innerHTML = '<div class="text-muted">No CPU data available</div>';
     }
 
     // Memory - show percentage and used/total
@@ -889,7 +904,7 @@ function updateSystemInfo(system) {
         updateElement('system-memory-detail', `${usedMB} / ${totalMB} MB`);
     } else {
         updateElement('system-memory', '0%');
-        updateElement('system-memory-detail', '-- / -- MB');
+        updateElement('system-memory-detail', '0 / 0 MB');
     }
 
     updateElement('system-temperature', `${(system.temperature || 0).toFixed(1)}°C`);
