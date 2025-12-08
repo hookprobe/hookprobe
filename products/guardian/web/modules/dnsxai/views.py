@@ -566,16 +566,17 @@ def api_ml_threats():
 
 @dnsxai_bp.route('/blocked')
 def api_blocked_domains():
-    """Get recently blocked domains from dnsmasq log."""
+    """Get recently blocked domains from dnsmasq log with block counts."""
     import time
     from collections import OrderedDict
 
     limit = request.args.get('limit', 50, type=int)
     blocked_domains = OrderedDict()
+    total_blocks = 0  # Total number of blocked requests
 
     try:
         if not os.path.exists(DNSMASQ_QUERY_LOG):
-            return jsonify({'success': True, 'domains': [], 'count': 0})
+            return jsonify({'success': True, 'domains': [], 'count': 0, 'total_blocks': 0})
 
         # Read last portion of log file for performance
         file_size = os.path.getsize(DNSMASQ_QUERY_LOG)
@@ -610,42 +611,47 @@ def api_blocked_domains():
                             parts = line.split(' reply ')[1].split(' is ')[0]
                             domain = parts.strip()
 
-                        if domain and domain not in blocked_domains:
-                            # Extract timestamp if possible
-                            timestamp = None
-                            try:
-                                # Get month day time from beginning of line
-                                ts_parts = line.split()[:3]
-                                if len(ts_parts) >= 3:
-                                    timestamp = ' '.join(ts_parts)
-                            except Exception:
-                                pass
+                        if domain:
+                            total_blocks += 1
 
-                            blocked_domains[domain] = {
-                                'domain': domain,
-                                'type': 'blocklist',
-                                'typeBadge': 'BLOCKED',
-                                'timestamp': timestamp,
-                                'time': int(time.time())
-                            }
+                            if domain in blocked_domains:
+                                # Increment block count for existing domain
+                                blocked_domains[domain]['block_count'] += 1
+                            else:
+                                # Extract timestamp if possible
+                                timestamp = None
+                                try:
+                                    # Get month day time from beginning of line
+                                    ts_parts = line.split()[:3]
+                                    if len(ts_parts) >= 3:
+                                        timestamp = ' '.join(ts_parts)
+                                except Exception:
+                                    pass
 
-                            if len(blocked_domains) >= limit:
-                                break
+                                blocked_domains[domain] = {
+                                    'domain': domain,
+                                    'type': 'blocklist',
+                                    'typeBadge': 'BLOCKED',
+                                    'timestamp': timestamp,
+                                    'time': int(time.time()),
+                                    'block_count': 1
+                                }
                     except Exception:
                         continue
 
-        # Convert to list and reverse (most recent first)
+        # Convert to list and sort by block count (most blocked first)
         domains_list = list(blocked_domains.values())
-        domains_list.reverse()
+        domains_list.sort(key=lambda x: x.get('block_count', 1), reverse=True)
 
         return jsonify({
             'success': True,
             'domains': domains_list[:limit],
-            'count': len(domains_list)
+            'count': len(domains_list),
+            'total_blocks': total_blocks
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e), 'domains': []}), 500
+        return jsonify({'success': False, 'error': str(e), 'domains': [], 'total_blocks': 0}), 500
 
 
 # =============================================================================
