@@ -464,7 +464,7 @@ function renderChannelAnalysis(data) {
                 <div class="stat-label">
                     ${isCurrent ? '<strong style="color: var(--hp-green);">ACTIVE</strong><br>' : ''}
                     ${isRecommended ? '<strong style="color: var(--hp-primary);">BEST</strong><br>' : ''}
-                    ${utilization > 0 ? `${utilization.toFixed(0)}% busy` : 'No data'}
+                    ${utilization > 0 ? `${utilization.toFixed(0)}% busy` : '<span style="color: var(--hp-green);">Clear</span>'}
                     ${noise !== '--' ? `<br>${noise} dBm` : ''}
                 </div>
             </div>
