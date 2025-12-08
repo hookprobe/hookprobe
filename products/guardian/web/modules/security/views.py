@@ -9,10 +9,11 @@ from utils import run_command, load_json_file
 @security_bp.route('/xdp_stats')
 def api_xdp_stats():
     """Get XDP/eBPF statistics."""
+    import os
     try:
         # Try to get XDP stats from bpftool or custom script
         stats = {
-            'mode': 'XDP-DRV',
+            'mode': 'Not Loaded',
             'interface': 'eth0',
             'drops': 0,
             'packets': 0,
@@ -21,23 +22,34 @@ def api_xdp_stats():
             'drop_rate': 0.0
         }
 
-        # Check if XDP is loaded
-        output, success = run_command("ip link show eth0 | grep xdp")
-        if success and 'xdp' in output:
+        # Check if XDP is loaded on eth0
+        output, success = run_command(['ip', 'link', 'show', 'eth0'])
+        if success and output:
             if 'xdpdrv' in output:
                 stats['mode'] = 'XDP-DRV'
             elif 'xdpgeneric' in output:
                 stats['mode'] = 'XDP-SKB'
             elif 'xdpoffload' in output:
                 stats['mode'] = 'XDP-HW'
+            elif 'xdp' in output.lower():
+                stats['mode'] = 'XDP-SKB'
 
-        # Get packet stats from /proc/net/dev
-        output, success = run_command("cat /proc/net/dev | grep eth0")
-        if success and output:
-            parts = output.split()
-            if len(parts) >= 10:
-                stats['packets'] = int(parts[2])
-                stats['bytes'] = int(parts[1])
+        # Get packet stats from /sys/class/net instead of /proc/net/dev
+        try:
+            stats_dir = '/sys/class/net/eth0/statistics'
+            if os.path.exists(stats_dir):
+                with open(f'{stats_dir}/rx_packets', 'r') as f:
+                    stats['packets'] = int(f.read().strip())
+                with open(f'{stats_dir}/rx_bytes', 'r') as f:
+                    stats['bytes'] = int(f.read().strip())
+                with open(f'{stats_dir}/rx_dropped', 'r') as f:
+                    stats['drops'] = int(f.read().strip())
+
+                # Calculate drop rate
+                if stats['packets'] > 0:
+                    stats['drop_rate'] = round((stats['drops'] / stats['packets']) * 100, 2)
+        except (IOError, ValueError):
+            pass
 
         return jsonify(stats)
     except Exception as e:
