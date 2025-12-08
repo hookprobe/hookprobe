@@ -475,3 +475,144 @@ def api_offline_networks():
         return api_wifi_scan()
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/fix-eth0', methods=['POST'])
+def api_offline_fix_eth0():
+    """
+    Fix eth0 DHCP issues (169.254.x.x link-local addresses).
+
+    This attempts to:
+    1. Release any existing DHCP lease
+    2. Flush the interface
+    3. Restart DHCP client
+    4. Return the new IP address
+
+    Use when eth0 gets stuck with 169.254.x.x address.
+    """
+    try:
+        from offline_mode_manager import OfflineModeManager
+
+        manager = OfflineModeManager()
+        success, ip = manager.fix_eth0_dhcp()
+
+        return jsonify({
+            'success': success,
+            'ip': ip,
+            'message': f'eth0 now has IP: {ip}' if success else 'DHCP fix failed'
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/route-metrics', methods=['GET', 'POST'])
+def api_offline_route_metrics():
+    """
+    Get or configure route metrics.
+
+    GET: Returns current route metrics and interface status
+    POST: Reconfigures route metrics (eth0 priority over wlan)
+
+    Route metric priority (lower = higher priority):
+    - eth0: 100 (always preferred when connected)
+    - wlan upstream: 200
+    - wlan AP: 600 (no default route)
+    """
+    try:
+        from offline_mode_manager import OfflineModeManager
+
+        manager = OfflineModeManager()
+
+        if request.method == 'POST':
+            # Reconfigure metrics
+            success = manager.configure_route_metrics()
+            return jsonify({
+                'success': success,
+                'message': 'Route metrics configured' if success else 'Configuration failed'
+            })
+
+        # GET - return current status
+        # Get current routes
+        from utils import run_command
+        output, _ = run_command("ip route show default")
+
+        routes = []
+        for line in output.split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split()
+            route = {'raw': line}
+            if 'dev' in parts:
+                route['interface'] = parts[parts.index('dev') + 1]
+            if 'via' in parts:
+                route['gateway'] = parts[parts.index('via') + 1]
+            if 'metric' in parts:
+                route['metric'] = int(parts[parts.index('metric') + 1])
+            else:
+                route['metric'] = 0  # No metric = highest priority
+            routes.append(route)
+
+        # Sort by metric
+        routes.sort(key=lambda x: x.get('metric', 0))
+
+        return jsonify({
+            'success': True,
+            'routes': routes,
+            'config': {
+                'eth0_metric': manager.config.eth0_metric,
+                'wlan_upstream_metric': manager.config.wlan_upstream_metric,
+                'wlan_ap_metric': manager.config.wlan_ap_metric
+            }
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/wan-detect')
+def api_offline_wan_detect():
+    """
+    Detect the best WAN interface.
+
+    Returns the highest priority working WAN interface:
+    1. eth0 with valid IP (not 169.254.x.x)
+    2. wlan upstream with valid IP
+    3. None if no WAN available
+    """
+    try:
+        from offline_mode_manager import OfflineModeManager
+
+        manager = OfflineModeManager()
+        interface, ip = manager.detect_wan_interface()
+
+        if interface:
+            return jsonify({
+                'success': True,
+                'interface': interface,
+                'ip': ip,
+                'has_wan': True
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'interface': None,
+                'ip': None,
+                'has_wan': False,
+                'message': 'No working WAN interface found'
+            })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
