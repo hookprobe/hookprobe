@@ -1,9 +1,19 @@
 """
 Config Module Views - WiFi, Network Configuration
+
+Includes offline mode management for congested environments where
+Guardian needs to start AP without pre-configured WAN connectivity.
 """
+import sys
+from pathlib import Path
 from flask import jsonify, request
 from . import config_bp
 from utils import run_command
+
+# Add lib directory to path for imports
+lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+if str(lib_path) not in sys.path:
+    sys.path.insert(0, str(lib_path))
 
 
 @config_bp.route('/wifi/scan', methods=['POST'])
@@ -202,3 +212,266 @@ def api_interfaces():
         return jsonify({'interfaces': interfaces})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# OFFLINE MODE ENDPOINTS
+# =============================================================================
+
+@config_bp.route('/offline/status')
+def api_offline_status():
+    """
+    Get offline mode status.
+
+    Returns comprehensive status including:
+    - Current state (offline_ready, online, etc.)
+    - AP configuration and client count
+    - WAN connectivity status
+    - Last channel scan results
+    """
+    try:
+        from offline_mode_manager import OfflineModeManager
+        manager = OfflineModeManager()
+        manager.load_state()
+        status = manager.get_status()
+        return jsonify({'success': True, **status})
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/init', methods=['POST'])
+def api_offline_init():
+    """
+    Initialize offline mode.
+
+    This triggers the full boot sequence:
+    1. Scan RF environment
+    2. Select optimal channel
+    3. Start AP
+    4. Start DHCP
+
+    Used when manually triggering offline mode or on first boot.
+    """
+    try:
+        from offline_mode_manager import OfflineModeManager
+        manager = OfflineModeManager()
+        success = manager.initialize_offline_mode()
+        return jsonify({
+            'success': success,
+            'status': manager.get_status()
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/scan', methods=['POST'])
+def api_offline_scan():
+    """
+    Scan RF environment for channel congestion.
+
+    Returns:
+    - Detected networks with signal strength
+    - Channel scores (lower is better)
+    - Recommended channels for 2.4GHz and 5GHz
+    """
+    try:
+        from wifi_channel_scanner import WiFiChannelScanner
+        scanner = WiFiChannelScanner(interface='wlan0')
+        result = scanner.scan()
+
+        return jsonify({
+            'success': True,
+            'networks': [
+                {
+                    'ssid': n.ssid,
+                    'bssid': n.bssid,
+                    'channel': n.channel,
+                    'signal_strength': n.signal_strength,
+                    'signal_quality': n.signal_quality,
+                    'security': n.security,
+                    'band': n.band.value
+                }
+                for n in result.networks
+            ],
+            'channel_scores': {
+                str(ch): {
+                    'score': round(s.score, 1),
+                    'networks_count': s.networks_count,
+                    'adjacent_interference': round(s.adjacent_interference, 1),
+                    'is_non_overlapping': s.is_non_overlapping
+                }
+                for ch, s in result.channel_scores.items()
+            },
+            'recommended': {
+                '2.4GHz': result.recommended_channel_2_4,
+                '5GHz': result.recommended_channel_5
+            },
+            'scan_timestamp': result.scan_timestamp
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'WiFi channel scanner not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/channel', methods=['POST'])
+def api_offline_channel():
+    """
+    Change AP channel.
+
+    Request body:
+    {
+        "channel": 6  // Channel number (1-11 for 2.4GHz, 36+ for 5GHz)
+    }
+
+    If channel is "auto", performs scan and selects optimal channel.
+    """
+    data = request.get_json() or {}
+    channel = data.get('channel', 'auto')
+
+    try:
+        from offline_mode_manager import OfflineModeManager
+
+        manager = OfflineModeManager()
+        manager.load_state()
+
+        if channel == 'auto':
+            # Scan and select best channel
+            channel, score, networks = manager.scan_and_select_channel()
+
+        # Validate channel
+        if isinstance(channel, str):
+            try:
+                channel = int(channel)
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid channel number'
+                }), 400
+
+        # Change channel
+        success = manager.restart_ap_with_channel(channel)
+
+        return jsonify({
+            'success': success,
+            'channel': channel,
+            'status': manager.get_status()
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/connect', methods=['POST'])
+def api_offline_connect():
+    """
+    Connect to upstream WiFi network.
+
+    Request body:
+    {
+        "ssid": "CoffeeShop-WiFi",
+        "password": "password123"
+    }
+
+    This enables internet connectivity while keeping the local AP running.
+    """
+    data = request.get_json() or {}
+    ssid = data.get('ssid', '').strip()
+    password = data.get('password', '')
+
+    if not ssid:
+        return jsonify({
+            'success': False,
+            'error': 'SSID is required'
+        }), 400
+
+    try:
+        from offline_mode_manager import OfflineModeManager
+
+        manager = OfflineModeManager()
+        manager.load_state()
+
+        success, message = manager.connect_upstream(ssid, password)
+
+        return jsonify({
+            'success': success,
+            'message': message,
+            'status': manager.get_status()
+        })
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Offline mode manager not available'
+        }), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@config_bp.route('/offline/networks')
+def api_offline_networks():
+    """
+    Get available upstream networks for connection.
+
+    Scans for available WiFi networks that can be used as upstream/WAN.
+    Similar to /wifi/scan but with additional metadata for offline mode.
+    """
+    try:
+        from wifi_channel_scanner import WiFiChannelScanner
+
+        scanner = WiFiChannelScanner(interface='wlan0')
+        result = scanner.scan()
+
+        # Format for upstream selection
+        networks = []
+        for net in result.networks:
+            # Skip our own AP
+            if 'HookProbe' in net.ssid or 'Guardian' in net.ssid:
+                continue
+
+            networks.append({
+                'ssid': net.ssid,
+                'signal': net.signal_quality,
+                'signal_dbm': net.signal_strength,
+                'security': net.security,
+                'channel': net.channel,
+                'band': net.band.value
+            })
+
+        # Sort by signal strength
+        networks.sort(key=lambda x: x['signal'], reverse=True)
+
+        # Remove duplicates (keep strongest)
+        seen = set()
+        unique = []
+        for net in networks:
+            if net['ssid'] and net['ssid'] not in seen:
+                seen.add(net['ssid'])
+                unique.append(net)
+
+        return jsonify({
+            'success': True,
+            'networks': unique,
+            'scan_timestamp': result.scan_timestamp
+        })
+    except ImportError:
+        # Fallback to basic iwlist scan
+        return api_wifi_scan()
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
