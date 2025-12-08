@@ -411,14 +411,14 @@ async function loadBlockedDomains() {
     try {
         // Get blocked domains from dnsmasq log and ML threats in parallel
         const [blockedResult, mlThreats] = await Promise.all([
-            apiGet('/dnsxai/blocked?limit=50').catch(() => ({ domains: [] })),
+            apiGet('/dnsxai/blocked?limit=50').catch(() => ({ domains: [], total_blocks: 0 })),
             apiGet('/dnsxai/ml/threats').catch(() => ({ threats: [] }))
         ]);
 
         // Build blocked domains list
         blockedDomainsCache = [];
 
-        // Add blocklist blocked domains first
+        // Add blocklist blocked domains first (with block counts)
         if (blockedResult.domains) {
             blockedResult.domains.forEach(d => {
                 blockedDomainsCache.push({
@@ -426,7 +426,8 @@ async function loadBlockedDomains() {
                     type: 'blocklist',
                     typeBadge: 'BLOCKED',
                     timestamp: d.timestamp,
-                    time: d.time
+                    time: d.time,
+                    block_count: d.block_count || 1
                 });
             });
         }
@@ -441,10 +442,18 @@ async function loadBlockedDomains() {
                         type: t.type === 'cname_uncloaked' ? 'cname' : 'ml',
                         typeBadge: t.type === 'cname_uncloaked' ? 'CNAME' : 'ML',
                         confidence: t.confidence,
-                        time: t.timestamp
+                        time: t.timestamp,
+                        block_count: 1
                     });
                 }
             });
+        }
+
+        // Update modal header with total blocks
+        const totalBlocks = blockedResult.total_blocks || blockedDomainsCache.reduce((sum, d) => sum + (d.block_count || 1), 0);
+        const modalHeader = document.querySelector('#blocked-domains-modal .modal-title');
+        if (modalHeader) {
+            modalHeader.textContent = `Blocked Domains (${totalBlocks} blocks)`;
         }
 
         renderBlockedDomains();
@@ -484,6 +493,7 @@ function renderBlockedDomains() {
             <thead>
                 <tr>
                     <th>Domain</th>
+                    <th style="width: 60px;">Blocks</th>
                     <th>Type</th>
                     <th style="width: 100px;">Action</th>
                 </tr>
@@ -492,6 +502,9 @@ function renderBlockedDomains() {
                 ${filtered.map(d => `
                     <tr>
                         <td class="font-mono" style="word-break: break-all;">${d.domain}</td>
+                        <td style="text-align: center;">
+                            <span class="badge badge-danger">${d.block_count || 1}×</span>
+                        </td>
                         <td>
                             <span class="badge ${d.type === 'ml' ? 'badge-warning' : d.type === 'cname' ? 'badge-info' : 'badge-secondary'}">
                                 ${d.typeBadge || d.type.toUpperCase()}
