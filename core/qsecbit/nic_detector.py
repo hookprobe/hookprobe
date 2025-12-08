@@ -2,7 +2,7 @@
 NIC Detection and XDP Capability Management
 
 Author: Andrei Toma
-License: MIT
+License: Proprietary - see LICENSE in this directory
 Version: 5.0
 """
 

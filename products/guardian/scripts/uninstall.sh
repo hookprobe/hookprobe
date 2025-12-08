@@ -2,7 +2,7 @@
 #
 # HookProbe Guardian Uninstall Script
 # Version: 5.0.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Guardian components:
 # - Podman containers (Suricata, WAF, Zeek)

@@ -18,7 +18,7 @@ Port: UDP 4719
 
 Author: HookProbe Team
 Version: 1.0.0 Liberty
-License: MIT
+License: AGPL-3.0 - see LICENSE in this directory
 """
 
 import os

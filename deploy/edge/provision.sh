@@ -2,7 +2,7 @@
 #
 # provision.sh - HookProbe Provision Script
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Runs at install and on each boot for auto-repair.
 # Responsible for:
