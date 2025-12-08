@@ -60,21 +60,29 @@ def api_status():
 @core_bp.route('/api/containers')
 def api_containers():
     """Get service status for all Guardian services (systemd services, not containers)."""
-    # Service configuration: key = display key, service = systemd service name
+    # Service configuration: key = display key, services = list of possible service names to try
     service_config = {
-        'hostapd': {'label': 'WiFi Access Point', 'service': 'hostapd'},
-        'dnsmasq': {'label': 'DNS/DHCP Server', 'service': 'dnsmasq'},
-        'dhcpcd': {'label': 'DHCP Client', 'service': 'dhcpcd'},
-        'guardian': {'label': 'Guardian Agent', 'service': 'guardian-agent'},
+        'hostapd': {'label': 'WiFi Access Point', 'services': ['hostapd']},
+        'dnsmasq': {'label': 'DNS/DHCP Server', 'services': ['dnsmasq']},
+        'dhcpcd': {'label': 'DHCP Client', 'services': ['dhcpcd', 'dhcpcd5', 'dhclient', 'NetworkManager']},
+        'guardian': {'label': 'Guardian Agent', 'services': ['guardian-agent', 'hookprobe-agent', 'guardian']},
     }
 
     services = {}
     for key, config in service_config.items():
-        service_name = config['service']
-        # Check systemd service status
-        output, success = run_command(['systemctl', 'is-active', service_name])
-        status = output.strip() if success else 'unknown'
-        is_running = status == 'active'
+        is_running = False
+        status = 'inactive'
+
+        # Try each possible service name
+        for service_name in config['services']:
+            output, success = run_command(['systemctl', 'is-active', service_name])
+            service_status = output.strip() if success else 'unknown'
+            if service_status == 'active':
+                is_running = True
+                status = 'active'
+                break
+            elif service_status != 'unknown' and status == 'inactive':
+                status = service_status
 
         services[key] = {
             'label': config['label'],
