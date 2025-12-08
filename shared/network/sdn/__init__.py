@@ -20,7 +20,14 @@ from .openflow_controller import (
     SwitchFeatures,
     OVSBridge,
     VLANRange,
-    OFP_CONSTANTS
+    OFP_CONSTANTS,
+    # Protocol enums for extensions
+    OFPType,
+    OFPActionType,
+    OFPFlowModCommand,
+    OFPPort,
+    OFP_VERSION,
+    OFP_HEADER_SIZE
 )
 
 __all__ = [
@@ -31,7 +38,14 @@ __all__ = [
     "SwitchFeatures",
     "OVSBridge",
     "VLANRange",
-    "OFP_CONSTANTS"
+    "OFP_CONSTANTS",
+    # Protocol enums
+    "OFPType",
+    "OFPActionType",
+    "OFPFlowModCommand",
+    "OFPPort",
+    "OFP_VERSION",
+    "OFP_HEADER_SIZE"
 ]
 
 __version__ = "5.0.0"
