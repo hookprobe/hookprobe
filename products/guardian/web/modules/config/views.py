@@ -744,7 +744,7 @@ def api_offline_networks():
     Similar to /wifi/scan but with additional metadata for offline mode.
     """
     try:
-        from wifi_channel_scanner import WiFiChannelScanner
+        from shared.wireless import WiFiChannelScanner
 
         scanner = WiFiChannelScanner(interface='wlan0')
         result = scanner.scan()
