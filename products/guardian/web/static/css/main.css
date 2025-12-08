@@ -144,22 +144,30 @@ a:hover {
 }
 
 .header-logo {
-    width: 96px;
-    height: 96px;
+    width: 64px;
+    height: 64px;
     border-radius: var(--radius-md);
     object-fit: contain;
+}
+
+.header-title {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
 }
 
 .header-title h1 {
     font-size: 1.5rem;
     color: var(--text-white);
     margin: 0;
+    line-height: 1.2;
 }
 
 .header-title .tagline {
     font-size: 0.875rem;
     color: var(--hp-primary);
     font-weight: 500;
+    margin-top: 2px;
 }
 
 .header-status {
