@@ -279,8 +279,27 @@ check_orphaned_files() {
         "install-validator.sh"
         "scripts/repo-cleanup-validator.sh"
         "scripts/run-unit-tests.sh"
+        "scripts/run-integration-tests.sh"
+        "scripts/run-performance-tests.sh"
         "scripts/install-edge.sh"
+        "scripts/gdpr-retention.sh"
         "Makefile"
+        # Product entry points
+        "products/guardian/web/app.py"
+        "products/mssp/setup.sh"
+        "products/mssp/uninstall.sh"
+        "products/sentinel/sentinel.py"
+        "products/sentinel/sentinel_security.py"
+        # Deploy scripts
+        "deploy/edge/provision.sh"
+        "deploy/edge/cleanup.sh"
+        "deploy/edge/update.sh"
+        "deploy/cloud/setup.sh"
+        "deploy/cloud/config.sh"
+        "deploy/addons/n8n/setup.sh"
+        "deploy/addons/n8n/config.sh"
+        "deploy/addons/webserver/setup-webserver.sh"
+        "deploy/addons/webserver/entrypoint.sh"
     )
 
     # Extract all file references from shell scripts
@@ -302,12 +321,28 @@ check_orphaned_files() {
         [[ "$file" == tests/* ]] && continue
         [[ "$file" == *_test.py ]] && continue
         [[ "$file" == *test_*.py ]] && continue
+        [[ "$file" == */tests/* ]] && continue
 
         # Skip __init__.py files
         [[ "$basename" == "__init__.py" ]] && continue
 
         # Skip conftest.py
         [[ "$basename" == "conftest.py" ]] && continue
+
+        # Skip backup files
+        [[ "$basename" == *_backup.py ]] && continue
+        [[ "$basename" == *_backup.sh ]] && continue
+        [[ "$basename" == *.bak ]] && continue
+
+        # Skip example files
+        [[ "$basename" == *_example.py ]] && continue
+        [[ "$basename" == *_example.sh ]] && continue
+        [[ "$basename" == example_*.py ]] && continue
+        [[ "$basename" == example_*.sh ]] && continue
+
+        # Skip integration files (often referenced dynamically)
+        [[ "$file" == */integrations/* ]] && continue
+        [[ "$file" == */lib/* ]] && continue
 
         # Check if file is referenced
         if ! grep -qF "$basename" "$referenced_files" 2>/dev/null; then
