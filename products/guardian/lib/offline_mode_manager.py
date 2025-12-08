@@ -19,7 +19,7 @@ Boot Sequence (Offline-First):
 
 Author: HookProbe Team
 Version: 1.0.0
-License: MIT
+License: AGPL-3.0 - see LICENSE in this directory
 """
 
 import os

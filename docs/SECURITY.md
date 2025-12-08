@@ -369,7 +369,7 @@ ALLOWED_HOSTS = ['your-domain.com', 'www.your-domain.com']
    - Document lessons learned
 
 5. **Reporting**
-   - Email incident details to security@hookprobe.com
+   - Email incident details to qsecbit@hookprobe.com
    - Document timeline and impact
    - Share findings with community (after remediation)
 
@@ -446,7 +446,7 @@ RETENTION_NETWORK_FLOWS_DAYS=30      # Default: 30 days (minimal)
 # Automated breach detection and notification
 BREACH_DETECTION_ENABLED=true
 BREACH_NOTIFICATION_DEADLINE_HOURS=72  # GDPR requirement
-BREACH_NOTIFICATION_EMAIL="dpo@hookprobe.com"
+BREACH_NOTIFICATION_EMAIL="qsecbit@hookprobe.com"
 
 # Response timeline:
 # T+0: Breach detected (automated)
@@ -539,7 +539,7 @@ cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).tx
 #### Contact
 
 - **GDPR Documentation**: [GDPR.md](GDPR.md)
-- **Data Protection Officer**: dpo@hookprobe.com
+- **Data Protection Officer**: qsecbit@hookprobe.com
 - **Security Contact**: qsecbit@hookprobe.com
 
 **Note**: HookProbe provides GDPR-compliant tools and defaults. Final compliance is the operator's responsibility and may require legal review specific to your jurisdiction and use case.

@@ -2,7 +2,7 @@
 #
 # HookProbe Guardian Setup Script
 # Version: 5.0.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Guardian - Portable Travel Security Companion
 #
@@ -1763,7 +1763,7 @@ install_qsecbit_agent() {
 """
 QSecBit Guardian Agent - Full Implementation
 Version: 5.0.0
-License: MIT
+License: AGPL-3.0
 
 Uses the full QSecBit modules for:
 - Energy monitoring (RAPL + per-PID tracking)

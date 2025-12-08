@@ -2,7 +2,7 @@
 #
 # cleanup.sh - HookProbe Cleanup Script
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Removes all HookProbe components:
 # - Systemd units

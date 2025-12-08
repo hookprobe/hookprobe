@@ -699,10 +699,10 @@ Conclusion:
 
 ## Business Contact
 
-- **Partnerships**: neuro@hookprobe.com
-- **Enterprise Sales**: sales@hookprobe.com
-- **Technical Support**: support@hookprobe.com
-- **Security Research**: security@hookprobe.com
+- **Partnerships**: qsecbit@hookprobe.com
+- **Enterprise Sales**: qsecbit@hookprobe.com
+- **Technical Support**: qsecbit@hookprobe.com
+- **Security Research**: qsecbit@hookprobe.com
 
 ---
 
