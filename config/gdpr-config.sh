@@ -2,7 +2,7 @@
 #
 # gdpr-config.sh - HookProbe v5.0 GDPR Compliance Configuration
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # This file contains all GDPR compliance settings for HookProbe
 # Implements privacy-by-design and privacy-by-default principles
@@ -272,7 +272,7 @@ SUPERVISORY_AUTHORITY_CONTACT=""       # Contact information
 ENABLE_COMPLIANCE_REPORTS=true         # Generate periodic compliance reports
 COMPLIANCE_REPORT_FREQUENCY_DAYS=30    # Monthly reports
 COMPLIANCE_REPORT_PATH="/var/log/hookprobe/compliance-reports/"
-COMPLIANCE_REPORT_EMAIL="compliance@hookprobe.com"
+COMPLIANCE_REPORT_EMAIL="qsecbit@hookprobe.com"
 
 # Report Contents
 REPORT_DATA_INVENTORY=true             # What data is collected

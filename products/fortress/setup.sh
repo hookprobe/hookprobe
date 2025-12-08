@@ -2,7 +2,7 @@
 #
 # HookProbe Fortress Setup Script
 # Version: 5.0.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Fortress - Full-Featured Edge Gateway with Monitoring
 #
@@ -638,7 +638,7 @@ install_qsecbit_agent() {
 """
 QSecBit Fortress Agent - Full Implementation
 Version: 5.0.0
-License: MIT
+License: AGPL-3.0
 
 Fortress-enhanced QSecBit with:
 - Extended telemetry from monitoring stack

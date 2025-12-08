@@ -401,4 +401,4 @@ podman exec hookprobe-dmz-mail-gateway postfix status
 
 - Documentation: /infrastructure/pod-009-email/README.md
 - Logs: /var/log/mail/
-- Issues: security@hookprobe.com
+- Issues: qsecbit@hookprobe.com

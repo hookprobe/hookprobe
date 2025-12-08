@@ -2,7 +2,7 @@
 #
 # update.sh - HookProbe Auto-Update Script
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # Pulls latest changes from GitHub and re-provisions safely
 #

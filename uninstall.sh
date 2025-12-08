@@ -2,7 +2,7 @@
 #
 # uninstall.sh - HookProbe Uninstallation Menu
 # Version: 5.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 
 set -e
