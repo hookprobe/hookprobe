@@ -27,7 +27,7 @@ Usage:
 
 Author: HookProbe Team
 Version: 5.0.0
-License: MIT
+License: Proprietary - see LICENSE in this directory
 """
 
 from .engine import (

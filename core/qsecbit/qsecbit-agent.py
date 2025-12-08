@@ -2,7 +2,7 @@
 """
 qsecbit-agent.py - HookProbe Qsecbit Monitoring Daemon
 Version: 5.0
-License: MIT
+License: Proprietary - see LICENSE in this directory
 
 Long-running daemon for:
 - Energy monitoring (RAPL + per-PID tracking)

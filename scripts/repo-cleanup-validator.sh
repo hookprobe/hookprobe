@@ -2,7 +2,7 @@
 #
 # repo-cleanup-validator.sh - HookProbe Repository Cleanup Validator
 # Version: 1.0.0
-# License: MIT
+# License: AGPL-3.0 - see LICENSE file
 #
 # This script validates the repository structure and identifies:
 # - Orphaned files not referenced by any script

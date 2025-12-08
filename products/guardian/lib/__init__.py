@@ -18,7 +18,7 @@ Modules:
 
 Author: HookProbe Team
 Version: 5.0.0 Liberty
-License: MIT
+License: AGPL-3.0 - see LICENSE in this directory
 """
 
 from .layer_threat_detector import (

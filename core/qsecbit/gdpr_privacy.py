@@ -9,7 +9,7 @@ Implements privacy-preserving data processing for Qsecbit analysis:
 - Pseudonymization
 
 Author: HookProbe Team
-License: MIT
+License: Proprietary - see LICENSE in this directory
 Version: 5.0
 """
 
