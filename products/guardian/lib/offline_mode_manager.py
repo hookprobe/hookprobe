@@ -27,9 +27,10 @@ import json
 import time
 import logging
 import subprocess
+import shlex
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Union
 from datetime import datetime
 from enum import Enum
 
@@ -142,11 +143,37 @@ class OfflineModeManager:
         # Ensure state directory exists
         Path(self.config.state_file).parent.mkdir(parents=True, exist_ok=True)
 
-    def _run_command(self, cmd: str, timeout: int = 30) -> Tuple[str, bool]:
-        """Run shell command safely"""
+    def _run_command(
+        self,
+        cmd: Union[str, List[str]],
+        timeout: int = 30,
+        suppress_stderr: bool = False
+    ) -> Tuple[str, bool]:
+        """Run command safely without shell=True to prevent command injection
+
+        Args:
+            cmd: Command string or list of arguments
+            timeout: Command timeout in seconds
+            suppress_stderr: If True, redirect stderr to DEVNULL (like 2>/dev/null)
+        """
         try:
+            # Convert string to list for safe execution
+            if isinstance(cmd, str):
+                # Remove shell redirections before parsing (handle them via subprocess)
+                clean_cmd = cmd.replace(" 2>/dev/null", "").replace("2>/dev/null", "")
+                cmd_list = shlex.split(clean_cmd)
+                # Auto-detect if stderr should be suppressed
+                if "2>/dev/null" in cmd:
+                    suppress_stderr = True
+            else:
+                cmd_list = cmd
+
+            stderr_dest = subprocess.DEVNULL if suppress_stderr else subprocess.PIPE
+
             result = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                cmd_list, capture_output=False,
+                stdout=subprocess.PIPE,
+                stderr=stderr_dest,
                 text=True, timeout=timeout
             )
             return result.stdout.strip(), result.returncode == 0
@@ -156,6 +183,47 @@ class OfflineModeManager:
         except Exception as e:
             logger.error(f"Command failed: {e}")
             return str(e), False
+
+    def _get_interface_ip(self, interface: str) -> Optional[str]:
+        """Get IP address of an interface without shell pipes"""
+        output, success = self._run_command(["ip", "addr", "show", interface])
+        if not success:
+            return None
+
+        # Parse output to find inet line
+        for line in output.split('\n'):
+            line = line.strip()
+            if line.startswith('inet ') and 'inet6' not in line:
+                # Format: inet 192.168.1.1/24 brd ...
+                parts = line.split()
+                if len(parts) >= 2:
+                    return parts[1]  # Returns IP/prefix like 192.168.1.1/24
+        return None
+
+    def _get_default_gateway(self, interface: str) -> Optional[str]:
+        """Get default gateway for an interface without shell pipes"""
+        output, success = self._run_command(["ip", "route", "show", "dev", interface])
+        if not success:
+            return None
+
+        for line in output.split('\n'):
+            if 'default' in line:
+                parts = line.split()
+                # Format: default via 192.168.1.1 dev eth0
+                if 'via' in parts:
+                    via_idx = parts.index('via')
+                    if via_idx + 1 < len(parts):
+                        return parts[via_idx + 1]
+        return None
+
+    def _count_arp_entries(self, interface: str) -> int:
+        """Count ARP entries for an interface without shell pipes"""
+        output, _ = self._run_command(["arp", "-an"])
+        count = 0
+        for line in output.split('\n'):
+            if interface in line:
+                count += 1
+        return count
 
     def _get_scanner(self):
         """Lazy load WiFi scanner"""
@@ -277,17 +345,15 @@ class OfflineModeManager:
 
         # Get IP for WAN interface
         if status['interface']:
-            output, success = self._run_command(
-                f"ip addr show {status['interface']} | grep 'inet ' | awk '{{print $2}}'"
-            )
-            if success and output:
-                status['ip'] = output.split('/')[0]
+            ip_addr = self._get_interface_ip(status['interface'])
+            if ip_addr:
+                status['ip'] = ip_addr.split('/')[0]
                 status['connected'] = True
 
             # Get SSID if WiFi
             if 'wlan' in status['interface']:
                 output, _ = self._run_command(
-                    f"iwgetid {status['interface']} -r"
+                    ["iwgetid", status['interface'], "-r"]
                 )
                 if output:
                     status['ssid'] = output
@@ -432,7 +498,10 @@ profile static_eth0
             elif interface == self.config.ap_interface:
                 # AP interface shouldn't have default route
                 logger.info(f"Removing default route from AP interface {interface}")
-                self._run_command(f"sudo ip route del default dev {interface} 2>/dev/null")
+                self._run_command(
+                    ["sudo", "ip", "route", "del", "default", "dev", interface],
+                    suppress_stderr=True
+                )
                 continue
             elif 'wlan' in interface:
                 metric = self.config.wlan_upstream_metric
@@ -445,11 +514,15 @@ profile static_eth0
 
             # Remove old route and add with correct metric
             logger.info(f"Setting metric {metric} for {interface}")
-            self._run_command(f"sudo ip route del default dev {interface} 2>/dev/null")
+            self._run_command(
+                ["sudo", "ip", "route", "del", "default", "dev", interface],
+                suppress_stderr=True
+            )
             if gateway:
-                self._run_command(
-                    f"sudo ip route add default via {gateway} dev {interface} metric {metric}"
-                )
+                self._run_command([
+                    "sudo", "ip", "route", "add", "default",
+                    "via", gateway, "dev", interface, "metric", str(metric)
+                ])
 
     def fix_eth0_dhcp(self) -> Tuple[bool, Optional[str]]:
         """
@@ -461,48 +534,44 @@ profile static_eth0
         logger.info("Attempting to fix eth0 DHCP...")
 
         # Check if eth0 exists and is up
-        output, success = self._run_command("ip link show eth0")
+        output, success = self._run_command(["ip", "link", "show", "eth0"])
         if not success:
             logger.warning("eth0 interface not found")
             return False, None
 
-        # Check current IP
-        output, _ = self._run_command(
-            "ip addr show eth0 | grep 'inet ' | awk '{print $2}'"
-        )
-        current_ip = output.split('/')[0] if output else None
+        # Check current IP using helper method
+        ip_addr = self._get_interface_ip("eth0")
+        current_ip = ip_addr.split('/')[0] if ip_addr else None
 
         # Check if it's a link-local address
         if current_ip and current_ip.startswith('169.254.'):
             logger.info(f"eth0 has link-local address {current_ip}, attempting DHCP")
 
             # Release any existing lease
-            self._run_command("sudo dhclient -r eth0 2>/dev/null")
-            self._run_command("sudo ip addr flush dev eth0 2>/dev/null")
+            self._run_command(["sudo", "dhclient", "-r", "eth0"], suppress_stderr=True)
+            self._run_command(["sudo", "ip", "addr", "flush", "dev", "eth0"], suppress_stderr=True)
 
             # Bring interface down and up
-            self._run_command("sudo ip link set eth0 down")
+            self._run_command(["sudo", "ip", "link", "set", "eth0", "down"])
             time.sleep(1)
-            self._run_command("sudo ip link set eth0 up")
+            self._run_command(["sudo", "ip", "link", "set", "eth0", "up"])
             time.sleep(2)
 
             # Try dhclient with timeout
             _, success = self._run_command(
-                f"sudo timeout {self.config.dhcp_timeout} dhclient -v eth0",
+                ["sudo", "timeout", str(self.config.dhcp_timeout), "dhclient", "-v", "eth0"],
                 timeout=self.config.dhcp_timeout + 5
             )
 
             if not success:
                 # Try dhcpcd as fallback
                 logger.info("dhclient failed, trying dhcpcd...")
-                self._run_command("sudo dhcpcd -n eth0")
+                self._run_command(["sudo", "dhcpcd", "-n", "eth0"])
                 time.sleep(5)
 
-            # Check new IP
-            output, _ = self._run_command(
-                "ip addr show eth0 | grep 'inet ' | awk '{print $2}'"
-            )
-            new_ip = output.split('/')[0] if output else None
+            # Check new IP using helper method
+            ip_addr = self._get_interface_ip("eth0")
+            new_ip = ip_addr.split('/')[0] if ip_addr else None
 
             if new_ip and not new_ip.startswith('169.254.'):
                 logger.info(f"eth0 DHCP fix successful: {new_ip}")
@@ -517,15 +586,15 @@ profile static_eth0
         else:
             # No IP at all, try DHCP
             logger.info("eth0 has no IP, requesting DHCP...")
-            self._run_command("sudo ip link set eth0 up")
+            self._run_command(["sudo", "ip", "link", "set", "eth0", "up"])
             time.sleep(1)
-            self._run_command(f"sudo timeout {self.config.dhcp_timeout} dhclient eth0")
+            self._run_command(
+                ["sudo", "timeout", str(self.config.dhcp_timeout), "dhclient", "eth0"]
+            )
             time.sleep(3)
 
-            output, _ = self._run_command(
-                "ip addr show eth0 | grep 'inet ' | awk '{print $2}'"
-            )
-            new_ip = output.split('/')[0] if output else None
+            ip_addr = self._get_interface_ip("eth0")
+            new_ip = ip_addr.split('/')[0] if ip_addr else None
 
             if new_ip and not new_ip.startswith('169.254.'):
                 return True, new_ip
@@ -550,18 +619,18 @@ profile static_eth0
 
         for interface, _ in interfaces_priority:
             # Check if interface exists
-            output, success = self._run_command(f"ip link show {interface} 2>/dev/null")
+            output, success = self._run_command(
+                ["ip", "link", "show", interface], suppress_stderr=True
+            )
             if not success:
                 continue
 
-            # Get IP
-            output, _ = self._run_command(
-                f"ip addr show {interface} | grep 'inet ' | awk '{{print $2}}'"
-            )
-            if not output:
+            # Get IP using helper method
+            ip_addr = self._get_interface_ip(interface)
+            if not ip_addr:
                 continue
 
-            ip = output.split('/')[0]
+            ip = ip_addr.split('/')[0]
 
             # Skip link-local addresses
             if ip.startswith('169.254.'):
@@ -572,13 +641,11 @@ profile static_eth0
             if ip == self.config.ap_ip:
                 continue
 
-            # Check if we can reach gateway
-            gw_output, _ = self._run_command(
-                f"ip route show dev {interface} | grep default | awk '{{print $3}}'"
-            )
-            if gw_output:
+            # Check if we can reach gateway using helper method
+            gateway = self._get_default_gateway(interface)
+            if gateway:
                 _, ping_success = self._run_command(
-                    f"ping -c 1 -W 2 -I {interface} {gw_output}",
+                    ["ping", "-c", "1", "-W", "2", "-I", interface, gateway],
                     timeout=5
                 )
                 if ping_success:
@@ -710,7 +777,9 @@ logger_syslog_level=2
                 f.write(config)
 
             # Copy to actual location (requires sudo)
-            _, success = self._run_command(f"sudo cp {temp_path} {self.config.hostapd_config_path}")
+            _, success = self._run_command(
+                ["sudo", "cp", temp_path, self.config.hostapd_config_path]
+            )
             if not success:
                 logger.error("Failed to copy hostapd config")
                 return False
@@ -726,14 +795,18 @@ logger_syslog_level=2
         self.save_state()
 
         # Stop any existing instance
-        self._run_command("sudo systemctl stop hostapd 2>/dev/null")
+        self._run_command(
+            ["sudo", "systemctl", "stop", "hostapd"], suppress_stderr=True
+        )
         time.sleep(1)
 
         # Ensure interface is up
-        self._run_command(f"sudo ip link set {self.config.ap_interface} up")
+        self._run_command(
+            ["sudo", "ip", "link", "set", self.config.ap_interface, "up"]
+        )
 
         # Start hostapd
-        _, success = self._run_command("sudo systemctl start hostapd")
+        _, success = self._run_command(["sudo", "systemctl", "start", "hostapd"])
 
         if success:
             # Wait a moment and verify
@@ -823,12 +896,14 @@ domain-needed
             with open(temp_path, 'w') as f:
                 f.write(config)
 
-            self._run_command(f"sudo cp {temp_path} {self.config.dnsmasq_config_path}")
+            self._run_command(
+                ["sudo", "cp", temp_path, self.config.dnsmasq_config_path]
+            )
         except Exception as e:
             logger.error(f"Failed to write dnsmasq config: {e}")
 
         # Restart dnsmasq
-        _, success = self._run_command("sudo systemctl restart dnsmasq")
+        _, success = self._run_command(["sudo", "systemctl", "restart", "dnsmasq"])
         if success:
             logger.info("DHCP server started")
             return True
@@ -874,7 +949,7 @@ domain-needed
                 self.state.wan_connected = True
                 self.state.wan_ip = wan_ip
                 if 'wlan' in wan_iface:
-                    output, _ = self._run_command(f"iwgetid {wan_iface} -r")
+                    output, _ = self._run_command(["iwgetid", wan_iface, "-r"])
                     self.state.wan_ssid = output if output else None
             else:
                 logger.info("No WAN connectivity detected")
@@ -939,16 +1014,23 @@ domain-needed
     def _setup_bridge(self):
         """Setup bridge interface if not exists"""
         # Check if br0 exists
-        output, _ = self._run_command("ip link show br0 2>/dev/null")
+        output, _ = self._run_command(
+            ["ip", "link", "show", "br0"], suppress_stderr=True
+        )
         if not output:
             # Create bridge
-            self._run_command("sudo ip link add name br0 type bridge")
-            self._run_command(f"sudo ip addr add {self.config.ap_ip}/{self.config.ap_netmask.count('255')*8 + 5} dev br0")
-            self._run_command("sudo ip link set br0 up")
+            # Calculate prefix length from netmask
+            prefix_len = self.config.ap_netmask.count('255') * 8 + 5
+            self._run_command(["sudo", "ip", "link", "add", "name", "br0", "type", "bridge"])
+            self._run_command([
+                "sudo", "ip", "addr", "add",
+                f"{self.config.ap_ip}/{prefix_len}", "dev", "br0"
+            ])
+            self._run_command(["sudo", "ip", "link", "set", "br0", "up"])
             logger.info("Created bridge interface br0")
         else:
             # Ensure it's up
-            self._run_command("sudo ip link set br0 up")
+            self._run_command(["sudo", "ip", "link", "set", "br0", "up"])
 
     # =========================================================================
     # UPSTREAM CONNECTION
@@ -994,13 +1076,15 @@ network={{
             # If using Ethernet, just check connectivity
             if 'eth' in wan_iface:
                 # Bring up interface
-                self._run_command(f"sudo ip link set {wan_iface} up")
-                self._run_command(f"sudo dhclient {wan_iface}")
+                self._run_command(["sudo", "ip", "link", "set", wan_iface, "up"])
+                self._run_command(["sudo", "dhclient", wan_iface])
             else:
                 # For WiFi, use wpa_supplicant
-                self._run_command(f"sudo wpa_supplicant -B -i {wan_iface} -c {temp_path}")
+                self._run_command([
+                    "sudo", "wpa_supplicant", "-B", "-i", wan_iface, "-c", temp_path
+                ])
                 time.sleep(2)
-                self._run_command(f"sudo dhclient {wan_iface}")
+                self._run_command(["sudo", "dhclient", wan_iface])
 
             # Wait and check connectivity
             time.sleep(5)
@@ -1033,12 +1117,22 @@ network={{
     def _enable_nat(self, wan_interface: str):
         """Enable NAT for internet sharing"""
         # Enable IP forwarding
-        self._run_command("sudo sysctl -w net.ipv4.ip_forward=1")
+        self._run_command(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"])
 
         # Setup iptables NAT
-        self._run_command(f"sudo iptables -t nat -A POSTROUTING -o {wan_interface} -j MASQUERADE")
-        self._run_command(f"sudo iptables -A FORWARD -i br0 -o {wan_interface} -j ACCEPT")
-        self._run_command(f"sudo iptables -A FORWARD -i {wan_interface} -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT")
+        self._run_command([
+            "sudo", "iptables", "-t", "nat", "-A", "POSTROUTING",
+            "-o", wan_interface, "-j", "MASQUERADE"
+        ])
+        self._run_command([
+            "sudo", "iptables", "-A", "FORWARD",
+            "-i", "br0", "-o", wan_interface, "-j", "ACCEPT"
+        ])
+        self._run_command([
+            "sudo", "iptables", "-A", "FORWARD",
+            "-i", wan_interface, "-o", "br0",
+            "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"
+        ])
 
         logger.info(f"NAT enabled for {wan_interface}")
 
@@ -1050,12 +1144,8 @@ network={{
         """Get comprehensive status for web UI"""
         self.state.uptime_seconds = int(time.time() - self._start_time)
 
-        # Count connected clients
-        output, _ = self._run_command("arp -an | grep br0 | wc -l")
-        try:
-            self.state.clients_connected = int(output)
-        except ValueError:
-            self.state.clients_connected = 0
+        # Count connected clients using helper method
+        self.state.clients_connected = self._count_arp_entries("br0")
 
         return {
             'state': self.state.state.value,
