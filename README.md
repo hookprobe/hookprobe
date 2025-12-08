@@ -2,637 +2,371 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
+<h1 align="center">Open-Source Network Security Firewall</h1>
+
 <p align="center">
-  <strong>Federated Cybersecurity Mesh</strong><br>
-  <em>Privacy-Preserving Collective Defense · One Node's Detection → Everyone's Protection</em>
+  <strong>Enterprise Firewall for Small Business · NIS2 Compliance Ready · Collective Defense</strong>
 </p>
 
 <p align="center">
-  <img src="assets/hookprobe-future-ram-cine.png" alt="Future of Cybersecurity" width="600"/>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3.0-blue.svg" alt="License: AGPL v3.0"/></a>
+  <a href="https://github.com/hookprobe/hookprobe/stargazers"><img src="https://img.shields.io/github/stars/hookprobe/hookprobe?style=social" alt="GitHub Stars"/></a>
+  <a href="https://github.com/hookprobe/hookprobe/releases"><img src="https://img.shields.io/github/v/release/hookprobe/hookprobe" alt="Latest Release"/></a>
+  <a href="https://github.com/hookprobe/hookprobe/actions"><img src="https://img.shields.io/github/actions/workflow/status/hookprobe/hookprobe/app-tests.yml" alt="Build Status"/></a>
 </p>
 
 <p align="center">
-  <strong>Enterprise-Grade AI Security for $75-$150 · Democratizing Cybersecurity for Millions</strong>
+  <img src="assets/hookprobe-future-ram-cine.png" alt="Open Source Firewall for Small Business" width="600"/>
+</p>
+
+<p align="center">
+  <strong>$75-$150 Hardware · Enterprise-Grade Protection · Community-Driven Innovation</strong>
 </p>
 
 ---
 
-## Why HookProbe Exists
+## 🎯 Why Small Businesses Choose HookProbe
 
-**4.3 billion people have no access to enterprise cybersecurity.** The industry charges $100K-$1M annually while 90% of the world remains unprotected. $8 trillion in annual cybercrime damages. Ransomware every 11 seconds. This is a humanitarian crisis.
+**The Problem:** Traditional firewalls cost $10,000-$50,000/year. Small businesses are left unprotected while facing the same threats as enterprises. **NIS2 compliance** requirements add more pressure with no affordable solutions.
 
-**HookProbe changes everything.** A $150 Raspberry Pi now delivers the same protection that costs enterprises $400,000+/year.
+**HookProbe Solution:** Deploy enterprise-grade **open-source network security** on a $150 Raspberry Pi or Mini PC. Get the same protection that Fortune 500 companies pay $400K+/year for.
 
-| The Problem | HookProbe Solution |
-|-------------|-------------------|
-| Static keys get stolen | Neural weights evolve continuously — no keys to steal |
-| Centralized SOCs fail | Decentralized mesh — one node protects all |
-| $100K+ enterprise cost | $150 hardware, $0 software (MIT license) |
-| Manual response (hours) | AI-autonomous response (<30 seconds) |
-| 90% of world unprotected | Enterprise security for everyone |
+| Challenge | Traditional Firewall | HookProbe |
+|-----------|---------------------|-----------|
+| **Cost** | $10K-$50K/year | $150 one-time |
+| **NIS2 Compliance** | Complex, expensive | Built-in automation |
+| **Threat Response** | Manual (hours) | AI-automated (<30 sec) |
+| **Updates** | Vendor-dependent | Community-driven |
+| **Collective Defense** | Isolated | Shared threat intelligence |
 
----
-
-## The Federated Mesh Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                          HOOKPROBE FEDERATED MESH                               │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                              ┌──────────────┐                                   │
-│                              │     MSSP     │  ← Central Brain                  │
-│                              │   (Cloud)    │    Analytics, Training, Portal    │
-│                              └──────┬───────┘                                   │
-│                    ┌────────────────┼────────────────┐                          │
-│                    │      HTP Mesh + Qsecbit         │ ← Trust Fabric           │
-│                    └────────────────┼────────────────┘                          │
-│          ┌──────────────────────────┼──────────────────────────┐               │
-│    ┌─────┴─────┐              ┌─────┴─────┐              ┌─────┴─────┐         │
-│    │   NEXUS   │ ◄──────────► │   NEXUS   │ ◄──────────► │   NEXUS   │ ← ML/AI │
-│    └─────┬─────┘              └─────┬─────┘              └─────┴─────┘         │
-│    ┌─────┴─────┐              ┌─────┴─────┐              ┌───────────┐         │
-│    │ Guardian  │              │ Fortress  │              │ Sentinel  │ ← Edge  │
-│    │ Fortress  │              │ Guardian  │              │ Guardian  │         │
-│    └───────────┘              └───────────┘              └───────────┘         │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-**The Core Innovation**: Customer A's attack becomes Customer B's immunity — without exposing A's data.
-
-| Component | Role | Hardware | What It Does |
-|-----------|------|----------|--------------|
-| **Sentinel** | Validator | IoT, 256MB | DSM mesh validation, health monitoring |
-| **Guardian** | Travel | RPi, 1.5GB | Portable WiFi hotspot, L2-L7 detection, dnsXai |
-| **Fortress** | Edge Router | Mini PC, 4GB | VLAN segmentation, local AI, SDN, dnsXai Advanced |
-| **Nexus** | ML/AI Compute | Server, 16GB+ | Federated learning, dnsXai training, mesh super-node |
-| **MSSP** | Cloud Brain | Auto-scale | Global threat model, fleet management, dnsXai global |
-
-**How Herd Immunity Works:**
-1. Nexus A detects attack → Creates Qsecbit signature (not raw data)
-2. MSSP aggregates → Trains hardened model
-3. All Nexuses receive update → Preemptively block attack
-4. Nexus D protected BEFORE attack reaches it
-
-📖 **[Full Architecture →](ARCHITECTURE.md)**
+> ⭐ **Star this repo** to support open-source network security for everyone!
 
 ---
 
-## Repository Structure
+## 🚀 Quick Start — Firewall for Small Business
 
+```bash
+# One-line installation on Raspberry Pi / Mini PC
+curl -fsSL https://hookprobe.com/install.sh | bash
+
+# Or clone and run manually
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+./install.sh --tier guardian  # For travel/portable WiFi
+./install.sh --tier fortress  # For office network (IoT segmentation)
 ```
-hookprobe/
-├── core/              # 🧠 Core Intelligence
-│   ├── htp/           # HookProbe Transport Protocol (UDP 4719)
-│   ├── qsecbit/       # Quantified Security Metric (0.0-1.0)
-│   └── neuro/         # Neural Resonance (TER → Weight → PoSF)
-│
-├── products/          # 📦 Product Tiers
-│   ├── sentinel/      # DSM Validator (256MB)
-│   ├── guardian/      # Travel Companion (1.5GB) + Flask Web UI
-│   ├── fortress/      # Edge Router (4GB) + Advanced Features
-│   ├── nexus/         # ML/AI Compute (16GB+)
-│   └── mssp/          # Cloud Federation + Django Portal
-│
-├── shared/            # 🔧 Shared Infrastructure
-│   ├── dnsXai/        # AI-Powered DNS Protection (NEW!)
-│   ├── mesh/          # Unified Mesh Communication (NEW!)
-│   ├── dsm/           # Decentralized Security Mesh
-│   └── response/      # Automated Threat Response
-│
-├── deploy/            # 🚀 Deployment
-│   ├── install/       # Installation scripts
-│   └── addons/        # n8n, LTE, webserver
-│
-├── infrastructure/    # 🏗️ Infrastructure Templates (NEW!)
-│   ├── pod-009-email/ # Email server infrastructure
-│   └── pod-010-dsm/   # DSM infrastructure
-│
-└── docs/              # 📚 Documentation
-```
+
+**Hardware Requirements:**
+
+| Product | Hardware | RAM | Best For |
+|---------|----------|-----|----------|
+| **Guardian** | Raspberry Pi 5 | 1.5GB+ | Travel WiFi hotspot, portable protection |
+| **Fortress** | Mini PC (N100/N5105) | 4GB+ | **Small business firewall**, IoT segmentation, NIS2 |
+| **Nexus** | Server | 16GB+ | Multi-site coordination, ML training |
+
+📖 **[Installation Guide →](docs/installation/INSTALLATION.md)** | **[Beginner's Guide →](docs/installation/BEGINNER-GUIDE.md)**
 
 ---
 
-## The Four Pillars
+## 🔥 Key Features for Business Networks
 
-### Pillar 1: Neural Resonance Protocol — Living Cryptography
+### 1. NIS2 Compliance Automation
 
-**Your cryptographic identity isn't a key — it's the evolution of a neural network.**
-
-Traditional authentication asks: *"Do you know the password?"*
-Neural Resonance asks: *"Can you prove your entire sensor history through deterministic weight evolution?"*
-
-#### How It Works (Plain Terms)
-
-Every 60 seconds, your device captures a **Temporal Event Record (TER)** — a 64-byte snapshot of system state (CPU, memory, network, disk + file integrity hashes). This TER drives **neural network weight updates** using fixed-point math. The weights continuously evolve based on your device's unique history.
-
-When connecting to the cloud, your device doesn't send a password. It sends its **weight fingerprint**. The cloud **replays your TER history** and calculates what your weights should be. If they match → authenticated. If they differ by even one bit → **quarantine**.
-
-**Why attackers can't win**: Tampering with the device changes the integrity hash → unpredictable weight divergence → instant detection on reconnect.
-
-#### The Algorithm
-
-```python
-# Temporal Event Record (64 bytes)
-TER = {
-    'H_Entropy':   SHA256(cpu, memory, network, disk),  # 32 bytes
-    'H_Integrity': RIPEMD160(kernel, binary, config),   # 20 bytes
-    'timestamp':   microseconds_since_epoch,             # 8 bytes
-    'sequence':    monotonic_counter,                    # 2 bytes
-    'chain_hash':  CRC16(previous_TER)                   # 2 bytes
-}
-
-# Weight Evolution (every 60 seconds)
-W(t+1) = W(t) - η × ∇L(W, TER)
-
-where:
-    η = η_base × exp(-Δt / τ)           # Time-decayed learning rate
-    L = L_base + C × Σ_threat           # Integrity penalty
-    Σ_threat = H_Integrity[:4] / 2^32   # Unpredictable if compromised
-```
-
-#### Key Files
-- `core/neuro/core/ter.py` — TER generation
-- `core/neuro/neural/engine.py` — Deterministic weight evolution
-- `core/neuro/core/posf.py` — Proof-of-Sensor-Fusion signatures
-
-📖 **[Full Neuro Protocol Specification →](docs/architecture/hookprobe-neuro-protocol.md)**
-
----
-
-### Pillar 2: HookProbe Transport Protocol (HTP) — Adaptive Quantum-Resistant Communication
-
-**A 9-message UDP protocol that survives DDoS, traverses NAT, and is quantum-resistant by design.**
-
-#### Why Not QUIC/TLS?
-
-QUIC uses TLS 1.3 with RSA/ECDSA — vulnerable to quantum computers by 2030. HTP uses **neural weights as cryptographic primitives**. No factoring problem. No discrete logarithm. No static keys.
-
-#### Adaptive Security (AI-Powered)
-
-HTP monitors network conditions in real-time and adapts:
+**EU NIS2 Directive compliance** out of the box — required for essential and important entities by October 2024.
 
 ```
-Normal:     STREAMING mode (full throughput)
-              ↓
-RTT spike / packet loss / CPU stress detected
-              ↓
-            ADAPTIVE mode
-              ↓
-• Switch to SENSOR packets (320 bytes minimum)
-• Reduce cryptographic operations
-• Increase redundancy/retries
-              ↓
-Conditions improve → Resume STREAMING
+✓ Automated incident reporting (Article 23)
+✓ Risk management measures (Article 21)
+✓ Supply chain security assessment
+✓ Continuous monitoring and logging
+✓ Compliance reports for auditors
 ```
 
-**Real attack scenario:**
-```
-T+00s: DDoS attack begins (packet loss: 5% → 25%)
-T+05s: HTP detects loss_rate > 15%
-T+10s: Auto-switch to ADAPTIVE mode
-T+15s: Reduce to SENSOR packets (320 bytes)
-T+20s: Session survives — connection maintained
-T+60s: Attack subsides → return to STREAMING
+### 2. AI-Powered Threat Detection (Qsecbit)
 
-Traditional VPN: Connection drops at T+10s
-HTP: Zero downtime, graceful degradation
-```
-
-#### Energy-Aware Routing
-
-```python
-# Power-to-Weight Flag in HTP header
-POWER_FLAGS = {
-    0x00: 'WALL_POWERED',  # Can relay mesh traffic
-    0x01: 'BATTERY',       # Receive only, no relay
-    0x02: 'LOW_BATTERY',   # Emergency mode
-    0x03: 'CHARGING'       # Gradual relay capability
-}
-# Result: 80% power savings for battery-powered edge nodes
-```
-
-#### The 9 Message Types
-
-```
-HELLO     → Edge sends weight fingerprint + node ID
-CHALLENGE → Validator sends 16-byte nonce
-ATTEST    → Edge signs nonce with Ed25519 device key
-ACCEPT    → Session established, encrypted with ChaCha20-Poly1305
-REJECT    → Authentication failed
-DATA      → Encrypted bidirectional communication
-HEARTBEAT → NAT keep-alive (every 30s)
-ACK       → Message acknowledgment
-CLOSE     → Session termination
-```
-
-#### Session Key Derivation
-
-```python
-session_key = SHA256(session_secret + weight_fingerprint)
-# Key is bound to neural state — changes if device is tampered
-```
-
-#### Key Files
-- `core/htp/transport/htp.py` — Complete HTP implementation
-- `core/neuro/identity/hardware_fingerprint.py` — Device identity without TPM
-
-📖 **[HTP Quantum Cryptography Analysis →](docs/HTP_QUANTUM_CRYPTOGRAPHY.md)**
-📖 **[HTP Security Enhancements →](docs/HTP_SECURITY_ENHANCEMENTS.md)**
-
----
-
-### Pillar 3: Qsecbit — AI Resilience Metrics with Energy Monitoring
-
-**Traditional security asks**: *"Are we under attack?"* (binary yes/no)
-**Qsecbit asks**: *"How fast can we return to equilibrium?"* (quantified resilience 0.0-1.0)
-
-#### The Formula
-
-```python
-Qsecbit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
-
-where:
-    drift         = Mahalanobis distance from baseline
-    p_attack      = ML-predicted attack probability (0.0-1.0)
-    decay         = Rate of classifier confidence change
-    q_drift       = System entropy deviation
-    energy_anomaly = Power consumption anomalies (v5.0 NEW)
-```
-
-#### RAG Status Classification
+Real-time threat scoring with automated response:
 
 | Score | Status | Action |
 |-------|--------|--------|
-| < 0.45 | 🟢 GREEN | Normal — learning baseline |
-| 0.45-0.70 | 🟡 AMBER | Warning — auto-response triggered |
-| > 0.70 | 🔴 RED | Critical — full mitigation deployed |
+| < 0.45 | 🟢 GREEN | Normal operations |
+| 0.45-0.70 | 🟡 AMBER | Auto-mitigation triggered |
+| > 0.70 | 🔴 RED | Full defense activated |
 
-#### Energy-Based Attack Detection (v5.0)
+### 3. Collective Defense Network
 
-Qsecbit detects attacks by **power consumption patterns** using Intel RAPL:
+**One business's detection → Everyone's protection**
 
-```
-DDoS Attack Pattern Detected:
-  ksoftirqd/0 power: 2.5W → 8.3W (Z-score: 4.2)
-  NIC interrupt:     1.2W → 5.1W (Z-score: 3.8)
-  Total spike: +262%
-
-  → Qsecbit: 0.78 (RED)
-  → XDP auto-deploys rate limiting
-  → Attack mitigated at kernel level
-```
-
-#### Network Direction-Aware Analysis
-
-```python
-# Role-based traffic pattern detection
-PUBLIC_SERVER_NORMAL  = IN > OUT  (ratio ~0.6)
-PUBLIC_SERVER_DDOS    = IN >>> OUT (ratio ~0.2) → DETECTED
-PUBLIC_SERVER_EXFIL   = OUT > IN  (ratio ~2.4) → DETECTED
-
-USER_ENDPOINT_NORMAL  = OUT > IN  (ratio ~1.8)
-USER_ENDPOINT_BOTNET  = OUT >>> IN (ratio ~8.5) → DETECTED
-```
-
-#### XDP/eBPF Kernel-Level Mitigation
-
-Sub-microsecond packet filtering **before the network stack**:
+When any HookProbe node detects a new threat, the entire network learns instantly:
 
 ```
-Intel I226 NIC (XDP-DRV mode):
-  - 2.5 Gbps line-rate filtering
-  - <1 µs latency
-  - 5-10% CPU usage
-  - Blocks attacks at Layer 0 (NIC hardware)
+Business A (London):     Detects ransomware C2 callback
+        ↓
+HookProbe Mesh:          Shares anonymized threat signature
+        ↓
+Business B (Berlin):     Protected BEFORE attack reaches them
+        ↓
+Business C (Paris):      Automatically blocking
 ```
 
-#### Key Files
-- `core/qsecbit/qsecbit.py` — Core resilience algorithm
-- `core/qsecbit/energy_monitor.py` — RAPL power monitoring
-- `core/qsecbit/xdp_manager.py` — Kernel-level XDP/eBPF programs
+### 4. IoT Network Segmentation
 
-📖 **[Complete Qsecbit Algorithm →](core/qsecbit/README.md)**
+**Fortress** automatically isolates IoT devices to prevent lateral movement:
+
+```
+┌─────────────────────────────────────────────────────┐
+│           Single WiFi: "Office-Network"              │
+│                        ↓                             │
+│    ┌──────────────────────────────────────┐         │
+│    │         Fortress Firewall            │         │
+│    └──────────┬───────┬───────┬───────────┘         │
+│               │       │       │                      │
+│    VLAN 10    │ VLAN 20│ VLAN 30 │ VLAN 99           │
+│    Trusted    │  IoT   │ Guest  │ Quarantine         │
+│    💻 📱      │ 📷 💡  │  📱    │   ❓               │
+│               │        │        │                    │
+│  ✗ IoT devices CANNOT access trusted network        │
+│  ✗ Compromised camera CANNOT spread to file server  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 5. DNS Protection (dnsXai)
+
+AI-powered DNS filtering blocks:
+- Ads and trackers (130K+ domains)
+- Malware command & control
+- Phishing domains
+- Data exfiltration tunnels
 
 ---
 
-### Pillar 4: dnsXai — AI-Powered DNS Protection
+## 🏗️ Architecture — Open Source Collaboration
 
-**Traditional blockers miss. dnsXai catches.**
+HookProbe is built on **open collaboration** principles. Core components are AGPL-licensed, ensuring contributions benefit everyone.
 
-dnsXai is HookProbe's next-generation DNS protection using machine learning to classify unknown domains in real-time.
+```
+hookprobe/
+├── core/                    # 🧠 Core Intelligence
+│   ├── htp/                 # Transport Protocol (AGPL)
+│   ├── qsecbit/             # AI Threat Scoring
+│   └── neuro/               # Neural Authentication
+│
+├── shared/                  # 🔧 Shared Innovation
+│   ├── dnsXai/              # AI DNS Protection
+│   ├── mesh/                # Collective Defense Network
+│   ├── network/             # Network Segmentation
+│   └── response/            # Automated Response (AGPL)
+│
+├── products/                # 📦 Distribution Tiers
+│   ├── guardian/            # Travel Firewall (AGPL)
+│   ├── fortress/            # Business Firewall
+│   ├── nexus/               # ML Coordination
+│   └── mssp/                # Managed Service Provider
+│
+└── deploy/                  # 🚀 Easy Deployment (AGPL)
+```
 
-#### Why dnsXai?
-
-| Traditional Blockers | dnsXai |
-|---------------------|--------|
-| Static blocklists only | ML-based classification for unknown domains |
-| Miss CNAME cloaking | Detects first-party tracker masquerading |
-| Isolated protection | Federated learning across mesh network |
-| Manual updates | Self-learning and auto-updating |
-| Binary block/allow | Confidence-based decisions with 8 categories |
-
-#### Features
-
-- **ML Classification** — 20-feature neural classifier (<1ms inference on Raspberry Pi)
-- **CNAME Uncloaking** — Detects `track.yoursite.com → adobe.demdex.net`
-- **5 Protection Levels** — Base (~130K domains) to Full (~250K domains)
-- **Federated Learning** — Privacy-preserving collective intelligence
-- **Qsecbit Integration** — Contributes 8% to security score
-
-#### Protection Levels
-
-| Level | Name | Blocks |
-|-------|------|--------|
-| 1 | Base | Ads + Malware |
-| 2 | Enhanced | + Fakenews |
-| 3 | Strong | + Gambling |
-| 4 | Maximum | + Adult Content |
-| 5 | Full | + Social Trackers |
-
-#### Key Files
-- `shared/dnsXai/engine.py` — ML classifier with 20 features
-- `shared/dnsXai/mesh_intelligence.py` — Federated learning
-- `shared/dnsXai/integration.py` — Product integration
-
-📖 **[Complete dnsXai Documentation →](shared/dnsXai/README.md)**
+📖 **[Full Architecture →](ARCHITECTURE.md)** | **[Mesh Documentation →](shared/mesh/ARCHITECTURE.md)**
 
 ---
 
-## Quick Start
+## 💼 Business Use Cases
 
-### For Everyone (Non-Technical)
+### Small Business (5-50 employees)
+
+**Challenge:** Need enterprise security but can't afford $50K/year solutions.
+
+**Solution:** Deploy Fortress on a $150 Mini PC:
+- ✅ NIS2 compliance automation
+- ✅ IoT device isolation
+- ✅ VPN for remote workers
+- ✅ AI threat detection
+- ✅ Zero ongoing license fees
+
+**ROI:** 99% cost savings vs. traditional enterprise firewalls.
+
+### Remote/Hybrid Workforce
+
+**Challenge:** Employees working from hotels, coffee shops, airports.
+
+**Solution:** Deploy Guardian on Raspberry Pi:
+- ✅ Portable secure WiFi hotspot
+- ✅ L2-L7 threat detection
+- ✅ DNS-level ad/malware blocking
+- ✅ VPN back to office network
+
+### Managed Service Providers (MSPs/MSSPs)
+
+**Challenge:** Need affordable solution to protect SMB clients.
+
+**Solution:** Deploy edge nodes at client sites:
+- ✅ Multi-tenant management dashboard
+- ✅ Cross-client threat intelligence
+- ✅ White-label capabilities
+- ✅ Offer $50/month vs. $500/month traditional
+
+---
+
+## 🌍 Community & Collaboration
+
+HookProbe is a **collaborative, community-driven project**. We believe security should be accessible to everyone.
+
+### How to Contribute
 
 ```bash
-git clone https://github.com/hookprobe/hookprobe
+# Fork, clone, and contribute
+git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
-sudo ./install.sh
+make install-dev
+make test
+
+# Submit pull request
 ```
 
-The interactive wizard handles everything: network detection, password generation, POD deployment. **15 minutes to enterprise security.**
+### Community Resources
 
-### For Developers (Technical)
+| Resource | Link |
+|----------|------|
+| 📖 Documentation | [docs/](docs/) |
+| 🐛 Issues | [GitHub Issues](https://github.com/hookprobe/hookprobe/issues) |
+| 💬 Discussions | [GitHub Discussions](https://github.com/hookprobe/hookprobe/discussions) |
+| 📧 Security Issues | qsecbit@hookprobe.com |
 
-```bash
-# Clone and enter
-git clone https://github.com/hookprobe/hookprobe && cd hookprobe
+### Contributors Welcome
 
-# Edge deployment with Neuro protocol
-sudo ./install.sh --role edge
-python3 -m neuro.tools.init_weights --node-id edge-001
-sudo systemctl start hookprobe-edge hookprobe-neuro
+- 🔧 **Developers:** Core features, bug fixes, integrations
+- 📝 **Technical Writers:** Documentation, tutorials
+- 🌐 **Translators:** Localization
+- 🧪 **Testers:** Edge cases, hardware compatibility
+- 💡 **Ideas:** Feature requests, use cases
 
-# Verify installation
-make status          # Check POD health
-make metrics         # View Qsecbit scores
-python3 -m neuro.core.ter  # Test TER generation
-make dsm-status      # View mesh connectivity
-```
-
-### Hardware Requirements
-
-| Platform | Price | Throughput | Best For |
-|----------|-------|------------|----------|
-| **Raspberry Pi 5** | $75 | 500 Mbps | Home, Budget |
-| **Intel N100** ⭐ | $150 | 2.5 Gbps | SMB, Best Value |
-| **Banana Pi M7** | $200 | 2.5 Gbps | High Performance |
-
-**Critical**: For best XDP/eBPF performance, choose Intel I226-V NIC (2.5 Gbps, XDP-DRV native support).
-
-📖 **[Complete Installation Guide →](docs/installation/INSTALLATION.md)**
+📖 **[Contributing Guide →](docs/CONTRIBUTING.md)**
 
 ---
 
-## VPN & Remote Access
+## 📊 Groundbreaking Innovation
 
-**Access your protected network from anywhere in the world.**
+### The Four Pillars
 
-HookProbe VPN enables secure remote access to your Fortress-protected network, even behind NAT/CGNAT. VPN services are managed by the **MSSP** cloud layer:
+| Pillar | Innovation | What It Does |
+|--------|------------|--------------|
+| **Neural Resonance** | Living cryptography | No static keys — neural weights evolve continuously |
+| **HTP Protocol** | Quantum-resistant transport | Survives DDoS, traverses NAT, post-quantum ready |
+| **Qsecbit Engine** | AI resilience metrics | Real-time threat scoring with energy monitoring |
+| **Collective Defense** | Federated mesh | One detection → global protection |
 
-```
-📱 Your Phone (Anywhere)     💻 Your Laptop (Coffee Shop)
-         │                              │
-         └──────── IKEv2 VPN ───────────┘
-                      │
-              ┌───────▼───────┐
-              │     MSSP      │  ← Cloud VPN Gateway (Public IP)
-              │  Federation   │
-              └───────┬───────┘
-                      │ HTP Tunnel
-              ┌───────▼───────┐
-              │   Fortress    │  ← Your Home/Office (No Public IP needed!)
-              │  Edge Router  │
-              └───────┬───────┘
-                      │
-         ┌────────────┼────────────┐
-         📷          💡           📁
-      Cameras      Lights        NAS
-```
+### Technical Highlights
 
-**Why You Need It:**
-- **Travel security** — Route traffic through your home network
-- **Access local resources** — Cameras, NAS, smart home from anywhere
-- **No port forwarding** — Works with any ISP, even mobile carriers
-- **Native mobile support** — Uses iOS/Android built-in VPN clients
+- **XDP/eBPF Filtering:** Kernel-level packet decisions (sub-microsecond)
+- **Post-Quantum Cryptography:** Kyber KEM hybrid encryption
+- **Energy-Aware:** 60-80% power savings vs. traditional firewalls
+- **Privacy-Preserving:** Threat intelligence shared without exposing raw data
 
-> **Note:** Guardian (Raspberry Pi) is for portable travel WiFi hotspot with threat detection. For VPN and advanced networking features, use Fortress (Mini PC, 8GB+ RAM).
-
-📖 **[VPN Documentation →](docs/networking/VPN.md)**
+📖 **[Qsecbit Algorithm →](core/qsecbit/README.md)** | **[HTP Protocol →](docs/HTP_SECURITY_ENHANCEMENTS.md)**
 
 ---
 
-## SDN & IoT Segmentation
+## 📋 Documentation
 
-**Plug-and-play network segmentation for IoT devices.**
+### For Business Users
 
-**Fortress** transforms a Mini PC into an enterprise-grade SDN controller with VLAN segmentation, automatically isolating your IoT devices:
+| Document | Description |
+|----------|-------------|
+| **[Quick Start](QUICK-START.md)** | Get running in 10 minutes |
+| **[Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)** | Step-by-step for non-technical users |
+| **[Guardian Setup](products/guardian/README.md)** | Travel WiFi firewall |
+| **[Fortress Setup](products/fortress/README.md)** | Small business firewall |
+| **[VPN Access](docs/networking/VPN.md)** | Remote access setup |
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  SINGLE SSID: "MyNetwork"                   │
-│     All devices connect to the same network name            │
-│                          │                                  │
-│              ┌───────────▼───────────┐                      │
-│              │      Fortress         │  ← Mini PC, 8GB RAM  │
-│              │  MAC → VLAN Router    │                      │
-│              └───────────┬───────────┘                      │
-│                          │                                  │
-│    ┌─────────┬─────────┬─────────┬─────────┬─────────┐     │
-│  VLAN 10  VLAN 20  VLAN 30  VLAN 40  VLAN 99          │     │
-│  Mgmt     Trusted    IoT      Guest  Quarantine       │     │
-│    🔐       💻        📷       📱       ❓              │     │
-│                                                             │
-│  ✗ IoT devices can't see trusted devices (isolated)        │
-│  ✗ Compromised device can't spread laterally               │
-│  ✗ Unknown devices quarantined until registered            │
-└─────────────────────────────────────────────────────────────┘
-```
+### For Developers
 
-**Why You Need It:**
-- **IoT devices are vulnerable** — Outdated firmware, weak security
-- **Lateral movement prevention** — Hacked camera can't attack your NAS
-- **Zero-config setup** — Connect via web UI, assign devices to VLANs
-- **MACsec encryption** — Layer 2 encryption for wired connections
+| Document | Description |
+|----------|-------------|
+| **[Architecture](ARCHITECTURE.md)** | System design overview |
+| **[CLAUDE.md](CLAUDE.md)** | AI assistant development guide |
+| **[Mesh Architecture](shared/mesh/ARCHITECTURE.md)** | P2P communication |
+| **[dnsXai](shared/dnsXai/README.md)** | DNS protection module |
+| **[Contributing](docs/CONTRIBUTING.md)** | How to contribute |
 
-> **Guardian vs Fortress:** Guardian (Raspberry Pi) provides portable WiFi hotspot with threat detection but **no VLAN segmentation** due to RPi hardware limitations. For IoT isolation and advanced SDN features, use Fortress.
+### For Compliance
 
-📖 **[SDN Documentation →](docs/networking/SDN.md)** | **[Fortress Setup →](products/fortress/README.md)**
+| Document | Description |
+|----------|-------------|
+| **[GDPR Compliance](docs/GDPR.md)** | Data protection |
+| **[Security Policy](docs/SECURITY.md)** | Vulnerability reporting |
+| **[Licensing](LICENSING.md)** | Dual license details |
 
 ---
 
-## Architecture Overview
+## 📜 Licensing — Open Source with Innovation Protection
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    HOOKPROBE ARCHITECTURE                        │
-│         Neural Resonance · Decentralized Mesh · Surgical AI     │
-├─────────────────────────────────────────────────────────────────┤
-│  LAYER 4: CONSENSUS (Cloud Validators)                          │
-│    BLS signatures · 2/3 quorum · Deterministic replay           │
-├─────────────────────────────────────────────────────────────────┤
-│  LAYER 3: MESH (P2P Edge Network)                               │
-│    Gossip protocol · Neural resonance · Threat sharing          │
-├─────────────────────────────────────────────────────────────────┤
-│  LAYER 2: AI ANALYSIS (Edge Node)                               │
-│    Qsecbit engine · Energy monitoring · Auto-mitigation         │
-├─────────────────────────────────────────────────────────────────┤
-│  LAYER 1: DETECTION (Kernel/Hardware)                           │
-│    XDP/eBPF · Suricata · Zeek · Snort3                          │
-└─────────────────────────────────────────────────────────────────┘
-
-30-Second Attack Response:
-  T+00s: XDP intercepts packet at NIC
-  T+05s: Qsecbit scores 0.85 (RED)
-  T+08s: Auto-deploy mitigation
-  T+15s: Announce to mesh
-  T+25s: BLS quorum signs checkpoint
-  T+30s: All nodes protected globally
-```
-
----
-
-## Energy Efficiency Focus
-
-HookProbe v5.0 "Liberty" prioritizes **energy-efficient security** for edge deployments:
-
-| Feature | Power Savings | Implementation |
-|---------|---------------|----------------|
-| **XDP/eBPF filtering** | 60-80% vs userspace | Kernel-level packet decisions |
-| **HTP energy-aware routing** | 80% for battery devices | Power-to-Weight flag |
-| **Qsecbit RAPL monitoring** | Attack detection | Per-process power tracking |
-| **Adaptive transmission** | Variable by conditions | STREAMING ↔ SENSOR modes |
-
-**Raspberry Pi 5 Power Profile:**
-- Idle: ~3W
-- Normal operation: ~5W
-- Under attack (XDP active): ~6W
-- Traditional software firewall: ~12W (2x worse)
-
----
-
-## Business Impact
-
-| Deployment | Traditional Cost | HookProbe Cost | Savings |
-|------------|------------------|----------------|---------|
-| Home | $600/year (monitoring) | $75 one-time | 99% |
-| SMB (20 users) | $100K+/year | $150 one-time | 99.9% |
-| MSSP (100 customers) | $50K/month | $15K one-time + hosting | 97% |
-
-**For MSSPs**: Deploy $150 edge nodes at customer sites. Centralized multi-tenant validators. Cross-customer threat intelligence. Offer enterprise security at $50/month vs $500/month traditional.
-
----
-
-## Documentation
-
-| Document | Audience |
-|----------|----------|
-| **[Architecture](ARCHITECTURE.md)** | Everyone |
-| **[Quick Start](QUICK-START.md)** | Everyone |
-| **[dnsXai DNS Protection](shared/dnsXai/README.md)** | Everyone |
-| **[Mesh Architecture](shared/mesh/ARCHITECTURE.md)** | Developers |
-| **[Guardian Setup](products/guardian/README.md)** | Raspberry Pi Users |
-| **[Fortress Setup](products/fortress/README.md)** | Mini PC Users |
-| **[Nexus Setup](products/nexus/README.md)** | Server/Cloud |
-| **[Core Intelligence](core/README.md)** | Developers |
-| **[Neuro Protocol Spec](docs/architecture/hookprobe-neuro-protocol.md)** | Developers, Researchers |
-| **[HTP Analysis](docs/HTP_QUANTUM_CRYPTOGRAPHY.md)** | Security Engineers |
-| **[Qsecbit Algorithm](core/qsecbit/README.md)** | AI/ML Engineers |
-| **[DSM Whitepaper](docs/architecture/dsm-whitepaper.md)** | Architects |
-| **[VPN Remote Access](docs/networking/VPN.md)** | Home/Business Users |
-| **[SDN & IoT Segmentation](docs/networking/SDN.md)** | Home/Business Users |
-| **[Installation Guide](docs/installation/INSTALLATION.md)** | System Admins |
-| **[CLAUDE.md AI Guide](CLAUDE.md)** | AI Assistants |
-
----
-
-## Licensing
-
-HookProbe uses a **dual licensing model** to balance open-source community benefits with intellectual property protection.
+HookProbe uses a **dual licensing model** balancing open collaboration with sustainable development.
 
 ### Open Source (AGPL v3.0)
 
-| Component | Location |
-|-----------|----------|
-| Deployment scripts | `deploy/` |
-| Guardian product | `products/guardian/` |
-| Threat response | `shared/response/` |
-| Mesh communication | `shared/mesh/` |
-| HTP base protocol | `core/htp/` |
-| Documentation | `docs/` |
+| Component | Status |
+|-----------|--------|
+| Deployment scripts | ✅ Fully Open |
+| Guardian product | ✅ Fully Open |
+| Mesh communication | ✅ Fully Open |
+| Threat response | ✅ Fully Open |
+| Documentation | ✅ Fully Open |
 
-### Proprietary (Commercial License Required for SaaS/OEM)
+### Innovation Protection (Commercial License for SaaS/OEM)
 
-| Innovation | Location |
-|------------|----------|
-| Qsecbit AI Algorithm | `core/qsecbit/` |
-| Neural Resonance Protocol | `core/neuro/` |
-| dnsXai ML Classifier | `shared/dnsXai/` |
-| DSM Consensus | `shared/dsm/` |
-| MSSP Cloud Platform | `products/mssp/` |
+| Innovation | Requires License For |
+|------------|---------------------|
+| Qsecbit AI Algorithm | SaaS/OEM use |
+| Neural Resonance Protocol | SaaS/OEM use |
+| dnsXai ML Classifier | SaaS/OEM use |
+| MSSP Cloud Platform | SaaS/OEM use |
 
-**Free for**: Personal use, internal business protection
-**Commercial license for**: MSSPs, SaaS providers, OEM integrations
+**Free for:**
+- ✅ Personal/home use
+- ✅ Internal business protection
+- ✅ Non-commercial research
 
-See **[LICENSING.md](LICENSING.md)** for full details. Contact: qsecbit@hookprobe.com
+**Commercial license required for:**
+- MSSP/SaaS offerings
+- OEM product embedding
+- White-label distribution
 
----
-
-## Join the Movement
-
-**For Users**: Deploy a $75 edge node. Your threats train the global AI. Protection improves daily.
-
-**For Developers**: AGPL open source. Build PODs, integrate services, research novel crypto+AI.
-
-**For MSSPs**: Commercial licenses available. 10x customers on same infrastructure.
-
-**For Researchers**: New cryptographic primitives. Continuous authentication. Academia partnership.
+📖 **[Full Licensing Details →](LICENSING.md)** | Contact: qsecbit@hookprobe.com
 
 ---
 
-## The Vision
+## 🤝 Join the Movement
 
-By 2030:
-- 🌐 1 million edge nodes globally
-- 🏠 Enterprise security in every home ($75)
-- 🧬 Neural cryptography as industry standard
-- 🎯 Qsecbit as the resilience metric
+**We're building the future of open-source network security.**
 
-**From fortifications to nervous systems. From static defense to living resilience.**
+Small businesses shouldn't choose between security and budget. With HookProbe, they don't have to.
+
+### Get Started Today
+
+```bash
+# Install on your Raspberry Pi or Mini PC
+curl -fsSL https://hookprobe.com/install.sh | bash
+```
+
+### Support the Project
+
+- ⭐ **Star this repo** — Help others discover open-source firewalls
+- 🍴 **Fork and contribute** — Every improvement helps everyone
+- 📢 **Share** — Tell other small businesses about affordable security
+- 💬 **Discuss** — Join our community discussions
 
 ---
 
 <p align="center">
-  <strong>Start Your Journey</strong><br>
-  <code>git clone https://github.com/hookprobe/hookprobe && cd hookprobe && sudo ./install.sh</code>
+  <strong>HookProbe v5.0 "Liberty"</strong><br>
+  <em>Open Source · Collective Defense · Enterprise Security for Everyone</em>
 </p>
 
 <p align="center">
-  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em><br>
-  <strong>HookProbe v5.0 "Liberty"</strong> · <a href="LICENSING.md">Dual Licensed (AGPL v3.0 + Commercial)</a><br><br>
-  <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
-  <a href="https://hookprobe.com">Website</a> ·
-  <a href="mailto:qsecbit@hookprobe.com">Licensing</a>
+  <a href="https://github.com/hookprobe/hookprobe">⭐ Star on GitHub</a> ·
+  <a href="docs/installation/INSTALLATION.md">📖 Documentation</a> ·
+  <a href="https://github.com/hookprobe/hookprobe/discussions">💬 Discussions</a>
 </p>
 
----
-
-**Made with 🧠 for a safer, more equitable internet**
+<p align="center">
+  <sub>Built with ❤️ by the HookProbe community. One node's detection → Everyone's protection.</sub>
+</p>
