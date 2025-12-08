@@ -95,8 +95,23 @@ def api_updates():
 def api_logs():
     """Get recent system logs."""
     try:
-        output, success = run_command('journalctl -n 50 --no-pager 2>/dev/null | tail -50')
-        return jsonify({'logs': output if success else 'No logs available'})
+        # Use journalctl without pipes (safer without shell=True)
+        output, success = run_command(['journalctl', '-n', '50', '--no-pager', '-q'])
+        if success and output:
+            return jsonify({'logs': output})
+
+        # Fallback: read from syslog
+        import os
+        for log_file in ['/var/log/syslog', '/var/log/messages']:
+            if os.path.exists(log_file):
+                try:
+                    with open(log_file, 'r') as f:
+                        lines = f.readlines()[-50:]
+                        return jsonify({'logs': ''.join(lines)})
+                except (IOError, PermissionError):
+                    continue
+
+        return jsonify({'logs': 'No logs available'})
     except Exception as e:
         return jsonify({'logs': str(e)})
 

@@ -58,26 +58,19 @@
             </div>
         </div>
 
-        <!-- Channel Analysis -->
+        <!-- Channel Selection -->
         <div style="margin-top: var(--spacing-lg);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
-                <h4 style="margin: 0;">Channel Congestion (2.4GHz)</h4>
-                <button class="btn btn-sm btn-secondary" onclick="scanChannels()">Scan Channels</button>
-            </div>
-            <div id="channel-analysis" class="device-grid" style="grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));">
-                <div class="empty-state">
-                    <p class="text-muted">Click "Scan Channels" to analyze RF environment</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Quick Actions -->
-        <div style="margin-top: var(--spacing-lg); padding-top: var(--spacing-md); border-top: 1px solid var(--border-color);">
-            <h4 style="margin-bottom: var(--spacing-sm);">Quick Actions</h4>
-            <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-sm);">
-                <button class="btn btn-secondary" onclick="autoSelectChannel()">
-                    Auto-Select Best Channel
+                <h4 style="margin: 0;">WiFi Channel</h4>
+                <button class="btn btn-sm btn-primary" onclick="autoSelectChannel()">
+                    Find Best Channel
                 </button>
+            </div>
+            <p class="text-muted" style="font-size: 0.8125rem; margin-bottom: var(--spacing-md);">
+                The AP automatically selects the least congested channel on startup. Click "Find Best Channel" to rescan and switch to a better channel if needed.
+            </p>
+            <div id="channel-analysis" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-sm);">
+                <!-- Populated by JavaScript -->
             </div>
         </div>
     </div>
@@ -521,17 +514,31 @@ async function selectChannel(channel) {
 }
 
 async function autoSelectChannel() {
+    const container = document.getElementById('channel-analysis');
+    container.innerHTML = '<div class="empty-state" style="text-align: center;"><p class="text-muted">Scanning RF environment...</p></div>';
     showToast('Scanning for best channel...', 'info');
+
     try {
-        const result = await apiPost('/config/offline/channel', { channel: 'auto' });
-        if (result.success) {
-            showToast(`Auto-selected channel ${result.channel}`, 'success');
-            refreshOfflineStatus();
-            scanChannels();
+        // First scan to get channel data
+        const scanResult = await apiPost('/config/offline/scan');
+        if (scanResult.success) {
+            // Show the scan results
+            renderChannelAnalysis(scanResult);
+
+            // Then auto-select the best channel
+            const selectResult = await apiPost('/config/offline/channel', { channel: 'auto' });
+            if (selectResult.success) {
+                showToast(`Switched to channel ${selectResult.channel} (least congested)`, 'success');
+                refreshOfflineStatus();
+            } else {
+                showToast(selectResult.error || 'Channel switch failed', 'error');
+            }
         } else {
-            showToast(result.error || 'Auto-select failed', 'error');
+            container.innerHTML = '<div class="empty-state"><p class="text-muted">No channel data available</p></div>';
+            showToast(scanResult.error || 'Scan failed', 'error');
         }
     } catch (error) {
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Scan failed</p></div>';
         showToast('Auto-select failed', 'error');
     }
 }
@@ -706,6 +713,19 @@ async function saveEth0Config(e) {
     }
 }
 
+// Load initial channel display
+function initChannelDisplay() {
+    const container = document.getElementById('channel-analysis');
+    // Show placeholder with current channel info
+    const channels = [1, 6, 11];
+    container.innerHTML = channels.map(ch => `
+        <div class="stat-card" style="text-align: center; padding: var(--spacing-sm);">
+            <div style="font-size: 1.25rem; font-weight: 700;">CH ${ch}</div>
+            <div class="text-muted" style="font-size: 0.75rem;">--</div>
+        </div>
+    `).join('');
+}
+
 // Load offline status on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Delay to ensure tab is visible
@@ -713,6 +733,7 @@ document.addEventListener('DOMContentLoaded', function() {
         refreshOfflineStatus();
         loadRouteMetrics();
         loadEth0Config();
+        initChannelDisplay();
     }, 500);
 });
 </script>
