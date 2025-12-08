@@ -553,6 +553,90 @@ def api_ml_threats():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@dnsxai_bp.route('/blocked')
+def api_blocked_domains():
+    """Get recently blocked domains from dnsmasq log."""
+    import time
+    from collections import OrderedDict
+
+    limit = request.args.get('limit', 50, type=int)
+    blocked_domains = OrderedDict()
+
+    try:
+        if not os.path.exists(DNSMASQ_QUERY_LOG):
+            return jsonify({'success': True, 'domains': [], 'count': 0})
+
+        # Read last portion of log file for performance
+        file_size = os.path.getsize(DNSMASQ_QUERY_LOG)
+        read_size = min(file_size, 2 * 1024 * 1024)  # 2MB max
+
+        with open(DNSMASQ_QUERY_LOG, 'r') as f:
+            if file_size > read_size:
+                f.seek(file_size - read_size)
+                f.readline()  # Skip partial line
+
+            # Parse blocked queries (return 0.0.0.0)
+            # Format: "Dec 8 10:30:45 dnsmasq[123]: /0.0.0.0 example.com is 0.0.0.0"
+            # Or: "Dec 8 10:30:45 dnsmasq[123]: config example.com is 0.0.0.0"
+            for line in f:
+                if ' is 0.0.0.0' in line or '/0.0.0.0' in line:
+                    try:
+                        # Extract domain from different log formats
+                        domain = None
+
+                        # Format 1: "config domain.com is 0.0.0.0"
+                        if ' config ' in line:
+                            parts = line.split(' config ')[1].split(' is ')[0]
+                            domain = parts.strip()
+
+                        # Format 2: "/0.0.0.0 domain.com is 0.0.0.0"
+                        elif '/0.0.0.0 ' in line:
+                            parts = line.split('/0.0.0.0 ')[1].split(' is ')[0]
+                            domain = parts.strip()
+
+                        # Format 3: "reply domain.com is 0.0.0.0"
+                        elif ' reply ' in line and ' is 0.0.0.0' in line:
+                            parts = line.split(' reply ')[1].split(' is ')[0]
+                            domain = parts.strip()
+
+                        if domain and domain not in blocked_domains:
+                            # Extract timestamp if possible
+                            timestamp = None
+                            try:
+                                # Get month day time from beginning of line
+                                ts_parts = line.split()[:3]
+                                if len(ts_parts) >= 3:
+                                    timestamp = ' '.join(ts_parts)
+                            except Exception:
+                                pass
+
+                            blocked_domains[domain] = {
+                                'domain': domain,
+                                'type': 'blocklist',
+                                'typeBadge': 'BLOCKED',
+                                'timestamp': timestamp,
+                                'time': int(time.time())
+                            }
+
+                            if len(blocked_domains) >= limit:
+                                break
+                    except Exception:
+                        continue
+
+        # Convert to list and reverse (most recent first)
+        domains_list = list(blocked_domains.values())
+        domains_list.reverse()
+
+        return jsonify({
+            'success': True,
+            'domains': domains_list[:limit],
+            'count': len(domains_list)
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'domains': []}), 500
+
+
 # =============================================================================
 # CNAME UNCLOAKING ENDPOINTS
 # =============================================================================
