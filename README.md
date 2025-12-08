@@ -2,10 +2,11 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
-<h1 align="center">Open-Source Network Security Firewall</h1>
+<h1 align="center">The Federated Network Security Platform</h1>
 
 <p align="center">
-  <strong>Enterprise Firewall for Small Business · NIS2 Compliance Ready · Collective Defense</strong>
+  <strong>Affordable WiFi Security · Open-Source Firewall · Collective Defense Mesh</strong><br>
+  <em>More than a firewall — it's a way of life.</em>
 </p>
 
 <p align="center">
@@ -16,34 +17,38 @@
 </p>
 
 <p align="center">
-  <img src="assets/hookprobe-future-ram-cine.png" alt="Open Source Firewall for Small Business" width="600"/>
+  <img src="assets/hookprobe-future-ram-cine.png" alt="Affordable WiFi Security Platform" width="600"/>
 </p>
 
 <p align="center">
-  <strong>$75-$150 Hardware · Enterprise-Grade Protection · Community-Driven Innovation</strong>
+  <strong>Off-the-Shelf Hardware · Enterprise Protection · NIS2 Compliance · Community Innovation</strong>
 </p>
 
 ---
 
-## 🎯 Why Small Businesses Choose HookProbe
+## 🎯 The Security Gap That Costs Billions
 
-**The Problem:** Traditional firewalls cost $10,000-$50,000/year. Small businesses are left unprotected while facing the same threats as enterprises. **NIS2 compliance** requirements add more pressure with no affordable solutions.
+**The Reality:** The SMB security market is worth **$25 billion in 2024**, growing to **$70 billion by 2034**. Yet enterprise vendors ignore smaller customers — charging $10,000-$50,000/year for solutions that are overkill for most businesses.
 
-**HookProbe Solution:** Deploy enterprise-grade **open-source network security** on a $150 Raspberry Pi or Mini PC. Get the same protection that Fortune 500 companies pay $400K+/year for.
+**The NIS2 Mandate:** EU's NIS2 Directive now requires essential and important entities to implement cybersecurity measures. Small businesses face **mandatory compliance** with no affordable path forward.
 
-| Challenge | Traditional Firewall | HookProbe |
-|-----------|---------------------|-----------|
-| **Cost** | $10K-$50K/year | $150 one-time |
-| **NIS2 Compliance** | Complex, expensive | Built-in automation |
+**HookProbe Changes Everything:** Build enterprise-grade WiFi security using **off-the-shelf hardware** — a Raspberry Pi and USB WiFi adapters. Full office coverage for under $200.
+
+| Challenge | Enterprise Vendors | HookProbe |
+|-----------|-------------------|-----------|
+| **Hardware** | Proprietary appliances | Raspberry Pi + USB WiFi |
+| **Total Cost** | $10K-$50K/year | $75-$200 one-time |
+| **Office WiFi** | Additional APs required | USB adapters = full coverage |
+| **NIS2 Compliance** | Expensive add-ons | Built-in automation |
 | **Threat Response** | Manual (hours) | AI-automated (<30 sec) |
-| **Updates** | Vendor-dependent | Community-driven |
-| **Collective Defense** | Isolated | Shared threat intelligence |
+| **Updates** | Vendor lock-in | Community-driven, open |
+| **Defense Model** | Isolated silos | Collective mesh intelligence |
 
-> ⭐ **Star this repo** to support open-source network security for everyone!
+> ⭐ **Star this repo** — help bring professional security to every business, everywhere.
 
 ---
 
-## 🚀 Quick Start — Firewall for Small Business
+## 🚀 Quick Start — Deploy in Minutes
 
 ```bash
 # One-line installation on Raspberry Pi / Mini PC
@@ -52,86 +57,98 @@ curl -fsSL https://hookprobe.com/install.sh | bash
 # Or clone and run manually
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
-./install.sh --tier guardian  # For travel/portable WiFi
-./install.sh --tier fortress  # For office network (IoT segmentation)
+./install.sh --tier guardian  # Portable secure WiFi hotspot
+./install.sh --tier fortress  # Full office WiFi security
 ```
 
-**Hardware Requirements:**
+**Off-the-Shelf Hardware — No Vendor Lock-in:**
 
-| Product | Hardware | RAM | Best For |
-|---------|----------|-----|----------|
-| **Guardian** | Raspberry Pi 5 | 1.5GB+ | Travel WiFi hotspot, portable protection |
-| **Fortress** | Mini PC (N100/N5105) | 4GB+ | **Small business firewall**, IoT segmentation, NIS2 |
-| **Nexus** | Server | 16GB+ | Multi-site coordination, ML training |
+| Product | Hardware | Cost | Best For |
+|---------|----------|------|----------|
+| **Guardian** | Raspberry Pi 5 + USB WiFi | ~$75 | Travel, home WiFi, portable protection |
+| **Fortress** | Mini PC + USB WiFi adapters | ~$150 | Office WiFi, IoT segmentation, NIS2 compliance |
+| **Nexus** | Any x86 server | Variable | Multi-site coordination, ML/AI training |
+
+**The Innovation:** Add USB WiFi adapters for instant coverage expansion. One Raspberry Pi + 3 USB adapters = complete office WiFi security. No proprietary hardware. No recurring fees.
 
 📖 **[Installation Guide →](docs/installation/INSTALLATION.md)** | **[Beginner's Guide →](docs/installation/BEGINNER-GUIDE.md)**
 
 ---
 
-## 🔥 Key Features for Business Networks
+## 🔥 The Five Pillars of HookProbe
 
-### 1. NIS2 Compliance Automation
+### 1. Collective Defense Mesh — One Detection Protects Everyone
 
-**EU NIS2 Directive compliance** out of the box — required for essential and important entities by October 2024.
+This is what makes HookProbe **more than a firewall**. When any node detects a threat, the entire mesh learns instantly:
+
+```
+Your Office (London):    Detects ransomware C2 callback
+        ↓
+HookProbe Mesh:          Anonymized threat signature shared globally
+        ↓
+Partner Office (Berlin): Protected BEFORE attack reaches them
+        ↓
+Remote Worker (Paris):   Already blocking — zero-day neutralized
+```
+
+**The Power of Many:** Individual firewalls are isolated. HookProbe creates a **federated security consciousness** where collective intelligence makes everyone stronger.
+
+### 2. Affordable WiFi Security — Off-the-Shelf Innovation
+
+**The Hardware Revolution:**
+- Raspberry Pi 5 ($60) + USB WiFi adapter ($15) = enterprise-grade security
+- Add more USB adapters for instant coverage expansion
+- One Pi + 3 adapters = full office WiFi with segmentation
+- No proprietary appliances. No recurring fees. No vendor lock-in.
+
+### 3. AI-Powered Detection & Prevention (Qsecbit)
+
+Real-time threat scoring with automated response:
+
+| Score | Status | Action |
+|-------|--------|--------|
+| < 0.45 | 🟢 GREEN | Normal operations, learning baseline |
+| 0.45-0.70 | 🟡 AMBER | Auto-mitigation triggered |
+| > 0.70 | 🔴 RED | Full defense activated |
+
+**Detection + Prevention:** L2-L7 threat analysis, behavioral anomaly detection, and automated response in under 30 seconds.
+
+### 4. NIS2 Compliance Built-In
+
+EU's NIS2 Directive compliance out of the box — **mandatory** for essential and important entities:
 
 ```
 ✓ Automated incident reporting (Article 23)
 ✓ Risk management measures (Article 21)
 ✓ Supply chain security assessment
 ✓ Continuous monitoring and logging
-✓ Compliance reports for auditors
+✓ Compliance reports ready for auditors
 ```
 
-### 2. AI-Powered Threat Detection (Qsecbit)
+### 5. Smart Network Segmentation
 
-Real-time threat scoring with automated response:
-
-| Score | Status | Action |
-|-------|--------|--------|
-| < 0.45 | 🟢 GREEN | Normal operations |
-| 0.45-0.70 | 🟡 AMBER | Auto-mitigation triggered |
-| > 0.70 | 🔴 RED | Full defense activated |
-
-### 3. Collective Defense Network
-
-**One business's detection → Everyone's protection**
-
-When any HookProbe node detects a new threat, the entire network learns instantly:
+Automatic IoT isolation prevents lateral movement attacks:
 
 ```
-Business A (London):     Detects ransomware C2 callback
-        ↓
-HookProbe Mesh:          Shares anonymized threat signature
-        ↓
-Business B (Berlin):     Protected BEFORE attack reaches them
-        ↓
-Business C (Paris):      Automatically blocking
+┌──────────────────────────────────────────────────────┐
+│            Single WiFi: "Office-Network"             │
+│                         ↓                            │
+│    ┌───────────────────────────────────────┐         │
+│    │     HookProbe Fortress (Mini PC)      │         │
+│    └─────┬───────┬───────┬───────┬─────────┘         │
+│          │       │       │       │                   │
+│   VLAN 10│ VLAN 20│ VLAN 30│ VLAN 99                 │
+│   Trusted│  IoT   │ Guest  │ Quarantine              │
+│    💻 📱 │  📷 💡 │  📱   │   ❓                     │
+│          │        │        │                         │
+│   ✗ IoT devices CANNOT access trusted network        │
+│   ✗ Compromised camera CANNOT spread laterally       │
+└──────────────────────────────────────────────────────┘
 ```
 
-### 4. IoT Network Segmentation
+### Bonus: DNS Protection (dnsXai)
 
-**Fortress** automatically isolates IoT devices to prevent lateral movement:
-
-```
-┌─────────────────────────────────────────────────────┐
-│           Single WiFi: "Office-Network"              │
-│                        ↓                             │
-│    ┌──────────────────────────────────────┐         │
-│    │         Fortress Firewall            │         │
-│    └──────────┬───────┬───────┬───────────┘         │
-│               │       │       │                      │
-│    VLAN 10    │ VLAN 20│ VLAN 30 │ VLAN 99           │
-│    Trusted    │  IoT   │ Guest  │ Quarantine         │
-│    💻 📱      │ 📷 💡  │  📱    │   ❓               │
-│               │        │        │                    │
-│  ✗ IoT devices CANNOT access trusted network        │
-│  ✗ Compromised camera CANNOT spread to file server  │
-└─────────────────────────────────────────────────────┘
-```
-
-### 5. DNS Protection (dnsXai)
-
-AI-powered DNS filtering blocks:
+AI-powered DNS filtering blocks at the source:
 - Ads and trackers (130K+ domains)
 - Malware command & control
 - Phishing domains
@@ -169,40 +186,54 @@ hookprobe/
 
 ---
 
-## 💼 Business Use Cases
+## 💼 Who Uses HookProbe
 
-### Small Business (5-50 employees)
+### 🏠 Home & Power Users
+
+**Use Cases:** Secure home WiFi, NAS protection, ad-blocking, privacy
+
+**Deploy Guardian** on Raspberry Pi:
+- ✅ Whole-home ad and tracker blocking
+- ✅ Secure remote access to your NAS
+- ✅ Protect all devices automatically
+- ✅ VPN for secure browsing anywhere
+- **Cost:** ~$75 one-time
+
+### 🏢 Small Business (5-50 employees)
 
 **Challenge:** Need enterprise security but can't afford $50K/year solutions.
 
-**Solution:** Deploy Fortress on a $150 Mini PC:
+**Deploy Fortress** on Mini PC + USB WiFi:
+- ✅ Full office WiFi from one device
 - ✅ NIS2 compliance automation
 - ✅ IoT device isolation
 - ✅ VPN for remote workers
 - ✅ AI threat detection
-- ✅ Zero ongoing license fees
+- **Cost:** ~$150 one-time, zero ongoing fees
 
-**ROI:** 99% cost savings vs. traditional enterprise firewalls.
+**ROI:** 99% cost savings vs. enterprise solutions.
 
-### Remote/Hybrid Workforce
+### 🧳 Remote & Traveling Workers
 
-**Challenge:** Employees working from hotels, coffee shops, airports.
+**Challenge:** Hotel WiFi, coffee shops, airports — all hostile networks.
 
-**Solution:** Deploy Guardian on Raspberry Pi:
-- ✅ Portable secure WiFi hotspot
-- ✅ L2-L7 threat detection
-- ✅ DNS-level ad/malware blocking
-- ✅ VPN back to office network
+**Deploy Guardian** — your portable security shield:
+- ✅ Carry-on sized secure WiFi hotspot
+- ✅ Connect to hostile networks safely
+- ✅ DNS-level threat blocking
+- ✅ VPN tunnel back to home/office
+- **Cost:** ~$75 fits in your bag
 
-### Managed Service Providers (MSPs/MSSPs)
+### 🏗️ Managed Service Providers (MSPs/MSSPs)
 
-**Challenge:** Need affordable solution to protect SMB clients.
+**Opportunity:** The $25B SMB security market is underserved.
 
-**Solution:** Deploy edge nodes at client sites:
+**Deploy HookProbe** at client sites:
 - ✅ Multi-tenant management dashboard
-- ✅ Cross-client threat intelligence
+- ✅ Cross-client collective threat intelligence
 - ✅ White-label capabilities
-- ✅ Offer $50/month vs. $500/month traditional
+- ✅ Offer $50/month vs. $500/month competitors
+- **Margin:** 10x better than enterprise resale
 
 ---
 
@@ -243,23 +274,37 @@ make test
 
 ---
 
-## 📊 Groundbreaking Innovation
+## 📊 The Federated Neuro-Resonant Security Mesh
 
-### The Four Pillars
+> **More than a firewall. A living, learning, collective defense consciousness.**
 
-| Pillar | Innovation | What It Does |
-|--------|------------|--------------|
-| **Neural Resonance** | Living cryptography | No static keys — neural weights evolve continuously |
-| **HTP Protocol** | Quantum-resistant transport | Survives DDoS, traverses NAT, post-quantum ready |
-| **Qsecbit Engine** | AI resilience metrics | Real-time threat scoring with energy monitoring |
-| **Collective Defense** | Federated mesh | One detection → global protection |
+### What Makes HookProbe Different
 
-### Technical Highlights
+Traditional security is **reactive and isolated**. HookProbe is **proactive and collective**:
 
-- **XDP/eBPF Filtering:** Kernel-level packet decisions (sub-microsecond)
-- **Post-Quantum Cryptography:** Kyber KEM hybrid encryption
-- **Energy-Aware:** 60-80% power savings vs. traditional firewalls
-- **Privacy-Preserving:** Threat intelligence shared without exposing raw data
+| Traditional | HookProbe |
+|-------------|-----------|
+| Static firewall rules | AI-evolving threat patterns |
+| Isolated silos | Federated mesh intelligence |
+| Reactive alerts | Predictive prevention |
+| Hardware lock-in | Off-the-shelf components |
+| Vendor dependencies | Community-driven innovation |
+
+### The Four Pillars of Innovation
+
+| Pillar | Technology | Why It Matters |
+|--------|------------|----------------|
+| **Neural Resonance** | Living cryptography | Keys evolve from device behavior — impossible to steal |
+| **HTP Protocol** | Quantum-resistant transport | Survives DDoS, traverses NAT, future-proof |
+| **Qsecbit Engine** | AI resilience scoring | Real-time threat detection with 30-second response |
+| **Collective Mesh** | Federated defense | One node's detection → everyone's protection |
+
+### Technical Depth
+
+- **XDP/eBPF:** Kernel-level packet filtering (sub-microsecond decisions)
+- **Post-Quantum Ready:** Kyber KEM hybrid encryption (NIST standard)
+- **Energy Efficient:** 60-80% power savings vs. traditional appliances
+- **Privacy-First:** Threat intelligence shared without exposing raw data
 
 📖 **[Qsecbit Algorithm →](core/qsecbit/README.md)** | **[HTP Protocol →](docs/HTP_SECURITY_ENHANCEMENTS.md)**
 
@@ -336,29 +381,30 @@ HookProbe uses a **dual licensing model** balancing open collaboration with sust
 
 ## 🤝 Join the Movement
 
-**We're building the future of open-source network security.**
+**Security shouldn't be a luxury. It should be a way of life.**
 
-Small businesses shouldn't choose between security and budget. With HookProbe, they don't have to.
+We're building something bigger than a firewall — a **federated security consciousness** where every home, every business, every traveler contributes to collective protection.
 
 ### Get Started Today
 
 ```bash
-# Install on your Raspberry Pi or Mini PC
+# One command. Off-the-shelf hardware. Enterprise security.
 curl -fsSL https://hookprobe.com/install.sh | bash
 ```
 
-### Support the Project
+### Be Part of the Mesh
 
-- ⭐ **Star this repo** — Help others discover open-source firewalls
-- 🍴 **Fork and contribute** — Every improvement helps everyone
-- 📢 **Share** — Tell other small businesses about affordable security
-- 💬 **Discuss** — Join our community discussions
+- ⭐ **Star this repo** — Every star helps spread affordable security
+- 🍴 **Fork and contribute** — Your code protects thousands
+- 📢 **Share** — Tell others about the security gap we're closing
+- 💬 **Discuss** — Shape the future of collective defense
 
 ---
 
 <p align="center">
   <strong>HookProbe v5.0 "Liberty"</strong><br>
-  <em>Open Source · Collective Defense · Enterprise Security for Everyone</em>
+  <em>The Federated Neuro-Resonant Decentralized Security Mesh</em><br>
+  <strong>More than a firewall — it's a way of life.</strong>
 </p>
 
 <p align="center">
@@ -368,5 +414,5 @@ curl -fsSL https://hookprobe.com/install.sh | bash
 </p>
 
 <p align="center">
-  <sub>Built with ❤️ by the HookProbe community. One node's detection → Everyone's protection.</sub>
+  <sub>Built by the community, for the community. One node's detection → Everyone's protection.</sub>
 </p>
