@@ -914,6 +914,11 @@ a:hover {
     gap: var(--spacing-sm);
 }
 
+/* Blocked Domains Modal */
+.blocked-domains-modal {
+    max-width: 600px;
+}
+
 /* ===== Slider / Range ===== */
 .slider-container {
     padding: var(--spacing-md) 0;
@@ -1364,6 +1369,23 @@ a:hover {
     .modal {
         margin: var(--spacing-md);
         max-height: calc(100vh - var(--spacing-xl));
+    }
+
+    /* Blocked domains modal - full width on mobile */
+    .modal-overlay {
+        padding: 0;
+    }
+
+    .blocked-domains-modal {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        border-radius: 0;
+        max-height: 100vh;
+    }
+
+    .blocked-domains-modal .modal-body {
+        max-height: calc(100vh - 140px);
     }
 
     .footer-inner {
