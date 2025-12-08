@@ -199,6 +199,7 @@ def api_interfaces():
             'guardian',     # OVS bridge for VXLAN/SDN
             'br-guardian',  # OVS bridge variant
             'br-sdn',       # SDN bridge
+            'ovs-system',   # OVS internal system interface
         }
 
         # Prefixes for virtual interfaces to skip
@@ -209,6 +210,8 @@ def api_interfaces():
             'cali',         # Calico networking
             'tunl',         # Tunnel interfaces
             'dummy',        # Dummy interfaces
+            'vxlan_sys',    # VXLAN system tunnels (e.g., vxlan_sys_4789)
+            'ovs-',         # OVS internal interfaces
         )
 
         # Get list of interfaces from /sys/class/net
