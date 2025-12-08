@@ -1,0 +1,36 @@
+[Unit]
+Description=Guardian Offline Mode - Smart WiFi AP Initialization
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-pre.target
+Before=network.target hostapd.service dnsmasq.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 2
+
+# Initialize offline mode with smart channel selection
+# This runs before hostapd starts and:
+# 1. Scans RF environment for congestion
+# 2. Selects optimal channel (1, 6, or 11 for 2.4GHz)
+# 3. Generates hostapd.conf with best channel
+# 4. Sets up bridge interface
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/offline_mode_manager.py init
+
+# Ensure we have proper permissions
+User=root
+Group=root
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-offline
+
+# Security hardening
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
