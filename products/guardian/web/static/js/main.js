@@ -345,9 +345,21 @@ function updateSecurityStats(threats, xdp) {
     updateElement('security-xdp-drops', xdp.drops || 0);
     updateElement('security-active-rules', xdp.active_rules || 0);
 
+    // Update XDP status details
+    updateElement('xdp-mode', xdp.mode || 'Not Loaded');
+    updateElement('xdp-interface', xdp.interface || 'eth0');
+    updateElement('xdp-packets', formatNumber(xdp.packets || 0));
+    updateElement('xdp-drop-rate', `${xdp.drop_rate || 0}%`);
+
     // Update QSecBit score with risk label
     const score = threats.stats?.qsecbit_score || 0;
     updateQSecBitDisplay(score);
+}
+
+function formatNumber(num) {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return num.toString();
 }
 
 function updateQSecBitDisplay(score) {
@@ -848,9 +860,11 @@ function updateSystemInfo(system) {
     // Update progress bars
     updateProgressBar('memory-progress', system.memory?.percent || 0);
 
-    // Update disk usage
+    // Update disk usage - format bytes to GB
     if (system.disk) {
-        updateElement('disk-usage', `${system.disk.used} / ${system.disk.total} (${system.disk.percent}%)`);
+        const used = formatBytes(system.disk.used || 0);
+        const total = formatBytes(system.disk.total || 0);
+        updateElement('disk-usage', `${used} / ${total} (${system.disk.percent}%)`);
         updateProgressBar('disk-progress', system.disk.percent || 0);
     }
 }
