@@ -144,8 +144,8 @@ a:hover {
 }
 
 .header-logo {
-    width: 70px;
-    height: 70px;
+    width: 50px;
+    height: 50px;
     border-radius: var(--radius-md);
     object-fit: contain;
 }
@@ -157,14 +157,14 @@ a:hover {
 }
 
 .header-title h1 {
-    font-size: 1.5rem;
+    font-size: 1.125rem;
     color: var(--text-white);
     margin: 0;
     line-height: 1.2;
 }
 
 .header-title .tagline {
-    font-size: 0.875rem;
+    font-size: 0.75rem;
     color: var(--hp-primary);
     font-weight: 500;
     margin-top: 2px;
