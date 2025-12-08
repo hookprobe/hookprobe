@@ -556,7 +556,20 @@ Maintainers may:
 
 ## ⚖️ License
 
-By contributing to HookProbe, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+HookProbe uses a **dual licensing model**:
+
+- **AGPL v3.0**: Open source components (deployment, Guardian, response, mesh, docs)
+- **Proprietary**: Core AI/ML innovations (Qsecbit, Neural Resonance, dnsXai ML, DSM, MSSP)
+
+By contributing to HookProbe, you agree that:
+
+1. **AGPL Components**: Your contributions to AGPL-licensed directories will be licensed under AGPL v3.0
+2. **Proprietary Components**: Contributions to proprietary directories require signing a Contributor License Agreement (CLA)
+3. **Documentation**: All documentation contributions are licensed under AGPL v3.0
+
+For full licensing details, see [LICENSING.md](../LICENSING.md).
+
+**CLA Contact**: qsecbit@hookprobe.com
 
 ---
 
