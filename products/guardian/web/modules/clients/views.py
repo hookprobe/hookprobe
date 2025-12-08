@@ -91,28 +91,72 @@ def api_clients_list():
 @clients_bp.route('/dhcp')
 def api_dhcp_leases():
     """Get DHCP leases."""
+    import os
+    import time
+
     try:
         leases = []
-        output, success = run_command("cat /var/lib/misc/dnsmasq.leases 2>/dev/null")
 
-        if success and output:
-            for line in output.split('\n'):
+        # Check multiple possible locations for dnsmasq leases file
+        lease_paths = [
+            '/var/lib/misc/dnsmasq.leases',
+            '/var/lib/dnsmasq/dnsmasq.leases',
+            '/var/lib/dhcp/dnsmasq.leases',
+            '/tmp/dnsmasq.leases',
+            '/var/run/dnsmasq/dnsmasq.leases'
+        ]
+
+        lease_content = None
+        for path in lease_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        lease_content = f.read()
+                    if lease_content:
+                        break
+                except (IOError, PermissionError):
+                    continue
+
+        if lease_content:
+            for line in lease_content.strip().split('\n'):
+                if not line:
+                    continue
                 parts = line.split()
                 if len(parts) >= 4:
-                    expires = int(parts[0])
-                    mac = parts[1]
-                    ip = parts[2]
-                    hostname = parts[3] if parts[3] != '*' else 'Unknown'
+                    try:
+                        expires = int(parts[0])
+                        mac = parts[1]
+                        ip = parts[2]
+                        hostname = parts[3] if parts[3] != '*' else 'Unknown'
 
-                    import time
-                    remaining = expires - int(time.time())
+                        remaining = expires - int(time.time())
 
-                    leases.append({
-                        'mac': mac,
-                        'ip': ip,
-                        'hostname': hostname,
-                        'expires_in': max(0, remaining)
-                    })
+                        leases.append({
+                            'mac': mac,
+                            'ip': ip,
+                            'hostname': hostname,
+                            'expires_in': max(0, remaining)
+                        })
+                    except (ValueError, IndexError):
+                        continue
+
+        # Also try to get connected clients from ARP table if no leases found
+        if not leases:
+            arp_output, success = run_command(['ip', 'neigh', 'show'])
+            if success and arp_output:
+                for line in arp_output.strip().split('\n'):
+                    if 'REACHABLE' in line or 'STALE' in line:
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            ip = parts[0]
+                            mac = parts[4] if len(parts) > 4 else 'unknown'
+                            if ip.startswith('192.168.') or ip.startswith('10.'):
+                                leases.append({
+                                    'mac': mac,
+                                    'ip': ip,
+                                    'hostname': 'Unknown',
+                                    'expires_in': 0
+                                })
 
         return jsonify({'leases': leases})
     except Exception as e:
