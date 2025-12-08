@@ -338,31 +338,42 @@ async function loadBlockedDomains() {
     container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading...</p></div>';
 
     try {
-        // Get ML threats for detailed info
-        const mlThreats = await apiGet('/dnsxai/ml/threats').catch(() => ({ threats: [] }));
-        const stats = await apiGet('/dnsxai/stats');
+        // Get blocked domains from dnsmasq log and ML threats in parallel
+        const [blockedResult, mlThreats] = await Promise.all([
+            apiGet('/dnsxai/blocked?limit=50').catch(() => ({ domains: [] })),
+            apiGet('/dnsxai/ml/threats').catch(() => ({ threats: [] }))
+        ]);
 
         // Build blocked domains list
         blockedDomainsCache = [];
 
-        // Add ML detected threats
-        if (mlThreats.threats) {
-            mlThreats.threats.forEach(t => {
+        // Add blocklist blocked domains first
+        if (blockedResult.domains) {
+            blockedResult.domains.forEach(d => {
                 blockedDomainsCache.push({
-                    domain: t.domain,
-                    type: t.type === 'cname_uncloaked' ? 'cname' : 'ml',
-                    typeBadge: t.type === 'cname_uncloaked' ? 'CNAME' : 'ML',
-                    confidence: t.confidence,
-                    time: t.timestamp
+                    domain: d.domain,
+                    type: 'blocklist',
+                    typeBadge: 'BLOCKED',
+                    timestamp: d.timestamp,
+                    time: d.time
                 });
             });
         }
 
-        // Add some demo blocklist entries if we have blocked count but few ML detections
-        const blockedCount = stats.blocked || 0;
-        if (blockedCount > blockedDomainsCache.length) {
-            // Note: In production, this would come from actual log parsing
-            // For now, show what we have from ML detections
+        // Add ML detected threats
+        if (mlThreats.threats) {
+            mlThreats.threats.forEach(t => {
+                // Avoid duplicates
+                if (!blockedDomainsCache.find(d => d.domain === t.domain)) {
+                    blockedDomainsCache.push({
+                        domain: t.domain,
+                        type: t.type === 'cname_uncloaked' ? 'cname' : 'ml',
+                        typeBadge: t.type === 'cname_uncloaked' ? 'CNAME' : 'ML',
+                        confidence: t.confidence,
+                        time: t.timestamp
+                    });
+                }
+            });
         }
 
         renderBlockedDomains();

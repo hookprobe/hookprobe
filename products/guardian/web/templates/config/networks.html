@@ -48,14 +48,6 @@
                 <div class="stat-value" style="font-size: 1rem;" id="offline-band">--</div>
                 <div class="stat-label">Band</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value" style="font-size: 1rem;" id="offline-networks">--</div>
-                <div class="stat-label">Networks Detected</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" style="font-size: 1rem;" id="offline-score">--</div>
-                <div class="stat-label">Channel Score</div>
-            </div>
         </div>
 
         <!-- Channel Selection -->
@@ -402,19 +394,6 @@ function updateOfflineStatusUI(data) {
         bandEl.textContent = data.current_band || '--';
     }
 
-    // Update scan info
-    const networksEl = document.getElementById('offline-networks');
-    const scoreEl = document.getElementById('offline-score');
-
-    if (data.scan) {
-        networksEl.textContent = data.scan.networks_detected || data.networks_detected || '--';
-        scoreEl.textContent = data.scan.channel_score ?
-            data.scan.channel_score.toFixed(1) :
-            (data.last_channel_score ? data.last_channel_score.toFixed(1) : '--');
-    } else {
-        networksEl.textContent = data.networks_detected || '--';
-        scoreEl.textContent = data.last_channel_score ? data.last_channel_score.toFixed(1) : '--';
-    }
 }
 
 async function initOfflineMode() {
@@ -496,9 +475,6 @@ function renderChannelAnalysis(data) {
 
     // Update header stats
     document.getElementById('offline-channel').textContent = currentChannel;
-    if (data.networks_detected !== undefined) {
-        document.getElementById('offline-networks').textContent = data.networks_detected || 'N/A';
-    }
 }
 
 async function selectChannel(channel) {
