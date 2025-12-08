@@ -16,8 +16,6 @@ HookProbe uses a **dual licensing model** to balance open-source community benef
 3. **Sustainable Business Model** - Commercial licenses fund continued development
 4. **Innovation Protection** - Core AI/ML algorithms remain proprietary to maintain competitive advantage
 
-This approach is used successfully by Grafana, MinIO, ParadeDB, and other leading open-source companies.
-
 ---
 
 ## License Categories
