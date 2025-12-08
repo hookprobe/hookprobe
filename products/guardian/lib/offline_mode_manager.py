@@ -54,10 +54,10 @@ class OfflineModeConfig:
     # Enable offline-first boot
     enabled: bool = True
 
-    # Interfaces
-    ap_interface: str = "wlan0"           # Interface for AP mode
-    wan_interface: str = "wlan1"          # Interface for upstream (if available)
-    fallback_wan_interface: str = "eth0"  # Ethernet fallback
+    # Interfaces - wlan0 is for WAN (upstream), wlan1 is for AP (LAN)
+    ap_interface: str = "wlan1"           # Interface for AP mode (LAN)
+    wan_interface: str = "wlan0"          # Interface for upstream WAN connection
+    fallback_wan_interface: str = "eth0"  # Ethernet fallback (highest priority)
 
     # AP defaults
     default_ssid: str = "HookProbe-Guardian"

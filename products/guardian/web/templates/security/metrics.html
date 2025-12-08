@@ -38,16 +38,17 @@
         <div style="display: flex; align-items: center; gap: var(--spacing-xl); flex-wrap: wrap;">
             <div style="text-align: center; min-width: 150px;">
                 <div id="qsecbit-score-display" style="font-size: 4rem; font-weight: 700; line-height: 1; color: var(--hp-green);">0.00</div>
-                <div class="text-muted" style="margin-top: var(--spacing-sm);">Current Score</div>
+                <div id="qsecbit-risk-label" style="font-size: 1rem; font-weight: 600; margin-top: var(--spacing-xs); color: var(--hp-green);">RISK LOW</div>
+                <div class="text-muted" style="margin-top: var(--spacing-xs);">Current Score</div>
             </div>
             <div style="flex: 1; min-width: 250px;">
                 <div class="progress" style="height: 16px; margin-bottom: var(--spacing-md);">
                     <div class="progress-bar success" id="qsecbit-progress" style="width: 0%;"></div>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.8125rem; color: var(--text-secondary);">
-                    <span style="color: var(--hp-green);">Green (&lt;0.45)</span>
-                    <span style="color: var(--hp-amber);">Amber (0.45-0.70)</span>
-                    <span style="color: var(--hp-red);">Red (&gt;0.70)</span>
+                    <span style="color: var(--hp-green);">RISK LOW (&lt;0.45)</span>
+                    <span style="color: var(--hp-amber);">RISK MEDIUM (0.45-0.70)</span>
+                    <span style="color: var(--hp-red);">RISK HIGH (&gt;0.70)</span>
                 </div>
             </div>
         </div>
