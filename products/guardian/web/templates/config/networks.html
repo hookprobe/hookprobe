@@ -270,9 +270,24 @@ function updateOfflineStatusUI(data) {
     // Update mode status
     const modeEl = document.getElementById('offline-mode-status');
     const modeCard = document.getElementById('offline-mode-card');
-    const state = data.state || 'unknown';
 
-    modeEl.textContent = state.replace(/_/g, ' ').toUpperCase();
+    // Handle error state
+    if (!data.success && data.error) {
+        modeEl.textContent = 'Not Initialized';
+        modeCard.className = 'stat-card info';
+        return;
+    }
+
+    const state = data.state || 'unknown';
+    const stateDisplay = {
+        'initializing': 'Initializing',
+        'scanning': 'Scanning',
+        'ap_starting': 'Starting AP',
+        'offline_ready': 'Offline Mode',
+        'online': 'Online',
+        'error': 'Error'
+    };
+    modeEl.textContent = stateDisplay[state] || state.replace(/_/g, ' ').toUpperCase();
 
     // Color based on state
     modeCard.className = 'stat-card';
@@ -286,30 +301,69 @@ function updateOfflineStatusUI(data) {
         modeCard.classList.add('info');
     }
 
-    // Update WAN status
+    // Update WAN status - check multiple sources
     const wanEl = document.getElementById('wan-status');
     const wanCard = document.getElementById('wan-status-card');
-    if (data.wan && data.wan.connected) {
-        wanEl.textContent = data.wan.ip || 'Connected';
+
+    let wanConnected = false;
+    let wanIp = null;
+    let wanSsid = null;
+
+    if (data.wan) {
+        wanConnected = data.wan.connected;
+        wanIp = data.wan.ip;
+        wanSsid = data.wan.ssid;
+    }
+
+    // Also check state for WAN connection
+    if (state === 'online' || data.wan_connected) {
+        wanConnected = true;
+        if (!wanIp) wanIp = data.wan_ip;
+    }
+
+    if (wanConnected) {
+        let statusText = wanIp || 'Connected';
+        if (wanSsid) {
+            statusText = `${wanSsid} (${wanIp || 'connected'})`;
+        }
+        wanEl.textContent = statusText;
         wanCard.className = 'stat-card success';
     } else {
         wanEl.textContent = 'Disconnected';
         wanCard.className = 'stat-card danger';
     }
 
-    // Update AP info
+    // Update AP info from multiple sources
+    const ssidEl = document.getElementById('lan-ssid');
+    const clientsEl = document.getElementById('lan-clients');
+    const channelEl = document.getElementById('offline-channel');
+    const bandEl = document.getElementById('offline-band');
+
     if (data.ap) {
-        document.getElementById('lan-ssid').textContent = data.ap.ssid || 'Guardian-AP';
-        document.getElementById('lan-clients').textContent = data.ap.clients || 0;
-        document.getElementById('offline-channel').textContent = data.ap.channel || '--';
-        document.getElementById('offline-band').textContent = data.ap.band || '--';
+        ssidEl.textContent = data.ap.ssid || data.ap_ssid || 'HookProbe-Guardian';
+        clientsEl.textContent = data.ap.clients || data.clients_connected || 0;
+        channelEl.textContent = data.ap.channel || data.current_channel || '--';
+        bandEl.textContent = data.ap.band || data.current_band || '--';
+    } else {
+        // Fallback to state fields
+        ssidEl.textContent = data.ap_ssid || 'HookProbe-Guardian';
+        clientsEl.textContent = data.clients_connected || 0;
+        channelEl.textContent = data.current_channel || '--';
+        bandEl.textContent = data.current_band || '--';
     }
 
     // Update scan info
+    const networksEl = document.getElementById('offline-networks');
+    const scoreEl = document.getElementById('offline-score');
+
     if (data.scan) {
-        document.getElementById('offline-networks').textContent = data.scan.networks_detected || '--';
-        document.getElementById('offline-score').textContent =
-            data.scan.channel_score ? data.scan.channel_score.toFixed(1) : '--';
+        networksEl.textContent = data.scan.networks_detected || data.networks_detected || '--';
+        scoreEl.textContent = data.scan.channel_score ?
+            data.scan.channel_score.toFixed(1) :
+            (data.last_channel_score ? data.last_channel_score.toFixed(1) : '--');
+    } else {
+        networksEl.textContent = data.networks_detected || '--';
+        scoreEl.textContent = data.last_channel_score ? data.last_channel_score.toFixed(1) : '--';
     }
 }
 
