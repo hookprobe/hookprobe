@@ -344,6 +344,48 @@ function updateSecurityStats(threats, xdp) {
     updateElement('security-blocked', threats.stats?.blocked || 0);
     updateElement('security-xdp-drops', xdp.drops || 0);
     updateElement('security-active-rules', xdp.active_rules || 0);
+
+    // Update QSecBit score with risk label
+    const score = threats.stats?.qsecbit_score || 0;
+    updateQSecBitDisplay(score);
+}
+
+function updateQSecBitDisplay(score) {
+    const scoreEl = document.getElementById('qsecbit-score-display');
+    const labelEl = document.getElementById('qsecbit-risk-label');
+    const progressEl = document.getElementById('qsecbit-progress');
+
+    if (!scoreEl) return;
+
+    // Determine risk level
+    let riskLabel, riskColor, progressClass;
+    if (score < 0.45) {
+        riskLabel = 'RISK LOW';
+        riskColor = 'var(--hp-green)';
+        progressClass = 'success';
+    } else if (score < 0.70) {
+        riskLabel = 'RISK MEDIUM';
+        riskColor = 'var(--hp-amber)';
+        progressClass = 'warning';
+    } else {
+        riskLabel = 'RISK HIGH';
+        riskColor = 'var(--hp-red)';
+        progressClass = 'danger';
+    }
+
+    // Update display
+    scoreEl.textContent = score.toFixed(2);
+    scoreEl.style.color = riskColor;
+
+    if (labelEl) {
+        labelEl.textContent = riskLabel;
+        labelEl.style.color = riskColor;
+    }
+
+    if (progressEl) {
+        progressEl.style.width = `${Math.min(100, score * 100)}%`;
+        progressEl.className = `progress-bar ${progressClass}`;
+    }
 }
 
 function updateLayerCards(layers) {
@@ -573,6 +615,14 @@ async function loadMLThreats() {
 
 function updateDnsxaiWhitelist(domains) {
     const tbody = document.getElementById('dnsxai-whitelist-body');
+    const countBadge = document.getElementById('dnsxai-whitelist-count');
+
+    // Update the count badge
+    if (countBadge) {
+        const count = domains.length;
+        countBadge.textContent = `${count} domain${count !== 1 ? 's' : ''}`;
+    }
+
     if (!tbody) return;
 
     if (domains.length === 0) {
