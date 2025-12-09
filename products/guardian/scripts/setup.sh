@@ -2829,6 +2829,102 @@ EOF
 }
 
 # ============================================================
+# AP SERVICES INSTALLATION (WAN-Independent Startup)
+# ============================================================
+install_ap_services() {
+    log_step "Installing Guardian AP services for WAN-independent startup..."
+
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local CONFIG_DIR="$(dirname "$SCRIPT_DIR")/config"
+
+    # Install guardian-wlan-setup.sh script
+    log_info "Installing guardian-wlan-setup.sh..."
+    cp "$SCRIPT_DIR/guardian-wlan-setup.sh" /usr/local/bin/
+    chmod +x /usr/local/bin/guardian-wlan-setup.sh
+
+    # Install guardian-wlan.service
+    log_info "Installing guardian-wlan.service..."
+    if [ -f "$CONFIG_DIR/systemd/guardian-wlan.service" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-wlan.service" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-wlan.service
+    else
+        log_warn "guardian-wlan.service not found in config directory"
+    fi
+
+    # Install guardian-ap.service (umbrella service)
+    log_info "Installing guardian-ap.service..."
+    if [ -f "$CONFIG_DIR/systemd/guardian-ap.service" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ap.service" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ap.service
+    else
+        log_warn "guardian-ap.service not found in config directory"
+    fi
+
+    # Install hostapd service override (removes network-online dependency)
+    log_info "Installing hostapd service override..."
+    mkdir -p /etc/systemd/system/hostapd.service.d
+    if [ -f "$CONFIG_DIR/systemd/hostapd.service.d/guardian-override.conf" ]; then
+        cp "$CONFIG_DIR/systemd/hostapd.service.d/guardian-override.conf" \
+            /etc/systemd/system/hostapd.service.d/
+        chmod 644 /etc/systemd/system/hostapd.service.d/guardian-override.conf
+    else
+        # Create inline if source not found
+        cat > /etc/systemd/system/hostapd.service.d/guardian-override.conf << 'HOSTAPD_OVERRIDE'
+# Guardian Override for hostapd.service
+# Removes dependency on network-online.target for offline-first operation
+
+[Unit]
+After=
+Wants=
+After=guardian-wlan.service guardian-offline.service local-fs.target
+Wants=guardian-wlan.service
+Requires=guardian-wlan.service
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+Environment="DAEMON_CONF=/etc/hostapd/hostapd.conf"
+HOSTAPD_OVERRIDE
+    fi
+
+    # Install dnsmasq service override (removes network-online dependency)
+    log_info "Installing dnsmasq service override..."
+    mkdir -p /etc/systemd/system/dnsmasq.service.d
+    if [ -f "$CONFIG_DIR/systemd/dnsmasq.service.d/guardian-override.conf" ]; then
+        cp "$CONFIG_DIR/systemd/dnsmasq.service.d/guardian-override.conf" \
+            /etc/systemd/system/dnsmasq.service.d/
+        chmod 644 /etc/systemd/system/dnsmasq.service.d/guardian-override.conf
+    else
+        # Create inline if source not found
+        cat > /etc/systemd/system/dnsmasq.service.d/guardian-override.conf << 'DNSMASQ_OVERRIDE'
+# Guardian Override for dnsmasq.service
+# Removes dependency on network-online.target for offline-first operation
+
+[Unit]
+After=
+Wants=
+After=guardian-wlan.service hostapd.service network.target
+Wants=hostapd.service
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+ExecStartPre=/bin/sleep 2
+DNSMASQ_OVERRIDE
+    fi
+
+    # Reload systemd to pick up new services
+    systemctl daemon-reload
+
+    log_info "Guardian AP services installed"
+    log_info "  - guardian-wlan.service: Prepares wlan1 for AP mode"
+    log_info "  - guardian-ap.service: Ensures hostapd/dnsmasq start"
+    log_info "  - hostapd/dnsmasq overrides: Removed network-online dependency"
+}
+
+# ============================================================
 # CONFIGURATION FILE CREATION
 # ============================================================
 create_default_config() {
@@ -3008,6 +3104,11 @@ enable_services() {
     systemctl enable nftables 2>/dev/null || true
     systemctl enable openvswitch-switch 2>/dev/null || systemctl enable openvswitch 2>/dev/null || true
 
+    # Enable Guardian AP services (WAN-independent startup)
+    log_info "Enabling Guardian AP services for offline-first operation..."
+    systemctl enable guardian-wlan 2>/dev/null || true
+    systemctl enable guardian-ap 2>/dev/null || true
+
     # Enable all Guardian security services
     log_info "Enabling Guardian security stack..."
     systemctl enable guardian-offline 2>/dev/null || true
@@ -3021,6 +3122,7 @@ enable_services() {
     systemctl enable guardian-webui 2>/dev/null || true
 
     log_info "Services enabled"
+    log_info "AP services will start on boot even without WAN connectivity"
 }
 
 start_services() {
@@ -3331,6 +3433,10 @@ main() {
     # Install Offline Mode service (smart channel selection, route metrics)
     log_step "Installing Offline Mode service..."
     install_offline_mode_service
+
+    # Install AP services (WAN-independent startup)
+    log_step "Installing AP services for WAN-independent operation..."
+    install_ap_services
 
     # Create default configuration file
     log_step "Creating configuration file..."

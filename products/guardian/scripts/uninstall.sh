@@ -1,18 +1,20 @@
 #!/bin/bash
 #
 # HookProbe Guardian Uninstall Script
-# Version: 5.0.0
+# Version: 5.1.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Guardian components:
 # - Podman containers (Suricata, WAF, Zeek)
 # - DNS Shield blocklists
 # - dnsXai ML models, training data, and Python packages (scikit-learn, joblib)
-# - Systemd services
+# - Systemd services (including AP services: guardian-wlan, guardian-ap)
+# - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)
 # - Network bridges
 # - hostapd and dnsmasq configurations
 # - nftables rules
 # - Guardian directories
+# - Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)
 #
 
 set -e
@@ -70,6 +72,9 @@ stop_services() {
         "guardian-waf"
         "guardian-zeek"
         "guardian-neuro"
+        # AP services (WAN-independent startup)
+        "guardian-ap"
+        "guardian-wlan"
         # Offline mode service
         "guardian-offline"
         # System services
@@ -109,6 +114,9 @@ remove_systemd_services() {
         "guardian-aggregator"
         "guardian-xdp"
         "guardian-zeek"
+        # AP services (WAN-independent startup)
+        "guardian-ap"
+        "guardian-wlan"
         # Offline mode service
         "guardian-offline"
     )
@@ -124,6 +132,26 @@ remove_systemd_services() {
             rm -f "/etc/systemd/system/${service}.service"
         fi
     done
+
+    # Remove systemd service drop-in directories (overrides for hostapd/dnsmasq)
+    log_info "Removing service override directories..."
+    if [ -d "/etc/systemd/system/hostapd.service.d" ]; then
+        rm -rf /etc/systemd/system/hostapd.service.d
+        log_info "Removed hostapd.service.d overrides"
+    fi
+    if [ -d "/etc/systemd/system/dnsmasq.service.d" ]; then
+        rm -rf /etc/systemd/system/dnsmasq.service.d
+        log_info "Removed dnsmasq.service.d overrides"
+    fi
+
+    # Remove guardian-wlan-setup script
+    if [ -f "/usr/local/bin/guardian-wlan-setup.sh" ]; then
+        rm -f /usr/local/bin/guardian-wlan-setup.sh
+        log_info "Removed guardian-wlan-setup.sh"
+    fi
+
+    # Remove runtime state directory
+    rm -rf /run/guardian 2>/dev/null || true
 
     # Reload systemd
     systemctl daemon-reload
@@ -640,14 +668,15 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Guardian Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                       Version 5.0.0                        ║${NC}"
+    echo -e "${BOLD}${RED}║                       Version 5.1.0                        ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     check_root
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
-    echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, etc.)"
+    echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, wlan, ap, etc.)"
+    echo -e "  - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
     echo -e "  - Podman containers (Suricata IDS, WAF, Zeek)"
     echo -e "  - DNS Shield blocklists and configuration"
     echo -e "  - dnsXai ML models and training data"
@@ -659,6 +688,7 @@ main() {
     echo -e "  - HTP file transfer state and session keys"
     echo -e "  - nftables firewall rules"
     echo -e "  - Guardian Python library modules"
+    echo -e "  - Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)"
     echo -e "  - Guardian data directories"
     echo ""
 
@@ -702,7 +732,8 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, offline, etc.)"
+    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, wlan, ap, offline, etc.)"
+    echo -e "  • Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
     echo -e "  • Podman containers and volumes"
     echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • dnsXai ML models, training data, and Python packages"
@@ -713,6 +744,7 @@ main() {
     echo -e "  • HTP file transfer state and session keys"
     echo -e "  • nftables rules"
     echo -e "  • Python library modules"
+    echo -e "  • Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)"
     echo -e "  • Guardian directories (/opt/hookprobe/guardian)"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
