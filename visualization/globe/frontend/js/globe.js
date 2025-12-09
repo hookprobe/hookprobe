@@ -14,7 +14,13 @@ const state = {
     stats: {
         attacks: 0,
         repelled: 0,
-        avgQsecbit: 0
+        avgQsecbit: 0,
+        byTier: {
+            sentinel: 0,
+            guardian: 0,
+            fortress: 0,
+            nexus: 0
+        }
     }
 };
 
@@ -37,6 +43,14 @@ const TIER_SIZES = {
     guardian: 0.5,
     fortress: 0.8,
     nexus: 1.2
+};
+
+// Tier base colors (used when node is healthy)
+const TIER_COLORS = {
+    sentinel: '#888888',   // Gray - small IoT
+    guardian: '#00bfff',   // Blue - portable
+    fortress: '#00ff88',   // Green - edge router
+    nexus: '#ffaa00'       // Amber - ML/AI compute
 };
 
 /**
@@ -146,8 +160,17 @@ function handleEvent(event) {
             updateNodes(event.nodes);
             break;
 
+        case 'snapshot':
+            handleSnapshot(event);
+            break;
+
         case 'qsecbit_update':
             updateNodeQsecbit(event);
+            break;
+
+        case 'mode_changed':
+            // Handled in data-stream.js
+            console.log(`Globe: Mode changed to ${event.mode}`);
             break;
 
         default:
@@ -186,10 +209,42 @@ function updateNodes(nodes) {
     if (globe) globe.pointsData(state.nodes);
     document.getElementById('stat-nodes').textContent = nodes.length;
 
+    // Count nodes by tier
+    state.stats.byTier = { sentinel: 0, guardian: 0, fortress: 0, nexus: 0 };
+    nodes.forEach(n => {
+        const tier = (n.tier || 'sentinel').toLowerCase();
+        if (state.stats.byTier.hasOwnProperty(tier)) {
+            state.stats.byTier[tier]++;
+        }
+    });
+
     // Calculate average Qsecbit
     const totalQsecbit = nodes.reduce((sum, n) => sum + (n.qsecbit || 0), 0);
     state.stats.avgQsecbit = nodes.length ? totalQsecbit / nodes.length : 0;
     updateStats();
+}
+
+/**
+ * Handle snapshot event (initial state from server)
+ */
+function handleSnapshot(event) {
+    // Update nodes
+    if (event.nodes) {
+        updateNodes(event.nodes);
+    }
+
+    // Update tier counts from snapshot stats
+    if (event.stats && event.stats.by_tier) {
+        state.stats.byTier = {
+            sentinel: event.stats.by_tier.sentinel || 0,
+            guardian: event.stats.by_tier.guardian || 0,
+            fortress: event.stats.by_tier.fortress || 0,
+            nexus: event.stats.by_tier.nexus || 0
+        };
+        updateStats();
+    }
+
+    console.log('Snapshot received:', event.stats?.total_nodes || 0, 'nodes');
 }
 
 /**
@@ -208,10 +263,24 @@ function updateNodeQsecbit(event) {
  * Update stats display
  */
 function updateStats() {
+    // Attack stats
     document.getElementById('stat-attacks').textContent = state.stats.attacks;
     document.getElementById('stat-repelled').textContent = state.stats.repelled;
     document.getElementById('stat-qsecbit').textContent =
         state.stats.avgQsecbit > 0 ? state.stats.avgQsecbit.toFixed(3) : '--';
+
+    // Tier counts
+    const tierElements = {
+        'stat-sentinels': state.stats.byTier.sentinel,
+        'stat-guardians': state.stats.byTier.guardian,
+        'stat-fortresses': state.stats.byTier.fortress,
+        'stat-nexuses': state.stats.byTier.nexus
+    };
+
+    for (const [id, count] of Object.entries(tierElements)) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = count;
+    }
 }
 
 /**
