@@ -326,20 +326,21 @@ function updateContainerStatus(containers) {
 
 async function loadSecurityData() {
     try {
-        const [threats, layers, xdp] = await Promise.all([
+        const [threats, layers, xdp, qsecbit] = await Promise.all([
             apiGet('/threats'),
             apiGet('/layer_threats'),
-            apiGet('/xdp_stats')
+            apiGet('/xdp_stats'),
+            apiGet('/security/qsecbit').catch(() => null)
         ]);
 
-        updateSecurityStats(threats, xdp);
+        updateSecurityStats(threats, xdp, qsecbit);
         updateLayerCards(layers);
     } catch (error) {
         console.error('Failed to load security:', error);
     }
 }
 
-function updateSecurityStats(threats, xdp) {
+function updateSecurityStats(threats, xdp, qsecbit) {
     updateElement('security-total-threats', threats.stats?.total || 0);
     updateElement('security-blocked', threats.stats?.blocked || 0);
     updateElement('security-xdp-drops', xdp.drops || 0);
@@ -351,9 +352,9 @@ function updateSecurityStats(threats, xdp) {
     updateElement('xdp-packets', formatNumber(xdp.packets || 0));
     updateElement('xdp-drop-rate', `${xdp.drop_rate || 0}%`);
 
-    // Update QSecBit score with risk label
-    const score = threats.stats?.qsecbit_score || 0;
-    updateQSecBitDisplay(score);
+    // Update QSecBit score - prefer dedicated endpoint, fallback to threats
+    const score = qsecbit?.score ?? threats.stats?.qsecbit_score ?? 0;
+    updateQSecBitDisplay(score, qsecbit);
 }
 
 function formatNumber(num) {
@@ -362,10 +363,11 @@ function formatNumber(num) {
     return num.toString();
 }
 
-function updateQSecBitDisplay(score) {
+function updateQSecBitDisplay(score, qsecbit) {
     const scoreEl = document.getElementById('qsecbit-score-display');
     const labelEl = document.getElementById('qsecbit-risk-label');
     const progressEl = document.getElementById('qsecbit-progress');
+    const componentsEl = document.getElementById('qsecbit-components');
 
     if (!scoreEl) return;
 
@@ -386,7 +388,7 @@ function updateQSecBitDisplay(score) {
     }
 
     // Update display
-    scoreEl.textContent = score.toFixed(2);
+    scoreEl.textContent = score.toFixed(3);
     scoreEl.style.color = riskColor;
 
     if (labelEl) {
@@ -397,6 +399,21 @@ function updateQSecBitDisplay(score) {
     if (progressEl) {
         progressEl.style.width = `${Math.min(100, score * 100)}%`;
         progressEl.className = `progress-bar ${progressClass}`;
+    }
+
+    // Update component breakdown if available
+    if (componentsEl && qsecbit?.components && qsecbit?.weights) {
+        const c = qsecbit.components;
+        const w = qsecbit.weights;
+        componentsEl.innerHTML = `
+            <div class="qsecbit-formula">
+                <span class="component" title="System drift (α=${w.alpha})">α·${c.drift?.toFixed(3) || '0.000'}</span> +
+                <span class="component" title="Attack probability (β=${w.beta})">β·${c.p_attack?.toFixed(3) || '0.000'}</span> +
+                <span class="component" title="Classifier decay (γ=${w.gamma})">γ·${c.decay?.toFixed(3) || '0.000'}</span> +
+                <span class="component" title="Quantum drift (δ=${w.delta})">δ·${c.q_drift?.toFixed(3) || '0.000'}</span> +
+                <span class="component" title="Energy anomaly (ε=${w.epsilon})">ε·${c.energy_anomaly?.toFixed(3) || '0.000'}</span>
+            </div>
+        `;
     }
 }
 
