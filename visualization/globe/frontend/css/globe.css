@@ -1,0 +1,297 @@
+/* HookProbe Globe Visualization Styles */
+
+:root {
+    --bg-dark: #0a0a0f;
+    --bg-panel: rgba(20, 20, 30, 0.9);
+    --text-primary: #e0e0e0;
+    --text-secondary: #888;
+    --accent-blue: #00bfff;
+    --accent-green: #00ff88;
+    --accent-amber: #ffaa00;
+    --accent-red: #ff4444;
+    --border-color: rgba(100, 100, 120, 0.3);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+}
+
+#app {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* Header */
+#header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 50px;
+    background: var(--bg-panel);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    z-index: 100;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.logo-icon {
+    font-size: 24px;
+}
+
+.logo-text {
+    font-size: 20px;
+    font-weight: 600;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    transition: background-color 0.3s;
+}
+
+.status-dot.connected {
+    background: var(--accent-green);
+    box-shadow: 0 0 10px var(--accent-green);
+}
+
+.status-dot.disconnected {
+    background: var(--accent-red);
+}
+
+.status-dot.connecting {
+    background: var(--accent-amber);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Stats Panel */
+#stats-panel {
+    position: fixed;
+    top: 60px;
+    left: 20px;
+    background: var(--bg-panel);
+    border-radius: 8px;
+    padding: 15px;
+    display: flex;
+    gap: 20px;
+    z-index: 90;
+    border: 1px solid var(--border-color);
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-blue);
+}
+
+.stat-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+/* Globe Container */
+#globe-container {
+    width: 100%;
+    height: 100%;
+    padding-top: 50px;
+}
+
+/* Event Log */
+#event-log {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    width: 350px;
+    max-height: 200px;
+    background: var(--bg-panel);
+    border-radius: 8px;
+    padding: 15px;
+    z-index: 90;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+#event-log h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+#event-list {
+    list-style: none;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+#event-list li {
+    font-size: 12px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#event-list li:last-child {
+    border-bottom: none;
+}
+
+#event-list .event-icon {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+#event-list .event-icon.attack { background: var(--accent-red); }
+#event-list .event-icon.repelled { background: var(--accent-blue); }
+#event-list .event-icon.node { background: var(--accent-green); }
+
+#event-list .event-time {
+    color: var(--text-secondary);
+    font-family: monospace;
+}
+
+/* Legend */
+#legend {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--bg-panel);
+    border-radius: 8px;
+    padding: 15px;
+    z-index: 90;
+    border: 1px solid var(--border-color);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    padding: 4px 0;
+}
+
+.legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.legend-dot.attack { background: var(--accent-red); }
+.legend-dot.repelled { background: var(--accent-blue); }
+.legend-dot.node-green { background: var(--accent-green); }
+.legend-dot.node-amber { background: var(--accent-amber); }
+.legend-dot.node-red { background: var(--accent-red); }
+
+/* 2D Fallback */
+#map-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 50px;
+}
+
+.fallback-message {
+    text-align: center;
+}
+
+.fallback-message h2 {
+    margin-bottom: 10px;
+}
+
+.fallback-message p {
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+
+#fallback-canvas {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    #stats-panel {
+        left: 10px;
+        right: 10px;
+        gap: 10px;
+        justify-content: space-around;
+    }
+
+    .stat-value {
+        font-size: 18px;
+    }
+
+    #event-log {
+        left: 10px;
+        right: 10px;
+        width: auto;
+    }
+
+    #legend {
+        display: none;
+    }
+}
