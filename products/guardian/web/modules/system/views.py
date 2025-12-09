@@ -57,7 +57,7 @@ def api_info():
 @system_bp.route('/services')
 def api_services():
     """Get service status."""
-    services = ['dnsmasq', 'hostapd', 'suricata', 'guardian-agent', 'nginx']
+    services = ['dnsmasq', 'hostapd', 'suricata', 'guardian-qsecbit', 'guardian-webui', 'nginx']
     result = []
 
     for service in services:
@@ -75,7 +75,7 @@ def api_services():
 @system_bp.route('/service/<name>/restart', methods=['POST'])
 def api_restart_service(name):
     """Restart a service."""
-    allowed = ['dnsmasq', 'hostapd', 'suricata', 'guardian-agent', 'nginx', 'dnsxai']
+    allowed = ['dnsmasq', 'hostapd', 'suricata', 'guardian-qsecbit', 'guardian-webui', 'nginx', 'dnsxai']
     if name not in allowed:
         return jsonify({'success': False, 'error': 'Service not allowed'}), 403
 
@@ -92,7 +92,7 @@ def api_restart_service(name):
 def api_restart_all():
     """Restart all Guardian services."""
     try:
-        services = ['dnsmasq', 'hostapd', 'suricata', 'guardian-agent']
+        services = ['dnsmasq', 'hostapd', 'suricata', 'guardian-qsecbit']
         for service in services:
             run_command(f'sudo systemctl restart {service} 2>/dev/null || true')
         return jsonify({'success': True})
