@@ -35,3 +35,7 @@ def register_blueprints(app: Flask):
     # System module - System settings
     from .system import system_bp
     app.register_blueprint(system_bp, url_prefix='/api/system')
+
+    # Cortex module - Neural Command Center integration
+    from .cortex import cortex_bp
+    app.register_blueprint(cortex_bp)
