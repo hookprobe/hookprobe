@@ -1,0 +1,120 @@
+<!-- Cortex Embedded Tab - Digital Twin Globe Visualization -->
+<!-- This template is included in the main Guardian UI as a tab -->
+
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cortex.css') }}">
+
+<div class="cortex-embedded">
+    <!-- Header -->
+    <div class="cortex-title-bar">
+        <div class="cortex-title">
+            <span class="cortex-icon">&#x2B21;</span>
+            <div class="cortex-title-text">
+                <h2>Digital Twin</h2>
+                <span class="cortex-subtitle">HookProbe Mesh Visualization</span>
+            </div>
+        </div>
+        <div class="cortex-controls">
+            <div class="cortex-mode-toggle">
+                <button id="cortex-demo-btn" class="cortex-btn active" title="Show demo mesh network">
+                    Demo
+                </button>
+                <button id="cortex-live-btn" class="cortex-btn" title="Show only this Guardian">
+                    Live
+                </button>
+            </div>
+            <div class="cortex-node-info">
+                <span class="cortex-node-dot"></span>
+                <span class="cortex-node-label" id="cortex-node-label">Detecting location...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="cortex-stats-bar">
+        <div class="cortex-stat">
+            <span class="cortex-stat-value" id="stat-nodes">--</span>
+            <span class="cortex-stat-label">Nodes</span>
+        </div>
+        <div class="cortex-stat">
+            <span class="cortex-stat-value" id="stat-attacks">0</span>
+            <span class="cortex-stat-label">Attacks</span>
+        </div>
+        <div class="cortex-stat">
+            <span class="cortex-stat-value" id="stat-repelled">0</span>
+            <span class="cortex-stat-label">Repelled</span>
+        </div>
+        <div class="cortex-stat">
+            <span class="cortex-stat-value" id="stat-qsecbit">--</span>
+            <span class="cortex-stat-label">Avg Qsecbit</span>
+        </div>
+        <div class="cortex-stat-divider"></div>
+        <div class="cortex-stat tier-sentinel">
+            <span class="cortex-stat-value" id="stat-sentinels">0</span>
+            <span class="cortex-stat-label">Sentinels</span>
+        </div>
+        <div class="cortex-stat tier-guardian">
+            <span class="cortex-stat-value" id="stat-guardians">0</span>
+            <span class="cortex-stat-label">Guardians</span>
+        </div>
+        <div class="cortex-stat tier-fortress">
+            <span class="cortex-stat-value" id="stat-fortresses">0</span>
+            <span class="cortex-stat-label">Fortresses</span>
+        </div>
+        <div class="cortex-stat tier-nexus">
+            <span class="cortex-stat-value" id="stat-nexuses">0</span>
+            <span class="cortex-stat-label">Nexuses</span>
+        </div>
+    </div>
+
+    <!-- Globe Container -->
+    <div class="cortex-globe-wrapper">
+        <!-- 3D Globe (WebGL) -->
+        <div id="globe-container" class="cortex-globe"></div>
+
+        <!-- 2D Fallback -->
+        <div id="map-fallback" class="cortex-map-fallback" style="display: none;">
+            <canvas id="fallback-canvas"></canvas>
+            <div class="fallback-info">2D Map (WebGL not available)</div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="cortex-loading" class="cortex-loading">
+            <div class="cortex-loading-spinner"></div>
+            <div class="cortex-loading-text">Initializing Globe...</div>
+        </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="cortex-event-log">
+        <div class="cortex-event-header">
+            <span>Recent Events</span>
+            <button id="cortex-clear-events" class="cortex-btn-small">Clear</button>
+        </div>
+        <ul id="event-list" class="cortex-event-list">
+            <li class="cortex-event-placeholder">Waiting for events...</li>
+        </ul>
+    </div>
+</div>
+
+<!-- Globe.gl Library (CDN) -->
+<script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+
+<!-- Cortex Embedded JavaScript -->
+<script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
+
+<script>
+    // Initialize when tab becomes visible
+    document.addEventListener('DOMContentLoaded', function() {
+        // Watch for tab activation
+        const cortexTab = document.querySelector('[data-tab="cortex"]');
+        if (cortexTab) {
+            cortexTab.addEventListener('click', function() {
+                // Initialize globe when tab is clicked (first time)
+                if (!window.cortexInitialized) {
+                    setTimeout(initCortexGlobe, 100);
+                    window.cortexInitialized = true;
+                }
+            });
+        }
+    });
+</script>
