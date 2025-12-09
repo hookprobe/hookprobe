@@ -1,7 +1,7 @@
 # HookProbe Licensing
 
-**Version**: 5.0 "Liberty"
-**Last Updated**: 2025-12-08
+**Version**: 5.1 "Cortex"
+**Last Updated**: 2025-12-09
 
 ---
 
@@ -34,6 +34,7 @@ The following components are licensed under the **GNU Affero General Public Lice
 | Self-hosted Deployment | `deploy/` | Edge and cloud deployment scripts |
 | Mesh Communication Base | `shared/mesh/` | Basic mesh networking |
 | Blocklist Management | `shared/dnsXai/update-blocklist.sh` | Blocklist updater scripts |
+| HookProbe Cortex | `visualization/globe/` | 3D Neural Command Center visualization |
 
 **AGPL v3.0 Key Requirements:**
 - Source code must be provided when software is distributed
@@ -261,5 +262,5 @@ For all licensing inquiries, compliance questions, contributor agreements, secur
 
 ---
 
-**HookProbe v5.0 "Liberty"**
+**HookProbe v5.1 "Cortex"**
 *Protecting innovation while democratizing security*

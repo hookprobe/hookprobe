@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.0
-**Last Updated**: 2025-12-07
+**Version**: 5.1
+**Last Updated**: 2025-12-09
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -32,6 +32,10 @@
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
+| **Cortex (3D Globe)** | Visualization | `visualization/globe/` |
+| **Globe product connectors** | Connectors | `visualization/globe/backend/connectors/` |
+| **Add Globe to Guardian** | Flask integration | `connectors/guardian.py` |
+| **Add Globe to MSSP** | Django integration | `connectors/mssp.py` |
 
 ---
 
@@ -43,6 +47,7 @@
 - [Core Modules](#core-modules)
 - [Shared Infrastructure](#shared-infrastructure)
 - [Product Tiers](#product-tiers)
+- [Visualization](#visualization)
 - [Testing Guide](#testing-guide)
 - [CI/CD Workflows](#cicd-workflows)
 - [Development Tooling](#development-tooling)
@@ -392,6 +397,36 @@ hookprobe/
 │       ├── requirements.sh          # Dependency checks
 │       └── instructions.sh          # Installation instructions
 │
+├── visualization/                    # HOOKPROBE CORTEX
+│   └── globe/                        # Neural Command Center (Digital Twin)
+│       ├── README.md                # Documentation
+│       ├── ARCHITECTURE.md          # HTP integration analysis
+│       ├── backend/
+│       │   ├── server.py            # WebSocket server with demo/live toggle
+│       │   ├── node_registry.py     # NodeTwin state management
+│       │   ├── htp_bridge.py        # HTP mesh participant
+│       │   ├── demo_data.py         # Demo event generator
+│       │   ├── data_collector.py    # HTP/Neuro data integration
+│       │   ├── geo_resolver.py      # IP geolocation
+│       │   └── connectors/          # Product tier connectors
+│       │       ├── __init__.py
+│       │       ├── base.py          # ProductConnector base class
+│       │       ├── manager.py       # ConnectorManager aggregator
+│       │       ├── guardian.py      # Guardian Flask integration
+│       │       ├── fortress.py      # Fortress DSM integration
+│       │       ├── nexus.py         # Nexus ML/AI integration
+│       │       └── mssp.py          # MSSP Django integration
+│       ├── frontend/
+│       │   ├── index.html           # Main page with mode toggle
+│       │   ├── css/globe.css        # Styling
+│       │   └── js/
+│       │       ├── globe.js         # Globe.gl visualization
+│       │       ├── data-stream.js   # WebSocket client with mode switching
+│       │       ├── animations.js    # Attack arc animations
+│       │       └── fallback-2d.js   # Mobile 2D fallback
+│       └── tests/
+│           └── test_globe_backend.py
+│
 ├── tests/                            # TEST SUITES
 │   ├── __init__.py
 │   ├── test_qsecbit.py              # Qsecbit algorithm tests
@@ -712,6 +747,174 @@ python manage.py seed_demo_data    # CMS demo content
 python manage.py seed_ai_content   # AI-generated content
 python manage.py seed_merchandise  # Product catalog
 ```
+
+---
+
+## Visualization
+
+### HookProbe Cortex - Neural Command Center
+
+**Location**: `visualization/globe/`
+**Status**: Phase 1 Development
+**Branding**: "Cortex" - The mesh's digital twin visualization
+
+HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin of the entire defense mesh. This is not just a dashboard showing data *about* the mesh - it *IS* the mesh visualized.
+
+**Tagline**: *See your mesh. Command your defense.*
+
+**Architecture**:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Frontend (Browser)                       │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  Globe.gl (Three.js wrapper)                            ││
+│  │  - 3D Earth rendering with night texture                ││
+│  │  - Arc animations for attacks (red) / repelled (blue)   ││
+│  │  - Point markers for nodes (color = Qsecbit status)     ││
+│  │  - Demo/Live mode toggle                                ││
+│  └─────────────────────────────────────────────────────────┘│
+│                          ▲ WebSocket                         │
+└──────────────────────────┼──────────────────────────────────┘
+                           │
+┌──────────────────────────┼──────────────────────────────────┐
+│                     Backend (Python)                         │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  GlobeServer (WebSocket + REST API)                     ││
+│  │       ▲                                                 ││
+│  │       │                                                 ││
+│  │  ConnectorManager (aggregates all product connectors)   ││
+│  │       ▲                                                 ││
+│  │       ├── GuardianConnector (Flask integration)         ││
+│  │       ├── FortressConnector (DSM participation)         ││
+│  │       ├── NexusConnector (ML/AI metrics)                ││
+│  │       └── MSSPConnector (Django integration)            ││
+│  │                                                         ││
+│  │  HTP Bridge → core/htp/ (mesh participant)              ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Files**:
+
+| File | Purpose |
+|------|---------|
+| `backend/server.py` | WebSocket server with demo/live toggle |
+| `backend/node_registry.py` | NodeTwin digital twin state management |
+| `backend/htp_bridge.py` | HTP mesh participant skeleton |
+| `backend/demo_data.py` | Simulated threat events |
+| `backend/connectors/base.py` | ProductConnector base class |
+| `backend/connectors/manager.py` | ConnectorManager aggregator |
+| `backend/connectors/guardian.py` | Guardian Flask integration |
+| `backend/connectors/fortress.py` | Fortress DSM integration |
+| `backend/connectors/nexus.py` | Nexus ML/AI integration |
+| `backend/connectors/mssp.py` | MSSP Django integration |
+| `frontend/js/globe.js` | Globe.gl initialization |
+| `frontend/js/data-stream.js` | WebSocket client with mode switching |
+
+### Product Connector Integration
+
+Each HookProbe product tier has a dedicated connector for the globe visualization:
+
+**GuardianConnector** (`connectors/guardian.py`):
+```python
+from visualization.globe.backend.connectors.guardian import create_flask_connector
+
+# In products/guardian/web/app.py
+globe_connector = create_flask_connector(
+    app,
+    node_id="guardian-home-001",
+    lat=37.7749,
+    lng=-122.4194,
+    label="Home Guardian"
+)
+
+@app.before_first_request
+async def start_globe():
+    await globe_connector.start()
+```
+
+**FortressConnector** (`connectors/fortress.py`):
+```python
+from visualization.globe.backend.connectors.fortress import create_fortress_connector
+
+# Creates edge router connector with DSM participation
+connector = create_fortress_connector(
+    node_id="fortress-dc-001",
+    lat=40.7128,
+    lng=-74.0060,
+    label="NYC Fortress",
+    dsm_enabled=True
+)
+```
+
+**NexusConnector** (`connectors/nexus.py`):
+```python
+from visualization.globe.backend.connectors.nexus import create_nexus_connector
+
+# Creates ML/AI compute connector
+connector = create_nexus_connector(
+    node_id="nexus-ml-001",
+    lat=37.3861,
+    lng=-122.0839,
+    label="Mountain View Nexus"
+)
+```
+
+**MSSPConnector** (`connectors/mssp.py`):
+```python
+from visualization.globe.backend.connectors.mssp import create_django_connector
+
+# In products/mssp/web/settings.py
+GLOBE_CONNECTOR = create_django_connector()
+```
+
+### Demo/Live Mode Toggle
+
+The visualization supports switching between demo and live data:
+
+- **Demo Mode**: Generates simulated events for visual testing
+- **Live Mode**: Receives real events from product connectors
+
+Toggle via UI or API:
+```bash
+# REST API
+curl -X POST http://localhost:8766/api/mode -d '{"mode": "live"}'
+
+# WebSocket message
+{"type": "set_mode", "mode": "demo"}
+```
+
+**Quick Start**:
+```bash
+# Backend (demo mode)
+cd visualization/globe/backend
+pip install -r requirements.txt
+python server.py --demo
+
+# Frontend (separate terminal)
+cd visualization/globe/frontend
+python -m http.server 8080
+# Open http://localhost:8080
+```
+
+**Event Types**:
+
+| Event | Color | Description |
+|-------|-------|-------------|
+| `attack_detected` | Red arc | Incoming attack trajectory |
+| `attack_repelled` | Blue arc | Successfully mitigated attack |
+| `node_status` | Point color | Node Qsecbit status (green/amber/red) |
+| `snapshot` | N/A | Full state snapshot on connect |
+| `mode_changed` | N/A | Demo/Live mode switch notification |
+
+**Node Tiers** (visual representation):
+
+| Tier | Size | Color | Description |
+|------|------|-------|-------------|
+| Sentinel | 0.3 | Gray | IoT validators |
+| Guardian | 0.5 | Blue | Portable gateways |
+| Fortress | 0.8 | Green | Edge routers |
+| Nexus | 1.2 | Amber | ML/AI compute |
 
 ---
 
@@ -1087,6 +1290,7 @@ shared/mesh/ARCHITECTURE.md      # Mesh architecture (MUST READ)
 shared/mesh/unified_transport.py # Mesh transport API
 products/guardian/web/app.py     # Guardian Flask app
 products/mssp/web/apps/          # MSSP Django apps
+visualization/globe/             # Cortex - Neural Command Center
 tests/                           # All tests
 .github/workflows/               # CI/CD
 ```
@@ -1105,9 +1309,12 @@ cd products/guardian/web && python app.py
 
 # MSSP web portal (Django)
 cd products/mssp/web && python manage.py runserver
+
+# Cortex visualization (demo mode)
+cd visualization/globe/backend && python server.py --demo
 ```
 
 ---
 
-**HookProbe v5.0** - Federated Cybersecurity Mesh
+**HookProbe v5.1** - Federated Cybersecurity Mesh
 *One node's detection -> Everyone's protection*
