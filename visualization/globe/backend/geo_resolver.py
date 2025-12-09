@@ -149,4 +149,13 @@ if __name__ == "__main__":
     test_ips = ["8.8.8.8", "1.1.1.1", "192.168.1.1", "123.45.67.89"]
     for ip in test_ips:
         lat, lng, info = resolver.resolve(ip)
-        print(f"{ip}: lat={lat}, lng={lng}, info={info}")
+        # Redact/mask sensitive latitude/longitude data from output
+        display = {}
+        if "error" in info:
+            display["status"] = info["error"]
+        else:
+            display["label"] = info.get("label", "")
+            display["country"] = info.get("country", "")
+            display["country_code"] = info.get("country_code", "")
+            display["source"] = info.get("source", "")
+        print(f"{ip}: location=REDACTED, info={display}")
