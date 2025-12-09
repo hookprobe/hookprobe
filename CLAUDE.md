@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.0
-**Last Updated**: 2025-12-07
+**Version**: 5.1
+**Last Updated**: 2025-12-09
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -32,6 +32,7 @@
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
+| **3D Globe Threat Map** | Visualization | `visualization/globe/` |
 
 ---
 
@@ -43,6 +44,7 @@
 - [Core Modules](#core-modules)
 - [Shared Infrastructure](#shared-infrastructure)
 - [Product Tiers](#product-tiers)
+- [Visualization](#visualization)
 - [Testing Guide](#testing-guide)
 - [CI/CD Workflows](#cicd-workflows)
 - [Development Tooling](#development-tooling)
@@ -392,6 +394,25 @@ hookprobe/
 │       ├── requirements.sh          # Dependency checks
 │       └── instructions.sh          # Installation instructions
 │
+├── visualization/                    # THREAT VISUALIZATION
+│   └── globe/                        # 3D Globe Threat Map
+│       ├── README.md                # Documentation
+│       ├── backend/
+│       │   ├── server.py            # WebSocket server
+│       │   ├── data_collector.py    # HTP/Neuro data integration
+│       │   ├── demo_data.py         # Demo event generator
+│       │   └── geo_resolver.py      # IP geolocation
+│       ├── frontend/
+│       │   ├── index.html           # Main page
+│       │   ├── css/globe.css        # Styling
+│       │   └── js/
+│       │       ├── globe.js         # Globe.gl visualization
+│       │       ├── data-stream.js   # WebSocket client
+│       │       ├── animations.js    # Attack arc animations
+│       │       └── fallback-2d.js   # Mobile 2D fallback
+│       └── tests/
+│           └── test_globe_backend.py
+│
 ├── tests/                            # TEST SUITES
 │   ├── __init__.py
 │   ├── test_qsecbit.py              # Qsecbit algorithm tests
@@ -712,6 +733,76 @@ python manage.py seed_demo_data    # CMS demo content
 python manage.py seed_ai_content   # AI-generated content
 python manage.py seed_merchandise  # Product catalog
 ```
+
+---
+
+## Visualization
+
+### 3D Globe Threat Map
+
+**Location**: `visualization/globe/`
+**Status**: Phase 1 Development (2026 Side Project)
+
+Real-time 3D globe visualization of HookProbe mesh network activity.
+
+**Architecture**:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Frontend (Browser)                       │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  Globe.gl (Three.js wrapper)                            ││
+│  │  - 3D Earth rendering with night texture                ││
+│  │  - Arc animations for attacks (red) / repelled (blue)   ││
+│  │  - Point markers for nodes (color = Qsecbit status)     ││
+│  └─────────────────────────────────────────────────────────┘│
+│                          ▲ WebSocket                         │
+└──────────────────────────┼──────────────────────────────────┘
+                           │
+┌──────────────────────────┼──────────────────────────────────┐
+│                     Backend (Python)                         │
+│  WebSocket Server → HTP Collector → Neuro Collector          │
+│                   → Qsecbit Collector                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Files**:
+
+| File | Purpose |
+|------|---------|
+| `backend/server.py` | WebSocket server with demo mode |
+| `backend/data_collector.py` | HTP/Neuro/Qsecbit integration skeletons |
+| `backend/demo_data.py` | Simulated threat events |
+| `backend/geo_resolver.py` | IP to lat/lng resolution |
+| `frontend/js/globe.js` | Globe.gl initialization |
+| `frontend/js/data-stream.js` | WebSocket client |
+| `frontend/js/fallback-2d.js` | Mobile 2D canvas fallback |
+
+**Quick Start**:
+```bash
+# Backend (demo mode)
+cd visualization/globe/backend
+pip install -r requirements.txt
+python server.py --demo
+
+# Frontend (separate terminal)
+cd visualization/globe/frontend
+python -m http.server 8080
+# Open http://localhost:8080
+```
+
+**Event Types**:
+
+| Event | Color | Description |
+|-------|-------|-------------|
+| `attack_detected` | Red arc | Incoming attack trajectory |
+| `attack_repelled` | Blue arc | Successfully mitigated attack |
+| `node_status` | Point color | Node Qsecbit status (green/amber/red) |
+
+**Node Tiers**:
+- Sentinel: Small point (0.3 radius)
+- Guardian: Medium point (0.5 radius)
+- Fortress: Large point (0.8 radius)
+- Nexus: Largest point (1.2 radius)
 
 ---
 
@@ -1087,6 +1178,7 @@ shared/mesh/ARCHITECTURE.md      # Mesh architecture (MUST READ)
 shared/mesh/unified_transport.py # Mesh transport API
 products/guardian/web/app.py     # Guardian Flask app
 products/mssp/web/apps/          # MSSP Django apps
+visualization/globe/             # 3D Globe Threat Map
 tests/                           # All tests
 .github/workflows/               # CI/CD
 ```
@@ -1105,9 +1197,12 @@ cd products/guardian/web && python app.py
 
 # MSSP web portal (Django)
 cd products/mssp/web && python manage.py runserver
+
+# Globe visualization (demo mode)
+cd visualization/globe/backend && python server.py --demo
 ```
 
 ---
 
-**HookProbe v5.0** - Federated Cybersecurity Mesh
+**HookProbe v5.1** - Federated Cybersecurity Mesh
 *One node's detection -> Everyone's protection*
