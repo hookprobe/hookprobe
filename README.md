@@ -9,10 +9,16 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3.0-blue.svg" alt="License: AGPL v3.0"/></a>
-  <a href="https://github.com/hookprobe/hookprobe/stargazers"><img src="https://img.shields.io/github/stars/hookprobe/hookprobe?style=social" alt="GitHub Stars"/></a>
-  <a href="https://github.com/hookprobe/hookprobe/releases"><img src="https://img.shields.io/github/v/release/hookprobe/hookprobe" alt="Latest Release"/></a>
-  <a href="https://github.com/hookprobe/hookprobe/actions"><img src="https://img.shields.io/github/actions/workflow/status/hookprobe/hookprobe/app-tests.yml" alt="Build Status"/></a>
+  <img src="https://img.shields.io/badge/Version-5.1_Cortex-00e5ff?style=flat-square" alt="Version 5.1 Cortex"/>
+  <img src="https://img.shields.io/badge/License-AGPL_v3.0_+_Commercial-blue?style=flat-square" alt="Dual License"/>
+  <img src="https://img.shields.io/badge/Python-3.9+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+"/>
+  <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"/>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Crypto-Post--Quantum_(Kyber)-ff6b6b?style=flat-square" alt="Post-Quantum"/>
+  <img src="https://img.shields.io/badge/AI-Qsecbit_Threat_Scoring-00ff88?style=flat-square" alt="AI Powered"/>
+  <img src="https://img.shields.io/badge/Network-Zero_Trust_Mesh-ffaa00?style=flat-square" alt="Zero Trust"/>
 </p>
 
 <p align="center">
