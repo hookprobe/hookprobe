@@ -2,7 +2,7 @@
 """
 Tests for HookProbe Globe Visualization Backend
 
-Run with: pytest visualization/globe/tests/
+Run with: pytest shared/cortex/tests/
 """
 
 import pytest
