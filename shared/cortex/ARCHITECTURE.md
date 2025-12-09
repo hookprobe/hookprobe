@@ -350,7 +350,7 @@ class EventType(Enum):
 ### Required Assets
 
 ```
-visualization/globe/frontend/assets/
+shared/cortex/frontend/assets/
 ├── textures/
 │   ├── earth/
 │   │   ├── earth-blue-marble-8k.jpg     # Daytime (NASA)
@@ -450,7 +450,7 @@ void main() {
 ## Files to Create/Modify
 
 ```
-visualization/globe/
+shared/cortex/
 ├── ARCHITECTURE.md              # This document
 ├── backend/
 │   ├── server.py               # Upgrade: HTP integration

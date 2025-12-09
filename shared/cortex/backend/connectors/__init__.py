@@ -9,7 +9,7 @@ the globe digital twin visualization.
 Architecture:
                      ┌─────────────────────────────────────────┐
                      │           Globe HTP Bridge              │
-                     │  (visualization/globe/backend/)         │
+                     │  (shared/cortex/backend/)               │
                      └────────────────┬────────────────────────┘
                                       │
         ┌─────────────────────────────┼─────────────────────────────┐
