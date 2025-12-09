@@ -113,7 +113,7 @@ prepare_interface() {
         ip link set "$iface" nomaster 2>/dev/null || true
     done
 
-    # Bring interface down
+    # Bring interface down for hostapd to configure
     ip link set "$iface" down 2>/dev/null || true
     sleep 1
 
@@ -122,11 +122,9 @@ prepare_interface() {
         iw dev "$iface" set type ap 2>/dev/null || \
         log_warn "Could not pre-set AP mode, hostapd will handle it"
 
-    # Bring interface up
-    ip link set "$iface" up 2>/dev/null || true
-    sleep 1
-
-    log_info "$iface prepared for AP mode"
+    # DO NOT bring interface up - let hostapd do it
+    # hostapd needs to configure the interface from a down state
+    log_info "$iface prepared for AP mode (interface down, ready for hostapd)"
 }
 
 # Create bridge interface if needed
