@@ -19,7 +19,10 @@
 
 ## What is HookProbe?
 
-HookProbe is advanced network security software that operates without the complexity. No security analysts required. No threat hunters. No SOC team. Just intelligent software that simplifies the chaos of modern network threats.
+HookProbe is an advanced, lightweight network security platform designed to bring intelligent protection to any environment — without the heavy operational overhead. It doesn’t replace SOC teams or security analysts; it empowers them by automating the repetitive, low-value noise that normally consumes time and attention.
+
+This creates shared resilience, reduces response time, and strengthens your existing security stack.
+HookProbe is built for organisations that need stronger security without adding complexity — a smart layer that supports your team, accelerates detection, and increases visibility across modern, distributed networks.
 
 **The core principle:** When one HookProbe node detects a threat anywhere in the world, every node learns instantly. Collective intelligence replaces isolated guesswork.
 
