@@ -2974,10 +2974,31 @@ DNSMASQ_OVERRIDE
     # Reload systemd to pick up new services
     systemctl daemon-reload
 
-    log_info "Guardian AP services installed"
+    # Enable services to start at boot
+    log_info "Enabling Guardian AP services..."
+    systemctl enable guardian-wlan.service 2>/dev/null || true
+    systemctl enable guardian-ap.service 2>/dev/null || true
+    systemctl enable hostapd.service 2>/dev/null || true
+    systemctl enable dnsmasq.service 2>/dev/null || true
+
+    # Unmask hostapd if it was masked (common on Raspberry Pi OS)
+    systemctl unmask hostapd.service 2>/dev/null || true
+
+    # Start the services now
+    log_info "Starting Guardian AP services..."
+    systemctl start guardian-wlan.service 2>/dev/null || true
+    sleep 2
+    systemctl start hostapd.service 2>/dev/null || {
+        log_warn "hostapd failed to start - check /etc/hostapd/hostapd.conf"
+        systemctl status hostapd.service --no-pager || true
+    }
+    systemctl start dnsmasq.service 2>/dev/null || true
+
+    log_info "Guardian AP services installed and enabled"
     log_info "  - guardian-wlan.service: Prepares wlan1 for AP mode"
     log_info "  - guardian-ap.service: Ensures hostapd/dnsmasq start"
     log_info "  - hostapd/dnsmasq overrides: Removed network-online dependency"
+    log_info "  - All services enabled to start at boot"
 }
 
 # ============================================================
