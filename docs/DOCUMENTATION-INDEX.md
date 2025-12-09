@@ -1,16 +1,15 @@
 # HookProbe Documentation Index
 
 <p align="center">
-  <strong>The Federated Network Security Platform</strong><br>
-  <em>Affordable WiFi Security · Open-Source Firewall · Collective Defense Mesh</em><br>
-  <strong>More than a firewall — it's a way of life.</strong>
+  <strong>Collective Intelligence for Network Security</strong><br>
+  <em>One node's detection is everyone's protection.</em>
 </p>
 
 ---
 
-**Complete Navigation Guide to HookProbe v5.0 "Liberty" Documentation**
+**Documentation for HookProbe v5.0**
 
-Welcome to HookProbe — the federated neuro-resonant security mesh that brings enterprise protection to everyone. Built on off-the-shelf hardware (Raspberry Pi + USB WiFi adapters), HookProbe delivers professional security at a fraction of traditional costs.
+HookProbe is advanced network security software that operates without the complexity. This index provides navigation to all documentation organized by topic and audience.
 
 ---
 
@@ -213,9 +212,9 @@ HookProbe uses a **dual licensing model**:
 ---
 
 <p align="center">
-  <strong>HookProbe v5.0 "Liberty"</strong><br>
-  <em>The Federated Neuro-Resonant Decentralized Security Mesh</em><br>
-  <strong>More than a firewall — it's a way of life.</strong>
+  <strong>HookProbe v5.0</strong><br>
+  <em>Collective intelligence for network security.</em><br>
+  <em>One node's detection is everyone's protection.</em>
 </p>
 
-**Version**: 5.0.0 | **Last Updated**: 2025-12-08
+**Version**: 5.0.0 | **Last Updated**: 2025-12-09

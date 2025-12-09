@@ -2,11 +2,10 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
-<h1 align="center">The Federated Network Security Platform</h1>
+<h1 align="center">Collective Intelligence for Network Security</h1>
 
 <p align="center">
-  <strong>Affordable WiFi Security · Open-Source Firewall · Collective Defense Mesh</strong><br>
-  <em>More than a firewall — it's a way of life.</em>
+  <strong>One node's detection is everyone's protection.</strong>
 </p>
 
 <p align="center">
@@ -16,403 +15,245 @@
   <a href="https://github.com/hookprobe/hookprobe/actions"><img src="https://img.shields.io/github/actions/workflow/status/hookprobe/hookprobe/app-tests.yml" alt="Build Status"/></a>
 </p>
 
-<p align="center">
-  <img src="assets/hookprobe-future-ram-cine.png" alt="Affordable WiFi Security Platform" width="600"/>
-</p>
+---
 
-<p align="center">
-  <strong>Off-the-Shelf Hardware · Enterprise Protection · NIS2 Compliance · Community Innovation</strong>
-</p>
+## What is HookProbe?
+
+HookProbe is advanced network security software that operates without the complexity. No security analysts required. No threat hunters. No SOC team. Just intelligent software that simplifies the chaos of modern network threats.
+
+**The core principle:** When one HookProbe node detects a threat anywhere in the world, every node learns instantly. Collective intelligence replaces isolated guesswork.
 
 ---
 
-## 🎯 The Security Gap That Costs Billions
+## Why HookProbe Exists
 
-**The Reality:** The SMB security market is worth **$25 billion in 2024**, growing to **$70 billion by 2034**. Yet enterprise vendors ignore smaller customers — charging $10,000-$50,000/year for solutions that are overkill for most businesses.
+Enterprise security vendors build complex solutions that require dedicated teams to operate. Small organizations face two choices: expensive complexity or no protection at all.
 
-**The NIS2 Mandate:** EU's NIS2 Directive now requires essential and important entities to implement cybersecurity measures. Small businesses face **mandatory compliance** with no affordable path forward.
+HookProbe takes a different approach. We built software that handles the complexity internally so you can focus on what matters. Deploy in minutes. Operate with confidence. Achieve more with less.
 
-**HookProbe Changes Everything:** Build enterprise-grade WiFi security using **off-the-shelf hardware** — a Raspberry Pi and USB WiFi adapters. Full office coverage for under $200.
-
-| Challenge | Enterprise Vendors | HookProbe |
-|-----------|-------------------|-----------|
-| **Hardware** | Proprietary appliances | Raspberry Pi + USB WiFi |
-| **Total Cost** | $10K-$50K/year | $75-$200 one-time |
-| **Office WiFi** | Additional APs required | USB adapters = full coverage |
-| **NIS2 Compliance** | Expensive add-ons | Built-in automation |
-| **Threat Response** | Manual (hours) | AI-automated (<30 sec) |
-| **Updates** | Vendor lock-in | Community-driven, open |
-| **Defense Model** | Isolated silos | Collective mesh intelligence |
-
-> ⭐ **Star this repo** — help bring professional security to every business, everywhere.
+| Traditional Security | HookProbe |
+|---------------------|-----------|
+| Requires security analysts | Self-operating |
+| Manual threat investigation | Automated response |
+| Isolated detection | Collective intelligence |
+| Complex configuration | Simple deployment |
+| Vendor lock-in | Open source foundation |
 
 ---
 
-## 🚀 Quick Start — Deploy in Minutes
+## Quick Start
 
 ```bash
-# One-line installation on Raspberry Pi / Mini PC
+# Deploy on any Linux system
 curl -fsSL https://hookprobe.com/install.sh | bash
 
-# Or clone and run manually
+# Or clone and deploy manually
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
-./install.sh --tier guardian  # Portable secure WiFi hotspot
-./install.sh --tier fortress  # Full office WiFi security
+./install.sh --tier guardian   # Home lab / prosumer
+./install.sh --tier fortress   # Business network
+./install.sh --tier nexus      # Multi-site coordination
 ```
 
-**Off-the-Shelf Hardware — No Vendor Lock-in:**
+**Deployment Tiers:**
 
-| Product | Hardware | Cost | Best For |
-|---------|----------|------|----------|
-| **Guardian** | Raspberry Pi 5 + USB WiFi | ~$75 | Travel, home WiFi, portable protection |
-| **Fortress** | Mini PC + USB WiFi adapters | ~$150 | Office WiFi, IoT segmentation, NIS2 compliance |
-| **Nexus** | Any x86 server | Variable | Multi-site coordination, ML/AI training |
+| Tier | Memory | Use Case |
+|------|--------|----------|
+| Guardian | 1.5GB+ | Home lab, travel security, personal networks |
+| Fortress | 4GB+ | Business networks, NIS2 compliance, IoT segmentation |
+| Nexus | 16GB+ | Multi-site coordination, ML model training |
 
-**The Innovation:** Add USB WiFi adapters for instant coverage expansion. One Raspberry Pi + 3 USB adapters = complete office WiFi security. No proprietary hardware. No recurring fees.
-
-📖 **[Installation Guide →](docs/installation/INSTALLATION.md)** | **[Beginner's Guide →](docs/installation/BEGINNER-GUIDE.md)**
+**[Installation Guide](docs/installation/INSTALLATION.md)** · **[Deployment Options](deploy/README.md)**
 
 ---
 
-## 🔥 The Five Pillars of HookProbe
+## How It Works
 
-### 1. Collective Defense Mesh — One Detection Protects Everyone
+### Collective Defense Mesh
 
-This is what makes HookProbe **more than a firewall**. When any node detects a threat, the entire mesh learns instantly:
+Every HookProbe installation joins a global mesh. When threats are detected, anonymized signatures propagate across the network in real-time.
 
 ```
-Your Office (London):    Detects ransomware C2 callback
-        ↓
-HookProbe Mesh:          Anonymized threat signature shared globally
-        ↓
-Partner Office (Berlin): Protected BEFORE attack reaches them
-        ↓
-Remote Worker (Paris):   Already blocking — zero-day neutralized
+Node A (Singapore)     Detects novel attack pattern
+        │
+        ▼
+Mesh Intelligence      Validates and distributes signature
+        │
+        ├──────────────────────────────────────┐
+        ▼                                      ▼
+Node B (London)        Node C (New York)       Node D (Berlin)
+Blocking in <30s       Blocking in <30s        Blocking in <30s
 ```
 
-**The Power of Many:** Individual firewalls are isolated. HookProbe creates a **federated security consciousness** where collective intelligence makes everyone stronger.
+Traditional firewalls wait for vendor updates. HookProbe nodes protect each other continuously.
 
-### 2. Affordable WiFi Security — Off-the-Shelf Innovation
-
-**The Hardware Revolution:**
-- Raspberry Pi 5 ($60) + USB WiFi adapter ($15) = enterprise-grade security
-- Add more USB adapters for instant coverage expansion
-- One Pi + 3 adapters = full office WiFi with segmentation
-- No proprietary appliances. No recurring fees. No vendor lock-in.
-
-### 3. AI-Powered Detection & Prevention (Qsecbit)
+### Qsecbit Engine
 
 Real-time threat scoring with automated response:
 
-| Score | Status | Action |
-|-------|--------|--------|
-| < 0.45 | 🟢 GREEN | Normal operations, learning baseline |
-| 0.45-0.70 | 🟡 AMBER | Auto-mitigation triggered |
-| > 0.70 | 🔴 RED | Full defense activated |
+| Score Range | Status | System Response |
+|-------------|--------|-----------------|
+| < 0.45 | Normal | Baseline learning, passive monitoring |
+| 0.45 - 0.70 | Elevated | Automated mitigation initiated |
+| > 0.70 | Critical | Full defensive response activated |
 
-**Detection + Prevention:** L2-L7 threat analysis, behavioral anomaly detection, and automated response in under 30 seconds.
+The engine combines behavioral analysis, network anomaly detection, and collective threat intelligence to score risk in real-time.
 
-### 4. NIS2 Compliance Built-In
+### Network Segmentation
 
-EU's NIS2 Directive compliance out of the box — **mandatory** for essential and important entities:
-
-```
-✓ Automated incident reporting (Article 23)
-✓ Risk management measures (Article 21)
-✓ Supply chain security assessment
-✓ Continuous monitoring and logging
-✓ Compliance reports ready for auditors
-```
-
-### 5. Smart Network Segmentation
-
-Automatic IoT isolation prevents lateral movement attacks:
+Automatic isolation of network segments prevents lateral movement:
 
 ```
-┌──────────────────────────────────────────────────────┐
-│            Single WiFi: "Office-Network"             │
-│                         ↓                            │
-│    ┌───────────────────────────────────────┐         │
-│    │     HookProbe Fortress (Mini PC)      │         │
-│    └─────┬───────┬───────┬───────┬─────────┘         │
-│          │       │       │       │                   │
-│   VLAN 10│ VLAN 20│ VLAN 30│ VLAN 99                 │
-│   Trusted│  IoT   │ Guest  │ Quarantine              │
-│    💻 📱 │  📷 💡 │  📱   │   ❓                     │
-│          │        │        │                         │
-│   ✗ IoT devices CANNOT access trusted network        │
-│   ✗ Compromised camera CANNOT spread laterally       │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    HookProbe Fortress                   │
+├─────────────┬─────────────┬─────────────┬──────────────┤
+│   VLAN 10   │   VLAN 20   │   VLAN 30   │   VLAN 99    │
+│   Trusted   │     IoT     │    Guest    │  Quarantine  │
+│             │             │             │              │
+│ Workstations│   Cameras   │   Visitors  │  Suspicious  │
+│   Servers   │   Sensors   │   Phones    │   Devices    │
+├─────────────┴─────────────┴─────────────┴──────────────┤
+│  Cross-segment traffic requires explicit authorization  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### Bonus: DNS Protection (dnsXai)
+### DNS Protection (dnsXai)
 
-AI-powered DNS filtering blocks at the source:
-- Ads and trackers (130K+ domains)
-- Malware command & control
-- Phishing domains
+ML-powered DNS filtering blocks threats at the source:
+
+- Malware command and control domains
+- Phishing infrastructure
+- Advertising and tracking networks
 - Data exfiltration tunnels
 
 ---
 
-## 🏗️ Architecture — Open Source Collaboration
+## Who Uses HookProbe
 
-HookProbe is built on **open collaboration** principles. Core components are AGPL-licensed, ensuring contributions benefit everyone.
+### Prosumers and Home Labs
+
+Build a secure home network without becoming a security expert. HookProbe handles ad blocking, NAS protection, and remote access security automatically.
+
+### Small and Medium Businesses
+
+Meet NIS2 compliance requirements without hiring a security team. HookProbe provides automated incident reporting, continuous monitoring, and audit-ready documentation.
+
+### Managed Service Providers
+
+Deploy consistent security across client networks. Collective intelligence means every client benefits from threats detected at any client site.
+
+---
+
+## Architecture
 
 ```
 hookprobe/
-├── core/                    # 🧠 Core Intelligence
-│   ├── htp/                 # Transport Protocol (AGPL)
-│   ├── qsecbit/             # AI Threat Scoring
+├── core/                    # Core Intelligence
+│   ├── htp/                 # Transport Protocol
+│   ├── qsecbit/             # Threat Scoring Engine
 │   └── neuro/               # Neural Authentication
 │
-├── shared/                  # 🔧 Shared Innovation
-│   ├── dnsXai/              # AI DNS Protection
-│   ├── mesh/                # Collective Defense Network
-│   ├── network/             # Network Segmentation
-│   └── response/            # Automated Response (AGPL)
+├── shared/                  # Shared Modules
+│   ├── dnsXai/              # DNS Protection
+│   ├── mesh/                # Collective Defense
+│   ├── network/             # Segmentation
+│   └── response/            # Automated Response
 │
-├── products/                # 📦 Distribution Tiers
-│   ├── guardian/            # Travel Firewall (AGPL)
-│   ├── fortress/            # Business Firewall
-│   ├── nexus/               # ML Coordination
-│   └── mssp/                # Managed Service Provider
+├── products/                # Deployment Tiers
+│   ├── guardian/            # Home / Prosumer
+│   ├── fortress/            # Business
+│   ├── nexus/               # Coordination
+│   └── mssp/                # Service Provider
 │
-└── deploy/                  # 🚀 Easy Deployment (AGPL)
+└── deploy/                  # Deployment Scripts
 ```
 
-📖 **[Full Architecture →](ARCHITECTURE.md)** | **[Mesh Documentation →](shared/mesh/ARCHITECTURE.md)**
+**[Full Architecture](ARCHITECTURE.md)** · **[Mesh Design](shared/mesh/ARCHITECTURE.md)**
 
 ---
 
-## 💼 Who Uses HookProbe
+## Technical Foundation
 
-### 🏠 Home & Power Users
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Packet Processing | XDP/eBPF | Sub-microsecond filtering decisions |
+| Cryptography | Kyber KEM | Post-quantum key exchange |
+| Transport | HTP Protocol | NAT traversal, DDoS resistance |
+| Intelligence | Federated ML | Privacy-preserving threat sharing |
 
-**Use Cases:** Secure home WiFi, NAS protection, ad-blocking, privacy
-
-**Deploy Guardian** on Raspberry Pi:
-- ✅ Whole-home ad and tracker blocking
-- ✅ Secure remote access to your NAS
-- ✅ Protect all devices automatically
-- ✅ VPN for secure browsing anywhere
-- **Cost:** ~$75 one-time
-
-### 🏢 Small Business (5-50 employees)
-
-**Challenge:** Need enterprise security but can't afford $50K/year solutions.
-
-**Deploy Fortress** on Mini PC + USB WiFi:
-- ✅ Full office WiFi from one device
-- ✅ NIS2 compliance automation
-- ✅ IoT device isolation
-- ✅ VPN for remote workers
-- ✅ AI threat detection
-- **Cost:** ~$150 one-time, zero ongoing fees
-
-**ROI:** 99% cost savings vs. enterprise solutions.
-
-### 🧳 Remote & Traveling Workers
-
-**Challenge:** Hotel WiFi, coffee shops, airports — all hostile networks.
-
-**Deploy Guardian** — your portable security shield:
-- ✅ Carry-on sized secure WiFi hotspot
-- ✅ Connect to hostile networks safely
-- ✅ DNS-level threat blocking
-- ✅ VPN tunnel back to home/office
-- **Cost:** ~$75 fits in your bag
-
-### 🏗️ Managed Service Providers (MSPs/MSSPs)
-
-**Opportunity:** The $25B SMB security market is underserved.
-
-**Deploy HookProbe** at client sites:
-- ✅ Multi-tenant management dashboard
-- ✅ Cross-client collective threat intelligence
-- ✅ White-label capabilities
-- ✅ Offer $50/month vs. $500/month competitors
-- **Margin:** 10x better than enterprise resale
+**[Qsecbit Engine](core/qsecbit/README.md)** · **[HTP Protocol](docs/HTP_SECURITY_ENHANCEMENTS.md)** · **[dnsXai](shared/dnsXai/README.md)**
 
 ---
 
-## 🌍 Community & Collaboration
+## NIS2 Compliance
 
-HookProbe is a **collaborative, community-driven project**. We believe security should be accessible to everyone.
+For organizations subject to EU NIS2 Directive requirements:
 
-### How to Contribute
+- Automated incident detection and reporting (Article 23)
+- Continuous risk assessment (Article 21)
+- Supply chain security monitoring
+- Audit trail and compliance documentation
+
+**[GDPR Compliance](docs/GDPR.md)** · **[Security Policy](docs/SECURITY.md)**
+
+---
+
+## Licensing
+
+HookProbe uses dual licensing to balance open collaboration with sustainable development.
+
+**AGPL v3.0 (Open Source):**
+- Deployment scripts
+- Guardian product tier
+- Mesh communication
+- Threat response modules
+- Documentation
+
+**Commercial License (for SaaS/OEM):**
+- Qsecbit AI algorithm
+- Neural Resonance protocol
+- dnsXai ML classifier
+- MSSP platform
+
+Personal use, internal business protection, and non-commercial research are free under both licenses.
+
+**[Licensing Details](LICENSING.md)** · Contact: qsecbit@hookprobe.com
+
+---
+
+## Contributing
 
 ```bash
-# Fork, clone, and contribute
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
 make install-dev
 make test
-
-# Submit pull request
 ```
 
-### Community Resources
-
-| Resource | Link |
-|----------|------|
-| 📖 Documentation | [docs/](docs/) |
-| 🐛 Issues | [GitHub Issues](https://github.com/hookprobe/hookprobe/issues) |
-| 💬 Discussions | [GitHub Discussions](https://github.com/hookprobe/hookprobe/discussions) |
-| 📧 Security Issues | qsecbit@hookprobe.com |
-
-### Contributors Welcome
-
-- 🔧 **Developers:** Core features, bug fixes, integrations
-- 📝 **Technical Writers:** Documentation, tutorials
-- 🌐 **Translators:** Localization
-- 🧪 **Testers:** Edge cases, hardware compatibility
-- 💡 **Ideas:** Feature requests, use cases
-
-📖 **[Contributing Guide →](docs/CONTRIBUTING.md)**
+**[Contributing Guide](docs/CONTRIBUTING.md)** · **[GitHub Issues](https://github.com/hookprobe/hookprobe/issues)** · **[Discussions](https://github.com/hookprobe/hookprobe/discussions)**
 
 ---
 
-## 📊 The Federated Neuro-Resonant Security Mesh
+## Documentation
 
-> **More than a firewall. A living, learning, collective defense consciousness.**
-
-### What Makes HookProbe Different
-
-Traditional security is **reactive and isolated**. HookProbe is **proactive and collective**:
-
-| Traditional | HookProbe |
-|-------------|-----------|
-| Static firewall rules | AI-evolving threat patterns |
-| Isolated silos | Federated mesh intelligence |
-| Reactive alerts | Predictive prevention |
-| Hardware lock-in | Off-the-shelf components |
-| Vendor dependencies | Community-driven innovation |
-
-### The Four Pillars of Innovation
-
-| Pillar | Technology | Why It Matters |
-|--------|------------|----------------|
-| **Neural Resonance** | Living cryptography | Keys evolve from device behavior — impossible to steal |
-| **HTP Protocol** | Quantum-resistant transport | Survives DDoS, traverses NAT, future-proof |
-| **Qsecbit Engine** | AI resilience scoring | Real-time threat detection with 30-second response |
-| **Collective Mesh** | Federated defense | One node's detection → everyone's protection |
-
-### Technical Depth
-
-- **XDP/eBPF:** Kernel-level packet filtering (sub-microsecond decisions)
-- **Post-Quantum Ready:** Kyber KEM hybrid encryption (NIST standard)
-- **Energy Efficient:** 60-80% power savings vs. traditional appliances
-- **Privacy-First:** Threat intelligence shared without exposing raw data
-
-📖 **[Qsecbit Algorithm →](core/qsecbit/README.md)** | **[HTP Protocol →](docs/HTP_SECURITY_ENHANCEMENTS.md)**
-
----
-
-## 📋 Documentation
-
-### For Business Users
-
-| Document | Description |
-|----------|-------------|
-| **[Quick Start](QUICK-START.md)** | Get running in 10 minutes |
-| **[Beginner's Guide](docs/installation/BEGINNER-GUIDE.md)** | Step-by-step for non-technical users |
-| **[Guardian Setup](products/guardian/README.md)** | Travel WiFi firewall |
-| **[Fortress Setup](products/fortress/README.md)** | Small business firewall |
-| **[VPN Access](docs/networking/VPN.md)** | Remote access setup |
-
-### For Developers
-
-| Document | Description |
-|----------|-------------|
-| **[Architecture](ARCHITECTURE.md)** | System design overview |
-| **[CLAUDE.md](CLAUDE.md)** | AI assistant development guide |
-| **[Mesh Architecture](shared/mesh/ARCHITECTURE.md)** | P2P communication |
-| **[dnsXai](shared/dnsXai/README.md)** | DNS protection module |
-| **[Contributing](docs/CONTRIBUTING.md)** | How to contribute |
-
-### For Compliance
-
-| Document | Description |
-|----------|-------------|
-| **[GDPR Compliance](docs/GDPR.md)** | Data protection |
-| **[Security Policy](docs/SECURITY.md)** | Vulnerability reporting |
-| **[Licensing](LICENSING.md)** | Dual license details |
-
----
-
-## 📜 Licensing — Open Source with Innovation Protection
-
-HookProbe uses a **dual licensing model** balancing open collaboration with sustainable development.
-
-### Open Source (AGPL v3.0)
-
-| Component | Status |
-|-----------|--------|
-| Deployment scripts | ✅ Fully Open |
-| Guardian product | ✅ Fully Open |
-| Mesh communication | ✅ Fully Open |
-| Threat response | ✅ Fully Open |
-| Documentation | ✅ Fully Open |
-
-### Innovation Protection (Commercial License for SaaS/OEM)
-
-| Innovation | Requires License For |
-|------------|---------------------|
-| Qsecbit AI Algorithm | SaaS/OEM use |
-| Neural Resonance Protocol | SaaS/OEM use |
-| dnsXai ML Classifier | SaaS/OEM use |
-| MSSP Cloud Platform | SaaS/OEM use |
-
-**Free for:**
-- ✅ Personal/home use
-- ✅ Internal business protection
-- ✅ Non-commercial research
-
-**Commercial license required for:**
-- MSSP/SaaS offerings
-- OEM product embedding
-- White-label distribution
-
-📖 **[Full Licensing Details →](LICENSING.md)** | Contact: qsecbit@hookprobe.com
-
----
-
-## 🤝 Join the Movement
-
-**Security shouldn't be a luxury. It should be a way of life.**
-
-We're building something bigger than a firewall — a **federated security consciousness** where every home, every business, every traveler contributes to collective protection.
-
-### Get Started Today
-
-```bash
-# One command. Off-the-shelf hardware. Enterprise security.
-curl -fsSL https://hookprobe.com/install.sh | bash
-```
-
-### Be Part of the Mesh
-
-- ⭐ **Star this repo** — Every star helps spread affordable security
-- 🍴 **Fork and contribute** — Your code protects thousands
-- 📢 **Share** — Tell others about the security gap we're closing
-- 💬 **Discuss** — Shape the future of collective defense
+| Topic | Link |
+|-------|------|
+| Installation | [Installation Guide](docs/installation/INSTALLATION.md) |
+| Architecture | [System Architecture](ARCHITECTURE.md) |
+| Development | [CLAUDE.md](CLAUDE.md) |
+| Networking | [VPN Setup](docs/networking/VPN.md) |
+| Compliance | [GDPR](docs/GDPR.md) |
 
 ---
 
 <p align="center">
-  <strong>HookProbe v5.0 "Liberty"</strong><br>
-  <em>The Federated Neuro-Resonant Decentralized Security Mesh</em><br>
-  <strong>More than a firewall — it's a way of life.</strong>
+  <strong>HookProbe v5.0</strong><br>
+  Collective intelligence for network security.<br>
+  <em>One node's detection is everyone's protection.</em>
 </p>
 
 <p align="center">
-  <a href="https://github.com/hookprobe/hookprobe">⭐ Star on GitHub</a> ·
-  <a href="docs/installation/INSTALLATION.md">📖 Documentation</a> ·
-  <a href="https://github.com/hookprobe/hookprobe/discussions">💬 Discussions</a>
-</p>
-
-<p align="center">
-  <sub>Built by the community, for the community. One node's detection → Everyone's protection.</sub>
+  <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
+  <a href="docs/installation/INSTALLATION.md">Documentation</a> ·
+  <a href="https://github.com/hookprobe/hookprobe/discussions">Community</a>
 </p>
