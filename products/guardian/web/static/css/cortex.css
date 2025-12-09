@@ -6,14 +6,32 @@
 /* Import Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap');
 
+/* ============================================
+ * Full-Screen Tab Override
+ * Remove page padding for immersive app experience
+ * ============================================ */
+#tab-cortex {
+    /* Compensate for parent .main-content padding */
+    margin: -2rem;
+    padding: 0;
+    width: calc(100% + 4rem);
+    min-height: calc(100vh - 80px);
+    background: #000000;
+}
+
+/* When cortex tab is active, hide scroll on body */
+#tab-cortex.active {
+    display: block;
+}
+
 /* Container */
 .cortex-embedded {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 200px);
-    min-height: 500px;
-    background: linear-gradient(180deg, #0a0a12 0%, #050508 100%);
-    border-radius: 8px;
+    height: calc(100vh - 80px);
+    min-height: 600px;
+    background: #000000;
+    border-radius: 0;
     overflow: hidden;
 }
 
@@ -23,7 +41,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 1rem 1.5rem;
-    background: linear-gradient(180deg, rgba(0,20,40,0.9) 0%, rgba(5,5,8,0.95) 100%);
+    background: linear-gradient(180deg, #0a0a0f 0%, #000000 100%);
     border-bottom: 1px solid rgba(0,229,255,0.2);
 }
 
@@ -125,7 +143,7 @@
     align-items: center;
     gap: 1.5rem;
     padding: 0.75rem 1.5rem;
-    background: rgba(0,0,0,0.3);
+    background: #050508;
     border-bottom: 1px solid rgba(255,255,255,0.05);
     overflow-x: auto;
 }
@@ -168,7 +186,7 @@
     flex: 1;
     position: relative;
     min-height: 300px;
-    background: #050508;
+    background: #000000;
 }
 
 .cortex-globe {
@@ -228,7 +246,7 @@
 /* Event Log */
 .cortex-event-log {
     max-height: 150px;
-    background: rgba(0,0,0,0.4);
+    background: #050508;
     border-top: 1px solid rgba(255,255,255,0.05);
     overflow: hidden;
 }
@@ -347,6 +365,11 @@
 
 /* Responsive */
 @media (max-width: 768px) {
+    #tab-cortex {
+        margin: -1rem;
+        width: calc(100% + 2rem);
+    }
+
     .cortex-title-bar {
         flex-direction: column;
         gap: 1rem;
@@ -372,12 +395,17 @@
     }
 
     .cortex-embedded {
-        height: calc(100vh - 160px);
+        height: calc(100vh - 70px);
         min-height: 400px;
     }
 }
 
 @media (max-width: 480px) {
+    #tab-cortex {
+        margin: -0.5rem;
+        width: calc(100% + 1rem);
+    }
+
     .cortex-stats-bar {
         flex-wrap: wrap;
         justify-content: center;
