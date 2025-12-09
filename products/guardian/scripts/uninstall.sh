@@ -307,12 +307,18 @@ remove_hostapd_config() {
 remove_dnsmasq_config() {
     log_step "Removing dnsmasq configuration..."
 
+    # Remove Guardian dnsmasq configs
     rm -f /etc/dnsmasq.d/guardian.conf
+    rm -f /etc/dnsmasq.d/dns-shield.conf
 
     # Restore original dnsmasq config if backed up
-    if [ -f /etc/dnsmasq.conf.bak ]; then
+    # Check for both possible backup names
+    if [ -f /etc/dnsmasq.conf.guardian-backup ]; then
+        mv /etc/dnsmasq.conf.guardian-backup /etc/dnsmasq.conf
+        log_info "Restored original dnsmasq.conf from guardian-backup"
+    elif [ -f /etc/dnsmasq.conf.bak ]; then
         mv /etc/dnsmasq.conf.bak /etc/dnsmasq.conf
-        log_info "Restored original dnsmasq.conf"
+        log_info "Restored original dnsmasq.conf from bak"
     fi
 
     log_info "dnsmasq configuration removed"
