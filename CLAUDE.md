@@ -32,7 +32,7 @@
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
-| **3D Globe Threat Map** | Visualization | `visualization/globe/` |
+| **Cortex (3D Globe)** | Visualization | `visualization/globe/` |
 | **Globe product connectors** | Connectors | `visualization/globe/backend/connectors/` |
 | **Add Globe to Guardian** | Flask integration | `connectors/guardian.py` |
 | **Add Globe to MSSP** | Django integration | `connectors/mssp.py` |
@@ -397,8 +397,8 @@ hookprobe/
 │       ├── requirements.sh          # Dependency checks
 │       └── instructions.sh          # Installation instructions
 │
-├── visualization/                    # THREAT VISUALIZATION
-│   └── globe/                        # 3D Globe Threat Map (Digital Twin)
+├── visualization/                    # HOOKPROBE CORTEX
+│   └── globe/                        # Neural Command Center (Digital Twin)
 │       ├── README.md                # Documentation
 │       ├── ARCHITECTURE.md          # HTP integration analysis
 │       ├── backend/
@@ -752,13 +752,15 @@ python manage.py seed_merchandise  # Product catalog
 
 ## Visualization
 
-### 3D Globe Threat Map (Digital Twin)
+### HookProbe Cortex - Neural Command Center
 
 **Location**: `visualization/globe/`
-**Status**: Phase 1 Development (2026 Side Project)
+**Status**: Phase 1 Development
+**Branding**: "Cortex" - The mesh's digital twin visualization
 
-Real-time 3D globe visualization that serves as a **digital twin** of the HookProbe mesh network.
-This is not just a dashboard showing data *about* the mesh - it *IS* the mesh visualized.
+HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin of the entire defense mesh. This is not just a dashboard showing data *about* the mesh - it *IS* the mesh visualized.
+
+**Tagline**: *See your mesh. Command your defense.*
 
 **Architecture**:
 ```
@@ -1288,7 +1290,7 @@ shared/mesh/ARCHITECTURE.md      # Mesh architecture (MUST READ)
 shared/mesh/unified_transport.py # Mesh transport API
 products/guardian/web/app.py     # Guardian Flask app
 products/mssp/web/apps/          # MSSP Django apps
-visualization/globe/             # 3D Globe Threat Map
+visualization/globe/             # Cortex - Neural Command Center
 tests/                           # All tests
 .github/workflows/               # CI/CD
 ```
@@ -1308,7 +1310,7 @@ cd products/guardian/web && python app.py
 # MSSP web portal (Django)
 cd products/mssp/web && python manage.py runserver
 
-# Globe visualization (demo mode)
+# Cortex visualization (demo mode)
 cd visualization/globe/backend && python server.py --demo
 ```
 

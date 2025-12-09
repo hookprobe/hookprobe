@@ -1,14 +1,31 @@
-# HookProbe Globe: Digital Twin Visualization
+# HookProbe Cortex - Neural Command Center
 
-**Status**: Phase 1 Development (2026 Side Project)
-**Version**: 0.2.0
+**Version**: 1.0.0
+**Status**: Phase 1 Active Development
+**Tagline**: *See your mesh. Command your defense.*
 
 ---
 
-## Vision: From Dashboard to Digital Twin
+## What is Cortex?
 
-This isn't a dashboard that shows data *about* the mesh.
-This **IS** the mesh, visualized.
+HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin of the entire HookProbe defense mesh. This isn't a dashboard that shows data *about* the mesh. This **IS** the mesh, visualized.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     HOOKPROBE CORTEX                             │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                                                             ││
+│  │           ⬡ Nexus (ML/AI)        Attack Arc →               ││
+│  │              ↓                        ↓                     ││
+│  │    ⬡ Guardian ←───── Mesh ─────→ ⬡ Fortress                 ││
+│  │              ↓                        ↓                     ││
+│  │         ⬡ Sentinel (IoT)      ← Repelled Arc                ││
+│  │                                                             ││
+│  │  [NODES: 1,247]  [ATTACKS: 89]  [REPELLED: 89]  [QSECBIT]  ││
+│  └─────────────────────────────────────────────────────────────┘│
+│         Real-time 3D globe with attack trajectories              │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 | Dashboard (what we're NOT building) | Digital Twin (what we ARE building) |
 |-------------------------------------|-------------------------------------|
@@ -18,65 +35,29 @@ This **IS** the mesh, visualized.
 | Passive observer | Bridge is a mesh participant |
 | Approximation of state | True reflection of state |
 
-Every Sentinel, Guardian, Fortress, and Nexus has a living twin on the globe.
-When a node's heart beats, its twin pulses. When a node blocks an attack,
-you see the arc fade from red to blue at its location.
-
 ---
 
-## Architecture
+## Features
 
-```
-                              ┌─────────────────────────────────────┐
-                              │         HookProbe Mesh              │
-                              │  Sentinels, Guardians, Fortresses   │
-                              │  Nexuses, MSSP                      │
-                              └──────────────┬──────────────────────┘
-                                             │ HTP Protocol (native)
-                                             ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                              HTP Bridge                                     │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Full HTP Stack (from core/htp/)                                     │  │
-│  │  - Connects as mesh participant (observer mode)                      │  │
-│  │  - Receives heartbeats, Qsecbit updates, threat events               │  │
-│  │  - Subscribes to DSM gossip for mesh-wide intelligence               │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                    ↓                                        │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Node Registry (Digital Twin State)                                  │  │
-│  │  - NodeTwin objects for each mesh node                               │  │
-│  │  - Geographic coordinates, Qsecbit history, liveness                 │  │
-│  │  - Mesh topology (edges between nodes)                               │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                    ↓                                        │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  WebSocket Gateway (last mile to browser)                            │  │
-│  │  - Broadcasts state changes to connected browsers                    │  │
-│  │  - Sends full snapshot on connect                                    │  │
-│  │  - Rate limiting, compression                                        │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────────┘
-                                             │ WebSocket
-                                             ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                              Browser                                        │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  Globe.gl (Three.js wrapper)                                         │  │
-│  │  - 3D Earth with high-res textures                                   │  │
-│  │  - Node points with breathing pulse (synced to heartbeat)            │  │
-│  │  - Attack arcs (red=detected, blue=repelled)                         │  │
-│  │  - Mesh topology lines (optional)                                    │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  2D Fallback (mobile/low-end)                                        │  │
-│  │  - Canvas-based flat map                                             │  │
-│  │  - Same data, simplified rendering                                   │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────────┘
-```
+### Premium Visual Experience
+- **3D Globe.gl rendering** with high-quality Earth textures
+- **Breathing node animations** synced to Qsecbit status
+- **Attack arc trajectories** - red for incoming, blue for repelled
+- **Particle impact effects** on attack targets
+- **Ripple effects** for mesh events
+- **Mesh heartbeat** visualization
+- **Ambient threat overlay** based on global threat level
+- **Scanline effects** for cyberpunk aesthetic
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed analysis of HTP integration options.
+### Real-Time Monitoring
+- **Node health** via Qsecbit color coding (green/amber/red)
+- **Tier-based visualization** (Sentinel → Guardian → Fortress → Nexus)
+- **Live attack tracking** from source to target
+- **Event log feed** with real-time updates
+
+### Demo/Live Toggle
+- **Demo Mode**: Simulated events for showcasing
+- **Live Mode**: Real HTP mesh data (when connected)
 
 ---
 
@@ -110,9 +91,78 @@ python -m http.server 8080
 
 ---
 
-## Visual Design: Canvas, Not Dashboard
+## Architecture
 
-The goal is a visualization you want to *stare at*, not just glance at.
+```
+                              ┌─────────────────────────────────────┐
+                              │         HookProbe Mesh              │
+                              │  Sentinels, Guardians, Fortresses   │
+                              │  Nexuses, MSSP                      │
+                              └──────────────┬──────────────────────┘
+                                             │ HTP Protocol (native)
+                                             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              HTP Bridge                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Full HTP Stack (from core/htp/)                                     │  │
+│  │  - Connects as mesh participant (observer mode)                      │  │
+│  │  - Receives heartbeats, Qsecbit updates, threat events               │  │
+│  │  - Subscribes to DSM gossip for mesh-wide intelligence               │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                    ↓                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Node Registry (Digital Twin State)                                  │  │
+│  │  - NodeTwin objects for each mesh node                               │  │
+│  │  - Geographic coordinates, Qsecbit history, liveness                 │  │
+│  │  - Mesh topology (edges between nodes)                               │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                    ↓                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Product Connectors                                                  │  │
+│  │  - GuardianConnector (Flask integration)                             │  │
+│  │  - FortressConnector (DSM participation)                             │  │
+│  │  - NexusConnector (ML/AI metrics)                                    │  │
+│  │  - MSSPConnector (Django integration)                                │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                    ↓                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  WebSocket Gateway (last mile to browser)                            │  │
+│  │  - Broadcasts state changes to connected browsers                    │  │
+│  │  - Sends full snapshot on connect                                    │  │
+│  │  - Rate limiting, compression                                        │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
+                                             │ WebSocket
+                                             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              Browser (Cortex)                               │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Globe.gl (Three.js wrapper)                                         │  │
+│  │  - 3D Earth with premium textures                                    │  │
+│  │  - Node points with breathing pulse (synced to heartbeat)            │  │
+│  │  - Attack arcs (red=detected, blue=repelled)                         │  │
+│  │  - Impact particles, ripples, ambient effects                        │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Animation Engine (animations.js)                                    │  │
+│  │  - Breathing effects for nodes                                       │  │
+│  │  - Impact bursts with particle systems                               │  │
+│  │  - Ripple effects, scanlines                                         │  │
+│  │  - Mesh heartbeat animation                                          │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  2D Fallback (mobile/low-end)                                        │  │
+│  │  - Canvas-based flat map                                             │  │
+│  │  - Same data, simplified rendering                                   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed analysis of HTP integration options.
+
+---
+
+## Visual Design
 
 ### Node Representation
 
@@ -135,50 +185,20 @@ The goal is a visualization you want to *stare at*, not just glance at.
 
 | Event | Visual |
 |-------|--------|
-| **Attack Detected** | Red particle stream from attacker to target |
-| **Attack Repelled** | Stream turns blue, particles explode at target |
-| **Active Attack** | Target node glows brighter (attention level) |
+| **Attack Detected** | Red arc with particle stream from attacker to target |
+| **Attack Repelled** | Arc turns blue, impact burst at target |
+| **Active Attack** | Target node glows brighter, pulse rings emanate |
 
----
+### Premium Effects
 
-## Digital Twin Data Model
-
-### NodeTwin (What the browser knows)
-
-```python
-@dataclass
-class NodeTwin:
-    # Identity
-    node_id: str              # "guardian-sf-001"
-    tier: NodeTier            # sentinel | guardian | fortress | nexus
-
-    # Geographic
-    lat: float
-    lng: float
-    label: str                # "San Francisco"
-
-    # Health (from Qsecbit)
-    qsecbit_score: float      # 0.0 - 1.0
-    qsecbit_status: str       # green | amber | red
-
-    # Liveness (from HTP heartbeat)
-    last_heartbeat: datetime
-    online: bool
-
-    # Visual state
-    pulse_phase: float        # Synced to heartbeat
-    attention_level: float    # 0=normal, 1=under attack
-```
-
-### Events
-
-| Event Type | Visual Effect |
-|------------|---------------|
-| `node_online` | Node materializes with ripple |
-| `node_offline` | Node dims, then fades |
-| `qsecbit_threshold` | Color transition animation |
-| `attack_detected` | Red arc from source to target |
-| `attack_repelled` | Arc turns blue |
+| Effect | Description |
+|--------|-------------|
+| **Breathing Nodes** | Nodes pulse based on Qsecbit status |
+| **Impact Bursts** | Particle explosions on attack/repel |
+| **Ripple Effects** | Expanding rings from events |
+| **Scanlines** | Subtle scanning animation overlay |
+| **Ambient Glow** | Global threat level colors the scene |
+| **Mesh Heartbeat** | Periodic pulse across all nodes |
 
 ---
 
@@ -187,25 +207,30 @@ class NodeTwin:
 ```
 visualization/globe/
 ├── README.md                 # This file
-├── ARCHITECTURE.md           # Detailed architecture analysis
+├── ARCHITECTURE.md           # HTP integration analysis
 ├── backend/
 │   ├── __init__.py
 │   ├── requirements.txt      # Python dependencies
 │   ├── server.py             # WebSocket server
 │   ├── htp_bridge.py         # HTP mesh participant
 │   ├── node_registry.py      # Digital twin state
-│   ├── data_collector.py     # Legacy collectors
 │   ├── demo_data.py          # Simulated events
-│   └── geo_resolver.py       # IP geolocation
+│   ├── geo_resolver.py       # IP geolocation
+│   └── connectors/           # Product integrations
+│       ├── base.py           # ProductConnector base
+│       ├── manager.py        # ConnectorManager
+│       ├── guardian.py       # Guardian Flask
+│       ├── fortress.py       # Fortress DSM
+│       ├── nexus.py          # Nexus ML/AI
+│       └── mssp.py           # MSSP Django
 ├── frontend/
-│   ├── index.html            # Main page
-│   ├── css/globe.css         # Styling
-│   ├── js/
-│   │   ├── globe.js          # Globe.gl
-│   │   ├── data-stream.js    # WebSocket client
-│   │   ├── animations.js     # Effects
-│   │   └── fallback-2d.js    # Mobile fallback
-│   └── assets/               # Textures
+│   ├── index.html            # Cortex main page
+│   ├── css/globe.css         # Premium styling
+│   └── js/
+│       ├── globe.js          # Globe.gl visualization
+│       ├── data-stream.js    # WebSocket client
+│       ├── animations.js     # Premium effects engine
+│       └── fallback-2d.js    # Mobile fallback
 └── tests/
     └── test_globe_backend.py
 ```
@@ -214,44 +239,42 @@ visualization/globe/
 
 ## Roadmap
 
-### Phase 1A: Smart Bridge (Current)
-- [x] Basic folder structure
-- [x] WebSocket server skeleton
-- [x] Globe.gl frontend skeleton
+### Phase 1A: Core Infrastructure ✅
+- [x] WebSocket server with demo/live toggle
+- [x] Globe.gl frontend with Earth textures
 - [x] 2D mobile fallback
 - [x] Demo data generator
-- [x] Architecture documentation
 - [x] Node registry (digital twin state)
 - [x] HTP bridge skeleton
+- [x] Product connectors (Guardian, Fortress, Nexus, MSSP)
+
+### Phase 1B: Visual Quality ✅
+- [x] Premium CSS with Orbitron/Rajdhani fonts
+- [x] Cortex branding (Neural Command Center)
+- [x] Breathing node animations
+- [x] Attack arc animations
+- [x] Impact particle effects
+- [x] Ripple effects
+- [x] Mesh heartbeat animation
+- [x] Ambient threat overlay
+- [x] Scanline effects
+- [x] Threat level indicator
+
+### Phase 1C: Production Integration (Next)
 - [ ] Connect to real `core/htp/`
-- [ ] Qsecbit live updates
+- [ ] Live Qsecbit updates
+- [ ] Guardian dashboard embedding
+- [ ] MSSP dashboard embedding
 
-### Phase 1B: Visual Quality
-- [ ] High-res Earth textures (8K)
+### Phase 2: Advanced Features
+- [ ] HTP-over-WebRTC (P2P to nearby nodes)
+- [ ] 8K Earth textures
 - [ ] Night lights layer
-- [ ] Node breathing animation
-- [ ] Attack particle streams
-- [ ] Smooth transitions
-
-### Phase 2: HTP-over-WebRTC
-- [ ] Direct P2P to nearby nodes
+- [ ] 3D attack trajectory arcs
 
 ### Phase 3: WASM Client
 - [ ] Browser as mesh node
-
----
-
-## Why HTP, Not Just WebSocket?
-
-WebSocket makes the globe a *passive observer*. Events are translated
-and lose their mesh semantics.
-
-With HTP Bridge:
-1. Bridge is a **full mesh participant**
-2. Events flow **natively** through the bridge
-3. WebSocket is only the **last mile**
-
-The globe becomes a window INTO the mesh, not a separate system.
+- [ ] Local threat processing
 
 ---
 
@@ -264,13 +287,15 @@ The globe becomes a window INTO the mesh, not a separate system.
 - geoip2 >= 4.8.0 (optional)
 
 ### Frontend
-- Globe.gl (CDN)
+- Globe.gl 2.27+ (CDN)
+- Google Fonts (Orbitron, Rajdhani)
 - No build step required
 
 ---
 
 ## License
 
-Part of HookProbe - see root LICENSE file.
+Part of HookProbe v5.1 "Cortex" - see root LICENSE file.
 
-*One node's detection -> Everyone's protection*
+**HookProbe Cortex - Neural Command Center**
+*See your mesh. Command your defense.*
