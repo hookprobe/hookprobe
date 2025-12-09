@@ -68,6 +68,53 @@ body {
     background-clip: text;
 }
 
+.logo-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+/* Mode Toggle */
+.mode-toggle {
+    display: flex;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.mode-btn {
+    padding: 6px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    text-transform: uppercase;
+}
+
+.mode-btn:hover {
+    color: var(--text-primary);
+}
+
+.mode-btn.active {
+    background: var(--accent-blue);
+    color: white;
+}
+
+.mode-btn.active.live {
+    background: var(--accent-green);
+}
+
 .status {
     display: flex;
     align-items: center;
@@ -229,6 +276,147 @@ body {
 .legend-dot.node-green { background: var(--accent-green); }
 .legend-dot.node-amber { background: var(--accent-amber); }
 .legend-dot.node-red { background: var(--accent-red); }
+
+/* Control Panel (Demo Mode) */
+#control-panel {
+    position: fixed;
+    top: 60px;
+    right: 20px;
+    background: var(--bg-panel);
+    border-radius: 8px;
+    padding: 15px;
+    z-index: 90;
+    border: 1px solid var(--border-color);
+    min-width: 180px;
+}
+
+#control-panel h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.control-group {
+    margin-bottom: 12px;
+}
+
+.control-group:last-child {
+    margin-bottom: 0;
+}
+
+.control-group label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.control-group input[type="range"] {
+    width: 100%;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    outline: none;
+    -webkit-appearance: none;
+}
+
+.control-group input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent-blue);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.control-group button {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--accent-blue);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.control-group button:hover {
+    background: #009ed9;
+}
+
+#demo-speed-value {
+    font-size: 11px;
+    color: var(--accent-blue);
+    float: right;
+    margin-top: -18px;
+}
+
+/* Stat Divider */
+.stat-divider {
+    width: 1px;
+    height: 40px;
+    background: var(--border-color);
+    margin: 0 10px;
+}
+
+/* Tier-specific stat colors */
+.stat-sentinel .stat-value { color: #888888; }
+.stat-guardian .stat-value { color: var(--accent-blue); }
+.stat-fortress .stat-value { color: var(--accent-green); }
+.stat-nexus .stat-value { color: var(--accent-amber); }
+
+/* Legend Divider */
+.legend-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 10px 0;
+}
+
+#legend h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+/* Tier legend dots */
+.legend-dot.sentinel { background: #888888; }
+.legend-dot.guardian { background: var(--accent-blue); }
+.legend-dot.fortress { background: var(--accent-green); }
+.legend-dot.nexus { background: var(--accent-amber); }
+
+/* Mode Indicator */
+#mode-indicator {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255, 170, 0, 0.2);
+    border: 1px solid var(--accent-amber);
+    border-radius: 4px;
+    padding: 6px 16px;
+    z-index: 90;
+}
+
+#mode-indicator #mode-text {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--accent-amber);
+}
+
+#mode-indicator.live {
+    background: rgba(0, 255, 136, 0.2);
+    border-color: var(--accent-green);
+}
+
+#mode-indicator.live #mode-text {
+    color: var(--accent-green);
+}
 
 /* 2D Fallback */
 #map-fallback {
