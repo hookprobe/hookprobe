@@ -11,7 +11,7 @@
 # - Systemd services (including AP services: guardian-wlan, guardian-ap)
 # - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)
 # - Network bridges
-# - hostapd and dnsmasq configurations
+# - hostapd, wpa_supplicant, and dnsmasq configurations
 # - nftables rules
 # - Guardian directories
 # - Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)
@@ -299,6 +299,22 @@ remove_hostapd_config() {
     fi
 
     log_info "hostapd configuration removed"
+}
+
+# ============================================================
+# REMOVE WPA_SUPPLICANT CONFIGURATION (wlan0 WAN)
+# ============================================================
+remove_wpa_supplicant_config() {
+    log_step "Removing wpa_supplicant configuration..."
+
+    # Remove Guardian-created wpa_supplicant config for wlan0
+    rm -f /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+    rm -f /tmp/wpa_supplicant-wlan0.conf
+
+    # Stop wpa_supplicant on wlan0 if running
+    pkill -f "wpa_supplicant.*wlan0" 2>/dev/null || true
+
+    log_info "wpa_supplicant configuration removed"
 }
 
 # ============================================================
@@ -714,6 +730,7 @@ main() {
     remove_network_interfaces
     remove_nftables_rules
     remove_hostapd_config
+    remove_wpa_supplicant_config
     remove_dnsmasq_config
     remove_offline_mode_config
     remove_sysctl_settings
@@ -744,7 +761,7 @@ main() {
     echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • dnsXai ML models, training data, and Python packages"
     echo -e "  • Network bridges (br0)"
-    echo -e "  • hostapd and dnsmasq configuration"
+    echo -e "  • hostapd, wpa_supplicant, and dnsmasq configuration"
     echo -e "  • Offline mode configuration and dhcpcd settings"
     echo -e "  • Guardian configuration (/etc/guardian/)"
     echo -e "  • HTP file transfer state and session keys"
