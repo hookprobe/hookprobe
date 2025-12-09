@@ -88,7 +88,7 @@ def api_cortex_node():
         })
     except Exception as e:
         current_app.logger.error(f"Cortex node API error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error'}), 500
 
 
 @cortex_bp.route('/api/cortex/events')
