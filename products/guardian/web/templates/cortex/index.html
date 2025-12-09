@@ -1,0 +1,228 @@
+{% extends "base_minimal.html" %}
+
+{% block title %}HookProbe Cortex - Neural Command Center{% endblock %}
+
+{% block head %}
+<style>
+    body, html {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #050508;
+    }
+
+    .cortex-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .cortex-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1.5rem;
+        background: linear-gradient(180deg, rgba(0,10,20,0.95) 0%, rgba(5,5,8,0.9) 100%);
+        border-bottom: 1px solid rgba(0,229,255,0.2);
+        z-index: 100;
+    }
+
+    .cortex-logo {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .cortex-logo-icon {
+        font-size: 1.5rem;
+        color: #00e5ff;
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    .cortex-logo-text {
+        font-family: 'Orbitron', sans-serif;
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #ffffff;
+        letter-spacing: 2px;
+    }
+
+    .cortex-logo-subtitle {
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.7rem;
+        color: #00e5ff;
+        letter-spacing: 3px;
+    }
+
+    .cortex-controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .cortex-node-badge {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 0.8rem;
+        background: rgba(0,255,136,0.1);
+        border: 1px solid rgba(0,255,136,0.3);
+        border-radius: 4px;
+    }
+
+    .cortex-node-dot {
+        width: 8px;
+        height: 8px;
+        background: #00ff88;
+        border-radius: 50%;
+        animation: breathe 2s ease-in-out infinite;
+    }
+
+    .cortex-node-id {
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.85rem;
+        color: #00ff88;
+    }
+
+    .cortex-back-btn {
+        padding: 0.5rem 1rem;
+        background: transparent;
+        border: 1px solid rgba(255,255,255,0.3);
+        color: #ffffff;
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .cortex-back-btn:hover {
+        background: rgba(255,255,255,0.1);
+        border-color: rgba(0,229,255,0.5);
+    }
+
+    .cortex-iframe-wrapper {
+        flex: 1;
+        position: relative;
+    }
+
+    .cortex-iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+    }
+
+    .cortex-loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        color: #ffffff;
+    }
+
+    .cortex-loading-spinner {
+        width: 60px;
+        height: 60px;
+        border: 3px solid rgba(0,229,255,0.2);
+        border-top-color: #00e5ff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 1rem;
+    }
+
+    .cortex-loading-text {
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 1rem;
+        color: #00e5ff;
+        letter-spacing: 2px;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 0.8; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.1); }
+    }
+
+    @keyframes breathe {
+        0%, 100% { opacity: 0.6; box-shadow: 0 0 5px currentColor; }
+        50% { opacity: 1; box-shadow: 0 0 15px currentColor; }
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap');
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cortex-container">
+    <div class="cortex-header">
+        <div class="cortex-logo">
+            <span class="cortex-logo-icon">&#x2B21;</span>
+            <div>
+                <div class="cortex-logo-text">HOOKPROBE CORTEX</div>
+                <div class="cortex-logo-subtitle">NEURAL COMMAND CENTER</div>
+            </div>
+        </div>
+
+        <div class="cortex-controls">
+            <div class="cortex-node-badge">
+                <span class="cortex-node-dot"></span>
+                <span class="cortex-node-id">{{ node_id }}</span>
+            </div>
+            <a href="/" class="cortex-back-btn">BACK TO GUARDIAN</a>
+        </div>
+    </div>
+
+    <div class="cortex-iframe-wrapper">
+        <div class="cortex-loading" id="loading">
+            <div class="cortex-loading-spinner"></div>
+            <div class="cortex-loading-text">CONNECTING TO CORTEX</div>
+        </div>
+        <iframe
+            id="cortex-frame"
+            class="cortex-iframe"
+            src="{{ cortex_url }}?mode={{ mode }}&node={{ node_id }}"
+            onload="document.getElementById('loading').style.display='none';"
+            allow="fullscreen"
+        ></iframe>
+    </div>
+</div>
+
+<script>
+    // Handle Cortex communication
+    window.addEventListener('message', function(event) {
+        // Verify origin if needed
+        if (event.data.type === 'cortex_ready') {
+            console.log('Cortex connected');
+            // Send node registration
+            document.getElementById('cortex-frame').contentWindow.postMessage({
+                type: 'register_node',
+                node_id: '{{ node_id }}',
+                tier: 'guardian'
+            }, '*');
+        }
+    });
+
+    // Handle iframe load errors
+    document.getElementById('cortex-frame').onerror = function() {
+        document.getElementById('loading').innerHTML = `
+            <div class="cortex-loading-text">CORTEX OFFLINE</div>
+            <p style="color: #666; margin-top: 1rem;">
+                Start the Cortex server:<br>
+                <code style="color: #00e5ff;">cd visualization/globe/backend && python server.py --demo</code>
+            </p>
+        `;
+    };
+</script>
+{% endblock %}
