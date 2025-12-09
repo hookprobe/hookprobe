@@ -32,10 +32,10 @@
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
-| **Cortex (3D Globe)** | Visualization | `visualization/globe/` |
-| **Globe product connectors** | Connectors | `visualization/globe/backend/connectors/` |
-| **Add Globe to Guardian** | Flask integration | `connectors/guardian.py` |
-| **Add Globe to MSSP** | Django integration | `connectors/mssp.py` |
+| **Cortex (3D Globe)** | Shared visualization | `shared/cortex/` |
+| **Cortex connectors** | Product connectors | `shared/cortex/backend/connectors/` |
+| **Add Cortex to Guardian** | Flask integration | `shared/cortex/backend/connectors/guardian.py` |
+| **Add Cortex to MSSP** | Django integration | `shared/cortex/backend/connectors/mssp.py` |
 
 ---
 
@@ -47,7 +47,7 @@
 - [Core Modules](#core-modules)
 - [Shared Infrastructure](#shared-infrastructure)
 - [Product Tiers](#product-tiers)
-- [Visualization](#visualization)
+- [Cortex Visualization](#cortex-visualization)
 - [Testing Guide](#testing-guide)
 - [CI/CD Workflows](#cicd-workflows)
 - [Development Tooling](#development-tooling)
@@ -231,13 +231,40 @@ hookprobe/
 │   │   ├── tunnel.py                # Tunnel providers
 │   │   └── unified_transport.py     # High-level transport API
 │   │
-│   └── response/                     # Automated Threat Response
-│       ├── README.md
-│       ├── MITIGATION_INSTALLATION_GUIDE.md
-│       ├── attack-mitigation-orchestrator.sh
-│       ├── kali-scripts.sh          # Kali mitigation
-│       ├── mitigation-maintenance.sh
-│       └── hookprobe-mitigation-systemd.conf
+│   ├── response/                     # Automated Threat Response
+│   │   ├── README.md
+│   │   ├── MITIGATION_INSTALLATION_GUIDE.md
+│   │   ├── attack-mitigation-orchestrator.sh
+│   │   ├── kali-scripts.sh          # Kali mitigation
+│   │   ├── mitigation-maintenance.sh
+│   │   └── hookprobe-mitigation-systemd.conf
+│   │
+│   └── cortex/                       # HOOKPROBE CORTEX - Neural Command Center
+│       ├── README.md                # Documentation
+│       ├── ARCHITECTURE.md          # HTP integration analysis
+│       ├── backend/
+│       │   ├── server.py            # WebSocket server with demo/live toggle
+│       │   ├── node_registry.py     # NodeTwin state management
+│       │   ├── htp_bridge.py        # HTP mesh participant
+│       │   ├── demo_data.py         # Demo event generator
+│       │   ├── geo_resolver.py      # IP geolocation
+│       │   └── connectors/          # Product tier connectors
+│       │       ├── base.py          # ProductConnector base class
+│       │       ├── manager.py       # ConnectorManager aggregator
+│       │       ├── guardian.py      # Guardian Flask integration
+│       │       ├── fortress.py      # Fortress DSM integration
+│       │       ├── nexus.py         # Nexus ML/AI integration
+│       │       └── mssp.py          # MSSP Django integration
+│       ├── frontend/
+│       │   ├── index.html           # Cortex main page
+│       │   ├── css/globe.css        # Premium styling
+│       │   └── js/
+│       │       ├── globe.js         # Globe.gl visualization
+│       │       ├── data-stream.js   # WebSocket client
+│       │       ├── animations.js    # Premium effects engine
+│       │       └── fallback-2d.js   # Mobile 2D fallback
+│       └── tests/
+│           └── test_globe_backend.py
 │
 ├── products/                         # PRODUCT TIERS
 │   ├── README.md                    # Product tier overview
@@ -396,36 +423,6 @@ hookprobe/
 │       ├── platform.sh              # Platform detection
 │       ├── requirements.sh          # Dependency checks
 │       └── instructions.sh          # Installation instructions
-│
-├── visualization/                    # HOOKPROBE CORTEX
-│   └── globe/                        # Neural Command Center (Digital Twin)
-│       ├── README.md                # Documentation
-│       ├── ARCHITECTURE.md          # HTP integration analysis
-│       ├── backend/
-│       │   ├── server.py            # WebSocket server with demo/live toggle
-│       │   ├── node_registry.py     # NodeTwin state management
-│       │   ├── htp_bridge.py        # HTP mesh participant
-│       │   ├── demo_data.py         # Demo event generator
-│       │   ├── data_collector.py    # HTP/Neuro data integration
-│       │   ├── geo_resolver.py      # IP geolocation
-│       │   └── connectors/          # Product tier connectors
-│       │       ├── __init__.py
-│       │       ├── base.py          # ProductConnector base class
-│       │       ├── manager.py       # ConnectorManager aggregator
-│       │       ├── guardian.py      # Guardian Flask integration
-│       │       ├── fortress.py      # Fortress DSM integration
-│       │       ├── nexus.py         # Nexus ML/AI integration
-│       │       └── mssp.py          # MSSP Django integration
-│       ├── frontend/
-│       │   ├── index.html           # Main page with mode toggle
-│       │   ├── css/globe.css        # Styling
-│       │   └── js/
-│       │       ├── globe.js         # Globe.gl visualization
-│       │       ├── data-stream.js   # WebSocket client with mode switching
-│       │       ├── animations.js    # Attack arc animations
-│       │       └── fallback-2d.js   # Mobile 2D fallback
-│       └── tests/
-│           └── test_globe_backend.py
 │
 ├── tests/                            # TEST SUITES
 │   ├── __init__.py
@@ -750,11 +747,11 @@ python manage.py seed_merchandise  # Product catalog
 
 ---
 
-## Visualization
+## Cortex Visualization
 
 ### HookProbe Cortex - Neural Command Center
 
-**Location**: `visualization/globe/`
+**Location**: `shared/cortex/`
 **Status**: Phase 1 Development
 **Branding**: "Cortex" - The mesh's digital twin visualization
 
@@ -887,12 +884,12 @@ curl -X POST http://localhost:8766/api/mode -d '{"mode": "live"}'
 **Quick Start**:
 ```bash
 # Backend (demo mode)
-cd visualization/globe/backend
+cd shared/cortex/backend
 pip install -r requirements.txt
 python server.py --demo
 
 # Frontend (separate terminal)
-cd visualization/globe/frontend
+cd shared/cortex/frontend
 python -m http.server 8080
 # Open http://localhost:8080
 ```
@@ -1290,7 +1287,7 @@ shared/mesh/ARCHITECTURE.md      # Mesh architecture (MUST READ)
 shared/mesh/unified_transport.py # Mesh transport API
 products/guardian/web/app.py     # Guardian Flask app
 products/mssp/web/apps/          # MSSP Django apps
-visualization/globe/             # Cortex - Neural Command Center
+shared/cortex/                   # Cortex - Neural Command Center
 tests/                           # All tests
 .github/workflows/               # CI/CD
 ```
@@ -1311,7 +1308,7 @@ cd products/guardian/web && python app.py
 cd products/mssp/web && python manage.py runserver
 
 # Cortex visualization (demo mode)
-cd visualization/globe/backend && python server.py --demo
+cd shared/cortex/backend && python server.py --demo
 ```
 
 ---

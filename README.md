@@ -181,7 +181,7 @@ Cortex is HookProbe's real-time 3D visualization - a digital twin of your entire
 - Demo mode for showcasing without live data
 - Premium visual effects: breathing nodes, particle impacts, ripple effects
 
-**[Cortex Documentation](visualization/globe/README.md)** · **[Architecture](visualization/globe/ARCHITECTURE.md)**
+**[Cortex Documentation](shared/cortex/README.md)** · **[Architecture](shared/cortex/ARCHITECTURE.md)**
 
 ---
 
@@ -198,7 +198,8 @@ hookprobe/
 │   ├── dnsXai/              # AI DNS Protection
 │   ├── mesh/                # Collective Defense Mesh
 │   ├── dsm/                 # Decentralized Security Mesh
-│   └── response/            # Automated Threat Response
+│   ├── response/            # Automated Threat Response
+│   └── cortex/              # Neural Command Center (3D Globe)
 │
 ├── products/                # Deployment Tiers
 │   ├── guardian/            # Home / Prosumer (1.5GB)
@@ -206,13 +207,10 @@ hookprobe/
 │   ├── nexus/               # ML Coordination (16GB+)
 │   └── mssp/                # Cloud Platform
 │
-├── visualization/           # HookProbe Cortex
-│   └── globe/               # 3D Neural Command Center
-│
 └── deploy/                  # Deployment Scripts
 ```
 
-**[Full Architecture](ARCHITECTURE.md)** · **[Mesh Design](shared/mesh/ARCHITECTURE.md)** · **[Cortex](visualization/globe/README.md)**
+**[Full Architecture](ARCHITECTURE.md)** · **[Mesh Design](shared/mesh/ARCHITECTURE.md)** · **[Cortex](shared/cortex/README.md)**
 
 ---
 
@@ -299,6 +297,6 @@ make test
 <p align="center">
   <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
   <a href="docs/installation/INSTALLATION.md">Documentation</a> ·
-  <a href="visualization/globe/README.md">Cortex</a> ·
+  <a href="shared/cortex/README.md">Cortex</a> ·
   <a href="https://github.com/hookprobe/hookprobe/discussions">Community</a>
 </p>
