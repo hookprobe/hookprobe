@@ -67,12 +67,12 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 
 ```bash
 # Terminal 1: Backend with simulated events
-cd visualization/globe/backend
+cd shared/cortex/backend
 pip install -r requirements.txt
 python server.py --demo
 
 # Terminal 2: Frontend
-cd visualization/globe/frontend
+cd shared/cortex/frontend
 python -m http.server 8080
 # Open http://localhost:8080
 ```
@@ -81,11 +81,11 @@ python -m http.server 8080
 
 ```bash
 # Terminal 1: Backend connected to real HTP mesh
-cd visualization/globe/backend
+cd shared/cortex/backend
 python server.py --bootstrap mssp.hookprobe.com:8144
 
 # Terminal 2: Frontend (or serve via nginx)
-cd visualization/globe/frontend
+cd shared/cortex/frontend
 python -m http.server 8080
 ```
 
@@ -205,7 +205,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed analysis of HTP integration 
 ## File Structure
 
 ```
-visualization/globe/
+shared/cortex/
 ├── README.md                 # This file
 ├── ARCHITECTURE.md           # HTP integration analysis
 ├── backend/
