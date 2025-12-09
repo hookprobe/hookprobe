@@ -2,7 +2,7 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
-<h1 align="center">Collective Intelligence for Network Security</h1>
+<h1 align="center">The World's First Collective Defense Mesh</h1>
 
 <p align="center">
   <strong>One node's detection is everyone's protection.</strong>
@@ -15,13 +15,17 @@
   <a href="https://github.com/hookprobe/hookprobe/actions"><img src="https://img.shields.io/github/actions/workflow/status/hookprobe/hookprobe/app-tests.yml" alt="Build Status"/></a>
 </p>
 
+<p align="center">
+  <em>Post-quantum cryptography. AI-powered threat detection. Zero-trust mesh networking.</em>
+</p>
+
 ---
 
 ## What is HookProbe?
 
-HookProbe is advanced network security software that operates without the complexity. No security analysts required. No threat hunters. No SOC team. Just intelligent software that simplifies the chaos of modern network threats.
+HookProbe is the world's first **federated cybersecurity mesh** - a living network where every node protects every other node. No security analysts required. No threat hunters. No SOC team. Just intelligent software that turns the chaos of modern network threats into collective strength.
 
-**The core principle:** When one HookProbe node detects a threat anywhere in the world, every node learns instantly. Collective intelligence replaces isolated guesswork.
+**The core principle:** When one HookProbe node detects a threat anywhere in the world, every node learns instantly. Collective intelligence replaces isolated guesswork. The mesh doesn't just defend - it evolves.
 
 ---
 
@@ -144,31 +148,68 @@ Deploy consistent security across client networks. Collective intelligence means
 
 ---
 
+## HookProbe Cortex - Neural Command Center
+
+**See your mesh. Command your defense.**
+
+Cortex is HookProbe's real-time 3D visualization - a digital twin of your entire defense network rendered on a globe. Watch attacks arrive from across the world and see them repelled in real-time.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     HOOKPROBE CORTEX                             │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                                                             ││
+│  │           ⬡ Nexus (ML/AI)        Attack Arc →               ││
+│  │              ↓                        ↓                     ││
+│  │    ⬡ Guardian ←───── Mesh ─────→ ⬡ Fortress                 ││
+│  │              ↓                        ↓                     ││
+│  │         ⬡ Sentinel (IoT)      ← Repelled Arc                ││
+│  │                                                             ││
+│  │  [NODES: 1,247]  [ATTACKS: 89]  [REPELLED: 89]  [QSECBIT]  ││
+│  └─────────────────────────────────────────────────────────────┘│
+│         Real-time 3D globe with attack trajectories              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- Real-time attack visualization with animated arcs
+- Node health monitoring via Qsecbit color coding
+- Tier-based node representation (Sentinel → Guardian → Fortress → Nexus)
+- Demo mode for showcasing without live data
+- Premium visual effects: breathing nodes, particle impacts, ripple effects
+
+**[Cortex Documentation](visualization/globe/README.md)** · **[Architecture](visualization/globe/ARCHITECTURE.md)**
+
+---
+
 ## Architecture
 
 ```
 hookprobe/
 ├── core/                    # Core Intelligence
-│   ├── htp/                 # Transport Protocol
-│   ├── qsecbit/             # Threat Scoring Engine
-│   └── neuro/               # Neural Authentication
+│   ├── htp/                 # Transport Protocol (Post-Quantum)
+│   ├── qsecbit/             # AI Threat Scoring Engine
+│   └── neuro/               # Neural Resonance Authentication
 │
 ├── shared/                  # Shared Modules
-│   ├── dnsXai/              # DNS Protection
-│   ├── mesh/                # Collective Defense
-│   ├── network/             # Segmentation
-│   └── response/            # Automated Response
+│   ├── dnsXai/              # AI DNS Protection
+│   ├── mesh/                # Collective Defense Mesh
+│   ├── dsm/                 # Decentralized Security Mesh
+│   └── response/            # Automated Threat Response
 │
 ├── products/                # Deployment Tiers
-│   ├── guardian/            # Home / Prosumer
-│   ├── fortress/            # Business
-│   ├── nexus/               # Coordination
-│   └── mssp/                # Service Provider
+│   ├── guardian/            # Home / Prosumer (1.5GB)
+│   ├── fortress/            # Business (4GB)
+│   ├── nexus/               # ML Coordination (16GB+)
+│   └── mssp/                # Cloud Platform
+│
+├── visualization/           # HookProbe Cortex
+│   └── globe/               # 3D Neural Command Center
 │
 └── deploy/                  # Deployment Scripts
 ```
 
-**[Full Architecture](ARCHITECTURE.md)** · **[Mesh Design](shared/mesh/ARCHITECTURE.md)**
+**[Full Architecture](ARCHITECTURE.md)** · **[Mesh Design](shared/mesh/ARCHITECTURE.md)** · **[Cortex](visualization/globe/README.md)**
 
 ---
 
@@ -247,13 +288,14 @@ make test
 ---
 
 <p align="center">
-  <strong>HookProbe v5.0</strong><br>
-  Collective intelligence for network security.<br>
+  <strong>HookProbe v5.1 "Cortex"</strong><br>
+  The world's first collective defense mesh.<br>
   <em>One node's detection is everyone's protection.</em>
 </p>
 
 <p align="center">
   <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
   <a href="docs/installation/INSTALLATION.md">Documentation</a> ·
+  <a href="visualization/globe/README.md">Cortex</a> ·
   <a href="https://github.com/hookprobe/hookprobe/discussions">Community</a>
 </p>

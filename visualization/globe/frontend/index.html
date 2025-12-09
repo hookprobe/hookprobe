@@ -3,30 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HookProbe Digital Twin</title>
+    <title>HookProbe Cortex - Neural Command Center</title>
+    <meta name="description" content="Real-time 3D visualization of the HookProbe collective defense mesh">
     <link rel="stylesheet" href="css/globe.css">
+    <!-- Premium fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Globe.gl from CDN - includes Three.js -->
     <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
 </head>
 <body>
     <div id="app">
+        <!-- Ambient Threat Overlay -->
+        <div id="ambient-overlay"></div>
+
+        <!-- Scanline Effect Container -->
+        <div id="scanline-container"></div>
+
         <!-- Header -->
         <header id="header">
             <div class="logo">
-                <span class="logo-icon">🛡️</span>
-                <span class="logo-text">HookProbe</span>
-                <span class="logo-subtitle">Digital Twin</span>
+                <div class="logo-icon-container">
+                    <span class="logo-icon">⬡</span>
+                    <span class="logo-icon-pulse"></span>
+                </div>
+                <div class="logo-stack">
+                    <span class="logo-text">HOOKPROBE</span>
+                    <span class="logo-subtitle">CORTEX</span>
+                </div>
             </div>
             <div class="header-controls">
+                <!-- Threat Level Indicator -->
+                <div class="threat-level">
+                    <span class="threat-label">THREAT</span>
+                    <div class="threat-bar">
+                        <div class="threat-fill" id="threat-fill"></div>
+                    </div>
+                    <span class="threat-value" id="threat-value">LOW</span>
+                </div>
                 <!-- Data Mode Toggle -->
                 <div class="mode-toggle">
-                    <button id="mode-demo" class="mode-btn active" onclick="setDataMode('demo')">Demo</button>
-                    <button id="mode-live" class="mode-btn" onclick="setDataMode('live')">Live</button>
+                    <button id="mode-demo" class="mode-btn active" onclick="setDataMode('demo')">DEMO</button>
+                    <button id="mode-live" class="mode-btn" onclick="setDataMode('live')">LIVE</button>
                 </div>
                 <!-- Connection Status -->
                 <div class="status">
                     <span id="connection-status" class="status-dot disconnected"></span>
-                    <span id="connection-text">Disconnected</span>
+                    <span id="connection-text">OFFLINE</span>
                 </div>
             </div>
         </header>
@@ -35,50 +59,53 @@
         <div id="stats-panel">
             <div class="stat">
                 <span class="stat-value" id="stat-nodes">0</span>
-                <span class="stat-label">Nodes</span>
+                <span class="stat-label">NODES</span>
             </div>
             <div class="stat stat-sentinel">
                 <span class="stat-value" id="stat-sentinels">0</span>
-                <span class="stat-label">Sentinels</span>
+                <span class="stat-label">SENTINELS</span>
             </div>
             <div class="stat stat-guardian">
                 <span class="stat-value" id="stat-guardians">0</span>
-                <span class="stat-label">Guardians</span>
+                <span class="stat-label">GUARDIANS</span>
             </div>
             <div class="stat stat-fortress">
                 <span class="stat-value" id="stat-fortresses">0</span>
-                <span class="stat-label">Fortresses</span>
+                <span class="stat-label">FORTRESSES</span>
             </div>
             <div class="stat stat-nexus">
                 <span class="stat-value" id="stat-nexuses">0</span>
-                <span class="stat-label">Nexuses</span>
+                <span class="stat-label">NEXUSES</span>
             </div>
             <div class="stat-divider"></div>
-            <div class="stat">
+            <div class="stat stat-attack">
                 <span class="stat-value" id="stat-attacks">0</span>
-                <span class="stat-label">Attacks</span>
+                <span class="stat-label">ATTACKS</span>
             </div>
-            <div class="stat">
+            <div class="stat stat-repelled">
                 <span class="stat-value" id="stat-repelled">0</span>
-                <span class="stat-label">Repelled</span>
+                <span class="stat-label">REPELLED</span>
             </div>
-            <div class="stat">
+            <div class="stat stat-qsecbit">
                 <span class="stat-value" id="stat-qsecbit">--</span>
-                <span class="stat-label">Avg Qsecbit</span>
+                <span class="stat-label">QSECBIT</span>
             </div>
         </div>
 
         <!-- Control Panel (Demo Mode) -->
         <div id="control-panel" class="demo-only">
-            <h3>Demo Controls</h3>
+            <h3>DEMO CONTROLS</h3>
             <div class="control-group">
-                <label>Event Speed</label>
+                <label>EVENT FREQUENCY</label>
                 <input type="range" id="demo-speed" min="0.5" max="10" step="0.5" value="3"
                        onchange="setDemoInterval(this.value)">
                 <span id="demo-speed-value">3s</span>
             </div>
             <div class="control-group">
-                <button onclick="requestSnapshot()">Refresh Nodes</button>
+                <button onclick="requestSnapshot()">REFRESH MESH</button>
+            </div>
+            <div class="control-group">
+                <button onclick="triggerHeartbeat()" class="secondary">MESH HEARTBEAT</button>
             </div>
         </div>
 
@@ -88,7 +115,7 @@
         <!-- 2D Map Fallback (for mobile/low-end devices) -->
         <div id="map-fallback" style="display: none;">
             <div class="fallback-message">
-                <h2>2D Threat Map</h2>
+                <h2>CORTEX 2D VIEW</h2>
                 <p>3D visualization not available on this device.</p>
                 <canvas id="fallback-canvas"></canvas>
             </div>
@@ -96,45 +123,45 @@
 
         <!-- Event Log -->
         <div id="event-log">
-            <h3>Recent Events</h3>
+            <h3>LIVE FEED</h3>
             <ul id="event-list"></ul>
         </div>
 
         <!-- Legend -->
         <div id="legend">
-            <h4>Node Types</h4>
+            <h4>NODE TYPES</h4>
             <div class="legend-item">
                 <span class="legend-dot sentinel"></span>
-                <span>Sentinel (IoT)</span>
+                <span>Sentinel <small>(IoT)</small></span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot guardian"></span>
-                <span>Guardian (Portable)</span>
+                <span>Guardian <small>(Portable)</small></span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot fortress"></span>
-                <span>Fortress (Edge)</span>
+                <span>Fortress <small>(Edge)</small></span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot nexus"></span>
-                <span>Nexus (ML/AI)</span>
+                <span>Nexus <small>(ML/AI)</small></span>
             </div>
             <div class="legend-divider"></div>
-            <h4>Qsecbit Status</h4>
+            <h4>QSECBIT STATUS</h4>
             <div class="legend-item">
                 <span class="legend-dot node-green"></span>
-                <span>Green (&lt;0.45)</span>
+                <span>Green <small>&lt;0.45</small></span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot node-amber"></span>
-                <span>Amber (0.45-0.70)</span>
+                <span>Amber <small>0.45-0.70</small></span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot node-red"></span>
-                <span>Red (&gt;0.70)</span>
+                <span>Red <small>&gt;0.70</small></span>
             </div>
             <div class="legend-divider"></div>
-            <h4>Events</h4>
+            <h4>EVENTS</h4>
             <div class="legend-item">
                 <span class="legend-dot attack"></span>
                 <span>Attack Detected</span>
@@ -149,6 +176,12 @@
         <div id="mode-indicator">
             <span id="mode-text">DEMO MODE</span>
         </div>
+
+        <!-- Cortex Branding Watermark -->
+        <div id="cortex-watermark">
+            <span>CORTEX</span>
+            <small>Neural Command Center</small>
+        </div>
     </div>
 
     <!-- Scripts -->
@@ -156,5 +189,25 @@
     <script src="js/animations.js"></script>
     <script src="js/fallback-2d.js"></script>
     <script src="js/globe.js"></script>
+
+    <!-- Cortex initialization -->
+    <script>
+        // Trigger mesh heartbeat from demo controls
+        function triggerHeartbeat() {
+            if (window.globe && window.state && window.state.nodes) {
+                meshHeartbeat(window.globe, window.state.nodes);
+            }
+        }
+
+        // Initialize premium effects on load
+        document.addEventListener('DOMContentLoaded', () => {
+            // Create subtle scanline effect
+            setTimeout(() => {
+                if (typeof createScanlineEffect === 'function') {
+                    createScanlineEffect();
+                }
+            }, 2000);
+        });
+    </script>
 </body>
 </html>
