@@ -37,7 +37,7 @@
     <div class="card-body">
         <div style="display: flex; align-items: center; gap: var(--spacing-xl); flex-wrap: wrap;">
             <div style="text-align: center; min-width: 150px;">
-                <div id="qsecbit-score-display" style="font-size: 4rem; font-weight: 700; line-height: 1; color: var(--hp-green);">0.00</div>
+                <div id="qsecbit-score-display" style="font-size: 4rem; font-weight: 700; line-height: 1; color: var(--hp-green);">0.000</div>
                 <div id="qsecbit-risk-label" style="font-size: 1rem; font-weight: 600; margin-top: var(--spacing-xs); color: var(--hp-green);">RISK LOW</div>
                 <div class="text-muted" style="margin-top: var(--spacing-xs);">Current Score</div>
             </div>
@@ -52,8 +52,18 @@
                 </div>
             </div>
         </div>
-        <p class="text-muted" style="margin-top: var(--spacing-lg); font-size: 0.875rem;">
-            QSecBit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
+        <!-- Component breakdown (dynamically updated) -->
+        <div id="qsecbit-components" style="margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); font-family: monospace;">
+            <div class="qsecbit-formula" style="display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; color: var(--text-secondary);">
+                <span class="component" title="System drift (α)">α·drift</span> +
+                <span class="component" title="Attack probability (β)">β·p_attack</span> +
+                <span class="component" title="Classifier decay (γ)">γ·decay</span> +
+                <span class="component" title="Quantum drift (δ)">δ·q_drift</span> +
+                <span class="component" title="Energy anomaly (ε)">ε·energy</span>
+            </div>
+        </div>
+        <p class="text-muted" style="margin-top: var(--spacing-sm); font-size: 0.75rem; text-align: center;">
+            Weights: α=0.25, β=0.25, γ=0.20, δ=0.15, ε=0.15
         </p>
     </div>
 </div>
