@@ -2273,7 +2273,18 @@ configure_base_networking() {
     local NETMASK="255.255.255.224"
 
     # Determine interfaces
-    local WIFI_IFACE=$(echo $WIFI_INTERFACES | awk '{print $1}')
+    # AP Interface: Use wlan1 if available (wlan0 is for WAN uplink)
+    # Priority: HOOKPROBE_AP_IFACE env > wlan1 > first available wlan
+    local WIFI_IFACE="${HOOKPROBE_AP_IFACE:-}"
+    if [ -z "$WIFI_IFACE" ]; then
+        # Prefer wlan1 for AP (wlan0 is typically WAN/uplink)
+        if echo "$WIFI_INTERFACES" | grep -qw "wlan1"; then
+            WIFI_IFACE="wlan1"
+        else
+            # Fallback to first available
+            WIFI_IFACE=$(echo $WIFI_INTERFACES | awk '{print $1}')
+        fi
+    fi
     local ETH_IFACE=$(echo $ETH_INTERFACES | awk '{print $1}')
 
     if [ -z "$WIFI_IFACE" ]; then
@@ -2518,28 +2529,41 @@ EOF
     log_info "Configuring dnsmasq..."
     cat > /etc/dnsmasq.d/guardian.conf << EOF
 # HookProbe Guardian - DHCP/DNS Configuration
+# Version: 5.1.0
 
-# Interface
+# Interface - listen on bridge only
 interface=br0
-bind-interfaces
+bind-dynamic
+
+# Do NOT listen on WAN interfaces
+except-interface=eth0
+except-interface=wlan0
+except-interface=lo
 
 # DHCP range (/27 subnet - 30 usable addresses)
 dhcp-range=$DHCP_START,$DHCP_END,$NETMASK,24h
 
 # Gateway
-dhcp-option=3,$BRIDGE_IP
+dhcp-option=option:router,$BRIDGE_IP
+dhcp-option=option:dns-server,$BRIDGE_IP
 
-# DNS servers
+# DNS servers (upstream)
 server=1.1.1.1
+server=9.9.9.9
 server=8.8.8.8
 
 # Domain
 domain=guardian.local
 local=/guardian.local/
+expand-hosts
+
+# Performance
+cache-size=1000
 
 # Logging
 log-queries
 log-dhcp
+log-facility=/var/log/hookprobe/dnsmasq.log
 EOF
 
     # Enable IP forwarding
