@@ -67,7 +67,7 @@ def api_containers():
         'hostapd': {'label': 'WiFi Access Point', 'services': ['hostapd']},
         'dnsmasq': {'label': 'DNS/DHCP Server', 'services': ['dnsmasq']},
         'dhcpcd': {'label': 'DHCP Client', 'services': ['dhcpcd', 'dhcpcd5', 'dhclient', 'NetworkManager']},
-        'guardian': {'label': 'Guardian Agent', 'services': ['guardian-agent', 'hookprobe-agent', 'guardian', 'guardian-web']},
+        'guardian': {'label': 'Guardian Agent', 'services': ['guardian-qsecbit', 'guardian-agent', 'hookprobe-agent', 'guardian', 'guardian-webui']},
     }
 
     services = {}
