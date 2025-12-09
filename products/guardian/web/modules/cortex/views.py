@@ -2,37 +2,69 @@
 Cortex Module Views - Neural Command Center Integration
 
 Provides:
-- /cortex: Full-page Cortex visualization iframe
+- /cortex: Full-page Cortex visualization (iframe mode)
+- /cortex/embedded: Embedded tab view for Guardian UI
 - /api/cortex/node: Guardian node status for Cortex digital twin
+- /api/cortex/location: Get Guardian's geographic location from WAN IP
 - /api/cortex/events: Recent events for Cortex visualization
+- /api/cortex/demo: Demo mode data for mesh visualization
 """
 import os
 import socket
 import json
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from flask import render_template, jsonify, current_app, request
 from . import cortex_bp
 from utils import load_json_file, get_system_info
 
+# Try to import requests for IP geolocation
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
 
 # Default Cortex server URL (can be configured via environment)
 CORTEX_SERVER_URL = os.environ.get('CORTEX_SERVER_URL', 'http://localhost:8765')
 
+# Demo mode state (in-memory, resets on restart)
+_demo_mode = True  # Default to demo mode for initial experience
+
+
+# =============================================================================
+# PAGE ROUTES
+# =============================================================================
 
 @cortex_bp.route('/cortex')
 def cortex_view():
     """
-    Full-page Cortex visualization.
+    Full-page Cortex visualization (iframe mode).
     Embeds the Cortex 3D globe as an iframe or redirects to standalone.
     """
     cortex_url = request.args.get('url', CORTEX_SERVER_URL)
-    mode = request.args.get('mode', 'demo')  # demo or live
+    mode = request.args.get('mode', 'demo')
 
     return render_template('cortex/index.html',
                            cortex_url=cortex_url,
                            mode=mode,
                            node_id=get_node_id())
 
+
+@cortex_bp.route('/cortex/embedded')
+def cortex_embedded():
+    """
+    Embedded Cortex view for Guardian tab integration.
+    Returns the embedded globe template for the Cortex tab.
+    """
+    return render_template('cortex/embedded.html',
+                           node_id=get_node_id(),
+                           demo_mode=_demo_mode)
+
+
+# =============================================================================
+# API ROUTES
+# =============================================================================
 
 @cortex_bp.route('/api/cortex/node')
 def api_cortex_node():
@@ -51,7 +83,7 @@ def api_cortex_node():
         threat_data = get_threat_summary()
         qsecbit = get_qsecbit_status()
 
-        # Get geographic coordinates (would be configured or detected)
+        # Get geographic coordinates (auto-detect or from config)
         geo = get_node_location()
 
         return jsonify({
@@ -91,6 +123,47 @@ def api_cortex_node():
         return jsonify({'error': 'Internal server error'}), 500
 
 
+@cortex_bp.route('/api/cortex/location')
+def api_cortex_location():
+    """
+    Get Guardian's geographic location from WAN IP.
+
+    Attempts to:
+    1. Read from local configuration
+    2. Detect from WAN IP using external geolocation service
+    3. Return default/estimated location
+
+    Returns:
+        JSON with lat, lng, label, city, country, source
+    """
+    try:
+        # First check for manual configuration
+        config_location = get_configured_location()
+        if config_location and config_location.get('lat') != 0:
+            config_location['source'] = 'config'
+            return jsonify(config_location)
+
+        # Try to detect from WAN IP
+        wan_location = detect_location_from_wan()
+        if wan_location:
+            # Cache the detected location
+            cache_location(wan_location)
+            return jsonify(wan_location)
+
+        # Return default
+        return jsonify({
+            'lat': 0.0,
+            'lng': 0.0,
+            'label': get_node_id(),
+            'city': 'Unknown',
+            'country': 'Unknown',
+            'source': 'default'
+        })
+    except Exception as e:
+        current_app.logger.error(f"Location API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @cortex_bp.route('/api/cortex/events')
 def api_cortex_events():
     """
@@ -110,6 +183,74 @@ def api_cortex_events():
     except Exception as e:
         current_app.logger.error(f"Cortex events API error: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@cortex_bp.route('/api/cortex/demo', methods=['GET'])
+def api_cortex_demo_status():
+    """Get current demo mode status."""
+    return jsonify({
+        'demo_mode': _demo_mode,
+        'node_id': get_node_id()
+    })
+
+
+@cortex_bp.route('/api/cortex/demo/toggle', methods=['POST'])
+def api_cortex_demo_toggle():
+    """Toggle demo mode on/off."""
+    global _demo_mode
+    _demo_mode = not _demo_mode
+
+    return jsonify({
+        'demo_mode': _demo_mode,
+        'message': f"Demo mode {'enabled' if _demo_mode else 'disabled'}"
+    })
+
+
+@cortex_bp.route('/api/cortex/demo/data')
+def api_cortex_demo_data():
+    """
+    Get demo mesh data for visualization.
+
+    In demo mode, returns simulated mesh with multiple nodes and events.
+    In live mode, returns only this Guardian's data.
+    """
+    guardian_location = get_node_location()
+    guardian_node = {
+        'id': get_node_id(),
+        'tier': 'guardian',
+        'lat': guardian_location['lat'],
+        'lng': guardian_location['lng'],
+        'label': guardian_location['label'],
+        'qsecbit': get_qsecbit_status()['score'],
+        'status': get_qsecbit_status()['status'],
+        'online': True
+    }
+
+    if not _demo_mode:
+        # Live mode - only this Guardian
+        return jsonify({
+            'mode': 'live',
+            'nodes': [guardian_node],
+            'events': [],
+            'stats': {
+                'total_nodes': 1,
+                'by_tier': {'guardian': 1, 'sentinel': 0, 'fortress': 0, 'nexus': 0}
+            }
+        })
+
+    # Demo mode - simulated mesh network
+    demo_nodes = generate_demo_nodes(guardian_node)
+    demo_events = generate_demo_events(demo_nodes)
+
+    return jsonify({
+        'mode': 'demo',
+        'nodes': demo_nodes,
+        'events': demo_events,
+        'stats': {
+            'total_nodes': len(demo_nodes),
+            'by_tier': count_by_tier(demo_nodes)
+        }
+    })
 
 
 @cortex_bp.route('/api/cortex/heartbeat', methods=['POST'])
@@ -132,6 +273,10 @@ def api_cortex_heartbeat():
         return jsonify({'error': str(e)}), 500
 
 
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
 def get_node_id():
     """Generate unique node ID for this Guardian."""
     hostname = socket.gethostname()
@@ -141,8 +286,34 @@ def get_node_id():
 def get_node_location():
     """
     Get geographic location for this node.
-    Reads from configuration or uses default.
+    Reads from configuration or detects from WAN IP.
     """
+    # Try configured location first
+    config_location = get_configured_location()
+    if config_location and config_location.get('lat') != 0:
+        return config_location
+
+    # Try cached detected location
+    cached = get_cached_location()
+    if cached:
+        return cached
+
+    # Try to detect (but don't block on it)
+    detected = detect_location_from_wan()
+    if detected:
+        cache_location(detected)
+        return detected
+
+    # Default
+    return {
+        'lat': 0.0,
+        'lng': 0.0,
+        'label': socket.gethostname()
+    }
+
+
+def get_configured_location():
+    """Read manually configured location."""
     config_path = '/opt/hookprobe/guardian/config/location.json'
     default = {'lat': 0.0, 'lng': 0.0, 'label': socket.gethostname()}
 
@@ -153,12 +324,88 @@ def get_node_location():
     except Exception:
         pass
 
-    # Try to get from environment
-    return {
-        'lat': float(os.environ.get('HOOKPROBE_LAT', 0.0)),
-        'lng': float(os.environ.get('HOOKPROBE_LNG', 0.0)),
-        'label': os.environ.get('HOOKPROBE_LABEL', default['label'])
-    }
+    # Try environment variables
+    env_lat = os.environ.get('HOOKPROBE_LAT')
+    env_lng = os.environ.get('HOOKPROBE_LNG')
+    if env_lat and env_lng:
+        return {
+            'lat': float(env_lat),
+            'lng': float(env_lng),
+            'label': os.environ.get('HOOKPROBE_LABEL', default['label'])
+        }
+
+    return default
+
+
+def get_cached_location():
+    """Read cached detected location."""
+    cache_path = '/tmp/guardian_location_cache.json'
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                data = json.load(f)
+                # Check if cache is less than 24 hours old
+                cached_time = datetime.fromisoformat(data.get('timestamp', '2000-01-01'))
+                if datetime.utcnow() - cached_time < timedelta(hours=24):
+                    return data
+    except Exception:
+        pass
+    return None
+
+
+def cache_location(location):
+    """Cache detected location."""
+    cache_path = '/tmp/guardian_location_cache.json'
+    try:
+        location['timestamp'] = datetime.utcnow().isoformat()
+        with open(cache_path, 'w') as f:
+            json.dump(location, f)
+    except Exception:
+        pass
+
+
+def detect_location_from_wan():
+    """
+    Detect geographic location from WAN IP address.
+
+    Uses free IP geolocation services (no API key required).
+    """
+    if not REQUESTS_AVAILABLE:
+        return None
+
+    try:
+        # Get public IP
+        ip_response = requests.get('https://api.ipify.org?format=json', timeout=5)
+        if ip_response.status_code != 200:
+            return None
+
+        public_ip = ip_response.json().get('ip')
+        if not public_ip:
+            return None
+
+        # Get geolocation for IP (using ip-api.com - free, no key required)
+        geo_response = requests.get(
+            f'http://ip-api.com/json/{public_ip}?fields=status,country,city,lat,lon',
+            timeout=5
+        )
+        if geo_response.status_code != 200:
+            return None
+
+        geo_data = geo_response.json()
+        if geo_data.get('status') != 'success':
+            return None
+
+        return {
+            'lat': geo_data.get('lat', 0.0),
+            'lng': geo_data.get('lon', 0.0),
+            'label': f"{geo_data.get('city', 'Unknown')} Guardian",
+            'city': geo_data.get('city', 'Unknown'),
+            'country': geo_data.get('country', 'Unknown'),
+            'source': 'wan_ip'
+        }
+    except Exception as e:
+        current_app.logger.debug(f"WAN location detection failed: {e}")
+        return None
 
 
 def get_qsecbit_status():
@@ -238,3 +485,110 @@ def get_recent_events(limit=50):
         pass
 
     return events
+
+
+# =============================================================================
+# DEMO DATA GENERATION
+# =============================================================================
+
+# Demo node locations (major cities worldwide)
+DEMO_LOCATIONS = [
+    {'lat': 40.7128, 'lng': -74.0060, 'city': 'New York', 'country': 'USA'},
+    {'lat': 51.5074, 'lng': -0.1278, 'city': 'London', 'country': 'UK'},
+    {'lat': 35.6762, 'lng': 139.6503, 'city': 'Tokyo', 'country': 'Japan'},
+    {'lat': 48.8566, 'lng': 2.3522, 'city': 'Paris', 'country': 'France'},
+    {'lat': -33.8688, 'lng': 151.2093, 'city': 'Sydney', 'country': 'Australia'},
+    {'lat': 52.5200, 'lng': 13.4050, 'city': 'Berlin', 'country': 'Germany'},
+    {'lat': 37.5665, 'lng': 126.9780, 'city': 'Seoul', 'country': 'S. Korea'},
+    {'lat': 55.7558, 'lng': 37.6173, 'city': 'Moscow', 'country': 'Russia'},
+    {'lat': -23.5505, 'lng': -46.6333, 'city': 'Sao Paulo', 'country': 'Brazil'},
+    {'lat': 19.4326, 'lng': -99.1332, 'city': 'Mexico City', 'country': 'Mexico'},
+    {'lat': 1.3521, 'lng': 103.8198, 'city': 'Singapore', 'country': 'Singapore'},
+    {'lat': 22.3193, 'lng': 114.1694, 'city': 'Hong Kong', 'country': 'China'},
+]
+
+# Attack source locations (for demo attacks)
+DEMO_ATTACK_SOURCES = [
+    {'lat': 39.9042, 'lng': 116.4074, 'label': 'Beijing Botnet'},
+    {'lat': 55.7558, 'lng': 37.6173, 'label': 'Moscow Scanner'},
+    {'lat': 9.0820, 'lng': 8.6753, 'label': 'Nigeria Phish'},
+    {'lat': 51.1657, 'lng': 10.4515, 'label': 'DE Scan Cluster'},
+    {'lat': 35.8617, 'lng': 104.1954, 'label': 'CN DDoS Origin'},
+]
+
+
+def generate_demo_nodes(guardian_node):
+    """Generate demo mesh nodes including the real Guardian."""
+    nodes = [guardian_node]  # Always include the real Guardian
+
+    # Add demo nodes
+    tiers = ['sentinel', 'guardian', 'fortress', 'nexus']
+    tier_weights = [0.4, 0.3, 0.2, 0.1]  # More sentinels, fewer nexuses
+
+    for loc in DEMO_LOCATIONS:
+        # Don't add node too close to real Guardian
+        if abs(loc['lat'] - guardian_node['lat']) < 5 and abs(loc['lng'] - guardian_node['lng']) < 5:
+            continue
+
+        tier = random.choices(tiers, weights=tier_weights)[0]
+        status = random.choices(['green', 'amber', 'red'], weights=[0.7, 0.2, 0.1])[0]
+        qsecbit = random.uniform(0.1, 0.4) if status == 'green' else \
+                  random.uniform(0.45, 0.65) if status == 'amber' else \
+                  random.uniform(0.7, 0.9)
+
+        nodes.append({
+            'id': f"demo-{tier}-{loc['city'].lower().replace(' ', '-')}",
+            'tier': tier,
+            'lat': loc['lat'] + random.uniform(-0.5, 0.5),
+            'lng': loc['lng'] + random.uniform(-0.5, 0.5),
+            'label': f"{loc['city']} {tier.capitalize()}",
+            'qsecbit': round(qsecbit, 3),
+            'status': status,
+            'online': random.random() > 0.05  # 95% online
+        })
+
+    return nodes
+
+
+def generate_demo_events(nodes):
+    """Generate demo attack/repelled events."""
+    events = []
+    now = datetime.utcnow()
+
+    # Generate a few recent events
+    num_events = random.randint(3, 8)
+    for i in range(num_events):
+        source = random.choice(DEMO_ATTACK_SOURCES)
+        target = random.choice([n for n in nodes if n.get('online', True)])
+        is_repelled = random.random() > 0.3  # 70% repelled
+
+        events.append({
+            'id': f"demo-event-{i}",
+            'type': 'attack_repelled' if is_repelled else 'attack_detected',
+            'source': {
+                'lat': source['lat'],
+                'lng': source['lng'],
+                'label': source['label']
+            },
+            'target': {
+                'node_id': target['id'],
+                'lat': target['lat'],
+                'lng': target['lng'],
+                'label': target['label']
+            },
+            'timestamp': (now - timedelta(seconds=random.randint(1, 60))).isoformat() + 'Z',
+            'severity': random.choice(['low', 'medium', 'high']),
+            'attack_type': random.choice(['ddos', 'scan', 'bruteforce', 'malware', 'phishing'])
+        })
+
+    return events
+
+
+def count_by_tier(nodes):
+    """Count nodes by tier."""
+    counts = {'sentinel': 0, 'guardian': 0, 'fortress': 0, 'nexus': 0}
+    for node in nodes:
+        tier = node.get('tier', 'sentinel').lower()
+        if tier in counts:
+            counts[tier] += 1
+    return counts
