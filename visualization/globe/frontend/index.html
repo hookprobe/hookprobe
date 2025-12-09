@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HookProbe Threat Globe</title>
+    <link rel="stylesheet" href="css/globe.css">
+    <!-- Globe.gl from CDN - includes Three.js -->
+    <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header id="header">
+            <div class="logo">
+                <span class="logo-icon">🛡️</span>
+                <span class="logo-text">HookProbe</span>
+            </div>
+            <div class="status">
+                <span id="connection-status" class="status-dot disconnected"></span>
+                <span id="connection-text">Disconnected</span>
+            </div>
+        </header>
+
+        <!-- Stats Panel -->
+        <div id="stats-panel">
+            <div class="stat">
+                <span class="stat-value" id="stat-nodes">0</span>
+                <span class="stat-label">Nodes</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="stat-attacks">0</span>
+                <span class="stat-label">Attacks</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="stat-repelled">0</span>
+                <span class="stat-label">Repelled</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="stat-qsecbit">--</span>
+                <span class="stat-label">Avg Qsecbit</span>
+            </div>
+        </div>
+
+        <!-- 3D Globe Container -->
+        <div id="globe-container"></div>
+
+        <!-- 2D Map Fallback (for mobile/low-end devices) -->
+        <div id="map-fallback" style="display: none;">
+            <div class="fallback-message">
+                <h2>2D Threat Map</h2>
+                <p>3D visualization not available on this device.</p>
+                <canvas id="fallback-canvas"></canvas>
+            </div>
+        </div>
+
+        <!-- Event Log -->
+        <div id="event-log">
+            <h3>Recent Events</h3>
+            <ul id="event-list"></ul>
+        </div>
+
+        <!-- Legend -->
+        <div id="legend">
+            <div class="legend-item">
+                <span class="legend-dot attack"></span>
+                <span>Attack Detected</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot repelled"></span>
+                <span>Attack Repelled</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot node-green"></span>
+                <span>Node (Green)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot node-amber"></span>
+                <span>Node (Amber)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot node-red"></span>
+                <span>Node (Red)</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/data-stream.js"></script>
+    <script src="js/animations.js"></script>
+    <script src="js/fallback-2d.js"></script>
+    <script src="js/globe.js"></script>
+</body>
+</html>
