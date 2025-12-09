@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HookProbe Threat Globe</title>
+    <title>HookProbe Digital Twin</title>
     <link rel="stylesheet" href="css/globe.css">
     <!-- Globe.gl from CDN - includes Three.js -->
     <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
@@ -15,10 +15,19 @@
             <div class="logo">
                 <span class="logo-icon">🛡️</span>
                 <span class="logo-text">HookProbe</span>
+                <span class="logo-subtitle">Digital Twin</span>
             </div>
-            <div class="status">
-                <span id="connection-status" class="status-dot disconnected"></span>
-                <span id="connection-text">Disconnected</span>
+            <div class="header-controls">
+                <!-- Data Mode Toggle -->
+                <div class="mode-toggle">
+                    <button id="mode-demo" class="mode-btn active" onclick="setDataMode('demo')">Demo</button>
+                    <button id="mode-live" class="mode-btn" onclick="setDataMode('live')">Live</button>
+                </div>
+                <!-- Connection Status -->
+                <div class="status">
+                    <span id="connection-status" class="status-dot disconnected"></span>
+                    <span id="connection-text">Disconnected</span>
+                </div>
             </div>
         </header>
 
@@ -28,6 +37,23 @@
                 <span class="stat-value" id="stat-nodes">0</span>
                 <span class="stat-label">Nodes</span>
             </div>
+            <div class="stat stat-sentinel">
+                <span class="stat-value" id="stat-sentinels">0</span>
+                <span class="stat-label">Sentinels</span>
+            </div>
+            <div class="stat stat-guardian">
+                <span class="stat-value" id="stat-guardians">0</span>
+                <span class="stat-label">Guardians</span>
+            </div>
+            <div class="stat stat-fortress">
+                <span class="stat-value" id="stat-fortresses">0</span>
+                <span class="stat-label">Fortresses</span>
+            </div>
+            <div class="stat stat-nexus">
+                <span class="stat-value" id="stat-nexuses">0</span>
+                <span class="stat-label">Nexuses</span>
+            </div>
+            <div class="stat-divider"></div>
             <div class="stat">
                 <span class="stat-value" id="stat-attacks">0</span>
                 <span class="stat-label">Attacks</span>
@@ -39,6 +65,20 @@
             <div class="stat">
                 <span class="stat-value" id="stat-qsecbit">--</span>
                 <span class="stat-label">Avg Qsecbit</span>
+            </div>
+        </div>
+
+        <!-- Control Panel (Demo Mode) -->
+        <div id="control-panel" class="demo-only">
+            <h3>Demo Controls</h3>
+            <div class="control-group">
+                <label>Event Speed</label>
+                <input type="range" id="demo-speed" min="0.5" max="10" step="0.5" value="3"
+                       onchange="setDemoInterval(this.value)">
+                <span id="demo-speed-value">3s</span>
+            </div>
+            <div class="control-group">
+                <button onclick="requestSnapshot()">Refresh Nodes</button>
             </div>
         </div>
 
@@ -62,6 +102,39 @@
 
         <!-- Legend -->
         <div id="legend">
+            <h4>Node Types</h4>
+            <div class="legend-item">
+                <span class="legend-dot sentinel"></span>
+                <span>Sentinel (IoT)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot guardian"></span>
+                <span>Guardian (Portable)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot fortress"></span>
+                <span>Fortress (Edge)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot nexus"></span>
+                <span>Nexus (ML/AI)</span>
+            </div>
+            <div class="legend-divider"></div>
+            <h4>Qsecbit Status</h4>
+            <div class="legend-item">
+                <span class="legend-dot node-green"></span>
+                <span>Green (&lt;0.45)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot node-amber"></span>
+                <span>Amber (0.45-0.70)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot node-red"></span>
+                <span>Red (&gt;0.70)</span>
+            </div>
+            <div class="legend-divider"></div>
+            <h4>Events</h4>
             <div class="legend-item">
                 <span class="legend-dot attack"></span>
                 <span>Attack Detected</span>
@@ -70,18 +143,11 @@
                 <span class="legend-dot repelled"></span>
                 <span>Attack Repelled</span>
             </div>
-            <div class="legend-item">
-                <span class="legend-dot node-green"></span>
-                <span>Node (Green)</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-dot node-amber"></span>
-                <span>Node (Amber)</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-dot node-red"></span>
-                <span>Node (Red)</span>
-            </div>
+        </div>
+
+        <!-- Mode Indicator -->
+        <div id="mode-indicator">
+            <span id="mode-text">DEMO MODE</span>
         </div>
     </div>
 

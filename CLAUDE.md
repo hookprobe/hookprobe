@@ -33,6 +33,9 @@
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
 | **3D Globe Threat Map** | Visualization | `visualization/globe/` |
+| **Globe product connectors** | Connectors | `visualization/globe/backend/connectors/` |
+| **Add Globe to Guardian** | Flask integration | `connectors/guardian.py` |
+| **Add Globe to MSSP** | Django integration | `connectors/mssp.py` |
 
 ---
 
@@ -395,19 +398,30 @@ hookprobe/
 │       └── instructions.sh          # Installation instructions
 │
 ├── visualization/                    # THREAT VISUALIZATION
-│   └── globe/                        # 3D Globe Threat Map
+│   └── globe/                        # 3D Globe Threat Map (Digital Twin)
 │       ├── README.md                # Documentation
+│       ├── ARCHITECTURE.md          # HTP integration analysis
 │       ├── backend/
-│       │   ├── server.py            # WebSocket server
-│       │   ├── data_collector.py    # HTP/Neuro data integration
+│       │   ├── server.py            # WebSocket server with demo/live toggle
+│       │   ├── node_registry.py     # NodeTwin state management
+│       │   ├── htp_bridge.py        # HTP mesh participant
 │       │   ├── demo_data.py         # Demo event generator
-│       │   └── geo_resolver.py      # IP geolocation
+│       │   ├── data_collector.py    # HTP/Neuro data integration
+│       │   ├── geo_resolver.py      # IP geolocation
+│       │   └── connectors/          # Product tier connectors
+│       │       ├── __init__.py
+│       │       ├── base.py          # ProductConnector base class
+│       │       ├── manager.py       # ConnectorManager aggregator
+│       │       ├── guardian.py      # Guardian Flask integration
+│       │       ├── fortress.py      # Fortress DSM integration
+│       │       ├── nexus.py         # Nexus ML/AI integration
+│       │       └── mssp.py          # MSSP Django integration
 │       ├── frontend/
-│       │   ├── index.html           # Main page
+│       │   ├── index.html           # Main page with mode toggle
 │       │   ├── css/globe.css        # Styling
 │       │   └── js/
 │       │       ├── globe.js         # Globe.gl visualization
-│       │       ├── data-stream.js   # WebSocket client
+│       │       ├── data-stream.js   # WebSocket client with mode switching
 │       │       ├── animations.js    # Attack arc animations
 │       │       └── fallback-2d.js   # Mobile 2D fallback
 │       └── tests/
@@ -738,12 +752,13 @@ python manage.py seed_merchandise  # Product catalog
 
 ## Visualization
 
-### 3D Globe Threat Map
+### 3D Globe Threat Map (Digital Twin)
 
 **Location**: `visualization/globe/`
 **Status**: Phase 1 Development (2026 Side Project)
 
-Real-time 3D globe visualization of HookProbe mesh network activity.
+Real-time 3D globe visualization that serves as a **digital twin** of the HookProbe mesh network.
+This is not just a dashboard showing data *about* the mesh - it *IS* the mesh visualized.
 
 **Architecture**:
 ```
@@ -754,14 +769,26 @@ Real-time 3D globe visualization of HookProbe mesh network activity.
 │  │  - 3D Earth rendering with night texture                ││
 │  │  - Arc animations for attacks (red) / repelled (blue)   ││
 │  │  - Point markers for nodes (color = Qsecbit status)     ││
+│  │  - Demo/Live mode toggle                                ││
 │  └─────────────────────────────────────────────────────────┘│
 │                          ▲ WebSocket                         │
 └──────────────────────────┼──────────────────────────────────┘
                            │
 ┌──────────────────────────┼──────────────────────────────────┐
 │                     Backend (Python)                         │
-│  WebSocket Server → HTP Collector → Neuro Collector          │
-│                   → Qsecbit Collector                        │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  GlobeServer (WebSocket + REST API)                     ││
+│  │       ▲                                                 ││
+│  │       │                                                 ││
+│  │  ConnectorManager (aggregates all product connectors)   ││
+│  │       ▲                                                 ││
+│  │       ├── GuardianConnector (Flask integration)         ││
+│  │       ├── FortressConnector (DSM participation)         ││
+│  │       ├── NexusConnector (ML/AI metrics)                ││
+│  │       └── MSSPConnector (Django integration)            ││
+│  │                                                         ││
+│  │  HTP Bridge → core/htp/ (mesh participant)              ││
+│  └─────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -769,13 +796,91 @@ Real-time 3D globe visualization of HookProbe mesh network activity.
 
 | File | Purpose |
 |------|---------|
-| `backend/server.py` | WebSocket server with demo mode |
-| `backend/data_collector.py` | HTP/Neuro/Qsecbit integration skeletons |
+| `backend/server.py` | WebSocket server with demo/live toggle |
+| `backend/node_registry.py` | NodeTwin digital twin state management |
+| `backend/htp_bridge.py` | HTP mesh participant skeleton |
 | `backend/demo_data.py` | Simulated threat events |
-| `backend/geo_resolver.py` | IP to lat/lng resolution |
+| `backend/connectors/base.py` | ProductConnector base class |
+| `backend/connectors/manager.py` | ConnectorManager aggregator |
+| `backend/connectors/guardian.py` | Guardian Flask integration |
+| `backend/connectors/fortress.py` | Fortress DSM integration |
+| `backend/connectors/nexus.py` | Nexus ML/AI integration |
+| `backend/connectors/mssp.py` | MSSP Django integration |
 | `frontend/js/globe.js` | Globe.gl initialization |
-| `frontend/js/data-stream.js` | WebSocket client |
-| `frontend/js/fallback-2d.js` | Mobile 2D canvas fallback |
+| `frontend/js/data-stream.js` | WebSocket client with mode switching |
+
+### Product Connector Integration
+
+Each HookProbe product tier has a dedicated connector for the globe visualization:
+
+**GuardianConnector** (`connectors/guardian.py`):
+```python
+from visualization.globe.backend.connectors.guardian import create_flask_connector
+
+# In products/guardian/web/app.py
+globe_connector = create_flask_connector(
+    app,
+    node_id="guardian-home-001",
+    lat=37.7749,
+    lng=-122.4194,
+    label="Home Guardian"
+)
+
+@app.before_first_request
+async def start_globe():
+    await globe_connector.start()
+```
+
+**FortressConnector** (`connectors/fortress.py`):
+```python
+from visualization.globe.backend.connectors.fortress import create_fortress_connector
+
+# Creates edge router connector with DSM participation
+connector = create_fortress_connector(
+    node_id="fortress-dc-001",
+    lat=40.7128,
+    lng=-74.0060,
+    label="NYC Fortress",
+    dsm_enabled=True
+)
+```
+
+**NexusConnector** (`connectors/nexus.py`):
+```python
+from visualization.globe.backend.connectors.nexus import create_nexus_connector
+
+# Creates ML/AI compute connector
+connector = create_nexus_connector(
+    node_id="nexus-ml-001",
+    lat=37.3861,
+    lng=-122.0839,
+    label="Mountain View Nexus"
+)
+```
+
+**MSSPConnector** (`connectors/mssp.py`):
+```python
+from visualization.globe.backend.connectors.mssp import create_django_connector
+
+# In products/mssp/web/settings.py
+GLOBE_CONNECTOR = create_django_connector()
+```
+
+### Demo/Live Mode Toggle
+
+The visualization supports switching between demo and live data:
+
+- **Demo Mode**: Generates simulated events for visual testing
+- **Live Mode**: Receives real events from product connectors
+
+Toggle via UI or API:
+```bash
+# REST API
+curl -X POST http://localhost:8766/api/mode -d '{"mode": "live"}'
+
+# WebSocket message
+{"type": "set_mode", "mode": "demo"}
+```
 
 **Quick Start**:
 ```bash
@@ -797,12 +902,17 @@ python -m http.server 8080
 | `attack_detected` | Red arc | Incoming attack trajectory |
 | `attack_repelled` | Blue arc | Successfully mitigated attack |
 | `node_status` | Point color | Node Qsecbit status (green/amber/red) |
+| `snapshot` | N/A | Full state snapshot on connect |
+| `mode_changed` | N/A | Demo/Live mode switch notification |
 
-**Node Tiers**:
-- Sentinel: Small point (0.3 radius)
-- Guardian: Medium point (0.5 radius)
-- Fortress: Large point (0.8 radius)
-- Nexus: Largest point (1.2 radius)
+**Node Tiers** (visual representation):
+
+| Tier | Size | Color | Description |
+|------|------|-------|-------------|
+| Sentinel | 0.3 | Gray | IoT validators |
+| Guardian | 0.5 | Blue | Portable gateways |
+| Fortress | 0.8 | Green | Edge routers |
+| Nexus | 1.2 | Amber | ML/AI compute |
 
 ---
 
