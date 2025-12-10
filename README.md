@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-5.0_Cortex-00e5ff?style=flat-square" alt="Version 5.1 Cortex"/>
+  <img src="https://img.shields.io/badge/Version-5.0_Cortex-00e5ff?style=flat-square" alt="Version 5.0 Cortex"/>
   <img src="https://img.shields.io/badge/License-AGPL_v3.0_+_Commercial-blue?style=flat-square" alt="Dual License"/>
   <img src="https://img.shields.io/badge/Python-3.9+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+"/>
   <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"/>
