@@ -108,6 +108,35 @@
     </div>
 </div>
 
+<!-- WAN WiFi Status -->
+<div class="card" id="wan-wifi-card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+            </svg>
+            WAN WiFi Connection (wlan0)
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshWanWifiStatus()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div id="wan-wifi-status" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--spacing-md);">
+            <div>
+                <div style="font-weight: 600;" id="wan-wifi-ssid">Checking...</div>
+                <div class="text-muted" style="font-size: 0.875rem;" id="wan-wifi-details">
+                    State: <span id="wan-wifi-state">--</span> |
+                    IP: <span id="wan-wifi-ip">--</span>
+                </div>
+            </div>
+            <div id="wan-wifi-actions">
+                <button class="btn btn-sm btn-danger" id="wan-wifi-disconnect-btn" onclick="disconnectWanWifi()" style="display: none;">
+                    Disconnect
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- WiFi Scanner -->
 <div class="card">
     <div class="card-header">
@@ -115,16 +144,16 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
                 <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
             </svg>
-            WiFi Networks
+            Available Networks
         </h3>
         <button class="btn btn-sm btn-primary" id="scan-wifi-btn" onclick="scanWifiNetworks()">
-            Scan Networks
+            Scan
         </button>
     </div>
     <div class="card-body">
         <div class="device-grid" id="wifi-networks-list">
             <div class="empty-state">
-                <p class="text-muted">Click "Scan Networks" to discover available WiFi networks</p>
+                <p class="text-muted">Click "Scan" to discover available WiFi networks</p>
             </div>
         </div>
     </div>
@@ -543,6 +572,76 @@ function renderRouteMetrics(data) {
 // WIFI & HOTSPOT FUNCTIONS
 // =========================================================================
 
+async function refreshWanWifiStatus() {
+    const ssidEl = document.getElementById('wan-wifi-ssid');
+    const stateEl = document.getElementById('wan-wifi-state');
+    const ipEl = document.getElementById('wan-wifi-ip');
+    const disconnectBtn = document.getElementById('wan-wifi-disconnect-btn');
+    const card = document.getElementById('wan-wifi-card');
+
+    try {
+        const result = await apiGet('/config/wifi/status');
+
+        if (result.connected && result.ssid) {
+            ssidEl.textContent = 'Connected to: ' + result.ssid;
+            ssidEl.style.color = 'var(--hp-green)';
+            stateEl.textContent = result.state || 'COMPLETED';
+            ipEl.textContent = result.ip || 'Waiting...';
+            disconnectBtn.style.display = 'inline-block';
+            card.style.borderLeft = '4px solid var(--hp-green)';
+        } else if (result.state === 'SCANNING' || result.state === 'ASSOCIATING') {
+            ssidEl.textContent = 'Connecting...';
+            ssidEl.style.color = 'var(--hp-amber)';
+            stateEl.textContent = result.state;
+            ipEl.textContent = '--';
+            disconnectBtn.style.display = 'none';
+            card.style.borderLeft = '4px solid var(--hp-amber)';
+        } else {
+            ssidEl.textContent = 'Not connected';
+            ssidEl.style.color = 'var(--text-secondary)';
+            stateEl.textContent = result.state || 'DISCONNECTED';
+            ipEl.textContent = '--';
+            disconnectBtn.style.display = 'none';
+            card.style.borderLeft = '4px solid var(--text-muted)';
+        }
+    } catch (error) {
+        ssidEl.textContent = 'Status unavailable';
+        ssidEl.style.color = 'var(--text-secondary)';
+        stateEl.textContent = 'ERROR';
+        ipEl.textContent = '--';
+        disconnectBtn.style.display = 'none';
+    }
+}
+
+async function disconnectWanWifi() {
+    if (!confirm('Disconnect from current WiFi network?')) {
+        return;
+    }
+
+    const btn = document.getElementById('wan-wifi-disconnect-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Disconnecting...';
+    }
+
+    try {
+        const result = await apiPost('/config/wifi/disconnect');
+        if (result.success) {
+            showToast('Disconnected from WiFi', 'success');
+            setTimeout(refreshWanWifiStatus, 1000);
+        } else {
+            showToast(result.error || 'Failed to disconnect', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to disconnect', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Disconnect';
+        }
+    }
+}
+
 async function connectToWifi(e) {
     e.preventDefault();
     const ssid = document.getElementById('wifi-ssid').value;
@@ -569,9 +668,12 @@ async function connectToWifi(e) {
             }
             // Refresh status after a delay
             setTimeout(() => {
+                refreshWanWifiStatus();
                 refreshOfflineStatus();
                 loadRouteMetrics();
-            }, 5000);
+            }, 3000);
+            // Check again after 8 seconds for slow connections
+            setTimeout(refreshWanWifiStatus, 8000);
         } else {
             showToast(result.error || 'Failed to connect', 'error');
         }
@@ -746,6 +848,7 @@ function initChannelDisplay() {
 document.addEventListener('DOMContentLoaded', function() {
     // Delay to ensure tab is visible
     setTimeout(() => {
+        refreshWanWifiStatus();
         refreshOfflineStatus();
         refreshHotspotStatus();
         loadRouteMetrics();
