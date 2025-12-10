@@ -2994,9 +2994,29 @@ DNSMASQ_OVERRIDE
     }
     systemctl start dnsmasq.service 2>/dev/null || true
 
+    # Install SSID health check script
+    log_info "Installing SSID health check..."
+    cp "$SCRIPT_DIR/guardian-ssid-health.sh" /usr/local/bin/
+    chmod +x /usr/local/bin/guardian-ssid-health.sh
+
+    # Install health check service and timer
+    if [ -f "$CONFIG_DIR/systemd/guardian-ssid-health.service" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ssid-health.service" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ssid-health.service
+    fi
+    if [ -f "$CONFIG_DIR/systemd/guardian-ssid-health.timer" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ssid-health.timer" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ssid-health.timer
+    fi
+
+    systemctl daemon-reload
+    systemctl enable guardian-ssid-health.timer 2>/dev/null || true
+    systemctl start guardian-ssid-health.timer 2>/dev/null || true
+
     log_info "Guardian AP services installed and enabled"
     log_info "  - guardian-wlan.service: Prepares wlan1 for AP mode"
     log_info "  - guardian-ap.service: Ensures hostapd/dnsmasq start"
+    log_info "  - guardian-ssid-health.timer: Monitors SSID every 5 minutes"
     log_info "  - hostapd/dnsmasq overrides: Removed network-online dependency"
     log_info "  - All services enabled to start at boot"
 }
