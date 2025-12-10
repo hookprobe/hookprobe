@@ -256,53 +256,61 @@ install_openvswitch() {
 configure_networkmanager() {
     log_step "Configuring NetworkManager for Guardian..."
 
-    # Create NetworkManager conf.d directory
+    # Enable and start NetworkManager first
+    systemctl enable NetworkManager 2>/dev/null || true
+    systemctl start NetworkManager 2>/dev/null || true
+    sleep 2
+
+    # Use the guardian-nm-setup.sh script to generate MAC-aware configuration
+    # This script auto-detects MAC addresses and creates proper config
+    local nm_setup_script="$SCRIPT_DIR/guardian-nm-setup.sh"
+
+    if [ -f "$nm_setup_script" ]; then
+        log_info "Running NetworkManager setup with MAC detection..."
+        bash "$nm_setup_script" || {
+            log_warn "guardian-nm-setup.sh failed, using fallback config"
+            _configure_nm_fallback
+        }
+    else
+        log_warn "guardian-nm-setup.sh not found, using fallback config"
+        _configure_nm_fallback
+    fi
+
+    log_info "NetworkManager configured (wlan0=managed, wlan1/OVS=unmanaged)"
+}
+
+_configure_nm_fallback() {
+    # Fallback configuration if guardian-nm-setup.sh is not available
     mkdir -p /etc/NetworkManager/conf.d
 
-    # Create unmanaged devices configuration
-    # This prevents NM from interfering with OVS bridges and hostapd
     cat > /etc/NetworkManager/conf.d/guardian-unmanaged.conf << 'EOF'
-# HookProbe Guardian - NetworkManager Configuration
-# Prevents NM from managing OVS/hostapd interfaces
-#
-# Managed by NetworkManager:
-#   - wlan0 (WAN interface for upstream WiFi)
-#
-# Unmanaged (OVS/hostapd controlled):
-#   - wlan1 (AP interface, managed by hostapd)
-#   - br0, br* (OVS bridges)
-#   - ovs-*, guardian (OVS internal ports)
-#   - vlan* (VLAN interfaces)
+# HookProbe Guardian - NetworkManager Configuration (Fallback)
+# For full MAC-aware config, run: guardian-nm-setup.sh
 
 [keyfile]
 unmanaged-devices=interface-name:wlan1;interface-name:br*;interface-name:ovs-*;interface-name:guardian;interface-name:vlan*;driver:openvswitch
 
 [device]
-# Disable MAC randomization for stable AP connections
+# Disable MAC randomization
 wifi.scan-rand-mac-address=no
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
+
+[connection]
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
 
 [main]
-# Use internal DHCP client (more reliable)
 dhcp=internal
-# Don't modify resolv.conf - dnsmasq handles DNS
 dns=none
 EOF
 
     chmod 644 /etc/NetworkManager/conf.d/guardian-unmanaged.conf
-
-    # Enable and start NetworkManager
-    systemctl enable NetworkManager 2>/dev/null || true
-    systemctl start NetworkManager 2>/dev/null || true
-
-    # Reload configuration
     nmcli general reload 2>/dev/null || true
 
-    # Explicitly set wlan1 as unmanaged (if it exists)
     if [ -d "/sys/class/net/wlan1" ]; then
         nmcli device set wlan1 managed no 2>/dev/null || true
     fi
-
-    log_info "NetworkManager configured (wlan0=managed, wlan1/OVS=unmanaged)"
 }
 
 generate_vxlan_psk() {
