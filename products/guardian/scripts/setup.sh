@@ -2994,9 +2994,29 @@ DNSMASQ_OVERRIDE
     }
     systemctl start dnsmasq.service 2>/dev/null || true
 
+    # Install SSID health check script
+    log_info "Installing SSID health check..."
+    cp "$SCRIPT_DIR/guardian-ssid-health.sh" /usr/local/bin/
+    chmod +x /usr/local/bin/guardian-ssid-health.sh
+
+    # Install health check service and timer
+    if [ -f "$CONFIG_DIR/systemd/guardian-ssid-health.service" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ssid-health.service" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ssid-health.service
+    fi
+    if [ -f "$CONFIG_DIR/systemd/guardian-ssid-health.timer" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ssid-health.timer" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ssid-health.timer
+    fi
+
+    systemctl daemon-reload
+    systemctl enable guardian-ssid-health.timer 2>/dev/null || true
+    systemctl start guardian-ssid-health.timer 2>/dev/null || true
+
     log_info "Guardian AP services installed and enabled"
     log_info "  - guardian-wlan.service: Prepares wlan1 for AP mode"
     log_info "  - guardian-ap.service: Ensures hostapd/dnsmasq start"
+    log_info "  - guardian-ssid-health.timer: Monitors SSID every 5 minutes"
     log_info "  - hostapd/dnsmasq overrides: Removed network-online dependency"
     log_info "  - All services enabled to start at boot"
 }
@@ -3217,54 +3237,58 @@ start_services() {
     # ─────────────────────────────────────────────────────────────
     log_info "Starting hostapd WiFi access point..."
 
-    # Set regulatory domain from hostapd config before starting
-    local HOSTAPD_COUNTRY=$(grep "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
-    if [ -n "$HOSTAPD_COUNTRY" ]; then
-        log_info "Setting regulatory domain to $HOSTAPD_COUNTRY..."
-        iw reg set "$HOSTAPD_COUNTRY" 2>/dev/null || true
-        sleep 2
-    fi
+    # Check if hostapd is already running (started by install_ap_services)
+    if systemctl is-active --quiet hostapd; then
+        log_info "Hostapd is already running, skipping startup"
+    else
+        # Set regulatory domain from hostapd config before starting
+        local HOSTAPD_COUNTRY=$(grep "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+        if [ -n "$HOSTAPD_COUNTRY" ]; then
+            log_info "Setting regulatory domain to $HOSTAPD_COUNTRY..."
+            iw reg set "$HOSTAPD_COUNTRY" 2>/dev/null || true
+            sleep 2
+        fi
 
-    # Make sure WiFi interface is ready
-    local WIFI_IFACE="${HOOKPROBE_WIFI_IFACE:-wlan1}"
-    if [ ! -d "/sys/class/net/$WIFI_IFACE" ]; then
-        WIFI_IFACE=$(ls /sys/class/net/ | grep -E '^wlan' | head -1)
-    fi
+        # Make sure WiFi interface is ready
+        local WIFI_IFACE="${HOOKPROBE_WIFI_IFACE:-wlan1}"
+        if [ ! -d "/sys/class/net/$WIFI_IFACE" ]; then
+            WIFI_IFACE=$(ls /sys/class/net/ | grep -E '^wlan' | head -1)
+        fi
 
-    if [ -n "$WIFI_IFACE" ]; then
-        # Kill interfering processes
-        pkill -f "wpa_supplicant.*$WIFI_IFACE" 2>/dev/null || true
-        sleep 1
+        if [ -n "$WIFI_IFACE" ]; then
+            # Kill interfering processes
+            pkill -f "wpa_supplicant.*$WIFI_IFACE" 2>/dev/null || true
+            sleep 1
 
-        # Ensure interface is down (hostapd will bring it up)
-        ip link set "$WIFI_IFACE" down 2>/dev/null || true
-        sleep 1
+            # Ensure interface is down (hostapd will bring it up)
+            ip link set "$WIFI_IFACE" down 2>/dev/null || true
+            sleep 1
 
-        # Try to start hostapd
-        if ! systemctl start hostapd; then
-            log_warn "Hostapd failed to start, attempting diagnostics..."
+            # Try to start hostapd
+            if ! systemctl start hostapd; then
+                log_warn "Hostapd failed to start, attempting diagnostics..."
 
-            # Show hostapd error output
-            journalctl -u hostapd -n 20 --no-pager 2>/dev/null || true
+                # Show hostapd error output
+                journalctl -u hostapd -n 20 --no-pager 2>/dev/null || true
 
-            # Try running hostapd directly for better error message
-            log_info "Running hostapd diagnostic..."
-            timeout 5 hostapd -d /etc/hostapd/hostapd.conf 2>&1 | head -30 || true
+                # Try running hostapd directly for better error message
+                log_info "Running hostapd diagnostic..."
+                timeout 5 hostapd -d /etc/hostapd/hostapd.conf 2>&1 | head -30 || true
 
-            # Common fixes
-            log_info "Attempting common fixes..."
+                # Common fixes
+                log_info "Attempting common fixes..."
 
-            # Fix 1: Try without bridge first
-            if grep -q "bridge=br0" /etc/hostapd/hostapd.conf; then
-                log_info "  - Trying without bridge..."
-                sed -i 's/^bridge=br0/#bridge=br0/' /etc/hostapd/hostapd.conf
-                if systemctl start hostapd 2>/dev/null; then
-                    log_info "Hostapd started without bridge mode"
-                else
-                    # Restore bridge setting
-                    sed -i 's/^#bridge=br0/bridge=br0/' /etc/hostapd/hostapd.conf
+                # Fix 1: Try without bridge first
+                if grep -q "bridge=br0" /etc/hostapd/hostapd.conf; then
+                    log_info "  - Trying without bridge..."
+                    sed -i 's/^bridge=br0/#bridge=br0/' /etc/hostapd/hostapd.conf
+                    if systemctl start hostapd 2>/dev/null; then
+                        log_info "Hostapd started without bridge mode"
+                    else
+                        # Restore bridge setting
+                        sed -i 's/^#bridge=br0/bridge=br0/' /etc/hostapd/hostapd.conf
+                    fi
                 fi
-            fi
 
             # Fix 2: Try different channel
             if ! systemctl is-active --quiet hostapd; then
@@ -3296,6 +3320,7 @@ start_services() {
     else
         log_warn "No WiFi interface found, skipping hostapd"
     fi
+fi  # end of "if hostapd not already running"
 
     systemctl start guardian-webui
 
