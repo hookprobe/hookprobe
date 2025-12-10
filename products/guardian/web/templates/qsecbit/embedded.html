@@ -264,7 +264,7 @@
 <div class="qsecbit-container">
     <div class="qsecbit-header">
         <h2>Qsecbit Live</h2>
-        <div class="subtitle">Real-Time v6.0 Protection Score</div>
+        <div class="subtitle">Real-Time 5.0 Protection Score</div>
         <div class="qsecbit-datetime" id="qsecbit-datetime">
             <span class="qsecbit-date" id="qsecbit-date"></span>
             <span class="qsecbit-time" id="qsecbit-time"></span>
@@ -403,7 +403,7 @@
         // Stats
         elements.threats.textContent = data.threats_active || 0;
         elements.chains.textContent = data.attack_chains || 0;
-        elements.version.textContent = data.v6 ? 'v6.0' : 'v5';
+        elements.version.textContent = data.v6 ? '5.0' : 'v5';
 
         // Layers
         if (data.layers && elements.layers) {

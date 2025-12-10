@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Guardian Connector for Globe Visualization (v6.0)
+Guardian Connector for Globe Visualization 
 
 Connects the Guardian product tier (travel/portable security gateway)
-to the globe digital twin visualization using Qsecbit v6.0 UnifiedThreatEngine.
+to the globe digital twin visualization using Qsecbit UnifiedThreatEngine.
 
 Integration points:
-- core/qsecbit/unified_engine.py - UnifiedThreatEngine v6.0
+- core/qsecbit/unified_engine.py - UnifiedThreatEngine
 - core/qsecbit/mesh_bridge.py - Mesh threat intelligence bridge
 - products/guardian/lib/guardian_agent.py - Main Guardian agent
 - products/guardian/web/app.py - Flask web UI
 
-v6.0 Features:
+Unified Features:
 - AI/ML threat classification across L2-L7
 - Real-time energy-based anomaly detection
 - Mesh consciousness integration for collective defense
@@ -55,7 +55,7 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# v6.0: Try to import Qsecbit Unified Engine components
+#  Try to import Qsecbit Unified Engine components
 UNIFIED_ENGINE_AVAILABLE = False
 UnifiedThreatEngine = None
 UnifiedEngineConfig = None
@@ -79,9 +79,9 @@ try:
         ResponseAction,
     )
     UNIFIED_ENGINE_AVAILABLE = True
-    logger.info("Qsecbit v6.0 UnifiedThreatEngine loaded successfully")
+    logger.info("Qsecbit UnifiedThreatEngine loaded successfully")
 except ImportError as e:
-    logger.warning(f"Qsecbit v6.0 not available: {e} - using legacy mode")
+    logger.warning(f"Qsecbit Unified not available: {e} - using legacy mode")
 
 # Legacy: Try to import Guardian components
 GUARDIAN_AGENT_AVAILABLE = False
@@ -105,7 +105,7 @@ except ImportError:
 
 @dataclass
 class GuardianConnectorConfig(ConnectorConfig):
-    """Guardian-specific connector configuration (v6.0)."""
+    """Guardian-specific connector configuration ."""
 
     tier: ProductTier = field(default=ProductTier.GUARDIAN)
 
@@ -119,8 +119,8 @@ class GuardianConnectorConfig(ConnectorConfig):
     wan_interface: str = "eth0"       # WAN interface
     lan_interface: str = "wlan0"      # LAN interface (AP)
 
-    # v6.0 Feature flags
-    use_unified_engine: bool = True   # Use v6.0 UnifiedThreatEngine
+    # Unified Feature flags
+    use_unified_engine: bool = True   # Use UnifiedThreatEngine
     enable_ml_classification: bool = True  # AI/ML attack classification
     enable_response_orchestration: bool = True  # Automated mitigation
     enable_mesh_reporting: bool = True  # Report threats to mesh
@@ -138,12 +138,12 @@ class GuardianConnectorConfig(ConnectorConfig):
 
 class GuardianConnector(ProductConnector):
     """
-    Connector for Guardian tier products (v6.0).
+    Connector for Guardian tier products .
 
     The Guardian is a portable security gateway (1.5GB RAM) designed for
     travelers. It creates a secure WiFi hotspot and protects connected devices.
 
-    v6.0 Features:
+    Unified Features:
     - UnifiedThreatEngine for AI/ML threat detection across L2-L7
     - 27 attack types with MITRE ATT&CK mapping
     - Mesh consciousness integration for collective defense
@@ -162,7 +162,7 @@ class GuardianConnector(ProductConnector):
         super().__init__(config)
         self.guardian_config = config
 
-        # v6.0 Unified Engine
+        # Unified Unified Engine
         self._unified_engine: Optional[Any] = None
         self._mesh_bridge: Optional[Any] = None
         self._mesh_consciousness: Optional[Any] = None
@@ -181,7 +181,7 @@ class GuardianConnector(ProductConnector):
         }
         self._attack_chains_detected = 0
 
-        # Initialize v6.0 UnifiedThreatEngine if available and enabled
+        # Initialize UnifiedThreatEngine if available and enabled
         if UNIFIED_ENGINE_AVAILABLE and config.use_unified_engine:
             self._init_unified_engine()
         elif GUARDIAN_AGENT_AVAILABLE:
@@ -193,7 +193,7 @@ class GuardianConnector(ProductConnector):
                 logger.warning(f"Failed to initialize GuardianAgent: {e}")
 
     def _init_unified_engine(self) -> None:
-        """Initialize the v6.0 UnifiedThreatEngine."""
+        """Initialize the UnifiedThreatEngine."""
         try:
             # Create engine configuration
             engine_config = UnifiedEngineConfig(
@@ -221,7 +221,7 @@ class GuardianConnector(ProductConnector):
                 if self._mesh_bridge:
                     self._mesh_bridge.register_cortex_callback(self._handle_mesh_cortex_event)
 
-            logger.info("Qsecbit v6.0 UnifiedThreatEngine initialized for Guardian")
+            logger.info("Qsecbit UnifiedThreatEngine initialized for Guardian")
 
         except Exception as e:
             logger.error(f"Failed to initialize UnifiedThreatEngine: {e}")
@@ -252,8 +252,8 @@ class GuardianConnector(ProductConnector):
         self._emit_event(event)
 
     async def collect_qsecbit(self) -> float:
-        """Collect Qsecbit score using v6.0 UnifiedThreatEngine."""
-        # v6.0: Use unified engine for detection
+        """Collect Qsecbit score using UnifiedThreatEngine."""
+        #  Use unified engine for detection
         if self._unified_engine:
             try:
                 # Run threat detection cycle
@@ -297,8 +297,8 @@ class GuardianConnector(ProductConnector):
         return self._estimate_qsecbit()
 
     async def collect_qsecbit_components(self) -> Dict[str, float]:
-        """Collect Qsecbit v6.0 component breakdown by OSI layer."""
-        # v6.0: Get layer scores from unified engine
+        """Collect Qsecbit Unified component breakdown by OSI layer."""
+        #  Get layer scores from unified engine
         if self._unified_engine and self._last_unified_score:
             try:
                 components = {}
@@ -306,7 +306,7 @@ class GuardianConnector(ProductConnector):
                     layer_name = layer_score.layer.name
                     components[f"layer_{layer_name.lower()}"] = layer_score.score
 
-                # Add additional v6.0 components
+                # Add additional Unified components
                 components['energy_anomaly'] = self._last_unified_score.energy_anomaly_score
                 components['behavioral'] = self._last_unified_score.behavioral_score
                 components['chain_correlation'] = self._last_unified_score.chain_correlation_score
@@ -320,7 +320,7 @@ class GuardianConnector(ProductConnector):
                 return components
 
             except Exception as e:
-                logger.error(f"Failed to get v6.0 components: {e}")
+                logger.error(f"Failed to get Unified components: {e}")
 
         # Fallback: Legacy components
         if self._guardian_agent and hasattr(self._guardian_agent, 'get_metrics'):
@@ -330,7 +330,7 @@ class GuardianConnector(ProductConnector):
             except Exception as e:
                 logger.error(f"Failed to get metrics: {e}")
 
-        # Return default Guardian v6.0 components
+        # Return default Guardian Unified components
         return {
             "layer_l2": 0.0,
             "layer_l3": 0.0,
@@ -344,7 +344,7 @@ class GuardianConnector(ProductConnector):
         }
 
     async def collect_statistics(self) -> Dict[str, Any]:
-        """Collect Guardian v6.0 statistics."""
+        """Collect Guardian Unified statistics."""
         stats = {
             "connected_clients": self._connected_clients,
             "blocked_domains": self._blocked_domains,
@@ -354,7 +354,7 @@ class GuardianConnector(ProductConnector):
             "ap_active": True,  # WiFi AP status
         }
 
-        # v6.0 statistics
+        # Unified statistics
         if self._unified_engine and self._last_unified_score:
             stats["v6_enabled"] = True
             stats["threats_by_layer"] = self._threats_detected_by_layer.copy()
@@ -405,10 +405,10 @@ class GuardianConnector(ProductConnector):
         return stats
 
     async def get_recent_threats(self) -> List[CortexThreatEvent]:
-        """Get recent threats detected by Guardian v6.0."""
+        """Get recent threats detected by Guardian."""
         threats = []
 
-        # v6.0: Get threats from unified engine
+        #  Get threats from unified engine
         if self._unified_engine and self._last_unified_score:
             try:
                 for qsecbit_threat in self._last_unified_score.threats[-20:]:
@@ -434,7 +434,7 @@ class GuardianConnector(ProductConnector):
                     threats.append(threat)
 
             except Exception as e:
-                logger.error(f"Failed to get v6.0 threats: {e}")
+                logger.error(f"Failed to get Unified threats: {e}")
 
         # Include cached threats from mesh
         threats.extend(self._threat_cache[-10:])
@@ -533,14 +533,14 @@ def create_guardian_connector(
     **kwargs
 ) -> GuardianConnector:
     """
-    Factory function to create a Guardian connector with v6.0 support.
+    Factory function to create a Guardian connector with Unified support.
 
     Args:
         node_id: Unique identifier for this Guardian node
         lat: Latitude for globe placement
         lng: Longitude for globe placement
         label: Human-readable label
-        use_unified_engine: Use v6.0 UnifiedThreatEngine (default: True)
+        use_unified_engine: Use UnifiedThreatEngine (default: True)
         enable_ml: Enable AI/ML classification (default: True)
         enable_mesh: Enable mesh threat reporting (default: True)
         **kwargs: Additional GuardianConnectorConfig options
@@ -572,10 +572,10 @@ def create_flask_connector(
     enable_mesh: bool = True
 ) -> GuardianConnector:
     """
-    Create a Guardian connector integrated with a Flask app (v6.0).
+    Create a Guardian connector integrated with a Flask app .
 
     This factory function creates a GuardianConnector that:
-    - Uses Qsecbit v6.0 UnifiedThreatEngine for AI/ML threat detection
+    - Uses Qsecbit UnifiedThreatEngine for AI/ML threat detection
     - Reports threats to the mesh consciousness for collective defense
     - Publishes events to Cortex visualization for real-time globe display
 
@@ -600,12 +600,12 @@ def create_flask_connector(
         lat: Latitude for globe placement
         lng: Longitude for globe placement
         label: Human-readable label
-        use_unified_engine: Use v6.0 UnifiedThreatEngine (default: True)
+        use_unified_engine: Use UnifiedThreatEngine (default: True)
         enable_ml: Enable AI/ML classification (default: True)
         enable_mesh: Enable mesh threat reporting (default: True)
 
     Returns:
-        Configured GuardianConnector instance with v6.0 features
+        Configured GuardianConnector instance with Unified features
     """
     import socket
 
@@ -635,7 +635,7 @@ def create_flask_connector(
             # Update stats on each request
             pass
 
-        logger.info(f"Guardian v6.0 connector registered with Flask app: {node_id}")
+        logger.info(f"Guardian Unified connector registered with Flask app: {node_id}")
         if use_unified_engine and UNIFIED_ENGINE_AVAILABLE:
             logger.info("  -> UnifiedThreatEngine: ENABLED")
             logger.info("  -> ML Classification: " + ("ENABLED" if enable_ml else "DISABLED"))

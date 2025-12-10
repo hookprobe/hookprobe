@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Layer 4 (Transport) Threat Detector
+Qsecbit Unified - Layer 4 (Transport) Threat Detector
 
 Detects Layer 4 attacks:
 - SYN Flood (SYN_RECV state monitoring)
@@ -10,7 +10,7 @@ Detects Layer 4 attacks:
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import re

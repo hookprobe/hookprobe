@@ -1,5 +1,5 @@
 """
-Qsecbit Live Views - Real-time v6.0 Unified Engine Integration
+Qsecbit Live Views - Real-time Unified Unified Engine Integration
 
 Provides simple API endpoints for real-time Qsecbit score display
 optimized for Raspberry Pi.
@@ -13,7 +13,7 @@ from . import qsecbit_bp
 
 logger = logging.getLogger(__name__)
 
-# Try to import Qsecbit v6.0 UnifiedThreatEngine
+# Try to import Qsecbit Unified UnifiedThreatEngine
 UNIFIED_ENGINE_AVAILABLE = False
 _unified_engine = None
 
@@ -28,9 +28,9 @@ try:
         DeploymentType,
     )
     UNIFIED_ENGINE_AVAILABLE = True
-    logger.info("Qsecbit v6.0 UnifiedThreatEngine available")
+    logger.info("Qsecbit Unified UnifiedThreatEngine available")
 except ImportError as e:
-    logger.warning(f"Qsecbit v6.0 not available: {e}")
+    logger.warning(f"Qsecbit Unified not available: {e}")
 
 
 def get_unified_engine():
@@ -81,7 +81,7 @@ def qsecbit_dashboard():
 @qsecbit_bp.route('/api/score')
 def api_qsecbit_score():
     """
-    Get current Qsecbit v6.0 score - optimized for frequent polling.
+    Get current Qsecbit Unified score - optimized for frequent polling.
 
     Returns a lightweight JSON response with score, status, and layer breakdown.
     """
@@ -89,7 +89,7 @@ def api_qsecbit_score():
         engine = get_unified_engine()
 
         if engine:
-            # Run v6.0 detection
+            # Run Unified detection
             result = engine.detect()
 
             # Build lightweight response
