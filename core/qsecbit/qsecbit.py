@@ -4,9 +4,16 @@ Qsecbit: Quantum Security Bit - Cyber Resilience Metric
 A resilience metric that measures the smallest unit where AI-driven attack
 and defense reach equilibrium through continuous error correction.
 
+Version 6.0 adds unified threat detection across OSI layers L2-L7:
+- Layer 2: ARP Spoofing, MAC Flooding, VLAN Hopping, Evil Twin, Rogue DHCP
+- Layer 3: IP Spoofing, ICMP Flood, Smurf Attack, Routing Attacks
+- Layer 4: SYN Flood, Port Scan, TCP Reset, Session Hijack, UDP Flood
+- Layer 5: SSL Strip, TLS Downgrade, Cert Pinning Bypass, Auth Bypass
+- Layer 7: SQL Injection, XSS, DNS Tunneling, HTTP Flood, Malware C2
+
 Author: Andrei Toma
 License: Proprietary - see LICENSE in this directory
-Version: 5.0
+Version: 6.0
 """
 
 import numpy as np
@@ -24,6 +31,16 @@ import socket
 from .nic_detector import NICDetector, NICCapability, XDPMode
 from .xdp_manager import XDPManager, XDPStats
 from .energy_monitor import EnergyMonitor, SystemEnergySnapshot, PIDEnergyStats
+
+# v6.0 Unified Engine (lazy import to avoid circular imports)
+_unified_engine_module = None
+
+def _get_unified_engine():
+    """Lazy import of unified engine module."""
+    global _unified_engine_module
+    if _unified_engine_module is None:
+        from . import unified_engine as _unified_engine_module
+    return _unified_engine_module
 
 # Optional ClickHouse integration (for edge deployments)
 try:
@@ -660,15 +677,128 @@ class Qsecbit:
             'total_samples': len(self.history)
         }
 
+    # ==========================================================================
+    # v6.0 UNIFIED THREAT DETECTION
+    # ==========================================================================
+
+    def create_unified_engine(
+        self,
+        deployment_type: str = 'guardian',
+        enable_response: bool = False,
+        data_dir: str = '/opt/hookprobe/data'
+    ):
+        """
+        Create a UnifiedThreatEngine instance with this Qsecbit's XDP manager.
+
+        The unified engine provides comprehensive threat detection across OSI
+        layers L2-L7, including ML-based classification and automated response.
+
+        Args:
+            deployment_type: One of 'guardian', 'fortress', 'nexus', 'mssp'
+            enable_response: Enable automated threat response
+            data_dir: Directory for detector state
+
+        Returns:
+            UnifiedThreatEngine instance
+
+        Example:
+            engine = qsecbit.create_unified_engine(deployment_type='guardian')
+            score = engine.detect()
+            print(f"Unified Score: {score.score} ({score.rag_status})")
+            for threat in score.threats:
+                print(f"  - {threat.attack_type.name}: {threat.description}")
+        """
+        unified = _get_unified_engine()
+
+        # Map string to DeploymentType enum
+        deployment_map = {
+            'guardian': unified.DeploymentType.GUARDIAN,
+            'fortress': unified.DeploymentType.FORTRESS,
+            'nexus': unified.DeploymentType.NEXUS,
+            'mssp': unified.DeploymentType.MSSP,
+        }
+        deployment = deployment_map.get(deployment_type.lower(), unified.DeploymentType.GUARDIAN)
+
+        # Create config with deployment-specific weights
+        config = unified.UnifiedEngineConfig(deployment_type=deployment)
+
+        # Create unified engine with same XDP manager
+        engine = unified.UnifiedThreatEngine(
+            xdp_manager=self.xdp_manager,
+            energy_monitor=self.energy_monitor,
+            config=config,
+            data_dir=data_dir
+        )
+
+        return engine
+
+    def detect_threats(
+        self,
+        deployment_type: str = 'guardian',
+        enable_response: bool = False
+    ) -> 'QsecbitUnifiedScore':
+        """
+        Perform comprehensive threat detection using v6.0 unified engine.
+
+        This is the single-source-of-truth for threat detection, combining:
+        - Layer 2: ARP Spoofing, MAC Flooding, VLAN Hopping, Evil Twin
+        - Layer 3: IP Spoofing, ICMP Flood, Smurf Attack
+        - Layer 4: SYN Flood, Port Scan, TCP Reset, Session Hijack
+        - Layer 5: SSL Strip, TLS Downgrade, Cert Pinning Bypass
+        - Layer 7: SQL Injection, XSS, DNS Tunneling, HTTP Flood
+
+        Args:
+            deployment_type: One of 'guardian', 'fortress', 'nexus', 'mssp'
+            enable_response: Enable automated threat response
+
+        Returns:
+            QsecbitUnifiedScore with detected threats and unified score
+
+        Example:
+            score = qsecbit.detect_threats(deployment_type='fortress')
+            if score.rag_status == 'RED':
+                print(f"CRITICAL: {len(score.threats)} active threats!")
+                for threat in score.threats:
+                    print(f"  [{threat.severity.name}] {threat.attack_type.name}")
+        """
+        if not hasattr(self, '_unified_engine') or self._unified_engine is None:
+            self._unified_engine = self.create_unified_engine(
+                deployment_type=deployment_type,
+                enable_response=enable_response
+            )
+
+        return self._unified_engine.detect()
+
+    def get_threat_summary(self) -> Dict:
+        """
+        Get summary of detected threats from unified engine.
+
+        Returns:
+            Dict with threat statistics by layer and type
+        """
+        if not hasattr(self, '_unified_engine') or self._unified_engine is None:
+            return {'error': 'Unified engine not initialized. Call detect_threats() first.'}
+
+        return self._unified_engine.get_statistics()
+
 
 # ===============================================================================
 # EXAMPLE USAGE
 # ===============================================================================
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Qsecbit v6.0 - Unified Threat Detection')
+    parser.add_argument('--mode', choices=['legacy', 'unified', 'both'], default='both',
+                        help='Detection mode: legacy (v5.0), unified (v6.0), or both')
+    parser.add_argument('--deployment', choices=['guardian', 'fortress', 'nexus', 'mssp'],
+                        default='guardian', help='Deployment type for unified engine')
+    args = parser.parse_args()
+
     print("=" * 70)
-    print("QSECBIT DEMONSTRATION")
-    print("Quantum Security Bit: AI-Era Cyber Resilience Metric")
+    print("QSECBIT v6.0 DEMONSTRATION")
+    print("Quantum Security Bit: Unified Cyber Resilience Metric")
     print("=" * 70)
 
     # Define baseline system profile
@@ -684,111 +814,147 @@ if __name__ == "__main__":
         delta=0.20,
         amber_threshold=0.45,
         red_threshold=0.70,
-        # Enable energy monitoring (requires Intel CPU with RAPL)
-        energy_monitoring_enabled=False,  # Set to True to enable
-        energy_spike_threshold=2.5,
-        energy_ewma_alpha=0.3,
-        energy_baseline_window=100
+        energy_monitoring_enabled=False,
     )
 
     q = Qsecbit(mu, cov, quantum_anchor, config)
 
-    # Simulate attack scenario
-    print("\n" + "-" * 70)
-    print("SCENARIO: Simulating XSS → Memory Overflow → Orchestrator Pivot")
-    print("-" * 70)
+    # =========================================================================
+    # v5.0 LEGACY MODE - Telemetry-based resilience scoring
+    # =========================================================================
+    if args.mode in ['legacy', 'both']:
+        print("\n" + "-" * 70)
+        print("v5.0 LEGACY MODE: Telemetry-Based Resilience Scoring")
+        print("-" * 70)
 
-    scenarios = [
-        {
-            'name': 'Normal Operation',
-            'x_t': np.array([0.12, 0.21, 0.16, 0.34]),
-            'p_attack': 0.05,
-            'c_t': np.array([0.95, 0.93, 0.94]),
-            'q_t': 6.15
-        },
-        {
-            'name': 'XSS Injection Detected',
-            'x_t': np.array([0.15, 0.24, 0.22, 0.36]),
-            'p_attack': 0.35,
-            'c_t': np.array([0.88, 0.85, 0.87]),
-            'q_t': 6.30
-        },
-        {
-            'name': 'Memory Overflow Attempt',
-            'x_t': np.array([0.25, 0.42, 0.35, 0.45]),
-            'p_attack': 0.72,
-            'c_t': np.array([0.76, 0.71, 0.73]),
-            'q_t': 6.65
-        },
-        {
-            'name': 'Orchestrator Pivot (Critical)',
-            'x_t': np.array([0.45, 0.68, 0.55, 0.62]),
-            'p_attack': 0.91,
-            'c_t': np.array([0.62, 0.58, 0.60]),
-            'q_t': 7.20
-        },
-        {
-            'name': 'Containment + Mitigation',
-            'x_t': np.array([0.28, 0.38, 0.32, 0.42]),
-            'p_attack': 0.48,
-            'c_t': np.array([0.81, 0.79, 0.80]),
-            'q_t': 6.45
-        },
-        {
-            'name': 'System Recovery',
-            'x_t': np.array([0.14, 0.23, 0.18, 0.35]),
-            'p_attack': 0.12,
-            'c_t': np.array([0.92, 0.90, 0.91]),
-            'q_t': 6.20
-        }
-    ]
+        scenarios = [
+            {
+                'name': 'Normal Operation',
+                'x_t': np.array([0.12, 0.21, 0.16, 0.34]),
+                'p_attack': 0.05,
+                'c_t': np.array([0.95, 0.93, 0.94]),
+                'q_t': 6.15
+            },
+            {
+                'name': 'XSS Injection Detected',
+                'x_t': np.array([0.15, 0.24, 0.22, 0.36]),
+                'p_attack': 0.35,
+                'c_t': np.array([0.88, 0.85, 0.87]),
+                'q_t': 6.30
+            },
+            {
+                'name': 'Memory Overflow Attempt',
+                'x_t': np.array([0.25, 0.42, 0.35, 0.45]),
+                'p_attack': 0.72,
+                'c_t': np.array([0.76, 0.71, 0.73]),
+                'q_t': 6.65
+            },
+            {
+                'name': 'Orchestrator Pivot (Critical)',
+                'x_t': np.array([0.45, 0.68, 0.55, 0.62]),
+                'p_attack': 0.91,
+                'c_t': np.array([0.62, 0.58, 0.60]),
+                'q_t': 7.20
+            },
+        ]
 
-    for i, scenario in enumerate(scenarios, 1):
-        sample = q.calculate(
-            x_t=scenario['x_t'],
-            p_attack=scenario['p_attack'],
-            c_t=scenario['c_t'],
-            q_t=scenario['q_t'],
-            dt=1.0,
-            metadata={'scenario': scenario['name']}
+        for i, scenario in enumerate(scenarios, 1):
+            sample = q.calculate(
+                x_t=scenario['x_t'],
+                p_attack=scenario['p_attack'],
+                c_t=scenario['c_t'],
+                q_t=scenario['q_t'],
+                dt=1.0,
+                metadata={'scenario': scenario['name']}
+            )
+
+            print(f"\nStep {i}: {scenario['name']}")
+            print(f"  Qsecbit Score:      {sample.score:.4f}")
+            print(f"  RAG Status:         {sample.rag_status}")
+            print(f"  Components:")
+            print(f"    - Drift:          {sample.components['drift']:.4f}")
+            print(f"    - Attack Prob:    {sample.components['attack_probability']:.4f}")
+            print(f"    - Classifier:     {sample.components['classifier_decay']:.4f}")
+            print(f"    - Quantum:        {sample.components['quantum_drift']:.4f}")
+
+        # Summary statistics
+        stats = q.summary_stats()
+        print(f"\nLegacy Summary: Mean={stats['mean_score']:.3f}, Trend={stats['trend']}")
+
+    # =========================================================================
+    # v6.0 UNIFIED MODE - Comprehensive OSI Layer Detection
+    # =========================================================================
+    if args.mode in ['unified', 'both']:
+        print("\n" + "-" * 70)
+        print(f"v6.0 UNIFIED MODE: OSI Layer L2-L7 Threat Detection")
+        print(f"Deployment Type: {args.deployment.upper()}")
+        print("-" * 70)
+
+        print("\nInitializing unified engine...")
+
+        # Create unified engine
+        engine = q.create_unified_engine(
+            deployment_type=args.deployment,
+            enable_response=False  # Set True for automated response
         )
 
-        print(f"\nStep {i}: {scenario['name']}")
-        print(f"  Qsecbit Score:      {sample.score:.4f}")
-        print(f"  RAG Status:         {sample.rag_status}")
-        print(f"  Components:")
-        print(f"    - Drift:          {sample.components['drift']:.4f}")
-        print(f"    - Attack Prob:    {sample.components['attack_probability']:.4f}")
-        print(f"    - Classifier:     {sample.components['classifier_decay']:.4f}")
-        print(f"    - Quantum:        {sample.components['quantum_drift']:.4f}")
-        if 'energy_anomaly' in sample.components:
-            print(f"    - Energy:         {sample.components['energy_anomaly']:.4f}")
+        print("Running comprehensive threat detection...")
 
-        # Print energy metadata if available
-        if 'energy' in sample.metadata:
-            energy = sample.metadata['energy']
-            print(f"  Energy Metrics:")
-            print(f"    - Package Power:  {energy.get('package_watts', 0):.2f}W")
-            print(f"    - NIC Processes:  {energy.get('nic_processes_watts', 0):.2f}W")
-            if energy.get('has_energy_anomaly'):
-                print(f"    - ⚠️  ANOMALY DETECTED")
-                if energy.get('nic_spike'):
-                    print(f"    - ⚠️  NIC POWER SPIKE")
-                if energy.get('xdp_spike'):
-                    print(f"    - ⚠️  XDP POWER SPIKE")
+        # Run detection
+        score = engine.detect()
 
-    # Summary statistics
+        print(f"\n{'=' * 50}")
+        print(f"UNIFIED QSECBIT SCORE: {score.score:.4f}")
+        print(f"RAG STATUS: {score.rag_status}")
+        print(f"{'=' * 50}")
+
+        # Layer breakdown
+        print("\nLAYER BREAKDOWN:")
+        for layer_score in score.layer_scores:
+            status_icon = {
+                'GREEN': '✓',
+                'AMBER': '⚠',
+                'RED': '✗'
+            }.get(layer_score.rag_status, '?')
+            print(f"  {status_icon} {layer_score.layer.name}: {layer_score.score:.3f} ({layer_score.rag_status})")
+            print(f"      Weight: {layer_score.weight:.2f}, Threats: {layer_score.threat_count}")
+
+        # Detected threats
+        if score.threats:
+            print(f"\nDETECTED THREATS ({len(score.threats)}):")
+            for threat in score.threats[:10]:  # Show first 10
+                severity_color = {
+                    'CRITICAL': '🔴',
+                    'HIGH': '🟠',
+                    'MEDIUM': '🟡',
+                    'LOW': '🟢'
+                }.get(threat.severity.name, '⚪')
+                print(f"  {severity_color} [{threat.severity.name}] {threat.attack_type.name}")
+                print(f"      {threat.description[:60]}...")
+                if threat.source_ip:
+                    print(f"      Source: {threat.source_ip}")
+        else:
+            print("\n✓ No active threats detected")
+
+        # Additional metrics
+        print(f"\nADDITIONAL METRICS:")
+        print(f"  Energy Score:       {score.energy_score:.3f}")
+        print(f"  Behavioral Score:   {score.behavioral_score:.3f}")
+        print(f"  Chain Correlation:  {score.chain_correlation:.3f}")
+        print(f"  Trend:              {score.trend}")
+        if score.convergence_rate:
+            print(f"  Convergence Rate:   {score.convergence_rate:.2f}")
+
+        # Statistics
+        stats = engine.get_statistics()
+        print(f"\nSTATISTICS:")
+        print(f"  Total Detection Runs: {stats['total_detections']}")
+        print(f"  Total Threats Found:  {stats['total_threats']}")
+        print(f"  By Severity:")
+        for sev, count in stats.get('threats_by_severity', {}).items():
+            if count > 0:
+                print(f"    - {sev}: {count}")
+
     print("\n" + "=" * 70)
-    print("SUMMARY STATISTICS")
-    print("=" * 70)
-    stats = q.summary_stats()
-    print(f"Mean Score:           {stats['mean_score']:.4f}")
-    print(f"Std Deviation:        {stats['std_score']:.4f}")
-    print(f"Score Range:          [{stats['min_score']:.4f}, {stats['max_score']:.4f}]")
-    print(f"Convergence Rate:     {stats['convergence_rate']:.2f} steps" if stats['convergence_rate'] else "N/A")
-    print(f"Trend:                {stats['trend']}")
-    print(f"RAG Distribution:     {stats['rag_distribution']}")
-
-    print("\n" + "=" * 70)
-    print("Qsecbit calculation complete. Export with q.export_history('qsecbit.json')")
+    print("Qsecbit v6.0 - Single Source of Truth for Cyber Protection")
     print("=" * 70)
