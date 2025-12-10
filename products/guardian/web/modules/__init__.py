@@ -43,3 +43,7 @@ def register_blueprints(app: Flask):
     # GitHub Update module - Pull updates via web UI
     from .github_update import github_update_bp
     app.register_blueprint(github_update_bp, url_prefix='/api/github')
+
+    # Debug module - Browser-based CLI
+    from .debug import debug_bp
+    app.register_blueprint(debug_bp, url_prefix='/api/debug')
