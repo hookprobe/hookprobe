@@ -24,6 +24,8 @@ Guardian transforms Raspberry Pi 4/5 into a portable security gateway. Perfect f
 - **Mesh Networking** — Collective threat intelligence sharing
 - **Connected Devices** — Track all devices on your network
 - **Web Dashboard** — Monitor threats and manage devices (Flask-based)
+- **Remote Updates** — Pull software updates from GitHub via web UI (no CLI needed)
+- **Browser Debug CLI** — Run diagnostics from the web interface when traveling
 - **Portable Security** — Take your network security anywhere
 
 ---
@@ -323,6 +325,43 @@ sudo ./install.sh --tier guardian
 - System Information — Uptime, memory, disk
 - Service Management — Start/stop services
 - System Actions — Restart, reboot
+
+### Updates Tab
+- GitHub Pull Updates — Update Guardian software from GitHub without CLI
+- Version Information — Current commit and branch
+- Preview Changes — See what files will be updated before applying
+- Scope Limitation — Only networking components updated for safety
+- Service Restart — Automatic restart of affected services
+
+**Update Scope (Safe Mode):**
+| Component | Path |
+|-----------|------|
+| Guardian | `products/guardian/` |
+| dnsXai | `shared/dnsXai/` |
+| Mesh | `shared/mesh/` |
+| Response | `shared/response/` |
+
+### Debug Tab
+- Browser CLI — Terminal interface for diagnostics without SSH
+- Command Whitelist — 34 safe diagnostic commands
+- Real-time Output — Streaming command output via SSE
+- Command History — Stored locally in browser
+- Rate Limiting — 30 commands/minute for safety
+
+**Available Command Categories:**
+| Category | Commands |
+|----------|----------|
+| Network | ping, traceroute, ip, ifconfig, ss, netstat, arp |
+| DNS | dig, nslookup, host |
+| System | uptime, free, df, ps, top, uname, hostname |
+| Containers | podman/docker ps, logs, inspect |
+| Logs | journalctl, dmesg, tail (restricted paths) |
+
+### Cortex Tab
+- 3D Globe Visualization — Real-time mesh network view
+- Node Status — See all connected nodes
+- Attack Visualization — Incoming threats as arcs
+- Digital Twin — Live mesh consciousness state
 
 ---
 
