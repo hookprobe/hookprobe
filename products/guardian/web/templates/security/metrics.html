@@ -1,184 +1,533 @@
-<!-- Security Tab Content -->
-<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
-    <h2>Security Overview</h2>
-    <p class="text-muted">L2-L7 threat detection, XDP/eBPF protection, and QSecBit metrics</p>
-</div>
+<!-- Security Tab - Simplified v6.0 -->
+<style>
+    .security-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 0 15px;
+    }
 
-<!-- Security Stats -->
-<div class="stats-grid">
-    <div class="stat-card danger">
-        <div class="stat-value" id="security-total-threats">0</div>
-        <div class="stat-label">Total Threats</div>
-    </div>
-    <div class="stat-card success">
-        <div class="stat-value" id="security-blocked">0</div>
-        <div class="stat-label">Blocked</div>
-    </div>
-    <div class="stat-card info">
-        <div class="stat-value" id="security-xdp-drops">0</div>
-        <div class="stat-label">XDP Drops</div>
-    </div>
-    <div class="stat-card warning">
-        <div class="stat-value" id="security-active-rules">0</div>
-        <div class="stat-label">Active Rules</div>
-    </div>
-</div>
+    .security-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 15px;
+        margin-bottom: 25px;
+    }
 
-<!-- QSecBit Score Card -->
-<div class="card">
-    <div class="card-header">
-        <h3 class="card-title">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+    .security-header h2 {
+        margin: 0;
+        font-size: 1.5rem;
+    }
+
+    .security-datetime {
+        text-align: right;
+        padding: 8px 15px;
+        background: var(--bg-secondary, rgba(255,255,255,0.05));
+        border-radius: 8px;
+    }
+
+    .security-datetime .date {
+        font-size: 0.85rem;
+        color: var(--text-primary, #fff);
+    }
+
+    .security-datetime .time {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--accent-color, #F05B2D);
+    }
+
+    /* Main Score Display */
+    .score-hero {
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
+        border-radius: 16px;
+        padding: 30px 20px;
+        text-align: center;
+        margin-bottom: 25px;
+    }
+
+    .score-circle {
+        position: relative;
+        width: 180px;
+        height: 180px;
+        margin: 0 auto 20px;
+    }
+
+    .score-circle svg {
+        width: 100%;
+        height: 100%;
+        transform: rotate(-90deg);
+    }
+
+    .score-circle .bg {
+        fill: none;
+        stroke: var(--bg-tertiary, #2d3748);
+        stroke-width: 12;
+    }
+
+    .score-circle .progress {
+        fill: none;
+        stroke-width: 12;
+        stroke-linecap: round;
+        stroke-dasharray: 440;
+        stroke-dashoffset: 440;
+        transition: stroke-dashoffset 0.8s ease, stroke 0.5s ease;
+    }
+
+    .score-circle .progress.green { stroke: #10b981; }
+    .score-circle .progress.amber { stroke: #f59e0b; }
+    .score-circle .progress.red { stroke: #ef4444; }
+
+    .score-circle .value {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+
+    .score-circle .value.green { color: #10b981; }
+    .score-circle .value.amber { color: #f59e0b; }
+    .score-circle .value.red { color: #ef4444; }
+
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 20px;
+        border-radius: 25px;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+
+    .status-pill.green {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+    }
+
+    .status-pill.amber {
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+    }
+
+    .status-pill.red {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        animation: pulse-badge 2s infinite;
+    }
+
+    @keyframes pulse-badge {
+        0%, 100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+        50% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
+    /* Quick Stats Row */
+    .quick-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 25px;
+    }
+
+    .quick-stat {
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
+        border-radius: 10px;
+        padding: 15px 10px;
+        text-align: center;
+    }
+
+    .quick-stat .value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary, #fff);
+    }
+
+    .quick-stat .label {
+        font-size: 0.7rem;
+        color: var(--text-muted, #64748b);
+        text-transform: uppercase;
+        margin-top: 4px;
+    }
+
+    .quick-stat.danger .value { color: #ef4444; }
+    .quick-stat.success .value { color: #10b981; }
+    .quick-stat.info .value { color: #3b82f6; }
+
+    /* Layer Bars */
+    .layers-section {
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 25px;
+    }
+
+    .layers-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-secondary, #94a3b8);
+        margin-bottom: 15px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .layer-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+
+    .layer-row:last-child {
+        margin-bottom: 0;
+    }
+
+    .layer-label {
+        width: 60px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--text-secondary, #94a3b8);
+    }
+
+    .layer-bar-bg {
+        flex: 1;
+        height: 10px;
+        background: var(--bg-tertiary, #1e293b);
+        border-radius: 5px;
+        overflow: hidden;
+        margin: 0 12px;
+    }
+
+    .layer-bar {
+        height: 100%;
+        border-radius: 5px;
+        transition: width 0.5s ease;
+    }
+
+    .layer-bar.green { background: #10b981; }
+    .layer-bar.amber { background: #f59e0b; }
+    .layer-bar.red { background: #ef4444; }
+
+    .layer-value {
+        width: 50px;
+        font-size: 0.8rem;
+        text-align: right;
+        font-weight: 600;
+        color: var(--text-primary, #fff);
+    }
+
+    .layer-threats {
+        width: 70px;
+        font-size: 0.7rem;
+        text-align: right;
+        color: var(--text-muted, #64748b);
+    }
+
+    /* XDP Stats */
+    .xdp-section {
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
+        border-radius: 12px;
+        padding: 20px;
+    }
+
+    .xdp-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+    }
+
+    .xdp-item {
+        text-align: center;
+        padding: 12px;
+        background: var(--bg-tertiary, rgba(255,255,255,0.02));
+        border-radius: 8px;
+    }
+
+    .xdp-item .value {
+        font-size: 1.25rem;
+        font-weight: 700;
+    }
+
+    .xdp-item .label {
+        font-size: 0.7rem;
+        color: var(--text-muted, #64748b);
+        text-transform: uppercase;
+        margin-top: 4px;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+        .quick-stats {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .score-circle {
+            width: 150px;
+            height: 150px;
+        }
+
+        .score-circle .value {
+            font-size: 2rem;
+        }
+
+        .layer-threats {
+            display: none;
+        }
+    }
+</style>
+
+<div class="security-container">
+    <!-- Header with DateTime -->
+    <div class="security-header">
+        <div>
+            <h2>Security</h2>
+            <p class="text-muted" style="margin: 0; font-size: 0.85rem;">Qsecbit v6.0 Protection</p>
+        </div>
+        <div class="security-datetime">
+            <div class="date" id="sec-date"></div>
+            <div class="time" id="sec-time"></div>
+        </div>
+    </div>
+
+    <!-- Main Score Display -->
+    <div class="score-hero">
+        <div class="score-circle">
+            <svg viewBox="0 0 160 160">
+                <circle class="bg" cx="80" cy="80" r="70"/>
+                <circle class="progress green" id="sec-progress" cx="80" cy="80" r="70"/>
             </svg>
-            QSecBit Security Score
-        </h3>
-    </div>
-    <div class="card-body">
-        <div style="display: flex; align-items: center; justify-content: center; gap: var(--spacing-xl); flex-wrap: wrap;">
-            <div style="text-align: center; min-width: 150px; width: 100%; max-width: 200px;">
-                <div id="qsecbit-score-display" style="font-size: 4rem; font-weight: 700; line-height: 1; color: var(--hp-green);">0.000</div>
-                <div id="qsecbit-risk-label" style="font-size: 1rem; font-weight: 600; margin-top: var(--spacing-xs); color: var(--hp-green);">RISK LOW</div>
-                <div class="text-muted" style="margin-top: var(--spacing-xs);">Current Score</div>
-            </div>
-            <div style="flex: 1; min-width: 250px; width: 100%;">
-                <div class="progress" style="height: 16px; margin-bottom: var(--spacing-md);">
-                    <div class="progress-bar success" id="qsecbit-progress" style="width: 0%;"></div>
-                </div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.8125rem; color: var(--text-secondary); flex-wrap: wrap; gap: var(--spacing-xs); text-align: center;">
-                    <span style="color: var(--hp-green); flex: 1;">LOW (&lt;0.45)</span>
-                    <span style="color: var(--hp-amber); flex: 1;">MEDIUM (0.45-0.70)</span>
-                    <span style="color: var(--hp-red); flex: 1;">HIGH (&gt;0.70)</span>
-                </div>
-            </div>
+            <div class="value green" id="sec-score">0.00</div>
         </div>
-        <!-- Component breakdown (dynamically updated) -->
-        <div id="qsecbit-components" style="margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); font-family: monospace;">
-            <div class="qsecbit-formula" style="display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; color: var(--text-secondary);">
-                <span class="component" title="System drift (α)">α·drift</span> +
-                <span class="component" title="Attack probability (β)">β·p_attack</span> +
-                <span class="component" title="Classifier decay (γ)">γ·decay</span> +
-                <span class="component" title="Quantum drift (δ)">δ·q_drift</span> +
-                <span class="component" title="Energy anomaly (ε)">ε·energy</span>
-            </div>
+        <div class="status-pill green" id="sec-status">
+            <span class="status-dot"></span>
+            <span id="sec-status-text">PROTECTED</span>
         </div>
-        <p class="text-muted" style="margin-top: var(--spacing-sm); font-size: 0.75rem; text-align: center;">
-            Weights: α=0.25, β=0.25, γ=0.20, δ=0.15, ε=0.15
-        </p>
     </div>
-</div>
 
-<!-- Layer Detection Cards -->
-<div class="card">
-    <div class="card-header">
-        <h3 class="card-title">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
-                <path d="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z"/>
-            </svg>
-            Detection Coverage by Layer
-        </h3>
-        <button class="btn btn-sm btn-secondary" onclick="loadSecurityData()">
-            Refresh
-        </button>
+    <!-- Quick Stats -->
+    <div class="quick-stats">
+        <div class="quick-stat danger">
+            <div class="value" id="sec-threats">0</div>
+            <div class="label">Threats</div>
+        </div>
+        <div class="quick-stat success">
+            <div class="value" id="sec-blocked">0</div>
+            <div class="label">Blocked</div>
+        </div>
+        <div class="quick-stat info">
+            <div class="value" id="sec-xdp">0</div>
+            <div class="label">XDP Drops</div>
+        </div>
+        <div class="quick-stat">
+            <div class="value" id="sec-chains">0</div>
+            <div class="label">Chains</div>
+        </div>
     </div>
-    <div class="card-body">
-        <div class="layer-grid" id="layer-cards">
-            <!-- L2 -->
-            <div class="layer-card">
-                <div class="layer-card-header">
-                    <div>
-                        <span class="layer-badge">L2</span>
-                        <span class="layer-name">Data Link</span>
-                    </div>
-                    <span class="layer-threat-count">0 threats</span>
-                </div>
-                <div class="layer-stats">
-                    <span class="layer-stat critical">0 Crit</span>
-                    <span class="layer-stat high">0 High</span>
-                    <span class="layer-stat medium">0 Med</span>
-                    <span class="layer-stat low">0 Low</span>
-                    <span class="layer-stat blocked">0 Blocked</span>
-                </div>
-                <div class="layer-types">
-                    <strong>Detection:</strong> ARP Spoofing, MAC Flooding, VLAN Hopping
-                </div>
-            </div>
 
-            <!-- L3 -->
-            <div class="layer-card">
-                <div class="layer-card-header">
-                    <div>
-                        <span class="layer-badge">L3</span>
-                        <span class="layer-name">Network</span>
-                    </div>
-                    <span class="layer-threat-count">0 threats</span>
-                </div>
-                <div class="layer-stats">
-                    <span class="layer-stat critical">0 Crit</span>
-                    <span class="layer-stat high">0 High</span>
-                    <span class="layer-stat medium">0 Med</span>
-                    <span class="layer-stat low">0 Low</span>
-                    <span class="layer-stat blocked">0 Blocked</span>
-                </div>
-                <div class="layer-types">
-                    <strong>Detection:</strong> IP Spoofing, ICMP Flood, Smurf Attack
-                </div>
-            </div>
+    <!-- Layer Breakdown -->
+    <div class="layers-section">
+        <div class="layers-title">OSI Layer Detection</div>
 
-            <!-- L4 -->
-            <div class="layer-card">
-                <div class="layer-card-header">
-                    <div>
-                        <span class="layer-badge">L4</span>
-                        <span class="layer-name">Transport</span>
-                    </div>
-                    <span class="layer-threat-count">0 threats</span>
-                </div>
-                <div class="layer-stats">
-                    <span class="layer-stat critical">0 Crit</span>
-                    <span class="layer-stat high">0 High</span>
-                    <span class="layer-stat medium">0 Med</span>
-                    <span class="layer-stat low">0 Low</span>
-                    <span class="layer-stat blocked">0 Blocked</span>
-                </div>
-                <div class="layer-types">
-                    <strong>Detection:</strong> SYN Flood, Port Scan, TCP Reset
-                </div>
+        <div class="layer-row" data-layer="L2">
+            <span class="layer-label">L2</span>
+            <div class="layer-bar-bg">
+                <div class="layer-bar green" style="width: 0%"></div>
             </div>
+            <span class="layer-value">0.00</span>
+            <span class="layer-threats">0 threats</span>
+        </div>
 
-            <!-- L5-L7 dynamically loaded -->
+        <div class="layer-row" data-layer="L3">
+            <span class="layer-label">L3</span>
+            <div class="layer-bar-bg">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+            <span class="layer-threats">0 threats</span>
+        </div>
+
+        <div class="layer-row" data-layer="L4">
+            <span class="layer-label">L4</span>
+            <div class="layer-bar-bg">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+            <span class="layer-threats">0 threats</span>
+        </div>
+
+        <div class="layer-row" data-layer="L5">
+            <span class="layer-label">L5</span>
+            <div class="layer-bar-bg">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+            <span class="layer-threats">0 threats</span>
+        </div>
+
+        <div class="layer-row" data-layer="L7">
+            <span class="layer-label">L7</span>
+            <div class="layer-bar-bg">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+            <span class="layer-threats">0 threats</span>
+        </div>
+    </div>
+
+    <!-- XDP Protection -->
+    <div class="xdp-section">
+        <div class="layers-title">XDP/eBPF Protection</div>
+        <div class="xdp-grid">
+            <div class="xdp-item">
+                <div class="value" id="sec-xdp-mode" style="color: #10b981;">--</div>
+                <div class="label">Mode</div>
+            </div>
+            <div class="xdp-item">
+                <div class="value" id="sec-xdp-iface">eth0</div>
+                <div class="label">Interface</div>
+            </div>
+            <div class="xdp-item">
+                <div class="value" id="sec-xdp-pkts">0</div>
+                <div class="label">Packets</div>
+            </div>
+            <div class="xdp-item">
+                <div class="value" id="sec-xdp-rate" style="color: #ef4444;">0%</div>
+                <div class="label">Drop Rate</div>
+            </div>
         </div>
     </div>
 </div>
 
-<!-- XDP/eBPF Status -->
-<div class="card">
-    <div class="card-header">
-        <h3 class="card-title">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
-                <path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/>
-            </svg>
-            XDP/eBPF Protection
-        </h3>
-    </div>
-    <div class="card-body">
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
-            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
-                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Mode</div>
-                <div style="font-weight: 600; color: var(--hp-green);" id="xdp-mode">XDP-DRV</div>
-            </div>
-            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
-                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Interface</div>
-                <div style="font-weight: 600;" id="xdp-interface">eth0</div>
-            </div>
-            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
-                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Packets Processed</div>
-                <div style="font-weight: 600;" id="xdp-packets">0</div>
-            </div>
-            <div style="padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
-                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Drop Rate</div>
-                <div style="font-weight: 600; color: var(--hp-red);" id="xdp-drop-rate">0%</div>
-            </div>
-        </div>
-    </div>
-</div>
+<script>
+(function() {
+    const POLL_INTERVAL = 5000;
+    const CIRCUMFERENCE = 440; // 2 * PI * 70
+
+    // Elements
+    const els = {
+        score: document.getElementById('sec-score'),
+        progress: document.getElementById('sec-progress'),
+        status: document.getElementById('sec-status'),
+        statusText: document.getElementById('sec-status-text'),
+        threats: document.getElementById('sec-threats'),
+        blocked: document.getElementById('sec-blocked'),
+        xdp: document.getElementById('sec-xdp'),
+        chains: document.getElementById('sec-chains'),
+        date: document.getElementById('sec-date'),
+        time: document.getElementById('sec-time'),
+        xdpMode: document.getElementById('sec-xdp-mode'),
+        xdpIface: document.getElementById('sec-xdp-iface'),
+        xdpPkts: document.getElementById('sec-xdp-pkts'),
+        xdpRate: document.getElementById('sec-xdp-rate'),
+    };
+
+    function getStatusClass(score) {
+        if (score >= 0.70) return 'red';
+        if (score >= 0.45) return 'amber';
+        return 'green';
+    }
+
+    function getStatusText(score) {
+        if (score >= 0.70) return 'THREAT DETECTED';
+        if (score >= 0.45) return 'ELEVATED RISK';
+        return 'PROTECTED';
+    }
+
+    function updateSecurityUI(data) {
+        const score = data.score || 0;
+        const statusClass = getStatusClass(score);
+
+        // Update score
+        els.score.textContent = score.toFixed(2);
+        els.score.className = 'value ' + statusClass;
+
+        // Update progress ring
+        const progress = 1 - score;
+        const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
+        els.progress.style.strokeDashoffset = offset;
+        els.progress.className = 'progress ' + statusClass;
+
+        // Update status pill
+        els.status.className = 'status-pill ' + statusClass;
+        els.statusText.textContent = getStatusText(score);
+
+        // Update stats
+        els.threats.textContent = data.threats_active || 0;
+        els.blocked.textContent = data.blocked || 0;
+        els.xdp.textContent = data.xdp_drops || 0;
+        els.chains.textContent = data.attack_chains || 0;
+
+        // Update layers
+        if (data.layers) {
+            Object.entries(data.layers).forEach(([layer, info]) => {
+                const row = document.querySelector(`[data-layer="${layer}"]`);
+                if (row) {
+                    const bar = row.querySelector('.layer-bar');
+                    const val = row.querySelector('.layer-value');
+                    const threats = row.querySelector('.layer-threats');
+                    const layerScore = typeof info === 'object' ? info.score : info;
+                    const layerThreats = typeof info === 'object' ? info.threats : 0;
+                    const layerClass = getStatusClass(layerScore);
+
+                    bar.style.width = (layerScore * 100) + '%';
+                    bar.className = 'layer-bar ' + layerClass;
+                    val.textContent = layerScore.toFixed(2);
+                    if (threats) threats.textContent = layerThreats + ' threats';
+                }
+            });
+        }
+    }
+
+    async function fetchSecurityData() {
+        try {
+            // Fetch Qsecbit score
+            const scoreRes = await fetch('/qsecbit/api/score');
+            if (scoreRes.ok) {
+                const data = await scoreRes.json();
+                updateSecurityUI(data);
+            }
+
+            // Fetch XDP stats
+            const xdpRes = await fetch('/api/xdp_stats');
+            if (xdpRes.ok) {
+                const xdp = await xdpRes.json();
+                els.xdpMode.textContent = xdp.mode || '--';
+                els.xdpIface.textContent = xdp.interface || 'eth0';
+                els.xdpPkts.textContent = formatNumber(xdp.packets || 0);
+                els.xdpRate.textContent = (xdp.drop_rate || 0) + '%';
+            }
+        } catch (e) {
+            console.error('Security fetch error:', e);
+        }
+    }
+
+    function formatNumber(n) {
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+        return n.toString();
+    }
+
+    function updateClock() {
+        const now = new Date();
+        els.date.textContent = now.toLocaleDateString('en-GB', {
+            weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+        });
+        els.time.textContent = now.toLocaleTimeString('en-GB', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+    }
+
+    // Initialize
+    fetchSecurityData();
+    updateClock();
+    setInterval(fetchSecurityData, POLL_INTERVAL);
+    setInterval(updateClock, 1000);
+})();
+</script>
