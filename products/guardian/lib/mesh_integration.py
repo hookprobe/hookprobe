@@ -76,7 +76,7 @@ class MeshConfig:
 
     # Neural seed - MUST be shared across all mesh nodes
     # In production, this would be provisioned during deployment
-    neuro_seed: bytes = b"HookProbe-Mesh-Seed-v5.0-Liberty"
+    neuro_seed: bytes = b"HookProbe-Mesh-Seed-v5.0-Cortex"
 
     # Bootstrap peers for initial mesh connection
     bootstrap_peers: List[str] = None

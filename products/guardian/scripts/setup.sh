@@ -2875,7 +2875,7 @@ install_guardian_lib() {
         cat > "$LIB_DEST/__init__.py" << 'PYEOF'
 """
 HookProbe Guardian Library
-Version: 5.0.0 Liberty
+Version: 5.0.0 Cortex
 """
 __version__ = '5.0.0'
 PYEOF
@@ -3127,7 +3127,7 @@ create_default_config() {
 
     cat > "$CONFIG_FILE" << 'YAMLEOF'
 # HookProbe Guardian Configuration
-# Version: 5.0.0 Liberty
+# Version: 5.0.0 Cortex
 # Mode: Guardian (Portable Travel Security)
 #
 # Guardian mode provides simple WiFi hotspot with security features.
@@ -3471,7 +3471,7 @@ fi  # end of "if hostapd not already running"
 show_guardian_banner() {
     echo ""
     echo -e "${BOLD}${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${GREEN}║         HookProbe Guardian - Liberty 5.0.0                  ║${NC}"
+    echo -e "${BOLD}${GREEN}║         HookProbe Guardian - Cortex 5.0.0                  ║${NC}"
     echo -e "${BOLD}${GREEN}║       Portable Travel Security Companion                   ║${NC}"
     echo -e "${BOLD}${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -3650,11 +3650,11 @@ main() {
     # Final summary
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║       Guardian Liberty 5.0.0 Installation Complete!        ║${NC}"
+    echo -e "${GREEN}║       Guardian Cortex 5.0.0 Installation Complete!        ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Configuration:${NC}"
-    echo -e "  Version:     ${BOLD}Liberty 5.0.0${NC}"
+    echo -e "  Version:     ${BOLD}Cortex 5.0.0${NC}"
     echo -e "  Mode:        ${BOLD}Guardian (Portable Travel Security)${NC}"
     echo -e "  Hotspot:     ${BOLD}${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}${NC}"
     echo -e "  Network:     ${BOLD}192.168.4.0/27 (br0, 30 devices max)${NC}"

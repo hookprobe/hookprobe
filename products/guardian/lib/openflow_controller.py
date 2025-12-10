@@ -5,7 +5,7 @@ Provides Guardian-specific SDN components built on the shared OpenFlow
 infrastructure. Includes VLAN definitions and OVS management utilities.
 
 Author: HookProbe Team
-Version: 5.0.0 Liberty
+Version: 5.0.0 Cortex
 License: AGPL-3.0 - see LICENSE in this directory
 """
 

@@ -1,6 +1,6 @@
 # MSSP Production Deployment Guide - hookprobe.com
 
-**Version**: 1.0-Liberty
+**Version**: 1.0-Cortex
 **Last Updated**: 2025-12-01
 **Target**: hookprobe.com production MSSP cloud
 
@@ -10,7 +10,7 @@
 
 This guide covers deploying the **HookProbe MSSP Cloud** to production at hookprobe.com. The MSSP cloud is the **prerequisite for all validators and edge nodes** in the HookProbe network.
 
-**Liberty Architecture**: Simple, effective, unhackable. The MSSP cloud uses SQLite, standard Linux tools, and proven technologies.
+**Cortex Architecture**: Simple, effective, unhackable. The MSSP cloud uses SQLite, standard Linux tools, and proven technologies.
 
 ---
 
@@ -250,7 +250,7 @@ registry.register_device(
     device_type=DeviceType.CLOUD,
     hardware_fingerprint=hashlib.sha256(b'$(hostname)-$(date +%s)').hexdigest(),
     public_key='mssp-cloud-pubkey',
-    firmware_version='1.0-Liberty',
+    firmware_version='1.0-Cortex',
     location=cloud_location
 )
 
@@ -293,7 +293,7 @@ server {
     # API health check endpoint
     location /api/v1/health {
         default_type application/json;
-        return 200 '{"status":"ok","service":"mssp-cloud","version":"1.0-Liberty"}';
+        return 200 '{"status":"ok","service":"mssp-cloud","version":"1.0-Cortex"}';
     }
 
     # Device registration endpoint
@@ -449,7 +449,7 @@ sudo journalctl -u hookprobe-htp-validator -f
 curl https://api.hookprobe.com/api/v1/health
 
 # Expected response:
-# {"status":"ok","service":"mssp-cloud","version":"1.0-Liberty"}
+# {"status":"ok","service":"mssp-cloud","version":"1.0-Cortex"}
 ```
 
 ### 3. Database Verification
@@ -505,7 +505,7 @@ When a validator operator runs `./install-validator.sh`:
      "device_type": "validator",
      "hardware_fingerprint": "sha256_hash",
      "public_key_ed25519": "device_pubkey",
-     "firmware_version": "1.0-Liberty",
+     "firmware_version": "1.0-Cortex",
      "kyc_info": {
        "organization": "Example Corp",
        "email": "security@example.com",
