@@ -59,6 +59,7 @@
                 <button class="nav-item" data-tab="vpn">VPN</button>
                 <button class="nav-item" data-tab="system">System</button>
                 <button class="nav-item" data-tab="updates">Updates</button>
+                <button class="nav-item" data-tab="debug">Debug</button>
                 <button class="nav-item" data-tab="cortex">Cortex</button>
             </nav>
         </div>
@@ -117,6 +118,11 @@
         <!-- Updates Tab - GitHub Pull Updates -->
         <section id="tab-updates" class="tab-panel">
             {% include 'github_update/index.html' %}
+        </section>
+
+        <!-- Debug Tab - Browser CLI -->
+        <section id="tab-debug" class="tab-panel">
+            {% include 'debug/index.html' %}
         </section>
 
         <!-- Cortex Tab - Digital Twin Globe Visualization -->

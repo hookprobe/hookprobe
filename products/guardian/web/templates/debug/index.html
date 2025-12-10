@@ -1,0 +1,668 @@
+<!-- Debug Tab Content - Browser CLI -->
+<div class="dashboard-header" style="margin-bottom: var(--spacing-lg);">
+    <h2>Debug Console</h2>
+    <p class="text-muted">Browser-based CLI for network diagnostics and system monitoring</p>
+</div>
+
+<!-- Rate Limit Status -->
+<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: var(--spacing-lg);">
+    <div class="stat-card info">
+        <div class="stat-value" id="debug-commands-remaining">--</div>
+        <div class="stat-label">Commands Remaining</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="debug-history-count">0</div>
+        <div class="stat-label">History Items</div>
+    </div>
+</div>
+
+<!-- Terminal Container -->
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 19V7H4v12h16m0-16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16m-7 14v-2h5v2h-5m-3.42-4L5.57 9H8.4l3.3 3.3c.39.39.39 1.03 0 1.42L8.42 17H5.59l4-4z"/>
+            </svg>
+            Terminal
+        </h3>
+        <div style="display: flex; gap: var(--spacing-sm);">
+            <button class="btn btn-sm btn-secondary" onclick="clearTerminal()">Clear</button>
+            <button class="btn btn-sm btn-secondary" onclick="showCommandHelp()">Help</button>
+        </div>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div id="terminal-container"></div>
+    </div>
+</div>
+
+<!-- Quick Commands -->
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <div class="card-header">
+        <h3 class="card-title">Quick Commands</h3>
+    </div>
+    <div class="card-body">
+        <div class="quick-commands">
+            <button class="quick-cmd" onclick="runQuickCommand('ping 8.8.8.8')">ping 8.8.8.8</button>
+            <button class="quick-cmd" onclick="runQuickCommand('ip addr')">ip addr</button>
+            <button class="quick-cmd" onclick="runQuickCommand('ss -tuln')">ss -tuln</button>
+            <button class="quick-cmd" onclick="runQuickCommand('dig google.com')">dig google.com</button>
+            <button class="quick-cmd" onclick="runQuickCommand('free -h')">free -h</button>
+            <button class="quick-cmd" onclick="runQuickCommand('df -h')">df -h</button>
+            <button class="quick-cmd" onclick="runQuickCommand('uptime')">uptime</button>
+            <button class="quick-cmd" onclick="runQuickCommand('podman ps')">podman ps</button>
+            <button class="quick-cmd" onclick="runQuickCommand('systemctl status dnsmasq')">dnsmasq status</button>
+            <button class="quick-cmd" onclick="runQuickCommand('journalctl -n 20 --no-pager')">recent logs</button>
+        </div>
+    </div>
+</div>
+
+<!-- Command Categories -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Available Commands</h3>
+    </div>
+    <div class="card-body">
+        <div id="command-categories">
+            <p class="text-muted">Loading commands...</p>
+        </div>
+    </div>
+</div>
+
+<!-- Help Modal -->
+<div class="modal-overlay" id="help-modal">
+    <div class="modal" style="max-width: 700px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Debug Console Help</h3>
+            <button class="modal-close" onclick="closeModal('help-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <pre id="help-content" style="background: var(--bg-darker); color: var(--hp-green); padding: var(--spacing-md); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 0.8125rem; max-height: 400px; overflow-y: auto; white-space: pre-wrap;">Loading...</pre>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('help-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- xterm.js from CDN -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+
+<style>
+/* Terminal styling */
+#terminal-container {
+    height: 400px;
+    background: #1a1b26;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+#terminal-container .xterm {
+    padding: var(--spacing-sm);
+}
+
+#terminal-container .xterm-viewport {
+    overflow-y: auto !important;
+}
+
+/* Quick commands */
+.quick-commands {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+}
+
+.quick-cmd {
+    background: var(--bg-darker);
+    border: 1px solid var(--bg-lighter);
+    color: var(--hp-green);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.quick-cmd:hover {
+    background: var(--bg-lighter);
+    border-color: var(--hp-green);
+}
+
+/* Command categories */
+.cmd-category {
+    margin-bottom: var(--spacing-lg);
+}
+
+.cmd-category-title {
+    color: var(--hp-orange);
+    font-weight: 600;
+    margin-bottom: var(--spacing-sm);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+}
+
+.cmd-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--spacing-sm);
+}
+
+.cmd-item {
+    background: var(--bg-darker);
+    border: 1px solid var(--bg-lighter);
+    border-radius: var(--radius-sm);
+    padding: var(--spacing-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cmd-item:hover {
+    border-color: var(--hp-green);
+    background: var(--bg-card);
+}
+
+.cmd-name {
+    font-family: var(--font-mono);
+    color: var(--hp-green);
+    font-weight: 500;
+}
+
+.cmd-desc {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Mobile adjustments */
+@media (max-width: 768px) {
+    #terminal-container {
+        height: 300px;
+    }
+
+    .quick-commands {
+        gap: var(--spacing-xs);
+    }
+
+    .quick-cmd {
+        font-size: 0.75rem;
+        padding: 4px 8px;
+    }
+}
+</style>
+
+<script>
+// Debug Console State
+const DebugConsole = {
+    terminal: null,
+    fitAddon: null,
+    commandHistory: [],
+    historyIndex: -1,
+    currentLine: '',
+    cursorPosition: 0,
+    isExecuting: false,
+    prompt: '\x1b[32mguardian\x1b[0m:\x1b[34m~\x1b[0m$ '
+};
+
+// Initialize terminal
+function initTerminal() {
+    if (DebugConsole.terminal) {
+        DebugConsole.terminal.dispose();
+    }
+
+    // Load history from localStorage
+    try {
+        const saved = localStorage.getItem('guardian-debug-history');
+        if (saved) {
+            DebugConsole.commandHistory = JSON.parse(saved);
+        }
+    } catch (e) {
+        console.error('Failed to load history:', e);
+    }
+
+    // Create terminal
+    DebugConsole.terminal = new Terminal({
+        theme: {
+            background: '#1a1b26',
+            foreground: '#c0caf5',
+            cursor: '#c0caf5',
+            cursorAccent: '#1a1b26',
+            selection: 'rgba(105, 212, 172, 0.3)',
+            black: '#15161e',
+            red: '#f7768e',
+            green: '#9ece6a',
+            yellow: '#e0af68',
+            blue: '#7aa2f7',
+            magenta: '#bb9af7',
+            cyan: '#7dcfff',
+            white: '#a9b1d6',
+            brightBlack: '#414868',
+            brightRed: '#f7768e',
+            brightGreen: '#9ece6a',
+            brightYellow: '#e0af68',
+            brightBlue: '#7aa2f7',
+            brightMagenta: '#bb9af7',
+            brightCyan: '#7dcfff',
+            brightWhite: '#c0caf5'
+        },
+        fontFamily: 'JetBrains Mono, Consolas, Monaco, monospace',
+        fontSize: 14,
+        lineHeight: 1.2,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        scrollback: 1000,
+        convertEol: true
+    });
+
+    // Fit addon
+    DebugConsole.fitAddon = new FitAddon.FitAddon();
+    DebugConsole.terminal.loadAddon(DebugConsole.fitAddon);
+
+    // Open terminal
+    const container = document.getElementById('terminal-container');
+    DebugConsole.terminal.open(container);
+    DebugConsole.fitAddon.fit();
+
+    // Welcome message
+    DebugConsole.terminal.writeln('\x1b[1;32mGuardian Debug Console\x1b[0m');
+    DebugConsole.terminal.writeln('\x1b[90mType "help" for available commands. Commands are rate-limited.\x1b[0m');
+    DebugConsole.terminal.writeln('');
+    writePrompt();
+
+    // Handle input
+    DebugConsole.terminal.onKey(handleKeyEvent);
+
+    // Handle paste
+    DebugConsole.terminal.onData(data => {
+        if (data.length > 1 && !data.startsWith('\x1b')) {
+            // Pasted content
+            for (const char of data) {
+                if (char === '\r' || char === '\n') {
+                    executeCurrentCommand();
+                } else if (char.charCodeAt(0) >= 32) {
+                    insertChar(char);
+                }
+            }
+        }
+    });
+
+    // Resize handler
+    window.addEventListener('resize', () => {
+        if (DebugConsole.fitAddon) {
+            DebugConsole.fitAddon.fit();
+        }
+    });
+
+    // Update history count
+    updateHistoryCount();
+}
+
+function writePrompt() {
+    DebugConsole.terminal.write(DebugConsole.prompt);
+    DebugConsole.currentLine = '';
+    DebugConsole.cursorPosition = 0;
+}
+
+function handleKeyEvent(e) {
+    const term = DebugConsole.terminal;
+    const key = e.key;
+    const domEvent = e.domEvent;
+
+    if (DebugConsole.isExecuting) {
+        // Allow Ctrl+C during execution
+        if (domEvent.ctrlKey && domEvent.key === 'c') {
+            term.writeln('^C');
+            DebugConsole.isExecuting = false;
+            writePrompt();
+        }
+        return;
+    }
+
+    // Handle special keys
+    if (domEvent.ctrlKey) {
+        switch (domEvent.key) {
+            case 'c':
+                term.writeln('^C');
+                writePrompt();
+                return;
+            case 'l':
+                clearTerminal();
+                return;
+            case 'u':
+                // Clear line
+                while (DebugConsole.cursorPosition > 0) {
+                    term.write('\b \b');
+                    DebugConsole.cursorPosition--;
+                }
+                DebugConsole.currentLine = '';
+                return;
+            case 'a':
+                // Move to start
+                while (DebugConsole.cursorPosition > 0) {
+                    term.write('\b');
+                    DebugConsole.cursorPosition--;
+                }
+                return;
+            case 'e':
+                // Move to end
+                while (DebugConsole.cursorPosition < DebugConsole.currentLine.length) {
+                    term.write(DebugConsole.currentLine[DebugConsole.cursorPosition]);
+                    DebugConsole.cursorPosition++;
+                }
+                return;
+        }
+    }
+
+    switch (key) {
+        case '\r': // Enter
+            executeCurrentCommand();
+            break;
+
+        case '\x7f': // Backspace
+            if (DebugConsole.cursorPosition > 0) {
+                const before = DebugConsole.currentLine.slice(0, DebugConsole.cursorPosition - 1);
+                const after = DebugConsole.currentLine.slice(DebugConsole.cursorPosition);
+                DebugConsole.currentLine = before + after;
+                DebugConsole.cursorPosition--;
+                term.write('\b' + after + ' ' + '\b'.repeat(after.length + 1));
+            }
+            break;
+
+        case '\x1b[A': // Up arrow - history
+            if (DebugConsole.historyIndex < DebugConsole.commandHistory.length - 1) {
+                DebugConsole.historyIndex++;
+                replaceCurrentLine(DebugConsole.commandHistory[DebugConsole.commandHistory.length - 1 - DebugConsole.historyIndex]);
+            }
+            break;
+
+        case '\x1b[B': // Down arrow - history
+            if (DebugConsole.historyIndex > 0) {
+                DebugConsole.historyIndex--;
+                replaceCurrentLine(DebugConsole.commandHistory[DebugConsole.commandHistory.length - 1 - DebugConsole.historyIndex]);
+            } else if (DebugConsole.historyIndex === 0) {
+                DebugConsole.historyIndex = -1;
+                replaceCurrentLine('');
+            }
+            break;
+
+        case '\x1b[C': // Right arrow
+            if (DebugConsole.cursorPosition < DebugConsole.currentLine.length) {
+                term.write(key);
+                DebugConsole.cursorPosition++;
+            }
+            break;
+
+        case '\x1b[D': // Left arrow
+            if (DebugConsole.cursorPosition > 0) {
+                term.write(key);
+                DebugConsole.cursorPosition--;
+            }
+            break;
+
+        case '\x1b[3~': // Delete
+            if (DebugConsole.cursorPosition < DebugConsole.currentLine.length) {
+                const before = DebugConsole.currentLine.slice(0, DebugConsole.cursorPosition);
+                const after = DebugConsole.currentLine.slice(DebugConsole.cursorPosition + 1);
+                DebugConsole.currentLine = before + after;
+                term.write(after + ' ' + '\b'.repeat(after.length + 1));
+            }
+            break;
+
+        case '\t': // Tab - simple completion
+            handleTabCompletion();
+            break;
+
+        default:
+            // Regular character
+            if (key.length === 1 && key.charCodeAt(0) >= 32) {
+                insertChar(key);
+            }
+    }
+}
+
+function insertChar(char) {
+    const before = DebugConsole.currentLine.slice(0, DebugConsole.cursorPosition);
+    const after = DebugConsole.currentLine.slice(DebugConsole.cursorPosition);
+    DebugConsole.currentLine = before + char + after;
+    DebugConsole.cursorPosition++;
+    DebugConsole.terminal.write(char + after + '\b'.repeat(after.length));
+}
+
+function replaceCurrentLine(newLine) {
+    const term = DebugConsole.terminal;
+    // Clear current line
+    while (DebugConsole.cursorPosition > 0) {
+        term.write('\b \b');
+        DebugConsole.cursorPosition--;
+    }
+    while (DebugConsole.currentLine.length > DebugConsole.cursorPosition) {
+        term.write(' ');
+        DebugConsole.cursorPosition++;
+    }
+    while (DebugConsole.cursorPosition > 0) {
+        term.write('\b \b');
+        DebugConsole.cursorPosition--;
+    }
+    // Write new line
+    DebugConsole.currentLine = newLine;
+    DebugConsole.cursorPosition = newLine.length;
+    term.write(newLine);
+}
+
+function handleTabCompletion() {
+    const input = DebugConsole.currentLine.trim();
+    if (!input) return;
+
+    // Simple command completion
+    const commands = [
+        'ping', 'traceroute', 'dig', 'nslookup', 'host',
+        'ip', 'ifconfig', 'iwconfig', 'ss', 'netstat', 'arp',
+        'uptime', 'free', 'df', 'ps', 'top', 'uname', 'hostname', 'date',
+        'podman', 'docker', 'journalctl', 'dmesg', 'systemctl',
+        'cat', 'tail', 'head', 'help', 'clear'
+    ];
+
+    const matches = commands.filter(cmd => cmd.startsWith(input));
+
+    if (matches.length === 1) {
+        replaceCurrentLine(matches[0] + ' ');
+    } else if (matches.length > 1) {
+        DebugConsole.terminal.writeln('');
+        DebugConsole.terminal.writeln(matches.join('  '));
+        writePrompt();
+        DebugConsole.terminal.write(DebugConsole.currentLine);
+    }
+}
+
+async function executeCurrentCommand() {
+    const term = DebugConsole.terminal;
+    const command = DebugConsole.currentLine.trim();
+
+    term.writeln('');
+
+    if (!command) {
+        writePrompt();
+        return;
+    }
+
+    // Add to history
+    if (command !== DebugConsole.commandHistory[DebugConsole.commandHistory.length - 1]) {
+        DebugConsole.commandHistory.push(command);
+        // Limit history
+        if (DebugConsole.commandHistory.length > 100) {
+            DebugConsole.commandHistory.shift();
+        }
+        // Save to localStorage
+        try {
+            localStorage.setItem('guardian-debug-history', JSON.stringify(DebugConsole.commandHistory));
+        } catch (e) {
+            console.error('Failed to save history:', e);
+        }
+        updateHistoryCount();
+    }
+    DebugConsole.historyIndex = -1;
+
+    // Handle clear locally
+    if (command === 'clear') {
+        term.clear();
+        writePrompt();
+        return;
+    }
+
+    DebugConsole.isExecuting = true;
+
+    try {
+        // Use SSE for streaming output
+        const response = await fetch('/api/debug/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.output) {
+                            // Unescape and write
+                            const output = data.output.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                            term.write(output);
+                        }
+                        if (data.error) {
+                            term.writeln(`\x1b[31m${data.error}\x1b[0m`);
+                        }
+                    } catch (e) {
+                        // Ignore parse errors
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        term.writeln(`\x1b[31mError: ${error.message}\x1b[0m`);
+    }
+
+    DebugConsole.isExecuting = false;
+    writePrompt();
+    updateRateLimit();
+}
+
+function runQuickCommand(command) {
+    if (DebugConsole.isExecuting) {
+        showToast('Command already running', 'warning');
+        return;
+    }
+
+    DebugConsole.currentLine = command;
+    DebugConsole.cursorPosition = command.length;
+    DebugConsole.terminal.write(command);
+    executeCurrentCommand();
+}
+
+function clearTerminal() {
+    if (DebugConsole.terminal) {
+        DebugConsole.terminal.clear();
+        writePrompt();
+    }
+}
+
+async function showCommandHelp() {
+    try {
+        const result = await apiGet('/debug/help');
+        if (result.success) {
+            document.getElementById('help-content').textContent = result.help;
+            openModal('help-modal');
+        }
+    } catch (error) {
+        showToast('Failed to load help', 'error');
+    }
+}
+
+async function loadCommandCategories() {
+    try {
+        const result = await apiGet('/debug/commands');
+        if (result.success && result.categories) {
+            const container = document.getElementById('command-categories');
+            let html = '';
+
+            const categoryOrder = ['network', 'dns', 'system', 'containers', 'logs'];
+
+            for (const cat of categoryOrder) {
+                const commands = result.categories[cat];
+                if (commands && commands.length > 0) {
+                    html += `<div class="cmd-category">`;
+                    html += `<div class="cmd-category-title">${cat}</div>`;
+                    html += `<div class="cmd-list">`;
+
+                    for (const cmd of commands) {
+                        html += `<div class="cmd-item" onclick="runQuickCommand('${cmd.name}')">`;
+                        html += `<div class="cmd-name">${cmd.name}</div>`;
+                        html += `<div class="cmd-desc">${cmd.description}</div>`;
+                        html += `</div>`;
+                    }
+
+                    html += `</div></div>`;
+                }
+            }
+
+            container.innerHTML = html;
+        }
+    } catch (error) {
+        console.error('Failed to load commands:', error);
+    }
+}
+
+async function updateRateLimit() {
+    try {
+        const result = await apiGet('/debug/rate-limit');
+        if (result.success) {
+            document.getElementById('debug-commands-remaining').textContent = result.remaining;
+        }
+    } catch (error) {
+        console.error('Failed to get rate limit:', error);
+    }
+}
+
+function updateHistoryCount() {
+    document.getElementById('debug-history-count').textContent = DebugConsole.commandHistory.length;
+}
+
+// Initialize on tab load
+function loadDebugData() {
+    if (!DebugConsole.terminal) {
+        // Small delay to ensure container is visible
+        setTimeout(() => {
+            initTerminal();
+            loadCommandCategories();
+            updateRateLimit();
+        }, 100);
+    } else {
+        // Re-fit terminal if already initialized
+        if (DebugConsole.fitAddon) {
+            DebugConsole.fitAddon.fit();
+        }
+        updateRateLimit();
+    }
+}
+
+// Check if we're already on the debug tab
+if (Guardian && Guardian.currentTab === 'debug') {
+    loadDebugData();
+}
+</script>
