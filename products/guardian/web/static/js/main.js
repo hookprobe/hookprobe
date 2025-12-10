@@ -110,6 +110,11 @@ function loadTabData(tabName) {
         case 'updates':
             loadUpdatesData();
             break;
+        case 'debug':
+            if (typeof loadDebugData === 'function') {
+                loadDebugData();
+            }
+            break;
     }
 }
 
