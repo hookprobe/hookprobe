@@ -1,12 +1,14 @@
 [Unit]
 Description=Guardian SSID Health Check Timer
-Documentation=https://hookprobe.com/docs/guardian
+Documentation=https://github.com/hookprobe/hookprobe
 
 [Timer]
-OnBootSec=3min
+# Run 30 seconds after boot
+OnBootSec=30s
+# Then every 5 minutes
 OnUnitActiveSec=5min
-RandomizedDelaySec=30
-Persistent=true
+# Randomize to avoid thundering herd
+RandomizedDelaySec=10s
 
 [Install]
 WantedBy=timers.target
