@@ -444,7 +444,7 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 
 ## License
 
-Part of HookProbe v5.1 "Cortex" - see root LICENSE file.
+Part of HookProbe v5.0 "Cortex" - see root LICENSE file.
 
 **HookProbe Cortex - Neural Command Center**
 *See your mesh. Command your defense.*
