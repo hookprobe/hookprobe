@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 Mesh Bridge - Connects Threat Detection to Decentralized Mesh
+Qsecbit Unified Mesh Bridge - Connects Threat Detection to Decentralized Mesh
 
 This module bridges the gap between local Qsecbit threat detection and the
 distributed mesh consciousness, enabling:
@@ -14,7 +14,7 @@ distributed mesh consciousness, enabling:
 
 Author: Andrei Toma
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import hashlib

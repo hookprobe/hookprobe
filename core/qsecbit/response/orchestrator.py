@@ -1,12 +1,12 @@
 """
-Qsecbit v6.0 - Response Orchestrator
+Qsecbit Unified - Response Orchestrator
 
 Automated threat response system with XDP integration.
 Coordinates responses across multiple mitigation systems.
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import os

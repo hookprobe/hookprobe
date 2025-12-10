@@ -6,7 +6,7 @@ Tests the WiFi channel scanner and offline mode manager functionality
 for busy environments where Guardian needs to start AP without WAN.
 
 Author: HookProbe Team
-Version: 1.0.0
+Version: 5.0.0
 License: AGPL-3.0 - see LICENSE file
 """
 

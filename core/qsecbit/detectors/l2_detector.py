@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Layer 2 (Data Link) Threat Detector
+Qsecbit Unified - Layer 2 (Data Link) Threat Detector
 
 Detects Layer 2 attacks:
 - ARP Spoofing (MAC change detection, gateway protection)
@@ -10,7 +10,7 @@ Detects Layer 2 attacks:
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import re

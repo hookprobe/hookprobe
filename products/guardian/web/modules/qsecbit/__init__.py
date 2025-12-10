@@ -1,5 +1,5 @@
 """
-Qsecbit Live Module - Real-time Qsecbit v6.0 Score Display
+Qsecbit Live Module - Real-time Qsecbit Unified Score Display
 
 Provides a simple, focused view of the Qsecbit protection status
 optimized for Raspberry Pi performance.
