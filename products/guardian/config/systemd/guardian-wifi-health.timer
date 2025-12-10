@@ -1,0 +1,12 @@
+[Unit]
+Description=Guardian WiFi WAN Health Check Timer
+Documentation=https://hookprobe.com/docs/guardian
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
