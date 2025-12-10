@@ -10,8 +10,8 @@
         <div class="stat-value" style="font-size: 1.25rem;" id="wan-status">Checking...</div>
         <div class="stat-label">WAN Gateway</div>
     </div>
-    <div class="stat-card info">
-        <div class="stat-value" style="font-size: 1.25rem;" id="lan-ssid">Guardian-AP</div>
+    <div class="stat-card info" id="lan-ssid-card">
+        <div class="stat-value" style="font-size: 1.25rem;" id="lan-ssid">Checking...</div>
         <div class="stat-label">Hotspot SSID</div>
     </div>
     <div class="stat-card warning">
@@ -404,19 +404,17 @@ function updateOfflineStatusUI(data) {
     }
 
     // Update AP info from multiple sources
-    const ssidEl = document.getElementById('lan-ssid');
+    // Note: lan-ssid is updated by updateHotspotStatusUI which handles broadcasting state
     const clientsEl = document.getElementById('lan-clients');
     const channelEl = document.getElementById('offline-channel');
     const bandEl = document.getElementById('offline-band');
 
     if (data.ap) {
-        ssidEl.textContent = data.ap.ssid || data.ap_ssid || 'HookProbe-Guardian';
         clientsEl.textContent = data.ap.clients || data.clients_connected || 0;
         channelEl.textContent = data.ap.channel || data.current_channel || '--';
         bandEl.textContent = data.ap.band || data.current_band || '--';
     } else {
         // Fallback to state fields
-        ssidEl.textContent = data.ap_ssid || 'HookProbe-Guardian';
         clientsEl.textContent = data.clients_connected || 0;
         channelEl.textContent = data.current_channel || '--';
         bandEl.textContent = data.current_band || '--';
@@ -694,8 +692,11 @@ function updateHotspotStatusUI(data) {
     // Update SSID in form if available
     if (data.ssid) {
         document.getElementById('hotspot-ssid').placeholder = data.ssid;
-        document.getElementById('lan-ssid').textContent = data.ssid;
     }
+
+    // Update header SSID card based on broadcasting status
+    const ssidEl = document.getElementById('lan-ssid');
+    const ssidCard = document.getElementById('lan-ssid-card');
 
     // Update status based on running/broadcasting state
     if (data.broadcasting) {
@@ -704,18 +705,27 @@ function updateHotspotStatusUI(data) {
         statusBadge.innerHTML = '<span class="badge badge-success">Broadcasting</span>';
         startBtn.style.display = 'none';
         stopBtn.style.display = 'inline-block';
+        // Update header card - show SSID with success styling
+        ssidEl.textContent = data.ssid || 'HookProbe-Guardian';
+        ssidCard.className = 'stat-card success';
     } else if (data.running) {
         statusText.textContent = 'Hostapd running but interface not up';
         statusPanel.style.borderLeftColor = 'var(--hp-amber)';
         statusBadge.innerHTML = '<span class="badge badge-warning">Starting</span>';
         startBtn.style.display = 'none';
         stopBtn.style.display = 'inline-block';
+        // Update header card - show starting state
+        ssidEl.textContent = 'Starting...';
+        ssidCard.className = 'stat-card warning';
     } else {
         statusText.textContent = 'SSID is not broadcasting - click "Start SSID" to enable';
         statusPanel.style.borderLeftColor = 'var(--hp-red)';
         statusBadge.innerHTML = '<span class="badge badge-danger">Stopped</span>';
         startBtn.style.display = 'inline-block';
         stopBtn.style.display = 'none';
+        // Update header card - show stopped state
+        ssidEl.textContent = 'Not Broadcasting';
+        ssidCard.className = 'stat-card danger';
     }
 
     // Update header status
