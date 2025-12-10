@@ -550,8 +550,12 @@ MACSECSCRIPT
 install_security_containers() {
     log_step "Installing Guardian security containers..."
 
-    # Create Guardian pod network
-    podman network create guardian-net 2>/dev/null || true
+    # NOTE: All security containers use --network host mode
+    # This is required for:
+    # - Suricata IDS: sniff traffic on eth0/br0
+    # - WAF: intercept HTTP traffic on host ports
+    # - Zeek: analyze raw network packets
+    # - Neuro: access host network for neural resonance protocol
 
     # Create volumes
     podman volume create guardian-suricata-logs 2>/dev/null || true

@@ -246,9 +246,10 @@ remove_containers() {
         fi
     done
 
-    # Remove network
+    # Remove legacy guardian-net network (backward compatibility)
+    # Note: Current containers use --network host, but older installs may have this
     if podman network exists guardian-net 2>/dev/null; then
-        log_info "Removing network: guardian-net"
+        log_info "Removing legacy network: guardian-net"
         podman network rm guardian-net 2>/dev/null || true
     fi
 
