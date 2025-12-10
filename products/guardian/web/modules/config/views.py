@@ -203,25 +203,11 @@ def api_wifi_connect():
 update_config=1
 country={country}
 
-        # Get country code from hostapd config or default to US
-        country = 'US'
-        try:
-            with open('/etc/hostapd/hostapd.conf', 'r') as f:
-                for line in f:
-                    if line.startswith('country_code='):
-                        country = line.split('=')[1].strip()
-                        break
-        except:
-            pass
+'''
 
-        # Create wpa_supplicant config
         if not password:
             # Open network
-            config_content = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country={country}
-
-network={{
+            network_block = f'''network={{
     ssid="{ssid}"
     key_mgmt=NONE
     scan_ssid=1
