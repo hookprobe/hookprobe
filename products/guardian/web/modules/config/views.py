@@ -97,9 +97,6 @@ def api_wifi_status():
                 'error': 'Interface not found'
             })
 
-        # Get wpa_supplicant status
-        status_output, ok = run_command(['wpa_cli', '-i', 'wlan0', 'status'], timeout=5)
-
         result = {
             'connected': False,
             'interface': 'wlan0',
@@ -107,32 +104,263 @@ def api_wifi_status():
             'ip': None,
             'state': 'DISCONNECTED',
             'bssid': None,
-            'freq': None
+            'freq': None,
+            'method': None
         }
 
-        if ok and status_output:
-            for line in status_output.strip().split('\n'):
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    if key == 'wpa_state':
-                        result['state'] = value
-                        result['connected'] = (value == 'COMPLETED')
-                    elif key == 'ssid':
-                        result['ssid'] = value
-                    elif key == 'bssid':
-                        result['bssid'] = value
-                    elif key == 'freq':
-                        result['freq'] = value
-                    elif key == 'ip_address':
-                        result['ip'] = value
+        # Try NetworkManager first
+        nm_output, nm_ok = run_command(['systemctl', 'is-active', 'NetworkManager'], timeout=5)
+        if nm_ok and nm_output and nm_output.strip() == 'active':
+            result['method'] = 'nmcli'
+            # Get device status from nmcli
+            dev_output, ok = run_command(
+                ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.CONNECTION,WIRED-PROPERTIES.CARRIER',
+                 'device', 'show', 'wlan0'],
+                timeout=5
+            )
+            if ok and dev_output:
+                for line in dev_output.strip().split('\n'):
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        if 'STATE' in key and 'connected' in value.lower():
+                            result['connected'] = True
+                            result['state'] = 'CONNECTED'
+                        elif 'CONNECTION' in key and value and value != '--':
+                            # Connection name often contains SSID
+                            result['ssid'] = value.replace('guardian-', '')
 
-        # Get IP if not in wpa_cli output
+            # Get more details from wifi show
+            wifi_output, ok = run_command(
+                ['nmcli', '-t', '-f', 'ACTIVE,SSID,BSSID,FREQ', 'device', 'wifi', 'list', 'ifname', 'wlan0'],
+                timeout=5
+            )
+            if ok and wifi_output:
+                for line in wifi_output.strip().split('\n'):
+                    parts = line.split(':')
+                    if len(parts) >= 4 and parts[0] == 'yes':
+                        result['ssid'] = parts[1] if parts[1] else result['ssid']
+                        result['bssid'] = parts[2] if parts[2] else None
+                        result['freq'] = parts[3] if parts[3] else None
+                        break
+        else:
+            result['method'] = 'wpa_supplicant'
+            # Fallback to wpa_cli
+            status_output, ok = run_command(['wpa_cli', '-i', 'wlan0', 'status'], timeout=5)
+            if ok and status_output:
+                for line in status_output.strip().split('\n'):
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        if key == 'wpa_state':
+                            result['state'] = value
+                            result['connected'] = (value == 'COMPLETED')
+                        elif key == 'ssid':
+                            result['ssid'] = value
+                        elif key == 'bssid':
+                            result['bssid'] = value
+                        elif key == 'freq':
+                            result['freq'] = value
+                        elif key == 'ip_address':
+                            result['ip'] = value
+
+        # Get IP if not already set
         if not result['ip']:
             result['ip'] = _get_interface_ip('wlan0')
+
+        # Update connected status based on IP
+        if result['ip'] and not result['ip'].startswith('169.254.'):
+            result['connected'] = True
 
         return jsonify(result)
     except Exception as e:
         return jsonify({'connected': False, 'error': str(e)}), 500
+
+
+def _nmcli_available():
+    """Check if NetworkManager is available and running."""
+    output, ok = run_command(['systemctl', 'is-active', 'NetworkManager'], timeout=5)
+    return ok and output and output.strip() == 'active'
+
+
+def _connect_with_nmcli(ssid, password, interface='wlan0'):
+    """
+    Connect to WiFi using NetworkManager (nmcli).
+    Returns (success, message, ip_address).
+    """
+    import time
+
+    # First, ensure interface is managed by NetworkManager
+    run_command(['sudo', 'nmcli', 'device', 'set', interface, 'managed', 'yes'], timeout=5)
+    time.sleep(1)
+
+    # Delete any existing connection with same name to avoid conflicts
+    run_command(['sudo', 'nmcli', 'connection', 'delete', f'guardian-{ssid}'], timeout=5)
+
+    # Build connection command
+    if password:
+        # WPA/WPA2 network
+        connect_cmd = [
+            'sudo', 'nmcli', 'device', 'wifi', 'connect', ssid,
+            'password', password,
+            'ifname', interface,
+            'name', f'guardian-{ssid}'
+        ]
+    else:
+        # Open network
+        connect_cmd = [
+            'sudo', 'nmcli', 'device', 'wifi', 'connect', ssid,
+            'ifname', interface,
+            'name', f'guardian-{ssid}'
+        ]
+
+    # Attempt connection (nmcli handles auth + DHCP automatically)
+    output, ok = run_command(connect_cmd, timeout=30)
+
+    if not ok:
+        # Parse common error messages
+        if output:
+            if 'Secrets were required' in output or 'password' in output.lower():
+                return False, 'Invalid password', None
+            elif 'No network with SSID' in output:
+                return False, f'Network "{ssid}" not found', None
+            elif 'Connection activation failed' in output:
+                return False, 'Connection failed - check password or signal', None
+        return False, f'Connection failed: {output}', None
+
+    # Wait for IP address
+    time.sleep(2)
+    for _ in range(5):
+        ip = _get_interface_ip(interface)
+        if ip and not ip.startswith('169.254.'):
+            return True, f'Connected to {ssid}', ip
+        time.sleep(1)
+
+    # Check connection state
+    status_out, _ = run_command(['nmcli', '-t', '-f', 'GENERAL.STATE', 'device', 'show', interface], timeout=5)
+    if status_out and 'connected' in status_out.lower():
+        ip = _get_interface_ip(interface)
+        return True, f'Connected to {ssid}', ip
+
+    return True, f'Connected to {ssid}, waiting for IP...', None
+
+
+def _connect_with_wpa_supplicant(ssid, password, interface='wlan0'):
+    """
+    Fallback: Connect to WiFi using wpa_supplicant directly.
+    Returns (success, message, ip_address).
+    """
+    import os
+    import time
+
+    wpa_conf = f'/etc/wpa_supplicant/wpa_supplicant-{interface}.conf'
+    wpa_dir = '/etc/wpa_supplicant'
+
+    # Ensure directory exists
+    run_command(['sudo', 'mkdir', '-p', wpa_dir], timeout=5)
+
+    # Get country code
+    country = 'US'
+    try:
+        with open('/etc/hostapd/hostapd.conf', 'r') as f:
+            for line in f:
+                if line.startswith('country_code='):
+                    country = line.split('=')[1].strip()
+                    break
+    except:
+        pass
+
+    # Build wpa_supplicant config
+    if not password:
+        config = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country={country}
+
+network={{
+    ssid="{ssid}"
+    key_mgmt=NONE
+    scan_ssid=1
+    priority=1
+}}
+'''
+    else:
+        escaped_password = password.replace('"', '\\"')
+        config = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country={country}
+
+network={{
+    ssid="{ssid}"
+    psk="{escaped_password}"
+    key_mgmt=WPA-PSK
+    scan_ssid=1
+    priority=1
+}}
+'''
+
+    # Write config
+    tmp_conf = f'/tmp/wpa_supplicant-{interface}.conf'
+    with open(tmp_conf, 'w') as f:
+        f.write(config)
+    os.chmod(tmp_conf, 0o600)
+
+    _, ok = run_command(['sudo', 'cp', tmp_conf, wpa_conf], timeout=5)
+    if not ok:
+        return False, 'Failed to write wpa_supplicant config', None
+    run_command(['sudo', 'chmod', '600', wpa_conf], timeout=5)
+
+    # Stop existing wpa_supplicant
+    run_command(['sudo', 'pkill', '-9', '-f', f'wpa_supplicant.*{interface}'], timeout=5)
+    time.sleep(1)
+
+    # Prepare interface
+    run_command(['sudo', 'ip', 'link', 'set', interface, 'down'], timeout=5)
+    run_command(['sudo', 'rfkill', 'unblock', 'wifi'], timeout=5)
+    time.sleep(1)
+
+    # Start wpa_supplicant
+    for driver in ['nl80211', 'wext']:
+        wpa_cmd = ['sudo', 'wpa_supplicant', '-B', '-i', interface, '-c', wpa_conf,
+                   '-D', driver, '-P', f'/var/run/wpa_supplicant_{interface}.pid']
+        output, ok = run_command(wpa_cmd, timeout=10)
+        if ok:
+            break
+    else:
+        return False, f'Failed to start wpa_supplicant', None
+
+    # Bring interface up
+    time.sleep(1)
+    run_command(['sudo', 'ip', 'link', 'set', interface, 'up'], timeout=5)
+    time.sleep(3)
+
+    # Request DHCP
+    for dhcp_cmd in [
+        ['sudo', 'dhclient', '-v', '-4', interface],
+        ['sudo', 'dhcpcd', '-4', '-w', interface],
+        ['sudo', 'udhcpc', '-i', interface, '-n', '-q']
+    ]:
+        output, ok = run_command(dhcp_cmd, timeout=20)
+        if ok:
+            break
+
+    time.sleep(2)
+
+    # Check result
+    ip = _get_interface_ip(interface)
+    status_output, _ = run_command(['wpa_cli', '-i', interface, 'status'], timeout=5)
+    state = 'UNKNOWN'
+    if status_output:
+        for line in status_output.split('\n'):
+            if line.startswith('wpa_state='):
+                state = line.split('=')[1].strip()
+                break
+
+    if ip and not ip.startswith('169.254.'):
+        return True, f'Connected to {ssid}', ip
+    elif state == 'COMPLETED':
+        return True, f'Connected to {ssid}, waiting for IP...', None
+    elif state in ['ASSOCIATING', 'ASSOCIATED', 'SCANNING']:
+        return True, f'Connecting to {ssid}... (state: {state})', None
+    else:
+        return False, f'Failed to connect (state: {state}). Check password.', None
 
 
 @config_bp.route('/wifi/disconnect', methods=['POST'])
@@ -141,20 +369,17 @@ def api_wifi_disconnect():
     try:
         import time
 
-        # Disconnect via wpa_cli
-        run_command(['sudo', 'wpa_cli', '-i', 'wlan0', 'disconnect'], timeout=5)
-
-        # Stop wpa_supplicant
-        run_command(['sudo', 'pkill', '-f', 'wpa_supplicant.*wlan0'], timeout=5)
-
-        # Release DHCP lease
-        run_command(['sudo', 'dhclient', '-r', 'wlan0'], timeout=5)
-
-        # Bring interface down
-        run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'down'], timeout=5)
+        if _nmcli_available():
+            # Use NetworkManager - cleaner disconnect
+            run_command(['sudo', 'nmcli', 'device', 'disconnect', 'wlan0'], timeout=10)
+        else:
+            # Fallback to manual disconnect
+            run_command(['sudo', 'wpa_cli', '-i', 'wlan0', 'disconnect'], timeout=5)
+            run_command(['sudo', 'pkill', '-f', 'wpa_supplicant.*wlan0'], timeout=5)
+            run_command(['sudo', 'dhclient', '-r', 'wlan0'], timeout=5)
+            run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'down'], timeout=5)
 
         time.sleep(1)
-
         return jsonify({'success': True, 'message': 'Disconnected from WiFi'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -162,9 +387,14 @@ def api_wifi_disconnect():
 
 @config_bp.route('/wifi/connect', methods=['POST'])
 def api_wifi_connect():
-    """Connect to a WiFi network using wlan0 (WAN interface)."""
+    """
+    Connect to a WiFi network using wlan0 (WAN interface).
+
+    Uses NetworkManager (nmcli) as primary method - it's more reliable
+    and handles authentication + DHCP atomically. Falls back to
+    wpa_supplicant if NetworkManager is not available.
+    """
     import os
-    import time
 
     data = request.get_json()
     ssid = data.get('ssid', '').strip()
@@ -174,159 +404,33 @@ def api_wifi_connect():
         return jsonify({'success': False, 'error': 'SSID required'}), 400
 
     try:
-        import os
-        import time
-
         # Check if wlan0 exists
         if not os.path.exists('/sys/class/net/wlan0'):
             return jsonify({'success': False, 'error': 'wlan0 interface not found'}), 400
 
-        wpa_conf = '/etc/wpa_supplicant/wpa_supplicant-wlan0.conf'
-        wpa_dir = '/etc/wpa_supplicant'
-
-        # Ensure directory exists
-        run_command(['sudo', 'mkdir', '-p', wpa_dir], timeout=5)
-
-        # Get country code from hostapd config or default to US
-        country = 'US'
-        try:
-            with open('/etc/hostapd/hostapd.conf', 'r') as f:
-                for line in f:
-                    if line.startswith('country_code='):
-                        country = line.split('=')[1].strip()
-                        break
-        except:
-            pass
-
-        # Create wpa_supplicant config
-        base_config = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country={country}
-
-'''
-
-        if not password:
-            # Open network
-            network_block = f'''network={{
-    ssid="{ssid}"
-    key_mgmt=NONE
-    scan_ssid=1
-    priority=1
-}}
-'''
-        else:
-            # WPA/WPA2 network - escape special chars in password
-            escaped_password = password.replace('"', '\\"')
-            network_block = f'''network={{
-    ssid="{ssid}"
-    psk="{escaped_password}"
-    key_mgmt=WPA-PSK
-    scan_ssid=1
-    priority=1
-}}
-'''
-        # Write config to temp file first
-        tmp_conf = '/tmp/wpa_supplicant-wlan0.conf'
-        with open(tmp_conf, 'w') as f:
-            f.write(base_config + network_block)
-        os.chmod(tmp_conf, 0o600)
-
-        # Copy to system location
-        _, ok = run_command(['sudo', 'cp', tmp_conf, wpa_conf], timeout=5)
-        if not ok:
-            return jsonify({'success': False, 'error': 'Failed to write wpa_supplicant config'}), 500
-        run_command(['sudo', 'chmod', '600', wpa_conf], timeout=5)
-
-        # Stop any existing wpa_supplicant on wlan0
-        run_command(['sudo', 'pkill', '-9', '-f', 'wpa_supplicant.*wlan0'], timeout=5)
-        time.sleep(1)
-
-        # Ensure interface is down and not managed by NetworkManager
-        run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'down'], timeout=5)
+        # Unblock WiFi first
         run_command(['sudo', 'rfkill', 'unblock', 'wifi'], timeout=5)
-        time.sleep(1)
 
-        # Start wpa_supplicant with proper options
-        wpa_cmd = ['sudo', 'wpa_supplicant', '-B', '-i', 'wlan0', '-c', wpa_conf,
-                   '-D', 'nl80211', '-P', '/var/run/wpa_supplicant_wlan0.pid']
-        output, ok = run_command(wpa_cmd, timeout=10)
-        if not ok:
-            # Try with wext driver as fallback
-            wpa_cmd = ['sudo', 'wpa_supplicant', '-B', '-i', 'wlan0', '-c', wpa_conf,
-                       '-D', 'wext', '-P', '/var/run/wpa_supplicant_wlan0.pid']
-            output, ok = run_command(wpa_cmd, timeout=10)
-            if not ok:
-                return jsonify({'success': False, 'error': f'Failed to start wpa_supplicant: {output}'}), 500
+        # Try NetworkManager first (preferred - handles everything atomically)
+        if _nmcli_available():
+            success, message, ip = _connect_with_nmcli(ssid, password, 'wlan0')
+        else:
+            # Fallback to wpa_supplicant
+            success, message, ip = _connect_with_wpa_supplicant(ssid, password, 'wlan0')
 
-        # Bring interface up
-        time.sleep(1)
-        run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
-        time.sleep(2)
-
-        # Wait for association
-        time.sleep(3)
-
-        # Request DHCP lease - try dhclient first, then dhcpcd
-        dhcp_ok = False
-        for dhcp_cmd in [
-            ['sudo', 'dhclient', '-v', '-4', 'wlan0'],
-            ['sudo', 'dhcpcd', '-4', '-w', 'wlan0'],
-            ['sudo', 'udhcpc', '-i', 'wlan0', '-n', '-q']
-        ]:
-            output, ok = run_command(dhcp_cmd, timeout=20)
-            if ok:
-                dhcp_ok = True
-                break
-
-        # Give it a moment to complete
-        time.sleep(2)
-
-        # Check if connected
-        ip = _get_interface_ip('wlan0')
-
-        # Also check wpa_cli status
-        status_output, _ = run_command(['wpa_cli', '-i', 'wlan0', 'status'], timeout=5)
-        state = 'UNKNOWN'
-        if status_output:
-            for line in status_output.split('\n'):
-                if line.startswith('wpa_state='):
-                    state = line.split('=')[1].strip()
-                    break
-
-        if ip and not ip.startswith('169.254.'):
+        if success:
             return jsonify({
                 'success': True,
-                'message': f'Connected to {ssid}',
+                'message': message,
                 'ip': ip,
-                'state': state
+                'method': 'nmcli' if _nmcli_available() else 'wpa_supplicant'
             })
         else:
-            # Check wpa_supplicant status
-            status_output, _ = run_command(['wpa_cli', '-i', 'wlan0', 'status'], timeout=5)
-            state = 'unknown'
-            if status_output:
-                for line in status_output.split('\n'):
-                    if line.startswith('wpa_state='):
-                        state = line.split('=')[1]
-                        break
+            return jsonify({
+                'success': False,
+                'error': message
+            }), 400
 
-            if state == 'COMPLETED':
-                return jsonify({
-                    'success': True,
-                    'message': f'Connected to {ssid}, waiting for IP...',
-                    'ip': None
-                })
-            elif state in ['ASSOCIATING', 'ASSOCIATED', 'SCANNING']:
-                return jsonify({
-                    'success': True,
-                    'message': f'Connecting to {ssid}... (state: {state})',
-                    'ip': None
-                })
-            else:
-                return jsonify({
-                    'success': False,
-                    'error': f'Failed to connect (state: {state}). Check password.'
-                }), 400
     except Exception as e:
         import traceback
         return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
