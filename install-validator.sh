@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# install-validator.sh - HookProbe Liberty Validator Installation
+# install-validator.sh - HookProbe Cortex Validator Installation
 #
 # CRITICAL: This script can ONLY be run AFTER MSSP Cloud is deployed.
 # Validators require KYC verification and MSSP cloud infrastructure.
@@ -311,7 +311,7 @@ install_dependencies() {
 }
 
 install_hookprobe_validator() {
-    echo -e "${YELLOW}Installing HookProbe Liberty Validator...${NC}"
+    echo -e "${YELLOW}Installing HookProbe Cortex Validator...${NC}"
 
     # Create directories
     mkdir -p $INSTALL_DIR
@@ -363,7 +363,7 @@ create_systemd_service() {
 
     cat > /etc/systemd/system/hookprobe-validator.service << SERVICE
 [Unit]
-Description=HookProbe Liberty Validator
+Description=HookProbe Cortex Validator
 After=network.target
 Wants=network-online.target
 
@@ -414,7 +414,7 @@ show_post_install_instructions() {
     echo "  Keys: ${CONFIG_DIR}/validator_*.pem"
     echo "  Data: ${DATA_DIR}/validator"
     echo ""
-    echo -e "${BLUE}HookProbe Liberty Validator - Production Ready${NC}"
+    echo -e "${BLUE}HookProbe Cortex Validator - Production Ready${NC}"
     echo ""
 }
 

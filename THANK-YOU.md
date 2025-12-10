@@ -29,7 +29,7 @@ Thank you for choosing HookProbe to protect your network and democratize cyberse
 
 ## 🌟 You're Part of Something Special
 
-HookProbe isn't just software—it's a movement to make enterprise-grade cybersecurity accessible to everyone. By choosing HookProbe v5.0 "Liberty", you're joining a community dedicated to:
+HookProbe isn't just software—it's a movement to make enterprise-grade cybersecurity accessible to everyone. By choosing HookProbe v5.0 "Cortex", you're joining a community dedicated to:
 
 - **Democratizing Cybersecurity** - Making $400K+ enterprise capabilities available for $150
 - **Neural Resonance Security** - Quantum-resistant authentication without static keys

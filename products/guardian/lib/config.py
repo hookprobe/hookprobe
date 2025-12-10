@@ -7,7 +7,7 @@ Configuration can be loaded from YAML file or environment variables.
 Configuration file: /etc/guardian/guardian.yaml
 
 Author: HookProbe Team
-Version: 5.0.0 Liberty
+Version: 5.0.0 Cortex
 License: AGPL-3.0 - see LICENSE in this directory
 """
 
@@ -265,7 +265,7 @@ class GuardianConfig:
     """
     # Version
     version: str = "5.0.0"
-    name: str = "Guardian Liberty"
+    name: str = "Guardian Cortex"
 
     # Component configurations
     vlan: VLANConfig = field(default_factory=VLANConfig)
@@ -491,13 +491,13 @@ def generate_default_config() -> str:
 
 # Default configuration template
 DEFAULT_CONFIG_TEMPLATE = """# Guardian Configuration
-# Version: 5.0.0 Liberty
+# Version: 5.0.0 Cortex
 #
 # This file contains all configuration settings for Guardian.
 # Edit values as needed, then restart Guardian services.
 
 version: "5.0.0"
-name: "Guardian Liberty"
+name: "Guardian Cortex"
 
 # ============================================================================
 # Device Tracking

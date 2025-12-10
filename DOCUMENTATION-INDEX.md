@@ -28,5 +28,5 @@ For complete documentation, see: **[docs/DOCUMENTATION-INDEX.md](docs/DOCUMENTAT
 
 ---
 
-**Version**: 5.0.0 Liberty
+**Version**: 5.0.0 Cortex
 **Last Updated**: 2025-12-07
