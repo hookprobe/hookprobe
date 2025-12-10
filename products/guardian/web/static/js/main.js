@@ -913,11 +913,16 @@ function updateSystemInfo(system) {
     }
 
     // Memory - show percentage and used/total
+    let memoryPercent = 0;
     if (system.memory) {
-        const percent = system.memory.percent || 0;
         const usedMB = Math.round((system.memory.used || 0) / (1024 * 1024));
         const totalMB = Math.round((system.memory.total || 0) / (1024 * 1024));
-        updateElement('system-memory', `${percent}%`);
+        // Calculate percent client-side if server value is 0 or missing
+        memoryPercent = system.memory.percent;
+        if ((!memoryPercent || memoryPercent === 0) && totalMB > 0) {
+            memoryPercent = Math.round((usedMB / totalMB) * 100);
+        }
+        updateElement('system-memory', `${memoryPercent || 0}%`);
         updateElement('system-memory-detail', `${usedMB} / ${totalMB} MB`);
     } else {
         updateElement('system-memory', '0%');
@@ -927,7 +932,7 @@ function updateSystemInfo(system) {
     updateElement('system-temperature', `${(system.temperature || 0).toFixed(1)}°C`);
 
     // Update progress bars
-    updateProgressBar('memory-progress', system.memory?.percent || 0);
+    updateProgressBar('memory-progress', memoryPercent);
 
     // Update disk usage - format bytes to GB
     if (system.disk) {
@@ -974,8 +979,8 @@ function updateNetworkInterfaces(interfaces) {
 }
 
 function updateHotspotConfig(config) {
+    // Note: lan-ssid is updated by updateHotspotStatusUI which handles broadcasting state
     if (config.ssid) {
-        updateElement('lan-ssid', config.ssid);
         const ssidInput = document.getElementById('hotspot-ssid');
         if (ssidInput) ssidInput.value = config.ssid;
     }
