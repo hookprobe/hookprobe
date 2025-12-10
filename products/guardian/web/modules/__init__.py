@@ -39,3 +39,7 @@ def register_blueprints(app: Flask):
     # Cortex module - Neural Command Center integration
     from .cortex import cortex_bp
     app.register_blueprint(cortex_bp)
+
+    # GitHub Update module - Pull updates via web UI
+    from .github_update import github_update_bp
+    app.register_blueprint(github_update_bp, url_prefix='/api/github')
