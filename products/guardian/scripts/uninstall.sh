@@ -75,12 +75,27 @@ stop_services() {
         # AP services (WAN-independent startup)
         "guardian-ap"
         "guardian-wlan"
+        # Health check timers
+        "guardian-ssid-health"
+        "guardian-wifi-health"
         # Offline mode service
         "guardian-offline"
         # System services
         "hostapd"
         "dnsmasq"
     )
+
+    # Stop timers first
+    local timers=(
+        "guardian-ssid-health"
+        "guardian-wifi-health"
+    )
+    for timer in "${timers[@]}"; do
+        if systemctl is-active "${timer}.timer" &>/dev/null; then
+            log_info "Stopping ${timer}.timer..."
+            systemctl stop "${timer}.timer" 2>/dev/null || true
+        fi
+    done
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -117,9 +132,28 @@ remove_systemd_services() {
         # AP services (WAN-independent startup)
         "guardian-ap"
         "guardian-wlan"
+        # Health check services
+        "guardian-ssid-health"
+        "guardian-wifi-health"
         # Offline mode service
         "guardian-offline"
     )
+
+    # Disable and remove timers first
+    local timers=(
+        "guardian-ssid-health"
+        "guardian-wifi-health"
+    )
+    for timer in "${timers[@]}"; do
+        if systemctl is-enabled "${timer}.timer" &>/dev/null; then
+            log_info "Disabling ${timer}.timer..."
+            systemctl disable "${timer}.timer" 2>/dev/null || true
+        fi
+        if [ -f "/etc/systemd/system/${timer}.timer" ]; then
+            log_info "Removing ${timer}.timer..."
+            rm -f "/etc/systemd/system/${timer}.timer"
+        fi
+    done
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
@@ -148,6 +182,16 @@ remove_systemd_services() {
     if [ -f "/usr/local/bin/guardian-wlan-setup.sh" ]; then
         rm -f /usr/local/bin/guardian-wlan-setup.sh
         log_info "Removed guardian-wlan-setup.sh"
+    fi
+
+    # Remove health check scripts
+    if [ -f "/usr/local/bin/guardian-ssid-health.sh" ]; then
+        rm -f /usr/local/bin/guardian-ssid-health.sh
+        log_info "Removed guardian-ssid-health.sh"
+    fi
+    if [ -f "/usr/local/bin/guardian-wifi-health.sh" ]; then
+        rm -f /usr/local/bin/guardian-wifi-health.sh
+        log_info "Removed guardian-wifi-health.sh"
     fi
 
     # Remove runtime state directory
