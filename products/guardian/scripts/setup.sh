@@ -2994,6 +2994,42 @@ DNSMASQ_OVERRIDE
     }
     systemctl start dnsmasq.service 2>/dev/null || true
 
+    # Install SSID health check script and timer
+    log_info "Installing SSID health check..."
+    if [ -f "$SCRIPT_DIR/guardian-ssid-health.sh" ]; then
+        cp "$SCRIPT_DIR/guardian-ssid-health.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/guardian-ssid-health.sh
+    fi
+    if [ -f "$CONFIG_DIR/systemd/guardian-ssid-health.service" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ssid-health.service" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ssid-health.service
+    fi
+    if [ -f "$CONFIG_DIR/systemd/guardian-ssid-health.timer" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-ssid-health.timer" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-ssid-health.timer
+        systemctl daemon-reload
+        systemctl enable guardian-ssid-health.timer 2>/dev/null || true
+        systemctl start guardian-ssid-health.timer 2>/dev/null || true
+    fi
+
+    # Install WiFi WAN health check script and timer
+    log_info "Installing WiFi WAN health check..."
+    if [ -f "$SCRIPT_DIR/guardian-wifi-health.sh" ]; then
+        cp "$SCRIPT_DIR/guardian-wifi-health.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/guardian-wifi-health.sh
+    fi
+    if [ -f "$CONFIG_DIR/systemd/guardian-wifi-health.service" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-wifi-health.service" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-wifi-health.service
+    fi
+    if [ -f "$CONFIG_DIR/systemd/guardian-wifi-health.timer" ]; then
+        cp "$CONFIG_DIR/systemd/guardian-wifi-health.timer" /etc/systemd/system/
+        chmod 644 /etc/systemd/system/guardian-wifi-health.timer
+        systemctl daemon-reload
+        systemctl enable guardian-wifi-health.timer 2>/dev/null || true
+        systemctl start guardian-wifi-health.timer 2>/dev/null || true
+    fi
+
     log_info "Guardian AP services installed and enabled"
     log_info "  - guardian-wlan.service: Prepares wlan1 for AP mode"
     log_info "  - guardian-ap.service: Ensures hostapd/dnsmasq start"
