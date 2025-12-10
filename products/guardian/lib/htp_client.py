@@ -17,7 +17,7 @@ Features:
 Port: UDP 4719
 
 Author: HookProbe Team
-Version: 1.0.0 Liberty
+Version: 1.0.0 Cortex
 License: AGPL-3.0 - see LICENSE in this directory
 """
 

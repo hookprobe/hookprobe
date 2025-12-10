@@ -3,7 +3,7 @@
 > **"Protection on the Move"** - Portable security gateway for travelers
 
 <p align="center">
-  <strong>Liberty Cybersecurity for the Masses</strong><br>
+  <strong>Cortex Cybersecurity for the Masses</strong><br>
   <em>Enterprise Security at $75 · L2-L7 Threat Detection · Travel Companion</em>
 </p>
 
@@ -13,7 +13,7 @@
 
 Guardian transforms Raspberry Pi 4/5 into a portable security gateway. Perfect for securing your devices on hotel WiFi, coffee shops, airports, and any untrusted network. Guardian creates a secure WiFi hotspot that protects all your connected devices.
 
-**Version 5.0.0 Liberty** — Affordable cybersecurity for everyone.
+**Version 5.0.0 Cortex** — Affordable cybersecurity for everyone.
 
 **Key Capabilities:**
 - **Secure WiFi Hotspot** — Create your own protected network anywhere
@@ -66,7 +66,7 @@ Fortress supports:
 
 ---
 
-## Liberty Mission
+## Cortex Mission
 
 **"Cybersecurity for the Masses"**
 
@@ -523,12 +523,12 @@ See [Fortress documentation](../fortress/) for full setup guide.
 
 | Version | Codename | Features |
 |---------|----------|----------|
-| 5.0.0 | **Liberty** | Simple mode, L2-L7 detection, mobile protection |
+| 5.0.0 | **Cortex** | Simple mode, L2-L7 detection, mobile protection |
 | 4.0.0 | Sentinel | Basic IDS, Suricata integration |
 | 3.0.0 | Pioneer | Multi-AP support |
 
 ---
 
-**HookProbe Guardian** — *Liberty Cybersecurity for the Masses*
+**HookProbe Guardian** — *Cortex Cybersecurity for the Masses*
 
-Version: 5.0.0 Liberty | MIT License
+Version: 5.0.0 Cortex | MIT License
