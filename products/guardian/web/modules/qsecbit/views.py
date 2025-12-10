@@ -61,10 +61,21 @@ def get_unified_engine():
 
 
 @qsecbit_bp.route('/')
+def qsecbit_index():
+    """Redirect to the simple dashboard."""
+    return render_template('qsecbit/dashboard.html')
+
+
 @qsecbit_bp.route('/live')
 def qsecbit_live():
-    """Render the simple Qsecbit Live view."""
+    """Render the embedded Qsecbit Live view."""
     return render_template('qsecbit/live.html')
+
+
+@qsecbit_bp.route('/dashboard')
+def qsecbit_dashboard():
+    """Render the simple Qsecbit dashboard - clean standalone view."""
+    return render_template('qsecbit/dashboard.html')
 
 
 @qsecbit_bp.route('/api/score')
