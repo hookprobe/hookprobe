@@ -2662,13 +2662,17 @@ DHCPCD_EOF
     mkdir -p /etc/nftables.d
     cat > /etc/nftables.d/guardian.nft << 'EOF'
 #!/usr/sbin/nft -f
-# HookProbe Guardian - NAT Rules
+# HookProbe Guardian - NAT and Firewall Rules
 # IMPORTANT: Preserves existing connections (SSH, etc.)
 
-# Delete old table if exists (clean slate)
+# Delete old tables if they exist (clean slate)
 table inet guardian
 delete table inet guardian
 
+table ip guardian_nat
+delete table ip guardian_nat
+
+# Filtering rules (inet family supports both IPv4 and IPv6)
 table inet guardian {
     # Input chain - allow established connections and SSH
     chain input {
@@ -2679,16 +2683,26 @@ table inet guardian {
         tcp dport 22 accept
         # Allow web UI
         tcp dport 8080 accept
+        # Allow DNS queries to dnsmasq from LAN
+        iifname "br0" udp dport 53 accept
+        iifname "br0" tcp dport 53 accept
     }
 
     chain forward {
         type filter hook forward priority 0; policy accept;
         ct state established,related accept
+        # Allow forwarding from LAN to WAN
+        iifname "br0" accept
     }
+}
 
+# NAT rules (MUST use ip family, not inet - inet doesn't support NAT)
+table ip guardian_nat {
     chain postrouting {
-        type nat hook postrouting priority 100;
-        oifname != "br0" masquerade
+        type nat hook postrouting priority srcnat; policy accept;
+        # Masquerade traffic going out WAN interfaces (not br0)
+        oifname "wlan0" masquerade
+        oifname "eth0" masquerade
     }
 }
 EOF
