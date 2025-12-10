@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Guardian SSID Health Check
-# Monitors and repairs wlan1 AP mode to ensure SSID is always broadcasting
+# Monitors and fixes SSID broadcasting issues
 #
 # Run manually: /usr/local/bin/guardian-ssid-health.sh
 # Or via systemd timer for periodic checks
@@ -14,7 +14,6 @@ set -e
 LOG_TAG="guardian-ssid-health"
 MAX_RETRIES=3
 RETRY_DELAY=5
-INTERFACE="wlan1"
 
 log_info() {
     logger -t "$LOG_TAG" -p user.info "$1"
@@ -31,133 +30,146 @@ log_error() {
     echo "[ERROR] $1"
 }
 
-# Check if interface exists
-check_interface_exists() {
-    if [ -d "/sys/class/net/$INTERFACE" ]; then
-        return 0
-    fi
-    return 1
-}
-
-# Check if SSID is broadcasting using iw dev
-check_ssid_broadcasting() {
-    local ssid
-    ssid=$(iw dev "$INTERFACE" info 2>/dev/null | grep -oP 'ssid\s+\K.*' | head -1)
-    if [ -n "$ssid" ]; then
-        echo "$ssid"
-        return 0
-    fi
-    return 1
-}
-
-# Get configured SSID from hostapd.conf
+# Get the configured SSID from hostapd.conf
 get_configured_ssid() {
-    grep -oP '^ssid=\K.*' /etc/hostapd/hostapd.conf 2>/dev/null | head -1
+    grep "^ssid=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2
 }
 
-# Check if hostapd is running
-check_hostapd_running() {
-    if systemctl is-active --quiet hostapd; then
-        return 0
+# Get the AP interface from hostapd.conf or detect it
+get_ap_interface() {
+    local iface
+    iface=$(grep "^interface=" /etc/hostapd/hostapd.conf 2>/dev/null | cut -d= -f2)
+    if [ -z "$iface" ]; then
+        iface="wlan1"
     fi
-    return 1
+    echo "$iface"
+}
+
+# Check if SSID is being broadcast
+check_ssid_broadcasting() {
+    local iface="$1"
+    local expected_ssid="$2"
+
+    # Check if interface exists
+    if [ ! -d "/sys/class/net/$iface" ]; then
+        log_warn "Interface $iface does not exist"
+        return 1
+    fi
+
+    # Check if interface is UP
+    if ! ip link show "$iface" | grep -q "state UP"; then
+        log_warn "Interface $iface is not UP"
+        return 1
+    fi
+
+    # Check if hostapd is running
+    if ! systemctl is-active --quiet hostapd; then
+        log_warn "hostapd is not running"
+        return 1
+    fi
+
+    # Check if iw dev shows the SSID
+    local current_ssid
+    current_ssid=$(iw dev "$iface" info 2>/dev/null | grep -oP 'ssid \K.*' || true)
+
+    if [ -z "$current_ssid" ]; then
+        log_warn "No SSID found on $iface (iw dev shows no ssid)"
+        return 1
+    fi
+
+    if [ "$current_ssid" != "$expected_ssid" ]; then
+        log_warn "SSID mismatch: expected '$expected_ssid', got '$current_ssid'"
+        return 1
+    fi
+
+    log_info "SSID '$current_ssid' is broadcasting on $iface"
+    return 0
 }
 
 # Fix SSID by restarting services
 fix_ssid() {
-    local expected_ssid="$1"
+    local iface="$1"
 
-    log_info "Attempting to fix SSID broadcast..."
+    log_info "Attempting to fix SSID on $iface..."
 
     # Stop services
     log_info "Stopping services..."
-    systemctl stop dnsmasq 2>/dev/null || true
     systemctl stop hostapd 2>/dev/null || true
-
-    # Restart guardian-wlan to prepare interface
-    if systemctl is-active --quiet guardian-wlan; then
-        systemctl restart guardian-wlan 2>/dev/null || true
-    else
-        systemctl start guardian-wlan 2>/dev/null || true
-    fi
+    systemctl stop dnsmasq 2>/dev/null || true
     sleep 2
+
+    # Kill any interfering processes
+    pkill -f "wpa_supplicant.*$iface" 2>/dev/null || true
+
+    # Bring interface down
+    ip link set "$iface" down 2>/dev/null || true
+    sleep 1
+
+    # Set AP mode
+    iw dev "$iface" set type __ap 2>/dev/null || \
+        iw dev "$iface" set type ap 2>/dev/null || true
+
+    # Run guardian-wlan-setup if available
+    if [ -x /usr/local/bin/guardian-wlan-setup.sh ]; then
+        log_info "Running guardian-wlan-setup.sh..."
+        /usr/local/bin/guardian-wlan-setup.sh || true
+    fi
 
     # Start hostapd
     log_info "Starting hostapd..."
-    systemctl start hostapd 2>/dev/null || {
-        log_warn "hostapd failed to start via systemctl, trying direct..."
-        hostapd -B /etc/hostapd/hostapd.conf 2>/dev/null || true
-    }
+    systemctl start hostapd
     sleep 3
 
     # Start dnsmasq
     log_info "Starting dnsmasq..."
-    systemctl start dnsmasq 2>/dev/null || true
+    systemctl start dnsmasq
     sleep 2
 
     return 0
 }
 
-# Main health check
+# Main health check loop
 main() {
-    log_info "SSID health check starting..."
+    local iface
+    local ssid
+    local retry=0
 
-    # Check if interface exists
-    if ! check_interface_exists; then
-        log_info "Interface $INTERFACE not found - no second WiFi adapter connected"
-        exit 0
+    iface=$(get_ap_interface)
+    ssid=$(get_configured_ssid)
+
+    if [ -z "$ssid" ]; then
+        log_error "No SSID configured in /etc/hostapd/hostapd.conf"
+        exit 1
     fi
 
-    # Get expected SSID
-    local expected_ssid
-    expected_ssid=$(get_configured_ssid)
-    if [ -z "$expected_ssid" ]; then
-        log_info "No SSID configured in hostapd.conf"
-        exit 0
-    fi
-    log_info "Expected SSID: $expected_ssid"
+    log_info "Health check starting - Interface: $iface, Expected SSID: $ssid"
 
     # Check if SSID is broadcasting
-    local current_ssid
-    if current_ssid=$(check_ssid_broadcasting); then
-        if [ "$current_ssid" = "$expected_ssid" ]; then
-            log_info "SSID health check PASSED - '$current_ssid' is broadcasting"
-            exit 0
-        else
-            log_warn "Wrong SSID broadcasting: '$current_ssid' (expected '$expected_ssid')"
-        fi
-    else
-        log_warn "SSID is not broadcasting"
-    fi
-
-    # Not broadcasting correctly, try to fix
-    local retry=0
     while [ $retry -lt $MAX_RETRIES ]; do
-        retry=$((retry + 1))
-        log_warn "Attempting fix (attempt $retry/$MAX_RETRIES)..."
-
-        fix_ssid "$expected_ssid"
-
-        if current_ssid=$(check_ssid_broadcasting); then
-            if [ "$current_ssid" = "$expected_ssid" ]; then
-                log_info "SSID health check PASSED after fix - '$current_ssid' is broadcasting"
-                exit 0
-            fi
+        if check_ssid_broadcasting "$iface" "$ssid"; then
+            log_info "SSID health check PASSED"
+            exit 0
         fi
+
+        retry=$((retry + 1))
+        log_warn "SSID not broadcasting (attempt $retry/$MAX_RETRIES)"
 
         if [ $retry -lt $MAX_RETRIES ]; then
-            log_info "Waiting ${RETRY_DELAY}s before next attempt..."
+            fix_ssid "$iface"
+            log_info "Waiting ${RETRY_DELAY}s before next check..."
             sleep $RETRY_DELAY
         fi
     done
 
-    # Final check
-    if current_ssid=$(check_ssid_broadcasting) && [ "$current_ssid" = "$expected_ssid" ]; then
+    # Final check after all retries
+    if check_ssid_broadcasting "$iface" "$ssid"; then
         log_info "SSID health check PASSED after fixes"
         exit 0
     else
         log_error "SSID health check FAILED after $MAX_RETRIES attempts"
-        log_error "Check hostapd configuration or wireless adapter"
+        log_error "Manual intervention may be required"
+        log_error "Debug: iw dev $iface info"
+        iw dev "$iface" info 2>&1 || true
         exit 1
     fi
 }
