@@ -458,7 +458,7 @@ body {
     bottom: 20px;
     left: 20px;
     width: 380px;
-    max-height: 220px;
+    max-height: 320px;
     background: var(--bg-panel);
     backdrop-filter: blur(20px);
     border-radius: 12px;
@@ -482,7 +482,7 @@ body {
 
 #event-list {
     list-style: none;
-    max-height: 160px;
+    max-height: 260px;
     overflow-y: auto;
 }
 
@@ -641,26 +641,16 @@ body {
     left: 50%;
     transform: translateX(-50%);
     text-align: center;
-    opacity: 0.3;
+    opacity: 0.4;
     pointer-events: none;
     z-index: 80;
 }
 
-#cortex-watermark span {
-    font-family: 'Orbitron', monospace;
-    font-size: 48px;
-    font-weight: 700;
-    letter-spacing: 20px;
-    color: var(--text-muted);
-    text-shadow: 0 0 40px rgba(0, 191, 255, 0.2);
-}
-
 #cortex-watermark small {
-    display: block;
-    font-size: 12px;
-    letter-spacing: 8px;
+    font-size: 11px;
+    letter-spacing: 4px;
     color: var(--text-muted);
-    margin-top: -5px;
+    text-transform: uppercase;
 }
 
 /* =========================================
