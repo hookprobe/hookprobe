@@ -181,30 +181,120 @@ def _nmcli_available():
     return ok and output and output.strip() == 'active'
 
 
+def _get_interface_mac(interface):
+    """Get the MAC address of a network interface."""
+    try:
+        with open(f'/sys/class/net/{interface}/address', 'r') as f:
+            return f.read().strip().upper()
+    except (IOError, FileNotFoundError):
+        return None
+
+
 def _ensure_nm_config():
     """
     Ensure NetworkManager is configured to NOT manage OVS/hostapd interfaces.
     This prevents conflicts between NM and Open vSwitch.
+
+    Also configures MAC address preservation to prevent randomization
+    from interfering with network connections.
     """
     import os
+    from datetime import datetime
 
     nm_conf_dir = '/etc/NetworkManager/conf.d'
     guardian_conf = f'{nm_conf_dir}/guardian-unmanaged.conf'
 
-    # Check if config already exists
+    # Check if config already exists and is recent (within last hour)
     if os.path.exists(guardian_conf):
-        return True
+        try:
+            mtime = os.path.getmtime(guardian_conf)
+            if (datetime.now().timestamp() - mtime) < 3600:
+                return True
+        except OSError:
+            pass
 
-    # Create the unmanaged configuration
-    config_content = """# HookProbe Guardian - NetworkManager Unmanaged Interfaces
+    # Detect MAC addresses for stable configuration
+    wlan0_mac = _get_interface_mac('wlan0')
+    wlan1_mac = _get_interface_mac('wlan1')
+    eth0_mac = _get_interface_mac('eth0')
+
+    # Build unmanaged devices string
+    unmanaged = ['interface-name:wlan1', 'interface-name:br*',
+                 'interface-name:ovs-*', 'interface-name:vlan*',
+                 'interface-name:guardian', 'driver:openvswitch']
+
+    # Add wlan1 MAC to unmanaged for extra safety
+    if wlan1_mac:
+        unmanaged.append(f'mac:{wlan1_mac}')
+
+    unmanaged_str = ';'.join(unmanaged)
+
+    # Create the configuration with MAC preservation
+    config_content = f"""# HookProbe Guardian - NetworkManager Configuration
+# Generated: {datetime.now().isoformat()}
 # Prevents NM from interfering with OVS/hostapd interfaces
+#
+# Detected MACs:
+#   wlan0: {wlan0_mac or 'not detected'} (managed - WAN WiFi)
+#   wlan1: {wlan1_mac or 'not detected'} (unmanaged - AP)
+#   eth0:  {eth0_mac or 'not detected'} (managed - Ethernet)
 
 [keyfile]
-# wlan1 = AP (hostapd), br* = OVS bridges, ovs-* = OVS ports
-unmanaged-devices=interface-name:wlan1;interface-name:br*;interface-name:ovs-*;interface-name:vlan*;driver:openvswitch
+# Interfaces that NetworkManager should NOT manage
+unmanaged-devices={unmanaged_str}
 
 [device]
+# ============================================================
+# MAC ADDRESS PRESERVATION - Disable all randomization
+# ============================================================
 wifi.scan-rand-mac-address=no
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
+"""
+
+    # Add interface-specific sections with MAC matching
+    if wlan0_mac:
+        config_content += f"""
+[device-wlan0-by-mac]
+# wlan0 (WAN WiFi) - preserve MAC: {wlan0_mac}
+match-device=mac:{wlan0_mac}
+wifi.scan-rand-mac-address=no
+wifi.cloned-mac-address=preserve
+managed=1
+
+[device-wlan0-by-name]
+match-device=interface-name:wlan0
+wifi.scan-rand-mac-address=no
+wifi.cloned-mac-address=preserve
+managed=1
+"""
+
+    if eth0_mac:
+        config_content += f"""
+[device-eth0-by-mac]
+# eth0 (Ethernet) - preserve MAC: {eth0_mac}
+match-device=mac:{eth0_mac}
+ethernet.cloned-mac-address=preserve
+"""
+
+    if wlan1_mac:
+        config_content += f"""
+[device-wlan1-unmanaged]
+# wlan1 (AP) - MUST stay unmanaged, MAC: {wlan1_mac}
+match-device=mac:{wlan1_mac}
+managed=0
+"""
+
+    config_content += """
+[connection]
+# Disable MAC randomization for all connections
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
+connection.auth-retries=3
+
+[main]
+dhcp=internal
+dns=none
 """
 
     try:
@@ -217,6 +307,7 @@ wifi.scan-rand-mac-address=no
 
         _, ok = run_command(['sudo', 'cp', tmp_file, guardian_conf], timeout=5)
         if ok:
+            run_command(['sudo', 'chmod', '644', guardian_conf], timeout=5)
             # Reload NetworkManager to apply
             run_command(['sudo', 'nmcli', 'general', 'reload'], timeout=10)
             return True
