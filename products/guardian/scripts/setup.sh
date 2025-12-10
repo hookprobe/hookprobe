@@ -148,6 +148,7 @@ install_packages() {
             iw \
             wireless-tools \
             wpasupplicant \
+            network-manager \
             python3 \
             python3-pip \
             python3-flask \
@@ -166,6 +167,8 @@ install_packages() {
             iw \
             wireless-tools \
             wpa_supplicant \
+            NetworkManager \
+            NetworkManager-wifi \
             python3 \
             python3-pip \
             python3-flask \
@@ -245,6 +248,69 @@ install_openvswitch() {
         systemctl start openvswitch 2>/dev/null || true
 
     log_info "Open vSwitch installed and running"
+}
+
+# ============================================================
+# NETWORKMANAGER CONFIGURATION
+# ============================================================
+configure_networkmanager() {
+    log_step "Configuring NetworkManager for Guardian..."
+
+    # Enable and start NetworkManager first
+    systemctl enable NetworkManager 2>/dev/null || true
+    systemctl start NetworkManager 2>/dev/null || true
+    sleep 2
+
+    # Use the guardian-nm-setup.sh script to generate MAC-aware configuration
+    # This script auto-detects MAC addresses and creates proper config
+    local nm_setup_script="$SCRIPT_DIR/guardian-nm-setup.sh"
+
+    if [ -f "$nm_setup_script" ]; then
+        log_info "Running NetworkManager setup with MAC detection..."
+        bash "$nm_setup_script" || {
+            log_warn "guardian-nm-setup.sh failed, using fallback config"
+            _configure_nm_fallback
+        }
+    else
+        log_warn "guardian-nm-setup.sh not found, using fallback config"
+        _configure_nm_fallback
+    fi
+
+    log_info "NetworkManager configured (wlan0=managed, wlan1/OVS=unmanaged)"
+}
+
+_configure_nm_fallback() {
+    # Fallback configuration if guardian-nm-setup.sh is not available
+    mkdir -p /etc/NetworkManager/conf.d
+
+    cat > /etc/NetworkManager/conf.d/guardian-unmanaged.conf << 'EOF'
+# HookProbe Guardian - NetworkManager Configuration (Fallback)
+# For full MAC-aware config, run: guardian-nm-setup.sh
+
+[keyfile]
+unmanaged-devices=interface-name:wlan1;interface-name:br*;interface-name:ovs-*;interface-name:guardian;interface-name:vlan*;driver:openvswitch
+
+[device]
+# Disable MAC randomization
+wifi.scan-rand-mac-address=no
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
+
+[connection]
+wifi.cloned-mac-address=preserve
+ethernet.cloned-mac-address=preserve
+
+[main]
+dhcp=internal
+dns=none
+EOF
+
+    chmod 644 /etc/NetworkManager/conf.d/guardian-unmanaged.conf
+    nmcli general reload 2>/dev/null || true
+
+    if [ -d "/sys/class/net/wlan1" ]; then
+        nmcli device set wlan1 managed no 2>/dev/null || true
+    fi
 }
 
 generate_vxlan_psk() {
@@ -484,8 +550,12 @@ MACSECSCRIPT
 install_security_containers() {
     log_step "Installing Guardian security containers..."
 
-    # Create Guardian pod network
-    podman network create guardian-net 2>/dev/null || true
+    # NOTE: All security containers use --network host mode
+    # This is required for:
+    # - Suricata IDS: sniff traffic on eth0/br0
+    # - WAF: intercept HTTP traffic on host ports
+    # - Zeek: analyze raw network packets
+    # - Neuro: access host network for neural resonance protocol
 
     # Create volumes
     podman volume create guardian-suricata-logs 2>/dev/null || true
@@ -3517,6 +3587,11 @@ main() {
     # Install Open vSwitch
     log_step "Installing Open vSwitch..."
     install_openvswitch
+
+    # Configure NetworkManager (must be before OVS bridge setup)
+    # This prevents NM from managing OVS/hostapd interfaces
+    log_step "Configuring NetworkManager..."
+    configure_networkmanager
 
     # Setup OVS bridge with VXLAN tunnel
     log_step "Configuring OVS bridge..."

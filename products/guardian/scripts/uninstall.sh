@@ -246,9 +246,10 @@ remove_containers() {
         fi
     done
 
-    # Remove network
+    # Remove legacy guardian-net network (backward compatibility)
+    # Note: Current containers use --network host, but older installs may have this
     if podman network exists guardian-net 2>/dev/null; then
-        log_info "Removing network: guardian-net"
+        log_info "Removing legacy network: guardian-net"
         podman network rm guardian-net 2>/dev/null || true
     fi
 
@@ -359,6 +360,39 @@ remove_wpa_supplicant_config() {
     pkill -f "wpa_supplicant.*wlan0" 2>/dev/null || true
 
     log_info "wpa_supplicant configuration removed"
+}
+
+# ============================================================
+# REMOVE NETWORKMANAGER CONFIGURATION
+# ============================================================
+remove_networkmanager_config() {
+    log_step "Removing NetworkManager Guardian configuration..."
+
+    # Remove Guardian NM configuration
+    rm -f /etc/NetworkManager/conf.d/guardian-unmanaged.conf 2>/dev/null || true
+
+    # Remove Guardian WiFi connections
+    if command -v nmcli &>/dev/null && systemctl is-active NetworkManager &>/dev/null; then
+        # List and delete guardian-* connections
+        local connections
+        connections=$(nmcli -t -f NAME connection show 2>/dev/null | grep "^guardian-" || true)
+        for conn in $connections; do
+            log_info "Removing NetworkManager connection: $conn"
+            nmcli connection delete "$conn" 2>/dev/null || true
+        done
+
+        # Reload NM configuration
+        nmcli general reload 2>/dev/null || true
+
+        # Re-enable management of all interfaces
+        for iface in wlan0 wlan1 eth0; do
+            if [ -d "/sys/class/net/$iface" ]; then
+                nmcli device set "$iface" managed yes 2>/dev/null || true
+            fi
+        done
+    fi
+
+    log_info "NetworkManager configuration removed"
 }
 
 # ============================================================
@@ -749,12 +783,13 @@ main() {
     echo -e "  - ML Python packages (scikit-learn, joblib)"
     echo -e "  - Network bridges (br0)"
     echo -e "  - WiFi hotspot (hostapd) configuration"
+    echo -e "  - NetworkManager Guardian connections and configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
     echo -e "  - Guardian configuration (/etc/guardian/guardian.yaml)"
     echo -e "  - HTP file transfer state and session keys"
     echo -e "  - nftables firewall rules"
     echo -e "  - Guardian Python library modules"
-    echo -e "  - Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)"
+    echo -e "  - Guardian scripts (/usr/local/bin/guardian-*)"
     echo -e "  - Guardian data directories"
     echo ""
 
@@ -775,6 +810,7 @@ main() {
     remove_nftables_rules
     remove_hostapd_config
     remove_wpa_supplicant_config
+    remove_networkmanager_config
     remove_dnsmasq_config
     remove_offline_mode_config
     remove_sysctl_settings
