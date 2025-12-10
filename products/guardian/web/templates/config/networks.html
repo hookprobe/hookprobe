@@ -10,8 +10,8 @@
         <div class="stat-value" style="font-size: 1.25rem;" id="wan-status">Checking...</div>
         <div class="stat-label">WAN Gateway</div>
     </div>
-    <div class="stat-card info">
-        <div class="stat-value" style="font-size: 1.25rem;" id="lan-ssid">Guardian-AP</div>
+    <div class="stat-card info" id="lan-ssid-card">
+        <div class="stat-value" style="font-size: 1.25rem;" id="lan-ssid">Checking...</div>
         <div class="stat-label">Hotspot SSID</div>
     </div>
     <div class="stat-card warning">
@@ -163,8 +163,36 @@
             </svg>
             Hotspot Settings
         </h3>
+        <div id="hotspot-status-badge">
+            <span class="badge badge-secondary">Checking...</span>
+        </div>
     </div>
     <div class="card-body">
+        <!-- Hotspot Status -->
+        <div id="hotspot-status-panel" style="margin-bottom: var(--spacing-lg); padding: var(--spacing-md); background: var(--bg-tertiary); border-radius: var(--radius-md); border-left: 4px solid var(--text-muted);">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-weight: 600;" id="hotspot-status-text">Checking SSID status...</div>
+                    <div class="text-muted" style="font-size: 0.875rem;">
+                        Interface: <span id="hotspot-interface">wlan1</span> |
+                        Channel: <span id="hotspot-channel-display">--</span> |
+                        Clients: <span id="hotspot-clients">0</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: var(--spacing-sm);">
+                    <button class="btn btn-sm btn-success" id="hotspot-start-btn" onclick="startHotspot()" style="display: none;">
+                        Start SSID
+                    </button>
+                    <button class="btn btn-sm btn-danger" id="hotspot-stop-btn" onclick="stopHotspot()" style="display: none;">
+                        Stop SSID
+                    </button>
+                    <button class="btn btn-sm btn-secondary" onclick="refreshHotspotStatus()">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <form id="hotspot-form" onsubmit="updateHotspot(event)">
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
                 <div class="form-group">
@@ -376,19 +404,17 @@ function updateOfflineStatusUI(data) {
     }
 
     // Update AP info from multiple sources
-    const ssidEl = document.getElementById('lan-ssid');
+    // Note: lan-ssid is updated by updateHotspotStatusUI which handles broadcasting state
     const clientsEl = document.getElementById('lan-clients');
     const channelEl = document.getElementById('offline-channel');
     const bandEl = document.getElementById('offline-band');
 
     if (data.ap) {
-        ssidEl.textContent = data.ap.ssid || data.ap_ssid || 'HookProbe-Guardian';
         clientsEl.textContent = data.ap.clients || data.clients_connected || 0;
         channelEl.textContent = data.ap.channel || data.current_channel || '--';
         bandEl.textContent = data.ap.band || data.current_band || '--';
     } else {
         // Fallback to state fields
-        ssidEl.textContent = data.ap_ssid || 'HookProbe-Guardian';
         clientsEl.textContent = data.clients_connected || 0;
         channelEl.textContent = data.current_channel || '--';
         bandEl.textContent = data.current_band || '--';
@@ -549,16 +575,41 @@ async function connectToWifi(e) {
     e.preventDefault();
     const ssid = document.getElementById('wifi-ssid').value;
     const password = document.getElementById('wifi-password').value;
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+
+    // Show loading state
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="loading-spinner"></span> Connecting...';
+    }
+
+    showToast('Connecting to ' + ssid + '...', 'info');
 
     try {
         const result = await apiPost('/config/wifi/connect', { ssid, password });
         if (result.success) {
-            showToast('Connecting to ' + ssid, 'success');
+            if (result.ip) {
+                showToast('Connected to ' + ssid + ' (' + result.ip + ')', 'success');
+            } else if (result.message) {
+                showToast(result.message, 'info');
+            } else {
+                showToast('Connection initiated to ' + ssid, 'success');
+            }
+            // Refresh status after a delay
+            setTimeout(() => {
+                refreshOfflineStatus();
+                loadRouteMetrics();
+            }, 5000);
         } else {
             showToast(result.error || 'Failed to connect', 'error');
         }
     } catch (error) {
-        showToast('Connection failed', 'error');
+        showToast('Connection failed: ' + (error.message || 'Unknown error'), 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Connect';
+        }
     }
 }
 
@@ -585,13 +636,155 @@ async function updateHotspot(e) {
 }
 
 async function restartHotspot() {
+    showToast('Restarting hotspot...', 'info');
     try {
         const result = await apiPost('/config/hotspot/restart');
         if (result.success) {
             showToast('Hotspot restarting...', 'info');
+            // Refresh status after restart
+            setTimeout(refreshHotspotStatus, 3000);
+        } else {
+            showToast(result.error || 'Failed to restart hotspot', 'error');
         }
     } catch (error) {
         showToast('Failed to restart hotspot', 'error');
+    }
+}
+
+// =========================================================================
+// HOTSPOT STATUS & CONTROL FUNCTIONS
+// =========================================================================
+
+async function refreshHotspotStatus() {
+    try {
+        const result = await apiGet('/config/hotspot/status');
+        updateHotspotStatusUI(result);
+    } catch (error) {
+        console.error('Failed to get hotspot status:', error);
+        updateHotspotStatusUI({ success: false, error: 'Failed to fetch status' });
+    }
+}
+
+function updateHotspotStatusUI(data) {
+    const statusPanel = document.getElementById('hotspot-status-panel');
+    const statusText = document.getElementById('hotspot-status-text');
+    const statusBadge = document.getElementById('hotspot-status-badge');
+    const interfaceEl = document.getElementById('hotspot-interface');
+    const channelEl = document.getElementById('hotspot-channel-display');
+    const clientsEl = document.getElementById('hotspot-clients');
+    const startBtn = document.getElementById('hotspot-start-btn');
+    const stopBtn = document.getElementById('hotspot-stop-btn');
+
+    if (!data.success && data.error) {
+        statusText.textContent = 'Error: ' + data.error;
+        statusPanel.style.borderLeftColor = 'var(--hp-red)';
+        statusBadge.innerHTML = '<span class="badge badge-danger">Error</span>';
+        startBtn.style.display = 'inline-block';
+        stopBtn.style.display = 'none';
+        return;
+    }
+
+    // Update display values
+    interfaceEl.textContent = data.interface || 'wlan1';
+    channelEl.textContent = data.channel || '--';
+    clientsEl.textContent = data.clients || 0;
+
+    // Update SSID in form if available
+    if (data.ssid) {
+        document.getElementById('hotspot-ssid').placeholder = data.ssid;
+    }
+
+    // Update header SSID card based on broadcasting status
+    const ssidEl = document.getElementById('lan-ssid');
+    const ssidCard = document.getElementById('lan-ssid-card');
+
+    // Update status based on running/broadcasting state
+    if (data.broadcasting) {
+        statusText.textContent = 'SSID "' + (data.ssid || 'HookProbe-Guardian') + '" is broadcasting';
+        statusPanel.style.borderLeftColor = 'var(--hp-green)';
+        statusBadge.innerHTML = '<span class="badge badge-success">Broadcasting</span>';
+        startBtn.style.display = 'none';
+        stopBtn.style.display = 'inline-block';
+        // Update header card - show SSID with success styling
+        ssidEl.textContent = data.ssid || 'HookProbe-Guardian';
+        ssidCard.className = 'stat-card success';
+    } else if (data.running) {
+        statusText.textContent = 'Hostapd running but interface not up';
+        statusPanel.style.borderLeftColor = 'var(--hp-amber)';
+        statusBadge.innerHTML = '<span class="badge badge-warning">Starting</span>';
+        startBtn.style.display = 'none';
+        stopBtn.style.display = 'inline-block';
+        // Update header card - show starting state
+        ssidEl.textContent = 'Starting...';
+        ssidCard.className = 'stat-card warning';
+    } else {
+        statusText.textContent = 'SSID is not broadcasting - click "Start SSID" to enable';
+        statusPanel.style.borderLeftColor = 'var(--hp-red)';
+        statusBadge.innerHTML = '<span class="badge badge-danger">Stopped</span>';
+        startBtn.style.display = 'inline-block';
+        stopBtn.style.display = 'none';
+        // Update header card - show stopped state
+        ssidEl.textContent = 'Not Broadcasting';
+        ssidCard.className = 'stat-card danger';
+    }
+
+    // Update header status
+    document.getElementById('lan-clients').textContent = data.clients || 0;
+}
+
+async function startHotspot() {
+    const startBtn = document.getElementById('hotspot-start-btn');
+    if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.innerHTML = '<span class="loading-spinner"></span> Starting...';
+    }
+
+    showToast('Starting hotspot...', 'info');
+
+    try {
+        const result = await apiPost('/config/hotspot/start');
+        if (result.success) {
+            showToast(result.message || 'Hotspot started', 'success');
+            setTimeout(refreshHotspotStatus, 2000);
+        } else {
+            showToast(result.error || 'Failed to start hotspot', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to start hotspot: ' + (error.message || 'Unknown error'), 'error');
+    } finally {
+        if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.textContent = 'Start SSID';
+        }
+    }
+}
+
+async function stopHotspot() {
+    if (!confirm('Stop the hotspot? All connected clients will be disconnected.')) {
+        return;
+    }
+
+    const stopBtn = document.getElementById('hotspot-stop-btn');
+    if (stopBtn) {
+        stopBtn.disabled = true;
+        stopBtn.innerHTML = '<span class="loading-spinner"></span> Stopping...';
+    }
+
+    try {
+        const result = await apiPost('/config/hotspot/stop');
+        if (result.success) {
+            showToast(result.message || 'Hotspot stopped', 'success');
+            setTimeout(refreshHotspotStatus, 1000);
+        } else {
+            showToast(result.error || 'Failed to stop hotspot', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to stop hotspot', 'error');
+    } finally {
+        if (stopBtn) {
+            stopBtn.disabled = false;
+            stopBtn.textContent = 'Stop SSID';
+        }
     }
 }
 
@@ -678,11 +871,12 @@ function initChannelDisplay() {
     refreshChannelData();
 }
 
-// Load offline status on page load
+// Load all status on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Delay to ensure tab is visible
     setTimeout(() => {
         refreshOfflineStatus();
+        refreshHotspotStatus();
         loadRouteMetrics();
         loadEth0Config();
         initChannelDisplay();
