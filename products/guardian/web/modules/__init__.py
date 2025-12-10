@@ -47,3 +47,7 @@ def register_blueprints(app: Flask):
     # Debug module - Browser-based CLI
     from .debug import debug_bp
     app.register_blueprint(debug_bp, url_prefix='/api/debug')
+
+    # Qsecbit Live module - Real-time v6.0 score display
+    from .qsecbit import qsecbit_bp
+    app.register_blueprint(qsecbit_bp)
