@@ -79,6 +79,13 @@ from .response import (
     ResponseOrchestrator
 )
 
+# v6.0 Mesh bridge for distributed threat sharing
+from .mesh_bridge import (
+    QsecbitMeshBridge,
+    MeshBridgeConfig,
+    create_mesh_bridge
+)
+
 __version__ = "6.0.0"
 __author__ = "Andrei Toma"
 __license__ = "Proprietary"
@@ -139,4 +146,9 @@ __all__ = [
 
     # v6.0 Response orchestration
     "ResponseOrchestrator",
+
+    # v6.0 Mesh bridge
+    "QsecbitMeshBridge",
+    "MeshBridgeConfig",
+    "create_mesh_bridge",
 ]
