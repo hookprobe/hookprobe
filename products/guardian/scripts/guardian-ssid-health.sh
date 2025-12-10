@@ -98,7 +98,12 @@ fix_ssid() {
     systemctl stop dnsmasq 2>/dev/null || true
     sleep 2
 
-    # Kill any interfering processes
+    # Ensure NetworkManager doesn't manage the AP interface
+    if command -v nmcli &>/dev/null && systemctl is-active NetworkManager &>/dev/null; then
+        nmcli device set "$iface" managed no 2>/dev/null || true
+    fi
+
+    # Kill any interfering processes (wpa_supplicant shouldn't run on AP interface)
     pkill -f "wpa_supplicant.*$iface" 2>/dev/null || true
 
     # Bring interface down
