@@ -148,6 +148,7 @@ install_packages() {
             iw \
             wireless-tools \
             wpasupplicant \
+            network-manager \
             python3 \
             python3-pip \
             python3-flask \
@@ -166,6 +167,8 @@ install_packages() {
             iw \
             wireless-tools \
             wpa_supplicant \
+            NetworkManager \
+            NetworkManager-wifi \
             python3 \
             python3-pip \
             python3-flask \
@@ -245,6 +248,61 @@ install_openvswitch() {
         systemctl start openvswitch 2>/dev/null || true
 
     log_info "Open vSwitch installed and running"
+}
+
+# ============================================================
+# NETWORKMANAGER CONFIGURATION
+# ============================================================
+configure_networkmanager() {
+    log_step "Configuring NetworkManager for Guardian..."
+
+    # Create NetworkManager conf.d directory
+    mkdir -p /etc/NetworkManager/conf.d
+
+    # Create unmanaged devices configuration
+    # This prevents NM from interfering with OVS bridges and hostapd
+    cat > /etc/NetworkManager/conf.d/guardian-unmanaged.conf << 'EOF'
+# HookProbe Guardian - NetworkManager Configuration
+# Prevents NM from managing OVS/hostapd interfaces
+#
+# Managed by NetworkManager:
+#   - wlan0 (WAN interface for upstream WiFi)
+#
+# Unmanaged (OVS/hostapd controlled):
+#   - wlan1 (AP interface, managed by hostapd)
+#   - br0, br* (OVS bridges)
+#   - ovs-*, guardian (OVS internal ports)
+#   - vlan* (VLAN interfaces)
+
+[keyfile]
+unmanaged-devices=interface-name:wlan1;interface-name:br*;interface-name:ovs-*;interface-name:guardian;interface-name:vlan*;driver:openvswitch
+
+[device]
+# Disable MAC randomization for stable AP connections
+wifi.scan-rand-mac-address=no
+
+[main]
+# Use internal DHCP client (more reliable)
+dhcp=internal
+# Don't modify resolv.conf - dnsmasq handles DNS
+dns=none
+EOF
+
+    chmod 644 /etc/NetworkManager/conf.d/guardian-unmanaged.conf
+
+    # Enable and start NetworkManager
+    systemctl enable NetworkManager 2>/dev/null || true
+    systemctl start NetworkManager 2>/dev/null || true
+
+    # Reload configuration
+    nmcli general reload 2>/dev/null || true
+
+    # Explicitly set wlan1 as unmanaged (if it exists)
+    if [ -d "/sys/class/net/wlan1" ]; then
+        nmcli device set wlan1 managed no 2>/dev/null || true
+    fi
+
+    log_info "NetworkManager configured (wlan0=managed, wlan1/OVS=unmanaged)"
 }
 
 generate_vxlan_psk() {
@@ -3517,6 +3575,11 @@ main() {
     # Install Open vSwitch
     log_step "Installing Open vSwitch..."
     install_openvswitch
+
+    # Configure NetworkManager (must be before OVS bridge setup)
+    # This prevents NM from managing OVS/hostapd interfaces
+    log_step "Configuring NetworkManager..."
+    configure_networkmanager
 
     # Setup OVS bridge with VXLAN tunnel
     log_step "Configuring OVS bridge..."
