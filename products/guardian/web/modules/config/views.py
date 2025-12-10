@@ -181,14 +181,68 @@ def _nmcli_available():
     return ok and output and output.strip() == 'active'
 
 
+def _ensure_nm_config():
+    """
+    Ensure NetworkManager is configured to NOT manage OVS/hostapd interfaces.
+    This prevents conflicts between NM and Open vSwitch.
+    """
+    import os
+
+    nm_conf_dir = '/etc/NetworkManager/conf.d'
+    guardian_conf = f'{nm_conf_dir}/guardian-unmanaged.conf'
+
+    # Check if config already exists
+    if os.path.exists(guardian_conf):
+        return True
+
+    # Create the unmanaged configuration
+    config_content = """# HookProbe Guardian - NetworkManager Unmanaged Interfaces
+# Prevents NM from interfering with OVS/hostapd interfaces
+
+[keyfile]
+# wlan1 = AP (hostapd), br* = OVS bridges, ovs-* = OVS ports
+unmanaged-devices=interface-name:wlan1;interface-name:br*;interface-name:ovs-*;interface-name:vlan*;driver:openvswitch
+
+[device]
+wifi.scan-rand-mac-address=no
+"""
+
+    try:
+        # Write config
+        run_command(['sudo', 'mkdir', '-p', nm_conf_dir], timeout=5)
+
+        tmp_file = '/tmp/guardian-unmanaged.conf'
+        with open(tmp_file, 'w') as f:
+            f.write(config_content)
+
+        _, ok = run_command(['sudo', 'cp', tmp_file, guardian_conf], timeout=5)
+        if ok:
+            # Reload NetworkManager to apply
+            run_command(['sudo', 'nmcli', 'general', 'reload'], timeout=10)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _connect_with_nmcli(ssid, password, interface='wlan0'):
     """
     Connect to WiFi using NetworkManager (nmcli).
     Returns (success, message, ip_address).
+
+    Note: Only wlan0 should be managed by NM. wlan1 (AP) and br0 (OVS)
+    must remain unmanaged to avoid conflicts with hostapd and Open vSwitch.
     """
     import time
 
-    # First, ensure interface is managed by NetworkManager
+    # Ensure NM config excludes OVS/hostapd interfaces
+    _ensure_nm_config()
+
+    # Ensure wlan1 stays unmanaged (AP interface for hostapd)
+    run_command(['sudo', 'nmcli', 'device', 'set', 'wlan1', 'managed', 'no'], timeout=5)
+
+    # Ensure wlan0 (WAN) IS managed by NetworkManager
     run_command(['sudo', 'nmcli', 'device', 'set', interface, 'managed', 'yes'], timeout=5)
     time.sleep(1)
 
