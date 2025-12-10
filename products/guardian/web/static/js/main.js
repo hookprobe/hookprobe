@@ -107,6 +107,14 @@ function loadTabData(tabName) {
         case 'system':
             loadSystemData();
             break;
+        case 'updates':
+            loadUpdatesData();
+            break;
+        case 'debug':
+            if (typeof loadDebugData === 'function') {
+                loadDebugData();
+            }
+            break;
     }
 }
 
@@ -940,6 +948,27 @@ function updateSystemInfo(system) {
         const total = formatBytes(system.disk.total || 0);
         updateElement('disk-usage', `${used} / ${total} (${system.disk.percent}%)`);
         updateProgressBar('disk-progress', system.disk.percent || 0);
+    }
+}
+
+// ============================================
+// UPDATES TAB DATA
+// ============================================
+async function loadUpdatesData() {
+    // Load GitHub status, log, and check for updates
+    try {
+        // These functions are defined inline in the template
+        if (typeof loadGitHubStatus === 'function') {
+            loadGitHubStatus();
+        }
+        if (typeof loadGitHubLog === 'function') {
+            loadGitHubLog();
+        }
+        if (typeof checkGitHubUpdates === 'function') {
+            checkGitHubUpdates();
+        }
+    } catch (error) {
+        console.error('Failed to load updates data:', error);
     }
 }
 
