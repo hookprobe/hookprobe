@@ -1,7 +1,7 @@
 [Unit]
 Description=Guardian SSID Health Check
-Documentation=https://hookprobe.com/docs/guardian
-After=network.target hostapd.service
+Documentation=https://github.com/hookprobe/hookprobe
+After=hostapd.service dnsmasq.service
 Wants=hostapd.service
 
 [Service]
@@ -9,6 +9,10 @@ Type=oneshot
 ExecStart=/usr/local/bin/guardian-ssid-health.sh
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=guardian-ssid-health
+
+# Allow time for fixes
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target
