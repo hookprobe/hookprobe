@@ -231,7 +231,7 @@ Together, we're building a more secure digital future.
 
 **HookProbe** - *Democratizing Cybersecurity Through Edge Computing*
 
-**Version**: 5.0.1
+**Version**: 5.0.0
 **Status**: Production Ready 🚀
 **Community**: Growing Every Day 🌱
 
