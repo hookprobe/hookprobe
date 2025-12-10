@@ -87,6 +87,9 @@ def api_wifi_scan():
 @config_bp.route('/wifi/connect', methods=['POST'])
 def api_wifi_connect():
     """Connect to a WiFi network using wlan0 (WAN interface)."""
+    import os
+    import time
+
     data = request.get_json()
     ssid = data.get('ssid', '').strip()
     password = data.get('password', '')
@@ -95,80 +98,140 @@ def api_wifi_connect():
         return jsonify({'success': False, 'error': 'SSID required'}), 400
 
     try:
-        import os
+        # Check if wlan0 exists
+        if not os.path.exists('/sys/class/net/wlan0'):
+            return jsonify({'success': False, 'error': 'wlan0 interface not found'}), 400
 
-        # wlan0 is the WAN interface for upstream connectivity
         wpa_conf = '/etc/wpa_supplicant/wpa_supplicant-wlan0.conf'
 
-        # Create base config with country and ctrl_interface
-        base_config = '''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=US
+        # Ensure directory exists
+        run_command(['sudo', 'mkdir', '-p', '/etc/wpa_supplicant'], timeout=5)
 
-'''
-        # Determine key management
+        # Get country code from hostapd config or default to US
+        country = 'US'
+        try:
+            with open('/etc/hostapd/hostapd.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('country_code='):
+                        country = line.split('=')[1].strip()
+                        break
+        except:
+            pass
+
+        # Create wpa_supplicant config
         if not password:
             # Open network
-            network_block = f'''network={{
+            config_content = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country={country}
+
+network={{
     ssid="{ssid}"
     key_mgmt=NONE
     scan_ssid=1
 }}
 '''
         else:
-            # WPA/WPA2 network
-            network_block = f'''network={{
+            # WPA/WPA2 network - escape quotes in password
+            escaped_password = password.replace('"', '\\"')
+            config_content = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country={country}
+
+network={{
     ssid="{ssid}"
-    psk="{password}"
+    psk="{escaped_password}"
     key_mgmt=WPA-PSK
     scan_ssid=1
 }}
 '''
-        # Write config to temp file first
-        with open('/tmp/wpa_supplicant-wlan0.conf', 'w') as f:
-            f.write(base_config + network_block)
-        os.chmod('/tmp/wpa_supplicant-wlan0.conf', 0o600)
 
-        # Copy to system location
-        run_command(['sudo', 'cp', '/tmp/wpa_supplicant-wlan0.conf', wpa_conf])
-        run_command(['sudo', 'chmod', '600', wpa_conf])
+        # Write config
+        tmp_conf = '/tmp/wpa_supplicant-wlan0.conf'
+        with open(tmp_conf, 'w') as f:
+            f.write(config_content)
+        os.chmod(tmp_conf, 0o600)
 
-        # Stop any existing wpa_supplicant on wlan0
-        run_command(['sudo', 'pkill', '-f', 'wpa_supplicant.*wlan0'], timeout=5)
+        run_command(['sudo', 'cp', tmp_conf, wpa_conf], timeout=5)
+        run_command(['sudo', 'chmod', '600', wpa_conf], timeout=5)
 
-        # Bring interface down then up
+        # Stop existing wpa_supplicant on wlan0
+        run_command(['sudo', 'pkill', '-9', '-f', 'wpa_supplicant.*wlan0'], timeout=5)
+        time.sleep(1)
+
+        # Unblock WiFi and bring interface down
+        run_command(['sudo', 'rfkill', 'unblock', 'wifi'], timeout=5)
         run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'down'], timeout=5)
+        time.sleep(1)
 
         # Start wpa_supplicant
-        run_command(['sudo', 'wpa_supplicant', '-B', '-i', 'wlan0',
-                     '-c', wpa_conf, '-D', 'nl80211,wext'], timeout=10)
+        output, ok = run_command(['sudo', 'wpa_supplicant', '-B', '-i', 'wlan0', '-c', wpa_conf, '-D', 'nl80211'], timeout=10)
+        if not ok:
+            # Fallback to wext driver
+            output, ok = run_command(['sudo', 'wpa_supplicant', '-B', '-i', 'wlan0', '-c', wpa_conf, '-D', 'wext'], timeout=10)
+            if not ok:
+                return jsonify({'success': False, 'error': f'wpa_supplicant failed: {output}'}), 500
 
         # Bring interface up
+        time.sleep(1)
         run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
+        time.sleep(2)
 
-        # Request DHCP lease
-        run_command(['sudo', 'dhcpcd', '-n', 'wlan0'], timeout=15)
+        # Request DHCP - try different clients
+        for dhcp_cmd in [
+            ['sudo', 'dhclient', '-4', 'wlan0'],
+            ['sudo', 'dhcpcd', '-4', 'wlan0'],
+            ['sudo', 'udhcpc', '-i', 'wlan0', '-n', '-q']
+        ]:
+            _, ok = run_command(dhcp_cmd, timeout=15)
+            if ok:
+                break
 
-        # Give it a moment to connect
-        import time
-        time.sleep(3)
+        time.sleep(2)
 
-        # Check if connected
+        # Check connection status
         ip = _get_interface_ip('wlan0')
+
+        # Also check wpa_cli status
+        status_output, _ = run_command(['wpa_cli', '-i', 'wlan0', 'status'], timeout=5)
+        state = 'UNKNOWN'
+        if status_output:
+            for line in status_output.split('\n'):
+                if line.startswith('wpa_state='):
+                    state = line.split('=')[1].strip()
+                    break
+
         if ip and not ip.startswith('169.254.'):
             return jsonify({
                 'success': True,
                 'message': f'Connected to {ssid}',
-                'ip': ip
+                'ip': ip,
+                'state': state
+            })
+        elif state == 'COMPLETED':
+            return jsonify({
+                'success': True,
+                'message': f'Connected to {ssid}, waiting for IP...',
+                'ip': None,
+                'state': state
+            })
+        elif state in ['SCANNING', 'ASSOCIATING', 'ASSOCIATED', '4WAY_HANDSHAKE']:
+            return jsonify({
+                'success': True,
+                'message': f'Connecting to {ssid}...',
+                'ip': None,
+                'state': state
             })
         else:
             return jsonify({
-                'success': True,
-                'message': f'Connecting to {ssid}... (may take a moment)',
-                'ip': None
-            })
+                'success': False,
+                'error': f'Connection failed (state: {state}). Check password.',
+                'state': state
+            }), 400
+
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        import traceback
+        return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
 @config_bp.route('/hotspot', methods=['GET', 'POST'])
