@@ -28,6 +28,30 @@
         margin-top: 5px;
     }
 
+    .qsecbit-datetime {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 15px;
+        margin-top: 12px;
+        padding: 8px 20px;
+        background: var(--bg-secondary, rgba(255, 255, 255, 0.05));
+        border-radius: 20px;
+    }
+
+    .qsecbit-date {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary, #fff);
+    }
+
+    .qsecbit-time {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--accent-color, #F05B2D);
+        font-variant-numeric: tabular-nums;
+    }
+
     /* Score Circle */
     .qsecbit-score-container {
         position: relative;
@@ -241,6 +265,10 @@
     <div class="qsecbit-header">
         <h2>Qsecbit Live</h2>
         <div class="subtitle">Real-Time v6.0 Protection Score</div>
+        <div class="qsecbit-datetime" id="qsecbit-datetime">
+            <span class="qsecbit-date" id="qsecbit-date"></span>
+            <span class="qsecbit-time" id="qsecbit-time"></span>
+        </div>
     </div>
 
     <!-- Score Circle -->
@@ -410,8 +438,27 @@
         }
     }
 
+    // Clock update
+    function updateQsecbitClock() {
+        const now = new Date();
+        const dateEl = document.getElementById('qsecbit-date');
+        const timeEl = document.getElementById('qsecbit-time');
+        if (dateEl) {
+            dateEl.textContent = now.toLocaleDateString('en-GB', {
+                weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+            });
+        }
+        if (timeEl) {
+            timeEl.textContent = now.toLocaleTimeString('en-GB', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        }
+    }
+
     // Initial fetch and polling
     fetchQsecbitScore();
+    updateQsecbitClock();
     setInterval(fetchQsecbitScore, POLL_INTERVAL);
+    setInterval(updateQsecbitClock, 1000);
 })();
 </script>
