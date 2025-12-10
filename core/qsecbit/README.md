@@ -1,13 +1,13 @@
-# Qsecbit: AI Resilience Metrics
+# Qsecbit: Unified Cyber Resilience Engine
 
 <p align="center">
   <strong>The Future of Cybersecurity</strong><br>
-  <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
+  <em>Single Source of Truth · AI-Powered Detection · Real-Time Mitigation</em>
 </p>
 
 **Pillar 3 of HookProbe: Quantified Cyber Resilience**
 
-**Version**: 5.0 "Liberty" | **License**: MIT | **Author**: Andrei Toma
+**Version**: 6.0 "Unified" | **License**: Proprietary | **Author**: Andrei Toma
 
 ---
 
@@ -18,7 +18,12 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
+- [v6.0 Unified Engine](#v60-unified-engine)
 - [Architecture](#architecture)
+- [OSI Layer Detection (L2-L7)](#osi-layer-detection-l2-l7)
+- [AI/ML Pattern Recognition](#aiml-pattern-recognition)
+- [Automated Response Orchestrator](#automated-response-orchestrator)
+- [Real-Time Mitigation Workflow](#real-time-mitigation-workflow)
 - [XDP/eBPF DDoS Mitigation](#xdpebpf-ddos-mitigation)
 - [Energy Monitoring & Anomaly Detection](#energy-monitoring--anomaly-detection)
 - [NIC Compatibility Matrix](#nic-compatibility-matrix)
@@ -36,59 +41,208 @@
 Traditional security asks: *"Are we under attack?"* (binary yes/no)
 **Qsecbit asks**: *"How fast can we return to equilibrium?"* (quantified resilience 0.0-1.0)
 
-**Qsecbit (Quantum Security Bit)** measures cyber resilience as the smallest unit where AI-driven attack and defense reach equilibrium through continuous error correction.
+**Qsecbit (Quantum Security Bit)** is the **single source of truth** for cyber protection, providing unified threat detection, classification, and automated response across all OSI layers (L2-L7).
+
+### What's New in v6.0 "Unified"
+
+**Qsecbit v6.0** transforms from a resilience metric into a **complete unified threat detection and response engine**:
+
+| Capability | v5.0 | v6.0 |
+|-----------|------|------|
+| **Threat Detection** | Statistical drift | **27 attack types across L2-L7** |
+| **ML Classification** | Single attack probability | **Multi-class classifier with 50+ features** |
+| **Response** | Manual/XDP blocking | **Automated orchestration with policy engine** |
+| **Attack Chains** | Not supported | **Multi-stage correlation scoring** |
+| **MITRE ATT&CK** | Not mapped | **Full technique mapping** |
+| **Energy Integration** | Anomaly score | **Spike-triggered mitigation** |
 
 ### Key Features
 
-- **Multi-Component Threat Analysis**: Combines statistical drift, ML predictions, classifier decay, system entropy, and energy anomalies
-- **RAG Status System**: Real-time Red/Amber/Green threat classification
-- **XDP/eBPF Integration**: Kernel-level DDoS mitigation with automatic NIC detection
-- **Energy Monitoring (NEW)**: Per-PID power consumption tracking with EWMA/Z-score anomaly detection
-- **Dual-Database Support**: ClickHouse (edge) and Apache Doris (cloud) integration
-- **Automatic NIC Detection**: Intelligent XDP mode selection based on hardware capabilities
-- **Multi-Tenant Support**: Built for MSSP cloud deployments with tenant isolation
+- **Single Source of Truth**: One unified engine for all threat detection, classification, and response
+- **OSI Layer Detection (L2-L7)**: 27 attack types from ARP Spoofing to HTTP Flood
+- **AI/ML Pattern Recognition**: Real-time classification with 50+ network features
+- **Automated Response**: Policy-driven mitigation via XDP, firewall, and rate limiting
+- **Attack Chain Correlation**: Detect multi-stage attacks (reconnaissance → exploitation → pivot)
+- **Energy-Based Anomaly Detection**: Power consumption spikes trigger automated response
+- **MITRE ATT&CK Mapping**: Industry-standard threat intelligence integration
+- **Deployment-Adaptive Weights**: Optimized for Guardian, Fortress, Nexus, MSSP
 
-### Qsecbit Algorithm
+### Supported Attack Types
 
-The Qsecbit score (R) is calculated as a weighted combination of **five components** (when energy monitoring is enabled):
+| OSI Layer | Attacks Detected |
+|-----------|------------------|
+| **L2 (Data Link)** | ARP Spoofing, MAC Flooding, VLAN Hopping, Evil Twin, Rogue DHCP |
+| **L3 (Network)** | IP Spoofing, ICMP Flood, Smurf Attack, Routing Attack, Fragmentation |
+| **L4 (Transport)** | SYN Flood, Port Scan, TCP Reset, Session Hijack, UDP Flood |
+| **L5 (Session)** | SSL Strip, TLS Downgrade, Cert Pinning Bypass, Auth Bypass |
+| **L7 (Application)** | SQL Injection, XSS, DNS Tunneling, HTTP Flood, Malware C2, Command Injection, Path Traversal |
+
+### Qsecbit v6.0 Unified Formula
+
+The unified Qsecbit score combines layer-weighted threat scores with behavioral analysis:
 
 ```
-R = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
+Q = Σ(ωᵢ × Lᵢ) + β×Energy + γ×Behavioral + δ×ChainCorrelation
 ```
 
-**Default (Energy Monitoring Disabled)**:
-- **drift** (30%): Mahalanobis distance from baseline telemetry
-- **p_attack** (30%): ML-predicted attack probability
-- **decay** (20%): Rate of change in classifier confidence
-- **q_drift** (20%): System entropy deviation
+Where:
+- **Lᵢ**: Layer score for L2, L3, L4, L5, L7 (0.0-1.0)
+- **ωᵢ**: Deployment-specific layer weight
+- **Energy**: Power consumption anomaly score
+- **Behavioral**: ML-detected behavioral anomalies
+- **ChainCorrelation**: Multi-stage attack correlation bonus
 
-**With Energy Monitoring Enabled**:
-- **drift** (25%): Mahalanobis distance from baseline telemetry
-- **p_attack** (25%): ML-predicted attack probability
-- **decay** (20%): Rate of change in classifier confidence
-- **q_drift** (15%): System entropy deviation
-- **energy_anomaly** (15%): Power consumption anomaly score (NEW)
+**Deployment-Specific Weights**:
+
+| Deployment | L2 | L3 | L4 | L5 | L7 | Energy | Behavioral | Chain |
+|-----------|-----|-----|-----|-----|-----|--------|------------|-------|
+| **Guardian** | 0.25 | 0.20 | 0.15 | 0.15 | 0.15 | 0.05 | 0.03 | 0.02 |
+| **Fortress** | 0.15 | 0.25 | 0.25 | 0.10 | 0.15 | 0.05 | 0.03 | 0.02 |
+| **Nexus** | 0.10 | 0.15 | 0.15 | 0.15 | 0.30 | 0.05 | 0.05 | 0.05 |
+| **MSSP** | 0.15 | 0.20 | 0.20 | 0.15 | 0.20 | 0.05 | 0.03 | 0.02 |
 
 **RAG Classification**:
-- **GREEN** (< 0.45): Normal operation
+- **GREEN** (< 0.45): Normal operation - monitoring mode
 - **AMBER** (0.45-0.70): Warning state - automated response initiated
 - **RED** (> 0.70): Critical - full mitigation engaged
 
 ---
 
+## 🚀 v6.0 Unified Engine
+
+### The Single Source of Truth
+
+Qsecbit v6.0 introduces the **UnifiedThreatEngine** - a complete detection-to-mitigation pipeline:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     QSECBIT v6.0 UNIFIED ENGINE                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+│  │   L2    │  │   L3    │  │   L4    │  │   L5    │  │   L7    │       │
+│  │Detector │  │Detector │  │Detector │  │Detector │  │Detector │       │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘       │
+│       │            │            │            │            │             │
+│       └────────────┴────────────┴────────────┴────────────┘             │
+│                              │                                          │
+│                              ▼                                          │
+│                    ┌─────────────────┐                                  │
+│                    │  ThreatEvent    │  Canonical threat format         │
+│                    │  Aggregator     │  with MITRE ATT&CK mapping       │
+│                    └────────┬────────┘                                  │
+│                             │                                           │
+│                             ▼                                           │
+│       ┌─────────────────────────────────────────────┐                   │
+│       │         ML ATTACK CLASSIFIER                │                   │
+│       │  ┌──────────────┐  ┌──────────────────────┐ │                   │
+│       │  │   Feature    │  │  Random Forest /     │ │                   │
+│       │  │  Extractor   │→│  Rule-Based Fallback │ │                   │
+│       │  │  (50+ feat)  │  │                      │ │                   │
+│       │  └──────────────┘  └──────────────────────┘ │                   │
+│       └─────────────────────┬───────────────────────┘                   │
+│                             │                                           │
+│                             ▼                                           │
+│       ┌─────────────────────────────────────────────┐                   │
+│       │         UNIFIED SCORE CALCULATOR            │                   │
+│       │  Q = Σ(ωᵢ × Lᵢ) + Energy + Behavior + Chain │                   │
+│       │  + Convergence Rate + Trend Analysis        │                   │
+│       └─────────────────────┬───────────────────────┘                   │
+│                             │                                           │
+│                             ▼                                           │
+│       ┌─────────────────────────────────────────────┐                   │
+│       │       RESPONSE ORCHESTRATOR                 │                   │
+│       │  ┌──────┐  ┌──────────┐  ┌─────────────┐   │                   │
+│       │  │ XDP  │  │ Firewall │  │ Rate Limit  │   │                   │
+│       │  │Block │  │  Rules   │  │   (tc/iptables) │                   │
+│       │  └──────┘  └──────────┘  └─────────────┘   │                   │
+│       └─────────────────────────────────────────────┘                   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Quick Start (v6.0 API)
+
+```python
+#!/usr/bin/env python3
+from core.qsecbit import (
+    Qsecbit, QsecbitConfig,
+    UnifiedThreatEngine, UnifiedEngineConfig, DeploymentType
+)
+import numpy as np
+
+# Option 1: Via existing Qsecbit instance (backward compatible)
+baseline_mu = np.array([0.1, 0.2, 0.15, 0.33])
+baseline_cov = np.eye(4) * 0.02
+quantum_anchor = 6.144
+
+qsecbit = Qsecbit(baseline_mu, baseline_cov, quantum_anchor)
+
+# Run unified detection with single method call
+score = qsecbit.detect_threats(deployment_type='guardian')
+
+print(f"Unified Score: {score.score:.4f} ({score.rag_status})")
+for threat in score.threats:
+    print(f"  [{threat.severity.name}] {threat.attack_type.name}")
+    print(f"    {threat.description}")
+
+# Option 2: Direct UnifiedThreatEngine (full control)
+config = UnifiedEngineConfig(deployment_type=DeploymentType.FORTRESS)
+engine = UnifiedThreatEngine(config=config)
+
+score = engine.detect()
+stats = engine.get_statistics()
+```
+
+### Legacy Mode (v5.0 Compatibility)
+
+Existing v5.0 code continues to work unchanged:
+
+```python
+# v5.0 legacy API still fully supported
+sample = qsecbit.calculate(
+    x_t=np.array([0.25, 0.42, 0.35, 0.45]),
+    p_attack=0.72,
+    c_t=np.array([0.76, 0.71, 0.73])
+)
+print(f"Legacy Score: {sample.score:.4f}")
+```
+
+---
+
 ## 🏗️ Architecture
 
-### V5.0 Modular Design
+### v6.0 Modular Design
 
-**Qsecbit v5.0** features a **clean, modular architecture** for production deployment:
+**Qsecbit v6.0** features a **comprehensive, modular architecture** with specialized detectors for each OSI layer:
 
 ```
 qsecbit/
-├── __init__.py              # Package exports
-├── qsecbit.py               # Core orchestrator (resilience metric calculation)
+├── __init__.py              # Package exports (v5.0 + v6.0 unified)
+├── qsecbit.py               # Core orchestrator + v6.0 unified integration
+├── threat_types.py          # Unified data model (ThreatEvent, AttackType)
+├── unified_engine.py        # Main v6.0 unified engine orchestrator
 ├── energy_monitor.py        # RAPL + per-PID power tracking
 ├── xdp_manager.py           # XDP/eBPF DDoS mitigation
 ├── nic_detector.py          # NIC capability detection
+│
+├── detectors/               # OSI Layer-Specific Detectors
+│   ├── __init__.py
+│   ├── base.py              # Abstract base detector class
+│   ├── l2_detector.py       # L2 Data Link: ARP, MAC, VLAN, Evil Twin
+│   ├── l3_detector.py       # L3 Network: IP Spoofing, ICMP, Smurf
+│   ├── l4_detector.py       # L4 Transport: SYN Flood, Port Scan
+│   ├── l5_detector.py       # L5 Session: SSL Strip, TLS Downgrade
+│   └── l7_detector.py       # L7 Application: SQLi, XSS, DNS Tunnel
+│
+├── ml/                      # Machine Learning Classification
+│   ├── __init__.py
+│   └── classifier.py        # Attack classifier with feature extraction
+│
+├── response/                # Automated Response Orchestration
+│   ├── __init__.py
+│   └── orchestrator.py      # XDP/firewall/rate-limit orchestrator
+│
 └── README.md                # This documentation
 ```
 
@@ -96,16 +250,21 @@ qsecbit/
 
 | Module | Purpose | Key Classes |
 |--------|---------|-------------|
-| `qsecbit.py` | **Main orchestrator** - Resilience metric calculation, database integration, reporting | `Qsecbit`, `QsecbitConfig`, `QsecbitSample` |
-| `energy_monitor.py` | Energy consumption monitoring and network direction-aware anomaly detection | `EnergyMonitor`, `SystemEnergySnapshot`, `PIDEnergyStats`, `NetworkEnergyStats`, `DeploymentRole` |
+| `qsecbit.py` | **Main orchestrator** - v5.0 resilience + v6.0 unified detection | `Qsecbit`, `QsecbitConfig`, `QsecbitSample` |
+| `threat_types.py` | **Unified data model** - All attack types, severities, responses | `AttackType`, `ThreatEvent`, `QsecbitUnifiedScore` |
+| `unified_engine.py` | **v6.0 unified engine** - Orchestrates all detectors | `UnifiedThreatEngine`, `UnifiedEngineConfig` |
+| `detectors/*.py` | **Layer detectors** - OSI L2-L7 threat detection | `L2DataLinkDetector`, `L3NetworkDetector`, etc. |
+| `ml/classifier.py` | **ML classification** - Feature extraction + attack classification | `AttackClassifier`, `FeatureExtractor` |
+| `response/orchestrator.py` | **Response automation** - XDP, firewall, rate limiting | `ResponseOrchestrator`, `ResponsePolicy` |
+| `energy_monitor.py` | Energy consumption monitoring with anomaly detection | `EnergyMonitor`, `SystemEnergySnapshot` |
 | `xdp_manager.py` | XDP/eBPF program lifecycle and DDoS mitigation | `XDPManager`, `XDPStats` |
-| `nic_detector.py` | NIC hardware capability detection and XDP mode selection | `NICDetector`, `NICCapability`, `XDPMode` |
 
 **Design Philosophy**:
-- **Separation of Concerns**: Each module has a single, well-defined responsibility
-- **Clean Imports**: Main orchestrator imports from submodules
-- **Easy Navigation**: Find code quickly - XDP logic in `xdp_manager.py`, energy in `energy_monitor.py`
-- **Production Ready**: Modular design supports unit testing, independent updates, and maintainability
+- **Single Source of Truth**: One unified engine for all detection and response
+- **OSI Layer Separation**: Each layer has dedicated detection logic
+- **ML-First Classification**: Pattern recognition before signature matching
+- **Automated Response**: Policy-driven mitigation without manual intervention
+- **Backward Compatible**: v5.0 API continues to work unchanged
 
 ### Deployment Models
 
@@ -150,6 +309,525 @@ qsecbit/
 4. **Adaptive Capacity**: Energy consumption patterns indicating system stress
 
 **Key Insight**: Qsecbit doesn't just detect attacks - it **quantifies how well your system absorbs and recovers from threats**. A high convergence rate indicates robust resilience; a degrading trend signals declining defensive capacity before catastrophic failure.
+
+---
+
+## 🔍 OSI Layer Detection (L2-L7)
+
+### Layer 2 - Data Link Detection
+
+**Detector**: `L2DataLinkDetector`
+
+| Attack Type | Detection Method | Confidence | Evidence |
+|------------|------------------|------------|----------|
+| **ARP Spoofing** | MAC address change for known IP; gateway protection | 85-95% | MAC history, is_gateway flag |
+| **MAC Flooding** | FDB table size monitoring (bridge fdb) | 60-80% | fdb_count, overflow_ratio |
+| **VLAN Hopping** | 802.1Q-in-Q double tagging via Suricata | 75% | Suricata alerts |
+| **Evil Twin** | Same SSID with different BSSID via WiFi scan | 90% | known_bssid, rogue_bssid |
+| **Rogue DHCP** | Multiple DHCP servers via Zeek dhcp.log | 85% | all_servers, new_servers |
+
+**Example Detection**:
+```python
+from core.qsecbit.detectors import L2DataLinkDetector
+
+detector = L2DataLinkDetector()
+threats = detector.detect()
+
+for threat in threats:
+    if threat.attack_type.name == 'ARP_SPOOFING':
+        print(f"ARP Spoofing: {threat.source_ip} MAC changed to {threat.source_mac}")
+        if threat.evidence.get('is_gateway'):
+            print("  ⚠️ CRITICAL: Gateway MAC compromised!")
+```
+
+### Layer 3 - Network Detection
+
+**Detector**: `L3NetworkDetector`
+
+| Attack Type | Detection Method | Confidence | Evidence |
+|------------|------------------|------------|----------|
+| **IP Spoofing** | Martian packets in kernel logs | 70-85% | spoofed_ip, interface |
+| **ICMP Flood** | `/proc/net/snmp` InEchos rate spike | 70-85% | icmp_rate, baseline_rate |
+| **Smurf Attack** | Broadcast ICMP echo requests | 80% | broadcast_count, source_ip |
+| **Routing Attack** | Suricata BGP/OSPF anomalies | 75% | Suricata alert signature |
+| **Fragmentation** | Overlapping/malformed fragments | 80% | Suricata frag alerts |
+
+### Layer 4 - Transport Detection
+
+**Detector**: `L4TransportDetector`
+
+| Attack Type | Detection Method | Confidence | Evidence |
+|------------|------------------|------------|----------|
+| **SYN Flood** | SYN_RECV state count via `ss -s` | 70-85% | syn_recv_count, threshold |
+| **Port Scan** | Zeek conn.log analysis (50+ ports) | 75-90% | ports_scanned, scan_duration |
+| **TCP Reset** | Suricata RST anomaly detection | 75% | Suricata RST alerts |
+| **Session Hijack** | Sequence number prediction alerts | 80% | flow_id, Suricata signature |
+| **UDP Flood** | `/proc/net/snmp` InDatagrams spike | 70-85% | udp_rate, baseline_rate |
+
+### Layer 5 - Session Detection
+
+**Detector**: `L5SessionDetector`
+
+| Attack Type | Detection Method | Confidence | Evidence |
+|------------|------------------|------------|----------|
+| **SSL Strip** | HTTP downgrade detection via Zeek | 80% | Zeek ssl.log, downgrade_url |
+| **TLS Downgrade** | Weak TLS version detection (SSLv2/3, TLS1.0) | 85% | tls_version, cipher_suite |
+| **Cert Pinning Bypass** | Certificate chain anomalies | 75% | cert_issuer, expected_issuer |
+| **Auth Bypass** | Brute force tracking (10+ failures) | 80% | failed_attempts, source_ip |
+
+### Layer 7 - Application Detection
+
+**Detector**: `L7ApplicationDetector`
+
+| Attack Type | Detection Method | Confidence | Evidence |
+|------------|------------------|------------|----------|
+| **SQL Injection** | Pattern matching (`' OR 1=1`, `UNION SELECT`) | 85% | payload_snippet, url |
+| **XSS** | Script tag/event handler detection | 85% | payload_snippet, url |
+| **DNS Tunneling** | Shannon entropy analysis (>4.0 = suspicious) | 70-90% | entropy, query_length, subdomain |
+| **HTTP Flood** | Request rate per source IP (>100/min) | 75% | request_rate, threshold |
+| **Malware C2** | Known C2 domain/IP matching | 90% | matched_indicator, indicator_type |
+| **Command Injection** | Shell metacharacter detection | 85% | payload_snippet |
+| **Path Traversal** | `../` and path encoding detection | 85% | payload_snippet, url |
+
+---
+
+## 🧠 AI/ML Pattern Recognition
+
+### Feature Extraction
+
+The ML classifier extracts **50+ features** from network traffic for pattern recognition:
+
+```python
+@dataclass
+class NetworkFeatures:
+    # Packet characteristics (8 features)
+    packet_count: int
+    bytes_total: int
+    avg_packet_size: float
+    packet_rate: float
+    byte_rate: float
+    small_packets_ratio: float
+    large_packets_ratio: float
+    packet_size_variance: float
+
+    # Protocol distribution (10 features)
+    tcp_ratio: float
+    udp_ratio: float
+    icmp_ratio: float
+    other_proto_ratio: float
+    unique_protocols: int
+    dns_ratio: float
+    http_ratio: float
+    https_ratio: float
+    ssh_ratio: float
+    ftp_ratio: float
+
+    # TCP flags analysis (8 features)
+    syn_ratio: float
+    ack_ratio: float
+    fin_ratio: float
+    rst_ratio: float
+    psh_ratio: float
+    urg_ratio: float
+    syn_ack_ratio: float
+    incomplete_handshake_ratio: float
+
+    # Connection patterns (9 features)
+    unique_src_ips: int
+    unique_dst_ips: int
+    unique_src_ports: int
+    unique_dst_ports: int
+    avg_connection_duration: float
+    connection_rate: float
+    failed_connections_ratio: float
+    port_scan_score: float
+    ip_scan_score: float
+
+    # DNS analysis (5 features)
+    dns_query_count: int
+    avg_dns_query_length: float
+    dns_entropy: float
+    dns_txt_ratio: float
+    dns_mx_ratio: float
+
+    # HTTP analysis (4 features)
+    http_error_ratio: float
+    avg_uri_length: float
+    http_method_entropy: float
+    suspicious_user_agent_ratio: float
+
+    # SSL/TLS analysis (4 features)
+    ssl_handshake_failures: float
+    weak_cipher_ratio: float
+    self_signed_cert_ratio: float
+    expired_cert_ratio: float
+
+    # ARP analysis (2 features)
+    arp_request_ratio: float
+    arp_reply_ratio: float
+```
+
+### Attack Classification Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  ML ATTACK CLASSIFICATION                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Raw Traffic Data                                                │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌─────────────────────┐                                         │
+│  │  Feature Extractor  │  Extract 50+ features from traffic      │
+│  │  - Packet stats     │                                         │
+│  │  - Protocol ratios  │                                         │
+│  │  - TCP flags        │                                         │
+│  │  - DNS entropy      │                                         │
+│  └──────────┬──────────┘                                         │
+│             │                                                    │
+│             ▼                                                    │
+│  ┌─────────────────────┐      ┌─────────────────────┐           │
+│  │   ML Model Check    │──No──│   Rule-Based        │           │
+│  │   (Model Loaded?)   │      │   Fallback          │           │
+│  └──────────┬──────────┘      │   (Signatures)      │           │
+│             │ Yes              └──────────┬──────────┘           │
+│             ▼                             │                      │
+│  ┌─────────────────────┐                 │                      │
+│  │   Random Forest     │                 │                      │
+│  │   Classifier        │                 │                      │
+│  │   - Multi-class     │                 │                      │
+│  │   - Probability     │                 │                      │
+│  └──────────┬──────────┘                 │                      │
+│             │                            │                      │
+│             └────────────────────────────┘                      │
+│                            │                                    │
+│                            ▼                                    │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  Classification Result                                   │    │
+│  │  - attack_type: AttackType enum                         │    │
+│  │  - confidence: 0.0-1.0                                  │    │
+│  │  - features_used: List[str]                             │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Signature-Based Fallback
+
+When ML model is unavailable, rule-based signatures provide detection:
+
+```python
+ATTACK_SIGNATURES = {
+    AttackType.SYN_FLOOD: {
+        'syn_ratio': (0.8, 'gt'),           # >80% SYN packets
+        'incomplete_handshake_ratio': (0.5, 'gt'),
+        'packet_rate': (1000, 'gt'),        # >1000 packets/sec
+    },
+    AttackType.PORT_SCAN: {
+        'unique_dst_ports': (50, 'gt'),     # >50 unique ports
+        'port_scan_score': (0.7, 'gt'),
+    },
+    AttackType.DNS_TUNNELING: {
+        'dns_entropy': (4.0, 'gt'),         # High entropy
+        'avg_dns_query_length': (50, 'gt'), # Long queries
+        'dns_txt_ratio': (0.3, 'gt'),       # Many TXT records
+    },
+    AttackType.SQL_INJECTION: {
+        'http_error_ratio': (0.3, 'gt'),    # Many errors
+        'avg_uri_length': (200, 'gt'),      # Long URIs
+    },
+    # ... 27 attack types with signatures
+}
+```
+
+### Training Custom Models
+
+```python
+from core.qsecbit.ml import AttackClassifier, FeatureExtractor
+
+# Initialize classifier
+classifier = AttackClassifier()
+
+# Prepare training data (labeled traffic captures)
+training_data = [...]  # List of NetworkFeatures
+training_labels = [...]  # List of AttackType
+
+# Train model
+classifier.train(training_data, training_labels)
+
+# Save for production use
+classifier.save_model('/opt/hookprobe/models/attack_classifier.joblib')
+
+# Load in production
+classifier.load_model('/opt/hookprobe/models/attack_classifier.joblib')
+```
+
+---
+
+## 🤖 Automated Response Orchestrator
+
+### Response Policy Engine
+
+The Response Orchestrator executes automated mitigation based on configurable policies:
+
+```python
+from core.qsecbit.response import ResponseOrchestrator, ResponsePolicy
+
+policy = ResponsePolicy(
+    # Enable/disable response types
+    enable_xdp_blocking=True,       # Kernel-level IP blocking
+    enable_firewall_rules=True,     # nftables/iptables rules
+    enable_rate_limiting=True,      # tc/iptables rate limits
+    enable_session_termination=False,  # Dangerous: kills connections
+    enable_quarantine=False,        # Requires SDN integration
+
+    # Automatic thresholds
+    auto_block_severity=ThreatSeverity.HIGH,   # Auto-block HIGH+
+    rate_limit_severity=ThreatSeverity.MEDIUM, # Rate limit MEDIUM+
+
+    # Limits
+    max_blocked_ips=10000,
+    block_duration_minutes=60,
+    rate_limit_duration_minutes=30,
+
+    # Whitelist (never block)
+    whitelist_ips={'192.168.1.1', '10.0.0.1'},
+    whitelist_macs={'aa:bb:cc:dd:ee:ff'},
+)
+
+orchestrator = ResponseOrchestrator(
+    xdp_manager=xdp_manager,
+    policy=policy
+)
+```
+
+### Response Actions
+
+| Action | Description | Implementation |
+|--------|-------------|----------------|
+| **MONITOR** | Log and track (no active response) | Logging only |
+| **ALERT** | Send notification | Callback + alerts.json |
+| **RATE_LIMIT** | Throttle source traffic | tc/iptables rules |
+| **BLOCK_IP** | Block source IP | XDP map → nftables → iptables |
+| **BLOCK_MAC** | Block source MAC | ebtables |
+| **TERMINATE_SESSION** | Kill active connections | conntrack -D |
+| **QUARANTINE** | Isolate to VLAN | SDN/OpenFlow (future) |
+| **CAPTIVE_PORTAL** | Redirect to portal | dnsmasq (future) |
+
+### Default Response Map
+
+```python
+DEFAULT_RESPONSE_MAP = {
+    # Critical threats → immediate block
+    AttackType.ARP_SPOOFING: [ResponseAction.ALERT, ResponseAction.BLOCK_MAC],
+    AttackType.EVIL_TWIN: [ResponseAction.ALERT],
+
+    # Flood attacks → rate limit then block
+    AttackType.SYN_FLOOD: [ResponseAction.ALERT, ResponseAction.RATE_LIMIT, ResponseAction.BLOCK_IP],
+    AttackType.UDP_FLOOD: [ResponseAction.ALERT, ResponseAction.RATE_LIMIT, ResponseAction.BLOCK_IP],
+    AttackType.ICMP_FLOOD: [ResponseAction.ALERT, ResponseAction.RATE_LIMIT],
+    AttackType.HTTP_FLOOD: [ResponseAction.ALERT, ResponseAction.RATE_LIMIT, ResponseAction.BLOCK_IP],
+
+    # Reconnaissance → monitor and alert
+    AttackType.PORT_SCAN: [ResponseAction.ALERT, ResponseAction.MONITOR],
+
+    # Application attacks → block source
+    AttackType.SQL_INJECTION: [ResponseAction.ALERT, ResponseAction.BLOCK_IP],
+    AttackType.XSS: [ResponseAction.ALERT, ResponseAction.BLOCK_IP],
+    AttackType.COMMAND_INJECTION: [ResponseAction.ALERT, ResponseAction.BLOCK_IP],
+
+    # Stealth attacks → alert only (investigation needed)
+    AttackType.DNS_TUNNELING: [ResponseAction.ALERT],
+    AttackType.MALWARE_C2: [ResponseAction.ALERT, ResponseAction.BLOCK_IP],
+}
+```
+
+---
+
+## ⚡ Real-Time Mitigation Workflow
+
+### Detection-to-Mitigation Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│               REAL-TIME DETECTION-TO-MITIGATION PIPELINE                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. CONTINUOUS MONITORING (every 1-5 seconds)                            │
+│     ┌──────────────────────────────────────────────────────────────┐    │
+│     │  • ARP cache changes    • /proc/net/snmp stats               │    │
+│     │  • Zeek/Suricata logs   • Energy consumption (RAPL)          │    │
+│     │  • WiFi scan (periodic) • HTTP access logs                   │    │
+│     └──────────────────────────────────────────────────────────────┘    │
+│                                    │                                     │
+│                                    ▼                                     │
+│  2. THREAT DETECTION (per-layer)                                         │
+│     ┌──────────────────────────────────────────────────────────────┐    │
+│     │  L2: ARP Spoofing detected! Gateway MAC changed               │    │
+│     │      → ThreatEvent(severity=CRITICAL, confidence=0.95)        │    │
+│     │                                                               │    │
+│     │  L4: SYN Flood detected! 50,000 SYN_RECV states              │    │
+│     │      → ThreatEvent(severity=HIGH, confidence=0.85)            │    │
+│     └──────────────────────────────────────────────────────────────┘    │
+│                                    │                                     │
+│                                    ▼                                     │
+│  3. ML CLASSIFICATION (optional enrichment)                              │
+│     ┌──────────────────────────────────────────────────────────────┐    │
+│     │  Feature extraction → Model inference → Confidence boost      │    │
+│     │  SYN Flood confidence: 0.85 → 0.92 (ML confirms pattern)     │    │
+│     └──────────────────────────────────────────────────────────────┘    │
+│                                    │                                     │
+│                                    ▼                                     │
+│  4. UNIFIED SCORE CALCULATION                                            │
+│     ┌──────────────────────────────────────────────────────────────┐    │
+│     │  Q = Σ(ωᵢ × Lᵢ) + Energy + Behavioral + Chain                │    │
+│     │                                                               │    │
+│     │  Layer Scores:  L2=0.85, L3=0.20, L4=0.75, L5=0.10, L7=0.15 │    │
+│     │  Energy: 0.12  Behavioral: 0.08  Chain: 0.15                 │    │
+│     │                                                               │    │
+│     │  Unified Score: 0.72  →  RAG: RED                            │    │
+│     └──────────────────────────────────────────────────────────────┘    │
+│                                    │                                     │
+│                                    ▼                                     │
+│  5. AUTOMATED RESPONSE (policy-driven)                                   │
+│     ┌──────────────────────────────────────────────────────────────┐    │
+│     │  ARP_SPOOFING (CRITICAL):                                     │    │
+│     │    → ALERT: Notification sent                                 │    │
+│     │    → BLOCK_MAC: ebtables -A INPUT -s aa:bb:cc:dd:ee:ff -j DROP│    │
+│     │                                                               │    │
+│     │  SYN_FLOOD (HIGH):                                            │    │
+│     │    → ALERT: Notification sent                                 │    │
+│     │    → RATE_LIMIT: 1000 pps per source                         │    │
+│     │    → BLOCK_IP: XDP map updated, 192.168.1.100 blocked        │    │
+│     └──────────────────────────────────────────────────────────────┘    │
+│                                    │                                     │
+│                                    ▼                                     │
+│  6. CONVERGENCE TRACKING                                                 │
+│     ┌──────────────────────────────────────────────────────────────┐    │
+│     │  Time to GREEN: 45 seconds                                    │    │
+│     │  Trend: IMPROVING                                             │    │
+│     │  Convergence Rate: 2.3 (good resilience)                     │    │
+│     └──────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Energy-Triggered Mitigation
+
+Energy consumption spikes can trigger automated response even before network-based detection:
+
+```python
+# Energy spike detection flow
+if energy_monitor.detect_anomalies(snapshot)['has_anomaly']:
+    anomalies = energy_monitor.detect_anomalies(snapshot)
+
+    if anomalies['nic_spike']:
+        # NIC interrupt handlers consuming excessive power
+        # → Likely DDoS attack overwhelming network stack
+        print("⚠️ NIC power spike detected - possible DDoS")
+
+        # Correlate with network metrics
+        if xdp_stats.tcp_syn_flood > threshold:
+            # Confirmed SYN Flood via energy + network correlation
+            orchestrator.respond(ThreatEvent(
+                attack_type=AttackType.SYN_FLOOD,
+                severity=ThreatSeverity.HIGH,
+                evidence={'energy_trigger': True, 'nic_watts': anomalies['nic_watts']}
+            ))
+
+    if anomalies['xdp_spike']:
+        # XDP/eBPF processes consuming excessive power
+        # → Possible XDP exploitation or overwhelming traffic
+        print("⚠️ XDP power spike detected - investigating")
+```
+
+### Attack Chain Correlation
+
+Multi-stage attacks are detected by correlating threats across time and layers:
+
+```python
+# Attack chain detection
+ATTACK_CHAINS = {
+    'reconnaissance_to_exploitation': [
+        AttackType.PORT_SCAN,      # Stage 1: Reconnaissance
+        AttackType.SYN_FLOOD,      # Stage 2: DoS distraction
+        AttackType.SQL_INJECTION,  # Stage 3: Exploitation
+    ],
+    'lateral_movement': [
+        AttackType.ARP_SPOOFING,   # Stage 1: MitM position
+        AttackType.SESSION_HIJACK, # Stage 2: Steal session
+        AttackType.COMMAND_INJECTION,  # Stage 3: Gain access
+    ],
+}
+
+# If threats in last 5 minutes match a chain pattern:
+# → Chain correlation score increases
+# → Higher overall Qsecbit score
+# → More aggressive response policy triggered
+```
+
+### Complete Integration Example
+
+```python
+#!/usr/bin/env python3
+"""
+Complete Qsecbit v6.0 Real-Time Mitigation Example
+"""
+import time
+from core.qsecbit import (
+    UnifiedThreatEngine, UnifiedEngineConfig, DeploymentType,
+    XDPManager, EnergyMonitor
+)
+from core.qsecbit.response import ResponseOrchestrator, ResponsePolicy
+
+# Initialize components
+xdp_manager = XDPManager(auto_detect=True)
+energy_monitor = EnergyMonitor(energy_monitoring_enabled=True)
+
+# Configure response policy
+policy = ResponsePolicy(
+    enable_xdp_blocking=True,
+    enable_firewall_rules=True,
+    enable_rate_limiting=True,
+    auto_block_severity=ThreatSeverity.HIGH,
+)
+
+# Create unified engine
+config = UnifiedEngineConfig(deployment_type=DeploymentType.FORTRESS)
+engine = UnifiedThreatEngine(
+    xdp_manager=xdp_manager,
+    energy_monitor=energy_monitor,
+    config=config
+)
+
+# Enable automated response
+engine.enable_response(policy)
+
+# Main monitoring loop
+print("Qsecbit v6.0 - Real-Time Threat Detection Active")
+print("=" * 60)
+
+while True:
+    # Run unified detection (all layers + ML + response)
+    score = engine.detect()
+
+    # Display status
+    print(f"\r[{score.timestamp}] Score: {score.score:.3f} ({score.rag_status}) "
+          f"Threats: {len(score.threats)}", end='', flush=True)
+
+    # Log significant events
+    if score.rag_status in ['AMBER', 'RED']:
+        print()  # Newline
+        for threat in score.threats:
+            print(f"  [{threat.severity.name}] {threat.attack_type.name}: "
+                  f"{threat.description[:50]}...")
+
+            # Response already executed automatically if enabled
+            if threat.blocked:
+                print(f"    ✓ Blocked at {threat.response_timestamp}")
+
+    time.sleep(5)  # 5-second detection interval
+```
 
 ---
 
@@ -1074,7 +1752,7 @@ mysql -h 10.100.1.10 -P 9030 -u root -p
 
 ## 📝 License
 
-MIT License - See `LICENSE` file in repository root.
+Proprietary License - See `LICENSE` file in this directory.
 
 ---
 
@@ -1086,4 +1764,6 @@ qsecbit@hookprobe.com
 
 ---
 
-**HookProbe v5.0** - Democratizing Cybersecurity Through Edge Computing
+**Qsecbit v6.0 "Unified"** - Single Source of Truth for Cyber Protection
+
+*One algorithm · All layers · Real-time mitigation*
