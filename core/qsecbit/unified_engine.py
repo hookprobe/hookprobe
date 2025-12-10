@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Unified Threat Engine
+Qsecbit Unified - Unified Threat Engine
 
 The Single Source of Truth for cybersecurity threat detection.
 Integrates all layer detectors, ML classification, energy monitoring,
@@ -7,7 +7,7 @@ and response orchestration into a unified scoring engine.
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import os
@@ -136,7 +136,7 @@ class UnifiedEngineConfig:
 
 class UnifiedThreatEngine:
     """
-    Qsecbit v6.0 - Unified Threat Engine
+    Qsecbit Unified - Unified Threat Engine
 
     The Single Source of Truth for cybersecurity threat detection and response.
 

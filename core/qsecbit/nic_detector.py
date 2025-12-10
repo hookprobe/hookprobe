@@ -3,7 +3,7 @@ NIC Detection and XDP Capability Management
 
 Author: Andrei Toma
 License: Proprietary - see LICENSE in this directory
-Version: 5.0
+Version: 5.0.0
 """
 
 import subprocess

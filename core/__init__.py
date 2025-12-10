@@ -11,4 +11,4 @@ Submodules:
 Full Documentation: docs/architecture/HOOKPROBE-ARCHITECTURE.md
 """
 
-__version__ = '1.0.0'
+__version__ = '5.0.0'

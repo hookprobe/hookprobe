@@ -13,7 +13,7 @@ Features:
 - JSON/JSONL output for web UI and API consumption
 
 Author: HookProbe Team
-Version: 1.0.0
+Version: 5.0.0
 License: AGPL-3.0 - see LICENSE in this directory
 """
 
