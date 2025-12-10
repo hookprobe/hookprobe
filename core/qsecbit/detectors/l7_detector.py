@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Layer 7 (Application) Threat Detector
+Qsecbit Unified - Layer 7 (Application) Threat Detector
 
 Detects Layer 7 attacks:
 - SQL Injection (SQLI patterns)
@@ -12,7 +12,7 @@ Detects Layer 7 attacks:
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import re

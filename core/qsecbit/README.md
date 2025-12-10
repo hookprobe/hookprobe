@@ -7,7 +7,7 @@
 
 **Pillar 3 of HookProbe: Quantified Cyber Resilience**
 
-**Version**: 6.0 "Unified" | **License**: Proprietary | **Author**: Andrei Toma
+**Version**: 5.0.0 "Cortex" | **License**: Proprietary | **Author**: Andrei Toma
 
 ---
 
@@ -18,7 +18,7 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [v6.0 Unified Engine](#v60-unified-engine)
+- [Unified Engine](#v60-unified-engine)
 - [Architecture](#architecture)
 - [OSI Layer Detection (L2-L7)](#osi-layer-detection-l2-l7)
 - [AI/ML Pattern Recognition](#aiml-pattern-recognition)
@@ -43,11 +43,11 @@ Traditional security asks: *"Are we under attack?"* (binary yes/no)
 
 **Qsecbit (Quantum Security Bit)** is the **single source of truth** for cyber protection, providing unified threat detection, classification, and automated response across all OSI layers (L2-L7).
 
-### What's New in v6.0 "Unified"
+### What's New in 5.0 "Unified"
 
-**Qsecbit v6.0** transforms from a resilience metric into a **complete unified threat detection and response engine**:
+**Qsecbit Unified** transforms from a resilience metric into a **complete unified threat detection and response engine**:
 
-| Capability | v5.0 | v6.0 |
+| Capability | Legacy | 5.0 Unified |
 |-----------|------|------|
 | **Threat Detection** | Statistical drift | **27 attack types across L2-L7** |
 | **ML Classification** | Single attack probability | **Multi-class classifier with 50+ features** |
@@ -77,7 +77,7 @@ Traditional security asks: *"Are we under attack?"* (binary yes/no)
 | **L5 (Session)** | SSL Strip, TLS Downgrade, Cert Pinning Bypass, Auth Bypass |
 | **L7 (Application)** | SQL Injection, XSS, DNS Tunneling, HTTP Flood, Malware C2, Command Injection, Path Traversal |
 
-### Qsecbit v6.0 Unified Formula
+### Qsecbit Unified Formula
 
 The unified Qsecbit score combines layer-weighted threat scores with behavioral analysis:
 
@@ -108,15 +108,15 @@ Where:
 
 ---
 
-## 🚀 v6.0 Unified Engine
+## 🚀 Unified Engine
 
 ### The Single Source of Truth
 
-Qsecbit v6.0 introduces the **UnifiedThreatEngine** - a complete detection-to-mitigation pipeline:
+Qsecbit 5.0 introduces the **UnifiedThreatEngine** - a complete detection-to-mitigation pipeline:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                     QSECBIT v6.0 UNIFIED ENGINE                         │
+│                     QSECBIT 5.0 UNIFIED ENGINE                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
@@ -161,7 +161,7 @@ Qsecbit v6.0 introduces the **UnifiedThreatEngine** - a complete detection-to-mi
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Quick Start (v6.0 API)
+### Quick Start (Unified API)
 
 ```python
 #!/usr/bin/env python3
@@ -212,16 +212,16 @@ print(f"Legacy Score: {sample.score:.4f}")
 
 ## 🏗️ Architecture
 
-### v6.0 Modular Design
+### Modular Design
 
-**Qsecbit v6.0** features a **comprehensive, modular architecture** with specialized detectors for each OSI layer:
+**Qsecbit Unified** features a **comprehensive, modular architecture** with specialized detectors for each OSI layer:
 
 ```
 qsecbit/
-├── __init__.py              # Package exports (v5.0 + v6.0 unified)
-├── qsecbit.py               # Core orchestrator + v6.0 unified integration
+├── __init__.py              # Package exports (unified)
+├── qsecbit.py               # Core orchestrator + unified integration
 ├── threat_types.py          # Unified data model (ThreatEvent, AttackType)
-├── unified_engine.py        # Main v6.0 unified engine orchestrator
+├── unified_engine.py        # Main unified engine orchestrator
 ├── energy_monitor.py        # RAPL + per-PID power tracking
 ├── xdp_manager.py           # XDP/eBPF DDoS mitigation
 ├── nic_detector.py          # NIC capability detection
@@ -250,9 +250,9 @@ qsecbit/
 
 | Module | Purpose | Key Classes |
 |--------|---------|-------------|
-| `qsecbit.py` | **Main orchestrator** - v5.0 resilience + v6.0 unified detection | `Qsecbit`, `QsecbitConfig`, `QsecbitSample` |
+| `qsecbit.py` | **Main orchestrator** - resilience + unified detection | `Qsecbit`, `QsecbitConfig`, `QsecbitSample` |
 | `threat_types.py` | **Unified data model** - All attack types, severities, responses | `AttackType`, `ThreatEvent`, `QsecbitUnifiedScore` |
-| `unified_engine.py` | **v6.0 unified engine** - Orchestrates all detectors | `UnifiedThreatEngine`, `UnifiedEngineConfig` |
+| `unified_engine.py` | **Unified engine** - Orchestrates all detectors | `UnifiedThreatEngine`, `UnifiedEngineConfig` |
 | `detectors/*.py` | **Layer detectors** - OSI L2-L7 threat detection | `L2DataLinkDetector`, `L3NetworkDetector`, etc. |
 | `ml/classifier.py` | **ML classification** - Feature extraction + attack classification | `AttackClassifier`, `FeatureExtractor` |
 | `response/orchestrator.py` | **Response automation** - XDP, firewall, rate limiting | `ResponseOrchestrator`, `ResponsePolicy` |
@@ -771,7 +771,7 @@ ATTACK_CHAINS = {
 ```python
 #!/usr/bin/env python3
 """
-Complete Qsecbit v6.0 Real-Time Mitigation Example
+Complete Qsecbit 5.0 Real-Time Mitigation Example
 """
 import time
 from core.qsecbit import (
@@ -804,7 +804,7 @@ engine = UnifiedThreatEngine(
 engine.enable_response(policy)
 
 # Main monitoring loop
-print("Qsecbit v6.0 - Real-Time Threat Detection Active")
+print("Qsecbit 5.0 - Real-Time Threat Detection Active")
 print("=" * 60)
 
 while True:
@@ -1764,6 +1764,6 @@ qsecbit@hookprobe.com
 
 ---
 
-**Qsecbit v6.0 "Unified"** - Single Source of Truth for Cyber Protection
+**Qsecbit 5.0 "Unified"** - Single Source of Truth for Cyber Protection
 
 *One algorithm · All layers · Real-time mitigation*

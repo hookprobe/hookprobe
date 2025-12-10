@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Response Orchestration
+Qsecbit Unified - Response Orchestration
 
 Provides automated threat response with XDP integration.
 """

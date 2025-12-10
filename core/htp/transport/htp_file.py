@@ -2,7 +2,7 @@
 """
 HTP File Transfer Extension for HookProbe Transport Protocol
 
-Version: 1.0-Cortex
+Version: 5.0.0 Cortex
 Author: HookProbe Team
 License: AGPL-3.0 - see LICENSE file
 

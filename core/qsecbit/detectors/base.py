@@ -1,12 +1,12 @@
 """
-Qsecbit v6.0 - Base Detector Class
+Qsecbit Unified - Base Detector Class
 
 Abstract base class for all layer-specific threat detectors.
 Provides common utilities for threat detection, logging, and event creation.
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import os
