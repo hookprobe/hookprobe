@@ -38,6 +38,30 @@
             margin-top: 5px;
         }
 
+        .datetime-display {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 15px;
+            padding: 10px 25px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 25px;
+        }
+
+        .current-date {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .current-time {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #F05B2D;
+            font-variant-numeric: tabular-nums;
+        }
+
         /* Main Score Circle */
         .score-container {
             position: relative;
@@ -254,6 +278,10 @@
     <div class="header">
         <h1>Qsecbit</h1>
         <div class="subtitle">Real-Time Protection Score</div>
+        <div class="datetime-display">
+            <span class="current-date" id="current-date"></span>
+            <span class="current-time" id="current-time"></span>
+        </div>
     </div>
 
     <!-- Main Score Circle -->
@@ -418,9 +446,28 @@
             }
         }
 
+        // Clock update
+        function updateClock() {
+            const now = new Date();
+            const dateEl = document.getElementById('current-date');
+            const timeEl = document.getElementById('current-time');
+            if (dateEl) {
+                dateEl.textContent = now.toLocaleDateString('en-GB', {
+                    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+                });
+            }
+            if (timeEl) {
+                timeEl.textContent = now.toLocaleTimeString('en-GB', {
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            }
+        }
+
         // Initial fetch and polling
         fetchScore();
+        updateClock();
         setInterval(fetchScore, POLL_INTERVAL);
+        setInterval(updateClock, 1000);
     </script>
 </body>
 </html>
