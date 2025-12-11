@@ -27,14 +27,14 @@
     <!-- Header -->
     <header class="header">
         <div class="header-inner">
-            <!-- Brand -->
-            <div class="header-brand">
+            <!-- Brand (clickable to return to dashboard) -->
+            <a href="#" class="header-brand" onclick="switchToTab('dashboard'); return false;" style="text-decoration: none; color: inherit;">
                 <img src="{{ url_for('static', filename='images/guardian-logo.png') }}" alt="HookProbe" class="header-logo">
                 <div class="header-title">
                     <h1>Guardian</h1>
                     <span class="tagline">Protection on the Move</span>
                 </div>
-            </div>
+            </a>
 
             <!-- Status Badge -->
             <div class="header-status" id="header-status">
@@ -58,7 +58,6 @@
                 <button class="nav-item" data-tab="config">Config</button>
                 <button class="nav-item" data-tab="vpn">VPN</button>
                 <button class="nav-item" data-tab="system">System</button>
-                <button class="nav-item" data-tab="updates">Updates</button>
                 <button class="nav-item" data-tab="debug">Debug</button>
                 <button class="nav-item" data-tab="cortex">Cortex</button>
             </nav>
@@ -110,14 +109,9 @@
             {% include 'vpn/index.html' %}
         </section>
 
-        <!-- System Tab -->
+        <!-- System Tab (includes Software Updates) -->
         <section id="tab-system" class="tab-panel">
             {% include 'system/index.html' %}
-        </section>
-
-        <!-- Updates Tab - GitHub Pull Updates -->
-        <section id="tab-updates" class="tab-panel">
-            {% include 'github_update/index.html' %}
         </section>
 
         <!-- Debug Tab - Browser CLI -->
