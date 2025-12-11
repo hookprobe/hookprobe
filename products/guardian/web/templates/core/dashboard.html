@@ -1,8 +1,32 @@
 <!-- Dashboard Tab Content -->
 <div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
-    <h2>System Overview</h2>
-    <p class="text-muted">Real-time monitoring of your Guardian security gateway</p>
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
+        <div>
+            <h2>System Overview</h2>
+            <p class="text-muted">Real-time monitoring of your Guardian security gateway</p>
+        </div>
+        <div id="dashboard-datetime" style="text-align: right; padding: 8px 16px; background: var(--bg-secondary, rgba(255,255,255,0.05)); border-radius: 8px;">
+            <div id="dashboard-date" style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary, #fff);"></div>
+            <div id="dashboard-time" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-color, #F05B2D);"></div>
+        </div>
+    </div>
 </div>
+
+<script>
+(function updateDashboardClock() {
+    function update() {
+        const now = new Date();
+        const dateEl = document.getElementById('dashboard-date');
+        const timeEl = document.getElementById('dashboard-time');
+        if (dateEl && timeEl) {
+            dateEl.textContent = now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+            timeEl.textContent = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+    }
+    update();
+    setInterval(update, 1000);
+})();
+</script>
 
 <!-- Stats Grid -->
 <div class="stats-grid">

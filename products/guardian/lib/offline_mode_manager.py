@@ -18,7 +18,7 @@ Boot Sequence (Offline-First):
 8. Guardian connects upstream, NAT enabled
 
 Author: HookProbe Team
-Version: 1.0.0
+Version: 5.0.0
 License: AGPL-3.0 - see LICENSE in this directory
 """
 

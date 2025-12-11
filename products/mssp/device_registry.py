@@ -1,5 +1,5 @@
 """
-MSSP Device Registry - Liberty Version
+MSSP Device Registry - Cortex Version
 
 Central registry for all devices (edge nodes and validators) in HookProbe.
 Tracks hardware fingerprints, locations, status, and relationships.

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qsecbit Dashboard - Guardian</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            font-size: 0.75rem;
+            letter-spacing: 3px;
+            color: #64748b;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .datetime {
+            font-size: 1.5rem;
+            font-weight: 300;
+            color: #cbd5e1;
+        }
+
+        .date {
+            font-size: 0.9rem;
+            color: #64748b;
+            margin-top: 5px;
+        }
+
+        /* Score Display */
+        .score-wrapper {
+            position: relative;
+            width: 280px;
+            height: 280px;
+            margin: 20px 0;
+        }
+
+        .score-ring {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .ring-bg {
+            fill: none;
+            stroke: #1e293b;
+            stroke-width: 8;
+        }
+
+        .ring-progress {
+            fill: none;
+            stroke-width: 8;
+            stroke-linecap: round;
+            stroke-dasharray: 754;
+            stroke-dashoffset: 754;
+            transition: stroke-dashoffset 1.2s ease-out, stroke 0.5s ease;
+        }
+
+        .ring-progress.green { stroke: #22c55e; }
+        .ring-progress.amber { stroke: #eab308; }
+        .ring-progress.red { stroke: #ef4444; }
+
+        .score-inner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .score-value {
+            font-size: 4.5rem;
+            font-weight: 200;
+            line-height: 1;
+            transition: color 0.5s ease;
+        }
+
+        .score-value.green { color: #22c55e; }
+        .score-value.amber { color: #eab308; }
+        .score-value.red { color: #ef4444; }
+
+        .score-unit {
+            font-size: 1rem;
+            color: #64748b;
+            margin-top: 8px;
+        }
+
+        /* Status */
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 28px;
+            border-radius: 50px;
+            font-size: 1rem;
+            font-weight: 500;
+            letter-spacing: 1px;
+            margin: 25px 0;
+        }
+
+        .status.green {
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+
+        .status.amber {
+            background: rgba(234, 179, 8, 0.1);
+            color: #eab308;
+            border: 1px solid rgba(234, 179, 8, 0.2);
+        }
+
+        .status.red {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            animation: pulse-alert 2s infinite;
+        }
+
+        @keyframes pulse-alert {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+            50% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.3); }
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* Stats Row */
+        .stats {
+            display: flex;
+            gap: 40px;
+            margin: 30px 0;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 300;
+            color: #f8fafc;
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 5px;
+        }
+
+        /* Layers (minimal) */
+        .layers {
+            width: 100%;
+            max-width: 320px;
+            margin: 20px 0;
+        }
+
+        .layer {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .layer-name {
+            width: 35px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #64748b;
+        }
+
+        .layer-track {
+            flex: 1;
+            height: 4px;
+            background: #1e293b;
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 0 10px;
+        }
+
+        .layer-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.6s ease;
+        }
+
+        .layer-fill.green { background: #22c55e; }
+        .layer-fill.amber { background: #eab308; }
+        .layer-fill.red { background: #ef4444; }
+
+        .layer-score {
+            width: 40px;
+            font-size: 0.75rem;
+            text-align: right;
+            color: #94a3b8;
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: 40px;
+            font-size: 0.7rem;
+            color: #475569;
+        }
+
+        .footer a {
+            color: #f97316;
+            text-decoration: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 400px) {
+            .score-wrapper {
+                width: 220px;
+                height: 220px;
+            }
+
+            .score-value {
+                font-size: 3.5rem;
+            }
+
+            .stats {
+                gap: 25px;
+            }
+
+            .stat-value {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">HookProbe Guardian</div>
+        <div class="datetime" id="time">--:--:--</div>
+        <div class="date" id="date">Loading...</div>
+    </div>
+
+    <!-- Score Circle -->
+    <div class="score-wrapper">
+        <svg class="score-ring" viewBox="0 0 260 260">
+            <circle class="ring-bg" cx="130" cy="130" r="120"/>
+            <circle class="ring-progress green" id="progress" cx="130" cy="130" r="120"/>
+        </svg>
+        <div class="score-inner">
+            <div class="score-value green" id="score">0.00</div>
+            <div class="score-unit">Qsecbit 5.0</div>
+        </div>
+    </div>
+
+    <!-- Status -->
+    <div class="status green" id="status">
+        <span class="status-dot"></span>
+        <span id="status-text">PROTECTED</span>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-value" id="threats">0</div>
+            <div class="stat-label">Active Threats</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="blocked">0</div>
+            <div class="stat-label">Blocked</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="chains">0</div>
+            <div class="stat-label">Attack Chains</div>
+        </div>
+    </div>
+
+    <!-- Layers -->
+    <div class="layers" id="layers">
+        <div class="layer" data-layer="L2">
+            <span class="layer-name">L2</span>
+            <div class="layer-track"><div class="layer-fill green"></div></div>
+            <span class="layer-score">0.00</span>
+        </div>
+        <div class="layer" data-layer="L3">
+            <span class="layer-name">L3</span>
+            <div class="layer-track"><div class="layer-fill green"></div></div>
+            <span class="layer-score">0.00</span>
+        </div>
+        <div class="layer" data-layer="L4">
+            <span class="layer-name">L4</span>
+            <div class="layer-track"><div class="layer-fill green"></div></div>
+            <span class="layer-score">0.00</span>
+        </div>
+        <div class="layer" data-layer="L5">
+            <span class="layer-name">L5</span>
+            <div class="layer-track"><div class="layer-fill green"></div></div>
+            <span class="layer-score">0.00</span>
+        </div>
+        <div class="layer" data-layer="L7">
+            <span class="layer-name">L7</span>
+            <div class="layer-track"><div class="layer-fill green"></div></div>
+            <span class="layer-score">0.00</span>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        Qsecbit 5.0 Unified Engine &bull; <a href="/">Back to Guardian</a>
+    </div>
+
+    <script>
+    (function() {
+        const POLL_MS = 5000;
+        const CIRC = 754; // 2 * PI * 120
+
+        const $ = id => document.getElementById(id);
+
+        function getClass(score) {
+            if (score >= 0.70) return 'red';
+            if (score >= 0.45) return 'amber';
+            return 'green';
+        }
+
+        function getText(score) {
+            if (score >= 0.70) return 'THREAT DETECTED';
+            if (score >= 0.45) return 'ELEVATED RISK';
+            return 'PROTECTED';
+        }
+
+        function updateUI(data) {
+            const s = data.score || 0;
+            const c = getClass(s);
+
+            // Score
+            $('score').textContent = s.toFixed(2);
+            $('score').className = 'score-value ' + c;
+
+            // Ring
+            const offset = CIRC - ((1 - s) * CIRC);
+            $('progress').style.strokeDashoffset = offset;
+            $('progress').className = 'ring-progress ' + c;
+
+            // Status
+            $('status').className = 'status ' + c;
+            $('status-text').textContent = getText(s);
+
+            // Stats
+            $('threats').textContent = data.threats_active || 0;
+            $('blocked').textContent = data.blocked || 0;
+            $('chains').textContent = data.attack_chains || 0;
+
+            // Layers
+            if (data.layers) {
+                Object.entries(data.layers).forEach(([layer, info]) => {
+                    const el = document.querySelector(`[data-layer="${layer}"]`);
+                    if (el) {
+                        const val = typeof info === 'object' ? info.score : info;
+                        const cls = getClass(val);
+                        el.querySelector('.layer-fill').style.width = (val * 100) + '%';
+                        el.querySelector('.layer-fill').className = 'layer-fill ' + cls;
+                        el.querySelector('.layer-score').textContent = val.toFixed(2);
+                    }
+                });
+            }
+        }
+
+        async function poll() {
+            try {
+                const res = await fetch('/qsecbit/api/score');
+                if (res.ok) updateUI(await res.json());
+            } catch (e) {
+                console.error('Poll error:', e);
+            }
+        }
+
+        function clock() {
+            const now = new Date();
+            $('time').textContent = now.toLocaleTimeString('en-GB', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+            $('date').textContent = now.toLocaleDateString('en-GB', {
+                weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+            });
+        }
+
+        // Init
+        poll();
+        clock();
+        setInterval(poll, POLL_MS);
+        setInterval(clock, 1000);
+    })();
+    </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 """
-HookProbe Hardware Fingerprinting - Liberty Version
+HookProbe Hardware Fingerprinting - Cortex Version
 
 Creates unique hardware identifier when TPM is not available.
 Combines multiple hardware characteristics for device uniqueness.

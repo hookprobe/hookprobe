@@ -59,7 +59,7 @@ class Device(models.Model):
     ip_address = models.GenericIPAddressField()
     mac_address = models.CharField(max_length=17, blank=True)
 
-    # Liberty Architecture - Hardware Fingerprinting (no TPM required)
+    # Cortex Architecture - Hardware Fingerprinting (no TPM required)
     hardware_fingerprint = models.CharField(
         max_length=64,
         blank=True,

@@ -5,7 +5,7 @@ HookProbe Guardian - Local Web UI
 Modular Flask application with Blueprint architecture.
 Runs on http://192.168.4.1:8080
 
-Version: 5.1.0 - Modular Architecture
+Version: 5.0.0 - Modular Architecture
 
 Changes in 5.1.0:
 - Refactored to modular Flask blueprint architecture
