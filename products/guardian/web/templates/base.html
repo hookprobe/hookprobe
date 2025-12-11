@@ -2,8 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#242943">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#002742">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="description" content="HookProbe Guardian - Secure Gateway with IDS/IPS, WAF, AI-powered protection">
 
     <title>{% block title %}HookProbe Guardian{% endblock %}</title>
@@ -19,7 +22,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{% filter urlencode %}<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23242943'/><path d='M50 20L25 35v30l25 15 25-15V35L50 20z' fill='%23F05B2D'/></svg>{% endfilter %}">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{% filter urlencode %}<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23002742'/><path d='M50 20L25 35v30l25 15 25-15V35L50 20z' fill='%23e69500'/></svg>{% endfilter %}">
+
+    <!-- Apple Touch Icon -->
+    <link rel="apple-touch-icon" href="data:image/svg+xml,{% filter urlencode %}<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23002742'/><path d='M50 20L25 35v30l25 15 25-15V35L50 20z' fill='%23e69500'/></svg>{% endfilter %}">
 
     {% block extra_css %}{% endblock %}
 </head>
@@ -125,39 +131,11 @@
         </section>
     </main>
 
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="footer-inner">
-            <div class="footer-brand">
-                <img src="{{ url_for('static', filename='images/guardian-logo.png') }}" alt="HookProbe" class="footer-logo">
-                <span>HookProbe Guardian v5.0</span>
-            </div>
-            <div class="footer-text">
-                Federated Cybersecurity Mesh - One node's detection, everyone's protection
-            </div>
-            <div class="footer-links">
-                <a href="https://hookprobe.com" target="_blank" class="footer-link">Website</a>
-                <a href="https://github.com/hookprobe/hookprobe" target="_blank" class="footer-link">GitHub</a>
-            </div>
-        </div>
-    </footer>
-
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
     <!-- Main JavaScript -->
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     {% block extra_js %}{% endblock %}
-
-    <style>
-        /* Tab Panel Styles */
-        .tab-panel {
-            display: none;
-            animation: fadeIn 0.3s ease;
-        }
-        .tab-panel.active {
-            display: block;
-        }
-    </style>
 </body>
 </html>
