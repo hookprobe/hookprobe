@@ -1496,6 +1496,23 @@ a:hover {
     text-overflow: ellipsis;
 }
 
+/* ===== Code Elements ===== */
+code {
+    background: var(--bg-light);
+    color: var(--hp-primary);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    border: 1px solid var(--border-color);
+}
+
+/* Code in tables - ensure visibility */
+.table code {
+    background: #f8fafc;
+    color: var(--hp-primary);
+}
+
 /* ===== ML/AI Feature Styles ===== */
 
 /* Classification Results */
