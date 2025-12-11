@@ -304,49 +304,67 @@ urlpatterns = [
 
 ---
 
-## Demo Data (Phase 1C Expanded)
+## Demo Data (Phase 3 Enterprise Scale)
 
-### Nodes (19 total, +137% from original 8)
-| Tier | Count | Locations |
-|------|-------|-----------|
-| Guardian | 4 | SF, NYC, LA, Miami |
-| Fortress | 5 | London, Amsterdam, Paris, Tokyo, Hong Kong |
-| Sentinel | 6 | Berlin, Singapore, Dublin, Toronto, Melbourne, Stockholm |
-| Nexus | 3 | Frankfurt, Ashburn, Singapore |
+Demonstrates collective defense value with enterprise-scale deployment.
 
-### Threat Sources (23 locations, +188% from original 8)
-- **China**: Beijing, Shanghai, Shenzhen, Guangzhou
-- **Russia**: Moscow, St. Petersburg, Yekaterinburg
-- **Iran**: Tehran
-- **North Korea**: Pyongyang
-- **Southeast Asia**: Seoul, Taipei, Manila, Ho Chi Minh City
-- **South Asia**: Mumbai, New Delhi, Karachi
-- **South America**: São Paulo, Buenos Aires
-- **Africa**: Lagos, Johannesburg, Cairo
-- **Eastern Europe**: Kyiv, Bucharest
+### Organizations (5 demo tenants)
+| Organization | Industry | Tier | Nodes |
+|--------------|----------|------|-------|
+| ACME Corporation | Technology | Enterprise | 15 |
+| Globex Industries | Manufacturing | Professional | 12 |
+| Initech Systems | Financial Services | Enterprise | 15 |
+| Wayne Enterprises | Conglomerate | Enterprise | 18 |
+| Stark Industries | Defense/Technology | Enterprise | 15 |
 
-### Attack Types (21 types, +250% from original 6)
-| Category | Types |
-|----------|-------|
-| DDoS | Volumetric, Amplification, Slowloris |
-| Scanning | Port scan, Vuln scan, Service enum |
-| Brute Force | SSH, RDP, Credential stuffing |
-| Malware | C2, Ransomware beacon, Botnet |
-| Web Attacks | SQLi, XSS, RFI/LFI, Path traversal, CSRF |
-| API | Abuse, Broken auth |
-| Zero-Day | Indicators, Unknown exploits |
+### Nodes (75+ total across organizations)
+| Tier | Count | Example Locations |
+|------|-------|-------------------|
+| Guardian | 25+ | SF, NYC, London, Tokyo, Sydney, Mumbai |
+| Fortress | 15+ | Ashburn DC, Frankfurt, Singapore, São Paulo |
+| Sentinel | 25+ | Lobby sensors, server rooms, edge IoT |
+| Nexus | 10+ | ML clusters, AI compute nodes |
 
-### Mitigation Methods (10 types)
-- `xdp_drop` - XDP/eBPF kernel-level drop
-- `rate_limit` - Rate limiting
-- `geo_block` - Geographic blocking
-- `signature_match` - IDS/IPS signature
-- `ml_detection` - ML model detection
-- `anomaly_block` - Anomaly-based blocking
-- `reputation_block` - IP reputation
-- `behavior_block` - Behavioral analysis
-- `captcha_challenge` - CAPTCHA
-- `honeypot_redirect` - Honeypot redirection
+### Threat Sources (35+ locations with threat profiles)
+| Threat Level | Regions | Profile |
+|--------------|---------|---------|
+| Critical | China (Beijing, Shanghai), Russia (Moscow), N. Korea | Nation State |
+| High | Iran (Tehran), Vietnam, Ukraine | Criminal/Hacktivist |
+| Medium | SE Asia, Eastern Europe | Criminal Syndicate |
+| Low | Various | Script Kiddie |
+
+### Attack Types (25+ types with categories)
+| Category | Types | Weight |
+|----------|-------|--------|
+| DDoS | Volumetric, Amplification, Slowloris, App-layer | High |
+| Credential | Brute force, Stuffing, Phishing | High |
+| Malware | C2, Ransomware, Cryptominer, Botnet | Medium |
+| Web | SQLi, XSS, RFI/LFI, Path traversal, CSRF, XXE | Medium |
+| Scan | Port scan, Vuln scan, Service enumeration | High |
+| API | Abuse, Broken auth, IDOR | Medium |
+| Advanced | Zero-day, Supply chain, Unknown exploit | Low |
+
+### Mitigation Methods (12 types with response times)
+| Method | Min Response | Max Response |
+|--------|-------------|--------------|
+| `xdp_drop` | 1ms | 10ms |
+| `rate_limit` | 5ms | 30ms |
+| `geo_block` | 2ms | 15ms |
+| `signature_match` | 10ms | 50ms |
+| `ml_detection` | 15ms | 80ms |
+| `anomaly_block` | 20ms | 100ms |
+| `reputation_block` | 5ms | 25ms |
+| `behavior_block` | 25ms | 150ms |
+| `captcha_challenge` | 50ms | 200ms |
+| `honeypot_redirect` | 30ms | 120ms |
+| `waf_block` | 8ms | 40ms |
+| `threat_intel_block` | 3ms | 20ms |
+
+### Collective Defense Visualization
+The demo shows how attacks on one organization trigger mesh-wide intelligence sharing:
+- **Campaign tracking** - Coordinated attacks visible across targets
+- **Mesh connections** - Real-time data flow between nodes
+- **Threat propagation** - Watch as threat intel spreads through the mesh
 
 ---
 
