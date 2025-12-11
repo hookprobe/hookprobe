@@ -228,19 +228,27 @@ function initGlobeGL() {
  * Initialize clustering system using shared ClusterManager
  */
 function initClusteringSystem() {
+    console.log('[Cortex Debug] initClusteringSystem starting', {
+        ClusterManagerAvailable: typeof ClusterManager !== 'undefined',
+        ZoomControllerAvailable: typeof ZoomController !== 'undefined',
+        ZoomIndicatorAvailable: typeof ZoomIndicator !== 'undefined',
+        hasGlobe: !!guardianCortex.globe
+    });
+
     // Initialize ClusterManager (from shared/cortex)
     if (typeof ClusterManager !== 'undefined') {
         guardianCortex.clusterManager = new ClusterManager();
         window.clusterManager = guardianCortex.clusterManager;
+        console.log('[Cortex Debug] ClusterManager created');
 
         // Listen for cluster updates
         guardianCortex.clusterManager.on('clustersUpdated', handleClustersUpdated);
         guardianCortex.clusterManager.on('loaded', () => {
-            console.log('ClusterManager: Nodes loaded');
+            console.log('[Cortex Debug] ClusterManager: Nodes loaded');
             updateDisplayData();
         });
     } else {
-        console.warn('ClusterManager not available, clustering disabled');
+        console.warn('[Cortex Debug] ClusterManager not available, clustering disabled');
     }
 
     // Initialize ZoomController (from shared/cortex)
@@ -250,19 +258,27 @@ function initClusteringSystem() {
             guardianCortex.clusterManager
         );
         window.zoomController = guardianCortex.zoomController;
+        console.log('[Cortex Debug] ZoomController created');
 
         // Listen for zoom changes
         guardianCortex.zoomController.on('zoomChange', handleZoomChange);
         guardianCortex.zoomController.on('zoomLevelChange', handleZoomLevelChange);
         guardianCortex.zoomController.on('drillDown', handleDrillDown);
+        console.log('[Cortex Debug] ZoomController event listeners attached');
+    } else {
+        console.warn('[Cortex Debug] ZoomController not initialized', {
+            ZoomControllerAvailable: typeof ZoomController !== 'undefined',
+            hasGlobe: !!guardianCortex.globe
+        });
     }
 
     // Initialize ZoomIndicator UI (from shared/cortex)
     if (typeof ZoomIndicator !== 'undefined' && guardianCortex.zoomController) {
         guardianCortex.zoomIndicator = new ZoomIndicator('zoom-indicator', guardianCortex.zoomController);
+        console.log('[Cortex Debug] ZoomIndicator created');
     }
 
-    console.log('Clustering system initialized');
+    console.log('[Cortex Debug] Clustering system initialization complete');
 }
 
 /**
@@ -453,8 +469,15 @@ function handleNodeClick(node) {
  * Handle zoom change
  */
 function handleZoomChange(data) {
+    console.log('[Cortex Debug] handleZoomChange:', {
+        altitude: data.altitude,
+        zoom: data.zoom,
+        level: data.level,
+        hasClusterManager: !!guardianCortex.clusterManager
+    });
     if (guardianCortex.clusterManager) {
         const zoom = data.zoom || guardianCortex.clusterManager.altitudeToZoom(data.altitude);
+        console.log('[Cortex Debug] Getting clusters for zoom:', zoom);
         guardianCortex.clusterManager.getAllClusters(zoom);
     }
 }
@@ -477,6 +500,12 @@ function handleDrillDown(data) {
  * Handle clusters updated
  */
 function handleClustersUpdated(data) {
+    console.log('[Cortex Debug] handleClustersUpdated:', {
+        clustersCount: data.clusters ? data.clusters.length : 0,
+        zoom: data.zoom,
+        totalClusters: data.totalClusters,
+        totalNodes: data.totalNodes
+    });
     updateGlobeData(data.clusters);
 }
 
@@ -502,10 +531,21 @@ function updateDisplayData() {
  * Update globe with display data
  */
 function updateGlobeData(displayData) {
-    if (!guardianCortex.globe || !displayData) return;
+    if (!guardianCortex.globe || !displayData) {
+        console.log('[Cortex Debug] updateGlobeData: skipped (globe or data missing)', {
+            hasGlobe: !!guardianCortex.globe,
+            hasDisplayData: !!displayData
+        });
+        return;
+    }
 
     const clusters = displayData.filter(d => d.type === 'cluster');
     const nodes = displayData.filter(d => d.type === 'node');
+    console.log('[Cortex Debug] updateGlobeData:', {
+        totalItems: displayData.length,
+        clusters: clusters.length,
+        nodes: nodes.length
+    });
 
     guardianCortex.globe.pointsData(nodes);
     guardianCortex.globe.htmlElementsData(clusters);
