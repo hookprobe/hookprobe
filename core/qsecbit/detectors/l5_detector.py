@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Layer 5 (Session) Threat Detector
+Qsecbit Unified - Layer 5 (Session) Threat Detector
 
 Detects Layer 5 attacks:
 - SSL Strip (HTTPS to HTTP downgrade)
@@ -9,7 +9,7 @@ Detects Layer 5 attacks:
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import re

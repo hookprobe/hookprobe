@@ -6,7 +6,7 @@ Provides single-source-of-truth protection across OSI layers L2-L7.
 
 Author: Andrei Toma
 License: Proprietary - see LICENSE in this directory
-Version: 6.0
+Version: 5.0.0
 """
 
 # Core v5.0 classes (backward compatibility)
@@ -37,7 +37,7 @@ from .energy_monitor import (
     DeploymentRole
 )
 
-# v6.0 Unified Threat Detection Engine
+# Unified Threat Detection Engine
 from .threat_types import (
     AttackType,
     ThreatSeverity,
@@ -79,12 +79,19 @@ from .response import (
     ResponseOrchestrator
 )
 
-__version__ = "6.0.0"
+# Mesh bridge for distributed threat sharing
+from .mesh_bridge import (
+    QsecbitMeshBridge,
+    MeshBridgeConfig,
+    create_mesh_bridge
+)
+
+__version__ = "5.0.0"
 __author__ = "Andrei Toma"
 __license__ = "Proprietary"
 
 __all__ = [
-    # Core qsecbit classes (v5.0 backward compatible)
+    # Core qsecbit classes (backward compatible)
     "Qsecbit",
     "QsecbitConfig",
     "QsecbitSample",
@@ -107,7 +114,7 @@ __all__ = [
     "NetworkEnergyStats",
     "DeploymentRole",
 
-    # v6.0 Threat types
+    # Threat types
     "AttackType",
     "ThreatSeverity",
     "OSILayer",
@@ -120,12 +127,12 @@ __all__ = [
     "DEFAULT_SEVERITY_MAP",
     "DEFAULT_RESPONSE_MAP",
 
-    # v6.0 Unified Engine
+    # Unified Engine
     "UnifiedThreatEngine",
     "UnifiedEngineConfig",
     "DeploymentType",
 
-    # v6.0 Layer detectors
+    # Layer detectors
     "BaseDetector",
     "L2DataLinkDetector",
     "L3NetworkDetector",
@@ -133,10 +140,15 @@ __all__ = [
     "L5SessionDetector",
     "L7ApplicationDetector",
 
-    # v6.0 ML classification
+    # ML classification
     "AttackClassifier",
     "FeatureExtractor",
 
-    # v6.0 Response orchestration
+    # Response orchestration
     "ResponseOrchestrator",
+
+    # Mesh bridge
+    "QsecbitMeshBridge",
+    "MeshBridgeConfig",
+    "create_mesh_bridge",
 ]

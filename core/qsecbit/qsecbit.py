@@ -13,7 +13,7 @@ Version 6.0 adds unified threat detection across OSI layers L2-L7:
 
 Author: Andrei Toma
 License: Proprietary - see LICENSE in this directory
-Version: 6.0
+Version: 5.0.0
 """
 
 import numpy as np
@@ -32,7 +32,7 @@ from .nic_detector import NICDetector, NICCapability, XDPMode
 from .xdp_manager import XDPManager, XDPStats
 from .energy_monitor import EnergyMonitor, SystemEnergySnapshot, PIDEnergyStats
 
-# v6.0 Unified Engine (lazy import to avoid circular imports)
+# Unified Engine (lazy import to avoid circular imports)
 _unified_engine_module = None
 
 def _get_unified_engine():
@@ -678,7 +678,7 @@ class Qsecbit:
         }
 
     # ==========================================================================
-    # v6.0 UNIFIED THREAT DETECTION
+    # UNIFIED THREAT DETECTION
     # ==========================================================================
 
     def create_unified_engine(
@@ -738,7 +738,7 @@ class Qsecbit:
         enable_response: bool = False
     ) -> 'QsecbitUnifiedScore':
         """
-        Perform comprehensive threat detection using v6.0 unified engine.
+        Perform comprehensive threat detection using unified engine.
 
         This is the single-source-of-truth for threat detection, combining:
         - Layer 2: ARP Spoofing, MAC Flooding, VLAN Hopping, Evil Twin
@@ -789,15 +789,15 @@ class Qsecbit:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Qsecbit v6.0 - Unified Threat Detection')
+    parser = argparse.ArgumentParser(description='Qsecbit Unified - Unified Threat Detection')
     parser.add_argument('--mode', choices=['legacy', 'unified', 'both'], default='both',
-                        help='Detection mode: legacy (v5.0), unified (v6.0), or both')
+                        help='Detection mode: legacy (v5.0), unified (Unified), or both')
     parser.add_argument('--deployment', choices=['guardian', 'fortress', 'nexus', 'mssp'],
                         default='guardian', help='Deployment type for unified engine')
     args = parser.parse_args()
 
     print("=" * 70)
-    print("QSECBIT v6.0 DEMONSTRATION")
+    print("QSECBIT 5.0 DEMONSTRATION")
     print("Quantum Security Bit: Unified Cyber Resilience Metric")
     print("=" * 70)
 
@@ -882,11 +882,11 @@ if __name__ == "__main__":
         print(f"\nLegacy Summary: Mean={stats['mean_score']:.3f}, Trend={stats['trend']}")
 
     # =========================================================================
-    # v6.0 UNIFIED MODE - Comprehensive OSI Layer Detection
+    # UNIFIED MODE - Comprehensive OSI Layer Detection
     # =========================================================================
     if args.mode in ['unified', 'both']:
         print("\n" + "-" * 70)
-        print(f"v6.0 UNIFIED MODE: OSI Layer L2-L7 Threat Detection")
+        print(f"UNIFIED MODE: OSI Layer L2-L7 Threat Detection")
         print(f"Deployment Type: {args.deployment.upper()}")
         print("-" * 70)
 
@@ -956,5 +956,5 @@ if __name__ == "__main__":
                 print(f"    - {sev}: {count}")
 
     print("\n" + "=" * 70)
-    print("Qsecbit v6.0 - Single Source of Truth for Cyber Protection")
+    print("Qsecbit Unified - Single Source of Truth for Cyber Protection")
     print("=" * 70)

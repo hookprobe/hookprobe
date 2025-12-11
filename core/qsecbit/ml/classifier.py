@@ -1,12 +1,12 @@
 """
-Qsecbit v6.0 - ML Attack Classifier
+Qsecbit Unified - ML Attack Classifier
 
 Machine learning-based attack classification using extracted network features.
 Uses Random Forest for classification with signature-based fallback.
 
 Author: HookProbe Team
 License: Proprietary
-Version: 6.0
+Version: 5.0.0
 """
 
 import math

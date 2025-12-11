@@ -2,7 +2,7 @@
 
 **Federated Cybersecurity Mesh: Privacy-Preserving Collective Defense**
 
-**Version**: 1.0-Liberty
+**Version**: 1.0-Cortex
 **Status**: Production Ready
 **Last Updated**: 2025-12-07
 
@@ -173,7 +173,7 @@ def sign(message_hash: bytes, nonce: bytes) -> bytes:
 
 **Verification**: Cloud simulates edge weight evolution from TER history, regenerates signature, and compares bit-for-bit.
 
-### Hardware Fingerprinting (Liberty Architecture)
+### Hardware Fingerprinting (Cortex Architecture)
 
 **No TPM required** - works on $75 Raspberry Pi:
 
@@ -770,7 +770,7 @@ sudo ./install.sh --tier nexus
 |-------|----------|--------|
 | **Phase 1**: Core Protocol | Q1 2025 | Complete |
 | **Phase 2**: POD Integration | Q2 2025 | Complete |
-| **Phase 3**: Liberty Integration | Q3 2025 | Complete |
+| **Phase 3**: Cortex Integration | Q3 2025 | Complete |
 | **Phase 4**: Production MSSP | Q4 2025 | In Progress |
 | **Phase 5**: HTP Enhancements | Q1 2026 | Planned |
 | **Phase 6**: Beta Testing | Q2-Q3 2026 | Planned |
