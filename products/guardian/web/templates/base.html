@@ -52,7 +52,6 @@
             <!-- Main Navigation -->
             <nav class="nav-main" role="navigation">
                 <button class="nav-item active" data-tab="dashboard">Dashboard</button>
-                <button class="nav-item" data-tab="qsecbit">Qsecbit</button>
                 <button class="nav-item" data-tab="security">Security</button>
                 <button class="nav-item" data-tab="dnsxai">dnsXai</button>
                 <button class="nav-item" data-tab="clients">Clients</button>
@@ -86,12 +85,7 @@
             {% include 'core/dashboard.html' %}
         </section>
 
-        <!-- Qsecbit Tab - Simple Real-Time Score -->
-        <section id="tab-qsecbit" class="tab-panel">
-            {% include 'qsecbit/embedded.html' %}
-        </section>
-
-        <!-- Security Tab -->
+        <!-- Security Tab (includes Qsecbit) -->
         <section id="tab-security" class="tab-panel">
             {% include 'security/metrics.html' %}
         </section>
