@@ -650,6 +650,63 @@
     color: #333;
 }
 
+/* Zoom controls */
+.zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px solid rgba(100, 120, 140, 0.3);
+}
+
+.zoom-btn {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 229, 255, 0.1);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 4px;
+    color: #00e5ff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.zoom-btn:hover {
+    background: rgba(0, 229, 255, 0.2);
+    border-color: #00e5ff;
+}
+
+.zoom-btn:active {
+    transform: scale(0.95);
+}
+
+/* Breadcrumb crumbs */
+.crumb {
+    color: #6a6a7a;
+    cursor: pointer;
+    transition: color 0.2s;
+    padding: 2px 4px;
+}
+
+.crumb:hover {
+    color: #00e5ff;
+}
+
+.crumb.active {
+    color: #00e5ff;
+    font-weight: 600;
+}
+
+.crumb-separator {
+    color: #333;
+    margin: 0 2px;
+}
+
 /* Mobile adjustments for cluster rings */
 @media (max-width: 768px) {
     .cluster-ring-outer,
