@@ -33,6 +33,7 @@
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
 | **Cortex (3D Globe)** | Shared visualization | `shared/cortex/` |
+| **Understand security fabric** | City-level visualization | `shared/cortex/README.md` (see "Understanding Your Security Fabric") |
 | **Cortex connectors** | Product connectors | `shared/cortex/backend/connectors/` |
 | **Add Cortex to Guardian** | Flask integration | `shared/cortex/backend/connectors/guardian.py` |
 | **Add Cortex to MSSP** | Django integration | `shared/cortex/backend/connectors/mssp.py` |
