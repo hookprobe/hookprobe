@@ -114,6 +114,117 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 - **Demo Mode**: Simulated events for showcasing
 - **Live Mode**: Real HTP mesh data (when connected)
 
+---
+
+## Understanding Your Security Fabric
+
+### The Journey from Global to Local
+
+Cortex transforms abstract security metrics into **spatial understanding**. Your security fabric isn't just data—it's a physical network of devices protecting real locations.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ZOOM LEVEL        WHAT YOU SEE              WHAT YOU UNDERSTAND            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Globe (1-4)       Continents, clusters      Global threat landscape        │
+│                    "5 attacks from Asia"     Where threats originate        │
+│                                                                             │
+│  Region (5-8)      Countries, cities         Regional defense posture       │
+│                    "London cluster: 12       Which regions need attention   │
+│                     nodes, all green"                                       │
+│                                                                             │
+│  City (9-12)       Districts, buildings      Local network topology         │
+│                    "3 Guardians in           How your offices are protected │
+│                     Financial District"                                     │
+│                                                                             │
+│  Street (13+)      Individual nodes          Device-level security status   │
+│                    "Reception Guardian:      Specific device health         │
+│                     Qsecbit 0.32, GREEN"                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why City-Level View Matters
+
+**1. See Your Actual Network**
+Traditional dashboards show lists and charts. Cortex shows your Guardian protecting the hotel WiFi in Tokyo, your Fortress securing the London office, your Sentinels monitoring the warehouse in São Paulo. Security becomes *real*.
+
+**2. Understand Geographic Risk**
+When you zoom into a city, you see:
+- How many nodes protect that location
+- Their current health status (green/amber/red)
+- Attack patterns targeting that region
+- Coverage gaps that need attention
+
+**3. Respond to Incidents Faster**
+When an attack hits:
+- See exactly which device is under attack
+- Understand the physical location instantly
+- Know what other devices are nearby to help
+- Watch the mesh respond in real-time
+
+**4. Plan Better Deployments**
+City view reveals:
+- Clustering of protection (too many nodes in one place?)
+- Coverage gaps (unprotected branch offices?)
+- Network topology (how nodes connect)
+- Department distribution (IT vs. Operations vs. Executive)
+
+### The Security Fabric Visualization
+
+Your "security fabric" is the mesh of HookProbe nodes working together. Cortex makes this visible:
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │           GLOBAL VIEW                    │
+                    │     See the entire mesh at once          │
+                    │     • 1,247 nodes across 6 continents    │
+                    │     • Real-time attack trajectories      │
+                    │     • Collective defense in action       │
+                    └─────────────────┬───────────────────────┘
+                                      │ Zoom In
+                                      ▼
+                    ┌─────────────────────────────────────────┐
+                    │           CITY VIEW                      │
+                    │     See your local deployment            │
+                    │     • Individual building placement      │
+                    │     • Street-level node locations        │
+                    │     • Local mesh connections             │
+                    └─────────────────┬───────────────────────┘
+                                      │ Click Node
+                                      ▼
+                    ┌─────────────────────────────────────────┐
+                    │           NODE DETAIL                    │
+                    │     See device-specific data             │
+                    │     • Qsecbit score and history          │
+                    │     • Recent threats blocked             │
+                    │     • Connection quality                 │
+                    │     • Last heartbeat time                │
+                    └─────────────────────────────────────────┘
+```
+
+### Practical Use Cases
+
+| Scenario | How Cortex Helps |
+|----------|------------------|
+| **Executive briefing** | Zoom to globe view, show global threat landscape and mesh responding |
+| **Incident response** | Zoom to affected city, see attack in context, identify nearby nodes |
+| **Compliance audit** | Show coverage of protected locations, demonstrate defense-in-depth |
+| **Capacity planning** | Identify geographic gaps, plan new node deployments |
+| **Travel security** | Zoom to destination city, see local protection status before arrival |
+| **Remote office check** | Zoom to branch office, verify Guardian is healthy and protecting |
+
+### From "Are We Protected?" to "Watch Us Protect"
+
+**Before Cortex:**
+> "The security dashboard says we blocked 89 attacks today."
+
+**With Cortex:**
+> "Watch this DDoS from Beijing hit our Tokyo Guardian. See the red arc? Now watch it turn blue—blocked in 3ms. The mesh just shared that threat signature with all 1,247 nodes worldwide. Every HookProbe device now recognizes that attack pattern."
+
+This is the difference between *believing* you're protected and *seeing* your protection work.
+
+---
+
 ### Production Integration (Phase 1C)
 - **HTP Bridge**: Full connection to core/htp/ protocol
 - **Live Qsecbit**: Real-time score updates from mesh nodes
