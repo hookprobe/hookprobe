@@ -1,8 +1,19 @@
 # HookProbe Cortex - Neural Command Center
 
+> **Transparency You Can See - Security Visualization That Empowers**
+
 **Version**: 2.0.0
 **Status**: Phase 2 Complete - City-Level Map View with Deck.gl + MapLibre GL
 **Tagline**: *See your mesh. Command your defense.*
+
+---
+
+## Why Visualization Matters for Transparency
+
+Transparent security isn't just about open source code - it's about visibility. Cortex makes your entire defense mesh visible, understandable, and controllable.
+
+**Without Cortex:** "You're protected" (trust us)
+**With Cortex:** *Watch* threats arrive from across the world and see them blocked in real-time
 
 ---
 
@@ -486,9 +497,23 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 
 ---
 
+## The Cortex Difference
+
+| Traditional Dashboards | Cortex |
+|-----------------------|--------|
+| Shows data *about* security | Shows security *as it happens* |
+| Static snapshots | Real-time streaming |
+| Abstract metrics | Geographic reality |
+| Vendor black box | Open source visualization |
+| "Trust us" | "See for yourself" |
+
+**Cortex turns transparency into something you can see, understand, and trust.**
+
+---
+
 ## License
 
 Part of HookProbe v5.0 "Cortex" - see root LICENSE file.
 
 **HookProbe Cortex - Neural Command Center**
-*See your mesh. Command your defense.*
+*See your mesh. Command your defense. Achieve more.*
