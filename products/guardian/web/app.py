@@ -53,7 +53,7 @@ def create_app(config_class=Config):
             return send_file(logo_path, mimetype='image/png')
         return '', 404
 
-    @app.route('/static/cortex/<path:filename>')
+    @app.route('/cortex-modules/<path:filename>')
     def serve_cortex_modules(filename):
         """Serve shared Cortex visualization modules."""
         # Try multiple possible paths for the shared cortex modules
@@ -65,6 +65,8 @@ def create_app(config_class=Config):
         for cortex_path in possible_paths:
             if cortex_path.exists():
                 return send_file(cortex_path, mimetype='application/javascript')
+        # Log which paths were tried for debugging
+        app.logger.warning(f"Cortex module not found: {filename}. Tried: {[str(p) for p in possible_paths]}")
         return '', 404
 
     @app.route('/favicon.ico')
