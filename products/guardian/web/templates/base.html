@@ -30,50 +30,48 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <!-- Header -->
-    <header class="header">
-        <div class="header-inner">
-            <!-- Brand (clickable to return to dashboard) -->
-            <a href="#" class="header-brand" onclick="switchToTab('dashboard'); return false;" style="text-decoration: none; color: inherit;">
-                <img src="{{ url_for('static', filename='images/guardian-logo.png') }}" alt="HookProbe" class="header-logo">
-                <div class="header-title">
-                    <h1>Guardian</h1>
-                    <span class="tagline">Protection on the Move</span>
-                </div>
-            </a>
-
-            <!-- Status Badge -->
-            <div class="header-status" id="header-status">
-                <span class="status-dot"></span>
-                <span class="status-text">Active</span>
+    <!-- Header (Forty-style) -->
+    <header id="header">
+        <!-- Logo (clickable to return to dashboard) -->
+        <a href="#" class="logo" onclick="switchToTab('dashboard'); return false;">
+            <img src="{{ url_for('static', filename='images/guardian-logo.png') }}" alt="HookProbe">
+            <div class="title">
+                <strong>Guardian</strong>
+                <span>Protection on the Move</span>
             </div>
+        </a>
 
-            <!-- Mobile Menu Toggle -->
-            <button class="menu-toggle" aria-label="Toggle menu">
-                <span></span>
-                <span></span>
-                <span></span>
-            </button>
+        <!-- Main Navigation -->
+        <nav role="navigation">
+            <button class="active" data-tab="dashboard">Dashboard</button>
+            <button data-tab="security">Security</button>
+            <button data-tab="dnsxai">dnsXai</button>
+            <button data-tab="clients">Clients</button>
+            <button data-tab="config">Config</button>
+            <button data-tab="vpn">VPN</button>
+            <button data-tab="system">System</button>
+            <button data-tab="debug">Debug</button>
+            <button data-tab="cortex">Cortex</button>
+        </nav>
 
-            <!-- Main Navigation -->
-            <nav class="nav-main" role="navigation">
-                <button class="nav-item active" data-tab="dashboard">Dashboard</button>
-                <button class="nav-item" data-tab="security">Security</button>
-                <button class="nav-item" data-tab="dnsxai">dnsXai</button>
-                <button class="nav-item" data-tab="clients">Clients</button>
-                <button class="nav-item" data-tab="config">Config</button>
-                <button class="nav-item" data-tab="vpn">VPN</button>
-                <button class="nav-item" data-tab="system">System</button>
-                <button class="nav-item" data-tab="debug">Debug</button>
-                <button class="nav-item" data-tab="cortex">Cortex</button>
-            </nav>
+        <!-- Status Badge -->
+        <div class="status" id="header-status">
+            <span class="dot"></span>
+            <span>Active</span>
         </div>
+
+        <!-- Mobile Menu Toggle -->
+        <button class="menu-toggle" aria-label="Toggle menu">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
     </header>
 
     <!-- Flash Messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
-    <div class="flash-messages" style="max-width: 1400px; margin: 0 auto; padding: var(--spacing-md) var(--spacing-xl);">
+    <div class="flash-messages">
         {% for category, message in messages %}
         <div class="alert alert-{{ category }}">
             {{ message }}
@@ -83,53 +81,53 @@
     {% endif %}
     {% endwith %}
 
-    <!-- Main Content -->
-    <main class="main-content">
+    <!-- Main Content Wrapper -->
+    <div id="wrapper">
         <!-- Dashboard Tab -->
-        <section id="tab-dashboard" class="tab-panel active">
+        <section id="tab-dashboard" class="tab-content active">
             {% include 'core/dashboard.html' %}
         </section>
 
         <!-- Security Tab (includes Qsecbit) -->
-        <section id="tab-security" class="tab-panel">
+        <section id="tab-security" class="tab-content">
             {% include 'security/metrics.html' %}
         </section>
 
         <!-- dnsXai Tab -->
-        <section id="tab-dnsxai" class="tab-panel">
+        <section id="tab-dnsxai" class="tab-content">
             {% include 'dnsxai/index.html' %}
         </section>
 
         <!-- Clients Tab -->
-        <section id="tab-clients" class="tab-panel">
+        <section id="tab-clients" class="tab-content">
             {% include 'clients/index.html' %}
         </section>
 
         <!-- Config Tab -->
-        <section id="tab-config" class="tab-panel">
+        <section id="tab-config" class="tab-content">
             {% include 'config/networks.html' %}
         </section>
 
         <!-- VPN Tab -->
-        <section id="tab-vpn" class="tab-panel">
+        <section id="tab-vpn" class="tab-content">
             {% include 'vpn/index.html' %}
         </section>
 
         <!-- System Tab (includes Software Updates) -->
-        <section id="tab-system" class="tab-panel">
+        <section id="tab-system" class="tab-content">
             {% include 'system/index.html' %}
         </section>
 
         <!-- Debug Tab - Browser CLI -->
-        <section id="tab-debug" class="tab-panel">
+        <section id="tab-debug" class="tab-content">
             {% include 'debug/index.html' %}
         </section>
 
         <!-- Cortex Tab - Digital Twin Globe Visualization -->
-        <section id="tab-cortex" class="tab-panel">
+        <section id="tab-cortex" class="tab-content">
             {% include 'cortex/embedded.html' %}
         </section>
-    </main>
+    </div>
 
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
