@@ -1,545 +1,656 @@
-<!-- Security Tab - Unified Qsecbit + Block Log + Export -->
-<!-- Includes Qsecbit score display at top, block log in middle, export options at bottom -->
+<!-- Security Tab - Premium QSecBit Display with Block Log -->
 <style>
-    .security-container {
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 0 15px;
+/* Premium QSecBit Hero Section */
+.qsecbit-hero {
+    background: linear-gradient(135deg, #0f1419 0%, #1a1d2e 50%, #0f1419 100%);
+    border-radius: var(--radius-xl);
+    padding: 40px;
+    margin-bottom: var(--spacing-xl);
+    position: relative;
+    overflow: hidden;
+    text-align: center;
+}
+
+.qsecbit-hero::before {
+    content: '';
+    position: absolute;
+    top: -100%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at center, rgba(240, 91, 45, 0.08) 0%, transparent 50%);
+    animation: pulse-glow 4s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { opacity: 0.5; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.1); }
+}
+
+.qsecbit-hero-content {
+    position: relative;
+    z-index: 1;
+}
+
+.qsecbit-hero h2 {
+    color: #fff;
+    font-size: 1.5rem;
+    margin-bottom: var(--spacing-xs);
+    font-weight: 600;
+}
+
+.qsecbit-hero .subtitle {
+    color: rgba(255,255,255,0.6);
+    font-size: 0.875rem;
+    margin-bottom: var(--spacing-xl);
+}
+
+/* Large Ring Display */
+.qsecbit-ring-large {
+    position: relative;
+    width: 220px;
+    height: 220px;
+    margin: 0 auto var(--spacing-xl);
+}
+
+.qsecbit-ring-large svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.ring-bg {
+    fill: none;
+    stroke: rgba(255,255,255,0.1);
+    stroke-width: 12;
+}
+
+.ring-fill {
+    fill: none;
+    stroke-width: 12;
+    stroke-linecap: round;
+    stroke-dasharray: 565; /* 2 * PI * 90 */
+    stroke-dashoffset: 565;
+    transition: stroke-dashoffset 1.5s ease, stroke 0.5s ease;
+    filter: drop-shadow(0 0 8px currentColor);
+}
+
+.ring-fill.green { stroke: #10b981; }
+.ring-fill.amber { stroke: #f59e0b; }
+.ring-fill.red { stroke: #ef4444; }
+
+.ring-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.ring-score {
+    font-size: 3.5rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: color 0.5s ease;
+}
+
+.ring-score.green { color: #10b981; }
+.ring-score.amber { color: #f59e0b; }
+.ring-score.red { color: #ef4444; }
+
+.ring-label {
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: var(--spacing-xs);
+}
+
+/* Risk Status Banner */
+.risk-banner {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    border-radius: 50px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: var(--spacing-xl);
+    transition: all 0.5s ease;
+}
+
+.risk-banner.green {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.risk-banner.amber {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.risk-banner.red {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    animation: pulse-red 2s ease-in-out infinite;
+}
+
+@keyframes pulse-red {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+    50% { box-shadow: 0 0 20px 5px rgba(239, 68, 68, 0.2); }
+}
+
+.risk-banner svg {
+    width: 20px;
+    height: 20px;
+}
+
+/* Stats Row */
+.qsecbit-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--spacing-md);
+    max-width: 600px;
+    margin: 0 auto var(--spacing-xl);
+}
+
+.qsecbit-stat {
+    text-align: center;
+    padding: var(--spacing-md);
+    background: rgba(255,255,255,0.03);
+    border-radius: var(--radius-md);
+}
+
+.qsecbit-stat .value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+.qsecbit-stat .value.danger { color: #ef4444; }
+.qsecbit-stat .value.success { color: #10b981; }
+
+.qsecbit-stat .label {
+    font-size: 0.7rem;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Component Breakdown */
+.component-breakdown {
+    background: rgba(0,0,0,0.3);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+.component-title {
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: var(--spacing-md);
+    text-align: center;
+}
+
+.component-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: var(--spacing-sm);
+}
+
+.component-item {
+    text-align: center;
+    padding: var(--spacing-sm);
+}
+
+.component-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--hp-primary);
+    font-family: var(--font-mono);
+}
+
+.component-name {
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.4);
+    text-transform: uppercase;
+}
+
+/* Block Log Section */
+.blocks-section {
+    background: var(--bg-card);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    margin-bottom: var(--spacing-xl);
+}
+
+.blocks-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-lg) var(--spacing-xl);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.blocks-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.blocks-header .count {
+    background: var(--hp-primary);
+    color: #fff;
+    font-size: 0.75rem;
+    padding: 2px 10px;
+    border-radius: 10px;
+}
+
+.block-list {
+    max-height: 350px;
+    overflow-y: auto;
+}
+
+.block-item {
+    display: flex;
+    align-items: flex-start;
+    padding: var(--spacing-md) var(--spacing-xl);
+    border-bottom: 1px solid var(--border-color);
+    gap: var(--spacing-md);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.block-item:hover {
+    background: var(--bg-light);
+}
+
+.block-severity {
+    width: 4px;
+    height: 50px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.block-severity.critical { background: #ef4444; }
+.block-severity.high { background: #f97316; }
+.block-severity.medium { background: #f59e0b; }
+.block-severity.low { background: #10b981; }
+
+.block-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--spacing-xs);
+}
+
+.block-category {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.block-time {
+    font-size: 0.75rem;
+    color: var(--text-light);
+}
+
+.block-reason {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.block-meta {
+    display: flex;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.block-tag {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-light);
+    color: var(--text-light);
+    font-family: var(--font-mono);
+}
+
+.empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--text-light);
+}
+
+.empty-state svg {
+    width: 48px;
+    height: 48px;
+    margin-bottom: var(--spacing-md);
+    opacity: 0.5;
+}
+
+/* Export Section */
+.export-section {
+    display: flex;
+    justify-content: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+    background: var(--bg-card);
+    border-radius: var(--radius-xl);
+}
+
+.btn-export {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-export:hover {
+    background: var(--bg-light);
+    color: var(--text-primary);
+    border-color: var(--hp-primary);
+}
+
+.btn-export svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    padding: 20px;
+}
+
+.modal-overlay.active {
+    display: flex;
+}
+
+.modal-content {
+    background: var(--bg-card);
+    border-radius: var(--radius-xl);
+    max-width: 600px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-lg) var(--spacing-xl);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-light);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: var(--spacing-xs);
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
+.modal-body {
+    padding: var(--spacing-xl);
+}
+
+.detail-section {
+    margin-bottom: var(--spacing-lg);
+}
+
+.detail-section h4 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--text-light);
+    margin: 0 0 var(--spacing-sm) 0;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-sm);
+}
+
+.detail-item {
+    background: var(--bg-light);
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+
+.detail-item.full {
+    grid-column: span 2;
+}
+
+.detail-item .label {
+    font-size: 0.7rem;
+    color: var(--text-light);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.detail-item .value {
+    color: var(--text-primary);
+    word-break: break-all;
+}
+
+.detail-item .value.mono {
+    font-family: var(--font-mono);
+}
+
+.severity-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.severity-badge.critical { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.severity-badge.high { background: rgba(249, 115, 22, 0.15); color: #f97316; }
+.severity-badge.medium { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.severity-badge.low { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .qsecbit-hero {
+        padding: var(--spacing-xl);
     }
 
-    /* Protection Status Header */
-    .protection-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        border-radius: 12px;
-        padding: 20px 25px;
-        margin-bottom: 20px;
-        gap: 20px;
-        flex-wrap: wrap;
+    .qsecbit-ring-large {
+        width: 180px;
+        height: 180px;
     }
 
-    /* Qsecbit Ring - Inline */
-    .qsecbit-ring-container {
-        position: relative;
-        width: 80px;
-        height: 80px;
-        flex-shrink: 0;
+    .ring-score {
+        font-size: 2.5rem;
     }
 
-    .qsecbit-ring-container svg {
-        width: 100%;
-        height: 100%;
-        transform: rotate(-90deg);
+    .qsecbit-stats {
+        grid-template-columns: repeat(2, 1fr);
     }
 
-    .qsecbit-ring-bg {
-        fill: none;
-        stroke: var(--bg-tertiary, #2d3748);
-        stroke-width: 6;
-    }
-
-    .qsecbit-ring-fill {
-        fill: none;
-        stroke-width: 6;
-        stroke-linecap: round;
-        stroke-dasharray: 226; /* 2 * PI * 36 */
-        stroke-dashoffset: 226;
-        transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
-    }
-
-    .qsecbit-ring-fill.green { stroke: #10b981; }
-    .qsecbit-ring-fill.amber { stroke: #f59e0b; }
-    .qsecbit-ring-fill.red { stroke: #ef4444; }
-
-    .qsecbit-ring-value {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        font-size: 1rem;
-        font-weight: 700;
-    }
-
-    .qsecbit-ring-value.green { color: #10b981; }
-    .qsecbit-ring-value.amber { color: #f59e0b; }
-    .qsecbit-ring-value.red { color: #ef4444; }
-
-    .protection-status {
-        display: flex;
-        align-items: center;
-        gap: 20px;
-    }
-
-    .status-indicator {
-        width: 60px;
-        height: 60px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.5rem;
-        font-weight: 700;
-        position: relative;
-    }
-
-    .status-indicator::before {
-        content: '';
-        position: absolute;
-        inset: -4px;
-        border-radius: 50%;
-        border: 3px solid currentColor;
-        opacity: 0.3;
-    }
-
-    .status-indicator.green { background: rgba(16, 185, 129, 0.15); color: #10b981; }
-    .status-indicator.amber { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
-    .status-indicator.red { background: rgba(239, 68, 68, 0.15); color: #ef4444; animation: pulse-red 2s infinite; }
-
-    @keyframes pulse-red {
-        0%, 100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
-        50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
-    }
-
-    .protection-info h2 {
-        margin: 0 0 4px 0;
-        font-size: 1.1rem;
-        color: var(--text-primary, #fff);
-    }
-
-    .protection-info .status-text {
-        font-size: 0.85rem;
-        color: var(--text-muted, #64748b);
-    }
-
-    .protection-info .status-text.green { color: #10b981; }
-    .protection-info .status-text.amber { color: #f59e0b; }
-    .protection-info .status-text.red { color: #ef4444; }
-
-    .protection-stats {
-        display: flex;
-        gap: 25px;
-    }
-
-    .stat-item {
-        text-align: center;
-    }
-
-    .stat-item .value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary, #fff);
-    }
-
-    .stat-item .value.danger { color: #ef4444; }
-    .stat-item .value.success { color: #10b981; }
-
-    .stat-item .label {
-        font-size: 0.7rem;
-        color: var(--text-muted, #64748b);
-        text-transform: uppercase;
-    }
-
-    /* Block Log Section */
-    .blocks-section {
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        border-radius: 12px;
-        overflow: hidden;
-    }
-
-    .blocks-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 15px 20px;
-        border-bottom: 1px solid var(--bg-tertiary, rgba(255,255,255,0.05));
-        flex-wrap: wrap;
-        gap: 10px;
-    }
-
-    .blocks-header h3 {
-        margin: 0;
-        font-size: 1rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .blocks-header h3 .count {
-        background: var(--accent-color, #F05B2D);
-        color: #fff;
-        font-size: 0.7rem;
-        padding: 2px 8px;
-        border-radius: 10px;
-    }
-
-    .export-buttons {
-        display: flex;
-        gap: 8px;
-    }
-
-    .btn-export {
-        padding: 6px 12px;
-        font-size: 0.75rem;
-        border-radius: 6px;
-        border: 1px solid var(--bg-tertiary, #374151);
-        background: transparent;
-        color: var(--text-secondary, #94a3b8);
-        cursor: pointer;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-    }
-
-    .btn-export:hover {
-        background: var(--bg-tertiary, rgba(255,255,255,0.05));
-        color: var(--text-primary, #fff);
-    }
-
-    .btn-export svg {
-        width: 14px;
-        height: 14px;
-    }
-
-    /* Block List */
-    .block-list {
-        max-height: 400px;
-        overflow-y: auto;
-    }
-
-    .block-item {
-        display: flex;
-        align-items: flex-start;
-        padding: 15px 20px;
-        border-bottom: 1px solid var(--bg-tertiary, rgba(255,255,255,0.03));
-        cursor: pointer;
-        transition: background 0.2s;
-        gap: 15px;
-    }
-
-    .block-item:hover {
-        background: var(--bg-tertiary, rgba(255,255,255,0.02));
-    }
-
-    .block-item:last-child {
-        border-bottom: none;
-    }
-
-    .block-severity {
-        width: 4px;
-        height: 40px;
-        border-radius: 2px;
-        flex-shrink: 0;
-    }
-
-    .block-severity.critical { background: #ef4444; }
-    .block-severity.high { background: #f97316; }
-    .block-severity.medium { background: #f59e0b; }
-    .block-severity.low { background: #10b981; }
-
-    .block-content {
-        flex: 1;
-        min-width: 0;
-    }
-
-    .block-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 6px;
-        gap: 10px;
-    }
-
-    .block-category {
-        font-weight: 600;
-        font-size: 0.9rem;
-        color: var(--text-primary, #fff);
-    }
-
-    .block-time {
-        font-size: 0.75rem;
-        color: var(--text-muted, #64748b);
-        white-space: nowrap;
-    }
-
-    .block-reason {
-        font-size: 0.85rem;
-        color: var(--text-secondary, #94a3b8);
-        margin-bottom: 8px;
-    }
-
-    .block-meta {
-        display: flex;
-        gap: 15px;
-        flex-wrap: wrap;
-    }
-
-    .block-tag {
-        font-size: 0.7rem;
-        padding: 2px 8px;
-        border-radius: 4px;
-        background: var(--bg-tertiary, rgba(255,255,255,0.05));
-        color: var(--text-muted, #64748b);
-    }
-
-    .block-tag.ip { font-family: monospace; }
-
-    .block-arrow {
-        color: var(--text-muted, #64748b);
-        font-size: 1.2rem;
-        flex-shrink: 0;
-    }
-
-    /* Empty State */
-    .empty-state {
-        padding: 60px 20px;
-        text-align: center;
-        color: var(--text-muted, #64748b);
-    }
-
-    .empty-state svg {
-        width: 48px;
-        height: 48px;
-        margin-bottom: 15px;
-        opacity: 0.5;
-    }
-
-    /* Inspection Modal */
-    .modal-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        display: none;
-        justify-content: center;
-        align-items: center;
-        z-index: 1000;
-        padding: 20px;
-    }
-
-    .modal-overlay.active {
-        display: flex;
-    }
-
-    .modal-content {
-        background: var(--bg-primary, #1a1a2e);
-        border-radius: 12px;
-        max-width: 600px;
-        width: 100%;
-        max-height: 80vh;
-        overflow-y: auto;
-    }
-
-    .modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 20px;
-        border-bottom: 1px solid var(--bg-tertiary, rgba(255,255,255,0.05));
-    }
-
-    .modal-header h3 {
-        margin: 0;
-        font-size: 1.1rem;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .modal-close {
-        background: none;
-        border: none;
-        color: var(--text-muted, #64748b);
-        font-size: 1.5rem;
-        cursor: pointer;
-        padding: 5px;
-        line-height: 1;
-    }
-
-    .modal-close:hover {
-        color: var(--text-primary, #fff);
-    }
-
-    .modal-body {
-        padding: 20px;
-    }
-
-    .detail-section {
-        margin-bottom: 20px;
-    }
-
-    .detail-section:last-child {
-        margin-bottom: 0;
-    }
-
-    .detail-section h4 {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        color: var(--text-muted, #64748b);
-        margin: 0 0 10px 0;
-        letter-spacing: 0.5px;
+    .component-grid {
+        grid-template-columns: repeat(3, 1fr);
     }
 
     .detail-grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 12px;
-    }
-
-    .detail-item {
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        padding: 12px;
-        border-radius: 8px;
+        grid-template-columns: 1fr;
     }
 
     .detail-item.full {
-        grid-column: span 2;
+        grid-column: span 1;
     }
 
-    .detail-item .label {
-        font-size: 0.7rem;
-        color: var(--text-muted, #64748b);
-        text-transform: uppercase;
-        margin-bottom: 4px;
+    .export-section {
+        flex-direction: column;
+        align-items: stretch;
     }
-
-    .detail-item .value {
-        font-size: 0.9rem;
-        color: var(--text-primary, #fff);
-        word-break: break-all;
-    }
-
-    .detail-item .value.mono {
-        font-family: monospace;
-    }
-
-    .severity-badge {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
-    }
-
-    .severity-badge.critical { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
-    .severity-badge.high { background: rgba(249, 115, 22, 0.15); color: #f97316; }
-    .severity-badge.medium { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
-    .severity-badge.low { background: rgba(16, 185, 129, 0.15); color: #10b981; }
-
-    /* Detection Explanation */
-    .detection-box {
-        background: var(--bg-tertiary, rgba(255,255,255,0.02));
-        border-left: 3px solid var(--accent-color, #F05B2D);
-        padding: 15px;
-        border-radius: 0 8px 8px 0;
-    }
-
-    .detection-box .method {
-        font-weight: 600;
-        color: var(--text-primary, #fff);
-        margin-bottom: 8px;
-    }
-
-    .detection-box .explanation {
-        font-size: 0.85rem;
-        color: var(--text-secondary, #94a3b8);
-        line-height: 1.5;
-    }
-
-    /* Responsive */
-    @media (max-width: 600px) {
-        .protection-header {
-            flex-direction: column;
-            align-items: stretch;
-        }
-
-        .protection-stats {
-            justify-content: space-around;
-        }
-
-        .detail-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .detail-item.full {
-            grid-column: span 1;
-        }
-
-        .block-meta {
-            flex-direction: column;
-            gap: 5px;
-        }
-    }
+}
 </style>
 
-<div class="security-container">
-    <!-- Protection Status Header with Qsecbit Ring -->
-    <div class="protection-header">
-        <div class="protection-status">
-            <!-- Qsecbit Score Ring -->
-            <div class="qsecbit-ring-container">
-                <svg viewBox="0 0 80 80">
-                    <circle class="qsecbit-ring-bg" cx="40" cy="40" r="36"/>
-                    <circle class="qsecbit-ring-fill green" id="qsecbit-ring-fill" cx="40" cy="40" r="36"/>
-                </svg>
-                <div class="qsecbit-ring-value green" id="score-value">0.0</div>
-            </div>
-            <div class="protection-info">
-                <h2>Protection Active</h2>
-                <div class="status-text green" id="status-text">All systems nominal</div>
+<!-- Premium QSecBit Hero Display -->
+<div class="qsecbit-hero">
+    <div class="qsecbit-hero-content">
+        <h2>Security Score</h2>
+        <p class="subtitle">Real-time Quantified Security Metric</p>
+
+        <!-- Large Ring Display -->
+        <div class="qsecbit-ring-large">
+            <svg viewBox="0 0 200 200">
+                <circle class="ring-bg" cx="100" cy="100" r="90"/>
+                <circle class="ring-fill green" id="qsecbit-ring" cx="100" cy="100" r="90"/>
+            </svg>
+            <div class="ring-center">
+                <div class="ring-score green" id="qsecbit-score">0.000</div>
+                <div class="ring-label">QSecBit</div>
             </div>
         </div>
-        <div class="protection-stats">
-            <div class="stat-item">
-                <div class="value danger" id="threats-count">0</div>
+
+        <!-- Risk Status Banner -->
+        <div class="risk-banner green" id="risk-banner">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <span id="risk-text">All Systems Nominal</span>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="qsecbit-stats">
+            <div class="qsecbit-stat">
+                <div class="value danger" id="threats-detected">0</div>
                 <div class="label">Detected</div>
             </div>
-            <div class="stat-item">
-                <div class="value success" id="blocked-count">0</div>
+            <div class="qsecbit-stat">
+                <div class="value success" id="threats-blocked">0</div>
                 <div class="label">Blocked</div>
             </div>
+            <div class="qsecbit-stat">
+                <div class="value" id="xdp-drops">0</div>
+                <div class="label">XDP Drops</div>
+            </div>
+            <div class="qsecbit-stat">
+                <div class="value" id="active-rules">0</div>
+                <div class="label">Active Rules</div>
+            </div>
         </div>
-    </div>
 
-    <!-- Block Log Section -->
-    <div class="blocks-section">
-        <div class="blocks-header">
-            <h3>
-                Recent Blocks
-                <span class="count" id="blocks-total">0</span>
-            </h3>
-        </div>
-        <div class="block-list" id="block-list">
-            <div class="empty-state">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                </svg>
-                <p>No blocked threats yet.<br>Your network is being monitored.</p>
+        <!-- Component Breakdown -->
+        <div class="component-breakdown">
+            <div class="component-title">Score Components</div>
+            <div class="component-grid" id="component-grid">
+                <div class="component-item">
+                    <div class="component-value" id="comp-drift">0.000</div>
+                    <div class="component-name">Drift</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-attack">0.000</div>
+                    <div class="component-name">Attack</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-decay">0.000</div>
+                    <div class="component-name">Decay</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-quantum">0.000</div>
+                    <div class="component-name">Quantum</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-energy">0.000</div>
+                    <div class="component-name">Energy</div>
+                </div>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Export Section (moved to bottom) -->
-    <div class="export-section" style="display: flex; justify-content: center; gap: 15px; padding: 20px; margin-top: 15px; background: var(--bg-secondary, rgba(255,255,255,0.03)); border-radius: 12px;">
-        <button class="btn-export" onclick="exportBlocks('csv')" title="Export blocked threats as CSV">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
+<!-- Block Log Section -->
+<div class="blocks-section">
+    <div class="blocks-header">
+        <h3>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="color: var(--hp-primary);">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
             </svg>
-            Export CSV
-        </button>
-        <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1 (Threat Intelligence Standard)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            Export STIX 2.1
-        </button>
+            Recent Blocks
+            <span class="count" id="blocks-total">0</span>
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshBlocks()">Refresh</button>
     </div>
+    <div class="block-list" id="block-list">
+        <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <p>No blocked threats yet.<br>Your network is being monitored.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Export Section -->
+<div class="export-section">
+    <button class="btn-export" onclick="exportBlocks('csv')" title="Export as CSV">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+        Export CSV
+    </button>
+    <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Export STIX 2.1
+    </button>
+    <button class="btn-export" onclick="exportBlocks('json')" title="Export as JSON">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/>
+            <path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/>
+        </svg>
+        Export JSON
+    </button>
 </div>
 
 <!-- Inspection Modal -->
@@ -550,7 +661,7 @@
                 <span id="modal-category">Threat Details</span>
                 <span class="severity-badge" id="modal-severity">HIGH</span>
             </h3>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <button class="modal-close" onclick="closeInspectionModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="detail-section">
@@ -578,18 +689,13 @@
                     </div>
                 </div>
             </div>
-
             <div class="detail-section">
                 <h4>Detection Analysis</h4>
-                <div class="detection-box">
-                    <div class="method" id="modal-method">-</div>
-                    <div class="explanation" id="modal-reason">-</div>
+                <div class="detail-item full" style="background: var(--bg-darker); border-left: 3px solid var(--hp-primary);">
+                    <div class="label">Detection Method</div>
+                    <div class="value" id="modal-method" style="font-weight: 600;">-</div>
+                    <div class="value" id="modal-reason" style="margin-top: 8px; color: var(--text-secondary);">-</div>
                 </div>
-            </div>
-
-            <div class="detail-section" id="modal-details-section" style="display: none;">
-                <h4>Additional Details</h4>
-                <div class="detail-grid" id="modal-details-grid"></div>
             </div>
         </div>
     </div>
@@ -597,23 +703,8 @@
 
 <script>
 (function() {
-    const POLL_INTERVAL = 5000;
+    const RING_CIRCUMFERENCE = 565; // 2 * PI * 90
     let blocksData = [];
-
-    // Elements
-    const els = {
-        ringFill: document.getElementById('qsecbit-ring-fill'),
-        scoreValue: document.getElementById('score-value'),
-        statusText: document.getElementById('status-text'),
-        threatsCount: document.getElementById('threats-count'),
-        blockedCount: document.getElementById('blocked-count'),
-        blockList: document.getElementById('block-list'),
-        blocksTotal: document.getElementById('blocks-total'),
-        modal: document.getElementById('inspection-modal')
-    };
-
-    // Qsecbit ring circumference (2 * PI * 36)
-    const RING_CIRCUMFERENCE = 226;
 
     function getStatusClass(score) {
         if (score >= 0.70) return 'red';
@@ -621,75 +712,97 @@
         return 'green';
     }
 
-    function getStatusMessage(score) {
-        if (score >= 0.70) return 'Threat detected - Active mitigation';
-        if (score >= 0.45) return 'Elevated risk - Monitoring closely';
-        return 'All systems nominal';
+    function getRiskMessage(score) {
+        if (score >= 0.70) return 'Threat Detected - Active Mitigation';
+        if (score >= 0.45) return 'Elevated Risk - Monitoring Closely';
+        return 'All Systems Nominal';
     }
 
     function formatTime(isoString) {
         const date = new Date(isoString);
         const now = new Date();
         const diff = (now - date) / 1000;
-
         if (diff < 60) return 'Just now';
         if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
         if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
         return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     }
 
-    function formatTimestamp(isoString) {
-        return new Date(isoString).toLocaleString('en-GB', {
-            day: 'numeric', month: 'short', year: 'numeric',
-            hour: '2-digit', minute: '2-digit', second: '2-digit'
-        });
-    }
-
-    async function fetchSecurityData() {
+    async function fetchQSecBitData() {
         try {
-            // Fetch Qsecbit score
-            const scoreRes = await fetch('/qsecbit/api/score');
+            // Fetch QSecBit score
+            const scoreRes = await fetch('/api/security/qsecbit');
             if (scoreRes.ok) {
                 const data = await scoreRes.json();
-                updateProtectionStatus(data);
+                updateQSecBitDisplay(data);
+            }
+
+            // Fetch XDP stats
+            const xdpRes = await fetch('/api/xdp_stats');
+            if (xdpRes.ok) {
+                const xdp = await xdpRes.json();
+                document.getElementById('xdp-drops').textContent = formatNumber(xdp.drops || 0);
+                document.getElementById('active-rules').textContent = xdp.active_rules || 0;
+            }
+
+            // Fetch threats
+            const threatsRes = await fetch('/api/threats');
+            if (threatsRes.ok) {
+                const threats = await threatsRes.json();
+                document.getElementById('threats-detected').textContent = threats.stats?.total || 0;
+                document.getElementById('threats-blocked').textContent = threats.stats?.blocked || 0;
             }
         } catch (e) {
-            console.error('Security fetch error:', e);
+            console.error('QSecBit fetch error:', e);
         }
     }
 
-    function updateProtectionStatus(data) {
+    function updateQSecBitDisplay(data) {
         const score = data.score || 0;
         const statusClass = getStatusClass(score);
 
-        // Update Qsecbit ring animation (inverted: 0 = full protection, 1 = no protection)
-        const progress = 1 - score;
+        // Update ring
+        const ring = document.getElementById('qsecbit-ring');
+        const progress = 1 - score; // Inverted: 0 = full protection
         const offset = RING_CIRCUMFERENCE - (progress * RING_CIRCUMFERENCE);
-        if (els.ringFill) {
-            els.ringFill.style.strokeDashoffset = offset;
-            els.ringFill.className = 'qsecbit-ring-fill ' + statusClass;
+        ring.style.strokeDashoffset = offset;
+        ring.className = 'ring-fill ' + statusClass;
+
+        // Update score display
+        const scoreEl = document.getElementById('qsecbit-score');
+        scoreEl.textContent = score.toFixed(3);
+        scoreEl.className = 'ring-score ' + statusClass;
+
+        // Update risk banner
+        const banner = document.getElementById('risk-banner');
+        const riskText = document.getElementById('risk-text');
+        banner.className = 'risk-banner ' + statusClass;
+        riskText.textContent = getRiskMessage(score);
+
+        // Update components
+        if (data.components) {
+            const c = data.components;
+            document.getElementById('comp-drift').textContent = (c.drift || 0).toFixed(3);
+            document.getElementById('comp-attack').textContent = (c.p_attack || 0).toFixed(3);
+            document.getElementById('comp-decay').textContent = (c.decay || 0).toFixed(3);
+            document.getElementById('comp-quantum').textContent = (c.q_drift || 0).toFixed(3);
+            document.getElementById('comp-energy').textContent = (c.energy_anomaly || 0).toFixed(3);
         }
+    }
 
-        // Update score value
-        els.scoreValue.textContent = score.toFixed(2);
-        els.scoreValue.className = 'qsecbit-ring-value ' + statusClass;
-
-        // Update status text
-        els.statusText.className = 'status-text ' + statusClass;
-        els.statusText.textContent = getStatusMessage(score);
-
-        // Update stats
-        els.threatsCount.textContent = data.threats_active || 0;
-        els.blockedCount.textContent = data.blocked || blocksData.length || 0;
+    function formatNumber(num) {
+        if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+        if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+        return num.toString();
     }
 
     async function fetchBlocks() {
         try {
-            const res = await fetch('/security/blocks');
+            const res = await fetch('/api/security/blocks');
             if (res.ok) {
                 const data = await res.json();
                 blocksData = data.blocks || [];
-                els.blocksTotal.textContent = data.total || blocksData.length;
+                document.getElementById('blocks-total').textContent = data.total || blocksData.length;
                 renderBlockList();
             }
         } catch (e) {
@@ -698,8 +811,9 @@
     }
 
     function renderBlockList() {
+        const list = document.getElementById('block-list');
         if (blocksData.length === 0) {
-            els.blockList.innerHTML = `
+            list.innerHTML = `
                 <div class="empty-state">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -710,7 +824,7 @@
             return;
         }
 
-        els.blockList.innerHTML = blocksData.map(block => `
+        list.innerHTML = blocksData.map(block => `
             <div class="block-item" onclick="showBlockDetail('${block.id}')">
                 <div class="block-severity ${block.severity.toLowerCase()}"></div>
                 <div class="block-content">
@@ -720,22 +834,19 @@
                     </div>
                     <div class="block-reason">${block.reason}</div>
                     <div class="block-meta">
-                        <span class="block-tag ip">${block.source_ip}</span>
+                        <span class="block-tag">${block.source_ip}</span>
                         <span class="block-tag">${block.protocol}:${block.dest_port}</span>
                         <span class="block-tag">${block.layer}</span>
                     </div>
                 </div>
-                <div class="block-arrow">&#8250;</div>
             </div>
         `).join('');
     }
 
-    // Modal functions - exposed globally
     window.showBlockDetail = function(blockId) {
         const block = blocksData.find(b => b.id === blockId);
         if (!block) return;
 
-        // Populate modal
         document.getElementById('modal-category').textContent = block.category;
         const severityEl = document.getElementById('modal-severity');
         severityEl.textContent = block.severity;
@@ -745,67 +856,38 @@
         document.getElementById('modal-dest-port').textContent = block.dest_port;
         document.getElementById('modal-protocol').textContent = block.protocol;
         document.getElementById('modal-layer').textContent = block.layer;
-        document.getElementById('modal-timestamp').textContent = formatTimestamp(block.timestamp);
+        document.getElementById('modal-timestamp').textContent = new Date(block.timestamp).toLocaleString();
         document.getElementById('modal-method').textContent = block.detection_method;
         document.getElementById('modal-reason').textContent = block.reason;
 
-        // Additional details
-        const detailsSection = document.getElementById('modal-details-section');
-        const detailsGrid = document.getElementById('modal-details-grid');
-
-        if (block.details && Object.keys(block.details).length > 0) {
-            detailsSection.style.display = 'block';
-            detailsGrid.innerHTML = Object.entries(block.details)
-                .filter(([key]) => key !== 'geo')
-                .map(([key, value]) => `
-                    <div class="detail-item">
-                        <div class="label">${key.replace(/_/g, ' ')}</div>
-                        <div class="value ${typeof value === 'string' && value.length > 20 ? 'mono' : ''}">${value}</div>
-                    </div>
-                `).join('');
-
-            // Add geo info if present
-            if (block.details.geo) {
-                detailsGrid.innerHTML += `
-                    <div class="detail-item">
-                        <div class="label">Origin</div>
-                        <div class="value">${block.details.geo.country} (${block.details.geo.asn})</div>
-                    </div>
-                `;
-            }
-        } else {
-            detailsSection.style.display = 'none';
-        }
-
-        els.modal.classList.add('active');
+        document.getElementById('inspection-modal').classList.add('active');
     };
 
-    window.closeModal = function() {
-        els.modal.classList.remove('active');
+    window.closeInspectionModal = function() {
+        document.getElementById('inspection-modal').classList.remove('active');
+    };
+
+    window.refreshBlocks = function() {
+        fetchBlocks();
     };
 
     window.exportBlocks = function(format) {
-        window.location.href = '/security/blocks/export?format=' + format;
+        window.location.href = '/api/security/blocks/export?format=' + format;
     };
 
     // Close modal on overlay click
-    els.modal.addEventListener('click', function(e) {
-        if (e.target === els.modal) {
-            closeModal();
-        }
+    document.getElementById('inspection-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeInspectionModal();
     });
 
-    // Close modal on Escape key
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closeModal();
-        }
+        if (e.key === 'Escape') closeInspectionModal();
     });
 
     // Initialize
-    fetchSecurityData();
+    fetchQSecBitData();
     fetchBlocks();
-    setInterval(fetchSecurityData, POLL_INTERVAL);
-    setInterval(fetchBlocks, 30000); // Refresh blocks every 30s
+    setInterval(fetchQSecBitData, 5000);
+    setInterval(fetchBlocks, 30000);
 })();
 </script>
