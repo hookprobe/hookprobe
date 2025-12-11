@@ -109,8 +109,10 @@ class ClusterManager {
      */
     load(nodes) {
         if (!this.index) {
-            console.warn('Supercluster not initialized');
+            console.warn('[ClusterManager] Supercluster not initialized, using raw nodes');
             this.rawNodes = nodes;
+            // Still emit loaded event for compatibility
+            this._emit('loaded', { nodeCount: nodes.length });
             return;
         }
 
@@ -147,7 +149,12 @@ class ClusterManager {
      */
     getClusters(bounds, zoom) {
         if (!this.index) {
-            return this.rawNodes;
+            // Return raw nodes with type property for compatibility
+            console.log('[ClusterManager] No Supercluster index, returning raw nodes');
+            return this.rawNodes.map(node => ({
+                ...node,
+                type: 'node'
+            }));
         }
 
         this.currentZoom = zoom;
@@ -211,7 +218,14 @@ class ClusterManager {
      * @returns {Array} Array of clusters and individual nodes
      */
     getAllClusters(zoom) {
-        return this.getClusters({ west: -180, south: -90, east: 180, north: 90 }, zoom);
+        console.log('[ClusterManager] getAllClusters called with zoom:', zoom);
+        const result = this.getClusters({ west: -180, south: -90, east: 180, north: 90 }, zoom);
+        console.log('[ClusterManager] getAllClusters result:', {
+            totalItems: result.length,
+            clusters: result.filter(r => r.type === 'cluster').length,
+            nodes: result.filter(r => r.type === 'node').length
+        });
+        return result;
     }
 
     /**
