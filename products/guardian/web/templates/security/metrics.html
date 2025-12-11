@@ -1,405 +1,541 @@
-<!-- Security Tab - Simplified Unified -->
+<!-- Security Tab - Simplified & Focused -->
 <style>
     .security-container {
-        max-width: 800px;
+        max-width: 900px;
         margin: 0 auto;
         padding: 0 15px;
     }
 
-    .security-header {
+    /* Protection Status Header */
+    .protection-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
+        border-radius: 12px;
+        padding: 20px 25px;
+        margin-bottom: 20px;
+        gap: 20px;
+        flex-wrap: wrap;
+    }
+
+    .protection-status {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+    }
+
+    .status-indicator {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+        font-weight: 700;
+        position: relative;
+    }
+
+    .status-indicator::before {
+        content: '';
+        position: absolute;
+        inset: -4px;
+        border-radius: 50%;
+        border: 3px solid currentColor;
+        opacity: 0.3;
+    }
+
+    .status-indicator.green { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+    .status-indicator.amber { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+    .status-indicator.red { background: rgba(239, 68, 68, 0.15); color: #ef4444; animation: pulse-red 2s infinite; }
+
+    @keyframes pulse-red {
+        0%, 100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+        50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
+    }
+
+    .protection-info h2 {
+        margin: 0 0 4px 0;
+        font-size: 1.1rem;
+        color: var(--text-primary, #fff);
+    }
+
+    .protection-info .status-text {
+        font-size: 0.85rem;
+        color: var(--text-muted, #64748b);
+    }
+
+    .protection-info .status-text.green { color: #10b981; }
+    .protection-info .status-text.amber { color: #f59e0b; }
+    .protection-info .status-text.red { color: #ef4444; }
+
+    .protection-stats {
+        display: flex;
+        gap: 25px;
+    }
+
+    .stat-item {
+        text-align: center;
+    }
+
+    .stat-item .value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary, #fff);
+    }
+
+    .stat-item .value.danger { color: #ef4444; }
+    .stat-item .value.success { color: #10b981; }
+
+    .stat-item .label {
+        font-size: 0.7rem;
+        color: var(--text-muted, #64748b);
+        text-transform: uppercase;
+    }
+
+    /* Block Log Section */
+    .blocks-section {
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    .blocks-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        padding: 15px 20px;
+        border-bottom: 1px solid var(--bg-tertiary, rgba(255,255,255,0.05));
         flex-wrap: wrap;
-        gap: 15px;
-        margin-bottom: 25px;
+        gap: 10px;
     }
 
-    .security-header h2 {
+    .blocks-header h3 {
         margin: 0;
-        font-size: 1.5rem;
-    }
-
-    .security-datetime {
-        text-align: right;
-        padding: 8px 15px;
-        background: var(--bg-secondary, rgba(255,255,255,0.05));
-        border-radius: 8px;
-    }
-
-    .security-datetime .date {
-        font-size: 0.85rem;
-        color: var(--text-primary, #fff);
-    }
-
-    .security-datetime .time {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: var(--accent-color, #F05B2D);
-    }
-
-    /* Main Score Display */
-    .score-hero {
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        border-radius: 16px;
-        padding: 30px 20px;
-        text-align: center;
-        margin-bottom: 25px;
-    }
-
-    .score-circle {
-        position: relative;
-        width: 180px;
-        height: 180px;
-        margin: 0 auto 20px;
-    }
-
-    .score-circle svg {
-        width: 100%;
-        height: 100%;
-        transform: rotate(-90deg);
-    }
-
-    .score-circle .bg {
-        fill: none;
-        stroke: var(--bg-tertiary, #2d3748);
-        stroke-width: 12;
-    }
-
-    .score-circle .progress {
-        fill: none;
-        stroke-width: 12;
-        stroke-linecap: round;
-        stroke-dasharray: 440;
-        stroke-dashoffset: 440;
-        transition: stroke-dashoffset 0.8s ease, stroke 0.5s ease;
-    }
-
-    .score-circle .progress.green { stroke: #10b981; }
-    .score-circle .progress.amber { stroke: #f59e0b; }
-    .score-circle .progress.red { stroke: #ef4444; }
-
-    .score-circle .value {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        font-size: 2.5rem;
-        font-weight: 700;
-    }
-
-    .score-circle .value.green { color: #10b981; }
-    .score-circle .value.amber { color: #f59e0b; }
-    .score-circle .value.red { color: #ef4444; }
-
-    .status-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 20px;
-        border-radius: 25px;
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
-
-    .status-pill.green {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-    }
-
-    .status-pill.amber {
-        background: rgba(245, 158, 11, 0.15);
-        color: #f59e0b;
-    }
-
-    .status-pill.red {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
-        animation: pulse-badge 2s infinite;
-    }
-
-    @keyframes pulse-badge {
-        0%, 100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
-        50% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
-    }
-
-    .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: currentColor;
-    }
-
-    /* Quick Stats Row */
-    .quick-stats {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 12px;
-        margin-bottom: 25px;
-    }
-
-    .quick-stat {
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        border-radius: 10px;
-        padding: 15px 10px;
-        text-align: center;
-    }
-
-    .quick-stat .value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary, #fff);
-    }
-
-    .quick-stat .label {
-        font-size: 0.7rem;
-        color: var(--text-muted, #64748b);
-        text-transform: uppercase;
-        margin-top: 4px;
-    }
-
-    .quick-stat.danger .value { color: #ef4444; }
-    .quick-stat.success .value { color: #10b981; }
-    .quick-stat.info .value { color: #3b82f6; }
-
-    /* Layer Bars */
-    .layers-section {
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 25px;
-    }
-
-    .layers-title {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--text-secondary, #94a3b8);
-        margin-bottom: 15px;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-
-    .layer-row {
+        font-size: 1rem;
         display: flex;
         align-items: center;
-        margin-bottom: 12px;
+        gap: 8px;
     }
 
-    .layer-row:last-child {
+    .blocks-header h3 .count {
+        background: var(--accent-color, #F05B2D);
+        color: #fff;
+        font-size: 0.7rem;
+        padding: 2px 8px;
+        border-radius: 10px;
+    }
+
+    .export-buttons {
+        display: flex;
+        gap: 8px;
+    }
+
+    .btn-export {
+        padding: 6px 12px;
+        font-size: 0.75rem;
+        border-radius: 6px;
+        border: 1px solid var(--bg-tertiary, #374151);
+        background: transparent;
+        color: var(--text-secondary, #94a3b8);
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .btn-export:hover {
+        background: var(--bg-tertiary, rgba(255,255,255,0.05));
+        color: var(--text-primary, #fff);
+    }
+
+    .btn-export svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    /* Block List */
+    .block-list {
+        max-height: 400px;
+        overflow-y: auto;
+    }
+
+    .block-item {
+        display: flex;
+        align-items: flex-start;
+        padding: 15px 20px;
+        border-bottom: 1px solid var(--bg-tertiary, rgba(255,255,255,0.03));
+        cursor: pointer;
+        transition: background 0.2s;
+        gap: 15px;
+    }
+
+    .block-item:hover {
+        background: var(--bg-tertiary, rgba(255,255,255,0.02));
+    }
+
+    .block-item:last-child {
+        border-bottom: none;
+    }
+
+    .block-severity {
+        width: 4px;
+        height: 40px;
+        border-radius: 2px;
+        flex-shrink: 0;
+    }
+
+    .block-severity.critical { background: #ef4444; }
+    .block-severity.high { background: #f97316; }
+    .block-severity.medium { background: #f59e0b; }
+    .block-severity.low { background: #10b981; }
+
+    .block-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .block-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 6px;
+        gap: 10px;
+    }
+
+    .block-category {
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: var(--text-primary, #fff);
+    }
+
+    .block-time {
+        font-size: 0.75rem;
+        color: var(--text-muted, #64748b);
+        white-space: nowrap;
+    }
+
+    .block-reason {
+        font-size: 0.85rem;
+        color: var(--text-secondary, #94a3b8);
+        margin-bottom: 8px;
+    }
+
+    .block-meta {
+        display: flex;
+        gap: 15px;
+        flex-wrap: wrap;
+    }
+
+    .block-tag {
+        font-size: 0.7rem;
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: var(--bg-tertiary, rgba(255,255,255,0.05));
+        color: var(--text-muted, #64748b);
+    }
+
+    .block-tag.ip { font-family: monospace; }
+
+    .block-arrow {
+        color: var(--text-muted, #64748b);
+        font-size: 1.2rem;
+        flex-shrink: 0;
+    }
+
+    /* Empty State */
+    .empty-state {
+        padding: 60px 20px;
+        text-align: center;
+        color: var(--text-muted, #64748b);
+    }
+
+    .empty-state svg {
+        width: 48px;
+        height: 48px;
+        margin-bottom: 15px;
+        opacity: 0.5;
+    }
+
+    /* Inspection Modal */
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+        padding: 20px;
+    }
+
+    .modal-overlay.active {
+        display: flex;
+    }
+
+    .modal-content {
+        background: var(--bg-primary, #1a1a2e);
+        border-radius: 12px;
+        max-width: 600px;
+        width: 100%;
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px;
+        border-bottom: 1px solid var(--bg-tertiary, rgba(255,255,255,0.05));
+    }
+
+    .modal-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .modal-close {
+        background: none;
+        border: none;
+        color: var(--text-muted, #64748b);
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 5px;
+        line-height: 1;
+    }
+
+    .modal-close:hover {
+        color: var(--text-primary, #fff);
+    }
+
+    .modal-body {
+        padding: 20px;
+    }
+
+    .detail-section {
+        margin-bottom: 20px;
+    }
+
+    .detail-section:last-child {
         margin-bottom: 0;
     }
 
-    .layer-label {
-        width: 60px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: var(--text-secondary, #94a3b8);
-    }
-
-    .layer-bar-bg {
-        flex: 1;
-        height: 10px;
-        background: var(--bg-tertiary, #1e293b);
-        border-radius: 5px;
-        overflow: hidden;
-        margin: 0 12px;
-    }
-
-    .layer-bar {
-        height: 100%;
-        border-radius: 5px;
-        transition: width 0.5s ease;
-    }
-
-    .layer-bar.green { background: #10b981; }
-    .layer-bar.amber { background: #f59e0b; }
-    .layer-bar.red { background: #ef4444; }
-
-    .layer-value {
-        width: 50px;
-        font-size: 0.8rem;
-        text-align: right;
-        font-weight: 600;
-        color: var(--text-primary, #fff);
-    }
-
-    .layer-threats {
-        width: 70px;
-        font-size: 0.7rem;
-        text-align: right;
+    .detail-section h4 {
+        font-size: 0.75rem;
+        text-transform: uppercase;
         color: var(--text-muted, #64748b);
+        margin: 0 0 10px 0;
+        letter-spacing: 0.5px;
     }
 
-    /* XDP Stats */
-    .xdp-section {
-        background: var(--bg-secondary, rgba(255,255,255,0.03));
-        border-radius: 12px;
-        padding: 20px;
-    }
-
-    .xdp-grid {
+    .detail-grid {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
-        gap: 15px;
+        gap: 12px;
     }
 
-    .xdp-item {
-        text-align: center;
+    .detail-item {
+        background: var(--bg-secondary, rgba(255,255,255,0.03));
         padding: 12px;
-        background: var(--bg-tertiary, rgba(255,255,255,0.02));
         border-radius: 8px;
     }
 
-    .xdp-item .value {
-        font-size: 1.25rem;
-        font-weight: 700;
+    .detail-item.full {
+        grid-column: span 2;
     }
 
-    .xdp-item .label {
+    .detail-item .label {
         font-size: 0.7rem;
         color: var(--text-muted, #64748b);
         text-transform: uppercase;
-        margin-top: 4px;
+        margin-bottom: 4px;
+    }
+
+    .detail-item .value {
+        font-size: 0.9rem;
+        color: var(--text-primary, #fff);
+        word-break: break-all;
+    }
+
+    .detail-item .value.mono {
+        font-family: monospace;
+    }
+
+    .severity-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+
+    .severity-badge.critical { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+    .severity-badge.high { background: rgba(249, 115, 22, 0.15); color: #f97316; }
+    .severity-badge.medium { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+    .severity-badge.low { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+
+    /* Detection Explanation */
+    .detection-box {
+        background: var(--bg-tertiary, rgba(255,255,255,0.02));
+        border-left: 3px solid var(--accent-color, #F05B2D);
+        padding: 15px;
+        border-radius: 0 8px 8px 0;
+    }
+
+    .detection-box .method {
+        font-weight: 600;
+        color: var(--text-primary, #fff);
+        margin-bottom: 8px;
+    }
+
+    .detection-box .explanation {
+        font-size: 0.85rem;
+        color: var(--text-secondary, #94a3b8);
+        line-height: 1.5;
     }
 
     /* Responsive */
     @media (max-width: 600px) {
-        .quick-stats {
-            grid-template-columns: repeat(2, 1fr);
+        .protection-header {
+            flex-direction: column;
+            align-items: stretch;
         }
 
-        .score-circle {
-            width: 150px;
-            height: 150px;
+        .protection-stats {
+            justify-content: space-around;
         }
 
-        .score-circle .value {
-            font-size: 2rem;
+        .detail-grid {
+            grid-template-columns: 1fr;
         }
 
-        .layer-threats {
-            display: none;
+        .detail-item.full {
+            grid-column: span 1;
+        }
+
+        .block-meta {
+            flex-direction: column;
+            gap: 5px;
         }
     }
 </style>
 
 <div class="security-container">
-    <!-- Header with DateTime -->
-    <div class="security-header">
-        <div>
-            <h2>Security</h2>
-            <p class="text-muted" style="margin: 0; font-size: 0.85rem;">Qsecbit Protection</p>
+    <!-- Protection Status Header -->
+    <div class="protection-header">
+        <div class="protection-status">
+            <div class="status-indicator green" id="status-indicator">
+                <span id="score-value">0.0</span>
+            </div>
+            <div class="protection-info">
+                <h2>Protection Active</h2>
+                <div class="status-text green" id="status-text">All systems nominal</div>
+            </div>
         </div>
-        <div class="security-datetime">
-            <div class="date" id="sec-date"></div>
-            <div class="time" id="sec-time"></div>
+        <div class="protection-stats">
+            <div class="stat-item">
+                <div class="value danger" id="threats-count">0</div>
+                <div class="label">Detected</div>
+            </div>
+            <div class="stat-item">
+                <div class="value success" id="blocked-count">0</div>
+                <div class="label">Blocked</div>
+            </div>
         </div>
     </div>
 
-    <!-- Main Score Display -->
-    <div class="score-hero">
-        <div class="score-circle">
-            <svg viewBox="0 0 160 160">
-                <circle class="bg" cx="80" cy="80" r="70"/>
-                <circle class="progress green" id="sec-progress" cx="80" cy="80" r="70"/>
-            </svg>
-            <div class="value green" id="sec-score">0.00</div>
+    <!-- Block Log Section -->
+    <div class="blocks-section">
+        <div class="blocks-header">
+            <h3>
+                Recent Blocks
+                <span class="count" id="blocks-total">0</span>
+            </h3>
+            <div class="export-buttons">
+                <button class="btn-export" onclick="exportBlocks('csv')" title="Export as CSV">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    CSV
+                </button>
+                <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1 (Standard format)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    STIX 2.1
+                </button>
+            </div>
         </div>
-        <div class="status-pill green" id="sec-status">
-            <span class="status-dot"></span>
-            <span id="sec-status-text">PROTECTED</span>
+        <div class="block-list" id="block-list">
+            <div class="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                <p>No blocked threats yet.<br>Your network is being monitored.</p>
+            </div>
         </div>
     </div>
+</div>
 
-    <!-- Quick Stats -->
-    <div class="quick-stats">
-        <div class="quick-stat danger">
-            <div class="value" id="sec-threats">0</div>
-            <div class="label">Threats</div>
+<!-- Inspection Modal -->
+<div class="modal-overlay" id="inspection-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>
+                <span id="modal-category">Threat Details</span>
+                <span class="severity-badge" id="modal-severity">HIGH</span>
+            </h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
         </div>
-        <div class="quick-stat success">
-            <div class="value" id="sec-blocked">0</div>
-            <div class="label">Blocked</div>
-        </div>
-        <div class="quick-stat info">
-            <div class="value" id="sec-xdp">0</div>
-            <div class="label">XDP Drops</div>
-        </div>
-        <div class="quick-stat">
-            <div class="value" id="sec-chains">0</div>
-            <div class="label">Chains</div>
-        </div>
-    </div>
+        <div class="modal-body">
+            <div class="detail-section">
+                <h4>Connection Details</h4>
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <div class="label">Source IP</div>
+                        <div class="value mono" id="modal-source-ip">-</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="label">Destination Port</div>
+                        <div class="value mono" id="modal-dest-port">-</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="label">Protocol</div>
+                        <div class="value" id="modal-protocol">-</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="label">OSI Layer</div>
+                        <div class="value" id="modal-layer">-</div>
+                    </div>
+                    <div class="detail-item full">
+                        <div class="label">Timestamp</div>
+                        <div class="value" id="modal-timestamp">-</div>
+                    </div>
+                </div>
+            </div>
 
-    <!-- Layer Breakdown -->
-    <div class="layers-section">
-        <div class="layers-title">OSI Layer Detection</div>
+            <div class="detail-section">
+                <h4>Detection Analysis</h4>
+                <div class="detection-box">
+                    <div class="method" id="modal-method">-</div>
+                    <div class="explanation" id="modal-reason">-</div>
+                </div>
+            </div>
 
-        <div class="layer-row" data-layer="L2">
-            <span class="layer-label">L2</span>
-            <div class="layer-bar-bg">
-                <div class="layer-bar green" style="width: 0%"></div>
-            </div>
-            <span class="layer-value">0.00</span>
-            <span class="layer-threats">0 threats</span>
-        </div>
-
-        <div class="layer-row" data-layer="L3">
-            <span class="layer-label">L3</span>
-            <div class="layer-bar-bg">
-                <div class="layer-bar green" style="width: 0%"></div>
-            </div>
-            <span class="layer-value">0.00</span>
-            <span class="layer-threats">0 threats</span>
-        </div>
-
-        <div class="layer-row" data-layer="L4">
-            <span class="layer-label">L4</span>
-            <div class="layer-bar-bg">
-                <div class="layer-bar green" style="width: 0%"></div>
-            </div>
-            <span class="layer-value">0.00</span>
-            <span class="layer-threats">0 threats</span>
-        </div>
-
-        <div class="layer-row" data-layer="L5">
-            <span class="layer-label">L5</span>
-            <div class="layer-bar-bg">
-                <div class="layer-bar green" style="width: 0%"></div>
-            </div>
-            <span class="layer-value">0.00</span>
-            <span class="layer-threats">0 threats</span>
-        </div>
-
-        <div class="layer-row" data-layer="L7">
-            <span class="layer-label">L7</span>
-            <div class="layer-bar-bg">
-                <div class="layer-bar green" style="width: 0%"></div>
-            </div>
-            <span class="layer-value">0.00</span>
-            <span class="layer-threats">0 threats</span>
-        </div>
-    </div>
-
-    <!-- XDP Protection -->
-    <div class="xdp-section">
-        <div class="layers-title">XDP/eBPF Protection</div>
-        <div class="xdp-grid">
-            <div class="xdp-item">
-                <div class="value" id="sec-xdp-mode" style="color: #10b981;">--</div>
-                <div class="label">Mode</div>
-            </div>
-            <div class="xdp-item">
-                <div class="value" id="sec-xdp-iface">eth0</div>
-                <div class="label">Interface</div>
-            </div>
-            <div class="xdp-item">
-                <div class="value" id="sec-xdp-pkts">0</div>
-                <div class="label">Packets</div>
-            </div>
-            <div class="xdp-item">
-                <div class="value" id="sec-xdp-rate" style="color: #ef4444;">0%</div>
-                <div class="label">Drop Rate</div>
+            <div class="detail-section" id="modal-details-section" style="display: none;">
+                <h4>Additional Details</h4>
+                <div class="detail-grid" id="modal-details-grid"></div>
             </div>
         </div>
     </div>
@@ -408,24 +544,18 @@
 <script>
 (function() {
     const POLL_INTERVAL = 5000;
-    const CIRCUMFERENCE = 440; // 2 * PI * 70
+    let blocksData = [];
 
     // Elements
     const els = {
-        score: document.getElementById('sec-score'),
-        progress: document.getElementById('sec-progress'),
-        status: document.getElementById('sec-status'),
-        statusText: document.getElementById('sec-status-text'),
-        threats: document.getElementById('sec-threats'),
-        blocked: document.getElementById('sec-blocked'),
-        xdp: document.getElementById('sec-xdp'),
-        chains: document.getElementById('sec-chains'),
-        date: document.getElementById('sec-date'),
-        time: document.getElementById('sec-time'),
-        xdpMode: document.getElementById('sec-xdp-mode'),
-        xdpIface: document.getElementById('sec-xdp-iface'),
-        xdpPkts: document.getElementById('sec-xdp-pkts'),
-        xdpRate: document.getElementById('sec-xdp-rate'),
+        indicator: document.getElementById('status-indicator'),
+        scoreValue: document.getElementById('score-value'),
+        statusText: document.getElementById('status-text'),
+        threatsCount: document.getElementById('threats-count'),
+        blockedCount: document.getElementById('blocked-count'),
+        blockList: document.getElementById('block-list'),
+        blocksTotal: document.getElementById('blocks-total'),
+        modal: document.getElementById('inspection-modal')
     };
 
     function getStatusClass(score) {
@@ -434,55 +564,28 @@
         return 'green';
     }
 
-    function getStatusText(score) {
-        if (score >= 0.70) return 'THREAT DETECTED';
-        if (score >= 0.45) return 'ELEVATED RISK';
-        return 'PROTECTED';
+    function getStatusMessage(score) {
+        if (score >= 0.70) return 'Threat detected - Active mitigation';
+        if (score >= 0.45) return 'Elevated risk - Monitoring closely';
+        return 'All systems nominal';
     }
 
-    function updateSecurityUI(data) {
-        const score = data.score || 0;
-        const statusClass = getStatusClass(score);
+    function formatTime(isoString) {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diff = (now - date) / 1000;
 
-        // Update score
-        els.score.textContent = score.toFixed(2);
-        els.score.className = 'value ' + statusClass;
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    }
 
-        // Update progress ring
-        const progress = 1 - score;
-        const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
-        els.progress.style.strokeDashoffset = offset;
-        els.progress.className = 'progress ' + statusClass;
-
-        // Update status pill
-        els.status.className = 'status-pill ' + statusClass;
-        els.statusText.textContent = getStatusText(score);
-
-        // Update stats
-        els.threats.textContent = data.threats_active || 0;
-        els.blocked.textContent = data.blocked || 0;
-        els.xdp.textContent = data.xdp_drops || 0;
-        els.chains.textContent = data.attack_chains || 0;
-
-        // Update layers
-        if (data.layers) {
-            Object.entries(data.layers).forEach(([layer, info]) => {
-                const row = document.querySelector(`[data-layer="${layer}"]`);
-                if (row) {
-                    const bar = row.querySelector('.layer-bar');
-                    const val = row.querySelector('.layer-value');
-                    const threats = row.querySelector('.layer-threats');
-                    const layerScore = typeof info === 'object' ? info.score : info;
-                    const layerThreats = typeof info === 'object' ? info.threats : 0;
-                    const layerClass = getStatusClass(layerScore);
-
-                    bar.style.width = (layerScore * 100) + '%';
-                    bar.className = 'layer-bar ' + layerClass;
-                    val.textContent = layerScore.toFixed(2);
-                    if (threats) threats.textContent = layerThreats + ' threats';
-                }
-            });
-        }
+    function formatTimestamp(isoString) {
+        return new Date(isoString).toLocaleString('en-GB', {
+            day: 'numeric', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
     }
 
     async function fetchSecurityData() {
@@ -491,43 +594,153 @@
             const scoreRes = await fetch('/qsecbit/api/score');
             if (scoreRes.ok) {
                 const data = await scoreRes.json();
-                updateSecurityUI(data);
-            }
-
-            // Fetch XDP stats
-            const xdpRes = await fetch('/api/xdp_stats');
-            if (xdpRes.ok) {
-                const xdp = await xdpRes.json();
-                els.xdpMode.textContent = xdp.mode || '--';
-                els.xdpIface.textContent = xdp.interface || 'eth0';
-                els.xdpPkts.textContent = formatNumber(xdp.packets || 0);
-                els.xdpRate.textContent = (xdp.drop_rate || 0) + '%';
+                updateProtectionStatus(data);
             }
         } catch (e) {
             console.error('Security fetch error:', e);
         }
     }
 
-    function formatNumber(n) {
-        if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-        if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-        return n.toString();
+    function updateProtectionStatus(data) {
+        const score = data.score || 0;
+        const statusClass = getStatusClass(score);
+
+        // Update indicator
+        els.indicator.className = 'status-indicator ' + statusClass;
+        els.scoreValue.textContent = score.toFixed(1);
+
+        // Update status text
+        els.statusText.className = 'status-text ' + statusClass;
+        els.statusText.textContent = getStatusMessage(score);
+
+        // Update stats
+        els.threatsCount.textContent = data.threats_active || 0;
+        els.blockedCount.textContent = data.blocked || blocksData.length || 0;
     }
 
-    function updateClock() {
-        const now = new Date();
-        els.date.textContent = now.toLocaleDateString('en-GB', {
-            weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
-        });
-        els.time.textContent = now.toLocaleTimeString('en-GB', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit'
-        });
+    async function fetchBlocks() {
+        try {
+            const res = await fetch('/security/blocks');
+            if (res.ok) {
+                const data = await res.json();
+                blocksData = data.blocks || [];
+                els.blocksTotal.textContent = data.total || blocksData.length;
+                renderBlockList();
+            }
+        } catch (e) {
+            console.error('Blocks fetch error:', e);
+        }
     }
+
+    function renderBlockList() {
+        if (blocksData.length === 0) {
+            els.blockList.innerHTML = `
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    </svg>
+                    <p>No blocked threats yet.<br>Your network is being monitored.</p>
+                </div>
+            `;
+            return;
+        }
+
+        els.blockList.innerHTML = blocksData.map(block => `
+            <div class="block-item" onclick="showBlockDetail('${block.id}')">
+                <div class="block-severity ${block.severity.toLowerCase()}"></div>
+                <div class="block-content">
+                    <div class="block-header">
+                        <span class="block-category">${block.category}</span>
+                        <span class="block-time">${formatTime(block.timestamp)}</span>
+                    </div>
+                    <div class="block-reason">${block.reason}</div>
+                    <div class="block-meta">
+                        <span class="block-tag ip">${block.source_ip}</span>
+                        <span class="block-tag">${block.protocol}:${block.dest_port}</span>
+                        <span class="block-tag">${block.layer}</span>
+                    </div>
+                </div>
+                <div class="block-arrow">&#8250;</div>
+            </div>
+        `).join('');
+    }
+
+    // Modal functions - exposed globally
+    window.showBlockDetail = function(blockId) {
+        const block = blocksData.find(b => b.id === blockId);
+        if (!block) return;
+
+        // Populate modal
+        document.getElementById('modal-category').textContent = block.category;
+        const severityEl = document.getElementById('modal-severity');
+        severityEl.textContent = block.severity;
+        severityEl.className = 'severity-badge ' + block.severity.toLowerCase();
+
+        document.getElementById('modal-source-ip').textContent = block.source_ip + ':' + block.source_port;
+        document.getElementById('modal-dest-port').textContent = block.dest_port;
+        document.getElementById('modal-protocol').textContent = block.protocol;
+        document.getElementById('modal-layer').textContent = block.layer;
+        document.getElementById('modal-timestamp').textContent = formatTimestamp(block.timestamp);
+        document.getElementById('modal-method').textContent = block.detection_method;
+        document.getElementById('modal-reason').textContent = block.reason;
+
+        // Additional details
+        const detailsSection = document.getElementById('modal-details-section');
+        const detailsGrid = document.getElementById('modal-details-grid');
+
+        if (block.details && Object.keys(block.details).length > 0) {
+            detailsSection.style.display = 'block';
+            detailsGrid.innerHTML = Object.entries(block.details)
+                .filter(([key]) => key !== 'geo')
+                .map(([key, value]) => `
+                    <div class="detail-item">
+                        <div class="label">${key.replace(/_/g, ' ')}</div>
+                        <div class="value ${typeof value === 'string' && value.length > 20 ? 'mono' : ''}">${value}</div>
+                    </div>
+                `).join('');
+
+            // Add geo info if present
+            if (block.details.geo) {
+                detailsGrid.innerHTML += `
+                    <div class="detail-item">
+                        <div class="label">Origin</div>
+                        <div class="value">${block.details.geo.country} (${block.details.geo.asn})</div>
+                    </div>
+                `;
+            }
+        } else {
+            detailsSection.style.display = 'none';
+        }
+
+        els.modal.classList.add('active');
+    };
+
+    window.closeModal = function() {
+        els.modal.classList.remove('active');
+    };
+
+    window.exportBlocks = function(format) {
+        window.location.href = '/security/blocks/export?format=' + format;
+    };
+
+    // Close modal on overlay click
+    els.modal.addEventListener('click', function(e) {
+        if (e.target === els.modal) {
+            closeModal();
+        }
+    });
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    });
 
     // Initialize
     fetchSecurityData();
-    updateClock();
+    fetchBlocks();
     setInterval(fetchSecurityData, POLL_INTERVAL);
-    setInterval(updateClock, 1000);
+    setInterval(fetchBlocks, 30000); // Refresh blocks every 30s
 })();
 </script>
