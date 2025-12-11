@@ -128,18 +128,50 @@
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
 
 <script>
+    // Debug: Check module loading status
+    console.log('[Cortex] Module load check:', {
+        Globe: typeof Globe,
+        Supercluster: typeof Supercluster,
+        ClusterManager: typeof ClusterManager,
+        ZoomController: typeof ZoomController,
+        ZoomIndicator: typeof ZoomIndicator,
+        ViewManager: typeof ViewManager
+    });
+
     // Initialize when tab becomes visible
     document.addEventListener('DOMContentLoaded', function() {
+        console.log('[Cortex] DOMContentLoaded fired');
+
         // Watch for tab activation
         const cortexTab = document.querySelector('[data-tab="cortex"]');
+        console.log('[Cortex] Tab button found:', !!cortexTab);
+
         if (cortexTab) {
             cortexTab.addEventListener('click', function() {
+                console.log('[Cortex] Tab clicked, initialized:', window.cortexInitialized);
                 // Initialize globe when tab is clicked (first time)
                 if (!window.cortexInitialized) {
-                    setTimeout(initCortexGlobe, 100);
+                    console.log('[Cortex] Starting initialization...');
+                    setTimeout(function() {
+                        try {
+                            initCortexGlobe();
+                            console.log('[Cortex] Initialization complete');
+                        } catch (e) {
+                            console.error('[Cortex] Initialization failed:', e);
+                        }
+                    }, 100);
                     window.cortexInitialized = true;
                 }
             });
+        } else {
+            console.error('[Cortex] Tab button not found! Selector: [data-tab="cortex"]');
+        }
+    });
+
+    // Also log any script load errors
+    window.addEventListener('error', function(e) {
+        if (e.filename && e.filename.includes('cortex')) {
+            console.error('[Cortex] Script error:', e.message, e.filename, e.lineno);
         }
     });
 </script>
