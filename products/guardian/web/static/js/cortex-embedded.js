@@ -23,6 +23,7 @@ const guardianCortex = {
     demoMode: true,
     nodes: [],
     arcs: [],
+    currentAltitude: 2.5,  // Track current zoom altitude for dynamic sizing
     stats: {
         attacks: 0,
         repelled: 0,
@@ -342,17 +343,29 @@ function getPointColor(d) {
 }
 
 /**
- * Get point radius
+ * Calculate dynamic scale factor based on altitude
+ * At altitude 2.5 (zoomed out) = 1.0, at 0.1 (zoomed in) = 0.2
  */
+function getAltitudeScaleFactor() {
+    const altitude = guardianCortex.currentAltitude || 2.5;
+    // Use square root for smoother scaling, clamp minimum to 0.15
+    return Math.max(0.15, Math.sqrt(altitude / 2.5));
+}
+
 function getPointRadius(d) {
+    const scaleFactor = getAltitudeScaleFactor();
+
     if (d.type === 'cluster') {
         const count = d.count;
-        if (count > 50) return 2.2;
-        if (count > 15) return 1.6;
-        if (count > 5) return 1.2;
-        return 0.8;
+        let baseSize;
+        if (count > 50) baseSize = 2.2;
+        else if (count > 15) baseSize = 1.6;
+        else if (count > 5) baseSize = 1.2;
+        else baseSize = 0.8;
+        return baseSize * scaleFactor;
     }
-    return TIER_SIZES[d.tier] || 0.5;
+    const baseSize = TIER_SIZES[d.tier] || 0.5;
+    return baseSize * scaleFactor;
 }
 
 /**
@@ -388,11 +401,17 @@ function createClusterElement(d) {
     const el = document.createElement('div');
     el.className = `cortex-cluster cortex-cluster-${d.worstStatus || 'green'}`;
 
+    // Base size based on node count
     const count = d.count;
-    let size = 35;
-    if (count > 50) size = 70;
-    else if (count > 15) size = 55;
-    else if (count > 5) size = 45;
+    let baseSize = 35;
+    if (count > 50) baseSize = 70;
+    else if (count > 15) baseSize = 55;
+    else if (count > 5) baseSize = 45;
+
+    // Scale size based on altitude (clusters are HTML elements in pixels)
+    // Use a gentler scaling for HTML elements (minimum 0.5)
+    const scaleFactor = Math.max(0.5, Math.sqrt(guardianCortex.currentAltitude / 2.5));
+    const size = Math.round(baseSize * scaleFactor);
 
     const color = NODE_COLORS[d.worstStatus] || NODE_COLORS.green;
 
@@ -475,10 +494,20 @@ function handleZoomChange(data) {
         level: data.level,
         hasClusterManager: !!guardianCortex.clusterManager
     });
+
+    // Store altitude for dynamic node sizing
+    guardianCortex.currentAltitude = data.altitude;
+
     if (guardianCortex.clusterManager) {
         const zoom = data.zoom || guardianCortex.clusterManager.altitudeToZoom(data.altitude);
-        console.log('[Cortex Debug] Getting clusters for zoom:', zoom);
+        console.log('[Cortex Debug] Getting clusters for zoom:', zoom, 'scaleFactor:', getAltitudeScaleFactor().toFixed(2));
         guardianCortex.clusterManager.getAllClusters(zoom);
+    } else if (guardianCortex.globe) {
+        // No clustering - just refresh points to update sizes
+        const currentPoints = guardianCortex.globe.pointsData();
+        if (currentPoints && currentPoints.length > 0) {
+            guardianCortex.globe.pointsData(currentPoints);
+        }
     }
 }
 
