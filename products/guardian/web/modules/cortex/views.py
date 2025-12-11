@@ -10,6 +10,7 @@ Provides:
 - /api/cortex/demo: Demo mode data for mesh visualization
 """
 import os
+import sys
 import socket
 import json
 import random
@@ -17,6 +18,20 @@ from datetime import datetime, timedelta
 from flask import render_template, jsonify, current_app, request
 from . import cortex_bp
 from utils import load_json_file, get_system_info
+
+# Add shared directory to path for cortex imports
+_shared_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'shared')
+if os.path.isdir(_shared_path) and _shared_path not in sys.path:
+    sys.path.insert(0, _shared_path)
+
+# Import shared Cortex demo data generator
+try:
+    from cortex.backend.demo_data import DemoDataGenerator, HOOKPROBE_NODES, THREAT_SOURCES
+    SHARED_DEMO_AVAILABLE = True
+    _demo_generator = DemoDataGenerator()
+except ImportError:
+    SHARED_DEMO_AVAILABLE = False
+    _demo_generator = None
 
 # Try to import requests for IP geolocation
 try:
@@ -190,7 +205,10 @@ def api_cortex_demo_status():
     """Get current demo mode status."""
     return jsonify({
         'demo_mode': _demo_mode,
-        'node_id': get_node_id()
+        'node_id': get_node_id(),
+        'shared_data_available': SHARED_DEMO_AVAILABLE,
+        'demo_node_count': len(_demo_generator.nodes) if _demo_generator else 12,
+        'demo_organizations': len(_demo_generator.organizations) if _demo_generator else 0
     })
 
 
@@ -211,7 +229,8 @@ def api_cortex_demo_data():
     """
     Get demo mesh data for visualization.
 
-    In demo mode, returns simulated mesh with multiple nodes and events.
+    In demo mode, returns simulated mesh with multiple nodes and events
+    from the shared Cortex demo data generator (75+ enterprise nodes).
     In live mode, returns only this Guardian's data.
     """
     guardian_location = get_node_location()
@@ -238,7 +257,61 @@ def api_cortex_demo_data():
             }
         })
 
-    # Demo mode - simulated mesh network
+    # Demo mode - use shared Cortex demo data generator if available
+    if SHARED_DEMO_AVAILABLE and _demo_generator:
+        # Get enterprise fleet data from shared generator (75+ nodes)
+        fleet_data = _demo_generator.get_fleet_data()
+        demo_nodes = [guardian_node]  # Always include real Guardian first
+
+        # Add shared demo nodes (avoiding duplicates near Guardian location)
+        for device in fleet_data.get('devices', []):
+            # Skip nodes too close to real Guardian (within 5 degrees)
+            if abs(device['lat'] - guardian_node['lat']) < 5 and \
+               abs(device['lng'] - guardian_node['lng']) < 5:
+                continue
+            demo_nodes.append({
+                'id': device['id'],
+                'tier': device['tier'],
+                'lat': device['lat'],
+                'lng': device['lng'],
+                'label': device['label'],
+                'qsecbit': device.get('qsecbit', 0.2),
+                'status': device.get('status', 'green'),
+                'online': device.get('online', True),
+                'customer_id': device.get('customer_id', ''),
+                'department': device.get('department', '')
+            })
+
+        # Generate events using shared generator
+        demo_events = []
+        for _ in range(random.randint(3, 8)):
+            event = _demo_generator.generate_event()
+            if event['type'] in ['attack_detected', 'attack_repelled']:
+                demo_events.append({
+                    'id': event.get('id', f"evt-{random.randint(1000, 9999)}"),
+                    'type': event['type'],
+                    'source': event.get('source', {}),
+                    'target': event.get('target', {}),
+                    'timestamp': event.get('timestamp'),
+                    'severity': event.get('severity', 'medium'),
+                    'attack_type': event.get('attack_type', 'unknown'),
+                    'category': event.get('category', 'unknown')
+                })
+
+        stats = fleet_data.get('stats', {})
+        return jsonify({
+            'mode': 'demo',
+            'nodes': demo_nodes,
+            'events': demo_events,
+            'stats': {
+                'total_nodes': len(demo_nodes),
+                'by_tier': stats.get('by_tier', count_by_tier(demo_nodes)),
+                'by_status': stats.get('by_status', {}),
+                'organizations': len(_demo_generator.organizations) if _demo_generator else 0
+            }
+        })
+
+    # Fallback to local demo data if shared not available
     demo_nodes = generate_demo_nodes(guardian_node)
     demo_events = generate_demo_events(demo_nodes)
 
