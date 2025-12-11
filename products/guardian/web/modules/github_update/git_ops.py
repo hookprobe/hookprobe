@@ -5,8 +5,31 @@ All operations are read-only or use --ff-only for safety.
 Designed to work without CLI access (via web UI).
 """
 import os
+import subprocess
+import shlex
 from typing import Dict, List, Tuple
-from utils import run_command
+
+
+def run_command(cmd, timeout=30):
+    """Execute a command safely without shell=True to prevent command injection."""
+    try:
+        # Convert string to list for safe execution
+        if isinstance(cmd, str):
+            cmd_list = shlex.split(cmd)
+        else:
+            cmd_list = cmd
+
+        result = subprocess.run(
+            cmd_list,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        return result.stdout.strip(), result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return "Command timed out", False
+    except Exception as e:
+        return str(e), False
 
 
 # Configuration

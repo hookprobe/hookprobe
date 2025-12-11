@@ -1,5 +1,6 @@
 <!-- Cortex Embedded Tab - Digital Twin Globe Visualization -->
 <!-- This template is included in the main Guardian UI as a tab -->
+<!-- Uses shared/cortex/ modules for clustering and city-level zoom -->
 
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cortex.css') }}">
 
@@ -71,11 +72,17 @@
         <!-- 3D Globe (WebGL) -->
         <div id="globe-container" class="cortex-globe"></div>
 
+        <!-- Map Container for City View (Phase 2) -->
+        <div id="map-container" class="cortex-map" style="display: none;"></div>
+
         <!-- 2D Fallback -->
         <div id="map-fallback" class="cortex-map-fallback" style="display: none;">
             <canvas id="fallback-canvas"></canvas>
             <div class="fallback-info">2D Map (WebGL not available)</div>
         </div>
+
+        <!-- Zoom Indicator -->
+        <div id="zoom-indicator" class="cortex-zoom-indicator"></div>
 
         <!-- Loading Overlay -->
         <div id="cortex-loading" class="cortex-loading">
@@ -96,19 +103,28 @@
     </div>
 </div>
 
-<!-- Globe.gl Library (CDN) -->
+<!-- External Libraries (CDN) -->
+<!-- Globe.gl - 3D Globe rendering -->
 <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
-<!-- Supercluster for spatial clustering -->
+<!-- Supercluster - Spatial clustering -->
 <script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"></script>
-<!-- KDBush for fast spatial indexing -->
+<!-- KDBush - Fast spatial indexing -->
 <script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"></script>
-<!-- Phase 2: Deck.gl for GPU-accelerated visualization -->
+<!-- Deck.gl - GPU-accelerated visualization -->
 <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
-<!-- Phase 2: MapLibre GL for free basemap tiles -->
+<!-- MapLibre GL - Free basemap tiles -->
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
 
-<!-- Cortex Embedded JavaScript (with zoom/clustering) -->
+<!-- Shared Cortex Modules (from shared/cortex/) -->
+<script src="/static/cortex/cluster-manager.js"></script>
+<script src="/static/cortex/zoom-controller.js"></script>
+<script src="/static/cortex/transitions.js"></script>
+<script src="/static/cortex/deck-renderer.js"></script>
+<script src="/static/cortex/basemap-config.js"></script>
+<script src="/static/cortex/view-manager.js"></script>
+
+<!-- Cortex Embedded Wrapper -->
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
 
 <script>
