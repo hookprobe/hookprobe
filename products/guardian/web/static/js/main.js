@@ -340,7 +340,7 @@ async function loadSecurityData() {
             apiGet('/threats'),
             apiGet('/layer_threats'),
             apiGet('/xdp_stats'),
-            apiGet('/security/qsecbit').catch(() => null)
+            apiGet('/qsecbit').catch(() => null)
         ]);
 
         updateSecurityStats(threats, xdp, qsecbit);
