@@ -1,7 +1,7 @@
 # HookProbe Cortex - Neural Command Center
 
-**Version**: 1.0.0
-**Status**: Phase 1C Complete - Production Integration
+**Version**: 2.0.0
+**Status**: Phase 2 Complete - City-Level Map View with Deck.gl + MapLibre GL
 **Tagline**: *See your mesh. Command your defense.*
 
 ---
@@ -48,6 +48,24 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 - **Mesh heartbeat** visualization
 - **Ambient threat overlay** based on global threat level
 - **Scanline effects** for cyberpunk aesthetic
+
+### Smart Clustering (Phase 1)
+- **Supercluster-based clustering** - dynamically groups nearby nodes
+- **Zoom-responsive rendering** - clusters expand/collapse on zoom
+- **Click-to-drill-down** - click clusters to zoom and expand
+- **Breadcrumb navigation** - track your position in the mesh
+- **Keyboard shortcuts** - +/- zoom, Escape reset, Backspace back
+
+### City-Level Map View (Phase 2)
+- **Deck.gl GPU-accelerated rendering** - smooth transitions at any scale
+- **MapLibre GL basemap** - free, open-source dark theme
+- **Building footprints** - see nodes in city context (zoom 13+)
+- **Street-level detail** - navigate to individual nodes
+- **Smooth globe-to-map transition** - seamless zoom experience
+- **Node search** - find nodes by name or tier (Ctrl+F)
+- **Filter panel** - filter by tier, status, or online state
+- **Mini-map** - overview of current viewport
+- **Node popups** - detailed info on click
 
 ### Real-Time Monitoring
 - **Node health** via Qsecbit color coding (green/amber/red)
@@ -330,12 +348,13 @@ urlpatterns = [
 shared/cortex/
 ├── README.md                 # This file
 ├── ARCHITECTURE.md           # HTP integration analysis
+├── PHASE2-CITY-VIEW.md       # Phase 2 architecture documentation
 ├── backend/
 │   ├── __init__.py
 │   ├── requirements.txt      # Python dependencies
 │   ├── server.py             # WebSocket + REST server
 │   ├── htp_bridge.py         # HTP mesh participant
-│   ├── node_registry.py      # Digital twin state
+│   ├── node_registry.py      # Digital twin state + cluster support
 │   ├── demo_data.py          # Simulated events
 │   ├── geo_resolver.py       # IP geolocation
 │   └── connectors/           # Product integrations
@@ -347,14 +366,24 @@ shared/cortex/
 │       └── mssp.py           # MSSP Django
 ├── frontend/
 │   ├── index.html            # Cortex main page
-│   ├── css/globe.css         # Premium styling
+│   ├── css/
+│   │   ├── globe.css         # Premium styling + cluster styles
+│   │   └── city-view.css     # Phase 2: City view styling
 │   └── js/
 │       ├── globe.js          # Globe.gl visualization
 │       ├── data-stream.js    # WebSocket client
 │       ├── animations.js     # Premium effects engine
-│       └── fallback-2d.js    # Mobile fallback
+│       ├── fallback-2d.js    # Mobile fallback
+│       ├── cluster-manager.js    # Phase 1: Supercluster clustering
+│       ├── zoom-controller.js    # Phase 1: Camera control
+│       ├── transitions.js        # Phase 1: Cluster animations
+│       ├── deck-renderer.js      # Phase 2: Deck.gl renderer
+│       ├── basemap-config.js     # Phase 2: MapLibre configuration
+│       ├── view-manager.js       # Phase 2: Globe ↔ Map transitions
+│       └── city-view.js          # Phase 2: City-level UI
 └── tests/
-    └── test_globe_backend.py # Backend unit tests
+    ├── test_globe_backend.py     # Backend unit tests
+    └── test_phase2_city_view.py  # Phase 2 tests
 ```
 
 ---
@@ -411,7 +440,18 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [x] REST API for configuration
 - [x] Integration tests
 
-### Phase 2: Advanced Features (Planned)
+### Phase 2: City-Level Map View ✅
+- [x] Supercluster-based node clustering
+- [x] Zoom-responsive cluster expansion
+- [x] Breadcrumb navigation and zoom controls
+- [x] Deck.gl GPU-accelerated renderer
+- [x] MapLibre GL basemap integration
+- [x] Custom dark theme with streets/buildings
+- [x] Smooth globe-to-map transitions
+- [x] Node search and filtering
+- [x] City-level UI (popups, mini-map, filters)
+
+### Phase 3: Advanced Features (Planned)
 - [ ] DSM consensus visualization
 - [ ] Neural resonance display
 - [ ] HTP-over-WebRTC (P2P to nearby nodes)
@@ -420,7 +460,7 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [ ] 3D attack trajectory arcs
 - [ ] Threat prediction overlays
 
-### Phase 3: WASM Client (Future)
+### Phase 4: WASM Client (Future)
 - [ ] Browser as mesh node
 - [ ] Local threat processing
 - [ ] Offline operation mode
@@ -435,8 +475,12 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - aiohttp >= 3.9.0
 - geoip2 >= 4.8.0 (optional)
 
-### Frontend
-- Globe.gl 2.27+ (CDN)
+### Frontend (all loaded from CDN)
+- Globe.gl 2.27+ (3D globe rendering)
+- Supercluster 8.0+ (spatial clustering)
+- KDBush 4.0+ (spatial indexing)
+- Deck.gl 8.9+ (GPU-accelerated visualization)
+- MapLibre GL 3.6+ (basemap tiles)
 - Google Fonts (Orbitron, Rajdhani)
 - No build step required
 
