@@ -31,8 +31,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // NAVIGATION
 // ============================================
 function initNavigation() {
-    // Handle nav item clicks
-    document.querySelectorAll('.nav-item').forEach(item => {
+    // Handle nav item clicks (Forty-style: #header nav button)
+    document.querySelectorAll('#header nav button').forEach(item => {
         item.addEventListener('click', (e) => {
             const tab = e.target.dataset.tab;
             if (tab) {
@@ -66,13 +66,13 @@ function switchToTab(tab) {
 }
 
 function showTab(tabName, animate = true) {
-    // Update nav items
-    document.querySelectorAll('.nav-item').forEach(item => {
+    // Update nav items (Forty-style)
+    document.querySelectorAll('#header nav button').forEach(item => {
         item.classList.toggle('active', item.dataset.tab === tabName);
     });
 
     // Update tab content
-    document.querySelectorAll('.tab-panel').forEach(panel => {
+    document.querySelectorAll('.tab-content').forEach(panel => {
         const isActive = panel.id === `tab-${tabName}`;
         panel.classList.toggle('active', isActive);
         if (animate && isActive) {
@@ -112,9 +112,6 @@ function loadTabData(tabName) {
         case 'system':
             loadSystemData();
             break;
-        case 'updates':
-            loadUpdatesData();
-            break;
         case 'debug':
             if (typeof loadDebugData === 'function') {
                 loadDebugData();
@@ -124,31 +121,31 @@ function loadTabData(tabName) {
 }
 
 // ============================================
-// MOBILE MENU
+// MOBILE MENU (Forty-style)
 // ============================================
 function initMobileMenu() {
-    const toggle = document.querySelector('.menu-toggle');
-    const nav = document.querySelector('.nav-main');
+    const toggle = document.querySelector('#header .menu-toggle');
+    const nav = document.querySelector('#header nav');
 
     if (toggle && nav) {
         toggle.addEventListener('click', () => {
-            nav.classList.toggle('active');
+            nav.classList.toggle('open');
             document.body.classList.toggle('menu-open');
         });
     }
 
     // Close on outside click
     document.addEventListener('click', (e) => {
-        if (!e.target.closest('.nav-main') && !e.target.closest('.menu-toggle')) {
+        if (!e.target.closest('#header nav') && !e.target.closest('.menu-toggle')) {
             closeMobileMenu();
         }
     });
 }
 
 function closeMobileMenu() {
-    const nav = document.querySelector('.nav-main');
+    const nav = document.querySelector('#header nav');
     if (nav) {
-        nav.classList.remove('active');
+        nav.classList.remove('open');
         document.body.classList.remove('menu-open');
     }
 }
@@ -370,11 +367,7 @@ function updateSecurityStats(threats, xdp, qsecbit) {
     updateQSecBitDisplay(score, qsecbit);
 }
 
-function formatNumber(num) {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return num.toString();
-}
+// formatNumber defined in UTILITY FUNCTIONS section below
 
 function updateQSecBitDisplay(score, qsecbit) {
     const scoreEl = document.getElementById('qsecbit-score-display');
@@ -956,27 +949,6 @@ function updateSystemInfo(system) {
     }
 }
 
-// ============================================
-// UPDATES TAB DATA
-// ============================================
-async function loadUpdatesData() {
-    // Load GitHub status, log, and check for updates
-    try {
-        // These functions are defined inline in the template
-        if (typeof loadGitHubStatus === 'function') {
-            loadGitHubStatus();
-        }
-        if (typeof loadGitHubLog === 'function') {
-            loadGitHubLog();
-        }
-        if (typeof checkGitHubUpdates === 'function') {
-            checkGitHubUpdates();
-        }
-    } catch (error) {
-        console.error('Failed to load updates data:', error);
-    }
-}
-
 async function loadConfigData() {
     try {
         const [interfaces, hotspot, dhcp] = await Promise.all([
@@ -1359,13 +1331,9 @@ function startBackgroundRefresh() {
     });
 }
 
-// Add CSS animation for fadeIn
+// Add CSS animation for slideOut (fadeIn already in main.css)
 const style = document.createElement('style');
 style.textContent = `
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
     @keyframes slideOut {
         from { transform: translateX(0); opacity: 1; }
         to { transform: translateX(100%); opacity: 0; }
@@ -1375,18 +1343,18 @@ style.textContent = `
         border: none;
         font-size: 1.25rem;
         cursor: pointer;
-        color: var(--text-secondary);
+        color: var(--text-alt);
         padding: 0 0.5rem;
     }
-    .toast-close:hover { color: var(--hp-red); }
-    .toast-success { border-left: 4px solid var(--hp-green); }
-    .toast-error { border-left: 4px solid var(--hp-red); }
-    .toast-warning { border-left: 4px solid var(--hp-amber); }
-    .toast-info { border-left: 4px solid var(--hp-blue); }
+    .toast-close:hover { color: var(--siren); }
+    .toast-success { border-left: 4px solid #10b981; }
+    .toast-error { border-left: 4px solid var(--siren); }
+    .toast-warning { border-left: 4px solid var(--tangerine); }
+    .toast-info { border-left: 4px solid #3b82f6; }
     .toast-icon { display: flex; align-items: center; }
-    .toast-success .toast-icon { color: var(--hp-green); }
-    .toast-error .toast-icon { color: var(--hp-red); }
-    .toast-warning .toast-icon { color: var(--hp-amber); }
-    .toast-info .toast-icon { color: var(--hp-blue); }
+    .toast-success .toast-icon { color: #10b981; }
+    .toast-error .toast-icon { color: var(--siren); }
+    .toast-warning .toast-icon { color: var(--tangerine); }
+    .toast-info .toast-icon { color: #3b82f6; }
 `;
 document.head.appendChild(style);

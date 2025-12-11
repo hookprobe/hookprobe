@@ -419,3 +419,247 @@
         display: none;
     }
 }
+
+/* ============================================
+ * CLUSTER VISUALIZATION STYLES
+ * Required for ClusterManager HTML elements
+ * ============================================ */
+
+/* Cluster container */
+.cortex-cluster {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.3s ease;
+}
+
+.cortex-cluster:hover {
+    transform: scale(1.15);
+}
+
+/* Cluster rings - concentric circles */
+.cluster-ring {
+    position: absolute;
+    border-radius: 50%;
+    border-style: solid;
+    animation: clusterRotate 20s linear infinite;
+}
+
+.cluster-ring-outer {
+    width: 100%;
+    height: 100%;
+    border-width: 1px;
+    animation-direction: reverse;
+}
+
+.cluster-ring-middle {
+    width: 75%;
+    height: 75%;
+    border-width: 1px;
+    animation-duration: 15s;
+}
+
+.cluster-ring-inner {
+    width: 50%;
+    height: 50%;
+    border-width: 2px;
+    animation-duration: 10s;
+    animation-direction: reverse;
+}
+
+@keyframes clusterRotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Cluster core with badge */
+.cluster-core {
+    position: relative;
+    width: 50%;
+    height: 50%;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+    box-shadow: 0 0 15px currentColor;
+}
+
+.cluster-badge {
+    font-family: 'Orbitron', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #000;
+    text-shadow: none;
+}
+
+/* Cluster glow effect */
+.cluster-glow {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    opacity: 0.3;
+    filter: blur(10px);
+    z-index: 0;
+    animation: clusterGlow 2s ease-in-out infinite;
+}
+
+@keyframes clusterGlow {
+    0%, 100% { opacity: 0.2; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.1); }
+}
+
+/* Cluster status-specific animations */
+.cortex-cluster-green .cluster-glow {
+    animation-duration: 3s;
+}
+
+.cortex-cluster-amber .cluster-glow {
+    animation-duration: 2s;
+}
+
+.cortex-cluster-red .cluster-glow {
+    animation-duration: 1s;
+}
+
+.cortex-cluster-red .cluster-ring {
+    animation-duration: 5s;
+}
+
+/* Cluster tooltip styling */
+.cluster-tooltip {
+    background: rgba(10, 12, 18, 0.95);
+    border: 1px solid rgba(100, 120, 140, 0.2);
+    border-radius: 8px;
+    padding: 12px 16px;
+    min-width: 180px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.cluster-tooltip .cluster-count {
+    font-family: 'Orbitron', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    color: #00e5ff;
+    margin-bottom: 6px;
+}
+
+.cluster-tooltip .cluster-tiers {
+    font-size: 11px;
+    color: #6a6a7a;
+    margin-bottom: 8px;
+}
+
+.cluster-tooltip .cluster-qsecbit {
+    font-size: 11px;
+    color: #4a4a5a;
+}
+
+.cluster-tooltip .cluster-status {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding-top: 8px;
+    margin-top: 8px;
+    border-top: 1px solid rgba(100, 120, 140, 0.2);
+}
+
+.cluster-tooltip .cluster-status.green { color: #00ff88; }
+.cluster-tooltip .cluster-status.amber { color: #ffaa00; }
+.cluster-tooltip .cluster-status.red { color: #ff4444; }
+
+.cluster-tooltip .cluster-hint {
+    font-size: 9px;
+    color: #4a4a5a;
+    margin-top: 8px;
+    font-style: italic;
+}
+
+/* ============================================
+ * ZOOM INDICATOR
+ * Shows current zoom level and breadcrumb
+ * ============================================ */
+
+.cortex-zoom-indicator {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: rgba(10, 12, 18, 0.9);
+    border: 1px solid rgba(100, 120, 140, 0.3);
+    border-radius: 20px;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 12px;
+    color: #6a6a7a;
+    backdrop-filter: blur(10px);
+    z-index: 100;
+    transition: all 0.3s ease;
+    opacity: 0;
+}
+
+.cortex-zoom-indicator.visible {
+    opacity: 1;
+}
+
+.cortex-zoom-indicator.animating {
+    border-color: #00e5ff;
+    box-shadow: 0 4px 30px rgba(0, 191, 255, 0.3);
+}
+
+.cortex-zoom-indicator.level-change {
+    animation: zoomPulse 0.5s ease;
+}
+
+@keyframes zoomPulse {
+    0%, 100% { transform: translateX(-50%) scale(1); }
+    50% { transform: translateX(-50%) scale(1.05); }
+}
+
+.zoom-level-label {
+    color: #00e5ff;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.zoom-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.breadcrumb-item {
+    color: #4a4a5a;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.breadcrumb-item:hover {
+    color: #00e5ff;
+}
+
+.breadcrumb-separator {
+    color: #333;
+}
+
+/* Mobile adjustments for cluster rings */
+@media (max-width: 768px) {
+    .cluster-ring-outer,
+    .cluster-ring-middle {
+        display: none;
+    }
+
+    .cortex-zoom-indicator {
+        top: 5px;
+        padding: 6px 12px;
+        font-size: 11px;
+    }
+}
