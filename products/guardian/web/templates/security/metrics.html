@@ -1,4 +1,5 @@
-<!-- Security Tab - Simplified & Focused -->
+<!-- Security Tab - Unified Qsecbit + Block Log + Export -->
+<!-- Includes Qsecbit score display at top, block log in middle, export options at bottom -->
 <style>
     .security-container {
         max-width: 900px;
@@ -18,6 +19,52 @@
         gap: 20px;
         flex-wrap: wrap;
     }
+
+    /* Qsecbit Ring - Inline */
+    .qsecbit-ring-container {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        flex-shrink: 0;
+    }
+
+    .qsecbit-ring-container svg {
+        width: 100%;
+        height: 100%;
+        transform: rotate(-90deg);
+    }
+
+    .qsecbit-ring-bg {
+        fill: none;
+        stroke: var(--bg-tertiary, #2d3748);
+        stroke-width: 6;
+    }
+
+    .qsecbit-ring-fill {
+        fill: none;
+        stroke-width: 6;
+        stroke-linecap: round;
+        stroke-dasharray: 226; /* 2 * PI * 36 */
+        stroke-dashoffset: 226;
+        transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+    }
+
+    .qsecbit-ring-fill.green { stroke: #10b981; }
+    .qsecbit-ring-fill.amber { stroke: #f59e0b; }
+    .qsecbit-ring-fill.red { stroke: #ef4444; }
+
+    .qsecbit-ring-value {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    .qsecbit-ring-value.green { color: #10b981; }
+    .qsecbit-ring-value.amber { color: #f59e0b; }
+    .qsecbit-ring-value.red { color: #ef4444; }
 
     .protection-status {
         display: flex;
@@ -427,11 +474,16 @@
 </style>
 
 <div class="security-container">
-    <!-- Protection Status Header -->
+    <!-- Protection Status Header with Qsecbit Ring -->
     <div class="protection-header">
         <div class="protection-status">
-            <div class="status-indicator green" id="status-indicator">
-                <span id="score-value">0.0</span>
+            <!-- Qsecbit Score Ring -->
+            <div class="qsecbit-ring-container">
+                <svg viewBox="0 0 80 80">
+                    <circle class="qsecbit-ring-bg" cx="40" cy="40" r="36"/>
+                    <circle class="qsecbit-ring-fill green" id="qsecbit-ring-fill" cx="40" cy="40" r="36"/>
+                </svg>
+                <div class="qsecbit-ring-value green" id="score-value">0.0</div>
             </div>
             <div class="protection-info">
                 <h2>Protection Active</h2>
@@ -457,25 +509,6 @@
                 Recent Blocks
                 <span class="count" id="blocks-total">0</span>
             </h3>
-            <div class="export-buttons">
-                <button class="btn-export" onclick="exportBlocks('csv')" title="Export as CSV">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                        <polyline points="14 2 14 8 20 8"/>
-                        <line x1="16" y1="13" x2="8" y2="13"/>
-                        <line x1="16" y1="17" x2="8" y2="17"/>
-                    </svg>
-                    CSV
-                </button>
-                <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1 (Standard format)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                    STIX 2.1
-                </button>
-            </div>
         </div>
         <div class="block-list" id="block-list">
             <div class="empty-state">
@@ -485,6 +518,27 @@
                 <p>No blocked threats yet.<br>Your network is being monitored.</p>
             </div>
         </div>
+    </div>
+
+    <!-- Export Section (moved to bottom) -->
+    <div class="export-section" style="display: flex; justify-content: center; gap: 15px; padding: 20px; margin-top: 15px; background: var(--bg-secondary, rgba(255,255,255,0.03)); border-radius: 12px;">
+        <button class="btn-export" onclick="exportBlocks('csv')" title="Export blocked threats as CSV">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            Export CSV
+        </button>
+        <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1 (Threat Intelligence Standard)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export STIX 2.1
+        </button>
     </div>
 </div>
 
@@ -548,7 +602,7 @@
 
     // Elements
     const els = {
-        indicator: document.getElementById('status-indicator'),
+        ringFill: document.getElementById('qsecbit-ring-fill'),
         scoreValue: document.getElementById('score-value'),
         statusText: document.getElementById('status-text'),
         threatsCount: document.getElementById('threats-count'),
@@ -557,6 +611,9 @@
         blocksTotal: document.getElementById('blocks-total'),
         modal: document.getElementById('inspection-modal')
     };
+
+    // Qsecbit ring circumference (2 * PI * 36)
+    const RING_CIRCUMFERENCE = 226;
 
     function getStatusClass(score) {
         if (score >= 0.70) return 'red';
@@ -605,9 +662,17 @@
         const score = data.score || 0;
         const statusClass = getStatusClass(score);
 
-        // Update indicator
-        els.indicator.className = 'status-indicator ' + statusClass;
-        els.scoreValue.textContent = score.toFixed(1);
+        // Update Qsecbit ring animation (inverted: 0 = full protection, 1 = no protection)
+        const progress = 1 - score;
+        const offset = RING_CIRCUMFERENCE - (progress * RING_CIRCUMFERENCE);
+        if (els.ringFill) {
+            els.ringFill.style.strokeDashoffset = offset;
+            els.ringFill.className = 'qsecbit-ring-fill ' + statusClass;
+        }
+
+        // Update score value
+        els.scoreValue.textContent = score.toFixed(2);
+        els.scoreValue.className = 'qsecbit-ring-value ' + statusClass;
 
         // Update status text
         els.statusText.className = 'status-text ' + statusClass;

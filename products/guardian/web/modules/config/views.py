@@ -1578,19 +1578,74 @@ def _netmask_to_cidr(netmask):
         return 24
 
 
-def _set_eth0_dhcp():
-    """Set eth0 to DHCP mode."""
-    import os
+def _nmcli_available():
+    """Check if NetworkManager/nmcli is available and running."""
+    import shutil
+    # Check if nmcli exists
+    if not shutil.which('nmcli'):
+        return False
+    # Check if NetworkManager is running
+    output, success = run_command(['systemctl', 'is-active', 'NetworkManager'], timeout=5)
+    return success and output.strip() == 'active'
 
-    dhcpcd_conf = '/etc/dhcpcd.conf'
-    if not os.path.exists(dhcpcd_conf):
+
+def _set_eth0_dhcp():
+    """Set eth0 to DHCP mode using nmcli (preferred) or dhcpcd fallback."""
+    import time
+
+    # Try NetworkManager first (preferred on modern systems)
+    if _nmcli_available():
+        # Delete any existing static connection for eth0
+        run_command(['sudo', 'nmcli', 'connection', 'delete', 'guardian-eth0-static'], timeout=5)
+
+        # Check if there's an existing DHCP connection for eth0
+        output, _ = run_command(['nmcli', '-t', '-f', 'NAME,DEVICE', 'connection', 'show', '--active'], timeout=5)
+        eth0_connection = None
+        if output:
+            for line in output.strip().split('\n'):
+                if ':eth0' in line:
+                    eth0_connection = line.split(':')[0]
+                    break
+
+        # If no active connection, create a new DHCP connection
+        if not eth0_connection:
+            # Create a new DHCP connection for eth0
+            cmd = [
+                'sudo', 'nmcli', 'connection', 'add',
+                'type', 'ethernet',
+                'con-name', 'guardian-eth0-dhcp',
+                'ifname', 'eth0',
+                'ipv4.method', 'auto'
+            ]
+            output, ok = run_command(cmd, timeout=10)
+            if ok:
+                # Activate the connection
+                run_command(['sudo', 'nmcli', 'connection', 'up', 'guardian-eth0-dhcp'], timeout=15)
+        else:
+            # Modify existing connection to use DHCP
+            run_command(['sudo', 'nmcli', 'connection', 'modify', eth0_connection, 'ipv4.method', 'auto'], timeout=5)
+            run_command(['sudo', 'nmcli', 'connection', 'modify', eth0_connection, 'ipv4.addresses', ''], timeout=5)
+            run_command(['sudo', 'nmcli', 'connection', 'modify', eth0_connection, 'ipv4.gateway', ''], timeout=5)
+            run_command(['sudo', 'nmcli', 'connection', 'modify', eth0_connection, 'ipv4.dns', ''], timeout=5)
+            # Reactivate connection
+            run_command(['sudo', 'nmcli', 'connection', 'up', eth0_connection], timeout=15)
+
+        time.sleep(2)
         return True
 
-    # Read current config
+    # Fallback to dhcpcd for systems without NetworkManager
+    import os
+    dhcpcd_conf = '/etc/dhcpcd.conf'
+    if not os.path.exists(dhcpcd_conf):
+        # Try dhclient as another fallback
+        run_command(['sudo', 'dhclient', '-r', 'eth0'], timeout=5)
+        run_command(['sudo', 'dhclient', '-v', 'eth0'], timeout=30)
+        return True
+
+    # Read current config and remove static eth0 section
     with open(dhcpcd_conf, 'r') as f:
         lines = f.readlines()
 
-    # Remove eth0 static config
     new_lines = []
     skip_eth0_section = False
     for line in lines:
@@ -1604,26 +1659,67 @@ def _set_eth0_dhcp():
                 skip_eth0_section = False
         new_lines.append(line)
 
-    # Write back
     with open('/tmp/dhcpcd.conf.new', 'w') as f:
         f.writelines(new_lines)
-    run_command(['sudo', 'cp', '/tmp/dhcpcd.conf.new', dhcpcd_conf])
+    run_command(['sudo', 'cp', '/tmp/dhcpcd.conf.new', dhcpcd_conf], timeout=5)
 
-    # Restart networking
-    run_command(['sudo', 'dhcpcd', '-n', 'eth0'])
+    # Restart dhcpcd
+    run_command(['sudo', 'systemctl', 'restart', 'dhcpcd'], timeout=15)
     return True
 
 
 def _set_eth0_static(ip, prefix, gateway, dns):
-    """Set eth0 to static IP."""
-    import os
+    """Set eth0 to static IP using nmcli (preferred) or dhcpcd fallback."""
+    import time
 
+    # Try NetworkManager first (preferred on modern systems)
+    if _nmcli_available():
+        # Delete any existing guardian eth0 connections
+        run_command(['sudo', 'nmcli', 'connection', 'delete', 'guardian-eth0-dhcp'], timeout=5)
+        run_command(['sudo', 'nmcli', 'connection', 'delete', 'guardian-eth0-static'], timeout=5)
+
+        # Build the nmcli command for static IP
+        cmd = [
+            'sudo', 'nmcli', 'connection', 'add',
+            'type', 'ethernet',
+            'con-name', 'guardian-eth0-static',
+            'ifname', 'eth0',
+            'ipv4.method', 'manual',
+            'ipv4.addresses', f'{ip}/{prefix}'
+        ]
+
+        if gateway:
+            cmd.extend(['ipv4.gateway', gateway])
+
+        if dns:
+            cmd.extend(['ipv4.dns', dns])
+
+        # Add route metric for proper priority
+        cmd.extend(['ipv4.route-metric', '100'])
+
+        output, ok = run_command(cmd, timeout=10)
+        if not ok:
+            return False
+
+        # Activate the connection
+        output, ok = run_command(['sudo', 'nmcli', 'connection', 'up', 'guardian-eth0-static'], timeout=15)
+        if not ok:
+            # Try bringing down any existing connection first
+            run_command(['sudo', 'nmcli', 'device', 'disconnect', 'eth0'], timeout=5)
+            time.sleep(1)
+            output, ok = run_command(['sudo', 'nmcli', 'connection', 'up', 'guardian-eth0-static'], timeout=15)
+
+        time.sleep(2)
+        return ok
+
+    # Fallback to dhcpcd for systems without NetworkManager
+    import os
     dhcpcd_conf = '/etc/dhcpcd.conf'
 
-    # First remove any existing eth0 config
+    # First remove any existing eth0 static config
     _set_eth0_dhcp()
 
-    # Add static config
+    # Build static config
     static_config = f"""
 interface eth0
 static ip_address={ip}/{prefix}
@@ -1637,13 +1733,13 @@ static ip_address={ip}/{prefix}
     with open('/tmp/eth0_static.conf', 'w') as f:
         f.write(static_config)
 
-    run_command(['sudo', 'bash', '-c', f'cat /tmp/eth0_static.conf >> {dhcpcd_conf}'])
+    run_command(['sudo', 'bash', '-c', f'cat /tmp/eth0_static.conf >> {dhcpcd_conf}'], timeout=5)
 
-    # Apply static IP immediately
-    run_command(['sudo', 'ip', 'addr', 'flush', 'dev', 'eth0'])
-    run_command(['sudo', 'ip', 'addr', 'add', f'{ip}/{prefix}', 'dev', 'eth0'])
+    # Apply static IP immediately using ip commands
+    run_command(['sudo', 'ip', 'addr', 'flush', 'dev', 'eth0'], timeout=5)
+    run_command(['sudo', 'ip', 'addr', 'add', f'{ip}/{prefix}', 'dev', 'eth0'], timeout=5)
     if gateway:
-        run_command(['sudo', 'ip', 'route', 'add', 'default', 'via', gateway, 'dev', 'eth0', 'metric', '100'])
+        run_command(['sudo', 'ip', 'route', 'add', 'default', 'via', gateway, 'dev', 'eth0', 'metric', '100'], timeout=5)
 
     return True
 

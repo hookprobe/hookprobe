@@ -60,6 +60,11 @@ function navigateTo(tab) {
     history.pushState({ tab }, '', `#${tab}`);
 }
 
+// Global function for logo click to switch to dashboard
+function switchToTab(tab) {
+    navigateTo(tab);
+}
+
 function showTab(tabName, animate = true) {
     // Update nav items
     document.querySelectorAll('.nav-item').forEach(item => {
