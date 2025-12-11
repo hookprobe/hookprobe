@@ -2,8 +2,8 @@
 
 > **Transparency You Can See - Security Visualization That Empowers**
 
-**Version**: 2.0.0
-**Status**: Phase 2 Complete - City-Level Map View with Deck.gl + MapLibre GL
+**Version**: 3.0.0
+**Status**: Phase 3 Complete - Fleet Management & Premium Visual Effects
 **Tagline**: *See your mesh. Command your defense.*
 
 ---
@@ -77,6 +77,32 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 - **Filter panel** - filter by tier, status, or online state
 - **Mini-map** - overview of current viewport
 - **Node popups** - detailed info on click
+
+### Fleet Management (Phase 3)
+- **Multi-tenant access control** - MSSP Admin, Fleet Admin, End User
+- **MSSP Admin "God View"** - see ALL endpoints across ALL customers
+- **Fleet Admin view** - see only your organization's devices
+- **City-level clustering** - IP-based geolocation, city-level accuracy
+- **User-declared locations** - precise locations visible only to fleet admins
+- **Department breakdown** - organizational structure visualization
+- **Device search and filtering** - find devices by name, tier, status
+- **Bulk actions** - select and focus on multiple devices
+- **Customer selector** - filter by customer (MSSP admin only)
+
+### Enhanced Heartbeat System (Phase 3)
+- **RAG-based pulse speed** - faster heartbeat = more critical status
+- **Double-bump heartbeat curve** - realistic heart rhythm animation
+- **Status transition effects** - ripple and flash on status change
+- **Mesh sync breathing** - collective pulse across all nodes
+- **Interpolated colors** - smooth Qsecbit value gradients
+
+### Premium Visual Effects (Phase 3)
+- **Connection mesh lines** - animated data flow between nodes
+- **Connection quality indicators** - latency/bandwidth visualization
+- **Attack type styling** - unique visuals per attack type (DDoS, malware, etc.)
+- **Severity-based intensity** - more severe = more dramatic effects
+- **Impact particle effects** - burst animation on attack impact
+- **Repelled celebration** - shield burst for blocked attacks
 
 ### Real-Time Monitoring
 - **Node health** via Qsecbit color coding (green/amber/red)
@@ -368,6 +394,7 @@ shared/cortex/
 │   ├── node_registry.py      # Digital twin state + cluster support
 │   ├── demo_data.py          # Simulated events
 │   ├── geo_resolver.py       # IP geolocation
+│   ├── fleet_manager.py      # Phase 3: Fleet management & access control
 │   └── connectors/           # Product integrations
 │       ├── base.py           # ProductConnector base
 │       ├── manager.py        # ConnectorManager
@@ -379,7 +406,8 @@ shared/cortex/
 │   ├── index.html            # Cortex main page
 │   ├── css/
 │   │   ├── globe.css         # Premium styling + cluster styles
-│   │   └── city-view.css     # Phase 2: City view styling
+│   │   ├── city-view.css     # Phase 2: City view styling
+│   │   └── fleet-panel.css   # Phase 3: Fleet panel styling
 │   └── js/
 │       ├── globe.js          # Globe.gl visualization
 │       ├── data-stream.js    # WebSocket client
@@ -391,10 +419,15 @@ shared/cortex/
 │       ├── deck-renderer.js      # Phase 2: Deck.gl renderer
 │       ├── basemap-config.js     # Phase 2: MapLibre configuration
 │       ├── view-manager.js       # Phase 2: Globe ↔ Map transitions
-│       └── city-view.js          # Phase 2: City-level UI
+│       ├── city-view.js          # Phase 2: City-level UI
+│       ├── fleet-panel.js        # Phase 3: Fleet management UI
+│       ├── heartbeat-system.js   # Phase 3: Enhanced heartbeat effects
+│       ├── mesh-connections.js   # Phase 3: Connection visualization
+│       └── attack-vectors.js     # Phase 3: Enhanced attack animations
 └── tests/
     ├── test_globe_backend.py     # Backend unit tests
-    └── test_phase2_city_view.py  # Phase 2 tests
+    ├── test_phase2_city_view.py  # Phase 2 tests
+    └── test_fleet_manager.py     # Phase 3: Fleet management tests
 ```
 
 ---
@@ -462,7 +495,21 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [x] Node search and filtering
 - [x] City-level UI (popups, mini-map, filters)
 
-### Phase 3: Advanced Features (Planned)
+### Phase 3: Fleet Management & Premium Effects ✅
+- [x] Multi-tenant access control (MSSP Admin, Fleet Admin, End User)
+- [x] Fleet management backend with customer/device models
+- [x] MSSP Admin "God View" - all endpoints, all customers
+- [x] City-level clustering with IP-based geolocation
+- [x] User-declared locations (fleet-only visibility)
+- [x] Enhanced heartbeat system with RAG-based pulse
+- [x] Connection mesh lines between nodes
+- [x] Premium attack vector animations
+- [x] Attack type-specific styling (DDoS, malware, etc.)
+- [x] Fleet overview panel UI
+- [x] Device search and filtering
+- [x] Department breakdown visualization
+
+### Phase 4: Advanced Features (Planned)
 - [ ] DSM consensus visualization
 - [ ] Neural resonance display
 - [ ] HTP-over-WebRTC (P2P to nearby nodes)
@@ -471,7 +518,7 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [ ] 3D attack trajectory arcs
 - [ ] Threat prediction overlays
 
-### Phase 4: WASM Client (Future)
+### Phase 5: WASM Client (Future)
 - [ ] Browser as mesh node
 - [ ] Local threat processing
 - [ ] Offline operation mode
