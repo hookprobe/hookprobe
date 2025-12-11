@@ -9,7 +9,7 @@
  * - Smooth zoom transitions with camera animations
  * - Click-to-drill-down on clusters
  * - Zoom level indicator and breadcrumb navigation
- * - Prepared for Phase 2 Mapbox GL JS integration
+ * - Phase 2 integration: Deck.gl + MapLibre GL for city view
  */
 
 // Globe instance
@@ -587,6 +587,11 @@ function updateNodes(nodes) {
     const totalQsecbit = nodes.reduce((sum, n) => sum + (n.qsecbit || 0), 0);
     state.stats.avgQsecbit = nodes.length ? totalQsecbit / nodes.length : 0;
     updateStats();
+
+    // Phase 2: Sync to ViewManager for city view
+    if (window.viewManager) {
+        syncToViewManager();
+    }
 }
 
 /**
@@ -711,6 +716,48 @@ function getClusteringStats() {
 // Export functions for external use
 window.toggleClustering = toggleClustering;
 window.getClusteringStats = getClusteringStats;
+
+// Phase 2: Export clustering instances for ViewManager integration
+window.clusterManager = clusterManager;
+
+/**
+ * Phase 2: Sync current nodes to ViewManager for city view
+ */
+function syncToViewManager() {
+    if (!window.viewManager) return;
+
+    // Sync nodes
+    window.viewManager.updateNodes(state.nodes);
+
+    // Sync clusters at current zoom
+    if (clusterManager && state.clusteringEnabled) {
+        const pov = globe ? globe.pointOfView() : { altitude: 2.5 };
+        const zoom = clusterManager.altitudeToZoom(pov.altitude);
+        const clusters = clusterManager.getAllClusters(zoom)
+            .filter(c => c.type === 'cluster');
+        window.viewManager.updateClusters(clusters);
+    }
+
+    // Sync arcs
+    window.viewManager.updateArcs(state.arcs);
+}
+
+/**
+ * Phase 2: Check if we should transition to city view
+ */
+function checkCityViewTransition(altitude) {
+    if (!window.viewManager) return;
+
+    // ViewManager handles the actual transition logic
+    // This just triggers a check on deep zoom
+    if (altitude < 0.3 && window.viewManager.isGlobeMode()) {
+        const pov = globe.pointOfView();
+        console.log('Globe: Deep zoom detected, ViewManager will handle transition');
+    }
+}
+
+// Export Phase 2 functions
+window.syncToViewManager = syncToViewManager;
 
 /**
  * Initialize on DOM ready
