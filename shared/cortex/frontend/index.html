@@ -12,6 +12,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Globe.gl from CDN - includes Three.js -->
     <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+    <!-- Supercluster for spatial clustering -->
+    <script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"></script>
+    <!-- KDBush for fast spatial indexing (dependency of Supercluster) -->
+    <script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"></script>
 </head>
 <body>
     <div id="app">
@@ -54,6 +58,11 @@
                 </div>
             </div>
         </header>
+
+        <!-- Zoom Level Indicator & Breadcrumb -->
+        <div id="zoom-indicator" class="cortex-zoom-indicator">
+            <!-- Populated by ZoomIndicator class -->
+        </div>
 
         <!-- Stats Panel -->
         <div id="stats-panel">
@@ -107,6 +116,12 @@
             <div class="control-group">
                 <button onclick="triggerHeartbeat()" class="secondary">MESH HEARTBEAT</button>
             </div>
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="clustering-toggle" checked onchange="toggleClustering(this.checked)">
+                    CLUSTERING
+                </label>
+            </div>
         </div>
 
         <!-- 3D Globe Container -->
@@ -120,6 +135,9 @@
                 <canvas id="fallback-canvas"></canvas>
             </div>
         </div>
+
+        <!-- Transition Overlay (for cluster animations) -->
+        <div id="transition-overlay" class="cortex-transition-overlay"></div>
 
         <!-- Event Log -->
         <div id="event-log">
@@ -161,6 +179,20 @@
                 <span>Red <small>&gt;0.70</small></span>
             </div>
             <div class="legend-divider"></div>
+            <h4>CLUSTERS</h4>
+            <div class="legend-item">
+                <span class="legend-cluster small"></span>
+                <span>Small <small>2-5 nodes</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-cluster medium"></span>
+                <span>Medium <small>6-15 nodes</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-cluster large"></span>
+                <span>Large <small>16+ nodes</small></span>
+            </div>
+            <div class="legend-divider"></div>
             <h4>EVENTS</h4>
             <div class="legend-item">
                 <span class="legend-dot attack"></span>
@@ -183,10 +215,15 @@
         </div>
     </div>
 
-    <!-- Scripts -->
+    <!-- Scripts - Order matters! -->
     <script src="js/data-stream.js"></script>
     <script src="js/animations.js"></script>
     <script src="js/fallback-2d.js"></script>
+    <!-- Clustering system (load before globe.js) -->
+    <script src="js/cluster-manager.js"></script>
+    <script src="js/zoom-controller.js"></script>
+    <script src="js/transitions.js"></script>
+    <!-- Main globe (loads last, uses clustering) -->
     <script src="js/globe.js"></script>
 
     <!-- Cortex initialization -->
@@ -206,6 +243,36 @@
                     createScanlineEffect();
                 }
             }, 2000);
+
+            // Log clustering status
+            setTimeout(() => {
+                if (typeof getClusteringStats === 'function') {
+                    console.log('Clustering stats:', getClusteringStats());
+                }
+            }, 3000);
+        });
+
+        // Keyboard shortcuts for zoom control
+        document.addEventListener('keydown', (e) => {
+            if (!window.zoomController) return;
+
+            switch (e.key) {
+                case '+':
+                case '=':
+                    window.zoomController.zoomIn();
+                    break;
+                case '-':
+                case '_':
+                    window.zoomController.zoomOut();
+                    break;
+                case 'Escape':
+                    window.zoomController.resetView();
+                    break;
+                case 'Backspace':
+                    e.preventDefault();
+                    window.zoomController.goBack();
+                    break;
+            }
         });
     </script>
 </body>
