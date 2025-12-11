@@ -1,7 +1,20 @@
 # HookProbe Licensing
 
+> **Transparent Licensing for Transparent Technology**
+
 **Version**: 5.0 "Cortex"
-**Last Updated**: 2025-12-09
+**Last Updated**: 2025-12-11
+
+---
+
+## Our Licensing Philosophy
+
+Transparency extends to how we license HookProbe. You should understand exactly what you can do, what requires permission, and why we made these choices.
+
+**The short version:**
+- **Personal and business protection:** Free, forever
+- **Offering as a service to others:** Commercial license required
+- **Audit the code:** Always available
 
 ---
 
@@ -15,6 +28,7 @@ HookProbe uses a **dual licensing model** to balance open-source community benef
 2. **Protection Against Cloud Exploitation** - Network copyleft prevents competitors from offering SaaS without contributing back
 3. **Sustainable Business Model** - Commercial licenses fund continued development
 4. **Innovation Protection** - Core AI/ML algorithms remain proprietary to maintain competitive advantage
+5. **Transparency Maintained** - Even proprietary components are fully documented - you understand what they do and why
 
 ---
 
@@ -262,5 +276,19 @@ For all licensing inquiries, compliance questions, contributor agreements, secur
 
 ---
 
+## The Licensing Difference
+
+| Traditional Security | HookProbe |
+|---------------------|-----------|
+| Opaque licensing terms | Clear, transparent terms |
+| Hidden costs | Free for protection, clear commercial terms |
+| Locked-in | Your data is yours, export anytime |
+| "Trust us" source code | Audit everything yourself |
+
+**We believe in transparency at every level - including how we license our software.**
+
+---
+
 **HookProbe v5.0 "Cortex"**
-*Protecting innovation while democratizing security*
+*Transparent licensing for transparent technology*
+*See everything. Own your protection. Achieve more.*
