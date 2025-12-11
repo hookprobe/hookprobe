@@ -1,49 +1,33 @@
 /**
- * HookProbe Cortex Embedded Globe with City-Level Zoom
+ * HookProbe Cortex Embedded - Guardian Integration
  *
- * Phase 2 Implementation:
- * - Globe.gl for 3D Earth view
- * - MapLibre GL for city-level 2D map
- * - Deck.gl for GPU-accelerated point rendering
- * - Smooth transitions between views
+ * Thin wrapper around shared/cortex/ modules for Guardian web UI.
+ * Uses the full Cortex visualization stack:
+ * - ClusterManager for spatial clustering
+ * - ZoomController for camera animations
+ * - ViewManager for Globe/Map transitions
+ * - DeckRenderer for city-level GPU rendering
  */
 
-// View modes
-const VIEW_MODE = {
-    GLOBE: 'globe',
-    MAP: 'map'
-};
+'use strict';
 
-// Zoom thresholds
-const ZOOM_THRESHOLD = {
-    GLOBE_TO_MAP: 4,      // Altitude at which to switch to map
-    MAP_TO_GLOBE: 0.8     // MapLibre zoom at which to switch to globe
-};
-
-// Globe instance
-let globe = null;
-let mapInstance = null;
-let deckOverlay = null;
-let isInitialized = false;
-let currentViewMode = VIEW_MODE.GLOBE;
-
-// Data state
-const cortexState = {
+// Guardian Cortex state
+const guardianCortex = {
+    initialized: false,
+    globe: null,
+    clusterManager: null,
+    zoomController: null,
+    viewManager: null,
+    zoomIndicator: null,
+    guardianLocation: null,
+    demoMode: true,
     nodes: [],
     arcs: [],
-    demoMode: true,
-    guardianLocation: null,
-    currentZoom: 2,
     stats: {
         attacks: 0,
         repelled: 0,
         avgQsecbit: 0,
-        byTier: {
-            sentinel: 0,
-            guardian: 0,
-            fortress: 0,
-            nexus: 0
-        }
+        byTier: { sentinel: 0, guardian: 0, fortress: 0, nexus: 0 }
     }
 };
 
@@ -53,56 +37,58 @@ const ARC_COLORS = {
     repelled: ['rgba(0, 191, 255, 0.8)', 'rgba(0, 191, 255, 0.2)']
 };
 
-// Node colors based on Qsecbit status
+// Node colors
 const NODE_COLORS = {
-    green: [16, 185, 129],
-    amber: [245, 158, 11],
-    red: [239, 68, 68]
-};
-
-const NODE_COLORS_HEX = {
-    green: '#10b981',
-    amber: '#f59e0b',
-    red: '#ef4444'
+    green: '#00ff88',
+    amber: '#ffaa00',
+    red: '#ff4444'
 };
 
 // Tier sizes
 const TIER_SIZES = {
     sentinel: 0.3,
-    guardian: 0.6,
-    fortress: 0.9,
+    guardian: 0.5,
+    fortress: 0.8,
     nexus: 1.2
 };
 
 /**
- * Initialize the Cortex globe
+ * Initialize the Cortex globe with all shared modules
  */
 function initCortexGlobe() {
-    if (isInitialized) return;
+    if (guardianCortex.initialized) return;
 
-    console.log('Initializing Cortex Globe with City-Level Zoom...');
+    console.log('Initializing Cortex with shared modules...');
 
-    // First fetch location
+    // First fetch Guardian location
     fetchGuardianLocation().then(() => {
         // Check WebGL support
         if (!isWebGLSupported()) {
             console.warn('WebGL not supported, using 2D fallback');
             show2DFallback();
-        } else {
-            initGlobeGL();
-            initMapView();
+            return;
         }
 
-        // Set up controls
+        // Initialize Globe.gl
+        initGlobeGL();
+
+        // Initialize clustering system (uses shared ClusterManager)
+        initClusteringSystem();
+
+        // Initialize view manager for Globe/Map transitions
+        initViewManager();
+
+        // Setup UI controls
         setupControls();
 
-        // Initial data load
+        // Load initial data
         refreshData();
 
-        // Start polling for updates
+        // Start polling
         setInterval(refreshData, 10000);
 
-        isInitialized = true;
+        guardianCortex.initialized = true;
+        console.log('Cortex initialized with shared modules');
     });
 }
 
@@ -113,12 +99,12 @@ async function fetchGuardianLocation() {
     try {
         const response = await fetch('/api/cortex/location');
         if (response.ok) {
-            cortexState.guardianLocation = await response.json();
+            guardianCortex.guardianLocation = await response.json();
             updateLocationDisplay();
         }
     } catch (error) {
         console.error('Failed to fetch location:', error);
-        cortexState.guardianLocation = { lat: 51.5074, lng: -0.1278, label: 'London, UK' };
+        guardianCortex.guardianLocation = { lat: 51.5074, lng: -0.1278, label: 'London, UK' };
     }
 }
 
@@ -127,8 +113,8 @@ async function fetchGuardianLocation() {
  */
 function updateLocationDisplay() {
     const label = document.getElementById('cortex-node-label');
-    if (label && cortexState.guardianLocation) {
-        const loc = cortexState.guardianLocation;
+    if (label && guardianCortex.guardianLocation) {
+        const loc = guardianCortex.guardianLocation;
         if (loc.city && loc.country) {
             label.textContent = `${loc.city}, ${loc.country}`;
         } else if (loc.label) {
@@ -162,29 +148,29 @@ function initGlobeGL() {
     const loading = document.getElementById('cortex-loading');
 
     try {
-        // Create globe instance
-        globe = Globe()(container)
+        guardianCortex.globe = Globe()(container)
             .globeImageUrl('https://unpkg.com/three-globe@2.24.10/example/img/earth-night.jpg')
             .bumpImageUrl('https://unpkg.com/three-globe@2.24.10/example/img/earth-topology.png')
             .backgroundImageUrl('https://unpkg.com/three-globe@2.24.10/example/img/night-sky.png')
             .showAtmosphere(true)
             .atmosphereColor('#00bfff')
             .atmosphereAltitude(0.15)
-            // Node points
-            .pointsData(cortexState.nodes)
+            // Points data
+            .pointsData([])
             .pointLat(d => d.lat)
             .pointLng(d => d.lng)
-            .pointColor(d => NODE_COLORS_HEX[d.status] || NODE_COLORS_HEX.green)
+            .pointColor(d => getPointColor(d))
             .pointAltitude(0.01)
-            .pointRadius(d => TIER_SIZES[d.tier] || 0.5)
-            .pointLabel(d => `<div style="background:#111;padding:8px;border-radius:4px;border:1px solid #333;">
-                <strong>${d.label}</strong><br/>
-                Tier: ${d.tier}<br/>
-                Qsecbit: ${d.qsecbit?.toFixed(3) || 'N/A'}<br/>
-                Status: ${d.status}
-            </div>`)
+            .pointRadius(d => getPointRadius(d))
+            .pointLabel(d => getPointLabel(d))
+            // HTML elements for clusters
+            .htmlElementsData([])
+            .htmlElement(d => createClusterElement(d))
+            .htmlLat(d => d.lat)
+            .htmlLng(d => d.lng)
+            .htmlAltitude(0.02)
             // Attack arcs
-            .arcsData(cortexState.arcs)
+            .arcsData(guardianCortex.arcs)
             .arcStartLat(d => d.source.lat)
             .arcStartLng(d => d.source.lng)
             .arcEndLat(d => d.target.lat)
@@ -195,43 +181,43 @@ function initGlobeGL() {
             .arcDashAnimateTime(1500)
             .arcStroke(d => d.type === 'attack' ? 0.5 : 0.3)
             .arcsTransitionDuration(300)
-            // Click to zoom
-            .onPointClick(handleNodeClick);
-
-        // Monitor zoom level for view switching
-        globe.controls().addEventListener('change', handleGlobeZoomChange);
+            // Click handlers
+            .onPointClick(handlePointClick);
 
         // Auto-rotate
-        globe.controls().autoRotate = true;
-        globe.controls().autoRotateSpeed = 0.3;
+        guardianCortex.globe.controls().autoRotate = true;
+        guardianCortex.globe.controls().autoRotateSpeed = 0.3;
 
         // Stop rotation on interaction
         container.addEventListener('mousedown', () => {
-            globe.controls().autoRotate = false;
+            guardianCortex.globe.controls().autoRotate = false;
         });
 
         // Resize handler
         const resizeObserver = new ResizeObserver(() => {
-            if (globe && container.offsetWidth && container.offsetHeight) {
-                globe.width(container.offsetWidth);
-                globe.height(container.offsetHeight);
+            if (guardianCortex.globe && container.offsetWidth && container.offsetHeight) {
+                guardianCortex.globe.width(container.offsetWidth);
+                guardianCortex.globe.height(container.offsetHeight);
             }
         });
         resizeObserver.observe(container);
 
-        // Point to Guardian location if available
-        if (cortexState.guardianLocation && cortexState.guardianLocation.lat !== 0) {
+        // Point to Guardian location
+        if (guardianCortex.guardianLocation && guardianCortex.guardianLocation.lat !== 0) {
             setTimeout(() => {
-                globe.pointOfView({
-                    lat: cortexState.guardianLocation.lat,
-                    lng: cortexState.guardianLocation.lng,
+                guardianCortex.globe.pointOfView({
+                    lat: guardianCortex.guardianLocation.lat,
+                    lng: guardianCortex.guardianLocation.lng,
                     altitude: 2
                 }, 1000);
             }, 500);
         }
 
+        // Export globe for shared modules
+        window.globe = guardianCortex.globe;
+
         if (loading) loading.style.display = 'none';
-        console.log('Globe initialized successfully');
+        console.log('Globe initialized');
     } catch (error) {
         console.error('Globe initialization failed:', error);
         show2DFallback();
@@ -239,341 +225,300 @@ function initGlobeGL() {
 }
 
 /**
- * Initialize MapLibre GL for city-level view
+ * Initialize clustering system using shared ClusterManager
  */
-function initMapView() {
-    // Create map container (hidden initially)
-    let mapContainer = document.getElementById('map-container');
-    if (!mapContainer) {
-        mapContainer = document.createElement('div');
-        mapContainer.id = 'map-container';
-        mapContainer.className = 'cortex-map';
-        mapContainer.style.cssText = 'position: absolute; inset: 0; display: none; z-index: 5;';
+function initClusteringSystem() {
+    // Initialize ClusterManager (from shared/cortex)
+    if (typeof ClusterManager !== 'undefined') {
+        guardianCortex.clusterManager = new ClusterManager();
+        window.clusterManager = guardianCortex.clusterManager;
 
-        const wrapper = document.querySelector('.cortex-globe-wrapper');
-        if (wrapper) {
-            wrapper.appendChild(mapContainer);
-        }
+        // Listen for cluster updates
+        guardianCortex.clusterManager.on('clustersUpdated', handleClustersUpdated);
+        guardianCortex.clusterManager.on('loaded', () => {
+            console.log('ClusterManager: Nodes loaded');
+            updateDisplayData();
+        });
+    } else {
+        console.warn('ClusterManager not available, clustering disabled');
     }
 
-    // Check if MapLibre is available
-    if (typeof maplibregl === 'undefined') {
-        console.warn('MapLibre GL not loaded, city view disabled');
+    // Initialize ZoomController (from shared/cortex)
+    if (typeof ZoomController !== 'undefined' && guardianCortex.globe) {
+        guardianCortex.zoomController = new ZoomController(
+            guardianCortex.globe,
+            guardianCortex.clusterManager
+        );
+        window.zoomController = guardianCortex.zoomController;
+
+        // Listen for zoom changes
+        guardianCortex.zoomController.on('zoomChange', handleZoomChange);
+        guardianCortex.zoomController.on('zoomLevelChange', handleZoomLevelChange);
+        guardianCortex.zoomController.on('drillDown', handleDrillDown);
+    }
+
+    // Initialize ZoomIndicator UI (from shared/cortex)
+    if (typeof ZoomIndicator !== 'undefined' && guardianCortex.zoomController) {
+        guardianCortex.zoomIndicator = new ZoomIndicator('zoom-indicator', guardianCortex.zoomController);
+    }
+
+    console.log('Clustering system initialized');
+}
+
+/**
+ * Initialize ViewManager for Globe/Map transitions
+ */
+function initViewManager() {
+    if (typeof ViewManager === 'undefined') {
+        console.warn('ViewManager not available, city view disabled');
         return;
     }
 
-    try {
-        // Initialize MapLibre with dark theme
-        mapInstance = new maplibregl.Map({
-            container: 'map-container',
-            style: {
-                version: 8,
-                sources: {
-                    'osm-tiles': {
-                        type: 'raster',
-                        tiles: [
-                            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-                            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-                            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
-                        ],
-                        tileSize: 256,
-                        attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-                    }
-                },
-                layers: [{
-                    id: 'osm-tiles',
-                    type: 'raster',
-                    source: 'osm-tiles',
-                    minzoom: 0,
-                    maxzoom: 19
-                }]
-            },
-            center: [cortexState.guardianLocation?.lng || 0, cortexState.guardianLocation?.lat || 51.5],
-            zoom: 10,
-            attributionControl: false
-        });
-
-        // Add navigation controls
-        mapInstance.addControl(new maplibregl.NavigationControl(), 'top-right');
-
-        // Monitor zoom for switching back to globe
-        mapInstance.on('zoom', handleMapZoomChange);
-
-        // Add Deck.gl overlay when ready
-        mapInstance.on('load', initDeckOverlay);
-
-        console.log('MapLibre GL initialized');
-    } catch (error) {
-        console.error('MapLibre initialization failed:', error);
-    }
-}
-
-/**
- * Initialize Deck.gl overlay for GPU-accelerated rendering
- */
-function initDeckOverlay() {
-    if (!mapInstance || typeof deck === 'undefined') {
-        console.warn('Deck.gl not available');
-        return;
-    }
-
-    try {
-        // Create Deck.gl overlay
-        deckOverlay = new deck.MapboxOverlay({
-            interleaved: true,
-            layers: createDeckLayers()
-        });
-
-        mapInstance.addControl(deckOverlay);
-        console.log('Deck.gl overlay initialized');
-    } catch (error) {
-        console.error('Deck.gl overlay failed:', error);
-    }
-}
-
-/**
- * Create Deck.gl layers for city view
- */
-function createDeckLayers() {
-    const layers = [];
-
-    // Scatterplot layer for nodes
-    layers.push(new deck.ScatterplotLayer({
-        id: 'nodes-layer',
-        data: cortexState.nodes,
-        pickable: true,
-        opacity: 0.8,
-        stroked: true,
-        filled: true,
-        radiusScale: 50,
-        radiusMinPixels: 8,
-        radiusMaxPixels: 30,
-        lineWidthMinPixels: 2,
-        getPosition: d => [d.lng, d.lat],
-        getRadius: d => (TIER_SIZES[d.tier] || 0.5) * 100,
-        getFillColor: d => [...(NODE_COLORS[d.status] || NODE_COLORS.green), 200],
-        getLineColor: d => [...(NODE_COLORS[d.status] || NODE_COLORS.green), 255],
-        onClick: info => {
-            if (info.object) {
-                showNodePopup(info.object);
-            }
-        }
-    }));
-
-    // Arc layer for attacks
-    if (cortexState.arcs.length > 0) {
-        layers.push(new deck.ArcLayer({
-            id: 'arcs-layer',
-            data: cortexState.arcs,
-            pickable: true,
-            getWidth: 3,
-            getSourcePosition: d => [d.source.lng, d.source.lat],
-            getTargetPosition: d => [d.target.lng, d.target.lat],
-            getSourceColor: d => d.type === 'attack' ? [255, 68, 68, 200] : [0, 191, 255, 200],
-            getTargetColor: d => d.type === 'attack' ? [255, 68, 68, 50] : [0, 191, 255, 50]
-        }));
-    }
-
-    return layers;
-}
-
-/**
- * Handle globe zoom changes to detect when to switch to map
- */
-function handleGlobeZoomChange() {
-    if (!globe) return;
-
-    const pov = globe.pointOfView();
-    cortexState.currentZoom = pov.altitude;
-
-    // Check if we should switch to map view
-    if (pov.altitude < ZOOM_THRESHOLD.GLOBE_TO_MAP && currentViewMode === VIEW_MODE.GLOBE) {
-        transitionToMap(pov.lat, pov.lng);
-    }
-}
-
-/**
- * Handle map zoom changes to detect when to switch back to globe
- */
-function handleMapZoomChange() {
-    if (!mapInstance) return;
-
-    const zoom = mapInstance.getZoom();
-
-    // Check if we should switch back to globe
-    if (zoom < ZOOM_THRESHOLD.MAP_TO_GLOBE && currentViewMode === VIEW_MODE.MAP) {
-        const center = mapInstance.getCenter();
-        transitionToGlobe(center.lat, center.lng);
-    }
-}
-
-/**
- * Transition from Globe to Map view
- */
-function transitionToMap(lat, lng) {
-    if (currentViewMode === VIEW_MODE.MAP) return;
-
-    console.log('Transitioning to city view...', { lat, lng });
-    currentViewMode = VIEW_MODE.MAP;
-
-    const globeContainer = document.getElementById('globe-container');
     const mapContainer = document.getElementById('map-container');
-
-    // Fade out globe
-    if (globeContainer) {
-        globeContainer.style.transition = 'opacity 0.5s ease';
-        globeContainer.style.opacity = '0';
-    }
-
-    // Position and show map
-    if (mapInstance && mapContainer) {
-        mapInstance.setCenter([lng, lat]);
-        mapInstance.setZoom(12);
-
-        setTimeout(() => {
-            if (globeContainer) globeContainer.style.display = 'none';
-            mapContainer.style.display = 'block';
-            mapContainer.style.opacity = '0';
-            mapContainer.style.transition = 'opacity 0.5s ease';
-
-            requestAnimationFrame(() => {
-                mapContainer.style.opacity = '1';
-                mapInstance.resize();
-                updateDeckLayers();
-            });
-        }, 400);
-    }
-
-    // Show city view indicator
-    showViewModeIndicator('City View');
-}
-
-/**
- * Transition from Map to Globe view
- */
-function transitionToGlobe(lat, lng) {
-    if (currentViewMode === VIEW_MODE.GLOBE) return;
-
-    console.log('Transitioning to globe view...', { lat, lng });
-    currentViewMode = VIEW_MODE.GLOBE;
-
     const globeContainer = document.getElementById('globe-container');
-    const mapContainer = document.getElementById('map-container');
 
-    // Fade out map
-    if (mapContainer) {
-        mapContainer.style.transition = 'opacity 0.5s ease';
-        mapContainer.style.opacity = '0';
-    }
+    guardianCortex.viewManager = new ViewManager();
+    window.viewManager = guardianCortex.viewManager;
 
-    // Show and position globe
-    if (globe && globeContainer) {
-        setTimeout(() => {
-            if (mapContainer) mapContainer.style.display = 'none';
-            globeContainer.style.display = 'block';
-            globeContainer.style.opacity = '0';
-            globeContainer.style.transition = 'opacity 0.5s ease';
+    // Initialize with Globe.gl
+    guardianCortex.viewManager.initWithGlobeGL(guardianCortex.globe, globeContainer);
 
-            globe.pointOfView({ lat, lng, altitude: ZOOM_THRESHOLD.GLOBE_TO_MAP + 0.5 }, 500);
-
-            requestAnimationFrame(() => {
-                globeContainer.style.opacity = '1';
-            });
-        }, 400);
-    }
-
-    // Show globe view indicator
-    showViewModeIndicator('Globe View');
-}
-
-/**
- * Update Deck.gl layers with current data
- */
-function updateDeckLayers() {
-    if (deckOverlay) {
-        deckOverlay.setProps({
-            layers: createDeckLayers()
+    // Initialize DeckRenderer for city view
+    if (mapContainer && typeof DeckRenderer !== 'undefined') {
+        guardianCortex.viewManager.initDeckRenderer(mapContainer, {
+            mapStyle: typeof getCortexMapStyle === 'function' ? getCortexMapStyle() : null,
+            onNodeClick: handleNodeClick
         });
     }
+
+    // Initialize transition overlay
+    const wrapper = document.querySelector('.cortex-globe-wrapper');
+    if (wrapper) {
+        guardianCortex.viewManager.initTransitionOverlay(wrapper);
+    }
+
+    // Connect to ClusterManager
+    if (guardianCortex.clusterManager) {
+        guardianCortex.viewManager.setClusterManager(guardianCortex.clusterManager);
+    }
+
+    // Connect to ZoomController
+    if (guardianCortex.zoomController) {
+        guardianCortex.viewManager.setZoomController(guardianCortex.zoomController);
+    }
+
+    // Listen for mode changes
+    guardianCortex.viewManager.on('modeChange', (data) => {
+        console.log('View mode changed to:', data.mode);
+    });
+
+    console.log('ViewManager initialized with DeckRenderer');
 }
 
 /**
- * Show view mode indicator temporarily
+ * Get point color
  */
-function showViewModeIndicator(mode) {
-    let indicator = document.getElementById('view-mode-indicator');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'view-mode-indicator';
-        indicator.style.cssText = `
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.8);
-            color: #00bfff;
-            padding: 8px 20px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 600;
-            z-index: 100;
-            transition: opacity 0.3s;
-            pointer-events: none;
+function getPointColor(d) {
+    if (d.type === 'cluster') {
+        return NODE_COLORS[d.worstStatus] || NODE_COLORS.green;
+    }
+    return NODE_COLORS[d.status] || NODE_COLORS.green;
+}
+
+/**
+ * Get point radius
+ */
+function getPointRadius(d) {
+    if (d.type === 'cluster') {
+        const count = d.count;
+        if (count > 50) return 2.2;
+        if (count > 15) return 1.6;
+        if (count > 5) return 1.2;
+        return 0.8;
+    }
+    return TIER_SIZES[d.tier] || 0.5;
+}
+
+/**
+ * Get point label
+ */
+function getPointLabel(d) {
+    if (d.type === 'cluster') {
+        const tiers = d.tierCounts || {};
+        const parts = [];
+        if (tiers.nexus) parts.push(`${tiers.nexus} Nexus`);
+        if (tiers.fortress) parts.push(`${tiers.fortress} Fortress`);
+        if (tiers.guardian) parts.push(`${tiers.guardian} Guardian`);
+        if (tiers.sentinel) parts.push(`${tiers.sentinel} Sentinel`);
+        return `
+            <div class="cluster-tooltip">
+                <div class="cluster-count">${d.count} Nodes</div>
+                <div class="cluster-tiers">${parts.join(' · ')}</div>
+                <div class="cluster-qsecbit">Avg Qsecbit: ${(d.avgQsecbit || 0).toFixed(3)}</div>
+                <div class="cluster-status ${d.worstStatus}">Status: ${(d.worstStatus || 'green').toUpperCase()}</div>
+                <div class="cluster-hint">Click to zoom in</div>
+            </div>
         `;
-        document.querySelector('.cortex-globe-wrapper')?.appendChild(indicator);
     }
-
-    indicator.textContent = mode;
-    indicator.style.opacity = '1';
-
-    setTimeout(() => {
-        indicator.style.opacity = '0';
-    }, 2000);
+    return `${d.label || 'Node'}<br/>Qsecbit: ${(d.qsecbit || 0).toFixed(3)}`;
 }
 
 /**
- * Handle node click to zoom in
+ * Create cluster HTML element
+ */
+function createClusterElement(d) {
+    if (d.type !== 'cluster') return null;
+
+    const el = document.createElement('div');
+    el.className = `cortex-cluster cortex-cluster-${d.worstStatus || 'green'}`;
+
+    const count = d.count;
+    let size = 35;
+    if (count > 50) size = 70;
+    else if (count > 15) size = 55;
+    else if (count > 5) size = 45;
+
+    const color = NODE_COLORS[d.worstStatus] || NODE_COLORS.green;
+
+    el.innerHTML = `
+        <div class="cluster-ring cluster-ring-outer" style="border-color: ${color}40"></div>
+        <div class="cluster-ring cluster-ring-middle" style="border-color: ${color}60"></div>
+        <div class="cluster-ring cluster-ring-inner" style="border-color: ${color}"></div>
+        <div class="cluster-core" style="background: ${color}">
+            <span class="cluster-badge">${d.count}</span>
+        </div>
+        <div class="cluster-glow" style="background: ${color}"></div>
+    `;
+
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+
+    el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleClusterClick(d);
+    });
+
+    return el;
+}
+
+/**
+ * Handle point click
+ */
+function handlePointClick(point, event) {
+    if (!point) return;
+
+    if (point.type === 'cluster') {
+        handleClusterClick(point);
+    } else {
+        handleNodeClick(point);
+    }
+}
+
+/**
+ * Handle cluster click - drill down
+ */
+function handleClusterClick(cluster) {
+    console.log('Cluster clicked:', cluster.id, `(${cluster.count} nodes)`);
+
+    if (guardianCortex.zoomController) {
+        guardianCortex.zoomController.drillDownCluster(cluster);
+    } else {
+        // Fallback zoom
+        guardianCortex.globe.pointOfView({
+            lat: cluster.lat,
+            lng: cluster.lng,
+            altitude: 0.5
+        }, 1500);
+    }
+}
+
+/**
+ * Handle node click
  */
 function handleNodeClick(node) {
-    if (!node) return;
+    console.log('Node clicked:', node.id, node.label);
 
-    if (currentViewMode === VIEW_MODE.GLOBE) {
-        // Zoom in on globe, which will trigger transition to map
-        globe.pointOfView({
+    if (guardianCortex.zoomController) {
+        guardianCortex.zoomController.focusNode(node);
+    } else {
+        guardianCortex.globe.pointOfView({
             lat: node.lat,
             lng: node.lng,
-            altitude: ZOOM_THRESHOLD.GLOBE_TO_MAP - 1
-        }, 1000);
+            altitude: 0.4
+        }, 1500);
     }
 }
 
 /**
- * Show node popup on map
+ * Handle zoom change
  */
-function showNodePopup(node) {
-    if (!mapInstance) return;
-
-    // Remove existing popups
-    const existingPopups = document.querySelectorAll('.maplibregl-popup');
-    existingPopups.forEach(p => p.remove());
-
-    const popup = new maplibregl.Popup({ closeOnClick: true })
-        .setLngLat([node.lng, node.lat])
-        .setHTML(`
-            <div style="background:#1a1d2e;padding:12px;border-radius:8px;color:#fff;min-width:180px;">
-                <div style="font-weight:600;font-size:14px;margin-bottom:8px;">${node.label}</div>
-                <div style="display:grid;gap:4px;font-size:12px;color:#94a3b8;">
-                    <div>Tier: <span style="color:#fff;">${node.tier}</span></div>
-                    <div>QSecBit: <span style="color:${NODE_COLORS_HEX[node.status]};">${node.qsecbit?.toFixed(3) || 'N/A'}</span></div>
-                    <div>Status: <span style="color:${NODE_COLORS_HEX[node.status]};">${node.status}</span></div>
-                </div>
-            </div>
-        `)
-        .addTo(mapInstance);
+function handleZoomChange(data) {
+    if (guardianCortex.clusterManager) {
+        const zoom = data.zoom || guardianCortex.clusterManager.altitudeToZoom(data.altitude);
+        guardianCortex.clusterManager.getAllClusters(zoom);
+    }
 }
 
 /**
- * Show 2D fallback map
+ * Handle zoom level change
+ */
+function handleZoomLevelChange(data) {
+    console.log(`Zoom level: ${data.from} → ${data.to}`);
+}
+
+/**
+ * Handle drill down
+ */
+function handleDrillDown(data) {
+    console.log('Drilling down to cluster:', data.cluster.id);
+}
+
+/**
+ * Handle clusters updated
+ */
+function handleClustersUpdated(data) {
+    updateGlobeData(data.clusters);
+}
+
+/**
+ * Update display data based on zoom
+ */
+function updateDisplayData() {
+    if (!guardianCortex.clusterManager) {
+        // No clustering - show all nodes
+        if (guardianCortex.globe) {
+            guardianCortex.globe.pointsData(guardianCortex.nodes.map(n => ({ ...n, type: 'node' })));
+        }
+        return;
+    }
+
+    const pov = guardianCortex.globe ? guardianCortex.globe.pointOfView() : { altitude: 2.5 };
+    const zoom = guardianCortex.clusterManager.altitudeToZoom(pov.altitude);
+    const displayData = guardianCortex.clusterManager.getAllClusters(zoom);
+    updateGlobeData(displayData);
+}
+
+/**
+ * Update globe with display data
+ */
+function updateGlobeData(displayData) {
+    if (!guardianCortex.globe || !displayData) return;
+
+    const clusters = displayData.filter(d => d.type === 'cluster');
+    const nodes = displayData.filter(d => d.type === 'node');
+
+    guardianCortex.globe.pointsData(nodes);
+    guardianCortex.globe.htmlElementsData(clusters);
+
+    // Sync to ViewManager for city view
+    if (guardianCortex.viewManager) {
+        guardianCortex.viewManager.updateNodes(nodes);
+        guardianCortex.viewManager.updateClusters(clusters);
+    }
+}
+
+/**
+ * Show 2D fallback
  */
 function show2DFallback() {
     const globeContainer = document.getElementById('globe-container');
@@ -588,7 +533,7 @@ function show2DFallback() {
 }
 
 /**
- * Initialize 2D canvas map
+ * Initialize 2D canvas map (fallback)
  */
 function init2DMap() {
     const canvas = document.getElementById('fallback-canvas');
@@ -611,14 +556,12 @@ function init2DMap() {
  * Draw 2D map
  */
 function draw2DMap(ctx, canvas) {
-    // Background
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Grid lines
+    // Grid
     ctx.strokeStyle = '#1a1a2e';
     ctx.lineWidth = 1;
-
     for (let lat = -60; lat <= 60; lat += 30) {
         const y = ((90 - lat) / 180) * canvas.height;
         ctx.beginPath();
@@ -626,7 +569,6 @@ function draw2DMap(ctx, canvas) {
         ctx.lineTo(canvas.width, y);
         ctx.stroke();
     }
-
     for (let lng = -150; lng <= 180; lng += 30) {
         const x = ((lng + 180) / 360) * canvas.width;
         ctx.beginPath();
@@ -635,14 +577,13 @@ function draw2DMap(ctx, canvas) {
         ctx.stroke();
     }
 
-    // Draw nodes
-    cortexState.nodes.forEach(node => {
+    // Nodes
+    guardianCortex.nodes.forEach(node => {
         const x = ((node.lng + 180) / 360) * canvas.width;
         const y = ((90 - node.lat) / 180) * canvas.height;
-        const color = NODE_COLORS_HEX[node.status] || NODE_COLORS_HEX.green;
+        const color = NODE_COLORS[node.status] || NODE_COLORS.green;
         const radius = (TIER_SIZES[node.tier] || 0.5) * 8;
 
-        // Glow
         ctx.beginPath();
         ctx.arc(x, y, radius + 3, 0, Math.PI * 2);
         ctx.fillStyle = color;
@@ -650,37 +591,15 @@ function draw2DMap(ctx, canvas) {
         ctx.fill();
         ctx.globalAlpha = 1;
 
-        // Node
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fillStyle = color;
         ctx.fill();
-
-        // Label
-        ctx.fillStyle = '#888';
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(node.label, x, y + radius + 12);
-    });
-
-    // Draw arcs
-    cortexState.arcs.forEach(arc => {
-        const x1 = ((arc.source.lng + 180) / 360) * canvas.width;
-        const y1 = ((90 - arc.source.lat) / 180) * canvas.height;
-        const x2 = ((arc.target.lng + 180) / 360) * canvas.width;
-        const y2 = ((90 - arc.target.lat) / 180) * canvas.height;
-
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = arc.type === 'attack' ? '#ff4444' : '#00bfff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
     });
 }
 
 /**
- * Setup controls
+ * Setup UI controls
  */
 function setupControls() {
     const demoBtn = document.getElementById('cortex-demo-btn');
@@ -714,7 +633,7 @@ function setupControls() {
 async function setMode(demoMode) {
     try {
         await fetch('/api/cortex/demo/toggle', { method: 'POST' });
-        cortexState.demoMode = demoMode;
+        guardianCortex.demoMode = demoMode;
         refreshData();
     } catch (error) {
         console.error('Failed to toggle mode:', error);
@@ -741,17 +660,18 @@ async function refreshData() {
  */
 function processData(data) {
     // Update nodes
-    cortexState.nodes = data.nodes || [];
-    if (globe) {
-        globe.pointsData(cortexState.nodes);
+    guardianCortex.nodes = data.nodes || [];
+
+    // Load into cluster manager
+    if (guardianCortex.clusterManager) {
+        guardianCortex.clusterManager.load(guardianCortex.nodes);
+    } else {
+        if (guardianCortex.globe) {
+            guardianCortex.globe.pointsData(guardianCortex.nodes.map(n => ({ ...n, type: 'node' })));
+        }
     }
 
-    // Update Deck.gl layers if in map mode
-    if (currentViewMode === VIEW_MODE.MAP) {
-        updateDeckLayers();
-    }
-
-    // Process events as arcs
+    // Process events
     if (data.events && data.events.length > 0) {
         data.events.forEach(event => {
             addArc(event);
@@ -761,17 +681,10 @@ function processData(data) {
 
     // Update stats
     updateStats(data);
-
-    // Redraw 2D if in fallback mode
-    const canvas = document.getElementById('fallback-canvas');
-    if (canvas && canvas.offsetParent !== null) {
-        const ctx = canvas.getContext('2d');
-        draw2DMap(ctx, canvas);
-    }
 }
 
 /**
- * Add arc to globe
+ * Add arc
  */
 function addArc(event) {
     const arc = {
@@ -782,23 +695,21 @@ function addArc(event) {
         timestamp: Date.now()
     };
 
-    cortexState.arcs.push(arc);
+    guardianCortex.arcs.push(arc);
 
-    // Remove arc after animation
     setTimeout(() => {
-        cortexState.arcs = cortexState.arcs.filter(a => a.id !== arc.id);
-        if (globe) globe.arcsData(cortexState.arcs);
-        if (currentViewMode === VIEW_MODE.MAP) updateDeckLayers();
+        guardianCortex.arcs = guardianCortex.arcs.filter(a => a.id !== arc.id);
+        if (guardianCortex.globe) guardianCortex.globe.arcsData(guardianCortex.arcs);
+        if (guardianCortex.viewManager) guardianCortex.viewManager.updateArcs(guardianCortex.arcs);
     }, 3000);
 
-    if (globe) globe.arcsData(cortexState.arcs);
-    if (currentViewMode === VIEW_MODE.MAP) updateDeckLayers();
+    if (guardianCortex.globe) guardianCortex.globe.arcsData(guardianCortex.arcs);
+    if (guardianCortex.viewManager) guardianCortex.viewManager.updateArcs(guardianCortex.arcs);
 
-    // Update counters
     if (arc.type === 'attack') {
-        cortexState.stats.attacks++;
+        guardianCortex.stats.attacks++;
     } else {
-        cortexState.stats.repelled++;
+        guardianCortex.stats.repelled++;
     }
 }
 
@@ -809,13 +720,13 @@ function updateStats(data) {
     const stats = data.stats || {};
     const byTier = stats.by_tier || {};
 
-    document.getElementById('stat-nodes').textContent = stats.total_nodes || cortexState.nodes.length;
-    document.getElementById('stat-attacks').textContent = cortexState.stats.attacks;
-    document.getElementById('stat-repelled').textContent = cortexState.stats.repelled;
+    document.getElementById('stat-nodes').textContent = stats.total_nodes || guardianCortex.nodes.length;
+    document.getElementById('stat-attacks').textContent = guardianCortex.stats.attacks;
+    document.getElementById('stat-repelled').textContent = guardianCortex.stats.repelled;
 
-    if (cortexState.nodes.length > 0) {
-        const totalQsecbit = cortexState.nodes.reduce((sum, n) => sum + (n.qsecbit || 0), 0);
-        const avg = totalQsecbit / cortexState.nodes.length;
+    if (guardianCortex.nodes.length > 0) {
+        const totalQsecbit = guardianCortex.nodes.reduce((sum, n) => sum + (n.qsecbit || 0), 0);
+        const avg = totalQsecbit / guardianCortex.nodes.length;
         document.getElementById('stat-qsecbit').textContent = avg.toFixed(3);
     }
 
@@ -866,25 +777,24 @@ function clearEvents() {
     if (list) {
         list.innerHTML = '<li class="cortex-event-placeholder">Waiting for events...</li>';
     }
-    cortexState.stats.attacks = 0;
-    cortexState.stats.repelled = 0;
+    guardianCortex.stats.attacks = 0;
+    guardianCortex.stats.repelled = 0;
     document.getElementById('stat-attacks').textContent = '0';
     document.getElementById('stat-repelled').textContent = '0';
 }
 
 /**
- * Fly to a specific location (exposed for external use)
+ * Fly to location (exposed for external use)
  */
 function flyToLocation(lat, lng, zoom) {
-    if (currentViewMode === VIEW_MODE.GLOBE && globe) {
-        const altitude = zoom ? Math.max(0.5, 10 - zoom) : 1;
-        globe.pointOfView({ lat, lng, altitude }, 1500);
-    } else if (currentViewMode === VIEW_MODE.MAP && mapInstance) {
-        mapInstance.flyTo({
-            center: [lng, lat],
-            zoom: zoom || 12,
-            duration: 1500
+    if (guardianCortex.zoomController) {
+        guardianCortex.zoomController.animateTo({
+            lat,
+            lng,
+            altitude: guardianCortex.clusterManager ? guardianCortex.clusterManager.zoomToAltitude(zoom || 10) : 0.5
         });
+    } else if (guardianCortex.globe) {
+        guardianCortex.globe.pointOfView({ lat, lng, altitude: zoom ? Math.max(0.5, 10 - zoom) : 1 }, 1500);
     }
 }
 
@@ -892,5 +802,4 @@ function flyToLocation(lat, lng, zoom) {
 window.initCortexGlobe = initCortexGlobe;
 window.refreshCortexData = refreshData;
 window.flyToLocation = flyToLocation;
-window.transitionToMap = transitionToMap;
-window.transitionToGlobe = transitionToGlobe;
+window.guardianCortex = guardianCortex;
