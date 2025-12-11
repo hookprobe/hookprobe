@@ -31,8 +31,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // NAVIGATION
 // ============================================
 function initNavigation() {
-    // Handle nav item clicks
-    document.querySelectorAll('.nav-item').forEach(item => {
+    // Handle nav item clicks (Forty-style: #header nav button)
+    document.querySelectorAll('#header nav button').forEach(item => {
         item.addEventListener('click', (e) => {
             const tab = e.target.dataset.tab;
             if (tab) {
@@ -66,13 +66,13 @@ function switchToTab(tab) {
 }
 
 function showTab(tabName, animate = true) {
-    // Update nav items
-    document.querySelectorAll('.nav-item').forEach(item => {
+    // Update nav items (Forty-style)
+    document.querySelectorAll('#header nav button').forEach(item => {
         item.classList.toggle('active', item.dataset.tab === tabName);
     });
 
     // Update tab content
-    document.querySelectorAll('.tab-panel').forEach(panel => {
+    document.querySelectorAll('.tab-content').forEach(panel => {
         const isActive = panel.id === `tab-${tabName}`;
         panel.classList.toggle('active', isActive);
         if (animate && isActive) {
@@ -124,31 +124,31 @@ function loadTabData(tabName) {
 }
 
 // ============================================
-// MOBILE MENU
+// MOBILE MENU (Forty-style)
 // ============================================
 function initMobileMenu() {
-    const toggle = document.querySelector('.menu-toggle');
-    const nav = document.querySelector('.nav-main');
+    const toggle = document.querySelector('#header .menu-toggle');
+    const nav = document.querySelector('#header nav');
 
     if (toggle && nav) {
         toggle.addEventListener('click', () => {
-            nav.classList.toggle('active');
+            nav.classList.toggle('open');
             document.body.classList.toggle('menu-open');
         });
     }
 
     // Close on outside click
     document.addEventListener('click', (e) => {
-        if (!e.target.closest('.nav-main') && !e.target.closest('.menu-toggle')) {
+        if (!e.target.closest('#header nav') && !e.target.closest('.menu-toggle')) {
             closeMobileMenu();
         }
     });
 }
 
 function closeMobileMenu() {
-    const nav = document.querySelector('.nav-main');
+    const nav = document.querySelector('#header nav');
     if (nav) {
-        nav.classList.remove('active');
+        nav.classList.remove('open');
         document.body.classList.remove('menu-open');
     }
 }
