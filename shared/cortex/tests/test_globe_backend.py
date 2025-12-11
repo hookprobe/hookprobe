@@ -83,10 +83,11 @@ class TestDemoDataGenerator:
         assert "mitigation" in event
         assert "response_ms" in event
         assert event["response_ms"] >= 1
-        assert event["response_ms"] <= 100  # Updated range in Phase 1C
+        assert event["response_ms"] <= 200  # Updated range in Phase 3 (CAPTCHA can take up to 200ms)
 
-        # Verify mitigation is valid
-        assert event["mitigation"] in MITIGATION_METHODS
+        # Verify mitigation is valid (MITIGATION_METHODS is now tuples: name, min_ms, max_ms, desc)
+        valid_methods = [m[0] for m in MITIGATION_METHODS]
+        assert event["mitigation"] in valid_methods
 
     def test_node_status_event_structure(self):
         """Test node status event has correct structure."""
@@ -167,8 +168,12 @@ class TestDemoDataGenerator:
         gen = DemoDataGenerator()
         snapshot = gen.get_full_snapshot()
 
-        assert snapshot["type"] == "node_status"
+        # Phase 3: get_full_snapshot returns "snapshot" type with richer data
+        assert snapshot["type"] == "snapshot"
         assert len(snapshot["nodes"]) == len(HOOKPROBE_NODES)
+        assert "edges" in snapshot  # Mesh connections
+        assert "stats" in snapshot  # Statistics
+        assert "organizations" in snapshot  # Organization data
 
     def test_statistics(self):
         """Test statistics reporting."""
@@ -462,22 +467,27 @@ class TestDataIntegrity:
             assert -180 <= source["lng"] <= 180
 
     def test_attack_types_valid(self):
-        """Test that all attack types have valid data (new in Phase 1C)."""
+        """Test that all attack types have valid data (Phase 3 expanded format)."""
         for attack in ATTACK_TYPES:
-            assert len(attack) == 3  # (name, severity, description)
-            name, severity, description = attack
+            # Phase 3: (name, severity, description, category, weight)
+            assert len(attack) == 5
+            name, severity, description, category, weight = attack
 
             assert isinstance(name, str)
             assert 0.0 <= severity <= 1.0
             assert isinstance(description, str)
+            assert isinstance(category, str)
+            assert category in ["ddos", "credential", "malware", "web", "api", "advanced", "scan", "bruteforce"]
+            assert isinstance(weight, (int, float))
+            assert weight > 0
 
     def test_expanded_data_coverage(self):
-        """Test that data has been expanded (~30% increase)."""
-        # Original: 8 nodes, 8 sources, 6 attack types
-        # Phase 1C: ~30% increase
-        assert len(HOOKPROBE_NODES) >= 10  # Was 8
-        assert len(THREAT_SOURCES) >= 10  # Was 8
-        assert len(ATTACK_TYPES) >= 10  # Was 6
+        """Test that data has been expanded to enterprise scale (Phase 3)."""
+        # Phase 3: Enterprise scale for collective defense visualization
+        # 5 organizations with 75+ nodes total
+        assert len(HOOKPROBE_NODES) >= 70  # Enterprise scale
+        assert len(THREAT_SOURCES) >= 30  # Global threat sources
+        assert len(ATTACK_TYPES) >= 20  # Comprehensive attack types
 
 
 class TestHTPBridgeConfig:
