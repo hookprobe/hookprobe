@@ -23,6 +23,7 @@ const guardianCortex = {
     demoMode: true,
     nodes: [],
     arcs: [],
+    currentAltitude: 2.5,  // Track current zoom altitude for dynamic sizing
     stats: {
         attacks: 0,
         repelled: 0,
@@ -228,19 +229,27 @@ function initGlobeGL() {
  * Initialize clustering system using shared ClusterManager
  */
 function initClusteringSystem() {
+    console.log('[Cortex Debug] initClusteringSystem starting', {
+        ClusterManagerAvailable: typeof ClusterManager !== 'undefined',
+        ZoomControllerAvailable: typeof ZoomController !== 'undefined',
+        ZoomIndicatorAvailable: typeof ZoomIndicator !== 'undefined',
+        hasGlobe: !!guardianCortex.globe
+    });
+
     // Initialize ClusterManager (from shared/cortex)
     if (typeof ClusterManager !== 'undefined') {
         guardianCortex.clusterManager = new ClusterManager();
         window.clusterManager = guardianCortex.clusterManager;
+        console.log('[Cortex Debug] ClusterManager created');
 
         // Listen for cluster updates
         guardianCortex.clusterManager.on('clustersUpdated', handleClustersUpdated);
         guardianCortex.clusterManager.on('loaded', () => {
-            console.log('ClusterManager: Nodes loaded');
+            console.log('[Cortex Debug] ClusterManager: Nodes loaded');
             updateDisplayData();
         });
     } else {
-        console.warn('ClusterManager not available, clustering disabled');
+        console.warn('[Cortex Debug] ClusterManager not available, clustering disabled');
     }
 
     // Initialize ZoomController (from shared/cortex)
@@ -250,19 +259,27 @@ function initClusteringSystem() {
             guardianCortex.clusterManager
         );
         window.zoomController = guardianCortex.zoomController;
+        console.log('[Cortex Debug] ZoomController created');
 
         // Listen for zoom changes
         guardianCortex.zoomController.on('zoomChange', handleZoomChange);
         guardianCortex.zoomController.on('zoomLevelChange', handleZoomLevelChange);
         guardianCortex.zoomController.on('drillDown', handleDrillDown);
+        console.log('[Cortex Debug] ZoomController event listeners attached');
+    } else {
+        console.warn('[Cortex Debug] ZoomController not initialized', {
+            ZoomControllerAvailable: typeof ZoomController !== 'undefined',
+            hasGlobe: !!guardianCortex.globe
+        });
     }
 
     // Initialize ZoomIndicator UI (from shared/cortex)
     if (typeof ZoomIndicator !== 'undefined' && guardianCortex.zoomController) {
         guardianCortex.zoomIndicator = new ZoomIndicator('zoom-indicator', guardianCortex.zoomController);
+        console.log('[Cortex Debug] ZoomIndicator created');
     }
 
-    console.log('Clustering system initialized');
+    console.log('[Cortex Debug] Clustering system initialization complete');
 }
 
 /**
@@ -326,17 +343,29 @@ function getPointColor(d) {
 }
 
 /**
- * Get point radius
+ * Calculate dynamic scale factor based on altitude
+ * At altitude 2.5 (zoomed out) = 1.0, at 0.1 (zoomed in) = 0.2
  */
+function getAltitudeScaleFactor() {
+    const altitude = guardianCortex.currentAltitude || 2.5;
+    // Use square root for smoother scaling, clamp minimum to 0.15
+    return Math.max(0.15, Math.sqrt(altitude / 2.5));
+}
+
 function getPointRadius(d) {
+    const scaleFactor = getAltitudeScaleFactor();
+
     if (d.type === 'cluster') {
         const count = d.count;
-        if (count > 50) return 2.2;
-        if (count > 15) return 1.6;
-        if (count > 5) return 1.2;
-        return 0.8;
+        let baseSize;
+        if (count > 50) baseSize = 2.2;
+        else if (count > 15) baseSize = 1.6;
+        else if (count > 5) baseSize = 1.2;
+        else baseSize = 0.8;
+        return baseSize * scaleFactor;
     }
-    return TIER_SIZES[d.tier] || 0.5;
+    const baseSize = TIER_SIZES[d.tier] || 0.5;
+    return baseSize * scaleFactor;
 }
 
 /**
@@ -372,11 +401,17 @@ function createClusterElement(d) {
     const el = document.createElement('div');
     el.className = `cortex-cluster cortex-cluster-${d.worstStatus || 'green'}`;
 
+    // Base size based on node count
     const count = d.count;
-    let size = 35;
-    if (count > 50) size = 70;
-    else if (count > 15) size = 55;
-    else if (count > 5) size = 45;
+    let baseSize = 35;
+    if (count > 50) baseSize = 70;
+    else if (count > 15) baseSize = 55;
+    else if (count > 5) baseSize = 45;
+
+    // Scale size based on altitude (clusters are HTML elements in pixels)
+    // Use a gentler scaling for HTML elements (minimum 0.5)
+    const scaleFactor = Math.max(0.5, Math.sqrt(guardianCortex.currentAltitude / 2.5));
+    const size = Math.round(baseSize * scaleFactor);
 
     const color = NODE_COLORS[d.worstStatus] || NODE_COLORS.green;
 
@@ -453,9 +488,26 @@ function handleNodeClick(node) {
  * Handle zoom change
  */
 function handleZoomChange(data) {
+    console.log('[Cortex Debug] handleZoomChange:', {
+        altitude: data.altitude,
+        zoom: data.zoom,
+        level: data.level,
+        hasClusterManager: !!guardianCortex.clusterManager
+    });
+
+    // Store altitude for dynamic node sizing
+    guardianCortex.currentAltitude = data.altitude;
+
     if (guardianCortex.clusterManager) {
         const zoom = data.zoom || guardianCortex.clusterManager.altitudeToZoom(data.altitude);
+        console.log('[Cortex Debug] Getting clusters for zoom:', zoom, 'scaleFactor:', getAltitudeScaleFactor().toFixed(2));
         guardianCortex.clusterManager.getAllClusters(zoom);
+    } else if (guardianCortex.globe) {
+        // No clustering - just refresh points to update sizes
+        const currentPoints = guardianCortex.globe.pointsData();
+        if (currentPoints && currentPoints.length > 0) {
+            guardianCortex.globe.pointsData(currentPoints);
+        }
     }
 }
 
@@ -477,6 +529,12 @@ function handleDrillDown(data) {
  * Handle clusters updated
  */
 function handleClustersUpdated(data) {
+    console.log('[Cortex Debug] handleClustersUpdated:', {
+        clustersCount: data.clusters ? data.clusters.length : 0,
+        zoom: data.zoom,
+        totalClusters: data.totalClusters,
+        totalNodes: data.totalNodes
+    });
     updateGlobeData(data.clusters);
 }
 
@@ -502,10 +560,21 @@ function updateDisplayData() {
  * Update globe with display data
  */
 function updateGlobeData(displayData) {
-    if (!guardianCortex.globe || !displayData) return;
+    if (!guardianCortex.globe || !displayData) {
+        console.log('[Cortex Debug] updateGlobeData: skipped (globe or data missing)', {
+            hasGlobe: !!guardianCortex.globe,
+            hasDisplayData: !!displayData
+        });
+        return;
+    }
 
     const clusters = displayData.filter(d => d.type === 'cluster');
     const nodes = displayData.filter(d => d.type === 'node');
+    console.log('[Cortex Debug] updateGlobeData:', {
+        totalItems: displayData.length,
+        clusters: clusters.length,
+        nodes: nodes.length
+    });
 
     guardianCortex.globe.pointsData(nodes);
     guardianCortex.globe.htmlElementsData(clusters);

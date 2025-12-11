@@ -102,7 +102,12 @@ class ZoomController {
      * Setup listener for camera changes
      */
     _setupCameraListener() {
-        if (!this.globe) return;
+        if (!this.globe) {
+            console.warn('[ZoomController] No globe provided, camera listener not set up');
+            return;
+        }
+
+        console.log('[ZoomController] Setting up camera listener');
 
         // Poll camera position since Globe.gl controls events are internal
         this._pollInterval = setInterval(() => {
@@ -110,6 +115,11 @@ class ZoomController {
 
             const pov = this.globe.pointOfView();
             if (Math.abs(pov.altitude - this.currentAltitude) > 0.01) {
+                console.log('[ZoomController] Altitude change detected:', {
+                    previous: this.currentAltitude,
+                    current: pov.altitude,
+                    delta: Math.abs(pov.altitude - this.currentAltitude)
+                });
                 this._onCameraChange(pov);
             }
         }, 50);
