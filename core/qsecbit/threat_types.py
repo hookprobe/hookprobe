@@ -1,12 +1,12 @@
 """
-Qsecbit v6.0 - Unified Threat Types and Data Model
+Qsecbit Unified - Unified Threat Types and Data Model
 
 Defines all attack types, severities, and the canonical ThreatEvent
 data structure used throughout the unified threat detection engine.
 
 Author: HookProbe Team
 License: Proprietary - see LICENSE in this directory
-Version: 6.0
+Version: 5.0.0
 """
 
 from enum import Enum, auto

@@ -45,7 +45,7 @@ class SecurityDevice(models.Model):
     ip_address = models.GenericIPAddressField()
     mac_address = models.CharField(max_length=17, blank=True)
 
-    # Liberty Architecture - Hardware Fingerprinting
+    # Cortex Architecture - Hardware Fingerprinting
     hardware_fingerprint = models.CharField(
         max_length=64,
         blank=True,
