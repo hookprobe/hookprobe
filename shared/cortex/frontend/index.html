@@ -6,12 +6,24 @@
     <title>HookProbe Cortex - Neural Command Center</title>
     <meta name="description" content="Real-time 3D visualization of the HookProbe collective defense mesh">
     <link rel="stylesheet" href="css/globe.css">
+    <!-- Phase 2: City view styles -->
+    <link rel="stylesheet" href="css/city-view.css">
+    <!-- MapLibre GL CSS -->
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
     <!-- Premium fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Globe.gl from CDN - includes Three.js -->
     <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+    <!-- Supercluster for spatial clustering -->
+    <script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"></script>
+    <!-- KDBush for fast spatial indexing (dependency of Supercluster) -->
+    <script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"></script>
+    <!-- Phase 2: Deck.gl for GPU-accelerated visualization -->
+    <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
+    <!-- Phase 2: MapLibre GL for free basemap tiles -->
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 </head>
 <body>
     <div id="app">
@@ -54,6 +66,11 @@
                 </div>
             </div>
         </header>
+
+        <!-- Zoom Level Indicator & Breadcrumb -->
+        <div id="zoom-indicator" class="cortex-zoom-indicator">
+            <!-- Populated by ZoomIndicator class -->
+        </div>
 
         <!-- Stats Panel -->
         <div id="stats-panel">
@@ -107,10 +124,19 @@
             <div class="control-group">
                 <button onclick="triggerHeartbeat()" class="secondary">MESH HEARTBEAT</button>
             </div>
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="clustering-toggle" checked onchange="toggleClustering(this.checked)">
+                    CLUSTERING
+                </label>
+            </div>
         </div>
 
         <!-- 3D Globe Container -->
         <div id="globe-container"></div>
+
+        <!-- Phase 2: City Map Container (Deck.gl + MapLibre) -->
+        <div id="city-map-container" style="display: none;"></div>
 
         <!-- 2D Map Fallback (for mobile/low-end devices) -->
         <div id="map-fallback" style="display: none;">
@@ -120,6 +146,9 @@
                 <canvas id="fallback-canvas"></canvas>
             </div>
         </div>
+
+        <!-- Transition Overlay (for cluster animations) -->
+        <div id="transition-overlay" class="cortex-transition-overlay"></div>
 
         <!-- Event Log -->
         <div id="event-log">
@@ -161,6 +190,20 @@
                 <span>Red <small>&gt;0.70</small></span>
             </div>
             <div class="legend-divider"></div>
+            <h4>CLUSTERS</h4>
+            <div class="legend-item">
+                <span class="legend-cluster small"></span>
+                <span>Small <small>2-5 nodes</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-cluster medium"></span>
+                <span>Medium <small>6-15 nodes</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-cluster large"></span>
+                <span>Large <small>16+ nodes</small></span>
+            </div>
+            <div class="legend-divider"></div>
             <h4>EVENTS</h4>
             <div class="legend-item">
                 <span class="legend-dot attack"></span>
@@ -183,10 +226,20 @@
         </div>
     </div>
 
-    <!-- Scripts -->
+    <!-- Scripts - Order matters! -->
     <script src="js/data-stream.js"></script>
     <script src="js/animations.js"></script>
     <script src="js/fallback-2d.js"></script>
+    <!-- Clustering system (load before globe.js) -->
+    <script src="js/cluster-manager.js"></script>
+    <script src="js/zoom-controller.js"></script>
+    <script src="js/transitions.js"></script>
+    <!-- Phase 2: City view system (Deck.gl + MapLibre) -->
+    <script src="js/basemap-config.js"></script>
+    <script src="js/deck-renderer.js"></script>
+    <script src="js/view-manager.js"></script>
+    <script src="js/city-view.js"></script>
+    <!-- Main globe (loads last, uses clustering) -->
     <script src="js/globe.js"></script>
 
     <!-- Cortex initialization -->
@@ -206,6 +259,134 @@
                     createScanlineEffect();
                 }
             }, 2000);
+
+            // Log clustering status
+            setTimeout(() => {
+                if (typeof getClusteringStats === 'function') {
+                    console.log('Clustering stats:', getClusteringStats());
+                }
+            }, 3000);
+
+            // Phase 2: Initialize city view system
+            setTimeout(() => {
+                initCityViewSystem();
+            }, 1500);
+        });
+
+        // Phase 2: Initialize city view components
+        function initCityViewSystem() {
+            // Check if Deck.gl and MapLibre are available
+            if (typeof DeckRenderer === 'undefined' || typeof maplibregl === 'undefined') {
+                console.warn('Phase 2 dependencies not loaded, city view disabled');
+                return;
+            }
+
+            // Initialize ViewManager
+            if (typeof ViewManager !== 'undefined' && window.globe) {
+                window.viewManager = new ViewManager();
+
+                // Connect to Globe.gl
+                window.viewManager.initWithGlobeGL(
+                    window.globe,
+                    document.getElementById('globe-container')
+                );
+
+                // Initialize DeckRenderer for city view
+                window.viewManager.initDeckRenderer(
+                    document.getElementById('city-map-container'),
+                    {
+                        mapStyle: getCortexMapStyle(),
+                        onNodeClick: (node, info) => {
+                            console.log('City view node clicked:', node);
+                            if (window.cityViewController) {
+                                window.cityViewController._onNodeClick(node, info);
+                            }
+                        },
+                        onClusterClick: (cluster, info) => {
+                            console.log('City view cluster clicked:', cluster);
+                            // Zoom into cluster
+                            if (window.viewManager.deckRenderer) {
+                                const coords = cluster.geometry?.coordinates ||
+                                    [cluster.lng, cluster.lat];
+                                window.viewManager.deckRenderer.flyTo({
+                                    longitude: coords[0],
+                                    latitude: coords[1],
+                                    zoom: 14,
+                                    duration: 800
+                                });
+                            }
+                        }
+                    }
+                );
+
+                // Create transition overlay
+                window.viewManager.initTransitionOverlay(document.getElementById('app'));
+
+                // Connect clustering system
+                if (window.clusterManager) {
+                    window.viewManager.setClusterManager(window.clusterManager);
+                }
+                if (window.zoomController) {
+                    window.viewManager.setZoomController(window.zoomController);
+                }
+
+                // Listen for mode changes
+                window.viewManager.on('modeChange', (data) => {
+                    console.log('View mode changed:', data.mode);
+                    updateModeIndicator(data.mode);
+                });
+
+                console.log('Phase 2: ViewManager initialized');
+            }
+
+            // Initialize CityViewController
+            if (typeof CityViewController !== 'undefined' && window.viewManager) {
+                window.cityViewController = new CityViewController(window.viewManager);
+                console.log('Phase 2: CityViewController initialized');
+            }
+
+            // Create view mode indicator
+            if (typeof ViewModeIndicator !== 'undefined') {
+                window.viewModeIndicator = new ViewModeIndicator(document.getElementById('app'));
+            }
+
+            console.log('Phase 2: City view system ready');
+        }
+
+        // Update mode indicator based on view
+        function updateModeIndicator(mode) {
+            if (window.viewModeIndicator) {
+                window.viewModeIndicator.setMode(mode);
+            }
+            // Update existing mode indicator text
+            const modeText = document.getElementById('mode-text');
+            if (modeText) {
+                const dataMode = window.dataMode || 'DEMO';
+                modeText.textContent = `${dataMode.toUpperCase()} MODE${mode === 'map' ? ' (2D)' : ''}`;
+            }
+        }
+
+        // Keyboard shortcuts for zoom control
+        document.addEventListener('keydown', (e) => {
+            if (!window.zoomController) return;
+
+            switch (e.key) {
+                case '+':
+                case '=':
+                    window.zoomController.zoomIn();
+                    break;
+                case '-':
+                case '_':
+                    window.zoomController.zoomOut();
+                    break;
+                case 'Escape':
+                    window.zoomController.resetView();
+                    break;
+                case 'Backspace':
+                    e.preventDefault();
+                    window.zoomController.goBack();
+                    break;
+            }
         });
     </script>
 </body>

@@ -348,6 +348,128 @@ class NodeRegistry:
                 if node.attention_level > 0:
                     node.attention_level = max(0, node.attention_level - 0.1)
 
+    # =========================================
+    # Cluster Support Methods
+    # =========================================
+
+    def get_nodes_by_region(self, bounds: Dict[str, float]) -> List[NodeTwin]:
+        """
+        Get nodes within geographic bounds.
+
+        Args:
+            bounds: Dict with west, south, east, north coordinates
+
+        Returns:
+            List of nodes within bounds
+        """
+        result = []
+        for node in self.nodes.values():
+            if (bounds.get('west', -180) <= node.lng <= bounds.get('east', 180) and
+                bounds.get('south', -90) <= node.lat <= bounds.get('north', 90)):
+                result.append(node)
+        return result
+
+    def get_cluster_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics for clustering visualization.
+
+        Returns:
+            Dict with node counts, tier distribution, and geographic coverage
+        """
+        stats = {
+            "total_nodes": len(self.nodes),
+            "online_nodes": sum(1 for n in self.nodes.values() if n.online),
+            "by_tier": {
+                "sentinel": 0,
+                "guardian": 0,
+                "fortress": 0,
+                "nexus": 0,
+            },
+            "by_status": {
+                "green": 0,
+                "amber": 0,
+                "red": 0,
+            },
+            "by_country": {},
+            "avg_qsecbit": 0.0,
+            "geographic_bounds": {
+                "north": -90,
+                "south": 90,
+                "east": -180,
+                "west": 180,
+            },
+        }
+
+        total_qsecbit = 0.0
+
+        for node in self.nodes.values():
+            # Count by tier
+            stats["by_tier"][node.tier.value] += 1
+
+            # Count by status
+            stats["by_status"][node.qsecbit_status.value] += 1
+
+            # Count by country
+            if node.country_code:
+                stats["by_country"][node.country_code] = (
+                    stats["by_country"].get(node.country_code, 0) + 1
+                )
+
+            # Sum Qsecbit
+            total_qsecbit += node.qsecbit_score
+
+            # Update geographic bounds
+            stats["geographic_bounds"]["north"] = max(
+                stats["geographic_bounds"]["north"], node.lat
+            )
+            stats["geographic_bounds"]["south"] = min(
+                stats["geographic_bounds"]["south"], node.lat
+            )
+            stats["geographic_bounds"]["east"] = max(
+                stats["geographic_bounds"]["east"], node.lng
+            )
+            stats["geographic_bounds"]["west"] = min(
+                stats["geographic_bounds"]["west"], node.lng
+            )
+
+        # Calculate average Qsecbit
+        if self.nodes:
+            stats["avg_qsecbit"] = round(total_qsecbit / len(self.nodes), 4)
+
+        return stats
+
+    def get_nodes_for_clustering(self) -> List[Dict[str, Any]]:
+        """
+        Get nodes in a format optimized for frontend clustering.
+
+        Returns:
+            List of node dicts with clustering-relevant fields
+        """
+        return [
+            {
+                "id": node.node_id,
+                "lat": node.lat,
+                "lng": node.lng,
+                "tier": node.tier.value,
+                "qsecbit": round(node.qsecbit_score, 4),
+                "status": node.qsecbit_status.value,
+                "label": node.label,
+                "online": node.online,
+                "country_code": node.country_code,
+            }
+            for node in self.nodes.values()
+        ]
+
+    def get_snapshot_with_stats(self) -> Dict[str, Any]:
+        """
+        Get full state snapshot with clustering statistics.
+
+        Enhanced version of get_snapshot() that includes cluster-relevant stats.
+        """
+        snapshot = self.get_snapshot()
+        snapshot["stats"] = self.get_cluster_stats()
+        return snapshot
+
 
 # Global registry instance
 _registry: Optional[NodeRegistry] = None
