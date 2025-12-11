@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Unified Layer Detectors
+Qsecbit Unified - Unified Layer Detectors
 
 Provides specialized threat detectors for each OSI layer (L2-L7).
 """

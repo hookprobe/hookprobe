@@ -10,7 +10,7 @@ Implements privacy-preserving data processing for Qsecbit analysis:
 
 Author: HookProbe Team
 License: Proprietary - see LICENSE in this directory
-Version: 5.0
+Version: 5.0.0
 """
 
 import hashlib

@@ -20,7 +20,7 @@ Pre-configured VLANs:
 - VLAN 999: Quarantine
 
 Author: HookProbe Team
-Version: 5.0.0 Liberty
+Version: 5.0.0 Cortex
 License: AGPL-3.0 - see LICENSE file
 """
 

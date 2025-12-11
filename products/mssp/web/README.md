@@ -5,7 +5,7 @@
   <em>Neural Resonance · Decentralized Mesh · Surgical Precision</em>
 </p>
 
-**Django-Powered Dashboard & APIs for HookProbe v5.0 "Liberty"**
+**Django-Powered Dashboard & APIs for HookProbe v5.0 "Cortex"**
 
 ---
 

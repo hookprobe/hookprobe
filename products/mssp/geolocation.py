@@ -1,5 +1,5 @@
 """
-GeoIP2 Integration for HookProbe Liberty
+GeoIP2 Integration for HookProbe Cortex
 
 Provides accurate IP-based geolocation for device tracking.
 Uses MaxMind GeoIP2 database for production-ready geolocation.

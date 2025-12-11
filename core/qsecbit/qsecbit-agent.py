@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 qsecbit-agent.py - HookProbe Qsecbit Monitoring Daemon
-Version: 5.0
+Version: 5.0.0
 License: Proprietary - see LICENSE in this directory
 
 Long-running daemon for:

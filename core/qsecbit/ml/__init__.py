@@ -1,5 +1,5 @@
 """
-Qsecbit v6.0 - Machine Learning Components
+Qsecbit Unified - Machine Learning Components
 
 Provides ML-based attack classification and behavioral analysis.
 """

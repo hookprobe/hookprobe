@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [5.0.0] - Q4 2025 - "Liberty"
+## [5.0.0] - Q4 2025 - "Cortex"
 
 ### 🎉 Major Release - Complete GPL Elimination
 

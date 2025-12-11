@@ -1,6 +1,6 @@
 # HookProbe Licensing
 
-**Version**: 5.1 "Cortex"
+**Version**: 5.0 "Cortex"
 **Last Updated**: 2025-12-09
 
 ---
@@ -262,5 +262,5 @@ For all licensing inquiries, compliance questions, contributor agreements, secur
 
 ---
 
-**HookProbe v5.1 "Cortex"**
+**HookProbe v5.0 "Cortex"**
 *Protecting innovation while democratizing security*

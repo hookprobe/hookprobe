@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#1a1a2e">
+    <title>Qsecbit Live - Guardian Protection</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #94a3b8;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .header .subtitle {
+            font-size: 0.875rem;
+            color: #64748b;
+            margin-top: 5px;
+        }
+
+        .datetime-display {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 15px;
+            padding: 10px 25px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 25px;
+        }
+
+        .current-date {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .current-time {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #F05B2D;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Main Score Circle */
+        .score-container {
+            position: relative;
+            width: 280px;
+            height: 280px;
+            margin: 20px auto;
+        }
+
+        .score-ring {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .score-ring-bg {
+            fill: none;
+            stroke: #2d3748;
+            stroke-width: 12;
+        }
+
+        .score-ring-progress {
+            fill: none;
+            stroke-width: 12;
+            stroke-linecap: round;
+            stroke-dasharray: 754;
+            stroke-dashoffset: 754;
+            transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+        }
+
+        .score-ring-progress.green { stroke: #10b981; }
+        .score-ring-progress.amber { stroke: #f59e0b; }
+        .score-ring-progress.red { stroke: #ef4444; }
+
+        .score-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .score-value {
+            font-size: 4rem;
+            font-weight: 700;
+            line-height: 1;
+            transition: color 0.5s ease;
+        }
+
+        .score-value.green { color: #10b981; }
+        .score-value.amber { color: #f59e0b; }
+        .score-value.red { color: #ef4444; }
+
+        .score-label {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 5px;
+        }
+
+        /* Status Badge */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 20px;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 1rem;
+            margin: 20px 0;
+            transition: all 0.5s ease;
+        }
+
+        .status-badge.green {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+        }
+
+        .status-badge.amber {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+            box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
+        }
+
+        .status-badge.red {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-red {
+            0%, 100% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.3); }
+            50% { box-shadow: 0 0 40px rgba(239, 68, 68, 0.6); }
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: blink 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Layer Bars */
+        .layers-grid {
+            width: 100%;
+            max-width: 400px;
+            margin: 30px auto;
+        }
+
+        .layer-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .layer-label {
+            width: 50px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #94a3b8;
+        }
+
+        .layer-bar-container {
+            flex: 1;
+            height: 8px;
+            background: #2d3748;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 0 10px;
+        }
+
+        .layer-bar {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease, background 0.5s ease;
+        }
+
+        .layer-bar.green { background: #10b981; }
+        .layer-bar.amber { background: #f59e0b; }
+        .layer-bar.red { background: #ef4444; }
+
+        .layer-value {
+            width: 40px;
+            font-size: 0.75rem;
+            text-align: right;
+            color: #64748b;
+        }
+
+        /* Stats Row */
+        .stats-row {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: auto;
+            padding-top: 30px;
+            text-align: center;
+            font-size: 0.75rem;
+            color: #475569;
+        }
+
+        .footer .version {
+            color: #64748b;
+            margin-bottom: 5px;
+        }
+
+        .last-update {
+            font-size: 0.7rem;
+            color: #475569;
+        }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .score-container { width: 220px; height: 220px; }
+            .score-value { font-size: 3rem; }
+            .stats-row { gap: 20px; padding: 15px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Qsecbit</h1>
+        <div class="subtitle">Real-Time Protection Score</div>
+        <div class="datetime-display">
+            <span class="current-date" id="current-date"></span>
+            <span class="current-time" id="current-time"></span>
+        </div>
+    </div>
+
+    <!-- Main Score Circle -->
+    <div class="score-container">
+        <svg class="score-ring" viewBox="0 0 260 260">
+            <circle class="score-ring-bg" cx="130" cy="130" r="120"/>
+            <circle class="score-ring-progress green" id="score-progress" cx="130" cy="130" r="120"/>
+        </svg>
+        <div class="score-center">
+            <div class="score-value green" id="score-value">0.00</div>
+            <div class="score-label">Protection Level</div>
+        </div>
+    </div>
+
+    <!-- Status Badge -->
+    <div class="status-badge green" id="status-badge">
+        <span class="status-dot"></span>
+        <span id="status-text">PROTECTED</span>
+    </div>
+
+    <!-- Layer Breakdown -->
+    <div class="layers-grid" id="layers-grid">
+        <div class="layer-item" data-layer="L2">
+            <span class="layer-label">L2</span>
+            <div class="layer-bar-container">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+        </div>
+        <div class="layer-item" data-layer="L3">
+            <span class="layer-label">L3</span>
+            <div class="layer-bar-container">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+        </div>
+        <div class="layer-item" data-layer="L4">
+            <span class="layer-label">L4</span>
+            <div class="layer-bar-container">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+        </div>
+        <div class="layer-item" data-layer="L5">
+            <span class="layer-label">L5</span>
+            <div class="layer-bar-container">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+        </div>
+        <div class="layer-item" data-layer="L7">
+            <span class="layer-label">L7</span>
+            <div class="layer-bar-container">
+                <div class="layer-bar green" style="width: 0%"></div>
+            </div>
+            <span class="layer-value">0.00</span>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+        <div class="stat-item">
+            <div class="stat-value" id="threats-count">0</div>
+            <div class="stat-label">Active Threats</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value" id="chains-count">0</div>
+            <div class="stat-label">Attack Chains</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div class="version">HookProbe Guardian 5.0</div>
+        <div class="last-update" id="last-update">Connecting...</div>
+    </div>
+
+    <script>
+        // Configuration
+        const POLL_INTERVAL = 5000; // 5 seconds - optimal for Raspberry Pi
+        const API_URL = '/qsecbit/api/score';
+
+        // Elements
+        const scoreValue = document.getElementById('score-value');
+        const scoreProgress = document.getElementById('score-progress');
+        const statusBadge = document.getElementById('status-badge');
+        const statusText = document.getElementById('status-text');
+        const threatsCount = document.getElementById('threats-count');
+        const chainsCount = document.getElementById('chains-count');
+        const lastUpdate = document.getElementById('last-update');
+        const layersGrid = document.getElementById('layers-grid');
+
+        // Circle circumference (2 * PI * r = 2 * 3.14159 * 120)
+        const CIRCUMFERENCE = 754;
+
+        function getStatusClass(status) {
+            return status.toLowerCase();
+        }
+
+        function getStatusMessage(status, score) {
+            if (status === 'GREEN') return 'PROTECTED';
+            if (status === 'AMBER') return 'ELEVATED RISK';
+            if (status === 'RED') return 'THREAT DETECTED';
+            return 'UNKNOWN';
+        }
+
+        function updateUI(data) {
+            const score = data.score;
+            const status = data.status;
+            const statusClass = getStatusClass(status);
+
+            // Update score value
+            scoreValue.textContent = score.toFixed(2);
+            scoreValue.className = 'score-value ' + statusClass;
+
+            // Update ring progress (inverted - lower score = more fill for GREEN)
+            // For security: 0 = fully protected (full ring), 1 = compromised (empty ring)
+            const progress = 1 - score; // Invert so low score = full ring
+            const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
+            scoreProgress.style.strokeDashoffset = offset;
+            scoreProgress.className = 'score-ring-progress ' + statusClass;
+
+            // Update status badge
+            statusBadge.className = 'status-badge ' + statusClass;
+            statusText.textContent = getStatusMessage(status, score);
+
+            // Update stats
+            threatsCount.textContent = data.threats_active || 0;
+            chainsCount.textContent = data.attack_chains || 0;
+
+            // Update layers
+            if (data.layers) {
+                Object.entries(data.layers).forEach(([layer, info]) => {
+                    const layerItem = layersGrid.querySelector(`[data-layer="${layer}"]`);
+                    if (layerItem) {
+                        const bar = layerItem.querySelector('.layer-bar');
+                        const value = layerItem.querySelector('.layer-value');
+                        const layerScore = typeof info === 'object' ? info.score : info;
+                        const layerStatus = typeof info === 'object' ? info.status : status;
+
+                        bar.style.width = (layerScore * 100) + '%';
+                        bar.className = 'layer-bar ' + getStatusClass(layerStatus || 'GREEN');
+                        value.textContent = layerScore.toFixed(2);
+                    }
+                });
+            }
+
+            // Update timestamp
+            const now = new Date();
+            lastUpdate.textContent = 'Updated: ' + now.toLocaleTimeString();
+        }
+
+        async function fetchScore() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) throw new Error('API error');
+
+                const data = await response.json();
+                updateUI(data);
+            } catch (error) {
+                console.error('Error fetching score:', error);
+                lastUpdate.textContent = 'Connection error - retrying...';
+            }
+        }
+
+        // Clock update
+        function updateClock() {
+            const now = new Date();
+            const dateEl = document.getElementById('current-date');
+            const timeEl = document.getElementById('current-time');
+            if (dateEl) {
+                dateEl.textContent = now.toLocaleDateString('en-GB', {
+                    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+                });
+            }
+            if (timeEl) {
+                timeEl.textContent = now.toLocaleTimeString('en-GB', {
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            }
+        }
+
+        // Initial fetch and polling
+        fetchScore();
+        updateClock();
+        setInterval(fetchScore, POLL_INTERVAL);
+        setInterval(updateClock, 1000);
+    </script>
+</body>
+</html>
