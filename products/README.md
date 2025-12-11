@@ -1,8 +1,8 @@
 # HookProbe Products
 
-> **Federated Cybersecurity Mesh — From IoT to Cloud**
+> **Choose Your Level of Protection - Same Transparency at Every Scale**
 
-The products/ directory contains the five tiers of HookProbe deployment, from lightweight IoT validators to full cloud federation platforms.
+HookProbe believes enterprise-grade security should be accessible to everyone. Whether you're protecting a home network on a $75 Raspberry Pi or managing a global mesh of thousands of nodes, you get the same transparent, auditable, empowering technology.
 
 ```
 products/
@@ -15,24 +15,41 @@ products/
 
 ---
 
+## The Same Core, Different Scales
+
+Every HookProbe product tier runs the same transparent algorithms. The difference is scale, not quality.
+
+| What You Get | Sentinel | Guardian | Fortress | Nexus | MSSP |
+|--------------|----------|----------|----------|-------|------|
+| **Transparent threat scoring** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Auditable decisions** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Privacy-preserving mesh** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Your data stays yours** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Open source foundation** | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+**The only differences:** RAM requirements, hardware capabilities, and advanced features that need more resources.
+
+---
+
 ## Product Hierarchy
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                          HOOKPROBE PRODUCT TIERS                                │
+│                    Same Transparency. Different Scales.                         │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │   ┌──────────────────────────────────────────────────────────────────────────┐ │
 │   │                              MSSP                                         │ │
 │   │                    Cloud Federation Platform                              │ │
-│   │         mssp.hookprobe.com · Scales horizontally · Global brain          │ │
+│   │        Manage thousands of nodes · Same transparency at scale            │ │
 │   └──────────────────────────────────────────────────────────────────────────┘ │
 │                                      ▲                                          │
 │                                      │ HTP                                      │
 │   ┌──────────────────────────────────┴───────────────────────────────────────┐ │
 │   │                              NEXUS                                        │ │
 │   │               ML/AI Heavy Computation · 16GB+ RAM                         │ │
-│   │         On-prem or Cloud · Federated Learning · Regional Hub             │ │
+│   │        Train models locally · Full visibility into ML decisions          │ │
 │   └──────────────────────────────────────────────────────────────────────────┘ │
 │                                      ▲                                          │
 │                                      │ HTP                                      │
@@ -43,6 +60,9 @@ products/
 │   │Edge Router│              │  Travel   │              │ Validator │          │
 │   │   4GB     │              │  1.5GB    │              │  256MB    │          │
 │   │ Mini PC   │              │   RPi     │              │   IoT     │          │
+│   │           │              │           │              │           │          │
+│   │ Business  │              │ Personal  │              │  Verify   │          │
+│   │ Networks  │              │ Protection│              │  & Watch  │          │
 │   └───────────┘              └───────────┘              └───────────┘          │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -50,200 +70,171 @@ products/
 
 ---
 
-## Quick Comparison
+## Choosing Your Tier
 
-| Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
-|---------|----------|----------|----------|-------|------|
-| **RAM** | 256MB | 1.5GB | 4GB | 16GB+ | Auto-scale |
-| **Hardware** | IoT gateway | RPi 4/5 | Mini PC | Server | Cloud |
-| **Use Case** | Validate | Travel | Home/Office | Regional | Global |
-| **L2-L7 Detection** | - | ✓ | ✓ | ✓ | - |
-| **dnsXai Protection** | - | ✓ | ✓ | ✓ | ✓ |
-| **WiFi Hotspot** | - | ✓ | ✓ | - | - |
-| **VLAN Segmentation** | - | - | ✓ | - | - |
-| **OpenFlow SDN** | - | - | ✓ | - | - |
-| **Local AI** | - | - | ✓ | ✓ | - |
-| **ML Training** | - | - | - | ✓ | ✓ |
-| **Mesh Networking** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Fleet Management** | - | - | - | Regional | Global |
-| **Multi-Tenant** | - | - | - | - | ✓ |
-| **Price** | $25 | $75 | $200 | $2000+ | SaaS |
+### What You're Protecting
+
+```
+Do you need to train ML models locally?
+├── YES → Nexus (16GB+ RAM, GPU optional)
+└── NO
+    └── Do you need VLAN segmentation or advanced SDN?
+        ├── YES → Fortress (4GB RAM, business networks)
+        └── NO
+            └── Do you need L2-L7 detection and WiFi hotspot?
+                ├── YES → Guardian (1.5GB RAM, travel/home)
+                └── NO → Sentinel (256MB RAM, IoT validation)
+```
+
+### What You're Spending
+
+| Tier | Hardware Cost | Software Cost | Total Investment |
+|------|---------------|---------------|------------------|
+| **Sentinel** | ~$25 | $0 | ~$25 |
+| **Guardian** | ~$75 | $0 | ~$75 |
+| **Fortress** | ~$200 | $0 | ~$200 |
+| **Nexus** | ~$2000+ | $0 | ~$2000+ |
+| **MSSP** | Cloud | Contact us | SaaS pricing |
+
+**Enterprise-grade security for the cost of a nice dinner.**
 
 ---
 
-## Sentinel — DSM Validator
+## Sentinel — The Watchful Eye
 
-> **"The Watchful Eye"** — Lightweight edge validator
+> **256MB RAM · $25 · IoT-scale protection**
 
-**Location:** `products/sentinel/`
+**What it enables:** Lightweight validation for IoT networks, LTE gateways, and constrained devices.
 
-For IoT gateways, LTE devices, and constrained environments.
+**Transparency features:**
+- Full visibility into DSM validation decisions
+- Auditable health monitoring logs
+- Open source mesh participation
 
-### Features
-- DSM mesh validation
-- Health monitoring (port 9090)
-- MSSP connectivity
-- Minimal footprint (~50MB)
-- No container overhead
+**Best for:** IoT deployments, edge validators, minimal footprint needs
 
-### Installation
 ```bash
-sudo ./install.sh --tier sentinel
+./install.sh --tier sentinel
 ```
 
 ---
 
-## Guardian — Travel Companion
+## Guardian — Protection on the Move
 
-> **"Protection on the Move"** — Portable security gateway
+> **1.5GB RAM · $75 · Travel companion**
 
-**Location:** `products/guardian/`
+**What it enables:** Take enterprise security with you. Hotel WiFi, coffee shops, airports - everywhere becomes safe.
 
-For travelers securing devices on hotel WiFi, airports, and public networks.
+**Transparency features:**
+- See every blocked domain and why (dnsXai)
+- View L2-L7 threat decisions in real-time
+- Web dashboard shows exactly what's happening
+- Export all security data - it's yours
 
-### Features
-- Secure WiFi hotspot creation
-- L2-L7 OSI threat detection
-- **dnsXai AI-powered DNS protection** — ML-based ad/tracker blocking
-- Mobile network protection (evil twin, MITM)
-- IDS/IPS (Suricata)
-- **Mesh networking** — Collective threat intelligence
-- Web dashboard (Flask-based with modular UI)
-- HTP secure uplink
+**Best for:** Travelers, remote workers, home labs, personal protection
 
-### Installation
 ```bash
-sudo ./install.sh --tier guardian
+./install.sh --tier guardian
 ```
 
-### Web Interface
-- **URL:** `http://192.168.4.1:8080`
-- Security overview, connected devices, WiFi management
+**What you achieve:**
+- Connect to any WiFi knowing you're protected
+- Block ads/trackers with full visibility into decisions
+- Share threat intelligence without sharing your data
 
 ---
 
-## Fortress — Edge Router
+## Fortress — Your Digital Stronghold
 
-> **"Your Digital Stronghold"** — Full-featured edge with AI
+> **4GB RAM · $200 · Business-grade protection**
 
-**Location:** `products/fortress/`
+**What it enables:** Permanent installation for home offices and small businesses with advanced network segmentation.
 
-For home/office permanent installations requiring advanced security.
-
-### Features
+**Transparency features:**
 - Everything in Guardian, plus:
-- **dnsXai Advanced** — Full ML classifier with CNAME uncloaking
-- **VLAN segmentation** — Isolate IoT devices
-- **OpenFlow SDN** — Advanced traffic control
-- **Local AI inference** — On-device threat detection
-- **Mesh coordinator** — Regional threat aggregation
-- **n8n automation** — Workflow orchestration
-- **Grafana dashboards** — Real-time metrics
-- **Victoria Metrics** — Time-series database
+- VLAN decisions are visible and auditable
+- SDN flow rules are documented
+- Local AI inference with explainable outputs
+- Full integration tests available
 
-### Installation
+**Best for:** Home offices, small businesses, NIS2 compliance needs
+
 ```bash
-sudo ./install.sh --tier fortress \
-  --enable-n8n \
-  --enable-monitoring
+./install.sh --tier fortress --enable-n8n --enable-monitoring
 ```
+
+**What you achieve:**
+- Isolate IoT devices with clear visibility
+- Meet compliance requirements with audit-ready logs
+- Automate security workflows transparently
 
 ---
 
-## Nexus — ML/AI Compute
+## Nexus — The Regional Brain
 
-> **"The Regional Brain"** — Distributed ML/AI computation
+> **16GB+ RAM · $2000+ · ML training capability**
 
-**Location:** `products/nexus/`
+**What it enables:** Local ML model training, regional threat aggregation, federated learning coordination.
 
-For regional hubs performing heavy computation and federated learning.
+**Transparency features:**
+- Everything in Fortress, plus:
+- See exactly how ML models make decisions
+- Audit federated learning contributions
+- Full visibility into adversarial testing results
+- Export model weights for verification
 
-### Features
-- Aggregates Qsecbit scores from edge nodes
-- **dnsXai Federated Learning** — Trains and distributes ML models
-- Lightweight inference locally
-- Adversarial AI (red-teams itself)
-- Reports weakness vectors to MSSP
-- Receives hardened models from MSSP
-- **Mesh super-node** — NAT traversal relay for edge nodes
-- Nexus-to-Nexus mesh communication
-- GPU acceleration (NVIDIA)
+**Best for:** Multi-site organizations, security research, ML-heavy workloads
 
-### The Federated Learning Loop
-```
-Edge detects anomaly
-    → Generates adversarial sample
-    → Tests own defenses
-    → Reports "weakness vector" to MSSP
-
-MSSP aggregates weakness vectors
-    → Trains hardened model
-    → Pushes update to all Nexuses
-
-Result: Network learns from attacks it hasn't seen yet
-```
-
-### Installation
 ```bash
-sudo ./install.sh --tier nexus \
-  --enable-gpu \
-  --enable-ha
+./install.sh --tier nexus --enable-gpu --enable-ha
 ```
+
+**What you achieve:**
+- Train security models without sending data to clouds
+- Understand exactly how your AI makes decisions
+- Contribute to collective defense while keeping data local
 
 ---
 
 ## MSSP — Cloud Federation
 
-> **"The Central Brain"** — Global coordination platform
+> **Auto-scale · SaaS pricing · Global coordination**
 
-**Location:** `products/mssp/`
+**What it enables:** Manage thousands of nodes with the same transparency principles.
 
-The cloud federation platform at mssp.hookprobe.com.
+**Transparency features:**
+- Multi-tenant with per-tenant visibility
+- Every customer sees their own complete picture
+- Aggregated threat intelligence without exposing individual data
+- Full audit trail for compliance
 
-### Features
-- Customer portal (Django-based)
-- Fleet management (all tiers)
-- **dnsXai Global Intelligence** — Aggregated threat blocklists
-- Global threat model
-- AI/ML training pipeline
-- **Mesh coordination** — Global node discovery and relay registry
-- Multi-tenant architecture
-- Privacy-preserving aggregation
+**Best for:** Managed Security Service Providers, large enterprises
 
-### Components
-| Directory | Purpose |
-|-----------|---------|
-| `web/` | Django web application |
-| `device_registry.py` | Device registration & management |
-| `geolocation.py` | Location services |
+**Contact:** qsecbit@hookprobe.com
 
-### Data Flow
-```
-Nexuses send:          MSSP provides:
-├── Qsecbit scores     ├── Hardened models
-├── Attack signatures  ├── Global threat intel
-├── Neural fingerprints├── Fleet commands
-└── Weakness vectors   └── Reputation updates
-
-RAW DATA NEVER LEAVES THE EDGE
-Only derived intelligence flows up
-```
+**What you achieve:**
+- Offer transparent security as a service
+- Show clients exactly how they're protected
+- Scale without sacrificing visibility
 
 ---
 
-## Choosing Your Tier
+## Feature Comparison
 
-```
-Do you have >16GB RAM and need ML training?
-├── YES → Nexus
-└── NO
-    └── Do you need VLAN segmentation or SDN?
-        ├── YES → Fortress (4GB RAM)
-        └── NO
-            └── Do you need WiFi hotspot and L2-L7 detection?
-                ├── YES → Guardian (1.5GB RAM)
-                └── NO → Sentinel (256MB RAM)
-```
+| Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
+|---------|----------|----------|----------|-------|------|
+| **RAM Required** | 256MB | 1.5GB | 4GB | 16GB+ | Auto |
+| **Typical Hardware** | IoT gateway | RPi 4/5 | Mini PC | Server | Cloud |
+| **L2-L7 Detection** | - | ✓ | ✓ | ✓ | - |
+| **dnsXai Protection** | - | ✓ | ✓ | ✓ | ✓ |
+| **Explainable Decisions** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **WiFi Hotspot** | - | ✓ | ✓ | - | - |
+| **VLAN Segmentation** | - | - | ✓ | - | - |
+| **OpenFlow SDN** | - | - | ✓ | - | - |
+| **Local ML Training** | - | - | ✓ | ✓ | ✓ |
+| **Federated Learning** | Participate | Participate | Coordinate | Train | Global |
+| **Web Dashboard** | Health | Full | Full | Full | Multi-tenant |
+| **Data Export** | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
 
@@ -252,44 +243,57 @@ Do you have >16GB RAM and need ML training?
 ```
 Sentinel → Guardian → Fortress → Nexus
    ↓          ↓           ↓          ↓
-  Add      Add WiFi    Add VLAN    Add ML
- L2-L7     hotspot       SDN      training
+ Verify    Protect    Segment    Train
+
+Each tier adds capability while maintaining transparency.
+Your security data migrates with you.
 ```
 
-Each tier builds on the previous, with seamless migration:
 ```bash
-# Upgrade Guardian to Fortress
-sudo ./install.sh --tier fortress --migrate
+# Upgrade Guardian to Fortress (keeps your data and config)
+./install.sh --tier fortress --migrate
 ```
 
 ---
 
-## Shared Infrastructure
+## Shared Transparent Infrastructure
 
-All products leverage shared infrastructure from `shared/`:
+All products use the same transparent infrastructure from `shared/`:
 
-| Module | Purpose | Used By |
-|--------|---------|---------|
-| **dnsXai** | AI-powered DNS protection with ML classification | Guardian, Fortress, Nexus, MSSP |
-| **mesh** | Unified mesh communication with NAT traversal | All tiers |
-| **dsm** | Decentralized Security Mesh consensus | All tiers |
-| **response** | Automated threat mitigation (Kali on-demand) | Guardian, Fortress |
+| Module | What It Does | Transparency |
+|--------|--------------|--------------|
+| **dnsXai** | AI DNS protection | Every block is explained |
+| **mesh** | Collective defense | See your mesh contributions |
+| **dsm** | Decentralized consensus | Audit validation decisions |
+| **response** | Automated mitigation | View every response action |
 
-### dnsXai Features by Tier
+### dnsXai Transparency by Tier
 
 | Feature | Guardian | Fortress | Nexus | MSSP |
 |---------|----------|----------|-------|------|
-| ML Classification | ✓ | ✓ | ✓ | ✓ |
-| CNAME Uncloaking | ✓ | ✓ | ✓ | ✓ |
-| Blocklist Updates | ✓ | ✓ | ✓ | ✓ |
-| Federated Learning | ✓ | ✓ | Train | Coordinate |
-| Custom Whitelist | ✓ | ✓ | ✓ | Global |
-| Protection Levels | 5 | 5 | 5 | N/A |
-
-See `shared/dnsXai/README.md` for full documentation.
+| Classification explanations | ✓ | ✓ | ✓ | ✓ |
+| Block reason visibility | ✓ | ✓ | ✓ | ✓ |
+| ML confidence scores | ✓ | ✓ | ✓ | ✓ |
+| CNAME chain visibility | ✓ | ✓ | ✓ | ✓ |
+| Federated learning stats | ✓ | ✓ | Full | Global |
+| Custom model training | - | - | ✓ | ✓ |
 
 ---
 
-**HookProbe Products v5.0** — *Federated Cybersecurity for Every Scale*
+## The HookProbe Difference
 
-MIT License
+**Every tier, same principles:**
+
+1. **You see everything** - No hidden decisions
+2. **You own your data** - Export anytime, no lock-in
+3. **You verify the code** - Open source foundation
+4. **You join the collective** - Strengthen everyone while protecting yourself
+
+**Enterprise security isn't about price. It's about capability.**
+**HookProbe brings that capability to everyone.**
+
+---
+
+**HookProbe Products v5.0** — *Transparent Security at Every Scale*
+
+AGPL v3.0 (Open Source Components) + Commercial License (Proprietary Components)

@@ -1,80 +1,145 @@
 # HookProbe Guardian
 
-> **"Protection on the Move"** - Portable security gateway for travelers
+> **Take Control of Your Security, Anywhere You Go**
 
 <p align="center">
-  <strong>Cortex Cybersecurity for the Masses</strong><br>
-  <em>Enterprise Security at $75 · L2-L7 Threat Detection · Travel Companion</em>
+  <strong>Enterprise Security for $75 · Full Visibility · Your Data, Your Control</strong>
 </p>
 
 ---
 
-## Overview
+## What Guardian Enables You to Achieve
 
-Guardian transforms Raspberry Pi 4/5 into a portable security gateway. Perfect for securing your devices on hotel WiFi, coffee shops, airports, and any untrusted network. Guardian creates a secure WiFi hotspot that protects all your connected devices.
+Guardian transforms a Raspberry Pi into your personal security gateway. Connect to any network - hotel WiFi, coffee shops, airports - with complete visibility into what's being blocked and why.
 
-**Version 5.0.0 Cortex** — Affordable cybersecurity for everyone.
+**No black boxes. No hidden decisions. No data leaving your device.**
 
-**Key Capabilities:**
-- **Secure WiFi Hotspot** — Create your own protected network anywhere
-- **L2-L7 Threat Detection** — Full OSI stack threat monitoring
-- **dnsXai AI Protection** — ML-based ad/tracker blocking with CNAME uncloaking
-- **Mobile Network Protection** — Hotel/public WiFi security
-- **IDS/IPS Protection** — Suricata-based intrusion detection
-- **Mesh Networking** — Collective threat intelligence sharing
-- **Connected Devices** — Track all devices on your network
-- **Web Dashboard** — Monitor threats and manage devices (Flask-based)
-- **Remote Updates** — Pull software updates from GitHub via web UI (no CLI needed)
-- **Browser Debug CLI** — Run diagnostics from the web interface when traveling
-- **Portable Security** — Take your network security anywhere
+| What You Get | How It Empowers You |
+|--------------|---------------------|
+| **Transparent DNS blocking** | See exactly why each domain is blocked |
+| **L2-L7 threat visibility** | Understand every security decision |
+| **Portable protection** | Take enterprise security anywhere |
+| **Data ownership** | Export everything - it's all yours |
+| **Open source foundation** | Audit the code yourself |
+
+**Version 5.0.0 Cortex** — See everything. Own your protection. Achieve more.
 
 ---
 
-## Guardian vs Fortress
+## The Guardian Promise
 
-Guardian is designed for **simplicity and portability**. For advanced features like VLAN segmentation, use **Fortress**.
+When you use Guardian, you're not trusting a black box - you're using transparent technology that shows you exactly what it's doing.
 
-| Feature | Guardian | Fortress |
-|---------|----------|----------|
-| **Use Case** | Travel, portable, simple | Home/Office, permanent, advanced |
-| **Network** | Single network (br0) | Multi-VLAN segmentation |
-| **WiFi Mode** | Simple AP hotspot | Multi-VAP with RADIUS VLANs |
-| **Device Isolation** | Firewall rules | VLAN per device category |
-| **WiFi Adapters** | Any USB adapter with AP mode | VAP-capable adapters required |
-| **Network Cards** | USB WiFi | PCIe NICs, enterprise adapters |
-| **SDN/OpenFlow** | Not included | Full OVS integration |
-| **Setup Time** | 5 minutes | 30+ minutes |
-| **Complexity** | Simple | Advanced |
+```
+Traditional Security:              Guardian (Transparent):
+"Something was blocked"      →     "ads.tracker.com blocked:
+                                    ML confidence 94%,
+                                    Category: ADVERTISING,
+                                    Reason: High entropy (4.2),
+                                    CNAME resolves to demdex.net"
+```
 
-### Want More Customization?
-
-If you need:
-- **VLAN segmentation** for IoT device isolation
-- **OpenFlow SDN** with Open vSwitch
-- **Multi-VAP WiFi** with per-device VLAN assignment
-- **PCIe network cards** for better performance
-- **Enterprise-grade networking**
-
-**→ Use [HookProbe Fortress](../fortress/) instead.**
-
-Fortress supports:
-- **PCIe WiFi cards** (Intel AX200/210, Qualcomm) for better performance
-- **PCIe NICs** (Intel i225/i226, Mellanox) for 2.5GbE/10GbE
-- **VAP-capable USB adapters** (Atheros AR9271, MediaTek MT7612U)
-- **Full VLAN segmentation** with FreeRADIUS dynamic assignment
-- **OpenFlow SDN** for advanced traffic control
+Every decision is explainable. Every action is auditable. Your data never leaves your device.
 
 ---
 
-## Cortex Mission
+## What You Achieve with Guardian
 
-**"Cybersecurity for the Masses"**
+### 1. Connect Anywhere with Confidence
 
-Guardian democratizes enterprise security:
-- **$75 hardware cost** (Raspberry Pi 4/5)
-- **Zero licensing fees** (MIT License)
-- **Full security stack** comparable to $10,000+ commercial appliances
-- **Open source** — audit, modify, contribute
+Hotel WiFi, airport networks, coffee shop hotspots - they're all risky. Guardian creates a secure bubble around your devices.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    YOUR SECURE BUBBLE                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Untrusted WiFi ──► Guardian ──► Your Devices                  │
+│   (Hotel/Airport)      │          (Laptop, Phone, Tablet)       │
+│                        │                                        │
+│                   ┌────┴────┐                                   │
+│                   │ You see │                                   │
+│                   │ everything │                                │
+│                   │ happening │                                 │
+│                   └─────────┘                                   │
+│                                                                  │
+│   What Guardian shows you:                                       │
+│   - Every blocked threat and why                                │
+│   - Every DNS query and its classification                      │
+│   - Every suspicious activity at every network layer            │
+│   - Real-time security score with full explanation              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2. Block Ads and Trackers - Know Why
+
+Guardian doesn't just block - it explains:
+
+```
+Domain: doubleclick.net
+Decision: BLOCKED
+Method: ML Classification + Blocklist
+Confidence: 98%
+Category: ADVERTISING
+Why:
+  - Known advertising network (blocklist)
+  - High ad-pattern score (0.89)
+  - CNAME chain contains: ad.doubleclick.net → pagead2.googlesyndication.com
+
+Your choice: [Whitelist] [Keep Blocked] [View Details]
+```
+
+### 3. Detect Threats Across All Network Layers
+
+See what's happening at every level:
+
+| Layer | What Guardian Detects | What You See |
+|-------|----------------------|--------------|
+| **L2** | ARP Spoofing, Evil Twin, Rogue DHCP | "MAC address changed for gateway - possible attack" |
+| **L3** | IP Spoofing, ICMP Flood | "Unusual ICMP traffic from 192.168.1.50" |
+| **L4** | Port Scans, SYN Flood | "50 connection attempts to different ports" |
+| **L5** | SSL Stripping, TLS Downgrade | "Someone tried to downgrade your connection" |
+| **L7** | SQL Injection, XSS, DNS Tunneling | "Suspicious query pattern blocked" |
+
+**Every detection includes:** What happened, why it's suspicious, what Guardian did, and what you can do.
+
+### 4. Join the Collective Without Losing Privacy
+
+Guardian connects to the global HookProbe mesh - but your data stays yours.
+
+**What Guardian shares:**
+- Anonymized threat signatures (no source info)
+- ML model weight updates (not your queries)
+- Attack patterns (source removed)
+
+**What Guardian NEVER shares:**
+- Your IP address
+- Your DNS queries
+- Your browsing history
+- Any identifiable information
+
+You benefit from global threat intelligence while keeping everything private.
+
+---
+
+## Quick Start
+
+```bash
+# Clone HookProbe
+git clone https://github.com/hookprobe/hookprobe
+cd hookprobe
+
+# Install Guardian
+./install.sh --tier guardian
+
+# Access the dashboard
+# Connect to HookProbe-Guardian WiFi
+# Open http://192.168.4.1:8080
+```
+
+**Time to protection:** ~5 minutes
+**Ongoing effort:** Zero - it learns and adapts automatically
 
 ---
 
@@ -86,298 +151,102 @@ Guardian democratizes enterprise security:
 | RAM | 1.5GB | 2-4GB |
 | Storage | 16GB microSD | 32GB+ microSD (A2 rated) |
 | Network | 1x WiFi (built-in) + 1x USB WiFi | 2x WiFi interfaces |
-| Internet | Required | Required |
+| Cost | ~$75 total | ~$100 total |
 
-### WiFi Adapter Recommendations
-
-**For Guardian (Any AP-capable adapter works):**
-- Built-in WiFi (wlan0) for uplink to hotel/airport WiFi
-- USB WiFi (wlan1) for your secure hotspot
-- Examples: TP-Link TL-WN722N, Panda PAU09, Alfa AWUS036ACH
-
-**For Fortress (VAP-capable adapters required):**
-- **Atheros AR9271** — Best open-source driver support, multiple VAPs
-- **MediaTek MT7612U** — 5GHz support, good for multi-VLAN
-- **PCIe cards** — Intel AX200/210 for best performance
+**That's enterprise security for the cost of a nice dinner.**
 
 ---
 
-## Supported Platforms
+## The Dashboard - Full Visibility
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| **Raspberry Pi 5** ⭐ | Recommended | Best performance, USB 3.0 |
-| **Raspberry Pi 4** | Supported | Great value, proven reliable |
-| **Intel N100** | Supported | Mini PC option, PCIe slots |
-| Raspberry Pi 4 CM | Supported | For custom builds |
-| Radxa Rock 5B | Supported | Alternative to Pi 5 |
-| Orange Pi 5 | Supported | Budget alternative |
+Access at `http://192.168.4.1:8080`
 
----
+### Dashboard Tab - Your Security at a Glance
+- **Qsecbit Score** with full breakdown of why
+- **Network status** - what's connected, what's happening
+- **Threat summary** - recent detections with explanations
 
-## Features
+### Security Tab - Deep Dive
+- **L2-L7 threat breakdown** - see every layer
+- **Mobile network trust level** - understand your risk
+- **Real-time IDS alerts** - Suricata explanations
+- **XDP statistics** - kernel-level protection details
 
-### Secure WiFi Hotspot
+### DNS Protection Tab - Explainable Blocking
+- **Every blocked domain with reason**
+- **ML classification confidence scores**
+- **CNAME chain visibility** - see the hidden trackers
+- **Whitelist controls** - your choice, always
 
-Guardian creates a protected WiFi network for your devices:
+### Devices Tab - Know What's Connected
+- **Every device on your network**
+- **MAC addresses and hostnames**
+- **Connection history**
+- **Export capability** - your data is yours
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    GUARDIAN TRAVEL SETUP                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Hotel/Airport WiFi ──► wlan0 (Uplink) ──► Guardian            │
-│                                              │                   │
-│                                              ▼                   │
-│                                        ┌──────────┐             │
-│                                        │ Security │             │
-│                                        │  Stack   │             │
-│                                        │ IDS/IPS  │             │
-│                                        │   WAF    │             │
-│                                        │   DNS    │             │
-│                                        └──────────┘             │
-│                                              │                   │
-│   Your Devices ◄────── wlan1 (Hotspot) ◄────┘                   │
-│   - Laptop             "HookProbe-Guardian"                      │
-│   - Phone              192.168.4.0/27 (30 devices)              │
-│   - Tablet             All on same network                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+### System Tab - Full Transparency
+- **Service status and logs**
+- **Resource usage**
+- **Update controls**
+- **Debug CLI** - full diagnostic access
 
-**Features:**
-- WPA2 encrypted hotspot
-- NAT isolation from untrusted network
-- All traffic scanned by IDS/IPS
-- DNS filtering blocks malicious domains
-- Web dashboard at http://192.168.4.1:8080
-
-### L2-L7 Threat Detection
-
-Guardian monitors threats across all OSI layers:
-
-| Layer | Detection Types | Examples |
-|-------|----------------|----------|
-| **L2 Data Link** | ARP Spoofing, MAC Flooding, Evil Twin, Rogue DHCP | Man-in-the-Middle via ARP cache poisoning |
-| **L3 Network** | IP Spoofing, ICMP Attacks, Routing Attacks | Ping of Death, IP source spoofing |
-| **L4 Transport** | Port Scans, SYN Flood, TCP Anomalies, UDP Flood | Network reconnaissance, DDoS attacks |
-| **L5 Session** | SSL Attacks, Session Hijacking, Auth Bypass | SSL stripping, credential stuffing |
-| **L6 Presentation** | Encoding Attacks, Format Exploits | XXE, weak cipher exploitation |
-| **L7 Application** | Web Attacks (SQLi, XSS), DNS Threats, Malware C2 | SQL injection, DNS tunneling |
-
-### Mobile Network Protection
-
-Specialized protection for hotel WiFi, airports, and public networks:
-
-- **Captive Portal Detection** — Safe handling of login portals
-- **Evil Twin Detection** — Identifies rogue access points
-- **SSL/TLS Interception Detection** — Alerts on HTTPS interception
-- **DNS Security Verification** — Detects DNS hijacking
-- **Network Trust Classification** — TRUSTED, VERIFIED, UNKNOWN, SUSPICIOUS, HOSTILE
-- **VPN Recommendations** — Automatic VPN suggestions based on trust level
-
-### Connected Devices Tracking
-
-Guardian tracks all devices connected to your hotspot:
-
-- **MAC Address Tracking** — See all connected devices
-- **Device Names** — Identify devices by hostname
-- **Connection Status** — Real-time connection monitoring
-- **Web UI Dashboard** — View all devices at http://192.168.4.1:8080
-
-### Security Stack
-
-| Component | Purpose |
-|-----------|---------|
-| **Layer Threat Detector** | L2-L7 OSI threat detection |
-| **Mobile Protection** | Hotel/public WiFi security |
-| **dnsXai** | AI-powered DNS protection with ML classification |
-| **QSecBit** | AI-powered threat scoring (8% dnsXai weight) |
-| **Suricata IDS/IPS** | Network intrusion detection & prevention |
-| **Zeek** | Network traffic analysis & logging |
-| **ModSecurity WAF** | Web application firewall |
-| **XDP/eBPF** | Kernel-level DDoS protection |
-| **Mesh Agent** | Collective threat intelligence sharing |
-| **Threat Aggregator** | Correlates alerts from all security tools |
-| **nftables** | Firewall rules |
-| **hostapd** | WiFi access point |
-| **FreeRADIUS** | MAC authentication & tracking |
-| **dnsmasq** | DHCP/DNS server |
-
-### dnsXai AI DNS Protection
-
-Guardian includes dnsXai for next-generation DNS protection:
-
-- **ML Classification** — 20-feature neural classifier for unknown domains
-- **CNAME Uncloaking** — Detects first-party tracker masquerading
-- **5 Protection Levels** — From basic ads/malware to full social tracker blocking
-- **Federated Learning** — Privacy-preserving collective intelligence
-- **<1ms Inference** — Lightweight enough for Raspberry Pi
-- **~130K-250K domains** — Comprehensive blocklist coverage
-
-**Protection Levels:**
-| Level | Name | Blocks |
-|-------|------|--------|
-| 1 | Base | Ads + Malware |
-| 2 | Enhanced | + Fakenews |
-| 3 | Strong | + Gambling |
-| 4 | Maximum | + Adult Content |
-| 5 | Full | + Social Trackers |
-
-Configure via Web UI at **DNS Protection** tab or `/api/dnsxai/level`.
-
-### HTP Secure Communication
-
-Guardian connects to the MSSP cloud for threat intelligence:
-
-- **HTP Protocol** — Secure UDP transport (port 4719)
-- **ChaCha20-Poly1305** — Authenticated encryption
-- **NAT/CGNAT Traversal** — Works behind any firewall
-- **Automatic Reconnection** — Resilient connection
-
-### Mesh Networking
-
-Guardian participates in the HookProbe mesh network:
-
-- **Collective Threat Intel** — Share/receive threat indicators
-- **Consciousness States** — DORMANT → AWAKENING → AWARE → SYNCHRONIZED
-- **NAT Traversal** — STUN/ICE hole punching for P2P connectivity
-- **Relay Fallback** — Uses Fortress/Nexus relays when direct connection fails
+### Cortex Tab - See Your Mesh
+- **3D visualization** of your security posture
+- **Real-time attack visualization**
+- **Mesh connectivity status**
+- **Your contribution to collective defense**
 
 ---
 
-## Installation
+## Technical Transparency
 
-### Quick Install
+### dnsXai - Explainable DNS Protection
 
-```bash
-# Clone HookProbe
-git clone https://github.com/hookprobe/hookprobe
-cd hookprobe
+Guardian uses dnsXai for AI-powered DNS filtering. Every decision is transparent:
 
-# Run Guardian setup
-sudo ./products/guardian/scripts/setup.sh
-
-# Or use the main installer
-sudo ./install.sh --tier guardian
+```python
+# This is the actual classification output you see:
+{
+    "domain": "suspicious-tracker.com",
+    "decision": "BLOCKED",
+    "confidence": 0.92,
+    "category": "TRACKING",
+    "features": {
+        "shannon_entropy": 4.2,
+        "ad_pattern_score": 0.15,
+        "cname_uncloaked": "adobe.demdex.net",
+        "blocklist_match": false,
+        "ml_classification": "TRACKING"
+    },
+    "explanation": "High entropy domain resolving to known tracker"
+}
 ```
 
-**What gets installed:**
-- L1-L7 OSI Layer Threat Detection
-- QSecBit AI-Powered Security Scoring
-- Suricata IDS/IPS
-- ModSecurity WAF
-- XDP/eBPF DDoS Protection
-- MAC Authentication & Device Tracking
-- HTP Secure Communication
-- Web Dashboard
+### Qsecbit - Transparent Threat Scoring
 
-### After Installation
+The security score isn't magic - it's math you can verify:
 
-1. **Connect to your Guardian hotspot:**
-   - SSID: `HookProbe-Guardian` (or your custom name)
-   - Password: Set during installation
+```
+Qsecbit = 0.30×threats + 0.20×mobile + 0.25×ids + 0.15×xdp + 0.02×network + 0.08×dnsxai
 
-2. **Access the Web Dashboard:**
-   - URL: `http://192.168.4.1:8080`
-
-3. **Configure upstream WiFi:**
-   - Go to WiFi tab in dashboard
-   - Scan for networks
-   - Connect to hotel/airport WiFi
-
----
-
-## Web Interface
-
-**URL:** `http://192.168.4.1:8080`
-
-### Dashboard Tab
-- Security Overview — RAG status for threats
-- Network Status — WAN/LAN interface status
-- Connected Clients — Number of devices
-- Security Services — Container status
-
-### Security Tab
-- Mobile Network Protection — Trust level, protection score
-- L2-L7 Layer Threats — OSI layer breakdown
-- Suricata Alerts — Real-time IDS alerts
-- XDP Protection — DDoS mitigation stats
-
-### DNS Protection Tab (dnsXai)
-- Protection Level — 5 configurable levels
-- Block Statistics — Ads, trackers, malware blocked
-- Whitelist Management — Custom domain whitelists
-- ML Confidence — Classification confidence scores
-- CNAME Uncloaking — Detected masqueraded trackers
-
-### Devices Tab
-- Connected Devices — All devices on your network
-- MAC Addresses — Device identification
-- IP Assignments — DHCP leases
-
-### WiFi Tab
-- Hotspot Settings — Configure SSID/password
-- Upstream WiFi — Connect to internet source
-- Interface Status — Network interface details
-
-### System Tab
-- System Information — Uptime, memory, disk
-- Service Management — Start/stop services
-- System Actions — Restart, reboot
-
-### Updates Tab
-- GitHub Pull Updates — Update Guardian software from GitHub without CLI
-- Version Information — Current commit and branch
-- Preview Changes — See what files will be updated before applying
-- Scope Limitation — Only networking components updated for safety
-- Service Restart — Automatic restart of affected services
-
-**Update Scope (Safe Mode):**
-| Component | Path |
-|-----------|------|
-| Guardian | `products/guardian/` |
-| dnsXai | `shared/dnsXai/` |
-| Mesh | `shared/mesh/` |
-| Response | `shared/response/` |
-
-### Debug Tab
-- Browser CLI — Terminal interface for diagnostics without SSH
-- Command Whitelist — 34 safe diagnostic commands
-- Real-time Output — Streaming command output via SSE
-- Command History — Stored locally in browser
-- Rate Limiting — 30 commands/minute for safety
-
-**Available Command Categories:**
-| Category | Commands |
-|----------|----------|
-| Network | ping, traceroute, ip, ifconfig, ss, netstat, arp |
-| DNS | dig, nslookup, host |
-| System | uptime, free, df, ps, top, uname, hostname |
-| Containers | podman/docker ps, logs, inspect |
-| Logs | journalctl, dmesg, tail (restricted paths) |
-
-### Cortex Tab
-- 3D Globe Visualization — Real-time mesh network view
-- Node Status — See all connected nodes
-- Attack Visualization — Incoming threats as arcs
-- Digital Twin — Live mesh consciousness state
-
----
-
-## Configuration
-
-Guardian uses a simple configuration file:
-
-```bash
-sudo nano /etc/guardian/guardian.yaml
+Current Score: 0.32 (GREEN)
+├── Threats component: 0.10 (low threat activity)
+├── Mobile component: 0.15 (trusted network)
+├── IDS component: 0.08 (no alerts)
+├── XDP component: 0.12 (normal traffic)
+├── Network component: 0.05 (stable)
+└── dnsXai component: 0.18 (some ads blocked)
 ```
 
-**Key sections:**
-- `network:` — Network configuration (192.168.4.0/27)
-- `htp:` — MSSP connection settings
-- `security:` — Threat detection thresholds
-- `webui:` — Web interface settings
+### Security Stack - All Auditable
+
+| Component | Purpose | Transparency |
+|-----------|---------|--------------|
+| **dnsXai** | DNS protection | Every block explained |
+| **Suricata** | IDS/IPS | Alert details visible |
+| **XDP/eBPF** | DDoS protection | Stats and rules shown |
+| **Layer Detector** | L2-L7 analysis | Detection reasoning exposed |
+| **Mesh Agent** | Collective intelligence | Contribution visible |
 
 ---
 
@@ -385,150 +254,111 @@ sudo nano /etc/guardian/guardian.yaml
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    GUARDIAN SIMPLE ARCHITECTURE                   │
+│                    GUARDIAN ARCHITECTURE                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   Internet ──► Hotel WiFi ──► wlan0 (WAN/Uplink)                │
-│                                    │                             │
-│                                    ▼                             │
-│                              ┌──────────┐                        │
-│                              │ Guardian │                        │
-│                              │   br0    │                        │
-│                              │192.168.4.1                        │
-│                              └────┬─────┘                        │
-│                                   │                              │
-│                              wlan1 (LAN/Hotspot)                 │
-│                              "HookProbe-Guardian"                │
-│                                   │                              │
-│                    ┌──────────────┼──────────────┐              │
-│                    │              │              │              │
-│                 Laptop         Phone         Tablet             │
-│              192.168.4.2    192.168.4.3    192.168.4.4          │
+│   Untrusted Network (Hotel WiFi, Airport, etc.)                 │
+│                              │                                   │
+│                              ▼                                   │
+│                   ┌──────────────────┐                          │
+│                   │   Guardian (RPi)  │                          │
+│                   │   192.168.4.1     │                          │
+│                   │                   │                          │
+│                   │  ┌─────────────┐ │                          │
+│                   │  │ You can see │ │                          │
+│                   │  │ everything  │ │                          │
+│                   │  │ happening   │ │                          │
+│                   │  └─────────────┘ │                          │
+│                   └────────┬─────────┘                          │
+│                            │                                     │
+│                  Your Secure Hotspot                             │
+│                  "HookProbe-Guardian"                            │
+│                            │                                     │
+│              ┌─────────────┼─────────────┐                      │
+│              │             │             │                      │
+│           Laptop        Phone        Tablet                     │
+│         192.168.4.2   192.168.4.3   192.168.4.4                │
 │                                                                  │
-│              All devices on same network (192.168.4.0/27)       │
+│   All traffic inspected · All decisions visible · All data yours│
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**For VLAN segmentation (device isolation by category), use Fortress.**
+---
+
+## Feature Summary
+
+| Feature | What It Does | What You See |
+|---------|--------------|--------------|
+| **Secure WiFi Hotspot** | Creates protected network | Connection stats, signal strength |
+| **L2-L7 Detection** | Monitors all layers | Every threat with explanation |
+| **dnsXai** | Blocks ads/trackers | Every block with reasoning |
+| **Mobile Protection** | Detects hostile networks | Trust level and why |
+| **IDS/IPS** | Intrusion detection | Alert details and context |
+| **XDP DDoS** | Kernel-level protection | Packet stats and rules |
+| **Mesh Networking** | Collective defense | Your contribution visible |
+| **Web Dashboard** | Full visibility | Everything at a glance |
+| **Data Export** | Your data, your choice | Export all logs anytime |
 
 ---
 
-## Service Management
+## Guardian vs Fortress
 
-```bash
-# Core services
-sudo systemctl status hostapd          # WiFi AP
-sudo systemctl status dnsmasq          # DHCP/DNS
-sudo systemctl status freeradius       # MAC tracking
-sudo systemctl status guardian-webui   # Web interface
+Guardian is designed for simplicity and portability. For advanced features, consider Fortress.
 
-# Security services
-sudo systemctl status guardian-suricata     # IDS/IPS
-sudo systemctl status guardian-zeek         # Network analysis
-sudo systemctl status guardian-waf          # Web firewall
-sudo systemctl status guardian-xdp          # DDoS protection
-sudo systemctl status guardian-aggregator   # Threat correlation
+| Feature | Guardian | Fortress |
+|---------|----------|----------|
+| **Use Case** | Travel, personal | Business, permanent |
+| **Network** | Single network | Multi-VLAN |
+| **Complexity** | Simple | Advanced |
+| **Setup Time** | 5 minutes | 30+ minutes |
+| **Transparency** | Full | Full |
+| **Data Ownership** | Complete | Complete |
 
-# View connected clients
-iw dev wlan1 station dump
-
-# View DHCP leases
-cat /var/lib/misc/dnsmasq.leases
-```
+**Both tiers:** Same transparency, same data ownership, same empowerment.
 
 ---
 
 ## Troubleshooting
 
-### WiFi AP Not Starting
-
+### Can't connect to hotspot?
 ```bash
-# Check hostapd status
-sudo systemctl status hostapd
-sudo journalctl -u hostapd -n 50
+# Check if hostapd is running
+systemctl status hostapd
 
-# Check if interface supports AP mode
-iw list | grep -A 10 "Supported interface modes"
+# View the logs
+journalctl -u hostapd -n 50
 
-# Common fix: unblock WiFi
-sudo rfkill unblock wifi
+# Guardian shows you exactly what's happening
 ```
 
-### No Internet Access
+### Want to understand a block?
+- Open Dashboard → DNS Protection
+- Find the domain
+- Click for full explanation including ML features, CNAME chain, and blocklist sources
 
-```bash
-# Check upstream connection
-ping -c 3 8.8.8.8
-
-# Check NAT rules
-sudo nft list ruleset | grep masquerade
-
-# Check IP forwarding
-cat /proc/sys/net/ipv4/ip_forward  # Should be 1
-```
-
-### Devices Not Connecting
-
-```bash
-# Check DHCP is running
-sudo systemctl status dnsmasq
-
-# View DHCP leases
-cat /var/lib/misc/dnsmasq.leases
-
-# Check bridge
-ip addr show br0
-```
+### Need to whitelist something?
+- Dashboard → DNS Protection → Whitelist
+- Add domain with one click
+- See the effect immediately
 
 ---
 
-## Upgrading to Fortress
+## The Guardian Difference
 
-If you need advanced features, consider upgrading to Fortress:
+**Other security tools:** "Trust us, we're protecting you"
+**Guardian:** "Here's exactly what we're doing and why"
 
-### When to Upgrade
+1. **Full visibility** into every security decision
+2. **Complete data ownership** - export everything, anytime
+3. **Open source foundation** - audit the code yourself
+4. **Collective defense** - benefit from the mesh while keeping privacy
+5. **Enterprise capability** for $75
 
-- You have **IoT devices** that need isolation (cameras, smart home)
-- You want **VLAN segmentation** per device category
-- You need **OpenFlow SDN** for traffic control
-- You have **PCIe slots** for better network cards
-- You want **enterprise-grade networking**
-
-### Hardware for Fortress
-
-**Recommended Network Cards:**
-
-| Type | Model | Speed | Notes |
-|------|-------|-------|-------|
-| **PCIe WiFi** | Intel AX210 | WiFi 6E | Best performance |
-| **PCIe NIC** | Intel i225-V | 2.5GbE | Multi-port options |
-| **PCIe NIC** | Mellanox ConnectX-3 | 10GbE | Enterprise grade |
-| **USB WiFi** | Atheros AR9271 | 2.4GHz | VAP-capable, open driver |
-| **USB WiFi** | MediaTek MT7612U | Dual-band | VAP-capable |
-
-**Recommended Platforms:**
-
-| Platform | PCIe Slots | Notes |
-|----------|------------|-------|
-| Intel N100 Mini PC | 1x PCIe | Great value |
-| Radxa Rock 5B | 1x PCIe | ARM alternative |
-| Mini-ITX Build | 2-4x PCIe | Maximum flexibility |
-
-See [Fortress documentation](../fortress/) for full setup guide.
+**This is what security looks like when you're in control.**
 
 ---
 
-## Version History
+**HookProbe Guardian v5.0** — *See everything. Own your protection. Achieve more.*
 
-| Version | Codename | Features |
-|---------|----------|----------|
-| 5.0.0 | **Cortex** | Simple mode, L2-L7 detection, mobile protection |
-| 4.0.0 | Sentinel | Basic IDS, Suricata integration |
-| 3.0.0 | Pioneer | Multi-AP support |
-
----
-
-**HookProbe Guardian** — *Cortex Cybersecurity for the Masses*
-
-Version: 5.0.0 Cortex | MIT License
+AGPL v3.0 License (Open Source)

@@ -2,10 +2,10 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
-<h1 align="center">The World's First Collective Defense Mesh</h1>
+<h1 align="center">Transparent Security That Empowers Everyone</h1>
 
 <p align="center">
-  <strong>One node's detection is everyone's protection.</strong>
+  <strong>See everything. Own your protection. Achieve more.</strong>
 </p>
 
 <p align="center">
@@ -16,152 +16,204 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Crypto-Post--Quantum_(Kyber)-ff6b6b?style=flat-square" alt="Post-Quantum"/>
-  <img src="https://img.shields.io/badge/AI-Qsecbit_Threat_Scoring-00ff88?style=flat-square" alt="AI Powered"/>
-  <img src="https://img.shields.io/badge/Network-Zero_Trust_Mesh-ffaa00?style=flat-square" alt="Zero Trust"/>
-</p>
-
-<p align="center">
-  <em>Post-quantum cryptography. AI-powered threat detection. Zero-trust mesh networking.</em>
+  <img src="https://img.shields.io/badge/Open_Source-Auditable_Code-00ff88?style=flat-square" alt="Open Source"/>
+  <img src="https://img.shields.io/badge/Privacy-Data_Never_Leaves_Edge-ff6b6b?style=flat-square" alt="Privacy First"/>
+  <img src="https://img.shields.io/badge/Collective-Mesh_Intelligence-ffaa00?style=flat-square" alt="Collective Defense"/>
 </p>
 
 ---
 
-## What is HookProbe?
+## The HookProbe Promise
 
-HookProbe is an advanced, lightweight network security platform designed to bring intelligent protection to any environment — without the heavy operational overhead. It doesn’t replace SOC teams or security analysts; it empowers them by automating the repetitive, low-value noise that normally consumes time and attention.
+**Transparency creates trust. Trust enables achievement.**
 
-This creates shared resilience, reduces response time, and strengthens your existing security stack.
-HookProbe is built for organisations that need stronger security without adding complexity — a smart layer that supports your team, accelerates detection, and increases visibility across modern, distributed networks.
+HookProbe is built on a simple belief: security technology should empower people, not create dependency. When you can see exactly how your protection works, audit every line of code, and understand every decision the system makes, you're free to focus on what matters - building, creating, and achieving more.
 
-**The core principle:** When one HookProbe node detects a threat anywhere in the world, every node learns instantly. Collective intelligence replaces isolated guesswork. The mesh doesn't just defend - it evolves.
+We reject the security industry's black-box approach. Our code is open. Our algorithms are documented. Our data handling is verifiable. When one HookProbe node anywhere in the world detects a threat, every node learns instantly - without anyone's private data ever leaving their control.
 
----
-
-## Why HookProbe Exists
-
-Enterprise security vendors build complex solutions that require dedicated teams to operate. Small organizations face two choices: expensive complexity or no protection at all.
-
-HookProbe takes a different approach. We built software that handles the complexity internally so you can focus on what matters. Deploy in minutes. Operate with confidence. Achieve more with less.
-
-| Traditional Security | HookProbe |
-|---------------------|-----------|
-| Requires security analysts | Self-operating |
-| Manual threat investigation | Automated response |
-| Isolated detection | Collective intelligence |
-| Complex configuration | Simple deployment |
-| Vendor lock-in | Open source foundation |
+**This is security that works *for* you, not security that works *on* you.**
 
 ---
 
-## Quick Start
+## Why Transparency Matters
+
+| Black-Box Security | HookProbe (Transparent) |
+|-------------------|-------------------------|
+| "Trust us, we're protecting you" | Audit the code yourself |
+| Your data sent to vendor clouds | Your data never leaves your edge |
+| Opaque threat scoring | See exactly why decisions are made |
+| Vendor lock-in | Open standards, your choice |
+| Security creates dependency | Security enables independence |
+| Complex interfaces hide complexity | Simple interfaces, documented complexity |
+
+**The difference:** Black boxes ask for trust. Transparency earns it.
+
+---
+
+## How HookProbe Helps You Achieve More
+
+### 1. Reclaim Your Time
+
+Traditional security demands constant attention - alerts to investigate, logs to review, updates to manage. HookProbe handles this automatically so you can focus on your actual work.
+
+- **Automated threat response** - No manual investigation needed
+- **Self-learning baselines** - Adapts to your environment
+- **Collective intelligence** - Benefits from global threat detection without effort
+
+### 2. Protect Without Complexity
+
+Enterprise security typically requires dedicated teams. HookProbe brings the same protection to anyone, regardless of technical background.
 
 ```bash
-# Deploy on any Linux system
-curl -fsSL https://hookprobe.com/install.sh | bash
-
-# Or clone and deploy manually
-git clone https://github.com/hookprobe/hookprobe.git
-cd hookprobe
-./install.sh --tier guardian   # Home lab / prosumer
-./install.sh --tier fortress   # Business network
-./install.sh --tier nexus      # Multi-site coordination
+# That's it. You're protected.
+./install.sh --tier guardian
 ```
 
-**Deployment Tiers:**
+### 3. Scale Without Cost
 
-| Tier | Memory | Use Case |
-|------|--------|----------|
-| Guardian | 1.5GB+ | Home lab, travel security, personal networks |
-| Fortress | 4GB+ | Business networks, NIS2 compliance, IoT segmentation |
-| Nexus | 16GB+ | Multi-site coordination, ML model training |
+From a single Raspberry Pi to a global mesh of thousands of nodes - same technology, same transparency, scaling to your needs.
 
-**[Installation Guide](docs/installation/INSTALLATION.md)** · **[Deployment Options](deploy/README.md)**
+| Your Situation | Solution | Investment |
+|----------------|----------|------------|
+| Home network | Guardian | $75 hardware, $0 software |
+| Small business | Fortress | $200 hardware, $0 software |
+| Growing company | Nexus | $2000 hardware, $0 software |
+| Enterprise/MSSP | Custom | Contact us |
+
+### 4. Own Your Security Data
+
+Every security decision, every threat detection, every response action - it's all yours. Export it. Analyze it. Verify it. No vendor has access unless you grant it.
 
 ---
 
-## How It Works
+## The Collective Defense Mesh
 
-### Collective Defense Mesh
-
-Every HookProbe installation joins a global mesh. When threats are detected, anonymized signatures propagate across the network in real-time.
+HookProbe's most powerful feature isn't code - it's community.
 
 ```
-Node A (Singapore)     Detects novel attack pattern
+Node A (Singapore)     Detects zero-day attack
         │
         ▼
-Mesh Intelligence      Validates and distributes signature
+Mesh Intelligence      Validates pattern, creates signature
         │
         ├──────────────────────────────────────┐
         ▼                                      ▼
 Node B (London)        Node C (New York)       Node D (Berlin)
-Blocking in <30s       Blocking in <30s        Blocking in <30s
+Protected in <30s      Protected in <30s        Protected in <30s
 ```
 
-Traditional firewalls wait for vendor updates. HookProbe nodes protect each other continuously.
+**How it works:**
+1. **Detection** - Any node detects a new threat pattern
+2. **Validation** - Mesh consensus confirms it's legitimate
+3. **Distribution** - Anonymized signature shared instantly
+4. **Protection** - All nodes block the threat
 
-### Qsecbit Engine
+**What we never share:**
+- Your raw traffic data
+- Your IP addresses
+- Your internal network details
+- Any personally identifiable information
 
-Real-time threat scoring with automated response:
+**What we share:**
+- Anonymized threat signatures
+- Attack patterns (source removed)
+- Model weight updates (federated learning)
 
-| Score Range | Status | System Response |
-|-------------|--------|-----------------|
-| < 0.45 | Normal | Baseline learning, passive monitoring |
-| 0.45 - 0.70 | Elevated | Automated mitigation initiated |
-| > 0.70 | Critical | Full defensive response activated |
-
-The engine combines behavioral analysis, network anomaly detection, and collective threat intelligence to score risk in real-time.
-
-### Network Segmentation
-
-Automatic isolation of network segments prevents lateral movement:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    HookProbe Fortress                   │
-├─────────────┬─────────────┬─────────────┬──────────────┤
-│   VLAN 10   │   VLAN 20   │   VLAN 30   │   VLAN 99    │
-│   Trusted   │     IoT     │    Guest    │  Quarantine  │
-│             │             │             │              │
-│ Workstations│   Cameras   │   Visitors  │  Suspicious  │
-│   Servers   │   Sensors   │   Phones    │   Devices    │
-├─────────────┴─────────────┴─────────────┴──────────────┤
-│  Cross-segment traffic requires explicit authorization  │
-└─────────────────────────────────────────────────────────┘
-```
-
-### DNS Protection (dnsXai)
-
-ML-powered DNS filtering blocks threats at the source:
-
-- Malware command and control domains
-- Phishing infrastructure
-- Advertising and tracking networks
-- Data exfiltration tunnels
+This is collective defense that respects individual privacy.
 
 ---
 
-## Who Uses HookProbe
+## Technical Foundation (Fully Documented)
 
-### Prosumers and Home Labs
+Every component is documented. Every algorithm is explained. Nothing is hidden.
 
-Build a secure home network without becoming a security expert. HookProbe handles ad blocking, NAS protection, and remote access security automatically.
+### Qsecbit Engine - Transparent Threat Scoring
 
-### Small and Medium Businesses
+Traditional security: "This is bad" (trust us)
+HookProbe: "This scores 0.72 because drift=0.25, attack_probability=0.85, decay=0.12"
 
-Meet NIS2 compliance requirements without hiring a security team. HookProbe provides automated incident reporting, continuous monitoring, and audit-ready documentation.
+```python
+# The actual formula - no secrets
+Qsecbit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomaly
+
+# You can verify every calculation
+# See: core/qsecbit/qsecbit.py
+```
+
+| Score | Status | What Happens | Why |
+|-------|--------|--------------|-----|
+| < 0.45 | GREEN | Learning mode | System behavior normal |
+| 0.45-0.70 | AMBER | Mitigation starts | Anomalies detected, investigating |
+| > 0.70 | RED | Full defense | Confirmed threat, blocking |
+
+### dnsXai - Explainable DNS Protection
+
+Not just "blocked" - but *why* it was blocked:
+
+```
+Domain: suspicious-tracker.com
+Decision: BLOCKED
+Confidence: 92%
+Reason: High entropy (4.2), matches tracking pattern, CNAME resolves to known tracker
+Category: ADVERTISING_TRACKER
+```
+
+Every block is explainable. Every decision is auditable.
+
+### HTP Protocol - Verifiable Security
+
+Post-quantum cryptography you can inspect:
+- **Kyber KEM** - NIST-approved, implementation viewable
+- **ChaCha20-Poly1305** - Standard authenticated encryption
+- **Entropy-based authentication** - Novel but documented
+
+### XDP/eBPF - Kernel-Level, User-Auditable
+
+DDoS mitigation at the kernel level, but you can see exactly what rules are applied:
+
+```bash
+# View active XDP rules
+./hookprobe-ctl xdp show
+
+# Understand every decision
+./hookprobe-ctl xdp explain --ip 192.168.1.100
+```
+
+---
+
+## Who Benefits from HookProbe
+
+### Home Users & Prosumers
+
+**Achieve:** Secure home network without becoming a security expert
+**Transparency benefit:** Know exactly what's being blocked and why
+**Time saved:** Set and forget - system learns your patterns
+
+### Small & Medium Businesses
+
+**Achieve:** Enterprise-grade protection without enterprise costs
+**Transparency benefit:** Audit-ready logs, explainable decisions
+**Time saved:** No dedicated security team needed
+
+### Developers & Technical Users
+
+**Achieve:** Security that integrates with your workflow
+**Transparency benefit:** Full API access, source code available
+**Time saved:** Automated responses, scriptable interfaces
 
 ### Managed Service Providers
 
-Deploy consistent security across client networks. Collective intelligence means every client benefits from threats detected at any client site.
+**Achieve:** Offer premium security services at scale
+**Transparency benefit:** Show clients exactly how they're protected
+**Time saved:** Centralized management, automated operations
 
 ---
 
-## HookProbe Cortex - Neural Command Center
+## HookProbe Cortex - See Your Mesh
 
-**See your mesh. Command your defense.**
+Transparency isn't just about code - it's about visibility.
 
-Cortex is HookProbe's real-time 3D visualization - a digital twin of your entire defense network rendered on a globe. Watch attacks arrive from across the world and see them repelled in real-time.
+Cortex is a real-time 3D visualization of your entire defense network. Watch threats arrive from across the world and see them blocked in real-time.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -180,129 +232,133 @@ Cortex is HookProbe's real-time 3D visualization - a digital twin of your entire
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Features:**
-- Real-time attack visualization with animated arcs
-- Node health monitoring via Qsecbit color coding
-- Tier-based node representation (Sentinel → Guardian → Fortress → Nexus)
-- Demo mode for showcasing without live data
-- Premium visual effects: breathing nodes, particle impacts, ripple effects
+**Not a dashboard about your security. A window into your security.**
 
-**[Cortex Documentation](shared/cortex/README.md)** · **[Architecture](shared/cortex/ARCHITECTURE.md)**
+[Cortex Documentation](shared/cortex/README.md)
 
 ---
 
-## Architecture
+## Quick Start
+
+```bash
+# Clone
+git clone https://github.com/hookprobe/hookprobe.git
+cd hookprobe
+
+# Deploy (choose your tier)
+./install.sh --tier guardian   # Home/prosumer (1.5GB RAM)
+./install.sh --tier fortress   # Business (4GB RAM)
+./install.sh --tier nexus      # Multi-site (16GB+ RAM)
+```
+
+**Time to protection:** ~5 minutes
+**Ongoing maintenance:** Automatic
+
+[Full Installation Guide](docs/installation/INSTALLATION.md)
+
+---
+
+## Our Commitment to Transparency
+
+### Open Source Foundation
+
+The majority of HookProbe is open source under AGPL v3.0:
+- Deployment scripts and configuration
+- Guardian product tier
+- Mesh communication layer
+- Threat response modules
+- All documentation
+- Cortex visualization
+
+### Documented Innovations
+
+Our proprietary components (Qsecbit algorithm, Neural Resonance protocol, dnsXai classifier) are clearly documented. You can understand *what* they do and *why* - the implementation is protected, but the purpose is transparent.
+
+### Privacy by Architecture
+
+We didn't add privacy as an afterthought. The architecture ensures:
+- Raw data never leaves your edge
+- Only anonymized signatures are shared
+- You control what participates in the mesh
+- Compliance (GDPR, NIS2) is built-in
+
+### Community-Driven Development
+
+- Public roadmap
+- Open issue tracking
+- Community contributions welcome
+- Regular security audits
+
+[Licensing Details](LICENSING.md) | [Contributing Guide](docs/CONTRIBUTING.md)
+
+---
+
+## Architecture Overview
 
 ```
 hookprobe/
-├── core/                    # Core Intelligence
-│   ├── htp/                 # Transport Protocol (Post-Quantum)
-│   ├── qsecbit/             # AI Threat Scoring Engine
-│   └── neuro/               # Neural Resonance Authentication
+├── core/                    # Core Intelligence (documented)
+│   ├── htp/                 # Transport Protocol (open source)
+│   ├── qsecbit/             # AI Threat Scoring (documented, proprietary)
+│   └── neuro/               # Neural Authentication (documented, proprietary)
 │
 ├── shared/                  # Shared Modules
-│   ├── dnsXai/              # AI DNS Protection
-│   ├── mesh/                # Collective Defense Mesh
-│   ├── dsm/                 # Decentralized Security Mesh
-│   ├── response/            # Automated Threat Response
-│   └── cortex/              # Neural Command Center (3D Globe)
+│   ├── dnsXai/              # AI DNS Protection (documented, proprietary)
+│   ├── mesh/                # Collective Defense (open source)
+│   ├── dsm/                 # Decentralized Security (documented, proprietary)
+│   ├── response/            # Automated Response (open source)
+│   └── cortex/              # 3D Visualization (open source)
 │
-├── products/                # Deployment Tiers
-│   ├── guardian/            # Home / Prosumer (1.5GB)
-│   ├── fortress/            # Business (4GB)
-│   ├── nexus/               # ML Coordination (16GB+)
-│   └── mssp/                # Cloud Platform
+├── products/                # Deployment Tiers (mostly open source)
+│   ├── guardian/            # Home/Prosumer
+│   ├── fortress/            # Business
+│   ├── nexus/               # Enterprise
+│   └── mssp/                # Service Provider (proprietary)
 │
-└── deploy/                  # Deployment Scripts
+└── deploy/                  # Deployment Scripts (open source)
 ```
 
-**[Full Architecture](ARCHITECTURE.md)** · **[Mesh Design](shared/mesh/ARCHITECTURE.md)** · **[Cortex](shared/cortex/README.md)**
+Every directory has documentation. Every module has a README.
 
 ---
 
-## Technical Foundation
+## Resources
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Packet Processing | XDP/eBPF | Sub-microsecond filtering decisions |
-| Cryptography | Kyber KEM | Post-quantum key exchange |
-| Transport | HTP Protocol | NAT traversal, DDoS resistance |
-| Intelligence | Federated ML | Privacy-preserving threat sharing |
-
-**[Qsecbit Engine](core/qsecbit/README.md)** · **[HTP Protocol](docs/HTP_SECURITY_ENHANCEMENTS.md)** · **[dnsXai](shared/dnsXai/README.md)**
-
----
-
-## NIS2 Compliance
-
-For organizations subject to EU NIS2 Directive requirements:
-
-- Automated incident detection and reporting (Article 23)
-- Continuous risk assessment (Article 21)
-- Supply chain security monitoring
-- Audit trail and compliance documentation
-
-**[GDPR Compliance](docs/GDPR.md)** · **[Security Policy](docs/SECURITY.md)**
+| Resource | Description |
+|----------|-------------|
+| [Installation Guide](docs/installation/INSTALLATION.md) | Get started in 5 minutes |
+| [Architecture Overview](docs/architecture/HOOKPROBE-ARCHITECTURE.md) | Understand the system |
+| [Qsecbit Documentation](core/qsecbit/README.md) | How threat scoring works |
+| [Mesh Architecture](shared/mesh/ARCHITECTURE.md) | Collective defense explained |
+| [Cortex Visualization](shared/cortex/README.md) | See your security |
+| [API Reference](docs/components/README.md) | Integrate and extend |
+| [GDPR Compliance](docs/GDPR.md) | Privacy documentation |
+| [Security Policy](docs/SECURITY.md) | Report vulnerabilities |
 
 ---
 
-## Licensing
+## The HookProbe Difference
 
-HookProbe uses dual licensing to balance open collaboration with sustainable development.
+**We don't ask you to trust us. We give you the tools to verify.**
 
-**AGPL v3.0 (Open Source):**
-- Deployment scripts
-- Guardian product tier
-- Mesh communication
-- Threat response modules
-- Documentation
+- Every threat decision is explainable
+- Every line of defense code is auditable
+- Every piece of your data stays under your control
+- Every node in the mesh strengthens everyone
 
-**Commercial License (for SaaS/OEM):**
-- Qsecbit AI algorithm
-- Neural Resonance protocol
-- dnsXai ML classifier
-- MSSP platform
-
-Personal use, internal business protection, and non-commercial research are free under both licenses.
-
-**[Licensing Details](LICENSING.md)** · Contact: qsecbit@hookprobe.com
-
----
-
-## Contributing
-
-```bash
-git clone https://github.com/hookprobe/hookprobe.git
-cd hookprobe
-make install-dev
-make test
-```
-
-**[Contributing Guide](docs/CONTRIBUTING.md)** · **[GitHub Issues](https://github.com/hookprobe/hookprobe/issues)** · **[Discussions](https://github.com/hookprobe/hookprobe/discussions)**
-
----
-
-## Documentation
-
-| Topic | Link |
-|-------|------|
-| Installation | [Installation Guide](docs/installation/INSTALLATION.md) |
-| Architecture | [System Architecture](ARCHITECTURE.md) |
-| Development | [CLAUDE.md](CLAUDE.md) |
-| Networking | [VPN Setup](docs/networking/VPN.md) |
-| Compliance | [GDPR](docs/GDPR.md) |
+**This is what security looks like when transparency comes first.**
 
 ---
 
 <p align="center">
   <strong>HookProbe v5.0 "Cortex"</strong><br>
-  The world's first collective defense mesh.<br>
-  <em>One node's detection is everyone's protection.</em>
+  Transparent Security That Empowers Everyone<br>
+  <em>See everything. Own your protection. Achieve more.</em>
 </p>
 
 <p align="center">
   <a href="https://github.com/hookprobe/hookprobe">GitHub</a> ·
-  <a href="docs/installation/INSTALLATION.md">Documentation</a> ·
-  <a href="shared/cortex/README.md">Cortex</a> ·
+  <a href="docs/installation/INSTALLATION.md">Get Started</a> ·
+  <a href="shared/cortex/README.md">See Cortex</a> ·
   <a href="https://github.com/hookprobe/hookprobe/discussions">Community</a>
 </p>
