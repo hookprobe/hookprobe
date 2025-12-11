@@ -38,7 +38,6 @@
     --tile-6: #00838f;
 
     /* Layout */
-    --header-height: 3.25em;
     --nav-height: 60px;
 
     /* Typography */
@@ -1234,7 +1233,7 @@ input[type="range"]::-moz-range-thumb {
 .text-success { color: #10b981 !important; }
 .text-warning { color: var(--tangerine) !important; }
 .text-danger { color: var(--siren) !important; }
-.text-muted { color: var(--text-alt) !important; }
+/* .text-muted defined in backwards compatibility section */
 
 .font-mono { font-family: var(--font-mono) !important; }
 .font-bold { font-weight: var(--font-weight-bold) !important; }
