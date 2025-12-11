@@ -98,8 +98,17 @@
 
 <!-- Globe.gl Library (CDN) -->
 <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+<!-- Supercluster for spatial clustering -->
+<script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"></script>
+<!-- KDBush for fast spatial indexing -->
+<script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"></script>
+<!-- Phase 2: Deck.gl for GPU-accelerated visualization -->
+<script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
+<!-- Phase 2: MapLibre GL for free basemap tiles -->
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
 
-<!-- Cortex Embedded JavaScript -->
+<!-- Cortex Embedded JavaScript (with zoom/clustering) -->
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
 
 <script>

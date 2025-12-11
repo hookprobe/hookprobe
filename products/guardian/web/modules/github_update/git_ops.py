@@ -37,12 +37,37 @@ ALLOWED_SERVICES = [
 
 def get_repo_path() -> str:
     """Get the repository path, validating it exists."""
+    # Check environment variable path first
     if os.path.isdir(os.path.join(REPO_PATH, '.git')):
         return REPO_PATH
+
+    # Try common installation paths
+    common_paths = [
+        '/opt/hookprobe',
+        '/home/user/hookprobe',
+        '/home/pi/hookprobe',
+        os.path.expanduser('~/hookprobe'),
+    ]
+
+    for path in common_paths:
+        if os.path.isdir(os.path.join(path, '.git')):
+            return path
+
+    # Try to find repo by traversing up from current file location
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(10):  # Max 10 levels up
+        if os.path.isdir(os.path.join(current_dir, '.git')):
+            return current_dir
+        parent = os.path.dirname(current_dir)
+        if parent == current_dir:  # Reached root
+            break
+        current_dir = parent
+
     # Fallback to current working directory if it's a git repo
     cwd = os.getcwd()
     if os.path.isdir(os.path.join(cwd, '.git')):
         return cwd
+
     return REPO_PATH
 
 
