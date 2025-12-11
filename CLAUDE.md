@@ -752,7 +752,7 @@ python manage.py seed_merchandise  # Product catalog
 ### HookProbe Cortex - Neural Command Center
 
 **Location**: `shared/cortex/`
-**Status**: Phase 1 Development
+**Status**: Phase 2 Complete (City View with Deck.gl + MapLibre GL)
 **Branding**: "Cortex" - The mesh's digital twin visualization
 
 HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin of the entire defense mesh. This is not just a dashboard showing data *about* the mesh - it *IS* the mesh visualized.
@@ -805,8 +805,17 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 | `backend/connectors/fortress.py` | Fortress DSM integration |
 | `backend/connectors/nexus.py` | Nexus ML/AI integration |
 | `backend/connectors/mssp.py` | MSSP Django integration |
-| `frontend/js/globe.js` | Globe.gl initialization |
+| `frontend/js/globe.js` | Globe.gl initialization with clustering |
 | `frontend/js/data-stream.js` | WebSocket client with mode switching |
+| `frontend/js/cluster-manager.js` | **Phase 1**: Supercluster spatial clustering |
+| `frontend/js/zoom-controller.js` | **Phase 1**: Camera control and zoom transitions |
+| `frontend/js/transitions.js` | **Phase 1**: Cluster expand/collapse animations |
+| `frontend/js/deck-renderer.js` | **Phase 2**: Deck.gl GPU-accelerated renderer |
+| `frontend/js/basemap-config.js` | **Phase 2**: MapLibre dark theme configuration |
+| `frontend/js/view-manager.js` | **Phase 2**: Globe ↔ Map view transitions |
+| `frontend/js/city-view.js` | **Phase 2**: City-level UI (search, filters, popups) |
+| `frontend/css/city-view.css` | **Phase 2**: City view styling |
+| `PHASE2-CITY-VIEW.md` | Phase 2 architecture documentation |
 
 ### Product Connector Integration
 
