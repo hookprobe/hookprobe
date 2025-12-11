@@ -243,9 +243,9 @@
     letter-spacing: 2px;
 }
 
-/* Event Log */
+/* Event Log - Taller to display more events */
 .cortex-event-log {
-    max-height: 150px;
+    max-height: 280px;
     background: #050508;
     border-top: 1px solid rgba(255,255,255,0.05);
     overflow: hidden;
@@ -284,7 +284,7 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    max-height: 110px;
+    max-height: 240px;
     overflow-y: auto;
 }
 
