@@ -337,7 +337,7 @@ code {
 }
 
 /* ============================================
-   Full-Screen Menu - Clean Light Overlay
+   Full-Screen Menu - Dark Overlay
    ============================================ */
 #menu {
     position: fixed;
@@ -346,9 +346,9 @@ code {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.98);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: rgba(0, 39, 66, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -371,7 +371,7 @@ code {
     background: var(--white);
     padding: 2em;
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
 }
 
 #menu.visible .inner {
@@ -440,7 +440,7 @@ code {
     flex-shrink: 0;
 }
 
-/* Close Button */
+/* Close Button - White on dark overlay */
 #menu .close {
     position: absolute;
     top: 1.5em;
@@ -454,6 +454,13 @@ code {
     text-indent: -9999px;
     overflow: hidden;
     text-decoration: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    transition: background var(--duration) ease;
+}
+
+#menu .close:hover {
+    background: rgba(255, 255, 255, 0.2);
 }
 
 #menu .close::before,
@@ -462,7 +469,7 @@ code {
     position: absolute;
     width: 20px;
     height: 2px;
-    background: var(--text);
+    background: var(--white);
     transition: background var(--duration) ease;
 }
 
@@ -471,7 +478,7 @@ code {
 
 #menu .close:hover::before,
 #menu .close:hover::after {
-    background: var(--accent);
+    background: var(--pacific);
 }
 
 /* Body locked when menu visible */
