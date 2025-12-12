@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Update Cortex modules without full reinstall
-# Copies shared/cortex/ JS modules to /opt/hookprobe/shared/cortex/
+# Copies shared/cortex/ frontend JS + backend Python to /opt/hookprobe/shared/cortex/
 #
 
 set -e
@@ -19,35 +19,59 @@ NC='\033[0m'
 echo -e "${GREEN}[Cortex]${NC} Updating shared Cortex visualization modules..."
 
 # Check source exists
-if [ ! -d "$SHARED_CORTEX/frontend/js" ]; then
+if [ ! -d "$SHARED_CORTEX" ]; then
     echo -e "${RED}[Error]${NC} Cortex source not found at $SHARED_CORTEX"
     exit 1
 fi
 
-# Create destination if needed
-mkdir -p /opt/hookprobe/shared/cortex/frontend/js
+# ========================================
+# Frontend JS Modules (Globe visualization)
+# ========================================
+if [ -d "$SHARED_CORTEX/frontend/js" ]; then
+    mkdir -p /opt/hookprobe/shared/cortex/frontend/js
+    cp "$SHARED_CORTEX/frontend/js/"*.js /opt/hookprobe/shared/cortex/frontend/js/ 2>/dev/null || {
+        echo -e "${RED}[Error]${NC} Failed to copy frontend modules"
+        exit 1
+    }
+    echo -e "${GREEN}[Cortex]${NC} Frontend JS modules updated:"
+    ls -1 /opt/hookprobe/shared/cortex/frontend/js/*.js 2>/dev/null | wc -l | xargs -I {} echo "  {} files copied"
+else
+    echo -e "${YELLOW}[WARN]${NC} Frontend JS not found at $SHARED_CORTEX/frontend/js"
+fi
 
-# Copy all JS modules
-cp "$SHARED_CORTEX/frontend/js/"*.js /opt/hookprobe/shared/cortex/frontend/js/ 2>/dev/null || {
-    echo -e "${RED}[Error]${NC} Failed to copy modules"
-    exit 1
-}
-
-# List copied files
-echo -e "${GREEN}[Cortex]${NC} Modules updated:"
-ls -la /opt/hookprobe/shared/cortex/frontend/js/*.js | awk '{print "  - " $NF}'
+# ========================================
+# Backend Python Modules (Demo data with 75+ nodes)
+# ========================================
+if [ -d "$SHARED_CORTEX/backend" ]; then
+    mkdir -p /opt/hookprobe/shared/cortex/backend
+    cp "$SHARED_CORTEX/backend/"*.py /opt/hookprobe/shared/cortex/backend/ 2>/dev/null || true
+    # Create __init__.py files for Python imports
+    touch /opt/hookprobe/shared/cortex/__init__.py
+    touch /opt/hookprobe/shared/cortex/backend/__init__.py
+    echo -e "${GREEN}[Cortex]${NC} Backend Python modules updated:"
+    ls -1 /opt/hookprobe/shared/cortex/backend/*.py 2>/dev/null | wc -l | xargs -I {} echo "  {} files copied"
+else
+    echo -e "${YELLOW}[WARN]${NC} Backend Python not found at $SHARED_CORTEX/backend"
+fi
 
 # Verify key files
+echo -e "\n${GREEN}[Cortex]${NC} Verification:"
 for file in cluster-manager.js zoom-controller.js basemap-config.js deck-renderer.js; do
     if [ -f "/opt/hookprobe/shared/cortex/frontend/js/$file" ]; then
-        echo -e "${GREEN}[OK]${NC} $file"
+        echo -e "  ${GREEN}[OK]${NC} frontend/js/$file"
     else
-        echo -e "${YELLOW}[WARN]${NC} Missing: $file"
+        echo -e "  ${YELLOW}[WARN]${NC} Missing: frontend/js/$file"
+    fi
+done
+
+for file in demo_data.py server.py node_registry.py; do
+    if [ -f "/opt/hookprobe/shared/cortex/backend/$file" ]; then
+        echo -e "  ${GREEN}[OK]${NC} backend/$file"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} Missing: backend/$file"
     fi
 done
 
 echo -e "\n${GREEN}[Cortex]${NC} Update complete!"
 echo -e "Restart Guardian web UI to apply changes:"
 echo -e "  ${YELLOW}systemctl restart guardian-webui${NC}"
-echo -e "  or"
-echo -e "  ${YELLOW}systemctl restart guardian-web${NC}"

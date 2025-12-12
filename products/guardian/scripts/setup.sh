@@ -3315,15 +3315,28 @@ install_web_ui() {
 
     log_info "Copied web UI: app.py, modules/, templates/, static/, utils.py, config.py"
 
-    # Install shared Cortex visualization modules
+    # Install shared Cortex visualization modules (frontend JS + backend Python)
     log_info "Installing shared Cortex visualization modules..."
     local SHARED_CORTEX="$GUARDIAN_ROOT/../../shared/cortex"
     if [ -d "$SHARED_CORTEX/frontend/js" ]; then
+        # Frontend JS modules (for globe visualization)
         mkdir -p /opt/hookprobe/shared/cortex/frontend/js
         cp "$SHARED_CORTEX/frontend/js/"*.js /opt/hookprobe/shared/cortex/frontend/js/ 2>/dev/null || true
-        log_info "Installed Cortex modules to /opt/hookprobe/shared/cortex/"
+        log_info "Installed Cortex frontend JS modules"
     else
-        log_warn "Shared Cortex modules not found at $SHARED_CORTEX"
+        log_warn "Shared Cortex frontend modules not found at $SHARED_CORTEX/frontend/js"
+    fi
+
+    # Backend Python modules (for demo data generation with 75+ nodes)
+    if [ -d "$SHARED_CORTEX/backend" ]; then
+        mkdir -p /opt/hookprobe/shared/cortex/backend
+        cp "$SHARED_CORTEX/backend/"*.py /opt/hookprobe/shared/cortex/backend/ 2>/dev/null || true
+        # Create __init__.py if it doesn't exist
+        touch /opt/hookprobe/shared/cortex/__init__.py
+        touch /opt/hookprobe/shared/cortex/backend/__init__.py
+        log_info "Installed Cortex backend Python modules (demo data generator)"
+    else
+        log_warn "Shared Cortex backend modules not found at $SHARED_CORTEX/backend"
     fi
 
     # Install ML libraries for dnsXai AI features
