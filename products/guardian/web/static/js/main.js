@@ -6,15 +6,20 @@
 // ============================================
 // GLOBAL STATE
 // ============================================
-const Guardian = {
-    currentTab: 'dashboard',
-    refreshInterval: null,
-    apiBase: '/api',
-    state: {
-        dnsxai: { paused: false, disabled: false, pauseEndTime: null },
-        system: { uptime: '', load: 0, memory: 0 }
-    }
-};
+// Guardian object is defined in base.html to be available for inline template scripts
+// Extend it here if needed
+if (typeof Guardian === 'undefined') {
+    // Fallback if not defined (shouldn't happen with base.html)
+    window.Guardian = {
+        currentTab: 'dashboard',
+        refreshInterval: null,
+        apiBase: '/api',
+        state: {
+            dnsxai: { paused: false, disabled: false, pauseEndTime: null },
+            system: { uptime: '', load: 0, memory: 0 }
+        }
+    };
+}
 
 // ============================================
 // INITIALIZATION
@@ -232,47 +237,55 @@ function closeModal(modalId) {
 }
 
 // ============================================
-// API UTILITIES
+// API UTILITIES (defined in base.html for early availability)
 // ============================================
-async function apiGet(endpoint) {
-    try {
-        const response = await fetch(`${Guardian.apiBase}${endpoint}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
-    } catch (error) {
-        console.error(`API GET ${endpoint}:`, error);
-        throw error;
-    }
+// These functions are already defined in base.html inline script
+// to be available before templates load. This block provides fallbacks.
+if (typeof apiGet === 'undefined') {
+    window.apiGet = async function(endpoint) {
+        try {
+            const response = await fetch(`${Guardian.apiBase}${endpoint}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (error) {
+            console.error(`API GET ${endpoint}:`, error);
+            throw error;
+        }
+    };
 }
 
-async function apiPost(endpoint, data = {}) {
-    try {
-        const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
-    } catch (error) {
-        console.error(`API POST ${endpoint}:`, error);
-        throw error;
-    }
+if (typeof apiPost === 'undefined') {
+    window.apiPost = async function(endpoint, data = {}) {
+        try {
+            const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (error) {
+            console.error(`API POST ${endpoint}:`, error);
+            throw error;
+        }
+    };
 }
 
-async function apiDelete(endpoint, data = {}) {
-    try {
-        const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
-    } catch (error) {
-        console.error(`API DELETE ${endpoint}:`, error);
-        throw error;
-    }
+if (typeof apiDelete === 'undefined') {
+    window.apiDelete = async function(endpoint, data = {}) {
+        try {
+            const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (error) {
+            console.error(`API DELETE ${endpoint}:`, error);
+            throw error;
+        }
+    };
 }
 
 // ============================================
