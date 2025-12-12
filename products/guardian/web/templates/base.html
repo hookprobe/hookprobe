@@ -141,6 +141,105 @@
     {% endif %}
     {% endwith %}
 
+    <!-- Core JavaScript (must load before templates that use Guardian/apiGet) -->
+    <script>
+        // Global state - defined early so templates can reference it
+        const Guardian = {
+            currentTab: 'dashboard',
+            refreshInterval: null,
+            apiBase: '/api',
+            state: {
+                dnsxai: { paused: false, disabled: false, pauseEndTime: null },
+                system: { uptime: '', load: 0, memory: 0 }
+            }
+        };
+
+        // API utilities - defined early for templates
+        async function apiGet(endpoint) {
+            try {
+                const response = await fetch(`${Guardian.apiBase}${endpoint}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.error(`API GET ${endpoint}:`, error);
+                throw error;
+            }
+        }
+
+        async function apiPost(endpoint, data = {}) {
+            try {
+                const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.error(`API POST ${endpoint}:`, error);
+                throw error;
+            }
+        }
+
+        async function apiDelete(endpoint, data = {}) {
+            try {
+                const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.error(`API DELETE ${endpoint}:`, error);
+                throw error;
+            }
+        }
+
+        // Toast notification - needed by some templates
+        function showToast(message, type = 'info', duration = 4000) {
+            const container = document.getElementById('toast-container') || createToastContainer();
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.innerHTML = `<span class="toast-message">${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), duration);
+        }
+
+        function createToastContainer() {
+            const container = document.createElement('div');
+            container.id = 'toast-container';
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+            return container;
+        }
+
+        // Navigation stub - will be replaced by main.js
+        function switchToTab(tab) {
+            if (typeof navigateTo === 'function') {
+                navigateTo(tab);
+            } else {
+                window.location.hash = tab;
+            }
+        }
+
+        function closeMenu() {
+            const menu = document.getElementById('menu');
+            if (menu) {
+                menu.classList.remove('visible');
+                document.body.classList.remove('is-menu-visible');
+            }
+        }
+
+        function openMenu() {
+            const menu = document.getElementById('menu');
+            if (menu) {
+                menu.classList.add('visible');
+                document.body.classList.add('is-menu-visible');
+            }
+        }
+    </script>
+
     <!-- Main Content Wrapper -->
     <div id="wrapper">
         <!-- Dashboard Tab -->
