@@ -116,13 +116,13 @@
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
 
-<!-- Shared Cortex Modules (from shared/cortex/) -->
-<script src="/cortex-modules/cluster-manager.js"></script>
-<script src="/cortex-modules/zoom-controller.js"></script>
-<script src="/cortex-modules/transitions.js"></script>
-<script src="/cortex-modules/deck-renderer.js"></script>
-<script src="/cortex-modules/basemap-config.js"></script>
-<script src="/cortex-modules/view-manager.js"></script>
+<!-- Shared Cortex Modules (bundled in Guardian static folder) -->
+<script src="{{ url_for('static', filename='js/cortex/cluster-manager.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cortex/zoom-controller.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cortex/transitions.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cortex/deck-renderer.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cortex/basemap-config.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cortex/view-manager.js') }}"></script>
 
 <!-- Cortex Embedded Wrapper -->
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
