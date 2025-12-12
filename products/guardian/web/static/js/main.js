@@ -121,33 +121,75 @@ function loadTabData(tabName) {
 }
 
 // ============================================
-// MOBILE MENU (Forty-style)
+// FULL-SCREEN MENU (Forty-style)
 // ============================================
 function initMobileMenu() {
     const toggle = document.querySelector('#header .menu-toggle');
-    const nav = document.querySelector('#header nav');
+    const menu = document.getElementById('menu');
 
-    if (toggle && nav) {
-        toggle.addEventListener('click', () => {
-            nav.classList.toggle('open');
-            document.body.classList.toggle('menu-open');
+    // Open menu on toggle click
+    if (toggle) {
+        toggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openMenu();
         });
     }
 
-    // Close on outside click
-    document.addEventListener('click', (e) => {
-        if (!e.target.closest('#header nav') && !e.target.closest('.menu-toggle')) {
-            closeMobileMenu();
+    // Close menu on close button click
+    if (menu) {
+        const closeBtn = menu.querySelector('.close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                closeMenu();
+            });
+        }
+
+        // Close on overlay click (clicking outside inner content)
+        menu.addEventListener('click', (e) => {
+            if (e.target === menu) {
+                closeMenu();
+            }
+        });
+    }
+
+    // Handle hash navigation for menu
+    if (window.location.hash === '#menu') {
+        openMenu();
+    }
+
+    // Close on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeMenu();
         }
     });
 }
 
-function closeMobileMenu() {
-    const nav = document.querySelector('#header nav');
-    if (nav) {
-        nav.classList.remove('open');
-        document.body.classList.remove('menu-open');
+function openMenu() {
+    const menu = document.getElementById('menu');
+    if (menu) {
+        menu.classList.add('visible');
+        document.body.classList.add('is-menu-visible');
     }
+}
+
+function closeMenu() {
+    const menu = document.getElementById('menu');
+    if (menu) {
+        menu.classList.remove('visible');
+        document.body.classList.remove('is-menu-visible');
+        // Clean up hash if present
+        if (window.location.hash === '#menu') {
+            history.pushState('', document.title, window.location.pathname + window.location.search);
+        }
+    }
+}
+
+// Legacy function for backwards compatibility
+function closeMobileMenu() {
+    closeMenu();
 }
 
 // ============================================
@@ -340,7 +382,7 @@ async function loadSecurityData() {
             apiGet('/threats'),
             apiGet('/layer_threats'),
             apiGet('/xdp_stats'),
-            apiGet('/security/qsecbit').catch(() => null)
+            apiGet('/qsecbit').catch(() => null)
         ]);
 
         updateSecurityStats(threats, xdp, qsecbit);
