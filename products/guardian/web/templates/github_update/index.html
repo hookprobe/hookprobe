@@ -520,7 +520,7 @@ function formatDate(dateStr) {
 }
 
 // Initialize on tab load
-if (Guardian && Guardian.currentTab === 'updates') {
+if (typeof Guardian !== 'undefined' && Guardian.currentTab === 'updates') {
     loadGitHubStatus();
     loadGitHubLog();
     checkGitHubUpdates();
