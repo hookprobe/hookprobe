@@ -3142,6 +3142,45 @@ install_ap_services() {
     cp "$SCRIPT_DIR/guardian-wlan-setup.sh" /usr/local/bin/
     chmod +x /usr/local/bin/guardian-wlan-setup.sh
 
+    # Install additional helper scripts to /usr/local/bin
+    log_info "Installing helper scripts..."
+
+    # guardian-nm-setup.sh - NetworkManager MAC-aware configuration
+    if [ -f "$SCRIPT_DIR/guardian-nm-setup.sh" ]; then
+        cp "$SCRIPT_DIR/guardian-nm-setup.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/guardian-nm-setup.sh
+    fi
+
+    # guardian-wifi-health.sh - WiFi health monitoring
+    if [ -f "$SCRIPT_DIR/guardian-wifi-health.sh" ]; then
+        cp "$SCRIPT_DIR/guardian-wifi-health.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/guardian-wifi-health.sh
+    fi
+
+    # fix-dns-nat.sh - DNS/NAT troubleshooting tool
+    if [ -f "$SCRIPT_DIR/fix-dns-nat.sh" ]; then
+        cp "$SCRIPT_DIR/fix-dns-nat.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/fix-dns-nat.sh
+    fi
+
+    # guardian-routing.sh - WAN failover management
+    if [ -f "$SCRIPT_DIR/guardian-routing.sh" ]; then
+        cp "$SCRIPT_DIR/guardian-routing.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/guardian-routing.sh
+    fi
+
+    # update-blocklists.sh - DNS Shield blocklist updater (also in /opt)
+    if [ -f "$SCRIPT_DIR/update-blocklists.sh" ]; then
+        cp "$SCRIPT_DIR/update-blocklists.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/update-blocklists.sh
+    fi
+
+    # update-cortex-modules.sh - Cortex module updater
+    if [ -f "$SCRIPT_DIR/update-cortex-modules.sh" ]; then
+        cp "$SCRIPT_DIR/update-cortex-modules.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/update-cortex-modules.sh
+    fi
+
     # Install guardian-wlan.service
     log_info "Installing guardian-wlan.service..."
     if [ -f "$CONFIG_DIR/systemd/guardian-wlan.service" ]; then
