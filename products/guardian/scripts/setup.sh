@@ -2786,6 +2786,78 @@ EOF
         iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
     }
 
+    # Ensure nftables loads guardian rules at boot
+    log_info "Configuring nftables to load Guardian rules at boot..."
+    if [ -f /etc/nftables.conf ]; then
+        # Add include directive if not already present
+        if ! grep -q "guardian.nft" /etc/nftables.conf; then
+            echo 'include "/etc/nftables.d/guardian.nft"' >> /etc/nftables.conf
+            log_info "Added Guardian rules to nftables.conf"
+        fi
+    fi
+
+    # Create iptables fallback script for systems without nftables
+    log_info "Creating iptables fallback for boot persistence..."
+    cat > /etc/network/if-up.d/guardian-nat << 'IPTABLES_EOF'
+#!/bin/bash
+# Guardian NAT rules - applied when network interfaces come up
+# This ensures routing works even if nftables fails
+
+# Only run for WAN interfaces
+case "$IFACE" in
+    eth0|wlan0|enp*|wlp*)
+        # Enable IP forwarding
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+
+        # Add NAT masquerade if not already present
+        if ! iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null; then
+            iptables -t nat -A POSTROUTING -o "$IFACE" -j MASQUERADE
+        fi
+
+        # Add FORWARD rules for LAN interfaces
+        for LAN_IFACE in wlan1 br0; do
+            if [ -d "/sys/class/net/$LAN_IFACE" ]; then
+                if ! iptables -C FORWARD -i "$LAN_IFACE" -o "$IFACE" -j ACCEPT 2>/dev/null; then
+                    iptables -A FORWARD -i "$LAN_IFACE" -o "$IFACE" -j ACCEPT
+                fi
+                if ! iptables -C FORWARD -i "$IFACE" -o "$LAN_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+                    iptables -A FORWARD -i "$IFACE" -o "$LAN_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+                fi
+            fi
+        done
+        ;;
+esac
+IPTABLES_EOF
+    chmod +x /etc/network/if-up.d/guardian-nat 2>/dev/null || true
+
+    # Also create systemd service for iptables persistence (for systems using systemd-networkd)
+    cat > /etc/systemd/system/guardian-routing.service << 'ROUTING_EOF'
+[Unit]
+Description=Guardian NAT and Routing Rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'echo 1 > /proc/sys/net/ipv4/ip_forward; \
+    iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; \
+    iptables -t nat -C POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE; \
+    for LAN in wlan1 br0; do \
+        [ -d /sys/class/net/$LAN ] && { \
+            iptables -C FORWARD -i $LAN -j ACCEPT 2>/dev/null || iptables -A FORWARD -i $LAN -j ACCEPT; \
+            iptables -C FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT; \
+        }; \
+    done'
+
+[Install]
+WantedBy=multi-user.target
+ROUTING_EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-routing.service 2>/dev/null || true
+    systemctl start guardian-routing.service 2>/dev/null || true
+
     log_info "Base networking configuration complete"
 }
 

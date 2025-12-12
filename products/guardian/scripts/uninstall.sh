@@ -80,6 +80,8 @@ stop_services() {
         "guardian-wifi-health"
         # Offline mode service
         "guardian-offline"
+        # Routing/NAT service
+        "guardian-routing"
         # System services
         "hostapd"
         "dnsmasq"
@@ -137,6 +139,8 @@ remove_systemd_services() {
         "guardian-wifi-health"
         # Offline mode service
         "guardian-offline"
+        # Routing/NAT service
+        "guardian-routing"
     )
 
     # Disable and remove timers first
@@ -316,11 +320,37 @@ remove_nftables_rules() {
     if nft list tables 2>/dev/null | grep -q "guardian"; then
         log_info "Removing nftables table: guardian"
         nft delete table inet guardian 2>/dev/null || true
+        nft delete table ip guardian_nat 2>/dev/null || true
     fi
 
     # Remove nftables configuration files
     rm -f /etc/nftables.d/guardian.nft
     rm -f /etc/nftables.d/guardian-vlans.nft
+
+    # Remove Guardian include from nftables.conf
+    if [ -f /etc/nftables.conf ]; then
+        sed -i '/guardian.nft/d' /etc/nftables.conf
+        log_info "Removed Guardian include from nftables.conf"
+    fi
+
+    # Remove iptables persistence hook script
+    rm -f /etc/network/if-up.d/guardian-nat
+    log_info "Removed iptables persistence hook"
+
+    # Clean up iptables NAT rules
+    log_info "Cleaning up iptables NAT rules..."
+    iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || true
+
+    # Clean up iptables FORWARD rules for Guardian LAN interfaces
+    for LAN in wlan1 br0; do
+        iptables -D FORWARD -i $LAN -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        for WAN in eth0 wlan0; do
+            iptables -D FORWARD -i $LAN -o $WAN -j ACCEPT 2>/dev/null || true
+            iptables -D FORWARD -i $WAN -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        done
+    done
 
     log_info "nftables rules removed"
 }
@@ -846,19 +876,21 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, wlan, ap, offline, etc.)"
+    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, wlan, ap, offline, routing, etc.)"
     echo -e "  • Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
     echo -e "  • Podman containers and volumes"
     echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • dnsXai ML models, training data, and Python packages"
     echo -e "  • Network bridges (br0)"
+    echo -e "  • NAT/routing rules (nftables, iptables, MASQUERADE)"
     echo -e "  • hostapd, wpa_supplicant, and dnsmasq configuration"
     echo -e "  • Offline mode configuration and dhcpcd settings"
     echo -e "  • Guardian configuration (/etc/guardian/)"
     echo -e "  • HTP file transfer state and session keys"
-    echo -e "  • nftables rules"
+    echo -e "  • nftables rules and iptables persistence hooks"
+    echo -e "  • Shared Cortex visualization modules"
     echo -e "  • Python library modules"
-    echo -e "  • Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)"
+    echo -e "  • Guardian scripts (/usr/local/bin/guardian-*)"
     echo -e "  • Guardian directories (/opt/hookprobe/guardian)"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
