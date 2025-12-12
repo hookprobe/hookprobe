@@ -1,14 +1,16 @@
 <!-- Security Tab - Premium QSecBit Display with Block Log -->
 <style>
-/* Premium QSecBit Hero Section */
+/* Premium QSecBit Hero Section - Navy Satin Design */
 .qsecbit-hero {
-    background: linear-gradient(135deg, #0f1419 0%, #1a1d2e 50%, #0f1419 100%);
-    border-radius: var(--radius-xl);
-    padding: 40px;
-    margin-bottom: var(--spacing-xl);
+    background: linear-gradient(135deg, #050a18 0%, #0b132b 30%, #1c2541 70%, #0b132b 100%);
+    border-radius: var(--radius-2xl);
+    padding: 50px 40px;
+    margin: var(--spacing-xl);
     position: relative;
     overflow: hidden;
     text-align: center;
+    border: 1px solid rgba(88, 164, 176, 0.15);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .qsecbit-hero::before {
@@ -18,13 +20,13 @@
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle at center, rgba(240, 91, 45, 0.08) 0%, transparent 50%);
+    background: radial-gradient(circle at center, rgba(88, 164, 176, 0.1) 0%, transparent 50%);
     animation: pulse-glow 4s ease-in-out infinite;
 }
 
 @keyframes pulse-glow {
-    0%, 100% { opacity: 0.5; transform: scale(1); }
-    50% { opacity: 1; transform: scale(1.1); }
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.15); }
 }
 
 .qsecbit-hero-content {
@@ -33,51 +35,54 @@
 }
 
 .qsecbit-hero h2 {
-    color: #fff;
-    font-size: 1.5rem;
+    color: var(--alabaster);
+    font-size: 1.75rem;
     margin-bottom: var(--spacing-xs);
-    font-weight: 600;
+    font-weight: 700;
+    letter-spacing: 0.02em;
 }
 
 .qsecbit-hero .subtitle {
-    color: rgba(255,255,255,0.6);
-    font-size: 0.875rem;
-    margin-bottom: var(--spacing-xl);
+    color: var(--powder-blue);
+    font-size: 0.9rem;
+    margin-bottom: var(--spacing-2xl);
+    font-weight: 500;
 }
 
-/* Large Ring Display */
+/* Large Ring Display - Premium Glow Effect */
 .qsecbit-ring-large {
     position: relative;
-    width: 220px;
-    height: 220px;
-    margin: 0 auto var(--spacing-xl);
+    width: 260px;
+    height: 260px;
+    margin: 0 auto var(--spacing-2xl);
 }
 
 .qsecbit-ring-large svg {
     width: 100%;
     height: 100%;
     transform: rotate(-90deg);
+    filter: drop-shadow(0 0 20px rgba(88, 164, 176, 0.2));
 }
 
 .ring-bg {
     fill: none;
-    stroke: rgba(255,255,255,0.1);
-    stroke-width: 12;
+    stroke: rgba(169, 188, 208, 0.1);
+    stroke-width: 14;
 }
 
 .ring-fill {
     fill: none;
-    stroke-width: 12;
+    stroke-width: 14;
     stroke-linecap: round;
     stroke-dasharray: 565; /* 2 * PI * 90 */
     stroke-dashoffset: 565;
-    transition: stroke-dashoffset 1.5s ease, stroke 0.5s ease;
-    filter: drop-shadow(0 0 8px currentColor);
+    transition: stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.5s ease;
+    filter: drop-shadow(0 0 15px currentColor);
 }
 
-.ring-fill.green { stroke: #10b981; }
-.ring-fill.amber { stroke: #f59e0b; }
-.ring-fill.red { stroke: #ef4444; }
+.ring-fill.green { stroke: #10b981; filter: drop-shadow(0 0 20px rgba(16, 185, 129, 0.6)); }
+.ring-fill.amber { stroke: #f59e0b; filter: drop-shadow(0 0 20px rgba(245, 158, 11, 0.6)); }
+.ring-fill.red { stroke: #ee4266; filter: drop-shadow(0 0 25px rgba(238, 66, 102, 0.7)); }
 
 .ring-center {
     position: absolute;
@@ -88,146 +93,181 @@
 }
 
 .ring-score {
-    font-size: 3.5rem;
-    font-weight: 700;
+    font-size: 4rem;
+    font-weight: 800;
     line-height: 1;
-    transition: color 0.5s ease;
+    transition: color 0.5s ease, text-shadow 0.5s ease;
+    font-family: var(--font-mono);
 }
 
-.ring-score.green { color: #10b981; }
-.ring-score.amber { color: #f59e0b; }
-.ring-score.red { color: #ef4444; }
+.ring-score.green { color: #10b981; text-shadow: 0 0 30px rgba(16, 185, 129, 0.5); }
+.ring-score.amber { color: #f59e0b; text-shadow: 0 0 30px rgba(245, 158, 11, 0.5); }
+.ring-score.red { color: #ee4266; text-shadow: 0 0 30px rgba(238, 66, 102, 0.6); }
 
 .ring-label {
-    font-size: 0.75rem;
-    color: rgba(255,255,255,0.5);
+    font-size: 0.8rem;
+    color: var(--powder-blue);
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-top: var(--spacing-xs);
+    letter-spacing: 0.2em;
+    margin-top: var(--spacing-sm);
+    font-weight: 600;
 }
 
-/* Risk Status Banner */
+/* Risk Status Banner - Premium Pill */
 .risk-banner {
     display: inline-flex;
     align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-sm) var(--spacing-lg);
+    gap: var(--spacing-md);
+    padding: var(--spacing-md) var(--spacing-xl);
     border-radius: 50px;
-    font-size: 0.875rem;
+    font-size: 0.95rem;
     font-weight: 600;
-    margin-bottom: var(--spacing-xl);
+    margin-bottom: var(--spacing-2xl);
     transition: all 0.5s ease;
+    letter-spacing: 0.02em;
 }
 
 .risk-banner.green {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(16, 185, 129, 0.12);
     color: #10b981;
     border: 1px solid rgba(16, 185, 129, 0.3);
+    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.15);
 }
 
 .risk-banner.amber {
-    background: rgba(245, 158, 11, 0.15);
+    background: rgba(245, 158, 11, 0.12);
     color: #f59e0b;
     border: 1px solid rgba(245, 158, 11, 0.3);
+    box-shadow: 0 4px 20px rgba(245, 158, 11, 0.15);
 }
 
 .risk-banner.red {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: rgba(238, 66, 102, 0.12);
+    color: #ee4266;
+    border: 1px solid rgba(238, 66, 102, 0.3);
     animation: pulse-red 2s ease-in-out infinite;
 }
 
 @keyframes pulse-red {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-    50% { box-shadow: 0 0 20px 5px rgba(239, 68, 68, 0.2); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(238, 66, 102, 0.4); }
+    50% { box-shadow: 0 0 30px 8px rgba(238, 66, 102, 0.25); }
+}
+
+.risk-banner i {
+    font-size: 1.1em;
 }
 
 .risk-banner svg {
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
 }
 
-/* Stats Row */
+/* Stats Row - Premium Glass Cards */
 .qsecbit-stats {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: var(--spacing-md);
-    max-width: 600px;
-    margin: 0 auto var(--spacing-xl);
+    gap: var(--spacing-lg);
+    max-width: 700px;
+    margin: 0 auto var(--spacing-2xl);
 }
 
 .qsecbit-stat {
     text-align: center;
-    padding: var(--spacing-md);
-    background: rgba(255,255,255,0.03);
-    border-radius: var(--radius-md);
+    padding: var(--spacing-lg) var(--spacing-md);
+    background: rgba(28, 37, 65, 0.6);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(169, 188, 208, 0.1);
+    backdrop-filter: blur(10px);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.qsecbit-stat:hover {
+    transform: translateY(-2px);
+    border-color: rgba(88, 164, 176, 0.3);
 }
 
 .qsecbit-stat .value {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #fff;
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--alabaster);
+    font-family: var(--font-mono);
 }
 
-.qsecbit-stat .value.danger { color: #ef4444; }
+.qsecbit-stat .value.danger { color: #ee4266; }
 .qsecbit-stat .value.success { color: #10b981; }
 
 .qsecbit-stat .label {
     font-size: 0.7rem;
-    color: rgba(255,255,255,0.5);
+    color: var(--powder-blue);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    margin-top: var(--spacing-xs);
+    font-weight: 600;
 }
 
-/* Component Breakdown */
+/* Component Breakdown - Premium Glass Panel */
 .component-breakdown {
-    background: rgba(0,0,0,0.3);
-    border-radius: var(--radius-lg);
-    padding: var(--spacing-lg);
-    max-width: 700px;
+    background: linear-gradient(135deg, rgba(28, 37, 65, 0.5) 0%, rgba(11, 19, 43, 0.5) 100%);
+    border-radius: var(--radius-xl);
+    padding: var(--spacing-xl);
+    max-width: 800px;
     margin: 0 auto;
+    border: 1px solid rgba(88, 164, 176, 0.15);
+    backdrop-filter: blur(10px);
 }
 
 .component-title {
-    font-size: 0.75rem;
-    color: rgba(255,255,255,0.5);
+    font-size: 0.8rem;
+    color: var(--powder-blue);
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-bottom: var(--spacing-md);
+    letter-spacing: 0.15em;
+    margin-bottom: var(--spacing-lg);
     text-align: center;
+    font-weight: 600;
 }
 
 .component-grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
-    gap: var(--spacing-sm);
+    gap: var(--spacing-md);
 }
 
 .component-item {
     text-align: center;
-    padding: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: rgba(5, 10, 24, 0.4);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(169, 188, 208, 0.08);
+    transition: border-color 0.2s ease;
+}
+
+.component-item:hover {
+    border-color: rgba(88, 164, 176, 0.3);
 }
 
 .component-value {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: var(--hp-primary);
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--pacific);
     font-family: var(--font-mono);
 }
 
 .component-name {
     font-size: 0.65rem;
-    color: rgba(255,255,255,0.4);
+    color: var(--powder-blue);
     text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: var(--spacing-xs);
 }
 
-/* Block Log Section */
+/* Block Log Section - Premium Card */
 .blocks-section {
     background: var(--bg-card);
     border-radius: var(--radius-xl);
     overflow: hidden;
-    margin-bottom: var(--spacing-xl);
+    margin: 0 var(--spacing-xl) var(--spacing-xl);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
 }
 
 .blocks-header {
@@ -235,22 +275,29 @@
     justify-content: space-between;
     align-items: center;
     padding: var(--spacing-lg) var(--spacing-xl);
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.2);
 }
 
 .blocks-header h3 {
     margin: 0;
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-md);
+    font-weight: 600;
+}
+
+.blocks-header h3 i {
+    font-size: 1.1em;
 }
 
 .blocks-header .count {
-    background: var(--hp-primary);
-    color: #fff;
+    background: var(--pacific);
+    color: var(--prussian-dark);
     font-size: 0.75rem;
-    padding: 2px 10px;
-    border-radius: 10px;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 12px;
 }
 
 .block-list {
@@ -340,39 +387,43 @@
     opacity: 0.5;
 }
 
-/* Export Section */
+/* Export Section - Premium Buttons */
 .export-section {
     display: flex;
     justify-content: center;
-    gap: var(--spacing-md);
-    padding: var(--spacing-lg);
+    gap: var(--spacing-lg);
+    padding: var(--spacing-xl);
+    margin: 0 var(--spacing-xl) var(--spacing-xl);
     background: var(--bg-card);
     border-radius: var(--radius-xl);
+    border: 1px solid var(--border);
 }
 
 .btn-export {
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
-    padding: var(--spacing-sm) var(--spacing-lg);
+    padding: var(--spacing-md) var(--spacing-xl);
     border-radius: var(--radius-md);
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border-alt);
     background: transparent;
-    color: var(--text-secondary);
-    font-size: 0.875rem;
+    color: var(--powder-blue);
+    font-size: 0.85rem;
+    font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.2s ease;
 }
 
 .btn-export:hover {
-    background: var(--bg-light);
-    color: var(--text-primary);
-    border-color: var(--hp-primary);
+    background: rgba(88, 164, 176, 0.1);
+    color: var(--pacific);
+    border-color: var(--pacific);
+    transform: translateY(-1px);
 }
 
-.btn-export svg {
-    width: 18px;
-    height: 18px;
+.btn-export i {
+    font-size: 1.1em;
+    color: var(--pacific);
 }
 
 /* Modal */
@@ -544,11 +595,9 @@
             </div>
         </div>
 
-        <!-- Risk Status Banner -->
+        <!-- Risk Status Banner with FontAwesome -->
         <div class="risk-banner green" id="risk-banner">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
+            <i class="fa-solid fa-shield-halved"></i>
             <span id="risk-text">All Systems Nominal</span>
         </div>
 
@@ -605,13 +654,11 @@
 <div class="blocks-section">
     <div class="blocks-header">
         <h3>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="color: var(--hp-primary);">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-            </svg>
+            <i class="fa-solid fa-ban" style="color: var(--pacific);"></i>
             Recent Blocks
             <span class="count" id="blocks-total">0</span>
         </h3>
-        <button class="btn btn-sm btn-secondary" onclick="refreshBlocks()">Refresh</button>
+        <button class="btn btn-sm btn-secondary" onclick="refreshBlocks()"><i class="fa-solid fa-rotate"></i> Refresh</button>
     </div>
     <div class="block-list" id="block-list">
         <div class="empty-state">
@@ -626,29 +673,15 @@
 <!-- Export Section -->
 <div class="export-section">
     <button class="btn-export" onclick="exportBlocks('csv')" title="Export as CSV">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-        </svg>
+        <i class="fa-solid fa-file-csv"></i>
         Export CSV
     </button>
     <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
+        <i class="fa-solid fa-download"></i>
         Export STIX 2.1
     </button>
     <button class="btn-export" onclick="exportBlocks('json')" title="Export as JSON">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/>
-            <path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/>
-        </svg>
+        <i class="fa-solid fa-file-code"></i>
         Export JSON
     </button>
 </div>
