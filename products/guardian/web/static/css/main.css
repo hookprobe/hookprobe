@@ -1631,6 +1631,102 @@ tbody tr:last-child td {
 }
 
 /* ============================================
+   Network Cards - Clean Minimal Style
+   ============================================ */
+.network-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 0.75rem;
+}
+
+.network-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--pacific);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    cursor: pointer;
+    transition: all var(--duration) ease;
+}
+
+.network-card:hover {
+    border-left-color: var(--pacific-light);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+.network-card.secure {
+    border-left-color: var(--green);
+}
+
+.network-card.open {
+    border-left-color: var(--amber);
+}
+
+.network-card-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.network-card-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.network-card-signal {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.network-card-signal svg {
+    width: 14px;
+    height: 14px;
+    color: var(--pacific);
+}
+
+.network-card-security {
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.network-card.secure .network-card-security {
+    color: var(--green);
+}
+
+.network-card.open .network-card-security {
+    color: var(--amber);
+}
+
+@media screen and (max-width: 736px) {
+    .network-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+    }
+
+    .network-card {
+        padding: 0.75rem;
+    }
+
+    .network-card-name {
+        font-size: 0.8rem;
+    }
+
+    .network-card-meta {
+        font-size: 0.65rem;
+    }
+}
+
+/* ============================================
    Quick Actions - Clean Style
    ============================================ */
 .quick-actions {
