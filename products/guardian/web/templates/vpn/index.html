@@ -410,6 +410,9 @@ async function registerMssp(event) {
     }
 }
 
-// Load HTP data when tab is shown
-loadHtpData();
+// Load HTP data when VPN tab becomes visible
+// Check if Guardian is defined (base.html loads it first)
+if (typeof Guardian !== 'undefined' && Guardian.currentTab === 'vpn') {
+    loadHtpData();
+}
 </script>
