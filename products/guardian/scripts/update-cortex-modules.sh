@@ -8,7 +8,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARDIAN_ROOT="$(dirname "$SCRIPT_DIR")"
-SHARED_CORTEX="$GUARDIAN_ROOT/../../shared/cortex"
 
 # Colors
 GREEN='\033[0;32m'
@@ -18,9 +17,35 @@ NC='\033[0m'
 
 echo -e "${GREEN}[Cortex]${NC} Updating shared Cortex visualization modules..."
 
-# Check source exists
-if [ ! -d "$SHARED_CORTEX" ]; then
-    echo -e "${RED}[Error]${NC} Cortex source not found at $SHARED_CORTEX"
+# Find Cortex source - check multiple locations
+SHARED_CORTEX=""
+POSSIBLE_PATHS=(
+    # Development/repo structure (products/guardian/scripts -> ../../shared/cortex)
+    "$GUARDIAN_ROOT/../../shared/cortex"
+    # Installed structure at /opt/hookprobe
+    "/opt/hookprobe/shared/cortex"
+    # If running from repo root
+    "./shared/cortex"
+    # Alternative: look for hookprobe repo
+    "$HOME/hookprobe/shared/cortex"
+)
+
+for path in "${POSSIBLE_PATHS[@]}"; do
+    if [ -d "$path/frontend/js" ] || [ -d "$path/backend" ]; then
+        SHARED_CORTEX="$path"
+        echo -e "${GREEN}[Cortex]${NC} Found source at: $SHARED_CORTEX"
+        break
+    fi
+done
+
+if [ -z "$SHARED_CORTEX" ] || [ ! -d "$SHARED_CORTEX" ]; then
+    echo -e "${RED}[Error]${NC} Cortex source not found in any of:"
+    for path in "${POSSIBLE_PATHS[@]}"; do
+        echo "  - $path"
+    done
+    echo ""
+    echo "Please run this script from the hookprobe repository directory,"
+    echo "or ensure /opt/hookprobe/shared/cortex exists."
     exit 1
 fi
 
