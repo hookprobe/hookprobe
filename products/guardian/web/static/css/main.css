@@ -1410,6 +1410,214 @@ tbody tr:last-child td {
 .mt-2 { margin-top: 2em !important; }
 
 /* ============================================
+   Page Content - Consistent Padding
+   ============================================ */
+.page-content,
+#wrapper > section {
+    padding: 1.5rem;
+}
+
+/* ============================================
+   Dashboard Header - Clean Style
+   ============================================ */
+.dashboard-header {
+    padding: 1.5rem 0 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.dashboard-header h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.dashboard-header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.dashboard-header .badge {
+    vertical-align: middle;
+}
+
+/* ============================================
+   Device Grid - DHCP Leases Cards
+   ============================================ */
+.device-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.device-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    transition: all var(--duration) ease;
+}
+
+.device-card:hover {
+    border-color: var(--pacific);
+    box-shadow: var(--shadow-md);
+}
+
+.device-card-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.device-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--radius-md);
+    background: rgba(88, 164, 176, 0.1);
+    color: var(--pacific);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.device-icon svg,
+.device-icon i {
+    font-size: 1.1rem;
+}
+
+.device-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.device-name {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.device-mac {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+
+.device-details {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+
+.device-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.device-detail-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.device-detail-value {
+    font-size: 0.85rem;
+    color: var(--text);
+    font-family: var(--font-mono);
+}
+
+.device-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+}
+
+.device-status .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+}
+
+.device-status .status-dot.inactive {
+    background: var(--text-muted);
+}
+
+.device-status .status-dot.warning {
+    background: var(--amber);
+}
+
+/* Device Card Actions */
+.device-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+
+.device-actions .btn {
+    flex: 1;
+    font-size: 0.75rem;
+    padding: 0.5rem;
+}
+
+/* ============================================
+   Blocked Clients List - Consistent Style
+   ============================================ */
+.blocked-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.blocked-item {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--watermelon);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.blocked-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.blocked-item-mac {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+}
+
+.blocked-item-name {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.blocked-item-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* ============================================
    Quick Actions - Clean Style
    ============================================ */
 .quick-actions {
