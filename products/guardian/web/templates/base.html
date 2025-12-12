@@ -15,8 +15,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Google Fonts - Inter for premium typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- FontAwesome 6 - Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
 
     <!-- Main Stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
@@ -41,17 +44,17 @@
             </div>
         </a>
 
-        <!-- Main Navigation -->
+        <!-- Main Navigation with FontAwesome Icons -->
         <nav role="navigation">
-            <button class="active" data-tab="dashboard">Dashboard</button>
-            <button data-tab="security">Security</button>
-            <button data-tab="dnsxai">dnsXai</button>
-            <button data-tab="clients">Clients</button>
-            <button data-tab="config">Config</button>
-            <button data-tab="vpn">VPN</button>
-            <button data-tab="system">System</button>
-            <button data-tab="debug">Debug</button>
-            <button data-tab="cortex">Cortex</button>
+            <button class="active" data-tab="dashboard"><i class="fa-solid fa-gauge-high"></i> Dashboard</button>
+            <button data-tab="security"><i class="fa-solid fa-shield-halved"></i> Security</button>
+            <button data-tab="dnsxai"><i class="fa-solid fa-brain"></i> dnsXai</button>
+            <button data-tab="clients"><i class="fa-solid fa-users"></i> Clients</button>
+            <button data-tab="config"><i class="fa-solid fa-sliders"></i> Config</button>
+            <button data-tab="vpn"><i class="fa-solid fa-lock"></i> VPN</button>
+            <button data-tab="system"><i class="fa-solid fa-server"></i> System</button>
+            <button data-tab="debug"><i class="fa-solid fa-terminal"></i> Debug</button>
+            <button data-tab="cortex"><i class="fa-solid fa-globe"></i> Cortex</button>
         </nav>
 
         <!-- Status Badge -->
@@ -64,67 +67,67 @@
         <a href="#menu" class="menu-toggle" aria-label="Open menu">Menu</a>
     </header>
 
-    <!-- Full-Screen Menu (Forty-style overlay) -->
+    <!-- Full-Screen Menu (Forty-style overlay with FontAwesome) -->
     <nav id="menu">
         <div class="inner">
             <h2>Navigation</h2>
             <ul class="links">
                 <li>
                     <a href="#" onclick="switchToTab('dashboard'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                        <i class="fa-solid fa-gauge-high"></i>
                         <span>Dashboard</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('security'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        <i class="fa-solid fa-shield-halved"></i>
                         <span>Security</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('dnsxai'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                        <i class="fa-solid fa-brain"></i>
                         <span>dnsXai</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('clients'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                        <i class="fa-solid fa-users"></i>
                         <span>Clients</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('config'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <i class="fa-solid fa-sliders"></i>
                         <span>Config</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('vpn'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        <i class="fa-solid fa-lock"></i>
                         <span>VPN</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('system'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                        <i class="fa-solid fa-server"></i>
                         <span>System</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('debug'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                        <i class="fa-solid fa-terminal"></i>
                         <span>Debug</span>
                     </a>
                 </li>
                 <li>
                     <a href="#" onclick="switchToTab('cortex'); closeMenu(); return false;">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><circle cx="12" cy="12" r="3"/></svg>
+                        <i class="fa-solid fa-globe"></i>
                         <span>Cortex</span>
                     </a>
                 </li>
             </ul>
-            <a href="#" class="close" onclick="closeMenu(); return false;">Close</a>
+            <a href="#" class="close" onclick="closeMenu(); return false;"><i class="fa-solid fa-xmark"></i> Close</a>
         </div>
     </nav>
 

@@ -1,43 +1,54 @@
 /*
- * HookProbe Guardian - Premium UI
- * Inspired by HTML5 UP Forty template
- * Color Palette: Prussian Blue, Siren, Tangerine, Ebb, Black Pearl
+ * HookProbe Guardian - Premium Dark UI
+ * Premium Navy Satin Design with FontAwesome
+ * Color Palette: Prussian Blue, Alabaster Grey, Powder Blue, Pacific Blue, Watermelon
  */
 
-@import url("https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
 
 /* ============================================
-   CSS Variables - HookProbe Brand
+   CSS Variables - Premium Dark Theme
    ============================================ */
 :root {
-    /* Brand Colors */
-    --prussian: #002742;
-    --prussian-light: #003a5c;
-    --prussian-dark: #001a2e;
-    --siren: #850033;
-    --siren-light: #a30040;
-    --tangerine: #e69500;
-    --tangerine-light: #ffb020;
-    --ebb: #e6dbdb;
-    --ebb-dark: #c9bfbf;
-    --black-pearl: #02040d;
+    /* Premium Dark Palette */
+    --prussian: #0b132b;
+    --prussian-light: #1c2541;
+    --prussian-dark: #050a18;
+    --alabaster: #d8dbe2;
+    --powder-blue: #a9bcd0;
+    --pacific: #58a4b0;
+    --pacific-light: #6ec5d3;
+    --watermelon: #ee4266;
+    --watermelon-light: #f4637f;
 
-    /* Tile Colors (Forty-style) */
-    --tile-1: var(--tangerine);
-    --tile-2: var(--siren);
-    --tile-3: #2e7d32;
-    --tile-4: #1565c0;
-    --tile-5: #6a1b9a;
-    --tile-6: #00838f;
+    /* Accent Colors */
+    --gold: #ffd700;
+    --gold-muted: #c5a000;
+    --cyan: #00d4ff;
+    --emerald: #10b981;
+
+    /* Tile Colors (Premium) */
+    --tile-1: var(--pacific);
+    --tile-2: var(--watermelon);
+    --tile-3: var(--emerald);
+    --tile-4: #3b82f6;
+    --tile-5: #8b5cf6;
+    --tile-6: #06b6d4;
 
     /* Semantic */
     --bg: var(--prussian);
-    --bg-alt: var(--black-pearl);
-    --text: var(--ebb);
-    --text-muted: rgba(230, 219, 219, 0.6);
-    --accent: var(--tangerine);
-    --border: rgba(230, 219, 219, 0.1);
-    --border-alt: rgba(230, 219, 219, 0.25);
+    --bg-alt: var(--prussian-dark);
+    --bg-card: var(--prussian-light);
+    --bg-elevated: #141e38;
+    --text: var(--alabaster);
+    --text-muted: var(--powder-blue);
+    --text-secondary: rgba(169, 188, 208, 0.8);
+    --accent: var(--pacific);
+    --accent-hover: var(--pacific-light);
+    --danger: var(--watermelon);
+    --border: rgba(169, 188, 208, 0.12);
+    --border-alt: rgba(169, 188, 208, 0.25);
+    --border-focus: var(--pacific);
 
     /* Status Colors */
     --green: #10b981;
@@ -51,36 +62,50 @@
     --prussian-blue-dark: var(--prussian-dark);
     --bg-primary: var(--prussian);
     --bg-secondary: var(--prussian-dark);
+    --ebb: var(--alabaster);
+    --ebb-dark: var(--powder-blue);
+    --tangerine: var(--pacific);
+    --tangerine-light: var(--pacific-light);
+    --siren: var(--watermelon);
+    --siren-light: var(--watermelon-light);
+    --black-pearl: var(--prussian-dark);
     --text-alt: var(--text-muted);
-    --accent-alt: var(--siren);
-    --hp-primary: var(--tangerine);
+    --accent-alt: var(--watermelon);
+    --hp-primary: var(--pacific);
     --hp-green: var(--green);
     --hp-amber: var(--amber);
     --hp-red: var(--red);
     --hp-blue: var(--blue);
-    --bg-card: var(--prussian-dark);
     --text-primary: var(--text);
-    --text-secondary: var(--text-muted);
     --text-light: var(--text-muted);
-    --bg-light: rgba(0,0,0,0.1);
+    --bg-light: rgba(88, 164, 176, 0.08);
+    --bg-darker: rgba(0, 0, 0, 0.3);
     --border-color: var(--border);
-    --shadow-md: 0 4px 20px rgba(0,0,0,0.2);
-    --shadow-xl: 0 8px 30px rgba(0,0,0,0.3);
-    --transition-fast: 0.2s ease;
-    --transition-normal: 0.3s ease;
+    --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
+    --shadow-xl: 0 8px 40px rgba(0,0,0,0.5);
+    --shadow-glow: 0 0 30px rgba(88, 164, 176, 0.15);
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.25s ease;
+    --radius-sm: 4px;
     --radius-md: 8px;
     --radius-lg: 12px;
     --radius-xl: 16px;
+    --radius-2xl: 24px;
     --spacing-xs: 0.25em;
     --spacing-sm: 0.5em;
     --spacing-md: 1em;
     --spacing-lg: 1.5em;
     --spacing-xl: 2em;
+    --spacing-2xl: 3em;
 
-    /* Layout */
-    --header-height: 3.5em;
+    /* Layout - Bigger header */
+    --header-height: 4.5em;
     --duration: 0.2s;
-    --radius: 4px;
+    --radius: 6px;
+
+    /* Font */
+    --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
 }
 
 /* ============================================
@@ -104,13 +129,15 @@ html {
 body {
     background: var(--bg);
     color: var(--text);
-    font-family: "Source Sans Pro", Helvetica, sans-serif;
+    font-family: var(--font-primary);
     font-size: 1rem;
-    font-weight: 300;
-    letter-spacing: 0.025em;
-    line-height: 1.65;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    line-height: 1.6;
     min-height: 100vh;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 body.menu-visible {
@@ -169,7 +196,7 @@ code {
 }
 
 /* ============================================
-   Header (Fixed Top Bar)
+   Header (Fixed Top Bar) - Bold Premium Design
    ============================================ */
 #header {
     position: fixed;
@@ -178,85 +205,99 @@ code {
     right: 0;
     height: var(--header-height);
     z-index: 10000;
-    background: rgba(0, 39, 66, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: linear-gradient(180deg, rgba(11, 19, 43, 0.98) 0%, rgba(5, 10, 24, 0.95) 100%);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 2em;
-    border-bottom: 1px solid var(--border);
+    padding: 0 2.5em;
+    border-bottom: 1px solid rgba(88, 164, 176, 0.2);
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.4);
 }
 
-/* Logo */
+/* Logo - Bigger and Bolder */
 #header .logo {
     display: flex;
     align-items: center;
-    gap: 0.75em;
+    gap: 1em;
     text-decoration: none;
     border: none;
+    padding: 0.5em 0;
 }
 
 #header .logo img {
-    height: 2.25em;
-    width: 2.25em;
-    border-radius: var(--radius);
+    height: 3em;
+    width: 3em;
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 15px rgba(88, 164, 176, 0.3);
+    transition: transform var(--duration) ease, box-shadow var(--duration) ease;
+}
+
+#header .logo:hover img {
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(88, 164, 176, 0.5);
 }
 
 #header .logo .title {
     display: flex;
     flex-direction: column;
+    gap: 0.15em;
 }
 
 #header .logo .title strong {
-    font-size: 1.15em;
-    font-weight: 700;
+    font-size: 1.5em;
+    font-weight: 800;
     color: var(--text);
-    letter-spacing: 0.05em;
+    letter-spacing: 0.02em;
     transition: color var(--duration) ease;
+    text-transform: uppercase;
 }
 
 #header .logo .title span {
-    font-size: 0.65em;
-    color: var(--accent);
+    font-size: 0.7em;
+    color: var(--pacific);
     text-transform: uppercase;
-    letter-spacing: 0.15em;
+    letter-spacing: 0.2em;
     font-weight: 600;
 }
 
 #header .logo:hover .title strong {
-    color: var(--accent);
+    color: var(--pacific);
 }
 
 /* Header Nav (Desktop) */
 #header nav {
     display: flex;
     align-items: center;
-    gap: 0.25em;
+    gap: 0.35em;
 }
 
 #header nav button {
-    padding: 0.6em 1em;
-    font-size: 0.75em;
+    padding: 0.7em 1.1em;
+    font-size: 0.7em;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--text);
+    letter-spacing: 0.08em;
+    color: var(--powder-blue);
     background: transparent;
     border: none;
     border-radius: var(--radius);
     cursor: pointer;
     transition: all var(--duration) ease;
+    position: relative;
 }
 
 #header nav button:hover {
-    background: rgba(230, 149, 0, 0.15);
-    color: var(--accent);
+    background: rgba(88, 164, 176, 0.12);
+    color: var(--pacific);
 }
 
 #header nav button.active {
-    background: var(--accent);
-    color: var(--black-pearl);
+    background: var(--pacific);
+    color: var(--prussian-dark);
+    font-weight: 700;
+    box-shadow: 0 2px 10px rgba(88, 164, 176, 0.4);
 }
 
 /* Menu Toggle (Hamburger) */
@@ -329,7 +370,7 @@ code {
 }
 
 /* ============================================
-   Full-Screen Menu (Forty Signature)
+   Full-Screen Menu (Premium Dark Overlay)
    ============================================ */
 #menu {
     position: fixed;
@@ -338,9 +379,9 @@ code {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 39, 66, 0.97);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: rgba(11, 19, 43, 0.98);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -400,18 +441,26 @@ code {
     gap: 1em;
     width: 100%;
     padding: 1.25em 0;
-    font-size: 0.85em;
+    font-size: 0.9em;
     font-weight: 600;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.15em;
     text-transform: uppercase;
     color: var(--text);
     text-decoration: none;
+    border: none;
     transition: color var(--duration) ease, background var(--duration) ease;
 }
 
 #menu .links a:hover {
-    color: var(--accent);
-    background: rgba(230, 149, 0, 0.1);
+    color: var(--pacific);
+    background: rgba(88, 164, 176, 0.1);
+}
+
+#menu .links a i {
+    font-size: 1.25em;
+    width: 1.5em;
+    text-align: center;
+    color: var(--pacific);
 }
 
 #menu .links a svg {
