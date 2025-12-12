@@ -188,6 +188,12 @@ remove_systemd_services() {
         log_info "Removed guardian-wlan-setup.sh"
     fi
 
+    # Remove guardian-setup-routing script
+    if [ -f "/usr/local/bin/guardian-setup-routing.sh" ]; then
+        rm -f /usr/local/bin/guardian-setup-routing.sh
+        log_info "Removed guardian-setup-routing.sh"
+    fi
+
     # Remove health check scripts
     if [ -f "/usr/local/bin/guardian-ssid-health.sh" ]; then
         rm -f /usr/local/bin/guardian-ssid-health.sh
@@ -337,17 +343,20 @@ remove_nftables_rules() {
     rm -f /etc/network/if-up.d/guardian-nat
     log_info "Removed iptables persistence hook"
 
-    # Clean up iptables NAT rules
+    # Clean up iptables NAT rules (all common WAN interfaces)
     log_info "Cleaning up iptables NAT rules..."
-    iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
-    iptables -t nat -D POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || true
+    for WAN in eth0 wlan0 enp0s25 enp1s0 wlp2s0; do
+        iptables -t nat -D POSTROUTING -o $WAN -j MASQUERADE 2>/dev/null || true
+    done
 
     # Clean up iptables FORWARD rules for Guardian LAN interfaces
     for LAN in wlan1 br0; do
         iptables -D FORWARD -i $LAN -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -o $LAN -j ACCEPT 2>/dev/null || true
         iptables -D FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-        for WAN in eth0 wlan0; do
+        for WAN in eth0 wlan0 enp0s25 enp1s0 wlp2s0; do
             iptables -D FORWARD -i $LAN -o $WAN -j ACCEPT 2>/dev/null || true
+            iptables -D FORWARD -i $WAN -o $LAN -j ACCEPT 2>/dev/null || true
             iptables -D FORWARD -i $WAN -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
         done
     done
