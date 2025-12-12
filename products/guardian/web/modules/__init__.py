@@ -12,9 +12,9 @@ def register_blueprints(app: Flask):
     from .core import core_bp
     app.register_blueprint(core_bp)
 
-    # Security module - QSecBit, threats, layer stats
+    # Security module - QSecBit, threats, layer stats, XDP, blocks
     from .security import security_bp
-    app.register_blueprint(security_bp, url_prefix='/api/security')
+    app.register_blueprint(security_bp, url_prefix='/api')
 
     # dnsXai module - AI-powered ad blocking
     from .dnsxai import dnsxai_bp
