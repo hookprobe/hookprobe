@@ -34,6 +34,49 @@ const BASEMAP_STYLES = {
 };
 
 // =============================================================================
+// OSM RASTER FALLBACK STYLE (CORS-friendly, works from any origin)
+// =============================================================================
+
+/**
+ * Simple raster tile style using OpenStreetMap tiles
+ * This is used when vector tiles have CORS issues (e.g., local IP access)
+ */
+const OSM_DARK_RASTER_STYLE = {
+    version: 8,
+    name: 'OSM Dark Raster',
+    sources: {
+        'osm-raster': {
+            type: 'raster',
+            tiles: [
+                'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
+            ],
+            tileSize: 256,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        }
+    },
+    layers: [
+        {
+            id: 'background',
+            type: 'background',
+            paint: { 'background-color': '#0a0a15' }
+        },
+        {
+            id: 'osm-raster-layer',
+            type: 'raster',
+            source: 'osm-raster',
+            paint: {
+                'raster-opacity': 0.85,
+                'raster-brightness-max': 0.5,
+                'raster-contrast': 0.2,
+                'raster-saturation': -0.3
+            }
+        }
+    ]
+};
+
+// =============================================================================
 // CORTEX CUSTOM DARK STYLE
 // =============================================================================
 
@@ -387,14 +430,29 @@ const CORTEX_DARK_STYLE = {
 
 /**
  * Get the recommended basemap style for Cortex
- * Uses custom style if CartoDB tiles are available, falls back to hosted styles
+ * Uses raster tiles by default to avoid CORS issues when accessed from local IPs
  */
 function getCortexMapStyle(options = {}) {
-    const { provider, apiKey } = options;
+    const { provider, apiKey, forceVector } = options;
 
-    // Default: Use our custom Cortex dark style (free, no key)
+    // Check if we're on a local network (likely to have CORS issues with vector tiles)
+    const isLocalNetwork = typeof window !== 'undefined' &&
+        (window.location.hostname.match(/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost|127\.0\.0\.1)/) ||
+         window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/));
+
+    // Default: Use raster tiles for local networks (CORS-friendly)
+    // unless forceVector is set
     if (!provider || provider === 'cortex' || provider === 'custom') {
+        if (isLocalNetwork && !forceVector) {
+            console.log('[BasemapConfig] Using raster tiles (CORS-friendly for local network)');
+            return OSM_DARK_RASTER_STYLE;
+        }
         return CORTEX_DARK_STYLE;
+    }
+
+    // Raster tiles (always CORS-friendly)
+    if (provider === 'raster' || provider === 'osm-raster') {
+        return OSM_DARK_RASTER_STYLE;
     }
 
     // MapTiler (requires API key)
@@ -407,7 +465,7 @@ function getCortexMapStyle(options = {}) {
         return BASEMAP_STYLES.stadia_dark;
     }
 
-    // CartoDB hosted style (fallback)
+    // CartoDB hosted style (may have CORS issues on local networks)
     return BASEMAP_STYLES.carto_dark;
 }
 
@@ -528,6 +586,7 @@ function setBuildingOpacity(map, opacity) {
 if (typeof window !== 'undefined') {
     window.BASEMAP_STYLES = BASEMAP_STYLES;
     window.CORTEX_DARK_STYLE = CORTEX_DARK_STYLE;
+    window.OSM_DARK_RASTER_STYLE = OSM_DARK_RASTER_STYLE;
     window.getCortexMapStyle = getCortexMapStyle;
     window.getSimplifiedStyle = getSimplifiedStyle;
     window.applyCortexTheme = applyCortexTheme;
@@ -540,6 +599,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         BASEMAP_STYLES,
         CORTEX_DARK_STYLE,
+        OSM_DARK_RASTER_STYLE,
         getCortexMapStyle,
         getSimplifiedStyle,
         applyCortexTheme,
