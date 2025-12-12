@@ -275,79 +275,119 @@
 
         // Phase 2: Initialize city view components
         function initCityViewSystem() {
+            // Check if we're on mobile or low-performance device
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            const isLowPerformance = !window.WebGLRenderingContext || (isMobile && window.innerWidth < 768);
+
             // Check if Deck.gl and MapLibre are available
-            if (typeof DeckRenderer === 'undefined' || typeof maplibregl === 'undefined') {
-                console.warn('Phase 2 dependencies not loaded, city view disabled');
+            const hasDeckGL = typeof deck !== 'undefined' && typeof DeckRenderer !== 'undefined';
+            const hasMapLibre = typeof maplibregl !== 'undefined';
+
+            if (!hasDeckGL || !hasMapLibre) {
+                console.warn('Phase 2 dependencies not loaded:', {
+                    hasDeckGL,
+                    hasMapLibre,
+                    isMobile,
+                    isLowPerformance
+                });
+                // City view disabled but globe should still work
+                console.log('City view disabled - using globe only mode');
+                return;
+            }
+
+            // On mobile with limited resources, skip city view initialization
+            if (isLowPerformance) {
+                console.log('Low performance device detected - city view disabled for better globe performance');
                 return;
             }
 
             // Initialize ViewManager
             if (typeof ViewManager !== 'undefined' && window.globe) {
-                window.viewManager = new ViewManager();
+                try {
+                    window.viewManager = new ViewManager();
 
-                // Connect to Globe.gl
-                window.viewManager.initWithGlobeGL(
-                    window.globe,
-                    document.getElementById('globe-container')
-                );
+                    // Connect to Globe.gl
+                    window.viewManager.initWithGlobeGL(
+                        window.globe,
+                        document.getElementById('globe-container')
+                    );
 
-                // Initialize DeckRenderer for city view
-                window.viewManager.initDeckRenderer(
-                    document.getElementById('city-map-container'),
-                    {
-                        mapStyle: getCortexMapStyle(),
-                        onNodeClick: (node, info) => {
-                            console.log('City view node clicked:', node);
-                            if (window.cityViewController) {
-                                window.cityViewController._onNodeClick(node, info);
-                            }
-                        },
-                        onClusterClick: (cluster, info) => {
-                            console.log('City view cluster clicked:', cluster);
-                            // Zoom into cluster
-                            if (window.viewManager.deckRenderer) {
-                                const coords = cluster.geometry?.coordinates ||
-                                    [cluster.lng, cluster.lat];
-                                window.viewManager.deckRenderer.flyTo({
-                                    longitude: coords[0],
-                                    latitude: coords[1],
-                                    zoom: 14,
-                                    duration: 800
-                                });
+                    // Initialize DeckRenderer for city view
+                    const mapStyle = typeof getCortexMapStyle === 'function' ? getCortexMapStyle() : null;
+
+                    window.viewManager.initDeckRenderer(
+                        document.getElementById('city-map-container'),
+                        {
+                            mapStyle: mapStyle,
+                            onNodeClick: (node, info) => {
+                                console.log('City view node clicked:', node);
+                                if (window.cityViewController) {
+                                    window.cityViewController._onNodeClick(node, info);
+                                }
+                            },
+                            onClusterClick: (cluster, info) => {
+                                console.log('City view cluster clicked:', cluster);
+                                // Zoom into cluster
+                                if (window.viewManager && window.viewManager.deckRenderer) {
+                                    const coords = cluster.geometry?.coordinates ||
+                                        [cluster.lng, cluster.lat];
+                                    window.viewManager.deckRenderer.flyTo({
+                                        longitude: coords[0],
+                                        latitude: coords[1],
+                                        zoom: 14,
+                                        duration: 800
+                                    });
+                                }
                             }
                         }
+                    );
+
+                    // Create transition overlay
+                    window.viewManager.initTransitionOverlay(document.getElementById('app'));
+
+                    // Connect clustering system
+                    if (window.clusterManager) {
+                        window.viewManager.setClusterManager(window.clusterManager);
                     }
-                );
+                    if (window.zoomController) {
+                        window.viewManager.setZoomController(window.zoomController);
+                    }
 
-                // Create transition overlay
-                window.viewManager.initTransitionOverlay(document.getElementById('app'));
+                    // Listen for mode changes
+                    window.viewManager.on('modeChange', (data) => {
+                        console.log('View mode changed:', data.mode);
+                        updateModeIndicator(data.mode);
+                    });
 
-                // Connect clustering system
-                if (window.clusterManager) {
-                    window.viewManager.setClusterManager(window.clusterManager);
+                    console.log('Phase 2: ViewManager initialized');
+                } catch (error) {
+                    console.error('Failed to initialize ViewManager:', error);
+                    // Clean up partial initialization
+                    if (window.viewManager) {
+                        try { window.viewManager.destroy(); } catch(e) {}
+                        window.viewManager = null;
+                    }
+                    return;
                 }
-                if (window.zoomController) {
-                    window.viewManager.setZoomController(window.zoomController);
-                }
-
-                // Listen for mode changes
-                window.viewManager.on('modeChange', (data) => {
-                    console.log('View mode changed:', data.mode);
-                    updateModeIndicator(data.mode);
-                });
-
-                console.log('Phase 2: ViewManager initialized');
             }
 
             // Initialize CityViewController
             if (typeof CityViewController !== 'undefined' && window.viewManager) {
-                window.cityViewController = new CityViewController(window.viewManager);
-                console.log('Phase 2: CityViewController initialized');
+                try {
+                    window.cityViewController = new CityViewController(window.viewManager);
+                    console.log('Phase 2: CityViewController initialized');
+                } catch (error) {
+                    console.error('Failed to initialize CityViewController:', error);
+                }
             }
 
             // Create view mode indicator
             if (typeof ViewModeIndicator !== 'undefined') {
-                window.viewModeIndicator = new ViewModeIndicator(document.getElementById('app'));
+                try {
+                    window.viewModeIndicator = new ViewModeIndicator(document.getElementById('app'));
+                } catch (error) {
+                    console.error('Failed to create ViewModeIndicator:', error);
+                }
             }
 
             console.log('Phase 2: City view system ready');

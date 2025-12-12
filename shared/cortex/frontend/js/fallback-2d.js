@@ -37,9 +37,31 @@ function init2DFallback() {
     canvas = document.getElementById('fallback-canvas');
     if (!canvas) return;
 
-    // Set canvas size
-    map2DState.width = Math.min(window.innerWidth - 40, 800);
-    map2DState.height = map2DState.width / 2;
+    // Calculate optimal canvas size based on viewport
+    const calculateCanvasSize = () => {
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        // For mobile portrait mode, use more of the available height
+        const isMobilePortrait = viewportHeight > viewportWidth && viewportWidth < 768;
+
+        if (isMobilePortrait) {
+            // Use nearly full width on mobile portrait
+            map2DState.width = viewportWidth - 20;
+            // Adjust height to fit below header (56px) and above mode indicator
+            map2DState.height = Math.min(map2DState.width / 1.5, viewportHeight - 200);
+        } else {
+            // Desktop/landscape: maintain 2:1 aspect ratio
+            map2DState.width = Math.min(viewportWidth - 40, 1200);
+            map2DState.height = Math.min(map2DState.width / 2, viewportHeight - 180);
+        }
+
+        // Ensure minimum dimensions
+        map2DState.width = Math.max(map2DState.width, 280);
+        map2DState.height = Math.max(map2DState.height, 200);
+    };
+
+    calculateCanvasSize();
     canvas.width = map2DState.width;
     canvas.height = map2DState.height;
 
@@ -48,16 +70,19 @@ function init2DFallback() {
     // Draw initial map
     drawMap();
 
-    // Resize handler
+    // Debounced resize handler
+    let resizeTimeout;
     window.addEventListener('resize', () => {
-        map2DState.width = Math.min(window.innerWidth - 40, 800);
-        map2DState.height = map2DState.width / 2;
-        canvas.width = map2DState.width;
-        canvas.height = map2DState.height;
-        drawMap();
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            calculateCanvasSize();
+            canvas.width = map2DState.width;
+            canvas.height = map2DState.height;
+            drawMap();
+        }, 100);
     });
 
-    console.log('2D fallback map initialized');
+    console.log('2D fallback map initialized:', map2DState.width, 'x', map2DState.height);
 }
 
 /**
