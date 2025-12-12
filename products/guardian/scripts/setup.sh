@@ -2614,8 +2614,9 @@ EOF
         sed -i 's/^expand-hosts/#expand-hosts/' /etc/dnsmasq.conf 2>/dev/null || true
     fi
 
-    # Remove any existing guardian/dns-shield configs to start fresh
-    rm -f /etc/dnsmasq.d/guardian.conf /etc/dnsmasq.d/dns-shield.conf 2>/dev/null || true
+    # Remove existing guardian.conf to start fresh (preserve dns-shield.conf if exists)
+    # NOTE: dns-shield.conf is created by install_dns_shield() which runs before this function
+    rm -f /etc/dnsmasq.d/guardian.conf 2>/dev/null || true
 
     cat > /etc/dnsmasq.d/guardian.conf << EOF
 # HookProbe Guardian - DHCP/DNS Configuration
