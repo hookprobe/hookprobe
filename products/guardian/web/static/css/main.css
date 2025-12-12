@@ -86,7 +86,7 @@
     --spacing-2xl: 3rem;
 
     /* Layout */
-    --header-height: 4rem;
+    --header-height: 4.5rem;
 
     /* Font */
     --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -180,27 +180,24 @@ code {
 }
 
 /* ============================================
-   Header (Fixed Top Bar) - Bold Premium Design
+   Header (Fixed Top Bar) - Taller, Clean Design
    ============================================ */
 #header {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    height: var(--header-height);
+    height: 4.5rem;
     z-index: 10000;
-    background: linear-gradient(180deg, rgba(11, 19, 43, 0.98) 0%, rgba(5, 10, 24, 0.95) 100%);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: var(--prussian);
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0 2.5em;
-    border-bottom: 1px solid rgba(88, 164, 176, 0.2);
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.4);
+    border-bottom: 1px solid var(--border);
 }
 
-/* Logo - Bigger and Bolder */
+/* Logo - Clean, no shadow */
 #header .logo {
     display: flex;
     align-items: center;
@@ -211,77 +208,63 @@ code {
 }
 
 #header .logo img {
-    height: 3em;
-    width: 3em;
-    border-radius: var(--radius-md);
-    box-shadow: 0 4px 15px rgba(88, 164, 176, 0.3);
-    transition: transform var(--duration) ease, box-shadow var(--duration) ease;
-}
-
-#header .logo:hover img {
-    transform: scale(1.05);
-    box-shadow: 0 6px 20px rgba(88, 164, 176, 0.5);
+    height: 2.5em;
+    width: 2.5em;
+    border-radius: var(--radius-sm);
 }
 
 #header .logo .title {
     display: flex;
     flex-direction: column;
-    gap: 0.15em;
+    gap: 0.1em;
 }
 
 #header .logo .title strong {
-    font-size: 1.5em;
-    font-weight: 800;
-    color: var(--text);
-    letter-spacing: 0.02em;
-    transition: color var(--duration) ease;
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--white);
+    letter-spacing: 0.03em;
     text-transform: uppercase;
 }
 
 #header .logo .title span {
-    font-size: 0.7em;
+    font-size: 0.65em;
     color: var(--pacific);
     text-transform: uppercase;
-    letter-spacing: 0.2em;
-    font-weight: 600;
-}
-
-#header .logo:hover .title strong {
-    color: var(--pacific);
+    letter-spacing: 0.15em;
+    font-weight: 500;
 }
 
 /* Header Nav (Desktop) */
 #header nav {
     display: flex;
     align-items: center;
-    gap: 0.35em;
+    gap: 0.5em;
 }
 
 #header nav button {
-    padding: 0.7em 1.1em;
-    font-size: 0.7em;
+    padding: 0.6em 1em;
+    font-size: 0.75em;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--powder-blue);
+    letter-spacing: 0.05em;
+    color: var(--alabaster);
     background: transparent;
     border: none;
-    border-radius: var(--radius);
+    border-radius: var(--radius-md);
     cursor: pointer;
     transition: all var(--duration) ease;
-    position: relative;
 }
 
 #header nav button:hover {
-    background: rgba(88, 164, 176, 0.12);
-    color: var(--pacific);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--white);
 }
 
 #header nav button.active {
     background: var(--pacific);
-    color: var(--prussian-dark);
+    color: var(--prussian);
     font-weight: 700;
-    box-shadow: 0 2px 10px rgba(88, 164, 176, 0.4);
 }
 
 /* Menu Toggle (Hamburger) */
@@ -354,7 +337,7 @@ code {
 }
 
 /* ============================================
-   Full-Screen Menu (Premium Dark Overlay)
+   Full-Screen Menu - Dark Overlay
    ============================================ */
 #menu {
     position: fixed;
@@ -363,13 +346,13 @@ code {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(11, 19, 43, 0.98);
-    backdrop-filter: blur(30px);
-    -webkit-backdrop-filter: blur(30px);
+    background: rgba(0, 39, 66, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
-    transition: opacity 0.35s ease, visibility 0.35s;
+    transition: opacity 0.3s ease, visibility 0.3s;
 }
 
 #menu.visible {
@@ -382,9 +365,13 @@ code {
     text-align: center;
     transform: translateY(20px);
     opacity: 0;
-    transition: transform 0.35s ease, opacity 0.35s ease;
+    transition: transform 0.3s ease, opacity 0.3s ease;
     max-width: 90%;
     width: 400px;
+    background: var(--white);
+    padding: 2em;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
 }
 
 #menu.visible .inner {
@@ -395,18 +382,18 @@ code {
 /* Menu Title */
 #menu h2 {
     font-family: var(--font-primary);
-    font-size: 0.9em;
+    font-size: 0.85em;
     font-weight: 600;
-    letter-spacing: 0.25em;
+    letter-spacing: 0.15em;
     text-transform: uppercase;
-    color: var(--text-alt);
+    color: var(--text-muted);
     margin: 0 0 1.5em 0;
 }
 
 /* Menu Navigation Links */
 #menu .links {
     list-style: none;
-    margin: 0 0 2em 0;
+    margin: 0 0 1.5em 0;
     padding: 0;
 }
 
@@ -422,12 +409,12 @@ code {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 1em;
+    gap: 0.75em;
     width: 100%;
-    padding: 1.25em 0;
+    padding: 1em 0;
     font-size: 0.9em;
     font-weight: 600;
-    letter-spacing: 0.15em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--text);
     text-decoration: none;
@@ -436,24 +423,11 @@ code {
 }
 
 #menu .links a:hover {
-    color: var(--pacific);
-    background: rgba(88, 164, 176, 0.1);
+    color: var(--watermelon);
+    background: rgba(238, 66, 102, 0.08);
 }
 
-#menu .links a i {
-    font-size: 1.25em;
-    width: 1.5em;
-    text-align: center;
-    color: var(--pacific);
-}
-
-#menu .links a svg {
-    width: 1.5em;
-    height: 1.5em;
-    flex-shrink: 0;
-}
-
-/* Close Button */
+/* Close Button - White on dark overlay */
 #menu .close {
     position: absolute;
     top: 1.5em;
@@ -467,15 +441,22 @@ code {
     text-indent: -9999px;
     overflow: hidden;
     text-decoration: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    transition: background var(--duration) ease;
+}
+
+#menu .close:hover {
+    background: rgba(255, 255, 255, 0.2);
 }
 
 #menu .close::before,
 #menu .close::after {
     content: '';
     position: absolute;
-    width: 24px;
+    width: 20px;
     height: 2px;
-    background: var(--text);
+    background: var(--white);
     transition: background var(--duration) ease;
 }
 
@@ -484,7 +465,7 @@ code {
 
 #menu .close:hover::before,
 #menu .close:hover::after {
-    background: var(--accent);
+    background: var(--pacific);
 }
 
 /* Body locked when menu visible */
@@ -616,18 +597,17 @@ body.is-menu-visible {
 }
 
 /* ============================================
-   Banner / Hero Section
+   Banner / Hero Section - Simple Dark Solid
    ============================================ */
 .banner {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 30vh;
-    padding: 3em 2em;
-    background: linear-gradient(135deg, var(--prussian) 0%, var(--black-pearl) 100%);
+    min-height: 20vh;
+    padding: 2em;
+    background: var(--prussian);
     text-align: center;
     position: relative;
-    border-bottom: 1px solid var(--border);
 }
 
 .banner .content {
@@ -636,14 +616,15 @@ body.is-menu-visible {
 }
 
 .banner h1 {
-    font-size: 2.5em;
+    font-size: 2em;
     font-weight: 700;
     margin-bottom: 0.25em;
+    color: var(--white);
 }
 
 .banner p {
-    font-size: 1.1em;
-    color: var(--text-muted);
+    font-size: 1em;
+    color: var(--alabaster);
     margin: 0;
 }
 
@@ -651,11 +632,10 @@ body.is-menu-visible {
     display: inline-flex;
     align-items: center;
     gap: 1em;
-    margin-top: 1.5em;
-    padding: 0.75em 1.5em;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 2em;
-    border: 1px solid var(--border);
+    margin-top: 1.25em;
+    padding: 0.6em 1.25em;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-md);
 }
 
 .banner .time {
@@ -1215,7 +1195,8 @@ tbody tr:last-child td {
 .health-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 2em;
+    gap: 1.5rem;
+    min-width: 0;
 }
 
 .health-item {
@@ -1277,12 +1258,24 @@ tbody tr:last-child td {
 
 @media screen and (max-width: 736px) {
     .health-grid {
-        grid-template-columns: 1fr;
-        gap: 1.5em;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.75rem;
     }
     .health-ring {
-        width: 80px;
-        height: 80px;
+        width: 70px;
+        height: 70px;
+    }
+    .health-ring-value {
+        font-size: 1rem;
+    }
+    .health-label {
+        font-size: 0.7rem;
+    }
+    .health-detail {
+        font-size: 0.6rem;
+    }
+    .health-panel {
+        padding: 1.25rem;
     }
 }
 
@@ -1422,6 +1415,310 @@ tbody tr:last-child td {
 .mb-2 { margin-bottom: 2em !important; }
 .mt-1 { margin-top: 1em !important; }
 .mt-2 { margin-top: 2em !important; }
+
+/* ============================================
+   Page Content - Consistent Padding
+   ============================================ */
+.page-content,
+#wrapper > section {
+    padding: 1.5rem;
+}
+
+/* ============================================
+   Dashboard Header - Clean Style
+   ============================================ */
+.dashboard-header {
+    padding: 1.5rem 0 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.dashboard-header h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.dashboard-header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.dashboard-header .badge {
+    vertical-align: middle;
+}
+
+/* ============================================
+   Device Grid - DHCP Leases Cards
+   ============================================ */
+.device-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.device-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    transition: all var(--duration) ease;
+}
+
+.device-card:hover {
+    border-color: var(--pacific);
+    box-shadow: var(--shadow-md);
+}
+
+.device-card-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.device-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--radius-md);
+    background: rgba(88, 164, 176, 0.1);
+    color: var(--pacific);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.device-icon svg,
+.device-icon i {
+    font-size: 1.1rem;
+}
+
+.device-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.device-name {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.device-mac {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+
+.device-details {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+
+.device-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.device-detail-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.device-detail-value {
+    font-size: 0.85rem;
+    color: var(--text);
+    font-family: var(--font-mono);
+}
+
+.device-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+}
+
+.device-status .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+}
+
+.device-status .status-dot.inactive {
+    background: var(--text-muted);
+}
+
+.device-status .status-dot.warning {
+    background: var(--amber);
+}
+
+/* Device Card Actions */
+.device-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+
+.device-actions .btn {
+    flex: 1;
+    font-size: 0.75rem;
+    padding: 0.5rem;
+}
+
+/* ============================================
+   Blocked Clients List - Consistent Style
+   ============================================ */
+.blocked-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.blocked-item {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--watermelon);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.blocked-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.blocked-item-mac {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+}
+
+.blocked-item-name {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.blocked-item-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* ============================================
+   Network Cards - Clean Minimal Style
+   ============================================ */
+.network-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 0.75rem;
+}
+
+.network-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--pacific);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    cursor: pointer;
+    transition: all var(--duration) ease;
+}
+
+.network-card:hover {
+    border-left-color: var(--pacific-light);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+.network-card.secure {
+    border-left-color: var(--green);
+}
+
+.network-card.open {
+    border-left-color: var(--amber);
+}
+
+.network-card-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.network-card-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.network-card-signal {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.network-card-signal svg {
+    width: 14px;
+    height: 14px;
+    color: var(--pacific);
+}
+
+.network-card-security {
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.network-card.secure .network-card-security {
+    color: var(--green);
+}
+
+.network-card.open .network-card-security {
+    color: var(--amber);
+}
+
+@media screen and (max-width: 736px) {
+    .network-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+    }
+
+    .network-card {
+        padding: 0.75rem;
+    }
+
+    .network-card-name {
+        font-size: 0.8rem;
+    }
+
+    .network-card-meta {
+        font-size: 0.65rem;
+    }
+}
 
 /* ============================================
    Quick Actions - Clean Style
