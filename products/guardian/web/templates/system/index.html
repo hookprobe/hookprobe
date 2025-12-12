@@ -382,7 +382,7 @@ async function restartService(service) {
 }
 
 // Load logs on tab view
-if (Guardian && Guardian.currentTab === 'system') {
+if (typeof Guardian !== 'undefined' && Guardian.currentTab === 'system') {
     refreshLogs();
 }
 

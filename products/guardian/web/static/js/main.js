@@ -394,8 +394,8 @@ async function loadSecurityData() {
         const [threats, layers, xdp, qsecbit] = await Promise.all([
             apiGet('/threats'),
             apiGet('/layer_threats'),
-            apiGet('/security/xdp_stats'),
-            apiGet('/security/qsecbit').catch(() => null)
+            apiGet('/xdp_stats'),
+            apiGet('/qsecbit').catch(() => null)
         ]);
 
         updateSecurityStats(threats, xdp, qsecbit);
