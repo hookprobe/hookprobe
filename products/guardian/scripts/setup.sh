@@ -2786,6 +2786,78 @@ EOF
         iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
     }
 
+    # Ensure nftables loads guardian rules at boot
+    log_info "Configuring nftables to load Guardian rules at boot..."
+    if [ -f /etc/nftables.conf ]; then
+        # Add include directive if not already present
+        if ! grep -q "guardian.nft" /etc/nftables.conf; then
+            echo 'include "/etc/nftables.d/guardian.nft"' >> /etc/nftables.conf
+            log_info "Added Guardian rules to nftables.conf"
+        fi
+    fi
+
+    # Create iptables fallback script for systems without nftables
+    log_info "Creating iptables fallback for boot persistence..."
+    cat > /etc/network/if-up.d/guardian-nat << 'IPTABLES_EOF'
+#!/bin/bash
+# Guardian NAT rules - applied when network interfaces come up
+# This ensures routing works even if nftables fails
+
+# Only run for WAN interfaces
+case "$IFACE" in
+    eth0|wlan0|enp*|wlp*)
+        # Enable IP forwarding
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+
+        # Add NAT masquerade if not already present
+        if ! iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null; then
+            iptables -t nat -A POSTROUTING -o "$IFACE" -j MASQUERADE
+        fi
+
+        # Add FORWARD rules for LAN interfaces
+        for LAN_IFACE in wlan1 br0; do
+            if [ -d "/sys/class/net/$LAN_IFACE" ]; then
+                if ! iptables -C FORWARD -i "$LAN_IFACE" -o "$IFACE" -j ACCEPT 2>/dev/null; then
+                    iptables -A FORWARD -i "$LAN_IFACE" -o "$IFACE" -j ACCEPT
+                fi
+                if ! iptables -C FORWARD -i "$IFACE" -o "$LAN_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+                    iptables -A FORWARD -i "$IFACE" -o "$LAN_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+                fi
+            fi
+        done
+        ;;
+esac
+IPTABLES_EOF
+    chmod +x /etc/network/if-up.d/guardian-nat 2>/dev/null || true
+
+    # Also create systemd service for iptables persistence (for systems using systemd-networkd)
+    cat > /etc/systemd/system/guardian-routing.service << 'ROUTING_EOF'
+[Unit]
+Description=Guardian NAT and Routing Rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'echo 1 > /proc/sys/net/ipv4/ip_forward; \
+    iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; \
+    iptables -t nat -C POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE; \
+    for LAN in wlan1 br0; do \
+        [ -d /sys/class/net/$LAN ] && { \
+            iptables -C FORWARD -i $LAN -j ACCEPT 2>/dev/null || iptables -A FORWARD -i $LAN -j ACCEPT; \
+            iptables -C FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT; \
+        }; \
+    done'
+
+[Install]
+WantedBy=multi-user.target
+ROUTING_EOF
+
+    systemctl daemon-reload
+    systemctl enable guardian-routing.service 2>/dev/null || true
+    systemctl start guardian-routing.service 2>/dev/null || true
+
     log_info "Base networking configuration complete"
 }
 
@@ -3243,15 +3315,28 @@ install_web_ui() {
 
     log_info "Copied web UI: app.py, modules/, templates/, static/, utils.py, config.py"
 
-    # Install shared Cortex visualization modules
+    # Install shared Cortex visualization modules (frontend JS + backend Python)
     log_info "Installing shared Cortex visualization modules..."
     local SHARED_CORTEX="$GUARDIAN_ROOT/../../shared/cortex"
     if [ -d "$SHARED_CORTEX/frontend/js" ]; then
+        # Frontend JS modules (for globe visualization)
         mkdir -p /opt/hookprobe/shared/cortex/frontend/js
         cp "$SHARED_CORTEX/frontend/js/"*.js /opt/hookprobe/shared/cortex/frontend/js/ 2>/dev/null || true
-        log_info "Installed Cortex modules to /opt/hookprobe/shared/cortex/"
+        log_info "Installed Cortex frontend JS modules"
     else
-        log_warn "Shared Cortex modules not found at $SHARED_CORTEX"
+        log_warn "Shared Cortex frontend modules not found at $SHARED_CORTEX/frontend/js"
+    fi
+
+    # Backend Python modules (for demo data generation with 75+ nodes)
+    if [ -d "$SHARED_CORTEX/backend" ]; then
+        mkdir -p /opt/hookprobe/shared/cortex/backend
+        cp "$SHARED_CORTEX/backend/"*.py /opt/hookprobe/shared/cortex/backend/ 2>/dev/null || true
+        # Create __init__.py if it doesn't exist
+        touch /opt/hookprobe/shared/cortex/__init__.py
+        touch /opt/hookprobe/shared/cortex/backend/__init__.py
+        log_info "Installed Cortex backend Python modules (demo data generator)"
+    else
+        log_warn "Shared Cortex backend modules not found at $SHARED_CORTEX/backend"
     fi
 
     # Install ML libraries for dnsXai AI features
