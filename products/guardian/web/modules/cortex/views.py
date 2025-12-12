@@ -20,24 +20,43 @@ from . import cortex_bp
 from utils import load_json_file, get_system_info
 
 # Add shared directory to path for cortex imports
-_shared_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'shared')
-_shared_path = os.path.abspath(_shared_path)
-print(f"[Cortex] Shared path: {_shared_path}, exists: {os.path.isdir(_shared_path)}")
+# Check multiple possible locations (installed vs development)
+_possible_shared_paths = [
+    # Installed location
+    '/opt/hookprobe/shared',
+    # Development location (relative to this file)
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'shared')),
+    # Alternative dev location
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', '..', 'shared')),
+]
 
-if os.path.isdir(_shared_path) and _shared_path not in sys.path:
-    sys.path.insert(0, _shared_path)
-    print(f"[Cortex] Added to sys.path")
+_shared_path = None
+for path in _possible_shared_paths:
+    if os.path.isdir(path) and os.path.exists(os.path.join(path, 'cortex', 'backend', 'demo_data.py')):
+        _shared_path = path
+        break
+
+if _shared_path:
+    print(f"[Cortex] Shared path found: {_shared_path}")
+    if _shared_path not in sys.path:
+        sys.path.insert(0, _shared_path)
+        print(f"[Cortex] Added to sys.path")
+else:
+    print(f"[Cortex] Shared path not found in: {_possible_shared_paths}")
 
 # Import shared Cortex demo data generator
+SHARED_DEMO_AVAILABLE = False
+_demo_generator = None
+HOOKPROBE_NODES = []
+
 try:
     from cortex.backend.demo_data import DemoDataGenerator, HOOKPROBE_NODES, THREAT_SOURCES
     SHARED_DEMO_AVAILABLE = True
     _demo_generator = DemoDataGenerator()
-    print(f"[Cortex] Shared demo data loaded: {len(HOOKPROBE_NODES)} nodes")
+    print(f"[Cortex] Shared demo data loaded: {len(HOOKPROBE_NODES)} nodes, {len(_demo_generator.organizations)} orgs")
 except ImportError as e:
-    SHARED_DEMO_AVAILABLE = False
-    _demo_generator = None
     print(f"[Cortex] Failed to load shared demo data: {e}")
+    # Will use fallback local demo data
 
 # Try to import requests for IP geolocation
 try:
