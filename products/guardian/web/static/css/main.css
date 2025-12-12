@@ -1201,7 +1201,8 @@ tbody tr:last-child td {
 .health-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 2em;
+    gap: 1.5rem;
+    min-width: 0;
 }
 
 .health-item {
@@ -1263,12 +1264,24 @@ tbody tr:last-child td {
 
 @media screen and (max-width: 736px) {
     .health-grid {
-        grid-template-columns: 1fr;
-        gap: 1.5em;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.75rem;
     }
     .health-ring {
-        width: 80px;
-        height: 80px;
+        width: 70px;
+        height: 70px;
+    }
+    .health-ring-value {
+        font-size: 1rem;
+    }
+    .health-label {
+        font-size: 0.7rem;
+    }
+    .health-detail {
+        font-size: 0.6rem;
+    }
+    .health-panel {
+        padding: 1.25rem;
     }
 }
 
