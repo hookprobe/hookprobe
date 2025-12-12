@@ -662,7 +662,7 @@ function loadDebugData() {
 }
 
 // Check if we're already on the debug tab
-if (Guardian && Guardian.currentTab === 'debug') {
+if (typeof Guardian !== 'undefined' && Guardian.currentTab === 'debug') {
     loadDebugData();
 }
 </script>
