@@ -1040,14 +1040,18 @@ function updateNetworkInterfaces(interfaces) {
         return;
     }
 
-    tbody.innerHTML = interfaces.map(iface => `
+    tbody.innerHTML = interfaces.map(iface => {
+        const isUp = iface.status === 'UP';
+        const badgeClass = isUp ? 'badge-success' : '';
+        const badgeStyle = !isUp ? 'background: rgba(238, 66, 102, 0.12); color: #ee4266;' : '';
+        return `
         <tr>
             <td><strong>${iface.name}</strong></td>
             <td class="font-mono">${iface.ip || 'N/A'}</td>
             <td class="font-mono">${iface.mac || 'N/A'}</td>
-            <td><span class="badge ${iface.status === 'UP' ? 'badge-success' : 'badge-danger'}">${iface.status}</span></td>
+            <td><span class="badge ${badgeClass}" style="${badgeStyle}">${iface.status}</span></td>
         </tr>
-    `).join('');
+    `}).join('');
 }
 
 function updateHotspotConfig(config) {
