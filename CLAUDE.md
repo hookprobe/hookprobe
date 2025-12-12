@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.0
-**Last Updated**: 2025-12-09
+**Version**: 5.1
+**Last Updated**: 2025-12-12
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -37,6 +37,8 @@
 | **Cortex connectors** | Product connectors | `shared/cortex/backend/connectors/` |
 | **Add Cortex to Guardian** | Flask integration | `shared/cortex/backend/connectors/guardian.py` |
 | **Add Cortex to MSSP** | Django integration | `shared/cortex/backend/connectors/mssp.py` |
+| **Guardian UI styling** | Forty-inspired CSS | `products/guardian/web/static/css/main.css` |
+| **UI design reference** | HTML5UP Forty template | `assets/forty/` |
 
 ---
 
@@ -292,23 +294,43 @@ hookprobe/
 │   │   │   ├── network_segmentation.py
 │   │   │   └── openflow_controller.py
 │   │   ├── scripts/
-│   │   │   ├── setup.sh
-│   │   │   ├── uninstall.sh
+│   │   │   ├── setup.sh             # Installation (also installs shared/cortex)
+│   │   │   ├── uninstall.sh         # Cleanup (removes shared/cortex)
 │   │   │   └── update-blocklists.sh
-│   │   └── web/                     # Flask Web UI
-│   │       ├── app.py               # Main Flask app
+│   │   └── web/                     # Flask Web UI (Forty-inspired design)
+│   │       ├── app.py               # Main Flask app + cortex-modules route
 │   │       ├── config.py
 │   │       ├── utils.py
-│   │       ├── modules/             # Blueprint modules
-│   │       │   ├── clients/         # Connected clients
-│   │       │   ├── config/          # Network config
-│   │       │   ├── core/            # Dashboard
-│   │       │   ├── dnsxai/          # DNS protection UI
-│   │       │   ├── security/        # Security metrics
-│   │       │   ├── system/          # System status
+│   │       ├── modules/             # Flask Blueprint modules
+│   │       │   ├── __init__.py      # register_blueprints()
+│   │       │   ├── clients/         # Connected clients API
+│   │       │   ├── config/          # Network config API
+│   │       │   ├── core/            # Dashboard (main landing)
+│   │       │   ├── debug/           # Browser CLI terminal
+│   │       │   ├── dnsxai/          # DNS protection settings
+│   │       │   ├── security/        # Security metrics + Qsecbit
+│   │       │   ├── system/          # System status + updates
 │   │       │   └── vpn/             # VPN management
-│   │       ├── static/              # CSS/JS assets
-│   │       └── templates/           # Jinja2 templates
+│   │       ├── static/
+│   │       │   ├── css/
+│   │       │   │   └── main.css     # Forty-inspired premium CSS
+│   │       │   ├── js/
+│   │       │   │   └── main.js      # Tab navigation + API calls
+│   │       │   └── images/          # Logo, icons
+│   │       └── templates/
+│   │           ├── base.html        # Main layout + full-screen menu
+│   │           ├── clients/         # Client management views
+│   │           ├── config/          # Network config views
+│   │           ├── core/            # Dashboard template
+│   │           │   └── dashboard.html
+│   │           ├── cortex/          # Cortex globe integration
+│   │           │   └── embedded.html # Uses /cortex-modules/* route
+│   │           ├── debug/           # Browser CLI terminal
+│   │           ├── dnsxai/          # DNS protection views
+│   │           ├── security/        # Security metrics views
+│   │           │   └── metrics.html # Qsecbit + layer cards
+│   │           ├── system/          # System status views
+│   │           └── vpn/             # VPN management views
 │   │
 │   ├── fortress/                     # Edge Router (4GB)
 │   │   ├── README.md
@@ -473,7 +495,7 @@ hookprobe/
 │   ├── mitigation-config.conf       # Mitigation config
 │   └── gdpr-config.sh               # GDPR config
 │
-├── assets/                           # IMAGES AND BRANDING
+├── assets/                           # IMAGES, BRANDING & UI TEMPLATES
 │   ├── readme.md
 │   ├── hookprobe-logo.svg
 │   ├── hookprobe-emblem.svg
@@ -483,7 +505,23 @@ hookprobe/
 │   ├── hookprobe-future-ram-cine.png
 │   ├── hookprobe-r&d.png
 │   ├── qsecbit-catcher.png
-│   └── xSOC-HLD-v1.2.png
+│   ├── xSOC-HLD-v1.2.png
+│   └── forty/                        # HTML5UP Forty Template (UI Reference)
+│       ├── index.html               # Main template structure
+│       ├── landing.html             # Landing page example
+│       ├── generic.html             # Generic content page
+│       ├── elements.html            # UI component showcase
+│       ├── images/                  # Stock images
+│       └── assets/
+│           ├── css/
+│           │   ├── main.css         # Full-screen menu, tiles, premium styling
+│           │   └── noscript.css
+│           ├── js/                  # jQuery + scrolly effects
+│           ├── sass/                # SCSS source files
+│           │   ├── base/            # Typography, reset
+│           │   ├── components/      # Buttons, forms, tiles
+│           │   └── layout/          # Header, menu, banner, footer
+│           └── webfonts/            # FontAwesome icons
 │
 └── .github/                          # CI/CD CONFIGURATION
     ├── dependabot.yml
@@ -694,17 +732,39 @@ Portable security gateway for travelers.
 
 **Architecture**:
 - **Backend**: `lib/` - Python modules for agent, detection, mesh
-- **Web UI**: `web/` - Flask app with modular blueprints
+- **Web UI**: `web/` - Flask app with modular blueprints (Forty-inspired)
 - **Config**: `config/` - WiFi (hostapd), DHCP (dnsmasq)
+
+**Web UI Design** (Forty-inspired premium theme):
+- **Template Reference**: `assets/forty/` - HTML5UP Forty template
+- **Color Palette**:
+  - Prussian Blue `#002742` (background)
+  - Siren `#850033` (danger/alerts)
+  - Tangerine `#e69500` (accent/highlights)
+  - Ebb `#e6dbdb` (text)
+  - Black Pearl `#02040d` (dark elements)
+- **Key Features**:
+  - Full-screen overlay menu (Forty-style)
+  - Tab-based single-page app navigation
+  - SVG icons for each menu item
+  - Mobile-first responsive design
+  - Premium cards, buttons, and forms
+
+**Web UI Files**:
+- `web/static/css/main.css` - Complete Forty-inspired stylesheet
+- `web/static/js/main.js` - Tab navigation, API calls, menu control
+- `web/templates/base.html` - Main layout with full-screen menu
 
 **Web UI Modules** (`web/modules/`):
 - `core/` - Main dashboard
 - `clients/` - Connected devices
 - `dnsxai/` - DNS protection settings
-- `security/` - Security metrics
+- `security/` - Security metrics + Qsecbit
 - `config/` - Network configuration
 - `system/` - System status
 - `vpn/` - VPN management
+- `debug/` - Browser CLI terminal
+- `cortex/` - 3D globe visualization (embedded)
 
 **Key Libraries**:
 ```python
@@ -712,6 +772,12 @@ from products.guardian.lib.guardian_agent import GuardianAgent
 from products.guardian.lib.mesh_integration import GuardianMeshAgent
 from products.guardian.lib.layer_threat_detector import LayerThreatDetector
 ```
+
+**Cortex Integration**:
+- Template: `web/templates/cortex/embedded.html`
+- Route: `/cortex-modules/<filename>` serves shared modules
+- Install path: `/opt/hookprobe/shared/cortex/frontend/js/`
+- Setup: `scripts/setup.sh` copies modules during installation
 
 ### MSSP - Cloud Federation Platform
 

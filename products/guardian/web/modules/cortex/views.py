@@ -21,17 +21,23 @@ from utils import load_json_file, get_system_info
 
 # Add shared directory to path for cortex imports
 _shared_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'shared')
+_shared_path = os.path.abspath(_shared_path)
+print(f"[Cortex] Shared path: {_shared_path}, exists: {os.path.isdir(_shared_path)}")
+
 if os.path.isdir(_shared_path) and _shared_path not in sys.path:
     sys.path.insert(0, _shared_path)
+    print(f"[Cortex] Added to sys.path")
 
 # Import shared Cortex demo data generator
 try:
     from cortex.backend.demo_data import DemoDataGenerator, HOOKPROBE_NODES, THREAT_SOURCES
     SHARED_DEMO_AVAILABLE = True
     _demo_generator = DemoDataGenerator()
-except ImportError:
+    print(f"[Cortex] Shared demo data loaded: {len(HOOKPROBE_NODES)} nodes")
+except ImportError as e:
     SHARED_DEMO_AVAILABLE = False
     _demo_generator = None
+    print(f"[Cortex] Failed to load shared demo data: {e}")
 
 # Try to import requests for IP geolocation
 try:
@@ -209,6 +215,24 @@ def api_cortex_demo_status():
         'shared_data_available': SHARED_DEMO_AVAILABLE,
         'demo_node_count': len(_demo_generator.nodes) if _demo_generator else 12,
         'demo_organizations': len(_demo_generator.organizations) if _demo_generator else 0
+    })
+
+
+@cortex_bp.route('/api/cortex/debug', methods=['GET'])
+def api_cortex_debug():
+    """Debug endpoint showing all Cortex configuration and state."""
+    return jsonify({
+        'shared_path': _shared_path,
+        'shared_path_exists': os.path.isdir(_shared_path),
+        'shared_demo_available': SHARED_DEMO_AVAILABLE,
+        'demo_mode': _demo_mode,
+        'demo_generator': _demo_generator is not None,
+        'demo_node_count': len(_demo_generator.nodes) if _demo_generator else 0,
+        'demo_org_count': len(_demo_generator.organizations) if _demo_generator else 0,
+        'requests_available': REQUESTS_AVAILABLE,
+        'cortex_server_url': CORTEX_SERVER_URL,
+        'node_id': get_node_id(),
+        'sample_nodes': _demo_generator.nodes[:3] if _demo_generator else []
     })
 
 

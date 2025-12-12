@@ -276,7 +276,12 @@ function initClusteringSystem() {
     // Initialize ZoomIndicator UI (from shared/cortex)
     if (typeof ZoomIndicator !== 'undefined' && guardianCortex.zoomController) {
         guardianCortex.zoomIndicator = new ZoomIndicator('zoom-indicator', guardianCortex.zoomController);
-        console.log('[Cortex Debug] ZoomIndicator created');
+        // Add visible class since CSS defaults to opacity:0
+        const indicatorEl = document.getElementById('zoom-indicator');
+        if (indicatorEl) {
+            indicatorEl.classList.add('visible');
+        }
+        console.log('[Cortex Debug] ZoomIndicator created and made visible');
     }
 
     console.log('[Cortex Debug] Clustering system initialization complete');

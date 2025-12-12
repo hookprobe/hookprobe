@@ -3243,6 +3243,17 @@ install_web_ui() {
 
     log_info "Copied web UI: app.py, modules/, templates/, static/, utils.py, config.py"
 
+    # Install shared Cortex visualization modules
+    log_info "Installing shared Cortex visualization modules..."
+    local SHARED_CORTEX="$GUARDIAN_ROOT/../../shared/cortex"
+    if [ -d "$SHARED_CORTEX/frontend/js" ]; then
+        mkdir -p /opt/hookprobe/shared/cortex/frontend/js
+        cp "$SHARED_CORTEX/frontend/js/"*.js /opt/hookprobe/shared/cortex/frontend/js/ 2>/dev/null || true
+        log_info "Installed Cortex modules to /opt/hookprobe/shared/cortex/"
+    else
+        log_warn "Shared Cortex modules not found at $SHARED_CORTEX"
+    fi
+
     # Install ML libraries for dnsXai AI features
     log_info "Installing ML libraries for dnsXai..."
     pip3 install --quiet --break-system-packages scikit-learn joblib 2>/dev/null || \
