@@ -1,17 +1,17 @@
 <!-- Config Tab Content -->
-<div class="dashboard-header" style="margin-bottom: var(--spacing-xl);">
+<div class="dashboard-header">
     <h2>Network Configuration</h2>
     <p class="text-muted">WiFi settings, hotspot configuration, and offline mode management</p>
 </div>
 
 <!-- Network Status -->
-<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-    <div class="stat-card" id="wan-status-card">
-        <div class="stat-value" style="font-size: 1.25rem;" id="wan-status">Checking...</div>
+<div class="stats-grid">
+    <div class="stat-card" id="wan-gateway-card">
+        <div class="stat-value" style="font-size: 1.1rem; font-family: var(--font-mono);" id="wan-gateway">Checking...</div>
         <div class="stat-label">WAN Gateway</div>
     </div>
     <div class="stat-card info" id="lan-ssid-card">
-        <div class="stat-value" style="font-size: 1.25rem;" id="lan-ssid">Checking...</div>
+        <div class="stat-value" style="font-size: 1.1rem;" id="lan-ssid">Checking...</div>
         <div class="stat-label">Hotspot SSID</div>
     </div>
     <div class="stat-card warning">
@@ -19,7 +19,7 @@
         <div class="stat-label">Connected Clients</div>
     </div>
     <div class="stat-card" id="offline-mode-card">
-        <div class="stat-value" style="font-size: 1.25rem;" id="offline-mode-status">--</div>
+        <div class="stat-value" style="font-size: 1.1rem;" id="offline-mode-status">--</div>
         <div class="stat-label">Mode</div>
     </div>
 </div>
@@ -151,8 +151,8 @@
         </button>
     </div>
     <div class="card-body">
-        <div class="device-grid" id="wifi-networks-list">
-            <div class="empty-state">
+        <div class="network-grid" id="wifi-networks-list">
+            <div class="empty-state" style="grid-column: 1 / -1;">
                 <p class="text-muted">Click "Scan" to discover available WiFi networks</p>
             </div>
         </div>
@@ -279,15 +279,15 @@
         </p>
         <form id="eth0-config-form" onsubmit="saveEth0Config(event)">
             <div style="margin-bottom: var(--spacing-md);">
-                <label class="form-label">IP Configuration Mode</label>
-                <div style="display: flex; gap: var(--spacing-lg);">
-                    <label class="toggle" style="cursor: pointer;">
-                        <input type="radio" name="eth0-mode" value="dhcp" id="eth0-mode-dhcp" checked onchange="toggleEth0Mode()">
-                        <span style="margin-left: var(--spacing-xs);">DHCP (Automatic)</span>
+                <label class="form-label" style="font-size: 0.9rem; font-weight: 700; margin-bottom: 0.75rem;">IP Configuration Mode</label>
+                <div style="display: flex; gap: var(--spacing-xl); flex-wrap: wrap;">
+                    <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.95rem;">
+                        <input type="radio" name="eth0-mode" value="dhcp" id="eth0-mode-dhcp" checked onchange="toggleEth0Mode()" style="width: 18px; height: 18px; accent-color: var(--pacific);">
+                        <span>DHCP (Automatic)</span>
                     </label>
-                    <label class="toggle" style="cursor: pointer;">
-                        <input type="radio" name="eth0-mode" value="static" id="eth0-mode-static" onchange="toggleEth0Mode()">
-                        <span style="margin-left: var(--spacing-xs);">Static (Manual)</span>
+                    <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.95rem;">
+                        <input type="radio" name="eth0-mode" value="static" id="eth0-mode-static" onchange="toggleEth0Mode()" style="width: 18px; height: 18px; accent-color: var(--pacific);">
+                        <span>Static (Manual)</span>
                     </label>
                 </div>
             </div>
@@ -543,6 +543,27 @@ async function loadRouteMetrics() {
 function renderRouteMetrics(data) {
     const tbody = document.getElementById('route-metrics-body');
     const routes = data.routes || [];
+
+    // Update WAN Gateway card with the primary route's gateway
+    const gatewayEl = document.getElementById('wan-gateway');
+    const gatewayCard = document.getElementById('wan-gateway-card');
+
+    if (gatewayEl && gatewayCard) {
+        if (routes.length > 0) {
+            // Find primary (eth0) or first route
+            const primaryRoute = routes.find(r => r.role === 'Primary') || routes[0];
+            if (primaryRoute && primaryRoute.gateway) {
+                gatewayEl.textContent = primaryRoute.gateway;
+                gatewayCard.className = 'stat-card success';
+            } else {
+                gatewayEl.textContent = 'No Gateway';
+                gatewayCard.className = 'stat-card danger';
+            }
+        } else {
+            gatewayEl.textContent = 'No Routes';
+            gatewayCard.className = 'stat-card danger';
+        }
+    }
 
     if (routes.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No default routes configured</td></tr>';
