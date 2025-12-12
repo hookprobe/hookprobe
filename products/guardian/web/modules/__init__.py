@@ -14,7 +14,7 @@ def register_blueprints(app: Flask):
 
     # Security module - QSecBit, threats, layer stats
     from .security import security_bp
-    app.register_blueprint(security_bp, url_prefix='/api')
+    app.register_blueprint(security_bp, url_prefix='/api/security')
 
     # dnsXai module - AI-powered ad blocking
     from .dnsxai import dnsxai_bp
