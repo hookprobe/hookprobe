@@ -831,25 +831,36 @@ function updateDhcpLeasesGrid(leases, activeClients = []) {
     grid.innerHTML = leases.map(lease => {
         const expiresIn = formatLeaseTime(lease.expires_in);
         const isActive = activeMacs.has(lease.mac?.toLowerCase());
-        const statusBadge = isActive ? 'badge-success' : 'badge-info';
-        const statusText = isActive ? 'Active' : 'Lease';
 
         return `
             <div class="device-card">
-                <div class="device-icon ${isActive ? 'text-success' : ''}">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
-                    </svg>
+                <div class="device-card-header">
+                    <div class="device-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
+                        </svg>
+                    </div>
+                    <div class="device-info">
+                        <div class="device-name">${lease.hostname || 'Unknown Device'}</div>
+                        <div class="device-mac">${lease.mac}</div>
+                    </div>
+                    <div class="device-status">
+                        <span class="status-dot ${isActive ? '' : 'inactive'}"></span>
+                        ${isActive ? 'Active' : 'Lease'}
+                    </div>
                 </div>
-                <div class="device-info">
-                    <div class="device-name">${lease.hostname || 'Unknown Device'}</div>
-                    <div class="device-ip font-mono">${lease.ip}</div>
-                    <div class="device-mac text-muted font-mono" style="font-size: 0.75rem;">${lease.mac}</div>
-                    <div class="text-muted" style="font-size: 0.75rem; margin-top: 2px;">Expires: ${expiresIn}</div>
+                <div class="device-details">
+                    <div class="device-detail">
+                        <span class="device-detail-label">IP Address</span>
+                        <span class="device-detail-value">${lease.ip}</span>
+                    </div>
+                    <div class="device-detail">
+                        <span class="device-detail-label">Expires</span>
+                        <span class="device-detail-value">${expiresIn}</span>
+                    </div>
                 </div>
                 <div class="device-actions">
-                    <span class="badge ${statusBadge}">${statusText}</span>
-                    <button class="btn btn-sm btn-danger" onclick="disconnectClientByMac('${lease.mac}')" title="Disconnect and remove lease">
+                    <button class="btn btn-sm btn-secondary" onclick="disconnectClientByMac('${lease.mac}')" title="Disconnect and remove lease">
                         Disconnect
                     </button>
                 </div>
@@ -1029,14 +1040,18 @@ function updateNetworkInterfaces(interfaces) {
         return;
     }
 
-    tbody.innerHTML = interfaces.map(iface => `
+    tbody.innerHTML = interfaces.map(iface => {
+        const isUp = iface.status === 'UP';
+        const badgeClass = isUp ? 'badge-success' : '';
+        const badgeStyle = !isUp ? 'background: rgba(238, 66, 102, 0.12); color: #ee4266;' : '';
+        return `
         <tr>
             <td><strong>${iface.name}</strong></td>
             <td class="font-mono">${iface.ip || 'N/A'}</td>
             <td class="font-mono">${iface.mac || 'N/A'}</td>
-            <td><span class="badge ${iface.status === 'UP' ? 'badge-success' : 'badge-danger'}">${iface.status}</span></td>
+            <td><span class="badge ${badgeClass}" style="${badgeStyle}">${iface.status}</span></td>
         </tr>
-    `).join('');
+    `}).join('');
 }
 
 function updateHotspotConfig(config) {
@@ -1308,26 +1323,30 @@ function updateWifiNetworksList(networks) {
     if (!list) return;
 
     if (!networks || networks.length === 0) {
-        list.innerHTML = '<div class="empty-state"><p>No networks found</p></div>';
+        list.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;"><p>No networks found</p></div>';
         return;
     }
 
-    list.innerHTML = networks.map(net => `
-        <div class="device-card" onclick="selectWifiNetwork('${net.ssid}')">
-            <div class="device-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
-                </svg>
+    list.innerHTML = networks.map(net => {
+        const isSecure = net.security && net.security !== 'Open';
+        const cardClass = isSecure ? 'secure' : 'open';
+        const securityLabel = net.security || 'Open';
+
+        return `
+            <div class="network-card ${cardClass}" onclick="selectWifiNetwork('${net.ssid}')" title="${net.ssid}">
+                <div class="network-card-name">${net.ssid}</div>
+                <div class="network-card-meta">
+                    <span class="network-card-signal">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+                        </svg>
+                        ${net.signal}%
+                    </span>
+                    <span class="network-card-security">${securityLabel}</span>
+                </div>
             </div>
-            <div class="device-info">
-                <div class="device-name">${net.ssid}</div>
-                <div class="device-ip">Signal: ${net.signal}%</div>
-            </div>
-            <span class="badge ${net.security ? 'badge-warning' : 'badge-success'}">
-                ${net.security || 'Open'}
-            </span>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function selectWifiNetwork(ssid) {
