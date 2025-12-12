@@ -427,19 +427,6 @@ code {
     background: rgba(238, 66, 102, 0.08);
 }
 
-#menu .links a i {
-    font-size: 1.25em;
-    width: 1.5em;
-    text-align: center;
-    color: var(--watermelon);
-}
-
-#menu .links a svg {
-    width: 1.5em;
-    height: 1.5em;
-    flex-shrink: 0;
-}
-
 /* Close Button - White on dark overlay */
 #menu .close {
     position: absolute;
