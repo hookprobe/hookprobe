@@ -198,6 +198,32 @@ remove_systemd_services() {
         log_info "Removed guardian-wifi-health.sh"
     fi
 
+    # Remove additional helper scripts (installed by setup.sh)
+    if [ -f "/usr/local/bin/guardian-nm-setup.sh" ]; then
+        rm -f /usr/local/bin/guardian-nm-setup.sh
+        log_info "Removed guardian-nm-setup.sh"
+    fi
+    if [ -f "/usr/local/bin/fix-dns-nat.sh" ]; then
+        rm -f /usr/local/bin/fix-dns-nat.sh
+        log_info "Removed fix-dns-nat.sh"
+    fi
+    if [ -f "/usr/local/bin/update-blocklists.sh" ]; then
+        rm -f /usr/local/bin/update-blocklists.sh
+        log_info "Removed update-blocklists.sh"
+    fi
+    if [ -f "/usr/local/bin/update-cortex-modules.sh" ]; then
+        rm -f /usr/local/bin/update-cortex-modules.sh
+        log_info "Removed update-cortex-modules.sh"
+    fi
+    if [ -f "/usr/local/bin/guardian-macsec" ]; then
+        rm -f /usr/local/bin/guardian-macsec
+        log_info "Removed guardian-macsec"
+    fi
+    if [ -f "/usr/local/bin/guardian-routing.sh" ]; then
+        rm -f /usr/local/bin/guardian-routing.sh
+        log_info "Removed guardian-routing.sh"
+    fi
+
     # Remove runtime state directory
     rm -rf /run/guardian 2>/dev/null || true
 
@@ -603,11 +629,35 @@ remove_guardian_directories() {
     rm -rf /etc/hookprobe/secrets/vxlan
     rm -f /etc/hookprobe/ovs-config.sh
 
+    # Remove MACsec configuration and secrets
+    rm -rf /etc/hookprobe/secrets/macsec 2>/dev/null || true
+    rm -f /etc/hookprobe/macsec.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/macsec-*.conf 2>/dev/null || true
+    log_info "Removed MACsec configuration"
+
+    # Remove /etc/hookprobe/secrets if empty
+    if [ -d /etc/hookprobe/secrets ] && [ -z "$(ls -A /etc/hookprobe/secrets 2>/dev/null)" ]; then
+        rm -rf /etc/hookprobe/secrets
+        log_info "Removed /etc/hookprobe/secrets (was empty)"
+    fi
+
     # Don't remove /etc/hookprobe if other components exist
     if [ -d /etc/hookprobe ] && [ -z "$(ls -A /etc/hookprobe 2>/dev/null)" ]; then
         rm -rf /etc/hookprobe
         log_info "Removed /etc/hookprobe (was empty)"
     fi
+
+    # Remove Guardian log directory
+    if [ -d /var/log/hookprobe ]; then
+        rm -rf /var/log/hookprobe
+        log_info "Removed /var/log/hookprobe log directory"
+    fi
+
+    # Remove runtime interface detection files
+    rm -f /run/guardian-xdp-iface 2>/dev/null || true
+    rm -f /run/guardian-zeek-iface 2>/dev/null || true
+    rm -f /run/guardian-*.pid 2>/dev/null || true
+    log_info "Removed runtime state files"
 
     # Don't remove /opt/hookprobe if other components exist
     if [ -d /opt/hookprobe ] && [ -z "$(ls -A /opt/hookprobe 2>/dev/null)" ]; then
@@ -818,20 +868,23 @@ main() {
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
     echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, wlan, ap, etc.)"
     echo -e "  - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
-    echo -e "  - Podman containers (Suricata IDS, WAF, Zeek)"
+    echo -e "  - Podman containers (Suricata IDS, WAF, Zeek, Neuro)"
     echo -e "  - DNS Shield blocklists and configuration"
     echo -e "  - dnsXai ML models and training data"
     echo -e "  - ML Python packages (scikit-learn, joblib)"
-    echo -e "  - Network bridges (br0)"
+    echo -e "  - Network bridges (br0, VLAN bridges)"
     echo -e "  - WiFi hotspot (hostapd) configuration"
     echo -e "  - NetworkManager Guardian connections and configuration"
     echo -e "  - DHCP/DNS (dnsmasq) configuration"
     echo -e "  - Guardian configuration (/etc/guardian/guardian.yaml)"
     echo -e "  - HTP file transfer state and session keys"
-    echo -e "  - nftables firewall rules"
+    echo -e "  - VXLAN and MACsec secrets (/etc/hookprobe/secrets/)"
+    echo -e "  - nftables/iptables firewall rules"
     echo -e "  - Guardian Python library modules"
-    echo -e "  - Guardian scripts (/usr/local/bin/guardian-*)"
-    echo -e "  - Guardian data directories"
+    echo -e "  - Guardian helper scripts (/usr/local/bin/guardian-*, fix-dns-nat.sh, etc.)"
+    echo -e "  - Guardian log files (/var/log/hookprobe/)"
+    echo -e "  - Shared Cortex visualization modules"
+    echo -e "  - Guardian data directories (/opt/hookprobe/guardian/)"
     echo ""
 
     read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
@@ -878,20 +931,22 @@ main() {
     echo -e "  ${BOLD}Removed:${NC}"
     echo -e "  • Guardian systemd services (webui, htp, xdp, ids, wlan, ap, offline, routing, etc.)"
     echo -e "  • Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
-    echo -e "  • Podman containers and volumes"
+    echo -e "  • Podman containers and volumes (Suricata, WAF, Zeek, Neuro)"
     echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • dnsXai ML models, training data, and Python packages"
-    echo -e "  • Network bridges (br0)"
+    echo -e "  • Network bridges (br0, VLAN bridges)"
     echo -e "  • NAT/routing rules (nftables, iptables, MASQUERADE)"
     echo -e "  • hostapd, wpa_supplicant, and dnsmasq configuration"
     echo -e "  • Offline mode configuration and dhcpcd settings"
     echo -e "  • Guardian configuration (/etc/guardian/)"
     echo -e "  • HTP file transfer state and session keys"
+    echo -e "  • VXLAN and MACsec secrets (/etc/hookprobe/secrets/)"
     echo -e "  • nftables rules and iptables persistence hooks"
     echo -e "  • Shared Cortex visualization modules"
     echo -e "  • Python library modules"
-    echo -e "  • Guardian scripts (/usr/local/bin/guardian-*)"
-    echo -e "  • Guardian directories (/opt/hookprobe/guardian)"
+    echo -e "  • Guardian helper scripts (/usr/local/bin/guardian-*, fix-dns-nat.sh, update-*, etc.)"
+    echo -e "  • Guardian log files (/var/log/hookprobe/)"
+    echo -e "  • Guardian directories (/opt/hookprobe/guardian/)"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
     echo -e "  ${DIM}Reboot: sudo reboot${NC}"
