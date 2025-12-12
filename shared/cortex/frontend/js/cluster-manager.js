@@ -157,6 +157,12 @@ class ClusterManager {
             }));
         }
 
+        // Return empty array if no data has been loaded yet
+        if (this.rawNodes.length === 0) {
+            console.log('[ClusterManager] No nodes loaded yet, returning empty array');
+            return [];
+        }
+
         this.currentZoom = zoom;
         const bbox = [bounds.west, bounds.south, bounds.east, bounds.north];
         const clusters = this.index.getClusters(bbox, Math.floor(zoom));
