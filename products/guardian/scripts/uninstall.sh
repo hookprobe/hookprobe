@@ -555,6 +555,17 @@ remove_guardian_directories() {
     rm -rf /opt/hookprobe/guardian/data
     log_info "Removed Guardian data directory"
 
+    # Remove shared Cortex visualization modules
+    if [ -d /opt/hookprobe/shared/cortex ]; then
+        rm -rf /opt/hookprobe/shared/cortex
+        log_info "Removed shared Cortex modules"
+    fi
+    # Remove shared directory if empty
+    if [ -d /opt/hookprobe/shared ] && [ -z "$(ls -A /opt/hookprobe/shared 2>/dev/null)" ]; then
+        rm -rf /opt/hookprobe/shared
+        log_info "Removed /opt/hookprobe/shared (was empty)"
+    fi
+
     # Remove full Guardian directory
     rm -rf /opt/hookprobe/guardian
 
