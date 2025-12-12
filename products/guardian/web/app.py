@@ -53,6 +53,26 @@ def create_app(config_class=Config):
             return send_file(logo_path, mimetype='image/png')
         return '', 404
 
+    @app.route('/cortex-modules/<path:filename>')
+    def serve_cortex_modules(filename):
+        """Serve shared Cortex visualization modules.
+
+        Paths searched (in order):
+        1. /opt/hookprobe/shared/cortex/frontend/js/ (installed location)
+        2. Relative to repository root (development location)
+        """
+        possible_paths = [
+            # Installed location (setup.sh copies here)
+            Path('/opt/hookprobe/shared/cortex/frontend/js') / filename,
+            # Development location (relative to products/guardian/web/)
+            Path(__file__).parent.parent.parent.parent / 'shared' / 'cortex' / 'frontend' / 'js' / filename,
+        ]
+        for cortex_path in possible_paths:
+            if cortex_path.exists():
+                return send_file(cortex_path, mimetype='application/javascript')
+        app.logger.warning(f"Cortex module not found: {filename}. Tried: {[str(p) for p in possible_paths]}")
+        return '', 404
+
     @app.route('/favicon.ico')
     def serve_favicon():
         """Serve favicon."""
