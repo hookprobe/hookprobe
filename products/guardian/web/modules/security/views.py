@@ -4,7 +4,7 @@ Security Module Views - QSecBit, Threats, XDP Stats, Block Log, Export
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import jsonify, request, Response
 from . import security_bp
 from utils import run_command, load_json_file
@@ -31,7 +31,7 @@ def _get_demo_blocks():
     return [
         {
             'id': 'blk-001',
-            'timestamp': (now.replace(minute=now.minute - 5)).isoformat() + 'Z',
+            'timestamp': (now - timedelta(minutes=5)).isoformat() + 'Z',
             'source_ip': '185.220.101.45',
             'source_port': 45821,
             'dest_port': 22,
@@ -51,7 +51,7 @@ def _get_demo_blocks():
         },
         {
             'id': 'blk-002',
-            'timestamp': (now.replace(minute=now.minute - 12)).isoformat() + 'Z',
+            'timestamp': (now - timedelta(minutes=12)).isoformat() + 'Z',
             'source_ip': '45.155.205.233',
             'source_port': 52341,
             'dest_port': 80,
@@ -71,7 +71,7 @@ def _get_demo_blocks():
         },
         {
             'id': 'blk-003',
-            'timestamp': (now.replace(minute=now.minute - 23)).isoformat() + 'Z',
+            'timestamp': (now - timedelta(minutes=23)).isoformat() + 'Z',
             'source_ip': '94.102.49.190',
             'source_port': 0,
             'dest_port': 0,
@@ -90,7 +90,7 @@ def _get_demo_blocks():
         },
         {
             'id': 'blk-004',
-            'timestamp': (now.replace(hour=now.hour - 1)).isoformat() + 'Z',
+            'timestamp': (now - timedelta(hours=1)).isoformat() + 'Z',
             'source_ip': '192.241.xxx.xxx',
             'source_port': 38291,
             'dest_port': 443,
@@ -109,7 +109,7 @@ def _get_demo_blocks():
         },
         {
             'id': 'blk-005',
-            'timestamp': (now.replace(hour=now.hour - 2)).isoformat() + 'Z',
+            'timestamp': (now - timedelta(hours=2)).isoformat() + 'Z',
             'source_ip': '103.75.201.88',
             'source_port': 44123,
             'dest_port': 53,
