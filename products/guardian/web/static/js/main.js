@@ -831,25 +831,36 @@ function updateDhcpLeasesGrid(leases, activeClients = []) {
     grid.innerHTML = leases.map(lease => {
         const expiresIn = formatLeaseTime(lease.expires_in);
         const isActive = activeMacs.has(lease.mac?.toLowerCase());
-        const statusBadge = isActive ? 'badge-success' : 'badge-info';
-        const statusText = isActive ? 'Active' : 'Lease';
 
         return `
             <div class="device-card">
-                <div class="device-icon ${isActive ? 'text-success' : ''}">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
-                    </svg>
+                <div class="device-card-header">
+                    <div class="device-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
+                        </svg>
+                    </div>
+                    <div class="device-info">
+                        <div class="device-name">${lease.hostname || 'Unknown Device'}</div>
+                        <div class="device-mac">${lease.mac}</div>
+                    </div>
+                    <div class="device-status">
+                        <span class="status-dot ${isActive ? '' : 'inactive'}"></span>
+                        ${isActive ? 'Active' : 'Lease'}
+                    </div>
                 </div>
-                <div class="device-info">
-                    <div class="device-name">${lease.hostname || 'Unknown Device'}</div>
-                    <div class="device-ip font-mono">${lease.ip}</div>
-                    <div class="device-mac text-muted font-mono" style="font-size: 0.75rem;">${lease.mac}</div>
-                    <div class="text-muted" style="font-size: 0.75rem; margin-top: 2px;">Expires: ${expiresIn}</div>
+                <div class="device-details">
+                    <div class="device-detail">
+                        <span class="device-detail-label">IP Address</span>
+                        <span class="device-detail-value">${lease.ip}</span>
+                    </div>
+                    <div class="device-detail">
+                        <span class="device-detail-label">Expires</span>
+                        <span class="device-detail-value">${expiresIn}</span>
+                    </div>
                 </div>
                 <div class="device-actions">
-                    <span class="badge ${statusBadge}">${statusText}</span>
-                    <button class="btn btn-sm btn-danger" onclick="disconnectClientByMac('${lease.mac}')" title="Disconnect and remove lease">
+                    <button class="btn btn-sm btn-secondary" onclick="disconnectClientByMac('${lease.mac}')" title="Disconnect and remove lease">
                         Disconnect
                     </button>
                 </div>
