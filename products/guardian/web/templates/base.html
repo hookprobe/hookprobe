@@ -67,68 +67,23 @@
         <a href="#menu" class="menu-toggle" aria-label="Open menu">Menu</a>
     </header>
 
-    <!-- Full-Screen Menu (Forty-style overlay with FontAwesome) -->
+    <!-- Full-Screen Menu (Clean overlay) -->
     <nav id="menu">
         <div class="inner">
             <h2>Navigation</h2>
             <ul class="links">
-                <li>
-                    <a href="#" onclick="switchToTab('dashboard'); closeMenu(); return false;">
-                        <i class="fa-solid fa-gauge-high"></i>
-                        <span>Dashboard</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('security'); closeMenu(); return false;">
-                        <i class="fa-solid fa-shield-halved"></i>
-                        <span>Security</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('dnsxai'); closeMenu(); return false;">
-                        <i class="fa-solid fa-brain"></i>
-                        <span>dnsXai</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('clients'); closeMenu(); return false;">
-                        <i class="fa-solid fa-users"></i>
-                        <span>Clients</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('config'); closeMenu(); return false;">
-                        <i class="fa-solid fa-sliders"></i>
-                        <span>Config</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('vpn'); closeMenu(); return false;">
-                        <i class="fa-solid fa-lock"></i>
-                        <span>VPN</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('system'); closeMenu(); return false;">
-                        <i class="fa-solid fa-server"></i>
-                        <span>System</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('debug'); closeMenu(); return false;">
-                        <i class="fa-solid fa-terminal"></i>
-                        <span>Debug</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#" onclick="switchToTab('cortex'); closeMenu(); return false;">
-                        <i class="fa-solid fa-globe"></i>
-                        <span>Cortex</span>
-                    </a>
-                </li>
+                <li><a href="#" onclick="switchToTab('dashboard'); closeMenu(); return false;">Dashboard</a></li>
+                <li><a href="#" onclick="switchToTab('security'); closeMenu(); return false;">Security</a></li>
+                <li><a href="#" onclick="switchToTab('dnsxai'); closeMenu(); return false;">dnsXai</a></li>
+                <li><a href="#" onclick="switchToTab('clients'); closeMenu(); return false;">Clients</a></li>
+                <li><a href="#" onclick="switchToTab('config'); closeMenu(); return false;">Config</a></li>
+                <li><a href="#" onclick="switchToTab('vpn'); closeMenu(); return false;">VPN</a></li>
+                <li><a href="#" onclick="switchToTab('system'); closeMenu(); return false;">System</a></li>
+                <li><a href="#" onclick="switchToTab('debug'); closeMenu(); return false;">Debug</a></li>
+                <li><a href="#" onclick="switchToTab('cortex'); closeMenu(); return false;">Cortex</a></li>
             </ul>
-            <a href="#" class="close" onclick="closeMenu(); return false;"><i class="fa-solid fa-xmark"></i> Close</a>
         </div>
+        <a href="#" class="close" onclick="closeMenu(); return false;">Close</a>
     </nav>
 
     <!-- Flash Messages -->
