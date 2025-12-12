@@ -220,6 +220,7 @@ class DeckRenderer {
 
     /**
      * Create appropriate view based on current mode
+     * Falls back to MapView if GlobeView is not available in CDN bundle
      */
     _createView() {
         if (this.currentView === VIEW_MODES.MAP) {
@@ -228,10 +229,21 @@ class DeckRenderer {
                 controller: true
             });
         } else {
-            return new deck.GlobeView({
-                id: 'globe-view',
-                resolution: 2
-            });
+            // Check if GlobeView is available (not in all deck.gl CDN bundles)
+            if (typeof deck.GlobeView === 'function') {
+                return new deck.GlobeView({
+                    id: 'globe-view',
+                    resolution: 2
+                });
+            } else {
+                // Fallback to MapView with globe-like initial state
+                console.warn('[DeckRenderer] GlobeView not available, using MapView fallback');
+                this.currentView = VIEW_MODES.MAP;
+                return new deck.MapView({
+                    id: 'map-view',
+                    controller: true
+                });
+            }
         }
     }
 
