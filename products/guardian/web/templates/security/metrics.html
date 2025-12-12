@@ -731,7 +731,7 @@
     async function fetchQSecBitData() {
         try {
             // Fetch QSecBit score
-            const scoreRes = await fetch('/api/security/qsecbit');
+            const scoreRes = await fetch('/api/qsecbit');
             if (scoreRes.ok) {
                 const data = await scoreRes.json();
                 updateQSecBitDisplay(data);
@@ -798,7 +798,7 @@
 
     async function fetchBlocks() {
         try {
-            const res = await fetch('/api/security/blocks');
+            const res = await fetch('/api/blocks');
             if (res.ok) {
                 const data = await res.json();
                 blocksData = data.blocks || [];
@@ -872,7 +872,7 @@
     };
 
     window.exportBlocks = function(format) {
-        window.location.href = '/api/security/blocks/export?format=' + format;
+        window.location.href = '/api/blocks/export?format=' + format;
     };
 
     // Close modal on overlay click
