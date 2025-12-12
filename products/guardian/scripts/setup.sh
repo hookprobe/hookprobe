@@ -2770,9 +2770,9 @@ table inet guardian {
 table ip guardian_nat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        # Masquerade traffic going out WAN interfaces (not br0)
-        oifname "wlan0" masquerade
-        oifname "eth0" masquerade
+        # Masquerade traffic going out WAN interfaces (all common patterns)
+        # Don't masquerade on LAN interfaces (br0, wlan1)
+        oifname != "br0" oifname != "wlan1" oifname != "lo" masquerade
     }
 }
 EOF
@@ -2840,23 +2840,111 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c 'echo 1 > /proc/sys/net/ipv4/ip_forward; \
-    iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; \
-    iptables -t nat -C POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE; \
-    for LAN in wlan1 br0; do \
-        [ -d /sys/class/net/$LAN ] && { \
-            iptables -C FORWARD -i $LAN -j ACCEPT 2>/dev/null || iptables -A FORWARD -i $LAN -j ACCEPT; \
-            iptables -C FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT; \
-        }; \
-    done'
+ExecStart=/usr/local/bin/guardian-setup-routing.sh
 
 [Install]
 WantedBy=multi-user.target
 ROUTING_EOF
 
+    # Create the routing setup script (more readable and maintainable)
+    cat > /usr/local/bin/guardian-setup-routing.sh << 'ROUTING_SCRIPT_EOF'
+#!/bin/bash
+# Guardian NAT/Routing Setup Script
+# Dynamically detects WAN interface and configures NAT/forwarding
+
+set -e
+
+# Enable IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Detect WAN interface from default route
+WAN=$(ip route | grep '^default' | head -1 | awk '{print $5}')
+
+if [ -z "$WAN" ]; then
+    echo "Warning: No default route found, trying common interfaces..."
+    for iface in eth0 wlan0 enp0s25 enp1s0 wlp2s0; do
+        if [ -d "/sys/class/net/$iface" ] && ip addr show "$iface" | grep -q "inet "; then
+            WAN="$iface"
+            break
+        fi
+    done
+fi
+
+if [ -z "$WAN" ]; then
+    echo "Error: Could not detect WAN interface"
+    exit 1
+fi
+
+echo "Detected WAN interface: $WAN"
+
+# Add MASQUERADE for WAN interface
+if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
+    iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE
+    echo "Added MASQUERADE for $WAN"
+fi
+
+# Also add masquerade for other potential WAN interfaces (failover)
+for iface in eth0 wlan0; do
+    if [ "$iface" != "$WAN" ] && [ -d "/sys/class/net/$iface" ]; then
+        if ! iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; then
+            iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+            echo "Added MASQUERADE for failover interface $iface"
+        fi
+    fi
+done
+
+# Configure FORWARD rules for LAN interfaces
+for LAN in wlan1 br0; do
+    if [ -d "/sys/class/net/$LAN" ]; then
+        # Allow LAN to WAN forwarding
+        if ! iptables -C FORWARD -i "$LAN" -o "$WAN" -j ACCEPT 2>/dev/null; then
+            iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
+            echo "Added FORWARD rule: $LAN -> $WAN"
+        fi
+
+        # Allow return traffic (established connections)
+        if ! iptables -C FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+            iptables -A FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT
+            echo "Added FORWARD rule: $WAN -> $LAN (established)"
+        fi
+
+        # General LAN outbound (for any WAN)
+        if ! iptables -C FORWARD -i "$LAN" -j ACCEPT 2>/dev/null; then
+            iptables -A FORWARD -i "$LAN" -j ACCEPT
+        fi
+
+        # General return traffic to LAN
+        if ! iptables -C FORWARD -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+            iptables -A FORWARD -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT
+        fi
+    fi
+done
+
+echo "Guardian routing setup complete"
+ROUTING_SCRIPT_EOF
+    chmod +x /usr/local/bin/guardian-setup-routing.sh
+
     systemctl daemon-reload
     systemctl enable guardian-routing.service 2>/dev/null || true
     systemctl start guardian-routing.service 2>/dev/null || true
+
+    # Also apply routing rules immediately (in case service start failed or for immediate effect)
+    log_info "Applying NAT/routing rules immediately..."
+    /usr/local/bin/guardian-setup-routing.sh 2>&1 || {
+        log_warn "Routing script failed, applying basic rules..."
+        # Fallback: apply basic rules directly
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+        WAN=$(ip route | grep '^default' | head -1 | awk '{print $5}')
+        if [ -n "$WAN" ]; then
+            iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null || true
+        fi
+        for LAN in wlan1 br0; do
+            [ -d "/sys/class/net/$LAN" ] && {
+                iptables -A FORWARD -i "$LAN" -j ACCEPT 2>/dev/null || true
+                iptables -A FORWARD -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+            }
+        done
+    }
 
     log_info "Base networking configuration complete"
 }
