@@ -1863,10 +1863,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger('qsecbit-guardian')
 
-# Paths
+# Paths - IMPORTANT: Web UI reads from /var/log/hookprobe/qsecbit/current.json
 CONFIG_DIR = Path('/opt/hookprobe/guardian')
 DATA_DIR = CONFIG_DIR / 'data'
-STATS_FILE = DATA_DIR / 'stats.json'
+QSECBIT_LOG_DIR = Path('/var/log/hookprobe/qsecbit')
+STATS_FILE = QSECBIT_LOG_DIR / 'current.json'  # Web UI reads this path
 THREATS_FILE = DATA_DIR / 'threats.json'
 NEURO_STATS = CONFIG_DIR / 'neuro' / 'stats.json'
 
@@ -1891,7 +1892,7 @@ class QSecBitConfig:
 
 @dataclass
 class QSecBitSample:
-    """Single QSecBit measurement"""
+    """Single QSecBit measurement - unified across all data sources"""
     timestamp: str
     score: float
     rag_status: str
@@ -1901,6 +1902,8 @@ class QSecBitSample:
     network_stats: Dict[str, any]
     threats_detected: int
     suricata_alerts: int
+    dnsxai_stats: Dict[str, any] = None  # DNS protection stats
+    bridge_stats: Dict[str, any] = None  # Suricata-dnsXai bridge stats
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -1945,6 +1948,7 @@ class QSecBitGuardianAgent:
 
         # Ensure directories exist
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        QSECBIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         # Signal handling
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -2109,8 +2113,88 @@ class QSecBitGuardianAgent:
                 pass
         return count
 
+    def get_dnsxai_stats(self) -> Dict:
+        """Get dnsXai DNS protection statistics"""
+        stats = {
+            'total_queries': 0,
+            'blocked': 0,
+            'block_rate': 0.0,
+            'ml_blocks': 0,
+            'cname_uncloaked': 0,
+            'threat_score': 0.0,
+        }
+
+        # Read from dnsmasq query log
+        query_log = Path('/var/log/hookprobe/dnsmasq-queries.log')
+        if query_log.exists():
+            try:
+                content = query_log.read_text()
+                lines = content.strip().split('\n') if content.strip() else []
+                stats['total_queries'] = len([l for l in lines if ' query[' in l])
+                stats['blocked'] = len([l for l in lines if '0.0.0.0' in l or '127.0.0.1' in l])
+                if stats['total_queries'] > 0:
+                    stats['block_rate'] = (stats['blocked'] / stats['total_queries']) * 100
+            except Exception:
+                pass
+
+        # Read from dnsXai stats file
+        dnsxai_file = Path('/opt/hookprobe/guardian/dnsxai/stats.json')
+        if dnsxai_file.exists():
+            try:
+                data = json.loads(dnsxai_file.read_text())
+                stats['ml_blocks'] = data.get('ml_blocks', 0)
+                stats['cname_uncloaked'] = data.get('cname_uncloaked', 0)
+            except Exception:
+                pass
+
+        # Calculate threat score (0-1) based on DNS activity
+        # High block rate indicates active threats
+        stats['threat_score'] = min(1.0, stats['block_rate'] / 30.0)  # 30% block rate = 1.0
+
+        return stats
+
+    def get_suricata_bridge_stats(self) -> Dict:
+        """Get Suricata-dnsXai bridge deep packet inspection stats"""
+        stats = {
+            'enabled': False,
+            'detections': 0,
+            'tls_sni_blocks': 0,
+            'ja3_blocks': 0,
+            'ip_reputation_blocks': 0,
+            'threat_score': 0.0,
+        }
+
+        bridge_log = Path('/var/log/hookprobe/suricata-dnsxai-bridge.log')
+        if bridge_log.exists():
+            stats['enabled'] = True
+            try:
+                # Read last 5KB
+                with open(bridge_log, 'rb') as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - 5000))
+                    content = f.read().decode('utf-8', errors='ignore')
+
+                for line in content.split('\n'):
+                    if 'TLS_SNI' in line:
+                        stats['tls_sni_blocks'] += 1
+                    elif 'JA3' in line:
+                        stats['ja3_blocks'] += 1
+                    elif 'IP_REPUTATION' in line:
+                        stats['ip_reputation_blocks'] += 1
+                    elif 'blocked' in line.lower():
+                        stats['detections'] += 1
+
+                # Threat score based on deep packet inspection hits
+                stats['threat_score'] = min(1.0, stats['detections'] / 20.0)
+            except Exception:
+                pass
+
+        return stats
+
     def calculate_score(self, xdp_stats: Dict, energy_stats: Dict, network_stats: Dict,
-                        threats: int, suricata_alerts: int) -> tuple:
+                        threats: int, suricata_alerts: int, dnsxai_stats: Dict = None,
+                        bridge_stats: Dict = None) -> tuple:
         """Calculate QSecBit score using full algorithm"""
         components = {
             'drift': 0.0,
@@ -2145,14 +2229,39 @@ class QSecBitGuardianAgent:
             else:
                 components['energy_anomaly'] = 0.0
 
-        # Calculate weighted score
-        score = (
-            self.config.alpha * components['drift'] +
-            self.config.beta * components['attack_probability'] +
-            self.config.gamma * components['classifier_decay'] +
-            self.config.delta * components['quantum_drift'] +
-            self.config.epsilon * components['energy_anomaly']
+        # Component 6: dnsXai threat score (DNS-based threat indicator)
+        dnsxai_score = 0.0
+        if dnsxai_stats:
+            # dnsXai contributes when blocking threats
+            dnsxai_score = dnsxai_stats.get('threat_score', 0.0)
+            # ML and CNAME uncloaking are strong indicators
+            ml_factor = min(1.0, dnsxai_stats.get('ml_blocks', 0) / 10.0)
+            cname_factor = min(1.0, dnsxai_stats.get('cname_uncloaked', 0) / 5.0)
+            dnsxai_score = max(dnsxai_score, ml_factor, cname_factor)
+        components['dnsxai_threat'] = dnsxai_score
+
+        # Component 7: Deep Packet Inspection (Suricata bridge)
+        dpi_score = 0.0
+        if bridge_stats and bridge_stats.get('enabled'):
+            dpi_score = bridge_stats.get('threat_score', 0.0)
+            # TLS/JA3 detections are high confidence
+            tls_factor = min(1.0, bridge_stats.get('tls_sni_blocks', 0) / 5.0)
+            ja3_factor = min(1.0, bridge_stats.get('ja3_blocks', 0) / 3.0)
+            dpi_score = max(dpi_score, tls_factor * 0.8, ja3_factor * 0.9)
+        components['dpi_threat'] = dpi_score
+
+        # Calculate weighted score (adjusted weights for new components)
+        # Original 5 components: 0.25 + 0.25 + 0.20 + 0.15 + 0.15 = 1.0
+        # New 7 components: reduce each slightly and add dnsxai (0.08) + dpi (0.07) = 0.15
+        base_score = (
+            self.config.alpha * 0.85 * components['drift'] +          # 0.2125
+            self.config.beta * 0.85 * components['attack_probability'] +  # 0.2125
+            self.config.gamma * 0.85 * components['classifier_decay'] +   # 0.17
+            self.config.delta * 0.85 * components['quantum_drift'] +      # 0.1275
+            self.config.epsilon * 0.85 * components['energy_anomaly']     # 0.1275 = 0.85
         )
+        # Add dnsXai and DPI contributions
+        score = base_score + 0.08 * dnsxai_score + 0.07 * dpi_score
 
         # Determine RAG status
         if score >= self.config.red_threshold:
@@ -2165,15 +2274,20 @@ class QSecBitGuardianAgent:
         return score, rag_status, components
 
     def collect_sample(self) -> QSecBitSample:
-        """Collect a complete QSecBit sample"""
+        """Collect a complete QSecBit sample - integrates all data sources"""
+        # Gather all data sources in parallel-ready manner
         xdp_stats = self.get_xdp_stats()
         energy_stats = self.get_energy_stats()
         network_stats = self.get_network_stats()
         threats = self.check_threats()
         suricata_alerts = self.check_suricata_alerts()
+        dnsxai_stats = self.get_dnsxai_stats()
+        bridge_stats = self.get_suricata_bridge_stats()
 
+        # Calculate unified score including all components
         score, rag_status, components = self.calculate_score(
-            xdp_stats, energy_stats, network_stats, threats, suricata_alerts
+            xdp_stats, energy_stats, network_stats, threats, suricata_alerts,
+            dnsxai_stats, bridge_stats
         )
 
         sample = QSecBitSample(
@@ -2185,27 +2299,98 @@ class QSecBitGuardianAgent:
             energy_stats=energy_stats,
             network_stats=network_stats,
             threats_detected=threats,
-            suricata_alerts=suricata_alerts
+            suricata_alerts=suricata_alerts,
+            dnsxai_stats=dnsxai_stats,
+            bridge_stats=bridge_stats
         )
 
         return sample
 
     def save_stats(self, sample: QSecBitSample):
-        """Save stats to file for Web UI"""
+        """Save stats to file for Web UI - optimized unified format"""
         try:
+            # Map internal component names to web UI expected names
+            components = {
+                'drift': sample.components.get('drift', 0.0),
+                'p_attack': sample.components.get('attack_probability', 0.0),
+                'decay': sample.components.get('classifier_decay', 0.0),
+                'q_drift': sample.components.get('quantum_drift', 0.0),
+                'energy_anomaly': sample.components.get('energy_anomaly', 0.0),
+                'dnsxai': sample.components.get('dnsxai_threat', 0.0),
+                'dpi': sample.components.get('dpi_threat', 0.0),
+            }
+
+            # Calculate intelligent layer scores
+            dnsxai = sample.dnsxai_stats or {}
+            bridge = sample.bridge_stats or {}
+            l7_dns_score = dnsxai.get('threat_score', 0.0)
+            l7_dpi_score = bridge.get('threat_score', 0.0)
+
             stats_data = {
                 'timestamp': sample.timestamp,
-                'score': sample.score,
-                'rag_status': sample.rag_status,
-                'components': sample.components,
+                'score': round(sample.score, 4),
+                'status': sample.rag_status,  # Web UI expects 'status'
+                'rag_status': sample.rag_status,  # Keep for compatibility
+                'components': components,
+                'weights': {
+                    'alpha': self.config.alpha,
+                    'beta': self.config.beta,
+                    'gamma': self.config.gamma,
+                    'delta': self.config.delta,
+                    'epsilon': self.config.epsilon,
+                    'dnsxai': 0.08,
+                    'dpi': 0.07,
+                },
+                # Layer scores for unified view (enhanced with dnsXai and DPI)
+                'layers': {
+                    'L2': {'score': 0.0, 'threats': 0, 'status': 'GREEN'},
+                    'L3': {
+                        'score': min(1.0, sample.xdp_stats.get('dropped_blocked', 0) / 100),
+                        'threats': sample.xdp_stats.get('dropped_blocked', 0),
+                        'status': 'GREEN' if sample.xdp_stats.get('dropped_blocked', 0) < 50 else 'AMBER'
+                    },
+                    'L4': {
+                        'score': min(1.0, sample.network_stats.get('connections', 0) / 50),
+                        'threats': 0,
+                        'status': 'GREEN'
+                    },
+                    'L5': {
+                        'score': bridge.get('tls_sni_blocks', 0) / 10 if bridge.get('enabled') else 0.0,
+                        'threats': bridge.get('tls_sni_blocks', 0),
+                        'status': 'GREEN' if bridge.get('tls_sni_blocks', 0) < 3 else 'AMBER'
+                    },
+                    'L7': {
+                        'score': max(l7_dns_score, l7_dpi_score, min(1.0, sample.suricata_alerts / 10)),
+                        'threats': sample.suricata_alerts + dnsxai.get('blocked', 0),
+                        'status': 'GREEN' if sample.suricata_alerts < 5 else 'AMBER'
+                    },
+                },
                 'xdp': sample.xdp_stats,
                 'energy': sample.energy_stats,
                 'network': sample.network_stats,
                 'threats': sample.threats_detected,
                 'suricata_alerts': sample.suricata_alerts,
-                'status': 'active',
+                # dnsXai integration
+                'dnsxai': {
+                    'total_queries': dnsxai.get('total_queries', 0),
+                    'blocked': dnsxai.get('blocked', 0),
+                    'block_rate': round(dnsxai.get('block_rate', 0.0), 2),
+                    'ml_blocks': dnsxai.get('ml_blocks', 0),
+                    'cname_uncloaked': dnsxai.get('cname_uncloaked', 0),
+                    'threat_score': round(dnsxai.get('threat_score', 0.0), 4),
+                },
+                # Suricata-dnsXai bridge (DPI)
+                'dpi': {
+                    'enabled': bridge.get('enabled', False),
+                    'detections': bridge.get('detections', 0),
+                    'tls_sni_blocks': bridge.get('tls_sni_blocks', 0),
+                    'ja3_blocks': bridge.get('ja3_blocks', 0),
+                    'ip_reputation_blocks': bridge.get('ip_reputation_blocks', 0),
+                    'threat_score': round(bridge.get('threat_score', 0.0), 4),
+                },
+                'active': True,
                 'mode': 'guardian-edge',
-                'version': '5.0.0'
+                'version': '5.1.0',  # Bumped for unified integration
             }
             STATS_FILE.write_text(json.dumps(stats_data, indent=2))
         except Exception as e:
