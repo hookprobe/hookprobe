@@ -109,6 +109,21 @@ html {
     background-color: var(--prussian);
 }
 
+/* iOS Safari - Cover the home indicator area with footer color */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+    body::after {
+        content: '';
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: env(safe-area-inset-bottom);
+        background: var(--prussian);
+        z-index: 9999;
+        pointer-events: none;
+    }
+}
+
 @media screen and (max-width: 1680px) { html { font-size: 14px; } }
 @media screen and (max-width: 1280px) { html { font-size: 13px; } }
 @media screen and (max-width: 736px) { html { font-size: 12px; } }
