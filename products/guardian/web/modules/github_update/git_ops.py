@@ -749,6 +749,11 @@ def restart_services(services: List[str]) -> Dict:
     """
     results = {}
     webui_deferred = False
+    deferred_services = []
+
+    # Services that will kill the connection if restarted immediately
+    # These need to be restarted after the HTTP response is sent
+    DEFERRED_SERVICES = {'guardian-webui', 'nginx'}
 
     for service in services:
         if service not in ALLOWED_SERVICES:
@@ -758,13 +763,14 @@ def restart_services(services: List[str]) -> Dict:
             }
             continue
 
-        # Skip guardian-webui - restarting ourselves kills the connection
-        # Web UI changes (templates, JS, CSS) take effect on page reload
-        if service == 'guardian-webui':
+        # Skip services that would kill the connection
+        # Web UI changes take effect on page reload, nginx will be restarted by systemd timer or manual
+        if service in DEFERRED_SERVICES:
             webui_deferred = True
+            deferred_services.append(service)
             results[service] = {
                 'success': True,
-                'output': 'Deferred - reload page to apply web UI changes'
+                'output': 'Deferred - reload page to apply changes'
             }
             continue
 
@@ -782,7 +788,8 @@ def restart_services(services: List[str]) -> Dict:
         'success': all(r['success'] for r in results.values()),
         'results': results,
         'webui_deferred': webui_deferred,
-        'message': 'Reload the page to apply web UI changes' if webui_deferred else None
+        'deferred_services': deferred_services,
+        'message': f'Reload the page to apply changes. Deferred: {", ".join(deferred_services)}' if deferred_services else None
     }
 
 
