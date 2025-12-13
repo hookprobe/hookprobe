@@ -43,6 +43,7 @@ ALLOWED_UPDATE_PATHS = [
     'shared/dnsXai/',
     'shared/mesh/',
     'shared/response/',
+    'shared/cortex/',        # Cortex globe visualization (embedded in Guardian)
 ]
 
 # Services that can be restarted after update
@@ -311,8 +312,93 @@ def determine_services_to_restart(changed_files: List[str]) -> List[str]:
         if file_path.startswith('shared/response/'):
             services.add('guardian-agent')
 
+        # Cortex visualization changes (embedded in Guardian web UI)
+        if file_path.startswith('shared/cortex/'):
+            services.add('guardian-webui')
+
     # Filter to only allowed services
     return [s for s in services if s in ALLOWED_SERVICES]
+
+
+def is_frontend_only_update(changed_files: List[str]) -> bool:
+    """
+    Check if the update only affects frontend (web UI) files.
+    Frontend-only updates don't require system reboot.
+
+    Args:
+        changed_files: List of file paths that changed
+
+    Returns:
+        True if only frontend files changed
+    """
+    frontend_paths = [
+        'products/guardian/web/',
+        'shared/cortex/frontend/',
+    ]
+
+    backend_paths = [
+        'products/guardian/lib/',
+        'products/guardian/config/',
+        'shared/dnsXai/',
+        'shared/mesh/',
+        'shared/response/',
+        'shared/cortex/backend/',
+    ]
+
+    has_frontend = False
+    has_backend = False
+
+    for file_path in changed_files:
+        if any(file_path.startswith(p) for p in frontend_paths):
+            has_frontend = True
+        if any(file_path.startswith(p) for p in backend_paths):
+            has_backend = True
+
+    return has_frontend and not has_backend
+
+
+def categorize_changes(changed_files: List[str]) -> Dict:
+    """
+    Categorize changed files by component for better UI display.
+
+    Args:
+        changed_files: List of file paths that changed
+
+    Returns:
+        Dict with categorized files and metadata
+    """
+    categories = {
+        'web_ui': [],      # Guardian web UI templates, JS, CSS
+        'cortex': [],      # Cortex visualization
+        'backend': [],     # Guardian agent/lib
+        'dnsxai': [],      # DNS protection
+        'network': [],     # Mesh, config
+        'other': []
+    }
+
+    for file_path in changed_files:
+        if file_path.startswith('products/guardian/web/'):
+            categories['web_ui'].append(file_path)
+        elif file_path.startswith('shared/cortex/'):
+            categories['cortex'].append(file_path)
+        elif file_path.startswith('products/guardian/lib/'):
+            categories['backend'].append(file_path)
+        elif file_path.startswith('shared/dnsXai/'):
+            categories['dnsxai'].append(file_path)
+        elif file_path.startswith('shared/mesh/') or file_path.startswith('products/guardian/config/'):
+            categories['network'].append(file_path)
+        else:
+            categories['other'].append(file_path)
+
+    # Remove empty categories
+    categories = {k: v for k, v in categories.items() if v}
+
+    return {
+        'categories': categories,
+        'is_frontend_only': is_frontend_only_update(changed_files),
+        'requires_reboot': False,  # Updates via this mechanism never require reboot
+        'total_files': len(changed_files)
+    }
 
 
 def pull_updates(dry_run: bool = False) -> Dict:
