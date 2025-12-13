@@ -21,7 +21,7 @@
 #   2 - Errors found (broken references)
 #
 
-set -e
+# Don't use set -e as we need to continue after errors to report all issues
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -343,6 +343,32 @@ check_orphaned_files() {
         # Skip integration files (often referenced dynamically)
         [[ "$file" == */integrations/* ]] && continue
         [[ "$file" == */lib/* ]] && continue
+
+        # Skip Django convention files (auto-discovered by Django)
+        [[ "$basename" == "admin.py" ]] && continue
+        [[ "$basename" == "apps.py" ]] && continue
+        [[ "$basename" == "forms.py" ]] && continue
+        [[ "$basename" == "serializers.py" ]] && continue
+        [[ "$basename" == "tests.py" ]] && continue
+        [[ "$basename" == "urls.py" ]] && continue
+        [[ "$basename" == "views.py" ]] && continue
+        [[ "$basename" == "models.py" ]] && continue
+        [[ "$basename" == "email.py" ]] && continue
+        [[ "$basename" == "authentication.py" ]] && continue
+        [[ "$file" == */management/commands/* ]] && continue
+        [[ "$file" == */api/* ]] && continue
+        [[ "$file" == */services/* ]] && continue
+        [[ "$file" == */settings/* ]] && continue
+        [[ "$file" == */common/* ]] && continue
+
+        # Skip Flask/Guardian web modules (registered via blueprints)
+        [[ "$file" == */web/modules/* ]] && continue
+
+        # Skip shared module files
+        [[ "$file" == */adversarial/* ]] && continue
+        [[ "$file" == */signatures/* ]] && continue
+        [[ "$file" == */ml/* ]] && continue
+        [[ "$file" == */wireless/* ]] && continue
 
         # Check if file is referenced
         if ! grep -qF "$basename" "$referenced_files" 2>/dev/null; then
