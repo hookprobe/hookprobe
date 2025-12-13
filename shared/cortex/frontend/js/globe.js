@@ -139,10 +139,31 @@ function isTouchDevice() {
 }
 
 /**
+ * Detect if device is mobile (from early detection in index.html or fallback)
+ */
+function isMobileDevice() {
+    return window.CORTEX_IS_MOBILE ||
+        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+
+/**
+ * Detect if device is low-end (limited resources)
+ */
+function isLowEndDevice() {
+    return window.CORTEX_IS_LOW_END ||
+        (isMobileDevice() && (
+            navigator.hardwareConcurrency <= 2 ||
+            navigator.deviceMemory <= 2
+        ));
+}
+
+/**
  * Initialize the globe with clustering support
  */
 function initGlobe() {
     const container = document.getElementById('globe-container');
+    const isMobile = isMobileDevice();
+    const isLowEnd = isLowEndDevice();
 
     // Check WebGL support
     if (!isWebGLSupported()) {
@@ -152,6 +173,8 @@ function initGlobe() {
     }
 
     console.log('Initializing Globe.gl...', {
+        isMobile: isMobile,
+        isLowEnd: isLowEnd,
         isTouchDevice: isTouchDevice(),
         containerSize: { width: container.clientWidth, height: container.clientHeight }
     });
@@ -159,14 +182,15 @@ function initGlobe() {
     // Select texture theme (dark is better for cybersecurity)
     const textures = GLOBE_TEXTURES.dark;
 
-    // Create globe instance with improved textures
-    globe = Globe()(container)
-        .globeImageUrl(textures.globe)
-        .bumpImageUrl(textures.bump)
-        .backgroundImageUrl(textures.background)
-        .showAtmosphere(true)
-        .atmosphereColor('#00bfff')
-        .atmosphereAltitude(0.15)
+    // Create globe instance with device-appropriate settings
+    try {
+        globe = Globe()(container)
+            .globeImageUrl(textures.globe)
+            .bumpImageUrl(isLowEnd ? null : textures.bump) // Skip bump map on low-end
+            .backgroundImageUrl(textures.background)
+            .showAtmosphere(!isLowEnd) // Skip atmosphere on low-end devices
+            .atmosphereColor('#00bfff')
+            .atmosphereAltitude(isMobile ? 0.1 : 0.15) // Smaller atmosphere on mobile
         // Country polygons for boundaries (loaded async)
         .polygonsData([])
         .polygonCapColor(() => 'rgba(0, 0, 0, 0)') // Transparent fill
@@ -200,19 +224,26 @@ function initGlobe() {
         .arcDashAnimateTime(d => d.type === 'heartbeat' ? 800 : 1500)
         .arcStroke(d => d.type === 'attack' ? 0.6 : d.type === 'heartbeat' ? 0.3 : 0.4)
         .arcsTransitionDuration(300)
-        // Click handlers
-        .onPointClick(handlePointClick)
-        .onGlobeClick(handleGlobeClick);
+            // Click handlers
+            .onPointClick(handlePointClick)
+            .onGlobeClick(handleGlobeClick);
+    } catch (error) {
+        console.error('Failed to initialize Globe.gl:', error);
+        showFallback();
+        return;
+    }
 
-    // Load country boundaries for better zoom detail
-    loadCountryBoundaries();
+    // Load country boundaries for better zoom detail (skip on low-end mobile)
+    if (!isLowEnd) {
+        loadCountryBoundaries();
+    }
 
     // Configure camera controls for better zoom range
     const controls = globe.controls();
 
-    // Enable auto-rotate
+    // Enable auto-rotate (slower on mobile to reduce CPU usage)
     controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.3;
+    controls.autoRotateSpeed = isMobile ? 0.15 : 0.3;
 
     // Configure zoom limits - allow much deeper zoom for city view transition
     // minDistance: how close you can zoom in (lower = closer)
@@ -259,17 +290,32 @@ function initGlobe() {
  * Initialize the clustering system
  */
 function initClusteringSystem() {
+    const isMobile = isMobileDevice();
+    const isLowEnd = isLowEndDevice();
+
+    // On low-end mobile, disable clustering for better performance
+    if (isLowEnd) {
+        console.log('Low-end device detected, clustering disabled for performance');
+        state.clusteringEnabled = false;
+        return;
+    }
+
     // Initialize ClusterManager (requires Supercluster)
     if (typeof ClusterManager !== 'undefined') {
-        clusterManager = new ClusterManager();
-        clusterVisuals = new ClusterVisuals();
+        try {
+            clusterManager = new ClusterManager();
+            clusterVisuals = new ClusterVisuals();
 
-        // Listen for cluster updates
-        clusterManager.on('clustersUpdated', handleClustersUpdated);
-        clusterManager.on('loaded', () => {
-            console.log('ClusterManager: Nodes loaded');
-            updateDisplayData();
-        });
+            // Listen for cluster updates
+            clusterManager.on('clustersUpdated', handleClustersUpdated);
+            clusterManager.on('loaded', () => {
+                console.log('ClusterManager: Nodes loaded');
+                updateDisplayData();
+            });
+        } catch (error) {
+            console.warn('ClusterManager initialization failed:', error);
+            state.clusteringEnabled = false;
+        }
     } else {
         console.warn('ClusterManager not available, clustering disabled');
         state.clusteringEnabled = false;
