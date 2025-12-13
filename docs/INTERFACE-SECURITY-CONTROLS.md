@@ -164,6 +164,7 @@ ip route show default → dev eth0/wlan0
 | **File** | `shared/dnsXai/engine.py:74-75` |
 | **Listen Address** | `127.0.0.1:5353` |
 | **Upstream DNS** | 1.1.1.1:53 (configurable) |
+| **Interface Binding** | **NONE** - No packet capture |
 
 **Traffic Flow**:
 ```
@@ -173,11 +174,12 @@ LAN Client (192.168.4.x)
     ▼
 dnsmasq (br0 interface)
     │
-    │ Forwards to 127.0.0.1:5353
+    │ Forwards DOMAIN STRING to 127.0.0.1:5353
     ▼
-dnsXai (localhost)
+dnsXai (localhost - NO interface binding)
     │
     │ ML classification + blocklist check
+    │ (analyzes domain NAME only, not traffic)
     │
     ├─── BLOCKED → Return 0.0.0.0
     │
@@ -185,6 +187,45 @@ dnsXai (localhost)
 ```
 
 **Verdict**: ✅ **LAN Interface (br0)** - Filters DNS queries from local clients only.
+
+---
+
+### 6a. dnsXai ML/AI Component Details
+
+**IMPORTANT**: The ML/AI in dnsXai does **NOT** inspect network traffic. It only analyzes domain name **strings**.
+
+| ML Component | Location | Input Data |
+|--------------|----------|------------|
+| `DomainFeatureExtractor` | In-memory (localhost) | Domain name string |
+| `DomainClassifier` | In-memory (localhost) | 20 text features |
+| `CNAMEUncloaker` | DNS queries to upstream | DNS CNAME records |
+| `FederatedLearning` | Mesh network | Model weights + domain hashes |
+
+**What the ML Analyzes** (`shared/dnsXai/engine.py:200-264`):
+
+| Feature | Source | Example |
+|---------|--------|---------|
+| `shannon_entropy` | String entropy | 3.42 |
+| `ad_pattern_count` | Regex on string | 2 (found "ads", "track") |
+| `subdomain_depth` | Count dots | 1 |
+| `digit_ratio` | Characters | 0.0 |
+| `has_uuid` | Regex pattern | False |
+| ... 15 more | String analysis | ... |
+
+**What the ML Does NOT See**:
+- ❌ Raw packets
+- ❌ HTTP headers or payload
+- ❌ TLS handshake data
+- ❌ IP addresses (except via DNS lookup)
+- ❌ Any actual network traffic
+
+**Interface Comparison**:
+
+| Control | Binds to Interface | Sees Packets | ML Input |
+|---------|-------------------|--------------|----------|
+| Suricata | eth0/wlan0 (WAN) | Yes (pcap) | Packet signatures |
+| Zeek | eth0/wlan0 (WAN) | Yes (pcap) | Connection metadata |
+| **dnsXai** | **None** | **No** | **Domain name text** |
 
 ---
 
