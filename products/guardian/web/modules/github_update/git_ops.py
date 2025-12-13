@@ -37,8 +37,33 @@ REPO_PATH = os.environ.get('GUARDIAN_REPO_PATH', '/opt/hookprobe')
 REMOTE_NAME = 'origin'
 DEFAULT_BRANCH = os.environ.get('GUARDIAN_BRANCH', 'main')
 
+# Installation config file location
+INSTALL_CONFIG_FILE = '/etc/hookprobe/install.conf'
+
 # Cache for detected repo path
 _cached_repo_path = None
+
+
+def read_install_config() -> dict:
+    """Read the HookProbe installation configuration file."""
+    config = {}
+    if os.path.isfile(INSTALL_CONFIG_FILE):
+        try:
+            with open(INSTALL_CONFIG_FILE, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+                    # Parse KEY="value" or KEY=value
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        config[key] = value
+        except (IOError, PermissionError):
+            pass
+    return config
 
 # Allowed paths for updates (networking-related only)
 ALLOWED_UPDATE_PATHS = [
@@ -70,12 +95,19 @@ def get_repo_path() -> str:
     if _cached_repo_path is not None:
         return _cached_repo_path
 
-    # Check environment variable path first
+    # Priority 1: Read from installation config file (/etc/hookprobe/install.conf)
+    install_config = read_install_config()
+    config_path = install_config.get('HOOKPROBE_INSTALL_DIR')
+    if config_path and os.path.isdir(os.path.join(config_path, '.git')):
+        _cached_repo_path = config_path
+        return _cached_repo_path
+
+    # Priority 2: Check environment variable
     if os.path.isdir(os.path.join(REPO_PATH, '.git')):
         _cached_repo_path = REPO_PATH
         return _cached_repo_path
 
-    # Try common installation paths
+    # Priority 3: Try common installation paths
     common_paths = [
         '/opt/hookprobe',
         '/home/user/hookprobe',
@@ -89,7 +121,7 @@ def get_repo_path() -> str:
             _cached_repo_path = path
             return _cached_repo_path
 
-    # Try to find repo by traversing up from current file location
+    # Priority 4: Find repo by traversing up from current file location
     current_dir = os.path.dirname(os.path.abspath(__file__))
     for _ in range(10):  # Max 10 levels up
         if os.path.isdir(os.path.join(current_dir, '.git')):
@@ -100,13 +132,13 @@ def get_repo_path() -> str:
             break
         current_dir = parent
 
-    # Fallback to current working directory if it's a git repo
+    # Priority 5: Current working directory
     cwd = os.getcwd()
     if os.path.isdir(os.path.join(cwd, '.git')):
         _cached_repo_path = cwd
         return _cached_repo_path
 
-    # Last resort: use git to find repo root from this file's location
+    # Priority 6: Use git to find repo root from this file's location
     this_file_dir = os.path.dirname(os.path.abspath(__file__))
     output, success = run_command(
         ['git', '-C', this_file_dir, 'rev-parse', '--show-toplevel']
