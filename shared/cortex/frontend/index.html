@@ -16,18 +16,36 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Mobile detection - load scripts conditionally -->
+    <script>
+        // Early mobile detection
+        window.CORTEX_IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        window.CORTEX_IS_LOW_END = window.CORTEX_IS_MOBILE && (
+            navigator.hardwareConcurrency <= 4 ||
+            navigator.deviceMemory <= 4
+        );
+        console.log('Cortex: Mobile=' + window.CORTEX_IS_MOBILE + ', LowEnd=' + window.CORTEX_IS_LOW_END);
+    </script>
     <!-- Globe.gl from CDN - includes Three.js -->
     <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
-    <!-- Supercluster for spatial clustering -->
-    <script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"></script>
-    <!-- KDBush for fast spatial indexing (dependency of Supercluster) -->
-    <script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"></script>
+    <!-- Supercluster for spatial clustering (skip on low-end mobile) -->
+    <script>
+        if (!window.CORTEX_IS_LOW_END) {
+            document.write('<script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"><\/script>');
+            document.write('<script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"><\/script>');
+        }
+    </script>
     <!-- TopoJSON for country boundaries (world-atlas parsing) -->
     <script src="https://unpkg.com/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
-    <!-- Phase 2: Deck.gl for GPU-accelerated visualization -->
-    <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
-    <!-- Phase 2: MapLibre GL for free basemap tiles -->
-    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <!-- Phase 2: Deck.gl + MapLibre (SKIP on mobile - too heavy) -->
+    <script>
+        if (!window.CORTEX_IS_MOBILE) {
+            document.write('<script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"><\/script>');
+            document.write('<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"><\/script>');
+        } else {
+            console.log('Cortex: Skipping Deck.gl/MapLibre on mobile');
+        }
+    </script>
 </head>
 <body>
     <div id="app">
@@ -113,8 +131,8 @@
             </div>
         </div>
 
-        <!-- Control Panel (Demo Mode) -->
-        <div id="control-panel" class="demo-only">
+        <!-- Control Panel (Demo Mode) - Hidden on mobile -->
+        <div id="control-panel" class="demo-only desktop-only">
             <h3>DEMO CONTROLS</h3>
             <div class="control-group">
                 <label>EVENT FREQUENCY</label>
@@ -160,8 +178,8 @@
             <ul id="event-list"></ul>
         </div>
 
-        <!-- Legend -->
-        <div id="legend">
+        <!-- Legend - Hidden on mobile for cleaner view -->
+        <div id="legend" class="desktop-only">
             <h4>NODE TYPES</h4>
             <div class="legend-item">
                 <span class="legend-dot sentinel"></span>
@@ -255,19 +273,33 @@
             }
         }
 
+        // Safe initialization wrapper for mobile compatibility
+        function safeInit(fn, name) {
+            try {
+                fn();
+            } catch (error) {
+                console.warn('Cortex: Failed to initialize ' + name + ':', error.message);
+            }
+        }
+
         // Initialize premium effects on load
         document.addEventListener('DOMContentLoaded', () => {
-            // Initialize geolocation early
+            console.log('Cortex: DOMContentLoaded, mobile=' + window.CORTEX_IS_MOBILE);
+
+            // Initialize geolocation early (non-critical)
             setTimeout(() => {
-                initGeolocation();
+                safeInit(initGeolocation, 'geolocation');
             }, 500);
 
-            // Create subtle scanline effect
-            setTimeout(() => {
-                if (typeof createScanlineEffect === 'function') {
-                    createScanlineEffect();
-                }
-            }, 2000);
+            // Skip non-essential effects on mobile
+            if (!window.CORTEX_IS_MOBILE) {
+                // Create subtle scanline effect (desktop only)
+                setTimeout(() => {
+                    if (typeof createScanlineEffect === 'function') {
+                        safeInit(createScanlineEffect, 'scanlines');
+                    }
+                }, 2000);
+            }
 
             // Log clustering status
             setTimeout(() => {
@@ -276,10 +308,12 @@
                 }
             }, 3000);
 
-            // Phase 2: Initialize city view system
-            setTimeout(() => {
-                initCityViewSystem();
-            }, 1500);
+            // Phase 2: Initialize city view system (desktop only)
+            if (!window.CORTEX_IS_MOBILE) {
+                setTimeout(() => {
+                    safeInit(initCityViewSystem, 'city view');
+                }, 1500);
+            }
         });
 
         // Device capability detection
