@@ -11,7 +11,35 @@
     overflow: hidden;
 }
 
-/* Clean hero - no gradient effects */
+/* Network Traffic Visualization Canvas */
+.traffic-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Threat dart flash effect */
+@keyframes dartFlash {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.2); }
+    100% { opacity: 0; transform: scale(0.5); }
+}
+
+.threat-dart {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: var(--watermelon);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--watermelon), 0 0 24px var(--watermelon);
+    animation: dartFlash 0.8s ease-out forwards;
+    pointer-events: none;
+    z-index: 2;
+}
 
 .hero-content {
     display: flex;
@@ -344,12 +372,13 @@
 }
 </style>
 
-<!-- Hero Section with DateTime -->
-<div class="dashboard-hero">
+<!-- Hero Section with Network Traffic Visualization -->
+<div class="dashboard-hero" id="dashboard-hero">
+    <canvas class="traffic-canvas" id="traffic-canvas"></canvas>
     <div class="hero-content">
         <div class="hero-left">
             <h2>Guardian Active</h2>
-            <p>Your network is protected</p>
+            <p id="hero-status">Your network is protected</p>
         </div>
         <div class="hero-datetime" id="dashboard-datetime">
             <div class="hero-date" id="dashboard-date"></div>
@@ -371,6 +400,194 @@
     }
     update();
     setInterval(update, 1000);
+})();
+
+// Network Traffic Visualization
+(function initTrafficViz() {
+    const canvas = document.getElementById('traffic-canvas');
+    const hero = document.getElementById('dashboard-hero');
+    if (!canvas || !hero) return;
+
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let particles = [];
+    let flowLines = [];
+    let lastThreatCount = 0;
+    let trafficRate = 0; // packets per second simulation
+
+    // Colors
+    const colors = {
+        line: 'rgba(255, 255, 255, 0.08)',
+        particle: 'rgba(59, 130, 246, 0.6)', // Blue for normal traffic
+        particleGlow: 'rgba(59, 130, 246, 0.3)',
+        threat: '#FF6B8A', // Watermelon
+        threatGlow: 'rgba(255, 107, 138, 0.5)'
+    };
+
+    function resize() {
+        const rect = hero.getBoundingClientRect();
+        width = canvas.width = rect.width;
+        height = canvas.height = rect.height;
+        initFlowLines();
+    }
+
+    function initFlowLines() {
+        flowLines = [];
+        const lineCount = 5;
+        const spacing = height / (lineCount + 1);
+        for (let i = 0; i < lineCount; i++) {
+            flowLines.push({
+                y: spacing * (i + 1),
+                amplitude: 3 + Math.random() * 5,
+                frequency: 0.005 + Math.random() * 0.005,
+                phase: Math.random() * Math.PI * 2,
+                speed: 0.02 + Math.random() * 0.02
+            });
+        }
+    }
+
+    function spawnParticle(isThreat = false) {
+        const line = flowLines[Math.floor(Math.random() * flowLines.length)];
+        particles.push({
+            x: 0,
+            y: line.y,
+            line: line,
+            speed: 2 + Math.random() * 3,
+            size: isThreat ? 4 : 2 + Math.random() * 2,
+            isThreat: isThreat,
+            alpha: 1,
+            trail: []
+        });
+    }
+
+    function spawnThreatDart() {
+        // Create DOM element for dart flash effect
+        const dart = document.createElement('div');
+        dart.className = 'threat-dart';
+        dart.style.left = (Math.random() * (width - 50) + 25) + 'px';
+        dart.style.top = (Math.random() * (height - 30) + 15) + 'px';
+        hero.appendChild(dart);
+        setTimeout(() => dart.remove(), 800);
+
+        // Also spawn threat particle
+        spawnParticle(true);
+    }
+
+    function update() {
+        // Update flow line phases
+        flowLines.forEach(line => {
+            line.phase += line.speed;
+        });
+
+        // Update particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.speed;
+
+            // Calculate Y position along wavy line
+            const wave = Math.sin(p.x * p.line.frequency + p.line.phase) * p.line.amplitude;
+            p.y = p.line.y + wave;
+
+            // Store trail
+            p.trail.push({ x: p.x, y: p.y });
+            if (p.trail.length > 8) p.trail.shift();
+
+            // Remove if off screen
+            if (p.x > width + 10) {
+                particles.splice(i, 1);
+            }
+        }
+
+        // Spawn new particles based on traffic rate
+        if (Math.random() < 0.05 + trafficRate * 0.1) {
+            spawnParticle();
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw flow lines (subtle)
+        ctx.strokeStyle = colors.line;
+        ctx.lineWidth = 1;
+        flowLines.forEach(line => {
+            ctx.beginPath();
+            for (let x = 0; x <= width; x += 5) {
+                const y = line.y + Math.sin(x * line.frequency + line.phase) * line.amplitude;
+                if (x === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        });
+
+        // Draw particles with trails
+        particles.forEach(p => {
+            // Draw trail
+            if (p.trail.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = p.isThreat ? colors.threatGlow : colors.particleGlow;
+                ctx.lineWidth = p.size * 0.8;
+                ctx.lineCap = 'round';
+                p.trail.forEach((pt, i) => {
+                    if (i === 0) ctx.moveTo(pt.x, pt.y);
+                    else ctx.lineTo(pt.x, pt.y);
+                });
+                ctx.stroke();
+            }
+
+            // Draw particle
+            ctx.beginPath();
+            ctx.fillStyle = p.isThreat ? colors.threat : colors.particle;
+            ctx.shadowColor = p.isThreat ? colors.threat : colors.particle;
+            ctx.shadowBlur = p.isThreat ? 10 : 5;
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        });
+    }
+
+    function animate() {
+        update();
+        draw();
+        requestAnimationFrame(animate);
+    }
+
+    // Fetch traffic stats and spawn threats on new blocks
+    async function fetchTrafficStats() {
+        try {
+            const response = await fetch('/api/core/dashboard');
+            if (response.ok) {
+                const data = await response.json();
+                // Update traffic rate based on network activity (simulated)
+                trafficRate = Math.min(1, (data.connected_clients || 0) * 0.2);
+
+                // Check for new threat blocks
+                const currentBlocks = (data.threats?.blocked || 0);
+                if (currentBlocks > lastThreatCount && lastThreatCount > 0) {
+                    // New threats blocked - spawn darts!
+                    const newThreats = Math.min(currentBlocks - lastThreatCount, 5);
+                    for (let i = 0; i < newThreats; i++) {
+                        setTimeout(() => spawnThreatDart(), i * 150);
+                    }
+                }
+                lastThreatCount = currentBlocks;
+            }
+        } catch (e) {
+            // Silent fail - visualization continues
+        }
+    }
+
+    // Initialize
+    resize();
+    window.addEventListener('resize', resize);
+    animate();
+
+    // Poll for traffic stats every 3 seconds
+    fetchTrafficStats();
+    setInterval(fetchTrafficStats, 3000);
+
+    // Expose method to manually trigger threat dart (for testing)
+    window.triggerThreatDart = spawnThreatDart;
 })();
 </script>
 
