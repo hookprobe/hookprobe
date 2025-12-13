@@ -1,19 +1,112 @@
 # HookProbe Interface Security Controls Report
 
 **Generated**: 2025-12-13
-**Version**: 5.1
-
-## Executive Summary
-
-This document maps all security controls to their respective network interfaces in the HookProbe Guardian deployment.
-
-**Key Finding**: Your understanding is **correct**:
-- **WAN Interface (eth0/wlan0)**: Qsecbit, XDP/eBPF, Suricata, Zeek - packet inspection and threat detection
-- **LAN Interface (br0)**: dnsXai - DNS query filtering for local clients
+**Version**: 5.2
 
 ---
 
-## Network Interface Architecture
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)
+2. [Chapter 1: Sentinel (IoT Validator)](#chapter-1-sentinel-iot-validator)
+3. [Chapter 2: Guardian (Travel Companion)](#chapter-2-guardian-travel-companion)
+4. [Chapter 3: Fortress (Edge Router)](#chapter-3-fortress-edge-router)
+5. [Chapter 4: Nexus (ML/AI Server)](#chapter-4-nexus-mlai-server)
+6. [Chapter 5: MSSP (Cloud Federation)](#chapter-5-mssp-cloud-federation)
+7. [Cross-Tier Comparison](#cross-tier-comparison)
+
+---
+
+## Executive Summary
+
+This document maps security controls to their network interfaces for each HookProbe product tier.
+
+**Key Principle**: All tiers follow the same pattern:
+- **WAN Interface**: Packet inspection, threat detection (Suricata, Zeek, XDP, Qsecbit)
+- **LAN Interface**: DNS filtering (dnsXai), client services
+- **Internal/Localhost**: Scoring engines, ML processing
+
+| Tier | RAM | Primary Security Focus | Key Interfaces |
+|------|-----|------------------------|----------------|
+| **Sentinel** | 256MB | DSM validation | eth0 (WAN) |
+| **Guardian** | 1.5GB | L2-L7 detection, WiFi AP | eth0/wlan0 (WAN), wlan1/br0 (LAN) |
+| **Fortress** | 4GB | VLAN segmentation, SDN | eth0 (WAN), br-vlan-* (VLANs) |
+| **Nexus** | 16GB+ | ML training, regional coordination | eth0 (WAN), internal mesh |
+| **MSSP** | Auto | Multi-tenant aggregation | Cloud networking |
+
+---
+
+## Chapter 1: Sentinel (IoT Validator)
+
+> **256MB RAM · $25 · IoT-scale protection**
+
+### What Sentinel Does
+
+Sentinel is the lightest HookProbe tier, designed for IoT gateways and constrained devices. It focuses on **validation** rather than full detection.
+
+### Network Architecture
+
+```
+              INTERNET
+                  │
+            ┌─────┴─────┐
+            │   eth0    │
+            │   (WAN)   │
+            └─────┬─────┘
+                  │
+    ┌─────────────┴─────────────┐
+    │     SECURITY CONTROLS     │
+    │  ┌─────────────────────┐  │
+    │  │  Lightweight Qsecbit │  │
+    │  │  (validation mode)   │  │
+    │  │                      │  │
+    │  │  DSM Microblock      │  │
+    │  │  Verification        │  │
+    │  └─────────────────────┘  │
+    └─────────────────────────────┘
+                  │
+        (Optional downstream)
+```
+
+### Interface Definitions
+
+| Interface | Role | Description |
+|-----------|------|-------------|
+| **eth0** | WAN | Single uplink to internet/upstream node |
+| **lo** | Localhost | Internal DSM validation services |
+
+### Security Controls
+
+| Control | Interface | What It Does |
+|---------|-----------|--------------|
+| **DSM Validator** | eth0 → localhost | Validates microblocks from mesh (timestamp, sequence, signatures) |
+| **Health Monitor** | localhost | Reports node health to mesh |
+| **Partial BLS Signing** | localhost | Contributes partial signatures for consensus |
+| **Threat Cache** | localhost | Maintains compact threat cache (100 entries) |
+
+### What Sentinel Does NOT Have
+
+- ❌ Suricata/Zeek (too heavy for 256MB)
+- ❌ XDP/eBPF (simplified network stack)
+- ❌ WiFi AP mode
+- ❌ dnsXai (no DNS filtering)
+- ❌ Full L2-L7 detection
+
+### Summary
+
+Sentinel is a **verification node**. It validates that threat intelligence from the mesh is legitimate, but doesn't do heavy packet inspection itself. Think of it as a witness that confirms what other nodes report.
+
+---
+
+## Chapter 2: Guardian (Travel Companion)
+
+> **1.5GB RAM · $75 · Portable protection**
+
+### What Guardian Does
+
+Guardian is the portable security gateway for travelers. It creates a protected WiFi bubble anywhere you go - hotels, cafés, airports.
+
+### Network Architecture
 
 ```
                     INTERNET
@@ -63,372 +156,416 @@ This document maps all security controls to their respective network interfaces 
               └───────────────────┘
 ```
 
----
-
-## Interface Definitions
+### Interface Definitions
 
 | Interface | Role | IP Address | Description |
 |-----------|------|------------|-------------|
 | **eth0** | WAN Primary | DHCP | Ethernet uplink (highest priority) |
 | **wlan0** | WAN Fallback | DHCP | WiFi upstream (hotel/café WiFi) |
-| **wlan1** | LAN AP | N/A (bridged) | WiFi Access Point for clients |
+| **wlan1** | LAN AP | N/A (bridged) | WiFi Access Point for your devices |
 | **br0** | LAN Bridge | 192.168.4.1/27 | Bridge interface, DHCP/DNS services |
-| **lo** | Localhost | 127.0.0.1 | Internal services (dnsXai) |
+| **lo** | Localhost | 127.0.0.1 | Internal services (dnsXai, Qsecbit) |
 
----
+### Security Controls by Interface
 
-## Security Controls by Interface
+#### WAN Interface (eth0/wlan0) - Packet Inspection
 
-### 1. XDP/eBPF DDoS Mitigation
+| Control | What It Does | Layer |
+|---------|--------------|-------|
+| **XDP/eBPF** | Kernel-level DDoS mitigation, drops bad packets before they hit userspace | Kernel |
+| **Suricata** | IDS/IPS, deep packet inspection, signature matching | L3-L7 |
+| **Zeek** | Network analysis, connection logs, TLS inspection | L3-L7 |
+| **Qsecbit** | Threat scoring from Suricata/Zeek logs, RAG status | Meta |
 
-| Attribute | Value |
-|-----------|-------|
-| **File** | `core/qsecbit/xdp_manager.py:184-206` |
-| **Interface** | Auto-detected primary (eth0 or wlan0) |
-| **Direction** | Ingress (incoming packets) |
-| **Layer** | Kernel (before network stack) |
+#### LAN Interface (br0) - Client Services
 
-**Interface Detection Logic** (`core/qsecbit/nic_detector.py:171-202`):
-```python
-# Gets default route interface
-ip route show default → dev eth0/wlan0
+| Control | What It Does |
+|---------|--------------|
+| **dnsmasq** | DHCP server (assigns IPs), DNS server (forwards to dnsXai) |
+| **dnsXai** | AI DNS filtering - blocks ads, trackers, malware domains |
+| **hostapd** | Creates WiFi access point (HookProbe-Guardian) |
+
+### dnsXai ML/AI Details
+
+**IMPORTANT**: dnsXai does NOT inspect network traffic. It only analyzes domain name **strings**.
+
 ```
-
-**Verdict**: ✅ **WAN Interface** - Filters malicious traffic before it enters the system.
-
----
-
-### 2. Suricata IDS/IPS
-
-| Attribute | Value |
-|-----------|-------|
-| **Config** | `products/guardian/lib/config.py:196-200` |
-| **Log Path** | `/var/log/suricata/eve.json` |
-| **Interface** | Typically eth0/wlan0 (WAN) |
-| **Mode** | IDS or IPS (configurable) |
-
-**Note**: Suricata's interface is configured in `/etc/suricata/suricata.yaml` (system config, not in repo). Default captures on the primary WAN interface.
-
-**Verdict**: ✅ **WAN Interface** - Inspects all incoming/outgoing WAN traffic.
-
----
-
-### 3. Zeek Network Analysis
-
-| Attribute | Value |
-|-----------|-------|
-| **Config** | `products/guardian/lib/config.py:202-204` |
-| **Log Directory** | `/var/log/zeek/current/` |
-| **Interface** | Typically eth0/wlan0 (WAN) |
-| **Logs Used** | conn.log, http.log, ssl.log, dns.log, dhcp.log |
-
-**Usage in Detectors** (`core/qsecbit/detectors/base.py:283-298`):
-- L4 Detector: `conn.log` for port scans
-- L5 Detector: `ssl.log` for TLS analysis, `http.log` for HTTP inspection
-- L2 Detector: `dhcp.log` for rogue DHCP detection
-
-**Verdict**: ✅ **WAN Interface** - Passive network analysis on WAN traffic.
-
----
-
-### 4. Qsecbit Threat Scoring
-
-| Attribute | Value |
-|-----------|-------|
-| **File** | `core/qsecbit/qsecbit.py` |
-| **Interface** | Indirect (parses logs from Suricata/Zeek) |
-| **Data Sources** | Suricata alerts, Zeek logs, /proc/net/*, ARP cache |
-
-**Verdict**: ✅ **WAN Interface** (indirectly via Suricata/Zeek data)
-
----
-
-### 5. Layer Threat Detectors (L2-L7)
-
-| Detector | Primary Data Source | Interface |
-|----------|---------------------|-----------|
-| L2 DataLink | ARP cache, WiFi scans | System-wide |
-| L3 Network | /proc/net/snmp, Suricata | WAN |
-| L4 Transport | ss -s, Zeek conn.log, Suricata | WAN |
-| L5 Session | Zeek ssl.log, http.log, Suricata | WAN |
-| L7 Application | Zeek http.log, Suricata, ModSecurity | WAN |
-
-**Verdict**: ✅ **WAN Interface** - All packet inspection occurs on WAN traffic.
-
----
-
-### 6. dnsXai AI DNS Protection
-
-| Attribute | Value |
-|-----------|-------|
-| **File** | `shared/dnsXai/engine.py:74-75` |
-| **Listen Address** | `127.0.0.1:5353` |
-| **Upstream DNS** | 1.1.1.1:53 (configurable) |
-| **Interface Binding** | **NONE** - No packet capture |
-
-**Traffic Flow**:
-```
-LAN Client (192.168.4.x)
+LAN Client asks for "ads.tracker.com"
     │
-    │ DNS query to 192.168.4.1:53
     ▼
-dnsmasq (br0 interface)
+dnsmasq receives DNS query
     │
-    │ Forwards DOMAIN STRING to 127.0.0.1:5353
     ▼
-dnsXai (localhost - NO interface binding)
+dnsXai receives domain STRING only
     │
-    │ ML classification + blocklist check
-    │ (analyzes domain NAME only, not traffic)
+    ├─── ML extracts 20 features from the text:
+    │    - shannon_entropy: 3.42
+    │    - ad_pattern_count: 2 ("ads", "track")
+    │    - subdomain_depth: 2
+    │    - etc.
     │
     ├─── BLOCKED → Return 0.0.0.0
+    └─── ALLOWED → Forward to upstream DNS
+```
+
+### Advanced Detection Features
+
+| Feature | Where It Lives | Interface |
+|---------|----------------|-----------|
+| TLS SNI Inspection | Zeek ssl.log → L5 Detector | WAN |
+| JA3 Fingerprinting | Zeek (if enabled) | WAN |
+| IP Reputation | Suricata feeds | WAN |
+| Deep Packet Inspection | Suricata IPS | WAN |
+| DNS ML Classification | dnsXai | Localhost (strings only) |
+
+### Summary Matrix
+
+| Control | eth0 (WAN) | wlan0 (WAN) | wlan1 (AP) | br0 (LAN) | localhost |
+|---------|:----------:|:-----------:|:----------:|:---------:|:---------:|
+| XDP/eBPF | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Suricata | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Zeek | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Qsecbit | ✅ (via logs) | ✅ (via logs) | ❌ | ❌ | ✅ |
+| dnsXai | ❌ | ❌ | ❌ | ✅ | ✅ |
+| dnsmasq | ❌ | ❌ | ❌ | ✅ | ❌ |
+| hostapd | ❌ | ❌ | ✅ | ✅ | ❌ |
+
+---
+
+## Chapter 3: Fortress (Edge Router)
+
+> **4GB RAM · $200 · Business-grade protection**
+
+### What Fortress Does
+
+Fortress is a permanent security appliance for home offices and small businesses. It adds **VLAN segmentation** and **SDN control** to isolate different network zones.
+
+### Network Architecture
+
+```
+                    INTERNET
+                        │
+                  ┌─────┴─────┐
+                  │   eth0    │
+                  │   (WAN)   │
+                  └─────┬─────┘
+                        │
+    ┌───────────────────┴───────────────────────┐
+    │           SECURITY CONTROLS               │
+    │  ┌─────────────────────────────────────┐  │
+    │  │  XDP/eBPF (enhanced DDoS)           │  │
+    │  │  Suricata IDS/IPS (full ruleset)    │  │
+    │  │  Zeek (full logging)                │  │
+    │  │  Qsecbit (local ML inference)       │  │
+    │  │  OpenFlow SDN Controller            │  │
+    │  └─────────────────────────────────────┘  │
+    └───────────────────┬───────────────────────┘
+                        │
+              ┌─────────┴─────────┐
+              │   OVS Bridge      │
+              │   (br-fortress)   │
+              └─────────┬─────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+  ┌─────┴─────┐   ┌─────┴─────┐   ┌─────┴─────┐
+  │ VLAN 10   │   │ VLAN 20   │   │ VLAN 30   │
+  │ Trusted   │   │ Guest     │   │ IoT       │
+  │ Devices   │   │ Network   │   │ Isolated  │
+  │           │   │           │   │           │
+  │ Full      │   │ Limited   │   │ Heavily   │
+  │ Access    │   │ Access    │   │ Restricted│
+  └───────────┘   └───────────┘   └───────────┘
+```
+
+### Interface Definitions
+
+| Interface | Role | Description |
+|-----------|------|-------------|
+| **eth0** | WAN | Primary internet uplink |
+| **eth1** | LAN Trunk | VLAN trunk to switches |
+| **br-fortress** | OVS Bridge | Software-defined bridge |
+| **vlan10** | Trusted VLAN | Full network access |
+| **vlan20** | Guest VLAN | Internet only, isolated |
+| **vlan30** | IoT VLAN | Heavily restricted, no inter-VLAN |
+| **lo** | Localhost | Internal services |
+
+### Security Controls by Interface
+
+#### WAN Interface (eth0) - Enhanced Inspection
+
+| Control | Enhancement over Guardian |
+|---------|---------------------------|
+| **XDP/eBPF** | Full ruleset, hardware offload if supported |
+| **Suricata** | Complete ruleset (not trimmed for Pi) |
+| **Zeek** | Full logging, JA3 enabled by default |
+| **Qsecbit** | Local ML inference for faster scoring |
+
+#### VLAN Interfaces - Zone Isolation
+
+| VLAN | Security Policy |
+|------|-----------------|
+| **VLAN 10 (Trusted)** | Full access, can reach other VLANs |
+| **VLAN 20 (Guest)** | Internet only, no local network |
+| **VLAN 30 (IoT)** | Internet only, rate limited, heavy logging |
+
+#### OpenFlow SDN Controller
+
+Fortress uses OpenFlow to dynamically control traffic:
+
+```
+Threat Detected (Qsecbit score > 0.7)
     │
-    └─── ALLOWED → Forward to upstream (1.1.1.1)
+    ▼
+SDN Controller creates flow rule:
+    "Block traffic from compromised IoT device"
+    │
+    ▼
+OVS Bridge applies rule instantly
+    │
+    ▼
+Device quarantined without affecting other VLANs
 ```
 
-**Verdict**: ✅ **LAN Interface (br0)** - Filters DNS queries from local clients only.
+### Summary Matrix
+
+| Control | eth0 (WAN) | VLANs | OVS Bridge | localhost |
+|---------|:----------:|:-----:|:----------:|:---------:|
+| XDP/eBPF | ✅ | ❌ | ❌ | ❌ |
+| Suricata | ✅ | ✅ (mirror) | ❌ | ❌ |
+| Zeek | ✅ | ✅ (mirror) | ❌ | ❌ |
+| Qsecbit | ✅ | ✅ | ❌ | ✅ |
+| dnsXai | ❌ | ✅ | ❌ | ✅ |
+| OpenFlow | ❌ | ❌ | ✅ | ❌ |
 
 ---
 
-### 6a. dnsXai ML/AI Component Details
+## Chapter 4: Nexus (ML/AI Server)
 
-**IMPORTANT**: The ML/AI in dnsXai does **NOT** inspect network traffic. It only analyzes domain name **strings**.
+> **16GB+ RAM · $2000+ · Regional intelligence hub**
 
-| ML Component | Location | Input Data |
-|--------------|----------|------------|
-| `DomainFeatureExtractor` | In-memory (localhost) | Domain name string |
-| `DomainClassifier` | In-memory (localhost) | 20 text features |
-| `CNAMEUncloaker` | DNS queries to upstream | DNS CNAME records |
-| `FederatedLearning` | Mesh network | Model weights + domain hashes |
+### What Nexus Does
 
-**What the ML Analyzes** (`shared/dnsXai/engine.py:200-264`):
+Nexus is the ML powerhouse. It **trains models**, **coordinates federated learning**, and serves as a **regional aggregation point** for threat intelligence.
 
-| Feature | Source | Example |
-|---------|--------|---------|
-| `shannon_entropy` | String entropy | 3.42 |
-| `ad_pattern_count` | Regex on string | 2 (found "ads", "track") |
-| `subdomain_depth` | Count dots | 1 |
-| `digit_ratio` | Characters | 0.0 |
-| `has_uuid` | Regex pattern | False |
-| ... 15 more | String analysis | ... |
-
-**What the ML Does NOT See**:
-- ❌ Raw packets
-- ❌ HTTP headers or payload
-- ❌ TLS handshake data
-- ❌ IP addresses (except via DNS lookup)
-- ❌ Any actual network traffic
-
-**Interface Comparison**:
-
-| Control | Binds to Interface | Sees Packets | ML Input |
-|---------|-------------------|--------------|----------|
-| Suricata | eth0/wlan0 (WAN) | Yes (pcap) | Packet signatures |
-| Zeek | eth0/wlan0 (WAN) | Yes (pcap) | Connection metadata |
-| **dnsXai** | **None** | **No** | **Domain name text** |
-
----
-
-### 6b. Advanced Detection Features - Where They Actually Live
-
-**IMPORTANT**: Features like TLS SNI inspection, JA3 fingerprinting, IP reputation, and deep packet inspection are **NOT part of dnsXai**. They are handled by **Qsecbit layer detectors** consuming data from **Suricata/Zeek** on the **WAN interface**.
-
-| Feature | Handled By | Interface | Source File |
-|---------|------------|-----------|-------------|
-| **TLS SNI Inspection** | Zeek ssl.log → L5 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l5_detector.py` |
-| **TLS Version/Cipher** | Zeek ssl.log → L5 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l5_detector.py:134-155` |
-| **SSL Strip Detection** | Suricata alerts → L5 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l5_detector.py:64-124` |
-| **JA3 Fingerprinting** | Zeek (if enabled) | eth0/wlan0 (WAN) | Zeek `ja3.log` |
-| **IP Reputation** | Suricata/External feeds | eth0/wlan0 (WAN) | `shared/dsm/validator.py` (planned) |
-| **Traffic Patterns** | Zeek conn.log → L4 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l4_detector.py` |
-| **Deep Packet Inspection** | Suricata IPS | eth0/wlan0 (WAN) | `/var/log/suricata/eve.json` |
-| **HTTP Inspection** | Zeek http.log → L7 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l7_detector.py` |
-
-**Architecture Flow**:
+### Network Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        WAN INTERFACE (eth0/wlan0)                           │
-│                                                                             │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐        │
-│  │    Suricata     │    │      Zeek       │    │   XDP/eBPF      │        │
-│  │    IDS/IPS      │    │ Network Monitor │    │ DDoS Mitigation │        │
-│  │                 │    │                 │    │                 │        │
-│  │ - DPI           │    │ - TLS/SSL logs  │    │ - Kernel-level  │        │
-│  │ - Signatures    │    │ - JA3 (optional)│    │ - Rate limiting │        │
-│  │ - Protocol      │    │ - Connection    │    │                 │        │
-│  │   detection     │    │   metadata      │    │                 │        │
-│  └────────┬────────┘    └────────┬────────┘    └─────────────────┘        │
-│           │                      │                                         │
-│           ▼                      ▼                                         │
-│  /var/log/suricata/      /var/log/zeek/current/                           │
-│  eve.json                 ├── conn.log                                     │
-│                           ├── ssl.log    ◄── TLS SNI, versions, ciphers   │
-│                           ├── http.log                                     │
-│                           ├── dns.log                                      │
-│                           └── ja3.log    ◄── JA3 fingerprints (if enabled)│
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     QSECBIT LAYER DETECTORS (localhost)                     │
-│                                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
-│  │ L2 Detector │  │ L4 Detector │  │ L5 Detector │  │ L7 Detector │       │
-│  │             │  │             │  │             │  │             │       │
-│  │ - ARP/MAC   │  │ - Port scan │  │ - SSL strip │  │ - SQLi/XSS  │       │
-│  │ - Evil twin │  │ - SYN flood │  │ - TLS down  │  │ - HTTP flood│       │
-│  │             │  │ - Patterns  │  │ - Cert      │  │ - Malware   │       │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘       │
-│                                    │                                       │
-│                    Reads from Suricata/Zeek logs                          │
-│                    (NO direct packet capture)                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        dnsXai (localhost:5353)                              │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────┐       │
-│  │  ONLY analyzes domain name STRINGS                              │       │
-│  │  - NO TLS inspection                                            │       │
-│  │  - NO JA3 fingerprinting                                        │       │
-│  │  - NO IP reputation                                             │       │
-│  │  - NO deep packet inspection                                    │       │
-│  │  - NO traffic pattern analysis                                  │       │
-│  │                                                                 │       │
-│  │  Input: "ads.example.com" (string)                              │       │
-│  │  Output: BLOCK/ALLOW                                            │       │
-│  └─────────────────────────────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────────────────────────────┘
+                    INTERNET
+                        │
+                  ┌─────┴─────┐
+                  │   eth0    │
+                  │   (WAN)   │
+                  └─────┬─────┘
+                        │
+    ┌───────────────────┴───────────────────────┐
+    │           SECURITY CONTROLS               │
+    │  ┌─────────────────────────────────────┐  │
+    │  │  Full Security Stack                 │  │
+    │  │  + GPU-accelerated ML Training       │  │
+    │  │  + Federated Learning Coordinator    │  │
+    │  │  + Regional Threat Aggregation       │  │
+    │  │  + Adversarial Testing Engine        │  │
+    │  └─────────────────────────────────────┘  │
+    └───────────────────┬───────────────────────┘
+                        │
+              ┌─────────┴─────────┐
+              │   Mesh Network    │
+              │   (HTP Protocol)  │
+              └─────────┬─────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+  ┌─────┴─────┐   ┌─────┴─────┐   ┌─────┴─────┐
+  │ Guardian  │   │ Guardian  │   │ Fortress  │
+  │ Node 1    │   │ Node 2    │   │ Node 3    │
+  └───────────┘   └───────────┘   └───────────┘
 ```
 
-**Summary of Feature Locations**:
+### Interface Definitions
 
-| If you want... | Look in... | Interface |
-|----------------|------------|-----------|
-| TLS/SSL analysis | `core/qsecbit/detectors/l5_detector.py` | WAN (via Zeek) |
-| JA3 fingerprints | Zeek configuration | WAN |
-| IP reputation | `shared/dsm/validator.py` (planned) | WAN (via Suricata) |
-| Traffic patterns | `core/qsecbit/detectors/l4_detector.py` | WAN (via Zeek) |
-| Deep packet inspection | Suricata configuration | WAN |
-| DNS domain ML | `shared/dnsXai/engine.py` | None (string only) |
+| Interface | Role | Description |
+|-----------|------|-------------|
+| **eth0** | WAN | Primary internet + mesh uplink |
+| **eth1** | Management | Optional management network |
+| **lo** | Localhost | ML training, model serving |
 
----
+### Security Controls by Interface
 
-### 7. dnsmasq DHCP/DNS Server
+#### WAN Interface (eth0)
 
-| Attribute | Value |
-|-----------|-------|
-| **File** | `products/guardian/config/dnsmasq.conf:32-38` |
-| **Listen Interface** | `br0` |
-| **Excluded Interfaces** | eth0, wlan0, lo |
+Same as Fortress (full stack), but Nexus also:
+- Receives threat intelligence from child nodes
+- Distributes trained model weights
+- Coordinates federated learning rounds
 
-**Configuration**:
-```conf
-interface=br0
-except-interface=eth0
-except-interface=wlan0
-except-interface=lo
-```
+#### ML Processing (localhost)
 
-**Verdict**: ✅ **LAN Interface (br0)** - DHCP/DNS only for local clients.
+| ML Component | What It Does |
+|--------------|--------------|
+| **Local Model Training** | Trains threat detection models on aggregated data |
+| **Federated Coordinator** | Orchestrates model weight sharing without raw data |
+| **Adversarial Engine** | Tests models against attack evasion techniques |
+| **Pattern Correlation** | Finds cross-mesh attack patterns |
 
----
+### Summary Matrix
 
-### 8. hostapd WiFi Access Point
-
-| Attribute | Value |
-|-----------|-------|
-| **File** | `products/guardian/config/hostapd.conf:13-15` |
-| **AP Interface** | `wlan1` |
-| **Bridge** | `br0` |
-
-**Configuration**:
-```conf
-interface=wlan1
-bridge=br0
-```
-
-**Verdict**: ✅ **LAN Interface (wlan1 → br0)**
+| Control | eth0 (WAN) | Mesh Network | localhost |
+|---------|:----------:|:------------:|:---------:|
+| XDP/eBPF | ✅ | ❌ | ❌ |
+| Suricata | ✅ | ❌ | ❌ |
+| Zeek | ✅ | ❌ | ❌ |
+| Qsecbit | ✅ | ✅ (aggregation) | ✅ |
+| dnsXai | ✅ | ✅ (federated) | ✅ |
+| ML Training | ❌ | ❌ | ✅ (GPU) |
+| Federated Learning | ❌ | ✅ | ✅ |
 
 ---
 
-### 9. OpenFlow SDN Controller
+## Chapter 5: MSSP (Cloud Federation)
 
-| Attribute | Value |
-|-----------|-------|
-| **File** | `products/guardian/lib/openflow_controller.py` |
-| **Listen** | `0.0.0.0:6653` |
-| **Bridge** | `br-guardian` |
+> **Auto-scale · SaaS pricing · Global coordination**
 
-**Verdict**: ⚠️ **Internal Management** - Controls OVS bridge, not direct packet inspection.
+### What MSSP Does
 
----
+MSSP is the cloud platform for Managed Security Service Providers. It aggregates intelligence from thousands of nodes without seeing raw customer data.
 
-## Summary Matrix
-
-| Security Control | eth0 (WAN) | wlan0 (WAN) | wlan1 (AP) | br0 (LAN) | localhost |
-|-----------------|:----------:|:-----------:|:----------:|:---------:|:---------:|
-| **XDP/eBPF** | ✅ Primary | ✅ Fallback | ❌ | ❌ | ❌ |
-| **Suricata** | ✅ Primary | ✅ Fallback | ❌ | ❌ | ❌ |
-| **Zeek** | ✅ Primary | ✅ Fallback | ❌ | ❌ | ❌ |
-| **Qsecbit** | ✅ (via logs) | ✅ (via logs) | ❌ | ❌ | ❌ |
-| **Layer Detectors** | ✅ (via logs) | ✅ (via logs) | ❌ | ❌ | ❌ |
-| **dnsXai** | ❌ | ❌ | ❌ | ✅ (via dnsmasq) | ✅ Listen |
-| **dnsmasq** | ❌ Excluded | ❌ Excluded | ❌ | ✅ Listen | ❌ |
-| **hostapd** | ❌ | ❌ | ✅ AP | ✅ Bridge | ❌ |
-
----
-
-## Traffic Inspection Points
-
-### WAN Traffic (Internet ↔ Guardian)
+### Network Architecture
 
 ```
-INTERNET → eth0/wlan0 → [XDP/eBPF] → [Suricata] → [Zeek] → NAT → br0 → LAN
-                           ↓              ↓          ↓
-                        DROP/PASS    eve.json    *.log
-                                         ↓          ↓
-                                    [Qsecbit Layer Detectors]
-                                              ↓
-                                    Threat Scoring (RAG)
+                    ┌─────────────────────────────────┐
+                    │         MSSP CLOUD              │
+                    │    (mssp.hookprobe.com)         │
+                    │                                 │
+                    │  ┌───────────────────────────┐  │
+                    │  │    Django Web Portal      │  │
+                    │  │    - Multi-tenant UI      │  │
+                    │  │    - Customer dashboards  │  │
+                    │  │    - Cortex visualization │  │
+                    │  └───────────────────────────┘  │
+                    │                                 │
+                    │  ┌───────────────────────────┐  │
+                    │  │    API Gateway            │  │
+                    │  │    - REST/GraphQL APIs    │  │
+                    │  │    - HTP Protocol Handler │  │
+                    │  │    - Webhook dispatch     │  │
+                    │  └───────────────────────────┘  │
+                    │                                 │
+                    │  ┌───────────────────────────┐  │
+                    │  │    Intelligence Engine    │  │
+                    │  │    - Cross-tenant dedup   │  │
+                    │  │    - Global threat DB     │  │
+                    │  │    - ML model serving     │  │
+                    │  └───────────────────────────┘  │
+                    └─────────────┬───────────────────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    │             │             │
+              ┌─────┴─────┐ ┌─────┴─────┐ ┌─────┴─────┐
+              │ Customer  │ │ Customer  │ │ Customer  │
+              │ A Mesh    │ │ B Mesh    │ │ C Mesh    │
+              │           │ │           │ │           │
+              │ Guardian  │ │ Fortress  │ │ Nexus     │
+              │ Nodes     │ │ Nodes     │ │ Nodes     │
+              └───────────┘ └───────────┘ └───────────┘
 ```
 
-### LAN Traffic (Clients → Guardian)
+### Interface Model
 
-```
-LAN Client → wlan1 → br0 → dnsmasq:53 → dnsXai:5353 → [ML/Blocklist] → Upstream DNS
-                              ↓
-                    DHCP lease assignment
-```
+MSSP uses **cloud networking** rather than physical interfaces:
+
+| Component | Network | Description |
+|-----------|---------|-------------|
+| **Load Balancer** | Public | Incoming HTP connections |
+| **API Gateway** | Public | REST/GraphQL API endpoints |
+| **Web Portal** | Public | Customer dashboards |
+| **Internal Services** | Private VPC | Database, cache, ML serving |
+
+### Security Controls
+
+#### Inbound (from customer nodes)
+
+| Control | What It Does |
+|---------|--------------|
+| **HTP Validator** | Authenticates incoming node connections |
+| **TER Verification** | Validates Telemetry Event Records |
+| **Rate Limiting** | Prevents API abuse |
+
+#### Intelligence Processing
+
+| Control | What It Does |
+|---------|--------------|
+| **Cross-Tenant Dedup** | Identifies threats seen by multiple customers |
+| **Global Threat DB** | Historical threat intelligence |
+| **ML Model Serving** | Distributes trained models to nodes |
+| **Consensus Finalization** | Global DSM checkpoint aggregation |
+
+#### Outbound (to customer nodes)
+
+| Control | What It Does |
+|---------|--------------|
+| **Threat Broadcast** | Distributes new IOCs to all nodes |
+| **Model Updates** | Pushes updated ML weights |
+| **Alert Dispatch** | Webhooks to customer SOCs |
+
+### What MSSP Does NOT Do
+
+- ❌ Inspect customer traffic (privacy-preserving)
+- ❌ Store raw packets
+- ❌ Access customer networks directly
+
+MSSP only sees:
+- Anonymized threat hashes (IOCs)
+- Aggregated statistics
+- Model weights (not training data)
+- DSM microblock metadata
+
+### Summary Matrix
+
+| Control | Public Internet | Private VPC | Customer Mesh |
+|---------|:---------------:|:-----------:|:-------------:|
+| HTP Gateway | ✅ | ❌ | ✅ |
+| REST API | ✅ | ❌ | ❌ |
+| Intelligence Engine | ❌ | ✅ | ❌ |
+| Threat Distribution | ✅ | ❌ | ✅ |
+| ML Model Serving | ❌ | ✅ | ✅ |
 
 ---
 
-## Key Configuration Files
+## Cross-Tier Comparison
 
-| Purpose | File | Key Lines |
-|---------|------|-----------|
-| WAN interface config | `products/guardian/lib/config.py` | 169-180 |
-| WAN interface detection | `core/qsecbit/nic_detector.py` | 171-202 |
-| XDP attachment | `core/qsecbit/xdp_manager.py` | 184-206 |
-| dnsmasq interface | `products/guardian/config/dnsmasq.conf` | 32-38 |
-| hostapd interface | `products/guardian/config/hostapd.conf` | 13-15 |
-| dnsXai listen | `shared/dnsXai/engine.py` | 74-75 |
-| Offline mode interfaces | `products/guardian/lib/offline_mode_manager.py` | 57-60 |
+### Security Controls by Tier
+
+| Control | Sentinel | Guardian | Fortress | Nexus | MSSP |
+|---------|:--------:|:--------:|:--------:|:-----:|:----:|
+| **XDP/eBPF** | ❌ | ✅ | ✅ | ✅ | N/A |
+| **Suricata** | ❌ | ✅ | ✅ | ✅ | N/A |
+| **Zeek** | ❌ | ✅ | ✅ | ✅ | N/A |
+| **Qsecbit** | Lite | ✅ | ✅ | ✅ | Aggregation |
+| **dnsXai** | ❌ | ✅ | ✅ | ✅ | ✅ |
+| **DSM** | Validate | Participate | Coordinate | Aggregate | Global |
+| **VLAN/SDN** | ❌ | ❌ | ✅ | ❌ | N/A |
+| **ML Training** | ❌ | ❌ | Inference | ✅ | Serving |
+| **WiFi AP** | ❌ | ✅ | ✅ | ❌ | N/A |
+
+### Interface Types by Tier
+
+| Tier | WAN Interfaces | LAN Interfaces | Special |
+|------|----------------|----------------|---------|
+| **Sentinel** | eth0 | None | DSM validation |
+| **Guardian** | eth0, wlan0 | wlan1, br0 | WiFi AP |
+| **Fortress** | eth0 | VLAN 10/20/30 | OVS, SDN |
+| **Nexus** | eth0 | Management | GPU, Mesh |
+| **MSSP** | Cloud LB | Private VPC | Multi-tenant |
+
+### Key Takeaways
+
+1. **All tiers inspect WAN traffic** (except Sentinel which validates only)
+2. **DNS filtering happens on LAN** (dnsXai receives strings, not packets)
+3. **dnsXai ML analyzes text** (domain names), not network traffic
+4. **Advanced detection (TLS, JA3) is on WAN** via Suricata/Zeek
+5. **Higher tiers add capabilities** but don't change the basic pattern
 
 ---
 
-## Recommendations
-
-1. **Current Design is Correct**: WAN inspection + LAN DNS filtering is the proper architecture.
-
-2. **No LAN Packet Inspection by Default**: Suricata/Zeek don't inspect br0 traffic. This is intentional for privacy (Guardian doesn't deep-inspect client traffic).
-
-3. **If LAN Inspection Needed**: Configure Suricata to also listen on br0, but this increases CPU load significantly on Raspberry Pi.
-
-4. **dnsXai Placement**: Correctly positioned to filter DNS without inspecting all LAN traffic.
-
----
-
-*Report generated from codebase analysis. For Suricata/Zeek interface configuration, check system files `/etc/suricata/suricata.yaml` and `/etc/zeek/node.cfg`.*
+*Report generated from codebase analysis v5.2. For system-level configs, check `/etc/suricata/suricata.yaml` and `/etc/zeek/node.cfg`.*
