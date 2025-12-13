@@ -41,20 +41,24 @@ show_menu() {
     echo -e "${BOLD}${CYAN}║              HookProbe Uninstaller v5.1                    ║${NC}"
     echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${YELLOW}Product Tiers:${NC}"
-    echo "  1) Uninstall Sentinel     (Lightweight Validator)"
-    echo "  2) Uninstall Guardian     (Travel Companion)"
-    echo "  3) Uninstall Fortress     (Edge Router)"
-    echo "  4) Uninstall Nexus        (ML/AI Compute)"
-    echo "  5) Uninstall MSSP         (Cloud Platform)"
+    echo -e "${YELLOW}Available Product Tiers:${NC}"
+    echo -e "  ${BOLD}1${NC}) Uninstall Sentinel     (Lightweight Validator)"
+    echo -e "       ${DIM}Removes: Service, firewall rules, health endpoint${NC}"
+    echo -e "  ${BOLD}2${NC}) Uninstall Guardian     (Travel Companion)"
+    echo -e "       ${DIM}Removes: Containers, WiFi AP, IDS/IPS, WAF, dnsXai, Web UI${NC}"
+    echo ""
+    echo -e "${YELLOW}Coming Soon (Not Yet Installable):${NC}"
+    echo -e "  ${DIM}─) Fortress              (Edge Router) [COMING SOON]${NC}"
+    echo -e "  ${DIM}─) Nexus                 (ML/AI Compute) [COMING SOON]${NC}"
+    echo -e "  ${DIM}─) MSSP                  (Cloud Platform) [COMING SOON]${NC}"
     echo ""
     echo -e "${YELLOW}Infrastructure:${NC}"
-    echo "  6) Uninstall Edge Deployment (PODs 001-007)"
-    echo "  7) Uninstall Cloud Backend"
-    echo "  8) Uninstall n8n Only (POD 008)"
+    echo -e "  ${BOLD}3${NC}) Uninstall Edge Deployment (PODs 001-007)"
+    echo -e "  ${BOLD}4${NC}) Uninstall Cloud Backend"
+    echo -e "  ${BOLD}5${NC}) Uninstall n8n Only (POD 008)"
     echo ""
     echo -e "${RED}Complete Removal:${NC}"
-    echo "  9) Uninstall EVERYTHING"
+    echo -e "  ${BOLD}9${NC}) Uninstall EVERYTHING"
     echo ""
     echo "  q) Cancel"
     echo ""
@@ -210,21 +214,12 @@ main() {
             uninstall_guardian
             ;;
         3)
-            uninstall_fortress
-            ;;
-        4)
-            uninstall_nexus
-            ;;
-        5)
-            uninstall_mssp
-            ;;
-        6)
             uninstall_edge
             ;;
-        7)
+        4)
             uninstall_cloud
             ;;
-        8)
+        5)
             uninstall_n8n
             ;;
         9)
