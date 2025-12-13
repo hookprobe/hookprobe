@@ -71,6 +71,8 @@ function switchToTab(tab) {
 }
 
 function showTab(tabName, animate = true) {
+    const previousTab = Guardian.currentTab;
+
     // Update nav items (Forty-style)
     document.querySelectorAll('#header nav button').forEach(item => {
         item.classList.toggle('active', item.dataset.tab === tabName);
@@ -86,6 +88,14 @@ function showTab(tabName, animate = true) {
     });
 
     Guardian.currentTab = tabName;
+
+    // Dispatch Cortex tab change events for animation control
+    if (previousTab === 'cortex' && tabName !== 'cortex') {
+        window.dispatchEvent(new CustomEvent('cortexTabDeactivated'));
+    }
+    if (tabName === 'cortex' && previousTab !== 'cortex') {
+        window.dispatchEvent(new CustomEvent('cortexTabActivated'));
+    }
 
     // Load tab-specific data
     loadTabData(tabName);
