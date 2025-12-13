@@ -42,10 +42,14 @@ const state = {
     clusteringEnabled: true
 };
 
-// Arc colors
+// Arc colors - Premium color schemes
 const ARC_COLORS = {
-    attack: ['rgba(255, 68, 68, 0.8)', 'rgba(255, 68, 68, 0.2)'],
-    repelled: ['rgba(0, 191, 255, 0.8)', 'rgba(0, 191, 255, 0.2)']
+    // Watermelon: Green rind → Red/pink flesh (threat coming in)
+    attack: ['rgba(76, 187, 23, 0.9)', 'rgba(255, 71, 87, 0.9)'],
+    // Pacific Blue: Deep ocean calming blue (defense)
+    repelled: ['rgba(0, 180, 216, 0.9)', 'rgba(144, 224, 239, 0.8)'],
+    // Heartbeat: Cyan mesh connectivity pulses
+    heartbeat: ['rgba(0, 255, 255, 0.6)', 'rgba(0, 255, 255, 0.2)']
 };
 
 // Node colors based on Qsecbit status
@@ -78,6 +82,24 @@ const TIER_COLORS = {
     fortress: '#00ff88',
     nexus: '#ffaa00'
 };
+
+/**
+ * Get arc color based on type
+ * @param {string} type - 'attack', 'repelled', or 'heartbeat'
+ * @returns {Array} Color gradient array [start, end]
+ */
+function getArcColor(type) {
+    switch (type) {
+        case 'attack':
+            return ARC_COLORS.attack;
+        case 'repelled':
+            return ARC_COLORS.repelled;
+        case 'heartbeat':
+            return ARC_COLORS.heartbeat;
+        default:
+            return ARC_COLORS.repelled;
+    }
+}
 
 /**
  * Detect if device is touch-enabled
@@ -132,11 +154,11 @@ function initGlobe() {
         .arcStartLng(d => d.source.lng)
         .arcEndLat(d => d.target.lat)
         .arcEndLng(d => d.target.lng)
-        .arcColor(d => d.type === 'attack' ? ARC_COLORS.attack : ARC_COLORS.repelled)
-        .arcDashLength(0.5)
-        .arcDashGap(0.1)
-        .arcDashAnimateTime(1500)
-        .arcStroke(d => d.type === 'attack' ? 0.5 : 0.3)
+        .arcColor(d => getArcColor(d.type))
+        .arcDashLength(d => d.type === 'heartbeat' ? 0.2 : 0.4)
+        .arcDashGap(d => d.type === 'heartbeat' ? 0.15 : 0.1)
+        .arcDashAnimateTime(d => d.type === 'heartbeat' ? 800 : 1500)
+        .arcStroke(d => d.type === 'attack' ? 0.6 : d.type === 'heartbeat' ? 0.3 : 0.4)
         .arcsTransitionDuration(300)
         // Click handlers
         .onPointClick(handlePointClick)
@@ -601,9 +623,10 @@ function addAttackArc(event, type) {
 
     state.arcs.push(arc);
 
-    // Trigger visual effect on target node
+    // Trigger visual effect on target node with matching colors
     if (targetNode && typeof pulseNode === 'function') {
-        const color = type === 'attack' ? '#ff4444' : '#00bfff';
+        // Watermelon red for attacks, Pacific blue for defense
+        const color = type === 'attack' ? '#ff4757' : '#00b4d8';
         pulseNode(target.lat, target.lng, color, 2, 1500);
     }
 
