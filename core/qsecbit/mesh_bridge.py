@@ -54,6 +54,16 @@ except ImportError:
     CORTEX_AVAILABLE = False
     CortexThreatEvent = None
 
+# Try to import DSM components
+try:
+    from shared.dsm.node import DSMNode
+    from shared.dsm.gossip import GossipProtocol
+    DSM_AVAILABLE = True
+except ImportError:
+    DSM_AVAILABLE = False
+    DSMNode = None
+    GossipProtocol = None
+
 
 @dataclass
 class MeshBridgeConfig:
@@ -94,10 +104,14 @@ class QsecbitMeshBridge:
     def __init__(
         self,
         config: Optional[MeshBridgeConfig] = None,
-        mesh_consciousness: Optional['MeshConsciousness'] = None
+        mesh_consciousness: Optional['MeshConsciousness'] = None,
+        dsm_node: Optional['DSMNode'] = None,
+        gossip: Optional['GossipProtocol'] = None
     ):
         self.config = config or MeshBridgeConfig()
         self.consciousness = mesh_consciousness
+        self.dsm_node = dsm_node
+        self.gossip = gossip
 
         # Statistics
         self.stats = {
@@ -128,6 +142,12 @@ class QsecbitMeshBridge:
         if consciousness:
             consciousness.on_intelligence(self._handle_mesh_intel)
             logger.info("Mesh consciousness connected to bridge")
+
+    def set_dsm_node(self, dsm_node: 'DSMNode', gossip: Optional['GossipProtocol'] = None):
+        """Set the DSM node and gossip protocol after initialization."""
+        self.dsm_node = dsm_node
+        self.gossip = gossip
+        logger.info("DSM node connected to bridge")
 
     def register_cortex_callback(self, callback: Callable):
         """Register callback for Cortex visualization events."""
@@ -247,6 +267,15 @@ class QsecbitMeshBridge:
                         reported = True
                     except Exception as e:
                         logger.error(f"Cortex callback failed: {e}")
+
+        # Create DSM microblock for significant threats
+        if self.config.enable_dsm_microblocks and self.dsm_node:
+            # Only create microblocks for HIGH/CRITICAL severity
+            if threat.severity in [ThreatSeverity.CRITICAL, ThreatSeverity.HIGH]:
+                block_id = self._create_dsm_microblock(threat)
+                if block_id:
+                    reported = True
+                    logger.info(f"Created DSM microblock: {block_id[:16]}...")
 
         return reported
 
@@ -427,6 +456,78 @@ class QsecbitMeshBridge:
                 return action_map[action]
 
         return 'monitoring'
+
+    def _create_dsm_microblock(self, threat: ThreatEvent) -> Optional[str]:
+        """
+        Create a DSM microblock for a significant threat event.
+
+        This creates an immutable record of the threat in the decentralized
+        security mesh, enabling mesh-wide verification and consensus.
+
+        Args:
+            threat: The ThreatEvent to record
+
+        Returns:
+            Block ID if successful, None otherwise
+        """
+        if not DSM_AVAILABLE or not self.dsm_node:
+            logger.warning("DSM not available, cannot create microblock")
+            return None
+
+        try:
+            # Anonymize source IP using SHA-256 hash for privacy
+            anonymized_source = None
+            if threat.source_ip:
+                anonymized_source = hashlib.sha256(
+                    threat.source_ip.encode()
+                ).hexdigest()[:16]
+
+            # Build microblock payload
+            payload = {
+                'event_id': threat.id,
+                'timestamp': threat.timestamp.isoformat(),
+                'attack_type': threat.attack_type.name,
+                'layer': threat.layer.name if threat.layer else 'UNKNOWN',
+                'severity': self._severity_map.get(threat.severity, 3),
+                'confidence': threat.confidence,
+                'source_hash': anonymized_source,
+                'mitre_id': threat.mitre_attack_id,
+                'blocked': threat.blocked,
+                'response_actions': [a.name for a in (threat.response_actions or [])],
+                'qsecbit_contribution': threat.qsecbit_contribution,
+            }
+
+            # Add IOC information
+            ioc_type, ioc_value = self._extract_ioc(threat)
+            if ioc_type == 'ip':
+                # Anonymize IP IOCs
+                payload['ioc_type'] = 'ip_hash'
+                payload['ioc_value'] = hashlib.sha256(ioc_value.encode()).hexdigest()[:16]
+            else:
+                payload['ioc_type'] = ioc_type
+                payload['ioc_value'] = ioc_value
+
+            # Create the microblock via DSM node
+            block_id = self.dsm_node.create_microblock(
+                event_type='threat_intelligence',
+                payload=payload
+            )
+
+            if block_id:
+                self.stats['microblocks_created'] += 1
+
+                # Announce via gossip if available
+                if self.gossip:
+                    microblock = self.dsm_node.get_microblock(block_id)
+                    if microblock:
+                        self.gossip.announce(block_id, microblock)
+
+                return block_id
+
+        except Exception as e:
+            logger.error(f"Failed to create DSM microblock: {e}")
+
+        return None
 
     def _handle_mesh_intel(self, intel: 'ThreatIntelligence'):
         """Handle threat intelligence received from mesh peers."""

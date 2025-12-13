@@ -21,10 +21,12 @@ import json
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread, Event
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
     from qsecbit import QsecbitAnalyzer, QsecbitConfig
@@ -35,6 +37,32 @@ except ImportError as e:
     print(f"ERROR: Failed to import qsecbit modules: {e}")
     print("Ensure qsecbit.py, energy_monitor.py, xdp_manager.py, and nic_detector.py are in the same directory")
     sys.exit(1)
+
+# Optional imports for E2E integration
+try:
+    from response.orchestrator import ResponseOrchestrator, ResponsePolicy
+    RESPONSE_AVAILABLE = True
+except ImportError:
+    RESPONSE_AVAILABLE = False
+
+try:
+    from mesh_bridge import QsecbitMeshBridge, MeshBridgeConfig
+    MESH_BRIDGE_AVAILABLE = True
+except ImportError:
+    MESH_BRIDGE_AVAILABLE = False
+
+try:
+    from shared.dsm.node import DSMNode
+    from shared.dsm.gossip import GossipProtocol
+    DSM_AVAILABLE = True
+except ImportError:
+    DSM_AVAILABLE = False
+
+try:
+    from threat_types import ThreatEvent, AttackType, ThreatSeverity, OSILayer
+    THREAT_TYPES_AVAILABLE = True
+except ImportError:
+    THREAT_TYPES_AVAILABLE = False
 
 # ============================================================================
 # CONFIGURATION
@@ -109,7 +137,7 @@ def run_health_server(port: int = 8888):
 # ============================================================================
 
 class HookProbeAgent:
-    """Main HookProbe monitoring agent"""
+    """Main HookProbe monitoring agent with E2E integration"""
 
     def __init__(self, config_file: Optional[Path] = None):
         self.config_file = config_file
@@ -117,15 +145,28 @@ class HookProbeAgent:
         self.start_time = time.time()
         self.last_metrics: Dict = {}
 
-        # Components
+        # Core Components
         self.qsecbit: Optional[QsecbitAnalyzer] = None
         self.energy_monitor: Optional[EnergyMonitor] = None
         self.xdp_manager: Optional[XDPManager] = None
         self.nic_detector: Optional[NICDetector] = None
 
+        # E2E Integration Components
+        self.response_orchestrator: Optional['ResponseOrchestrator'] = None
+        self.mesh_bridge: Optional['QsecbitMeshBridge'] = None
+        self.dsm_node: Optional['DSMNode'] = None
+        self.gossip: Optional['GossipProtocol'] = None
+
+        # Threat tracking
+        self.active_threats: List['ThreatEvent'] = []
+        self.rag_history: List[Dict] = []  # Track RAG status changes
+
         # Configuration
         self.xdp_enabled = os.getenv("XDP_ENABLED", "false").lower() == "true"
+        self.dsm_enabled = os.getenv("DSM_ENABLED", "false").lower() == "true"
+        self.mesh_enabled = os.getenv("MESH_ENABLED", "false").lower() == "true"
         self.deployment_role = self._detect_deployment_role()
+        self.node_id = os.getenv("NODE_ID", f"guardian-{os.getpid()}")
 
         # Signal handling
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -198,7 +239,84 @@ class HookProbeAgent:
             logger.error(f"Qsecbit initialization failed: {e}")
             self.qsecbit = None
 
+        # Initialize E2E integration components
+        self._initialize_e2e_components()
+
         logger.info("Component initialization completed")
+
+    def _initialize_e2e_components(self):
+        """Initialize E2E integration: ResponseOrchestrator, MeshBridge, DSM"""
+
+        # Response Orchestrator - automated threat response
+        if RESPONSE_AVAILABLE:
+            try:
+                policy = ResponsePolicy(
+                    enable_xdp_blocking=self.xdp_enabled,
+                    enable_firewall_rules=True,
+                    enable_rate_limiting=True,
+                    enable_session_termination=False,  # Dangerous
+                    enable_quarantine=False,           # Requires SDN
+                )
+                self.response_orchestrator = ResponseOrchestrator(
+                    xdp_manager=self.xdp_manager,
+                    policy=policy,
+                    data_dir=str(BASE_DIR / "data")
+                )
+                logger.info("ResponseOrchestrator initialized")
+            except Exception as e:
+                logger.error(f"ResponseOrchestrator initialization failed: {e}")
+                self.response_orchestrator = None
+        else:
+            logger.info("ResponseOrchestrator not available (module not found)")
+
+        # DSM Node - decentralized security mesh
+        if DSM_AVAILABLE and self.dsm_enabled:
+            try:
+                tpm_key_path = os.getenv("TPM_KEY_PATH", "/var/lib/hookprobe/tpm/key")
+                ledger_path = os.getenv("DSM_LEDGER_PATH", "/var/lib/hookprobe/dsm/microblocks")
+                bootstrap_nodes = os.getenv("DSM_BOOTSTRAP_NODES", "").split(",")
+                bootstrap_nodes = [n.strip() for n in bootstrap_nodes if n.strip()]
+
+                self.dsm_node = DSMNode(
+                    node_id=self.node_id,
+                    tpm_key_path=tpm_key_path,
+                    ledger_path=ledger_path,
+                    bootstrap_nodes=bootstrap_nodes
+                )
+                self.gossip = self.dsm_node.gossip
+                logger.info(f"DSM node initialized: {self.node_id}")
+            except Exception as e:
+                logger.error(f"DSM node initialization failed: {e}")
+                self.dsm_node = None
+        else:
+            if not DSM_AVAILABLE:
+                logger.info("DSM not available (module not found)")
+            elif not self.dsm_enabled:
+                logger.info("DSM disabled (set DSM_ENABLED=true to enable)")
+
+        # Mesh Bridge - connects Qsecbit to mesh consciousness
+        if MESH_BRIDGE_AVAILABLE and self.mesh_enabled:
+            try:
+                config = MeshBridgeConfig(
+                    tier='guardian',
+                    enable_mesh_reporting=True,
+                    enable_cortex_events=True,
+                    enable_dsm_microblocks=self.dsm_enabled,
+                )
+                self.mesh_bridge = QsecbitMeshBridge(
+                    config=config,
+                    dsm_node=self.dsm_node,
+                    gossip=self.gossip
+                )
+                logger.info("MeshBridge initialized")
+            except Exception as e:
+                logger.error(f"MeshBridge initialization failed: {e}")
+                self.mesh_bridge = None
+        else:
+            if not MESH_BRIDGE_AVAILABLE:
+                logger.info("MeshBridge not available (module not found)")
+            elif not self.mesh_enabled:
+                logger.info("MeshBridge disabled (set MESH_ENABLED=true to enable)")
 
     def collect_metrics(self) -> Dict:
         """Collect metrics from all sources"""
@@ -240,20 +358,42 @@ class HookProbeAgent:
         return metrics
 
     def process_alerts(self, metrics: Dict):
-        """Process alerts based on metrics"""
+        """
+        Process alerts based on metrics.
+
+        This is the core E2E integration point:
+        1. Evaluate Qsecbit RAG status
+        2. Create ThreatEvents for detected anomalies
+        3. Execute ResponseOrchestrator actions
+        4. Report threats to mesh via MeshBridge
+        5. Create DSM microblocks for significant threats
+        """
         if "qsecbit" not in metrics:
             return
 
         qsecbit_data = metrics["qsecbit"]
         rag_status = qsecbit_data.get("rag_status", "GREEN")
         score = qsecbit_data.get("score", 0.0)
+        prev_rag = self.rag_history[-1]["status"] if self.rag_history else "GREEN"
+
+        # Track RAG status changes
+        if rag_status != prev_rag:
+            self.rag_history.append({
+                "status": rag_status,
+                "score": score,
+                "timestamp": datetime.now().isoformat()
+            })
+            # Keep only last 100 entries
+            if len(self.rag_history) > 100:
+                self.rag_history = self.rag_history[-100:]
 
         if rag_status == "RED":
             logger.warning(f"RED ALERT: Qsecbit score {score:.3f} - System under stress!")
-            # TODO: Trigger Kali response
+            self._handle_red_alert(metrics, score)
+
         elif rag_status == "AMBER":
             logger.warning(f"AMBER ALERT: Qsecbit score {score:.3f} - Defensive capacity declining")
-            # TODO: Prepare Kali container
+            self._handle_amber_alert(metrics, score)
 
         # XDP rate limiting
         if self.xdp_manager and "xdp" in metrics:
@@ -262,6 +402,175 @@ class HookProbeAgent:
             # Check for DDoS indicators
             if xdp_stats.get("drops", 0) > 1000:
                 logger.warning(f"High XDP drop rate: {xdp_stats['drops']} packets")
+                self._handle_ddos_indicator(xdp_stats)
+
+    def _handle_red_alert(self, metrics: Dict, score: float):
+        """
+        Handle RED alert status - critical threat response.
+
+        Actions:
+        1. Create ThreatEvent from metrics
+        2. Execute blocking responses via ResponseOrchestrator
+        3. Report to mesh via MeshBridge
+        4. Create DSM microblock for audit trail
+        """
+        if not THREAT_TYPES_AVAILABLE:
+            logger.warning("ThreatTypes not available, cannot create ThreatEvent")
+            return
+
+        # Create ThreatEvent from Qsecbit metrics
+        threat = self._create_threat_from_metrics(metrics, ThreatSeverity.CRITICAL)
+        if not threat:
+            return
+
+        self.active_threats.append(threat)
+
+        # Execute response via ResponseOrchestrator
+        if self.response_orchestrator:
+            try:
+                results = self.response_orchestrator.respond(threat)
+                for result in results:
+                    logger.info(
+                        f"Response action {result.action.name}: "
+                        f"{'SUCCESS' if result.success else 'FAILED'} - {result.details}"
+                    )
+            except Exception as e:
+                logger.error(f"ResponseOrchestrator failed: {e}")
+
+        # Report to mesh via MeshBridge
+        if self.mesh_bridge:
+            try:
+                reported = self.mesh_bridge.report_threat(threat)
+                if reported:
+                    logger.info(f"Threat {threat.id[:8]}... reported to mesh")
+            except Exception as e:
+                logger.error(f"MeshBridge reporting failed: {e}")
+
+    def _handle_amber_alert(self, metrics: Dict, score: float):
+        """
+        Handle AMBER alert status - elevated threat warning.
+
+        Actions:
+        1. Create ThreatEvent from metrics
+        2. Enable rate limiting if available
+        3. Report to mesh for awareness
+        """
+        if not THREAT_TYPES_AVAILABLE:
+            return
+
+        # Create ThreatEvent with HIGH severity
+        threat = self._create_threat_from_metrics(metrics, ThreatSeverity.HIGH)
+        if not threat:
+            return
+
+        self.active_threats.append(threat)
+
+        # Execute response (rate limiting, alerts)
+        if self.response_orchestrator:
+            try:
+                results = self.response_orchestrator.respond(threat)
+                for result in results:
+                    if result.success:
+                        logger.info(f"AMBER response: {result.action.name} - {result.details}")
+            except Exception as e:
+                logger.error(f"AMBER response failed: {e}")
+
+        # Report to mesh
+        if self.mesh_bridge:
+            try:
+                self.mesh_bridge.report_threat(threat)
+            except Exception as e:
+                logger.debug(f"Mesh reporting skipped: {e}")
+
+    def _handle_ddos_indicator(self, xdp_stats: Dict):
+        """Handle DDoS indicators from XDP statistics."""
+        if not THREAT_TYPES_AVAILABLE:
+            return
+
+        # Create DDoS threat event
+        threat = ThreatEvent(
+            attack_type=AttackType.SYN_FLOOD,  # Most common DDoS
+            layer=OSILayer.L4_TRANSPORT,
+            source_ip=xdp_stats.get("top_attacker_ip", "unknown"),
+            severity=ThreatSeverity.HIGH,
+            confidence=0.85,
+            detector="xdp_manager",
+            description=f"DDoS indicator: {xdp_stats.get('drops', 0)} drops in monitoring window",
+            evidence={
+                "drops": xdp_stats.get("drops", 0),
+                "packets_total": xdp_stats.get("packets", 0),
+                "bytes_dropped": xdp_stats.get("bytes_dropped", 0),
+            },
+            qsecbit_contribution=0.3,
+        )
+
+        if self.response_orchestrator:
+            self.response_orchestrator.respond(threat)
+
+        if self.mesh_bridge:
+            self.mesh_bridge.report_threat(threat)
+
+    def _create_threat_from_metrics(
+        self,
+        metrics: Dict,
+        severity: 'ThreatSeverity'
+    ) -> Optional['ThreatEvent']:
+        """
+        Create a ThreatEvent from Qsecbit metrics.
+
+        This converts generic anomaly scores into a structured threat event
+        that can be processed by ResponseOrchestrator and shared via mesh.
+        """
+        if not THREAT_TYPES_AVAILABLE:
+            return None
+
+        qsecbit_data = metrics.get("qsecbit", {})
+        energy_data = metrics.get("energy", {})
+        xdp_data = metrics.get("xdp", {})
+
+        # Determine attack type from metrics
+        attack_type = AttackType.SYN_FLOOD  # Default
+        layer = OSILayer.L4_TRANSPORT
+
+        # Check for energy anomaly (cryptominer indicator)
+        if energy_data.get("anomaly_score", 0) > 0.7:
+            attack_type = AttackType.MALWARE_C2
+            layer = OSILayer.L7_APPLICATION
+
+        # Check for XDP indicators
+        if xdp_data.get("drops", 0) > 1000:
+            attack_type = AttackType.SYN_FLOOD
+            layer = OSILayer.L4_TRANSPORT
+
+        # Build evidence from all available metrics
+        evidence = {
+            "qsecbit_score": qsecbit_data.get("score", 0),
+            "rag_status": qsecbit_data.get("rag_status", "UNKNOWN"),
+            "drift": qsecbit_data.get("drift", 0),
+            "p_attack": qsecbit_data.get("p_attack", 0),
+        }
+
+        if energy_data:
+            evidence["energy_anomaly"] = energy_data.get("anomaly_score", 0)
+            evidence["power_watts"] = energy_data.get("power_watts", 0)
+
+        if xdp_data:
+            evidence["xdp_drops"] = xdp_data.get("drops", 0)
+            evidence["xdp_packets"] = xdp_data.get("packets", 0)
+
+        threat = ThreatEvent(
+            attack_type=attack_type,
+            layer=layer,
+            source_ip=xdp_data.get("top_attacker_ip"),  # May be None
+            severity=severity,
+            confidence=min(0.95, qsecbit_data.get("score", 0.5) + 0.3),
+            detector="qsecbit_agent",
+            description=f"Qsecbit anomaly detected (score={qsecbit_data.get('score', 0):.3f})",
+            evidence=evidence,
+            qsecbit_contribution=qsecbit_data.get("score", 0),
+        )
+
+        return threat
 
     def export_metrics(self, metrics: Dict):
         """Export metrics to external systems"""
@@ -322,7 +631,7 @@ class HookProbeAgent:
         self.run_monitoring_loop()
 
     def stop(self):
-        """Stop the agent"""
+        """Stop the agent and clean up all components"""
         logger.info("Stopping HookProbe agent...")
 
         # Clear running flag
@@ -335,6 +644,32 @@ class HookProbeAgent:
                 logger.info("XDP cleanup completed")
             except Exception as e:
                 logger.error(f"XDP cleanup failed: {e}")
+
+        # Cleanup ResponseOrchestrator (save state)
+        if self.response_orchestrator:
+            try:
+                self.response_orchestrator._save_state()
+                self.response_orchestrator.cleanup_expired_blocks()
+                logger.info("ResponseOrchestrator state saved")
+            except Exception as e:
+                logger.error(f"ResponseOrchestrator cleanup failed: {e}")
+
+        # Cleanup DSM Node
+        if self.dsm_node:
+            try:
+                self.dsm_node.shutdown()
+                logger.info("DSM node shutdown completed")
+            except Exception as e:
+                logger.error(f"DSM node shutdown failed: {e}")
+
+        # Log final statistics
+        if self.mesh_bridge:
+            stats = self.mesh_bridge.get_statistics()
+            logger.info(
+                f"MeshBridge stats: {stats['threats_reported']} reported, "
+                f"{stats['threats_received']} received, "
+                f"{stats['microblocks_created']} microblocks"
+            )
 
         logger.info("Agent stopped")
 

@@ -39,6 +39,7 @@ import time
 import secrets
 import threading
 import queue
+import logging
 from enum import Enum, IntEnum, auto
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Callable, Tuple
@@ -54,6 +55,17 @@ from .neuro_encoder import (
     ResonanceHandshake,
 )
 from .channel_selector import ChannelSelector, ChannelHopper, SelectionStrategy
+
+logger = logging.getLogger(__name__)
+
+# Neural Synaptic Encryption integration for RDV verification and payload encryption
+try:
+    from core.neuro.integration import MeshNeuroAuth, NeuroSecurityStack
+    NEURO_INTEGRATION_AVAILABLE = True
+except ImportError:
+    MeshNeuroAuth = None
+    NeuroSecurityStack = None
+    NEURO_INTEGRATION_AVAILABLE = False
 
 
 class PacketType(IntEnum):
@@ -345,6 +357,15 @@ class UnifiedTransport:
         # Register hopper callback
         self.hopper.on_hop(self._handle_channel_hop)
 
+        # Neural Synaptic Encryption for RDV verification and payload encryption
+        self.neuro_auth: Optional['MeshNeuroAuth'] = None
+        if NEURO_INTEGRATION_AVAILABLE and MeshNeuroAuth:
+            try:
+                self.neuro_auth = MeshNeuroAuth(self.node_id)
+                logger.info(f"[Mesh] NeuroAuth initialized for RDV verification and payload encryption")
+            except Exception as e:
+                logger.warning(f"[Mesh] Failed to initialize NeuroAuth: {e}")
+
     @property
     def state(self) -> TransportState:
         """Get current transport state."""
@@ -448,13 +469,27 @@ class UnifiedTransport:
             # Get RDV prefix for authentication
             rdv = self.encoder.generate_rdv(self.flow_token)
 
+            # NSE Integration: Encrypt payload if neuro_auth available
+            encrypted_payload = payload
+            if self.neuro_auth and self._active_peer:
+                try:
+                    encrypted_payload = self.neuro_auth.encrypt_payload(
+                        self._active_peer.node_id,
+                        payload,
+                    )
+                    flags |= PacketFlags.ENCRYPTED
+                    logger.debug(f"[Mesh NSE] Payload encrypted for peer")
+                except Exception as e:
+                    logger.warning(f"[Mesh NSE] Encryption failed, sending plaintext: {e}")
+                    encrypted_payload = payload
+
             packet = MeshPacket(
                 packet_type=packet_type,
                 flags=flags,
                 sequence=self._next_sequence(),
                 flow_token=self.flow_token,
                 rdv_prefix=rdv.vector[:16],
-                payload=payload,
+                payload=encrypted_payload,
             )
 
             # Send via channel
@@ -690,10 +725,36 @@ class UnifiedTransport:
     def _process_received_packet(self, packet: MeshPacket) -> None:
         """Process a received packet."""
         # Verify neuro auth if required
-        if packet.has_neuro_auth:
-            # Verify RDV prefix matches expected
-            # For now, accept (full verification in encoder)
-            pass
+        if packet.has_neuro_auth and self.neuro_auth and self._active_peer:
+            # NSE Integration: Verify RDV prefix
+            try:
+                is_valid = self.neuro_auth.verify_rdv_from_peer(
+                    peer_id=self._active_peer.node_id,
+                    received_rdv_prefix=packet.rdv_prefix,
+                    flow_token=self.flow_token,
+                )
+                if not is_valid:
+                    logger.warning(f"[Mesh NSE] RDV verification failed - possible attack")
+                    return  # Reject packet
+                logger.debug(f"[Mesh NSE] RDV verified from peer")
+            except Exception as e:
+                logger.warning(f"[Mesh NSE] RDV verification error: {e}")
+                # Continue processing anyway
+
+        # NSE Integration: Decrypt payload if encrypted
+        payload = packet.payload
+        if packet.is_encrypted and self.neuro_auth and self._active_peer:
+            try:
+                payload = self.neuro_auth.decrypt_payload(
+                    self._active_peer.node_id,
+                    packet.payload,
+                )
+                # Update packet payload with decrypted data
+                packet.payload = payload
+                logger.debug(f"[Mesh NSE] Payload decrypted from peer")
+            except Exception as e:
+                logger.warning(f"[Mesh NSE] Decryption failed: {e}")
+                return  # Reject packet
 
         # Handle by type
         if packet.packet_type == PacketType.KEEPALIVE:
@@ -739,9 +800,21 @@ class UnifiedTransport:
         """Handle TER sync from peer."""
         try:
             ter = TERSnapshot.from_bytes(data)
+
+            # NSE Integration: Validate TER before applying
+            if self.neuro_auth and self._active_peer:
+                is_valid = self.neuro_auth.validate_ter_sync(
+                    self._active_peer.node_id,
+                    ter,
+                )
+                if not is_valid:
+                    logger.warning(f"[Mesh NSE] TER validation failed - chain break detected")
+                    return  # Reject TER
+
             self.encoder.evolve_weights(ter)
-        except Exception:
-            pass
+            logger.debug(f"[Mesh] TER sync applied from peer")
+        except Exception as e:
+            logger.warning(f"[Mesh] TER sync error: {e}")
 
     def _handle_emergency_switch(self, data: bytes) -> None:
         """Handle emergency channel switch announcement."""
