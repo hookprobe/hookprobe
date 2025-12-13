@@ -1096,6 +1096,7 @@ tbody tr:last-child td {
     overflow: hidden;
 }
 
+.progress-bar,
 .progress .bar {
     height: 100%;
     background: var(--pacific);
@@ -1103,9 +1104,10 @@ tbody tr:last-child td {
     transition: width 0.5s ease;
 }
 
-.progress .bar.green { background: var(--green); }
-.progress .bar.amber { background: var(--amber); }
-.progress .bar.red { background: var(--red); }
+/* Color variants for progress bars */
+.progress-bar.success, .progress .bar.green { background: var(--green); }
+.progress-bar.warning, .progress .bar.amber { background: var(--amber); }
+.progress-bar.danger, .progress .bar.red { background: var(--red); }
 
 /* ============================================
    Alerts - Clean Style
