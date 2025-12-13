@@ -195,30 +195,39 @@ hookprobe/
 │   │   ├── xdp_manager.py           # XDP/eBPF DDoS mitigation
 │   │   ├── nic_detector.py          # NIC capability detection
 │   │   ├── gdpr_privacy.py          # Privacy-preserving module
-│   │   └── README.md                # Qsecbit documentation
+│   │   ├── README.md                # Qsecbit documentation
+│   │   ├── detectors/               # L2-L7 layer threat detectors
+│   │   ├── ml/                      # ML classifier components
+│   │   ├── response/                # Threat response orchestration
+│   │   └── signatures/              # Signature database and matching
 │   │
-│   └── neuro/                        # Neural Resonance Protocol
-│       ├── README.md                # Neuro protocol docs
-│       ├── requirements.txt         # Python dependencies
-│       ├── attestation/
-│       │   └── device_identity.py   # Device attestation
-│       ├── audit/
-│       │   └── merkle_log.py        # Audit logging
-│       ├── core/
-│       │   ├── ter.py               # Telemetry Event Record
-│       │   ├── posf.py              # Proof of Secure Function
-│       │   └── replay.py            # Replay protection
-│       ├── identity/
-│       │   └── hardware_fingerprint.py  # Hardware identity
-│       ├── network/
-│       │   └── nat_traversal.py     # NAT traversal
-│       ├── neural/
-│       │   ├── engine.py            # Neural weight evolution
-│       │   └── fixedpoint.py        # Q16.16 fixed-point math
-│       ├── storage/
-│       │   └── dreamlog.py          # Offline TER storage
-│       └── validation/
-│           └── validator_network.py  # Validator network
+│   ├── neuro/                        # Neural Resonance Protocol
+│   │   ├── README.md                # Neuro protocol docs
+│   │   ├── requirements.txt         # Python dependencies
+│   │   ├── adversarial/             # Adversarial attack detection
+│   │   ├── attestation/
+│   │   │   └── device_identity.py   # Device attestation
+│   │   ├── audit/
+│   │   │   └── merkle_log.py        # Audit logging
+│   │   ├── core/
+│   │   │   ├── ter.py               # Telemetry Event Record
+│   │   │   ├── posf.py              # Proof of Secure Function
+│   │   │   └── replay.py            # Replay protection
+│   │   ├── identity/
+│   │   │   └── hardware_fingerprint.py  # Hardware identity
+│   │   ├── network/
+│   │   │   └── nat_traversal.py     # NAT traversal
+│   │   ├── neural/
+│   │   │   ├── engine.py            # Neural weight evolution
+│   │   │   └── fixedpoint.py        # Q16.16 fixed-point math
+│   │   ├── product_adapters/        # Product-specific adapters
+│   │   ├── storage/
+│   │   │   └── dreamlog.py          # Offline TER storage
+│   │   ├── tools/                   # Neuro utility tools
+│   │   └── validation/
+│   │       └── validator_network.py  # Validator network
+│   │
+│   └── threat_detection/             # Shared threat detection utilities
 │
 ├── shared/                           # SHARED INFRASTRUCTURE
 │   ├── README.md
@@ -266,6 +275,13 @@ hookprobe/
 │   │   ├── kali-scripts.sh          # Kali mitigation
 │   │   ├── mitigation-maintenance.sh
 │   │   └── hookprobe-mitigation-systemd.conf
+│   │
+│   ├── mobile_security/              # Mobile device security
+│   │
+│   ├── network/                      # Network utilities
+│   │   └── sdn/                     # SDN integration
+│   │
+│   ├── wireless/                     # Wireless security tools
 │   │
 │   └── cortex/                       # HOOKPROBE CORTEX - Neural Command Center
 │       ├── README.md                # Documentation
@@ -331,8 +347,11 @@ hookprobe/
 │   │       │   ├── clients/         # Connected clients API
 │   │       │   ├── config/          # Network config API
 │   │       │   ├── core/            # Dashboard (main landing)
+│   │       │   ├── cortex/          # Cortex globe integration
 │   │       │   ├── debug/           # Browser CLI terminal
 │   │       │   ├── dnsxai/          # DNS protection settings
+│   │       │   ├── github_update/   # Git/GitHub update operations
+│   │       │   ├── qsecbit/         # Qsecbit security scoring
 │   │       │   ├── security/        # Security metrics + Qsecbit
 │   │       │   ├── system/          # System status + updates
 │   │       │   └── vpn/             # VPN management
