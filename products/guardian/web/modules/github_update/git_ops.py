@@ -41,6 +41,10 @@ def run_command(cmd, timeout=30):
 REPO_PATH = os.environ.get('GUARDIAN_REPO_PATH', '/opt/hookprobe')
 REMOTE_NAME = 'origin'
 DEFAULT_BRANCH = os.environ.get('GUARDIAN_BRANCH', 'main')
+DEFAULT_REMOTE_URL = os.environ.get(
+    'HOOKPROBE_REMOTE_URL',
+    'https://github.com/hookprobe/hookprobe.git'
+)
 
 # Installation config file location
 INSTALL_CONFIG_FILE = '/etc/hookprobe/install.conf'
@@ -288,7 +292,7 @@ def fetch_updates() -> Tuple[bool, str]:
     if not remote_ok:
         # Check if this might be a permission issue rather than missing remote
         error_lower = remote_output.lower() if remote_output else ''
-        if 'permission' in error_lower or 'denied' in error_lower or not remote_output.strip():
+        if 'permission' in error_lower or 'denied' in error_lower:
             install_config = read_install_config()
             install_user = install_config.get('HOOKPROBE_USER', 'unknown')
             current_user = os.environ.get('USER', 'unknown')
@@ -297,7 +301,28 @@ def fetch_updates() -> Tuple[bool, str]:
                 f'The web app is running as "{current_user}" but needs access to files owned by "{install_user}". '
                 f'Solution: Add {current_user} to the {install_user} group, or adjust directory permissions.'
             )
-        return False, f'Remote "{REMOTE_NAME}" is not configured. Run: git remote add origin <url>'
+
+        # Remote not configured - try to auto-configure with default URL
+        # First check install config for custom remote URL
+        install_config = read_install_config()
+        remote_url = install_config.get('HOOKPROBE_REMOTE_URL', DEFAULT_REMOTE_URL)
+
+        add_output, add_ok = run_command(
+            ['git', '-C', repo_path, 'remote', 'add', REMOTE_NAME, remote_url],
+            timeout=10
+        )
+        if not add_ok:
+            # Remote might already exist with different name, or permission issue
+            if 'already exists' in add_output.lower():
+                # Try to set the URL instead
+                set_output, set_ok = run_command(
+                    ['git', '-C', repo_path, 'remote', 'set-url', REMOTE_NAME, remote_url],
+                    timeout=10
+                )
+                if not set_ok:
+                    return False, f'Failed to configure remote: {set_output}'
+            else:
+                return False, f'Failed to add remote "{REMOTE_NAME}": {add_output}'
 
     # Try to fetch
     output, success = run_command(
