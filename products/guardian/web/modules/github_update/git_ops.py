@@ -748,12 +748,23 @@ def restart_services(services: List[str]) -> Dict:
         Dict with results for each service
     """
     results = {}
+    webui_deferred = False
 
     for service in services:
         if service not in ALLOWED_SERVICES:
             results[service] = {
                 'success': False,
                 'error': 'Service not in allowed list'
+            }
+            continue
+
+        # Skip guardian-webui - restarting ourselves kills the connection
+        # Web UI changes (templates, JS, CSS) take effect on page reload
+        if service == 'guardian-webui':
+            webui_deferred = True
+            results[service] = {
+                'success': True,
+                'output': 'Deferred - reload page to apply web UI changes'
             }
             continue
 
@@ -769,7 +780,9 @@ def restart_services(services: List[str]) -> Dict:
 
     return {
         'success': all(r['success'] for r in results.values()),
-        'results': results
+        'results': results,
+        'webui_deferred': webui_deferred,
+        'message': 'Reload the page to apply web UI changes' if webui_deferred else None
     }
 
 
