@@ -24,6 +24,8 @@ const guardianCortex = {
     nodes: [],
     arcs: [],
     currentAltitude: 2.5,  // Track current zoom altitude for dynamic sizing
+    refreshIntervalId: null,
+    heartbeatIntervalId: null,
     stats: {
         attacks: 0,
         repelled: 0,
@@ -85,11 +87,82 @@ function initCortexGlobe() {
         // Load initial data
         refreshData();
 
-        // Start polling
-        setInterval(refreshData, 10000);
+        // Start polling intervals and store IDs for visibility handling
+        startCortexAnimations();
+
+        // Setup visibility change handler to pause/resume animations
+        setupVisibilityHandler();
 
         guardianCortex.initialized = true;
         console.log('Cortex initialized with shared modules');
+    });
+}
+
+/**
+ * Start Cortex animation intervals
+ */
+function startCortexAnimations() {
+    // Clear any existing intervals first
+    stopCortexAnimations();
+
+    // Data refresh every 10 seconds
+    guardianCortex.refreshIntervalId = setInterval(refreshData, 10000);
+
+    // Heartbeat animation every 5 seconds
+    guardianCortex.heartbeatIntervalId = setInterval(() => {
+        if (guardianCortex.globe && guardianCortex.nodes.length > 1) {
+            if (typeof meshHeartbeat === 'function') {
+                meshHeartbeat(guardianCortex.globe, guardianCortex.nodes);
+            }
+        }
+    }, 5000);
+
+    console.log('[Cortex] Animations started');
+}
+
+/**
+ * Stop Cortex animation intervals
+ */
+function stopCortexAnimations() {
+    if (guardianCortex.refreshIntervalId) {
+        clearInterval(guardianCortex.refreshIntervalId);
+        guardianCortex.refreshIntervalId = null;
+    }
+    if (guardianCortex.heartbeatIntervalId) {
+        clearInterval(guardianCortex.heartbeatIntervalId);
+        guardianCortex.heartbeatIntervalId = null;
+    }
+    console.log('[Cortex] Animations stopped');
+}
+
+/**
+ * Setup visibility change handler to pause/resume animations when tab changes
+ */
+function setupVisibilityHandler() {
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            // Tab is hidden - pause animations to save resources
+            stopCortexAnimations();
+        } else {
+            // Tab is visible again - restart animations
+            if (guardianCortex.initialized) {
+                startCortexAnimations();
+                // Immediate refresh when returning to tab
+                refreshData();
+            }
+        }
+    });
+
+    // Also listen for Guardian tab changes (specific to Guardian web UI)
+    window.addEventListener('cortexTabActivated', () => {
+        if (guardianCortex.initialized && !guardianCortex.refreshIntervalId) {
+            startCortexAnimations();
+            refreshData();
+        }
+    });
+
+    window.addEventListener('cortexTabDeactivated', () => {
+        stopCortexAnimations();
     });
 }
 

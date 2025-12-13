@@ -22,11 +22,40 @@ let transitionManager = null;
 let clusterVisuals = null;
 let zoomIndicator = null;
 
+// Country/region data
+let countriesData = null;
+
+// Globe texture configuration - Higher resolution options
+const GLOBE_TEXTURES = {
+    // Dark theme (better for cybersecurity aesthetic)
+    dark: {
+        globe: 'https://unpkg.com/three-globe@2.31.0/example/img/earth-night.jpg',
+        bump: 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png',
+        background: 'https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png'
+    },
+    // Blue marble (higher detail, better zoom quality)
+    blueMarble: {
+        globe: 'https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg',
+        bump: 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png',
+        background: 'https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png'
+    },
+    // Dark with borders (custom dark texture)
+    darkPolitical: {
+        globe: 'https://unpkg.com/three-globe@2.31.0/example/img/earth-dark.jpg',
+        bump: 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png',
+        background: 'https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png'
+    }
+};
+
+// Country boundaries data source (TopoJSON)
+const COUNTRIES_DATA_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+
 // Data state
 const state = {
     nodes: [],
     arcs: [],
     displayData: [], // Clusters + individual nodes for current zoom
+    countries: [],   // Country polygons for boundaries
     stats: {
         attacks: 0,
         repelled: 0,
@@ -39,7 +68,8 @@ const state = {
         }
     },
     currentZoomLevel: 'GLOBAL',
-    clusteringEnabled: true
+    clusteringEnabled: true,
+    showCountryBorders: true
 };
 
 // Arc colors - Premium color schemes
@@ -126,14 +156,24 @@ function initGlobe() {
         containerSize: { width: container.clientWidth, height: container.clientHeight }
     });
 
-    // Create globe instance
+    // Select texture theme (dark is better for cybersecurity)
+    const textures = GLOBE_TEXTURES.dark;
+
+    // Create globe instance with improved textures
     globe = Globe()(container)
-        .globeImageUrl('https://unpkg.com/three-globe@2.24.10/example/img/earth-night.jpg')
-        .bumpImageUrl('https://unpkg.com/three-globe@2.24.10/example/img/earth-topology.png')
-        .backgroundImageUrl('https://unpkg.com/three-globe@2.24.10/example/img/night-sky.png')
+        .globeImageUrl(textures.globe)
+        .bumpImageUrl(textures.bump)
+        .backgroundImageUrl(textures.background)
         .showAtmosphere(true)
         .atmosphereColor('#00bfff')
         .atmosphereAltitude(0.15)
+        // Country polygons for boundaries (loaded async)
+        .polygonsData([])
+        .polygonCapColor(() => 'rgba(0, 0, 0, 0)') // Transparent fill
+        .polygonSideColor(() => 'rgba(0, 191, 255, 0.05)') // Subtle side
+        .polygonStrokeColor(() => 'rgba(0, 191, 255, 0.4)') // Cyan borders
+        .polygonAltitude(0.001) // Slightly above surface
+        .polygonLabel(d => `<div class="country-tooltip">${d.properties?.name || ''}</div>`)
         // Points (clusters + individual nodes)
         .pointsData([])
         .pointLat(d => d.lat)
@@ -163,6 +203,9 @@ function initGlobe() {
         // Click handlers
         .onPointClick(handlePointClick)
         .onGlobeClick(handleGlobeClick);
+
+    // Load country boundaries for better zoom detail
+    loadCountryBoundaries();
 
     // Configure camera controls for better zoom range
     const controls = globe.controls();
@@ -262,6 +305,89 @@ function initClusteringSystem() {
 
     console.log('Clustering system initialized');
 }
+
+/**
+ * Load country boundary polygons for zoom detail
+ * Uses TopoJSON world atlas data for country outlines
+ */
+async function loadCountryBoundaries() {
+    if (!state.showCountryBorders) return;
+
+    try {
+        console.log('Loading country boundaries...');
+        const response = await fetch(COUNTRIES_DATA_URL);
+        const topoData = await response.json();
+
+        // Convert TopoJSON to GeoJSON features
+        if (topoData.objects && topoData.objects.countries) {
+            // Need topojson library for conversion
+            if (typeof topojson !== 'undefined') {
+                const countries = topojson.feature(topoData, topoData.objects.countries);
+                countriesData = countries.features;
+                state.countries = countriesData;
+
+                // Apply to globe
+                if (globe) {
+                    globe.polygonsData(countriesData);
+                    console.log(`Loaded ${countriesData.length} country boundaries`);
+                }
+            } else {
+                // Fallback: try loading pre-converted GeoJSON
+                const geoResponse = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+                const geoData = await geoResponse.json();
+
+                // If it's already GeoJSON features
+                if (geoData.features) {
+                    countriesData = geoData.features;
+                    state.countries = countriesData;
+                    if (globe) {
+                        globe.polygonsData(countriesData);
+                        console.log(`Loaded ${countriesData.length} country boundaries (GeoJSON)`);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('Could not load country boundaries:', error.message);
+        // Globe still works without boundaries
+    }
+}
+
+/**
+ * Toggle country borders visibility
+ * @param {boolean} show - Whether to show country borders
+ */
+function toggleCountryBorders(show) {
+    state.showCountryBorders = show;
+
+    if (globe) {
+        if (show && countriesData) {
+            globe.polygonsData(countriesData);
+        } else {
+            globe.polygonsData([]);
+        }
+    }
+}
+
+/**
+ * Update country border visibility based on zoom level
+ * Makes borders more visible when zoomed in
+ * @param {number} altitude - Current camera altitude
+ */
+function updateCountryBorderOpacity(altitude) {
+    if (!globe || !state.showCountryBorders) return;
+
+    // Calculate opacity based on altitude (more visible when zoomed in)
+    // altitude: 2.5 = far out, 0.1 = very close
+    const opacity = Math.min(0.8, Math.max(0.2, 1 - (altitude / 3)));
+
+    globe
+        .polygonStrokeColor(() => `rgba(0, 191, 255, ${opacity})`)
+        .polygonSideColor(() => `rgba(0, 191, 255, ${opacity * 0.1})`);
+}
+
+// Export border functions
+window.toggleCountryBorders = toggleCountryBorders;
 
 /**
  * Get point color based on type (cluster or node)
@@ -431,6 +557,11 @@ function handleZoomChange(data) {
     if (state.clusteringEnabled && clusterManager) {
         const zoom = data.zoom || clusterManager.altitudeToZoom(data.altitude);
         clusterManager.getAllClusters(zoom);
+    }
+
+    // Update country border visibility based on zoom
+    if (data.altitude !== undefined) {
+        updateCountryBorderOpacity(data.altitude);
     }
 }
 

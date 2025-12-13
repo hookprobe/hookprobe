@@ -408,6 +408,8 @@ class DemoDataGenerator:
         self._active_campaigns: Dict[str, Dict] = {}  # source -> campaign info
         self._targeted_nodes: Dict[str, int] = {}  # node_id -> attack count
         self._mesh_connections: List[Dict] = []
+        self._campaign_max_age_minutes = 10  # Campaigns expire after 10 minutes
+        self._campaign_max_count = 50  # Maximum active campaigns
         self._generate_mesh_connections()
 
         # Statistics
@@ -417,6 +419,32 @@ class DemoDataGenerator:
             "attacks_by_type": {},
             "attacks_by_source": {},
         }
+
+    def _cleanup_expired_campaigns(self):
+        """Remove campaigns older than max age to prevent memory leaks."""
+        if not self._active_campaigns:
+            return
+
+        now = datetime.utcnow()
+        expired = []
+        for campaign_id, campaign in self._active_campaigns.items():
+            age_minutes = (now - campaign["started"]).total_seconds() / 60
+            if age_minutes > self._campaign_max_age_minutes:
+                expired.append(campaign_id)
+
+        for campaign_id in expired:
+            del self._active_campaigns[campaign_id]
+
+        # Also enforce max count by removing oldest if over limit
+        if len(self._active_campaigns) > self._campaign_max_count:
+            sorted_campaigns = sorted(
+                self._active_campaigns.items(),
+                key=lambda x: x[1]["started"]
+            )
+            # Remove oldest campaigns
+            to_remove = len(self._active_campaigns) - self._campaign_max_count
+            for campaign_id, _ in sorted_campaigns[:to_remove]:
+                del self._active_campaigns[campaign_id]
 
     def _generate_mesh_connections(self):
         """Generate mesh connections between nodes."""
@@ -468,6 +496,9 @@ class DemoDataGenerator:
 
     def _generate_attack(self) -> Dict[str, Any]:
         """Generate an attack_detected event with campaign awareness."""
+        # Cleanup expired campaigns to prevent memory leaks
+        self._cleanup_expired_campaigns()
+
         # Select threat source based on profile weights
         source = self._select_threat_source()
         target = self._select_target()

@@ -10,12 +10,14 @@ const WS_CONFIG = {
     url: 'ws://localhost:8765',
     reconnectDelay: 2000,
     maxReconnectDelay: 30000,
-    reconnectMultiplier: 1.5
+    reconnectMultiplier: 1.5,
+    maxReconnectAttempts: 10  // Stop after 10 failed attempts
 };
 
 // State
 let ws = null;
 let reconnectDelay = WS_CONFIG.reconnectDelay;
+let reconnectAttempts = 0;  // Track reconnection attempts
 let eventHandler = null;
 let currentMode = 'demo';  // 'demo' or 'live'
 let demoInterval = 3.0;    // seconds between demo events
@@ -55,6 +57,7 @@ function handleOpen() {
     console.log('Connected to HookProbe server');
     updateConnectionStatus('connected');
     reconnectDelay = WS_CONFIG.reconnectDelay; // Reset delay on success
+    reconnectAttempts = 0; // Reset attempt counter on successful connection
 }
 
 /**
@@ -107,9 +110,21 @@ function handleError(error) {
 
 /**
  * Schedule reconnection with exponential backoff
+ * Stops after maxReconnectAttempts to prevent infinite loops
  */
 function scheduleReconnect() {
-    console.log(`Reconnecting in ${reconnectDelay / 1000}s...`);
+    reconnectAttempts++;
+
+    if (reconnectAttempts > WS_CONFIG.maxReconnectAttempts) {
+        console.warn(`Max reconnection attempts (${WS_CONFIG.maxReconnectAttempts}) reached. Stopping.`);
+        updateConnectionStatus('disconnected');
+        // Show user-friendly message
+        const text = document.getElementById('connection-text');
+        if (text) text.textContent = 'Connection Failed';
+        return;
+    }
+
+    console.log(`Reconnecting in ${reconnectDelay / 1000}s... (attempt ${reconnectAttempts}/${WS_CONFIG.maxReconnectAttempts})`);
 
     setTimeout(() => {
         reconnectDelay = Math.min(
