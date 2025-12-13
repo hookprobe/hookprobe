@@ -6,6 +6,7 @@ from GitHub without CLI access.
 """
 from flask import jsonify, request
 from . import github_update_bp
+import os
 from .git_ops import (
     get_current_status,
     check_for_updates,
@@ -15,8 +16,11 @@ from .git_ops import (
     get_update_log,
     categorize_changes,
     is_frontend_only_update,
+    get_repo_path,
+    run_command,
     ALLOWED_SERVICES,
-    ALLOWED_UPDATE_PATHS
+    ALLOWED_UPDATE_PATHS,
+    REPO_PATH
 )
 
 
@@ -191,4 +195,59 @@ def api_config():
         'allowed_paths': ALLOWED_UPDATE_PATHS,
         'allowed_services': ALLOWED_SERVICES,
         'note': 'Updates are limited to networking components only for safety'
+    })
+
+
+@github_update_bp.route('/debug')
+def api_debug():
+    """
+    Debug endpoint to diagnose git path detection issues.
+
+    Returns:
+        JSON with detailed path detection information
+    """
+    # Get all the paths we check
+    common_paths = [
+        '/opt/hookprobe',
+        '/home/user/hookprobe',
+        '/home/pi/hookprobe',
+        '/home/guardian/hookprobe',
+        os.path.expanduser('~/hookprobe'),
+    ]
+
+    # Check each path
+    path_checks = {}
+    for path in common_paths:
+        git_dir = os.path.join(path, '.git')
+        path_checks[path] = {
+            'exists': os.path.isdir(path),
+            'has_git': os.path.isdir(git_dir)
+        }
+
+    # Get the detected repo path
+    detected_path = get_repo_path()
+
+    # Test git command from detected path
+    git_test, git_success = run_command(
+        ['git', '-C', detected_path, 'rev-parse', '--short', 'HEAD']
+    )
+
+    # Get current file location
+    this_file = os.path.abspath(__file__)
+    this_dir = os.path.dirname(this_file)
+
+    return jsonify({
+        'success': True,
+        'env_repo_path': REPO_PATH,
+        'env_guardian_repo_path': os.environ.get('GUARDIAN_REPO_PATH', 'not set'),
+        'detected_repo_path': detected_path,
+        'detected_has_git': os.path.isdir(os.path.join(detected_path, '.git')),
+        'git_test_output': git_test,
+        'git_test_success': git_success,
+        'path_checks': path_checks,
+        'this_file': this_file,
+        'this_dir': this_dir,
+        'cwd': os.getcwd(),
+        'user': os.environ.get('USER', 'unknown'),
+        'home': os.environ.get('HOME', 'unknown')
     })

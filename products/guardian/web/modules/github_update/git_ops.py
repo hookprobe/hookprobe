@@ -37,6 +37,9 @@ REPO_PATH = os.environ.get('GUARDIAN_REPO_PATH', '/opt/hookprobe')
 REMOTE_NAME = 'origin'
 DEFAULT_BRANCH = os.environ.get('GUARDIAN_BRANCH', 'main')
 
+# Cache for detected repo path
+_cached_repo_path = None
+
 # Allowed paths for updates (networking-related only)
 ALLOWED_UPDATE_PATHS = [
     'products/guardian/',
@@ -60,28 +63,38 @@ ALLOWED_SERVICES = [
 
 
 def get_repo_path() -> str:
-    """Get the repository path, validating it exists."""
+    """Get the repository path, validating it exists. Result is cached."""
+    global _cached_repo_path
+
+    # Return cached path if already detected
+    if _cached_repo_path is not None:
+        return _cached_repo_path
+
     # Check environment variable path first
     if os.path.isdir(os.path.join(REPO_PATH, '.git')):
-        return REPO_PATH
+        _cached_repo_path = REPO_PATH
+        return _cached_repo_path
 
     # Try common installation paths
     common_paths = [
         '/opt/hookprobe',
         '/home/user/hookprobe',
         '/home/pi/hookprobe',
+        '/home/guardian/hookprobe',
         os.path.expanduser('~/hookprobe'),
     ]
 
     for path in common_paths:
         if os.path.isdir(os.path.join(path, '.git')):
-            return path
+            _cached_repo_path = path
+            return _cached_repo_path
 
     # Try to find repo by traversing up from current file location
     current_dir = os.path.dirname(os.path.abspath(__file__))
     for _ in range(10):  # Max 10 levels up
         if os.path.isdir(os.path.join(current_dir, '.git')):
-            return current_dir
+            _cached_repo_path = current_dir
+            return _cached_repo_path
         parent = os.path.dirname(current_dir)
         if parent == current_dir:  # Reached root
             break
@@ -90,9 +103,20 @@ def get_repo_path() -> str:
     # Fallback to current working directory if it's a git repo
     cwd = os.getcwd()
     if os.path.isdir(os.path.join(cwd, '.git')):
-        return cwd
+        _cached_repo_path = cwd
+        return _cached_repo_path
 
-    return REPO_PATH
+    # Last resort: use git to find repo root from this file's location
+    this_file_dir = os.path.dirname(os.path.abspath(__file__))
+    output, success = run_command(
+        ['git', '-C', this_file_dir, 'rev-parse', '--show-toplevel']
+    )
+    if success and output and os.path.isdir(output):
+        _cached_repo_path = output
+        return _cached_repo_path
+
+    _cached_repo_path = REPO_PATH
+    return _cached_repo_path
 
 
 def get_current_status() -> Dict:
