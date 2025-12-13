@@ -1098,10 +1098,23 @@ body {
 }
 
 /* =========================================
+   DESKTOP-ONLY ELEMENTS (hide on mobile)
+   ========================================= */
+
+.desktop-only {
+    /* Visible by default on desktop */
+}
+
+/* =========================================
    MOBILE RESPONSIVE
    ========================================= */
 
 @media (max-width: 768px) {
+    /* Hide desktop-only elements on mobile */
+    .desktop-only {
+        display: none !important;
+    }
+
     #header {
         padding: 0 12px;
         padding-top: env(safe-area-inset-top);
@@ -1162,8 +1175,19 @@ body {
         left: 10px;
         right: 10px;
         width: auto;
-        max-height: 160px;
-        bottom: calc(20px + env(safe-area-inset-bottom));
+        max-height: 120px;
+        bottom: calc(60px + env(safe-area-inset-bottom));
+        padding: 10px;
+    }
+
+    #event-log h3 {
+        font-size: 9px;
+        margin-bottom: 8px;
+    }
+
+    #event-list li {
+        font-size: 10px;
+        padding: 5px 0;
     }
 
     #legend {
@@ -1237,6 +1261,25 @@ body {
     .stat-sentinel,
     .stat-nexus {
         display: none;
+    }
+
+    /* Hide event log and zoom indicator on very small screens for cleaner view */
+    #event-log {
+        display: none;
+    }
+
+    .cortex-zoom-indicator {
+        display: none;
+    }
+
+    /* Simplified mode indicator */
+    #mode-indicator {
+        padding: 4px 8px;
+    }
+
+    #mode-indicator #mode-text {
+        font-size: 8px;
+        letter-spacing: 1px;
     }
 
     .zoom-breadcrumb .crumb {
