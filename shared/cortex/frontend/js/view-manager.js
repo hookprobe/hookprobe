@@ -20,20 +20,29 @@
 
 const VIEW_MANAGER_CONFIG = {
     // Altitude thresholds for Globe.gl (Phase 1)
-    globeToMapAltitude: 0.25,      // Switch to map below this altitude
-    mapToGlobeAltitude: 0.35,      // Switch to globe above this altitude
+    // Globe.gl altitude = (camera_distance - globe_radius) / globe_radius
+    // With minDistance=101 and globe_radius~100, min altitude ≈ 0.01
+    globeToMapAltitude: 0.20,      // Switch to map below this altitude (lowered from 0.25)
+    mapToGlobeAltitude: 0.30,      // Switch to globe above this altitude (lowered from 0.35)
 
     // Zoom thresholds for Deck.gl (if using full Deck.gl mode)
-    globeToMapZoom: 8,
-    mapToGlobeZoom: 6,
+    globeToMapZoom: 10,            // Increased from 8 for better transition
+    mapToGlobeZoom: 7,             // Increased from 6
 
     // Transition settings
     transitionDuration: 600,       // ms for view switch animation
     fadeOverlayDuration: 400,      // ms for overlay fade
 
+    // Polling interval for altitude check (ms)
+    altitudeCheckInterval: 100,    // More responsive than 200ms
+
     // Mode settings
     useGlobeGL: true,              // Use Globe.gl for globe view (Phase 1)
-    useDeckGL: true                // Use Deck.gl for map view (Phase 2)
+    useDeckGL: true,               // Use Deck.gl for map view (Phase 2)
+
+    // Mobile settings
+    enableOnMobile: true,          // Enable view transitions on mobile
+    debugMode: false               // Set true for altitude logging
 };
 
 // =============================================================================
@@ -167,15 +176,27 @@ class ViewManager {
      * Setup Globe.gl event listeners
      */
     _setupGlobeGLListeners() {
+        // Track last altitude for change detection
+        this._lastAltitude = null;
+
         // We need to poll Globe.gl since it doesn't have clean event API
         this._globeCheckInterval = setInterval(() => {
             if (!this.globeGL || this.isTransitioning) return;
 
             const pov = this.globeGL.pointOfView();
             if (pov && pov.altitude !== undefined) {
+                // Debug logging when enabled
+                if (this.config.debugMode && this._lastAltitude !== pov.altitude) {
+                    console.log('[ViewManager] Altitude:', pov.altitude.toFixed(3),
+                        '| Threshold:', this.config.globeToMapAltitude);
+                }
+                this._lastAltitude = pov.altitude;
                 this._checkGlobeAltitude(pov.altitude, pov.lat, pov.lng);
             }
-        }, 200);
+        }, this.config.altitudeCheckInterval || 100);
+
+        console.log('[ViewManager] Globe.gl listeners initialized, checking altitude every',
+            this.config.altitudeCheckInterval || 100, 'ms');
     }
 
     /**

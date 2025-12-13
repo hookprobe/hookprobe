@@ -341,27 +341,93 @@ function createConnectionBeam(sourceLat, sourceLng, targetLat, targetLng, color 
 
 /**
  * Create "heartbeat" effect for the entire mesh
- * Premium visual: periodic pulse showing mesh is alive
+ * Premium visual: small dots flow between connected nodes
+ * Works with the actual displayed data (respects clustering state)
  */
 function meshHeartbeat(globe, nodes) {
-    if (!globe || !nodes || nodes.length === 0) return;
+    if (!globe) return;
 
-    const originalSizes = nodes.map(n => n.radius || 0.5);
+    // Get actual node data
+    const nodeData = window.state?.nodes || nodes || [];
+    if (nodeData.length < 2) return;
 
-    // Expand phase
-    nodes.forEach((node, i) => {
-        node.radius = originalSizes[i] * 1.3;
+    // Create flowing dot connections between nearby nodes
+    const connections = generateMeshConnections(nodeData, 5); // 5 random connections
+
+    // Create temporary arcs for the heartbeat flow
+    const heartbeatArcs = connections.map((conn, i) => ({
+        id: `hb-${Date.now()}-${i}`,
+        type: 'heartbeat',
+        source: { lat: conn.source.lat, lng: conn.source.lng },
+        target: { lat: conn.target.lat, lng: conn.target.lng },
+        timestamp: Date.now()
+    }));
+
+    // Add heartbeat arcs to globe
+    const existingArcs = window.state?.arcs || [];
+    globe.arcsData([...existingArcs, ...heartbeatArcs]);
+
+    // Remove heartbeat arcs after animation
+    setTimeout(() => {
+        const currentArcs = window.state?.arcs || [];
+        globe.arcsData(currentArcs.filter(a => !a.id?.startsWith('hb-')));
+    }, 2000);
+
+    // Also pulse the nodes slightly
+    const clusterElements = document.querySelectorAll('.cortex-cluster');
+    clusterElements.forEach(el => {
+        el.style.transform = 'scale(1.1)';
+        el.style.transition = 'transform 0.3s ease-out';
     });
 
-    globe.pointsData([...nodes]);
-
-    // Contract phase
     setTimeout(() => {
-        nodes.forEach((node, i) => {
-            node.radius = originalSizes[i];
+        clusterElements.forEach(el => {
+            el.style.transform = 'scale(1)';
         });
-        globe.pointsData([...nodes]);
-    }, 200);
+    }, 300);
+
+    console.log(`Mesh heartbeat: ${connections.length} connections pulsed`);
+}
+
+/**
+ * Generate random mesh connections between nodes for heartbeat visualization
+ */
+function generateMeshConnections(nodes, count = 5) {
+    if (nodes.length < 2) return [];
+
+    const connections = [];
+    const usedPairs = new Set();
+
+    for (let i = 0; i < count && i < nodes.length * 2; i++) {
+        // Pick two random nodes
+        const sourceIdx = Math.floor(Math.random() * nodes.length);
+        let targetIdx = Math.floor(Math.random() * nodes.length);
+
+        // Ensure different nodes
+        while (targetIdx === sourceIdx) {
+            targetIdx = Math.floor(Math.random() * nodes.length);
+        }
+
+        // Check for duplicate pair
+        const pairKey = [sourceIdx, targetIdx].sort().join('-');
+        if (usedPairs.has(pairKey)) continue;
+        usedPairs.add(pairKey);
+
+        // Prefer nearby nodes (within ~50 degrees) for more realistic mesh connections
+        const source = nodes[sourceIdx];
+        const target = nodes[targetIdx];
+        const distance = Math.sqrt(
+            Math.pow(source.lat - target.lat, 2) +
+            Math.pow(source.lng - target.lng, 2)
+        );
+
+        // Only include if reasonably close (creates regional mesh look)
+        if (distance < 60) {
+            connections.push({ source, target });
+        }
+    }
+
+    return connections;
 }
 
 /**
@@ -449,6 +515,7 @@ window.focusOnEvent = focusOnEvent;
 window.createRippleEffect = createRippleEffect;
 window.createConnectionBeam = createConnectionBeam;
 window.meshHeartbeat = meshHeartbeat;
+window.generateMeshConnections = generateMeshConnections;
 window.setAmbientThreatLevel = setAmbientThreatLevel;
 window.createScanlineEffect = createScanlineEffect;
 window.destroyAnimationEngine = destroyAnimationEngine;
