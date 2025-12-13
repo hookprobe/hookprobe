@@ -80,6 +80,13 @@ const TIER_COLORS = {
 };
 
 /**
+ * Detect if device is touch-enabled
+ */
+function isTouchDevice() {
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+/**
  * Initialize the globe with clustering support
  */
 function initGlobe() {
@@ -91,6 +98,11 @@ function initGlobe() {
         showFallback();
         return;
     }
+
+    console.log('Initializing Globe.gl...', {
+        isTouchDevice: isTouchDevice(),
+        containerSize: { width: container.clientWidth, height: container.clientHeight }
+    });
 
     // Create globe instance
     globe = Globe()(container)
@@ -130,14 +142,40 @@ function initGlobe() {
         .onPointClick(handlePointClick)
         .onGlobeClick(handleGlobeClick);
 
-    // Auto-rotate
-    globe.controls().autoRotate = true;
-    globe.controls().autoRotateSpeed = 0.3;
+    // Configure camera controls for better zoom range
+    const controls = globe.controls();
 
-    // Stop rotation on interaction
+    // Enable auto-rotate
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.3;
+
+    // Configure zoom limits - allow much deeper zoom for city view transition
+    // minDistance: how close you can zoom in (lower = closer)
+    // maxDistance: how far you can zoom out
+    controls.minDistance = 101;  // Very close zoom (altitude ~0.01)
+    controls.maxDistance = 500;  // Far zoom out
+
+    // Enable damping for smoother control
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+
+    // Improve touch controls
+    if (isTouchDevice()) {
+        controls.rotateSpeed = 0.4;     // Slower rotation for touch
+        controls.zoomSpeed = 0.8;       // Slightly slower zoom for touch precision
+        controls.panSpeed = 0.5;        // Pan speed
+        controls.enablePan = false;     // Disable pan on touch (can be confusing)
+    }
+
+    // Stop rotation on any interaction
     container.addEventListener('mousedown', () => {
-        globe.controls().autoRotate = false;
+        controls.autoRotate = false;
     });
+
+    // Touch events - stop rotation
+    container.addEventListener('touchstart', () => {
+        controls.autoRotate = false;
+    }, { passive: true });
 
     // Initialize clustering system
     initClusteringSystem();
