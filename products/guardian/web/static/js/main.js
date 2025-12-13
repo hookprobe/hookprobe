@@ -1164,11 +1164,14 @@ function updateDnsxaiQuickActionsUI(status) {
     const label = document.getElementById('quick-actions-label');
     const btn = document.getElementById('killswitch-btn');
     const timer = document.getElementById('pause-timer');
+    const emblem = document.getElementById('protection-emblem');
 
     if (!icon || !label || !btn) return;
 
+    // Reset classes
     icon.className = 'quick-actions-icon';
     label.className = 'status-label';
+    if (emblem) emblem.className = 'protection-emblem';
 
     if (status === 'active') {
         icon.classList.add('active');
@@ -1177,6 +1180,7 @@ function updateDnsxaiQuickActionsUI(status) {
         btn.textContent = 'DISABLE';
         btn.className = 'btn btn-danger';
         if (timer) timer.style.display = 'none';
+        if (emblem) emblem.classList.add('active');
     } else if (status === 'paused') {
         icon.classList.add('paused');
         label.textContent = 'Protection Paused';
@@ -1184,6 +1188,7 @@ function updateDnsxaiQuickActionsUI(status) {
         btn.textContent = 'ENABLE';
         btn.className = 'btn btn-success';
         if (timer) timer.style.display = 'block';
+        if (emblem) emblem.classList.add('paused');
     } else if (status === 'disabled') {
         icon.classList.add('disabled');
         label.textContent = 'Protection DISABLED';
@@ -1191,6 +1196,7 @@ function updateDnsxaiQuickActionsUI(status) {
         btn.textContent = 'ENABLE';
         btn.className = 'btn btn-success';
         if (timer) timer.style.display = 'none';
+        if (emblem) emblem.classList.add('disabled');
     }
 }
 
