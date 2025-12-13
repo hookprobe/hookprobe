@@ -190,3 +190,36 @@ def get_layer_threat_data():
 def api_layer_threats():
     """Get L2-L7 layer threat breakdown."""
     return jsonify(get_layer_threat_data())
+
+
+@core_bp.route('/api/core/dashboard')
+def api_dashboard():
+    """Get dashboard data for real-time updates including traffic stats."""
+    system = get_system_info()
+
+    # Get network stats (raw bytes for traffic visualization)
+    wan_interface = current_app.config.get('WAN_INTERFACE', 'eth0')
+    wan_stats = get_network_stats(wan_interface)
+
+    # Load threat data
+    threat_file = current_app.config.get('THREAT_FILE', '/var/log/hookprobe/threats/aggregated.json')
+    threats = load_json_file(threat_file, {'stats': {'blocked': 0}})
+
+    # Get connected clients
+    output, success = run_command("ip neigh show | grep -v FAILED | wc -l")
+    connected_clients = int(output) if success and output.isdigit() else 0
+
+    return jsonify({
+        'connected_clients': connected_clients,
+        'network': {
+            'rx_bytes': wan_stats.get('rx_bytes', 0),
+            'tx_bytes': wan_stats.get('tx_bytes', 0),
+            'interface': wan_interface
+        },
+        'threats': threats.get('stats', {'blocked': 0}),
+        'system': {
+            'uptime': system.get('uptime', '0:00'),
+            'load': system.get('load', [0, 0, 0]),
+            'temperature': system.get('temperature', 0)
+        }
+    })
