@@ -158,11 +158,29 @@ def get_current_status() -> Dict:
     Returns:
         Dict with current_commit, current_branch, repo_path, is_valid
     """
+    # Read install config for fallback values
+    install_config = read_install_config()
+    fallback_commit = install_config.get('HOOKPROBE_INSTALL_COMMIT', '')
+    fallback_branch = install_config.get('HOOKPROBE_INSTALL_BRANCH', '')
+    fallback_date = install_config.get('HOOKPROBE_INSTALL_DATE', '')
+
     repo_path = get_repo_path()
 
     # Check if path exists and has .git
     git_dir = os.path.join(repo_path, '.git')
     if not os.path.isdir(git_dir):
+        # Use install config values if available
+        if fallback_commit and fallback_branch:
+            return {
+                'current_commit': fallback_commit,
+                'full_commit': fallback_commit,
+                'current_branch': fallback_branch,
+                'commit_date': fallback_date or 'unknown',
+                'repo_path': repo_path,
+                'is_valid': True,
+                'source': 'install_config',
+                'note': 'Using values from installation config (git directory not accessible)'
+            }
         return {
             'current_commit': 'not found',
             'full_commit': 'not found',
@@ -193,13 +211,28 @@ def get_current_status() -> Dict:
         ['git', '-C', repo_path, 'log', '-1', '--format=%ci']
     )
 
+    # If git commands failed but we have install config, use those values
+    if not commit_success or not branch_success:
+        if fallback_commit and fallback_branch:
+            return {
+                'current_commit': fallback_commit,
+                'full_commit': fallback_commit,
+                'current_branch': fallback_branch,
+                'commit_date': fallback_date or 'unknown',
+                'repo_path': repo_path,
+                'is_valid': True,
+                'source': 'install_config',
+                'note': 'Using values from installation config (git commands failed - check permissions)'
+            }
+
     result = {
         'current_commit': commit_output if commit_success else 'error',
         'full_commit': full_commit.strip() if full_commit else 'error',
         'current_branch': branch_output if branch_success else 'error',
         'commit_date': date_output.strip() if date_output else 'unknown',
         'repo_path': repo_path,
-        'is_valid': commit_success and branch_success
+        'is_valid': commit_success and branch_success,
+        'source': 'git'
     }
 
     # Add error info if git commands failed
@@ -218,6 +251,25 @@ def fetch_updates() -> Tuple[bool, str]:
     """
     repo_path = get_repo_path()
 
+    # First verify git is available
+    git_version, git_available = run_command(['git', '--version'], timeout=5)
+    if not git_available:
+        return False, 'Git is not installed or not available in PATH'
+
+    # Verify the repo path has a .git directory
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        return False, f'Not a git repository: {repo_path}'
+
+    # Check if remote is configured
+    remote_output, remote_ok = run_command(
+        ['git', '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
+        timeout=10
+    )
+    if not remote_ok:
+        return False, f'Remote "{REMOTE_NAME}" is not configured. Run: git remote add origin <url>'
+
+    # Try to fetch
     output, success = run_command(
         ['git', '-C', repo_path, 'fetch', REMOTE_NAME],
         timeout=60
@@ -225,7 +277,17 @@ def fetch_updates() -> Tuple[bool, str]:
 
     if success:
         return True, 'Successfully fetched updates from remote'
-    return False, f'Failed to fetch: {output}'
+
+    # Provide more helpful error messages
+    error_msg = output.strip() if output else 'Unknown error'
+    if 'Could not resolve host' in error_msg or 'unable to access' in error_msg.lower():
+        return False, 'Network error: Unable to reach GitHub. Check internet connection.'
+    if 'Permission denied' in error_msg or 'Authentication failed' in error_msg:
+        return False, 'Authentication error: Git credentials may be required or invalid.'
+    if 'not found' in error_msg.lower():
+        return False, 'Repository not found on remote. Check if the repository exists.'
+
+    return False, f'Failed to fetch: {error_msg}' if error_msg else 'Failed to fetch: Unknown error (no output from git)'
 
 
 def check_for_updates() -> Dict:
