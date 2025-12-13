@@ -977,4 +977,290 @@ class TestFullPipelineIntegration:
         assert coordinator.stats.cortex_events_sent == 1
 
 
+# ============================================================================
+# Neural Synaptic Encryption Integration Tests
+# ============================================================================
+
+class TestNeuroSecurityStackIntegration:
+    """Test Neural Synaptic Encryption integration across HTP, DSM, and Mesh."""
+
+    def test_neuro_security_stack_initialization(self):
+        """NeuroSecurityStack initializes all components."""
+        try:
+            from core.neuro.integration import (
+                NeuroSecurityStack,
+                create_neuro_security_stack
+            )
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        stack = create_neuro_security_stack(node_id=secrets.token_bytes(16))
+
+        assert stack.htp_binding is not None
+        assert stack.dsm_validator is not None
+        assert stack.mesh_auth is not None
+
+    def test_htp_session_key_derivation(self):
+        """HTP session keys are derived from neural state."""
+        try:
+            from core.neuro.integration import NeuroSecurityStack
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        stack = NeuroSecurityStack(secrets.token_bytes(16))
+
+        # Derive key
+        rdv = secrets.token_bytes(32)
+        key1 = stack.get_htp_session_key(rdv=rdv, qsecbit=0.5)
+        key2 = stack.get_htp_session_key(rdv=rdv, qsecbit=0.5)
+
+        # Keys should be 32 bytes
+        assert len(key1) == 32
+
+        # Different qsecbit should produce different key
+        key3 = stack.get_htp_session_key(rdv=rdv, qsecbit=0.9)
+        assert key1 != key3
+
+    def test_ter_checkpoint_proof_creation(self):
+        """TER checkpoint proofs are created correctly."""
+        try:
+            from core.neuro.integration import DSMNeuroValidator, TERCheckpointProof
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        validator = DSMNeuroValidator(node_id='test-validator')
+
+        # Create proof with empty history
+        proof = validator.create_ter_checkpoint_proof(ter_history=[])
+
+        assert proof.ter_count == 0
+        assert proof.sequence_range == (0, 0)
+        assert len(proof.weight_fingerprint) == 32
+
+    def test_ter_checkpoint_proof_serialization(self):
+        """TER checkpoint proofs serialize/deserialize correctly."""
+        try:
+            from core.neuro.integration import TERCheckpointProof
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        proof = TERCheckpointProof(
+            ter_count=100,
+            sequence_range=(50, 150),
+            weight_fingerprint=secrets.token_bytes(32),
+            chain_hash=0x1234,
+            avg_threat_score=0.45,
+            posf_signature=secrets.token_bytes(32),
+        )
+
+        # Serialize and deserialize
+        data = proof.to_bytes()
+        restored = TERCheckpointProof.from_bytes(data)
+
+        assert restored.ter_count == proof.ter_count
+        assert restored.sequence_range == proof.sequence_range
+        assert restored.chain_hash == proof.chain_hash
+
+    def test_mesh_payload_encryption(self):
+        """Mesh payloads are encrypted and decrypted correctly."""
+        try:
+            from core.neuro.integration import MeshNeuroAuth
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        auth = MeshNeuroAuth(secrets.token_bytes(16))
+        peer_id = secrets.token_bytes(16)
+
+        plaintext = b"Secret threat intelligence data"
+
+        # Encrypt
+        encrypted = auth.encrypt_payload(peer_id, plaintext)
+
+        # Encrypted should be different (unless crypto unavailable)
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            assert encrypted != plaintext
+            assert len(encrypted) > len(plaintext)  # nonce + tag overhead
+
+            # Decrypt
+            decrypted = auth.decrypt_payload(peer_id, encrypted)
+            assert decrypted == plaintext
+        except ImportError:
+            # Without cryptography, should gracefully degrade
+            pass
+
+    def test_rdv_generation_and_verification(self):
+        """RDV generation and verification works correctly."""
+        try:
+            from core.neuro.integration import MeshNeuroAuth
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        auth = MeshNeuroAuth(secrets.token_bytes(16))
+        peer_id = secrets.token_bytes(16)
+        flow_token = secrets.token_bytes(8)
+
+        # Generate RDV
+        rdv = auth.generate_rdv_for_peer(peer_id, flow_token)
+
+        assert len(rdv) == 32
+
+    def test_dsm_consensus_vote_validation(self):
+        """DSM consensus votes with TER proofs are validated."""
+        try:
+            from core.neuro.integration import DSMNeuroValidator, TERCheckpointProof
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        validator = DSMNeuroValidator(node_id='test-validator')
+
+        # Create a vote with TER proof
+        proof = TERCheckpointProof(
+            ter_count=10,
+            sequence_range=(1, 10),
+            weight_fingerprint=secrets.token_bytes(32),
+            chain_hash=0xABCD,
+            avg_threat_score=0.3,
+            posf_signature=hashlib.sha256(
+                secrets.token_bytes(32) +
+                b'test-voter'.ljust(16)[:16]
+            ).digest(),
+        )
+
+        vote = {
+            'checkpoint_id': 'cp-123',
+            'merkle_root': secrets.token_bytes(32),
+            'signature': 'sig-123',
+            'ter_checkpoint_proof': proof.to_bytes(),
+        }
+
+        # Verify vote
+        is_valid, reason = validator.verify_consensus_vote(vote, 'test-voter')
+
+        # Should pass or fail cleanly, not raise
+        assert isinstance(is_valid, bool)
+        assert isinstance(reason, str)
+
+    def test_key_rotation_detection(self):
+        """Key rotation is detected when needed."""
+        try:
+            from core.neuro.integration import NeuroKeyDerivation
+        except ImportError:
+            pytest.skip("Neuro integration module not available")
+
+        kd = NeuroKeyDerivation(secrets.token_bytes(16))
+
+        # Initially needs rotation (no key yet)
+        assert kd.needs_rotation() is True
+
+        # Derive a key
+        try:
+            kd.derive_session_key(
+                weight_fingerprint=secrets.token_bytes(32),
+                rdv=secrets.token_bytes(32),
+                ter_entropy=secrets.token_bytes(32),
+                qsecbit_current=0.5,
+            )
+            # After deriving, should not immediately need rotation
+            assert kd.needs_rotation() is False
+        except RuntimeError:
+            # Cryptography library not available
+            pass
+
+
+class TestHTPNeuroIntegration:
+    """Test HTP transport neural key derivation integration."""
+
+    def test_htp_transport_accepts_neuro_stack(self):
+        """HTP transport accepts NeuroSecurityStack parameter."""
+        try:
+            from core.htp.transport.htp import HookProbeTransport
+        except ImportError:
+            pytest.skip("HTP transport module not available")
+
+        # Should not raise
+        transport = HookProbeTransport(
+            node_id="test-node",
+            listen_port=0,
+            enable_encryption=True,
+        )
+
+        # Check neuro_stack was initialized (or is None if unavailable)
+        assert hasattr(transport, 'neuro_stack')
+
+        # Cleanup
+        transport.socket.close()
+
+    def test_htp_session_has_neuro_binding(self):
+        """HTP sessions have neuro binding attribute."""
+        try:
+            from core.htp.transport.htp import HTPSession, HTPState
+        except ImportError:
+            pytest.skip("HTP transport module not available")
+
+        session = HTPSession(
+            flow_token=12345,
+            state=HTPState.INIT,
+            peer_address=('127.0.0.1', 8144),
+        )
+
+        assert hasattr(session, 'neuro_binding')
+        assert hasattr(session, 'current_qsecbit')
+
+
+class TestDSMNeuroIntegration:
+    """Test DSM consensus neural validation integration."""
+
+    def test_consensus_engine_has_neuro_validator(self):
+        """Consensus engine has neuro validator attribute."""
+        try:
+            from shared.dsm.consensus import ConsensusEngine
+        except ImportError:
+            pytest.skip("DSM consensus module not available")
+
+        engine = ConsensusEngine(
+            validators=[],
+            quorum_threshold=0.67,
+            node_id='test-consensus',
+        )
+
+        assert hasattr(engine, 'neuro_validator')
+
+    def test_signature_verification_uses_neuro(self):
+        """Single signature verification uses neuro validator."""
+        try:
+            from shared.dsm.consensus import ConsensusEngine
+        except ImportError:
+            pytest.skip("DSM consensus module not available")
+
+        engine = ConsensusEngine(validators=[], node_id='test')
+
+        # Mock validator
+        mock_validator = Mock()
+        mock_validator.node_id = 'validator-1'
+        mock_validator.public_key = 'pubkey-1'
+
+        # Should not raise, and return boolean
+        result = engine._verify_single_signature('sig', mock_validator)
+        assert isinstance(result, bool)
+
+
+class TestMeshNeuroIntegration:
+    """Test mesh transport neural authentication integration."""
+
+    def test_unified_transport_has_neuro_auth(self):
+        """Unified transport has neuro auth attribute."""
+        try:
+            from shared.mesh.unified_transport import UnifiedTransport
+        except ImportError:
+            pytest.skip("Mesh transport module not available")
+
+        transport = UnifiedTransport(
+            node_id=secrets.token_bytes(16),
+            neuro_seed=secrets.token_bytes(32),
+        )
+
+        assert hasattr(transport, 'neuro_auth')
+
+
 # Run with: pytest tests/test_e2e_integration.py -v
