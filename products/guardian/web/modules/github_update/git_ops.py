@@ -37,6 +37,34 @@ REPO_PATH = os.environ.get('GUARDIAN_REPO_PATH', '/opt/hookprobe')
 REMOTE_NAME = 'origin'
 DEFAULT_BRANCH = os.environ.get('GUARDIAN_BRANCH', 'main')
 
+# Installation config file location
+INSTALL_CONFIG_FILE = '/etc/hookprobe/install.conf'
+
+# Cache for detected repo path
+_cached_repo_path = None
+
+
+def read_install_config() -> dict:
+    """Read the HookProbe installation configuration file."""
+    config = {}
+    if os.path.isfile(INSTALL_CONFIG_FILE):
+        try:
+            with open(INSTALL_CONFIG_FILE, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+                    # Parse KEY="value" or KEY=value
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        config[key] = value
+        except (IOError, PermissionError):
+            pass
+    return config
+
 # Allowed paths for updates (networking-related only)
 ALLOWED_UPDATE_PATHS = [
     'products/guardian/',
@@ -60,39 +88,67 @@ ALLOWED_SERVICES = [
 
 
 def get_repo_path() -> str:
-    """Get the repository path, validating it exists."""
-    # Check environment variable path first
-    if os.path.isdir(os.path.join(REPO_PATH, '.git')):
-        return REPO_PATH
+    """Get the repository path, validating it exists. Result is cached."""
+    global _cached_repo_path
 
-    # Try common installation paths
+    # Return cached path if already detected
+    if _cached_repo_path is not None:
+        return _cached_repo_path
+
+    # Priority 1: Read from installation config file (/etc/hookprobe/install.conf)
+    install_config = read_install_config()
+    config_path = install_config.get('HOOKPROBE_INSTALL_DIR')
+    if config_path and os.path.isdir(os.path.join(config_path, '.git')):
+        _cached_repo_path = config_path
+        return _cached_repo_path
+
+    # Priority 2: Check environment variable
+    if os.path.isdir(os.path.join(REPO_PATH, '.git')):
+        _cached_repo_path = REPO_PATH
+        return _cached_repo_path
+
+    # Priority 3: Try common installation paths
     common_paths = [
         '/opt/hookprobe',
         '/home/user/hookprobe',
         '/home/pi/hookprobe',
+        '/home/guardian/hookprobe',
         os.path.expanduser('~/hookprobe'),
     ]
 
     for path in common_paths:
         if os.path.isdir(os.path.join(path, '.git')):
-            return path
+            _cached_repo_path = path
+            return _cached_repo_path
 
-    # Try to find repo by traversing up from current file location
+    # Priority 4: Find repo by traversing up from current file location
     current_dir = os.path.dirname(os.path.abspath(__file__))
     for _ in range(10):  # Max 10 levels up
         if os.path.isdir(os.path.join(current_dir, '.git')):
-            return current_dir
+            _cached_repo_path = current_dir
+            return _cached_repo_path
         parent = os.path.dirname(current_dir)
         if parent == current_dir:  # Reached root
             break
         current_dir = parent
 
-    # Fallback to current working directory if it's a git repo
+    # Priority 5: Current working directory
     cwd = os.getcwd()
     if os.path.isdir(os.path.join(cwd, '.git')):
-        return cwd
+        _cached_repo_path = cwd
+        return _cached_repo_path
 
-    return REPO_PATH
+    # Priority 6: Use git to find repo root from this file's location
+    this_file_dir = os.path.dirname(os.path.abspath(__file__))
+    output, success = run_command(
+        ['git', '-C', this_file_dir, 'rev-parse', '--show-toplevel']
+    )
+    if success and output and os.path.isdir(output):
+        _cached_repo_path = output
+        return _cached_repo_path
+
+    _cached_repo_path = REPO_PATH
+    return _cached_repo_path
 
 
 def get_current_status() -> Dict:
@@ -103,6 +159,19 @@ def get_current_status() -> Dict:
         Dict with current_commit, current_branch, repo_path, is_valid
     """
     repo_path = get_repo_path()
+
+    # Check if path exists and has .git
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        return {
+            'current_commit': 'not found',
+            'full_commit': 'not found',
+            'current_branch': 'not found',
+            'commit_date': 'unknown',
+            'repo_path': repo_path,
+            'is_valid': False,
+            'error': f'Git directory not found at {repo_path}'
+        }
 
     # Get current commit hash
     commit_output, commit_success = run_command(
@@ -124,14 +193,20 @@ def get_current_status() -> Dict:
         ['git', '-C', repo_path, 'log', '-1', '--format=%ci']
     )
 
-    return {
-        'current_commit': commit_output if commit_success else 'unknown',
-        'full_commit': full_commit.strip() if full_commit else 'unknown',
-        'current_branch': branch_output if branch_success else 'unknown',
+    result = {
+        'current_commit': commit_output if commit_success else 'error',
+        'full_commit': full_commit.strip() if full_commit else 'error',
+        'current_branch': branch_output if branch_success else 'error',
         'commit_date': date_output.strip() if date_output else 'unknown',
         'repo_path': repo_path,
         'is_valid': commit_success and branch_success
     }
+
+    # Add error info if git commands failed
+    if not commit_success:
+        result['error'] = f'Git command failed: {commit_output}'
+
+    return result
 
 
 def fetch_updates() -> Tuple[bool, str]:
