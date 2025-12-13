@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>HookProbe Cortex - Neural Command Center</title>
     <meta name="description" content="Real-time 3D visualization of the HookProbe collective defense mesh">
     <link rel="stylesheet" href="css/globe.css">
@@ -253,6 +255,11 @@
 
         // Initialize premium effects on load
         document.addEventListener('DOMContentLoaded', () => {
+            // Initialize geolocation early
+            setTimeout(() => {
+                initGeolocation();
+            }, 500);
+
             // Create subtle scanline effect
             setTimeout(() => {
                 if (typeof createScanlineEffect === 'function') {
@@ -273,11 +280,57 @@
             }, 1500);
         });
 
+        // Device capability detection
+        function detectDeviceCapabilities() {
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+            const hasWebGL = !!window.WebGLRenderingContext;
+
+            // More nuanced performance check - don't just use viewport width
+            // Many modern phones have high-res screens and good GPUs
+            const isLowPerformance = !hasWebGL;
+
+            return { isMobile, isTouchDevice, hasWebGL, isLowPerformance };
+        }
+
+        // Initialize user geolocation
+        function initGeolocation() {
+            if (!navigator.geolocation) {
+                console.log('Geolocation not supported');
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    console.log('User location detected:', latitude.toFixed(2), longitude.toFixed(2));
+
+                    // Store user location for potential use
+                    window.userLocation = { lat: latitude, lng: longitude };
+
+                    // If globe is ready, optionally fly to user location
+                    if (window.globe && window.zoomController) {
+                        // Emit event for location detection
+                        window.dispatchEvent(new CustomEvent('userLocationDetected', {
+                            detail: { lat: latitude, lng: longitude }
+                        }));
+                    }
+                },
+                (error) => {
+                    console.log('Geolocation error:', error.message);
+                },
+                {
+                    enableHighAccuracy: false,
+                    timeout: 10000,
+                    maximumAge: 300000 // 5 minutes cache
+                }
+            );
+        }
+
         // Phase 2: Initialize city view components
         function initCityViewSystem() {
-            // Check if we're on mobile or low-performance device
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            const isLowPerformance = !window.WebGLRenderingContext || (isMobile && window.innerWidth < 768);
+            const device = detectDeviceCapabilities();
+            console.log('Device capabilities:', device);
 
             // Check if Deck.gl and MapLibre are available
             const hasDeckGL = typeof deck !== 'undefined' && typeof DeckRenderer !== 'undefined';
@@ -287,17 +340,17 @@
                 console.warn('Phase 2 dependencies not loaded:', {
                     hasDeckGL,
                     hasMapLibre,
-                    isMobile,
-                    isLowPerformance
+                    ...device
                 });
                 // City view disabled but globe should still work
                 console.log('City view disabled - using globe only mode');
                 return;
             }
 
-            // On mobile with limited resources, skip city view initialization
-            if (isLowPerformance) {
-                console.log('Low performance device detected - city view disabled for better globe performance');
+            // On truly low performance devices (no WebGL), skip city view
+            // Mobile devices with WebGL can still use city view
+            if (device.isLowPerformance) {
+                console.log('Low performance device detected - city view disabled');
                 return;
             }
 
