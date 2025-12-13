@@ -105,6 +105,8 @@
 html {
     font-size: 16px;
     scroll-behavior: smooth;
+    /* Match footer color to prevent white gap on mobile overscroll */
+    background-color: var(--prussian);
 }
 
 @media screen and (max-width: 1680px) { html { font-size: 14px; } }
@@ -120,6 +122,7 @@ body {
     letter-spacing: -0.01em;
     line-height: 1.5;
     min-height: 100vh;
+    min-height: 100dvh; /* Dynamic viewport height for mobile */
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
 }
@@ -2112,7 +2115,22 @@ tbody tr:last-child td {
     background: var(--prussian);
     color: var(--alabaster);
     padding: 1.5rem 1rem;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
     margin-top: auto;
+    /* Extend footer color beyond viewport for mobile overscroll */
+    position: relative;
+}
+
+/* Pseudo-element to extend footer color on mobile overscroll */
+#footer::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -100vh;
+    height: 100vh;
+    background: var(--prussian);
+    z-index: -1;
 }
 
 .footer-inner {
@@ -2187,6 +2205,10 @@ tbody tr:last-child td {
 @media (max-width: 600px) {
     #footer {
         padding: 1.25rem 0.75rem;
+        /* iOS safe area padding for home indicator */
+        padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+        padding-left: calc(0.75rem + env(safe-area-inset-left, 0px));
+        padding-right: calc(0.75rem + env(safe-area-inset-right, 0px));
     }
 
     .footer-motto {
@@ -2213,6 +2235,26 @@ tbody tr:last-child td {
 
     .footer-copyright .separator {
         display: none;
+    }
+}
+
+/* Extra small screens (iPhone SE, small Android) */
+@media (max-width: 380px) {
+    #footer {
+        padding: 1rem 0.5rem;
+        padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+    }
+
+    .footer-motto .motto-text {
+        font-size: 0.8rem;
+    }
+
+    .footer-links {
+        gap: 0.75rem;
+    }
+
+    .footer-copyright {
+        font-size: 0.75rem;
     }
 }
 
