@@ -218,6 +218,25 @@ def fetch_updates() -> Tuple[bool, str]:
     """
     repo_path = get_repo_path()
 
+    # First verify git is available
+    git_version, git_available = run_command(['git', '--version'], timeout=5)
+    if not git_available:
+        return False, 'Git is not installed or not available in PATH'
+
+    # Verify the repo path has a .git directory
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        return False, f'Not a git repository: {repo_path}'
+
+    # Check if remote is configured
+    remote_output, remote_ok = run_command(
+        ['git', '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
+        timeout=10
+    )
+    if not remote_ok:
+        return False, f'Remote "{REMOTE_NAME}" is not configured. Run: git remote add origin <url>'
+
+    # Try to fetch
     output, success = run_command(
         ['git', '-C', repo_path, 'fetch', REMOTE_NAME],
         timeout=60
@@ -225,7 +244,17 @@ def fetch_updates() -> Tuple[bool, str]:
 
     if success:
         return True, 'Successfully fetched updates from remote'
-    return False, f'Failed to fetch: {output}'
+
+    # Provide more helpful error messages
+    error_msg = output.strip() if output else 'Unknown error'
+    if 'Could not resolve host' in error_msg or 'unable to access' in error_msg.lower():
+        return False, 'Network error: Unable to reach GitHub. Check internet connection.'
+    if 'Permission denied' in error_msg or 'Authentication failed' in error_msg:
+        return False, 'Authentication error: Git credentials may be required or invalid.'
+    if 'not found' in error_msg.lower():
+        return False, 'Repository not found on remote. Check if the repository exists.'
+
+    return False, f'Failed to fetch: {error_msg}' if error_msg else 'Failed to fetch: Unknown error (no output from git)'
 
 
 def check_for_updates() -> Dict:
