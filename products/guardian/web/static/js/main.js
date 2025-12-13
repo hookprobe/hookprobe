@@ -349,30 +349,37 @@ function loadInitialData() {
 
 async function loadDashboardData() {
     try {
-        const [status, threats, containers, dhcp] = await Promise.all([
+        const [status, threats, containers, dhcp, qsecbit] = await Promise.all([
             apiGet('/status'),
             apiGet('/threats'),
             apiGet('/containers'),
-            apiGet('/clients/dhcp').catch(() => ({ leases: [] }))
+            apiGet('/clients/dhcp').catch(() => ({ leases: [] })),
+            apiGet('/qsecbit').catch(() => null)
         ]);
 
         // Use DHCP leases count for connected clients (more reliable)
         const clientCount = (dhcp.leases || []).length;
         status.connected_clients = clientCount;
 
-        updateDashboardStats(status, threats);
+        updateDashboardStats(status, threats, qsecbit);
         updateContainerStatus(containers);
     } catch (error) {
         console.error('Failed to load dashboard:', error);
     }
 }
 
-function updateDashboardStats(status, threats) {
+function updateDashboardStats(status, threats, qsecbit = null) {
     // Update stat cards
     updateElement('stat-clients', status.connected_clients || 0);
     updateElement('stat-threats-blocked', threats.stats?.blocked || 0);
     updateElement('stat-uptime', status.uptime || '0:00');
-    updateElement('stat-qsecbit', (threats.stats?.qsecbit_score || 0).toFixed(2));
+
+    // Prefer dedicated qsecbit endpoint, fallback to threats data
+    const score = qsecbit?.score ?? threats.stats?.qsecbit_score ?? 0;
+    updateElement('stat-qsecbit', score.toFixed(2));
+
+    // Also update tile stat
+    updateElement('tile-qsecbit', score.toFixed(2));
 }
 
 function updateContainerStatus(containers) {
