@@ -3403,6 +3403,204 @@ DNSMASQ_OVERRIDE
 }
 
 # ============================================================
+# AUTOMATIC WIFI CHANNEL OPTIMIZATION
+# ============================================================
+install_channel_optimization_service() {
+    log_step "Installing Automatic WiFi Channel Optimization..."
+
+    # Create state directory
+    mkdir -p /var/lib/guardian
+
+    # Create the channel optimization script
+    log_info "Creating channel optimization script..."
+    cat > /usr/local/bin/guardian-channel-optimize.sh << 'CHANNEL_SCRIPT'
+#!/bin/bash
+# Guardian WiFi Channel Optimization
+# Automatically selects the best WiFi channel based on RF environment
+# Runs at boot and daily at 4:00 AM
+
+set -e
+
+LOG_FILE="/var/log/hookprobe/channel-optimization.log"
+STATE_FILE="/var/lib/guardian/channel_state.json"
+HOSTAPD_CONF="/etc/hostapd/hostapd.conf"
+AP_INTERFACE="wlan1"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    echo "$1"
+}
+
+# Ensure log directory exists
+mkdir -p /var/log/hookprobe
+
+log "Starting WiFi channel optimization..."
+
+# Check if AP interface exists
+if [ ! -e "/sys/class/net/$AP_INTERFACE" ]; then
+    AP_INTERFACE="wlan0"
+    if [ ! -e "/sys/class/net/$AP_INTERFACE" ]; then
+        log "ERROR: No WiFi interface found"
+        exit 1
+    fi
+fi
+
+# Get current channel from hostapd config
+CURRENT_CHANNEL=$(grep "^channel=" "$HOSTAPD_CONF" 2>/dev/null | cut -d= -f2 || echo "6")
+
+log "Current channel: $CURRENT_CHANNEL"
+
+# Scan for networks and channel utilization
+# Use iw scan if hostapd is not running, otherwise use survey dump
+SCAN_DATA=""
+
+if systemctl is-active --quiet hostapd; then
+    # AP is running - use survey dump (non-disruptive)
+    log "AP is running, using survey dump..."
+    SCAN_DATA=$(sudo iw dev "$AP_INTERFACE" survey dump 2>/dev/null || true)
+else
+    # AP not running - can do full scan
+    log "AP not running, performing full scan..."
+    sudo ip link set "$AP_INTERFACE" up 2>/dev/null || true
+    sleep 1
+    SCAN_DATA=$(sudo iw dev "$AP_INTERFACE" scan 2>/dev/null || true)
+fi
+
+# Analyze channels 1, 6, 11 (non-overlapping 2.4GHz)
+declare -A CHANNEL_SCORE
+
+# Initialize scores (lower is better)
+CHANNEL_SCORE[1]=0
+CHANNEL_SCORE[6]=0
+CHANNEL_SCORE[11]=0
+
+# Parse scan/survey data for channel utilization
+if [ -n "$SCAN_DATA" ]; then
+    # Count networks on each channel from scan data
+    for ch in 1 6 11; do
+        # Look for DS Parameter Set (channel info) or frequency
+        freq_2_4g=$((2407 + ch * 5))
+        count=$(echo "$SCAN_DATA" | grep -c "frequency: $freq_2_4g" 2>/dev/null || echo "0")
+        CHANNEL_SCORE[$ch]=$((CHANNEL_SCORE[$ch] + count * 10))
+
+        # Check survey data for busy time
+        busy=$(echo "$SCAN_DATA" | grep -A5 "frequency.*$freq_2_4g" | grep "channel busy time" | awk '{print $4}' | head -1)
+        if [ -n "$busy" ] && [ "$busy" -gt 0 ]; then
+            CHANNEL_SCORE[$ch]=$((CHANNEL_SCORE[$ch] + busy / 1000))
+        fi
+    done
+fi
+
+# Find best channel (lowest score)
+BEST_CHANNEL=6
+BEST_SCORE=${CHANNEL_SCORE[6]}
+
+for ch in 1 11; do
+    if [ "${CHANNEL_SCORE[$ch]}" -lt "$BEST_SCORE" ]; then
+        BEST_SCORE="${CHANNEL_SCORE[$ch]}"
+        BEST_CHANNEL=$ch
+    fi
+done
+
+log "Channel scores: CH1=${CHANNEL_SCORE[1]}, CH6=${CHANNEL_SCORE[6]}, CH11=${CHANNEL_SCORE[11]}"
+log "Best channel: $BEST_CHANNEL (score: $BEST_SCORE)"
+
+# Only change channel if significantly better (score difference > 5)
+SCORE_DIFF=$((${CHANNEL_SCORE[$CURRENT_CHANNEL]} - BEST_SCORE))
+
+if [ "$BEST_CHANNEL" != "$CURRENT_CHANNEL" ] && [ "$SCORE_DIFF" -gt 5 ]; then
+    log "Switching from channel $CURRENT_CHANNEL to $BEST_CHANNEL (improvement: $SCORE_DIFF)"
+
+    # Update hostapd config
+    sudo sed -i "s/^channel=.*/channel=$BEST_CHANNEL/" "$HOSTAPD_CONF"
+
+    # Restart hostapd to apply new channel
+    if systemctl is-active --quiet hostapd; then
+        log "Restarting hostapd to apply new channel..."
+        sudo systemctl restart hostapd
+        sleep 3
+
+        if systemctl is-active --quiet hostapd; then
+            log "Channel changed successfully to $BEST_CHANNEL"
+        else
+            log "WARNING: hostapd failed to restart, reverting to channel $CURRENT_CHANNEL"
+            sudo sed -i "s/^channel=.*/channel=$CURRENT_CHANNEL/" "$HOSTAPD_CONF"
+            sudo systemctl start hostapd
+        fi
+    fi
+else
+    log "Keeping current channel $CURRENT_CHANNEL (no significant improvement available)"
+fi
+
+# Save state
+cat > "$STATE_FILE" << EOF
+{
+    "last_optimization": "$(date -Iseconds)",
+    "current_channel": $BEST_CHANNEL,
+    "channel_scores": {
+        "1": ${CHANNEL_SCORE[1]},
+        "6": ${CHANNEL_SCORE[6]},
+        "11": ${CHANNEL_SCORE[11]}
+    },
+    "auto_enabled": true
+}
+EOF
+
+log "Channel optimization complete"
+CHANNEL_SCRIPT
+
+    chmod +x /usr/local/bin/guardian-channel-optimize.sh
+
+    # Create systemd service for channel optimization
+    log_info "Creating channel optimization service..."
+    cat > /etc/systemd/system/guardian-channel-optimize.service << 'SERVICE_EOF'
+[Unit]
+Description=Guardian WiFi Channel Optimization
+After=network.target hostapd.service
+Wants=hostapd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/guardian-channel-optimize.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+    # Create systemd timer for daily optimization at 4:00 AM
+    log_info "Creating channel optimization timer..."
+    cat > /etc/systemd/system/guardian-channel-optimize.timer << 'TIMER_EOF'
+[Unit]
+Description=Daily WiFi Channel Optimization at 4:00 AM
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    # Enable and start timer
+    systemctl enable guardian-channel-optimize.timer 2>/dev/null || true
+    systemctl start guardian-channel-optimize.timer 2>/dev/null || true
+
+    # Run optimization once at boot (via service)
+    systemctl enable guardian-channel-optimize.service 2>/dev/null || true
+
+    log_info "Automatic WiFi Channel Optimization installed"
+    log_info "  - Runs at boot and daily at 4:00 AM"
+    log_info "  - Selects best channel from 1, 6, 11 (non-overlapping)"
+    log_info "  - Only changes if significant improvement available"
+}
+
+# ============================================================
 # CONFIGURATION FILE CREATION
 # ============================================================
 create_default_config() {
@@ -3949,6 +4147,10 @@ main() {
     # Install AP services (WAN-independent startup)
     log_step "Installing AP services for WAN-independent operation..."
     install_ap_services
+
+    # Install automatic WiFi channel optimization
+    log_step "Installing Automatic WiFi Channel Optimization..."
+    install_channel_optimization_service
 
     # Create default configuration file
     log_step "Creating configuration file..."
