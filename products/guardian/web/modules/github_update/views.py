@@ -57,6 +57,12 @@ def api_check():
     """
     try:
         result = check_for_updates()
+        # If result contains an error, return as failure
+        if 'error' in result:
+            return jsonify({
+                'success': False,
+                **result
+            })
         return jsonify({
             'success': True,
             **result
