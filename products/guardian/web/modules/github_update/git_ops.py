@@ -373,6 +373,7 @@ def categorize_changes(changed_files: List[str]) -> Dict:
         'backend': [],     # Guardian agent/lib
         'dnsxai': [],      # DNS protection
         'network': [],     # Mesh, config
+        'response': [],    # Threat response scripts
         'other': []
     }
 
@@ -387,6 +388,8 @@ def categorize_changes(changed_files: List[str]) -> Dict:
             categories['dnsxai'].append(file_path)
         elif file_path.startswith('shared/mesh/') or file_path.startswith('products/guardian/config/'):
             categories['network'].append(file_path)
+        elif file_path.startswith('shared/response/'):
+            categories['response'].append(file_path)
         else:
             categories['other'].append(file_path)
 
