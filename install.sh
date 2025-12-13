@@ -1099,44 +1099,25 @@ show_capability_summary() {
     # ELIGIBLE DEPLOYMENT TIERS
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     echo ""
-    print_section "Eligible Deployment Tiers"
+    print_section "Deployment Tiers"
     echo ""
 
     local tier_num=1
 
-    # MSSP
-    if [ "$CAN_MSSP" = true ]; then
-        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}█████${NC} ${BOLD}${WHITE}MSSP${NC} ${GREEN}[AVAILABLE]${NC}"
-        echo -e "       ${ITALIC}\"The Central Brain\"${NC}"
-        echo -e "       ${DIM}Cloud MSSP platform with Django portal, all PODs${NC}"
-        tier_num=$((tier_num + 1))
-    else
-        echo -e "  ${DIM}░░░░░ MSSP [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 4+ cores, 16GB+ RAM, 100GB+ storage${NC}"
-    fi
-    echo ""
+    # ─────────────────────────────────────────────────────────────
+    # AVAILABLE TIERS (Sentinel & Guardian only for now)
+    # ─────────────────────────────────────────────────────────────
 
-    # NEXUS
-    if [ "$CAN_NEXUS" = true ]; then
-        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}████${NC} ${BOLD}${WHITE}NEXUS${NC} ${GREEN}[AVAILABLE]${NC}"
-        echo -e "       ${ITALIC}\"The Central Command\"${NC}"
-        echo -e "       ${DIM}ML/AI compute hub with edge orchestration${NC}"
+    # SENTINEL
+    if [ "$CAN_SENTINEL" = true ]; then
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}█${NC}░░░ ${BOLD}${WHITE}SENTINEL${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "       ${ITALIC}\"The Watchful Eye\"${NC}"
+        echo -e "       ${DIM}Lightweight edge validator for IoT devices${NC}"
+        echo -e "       ${DIM}Installs: Health monitoring, edge validation (~50MB)${NC}"
         tier_num=$((tier_num + 1))
     else
-        echo -e "  ${DIM}░░░░ NEXUS [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 4+ cores, 16GB+ RAM, 100GB+ storage${NC}"
-    fi
-    echo ""
-
-    # FORTRESS
-    if [ "$CAN_FORTRESS" = true ]; then
-        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}███${NC}░ ${BOLD}${WHITE}FORTRESS${NC} ${GREEN}[AVAILABLE]${NC}"
-        echo -e "       ${ITALIC}\"Your Digital Stronghold\"${NC}"
-        echo -e "       ${DIM}Full monitoring, dashboards, local AI${NC}"
-        tier_num=$((tier_num + 1))
-    else
-        echo -e "  ${DIM}░░░░ FORTRESS [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 4GB+ RAM, 16GB+ storage, 2+ ethernet${NC}"
+        echo -e "  ${DIM}░░░░ SENTINEL [NOT AVAILABLE]${NC}"
+        echo -e "       ${DIM}Requires: 256MB+ RAM, 1GB+ storage, 1+ NIC${NC}"
     fi
     echo ""
 
@@ -1144,7 +1125,8 @@ show_capability_summary() {
     if [ "$CAN_GUARDIAN" = true ]; then
         echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}██${NC}░░ ${BOLD}${WHITE}GUARDIAN${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"Protection on the Move\"${NC}"
-        echo -e "       ${DIM}Secure gateway with IDS/IPS, WAF, lite AI${NC}"
+        echo -e "       ${DIM}Travel-secure router / Home gateway${NC}"
+        echo -e "       ${DIM}Installs: WiFi AP, IDS/IPS (Suricata), WAF, dnsXai, Web UI${NC}"
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ GUARDIAN [NOT AVAILABLE]${NC}"
@@ -1152,15 +1134,26 @@ show_capability_summary() {
     fi
     echo ""
 
-    # SENTINEL
-    if [ "$CAN_SENTINEL" = true ]; then
-        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}█${NC}░░░ ${BOLD}${WHITE}SENTINEL${NC} ${GREEN}[AVAILABLE]${NC}"
-        echo -e "       ${ITALIC}\"The Watchful Eye\"${NC}"
-        echo -e "       ${DIM}Lightweight edge validator${NC}"
-    else
-        echo -e "  ${DIM}░░░░ SENTINEL [NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 256MB+ RAM, 1GB+ storage, 1+ NIC${NC}"
-    fi
+    # ─────────────────────────────────────────────────────────────
+    # COMING SOON TIERS (greyed out regardless of system capability)
+    # ─────────────────────────────────────────────────────────────
+
+    # FORTRESS - Coming Soon
+    echo -e "  ${DIM}░░░░ FORTRESS ${YELLOW}[COMING SOON]${NC}"
+    echo -e "       ${DIM}\"Your Digital Stronghold\"${NC}"
+    echo -e "       ${DIM}Full monitoring, Grafana dashboards, n8n automation${NC}"
+    echo ""
+
+    # NEXUS - Coming Soon
+    echo -e "  ${DIM}░░░░ NEXUS ${YELLOW}[COMING SOON]${NC}"
+    echo -e "       ${DIM}\"The Central Command\"${NC}"
+    echo -e "       ${DIM}ML/AI compute hub with edge orchestration${NC}"
+    echo ""
+
+    # MSSP - Coming Soon
+    echo -e "  ${DIM}░░░░░ MSSP ${YELLOW}[COMING SOON]${NC}"
+    echo -e "       ${DIM}\"The Central Brain\"${NC}"
+    echo -e "       ${DIM}Cloud MSSP platform with Django portal${NC}"
 
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
@@ -1173,13 +1166,11 @@ handle_capability_check() {
         show_capability_summary
         read -p "Select option: " choice
 
-        # Build list of available tiers in order
+        # Build list of available tiers in order (Sentinel and Guardian only)
+        # Fortress, Nexus, and MSSP are coming soon and not selectable
         local available_tiers=()
-        [ "$CAN_MSSP" = true ] && available_tiers+=("mssp")
-        [ "$CAN_NEXUS" = true ] && available_tiers+=("nexus")
-        [ "$CAN_FORTRESS" = true ] && available_tiers+=("fortress")
-        [ "$CAN_GUARDIAN" = true ] && available_tiers+=("guardian")
         [ "$CAN_SENTINEL" = true ] && available_tiers+=("sentinel")
+        [ "$CAN_GUARDIAN" = true ] && available_tiers+=("guardian")
 
         case $choice in
             b|B|m|M) return ;;
@@ -1191,12 +1182,9 @@ handle_capability_check() {
                     case "$tier" in
                         sentinel) install_sentinel; return ;;
                         guardian) install_guardian; return ;;
-                        fortress) install_fortress; return ;;
-                        nexus) install_nexus; return ;;
-                        mssp) install_mssp; return ;;
                     esac
                 else
-                    echo -e "${RED}Invalid selection${NC}"; sleep 1
+                    echo -e "${RED}Invalid selection. Only Sentinel and Guardian are available.${NC}"; sleep 1
                 fi
                 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
@@ -1219,12 +1207,19 @@ show_install_menu() {
     local option_num=1
     local options=()
 
+    # ─────────────────────────────────────────────────────────────
+    # AVAILABLE TIERS (Sentinel & Guardian only for now)
+    # ─────────────────────────────────────────────────────────────
+
     # SENTINEL
     if [ "$CAN_SENTINEL" = true ]; then
         echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}█${NC}░░░ ${BOLD}SENTINEL${NC} - ${ITALIC}\"The Watchful Eye\"${NC}"
         echo -e "        ${DIM}Lightweight validator for constrained devices${NC}"
-        echo -e "        ${DIM}RAM: 512MB-3GB | Storage: 1GB+ | Network: 1+ interface${NC}"
-        echo -e "        ${DIM}Features: Edge validation, health monitoring${NC}"
+        echo -e "        ${DIM}RAM: 256MB+ | Storage: 1GB+ | Network: 1+ interface${NC}"
+        echo -e "        ${CYAN}Installs:${NC}"
+        echo -e "          • HookProbe Sentinel service (~50MB)"
+        echo -e "          • Health monitoring endpoint (port 9090)"
+        echo -e "          • Edge node validation"
         echo ""
         options+=("sentinel")
         option_num=$((option_num + 1))
@@ -1234,42 +1229,21 @@ show_install_menu() {
     if [ "$CAN_GUARDIAN" = true ]; then
         echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}██${NC}░░ ${BOLD}GUARDIAN${NC} - ${ITALIC}\"Protection on the Move\"${NC}"
         echo -e "        ${DIM}Travel-secure router / Home gateway${NC}"
-        echo -e "        ${DIM}RAM: 3GB+ | Storage: 16GB+ | Network: 2+ interfaces${NC}"
-        echo -e "        ${DIM}Features: QSecBit, OpenFlow, WAF, IDS/IPS, Lite AI${NC}"
+        echo -e "        ${DIM}RAM: 1.5GB+ | Storage: 8GB+ | Network: 2+ interfaces${NC}"
+        echo -e "        ${CYAN}Installs:${NC}"
+        echo -e "          • WiFi Access Point (hostapd, dnsmasq)"
+        echo -e "          • IDS/IPS (Suricata container)"
+        echo -e "          • Web Application Firewall"
+        echo -e "          • dnsXai DNS Protection (ML-based ad/tracker blocking)"
+        echo -e "          • Guardian Web UI (Flask)"
+        echo -e "          • Cortex 3D Globe Visualization"
+        echo -e "          • XDP/eBPF DDoS Mitigation"
+        echo -e "          • nftables Firewall Rules"
         if [ "$SYS_WIFI_HOTSPOT" = true ]; then
-            echo -e "        ${GREEN}WiFi hotspot available${NC}"
+            echo -e "        ${GREEN}✓ WiFi hotspot mode available${NC}"
         fi
-        echo -e "        ${YELLOW}Requires: MSSP ID for management${NC}"
         echo ""
         options+=("guardian")
-        option_num=$((option_num + 1))
-    fi
-
-    # FORTRESS
-    if [ "$CAN_FORTRESS" = true ]; then
-        echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}███${NC}░ ${BOLD}FORTRESS${NC} - ${ITALIC}\"Your Digital Stronghold\"${NC}"
-        echo -e "        ${DIM}Full-featured edge with local monitoring${NC}"
-        echo -e "        ${DIM}RAM: 8GB+ | Storage: 32GB+ | Network: 2+ ethernet${NC}"
-        echo -e "        ${DIM}Features: Guardian + Victoria Metrics, Grafana, n8n, Dashboard${NC}"
-        if [ "$SYS_LTE_COUNT" -gt 0 ]; then
-            echo -e "        ${GREEN}LTE/5G failover available${NC}"
-        fi
-        echo ""
-        options+=("fortress")
-        option_num=$((option_num + 1))
-    fi
-
-    # NEXUS
-    if [ "$CAN_NEXUS" = true ]; then
-        echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}████${NC} ${BOLD}NEXUS${NC} - ${ITALIC}\"The Central Command\"${NC}"
-        echo -e "        ${DIM}Multi-tenant MSSP command center${NC}"
-        echo -e "        ${DIM}Cores: 8+ | RAM: 64GB+ | Storage: 1TB+${NC}"
-        echo -e "        ${DIM}Features: Multi-tenant SOC, ClickHouse, long-term retention${NC}"
-        if [ "$SYS_HAS_GPU" = true ]; then
-            echo -e "        ${GREEN}GPU acceleration: $SYS_GPU_TYPE${NC}"
-        fi
-        echo ""
-        options+=("nexus")
         option_num=$((option_num + 1))
     fi
 
@@ -1278,14 +1252,29 @@ show_install_menu() {
         echo -e "  ${RED}No deployment tiers available for this system.${NC}"
         echo ""
         echo -e "  ${YELLOW}Minimum requirements:${NC}"
-        echo -e "    • RAM: 512MB+"
-        echo -e "    • Storage: 1GB+"
-        echo -e "    • Network: 1+ interface"
+        echo -e "    • RAM: 256MB+ (Sentinel) or 1.5GB+ (Guardian)"
+        echo -e "    • Storage: 1GB+ (Sentinel) or 8GB+ (Guardian)"
+        echo -e "    • Network: 1+ interface (Sentinel) or 2+ interfaces (Guardian)"
         echo ""
         echo -e "  ${CYAN}For ultra-constrained devices, try Sentinel Lite:${NC}"
         echo -e "  ${DIM}curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | sudo bash${NC}"
         echo ""
     fi
+
+    # ─────────────────────────────────────────────────────────────
+    # COMING SOON TIERS (always greyed out)
+    # ─────────────────────────────────────────────────────────────
+    echo ""
+    echo -e "${YELLOW}Coming Soon:${NC}"
+    echo ""
+    echo -e "  ${DIM}░░░░ FORTRESS - \"Your Digital Stronghold\"${NC}"
+    echo -e "       ${DIM}Full monitoring with Grafana, n8n automation, local AI${NC}"
+    echo ""
+    echo -e "  ${DIM}░░░░ NEXUS - \"The Central Command\"${NC}"
+    echo -e "       ${DIM}ML/AI compute hub with ClickHouse analytics${NC}"
+    echo ""
+    echo -e "  ${DIM}░░░░░ MSSP - \"The Central Brain\"${NC}"
+    echo -e "       ${DIM}Cloud MSSP platform with Django portal${NC}"
 
     show_nav_footer
     printf '%s\n' "${options[@]}"
@@ -1814,17 +1803,15 @@ handle_install() {
             [0-9]*)
                 local idx=$((choice - 1))
                 if [ $idx -ge 0 ] && [ $idx -lt ${#options[@]} ]; then
+                    # Only Sentinel and Guardian are available for installation
                     case "${options[$idx]}" in
                         sentinel) install_sentinel ;;
                         guardian) install_guardian ;;
-                        fortress) install_fortress ;;
-                        nexus) install_nexus ;;
-                        mssp) install_mssp ;;
                     esac
                     echo ""
                     read -p "Press Enter to continue..."
                 else
-                    echo -e "${RED}Invalid option${NC}"
+                    echo -e "${RED}Invalid selection. Only Sentinel and Guardian are available.${NC}"
                     sleep 1
                 fi
                 ;;
