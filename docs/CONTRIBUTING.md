@@ -1,6 +1,24 @@
 # Contributing to HookProbe
 
-Thank you for your interest in contributing to HookProbe! We welcome contributions from the community.
+> **"One node's detection → Everyone's protection"**
+
+## 🤝 Welcome to the Family
+
+Thank you for your interest in contributing to HookProbe! You're not just contributing to a project – **you're joining a family of protectors** building the future of collective defense.
+
+**Our Philosophy:**
+- 🛡️ **Protection is a right, not a privilege** - We make enterprise security accessible to everyone
+- 🔍 **Transparency builds trust** - Every decision is explainable, every line of code is auditable
+- 🤝 **Collective defense works** - One detection protects all
+- 🧠 **AI serves humans** - Help people focus on what they love
+
+**What "Family" Means:**
+- We share knowledge freely (no paywalls on protection)
+- We help each other (stuck? ask. know something? teach)
+- We build together (your contribution makes everyone stronger)
+- We protect each other (one node's detection → everyone's protection)
+
+**Read our [Manifesto](../MANIFESTO.md)** to understand the full vision.
 
 ---
 
