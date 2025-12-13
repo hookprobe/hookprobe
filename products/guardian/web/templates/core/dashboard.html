@@ -2,7 +2,7 @@
 <style>
 /* Dashboard Premium Styles */
 .dashboard-hero {
-    background: linear-gradient(135deg, #242943 0%, #1a1d2e 100%);
+    background: var(--prussian);
     border-radius: var(--radius-xl);
     padding: var(--spacing-xl);
     margin-bottom: var(--spacing-xl);
@@ -11,16 +11,7 @@
     overflow: hidden;
 }
 
-.dashboard-hero::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    right: -20%;
-    width: 400px;
-    height: 400px;
-    background: radial-gradient(circle, rgba(240, 91, 45, 0.15) 0%, transparent 70%);
-    pointer-events: none;
-}
+/* Clean hero - no gradient effects */
 
 .hero-content {
     display: flex;
@@ -312,13 +303,21 @@
     }
 
     .health-grid {
-        grid-template-columns: 1fr;
-        gap: var(--spacing-lg);
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--spacing-sm);
     }
 
     .health-ring {
-        width: 80px;
-        height: 80px;
+        width: 60px;
+        height: 60px;
+    }
+
+    .health-ring-value {
+        font-size: 0.875rem;
+    }
+
+    .health-label {
+        font-size: 0.7rem;
     }
 
     .nav-tiles {

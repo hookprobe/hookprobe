@@ -78,6 +78,8 @@ stop_services() {
         # Health check timers
         "guardian-ssid-health"
         "guardian-wifi-health"
+        # Channel optimization
+        "guardian-channel-optimize"
         # Offline mode service
         "guardian-offline"
         # Routing/NAT service
@@ -91,6 +93,7 @@ stop_services() {
     local timers=(
         "guardian-ssid-health"
         "guardian-wifi-health"
+        "guardian-channel-optimize"
     )
     for timer in "${timers[@]}"; do
         if systemctl is-active "${timer}.timer" &>/dev/null; then
@@ -137,6 +140,8 @@ remove_systemd_services() {
         # Health check services
         "guardian-ssid-health"
         "guardian-wifi-health"
+        # Channel optimization
+        "guardian-channel-optimize"
         # Offline mode service
         "guardian-offline"
         # Routing/NAT service
@@ -147,6 +152,7 @@ remove_systemd_services() {
     local timers=(
         "guardian-ssid-health"
         "guardian-wifi-health"
+        "guardian-channel-optimize"
     )
     for timer in "${timers[@]}"; do
         if systemctl is-enabled "${timer}.timer" &>/dev/null; then
@@ -196,6 +202,10 @@ remove_systemd_services() {
     if [ -f "/usr/local/bin/guardian-wifi-health.sh" ]; then
         rm -f /usr/local/bin/guardian-wifi-health.sh
         log_info "Removed guardian-wifi-health.sh"
+    fi
+    if [ -f "/usr/local/bin/guardian-channel-optimize.sh" ]; then
+        rm -f /usr/local/bin/guardian-channel-optimize.sh
+        log_info "Removed guardian-channel-optimize.sh"
     fi
 
     # Remove additional helper scripts (installed by setup.sh)
