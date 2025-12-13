@@ -104,6 +104,19 @@ def get_current_status() -> Dict:
     """
     repo_path = get_repo_path()
 
+    # Check if path exists and has .git
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        return {
+            'current_commit': 'not found',
+            'full_commit': 'not found',
+            'current_branch': 'not found',
+            'commit_date': 'unknown',
+            'repo_path': repo_path,
+            'is_valid': False,
+            'error': f'Git directory not found at {repo_path}'
+        }
+
     # Get current commit hash
     commit_output, commit_success = run_command(
         ['git', '-C', repo_path, 'rev-parse', '--short', 'HEAD']
@@ -124,14 +137,20 @@ def get_current_status() -> Dict:
         ['git', '-C', repo_path, 'log', '-1', '--format=%ci']
     )
 
-    return {
-        'current_commit': commit_output if commit_success else 'unknown',
-        'full_commit': full_commit.strip() if full_commit else 'unknown',
-        'current_branch': branch_output if branch_success else 'unknown',
+    result = {
+        'current_commit': commit_output if commit_success else 'error',
+        'full_commit': full_commit.strip() if full_commit else 'error',
+        'current_branch': branch_output if branch_success else 'error',
         'commit_date': date_output.strip() if date_output else 'unknown',
         'repo_path': repo_path,
         'is_valid': commit_success and branch_success
     }
+
+    # Add error info if git commands failed
+    if not commit_success:
+        result['error'] = f'Git command failed: {commit_output}'
+
+    return result
 
 
 def fetch_updates() -> Tuple[bool, str]:

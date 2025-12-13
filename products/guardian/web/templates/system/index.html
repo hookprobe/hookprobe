@@ -398,12 +398,24 @@ const GitHubUpdate = {
 async function loadGitHubStatus() {
     try {
         const status = await apiGet('/github/status');
-        if (status.success) {
+        if (status.success && status.is_valid) {
             document.getElementById('github-current-commit').textContent = status.current_commit || '---';
             document.getElementById('github-branch').textContent = status.current_branch || '---';
+            document.getElementById('github-update-status').textContent = 'Ready';
+        } else if (status.success) {
+            // Git repo not found or commands failed
+            document.getElementById('github-current-commit').textContent = status.current_commit || 'N/A';
+            document.getElementById('github-branch').textContent = status.current_branch || 'N/A';
+            document.getElementById('github-update-status').textContent = 'Not Available';
+            const statusCard = document.getElementById('github-status-card');
+            statusCard.classList.add('danger');
+            console.warn('Git status:', status.error || 'Repository not configured', 'Path:', status.repo_path);
         }
     } catch (error) {
         console.error('Failed to load GitHub status:', error);
+        document.getElementById('github-current-commit').textContent = 'Error';
+        document.getElementById('github-branch').textContent = 'Error';
+        document.getElementById('github-update-status').textContent = 'API Error';
     }
 }
 
@@ -413,7 +425,7 @@ async function checkGitHubUpdates() {
         showToast('Checking for updates...', 'info');
         const result = await apiGet('/github/check');
 
-        if (result.success) {
+        if (result.success && !result.error) {
             GitHubUpdate.updatesAvailable = result.updates_available;
             GitHubUpdate.commitsBehind = result.commits_behind || 0;
 
@@ -422,26 +434,33 @@ async function checkGitHubUpdates() {
             const statusCard = document.getElementById('github-status-card');
             const statusText = document.getElementById('github-update-status');
 
+            // Reset status card classes
+            statusCard.classList.remove('warning', 'success', 'danger');
+
             if (result.updates_available) {
                 statusText.textContent = 'Updates Available';
                 statusCard.classList.add('warning');
-                statusCard.classList.remove('success');
                 document.getElementById('btn-preview').disabled = false;
                 document.getElementById('btn-pull').disabled = false;
                 showToast(`${result.commits_behind} update(s) available`, 'warning');
             } else {
                 statusText.textContent = 'Up to Date';
                 statusCard.classList.add('success');
-                statusCard.classList.remove('warning');
                 document.getElementById('btn-preview').disabled = true;
                 document.getElementById('btn-pull').disabled = true;
                 showToast('Already up to date', 'success');
             }
         } else {
-            showToast(result.error || 'Failed to check updates', 'error');
+            const errorMsg = result.error || 'Failed to check updates';
+            showToast(errorMsg, 'error');
+            document.getElementById('github-update-status').textContent = 'Check Failed';
+            const statusCard = document.getElementById('github-status-card');
+            statusCard.classList.remove('warning', 'success');
+            statusCard.classList.add('danger');
         }
     } catch (error) {
-        showToast('Failed to check for updates', 'error');
+        showToast('Failed to check for updates: ' + error.message, 'error');
+        document.getElementById('github-update-status').textContent = 'Error';
     }
 }
 
