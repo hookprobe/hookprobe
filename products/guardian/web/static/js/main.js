@@ -588,7 +588,7 @@ function updateDnsxaiMLStatus(mlStatus, stats) {
             mlStatusEl.innerHTML = '<span class="badge badge-warning">ML Not Installed</span>';
             mlStatusEl.title = 'Install numpy and scikit-learn for ML features';
         } else if (mlStatus.classifier?.is_trained) {
-            mlStatusEl.innerHTML = '<span class="badge badge-success">ML Active</span>';
+            mlStatusEl.innerHTML = '<span class="badge" style="background: var(--watermelon); color: white;">ML Active</span>';
         } else {
             mlStatusEl.innerHTML = '<span class="badge badge-info">ML Ready</span>';
         }

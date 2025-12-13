@@ -187,13 +187,13 @@ code {
     top: 0;
     left: 0;
     right: 0;
-    height: 4.5rem;
+    height: var(--header-height);
     z-index: 10000;
     background: var(--prussian);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 2.5em;
+    padding: 0 1.5rem;
     border-bottom: 1px solid var(--border);
 }
 
@@ -208,8 +208,8 @@ code {
 }
 
 #header .logo img {
-    height: 2.5em;
-    width: 2.5em;
+    height: 3.3em;
+    width: 3.3em;
     border-radius: var(--radius-sm);
 }
 
@@ -229,7 +229,7 @@ code {
 
 #header .logo .title span {
     font-size: 0.65em;
-    color: var(--pacific);
+    color: var(--watermelon);
     text-transform: uppercase;
     letter-spacing: 0.15em;
     font-weight: 500;
@@ -416,15 +416,15 @@ code {
     font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--text);
+    color: var(--watermelon);
     text-decoration: none;
     border: none;
     transition: color var(--duration) ease, background var(--duration) ease;
 }
 
 #menu .links a:hover {
-    color: var(--watermelon);
-    background: rgba(238, 66, 102, 0.08);
+    color: var(--watermelon-light);
+    background: rgba(238, 66, 102, 0.12);
 }
 
 /* Close Button - White on dark overlay */
