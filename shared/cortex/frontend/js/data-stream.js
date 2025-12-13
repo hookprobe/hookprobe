@@ -175,10 +175,63 @@ function setDataMode(mode) {
         return;
     }
 
+    const previousMode = currentMode;
     currentMode = mode;
+
+    // Clear existing visualization data when switching modes
+    if (previousMode !== mode) {
+        clearVisualizationData();
+    }
+
     sendMessage('set_mode', { mode: mode });
     updateModeUI(mode);
+
+    // Request fresh data after mode switch
+    setTimeout(() => {
+        requestSnapshot();
+    }, 500);
+
     console.log(`Requested mode switch to: ${mode}`);
+}
+
+/**
+ * Clear all visualization data (arcs, effects, etc.)
+ * Called when switching between demo and live modes
+ */
+function clearVisualizationData() {
+    // Clear arcs from globe
+    if (window.state && window.state.arcs) {
+        window.state.arcs = [];
+        if (window.globe) {
+            window.globe.arcsData([]);
+        }
+    }
+
+    // Reset attack/repelled counters
+    if (window.state && window.state.stats) {
+        window.state.stats.attacks = 0;
+        window.state.stats.repelled = 0;
+    }
+
+    // Update stats display
+    const statAttacks = document.getElementById('stat-attacks');
+    const statRepelled = document.getElementById('stat-repelled');
+    if (statAttacks) statAttacks.textContent = '0';
+    if (statRepelled) statRepelled.textContent = '0';
+
+    // Clear event log
+    const eventList = document.getElementById('event-list');
+    if (eventList) {
+        eventList.innerHTML = '';
+    }
+
+    // Reset threat indicator
+    const threatFill = document.getElementById('threat-fill');
+    const threatValue = document.getElementById('threat-value');
+    if (threatFill) threatFill.style.width = '20%';
+    if (threatValue) threatValue.textContent = 'LOW';
+
+    console.log('Visualization data cleared for mode switch');
 }
 
 /**
@@ -246,3 +299,4 @@ window.requestSnapshot = requestSnapshot;
 window.setDataMode = setDataMode;
 window.setDemoInterval = setDemoInterval;
 window.getCurrentMode = getCurrentMode;
+window.clearVisualizationData = clearVisualizationData;

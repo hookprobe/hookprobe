@@ -342,26 +342,47 @@ function createConnectionBeam(sourceLat, sourceLng, targetLat, targetLng, color 
 /**
  * Create "heartbeat" effect for the entire mesh
  * Premium visual: periodic pulse showing mesh is alive
+ * Works with the actual displayed data (respects clustering state)
  */
 function meshHeartbeat(globe, nodes) {
-    if (!globe || !nodes || nodes.length === 0) return;
+    if (!globe) return;
 
-    const originalSizes = nodes.map(n => n.radius || 0.5);
+    // Get actual displayed data from state (respects clustering)
+    const displayData = window.state?.displayData || nodes || [];
+    if (displayData.length === 0) return;
 
-    // Expand phase
-    nodes.forEach((node, i) => {
-        node.radius = originalSizes[i] * 1.3;
+    // Store original altitude for all points
+    const originalAltitudes = displayData.map(d => d.pointAltitude || 0.01);
+
+    // Expand phase - increase altitude to create "pop" effect
+    displayData.forEach((point, i) => {
+        point.pointAltitude = originalAltitudes[i] * 2;
     });
 
-    globe.pointsData([...nodes]);
+    // Force redraw with expanded points
+    globe.pointsData([...displayData.filter(d => d.type !== 'cluster')]);
+
+    // Also pulse HTML elements (clusters) if present
+    const clusterElements = document.querySelectorAll('.cortex-cluster');
+    clusterElements.forEach(el => {
+        el.style.transform = 'scale(1.2)';
+        el.style.transition = 'transform 0.2s ease-out';
+    });
 
     // Contract phase
     setTimeout(() => {
-        nodes.forEach((node, i) => {
-            node.radius = originalSizes[i];
+        displayData.forEach((point, i) => {
+            point.pointAltitude = originalAltitudes[i];
         });
-        globe.pointsData([...nodes]);
+        globe.pointsData([...displayData.filter(d => d.type !== 'cluster')]);
+
+        // Reset cluster elements
+        clusterElements.forEach(el => {
+            el.style.transform = 'scale(1)';
+        });
     }, 200);
+
+    console.log(`Mesh heartbeat: pulsed ${displayData.length} points`);
 }
 
 /**
