@@ -2,10 +2,11 @@
   <img src="assets/hookprobe-logo.svg" alt="HookProbe Logo" width="400"/>
 </p>
 
-<h1 align="center">Transparent Security That Empowers Everyone</h1>
+<h1 align="center">One Node's Detection → Everyone's Protection</h1>
 
 <p align="center">
-  <strong>See everything. Own your protection. Achieve more.</strong>
+  <strong>The HTP-DSM-NEURO-QSECBIT-NSE Security Stack</strong><br>
+  <em>Transparent Security That Empowers Everyone</em>
 </p>
 
 <p align="center">
@@ -120,6 +121,87 @@ Protected in <30s      Protected in <30s        Protected in <30s
 - Model weight updates (federated learning)
 
 This is collective defense that respects individual privacy.
+
+---
+
+## The HTP-DSM-NEURO-QSECBIT-NSE Security Stack
+
+HookProbe's core innovation is the integrated security stack that provides end-to-end protection from detection to response to mesh propagation.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    HTP-DSM-NEURO-QSECBIT-NSE SECURITY STACK                     │
+│                  "One node's detection → Everyone's protection"                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐      │
+│  │     HTP     │───▶│     DSM     │───▶│    NEURO    │───▶│   QSECBIT   │      │
+│  │  Transport  │    │  Consensus  │    │  Resonance  │    │   Scoring   │      │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘      │
+│         │                  │                  │                  │              │
+│         └──────────────────┴──────────────────┴──────────────────┘              │
+│                                     │                                            │
+│                              ┌──────▼──────┐                                    │
+│                              │     NSE     │                                    │
+│                              │  Encryption │                                    │
+│                              │ (Neural AI) │                                    │
+│                              └─────────────┘                                    │
+│                                                                                  │
+│  "Nobody knows the key - the AI communicates via neural synapses"               │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Stack Components
+
+| Component | Purpose | Innovation |
+|-----------|---------|------------|
+| **HTP** | HookProbe Transport Protocol | Post-quantum Kyber KEM, keyless authentication |
+| **DSM** | Decentralized Security Mesh | Byzantine fault-tolerant consensus, 2/3 quorum |
+| **NEURO** | Neural Resonance Protocol | Device fingerprinting via weight evolution |
+| **QSECBIT** | Quantified Security Metric | Real-time RAG scoring (GREEN/AMBER/RED) |
+| **NSE** | Neural Synaptic Encryption | Keys emerge from neural state - nobody knows the password |
+
+### The NSE Innovation
+
+Traditional encryption requires sharing secrets. NSE eliminates this:
+
+```
+Traditional: "Do you know the password?"
+NSE:         "Can your neural state produce the matching key?"
+
+Keys are DERIVED from:
+├── Neural weight state (unique per device)
+├── Resonance Drift Vector (temporal)
+├── Qsecbit score (security context)
+└── Collective entropy (mesh participation)
+
+Result: Encryption where nobody knows the key
+```
+
+### E2E Security Flow
+
+When an attack is detected, the entire stack activates:
+
+```
+1. DETECTION   → Qsecbit identifies threat (L2-L7)
+2. SCORING     → RAG status calculated (GREEN/AMBER/RED)
+3. RESPONSE    → XDP/eBPF blocks at kernel level
+4. PROPAGATION → Mesh consciousness spreads intelligence
+5. CONSENSUS   → DSM validates across validator network
+6. PROTECTION  → All nodes protected in <30 seconds
+```
+
+### Adversarial Security Testing
+
+HookProbe includes AI vs AI testing - our Red Team AI attacks the stack while our Blue Team AI defends:
+
+- **9 Attack Vectors**: TER replay, timing, entropy poisoning, weight prediction, etc.
+- **CVSS Scoring**: Vulnerability severity from 0.0-10.0
+- **Automated Mitigations**: AI-suggested code-level fixes
+- **Designer Alerts**: Multi-channel notifications for critical findings
+
+> "Know your vulnerabilities before someone else does"
 
 ---
 
@@ -351,9 +433,9 @@ Every directory has documentation. Every module has a README.
 ---
 
 <p align="center">
-  <strong>HookProbe v5.0 "Cortex"</strong><br>
-  Transparent Security That Empowers Everyone<br>
-  <em>See everything. Own your protection. Achieve more.</em>
+  <strong>HookProbe v5.1 "Neural"</strong><br>
+  <em>One Node's Detection → Everyone's Protection</em><br>
+  HTP-DSM-NEURO-QSECBIT-NSE: The Future of Endpoint Security
 </p>
 
 <p align="center">
