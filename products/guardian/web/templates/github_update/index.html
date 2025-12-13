@@ -464,12 +464,23 @@ async function executePull() {
 
         setTimeout(() => {
             closeModal('progress-modal');
-            showToast('Update applied successfully!', 'success');
 
-            // Refresh status
-            loadGitHubStatus();
-            checkGitHubUpdates();
-            loadGitHubLog();
+            // Check if web UI changes need a reload
+            const needsReload = applyResult?.webui_deferred ||
+                (pullResult.updated_files || []).some(f =>
+                    f.startsWith('products/guardian/web/') || f.startsWith('shared/cortex/')
+                );
+
+            if (needsReload) {
+                showToast('Update applied! Reloading page...', 'success');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showToast('Update applied successfully!', 'success');
+                // Refresh status
+                loadGitHubStatus();
+                checkGitHubUpdates();
+                loadGitHubLog();
+            }
         }, 1000);
 
     } catch (error) {
