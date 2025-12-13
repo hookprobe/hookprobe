@@ -1,8 +1,15 @@
 # HookProbe Products
 
-> **Choose Your Level of Protection - Same Transparency at Every Scale**
+> **One Node's Detection → Everyone's Protection**
 
-HookProbe believes enterprise-grade security should be accessible to everyone. Whether you're protecting a home network on a $75 Raspberry Pi or managing a global mesh of thousands of nodes, you get the same transparent, auditable, empowering technology.
+HookProbe believes enterprise-grade security should be accessible to everyone. Whether you're protecting a home network on a $75 Raspberry Pi or managing a global mesh of thousands of nodes, you get the same **HTP-DSM-NEURO-QSECBIT-NSE** security stack - transparent, auditable, AI-powered.
+
+**Every product tier runs the complete security stack:**
+- **HTP**: Post-quantum transport with keyless authentication
+- **DSM**: Byzantine fault-tolerant consensus
+- **NEURO**: Neural resonance device fingerprinting
+- **QSECBIT**: Real-time RAG threat scoring
+- **NSE**: Neural Synaptic Encryption (nobody knows the key)
 
 ```
 products/
@@ -294,6 +301,22 @@ All products use the same transparent infrastructure from `shared/`:
 
 ---
 
-**HookProbe Products v5.0** — *Transparent Security at Every Scale*
+---
+
+## NSE Integration by Product Tier
+
+| Tier | NSE Capability | Memory Budget | Use Case |
+|------|---------------|---------------|----------|
+| **Sentinel** | TER validation only | 256MB | IoT validators |
+| **Guardian** | Full NSE client | 1.5GB | Personal protection |
+| **Fortress** | NSE relay + routing | 4GB | Business networks |
+| **Nexus** | ML training + adversarial | 16GB+ | Security research |
+| **MSSP** | Full orchestration | Auto-scale | Multi-tenant cloud |
+
+---
+
+**HookProbe Products v5.1 "Neural"** — *One Node's Detection → Everyone's Protection*
+
+HTP-DSM-NEURO-QSECBIT-NSE: The Future of Endpoint Security
 
 AGPL v3.0 (Open Source Components) + Commercial License (Proprietary Components)
