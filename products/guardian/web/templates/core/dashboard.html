@@ -43,44 +43,99 @@
 
 .hero-content {
     display: flex;
+    flex-direction: column;
     justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--spacing-lg);
+    height: 100%;
+    min-height: 140px;
     position: relative;
     z-index: 1;
 }
 
-.hero-left h2 {
-    color: #fff;
-    font-size: 1.75rem;
-    margin-bottom: var(--spacing-xs);
+/* Status bar at top */
+.hero-status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--spacing-sm);
 }
 
-.hero-left p {
-    color: rgba(255,255,255,0.7);
-    margin: 0;
+.hero-status-left {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
 }
 
-.hero-datetime {
-    text-align: center;
-    padding: var(--spacing-md) var(--spacing-xl);
-    background: rgba(255,255,255,0.08);
-    border-radius: var(--radius-lg);
-    backdrop-filter: blur(10px);
+.status-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--hp-green);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--hp-green);
+    animation: pulse 2s ease-in-out infinite;
 }
 
-.hero-date {
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.status-text {
     font-size: 0.875rem;
-    color: rgba(255,255,255,0.8);
-    margin-bottom: var(--spacing-xs);
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
-.hero-time {
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--hp-primary);
+.status-time {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.5);
     font-variant-numeric: tabular-nums;
+}
+
+/* Stats at bottom */
+.hero-stats {
+    display: flex;
+    justify-content: flex-start;
+    gap: var(--spacing-xl);
+    padding-top: var(--spacing-sm);
+}
+
+.hero-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+}
+
+.hero-stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.hero-stat-label {
+    font-size: 0.7rem;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 2px;
+}
+
+.hero-stat.threat-stat .hero-stat-value {
+    color: var(--watermelon);
+}
+
+.hero-stat.threat-stat.has-threats {
+    animation: threatPulse 0.5s ease-out;
+}
+
+@keyframes threatPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
 }
 
 /* Quick Stats Row */
@@ -316,14 +371,20 @@
 
 /* Mobile Responsive */
 @media (max-width: 768px) {
-    .hero-content {
-        flex-direction: column;
-        text-align: center;
+    .dashboard-hero {
+        padding: var(--spacing-lg);
     }
 
-    .hero-datetime {
-        width: 100%;
-        max-width: 280px;
+    .hero-content {
+        min-height: 120px;
+    }
+
+    .hero-stats {
+        gap: var(--spacing-lg);
+    }
+
+    .hero-stat-value {
+        font-size: 1rem;
     }
 
     .quick-stats {
@@ -376,26 +437,40 @@
 <div class="dashboard-hero" id="dashboard-hero">
     <canvas class="traffic-canvas" id="traffic-canvas"></canvas>
     <div class="hero-content">
-        <div class="hero-left">
-            <h2>Guardian Active</h2>
-            <p id="hero-status">Your network is protected</p>
+        <div class="hero-status-bar">
+            <div class="hero-status-left">
+                <span class="status-dot"></span>
+                <span class="status-text">Guardian Active</span>
+            </div>
+            <div class="hero-status-right">
+                <span class="status-time" id="status-time"></span>
+            </div>
         </div>
-        <div class="hero-datetime" id="dashboard-datetime">
-            <div class="hero-date" id="dashboard-date"></div>
-            <div class="hero-time" id="dashboard-time"></div>
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <span class="hero-stat-value" id="hero-rx">0</span>
+                <span class="hero-stat-label">↓ RX</span>
+            </div>
+            <div class="hero-stat">
+                <span class="hero-stat-value" id="hero-tx">0</span>
+                <span class="hero-stat-label">↑ TX</span>
+            </div>
+            <div class="hero-stat threat-stat" id="hero-threat-stat">
+                <span class="hero-stat-value" id="hero-blocked">0</span>
+                <span class="hero-stat-label">Blocked</span>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
-(function updateDashboardClock() {
+// Mini clock update
+(function updateStatusTime() {
     function update() {
-        const now = new Date();
-        const dateEl = document.getElementById('dashboard-date');
-        const timeEl = document.getElementById('dashboard-time');
-        if (dateEl && timeEl) {
-            dateEl.textContent = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-            timeEl.textContent = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const el = document.getElementById('status-time');
+        if (el) {
+            const now = new Date();
+            el.textContent = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
         }
     }
     update();
@@ -552,6 +627,14 @@
         requestAnimationFrame(animate);
     }
 
+    // Format bytes to human readable
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
     // Fetch traffic stats and spawn threats on new blocks
     async function fetchTrafficStats() {
         try {
@@ -561,13 +644,32 @@
                 // Update traffic rate based on network activity (simulated)
                 trafficRate = Math.min(1, (data.connected_clients || 0) * 0.2);
 
+                // Update hero stats display
+                const rxEl = document.getElementById('hero-rx');
+                const txEl = document.getElementById('hero-tx');
+                const blockedEl = document.getElementById('hero-blocked');
+                const threatStat = document.getElementById('hero-threat-stat');
+
+                if (data.network) {
+                    if (rxEl) rxEl.textContent = formatBytes(data.network.rx_bytes || 0);
+                    if (txEl) txEl.textContent = formatBytes(data.network.tx_bytes || 0);
+                }
+
                 // Check for new threat blocks
                 const currentBlocks = (data.threats?.blocked || 0);
+                if (blockedEl) blockedEl.textContent = currentBlocks;
+
                 if (currentBlocks > lastThreatCount && lastThreatCount > 0) {
                     // New threats blocked - spawn darts!
                     const newThreats = Math.min(currentBlocks - lastThreatCount, 5);
                     for (let i = 0; i < newThreats; i++) {
                         setTimeout(() => spawnThreatDart(), i * 150);
+                    }
+                    // Pulse the blocked stat
+                    if (threatStat) {
+                        threatStat.classList.remove('has-threats');
+                        void threatStat.offsetWidth; // Trigger reflow
+                        threatStat.classList.add('has-threats');
                     }
                 }
                 lastThreatCount = currentBlocks;
