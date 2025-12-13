@@ -25,7 +25,12 @@ def run_command(cmd, timeout=30):
             text=True,
             timeout=timeout
         )
-        return result.stdout.strip(), result.returncode == 0
+        # Combine stdout and stderr for better error reporting
+        output = result.stdout.strip()
+        if result.returncode != 0 and result.stderr:
+            # Include stderr in output for failed commands
+            output = result.stderr.strip() if not output else f"{output}\n{result.stderr.strip()}"
+        return output, result.returncode == 0
     except subprocess.TimeoutExpired:
         return "Command timed out", False
     except Exception as e:
