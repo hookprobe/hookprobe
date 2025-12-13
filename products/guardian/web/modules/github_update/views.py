@@ -13,6 +13,8 @@ from .git_ops import (
     pull_updates,
     restart_services,
     get_update_log,
+    categorize_changes,
+    is_frontend_only_update,
     ALLOWED_SERVICES,
     ALLOWED_UPDATE_PATHS
 )
@@ -70,9 +72,14 @@ def api_preview():
     """
     try:
         preview = preview_changes()
+
+        # Add categorization for better UI display
+        categorization = categorize_changes(preview.get('files', []))
+
         return jsonify({
             'success': True,
             **preview,
+            **categorization,
             'allowed_paths': ALLOWED_UPDATE_PATHS,
             'note': 'Only files in allowed paths will be updated'
         })
