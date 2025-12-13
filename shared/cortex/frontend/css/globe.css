@@ -878,6 +878,21 @@ body {
     font-style: italic;
 }
 
+/* Country tooltip styling (for polygon hover) */
+.country-tooltip {
+    background: var(--bg-panel);
+    border: 1px solid var(--accent-cyan);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    box-shadow: 0 4px 16px rgba(0, 191, 255, 0.2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 /* Legend cluster indicators */
 .legend-cluster {
     width: 20px;
