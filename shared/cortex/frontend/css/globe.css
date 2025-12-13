@@ -32,7 +32,13 @@ body {
     color: var(--text-primary);
     overflow: hidden;
     height: 100vh;
+    height: 100dvh; /* Dynamic viewport height for mobile */
     width: 100vw;
+    /* Support for notched devices */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
 }
 
 #app {
@@ -1083,7 +1089,8 @@ body {
 @media (max-width: 768px) {
     #header {
         padding: 0 12px;
-        height: 50px;
+        padding-top: env(safe-area-inset-top);
+        height: calc(50px + env(safe-area-inset-top));
     }
 
     .logo-text {
@@ -1099,8 +1106,15 @@ body {
         display: none;
     }
 
+    /* Globe container - full screen on mobile */
+    #globe-container {
+        padding-top: calc(50px + env(safe-area-inset-top));
+        /* Ensure touch events work properly */
+        touch-action: manipulation;
+    }
+
     #stats-panel {
-        top: 60px;
+        top: calc(60px + env(safe-area-inset-top));
         left: 10px;
         right: 10px;
         padding: 12px;
@@ -1123,7 +1137,7 @@ body {
 
     #control-panel {
         top: auto;
-        bottom: 240px;
+        bottom: calc(240px + env(safe-area-inset-bottom));
         right: 10px;
         left: 10px;
         min-width: auto;
@@ -1134,6 +1148,7 @@ body {
         right: 10px;
         width: auto;
         max-height: 160px;
+        bottom: calc(20px + env(safe-area-inset-bottom));
     }
 
     #legend {
@@ -1145,7 +1160,7 @@ body {
     }
 
     #mode-indicator {
-        bottom: 10px;
+        bottom: calc(10px + env(safe-area-inset-bottom));
         padding: 6px 12px;
     }
 
@@ -1156,7 +1171,7 @@ body {
 
     /* Zoom indicator mobile */
     .cortex-zoom-indicator {
-        top: 115px;
+        top: calc(115px + env(safe-area-inset-top));
         padding: 6px 12px;
         gap: 8px;
     }
@@ -1171,14 +1186,46 @@ body {
     }
 
     .zoom-btn {
-        width: 24px;
-        height: 24px;
-        font-size: 14px;
+        width: 32px;  /* Larger for touch targets */
+        height: 32px;
+        font-size: 16px;
     }
 
     /* Hide cluster rings on mobile for performance */
     .cluster-ring-outer,
     .cluster-ring-middle {
         display: none;
+    }
+
+    /* 2D fallback adjustments */
+    #map-fallback {
+        padding-top: calc(50px + env(safe-area-inset-top));
+    }
+}
+
+/* Extra small devices */
+@media (max-width: 480px) {
+    #stats-panel {
+        padding: 8px;
+        gap: 4px;
+    }
+
+    .stat {
+        min-width: 40px;
+    }
+
+    .stat-value {
+        font-size: 14px;
+    }
+
+    /* Hide some stats on very small screens */
+    .stat-sentinel,
+    .stat-nexus {
+        display: none;
+    }
+
+    .zoom-breadcrumb .crumb {
+        font-size: 9px;
+        padding: 2px 4px;
     }
 }
