@@ -15,7 +15,7 @@ Security Model:
 - Identity and authentication via sensor entropy (qsecbit)
 - Continuous resonance alignment and entropy-echo verification
 - Anti-replay via qsecbit drift detection
-- Optional ChaCha20-Poly1305 payload encryption
+- Neural Synaptic Encryption (NSE) - keys derived from neural state
 
 State Machine:
 INIT → RESONATE → SYNC → STREAMING → ADAPTIVE → (RE-RESONATE) → STREAMING
@@ -27,10 +27,13 @@ import hashlib
 import socket
 import time
 import secrets
+import logging
 from typing import Optional, Tuple, List, Dict
 from enum import Enum
 from dataclasses import dataclass, field
 from collections import deque
+
+logger = logging.getLogger(__name__)
 
 # Optional encryption (if enabled)
 try:
@@ -38,6 +41,15 @@ try:
     ENCRYPTION_AVAILABLE = True
 except ImportError:
     ENCRYPTION_AVAILABLE = False
+
+# Neural Synaptic Encryption integration
+try:
+    from core.neuro.integration import HTPNeuroBinding, NeuroSecurityStack
+    NEURO_INTEGRATION_AVAILABLE = True
+except ImportError:
+    HTPNeuroBinding = None
+    NeuroSecurityStack = None
+    NEURO_INTEGRATION_AVAILABLE = False
 
 # Use BLAKE3 if available, fallback to SHA256
 try:
@@ -410,11 +422,17 @@ class HTPSession:
     send_sequence: int = 0
     recv_sequence: int = 0
 
-    # Optional encryption
+    # Optional encryption - derived from neural state via NSE
     encryption_key: Optional[bytes] = None
 
     # Anti-replay nonce history
     nonce_history: deque = field(default_factory=lambda: deque(maxlen=100))
+
+    # Neural Synaptic Encryption binding (derives keys from weight state)
+    neuro_binding: Optional['HTPNeuroBinding'] = None
+
+    # Current Qsecbit score for key derivation
+    current_qsecbit: float = 0.0
 
 
 # ============================================================================
@@ -453,7 +471,8 @@ class HookProbeTransport:
         node_id: str,
         listen_port: int = 0,
         enable_encryption: bool = False,
-        sensor_source=None  # Optional sensor data source
+        sensor_source=None,  # Optional sensor data source
+        neuro_security_stack: Optional['NeuroSecurityStack'] = None,
     ):
         """
         Args:
@@ -461,10 +480,21 @@ class HookProbeTransport:
             listen_port: UDP port to listen on
             enable_encryption: Enable ChaCha20-Poly1305 payload encryption
             sensor_source: Optional sensor data source for qsecbit
+            neuro_security_stack: Optional NeuroSecurityStack for NSE integration
         """
         self.node_id = node_id
         self.enable_encryption = enable_encryption and ENCRYPTION_AVAILABLE
         self.sensor_source = sensor_source
+
+        # Neural Synaptic Encryption - derive keys from neural state
+        self.neuro_stack = neuro_security_stack
+        if self.neuro_stack is None and NEURO_INTEGRATION_AVAILABLE:
+            try:
+                self.neuro_stack = NeuroSecurityStack(node_id.encode()[:16])
+                logger.info(f"[HTP] NeuroSecurityStack initialized for {node_id}")
+            except Exception as e:
+                logger.warning(f"[HTP] Failed to initialize NeuroSecurityStack: {e}")
+                self.neuro_stack = None
 
         # Create UDP socket
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -477,9 +507,10 @@ class HookProbeTransport:
         # Session management (keyed by flow_token)
         self.sessions: Dict[int, HTPSession] = {}
 
-        print(f"[HTP Keyless] {node_id} listening on {self.local_address}")
-        print(f"[HTP Keyless] Encryption: {'enabled' if self.enable_encryption else 'disabled'}")
-        print(f"[HTP Keyless] Security: qsecbit + white noise + resonance drift")
+        logger.info(f"[HTP Keyless] {node_id} listening on {self.local_address}")
+        logger.info(f"[HTP Keyless] Encryption: {'enabled' if self.enable_encryption else 'disabled'}")
+        logger.info(f"[HTP Keyless] NSE: {'enabled' if self.neuro_stack else 'disabled'}")
+        logger.info(f"[HTP Keyless] Security: qsecbit + white noise + resonance drift + neural keys")
 
     def initiate_resonance(
         self,
@@ -599,7 +630,17 @@ class HookProbeTransport:
         # Build neuro layer
         neuro = NeuroLayer(delta_W=delta_W, ter=session.ter, entropy_vec=white_noise)
 
-        # Optionally encrypt payload
+        # Derive encryption key from neural state (NSE integration)
+        if self.enable_encryption and self.neuro_stack:
+            # Derive ephemeral key from neural state - key exists only during this call
+            session.encryption_key = self.neuro_stack.get_htp_session_key(
+                rdv=rdv,
+                qsecbit=session.current_qsecbit,
+                peer_id=struct.pack('>Q', session.flow_token),
+            )
+            logger.debug(f"[HTP NSE] Ephemeral key derived: {session.encryption_key[:8].hex()}...")
+
+        # Encrypt payload with derived key
         if self.enable_encryption and session.encryption_key:
             cipher = ChaCha20Poly1305(session.encryption_key)
             nonce_enc = secrets.token_bytes(12)
@@ -681,7 +722,15 @@ class HookProbeTransport:
                 session.last_rdv = resonance.rdv
                 session.last_posf = resonance.posf
 
-                # Optionally decrypt payload
+                # Derive decryption key from neural state (NSE integration)
+                if self.enable_encryption and self.neuro_stack:
+                    session.encryption_key = self.neuro_stack.get_htp_session_key(
+                        rdv=resonance.rdv,
+                        qsecbit=session.current_qsecbit,
+                        peer_id=struct.pack('>Q', session.flow_token),
+                    )
+
+                # Decrypt payload with derived key
                 if self.enable_encryption and session.encryption_key and len(payload) > 12:
                     cipher = ChaCha20Poly1305(session.encryption_key)
                     nonce_enc = payload[:12]
@@ -689,7 +738,7 @@ class HookProbeTransport:
                     try:
                         payload = cipher.decrypt(nonce_enc, ciphertext, associated_data=None)
                     except Exception as e:
-                        print(f"[HTP] Decryption failed: {e}")
+                        logger.warning(f"[HTP] Decryption failed: {e}")
                         continue
 
                 # P2: Calculate RTT if we have send timestamp for this sequence
