@@ -96,6 +96,36 @@ ALLOWED_SERVICES = [
 ]
 
 
+def _try_add_safe_directory(repo_path: str) -> bool:
+    """
+    Try to add repo_path to git's safe.directory config.
+
+    This resolves the 'dubious ownership' error when running git commands
+    in a directory owned by a different user.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        True if safe.directory was added successfully, False otherwise
+    """
+    # Try adding to global config (requires write access to user's gitconfig)
+    output, success = run_command(
+        ['git', 'config', '--global', '--add', 'safe.directory', repo_path],
+        timeout=10
+    )
+    if success:
+        return True
+
+    # If global config fails, try system config with sudo
+    # This is a fallback that may work if sudoers is configured
+    output, success = run_command(
+        ['sudo', '-n', 'git', 'config', '--system', '--add', 'safe.directory', repo_path],
+        timeout=10
+    )
+    return success
+
+
 def get_repo_path() -> str:
     """Get the repository path, validating it exists. Result is cached."""
     global _cached_repo_path
@@ -302,27 +332,56 @@ def fetch_updates() -> Tuple[bool, str]:
                 f'Solution: Add {current_user} to the {install_user} group, or adjust directory permissions.'
             )
 
-        # Remote not configured - try to auto-configure with default URL
-        # First check install config for custom remote URL
-        install_config = read_install_config()
-        remote_url = install_config.get('HOOKPROBE_REMOTE_URL', DEFAULT_REMOTE_URL)
-
-        add_output, add_ok = run_command(
-            ['git', '-C', repo_path, 'remote', 'add', REMOTE_NAME, remote_url],
-            timeout=10
-        )
-        if not add_ok:
-            # Remote might already exist with different name, or permission issue
-            if 'already exists' in add_output.lower():
-                # Try to set the URL instead
-                set_output, set_ok = run_command(
-                    ['git', '-C', repo_path, 'remote', 'set-url', REMOTE_NAME, remote_url],
+        # Check for dubious ownership error (git safe.directory issue)
+        if 'dubious ownership' in error_lower:
+            # Try to add safe.directory config
+            safe_dir_ok = _try_add_safe_directory(repo_path)
+            if safe_dir_ok:
+                # Retry getting remote URL
+                remote_output, remote_ok = run_command(
+                    ['git', '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
                     timeout=10
                 )
-                if not set_ok:
-                    return False, f'Failed to configure remote: {set_output}'
+                if remote_ok:
+                    # Remote is now accessible, continue to fetch
+                    pass
+                else:
+                    # Still need to add remote, fall through to add logic below
+                    pass
             else:
-                return False, f'Failed to add remote "{REMOTE_NAME}": {add_output}'
+                return False, (
+                    f'Git safe directory issue: The repository at {repo_path} is owned by a different user. '
+                    f'Run: sudo git config --global --add safe.directory {repo_path}'
+                )
+
+        # Remote not configured - try to auto-configure with default URL
+        # First check install config for custom remote URL
+        if not remote_ok:
+            install_config = read_install_config()
+            remote_url = install_config.get('HOOKPROBE_REMOTE_URL', DEFAULT_REMOTE_URL)
+
+            add_output, add_ok = run_command(
+                ['git', '-C', repo_path, 'remote', 'add', REMOTE_NAME, remote_url],
+                timeout=10
+            )
+            if not add_ok:
+                # Check for dubious ownership again
+                if 'dubious ownership' in add_output.lower():
+                    return False, (
+                        f'Git safe directory issue: The repository at {repo_path} is owned by a different user. '
+                        f'Run: sudo git config --global --add safe.directory {repo_path}'
+                    )
+                # Remote might already exist with different name, or permission issue
+                if 'already exists' in add_output.lower():
+                    # Try to set the URL instead
+                    set_output, set_ok = run_command(
+                        ['git', '-C', repo_path, 'remote', 'set-url', REMOTE_NAME, remote_url],
+                        timeout=10
+                    )
+                    if not set_ok:
+                        return False, f'Failed to configure remote: {set_output}'
+                else:
+                    return False, f'Failed to add remote "{REMOTE_NAME}": {add_output}'
 
     # Try to fetch
     output, success = run_command(
@@ -335,11 +394,31 @@ def fetch_updates() -> Tuple[bool, str]:
 
     # Provide more helpful error messages
     error_msg = output.strip() if output else 'Unknown error'
-    if 'Could not resolve host' in error_msg or 'unable to access' in error_msg.lower():
+    error_lower = error_msg.lower()
+
+    # Handle dubious ownership during fetch
+    if 'dubious ownership' in error_lower:
+        safe_dir_ok = _try_add_safe_directory(repo_path)
+        if safe_dir_ok:
+            # Retry fetch after adding safe.directory
+            output, success = run_command(
+                ['git', '-C', repo_path, 'fetch', REMOTE_NAME],
+                timeout=60
+            )
+            if success:
+                return True, 'Successfully fetched updates from remote'
+            error_msg = output.strip() if output else 'Unknown error'
+        else:
+            return False, (
+                f'Git safe directory issue: The repository at {repo_path} is owned by a different user. '
+                f'Run: sudo git config --global --add safe.directory {repo_path}'
+            )
+
+    if 'Could not resolve host' in error_msg or 'unable to access' in error_lower:
         return False, 'Network error: Unable to reach GitHub. Check internet connection.'
     if 'Permission denied' in error_msg or 'Authentication failed' in error_msg:
         return False, 'Authentication error: Git credentials may be required or invalid.'
-    if 'not found' in error_msg.lower():
+    if 'not found' in error_lower:
         return False, 'Repository not found on remote. Check if the repository exists.'
 
     return False, f'Failed to fetch: {error_msg}' if error_msg else 'Failed to fetch: Unknown error (no output from git)'
