@@ -102,13 +102,24 @@ def api_restart_all():
 
 @system_bp.route('/updates')
 def api_updates():
-    """Check for system updates."""
+    """Check for system updates (apt packages)."""
     try:
-        output, success = run_command('apt update 2>/dev/null && apt list --upgradable 2>/dev/null | wc -l')
-        count = int(output.strip()) - 1 if success and output.isdigit() else 0
+        # Run apt update first (use sudo, allow failure)
+        run_command(['sudo', 'apt', 'update', '-qq'], timeout=60)
+
+        # Get list of upgradable packages
+        output, success = run_command(['apt', 'list', '--upgradable'], timeout=30)
+
+        if success and output:
+            # Count lines, excluding the header "Listing..."
+            lines = [l for l in output.strip().split('\n') if l and not l.startswith('Listing')]
+            count = len(lines)
+        else:
+            count = 0
+
         return jsonify({
             'available': count > 0,
-            'count': max(0, count)
+            'count': count
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
