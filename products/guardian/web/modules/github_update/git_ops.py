@@ -158,11 +158,29 @@ def get_current_status() -> Dict:
     Returns:
         Dict with current_commit, current_branch, repo_path, is_valid
     """
+    # Read install config for fallback values
+    install_config = read_install_config()
+    fallback_commit = install_config.get('HOOKPROBE_INSTALL_COMMIT', '')
+    fallback_branch = install_config.get('HOOKPROBE_INSTALL_BRANCH', '')
+    fallback_date = install_config.get('HOOKPROBE_INSTALL_DATE', '')
+
     repo_path = get_repo_path()
 
     # Check if path exists and has .git
     git_dir = os.path.join(repo_path, '.git')
     if not os.path.isdir(git_dir):
+        # Use install config values if available
+        if fallback_commit and fallback_branch:
+            return {
+                'current_commit': fallback_commit,
+                'full_commit': fallback_commit,
+                'current_branch': fallback_branch,
+                'commit_date': fallback_date or 'unknown',
+                'repo_path': repo_path,
+                'is_valid': True,
+                'source': 'install_config',
+                'note': 'Using values from installation config (git directory not accessible)'
+            }
         return {
             'current_commit': 'not found',
             'full_commit': 'not found',
@@ -193,13 +211,28 @@ def get_current_status() -> Dict:
         ['git', '-C', repo_path, 'log', '-1', '--format=%ci']
     )
 
+    # If git commands failed but we have install config, use those values
+    if not commit_success or not branch_success:
+        if fallback_commit and fallback_branch:
+            return {
+                'current_commit': fallback_commit,
+                'full_commit': fallback_commit,
+                'current_branch': fallback_branch,
+                'commit_date': fallback_date or 'unknown',
+                'repo_path': repo_path,
+                'is_valid': True,
+                'source': 'install_config',
+                'note': 'Using values from installation config (git commands failed - check permissions)'
+            }
+
     result = {
         'current_commit': commit_output if commit_success else 'error',
         'full_commit': full_commit.strip() if full_commit else 'error',
         'current_branch': branch_output if branch_success else 'error',
         'commit_date': date_output.strip() if date_output else 'unknown',
         'repo_path': repo_path,
-        'is_valid': commit_success and branch_success
+        'is_valid': commit_success and branch_success,
+        'source': 'git'
     }
 
     # Add error info if git commands failed
