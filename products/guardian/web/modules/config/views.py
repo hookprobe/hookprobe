@@ -1744,6 +1744,106 @@ static ip_address={ip}/{prefix}
     return True
 
 
+# =============================================================================
+# AUTOMATIC CHANNEL OPTIMIZATION
+# =============================================================================
+
+@config_bp.route('/channel/status')
+def api_channel_status():
+    """
+    Get automatic WiFi channel optimization status.
+
+    Returns current channel, auto-optimization state, and channel utilization.
+    Channel is automatically selected at boot and daily at 4:00 AM.
+    """
+    import os
+
+    result = {
+        'success': True,
+        'current_channel': 6,
+        'auto_enabled': True,
+        'last_optimization': None,
+        'next_optimization': '4:00 AM',
+        'channel_scores': {}
+    }
+
+    # Get current channel from hostapd config
+    try:
+        if os.path.exists('/etc/hostapd/hostapd.conf'):
+            with open('/etc/hostapd/hostapd.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('channel='):
+                        result['current_channel'] = int(line.split('=')[1].strip())
+                        break
+    except Exception:
+        pass
+
+    # Get last optimization time from state file
+    state_file = '/var/lib/guardian/channel_state.json'
+    if os.path.exists(state_file):
+        try:
+            import json
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+                result['last_optimization'] = state.get('last_optimization')
+        except Exception:
+            pass
+
+    # Get channel utilization via survey dump
+    ap_interface = 'wlan1' if os.path.exists('/sys/class/net/wlan1') else 'wlan0'
+    try:
+        output, success = run_command(['sudo', 'iw', 'dev', ap_interface, 'survey', 'dump'])
+        if success and output:
+            current = {}
+            for line in output.split('\n'):
+                line = line.strip()
+                if line.startswith('Survey data from'):
+                    if current.get('channel'):
+                        result['channel_scores'][current['channel']] = current
+                    current = {}
+                elif 'frequency:' in line:
+                    try:
+                        freq = int(line.split(':')[1].strip().split()[0])
+                        if 2400 <= freq <= 2500:
+                            current['channel'] = (freq - 2407) // 5
+                    except (ValueError, IndexError):
+                        pass
+                elif 'noise:' in line:
+                    try:
+                        current['noise'] = int(line.split(':')[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                elif 'channel busy time:' in line:
+                    try:
+                        current['busy_time'] = int(line.split(':')[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                elif 'channel active time:' in line:
+                    try:
+                        current['active_time'] = int(line.split(':')[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+            if current.get('channel'):
+                result['channel_scores'][current['channel']] = current
+
+        # Calculate utilization percentages
+        for ch in [1, 6, 11]:
+            if ch in result['channel_scores']:
+                data = result['channel_scores'][ch]
+                if data.get('active_time') and data.get('busy_time'):
+                    data['utilization'] = round((data['busy_time'] / data['active_time']) * 100, 1)
+                else:
+                    data['utilization'] = 0
+            else:
+                result['channel_scores'][ch] = {'utilization': 0, 'noise': 0}
+    except Exception:
+        # Provide default empty scores
+        for ch in [1, 6, 11]:
+            result['channel_scores'][ch] = {'utilization': 0, 'noise': 0}
+
+    return jsonify(result)
+
+
 @config_bp.route('/offline/wan-detect')
 def api_offline_wan_detect():
     """

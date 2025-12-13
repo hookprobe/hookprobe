@@ -1,7 +1,7 @@
 <!-- Config Tab Content -->
 <div class="dashboard-header">
     <h2>Network Configuration</h2>
-    <p class="text-muted">WiFi settings, hotspot configuration, and offline mode management</p>
+    <p class="text-muted">WiFi settings and hotspot configuration</p>
 </div>
 
 <!-- Network Status -->
@@ -18,57 +18,48 @@
         <div class="stat-value" style="font-size: 1.25rem;" id="lan-clients">0</div>
         <div class="stat-label">Connected Clients</div>
     </div>
-    <div class="stat-card" id="offline-mode-card">
-        <div class="stat-value" style="font-size: 1.1rem;" id="offline-mode-status">--</div>
-        <div class="stat-label">Mode</div>
+    <div class="stat-card success" id="channel-status-card">
+        <div class="stat-value" style="font-size: 1.1rem;" id="current-channel">--</div>
+        <div class="stat-label">WiFi Channel</div>
     </div>
 </div>
 
-<!-- Offline Mode Status -->
-<div class="card" id="offline-mode-section">
+<!-- Automatic WiFi Optimization -->
+<div class="card">
     <div class="card-header">
         <h3 class="card-title">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
             </svg>
-            Offline Mode
+            Automatic WiFi Optimization
         </h3>
-        <div style="display: flex; gap: var(--spacing-sm);">
-            <button class="btn btn-sm btn-secondary" onclick="refreshOfflineStatus()">Refresh</button>
-            <button class="btn btn-sm btn-primary" onclick="initOfflineMode()">Initialize</button>
-        </div>
+        <span class="badge badge-success" id="auto-channel-status">Active</span>
     </div>
     <div class="card-body">
-        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: var(--spacing-md);">
+        <p class="text-muted" style="margin-bottom: var(--spacing-md);">
+            Guardian automatically selects the best WiFi channel for optimal signal quality.
+        </p>
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: var(--spacing-md);">
             <div class="stat-card">
-                <div class="stat-value" style="font-size: 1rem;" id="offline-channel">--</div>
-                <div class="stat-label">AP Channel</div>
+                <div class="stat-value" style="font-size: 0.9rem;">At Boot</div>
+                <div class="stat-label">Scans and selects best channel</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" style="font-size: 1rem;" id="offline-band">--</div>
-                <div class="stat-label">Band</div>
+                <div class="stat-value" style="font-size: 0.9rem;">Daily 4:00 AM</div>
+                <div class="stat-label">Scheduled optimization</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 0.9rem;">Continuous</div>
+                <div class="stat-label">Monitors signal conditions</div>
             </div>
         </div>
-
-        <!-- Channel Selection -->
-        <div style="margin-top: var(--spacing-lg);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
-                <h4 style="margin: 0;">WiFi Channel</h4>
-                <button class="btn btn-sm btn-secondary" onclick="refreshChannelData()">
-                    Refresh
-                </button>
-            </div>
-            <p class="text-muted" style="font-size: 0.8125rem; margin-bottom: var(--spacing-md);">
-                Channel is automatically selected at AP startup. Current utilization shown below (live data, no disconnection).
-            </p>
-            <div id="channel-analysis" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-sm);">
-                <!-- Populated by JavaScript -->
-            </div>
-            <div style="margin-top: var(--spacing-md); padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm); border-left: 3px solid var(--hp-amber);">
-                <small class="text-muted">
-                    <strong>Note:</strong> Changing channels will briefly restart the AP and disconnect clients for a few seconds.
-                </small>
-            </div>
+        <div id="channel-analysis" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+            <!-- Channel utilization populated by JavaScript -->
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-light); border-radius: var(--radius-sm); border-left: 3px solid var(--hp-green);">
+            <small class="text-muted">
+                <strong>Automatic Mode:</strong> Best channel is selected at startup and re-evaluated daily at 4:00 AM to ensure optimal WiFi performance.
+            </small>
         </div>
     </div>
 </div>
@@ -323,141 +314,44 @@
 
 <script>
 // =========================================================================
-// OFFLINE MODE FUNCTIONS
+// AUTOMATIC WIFI CHANNEL OPTIMIZATION
 // =========================================================================
 
-async function refreshOfflineStatus() {
-    try {
-        const result = await apiGet('/config/offline/status');
-        if (result.success) {
-            updateOfflineStatusUI(result);
-        }
-    } catch (error) {
-        console.error('Failed to get offline status:', error);
-    }
-}
-
-function updateOfflineStatusUI(data) {
-    // Update mode status
-    const modeEl = document.getElementById('offline-mode-status');
-    const modeCard = document.getElementById('offline-mode-card');
-
-    // Handle error state
-    if (!data.success && data.error) {
-        modeEl.textContent = 'Not Initialized';
-        modeCard.className = 'stat-card info';
-        return;
-    }
-
-    const state = data.state || 'unknown';
-    const stateDisplay = {
-        'initializing': 'Initializing',
-        'scanning': 'Scanning',
-        'ap_starting': 'Starting AP',
-        'offline_ready': 'Offline Mode',
-        'online': 'Online',
-        'error': 'Error'
-    };
-    modeEl.textContent = stateDisplay[state] || state.replace(/_/g, ' ').toUpperCase();
-
-    // Color based on state
-    modeCard.className = 'stat-card';
-    if (state === 'online') {
-        modeCard.classList.add('success');
-    } else if (state === 'offline_ready') {
-        modeCard.classList.add('warning');
-    } else if (state === 'error') {
-        modeCard.classList.add('danger');
-    } else {
-        modeCard.classList.add('info');
-    }
-
-    // Update WAN status - check multiple sources
-    const wanEl = document.getElementById('wan-status');
-    const wanCard = document.getElementById('wan-status-card');
-
-    let wanConnected = false;
-    let wanIp = null;
-    let wanSsid = null;
-
-    if (data.wan) {
-        wanConnected = data.wan.connected;
-        wanIp = data.wan.ip;
-        wanSsid = data.wan.ssid;
-    }
-
-    // Also check state for WAN connection
-    if (state === 'online' || data.wan_connected) {
-        wanConnected = true;
-        if (!wanIp) wanIp = data.wan_ip;
-    }
-
-    if (wanConnected) {
-        let statusText = wanIp || 'Connected';
-        if (wanSsid) {
-            statusText = `${wanSsid} (${wanIp || 'connected'})`;
-        }
-        wanEl.textContent = statusText;
-        wanCard.className = 'stat-card success';
-    } else {
-        wanEl.textContent = 'Disconnected';
-        wanCard.className = 'stat-card danger';
-    }
-
-    // Update AP info from multiple sources
-    // Note: lan-ssid is updated by updateHotspotStatusUI which handles broadcasting state
-    const clientsEl = document.getElementById('lan-clients');
-    const channelEl = document.getElementById('offline-channel');
-    const bandEl = document.getElementById('offline-band');
-
-    if (data.ap) {
-        clientsEl.textContent = data.ap.clients || data.clients_connected || 0;
-        channelEl.textContent = data.ap.channel || data.current_channel || '--';
-        bandEl.textContent = data.ap.band || data.current_band || '--';
-    } else {
-        // Fallback to state fields
-        clientsEl.textContent = data.clients_connected || 0;
-        channelEl.textContent = data.current_channel || '--';
-        bandEl.textContent = data.current_band || '--';
-    }
-
-}
-
-async function initOfflineMode() {
-    showToast('Initializing offline mode...', 'info');
-    try {
-        const result = await apiPost('/config/offline/init');
-        if (result.success) {
-            showToast('Offline mode initialized', 'success');
-            updateOfflineStatusUI(result.status);
-        } else {
-            showToast(result.error || 'Initialization failed', 'error');
-        }
-    } catch (error) {
-        showToast('Initialization failed', 'error');
-    }
-}
-
-async function refreshChannelData() {
+async function refreshChannelStatus() {
     const container = document.getElementById('channel-analysis');
-    container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading channel data...</p></div>';
+    const channelEl = document.getElementById('current-channel');
+    const statusBadge = document.getElementById('auto-channel-status');
 
     try {
-        const result = await apiPost('/config/offline/scan');
+        const result = await apiGet('/config/channel/status');
         if (result.success) {
-            renderChannelAnalysis(result);
+            // Update header channel display
+            channelEl.textContent = `CH ${result.current_channel || '--'}`;
+
+            // Update status badge
+            if (result.auto_enabled) {
+                statusBadge.textContent = 'Active';
+                statusBadge.className = 'badge badge-success';
+            } else {
+                statusBadge.textContent = 'Manual';
+                statusBadge.className = 'badge badge-warning';
+            }
+
+            // Render channel utilization
+            renderChannelUtilization(result);
         } else {
-            container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load channel data</p></div>';
+            channelEl.textContent = '--';
+            container.innerHTML = '<div class="empty-state"><p class="text-muted">Channel data unavailable</p></div>';
         }
     } catch (error) {
-        container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load channel data</p></div>';
+        console.error('Failed to get channel status:', error);
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Channel data unavailable</p></div>';
     }
 }
 
-function renderChannelAnalysis(data) {
+function renderChannelUtilization(data) {
     const container = document.getElementById('channel-analysis');
     const scores = data.channel_scores || {};
-    const recommended = data.recommended ? data.recommended['2.4GHz'] : null;
     const currentChannel = data.current_channel || 6;
 
     // Only show 2.4GHz non-overlapping channels (1, 6, 11)
@@ -467,14 +361,11 @@ function renderChannelAnalysis(data) {
     channels.forEach(ch => {
         const score = scores[ch] || scores[String(ch)] || { score: 0, utilization: 0 };
         const isCurrent = ch === currentChannel;
-        const isRecommended = ch === recommended && !isCurrent;
 
         // Determine card style based on utilization
         let cardClass = 'stat-card';
         if (isCurrent) {
             cardClass = 'stat-card success';
-        } else if (isRecommended) {
-            cardClass = 'stat-card info';
         } else if (score.utilization > 50) {
             cardClass = 'stat-card danger';
         } else if (score.utilization > 25) {
@@ -482,51 +373,19 @@ function renderChannelAnalysis(data) {
         }
 
         const utilization = score.utilization || 0;
-        const noise = score.noise || '--';
 
         html += `
-            <div class="${cardClass}" style="cursor: pointer; text-align: center;"
-                 onclick="selectChannel(${ch})" title="Click to switch to channel ${ch}">
+            <div class="${cardClass}" style="text-align: center;">
                 <div class="stat-value" style="font-size: 1.5rem;">CH ${ch}</div>
                 <div class="stat-label">
                     ${isCurrent ? '<strong style="color: var(--hp-green);">ACTIVE</strong><br>' : ''}
-                    ${isRecommended ? '<strong style="color: var(--hp-primary);">BEST</strong><br>' : ''}
                     ${utilization > 0 ? `${utilization.toFixed(0)}% busy` : '<span style="color: var(--hp-green);">Clear</span>'}
-                    ${noise !== '--' ? `<br>${noise} dBm` : ''}
                 </div>
             </div>
         `;
     });
 
     container.innerHTML = html;
-
-    // Update header stats
-    document.getElementById('offline-channel').textContent = currentChannel;
-}
-
-async function selectChannel(channel) {
-    if (!confirm(`Change AP to channel ${channel}? This will briefly disconnect clients.`)) {
-        return;
-    }
-
-    showToast(`Switching to channel ${channel}...`, 'info');
-    try {
-        const result = await apiPost('/config/offline/channel', { channel });
-        if (result.success) {
-            showToast(`Switched to channel ${channel}`, 'success');
-            refreshOfflineStatus();
-        } else {
-            showToast(result.error || 'Channel change failed', 'error');
-        }
-    } catch (error) {
-        showToast('Channel change failed', 'error');
-    }
-}
-
-async function autoSelectChannel() {
-    // This function is kept for backwards compatibility but now just refreshes data
-    // Channel changes are done via selectChannel() which has a confirmation dialog
-    refreshChannelData();
 }
 
 async function loadRouteMetrics() {
@@ -690,7 +549,7 @@ async function connectToWifi(e) {
             // Refresh status after a delay
             setTimeout(() => {
                 refreshWanWifiStatus();
-                refreshOfflineStatus();
+                refreshChannelStatus();
                 loadRouteMetrics();
             }, 3000);
             // Check again after 8 seconds for slow connections
@@ -849,7 +708,7 @@ async function saveEth0Config(e) {
             showToast(result.message || 'eth0 configuration applied', 'success');
             // Reload config and status
             loadEth0Config();
-            refreshOfflineStatus();
+            refreshChannelStatus();
             loadRouteMetrics();
         } else {
             showToast(result.error || 'Configuration failed', 'error');
@@ -859,22 +718,15 @@ async function saveEth0Config(e) {
     }
 }
 
-// Load initial channel display with actual data
-function initChannelDisplay() {
-    // Load channel data immediately
-    refreshChannelData();
-}
-
 // Load all status on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Delay to ensure tab is visible
     setTimeout(() => {
         refreshWanWifiStatus();
-        refreshOfflineStatus();
+        refreshChannelStatus();
         refreshHotspotStatus();
         loadRouteMetrics();
         loadEth0Config();
-        initChannelDisplay();
     }, 500);
 });
 </script>
