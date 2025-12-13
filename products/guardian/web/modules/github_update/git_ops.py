@@ -25,7 +25,12 @@ def run_command(cmd, timeout=30):
             text=True,
             timeout=timeout
         )
-        return result.stdout.strip(), result.returncode == 0
+        # Combine stdout and stderr for better error reporting
+        output = result.stdout.strip()
+        if result.returncode != 0 and result.stderr:
+            # Include stderr in output for failed commands
+            output = result.stderr.strip() if not output else f"{output}\n{result.stderr.strip()}"
+        return output, result.returncode == 0
     except subprocess.TimeoutExpired:
         return "Command timed out", False
     except Exception as e:
@@ -261,12 +266,37 @@ def fetch_updates() -> Tuple[bool, str]:
     if not os.path.isdir(git_dir):
         return False, f'Not a git repository: {repo_path}'
 
+    # Check if we can read the git config (permission check)
+    git_config = os.path.join(git_dir, 'config')
+    if os.path.isfile(git_config) and not os.access(git_config, os.R_OK):
+        # Git directory exists but we can't read it - permission issue
+        install_config = read_install_config()
+        install_user = install_config.get('HOOKPROBE_USER', 'unknown')
+        current_user = os.environ.get('USER', 'unknown')
+        return False, (
+            f'Permission denied: Cannot read git config. '
+            f'Web app running as "{current_user}" but repo owned by "{install_user}". '
+            f'Fix with: sudo chown -R {current_user}:{current_user} {repo_path}/.git '
+            f'or run web app as {install_user}.'
+        )
+
     # Check if remote is configured
     remote_output, remote_ok = run_command(
         ['git', '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
         timeout=10
     )
     if not remote_ok:
+        # Check if this might be a permission issue rather than missing remote
+        error_lower = remote_output.lower() if remote_output else ''
+        if 'permission' in error_lower or 'denied' in error_lower or not remote_output.strip():
+            install_config = read_install_config()
+            install_user = install_config.get('HOOKPROBE_USER', 'unknown')
+            current_user = os.environ.get('USER', 'unknown')
+            return False, (
+                f'Permission issue: Cannot access git repository at {repo_path}. '
+                f'The web app is running as "{current_user}" but needs access to files owned by "{install_user}". '
+                f'Solution: Add {current_user} to the {install_user} group, or adjust directory permissions.'
+            )
         return False, f'Remote "{REMOTE_NAME}" is not configured. Run: git remote add origin <url>'
 
     # Try to fetch
