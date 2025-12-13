@@ -229,6 +229,93 @@ dnsXai (localhost - NO interface binding)
 
 ---
 
+### 6b. Advanced Detection Features - Where They Actually Live
+
+**IMPORTANT**: Features like TLS SNI inspection, JA3 fingerprinting, IP reputation, and deep packet inspection are **NOT part of dnsXai**. They are handled by **Qsecbit layer detectors** consuming data from **Suricata/Zeek** on the **WAN interface**.
+
+| Feature | Handled By | Interface | Source File |
+|---------|------------|-----------|-------------|
+| **TLS SNI Inspection** | Zeek ssl.log → L5 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l5_detector.py` |
+| **TLS Version/Cipher** | Zeek ssl.log → L5 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l5_detector.py:134-155` |
+| **SSL Strip Detection** | Suricata alerts → L5 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l5_detector.py:64-124` |
+| **JA3 Fingerprinting** | Zeek (if enabled) | eth0/wlan0 (WAN) | Zeek `ja3.log` |
+| **IP Reputation** | Suricata/External feeds | eth0/wlan0 (WAN) | `shared/dsm/validator.py` (planned) |
+| **Traffic Patterns** | Zeek conn.log → L4 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l4_detector.py` |
+| **Deep Packet Inspection** | Suricata IPS | eth0/wlan0 (WAN) | `/var/log/suricata/eve.json` |
+| **HTTP Inspection** | Zeek http.log → L7 Detector | eth0/wlan0 (WAN) | `core/qsecbit/detectors/l7_detector.py` |
+
+**Architecture Flow**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        WAN INTERFACE (eth0/wlan0)                           │
+│                                                                             │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐        │
+│  │    Suricata     │    │      Zeek       │    │   XDP/eBPF      │        │
+│  │    IDS/IPS      │    │ Network Monitor │    │ DDoS Mitigation │        │
+│  │                 │    │                 │    │                 │        │
+│  │ - DPI           │    │ - TLS/SSL logs  │    │ - Kernel-level  │        │
+│  │ - Signatures    │    │ - JA3 (optional)│    │ - Rate limiting │        │
+│  │ - Protocol      │    │ - Connection    │    │                 │        │
+│  │   detection     │    │   metadata      │    │                 │        │
+│  └────────┬────────┘    └────────┬────────┘    └─────────────────┘        │
+│           │                      │                                         │
+│           ▼                      ▼                                         │
+│  /var/log/suricata/      /var/log/zeek/current/                           │
+│  eve.json                 ├── conn.log                                     │
+│                           ├── ssl.log    ◄── TLS SNI, versions, ciphers   │
+│                           ├── http.log                                     │
+│                           ├── dns.log                                      │
+│                           └── ja3.log    ◄── JA3 fingerprints (if enabled)│
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     QSECBIT LAYER DETECTORS (localhost)                     │
+│                                                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │ L2 Detector │  │ L4 Detector │  │ L5 Detector │  │ L7 Detector │       │
+│  │             │  │             │  │             │  │             │       │
+│  │ - ARP/MAC   │  │ - Port scan │  │ - SSL strip │  │ - SQLi/XSS  │       │
+│  │ - Evil twin │  │ - SYN flood │  │ - TLS down  │  │ - HTTP flood│       │
+│  │             │  │ - Patterns  │  │ - Cert      │  │ - Malware   │       │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘       │
+│                                    │                                       │
+│                    Reads from Suricata/Zeek logs                          │
+│                    (NO direct packet capture)                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        dnsXai (localhost:5353)                              │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐       │
+│  │  ONLY analyzes domain name STRINGS                              │       │
+│  │  - NO TLS inspection                                            │       │
+│  │  - NO JA3 fingerprinting                                        │       │
+│  │  - NO IP reputation                                             │       │
+│  │  - NO deep packet inspection                                    │       │
+│  │  - NO traffic pattern analysis                                  │       │
+│  │                                                                 │       │
+│  │  Input: "ads.example.com" (string)                              │       │
+│  │  Output: BLOCK/ALLOW                                            │       │
+│  └─────────────────────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Summary of Feature Locations**:
+
+| If you want... | Look in... | Interface |
+|----------------|------------|-----------|
+| TLS/SSL analysis | `core/qsecbit/detectors/l5_detector.py` | WAN (via Zeek) |
+| JA3 fingerprints | Zeek configuration | WAN |
+| IP reputation | `shared/dsm/validator.py` (planned) | WAN (via Suricata) |
+| Traffic patterns | `core/qsecbit/detectors/l4_detector.py` | WAN (via Zeek) |
+| Deep packet inspection | Suricata configuration | WAN |
+| DNS domain ML | `shared/dnsXai/engine.py` | None (string only) |
+
+---
+
 ### 7. dnsmasq DHCP/DNS Server
 
 | Attribute | Value |
