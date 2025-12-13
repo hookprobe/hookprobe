@@ -2117,20 +2117,6 @@ tbody tr:last-child td {
     padding: 0.75rem 1rem;
     padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
     margin-top: auto;
-    /* Extend footer color beyond viewport for mobile overscroll */
-    position: relative;
-}
-
-/* Pseudo-element to extend footer color on mobile overscroll */
-#footer::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: -100vh;
-    height: 100vh;
-    background: var(--prussian);
-    z-index: -1;
 }
 
 .footer-inner {
