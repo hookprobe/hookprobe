@@ -574,26 +574,52 @@ function handleEvent(event) {
 }
 
 /**
- * Add attack/repelled arc
+ * Add attack/repelled arc with visual correlation to target node
  */
 function addAttackArc(event, type) {
+    // Ensure target coordinates match an actual node in the mesh
+    const targetNode = state.nodes.find(n =>
+        n.id === event.target?.node_id ||
+        (Math.abs(n.lat - event.target?.lat) < 0.01 && Math.abs(n.lng - event.target?.lng) < 0.01)
+    );
+
+    // Use exact node coordinates if found for precise arc targeting
+    const target = targetNode ? {
+        lat: targetNode.lat,
+        lng: targetNode.lng,
+        label: targetNode.label || event.target?.label,
+        node_id: targetNode.id
+    } : event.target;
+
     const arc = {
         id: event.id || Date.now(),
         type: type,
         source: event.source,
-        target: event.target,
+        target: target,
         timestamp: Date.now()
     };
 
     state.arcs.push(arc);
 
-    // Remove arc after animation
+    // Trigger visual effect on target node
+    if (targetNode && typeof pulseNode === 'function') {
+        const color = type === 'attack' ? '#ff4444' : '#00bfff';
+        pulseNode(target.lat, target.lng, color, 2, 1500);
+    }
+
+    // Arc duration matches animation time (1.5s) plus lingering (1.5s)
+    const arcDuration = 3000;
     setTimeout(() => {
         state.arcs = state.arcs.filter(a => a.id !== arc.id);
         if (globe) globe.arcsData(state.arcs);
-    }, 3000);
+    }, arcDuration);
 
     if (globe) globe.arcsData(state.arcs);
+
+    // Log for debugging correlation
+    if (targetNode) {
+        console.log(`Arc ${type}: ${event.source?.label} → ${targetNode.label} (${targetNode.tier})`);
+    }
 }
 
 /**
