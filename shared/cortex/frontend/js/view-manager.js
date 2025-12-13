@@ -38,7 +38,8 @@ const VIEW_MANAGER_CONFIG = {
 
     // Mode settings
     useGlobeGL: true,              // Use Globe.gl for globe view (Phase 1)
-    useDeckGL: true,               // Use Deck.gl for map view (Phase 2)
+    useDeckGL: false,              // DISABLED: Deck.gl map view has compatibility issues
+                                   // TODO: Implement Leaflet.js as lightweight alternative
 
     // Mobile settings
     enableOnMobile: true,          // Enable view transitions on mobile
@@ -243,6 +244,13 @@ class ViewManager {
      */
     async transitionToMap(lat, lng, zoom = 14) {
         if (this.currentMode === 'map' || this.isTransitioning) return;
+
+        // Guard: Don't attempt map transition if Deck.gl is disabled
+        if (!this.config.useDeckGL) {
+            console.log('ViewManager: Map view disabled (useDeckGL=false)');
+            return;
+        }
+
         if (!this.deckRenderer) {
             console.warn('ViewManager: No DeckRenderer available for map view');
             return;

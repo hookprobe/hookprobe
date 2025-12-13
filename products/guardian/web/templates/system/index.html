@@ -455,14 +455,46 @@ async function previewGitHubChanges() {
             GitHubUpdate.previewData = result;
             GitHubUpdate.servicesToRestart = result.services_to_restart || [];
 
-            let html = `<div class="alert" style="background: rgba(105, 212, 172, 0.1); border: 1px solid var(--hp-green); color: var(--hp-green); padding: var(--spacing-md); border-radius: var(--radius-md); margin-bottom: var(--spacing-md);">`;
+            let html = '';
+
+            // Show frontend-only badge if applicable
+            if (result.is_frontend_only) {
+                html += `<div class="alert" style="background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: var(--spacing-md); border-radius: var(--radius-md); margin-bottom: var(--spacing-md);">
+                    <strong>🚀 Frontend-Only Update</strong><br>
+                    <small>Only Web UI files changed. Quick update - no reboot required!</small>
+                </div>`;
+            }
+
+            html += `<div class="alert" style="background: rgba(105, 212, 172, 0.1); border: 1px solid var(--hp-green); color: var(--hp-green); padding: var(--spacing-md); border-radius: var(--radius-md); margin-bottom: var(--spacing-md);">`;
             html += `<strong>${result.allowed_changes || 0}</strong> files will be updated`;
             if (result.blocked_files && result.blocked_files.length > 0) {
                 html += ` (${result.blocked_files.length} excluded)`;
             }
             html += '</div>';
 
-            if (result.files && result.files.length > 0) {
+            // Show categorized changes
+            if (result.categories) {
+                const categoryNames = {
+                    'web_ui': '🎨 Web UI',
+                    'cortex': '🌍 Cortex Globe',
+                    'backend': '⚙️ Backend',
+                    'dnsxai': '🛡️ DNS Protection',
+                    'network': '🌐 Network Config',
+                    'response': '🔥 Threat Response',
+                    'other': '📁 Other'
+                };
+
+                for (const [cat, files] of Object.entries(result.categories)) {
+                    if (files && files.length > 0) {
+                        html += `<h4 style="margin: var(--spacing-md) 0 var(--spacing-sm);">${categoryNames[cat] || cat} (${files.length})</h4>`;
+                        html += '<div class="file-list">';
+                        files.forEach(file => {
+                            html += `<div class="file-list-item allowed">${file}</div>`;
+                        });
+                        html += '</div>';
+                    }
+                }
+            } else if (result.files && result.files.length > 0) {
                 html += '<h4 style="margin-bottom: var(--spacing-sm);">Files to Update:</h4>';
                 html += '<div class="file-list">';
                 result.files.forEach(file => {
@@ -493,7 +525,18 @@ async function openPullModal() {
 
     const preview = GitHubUpdate.previewData;
     if (preview) {
-        document.getElementById('pull-preview-summary').innerHTML = `<p><strong>${preview.allowed_changes || 0}</strong> files will be updated.</p>`;
+        let summaryHtml = '';
+
+        // Show frontend-only badge
+        if (preview.is_frontend_only) {
+            summaryHtml += `<div style="background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: var(--spacing-sm); border-radius: var(--radius-md); margin-bottom: var(--spacing-md); font-size: 0.875rem;">
+                <strong>🚀 Quick Update</strong> - Only Web UI changes, no reboot needed
+            </div>`;
+        }
+
+        summaryHtml += `<p><strong>${preview.allowed_changes || 0}</strong> files will be updated.</p>`;
+
+        document.getElementById('pull-preview-summary').innerHTML = summaryHtml;
         const servicesList = document.getElementById('services-to-restart');
         if (preview.services_to_restart && preview.services_to_restart.length > 0) {
             servicesList.innerHTML = preview.services_to_restart.map(s => `<li><code>${s}</code></li>`).join('');
