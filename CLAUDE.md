@@ -70,14 +70,34 @@
 
 ### What is HookProbe?
 
-HookProbe is a **federated cybersecurity mesh** built for edge computing and distributed security. It provides:
+> **"One node's detection → Everyone's protection"**
 
-- **AI-Powered Threat Detection**: Qsecbit algorithm for real-time security analysis
+HookProbe is a **federated cybersecurity mesh** - a family of protectors building the future of collective defense. We believe security is a right, not a privilege. A $75 Raspberry Pi running HookProbe gets the same AI-powered protection as a $50,000 enterprise appliance.
+
+**Core Philosophy:**
+- 🛡️ **Protection is a right** - Enterprise-grade security for everyone
+- 🔍 **Transparency builds trust** - Every decision is explainable
+- 🤝 **Collective defense works** - One detection protects all
+- 🧠 **AI serves humans** - Focus on what you love, we handle protection
+
+**The HTP-DSM-NEURO-QSECBIT-NSE Security Stack:**
+
+| Layer | Purpose | Innovation |
+|-------|---------|------------|
+| **HTP** | Transport | Post-quantum Kyber KEM, keyless authentication |
+| **DSM** | Consensus | Byzantine fault-tolerant validation |
+| **NEURO** | Identity | Neural fingerprinting via weight evolution |
+| **QSECBIT** | Scoring | Real-time RAG status (GREEN/AMBER/RED) |
+| **NSE** | Encryption | Keys emerge from neural state - nobody knows the password |
+
+**Key Capabilities:**
+- **AI-Powered Threat Detection**: Qsecbit algorithm for L2-L7 security analysis
 - **Federated Defense**: Privacy-preserving collective intelligence
 - **Multi-Tier Products**: Sentinel, Guardian, Fortress, Nexus, MSSP
 - **Zero Trust Mesh**: HTP protocol with post-quantum cryptography
 - **AI DNS Protection**: dnsXai for ML-based ad/tracker blocking
 - **Mesh Consciousness**: Collective threat intelligence sharing
+- **Adversarial Testing**: AI vs AI security validation
 
 **Project Type**: Federated Security Platform / Infrastructure-as-Code
 **Primary Languages**: Python (core logic), Bash (deployment)
