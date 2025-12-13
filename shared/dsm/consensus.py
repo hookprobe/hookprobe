@@ -3,6 +3,8 @@ DSM Consensus Engine
 
 Implements BLS signature aggregation for Byzantine fault-tolerant consensus.
 Based on the architecture specified in docs/architecture/dsm-implementation.md
+
+Now integrated with Neural Synaptic Encryption (NSE) for TER-validated signatures.
 """
 
 import logging
@@ -13,6 +15,15 @@ from .crypto.bls import bls_aggregate, bls_verify, bls_verify_single
 from .gossip import GossipProtocol
 
 logger = logging.getLogger(__name__)
+
+# Neural Synaptic Encryption integration for TER validation
+try:
+    from core.neuro.integration import DSMNeuroValidator, TERCheckpointProof
+    NEURO_INTEGRATION_AVAILABLE = True
+except ImportError:
+    DSMNeuroValidator = None
+    TERCheckpointProof = None
+    NEURO_INTEGRATION_AVAILABLE = False
 
 
 class ConsensusEngine:
@@ -36,7 +47,8 @@ class ConsensusEngine:
         self,
         validators: List[Any],
         quorum_threshold: float = 0.67,
-        signature_timeout: int = 30
+        signature_timeout: int = 30,
+        node_id: Optional[str] = None,
     ):
         """
         Initialize consensus engine.
@@ -45,15 +57,26 @@ class ConsensusEngine:
             validators: List of validator objects
             quorum_threshold: Minimum fraction of validators required (default 2/3)
             signature_timeout: Seconds to wait for validator signatures
+            node_id: Node identifier for NSE integration
         """
         self.validators = validators
         self.quorum_threshold = quorum_threshold
         self.signature_timeout = signature_timeout
         self.pending_checkpoints = {}
+        self.node_id = node_id or "consensus-engine"
+
+        # Initialize Neural Synaptic Encryption validator for TER proofs
+        self.neuro_validator: Optional['DSMNeuroValidator'] = None
+        if NEURO_INTEGRATION_AVAILABLE and DSMNeuroValidator:
+            try:
+                self.neuro_validator = DSMNeuroValidator(self.node_id)
+                logger.info(f"[DSM] NeuroValidator initialized for TER validation")
+            except Exception as e:
+                logger.warning(f"[DSM] Failed to initialize NeuroValidator: {e}")
 
         logger.info(
             f"Consensus engine initialized: {len(validators)} validators, "
-            f"quorum={quorum_threshold:.0%}"
+            f"quorum={quorum_threshold:.0%}, NSE={'enabled' if self.neuro_validator else 'disabled'}"
         )
 
     def collect_validator_signatures(
@@ -190,21 +213,45 @@ class ConsensusEngine:
     def _verify_single_signature(
         self,
         signature: str,
-        validator: Any
+        validator: Any,
+        vote: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Verify individual validator signature before aggregation.
 
+        Now integrated with NSE for TER checkpoint proof validation.
+
         Args:
             signature: BLS signature to verify
             validator: Validator object with public key
+            vote: Optional vote dictionary containing TER checkpoint proof
 
         Returns:
             True if valid, False otherwise
         """
-        # TODO: Implement BLS single signature verification
-        # return bls_verify_single(signature, validator.public_key, message)
-        return True  # Placeholder
+        # NSE Integration: Verify TER checkpoint proof if available
+        if self.neuro_validator and vote:
+            try:
+                is_valid, reason = self.neuro_validator.verify_consensus_vote(
+                    vote=vote,
+                    validator_id=validator.node_id,
+                )
+                if not is_valid:
+                    logger.warning(
+                        f"[DSM NSE] TER proof invalid from {validator.node_id}: {reason}"
+                    )
+                    return False
+                logger.debug(f"[DSM NSE] TER proof valid from {validator.node_id}")
+            except Exception as e:
+                logger.warning(f"[DSM NSE] TER validation error: {e}")
+                # Fall through to BLS verification
+
+        # BLS signature verification
+        try:
+            return bls_verify_single(signature, validator.public_key, b"checkpoint")
+        except Exception as e:
+            logger.warning(f"[DSM] BLS verification failed for {validator.node_id}: {e}")
+            return False
 
     def _verify_aggregated_signature(
         self,
