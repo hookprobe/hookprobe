@@ -652,4 +652,329 @@ class TestE2EValidationChecklist:
         mock_dsm.create_microblock.assert_called_once()
 
 
+# ============================================================================
+# E2E Coordinator Tests
+# ============================================================================
+
+class TestE2ECoordinator:
+    """Tests for the unified E2E coordinator."""
+
+    def test_coordinator_initialization(self):
+        """E2E coordinator initializes with default config."""
+        from core.qsecbit.e2e_coordinator import E2ECoordinator, E2EConfig
+
+        config = E2EConfig(
+            node_id='test-node',
+            tier='guardian',
+            data_dir='/tmp/hookprobe-test'
+        )
+        coordinator = E2ECoordinator(config)
+
+        assert coordinator.config.node_id == 'test-node'
+        assert coordinator.stats.threats_detected == 0
+        assert coordinator.storage is not None
+
+    def test_coordinator_component_connection(self):
+        """E2E coordinator connects components correctly."""
+        from core.qsecbit.e2e_coordinator import E2ECoordinator, E2EConfig
+
+        coordinator = E2ECoordinator(E2EConfig(data_dir='/tmp/hookprobe-test'))
+
+        # Mock components
+        mock_response = Mock()
+        mock_mesh = Mock()
+        mock_dsm = Mock()
+
+        coordinator.connect_response(mock_response)
+        coordinator.connect_mesh(mock_mesh)
+        coordinator.connect_dsm(mock_dsm)
+
+        assert coordinator.response_orchestrator is mock_response
+        assert coordinator.mesh_bridge is mock_mesh
+        assert coordinator.dsm_node is mock_dsm
+
+    def test_threat_processing_pipeline(self, mock_threat_event):
+        """E2E coordinator processes threats through full pipeline."""
+        from core.qsecbit.e2e_coordinator import E2ECoordinator, E2EConfig
+
+        coordinator = E2ECoordinator(E2EConfig(
+            data_dir='/tmp/hookprobe-test',
+            enable_response=False,  # Disable for this test
+            enable_mesh=False,
+            enable_dsm=False,
+        ))
+
+        result = coordinator.process_threat(mock_threat_event)
+
+        assert result['threat_id'] == mock_threat_event.id
+        assert result['stored'] is True
+        assert coordinator.stats.threats_detected == 1
+
+    def test_threat_storage_persistence(self, mock_threat_event):
+        """Threats are persisted to storage."""
+        from core.qsecbit.e2e_coordinator import ThreatStorage
+        import tempfile
+        import os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = ThreatStorage(
+                db_path=os.path.join(tmpdir, 'threats.jsonl'),
+                retention_hours=24
+            )
+
+            storage.store(mock_threat_event)
+            recent = storage.query_recent(hours=1)
+
+            assert len(recent) == 1
+            assert recent[0]['id'] == mock_threat_event.id
+
+    def test_threat_storage_cleanup(self):
+        """Old threats are cleaned up."""
+        from core.qsecbit.e2e_coordinator import ThreatStorage
+        import tempfile
+        import os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = ThreatStorage(
+                db_path=os.path.join(tmpdir, 'threats.jsonl'),
+                retention_hours=0  # Immediate cleanup
+            )
+
+            # Add a mock record directly
+            with open(storage.db_path, 'w') as f:
+                f.write('{"id":"old","timestamp":"2020-01-01T00:00:00"}\n')
+
+            removed = storage.cleanup_old()
+            assert removed == 1
+
+    def test_cortex_event_creation(self, mock_threat_event):
+        """Cortex events are created correctly."""
+        from core.qsecbit.e2e_coordinator import E2ECoordinator, E2EConfig
+
+        coordinator = E2ECoordinator(E2EConfig(data_dir='/tmp/hookprobe-test'))
+        event = coordinator._create_cortex_event(mock_threat_event)
+
+        assert event['type'] == 'attack_detected'
+        assert event['attack_type'] == 'syn_flood'
+        assert event['source']['ip'] == mock_threat_event.source_ip
+
+    def test_get_status(self):
+        """Coordinator status includes all components."""
+        from core.qsecbit.e2e_coordinator import E2ECoordinator, E2EConfig
+
+        coordinator = E2ECoordinator(E2EConfig(data_dir='/tmp/hookprobe-test'))
+        status = coordinator.get_status()
+
+        assert 'node_id' in status
+        assert 'statistics' in status
+        assert 'components' in status
+        assert 'storage' in status
+
+
+# ============================================================================
+# Neuro-DSM Bridge Tests
+# ============================================================================
+
+class TestNeuroDSMBridge:
+    """Tests for the Neuro-DSM bridge."""
+
+    def test_bridge_initialization(self):
+        """Neuro-DSM bridge initializes correctly."""
+        from core.neuro.dsm_bridge import NeuroDSMBridge, NeuroDSMConfig
+
+        config = NeuroDSMConfig()
+        bridge = NeuroDSMBridge(
+            node_id='test-neuro-node',
+            config=config
+        )
+
+        assert bridge.node_id == 'test-neuro-node'
+        assert bridge.stats['ters_generated'] == 0
+
+    def test_weight_fingerprint_computation(self):
+        """Weight fingerprints are computed deterministically."""
+        from core.neuro.dsm_bridge import NeuroDSMBridge
+
+        bridge = NeuroDSMBridge(node_id='test')
+
+        # Create mock TER-like objects
+        class MockTER:
+            def __init__(self, seq):
+                self.h_entropy = hashlib.sha256(f"entropy-{seq}".encode()).digest()
+                self.sequence = seq
+
+        ters = [MockTER(i) for i in range(10)]
+
+        fp1 = bridge._compute_weight_fingerprint(ters)
+        fp2 = bridge._compute_weight_fingerprint(ters)
+
+        # Same input should produce same fingerprint
+        assert fp1 == fp2
+        assert len(fp1) == 32  # SHA256
+
+    def test_fingerprint_drift_calculation(self):
+        """Fingerprint drift is calculated correctly."""
+        from core.neuro.dsm_bridge import NeuroDSMBridge
+
+        bridge = NeuroDSMBridge(node_id='test')
+
+        fp1 = b'\x00' * 32
+        fp2 = b'\x00' * 32
+        fp3 = b'\xff' * 32
+
+        # Identical fingerprints = 0 drift
+        assert bridge._calculate_fingerprint_drift(fp1, fp2) == 0.0
+
+        # Maximum different = 1.0 drift
+        assert bridge._calculate_fingerprint_drift(fp1, fp3) == 1.0
+
+    def test_consensus_vote_creation(self):
+        """Consensus votes include required fields."""
+        from core.neuro.dsm_bridge import NeuroDSMBridge
+
+        bridge = NeuroDSMBridge(node_id='test-voter')
+
+        # Add some mock TER history
+        class MockTER:
+            def __init__(self, seq):
+                self.h_entropy = hashlib.sha256(f"e{seq}".encode()).digest()
+                self.h_integrity = hashlib.new('ripemd160', b'test').digest()
+                self.timestamp = 1234567890000000 + seq * 1000000
+                self.sequence = seq
+                self.chain_hash = seq
+
+            def to_bytes(self):
+                return self.h_entropy + self.h_integrity + bytes(12)
+
+            def calculate_threat_score(self):
+                return 0.5
+
+        bridge._ter_history.extend([MockTER(i) for i in range(5)])
+
+        vote = bridge.create_consensus_vote(
+            checkpoint_id='cp-12345',
+            ter_summary={}
+        )
+
+        assert vote is not None
+        assert vote['checkpoint_id'] == 'cp-12345'
+        assert vote['node_id'] == 'test-voter'
+        assert 'weight_fingerprint' in vote
+        assert vote['ter_count'] == 5
+
+    def test_ter_summary_for_checkpoint(self):
+        """TER summary contains required checkpoint data."""
+        from core.neuro.dsm_bridge import NeuroDSMBridge
+
+        bridge = NeuroDSMBridge(node_id='test-node')
+
+        # Empty history case
+        summary = bridge.get_ter_summary_for_checkpoint()
+        assert summary['node_id'] == 'test-node'
+        assert summary['ter_count'] == 0
+
+
+# ============================================================================
+# Qsecbit Agent E2E Integration Tests
+# ============================================================================
+
+class TestQsecbitAgentIntegration:
+    """Tests for qsecbit-agent E2E integration."""
+
+    def test_agent_imports_e2e_components(self):
+        """Agent imports E2E components correctly."""
+        # Test that imports work without errors
+        import core.qsecbit.qsecbit_agent as agent_module
+
+        # Check that integration flags exist
+        assert hasattr(agent_module, 'RESPONSE_AVAILABLE')
+        assert hasattr(agent_module, 'MESH_BRIDGE_AVAILABLE')
+        assert hasattr(agent_module, 'DSM_AVAILABLE')
+
+    def test_agent_has_e2e_methods(self):
+        """Agent has E2E integration methods."""
+        from core.qsecbit.qsecbit_agent import HookProbeAgent
+
+        # Check that new methods exist
+        agent = HookProbeAgent.__new__(HookProbeAgent)
+        assert hasattr(agent, '_handle_red_alert')
+        assert hasattr(agent, '_handle_amber_alert')
+        assert hasattr(agent, '_handle_ddos_indicator')
+        assert hasattr(agent, '_create_threat_from_metrics')
+
+    def test_agent_initializes_e2e_components_attr(self):
+        """Agent has E2E component attributes."""
+        from core.qsecbit.qsecbit_agent import HookProbeAgent
+
+        # Create agent without running
+        agent = HookProbeAgent.__new__(HookProbeAgent)
+        agent.__init__()
+
+        # Check E2E attributes exist
+        assert hasattr(agent, 'response_orchestrator')
+        assert hasattr(agent, 'mesh_bridge')
+        assert hasattr(agent, 'dsm_node')
+        assert hasattr(agent, 'active_threats')
+        assert hasattr(agent, 'rag_history')
+
+
+# ============================================================================
+# Full Pipeline Integration Test
+# ============================================================================
+
+class TestFullPipelineIntegration:
+    """Test the complete E2E pipeline with all components mocked."""
+
+    def test_full_pipeline_threat_to_visualization(self, mock_critical_threat):
+        """Complete pipeline: Detection → Response → Mesh → DSM → Cortex."""
+        from core.qsecbit.e2e_coordinator import E2ECoordinator, E2EConfig
+
+        # Create coordinator
+        coordinator = E2ECoordinator(E2EConfig(
+            node_id='test-full-pipeline',
+            data_dir='/tmp/hookprobe-test-full',
+            enable_response=True,
+            enable_mesh=True,
+            enable_dsm=True,
+            enable_cortex=True,
+        ))
+
+        # Mock components
+        mock_response = Mock()
+        mock_response.respond.return_value = [Mock(action=Mock(name='BLOCK_IP'), success=True)]
+
+        mock_mesh = Mock()
+        mock_mesh.report_threat.return_value = True
+
+        mock_dsm = Mock()
+        mock_dsm.create_microblock.return_value = 'test-block-123'
+
+        # Connect mocks
+        coordinator.connect_response(mock_response)
+        coordinator.connect_mesh(mock_mesh)
+        coordinator.connect_dsm(mock_dsm)
+
+        # Cortex callback
+        cortex_events = []
+        coordinator.register_cortex_callback(lambda e: cortex_events.append(e))
+
+        # Process threat
+        result = coordinator.process_threat(mock_critical_threat)
+
+        # Verify complete pipeline
+        assert result['stored'] is True
+        assert result['response_executed'] is True
+        assert result['mesh_propagated'] is True
+        assert result['microblock_created'] is True
+        assert result['cortex_notified'] is True
+        assert len(cortex_events) == 1
+
+        # Verify statistics
+        assert coordinator.stats.threats_detected == 1
+        assert coordinator.stats.threats_responded == 1
+        assert coordinator.stats.threats_propagated == 1
+        assert coordinator.stats.microblocks_created == 1
+        assert coordinator.stats.cortex_events_sent == 1
+
+
 # Run with: pytest tests/test_e2e_integration.py -v
