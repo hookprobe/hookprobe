@@ -189,6 +189,37 @@
         font-size: 0.75rem;
         padding: 4px 8px;
     }
+
+    /* Command categories - 3 per row on mobile */
+    .cmd-list {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+    }
+
+    .cmd-item {
+        padding: 6px;
+    }
+
+    .cmd-name {
+        font-size: 0.6875rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .cmd-desc {
+        display: none; /* Hide descriptions on mobile to save space */
+    }
+}
+
+@media (max-width: 480px) {
+    .cmd-list {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .cmd-name {
+        font-size: 0.625rem;
+    }
 }
 </style>
 
