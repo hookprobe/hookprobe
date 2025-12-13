@@ -42,10 +42,14 @@ const state = {
     clusteringEnabled: true
 };
 
-// Arc colors
+// Arc colors - Premium color schemes
 const ARC_COLORS = {
-    attack: ['rgba(255, 68, 68, 0.8)', 'rgba(255, 68, 68, 0.2)'],
-    repelled: ['rgba(0, 191, 255, 0.8)', 'rgba(0, 191, 255, 0.2)']
+    // Watermelon: Green rind → Red/pink flesh (threat coming in)
+    attack: ['rgba(76, 187, 23, 0.9)', 'rgba(255, 71, 87, 0.9)'],
+    // Pacific Blue: Deep ocean calming blue (defense)
+    repelled: ['rgba(0, 180, 216, 0.9)', 'rgba(144, 224, 239, 0.8)'],
+    // Heartbeat: Cyan mesh connectivity pulses
+    heartbeat: ['rgba(0, 255, 255, 0.6)', 'rgba(0, 255, 255, 0.2)']
 };
 
 // Node colors based on Qsecbit status
@@ -80,6 +84,31 @@ const TIER_COLORS = {
 };
 
 /**
+ * Get arc color based on type
+ * @param {string} type - 'attack', 'repelled', or 'heartbeat'
+ * @returns {Array} Color gradient array [start, end]
+ */
+function getArcColor(type) {
+    switch (type) {
+        case 'attack':
+            return ARC_COLORS.attack;
+        case 'repelled':
+            return ARC_COLORS.repelled;
+        case 'heartbeat':
+            return ARC_COLORS.heartbeat;
+        default:
+            return ARC_COLORS.repelled;
+    }
+}
+
+/**
+ * Detect if device is touch-enabled
+ */
+function isTouchDevice() {
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+/**
  * Initialize the globe with clustering support
  */
 function initGlobe() {
@@ -91,6 +120,11 @@ function initGlobe() {
         showFallback();
         return;
     }
+
+    console.log('Initializing Globe.gl...', {
+        isTouchDevice: isTouchDevice(),
+        containerSize: { width: container.clientWidth, height: container.clientHeight }
+    });
 
     // Create globe instance
     globe = Globe()(container)
@@ -120,24 +154,50 @@ function initGlobe() {
         .arcStartLng(d => d.source.lng)
         .arcEndLat(d => d.target.lat)
         .arcEndLng(d => d.target.lng)
-        .arcColor(d => d.type === 'attack' ? ARC_COLORS.attack : ARC_COLORS.repelled)
-        .arcDashLength(0.5)
-        .arcDashGap(0.1)
-        .arcDashAnimateTime(1500)
-        .arcStroke(d => d.type === 'attack' ? 0.5 : 0.3)
+        .arcColor(d => getArcColor(d.type))
+        .arcDashLength(d => d.type === 'heartbeat' ? 0.2 : 0.4)
+        .arcDashGap(d => d.type === 'heartbeat' ? 0.15 : 0.1)
+        .arcDashAnimateTime(d => d.type === 'heartbeat' ? 800 : 1500)
+        .arcStroke(d => d.type === 'attack' ? 0.6 : d.type === 'heartbeat' ? 0.3 : 0.4)
         .arcsTransitionDuration(300)
         // Click handlers
         .onPointClick(handlePointClick)
         .onGlobeClick(handleGlobeClick);
 
-    // Auto-rotate
-    globe.controls().autoRotate = true;
-    globe.controls().autoRotateSpeed = 0.3;
+    // Configure camera controls for better zoom range
+    const controls = globe.controls();
 
-    // Stop rotation on interaction
+    // Enable auto-rotate
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.3;
+
+    // Configure zoom limits - allow much deeper zoom for city view transition
+    // minDistance: how close you can zoom in (lower = closer)
+    // maxDistance: how far you can zoom out
+    controls.minDistance = 101;  // Very close zoom (altitude ~0.01)
+    controls.maxDistance = 500;  // Far zoom out
+
+    // Enable damping for smoother control
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+
+    // Improve touch controls
+    if (isTouchDevice()) {
+        controls.rotateSpeed = 0.4;     // Slower rotation for touch
+        controls.zoomSpeed = 0.8;       // Slightly slower zoom for touch precision
+        controls.panSpeed = 0.5;        // Pan speed
+        controls.enablePan = false;     // Disable pan on touch (can be confusing)
+    }
+
+    // Stop rotation on any interaction
     container.addEventListener('mousedown', () => {
-        globe.controls().autoRotate = false;
+        controls.autoRotate = false;
     });
+
+    // Touch events - stop rotation
+    container.addEventListener('touchstart', () => {
+        controls.autoRotate = false;
+    }, { passive: true });
 
     // Initialize clustering system
     initClusteringSystem();
@@ -536,26 +596,53 @@ function handleEvent(event) {
 }
 
 /**
- * Add attack/repelled arc
+ * Add attack/repelled arc with visual correlation to target node
  */
 function addAttackArc(event, type) {
+    // Ensure target coordinates match an actual node in the mesh
+    const targetNode = state.nodes.find(n =>
+        n.id === event.target?.node_id ||
+        (Math.abs(n.lat - event.target?.lat) < 0.01 && Math.abs(n.lng - event.target?.lng) < 0.01)
+    );
+
+    // Use exact node coordinates if found for precise arc targeting
+    const target = targetNode ? {
+        lat: targetNode.lat,
+        lng: targetNode.lng,
+        label: targetNode.label || event.target?.label,
+        node_id: targetNode.id
+    } : event.target;
+
     const arc = {
         id: event.id || Date.now(),
         type: type,
         source: event.source,
-        target: event.target,
+        target: target,
         timestamp: Date.now()
     };
 
     state.arcs.push(arc);
 
-    // Remove arc after animation
+    // Trigger visual effect on target node with matching colors
+    if (targetNode && typeof pulseNode === 'function') {
+        // Watermelon red for attacks, Pacific blue for defense
+        const color = type === 'attack' ? '#ff4757' : '#00b4d8';
+        pulseNode(target.lat, target.lng, color, 2, 1500);
+    }
+
+    // Arc duration matches animation time (1.5s) plus lingering (1.5s)
+    const arcDuration = 3000;
     setTimeout(() => {
         state.arcs = state.arcs.filter(a => a.id !== arc.id);
         if (globe) globe.arcsData(state.arcs);
-    }, 3000);
+    }, arcDuration);
 
     if (globe) globe.arcsData(state.arcs);
+
+    // Log for debugging correlation
+    if (targetNode) {
+        console.log(`Arc ${type}: ${event.source?.label} → ${targetNode.label} (${targetNode.tier})`);
+    }
 }
 
 /**
