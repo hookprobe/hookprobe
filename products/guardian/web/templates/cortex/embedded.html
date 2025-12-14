@@ -128,33 +128,16 @@
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
 
 <script>
-    // Initialize Cortex globe - handles both desktop tabs and mobile menu
-    function initCortexIfNeeded() {
-        if (!window.cortexInitialized) {
-            window.cortexInitialized = true;
-            setTimeout(function() {
-                try {
-                    initCortexGlobe();
-                } catch (e) {
-                    // Silent fail - 2D fallback will be shown
-                }
-            }, 100);
-        }
-    }
-
+    // Cortex initialization is handled by main.js loadTabData('cortex')
+    // This is a fallback for direct URL navigation
     document.addEventListener('DOMContentLoaded', function() {
-        // Method 1: Desktop tab bar button click
-        const cortexTab = document.querySelector('[data-tab="cortex"]');
-        if (cortexTab) {
-            cortexTab.addEventListener('click', initCortexIfNeeded);
-        }
-
-        // Method 2: Mobile menu uses switchToTab() which dispatches cortexTabActivated
-        window.addEventListener('cortexTabActivated', initCortexIfNeeded);
-
-        // Method 3: Direct URL navigation (e.g. #cortex in URL)
         if (window.location.hash === '#cortex') {
-            initCortexIfNeeded();
+            setTimeout(function() {
+                if (typeof initCortexGlobe === 'function' && !window.cortexInitialized) {
+                    window.cortexInitialized = true;
+                    initCortexGlobe();
+                }
+            }, 200);
         }
     });
 </script>

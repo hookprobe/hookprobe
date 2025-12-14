@@ -132,6 +132,13 @@ function loadTabData(tabName) {
                 loadDebugData();
             }
             break;
+        case 'cortex':
+            // Initialize Cortex globe when tab is activated
+            if (typeof initCortexGlobe === 'function' && !window.cortexInitialized) {
+                window.cortexInitialized = true;
+                setTimeout(initCortexGlobe, 100);
+            }
+            break;
     }
 }
 
