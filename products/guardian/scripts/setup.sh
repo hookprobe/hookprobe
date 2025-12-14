@@ -178,7 +178,8 @@ PLACEHOLDER
             python3-requests \
             python3-numpy \
             net-tools \
-            curl
+            curl \
+            jq
     elif command -v dnf &>/dev/null; then
         PKG_MGR="dnf"
         dnf install -y -q \
@@ -198,7 +199,8 @@ PLACEHOLDER
             python3-requests \
             python3-numpy \
             net-tools \
-            curl
+            curl \
+            jq
     else
         log_error "Unsupported package manager"
         exit 1
