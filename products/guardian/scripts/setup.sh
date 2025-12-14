@@ -3917,9 +3917,35 @@ install_web_ui() {
 
     # Install ML libraries for dnsXai AI features
     log_info "Installing ML libraries for dnsXai..."
-    pip3 install --quiet --break-system-packages scikit-learn joblib 2>/dev/null || \
-    pip3 install --quiet scikit-learn joblib 2>/dev/null || \
-    log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
+
+    # First try system packages (more reliable on ARM/Raspberry Pi)
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y -qq python3-sklearn python3-joblib 2>/dev/null && {
+            log_info "ML libraries installed via apt"
+        } || {
+            # Fall back to pip if system packages not available
+            log_info "System packages not available, trying pip..."
+            # Install build dependencies first
+            apt-get install -y -qq python3-dev build-essential 2>/dev/null || true
+            pip3 install --break-system-packages numpy scikit-learn joblib 2>&1 | head -5 || \
+            pip3 install numpy scikit-learn joblib 2>&1 | head -5 || \
+            log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
+        }
+    elif command -v dnf &>/dev/null; then
+        dnf install -y -q python3-scikit-learn python3-joblib 2>/dev/null && {
+            log_info "ML libraries installed via dnf"
+        } || {
+            log_info "System packages not available, trying pip..."
+            dnf install -y -q python3-devel gcc 2>/dev/null || true
+            pip3 install numpy scikit-learn joblib 2>&1 | head -5 || \
+            log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
+        }
+    else
+        # Generic pip install
+        pip3 install --break-system-packages numpy scikit-learn joblib 2>&1 | head -5 || \
+        pip3 install numpy scikit-learn joblib 2>&1 | head -5 || \
+        log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
+    fi
 
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
