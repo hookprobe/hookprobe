@@ -15,20 +15,71 @@ from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from typing import Dict, List, Tuple, Optional, Any
 
-# ML imports - with fallbacks for lightweight deployment
-try:
-    import numpy as np
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
+# ML imports - lazy loading for resilience to installation order
+# These will be populated by check_ml_libraries()
+np = None
+IsolationForest = None
+RandomForestClassifier = None
+StandardScaler = None
+joblib = None
 
-try:
-    from sklearn.ensemble import IsolationForest, RandomForestClassifier
-    from sklearn.preprocessing import StandardScaler
-    import joblib
-    HAS_SKLEARN = True
-except ImportError:
-    HAS_SKLEARN = False
+_ml_check_cache = {'numpy': None, 'sklearn': None, 'last_check': 0}
+
+def check_ml_libraries(force_recheck: bool = False) -> Tuple[bool, bool]:
+    """
+    Check if ML libraries are available. Uses caching to avoid repeated import attempts.
+    Returns (has_numpy, has_sklearn).
+
+    Args:
+        force_recheck: If True, re-attempt imports even if previously failed.
+                       Useful after installing packages.
+    """
+    global np, IsolationForest, RandomForestClassifier, StandardScaler, joblib
+
+    now = time.time()
+    # Re-check every 60 seconds if previously failed, or if forced
+    cache_valid = (now - _ml_check_cache['last_check']) < 60
+
+    if not force_recheck and cache_valid and _ml_check_cache['numpy'] is not None:
+        return _ml_check_cache['numpy'], _ml_check_cache['sklearn']
+
+    # Check numpy
+    has_numpy = False
+    if np is None:
+        try:
+            import numpy
+            np = numpy
+            has_numpy = True
+        except ImportError:
+            pass
+    else:
+        has_numpy = True
+
+    # Check sklearn
+    has_sklearn = False
+    if IsolationForest is None:
+        try:
+            from sklearn.ensemble import IsolationForest as IF, RandomForestClassifier as RFC
+            from sklearn.preprocessing import StandardScaler as SS
+            import joblib as jl
+            IsolationForest = IF
+            RandomForestClassifier = RFC
+            StandardScaler = SS
+            joblib = jl
+            has_sklearn = True
+        except ImportError:
+            pass
+    else:
+        has_sklearn = True
+
+    _ml_check_cache['numpy'] = has_numpy
+    _ml_check_cache['sklearn'] = has_sklearn
+    _ml_check_cache['last_check'] = now
+
+    return has_numpy, has_sklearn
+
+# For backward compatibility - these will be updated on first check
+HAS_NUMPY, HAS_SKLEARN = check_ml_libraries()
 
 logger = logging.getLogger(__name__)
 
