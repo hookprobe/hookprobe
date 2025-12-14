@@ -3669,26 +3669,27 @@ install_ap_services() {
         # Create inline if source not found
         cat > /etc/systemd/system/hostapd.service.d/guardian-override.conf << 'HOSTAPD_OVERRIDE'
 # Guardian Override for hostapd.service
-# Removes dependency on network-online.target for offline-first operation
-# Clears ConditionFileNotEmpty to prevent startup race conditions
+# Minimal override - just clear problematic conditions and dependencies
 
 [Unit]
-# Clear default conditions and dependencies
+# Clear ALL conditions to prevent startup failures
 ConditionFileNotEmpty=
+ConditionPathExists=
+
+# Clear ALL dependencies - hostapd just needs the interface to exist
 After=
 Wants=
-# Set Guardian-specific dependencies
-# Use Wants (not Requires) so hostapd can still start if guardian-wlan has issues
-After=guardian-wlan.service local-fs.target
-Wants=guardian-wlan.service
+Requires=
+BindsTo=
+
+# Minimal dependencies - just local filesystem
+After=local-fs.target
 
 [Service]
 Restart=on-failure
-RestartSec=5
+RestartSec=3
 TimeoutStartSec=30
 Environment="DAEMON_CONF=/etc/hostapd/hostapd.conf"
-# Add ExecStartPre to verify config exists
-ExecStartPre=/bin/test -s /etc/hostapd/hostapd.conf
 HOSTAPD_OVERRIDE
     fi
 
