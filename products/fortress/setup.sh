@@ -247,69 +247,232 @@ detect_interfaces() {
 # ============================================================
 # PACKAGE INSTALLATION
 # ============================================================
+
+# Required packages - installation will fail if these cannot be installed
+REQUIRED_PACKAGES_APT=(
+    "openvswitch-switch"
+    "python3"
+    "python3-pip"
+    "curl"
+    "jq"
+    "openssl"
+    "iptables"
+    "bridge-utils"
+)
+
+# Optional packages - won't fail if unavailable
+OPTIONAL_PACKAGES_APT=(
+    "hostapd"
+    "dnsmasq"
+    "nftables"
+    "iw"
+    "wireless-tools"
+    "wpasupplicant"
+    "wpa_supplicant"
+    "python3-flask"
+    "python3-requests"
+    "net-tools"
+    "freeradius"
+    "freeradius-utils"
+    "vlan"
+    "network-manager"
+    "modemmanager"
+    "libqmi-utils"
+    "libmbim-utils"
+    "usb-modeswitch"
+)
+
 install_packages() {
     log_step "Installing required packages..."
 
     if command -v apt-get &>/dev/null; then
         PKG_MGR="apt"
-        apt-get update -qq
 
-        apt-get install -y -qq \
-            hostapd \
-            dnsmasq \
-            bridge-utils \
-            iptables \
-            nftables \
-            iw \
-            wireless-tools \
-            wpasupplicant \
-            python3 \
-            python3-pip \
-            python3-flask \
-            python3-requests \
-            net-tools \
-            curl \
-            jq \
-            openssl \
-            openvswitch-switch \
-            freeradius \
-            freeradius-utils \
-            vlan \
-            2>/dev/null || true
+        log_info "Updating package lists..."
+        if ! apt-get update -qq; then
+            log_warn "apt-get update had warnings, continuing..."
+        fi
 
-        # MACsec tools (may not be available on all distros)
-        apt-get install -y -qq wpa_supplicant 2>/dev/null || true
+        # Install required packages first (will fail if any are missing)
+        log_info "Installing required packages: ${REQUIRED_PACKAGES_APT[*]}"
+        for pkg in "${REQUIRED_PACKAGES_APT[@]}"; do
+            if dpkg -l "$pkg" &>/dev/null; then
+                log_info "  $pkg: already installed"
+            else
+                log_info "  Installing $pkg..."
+                if ! apt-get install -y "$pkg"; then
+                    log_error "Failed to install required package: $pkg"
+                    log_error "This package is required for Fortress to function."
+                    log_error "Please install it manually and re-run setup."
+                    exit 1
+                fi
+            fi
+        done
 
-        log_info "Packages installed"
+        # Install optional packages (won't fail)
+        log_info "Installing optional packages..."
+        for pkg in "${OPTIONAL_PACKAGES_APT[@]}"; do
+            if dpkg -l "$pkg" &>/dev/null 2>&1; then
+                log_info "  $pkg: already installed"
+            else
+                if apt-get install -y "$pkg" 2>/dev/null; then
+                    log_info "  $pkg: installed"
+                else
+                    log_warn "  $pkg: not available (optional)"
+                fi
+            fi
+        done
+
+        log_info "Package installation complete"
 
     elif command -v dnf &>/dev/null; then
         PKG_MGR="dnf"
-        dnf install -y -q \
-            hostapd \
-            dnsmasq \
-            bridge-utils \
-            iptables \
-            nftables \
-            iw \
-            wireless-tools \
-            wpa_supplicant \
-            python3 \
-            python3-pip \
-            python3-flask \
-            python3-requests \
-            net-tools \
-            curl \
-            jq \
-            openssl \
-            openvswitch \
-            freeradius \
-            2>/dev/null || true
 
-        log_info "Packages installed"
+        # Fedora/RHEL package names
+        local required_pkgs=(
+            "openvswitch"
+            "python3"
+            "python3-pip"
+            "curl"
+            "jq"
+            "openssl"
+            "iptables"
+            "bridge-utils"
+        )
+
+        local optional_pkgs=(
+            "hostapd"
+            "dnsmasq"
+            "nftables"
+            "iw"
+            "wireless-tools"
+            "wpa_supplicant"
+            "python3-flask"
+            "python3-requests"
+            "net-tools"
+            "freeradius"
+            "NetworkManager"
+            "ModemManager"
+            "libqmi-utils"
+            "libmbim-utils"
+            "usb_modeswitch"
+        )
+
+        log_info "Installing required packages..."
+        for pkg in "${required_pkgs[@]}"; do
+            if rpm -q "$pkg" &>/dev/null; then
+                log_info "  $pkg: already installed"
+            else
+                log_info "  Installing $pkg..."
+                if ! dnf install -y "$pkg"; then
+                    log_error "Failed to install required package: $pkg"
+                    exit 1
+                fi
+            fi
+        done
+
+        log_info "Installing optional packages..."
+        for pkg in "${optional_pkgs[@]}"; do
+            if rpm -q "$pkg" &>/dev/null 2>&1; then
+                log_info "  $pkg: already installed"
+            else
+                dnf install -y "$pkg" 2>/dev/null && log_info "  $pkg: installed" || log_warn "  $pkg: not available"
+            fi
+        done
+
+        log_info "Package installation complete"
     else
-        log_error "Unsupported package manager"
+        log_error "Unsupported package manager. Fortress requires apt (Debian/Ubuntu) or dnf (Fedora/RHEL)."
         exit 1
     fi
+}
+
+verify_critical_packages() {
+    log_step "Verifying critical packages..."
+
+    local missing=()
+
+    # Check for ovs-vsctl (Open vSwitch)
+    if ! command -v ovs-vsctl &>/dev/null; then
+        missing+=("openvswitch-switch (ovs-vsctl not found)")
+    else
+        log_info "  ovs-vsctl: OK"
+    fi
+
+    # Check for python3
+    if ! command -v python3 &>/dev/null; then
+        missing+=("python3")
+    else
+        log_info "  python3: OK ($(python3 --version))"
+    fi
+
+    # Check for curl
+    if ! command -v curl &>/dev/null; then
+        missing+=("curl")
+    else
+        log_info "  curl: OK"
+    fi
+
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        missing+=("jq")
+    else
+        log_info "  jq: OK"
+    fi
+
+    # Check for iptables
+    if ! command -v iptables &>/dev/null; then
+        missing+=("iptables")
+    else
+        log_info "  iptables: OK"
+    fi
+
+    # Check for ip command
+    if ! command -v ip &>/dev/null; then
+        missing+=("iproute2 (ip command not found)")
+    else
+        log_info "  ip: OK"
+    fi
+
+    # Check for brctl (optional but useful)
+    if command -v brctl &>/dev/null; then
+        log_info "  brctl: OK"
+    else
+        log_warn "  brctl: not found (bridge-utils optional)"
+    fi
+
+    # Check for iw (WiFi)
+    if command -v iw &>/dev/null; then
+        log_info "  iw: OK"
+    else
+        log_warn "  iw: not found (WiFi features limited)"
+    fi
+
+    # Check for nmcli (NetworkManager - needed for LTE)
+    if command -v nmcli &>/dev/null; then
+        log_info "  nmcli: OK (NetworkManager available)"
+    else
+        log_warn "  nmcli: not found (LTE failover requires NetworkManager)"
+    fi
+
+    # Check for mmcli (ModemManager - needed for LTE)
+    if command -v mmcli &>/dev/null; then
+        log_info "  mmcli: OK (ModemManager available)"
+    else
+        log_warn "  mmcli: not found (LTE modem detection requires ModemManager)"
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_error "Missing critical packages:"
+        for pkg in "${missing[@]}"; do
+            log_error "  - $pkg"
+        done
+        log_error ""
+        log_error "Please install missing packages and re-run setup."
+        exit 1
+    fi
+
+    log_info "All critical packages verified"
 }
 
 install_podman() {
@@ -1820,6 +1983,7 @@ main() {
     detect_interfaces
 
     install_packages
+    verify_critical_packages
     install_podman
     install_openvswitch
 
