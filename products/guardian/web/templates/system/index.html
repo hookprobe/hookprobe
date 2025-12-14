@@ -640,9 +640,25 @@ function escapeHtml(text) {
 }
 
 function formatGitDate(dateStr) {
-    if (!dateStr) return '---';
+    if (!dateStr || dateStr === 'unknown') return '---';
     try {
-        const date = new Date(dateStr);
+        // Git date format: "2024-01-15 10:30:45 +0000"
+        // Convert to ISO 8601: "2024-01-15T10:30:45+00:00"
+        let normalized = dateStr;
+
+        // Replace space between date and time with 'T'
+        // And fix timezone format ("+0000" -> "+00:00")
+        if (dateStr.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)) {
+            normalized = dateStr.replace(' ', 'T').replace(/ ([+-])(\d{2})(\d{2})$/, '$1$2:$3');
+        }
+
+        const date = new Date(normalized);
+
+        // Check if date is valid
+        if (isNaN(date.getTime())) {
+            return dateStr; // Return original if parsing failed
+        }
+
         return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
     } catch { return dateStr; }
 }
