@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Users - HookProbe Fortress{% endblock %}
+{% block page_title %}User Management{% endblock %}
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('settings.index') }}">Settings</a></li>
+<li class="breadcrumb-item active">Users</li>
+{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Users</h3>
+        <div class="card-tools">
+            <button class="btn btn-primary btn-sm" data-toggle="modal" data-target="#addUserModal">
+                <i class="fas fa-plus"></i> Add User
+            </button>
+        </div>
+    </div>
+    <div class="card-body table-responsive p-0">
+        <table class="table table-hover text-nowrap">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Role</th>
+                    <th>Email</th>
+                    <th>Last Login</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user.id }}</td>
+                    <td><span class="badge badge-{{ 'danger' if user.role == 'admin' else 'warning' if user.role == 'operator' else 'info' }}">{{ user.role }}</span></td>
+                    <td>{{ user.email or '-' }}</td>
+                    <td>{{ user.last_login or 'Never' }}</td>
+                    <td>
+                        <button class="btn btn-xs btn-info"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-xs btn-danger"><i class="fas fa-trash"></i></button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center">No users found</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
