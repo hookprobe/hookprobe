@@ -2014,6 +2014,171 @@ show_completion() {
 }
 
 # ============================================================
+# USER INPUT COLLECTION (before installation)
+# ============================================================
+collect_user_inputs() {
+    # Collect all user configuration BEFORE starting installation
+    # This allows users to provide all inputs upfront, then enjoy coffee
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Configuration Setup${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo "We'll collect a few settings before starting installation."
+    echo "After this, no further input is needed - grab a coffee! ☕"
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
+    # Feature Selection
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${YELLOW}Optional Features:${NC}"
+    echo ""
+
+    # LTE Failover
+    if [ "$ENABLE_LTE" != true ]; then
+        if [ "$WWAN_COUNT" -gt 0 ] || [ -n "$MODEM_CTRL_DEVICES" ]; then
+            echo -e "${GREEN}✓ LTE modem detected${NC}"
+            read -p "Enable LTE WAN failover? [Y/n]: " enable_lte_choice
+            enable_lte_choice="${enable_lte_choice:-Y}"
+            [[ "${enable_lte_choice,,}" =~ ^y ]] && ENABLE_LTE=true
+        else
+            read -p "Enable LTE WAN failover? (no modem detected) [y/N]: " enable_lte_choice
+            [[ "${enable_lte_choice,,}" =~ ^y ]] && ENABLE_LTE=true
+        fi
+    fi
+
+    # Remote Access (Cloudflare Tunnel)
+    if [ "$ENABLE_REMOTE_ACCESS" != true ]; then
+        read -p "Enable remote dashboard access (Cloudflare Tunnel)? [y/N]: " enable_remote_choice
+        [[ "${enable_remote_choice,,}" =~ ^y ]] && ENABLE_REMOTE_ACCESS=true
+    fi
+
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
+    # LTE Configuration
+    # ─────────────────────────────────────────────────────────────
+    if [ "$ENABLE_LTE" = true ] && [ -z "$HOOKPROBE_LTE_APN" ]; then
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo -e "${CYAN}  LTE Configuration${NC}"
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo ""
+
+        # Show detected modem
+        if [ -n "$MODEM_CTRL_DEVICES" ]; then
+            echo -e "${GREEN}✓ Modem device: $MODEM_CTRL_DEVICES${NC}"
+        fi
+        if [ -n "$WWAN_INTERFACES" ]; then
+            echo -e "${GREEN}✓ WWAN interface: $WWAN_INTERFACES${NC}"
+        fi
+        echo ""
+
+        # Common APNs
+        echo "Common APNs by carrier:"
+        echo "  Vodafone:   internet.vodafone.ro, web.vodafone.de, internet"
+        echo "  Orange:     internet, orange.ro, orange"
+        echo "  T-Mobile:   internet.t-mobile, fast.t-mobile.com"
+        echo "  AT&T:       broadband, phone"
+        echo "  Verizon:    vzwinternet"
+        echo "  Generic:    internet"
+        echo ""
+
+        read -p "Enter your APN name: " HOOKPROBE_LTE_APN
+        if [ -z "$HOOKPROBE_LTE_APN" ]; then
+            log_warn "No APN provided - using 'internet' as default"
+            HOOKPROBE_LTE_APN="internet"
+        fi
+
+        # Authentication (most don't need it)
+        echo ""
+        echo "Does your carrier require authentication? (most don't)"
+        read -p "Require auth? [y/N]: " need_auth
+        if [[ "${need_auth,,}" =~ ^y ]]; then
+            echo "Auth types: 1=PAP, 2=CHAP, 3=MSCHAPv2"
+            read -p "Select [1-3]: " auth_choice
+            case "$auth_choice" in
+                1) HOOKPROBE_LTE_AUTH="pap" ;;
+                2) HOOKPROBE_LTE_AUTH="chap" ;;
+                3) HOOKPROBE_LTE_AUTH="mschapv2" ;;
+                *) HOOKPROBE_LTE_AUTH="none" ;;
+            esac
+            if [ "$HOOKPROBE_LTE_AUTH" != "none" ]; then
+                read -p "Username: " HOOKPROBE_LTE_USER
+                read -sp "Password: " HOOKPROBE_LTE_PASS
+                echo ""
+            fi
+        else
+            HOOKPROBE_LTE_AUTH="none"
+        fi
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Cloudflare Tunnel Configuration
+    # ─────────────────────────────────────────────────────────────
+    if [ "$ENABLE_REMOTE_ACCESS" = true ]; then
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo -e "${CYAN}  Remote Access Configuration${NC}"
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo ""
+        echo "Cloudflare Tunnel allows secure remote access to your dashboard."
+        echo "You'll need a Cloudflare account and can set this up later via Web UI."
+        echo ""
+        echo "Setup options:"
+        echo "  1. Configure now (need Cloudflare tunnel token)"
+        echo "  2. Configure later via Web UI (recommended)"
+        echo ""
+        read -p "Select [1-2] (default: 2): " cf_choice
+        cf_choice="${cf_choice:-2}"
+
+        if [ "$cf_choice" = "1" ]; then
+            echo ""
+            echo "To get your tunnel token:"
+            echo "  1. Go to https://one.dash.cloudflare.com"
+            echo "  2. Networks → Tunnels → Create a tunnel"
+            echo "  3. Copy the tunnel token"
+            echo ""
+            read -p "Enter Cloudflare tunnel token (or press Enter to skip): " CLOUDFLARE_TUNNEL_TOKEN
+            if [ -n "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+                read -p "Enter hostname (e.g., fortress.yourdomain.com): " CLOUDFLARE_TUNNEL_HOSTNAME
+            fi
+        fi
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Configuration Summary
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Configuration Summary${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${BOLD}Core Features:${NC}"
+    echo "    ✓ OVS Bridge with OpenFlow 1.3"
+    echo "    ✓ VLAN Segmentation (5 VLANs)"
+    [ "$MACSEC_ENABLED" = true ] && echo "    ✓ MACsec Layer 2 Encryption"
+    echo "    ✓ QSecBit Security Agent"
+    echo "    ✓ Web Dashboard (https://localhost:8443)"
+    echo ""
+    echo -e "  ${BOLD}Optional Features:${NC}"
+    [ "$ENABLE_LTE" = true ] && echo "    ✓ LTE Failover (APN: $HOOKPROBE_LTE_APN)"
+    [ "$ENABLE_REMOTE_ACCESS" = true ] && echo "    ✓ Remote Access (Cloudflare Tunnel)"
+    [ "$ENABLE_MONITORING" = true ] && echo "    ✓ Monitoring (Grafana + Victoria Metrics)"
+    [ "$ENABLE_N8N" = true ] && echo "    ✓ n8n Workflow Automation"
+    [ "$ENABLE_LTE" != true ] && [ "$ENABLE_REMOTE_ACCESS" != true ] && echo "    (none selected)"
+    echo ""
+
+    # Confirm
+    read -p "Proceed with installation? [Y/n]: " confirm_install
+    confirm_install="${confirm_install:-Y}"
+    if [[ ! "${confirm_install,,}" =~ ^y ]]; then
+        echo "Installation cancelled."
+        exit 0
+    fi
+}
+
+# ============================================================
 # MAIN
 # ============================================================
 main() {
@@ -2083,11 +2248,28 @@ main() {
         esac
     done
 
-    # Run installation steps
+    # Phase 1: Pre-flight checks
     check_root
     check_requirements
     detect_platform
     detect_interfaces
+
+    # Phase 2: Collect all user inputs BEFORE installation
+    if [ "$NON_INTERACTIVE" != true ]; then
+        collect_user_inputs
+    fi
+
+    # Phase 3: Installation - user can enjoy coffee ☕
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                                                              ║${NC}"
+    echo -e "${CYAN}║   ☕ Grab a coffee - Fortress is being configured for you   ║${NC}"
+    echo -e "${CYAN}║                                                              ║${NC}"
+    echo -e "${CYAN}║   This will take a few minutes. No further input needed.    ║${NC}"
+    echo -e "${CYAN}║                                                              ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    sleep 2
 
     install_packages
     verify_critical_packages
@@ -2112,8 +2294,8 @@ main() {
 
     # Start services
     log_step "Starting services..."
-    systemctl start hookprobe-fortress
-    systemctl start fortress-qsecbit
+    systemctl start hookprobe-fortress 2>/dev/null || true
+    systemctl start fortress-qsecbit 2>/dev/null || true
 
     # Validate installation
     validate_installation
