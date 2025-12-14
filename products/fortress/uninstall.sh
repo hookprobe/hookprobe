@@ -196,9 +196,11 @@ remove_containers() {
     local containers=(
         "fortress-victoria"
         "fortress-grafana"
+        "fortress-postgres"
         "fortress-victoriametrics"  # Alternative name
         "fortress-n8n"
         "fortress-clickhouse"
+        "fortress-logto"
     )
 
     for container in "${containers[@]}"; do
@@ -215,6 +217,7 @@ remove_containers() {
         "fortress-victoriametrics-data"
         "fortress-victoria-data"
         "fortress-grafana-data"
+        "fortress-postgres-data"
         "fortress-n8n-data"
         "fortress-clickhouse-data"
     )
