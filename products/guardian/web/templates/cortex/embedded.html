@@ -128,16 +128,20 @@
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
 
 <script>
-    // Cortex initialization is handled by main.js loadTabData('cortex')
-    // This is a fallback for direct URL navigation
+    // Cortex initialization is handled by:
+    // 1. main.js loadTabData('cortex') for tab switches
+    // 2. cortexTabActivated event listener in cortex-embedded.js
+    // 3. This fallback for direct URL navigation (e.g., page load with #cortex)
     document.addEventListener('DOMContentLoaded', function() {
         if (window.location.hash === '#cortex') {
-            setTimeout(function() {
-                if (typeof initCortexGlobe === 'function' && !window.cortexInitialized) {
-                    window.cortexInitialized = true;
-                    initCortexGlobe();
-                }
-            }, 200);
+            // Double RAF ensures layout is complete
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    if (typeof initCortexGlobe === 'function') {
+                        initCortexGlobe();
+                    }
+                });
+            });
         }
     });
 </script>

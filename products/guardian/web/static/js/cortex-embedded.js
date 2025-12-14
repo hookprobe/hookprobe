@@ -20,6 +20,7 @@ function cortexLog(...args) {
 // Guardian Cortex state
 const guardianCortex = {
     initialized: false,
+    initializing: false,
     globe: null,
     clusterManager: null,
     zoomController: null,
@@ -65,23 +66,34 @@ const TIER_SIZES = {
  * Initialize the Cortex globe with all shared modules
  */
 function initCortexGlobe() {
-    if (guardianCortex.initialized) return;
+    // Prevent duplicate initialization
+    if (guardianCortex.initialized || guardianCortex.initializing) {
+        cortexLog('Init skipped - already initialized or initializing');
+        return;
+    }
 
+    // Check container has dimensions (required for WebGL)
+    const container = document.getElementById('globe-container');
+    if (!container) {
+        cortexLog('Globe container not found');
+        return;
+    }
+
+    if (container.offsetWidth < 100 || container.offsetHeight < 100) {
+        cortexLog('Container too small (' + container.offsetWidth + 'x' + container.offsetHeight + '), retrying in 200ms');
+        setTimeout(initCortexGlobe, 200);
+        return;
+    }
+
+    // Mark as initializing to prevent duplicate attempts
+    guardianCortex.initializing = true;
     cortexLog('Initializing with shared modules...');
 
     // First fetch Guardian location
     fetchGuardianLocation().then(() => {
-        // Check WebGL support
-        // Check container has dimensions (required for WebGL)
-        const container = document.getElementById('globe-container');
-        if (container && (container.offsetWidth < 100 || container.offsetHeight < 100)) {
-            cortexLog('Container too small, retrying in 200ms');
-            setTimeout(initCortexGlobe, 200);
-            return;
-        }
-
         if (!isWebGLSupported()) {
             cortexLog('WebGL not supported, using 2D fallback');
+            guardianCortex.initializing = false;
             show2DFallback();
             return;
         }
@@ -108,7 +120,11 @@ function initCortexGlobe() {
         setupVisibilityHandler();
 
         guardianCortex.initialized = true;
+        guardianCortex.initializing = false;
         cortexLog('Initialized with shared modules');
+    }).catch((err) => {
+        cortexLog('Init error:', err);
+        guardianCortex.initializing = false;
     });
 }
 
@@ -918,6 +934,23 @@ function flyToLocation(lat, lng, zoom) {
         guardianCortex.globe.pointOfView({ lat, lng, altitude: zoom ? Math.max(0.5, 10 - zoom) : 1 }, 1500);
     }
 }
+
+// Listen for tab activation event (works for both desktop nav and mobile menu)
+window.addEventListener('cortexTabActivated', function() {
+    cortexLog('cortexTabActivated event received');
+    if (!guardianCortex.initialized && !guardianCortex.initializing) {
+        // Use double RAF to ensure layout is complete after tab switch
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                initCortexGlobe();
+            });
+        });
+    } else if (guardianCortex.initialized) {
+        // Already initialized, just restart animations
+        startCortexAnimations();
+        refreshData();
+    }
+});
 
 // Export for external use
 window.initCortexGlobe = initCortexGlobe;
