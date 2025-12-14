@@ -2864,11 +2864,74 @@ configure_base_networking() {
     systemctl stop dnsmasq 2>/dev/null || true
 
     # ─────────────────────────────────────────────────────────────
+    # Clean up any existing netplan/NetworkManager configurations
+    # ─────────────────────────────────────────────────────────────
+    log_info "Cleaning up existing network configurations..."
+
+    # Remove netplan WiFi configurations
+    if [ -d /etc/netplan ]; then
+        for conf in /etc/netplan/*.yaml /etc/netplan/*.yml; do
+            if [ -f "$conf" ] && grep -q "wlan" "$conf" 2>/dev/null; then
+                log_info "Removing WiFi config from netplan: $conf"
+                # Comment out wlan sections instead of deleting the file
+                sed -i 's/^\([[:space:]]*\)\(wlan[0-9]*:\)/\1# \2 # Disabled by Guardian/' "$conf" 2>/dev/null || true
+            fi
+        done
+        # Apply netplan changes
+        netplan generate 2>/dev/null || true
+    fi
+
+    # Delete existing NetworkManager connections for WiFi interfaces
+    if command -v nmcli &>/dev/null; then
+        for iface in $WIFI_INTERFACES; do
+            # Find and delete connections associated with this interface
+            local connections=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1)
+            for conn in $connections; do
+                log_info "Removing NetworkManager connection: $conn (interface: $iface)"
+                nmcli connection delete "$conn" 2>/dev/null || true
+            done
+            # Also delete connections by name pattern (netplan-wlan*, wlan*, etc)
+            local pattern_connections=$(nmcli -t -f NAME connection show 2>/dev/null | grep -E "^(netplan-)?${iface}" || true)
+            for conn in $pattern_connections; do
+                log_info "Removing NetworkManager connection by name: $conn"
+                nmcli connection delete "$conn" 2>/dev/null || true
+            done
+        done
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Clean up wpa_supplicant (user may have pre-configured WiFi)
+    # ─────────────────────────────────────────────────────────────
+    log_info "Cleaning up wpa_supplicant configurations..."
+
+    # Stop and disable wpa_supplicant service
+    systemctl stop wpa_supplicant 2>/dev/null || true
+    systemctl disable wpa_supplicant 2>/dev/null || true
+
+    # Kill any wpa_supplicant processes
+    pkill -9 wpa_supplicant 2>/dev/null || true
+
+    # Remove wpa_supplicant configurations
+    if [ -f /etc/wpa_supplicant/wpa_supplicant.conf ]; then
+        log_info "Removing /etc/wpa_supplicant/wpa_supplicant.conf"
+        rm -f /etc/wpa_supplicant/wpa_supplicant.conf
+    fi
+
+    # Remove interface-specific wpa_supplicant configs
+    rm -f /etc/wpa_supplicant/wpa_supplicant-*.conf 2>/dev/null || true
+
+    # Disable interface-specific wpa_supplicant services
+    for iface in $WIFI_INTERFACES; do
+        systemctl disable "wpa_supplicant@${iface}" 2>/dev/null || true
+        systemctl stop "wpa_supplicant@${iface}" 2>/dev/null || true
+    done
+
+    # ─────────────────────────────────────────────────────────────
     # Prepare WiFi interface for AP mode
     # ─────────────────────────────────────────────────────────────
     log_info "Preparing $WIFI_IFACE for AP mode..."
 
-    # Kill any wpa_supplicant processes using this interface
+    # Kill any remaining wpa_supplicant processes using this interface
     pkill -f "wpa_supplicant.*$WIFI_IFACE" 2>/dev/null || true
     sleep 1
 
