@@ -2864,6 +2864,42 @@ configure_base_networking() {
     systemctl stop dnsmasq 2>/dev/null || true
 
     # ─────────────────────────────────────────────────────────────
+    # Clean up any existing netplan/NetworkManager configurations
+    # ─────────────────────────────────────────────────────────────
+    log_info "Cleaning up existing network configurations..."
+
+    # Remove netplan WiFi configurations
+    if [ -d /etc/netplan ]; then
+        for conf in /etc/netplan/*.yaml /etc/netplan/*.yml; do
+            if [ -f "$conf" ] && grep -q "wlan" "$conf" 2>/dev/null; then
+                log_info "Removing WiFi config from netplan: $conf"
+                # Comment out wlan sections instead of deleting the file
+                sed -i 's/^\([[:space:]]*\)\(wlan[0-9]*:\)/\1# \2 # Disabled by Guardian/' "$conf" 2>/dev/null || true
+            fi
+        done
+        # Apply netplan changes
+        netplan generate 2>/dev/null || true
+    fi
+
+    # Delete existing NetworkManager connections for WiFi interfaces
+    if command -v nmcli &>/dev/null; then
+        for iface in $WIFI_INTERFACES; do
+            # Find and delete connections associated with this interface
+            local connections=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1)
+            for conn in $connections; do
+                log_info "Removing NetworkManager connection: $conn (interface: $iface)"
+                nmcli connection delete "$conn" 2>/dev/null || true
+            done
+            # Also delete connections by name pattern (netplan-wlan*, wlan*, etc)
+            local pattern_connections=$(nmcli -t -f NAME connection show 2>/dev/null | grep -E "^(netplan-)?${iface}" || true)
+            for conn in $pattern_connections; do
+                log_info "Removing NetworkManager connection by name: $conn"
+                nmcli connection delete "$conn" 2>/dev/null || true
+            done
+        done
+    fi
+
+    # ─────────────────────────────────────────────────────────────
     # Prepare WiFi interface for AP mode
     # ─────────────────────────────────────────────────────────────
     log_info "Preparing $WIFI_IFACE for AP mode..."
