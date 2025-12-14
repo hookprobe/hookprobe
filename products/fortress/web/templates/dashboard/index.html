@@ -53,6 +53,63 @@
     </div>
 </div>
 
+<!-- Remote Access Status -->
+<div class="row">
+    <div class="col-12">
+        <div class="card card-outline {% if tunnel_status.state == 'connected' %}card-success{% elif tunnel_status.state == 'configured' %}card-warning{% else %}card-secondary{% endif %}">
+            <div class="card-header py-2">
+                <h3 class="card-title">
+                    <i class="fas fa-cloud mr-2"></i>Remote Access
+                </h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('tunnel.index') }}" class="btn btn-tool">
+                        Configure <i class="fas fa-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body py-2">
+                {% if tunnel_status.state == 'connected' %}
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="badge badge-success mr-2">
+                            <i class="fas fa-check-circle"></i> Connected
+                        </span>
+                        <a href="https://{{ tunnel_status.hostname }}" target="_blank" class="text-info">
+                            https://{{ tunnel_status.hostname }}
+                        </a>
+                    </div>
+                    <small class="text-muted">Access your Fortress from anywhere</small>
+                </div>
+                {% elif tunnel_status.state == 'configured' %}
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="badge badge-warning mr-2">
+                            <i class="fas fa-pause-circle"></i> Stopped
+                        </span>
+                        <span class="text-muted">{{ tunnel_status.hostname or 'Configured' }}</span>
+                    </div>
+                    <a href="{{ url_for('tunnel.index') }}" class="btn btn-sm btn-success">
+                        <i class="fas fa-play"></i> Start
+                    </a>
+                </div>
+                {% else %}
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="badge badge-secondary mr-2">
+                            <i class="fas fa-times-circle"></i> Not Configured
+                        </span>
+                        <span class="text-muted">Access your dashboard from your phone</span>
+                    </div>
+                    <a href="{{ url_for('tunnel.wizard') }}" class="btn btn-sm btn-primary">
+                        <i class="fas fa-magic"></i> Setup
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="row">
     <!-- Recent Threats -->
     <div class="col-md-6">
