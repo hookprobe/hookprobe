@@ -681,6 +681,303 @@ OVSEOF
 }
 
 # ============================================================
+# BRIDGE LAN INTERFACES
+# ============================================================
+setup_lan_bridge() {
+    log_step "Adding LAN interfaces to bridge..."
+
+    # Get LAN interfaces (exclude WAN which is typically the first one or has default route)
+    local wan_iface=""
+    wan_iface=$(ip route | grep default | awk '{print $5}' | head -1)
+
+    local lan_ifaces=""
+    for iface in $ETH_INTERFACES; do
+        # Skip WAN interface
+        if [ "$iface" = "$wan_iface" ]; then
+            log_info "Skipping WAN interface: $iface"
+            continue
+        fi
+        lan_ifaces="$lan_ifaces $iface"
+    done
+
+    lan_ifaces=$(echo $lan_ifaces | xargs)  # trim
+
+    if [ -z "$lan_ifaces" ]; then
+        log_warn "No LAN interfaces found to bridge"
+        log_info "WAN interface: ${wan_iface:-none}"
+        log_info "Available interfaces: $ETH_INTERFACES"
+        return 0
+    fi
+
+    log_info "WAN interface: $wan_iface"
+    log_info "LAN interfaces to bridge: $lan_ifaces"
+
+    # Add each LAN interface to the OVS bridge
+    for iface in $lan_ifaces; do
+        if ip link show "$iface" &>/dev/null; then
+            # Remove any existing IP from the interface
+            ip addr flush dev "$iface" 2>/dev/null || true
+
+            # Add to OVS bridge
+            if ! ovs-vsctl list-ports "$OVS_BRIDGE_NAME" 2>/dev/null | grep -q "^${iface}$"; then
+                log_info "Adding $iface to bridge $OVS_BRIDGE_NAME..."
+                ovs-vsctl add-port "$OVS_BRIDGE_NAME" "$iface" 2>/dev/null || {
+                    log_warn "Failed to add $iface to bridge"
+                    continue
+                }
+            else
+                log_info "$iface already in bridge"
+            fi
+
+            # Bring interface up
+            ip link set "$iface" up
+        fi
+    done
+
+    # Save LAN configuration
+    cat > /etc/hookprobe/lan-bridge.conf << EOF
+# HookProbe Fortress LAN Bridge Configuration
+WAN_INTERFACE=$wan_iface
+LAN_INTERFACES="$lan_ifaces"
+BRIDGE_NAME=$OVS_BRIDGE_NAME
+BRIDGE_IP=10.250.0.1
+BRIDGE_NETMASK=255.255.0.0
+DHCP_RANGE_START=10.250.1.100
+DHCP_RANGE_END=10.250.1.250
+EOF
+
+    log_info "LAN interfaces bridged"
+}
+
+# ============================================================
+# WIFI ACCESS POINT (hostapd)
+# ============================================================
+setup_wifi_ap() {
+    log_step "Setting up WiFi Access Point..."
+
+    if [ -z "$WIFI_INTERFACES" ]; then
+        log_info "No WiFi interfaces detected, skipping AP setup"
+        return 0
+    fi
+
+    if ! command -v hostapd &>/dev/null; then
+        log_warn "hostapd not installed, skipping WiFi AP setup"
+        return 0
+    fi
+
+    # Use first WiFi interface
+    local wifi_iface=$(echo $WIFI_INTERFACES | awk '{print $1}')
+    log_info "Configuring WiFi AP on: $wifi_iface"
+
+    # Generate random password if not set
+    local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
+    local ap_ssid="${FORTRESS_WIFI_SSID:-Fortress-$(hostname -s)}"
+
+    # Create hostapd configuration
+    mkdir -p /etc/hostapd
+    cat > /etc/hostapd/fortress.conf << EOF
+# HookProbe Fortress WiFi AP Configuration
+interface=$wifi_iface
+driver=nl80211
+ssid=$ap_ssid
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=$ap_password
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+
+# Bridge to OVS
+bridge=$OVS_BRIDGE_NAME
+EOF
+
+    chmod 600 /etc/hostapd/fortress.conf
+
+    # Point hostapd to our config
+    if [ -f /etc/default/hostapd ]; then
+        sed -i 's|^#*DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/fortress.conf"|' /etc/default/hostapd
+    fi
+
+    # Add WiFi interface to bridge (hostapd will handle this, but ensure it's ready)
+    ip link set "$wifi_iface" up 2>/dev/null || true
+
+    # Create systemd service for hostapd
+    cat > /etc/systemd/system/fortress-hostapd.service << EOF
+[Unit]
+Description=Fortress WiFi Access Point
+After=network.target sys-subsystem-net-devices-${wifi_iface}.device
+Wants=sys-subsystem-net-devices-${wifi_iface}.device
+
+[Service]
+Type=forking
+PIDFile=/run/hostapd.pid
+ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-hostapd 2>/dev/null || true
+
+    # Save WiFi credentials
+    cat > /etc/hookprobe/wifi-ap.conf << EOF
+# HookProbe Fortress WiFi AP Credentials
+WIFI_INTERFACE=$wifi_iface
+WIFI_SSID=$ap_ssid
+WIFI_PASSWORD=$ap_password
+EOF
+    chmod 600 /etc/hookprobe/wifi-ap.conf
+
+    log_info "WiFi AP configured:"
+    log_info "  SSID: $ap_ssid"
+    log_info "  Password: $ap_password"
+    log_info "  Interface: $wifi_iface"
+}
+
+# ============================================================
+# DHCP SERVER (dnsmasq)
+# ============================================================
+setup_dhcp_server() {
+    log_step "Setting up DHCP server (dnsmasq)..."
+
+    if ! command -v dnsmasq &>/dev/null; then
+        log_warn "dnsmasq not installed, skipping DHCP setup"
+        return 0
+    fi
+
+    # Create dnsmasq configuration for Fortress
+    mkdir -p /etc/dnsmasq.d
+    cat > /etc/dnsmasq.d/fortress.conf << EOF
+# HookProbe Fortress DHCP Configuration
+
+# Listen on the bridge interface
+interface=$OVS_BRIDGE_NAME
+bind-interfaces
+
+# DHCP range for the main network (10.250.0.0/16)
+dhcp-range=10.250.1.100,10.250.1.250,255.255.0.0,24h
+
+# Gateway (this Fortress)
+dhcp-option=option:router,10.250.0.1
+
+# DNS servers (Fortress itself + Cloudflare)
+dhcp-option=option:dns-server,10.250.0.1,1.1.1.1
+
+# Domain
+dhcp-option=option:domain-name,fortress.local
+local=/fortress.local/
+
+# Lease file
+dhcp-leasefile=/var/lib/misc/fortress-dnsmasq.leases
+
+# Logging
+log-queries
+log-dhcp
+log-facility=/var/log/fortress-dnsmasq.log
+
+# Don't read /etc/resolv.conf
+no-resolv
+
+# Upstream DNS
+server=1.1.1.1
+server=8.8.8.8
+
+# Local hostname
+address=/fortress.local/10.250.0.1
+address=/fortress/10.250.0.1
+
+# DHCP authoritative mode
+dhcp-authoritative
+
+# Fast DHCP
+dhcp-rapid-commit
+
+# Hostname for DHCP clients
+expand-hosts
+domain=fortress.local
+EOF
+
+    # Create lease file directory
+    mkdir -p /var/lib/misc
+    touch /var/lib/misc/fortress-dnsmasq.leases
+
+    # Stop system dnsmasq if running (we'll use our own config)
+    systemctl stop dnsmasq 2>/dev/null || true
+    systemctl disable dnsmasq 2>/dev/null || true
+
+    # Create fortress-dnsmasq service
+    cat > /etc/systemd/system/fortress-dnsmasq.service << EOF
+[Unit]
+Description=Fortress DHCP and DNS Server
+After=network.target fortress-hostapd.service
+Wants=network.target
+
+[Service]
+Type=forking
+PIDFile=/run/fortress-dnsmasq.pid
+ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress.conf
+ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress.conf --pid-file=/run/fortress-dnsmasq.pid
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-dnsmasq 2>/dev/null || true
+
+    log_info "DHCP server configured:"
+    log_info "  Range: 10.250.1.100 - 10.250.1.250"
+    log_info "  Gateway: 10.250.0.1"
+    log_info "  DNS: 10.250.0.1, 1.1.1.1"
+    log_info "  Domain: fortress.local"
+}
+
+# ============================================================
+# START NETWORK SERVICES
+# ============================================================
+start_network_services() {
+    log_step "Starting network services..."
+
+    # Start dnsmasq first (DHCP/DNS)
+    if [ -f /etc/systemd/system/fortress-dnsmasq.service ]; then
+        log_info "Starting DHCP server..."
+        systemctl start fortress-dnsmasq 2>/dev/null || log_warn "Failed to start dnsmasq"
+    fi
+
+    # Start hostapd (WiFi AP)
+    if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
+        log_info "Starting WiFi AP..."
+        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
+    fi
+
+    # Verify services
+    sleep 2
+    if systemctl is-active fortress-dnsmasq &>/dev/null; then
+        log_info "✓ DHCP server running"
+    else
+        log_warn "✗ DHCP server not running"
+    fi
+
+    if systemctl is-active fortress-hostapd &>/dev/null; then
+        log_info "✓ WiFi AP running"
+    else
+        log_warn "✗ WiFi AP not running (may need WiFi interface)"
+    fi
+}
+
+# ============================================================
 # VLAN SEGMENTATION
 # ============================================================
 setup_vlans() {
@@ -1981,9 +2278,28 @@ show_completion() {
     echo ""
 
     echo -e "  ${BOLD}Network Configuration:${NC}"
+    echo -e "  Bridge: $OVS_BRIDGE_NAME (10.250.0.1)"
+    echo -e "  DHCP Range: 10.250.1.100 - 10.250.1.250"
     [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  Primary WAN: $FORTRESS_WAN_IFACE"
     [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
-    [ -n "$FORTRESS_LAN_IFACES" ] && echo -e "  LAN Bridge: br-lan ($FORTRESS_LAN_IFACES)"
+
+    # Show WiFi credentials if configured
+    if [ -f /etc/hookprobe/wifi-ap.conf ]; then
+        source /etc/hookprobe/wifi-ap.conf 2>/dev/null
+        if [ -n "$WIFI_SSID" ]; then
+            echo ""
+            echo -e "  ${BOLD}${GREEN}WiFi Access Point:${NC}"
+            echo -e "  SSID:     ${CYAN}$WIFI_SSID${NC}"
+            echo -e "  Password: ${CYAN}$WIFI_PASSWORD${NC}"
+        fi
+    fi
+    echo ""
+
+    echo -e "  ${BOLD}Connect to Fortress:${NC}"
+    echo -e "  1. Connect to WiFi: ${CYAN}${WIFI_SSID:-Fortress-$(hostname -s)}${NC}"
+    echo -e "  2. Or plug into a LAN port"
+    echo -e "  3. You'll get an IP in 10.250.1.x range"
+    echo -e "  4. Access dashboard: ${CYAN}https://10.250.0.1:8443${NC}"
     echo ""
 
     echo -e "  ${BOLD}Management Commands:${NC}"
@@ -2278,6 +2594,9 @@ main() {
     install_openvswitch
 
     setup_ovs_bridge
+    setup_lan_bridge
+    setup_wifi_ap
+    setup_dhcp_server
     setup_vlans
     setup_vxlan_tunnels
     setup_macsec
@@ -2288,6 +2607,9 @@ main() {
     install_monitoring
     install_cloudflared
     setup_lte_failover
+
+    # Start network services (DHCP, WiFi AP)
+    start_network_services
 
     create_systemd_services
     create_config_file
