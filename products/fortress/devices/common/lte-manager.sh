@@ -33,10 +33,11 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log_info() { echo -e "${CYAN}[LTE]${NC} $*"; }
-log_success() { echo -e "${GREEN}[LTE]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[LTE]${NC} $*"; }
-log_error() { echo -e "${RED}[LTE]${NC} $*"; }
+# LTE-specific logging (prefixed to avoid conflicts with main setup.sh)
+lte_log() { echo -e "${CYAN}[LTE]${NC} $*"; }
+lte_success() { echo -e "${GREEN}[LTE]${NC} $*"; }
+lte_warn() { echo -e "${YELLOW}[LTE]${NC} $*"; }
+lte_error() { echo -e "${RED}[LTE]${NC} $*"; }
 
 # ============================================================
 # LTE MODEM DETECTION
@@ -84,7 +85,7 @@ detect_usb_lte_modems() {
     #   LTE_MODEMS_FOUND - Array of detected modems
     #   LTE_MODEM_COUNT - Number of modems found
 
-    log_info "Scanning for USB LTE modems..."
+    lte_log "Scanning for USB LTE modems..."
 
     declare -gA LTE_MODEMS_FOUND
     export LTE_MODEM_COUNT=0
@@ -105,7 +106,7 @@ detect_usb_lte_modems() {
                 LTE_MODEMS_FOUND["$usb_id"]="$vendor $model"
                 LTE_MODEM_COUNT=$((LTE_MODEM_COUNT + 1))
 
-                log_info "  Found: $vendor $model ($usb_id)"
+                lte_log "  Found: $vendor $model ($usb_id)"
             fi
         done < <(lsusb 2>/dev/null)
     fi
@@ -123,9 +124,9 @@ detect_usb_lte_modems() {
                     local modem_info
                     modem_info=$(mmcli -m "$modem_idx" 2>/dev/null | grep -E "manufacturer|model" | head -2)
 
-                    log_info "  ModemManager modem $modem_idx:"
+                    lte_log "  ModemManager modem $modem_idx:"
                     echo "$modem_info" | while read -r info_line; do
-                        log_info "    $info_line"
+                        lte_log "    $info_line"
                     done
                 fi
             fi
@@ -136,14 +137,14 @@ detect_usb_lte_modems() {
     for iface in /sys/class/net/wwan* /sys/class/net/wwp*; do
         if [ -d "$iface" ]; then
             local name=$(basename "$iface")
-            log_info "  Found WWAN interface: $name"
+            lte_log "  Found WWAN interface: $name"
         fi
     done 2>/dev/null || true
 
     if [ "$LTE_MODEM_COUNT" -eq 0 ]; then
-        log_warn "No LTE modems detected"
+        lte_warn "No LTE modems detected"
     else
-        log_success "Found $LTE_MODEM_COUNT LTE modem(s)"
+        lte_success "Found $LTE_MODEM_COUNT LTE modem(s)"
     fi
 
     export LTE_MODEMS_FOUND LTE_MODEM_COUNT
@@ -207,11 +208,11 @@ configure_modem_apn() {
     local password="${4:-}"
     local modem_idx="${5:-0}"
 
-    [ -z "$apn" ] && { log_error "APN name required"; return 1; }
+    [ -z "$apn" ] && { lte_error "APN name required"; return 1; }
 
-    log_info "Configuring APN: $apn"
-    log_info "  Authentication: $auth_type"
-    [ -n "$username" ] && log_info "  Username: $username"
+    lte_log "Configuring APN: $apn"
+    lte_log "  Authentication: $auth_type"
+    [ -n "$username" ] && lte_log "  Username: $username"
 
     # Build connection string
     local connect_args="apn=$apn"
@@ -249,7 +250,7 @@ APNEOF
         return 0
     fi
 
-    log_error "Failed to configure APN"
+    lte_error "Failed to configure APN"
     return 1
 }
 
@@ -265,7 +266,7 @@ configure_apn_nmcli() {
     local con_name="fortress-lte"
 
     if ! command -v nmcli &>/dev/null; then
-        log_warn "NetworkManager not available"
+        lte_warn "NetworkManager not available"
         return 1
     fi
 
@@ -279,11 +280,11 @@ configure_apn_nmcli() {
     done 2>/dev/null
 
     if [ -z "$wwan_iface" ]; then
-        log_warn "No WWAN interface found for nmcli"
+        lte_warn "No WWAN interface found for nmcli"
         return 1
     fi
 
-    log_info "Configuring LTE via NetworkManager (interface: $wwan_iface)"
+    lte_log "Configuring LTE via NetworkManager (interface: $wwan_iface)"
 
     # Delete existing connection if exists
     nmcli con delete "$con_name" 2>/dev/null || true
@@ -314,7 +315,7 @@ configure_apn_nmcli() {
 
     # Execute
     if eval "$nmcli_cmd" 2>/dev/null; then
-        log_success "LTE connection created via NetworkManager"
+        lte_success "LTE connection created via NetworkManager"
 
         # Export interface name
         export LTE_INTERFACE="$wwan_iface"
@@ -323,7 +324,7 @@ configure_apn_nmcli() {
         return 0
     fi
 
-    log_warn "Failed to create nmcli connection"
+    lte_warn "Failed to create nmcli connection"
     return 1
 }
 
@@ -337,7 +338,7 @@ configure_apn_modemmanager() {
     local modem_idx="${5:-0}"
 
     if ! command -v mmcli &>/dev/null; then
-        log_warn "ModemManager not available"
+        lte_warn "ModemManager not available"
         return 1
     fi
 
@@ -347,7 +348,7 @@ configure_apn_modemmanager() {
         sleep 2
     fi
 
-    log_info "Configuring LTE via ModemManager (modem: $modem_idx)"
+    lte_log "Configuring LTE via ModemManager (modem: $modem_idx)"
 
     # Build connection string
     local connect_str="apn=$apn"
@@ -363,7 +364,7 @@ configure_apn_modemmanager() {
 
     # Connect with APN
     if mmcli -m "$modem_idx" --simple-connect="$connect_str" 2>/dev/null; then
-        log_success "LTE connected via ModemManager"
+        lte_success "LTE connected via ModemManager"
 
         # Get the bearer interface
         local bearer_iface
@@ -376,7 +377,7 @@ configure_apn_modemmanager() {
         return 0
     fi
 
-    log_warn "Failed to connect via ModemManager"
+    lte_warn "Failed to connect via ModemManager"
     return 1
 }
 
@@ -388,7 +389,7 @@ configure_apn_qmi() {
     local password="$3"
 
     if ! command -v qmicli &>/dev/null; then
-        log_warn "QMI tools not available"
+        lte_warn "QMI tools not available"
         return 1
     fi
 
@@ -402,11 +403,11 @@ configure_apn_qmi() {
     done
 
     if [ -z "$qmi_dev" ]; then
-        log_warn "No QMI device found"
+        lte_warn "No QMI device found"
         return 1
     fi
 
-    log_info "Configuring LTE via QMI ($qmi_dev)"
+    lte_log "Configuring LTE via QMI ($qmi_dev)"
 
     # Build network string
     local network_str="apn=$apn"
@@ -414,7 +415,7 @@ configure_apn_qmi() {
     [ -n "$password" ] && network_str="${network_str},password=$password"
 
     if qmicli -d "$qmi_dev" --wds-start-network="$network_str" --client-no-release-cid 2>/dev/null; then
-        log_success "LTE connected via QMI"
+        lte_success "LTE connected via QMI"
 
         # Get WWAN interface
         local wwan_iface
@@ -429,7 +430,7 @@ configure_apn_qmi() {
         return 0
     fi
 
-    log_warn "Failed to connect via QMI"
+    lte_warn "Failed to connect via QMI"
     return 1
 }
 
@@ -449,7 +450,7 @@ configure_apn_interactive() {
     # APN Name
     local apn=""
     read -p "Enter APN name (e.g., internet.vodafone.ro): " apn
-    [ -z "$apn" ] && { log_error "APN is required"; return 1; }
+    [ -z "$apn" ] && { lte_error "APN is required"; return 1; }
 
     # Authentication type
     echo ""
@@ -499,7 +500,7 @@ configure_apn_interactive() {
         configure_modem_apn "$apn" "$auth_type" "$username" "$password"
         return $?
     else
-        log_info "Configuration cancelled"
+        lte_log "Configuration cancelled"
         return 1
     fi
 }
@@ -512,7 +513,7 @@ connect_lte_modem() {
 
     local modem_idx="${1:-0}"
 
-    log_info "Connecting LTE modem $modem_idx..."
+    lte_log "Connecting LTE modem $modem_idx..."
 
     # Ensure ModemManager is running
     if ! systemctl is-active ModemManager &>/dev/null; then
@@ -529,7 +530,7 @@ connect_lte_modem() {
         state=$(mmcli -m "$modem_idx" 2>/dev/null | grep "state:" | awk '{print $NF}')
 
         if [ "$state" = "connected" ]; then
-            log_success "Modem already connected"
+            lte_success "Modem already connected"
             return 0
         fi
 
@@ -539,19 +540,19 @@ connect_lte_modem() {
 
         if [ -n "$apn" ]; then
             mmcli -m "$modem_idx" --simple-connect="apn=$apn" 2>/dev/null && {
-                log_success "LTE connected with APN: $apn"
+                lte_success "LTE connected with APN: $apn"
                 return 0
             }
         else
             # Try to connect without explicit APN (auto-detect)
             mmcli -m "$modem_idx" --simple-connect="" 2>/dev/null && {
-                log_success "LTE connected (auto APN)"
+                lte_success "LTE connected (auto APN)"
                 return 0
             }
         fi
     fi
 
-    log_error "Failed to connect LTE modem"
+    lte_error "Failed to connect LTE modem"
     return 1
 }
 
@@ -559,11 +560,11 @@ disconnect_lte_modem() {
     # Disconnect LTE modem
     local modem_idx="${1:-0}"
 
-    log_info "Disconnecting LTE modem $modem_idx..."
+    lte_log "Disconnecting LTE modem $modem_idx..."
 
     if command -v mmcli &>/dev/null; then
         mmcli -m "$modem_idx" --simple-disconnect 2>/dev/null
-        log_success "LTE disconnected"
+        lte_success "LTE disconnected"
     fi
 }
 
@@ -601,12 +602,12 @@ setup_wan_failover() {
     local primary_wan="${1:-$FORTRESS_WAN_IFACE}"
     local lte_iface="${2:-$(get_modem_interface)}"
 
-    [ -z "$primary_wan" ] && { log_error "Primary WAN interface required"; return 1; }
-    [ -z "$lte_iface" ] && { log_error "LTE interface not found"; return 1; }
+    [ -z "$primary_wan" ] && { lte_error "Primary WAN interface required"; return 1; }
+    [ -z "$lte_iface" ] && { lte_error "LTE interface not found"; return 1; }
 
-    log_info "Setting up WAN failover:"
-    log_info "  Primary: $primary_wan"
-    log_info "  Backup:  $lte_iface (LTE)"
+    lte_log "Setting up WAN failover:"
+    lte_log "  Primary: $primary_wan"
+    lte_log "  Backup:  $lte_iface (LTE)"
 
     # Create state directory
     mkdir -p "$LTE_STATE_DIR"
@@ -627,7 +628,7 @@ EOF
     # Set up routing tables for failover
     setup_failover_routing "$primary_wan" "$lte_iface"
 
-    log_success "WAN failover configured"
+    lte_success "WAN failover configured"
 }
 
 setup_failover_routing() {
@@ -640,7 +641,7 @@ setup_failover_routing() {
     grep -q "201 backup_wan" /etc/iproute2/rt_tables || echo "201 backup_wan" >> /etc/iproute2/rt_tables
 
     # Rules will be added dynamically during failover
-    log_info "Routing tables configured"
+    lte_log "Routing tables configured"
 }
 
 check_wan_health() {
@@ -688,7 +689,7 @@ perform_failover() {
     current_state=$(cat "$FAILOVER_STATE_FILE" 2>/dev/null || echo "primary")
 
     if [ "$direction" = "to_backup" ] && [ "$current_state" = "primary" ]; then
-        log_warn "FAILOVER: Switching from $PRIMARY_WAN to $BACKUP_WAN (LTE)"
+        lte_warn "FAILOVER: Switching from $PRIMARY_WAN to $BACKUP_WAN (LTE)"
 
         # Connect LTE if not connected
         connect_lte_modem
@@ -707,10 +708,10 @@ perform_failover() {
 
         # Update state
         echo "backup" > "$FAILOVER_STATE_FILE"
-        log_success "Failover complete - now using LTE"
+        lte_success "Failover complete - now using LTE"
 
     elif [ "$direction" = "to_primary" ] && [ "$current_state" = "backup" ]; then
-        log_info "FAILBACK: Switching from $BACKUP_WAN (LTE) to $PRIMARY_WAN"
+        lte_log "FAILBACK: Switching from $BACKUP_WAN (LTE) to $PRIMARY_WAN"
 
         # Update default route
         local primary_gw
@@ -726,7 +727,7 @@ perform_failover() {
 
         # Update state
         echo "primary" > "$FAILOVER_STATE_FILE"
-        log_success "Failback complete - now using primary WAN"
+        lte_success "Failback complete - now using primary WAN"
     fi
 }
 
@@ -734,14 +735,14 @@ monitor_wan_failover() {
     # Continuous WAN health monitoring loop
     # Runs in background, checks health and performs failover as needed
 
-    source "$LTE_STATE_DIR/failover.conf" 2>/dev/null || { log_error "Failover not configured"; return 1; }
+    source "$LTE_STATE_DIR/failover.conf" 2>/dev/null || { lte_error "Failover not configured"; return 1; }
 
     local primary_failures=0
     local backup_available=false
 
-    log_info "Starting WAN failover monitor..."
-    log_info "  Checking every ${HEALTH_CHECK_INTERVAL}s"
-    log_info "  Failover after $FAILOVER_THRESHOLD consecutive failures"
+    lte_log "Starting WAN failover monitor..."
+    lte_log "  Checking every ${HEALTH_CHECK_INTERVAL}s"
+    lte_log "  Failover after $FAILOVER_THRESHOLD consecutive failures"
 
     while true; do
         local current_state
@@ -757,7 +758,7 @@ monitor_wan_failover() {
             fi
         else
             primary_failures=$((primary_failures + 1))
-            log_warn "Primary WAN ($PRIMARY_WAN) unhealthy (failures: $primary_failures/$FAILOVER_THRESHOLD)"
+            lte_warn "Primary WAN ($PRIMARY_WAN) unhealthy (failures: $primary_failures/$FAILOVER_THRESHOLD)"
 
             # Check if failover threshold reached
             if [ "$primary_failures" -ge "$FAILOVER_THRESHOLD" ] && [ "$current_state" = "primary" ]; then
@@ -765,7 +766,7 @@ monitor_wan_failover() {
                 if check_wan_health "$BACKUP_WAN" 2>/dev/null || connect_lte_modem; then
                     perform_failover "to_backup"
                 else
-                    log_error "Primary WAN down, LTE backup unavailable!"
+                    lte_error "Primary WAN down, LTE backup unavailable!"
                 fi
             fi
         fi
@@ -781,7 +782,7 @@ monitor_wan_failover() {
 install_failover_service() {
     # Install systemd service for WAN failover monitoring
 
-    log_info "Installing WAN failover systemd service..."
+    lte_log "Installing WAN failover systemd service..."
 
     cat > /etc/systemd/system/fortress-wan-failover.service << 'EOF'
 [Unit]
@@ -803,7 +804,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable fortress-wan-failover.service
-    log_success "WAN failover service installed"
+    lte_success "WAN failover service installed"
 }
 
 # ============================================================
