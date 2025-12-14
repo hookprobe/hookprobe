@@ -39,7 +39,8 @@ function initNavigation() {
     // Handle nav item clicks (Forty-style: #header nav button)
     document.querySelectorAll('#header nav button').forEach(item => {
         item.addEventListener('click', (e) => {
-            const tab = e.target.dataset.tab;
+            // Use currentTarget to get the button, not the icon inside it
+            const tab = e.currentTarget.dataset.tab;
             if (tab) {
                 navigateTo(tab);
             }
@@ -134,9 +135,14 @@ function loadTabData(tabName) {
             break;
         case 'cortex':
             // Initialize Cortex globe when tab is activated
-            if (typeof initCortexGlobe === 'function' && !window.cortexInitialized) {
-                window.cortexInitialized = true;
-                setTimeout(initCortexGlobe, 100);
+            // Use requestAnimationFrame to ensure DOM is painted before init
+            if (typeof initCortexGlobe === 'function') {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        // Double RAF ensures layout is complete
+                        initCortexGlobe();
+                    });
+                });
             }
             break;
     }
