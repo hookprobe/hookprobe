@@ -84,6 +84,28 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
 
 # ============================================================
+# DEVICE DETECTION
+# ============================================================
+DEVICES_DIR="$FORTRESS_ROOT/devices"
+
+# Source device detection framework
+if [ -f "$DEVICES_DIR/common/detect-hardware.sh" ]; then
+    source "$DEVICES_DIR/common/detect-hardware.sh"
+    DEVICE_DETECTION_AVAILABLE=true
+else
+    DEVICE_DETECTION_AVAILABLE=false
+    log_warn "Device detection framework not found"
+fi
+
+# Source LTE manager
+if [ -f "$DEVICES_DIR/common/lte-manager.sh" ]; then
+    source "$DEVICES_DIR/common/lte-manager.sh"
+    LTE_MANAGER_AVAILABLE=true
+else
+    LTE_MANAGER_AVAILABLE=false
+fi
+
+# ============================================================
 # PREREQUISITES
 # ============================================================
 check_root() {
@@ -122,7 +144,7 @@ check_requirements() {
 }
 
 detect_platform() {
-    log_step "Detecting platform..."
+    log_step "Detecting platform and hardware..."
 
     if [ -f /sys/class/dmi/id/product_name ]; then
         PLATFORM_NAME=$(cat /sys/class/dmi/id/product_name)
@@ -132,6 +154,55 @@ detect_platform() {
 
     PLATFORM_ARCH=$(uname -m)
     log_info "Platform: $PLATFORM_NAME ($PLATFORM_ARCH)"
+
+    # Use device detection framework if available
+    if [ "$DEVICE_DETECTION_AVAILABLE" = true ]; then
+        log_step "Running device profile detection..."
+        detect_hardware
+
+        log_info "Device ID: ${FORTRESS_DEVICE_ID:-unknown}"
+        log_info "Device Name: ${FORTRESS_DEVICE_NAME:-Unknown Device}"
+        log_info "Device Family: ${FORTRESS_DEVICE_FAMILY:-unknown}"
+        log_info "Architecture: ${FORTRESS_ARCHITECTURE:-$(uname -m)}"
+
+        if [ -n "$FORTRESS_PROFILE_DIR" ] && [ -d "$FORTRESS_PROFILE_DIR" ]; then
+            log_info "Device profile: $FORTRESS_PROFILE_DIR"
+
+            # Source device-specific interface detection
+            if [ -f "$FORTRESS_PROFILE_DIR/interfaces.sh" ]; then
+                log_step "Running device-specific interface detection..."
+                source "$FORTRESS_PROFILE_DIR/interfaces.sh"
+
+                # Run the device-specific detection function
+                case "$FORTRESS_DEVICE_ID" in
+                    intel-n100|intel-n150|intel-n200|intel-n305)
+                        detect_intel_n100_interfaces
+                        ;;
+                    rpi-cm5)
+                        detect_cm5_interfaces
+                        ;;
+                    radxa-rock5b)
+                        detect_rock5b_interfaces
+                        ;;
+                    *)
+                        detect_device_interfaces 2>/dev/null || true
+                        ;;
+                esac
+
+                # Export detected interfaces
+                if [ -n "$FORTRESS_WAN_IFACE" ]; then
+                    log_info "WAN Interface: $FORTRESS_WAN_IFACE"
+                    WAN_INTERFACE="$FORTRESS_WAN_IFACE"
+                fi
+                if [ -n "$FORTRESS_LAN_IFACES" ]; then
+                    log_info "LAN Interfaces: $FORTRESS_LAN_IFACES"
+                    LAN_INTERFACES="$FORTRESS_LAN_IFACES"
+                fi
+            fi
+        else
+            log_warn "No device profile found for: ${FORTRESS_DEVICE_ID:-unknown}"
+        fi
+    fi
 }
 
 detect_interfaces() {
@@ -1095,6 +1166,140 @@ install_monitoring() {
 }
 
 # ============================================================
+# LTE FAILOVER SETUP
+# ============================================================
+setup_lte_failover() {
+    if [ "$ENABLE_LTE" != true ]; then
+        log_info "LTE failover disabled"
+        return 0
+    fi
+
+    if [ "$LTE_MANAGER_AVAILABLE" != true ]; then
+        log_error "LTE manager not available. Cannot setup LTE failover."
+        return 1
+    fi
+
+    log_step "Setting up LTE WAN failover..."
+
+    # Install ModemManager if not present
+    if ! command -v mmcli &>/dev/null; then
+        log_info "Installing ModemManager..."
+        if [ "$PKG_MGR" = "apt" ]; then
+            apt-get install -y -qq modemmanager libqmi-utils libmbim-utils 2>/dev/null || true
+        else
+            dnf install -y -q ModemManager libqmi-utils libmbim-utils 2>/dev/null || true
+        fi
+    fi
+
+    # Detect LTE modem
+    log_info "Detecting LTE modem..."
+    if detect_lte_modem; then
+        log_info "LTE modem detected:"
+        log_info "  Vendor: ${LTE_VENDOR:-unknown}"
+        log_info "  Model: ${LTE_MODEL:-unknown}"
+        log_info "  Interface: ${LTE_INTERFACE:-unknown}"
+        log_info "  Protocol: ${LTE_PROTOCOL:-unknown}"
+
+        # Configure modem with APN
+        local apn="${HOOKPROBE_LTE_APN:-internet}"
+        log_info "Configuring modem with APN: $apn"
+
+        if configure_lte_modem "$apn"; then
+            log_info "LTE modem configured successfully"
+        else
+            log_warn "Failed to configure LTE modem"
+        fi
+
+        # Setup WAN failover
+        log_info "Setting up WAN failover..."
+        local primary_wan="${WAN_INTERFACE:-eth0}"
+        local backup_wan="${LTE_INTERFACE:-wwan0}"
+
+        if setup_wan_failover "$primary_wan" "$backup_wan"; then
+            log_info "WAN failover configured:"
+            log_info "  Primary WAN: $primary_wan"
+            log_info "  Backup WAN: $backup_wan"
+        else
+            log_warn "Failed to setup WAN failover"
+        fi
+
+        # Create LTE failover systemd service
+        cat > /etc/systemd/system/fortress-lte-failover.service << 'LTESERVICEEOF'
+[Unit]
+Description=HookProbe Fortress LTE WAN Failover Monitor
+After=network.target ModemManager.service
+Wants=ModemManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fortress-lte-monitor
+Restart=always
+RestartSec=30
+Environment=HEALTH_CHECK_INTERVAL=30
+Environment=FAILOVER_THRESHOLD=3
+Environment=FAILBACK_THRESHOLD=5
+
+[Install]
+WantedBy=multi-user.target
+LTESERVICEEOF
+
+        # Create LTE monitor script
+        cat > /usr/local/bin/fortress-lte-monitor << 'LTEMONITOREOF'
+#!/bin/bash
+# HookProbe Fortress LTE Failover Monitor
+
+source /etc/hookprobe/lte-failover.conf 2>/dev/null || {
+    PRIMARY_WAN="eth0"
+    BACKUP_WAN="wwan0"
+    HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-30}"
+    FAILOVER_THRESHOLD="${FAILOVER_THRESHOLD:-3}"
+    FAILBACK_THRESHOLD="${FAILBACK_THRESHOLD:-5}"
+}
+
+DEVICES_DIR="/opt/hookprobe/fortress/devices"
+if [ -f "$DEVICES_DIR/common/lte-manager.sh" ]; then
+    source "$DEVICES_DIR/common/lte-manager.sh"
+    monitor_wan_failover
+else
+    echo "LTE manager not found"
+    exit 1
+fi
+LTEMONITOREOF
+
+        chmod +x /usr/local/bin/fortress-lte-monitor
+
+        # Save failover configuration
+        cat > /etc/hookprobe/lte-failover.conf << LTECONFEOF
+# HookProbe Fortress LTE Failover Configuration
+# Generated: $(date -Iseconds)
+
+PRIMARY_WAN="${primary_wan}"
+BACKUP_WAN="${backup_wan}"
+HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30}
+FAILOVER_THRESHOLD=${FAILOVER_THRESHOLD:-3}
+FAILBACK_THRESHOLD=${FAILBACK_THRESHOLD:-5}
+HEALTH_CHECK_TARGETS="8.8.8.8 1.1.1.1"
+
+# LTE Modem Info
+LTE_VENDOR="${LTE_VENDOR:-}"
+LTE_MODEL="${LTE_MODEL:-}"
+LTE_INTERFACE="${LTE_INTERFACE:-}"
+LTE_APN="${apn}"
+LTECONFEOF
+
+        chmod 644 /etc/hookprobe/lte-failover.conf
+
+        systemctl daemon-reload
+        systemctl enable fortress-lte-failover
+
+        log_info "LTE failover setup complete"
+    else
+        log_warn "No LTE modem detected. LTE failover not configured."
+        log_warn "Connect a supported LTE modem and re-run setup with --enable-lte"
+    fi
+}
+
+# ============================================================
 # SYSTEMD SERVICES
 # ============================================================
 create_systemd_services() {
@@ -1174,10 +1379,20 @@ tier = fortress
 node_id = ${HOOKPROBE_NODE_ID:-$(hostname)-fortress}
 version = 5.0.0
 
+[device]
+device_id = ${FORTRESS_DEVICE_ID:-unknown}
+device_name = ${FORTRESS_DEVICE_NAME:-Unknown Device}
+device_family = ${FORTRESS_DEVICE_FAMILY:-unknown}
+architecture = ${FORTRESS_ARCHITECTURE:-$(uname -m)}
+profile_dir = ${FORTRESS_PROFILE_DIR:-}
+
 [network]
 ovs_bridge = $OVS_BRIDGE_NAME
 vlan_segmentation = $VLAN_SEGMENTATION
 macsec_enabled = $MACSEC_ENABLED
+wan_interface = ${WAN_INTERFACE:-${FORTRESS_WAN_IFACE:-}}
+lan_interfaces = ${LAN_INTERFACES:-${FORTRESS_LAN_IFACES:-}}
+total_nics = ${FORTRESS_TOTAL_NICS:-0}
 
 [vlans]
 management = 10
@@ -1195,6 +1410,7 @@ mssp_endpoint = ${HOOKPROBE_MSSP_URL:-mssp.hookprobe.com}
 qsecbit_enabled = true
 openflow_enabled = true
 macsec_enabled = $MACSEC_ENABLED
+xdp_mode = ${FORTRESS_XDP_MODE:-generic}
 
 [monitoring]
 enabled = $ENABLE_MONITORING
@@ -1203,10 +1419,25 @@ grafana_port = 3000
 
 [automation]
 n8n_enabled = $ENABLE_N8N
+
+[lte]
+enabled = $ENABLE_LTE
+interface = ${LTE_INTERFACE:-}
+vendor = ${LTE_VENDOR:-}
+model = ${LTE_MODEL:-}
+protocol = ${LTE_PROTOCOL:-}
 CONFEOF
 
     chmod 644 /etc/hookprobe/fortress.conf
     log_info "Configuration file created: /etc/hookprobe/fortress.conf"
+
+    # Copy device profiles to installation directory
+    if [ -d "$DEVICES_DIR" ]; then
+        log_info "Installing device profiles..."
+        mkdir -p /opt/hookprobe/fortress/devices
+        cp -r "$DEVICES_DIR"/* /opt/hookprobe/fortress/devices/
+        log_info "Device profiles installed to /opt/hookprobe/fortress/devices/"
+    fi
 }
 
 # ============================================================
@@ -1220,6 +1451,18 @@ show_completion() {
     echo -e "${CYAN}║                                                              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
+
+    # Device information
+    if [ -n "$FORTRESS_DEVICE_ID" ] && [ "$FORTRESS_DEVICE_ID" != "unknown" ]; then
+        echo -e "  ${BOLD}Detected Hardware:${NC}"
+        echo -e "  Device: ${GREEN}${FORTRESS_DEVICE_NAME:-$FORTRESS_DEVICE_ID}${NC}"
+        echo -e "  Family: ${FORTRESS_DEVICE_FAMILY:-unknown}"
+        echo -e "  Architecture: ${FORTRESS_ARCHITECTURE:-$(uname -m)}"
+        [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  WAN Interface: ${CYAN}$FORTRESS_WAN_IFACE${NC}"
+        [ -n "$FORTRESS_LAN_IFACES" ] && echo -e "  LAN Interfaces: ${CYAN}$FORTRESS_LAN_IFACES${NC}"
+        echo ""
+    fi
+
     echo -e "  ${BOLD}Installed Components:${NC}"
     echo -e "  ${GREEN}✓${NC} Open vSwitch with OpenFlow 1.3"
     echo -e "  ${GREEN}✓${NC} VLAN Segmentation (management, trusted, iot, guest, quarantine)"
@@ -1229,11 +1472,24 @@ show_completion() {
     echo -e "  ${GREEN}✓${NC} FreeRADIUS with dynamic VLAN assignment"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Monitoring (Grafana + Victoria Metrics)"
     [ "$ENABLE_N8N" = true ] && echo -e "  ${GREEN}✓${NC} n8n Workflow Automation"
+
+    # LTE information
+    if [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ]; then
+        echo -e "  ${GREEN}✓${NC} LTE WAN Failover (${LTE_VENDOR:-Unknown} ${LTE_MODEL:-modem})"
+    fi
     echo ""
+
+    echo -e "  ${BOLD}Network Configuration:${NC}"
+    [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  Primary WAN: $FORTRESS_WAN_IFACE"
+    [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
+    [ -n "$FORTRESS_LAN_IFACES" ] && echo -e "  LAN Bridge: br-lan ($FORTRESS_LAN_IFACES)"
+    echo ""
+
     echo -e "  ${BOLD}Management Commands:${NC}"
     echo -e "  ${CYAN}hookprobe-macsec${NC} enable eth0  - Enable MACsec on interface"
     echo -e "  ${CYAN}hookprobe-openflow${NC} status     - View OpenFlow status"
     echo -e "  ${CYAN}systemctl status${NC} hookprobe-fortress"
+    [ "$ENABLE_LTE" = true ] && echo -e "  ${CYAN}systemctl status${NC} fortress-lte-failover"
     echo ""
     echo -e "  ${BOLD}Web Interfaces:${NC}"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  Grafana:          http://localhost:3000"
@@ -1241,7 +1497,15 @@ show_completion() {
     echo ""
     echo -e "  ${BOLD}Logs:${NC}"
     echo -e "  journalctl -u fortress-qsecbit -f"
+    [ "$ENABLE_LTE" = true ] && echo -e "  journalctl -u fortress-lte-failover -f"
     echo ""
+
+    # Show device profile info if available
+    if [ -n "$FORTRESS_PROFILE_DIR" ] && [ -d "$FORTRESS_PROFILE_DIR" ]; then
+        echo -e "  ${BOLD}Device Profile:${NC}"
+        echo -e "  $FORTRESS_PROFILE_DIR"
+        echo ""
+    fi
 }
 
 # ============================================================
@@ -1264,10 +1528,42 @@ main() {
             --enable-monitoring) ENABLE_MONITORING=true; shift ;;
             --enable-clickhouse) ENABLE_CLICKHOUSE=true; shift ;;
             --enable-lte) ENABLE_LTE=true; shift ;;
+            --lte-apn) HOOKPROBE_LTE_APN="$2"; shift 2 ;;
             --disable-macsec) MACSEC_ENABLED=false; shift ;;
             --disable-vlan) VLAN_SEGMENTATION=false; shift ;;
             --node-id) HOOKPROBE_NODE_ID="$2"; shift 2 ;;
             --mssp-url) HOOKPROBE_MSSP_URL="$2"; shift 2 ;;
+            --help|-h)
+                echo "HookProbe Fortress Installer v5.0.0"
+                echo ""
+                echo "Usage: $0 [OPTIONS]"
+                echo ""
+                echo "Options:"
+                echo "  --enable-n8n           Enable n8n workflow automation"
+                echo "  --enable-monitoring    Enable Grafana + Victoria Metrics"
+                echo "  --enable-clickhouse    Enable ClickHouse analytics"
+                echo "  --enable-lte           Enable LTE WAN failover"
+                echo "  --lte-apn APN          Set LTE APN (default: internet)"
+                echo "  --disable-macsec       Disable MACsec L2 encryption"
+                echo "  --disable-vlan         Disable VLAN segmentation"
+                echo "  --node-id ID           Set node identifier"
+                echo "  --mssp-url URL         Set MSSP endpoint URL"
+                echo "  --help, -h             Show this help message"
+                echo ""
+                echo "Supported Devices:"
+                echo "  - Intel N100/N150/N200/N305 Mini-PCs"
+                echo "  - Raspberry Pi Compute Module 5"
+                echo "  - Radxa Rock 5B"
+                echo "  - Generic x86_64/ARM64 systems"
+                echo ""
+                echo "LTE Modems:"
+                echo "  - Quectel EC25, EM05, RM500Q"
+                echo "  - Sierra Wireless EM7455, EM7565"
+                echo "  - Huawei ME909s"
+                echo "  - Fibocom FM150, L850-GL"
+                echo ""
+                exit 0
+                ;;
             *) shift ;;
         esac
     done
@@ -1291,6 +1587,7 @@ main() {
     install_qsecbit_agent
     configure_freeradius_vlan
     install_monitoring
+    setup_lte_failover
 
     create_systemd_services
     create_config_file
