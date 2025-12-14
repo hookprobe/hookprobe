@@ -329,19 +329,49 @@ EOF
 remove_networkmanager_config() {
     log_step "Removing NetworkManager configuration..."
 
-    local nm_conf="/etc/NetworkManager/conf.d/fortress-unmanaged.conf"
-    if [ -f "$nm_conf" ]; then
-        log_info "Removing $nm_conf..."
-        rm -f "$nm_conf"
+    # Remove all Fortress NetworkManager config files
+    local nm_configs=(
+        "/etc/NetworkManager/conf.d/fortress-unmanaged.conf"
+        "/etc/NetworkManager/conf.d/fortress-wifi.conf"
+    )
 
-        # Reload NetworkManager if running
-        if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-            nmcli general reload 2>/dev/null || true
+    for nm_conf in "${nm_configs[@]}"; do
+        if [ -f "$nm_conf" ]; then
+            log_info "Removing $nm_conf..."
+            rm -f "$nm_conf"
         fi
+    done
+
+    # Reload NetworkManager if running
+    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        nmcli general reload 2>/dev/null || true
     fi
 
     # Remove LTE connection if it exists
     nmcli con delete "fortress-lte" 2>/dev/null || true
+
+    # Remove WiFi prepare helper script
+    rm -f /usr/local/bin/fortress-wifi-prepare.sh 2>/dev/null || true
+
+    # Restore WiFi interface to managed mode
+    local wifi_conf="/etc/hookprobe/wifi-ap.conf"
+    if [ -f "$wifi_conf" ]; then
+        local wifi_iface=$(grep "^WIFI_INTERFACE=" "$wifi_conf" | cut -d= -f2)
+        if [ -n "$wifi_iface" ]; then
+            log_info "Restoring WiFi interface $wifi_iface to managed mode..."
+            nmcli device set "$wifi_iface" managed yes 2>/dev/null || true
+        fi
+    fi
+
+    # Restore netplan backup if it exists
+    for backup in /etc/netplan/*.yaml.fortress-backup; do
+        if [ -f "$backup" ]; then
+            original="${backup%.fortress-backup}"
+            log_info "Restoring netplan backup: $original"
+            mv "$backup" "$original"
+        fi
+    done
+    netplan apply 2>/dev/null || true
 
     log_info "NetworkManager configuration removed"
 }
