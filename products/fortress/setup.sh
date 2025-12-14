@@ -46,11 +46,7 @@ NC='\033[0m'
 # ============================================================
 # CONFIGURATION
 # ============================================================
-# Bridge naming convention:
-#   fortress-lan  = OVS bridge for LAN/WiFi clients (your network)
-#   podman0       = Podman container bridge (ignore - auto-created)
-#   vlanXX        = VLAN interfaces (10, 20, 30, 40, 99)
-OVS_BRIDGE_NAME="fortress-lan"
+OVS_BRIDGE_NAME="fortress"
 OVS_BRIDGE_SUBNET="10.250.0.0/16"
 MACSEC_ENABLED=true
 VLAN_SEGMENTATION=true
@@ -1294,7 +1290,7 @@ SYSCTL_EOF
 
     if [ -z "$wan_iface" ]; then
         # Fallback: first interface that's not loopback, bridge, or vlan
-        wan_iface=$(ip -o link show | awk -F': ' '!/lo|fortress-lan|vlan|br-|podman/ {print $2}' | head -1)
+        wan_iface=$(ip -o link show | awk -F': ' '!/lo|fortress|vlan|br-/ {print $2}' | head -1)
     fi
 
     if [ -z "$wan_iface" ]; then
@@ -1315,7 +1311,7 @@ SYSCTL_EOF
     # Setup FORWARD rules for bridge traffic
     local bridge="$OVS_BRIDGE_NAME"
     if [ -z "$bridge" ]; then
-        bridge="fortress-lan"
+        bridge="fortress"
     fi
 
     # Clear existing FORWARD rules for bridge
@@ -1372,12 +1368,12 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 # Find WAN interface
 WAN=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
 if [ -z "$WAN" ]; then
-    WAN=$(ip -o link show | awk -F': ' '!/lo|fortress-lan|vlan|br-|podman/ {print $2}' | head -1)
+    WAN=$(ip -o link show | awk -F': ' '!/lo|fortress|vlan|br-/ {print $2}' | head -1)
 fi
 
 [ -z "$WAN" ] && { echo "No WAN interface found"; exit 1; }
 
-BRIDGE="fortress-lan"
+BRIDGE="fortress"
 
 # Setup MASQUERADE
 if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
