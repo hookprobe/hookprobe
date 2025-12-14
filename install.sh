@@ -1134,15 +1134,23 @@ show_capability_summary() {
     fi
     echo ""
 
+    # FORTRESS
+    if [ "$CAN_FORTRESS" = true ]; then
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}███${NC}░ ${BOLD}${WHITE}FORTRESS${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "       ${ITALIC}\"Your Digital Stronghold\"${NC}"
+        echo -e "       ${DIM}Full-featured edge router with monitoring${NC}"
+        echo -e "       ${DIM}Installs: OVS, VLANs, MACsec, Grafana, VictoriaMetrics, LTE failover${NC}"
+        tier_num=$((tier_num + 1))
+    else
+        echo -e "  ${DIM}░░░░ FORTRESS [NOT AVAILABLE]${NC}"
+        echo -e "       ${DIM}Requires: 4GB+ RAM, 16GB+ storage, 2+ ethernet ports${NC}"
+    fi
+    echo ""
+
     # ─────────────────────────────────────────────────────────────
     # COMING SOON TIERS (greyed out regardless of system capability)
     # ─────────────────────────────────────────────────────────────
 
-    # FORTRESS - Coming Soon
-    echo -e "  ${DIM}░░░░ FORTRESS ${YELLOW}[COMING SOON]${NC}"
-    echo -e "       ${DIM}\"Your Digital Stronghold\"${NC}"
-    echo -e "       ${DIM}Full monitoring, Grafana dashboards, n8n automation${NC}"
-    echo ""
 
     # NEXUS - Coming Soon
     echo -e "  ${DIM}░░░░ NEXUS ${YELLOW}[COMING SOON]${NC}"
@@ -1166,11 +1174,12 @@ handle_capability_check() {
         show_capability_summary
         read -p "Select option: " choice
 
-        # Build list of available tiers in order (Sentinel and Guardian only)
-        # Fortress, Nexus, and MSSP are coming soon and not selectable
+        # Build list of available tiers in order
+        # Nexus and MSSP are coming soon and not selectable
         local available_tiers=()
         [ "$CAN_SENTINEL" = true ] && available_tiers+=("sentinel")
         [ "$CAN_GUARDIAN" = true ] && available_tiers+=("guardian")
+        [ "$CAN_FORTRESS" = true ] && available_tiers+=("fortress")
 
         case $choice in
             b|B|m|M) return ;;
@@ -1182,9 +1191,10 @@ handle_capability_check() {
                     case "$tier" in
                         sentinel) install_sentinel; return ;;
                         guardian) install_guardian; return ;;
+                        fortress) install_fortress; return ;;
                     esac
                 else
-                    echo -e "${RED}Invalid selection. Only Sentinel and Guardian are available.${NC}"; sleep 1
+                    echo -e "${RED}Invalid selection. Choose from available tiers.${NC}"; sleep 1
                 fi
                 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
@@ -1247,14 +1257,35 @@ show_install_menu() {
         option_num=$((option_num + 1))
     fi
 
+    # FORTRESS
+    if [ "$CAN_FORTRESS" = true ]; then
+        echo -e "  ${BOLD}${option_num}${NC}) ${GREEN}███${NC}░ ${BOLD}FORTRESS${NC} - ${ITALIC}\"Your Digital Stronghold\"${NC}"
+        echo -e "        ${DIM}Full-featured edge router with monitoring${NC}"
+        echo -e "        ${DIM}RAM: 4GB+ | Storage: 16GB+ | Network: 2+ ethernet ports${NC}"
+        echo -e "        ${CYAN}Installs:${NC}"
+        echo -e "          • Open vSwitch with OpenFlow 1.3"
+        echo -e "          • VLAN Segmentation (management, trusted, iot, guest, quarantine)"
+        echo -e "          • MACsec (802.1AE) Layer 2 encryption"
+        echo -e "          • VXLAN tunnels with PSK encryption"
+        echo -e "          • Grafana + VictoriaMetrics monitoring"
+        echo -e "          • FreeRADIUS with dynamic VLAN assignment"
+        echo -e "          • QSecBit Fortress Agent"
+        if [ "$SYS_HAS_LTE" = true ] 2>/dev/null || lsusb 2>/dev/null | grep -qiE "quectel|sierra|huawei|fibocom"; then
+            echo -e "        ${GREEN}✓ LTE modem detected - failover available${NC}"
+        fi
+        echo ""
+        options+=("fortress")
+        option_num=$((option_num + 1))
+    fi
+
     # No options available
     if [ ${#options[@]} -eq 0 ]; then
         echo -e "  ${RED}No deployment tiers available for this system.${NC}"
         echo ""
         echo -e "  ${YELLOW}Minimum requirements:${NC}"
-        echo -e "    • RAM: 256MB+ (Sentinel) or 1.5GB+ (Guardian)"
-        echo -e "    • Storage: 1GB+ (Sentinel) or 8GB+ (Guardian)"
-        echo -e "    • Network: 1+ interface (Sentinel) or 2+ interfaces (Guardian)"
+        echo -e "    • RAM: 256MB+ (Sentinel), 1.5GB+ (Guardian), 4GB+ (Fortress)"
+        echo -e "    • Storage: 1GB+ (Sentinel), 8GB+ (Guardian), 16GB+ (Fortress)"
+        echo -e "    • Network: 1+ interface (Sentinel), 2+ (Guardian/Fortress)"
         echo ""
         echo -e "  ${CYAN}For ultra-constrained devices, try Sentinel Lite:${NC}"
         echo -e "  ${DIM}curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | sudo bash${NC}"
@@ -1266,9 +1297,6 @@ show_install_menu() {
     # ─────────────────────────────────────────────────────────────
     echo ""
     echo -e "${YELLOW}Coming Soon:${NC}"
-    echo ""
-    echo -e "  ${DIM}░░░░ FORTRESS - \"Your Digital Stronghold\"${NC}"
-    echo -e "       ${DIM}Full monitoring with Grafana, n8n automation, local AI${NC}"
     echo ""
     echo -e "  ${DIM}░░░░ NEXUS - \"The Central Command\"${NC}"
     echo -e "       ${DIM}ML/AI compute hub with ClickHouse analytics${NC}"
@@ -1803,15 +1831,15 @@ handle_install() {
             [0-9]*)
                 local idx=$((choice - 1))
                 if [ $idx -ge 0 ] && [ $idx -lt ${#options[@]} ]; then
-                    # Only Sentinel and Guardian are available for installation
                     case "${options[$idx]}" in
                         sentinel) install_sentinel ;;
                         guardian) install_guardian ;;
+                        fortress) install_fortress ;;
                     esac
                     echo ""
                     read -p "Press Enter to continue..."
                 else
-                    echo -e "${RED}Invalid selection. Only Sentinel and Guardian are available.${NC}"
+                    echo -e "${RED}Invalid selection. Choose from available tiers.${NC}"
                     sleep 1
                 fi
                 ;;
