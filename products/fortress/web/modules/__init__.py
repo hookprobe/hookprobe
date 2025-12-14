@@ -43,3 +43,7 @@ def register_blueprints(app: Flask):
     # API module - REST API endpoints
     from .api import api_bp
     app.register_blueprint(api_bp, url_prefix='/api')
+
+    # Tunnel module - Cloudflare Tunnel remote access
+    from .tunnel import tunnel_bp
+    app.register_blueprint(tunnel_bp, url_prefix='/tunnel')
