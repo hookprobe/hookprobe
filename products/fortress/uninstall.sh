@@ -106,6 +106,7 @@ stop_services() {
         "fortress-dnsmasq"
         "fortress-hostapd"
         "fortress-nat"
+        "fortress-web"
     )
 
     for service in "${services[@]}"; do
@@ -136,6 +137,7 @@ remove_systemd_services() {
         "fortress-dnsmasq"
         "fortress-hostapd"
         "fortress-nat"
+        "fortress-web"
     )
 
     for service in "${services[@]}"; do
@@ -399,6 +401,16 @@ remove_configuration() {
         log_info "Removing MACsec secrets..."
         rm -rf "$SECRETS_DIR/macsec"
     fi
+
+    # Remove SSL certificates
+    if [ -d /etc/hookprobe/ssl ]; then
+        log_info "Removing SSL certificates..."
+        rm -rf /etc/hookprobe/ssl
+    fi
+
+    # Remove admin password and secret key
+    rm -f "$SECRETS_DIR/admin_password" 2>/dev/null || true
+    rm -f "$SECRETS_DIR/fortress_secret_key" 2>/dev/null || true
 
     # Remove Cloudflare Tunnel configuration
     if [ -d "$INSTALL_DIR/tunnel" ]; then
