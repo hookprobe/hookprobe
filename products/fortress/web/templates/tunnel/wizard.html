@@ -1,0 +1,385 @@
+{% extends "base.html" %}
+
+{% block title %}Remote Access Setup - HookProbe Fortress{% endblock %}
+
+{% block page_title %}Remote Access Setup Wizard{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('tunnel.index') }}">Remote Access</a></li>
+<li class="breadcrumb-item active">Setup Wizard</li>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.wizard-step {
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    transition: all 0.3s ease;
+}
+.wizard-step.active {
+    background: rgba(0, 123, 255, 0.1);
+    border: 2px solid #007bff;
+}
+.wizard-step.completed {
+    background: rgba(40, 167, 69, 0.1);
+    border: 2px solid #28a745;
+}
+.wizard-step.pending {
+    background: rgba(108, 117, 125, 0.1);
+    border: 2px solid #6c757d;
+    opacity: 0.7;
+}
+.step-number {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    margin-right: 15px;
+}
+.step-number.active { background: #007bff; color: white; }
+.step-number.completed { background: #28a745; color: white; }
+.step-number.pending { background: #6c757d; color: white; }
+.cloudflare-logo {
+    max-height: 30px;
+    margin-right: 10px;
+}
+.code-block {
+    background: #1e1e1e;
+    border-radius: 8px;
+    padding: 15px;
+    font-family: 'Monaco', 'Menlo', monospace;
+    color: #d4d4d4;
+    margin: 15px 0;
+    overflow-x: auto;
+}
+.code-block .comment { color: #6a9955; }
+.code-block .command { color: #569cd6; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Progress Overview -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="progress" style="height: 8px;">
+            <div class="progress-bar bg-success" style="width: {{ (step / 4) * 100 }}%"></div>
+        </div>
+        <div class="d-flex justify-content-between mt-2 text-muted small">
+            <span>Step {{ step }} of 4</span>
+            <span>{{ ((step / 4) * 100) | int }}% Complete</span>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Step 1: Install cloudflared -->
+        <div class="wizard-step {% if step == 1 %}active{% elif step > 1 %}completed{% else %}pending{% endif %}">
+            <div class="d-flex align-items-center mb-3">
+                <span class="step-number {% if step == 1 %}active{% elif step > 1 %}completed{% else %}pending{% endif %}">
+                    {% if step > 1 %}<i class="fas fa-check"></i>{% else %}1{% endif %}
+                </span>
+                <h4 class="mb-0">Install Cloudflare Tunnel Client</h4>
+            </div>
+
+            {% if step == 1 %}
+            <div class="ml-5 pl-3">
+                <p>
+                    First, we need to install <code>cloudflared</code> - the Cloudflare Tunnel client
+                    that creates a secure connection from your Fortress to Cloudflare's network.
+                </p>
+
+                {% if status.cloudflared_version %}
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle mr-2"></i>
+                    <strong>Already installed!</strong> Version {{ status.cloudflared_version }}
+                </div>
+                {% else %}
+                <form action="{{ url_for('tunnel.install') }}" method="post">
+                    <button type="submit" class="btn btn-primary btn-lg">
+                        <i class="fas fa-download mr-2"></i>Install cloudflared
+                    </button>
+                </form>
+                <p class="text-muted mt-2">
+                    <small>This will download and install the official Cloudflare tunnel client.</small>
+                </p>
+                {% endif %}
+            </div>
+            {% elif step > 1 %}
+            <div class="ml-5 pl-3">
+                <span class="text-success">
+                    <i class="fas fa-check mr-2"></i>cloudflared {{ status.cloudflared_version }} installed
+                </span>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Step 2: Get Token from Cloudflare -->
+        <div class="wizard-step {% if step == 2 %}active{% elif step > 2 %}completed{% else %}pending{% endif %}">
+            <div class="d-flex align-items-center mb-3">
+                <span class="step-number {% if step == 2 %}active{% elif step > 2 %}completed{% else %}pending{% endif %}">
+                    {% if step > 2 %}<i class="fas fa-check"></i>{% else %}2{% endif %}
+                </span>
+                <h4 class="mb-0">Create Tunnel in Cloudflare Dashboard</h4>
+            </div>
+
+            {% if step == 2 %}
+            <div class="ml-5 pl-3">
+                <p>Now we need to create a tunnel in Cloudflare and get a token. Follow these steps:</p>
+
+                <div class="card bg-dark mb-3">
+                    <div class="card-body">
+                        <ol class="mb-0">
+                            <li class="mb-3">
+                                <strong>Go to Cloudflare Zero Trust Dashboard</strong>
+                                <br>
+                                <a href="https://one.dash.cloudflare.com/" target="_blank" class="btn btn-sm btn-outline-info mt-2">
+                                    <i class="fas fa-external-link-alt mr-2"></i>Open Cloudflare Dashboard
+                                </a>
+                            </li>
+                            <li class="mb-3">
+                                <strong>Navigate to:</strong> Networks &rarr; Tunnels
+                            </li>
+                            <li class="mb-3">
+                                <strong>Click "Create a tunnel"</strong>
+                                <br>
+                                <small class="text-muted">Choose "Cloudflared" as the connector type</small>
+                            </li>
+                            <li class="mb-3">
+                                <strong>Name your tunnel:</strong> <code>fortress-{{ hostname or 'mybusiness' }}</code>
+                            </li>
+                            <li class="mb-3">
+                                <strong>Copy the tunnel token</strong>
+                                <br>
+                                <small class="text-muted">It looks like: <code>eyJhI...</code> (very long string)</small>
+                            </li>
+                            <li class="mb-3">
+                                <strong>Configure Public Hostname:</strong>
+                                <ul>
+                                    <li>Subdomain: <code>fortress</code> (or your choice)</li>
+                                    <li>Domain: Select your website domain</li>
+                                    <li>Service Type: <code>HTTPS</code></li>
+                                    <li>URL: <code>localhost:8443</code></li>
+                                </ul>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+
+                <!-- Token Input Form -->
+                <form action="{{ url_for('tunnel.configure') }}" method="post" class="mt-4">
+                    <div class="form-group">
+                        <label for="token"><strong>Tunnel Token</strong></label>
+                        <input type="password" class="form-control" id="token" name="token"
+                               placeholder="Paste your tunnel token here..."
+                               required>
+                        <small class="form-text text-muted">
+                            The token from Cloudflare dashboard (starts with "eyJ...")
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="hostname"><strong>Your Access URL</strong></label>
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text">https://</span>
+                            </div>
+                            <input type="text" class="form-control" id="hostname" name="hostname"
+                                   placeholder="fortress.yourbusiness.com"
+                                   required>
+                        </div>
+                        <small class="form-text text-muted">
+                            The subdomain you configured in Cloudflare (e.g., fortress.mybakery.com)
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="auto_start"
+                                   name="auto_start" checked>
+                            <label class="custom-control-label" for="auto_start">
+                                Start automatically on boot
+                            </label>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-success btn-lg">
+                        <i class="fas fa-link mr-2"></i>Connect Tunnel
+                    </button>
+                </form>
+            </div>
+            {% elif step > 2 %}
+            <div class="ml-5 pl-3">
+                <span class="text-success">
+                    <i class="fas fa-check mr-2"></i>Tunnel configured
+                </span>
+            </div>
+            {% else %}
+            <div class="ml-5 pl-3">
+                <span class="text-muted">Complete step 1 first</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Step 3: Verify DNS -->
+        <div class="wizard-step {% if step == 3 %}active{% elif step > 3 %}completed{% else %}pending{% endif %}">
+            <div class="d-flex align-items-center mb-3">
+                <span class="step-number {% if step == 3 %}active{% elif step > 3 %}completed{% else %}pending{% endif %}">
+                    {% if step > 3 %}<i class="fas fa-check"></i>{% else %}3{% endif %}
+                </span>
+                <h4 class="mb-0">Verify Connection</h4>
+            </div>
+
+            {% if step == 3 %}
+            <div class="ml-5 pl-3">
+                <p>Your tunnel is configured! Let's verify it's working:</p>
+
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    DNS changes may take a few minutes to propagate.
+                </div>
+
+                <button type="button" class="btn btn-info" onclick="testConnectivity()">
+                    <i class="fas fa-satellite-dish mr-2"></i>Test Connection
+                </button>
+
+                <div id="test-result" class="mt-3" style="display: none;"></div>
+
+                <hr>
+
+                <p>Once the test passes, your Fortress will be accessible at:</p>
+                <div class="code-block">
+                    <span class="command">https://{{ status.hostname or 'fortress.yourbusiness.com' }}</span>
+                </div>
+
+                <a href="{{ url_for('tunnel.index') }}" class="btn btn-success btn-lg mt-3">
+                    <i class="fas fa-check mr-2"></i>Complete Setup
+                </a>
+            </div>
+            {% elif step > 3 %}
+            <div class="ml-5 pl-3">
+                <span class="text-success">
+                    <i class="fas fa-check mr-2"></i>Connection verified
+                </span>
+            </div>
+            {% else %}
+            <div class="ml-5 pl-3">
+                <span class="text-muted">Complete previous steps first</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Step 4: Complete -->
+        <div class="wizard-step {% if step == 4 %}active completed{% else %}pending{% endif %}">
+            <div class="d-flex align-items-center mb-3">
+                <span class="step-number {% if step == 4 %}completed{% else %}pending{% endif %}">
+                    {% if step == 4 %}<i class="fas fa-check"></i>{% else %}4{% endif %}
+                </span>
+                <h4 class="mb-0">Setup Complete!</h4>
+            </div>
+
+            {% if step == 4 %}
+            <div class="ml-5 pl-3">
+                <div class="alert alert-success">
+                    <i class="fas fa-party-horn mr-2"></i>
+                    <strong>Congratulations!</strong> Your Fortress is now accessible from anywhere.
+                </div>
+
+                <p>Bookmark this URL on your phone:</p>
+                <div class="code-block">
+                    <span class="command">https://{{ status.hostname }}</span>
+                </div>
+
+                <a href="{{ url_for('tunnel.index') }}" class="btn btn-primary btn-lg">
+                    <i class="fas fa-arrow-right mr-2"></i>Go to Remote Access Dashboard
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Help Sidebar -->
+    <div class="col-lg-4">
+        <div class="card card-outline card-info sticky-top" style="top: 20px;">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-question-circle mr-2"></i>Need Help?</h3>
+            </div>
+            <div class="card-body">
+                <h6>What is Cloudflare Tunnel?</h6>
+                <p class="small">
+                    Cloudflare Tunnel creates a secure, outbound-only connection from your network to Cloudflare.
+                    No ports need to be opened on your firewall!
+                </p>
+
+                <h6>Prerequisites</h6>
+                <ul class="small">
+                    <li>Website on Cloudflare (free tier works)</li>
+                    <li>Cloudflare account</li>
+                    <li>Internet connection</li>
+                </ul>
+
+                <h6>Don't have a Cloudflare account?</h6>
+                <p class="small">
+                    <a href="https://dash.cloudflare.com/sign-up" target="_blank">
+                        Create a free account <i class="fas fa-external-link-alt"></i>
+                    </a>
+                </p>
+
+                <hr>
+
+                <h6>Security Notes</h6>
+                <ul class="small text-muted">
+                    <li>All traffic is encrypted end-to-end</li>
+                    <li>Cloudflare provides DDoS protection</li>
+                    <li>You can add additional authentication via Cloudflare Access</li>
+                </ul>
+
+                <hr>
+
+                <a href="{{ url_for('tunnel.index') }}" class="btn btn-outline-secondary btn-block btn-sm">
+                    <i class="fas fa-arrow-left mr-2"></i>Back to Status
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function testConnectivity() {
+    var resultDiv = $('#test-result');
+    resultDiv.html('<i class="fas fa-spinner fa-spin mr-2"></i>Testing...').show();
+
+    fetch('{{ url_for("tunnel.test") }}', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                resultDiv.html(
+                    '<div class="alert alert-success">' +
+                    '<i class="fas fa-check-circle mr-2"></i>' + data.message +
+                    '</div>'
+                );
+            } else {
+                resultDiv.html(
+                    '<div class="alert alert-warning">' +
+                    '<i class="fas fa-exclamation-triangle mr-2"></i>' + data.message +
+                    '<br><small>DNS propagation may take a few minutes. Try again shortly.</small>' +
+                    '</div>'
+                );
+            }
+        })
+        .catch(error => {
+            resultDiv.html(
+                '<div class="alert alert-danger">' +
+                '<i class="fas fa-times-circle mr-2"></i>Test failed: ' + error +
+                '</div>'
+            );
+        });
+}
+</script>
+{% endblock %}

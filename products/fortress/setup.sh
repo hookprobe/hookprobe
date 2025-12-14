@@ -74,6 +74,7 @@ ENABLE_N8N="${ENABLE_N8N:-false}"
 ENABLE_MONITORING="${ENABLE_MONITORING:-true}"
 ENABLE_CLICKHOUSE="${ENABLE_CLICKHOUSE:-false}"
 ENABLE_LTE="${ENABLE_LTE:-false}"
+ENABLE_REMOTE_ACCESS="${ENABLE_REMOTE_ACCESS:-false}"
 
 # Installation mode
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
@@ -246,69 +247,232 @@ detect_interfaces() {
 # ============================================================
 # PACKAGE INSTALLATION
 # ============================================================
+
+# Required packages - installation will fail if these cannot be installed
+REQUIRED_PACKAGES_APT=(
+    "openvswitch-switch"
+    "python3"
+    "python3-pip"
+    "curl"
+    "jq"
+    "openssl"
+    "iptables"
+    "bridge-utils"
+)
+
+# Optional packages - won't fail if unavailable
+OPTIONAL_PACKAGES_APT=(
+    "hostapd"
+    "dnsmasq"
+    "nftables"
+    "iw"
+    "wireless-tools"
+    "wpasupplicant"
+    "wpa_supplicant"
+    "python3-flask"
+    "python3-requests"
+    "net-tools"
+    "freeradius"
+    "freeradius-utils"
+    "vlan"
+    "network-manager"
+    "modemmanager"
+    "libqmi-utils"
+    "libmbim-utils"
+    "usb-modeswitch"
+)
+
 install_packages() {
     log_step "Installing required packages..."
 
     if command -v apt-get &>/dev/null; then
         PKG_MGR="apt"
-        apt-get update -qq
 
-        apt-get install -y -qq \
-            hostapd \
-            dnsmasq \
-            bridge-utils \
-            iptables \
-            nftables \
-            iw \
-            wireless-tools \
-            wpasupplicant \
-            python3 \
-            python3-pip \
-            python3-flask \
-            python3-requests \
-            net-tools \
-            curl \
-            jq \
-            openssl \
-            openvswitch-switch \
-            freeradius \
-            freeradius-utils \
-            vlan \
-            2>/dev/null || true
+        log_info "Updating package lists..."
+        if ! apt-get update -qq; then
+            log_warn "apt-get update had warnings, continuing..."
+        fi
 
-        # MACsec tools (may not be available on all distros)
-        apt-get install -y -qq wpa_supplicant 2>/dev/null || true
+        # Install required packages first (will fail if any are missing)
+        log_info "Installing required packages: ${REQUIRED_PACKAGES_APT[*]}"
+        for pkg in "${REQUIRED_PACKAGES_APT[@]}"; do
+            if dpkg -l "$pkg" &>/dev/null; then
+                log_info "  $pkg: already installed"
+            else
+                log_info "  Installing $pkg..."
+                if ! apt-get install -y "$pkg"; then
+                    log_error "Failed to install required package: $pkg"
+                    log_error "This package is required for Fortress to function."
+                    log_error "Please install it manually and re-run setup."
+                    exit 1
+                fi
+            fi
+        done
 
-        log_info "Packages installed"
+        # Install optional packages (won't fail)
+        log_info "Installing optional packages..."
+        for pkg in "${OPTIONAL_PACKAGES_APT[@]}"; do
+            if dpkg -l "$pkg" &>/dev/null 2>&1; then
+                log_info "  $pkg: already installed"
+            else
+                if apt-get install -y "$pkg" 2>/dev/null; then
+                    log_info "  $pkg: installed"
+                else
+                    log_warn "  $pkg: not available (optional)"
+                fi
+            fi
+        done
+
+        log_info "Package installation complete"
 
     elif command -v dnf &>/dev/null; then
         PKG_MGR="dnf"
-        dnf install -y -q \
-            hostapd \
-            dnsmasq \
-            bridge-utils \
-            iptables \
-            nftables \
-            iw \
-            wireless-tools \
-            wpa_supplicant \
-            python3 \
-            python3-pip \
-            python3-flask \
-            python3-requests \
-            net-tools \
-            curl \
-            jq \
-            openssl \
-            openvswitch \
-            freeradius \
-            2>/dev/null || true
 
-        log_info "Packages installed"
+        # Fedora/RHEL package names
+        local required_pkgs=(
+            "openvswitch"
+            "python3"
+            "python3-pip"
+            "curl"
+            "jq"
+            "openssl"
+            "iptables"
+            "bridge-utils"
+        )
+
+        local optional_pkgs=(
+            "hostapd"
+            "dnsmasq"
+            "nftables"
+            "iw"
+            "wireless-tools"
+            "wpa_supplicant"
+            "python3-flask"
+            "python3-requests"
+            "net-tools"
+            "freeradius"
+            "NetworkManager"
+            "ModemManager"
+            "libqmi-utils"
+            "libmbim-utils"
+            "usb_modeswitch"
+        )
+
+        log_info "Installing required packages..."
+        for pkg in "${required_pkgs[@]}"; do
+            if rpm -q "$pkg" &>/dev/null; then
+                log_info "  $pkg: already installed"
+            else
+                log_info "  Installing $pkg..."
+                if ! dnf install -y "$pkg"; then
+                    log_error "Failed to install required package: $pkg"
+                    exit 1
+                fi
+            fi
+        done
+
+        log_info "Installing optional packages..."
+        for pkg in "${optional_pkgs[@]}"; do
+            if rpm -q "$pkg" &>/dev/null 2>&1; then
+                log_info "  $pkg: already installed"
+            else
+                dnf install -y "$pkg" 2>/dev/null && log_info "  $pkg: installed" || log_warn "  $pkg: not available"
+            fi
+        done
+
+        log_info "Package installation complete"
     else
-        log_error "Unsupported package manager"
+        log_error "Unsupported package manager. Fortress requires apt (Debian/Ubuntu) or dnf (Fedora/RHEL)."
         exit 1
     fi
+}
+
+verify_critical_packages() {
+    log_step "Verifying critical packages..."
+
+    local missing=()
+
+    # Check for ovs-vsctl (Open vSwitch)
+    if ! command -v ovs-vsctl &>/dev/null; then
+        missing+=("openvswitch-switch (ovs-vsctl not found)")
+    else
+        log_info "  ovs-vsctl: OK"
+    fi
+
+    # Check for python3
+    if ! command -v python3 &>/dev/null; then
+        missing+=("python3")
+    else
+        log_info "  python3: OK ($(python3 --version))"
+    fi
+
+    # Check for curl
+    if ! command -v curl &>/dev/null; then
+        missing+=("curl")
+    else
+        log_info "  curl: OK"
+    fi
+
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        missing+=("jq")
+    else
+        log_info "  jq: OK"
+    fi
+
+    # Check for iptables
+    if ! command -v iptables &>/dev/null; then
+        missing+=("iptables")
+    else
+        log_info "  iptables: OK"
+    fi
+
+    # Check for ip command
+    if ! command -v ip &>/dev/null; then
+        missing+=("iproute2 (ip command not found)")
+    else
+        log_info "  ip: OK"
+    fi
+
+    # Check for brctl (optional but useful)
+    if command -v brctl &>/dev/null; then
+        log_info "  brctl: OK"
+    else
+        log_warn "  brctl: not found (bridge-utils optional)"
+    fi
+
+    # Check for iw (WiFi)
+    if command -v iw &>/dev/null; then
+        log_info "  iw: OK"
+    else
+        log_warn "  iw: not found (WiFi features limited)"
+    fi
+
+    # Check for nmcli (NetworkManager - needed for LTE)
+    if command -v nmcli &>/dev/null; then
+        log_info "  nmcli: OK (NetworkManager available)"
+    else
+        log_warn "  nmcli: not found (LTE failover requires NetworkManager)"
+    fi
+
+    # Check for mmcli (ModemManager - needed for LTE)
+    if command -v mmcli &>/dev/null; then
+        log_info "  mmcli: OK (ModemManager available)"
+    else
+        log_warn "  mmcli: not found (LTE modem detection requires ModemManager)"
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_error "Missing critical packages:"
+        for pkg in "${missing[@]}"; do
+            log_error "  - $pkg"
+        done
+        log_error ""
+        log_error "Please install missing packages and re-run setup."
+        exit 1
+    fi
+
+    log_info "All critical packages verified"
 }
 
 install_podman() {
@@ -1175,6 +1339,79 @@ install_monitoring() {
 }
 
 # ============================================================
+# CLOUDFLARE TUNNEL (REMOTE ACCESS)
+# ============================================================
+install_cloudflared() {
+    if [ "$ENABLE_REMOTE_ACCESS" != true ]; then
+        log_info "Remote access (Cloudflare Tunnel) disabled"
+        return 0
+    fi
+
+    log_step "Installing Cloudflare Tunnel client for remote access..."
+
+    # Check if already installed
+    if command -v cloudflared &>/dev/null; then
+        local version=$(cloudflared version 2>&1 | head -1 | awk '{print $3}')
+        log_info "cloudflared already installed: $version"
+        return 0
+    fi
+
+    # Detect architecture
+    local arch=""
+    case "$(uname -m)" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        armv7l|armhf) arch="arm" ;;
+        *)
+            log_warn "Unsupported architecture for cloudflared: $(uname -m)"
+            return 1
+            ;;
+    esac
+
+    log_info "Downloading cloudflared for $arch..."
+
+    local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}"
+
+    if curl -fsSL -o /tmp/cloudflared "$url"; then
+        mv /tmp/cloudflared /usr/local/bin/cloudflared
+        chmod +x /usr/local/bin/cloudflared
+
+        # Verify installation
+        if /usr/local/bin/cloudflared version &>/dev/null; then
+            local version=$(/usr/local/bin/cloudflared version 2>&1 | head -1 | awk '{print $3}')
+            log_info "cloudflared $version installed successfully"
+
+            # Create tunnel configuration directory
+            mkdir -p /opt/hookprobe/fortress/tunnel
+            chmod 700 /opt/hookprobe/fortress/tunnel
+
+            # Copy tunnel management library
+            if [ -f "$FORTRESS_ROOT/lib/cloudflare_tunnel.py" ]; then
+                cp "$FORTRESS_ROOT/lib/cloudflare_tunnel.py" /opt/hookprobe/fortress/lib/
+                log_info "Cloudflare Tunnel manager library installed"
+            fi
+
+            log_info ""
+            log_info "Cloudflare Tunnel installed! To enable remote access:"
+            log_info "  1. Open the Fortress web UI"
+            log_info "  2. Go to 'Remote Access' in the sidebar"
+            log_info "  3. Follow the setup wizard"
+            log_info ""
+            log_info "Or configure manually:"
+            log_info "  cloudflared tunnel login"
+            log_info "  cloudflared tunnel create fortress-\$(hostname)"
+            log_info ""
+        else
+            log_error "cloudflared installation verification failed"
+            return 1
+        fi
+    else
+        log_error "Failed to download cloudflared"
+        return 1
+    fi
+}
+
+# ============================================================
 # LTE FAILOVER SETUP
 # ============================================================
 setup_lte_failover() {
@@ -1628,6 +1865,7 @@ show_completion() {
     echo -e "  ${GREEN}✓${NC} FreeRADIUS with dynamic VLAN assignment"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Monitoring (Grafana + Victoria Metrics)"
     [ "$ENABLE_N8N" = true ] && echo -e "  ${GREEN}✓${NC} n8n Workflow Automation"
+    [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e "  ${GREEN}✓${NC} Cloudflare Tunnel (Remote Access)"
 
     # LTE information
     if [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ]; then
@@ -1650,6 +1888,10 @@ show_completion() {
     echo -e "  ${BOLD}Web Interfaces:${NC}"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  Grafana:          http://localhost:3000"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  Victoria Metrics: http://localhost:8428"
+    echo -e "  Fortress Web UI:  https://localhost:8443"
+    [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e ""
+    [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e "  ${BOLD}Remote Access:${NC}"
+    [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e "  cloudflared installed - configure via Web UI > Remote Access"
     echo ""
     echo -e "  ${BOLD}Logs:${NC}"
     echo -e "  journalctl -u fortress-qsecbit -f"
@@ -1684,6 +1926,7 @@ main() {
             --enable-monitoring) ENABLE_MONITORING=true; shift ;;
             --enable-clickhouse) ENABLE_CLICKHOUSE=true; shift ;;
             --enable-lte) ENABLE_LTE=true; shift ;;
+            --enable-remote-access) ENABLE_REMOTE_ACCESS=true; shift ;;
             --non-interactive) NON_INTERACTIVE=true; shift ;;
             --lte-apn) HOOKPROBE_LTE_APN="$2"; shift 2 ;;
             --lte-auth) HOOKPROBE_LTE_AUTH="$2"; shift 2 ;;
@@ -1703,6 +1946,7 @@ main() {
                 echo "  --enable-monitoring    Enable Grafana + Victoria Metrics"
                 echo "  --enable-clickhouse    Enable ClickHouse analytics"
                 echo "  --enable-lte           Enable LTE WAN failover"
+                echo "  --enable-remote-access Install Cloudflare Tunnel for remote dashboard access"
                 echo "  --lte-apn APN          Set LTE APN (e.g., internet.vodafone.ro)"
                 echo "  --lte-auth TYPE        Set LTE auth type: none, pap, chap, mschapv2"
                 echo "  --lte-user USER        Set LTE username (for PAP/CHAP auth)"
@@ -1739,6 +1983,7 @@ main() {
     detect_interfaces
 
     install_packages
+    verify_critical_packages
     install_podman
     install_openvswitch
 
@@ -1751,6 +1996,7 @@ main() {
     install_qsecbit_agent
     configure_freeradius_vlan
     install_monitoring
+    install_cloudflared
     setup_lte_failover
 
     create_systemd_services
