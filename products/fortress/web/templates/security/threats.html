@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Threat Log - HookProbe Fortress{% endblock %}
+{% block page_title %}Threat Log{% endblock %}
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('security.index') }}">Security</a></li>
+<li class="breadcrumb-item active">Threats</li>
+{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap4.min.css">
+<style>
+    .threat-severity-HIGH { border-left: 4px solid #dc3545; }
+    .threat-severity-MEDIUM { border-left: 4px solid #ffc107; }
+    .threat-severity-LOW { border-left: 4px solid #17a2b8; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Time Range Filter -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="btn-group">
+            <a href="{{ url_for('security.threats', hours=6) }}" class="btn btn-{% if hours == 6 %}primary{% else %}outline-primary{% endif %}">
+                Last 6 Hours
+            </a>
+            <a href="{{ url_for('security.threats', hours=24) }}" class="btn btn-{% if hours == 24 %}primary{% else %}outline-primary{% endif %}">
+                Last 24 Hours
+            </a>
+            <a href="{{ url_for('security.threats', hours=72) }}" class="btn btn-{% if hours == 72 %}primary{% else %}outline-primary{% endif %}">
+                Last 3 Days
+            </a>
+            <a href="{{ url_for('security.threats', hours=168) }}" class="btn btn-{% if hours == 168 %}primary{% else %}outline-primary{% endif %}">
+                Last 7 Days
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Threat Table -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-shield-virus mr-2"></i>Detected Threats ({{ threats|length }})</h3>
+    </div>
+    <div class="card-body">
+        <table id="threats-table" class="table table-bordered table-striped">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Severity</th>
+                    <th>Source IP</th>
+                    <th>Target</th>
+                    <th>Status</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for threat in threats %}
+                <tr class="threat-severity-{{ threat.severity }}">
+                    <td data-order="{{ threat.detected_at }}">
+                        {{ threat.detected_at[:19] if threat.detected_at else 'N/A' }}
+                    </td>
+                    <td>
+                        <i class="fas fa-{% if 'scan' in threat.threat_type %}search{% elif 'dns' in threat.threat_type %}dns{% elif 'arp' in threat.threat_type %}network-wired{% elif 'flood' in threat.threat_type %}water{% elif 'inject' in threat.threat_type %}syringe{% else %}exclamation-triangle{% endif %} mr-2"></i>
+                        {{ threat.threat_type|replace('_', ' ')|title }}
+                    </td>
+                    <td>
+                        <span class="badge badge-{% if threat.severity == 'HIGH' %}danger{% elif threat.severity == 'MEDIUM' %}warning{% else %}info{% endif %}">
+                            {{ threat.severity }}
+                        </span>
+                    </td>
+                    <td><code>{{ threat.source_ip }}</code></td>
+                    <td>
+                        {% if threat.target_ip %}
+                        <code>{{ threat.target_ip }}</code>
+                        {% elif threat.target_mac %}
+                        <code>{{ threat.target_mac }}</code>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if threat.blocked %}
+                        <span class="badge badge-success"><i class="fas fa-ban"></i> Blocked</span>
+                        {% else %}
+                        <span class="badge badge-warning"><i class="fas fa-eye"></i> Monitored</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if threat.details %}
+                        <button type="button" class="btn btn-sm btn-outline-info details-btn" data-details='{{ threat.details|tojson }}'>
+                            <i class="fas fa-info-circle"></i> View
+                        </button>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not threats %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">
+                        <i class="fas fa-check-circle fa-2x mb-2"></i>
+                        <p class="mb-0">No threats detected in the selected time period</p>
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Details Modal -->
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-info-circle"></i> Threat Details</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <pre id="details-content" class="bg-dark text-light p-3 rounded"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Back Button -->
+<div class="row mt-3">
+    <div class="col-12">
+        <a href="{{ url_for('security.index') }}" class="btn btn-secondary">
+            <i class="fas fa-arrow-left"></i> Back to Security Dashboard
+        </a>
+    </div>
+</div>
+
+{% if not db_available %}
+<div class="alert alert-warning mt-3">
+    <i class="fas fa-exclamation-triangle"></i>
+    <strong>Demo Mode:</strong> Database is not connected. Showing sample threat data.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap4.min.js"></script>
+<script>
+$(document).ready(function() {
+    // Initialize DataTable
+    $('#threats-table').DataTable({
+        "order": [[0, "desc"]],
+        "pageLength": 25,
+        "language": {
+            "search": "Search threats:"
+        }
+    });
+
+    // Details modal
+    $('.details-btn').on('click', function() {
+        var details = $(this).data('details');
+        $('#details-content').text(JSON.stringify(details, null, 2));
+        $('#detailsModal').modal('show');
+    });
+});
+</script>
+{% endblock %}

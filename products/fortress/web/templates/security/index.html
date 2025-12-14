@@ -1,9 +1,357 @@
 {% extends "base.html" %}
 {% block title %}Security - HookProbe Fortress{% endblock %}
-{% block page_title %}Security{% endblock %}
+{% block page_title %}Security Dashboard{% endblock %}
 {% block breadcrumb %}<li class="breadcrumb-item active">Security</li>{% endblock %}
+
+{% block extra_css %}
+<style>
+    .qsecbit-gauge {
+        width: 200px;
+        height: 200px;
+        margin: 0 auto;
+        position: relative;
+    }
+    .qsecbit-score {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 48px;
+        font-weight: bold;
+    }
+    .qsecbit-label {
+        text-align: center;
+        font-size: 14px;
+        color: #aaa;
+    }
+    .rag-GREEN { color: #28a745; }
+    .rag-AMBER { color: #ffc107; }
+    .rag-RED { color: #dc3545; }
+    .layer-card {
+        transition: transform 0.2s;
+    }
+    .layer-card:hover {
+        transform: translateY(-5px);
+    }
+    .threat-severity-HIGH { border-left: 4px solid #dc3545; }
+    .threat-severity-MEDIUM { border-left: 4px solid #ffc107; }
+    .threat-severity-LOW { border-left: 4px solid #17a2b8; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="alert alert-info">
-    <i class="fas fa-info-circle"></i> Security module - Port from Guardian security/metrics.html
+<!-- QSecBit Score -->
+<div class="row">
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shield-alt mr-2"></i>QSecBit Score</h3>
+            </div>
+            <div class="card-body text-center">
+                <div class="qsecbit-gauge">
+                    <canvas id="qsecbitGauge" width="200" height="200"></canvas>
+                    <div class="qsecbit-score rag-{{ qsecbit.rag_status }}" id="qsecbit-score">
+                        {{ (qsecbit.score * 100)|int }}
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <span class="badge badge-lg badge-{% if qsecbit.rag_status == 'GREEN' %}success{% elif qsecbit.rag_status == 'AMBER' %}warning{% else %}danger{% endif %}" style="font-size: 1.5em; padding: 10px 30px;">
+                        {{ qsecbit.rag_status }}
+                    </span>
+                </div>
+                <p class="qsecbit-label mt-3">
+                    Last updated: {{ qsecbit.recorded_at[:19] if qsecbit.recorded_at else 'N/A' }}
+                </p>
+                <div class="mt-2">
+                    <small class="text-muted">
+                        GREEN &lt; 0.45 | AMBER 0.45-0.70 | RED &gt; 0.70
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Threat Summary -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-exclamation-triangle mr-2"></i>Threat Summary (24h)</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6 text-center">
+                        <h1 class="display-4">{{ threat_summary.total }}</h1>
+                        <p class="text-muted">Total Threats</p>
+                    </div>
+                    <div class="col-6 text-center">
+                        <h1 class="display-4 text-success">{{ threat_summary.blocked }}</h1>
+                        <p class="text-muted">Blocked</p>
+                    </div>
+                </div>
+                <hr>
+                <div class="row text-center">
+                    <div class="col-4">
+                        <span class="badge badge-danger" style="font-size: 1.2em;">{{ threat_summary.high }}</span>
+                        <p class="small text-muted mb-0">High</p>
+                    </div>
+                    <div class="col-4">
+                        <span class="badge badge-warning" style="font-size: 1.2em;">{{ threat_summary.medium }}</span>
+                        <p class="small text-muted mb-0">Medium</p>
+                    </div>
+                    <div class="col-4">
+                        <span class="badge badge-info" style="font-size: 1.2em;">{{ threat_summary.low }}</span>
+                        <p class="small text-muted mb-0">Low</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DNS Protection -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-dns mr-2"></i>DNS Protection</h3>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-3">
+                    <div class="col-6">
+                        <h2>{{ dns_stats.total_queries|default(0) }}</h2>
+                        <p class="text-muted">Total Queries</p>
+                    </div>
+                    <div class="col-6">
+                        <h2 class="text-danger">{{ dns_stats.blocked_queries|default(0) }}</h2>
+                        <p class="text-muted">Blocked</p>
+                    </div>
+                </div>
+                <div class="progress mb-2" style="height: 25px;">
+                    <div class="progress-bar bg-success" style="width: {{ 100 - dns_stats.block_rate|default(0) }}%">
+                        Allowed
+                    </div>
+                    <div class="progress-bar bg-danger" style="width: {{ dns_stats.block_rate|default(0) }}%">
+                        {{ dns_stats.block_rate|default(0)|round(1) }}%
+                    </div>
+                </div>
+                <p class="text-center text-muted small">Block Rate: {{ dns_stats.block_rate|default(0)|round(2) }}%</p>
+            </div>
+        </div>
+    </div>
 </div>
+
+<!-- Layer Security Cards -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-layer-group mr-2"></i>Layer Security Status</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% for layer, stats in layer_stats.items() %}
+                    <div class="col-md-2 col-sm-4 col-6 mb-3">
+                        <div class="card layer-card h-100 border-{% if stats.status == 'GREEN' %}success{% elif stats.status == 'AMBER' %}warning{% else %}danger{% endif %}">
+                            <div class="card-body text-center p-3">
+                                <h5 class="mb-1">{{ layer }}</h5>
+                                <div class="display-4 mb-2 text-{% if stats.status == 'GREEN' %}success{% elif stats.status == 'AMBER' %}warning{% else %}danger{% endif %}">
+                                    {{ (stats.score * 100)|int }}%
+                                </div>
+                                <p class="mb-0 small">
+                                    <span class="badge badge-{% if stats.threats == 0 %}success{% else %}warning{% endif %}">
+                                        {{ stats.threats }} threats
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Threats -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shield-virus mr-2"></i>Recent Threats</h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('security.threats') }}" class="btn btn-sm btn-outline-light">
+                        View All <i class="fas fa-arrow-right ml-1"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Severity</th>
+                            <th>Source</th>
+                            <th>Time</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for threat in threats %}
+                        <tr class="threat-severity-{{ threat.severity }}">
+                            <td>
+                                <i class="fas fa-{% if 'scan' in threat.threat_type %}search{% elif 'dns' in threat.threat_type %}dns{% elif 'arp' in threat.threat_type %}network-wired{% else %}exclamation-triangle{% endif %} mr-2"></i>
+                                {{ threat.threat_type|replace('_', ' ')|title }}
+                            </td>
+                            <td>
+                                <span class="badge badge-{% if threat.severity == 'HIGH' %}danger{% elif threat.severity == 'MEDIUM' %}warning{% else %}info{% endif %}">
+                                    {{ threat.severity }}
+                                </span>
+                            </td>
+                            <td><code>{{ threat.source_ip }}</code></td>
+                            <td>{{ threat.detected_at[:19] if threat.detected_at else 'N/A' }}</td>
+                            <td>
+                                {% if threat.blocked %}
+                                <span class="badge badge-success"><i class="fas fa-ban"></i> Blocked</span>
+                                {% else %}
+                                <span class="badge badge-warning"><i class="fas fa-eye"></i> Monitored</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% if not threats %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">
+                                <i class="fas fa-check-circle fa-2x mb-2"></i>
+                                <p class="mb-0">No threats detected in the last 24 hours</p>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Top Blocked Domains -->
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-ban mr-2"></i>Top Blocked Domains</h3>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Domain</th>
+                            <th class="text-right">Blocks</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for domain in dns_stats.top_blocked|default([]) %}
+                        <tr>
+                            <td><code>{{ domain.domain }}</code></td>
+                            <td class="text-right">
+                                <span class="badge badge-danger">{{ domain.count }}</span>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="2" class="text-center text-muted py-3">No blocked domains</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Security Components -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-cogs mr-2"></i>Security Components</h3>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                        <span><i class="fas fa-shield-alt text-success mr-2"></i>QSecBit Engine</span>
+                        <span class="badge badge-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                        <span><i class="fas fa-dns text-info mr-2"></i>dnsXai Protection</span>
+                        <span class="badge badge-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                        <span><i class="fas fa-microchip text-warning mr-2"></i>XDP/eBPF DDoS Protection</span>
+                        <span class="badge badge-success">Enabled</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                        <span><i class="fas fa-project-diagram text-primary mr-2"></i>VLAN Segmentation</span>
+                        <span class="badge badge-success">Active</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                        <span><i class="fas fa-lock text-danger mr-2"></i>MACsec Encryption</span>
+                        <span class="badge badge-success">Active</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not db_available %}
+<div class="alert alert-warning mt-3">
+    <i class="fas fa-exclamation-triangle"></i>
+    <strong>Demo Mode:</strong> Database is not connected. Showing sample security data.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Draw QSecBit gauge
+    var canvas = document.getElementById('qsecbitGauge');
+    if (canvas) {
+        var ctx = canvas.getContext('2d');
+        var score = {{ qsecbit.score }};
+        var status = '{{ qsecbit.rag_status }}';
+
+        // Determine color based on status
+        var color;
+        if (status === 'GREEN') {
+            color = '#28a745';
+        } else if (status === 'AMBER') {
+            color = '#ffc107';
+        } else {
+            color = '#dc3545';
+        }
+
+        // Draw background arc
+        ctx.beginPath();
+        ctx.arc(100, 100, 80, 0.75 * Math.PI, 2.25 * Math.PI);
+        ctx.strokeStyle = '#2c2c2c';
+        ctx.lineWidth = 20;
+        ctx.stroke();
+
+        // Draw score arc
+        var endAngle = 0.75 * Math.PI + (score * 1.5 * Math.PI);
+        ctx.beginPath();
+        ctx.arc(100, 100, 80, 0.75 * Math.PI, endAngle);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 20;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+    }
+
+    // Auto-refresh QSecBit score every 30 seconds
+    setInterval(function() {
+        $.get('/security/api/qsecbit', function(data) {
+            if (data.score !== undefined) {
+                $('#qsecbit-score').text(Math.round(data.score * 100));
+            }
+        });
+    }, 30000);
+});
+</script>
 {% endblock %}
