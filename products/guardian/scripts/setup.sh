@@ -128,13 +128,36 @@ install_packages() {
         PKG_MGR="apt"
         apt-get update -qq
 
-        # Create /etc/default/hostapd before installing hostapd
-        # This prevents the post-install script from failing
-        if [ ! -f /etc/default/hostapd ]; then
-            mkdir -p /etc/default
-            echo '# Defaults for hostapd initscript' > /etc/default/hostapd
-            echo 'DAEMON_CONF=""' >> /etc/default/hostapd
+        # Pre-create hostapd config directory and files BEFORE installing
+        # This prevents systemd ConditionFileNotEmpty check from failing
+        log_info "Pre-creating hostapd configuration..."
+        mkdir -p /etc/hostapd
+        mkdir -p /etc/default
+
+        # Create placeholder hostapd.conf if it doesn't exist
+        # This satisfies the systemd ConditionFileNotEmpty=/etc/hostapd/hostapd.conf
+        if [ ! -f /etc/hostapd/hostapd.conf ]; then
+            cat > /etc/hostapd/hostapd.conf << 'PLACEHOLDER'
+# HookProbe Guardian - Placeholder configuration
+# This file will be replaced during setup with proper configuration
+interface=wlan1
+driver=nl80211
+ssid=HookProbe-Guardian
+hw_mode=g
+channel=6
+PLACEHOLDER
+            chmod 644 /etc/hostapd/hostapd.conf
         fi
+
+        # Create /etc/default/hostapd for init script compatibility
+        if [ ! -f /etc/default/hostapd ]; then
+            echo '# Defaults for hostapd initscript' > /etc/default/hostapd
+            echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
+        fi
+
+        # Mask hostapd to prevent auto-start during package installation
+        # We'll unmask and configure it properly later
+        systemctl mask hostapd.service 2>/dev/null || true
 
         # Install packages non-interactively (auto-keep existing configs)
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -3638,10 +3661,14 @@ install_ap_services() {
         cat > /etc/systemd/system/hostapd.service.d/guardian-override.conf << 'HOSTAPD_OVERRIDE'
 # Guardian Override for hostapd.service
 # Removes dependency on network-online.target for offline-first operation
+# Clears ConditionFileNotEmpty to prevent startup race conditions
 
 [Unit]
+# Clear default conditions and dependencies
+ConditionFileNotEmpty=
 After=
 Wants=
+# Set Guardian-specific dependencies
 After=guardian-wlan.service guardian-offline.service local-fs.target
 Wants=guardian-wlan.service
 Requires=guardian-wlan.service
@@ -3651,6 +3678,8 @@ Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30
 Environment="DAEMON_CONF=/etc/hostapd/hostapd.conf"
+# Add ExecStartPre to verify config exists
+ExecStartPre=/bin/test -s /etc/hostapd/hostapd.conf
 HOSTAPD_OVERRIDE
     fi
 
