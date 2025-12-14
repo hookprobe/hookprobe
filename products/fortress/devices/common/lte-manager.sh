@@ -182,44 +182,326 @@ get_modem_interface() {
 }
 
 # ============================================================
-# MODEM CONFIGURATION
+# APN CONFIGURATION WITH AUTHENTICATION
 # ============================================================
 
+# APN Authentication types
+APN_AUTH_NONE="none"
+APN_AUTH_PAP="pap"
+APN_AUTH_CHAP="chap"
+APN_AUTH_MSCHAPV2="mschapv2"
+
 configure_modem_apn() {
-    # Configure APN settings for LTE modem
+    # Configure APN settings for LTE modem with authentication
     #
     # Args:
-    #   $1 - APN name (e.g., "internet", "fast.t-mobile.com")
-    #   $2 - Modem index (optional)
+    #   $1 - APN name (e.g., "internet.vodafone.ro")
+    #   $2 - Authentication type: none, pap, chap, mschapv2 (optional)
+    #   $3 - Username (optional, required for pap/chap)
+    #   $4 - Password (optional, required for pap/chap)
+    #   $5 - Modem index (optional, default 0)
 
     local apn="$1"
-    local modem_idx="${2:-0}"
+    local auth_type="${2:-none}"
+    local username="${3:-}"
+    local password="${4:-}"
+    local modem_idx="${5:-0}"
 
     [ -z "$apn" ] && { log_error "APN name required"; return 1; }
 
-    log_info "Configuring APN: $apn for modem $modem_idx"
+    log_info "Configuring APN: $apn"
+    log_info "  Authentication: $auth_type"
+    [ -n "$username" ] && log_info "  Username: $username"
 
-    if command -v mmcli &>/dev/null; then
-        # Using ModemManager
-        mmcli -m "$modem_idx" --simple-connect="apn=$apn" 2>/dev/null && {
-            log_success "APN configured via ModemManager"
-            return 0
-        }
+    # Build connection string
+    local connect_args="apn=$apn"
+
+    if [ "$auth_type" != "none" ] && [ -n "$username" ]; then
+        connect_args="${connect_args},user=$username"
+        [ -n "$password" ] && connect_args="${connect_args},password=$password"
     fi
 
-    # Alternative: Use QMI/MBIM directly (for Quectel modems)
-    if command -v qmicli &>/dev/null; then
-        local qmi_dev="/dev/cdc-wdm0"
-        if [ -c "$qmi_dev" ]; then
-            qmicli -d "$qmi_dev" --wds-start-network="apn=$apn" 2>/dev/null && {
-                log_success "APN configured via QMI"
-                return 0
-            }
-        fi
+    # Save configuration for later use
+    mkdir -p "$LTE_STATE_DIR"
+    cat > "$LTE_CONFIG_FILE" << APNEOF
+# Fortress LTE APN Configuration
+# Generated: $(date -Iseconds)
+LTE_APN="$apn"
+LTE_AUTH_TYPE="$auth_type"
+LTE_USERNAME="$username"
+LTE_PASSWORD="$password"
+LTE_MODEM_IDX="$modem_idx"
+APNEOF
+    chmod 600 "$LTE_CONFIG_FILE"
+
+    # Try NetworkManager first (preferred method like Guardian)
+    if configure_apn_nmcli "$apn" "$auth_type" "$username" "$password"; then
+        return 0
+    fi
+
+    # Fallback to ModemManager
+    if configure_apn_modemmanager "$apn" "$auth_type" "$username" "$password" "$modem_idx"; then
+        return 0
+    fi
+
+    # Fallback to QMI
+    if configure_apn_qmi "$apn" "$username" "$password"; then
+        return 0
     fi
 
     log_error "Failed to configure APN"
     return 1
+}
+
+configure_apn_nmcli() {
+    # Configure APN using NetworkManager (nmcli) - like Guardian
+    #
+    # Args: apn, auth_type, username, password
+
+    local apn="$1"
+    local auth_type="$2"
+    local username="$3"
+    local password="$4"
+    local con_name="fortress-lte"
+
+    if ! command -v nmcli &>/dev/null; then
+        log_warn "NetworkManager not available"
+        return 1
+    fi
+
+    # Find the LTE/WWAN interface
+    local wwan_iface=""
+    for iface in /sys/class/net/wwan* /sys/class/net/wwp*; do
+        if [ -d "$iface" ]; then
+            wwan_iface=$(basename "$iface")
+            break
+        fi
+    done 2>/dev/null
+
+    if [ -z "$wwan_iface" ]; then
+        log_warn "No WWAN interface found for nmcli"
+        return 1
+    fi
+
+    log_info "Configuring LTE via NetworkManager (interface: $wwan_iface)"
+
+    # Delete existing connection if exists
+    nmcli con delete "$con_name" 2>/dev/null || true
+
+    # Build nmcli command based on auth type
+    local nmcli_cmd="nmcli con add type gsm ifname $wwan_iface con-name $con_name apn $apn"
+
+    case "$auth_type" in
+        pap)
+            nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
+            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username $username"
+            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password $password"
+            ;;
+        chap)
+            nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
+            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username $username"
+            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password $password"
+            ;;
+        mschapv2)
+            nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
+            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username $username"
+            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password $password"
+            ;;
+    esac
+
+    # Add IPv4 configuration
+    nmcli_cmd="$nmcli_cmd ipv4.method auto"
+
+    # Execute
+    if eval "$nmcli_cmd" 2>/dev/null; then
+        log_success "LTE connection created via NetworkManager"
+
+        # Export interface name
+        export LTE_INTERFACE="$wwan_iface"
+        export LTE_NM_CONNECTION="$con_name"
+
+        return 0
+    fi
+
+    log_warn "Failed to create nmcli connection"
+    return 1
+}
+
+configure_apn_modemmanager() {
+    # Configure APN using ModemManager (mmcli)
+
+    local apn="$1"
+    local auth_type="$2"
+    local username="$3"
+    local password="$4"
+    local modem_idx="${5:-0}"
+
+    if ! command -v mmcli &>/dev/null; then
+        log_warn "ModemManager not available"
+        return 1
+    fi
+
+    # Ensure ModemManager is running
+    if ! systemctl is-active ModemManager &>/dev/null; then
+        systemctl start ModemManager 2>/dev/null || true
+        sleep 2
+    fi
+
+    log_info "Configuring LTE via ModemManager (modem: $modem_idx)"
+
+    # Build connection string
+    local connect_str="apn=$apn"
+
+    if [ "$auth_type" != "none" ] && [ -n "$username" ]; then
+        connect_str="${connect_str},user=$username"
+        [ -n "$password" ] && connect_str="${connect_str},password=$password"
+    fi
+
+    # Enable modem first
+    mmcli -m "$modem_idx" -e 2>/dev/null || true
+    sleep 1
+
+    # Connect with APN
+    if mmcli -m "$modem_idx" --simple-connect="$connect_str" 2>/dev/null; then
+        log_success "LTE connected via ModemManager"
+
+        # Get the bearer interface
+        local bearer_iface
+        bearer_iface=$(mmcli -m "$modem_idx" 2>/dev/null | grep -E "primary port:|interface:" | awk '{print $NF}' | head -1)
+
+        if [ -n "$bearer_iface" ]; then
+            export LTE_INTERFACE="$bearer_iface"
+        fi
+
+        return 0
+    fi
+
+    log_warn "Failed to connect via ModemManager"
+    return 1
+}
+
+configure_apn_qmi() {
+    # Configure APN using QMI directly (for Quectel, Sierra modems)
+
+    local apn="$1"
+    local username="$2"
+    local password="$3"
+
+    if ! command -v qmicli &>/dev/null; then
+        log_warn "QMI tools not available"
+        return 1
+    fi
+
+    # Find QMI device
+    local qmi_dev=""
+    for dev in /dev/cdc-wdm*; do
+        if [ -c "$dev" ]; then
+            qmi_dev="$dev"
+            break
+        fi
+    done
+
+    if [ -z "$qmi_dev" ]; then
+        log_warn "No QMI device found"
+        return 1
+    fi
+
+    log_info "Configuring LTE via QMI ($qmi_dev)"
+
+    # Build network string
+    local network_str="apn=$apn"
+    [ -n "$username" ] && network_str="${network_str},username=$username"
+    [ -n "$password" ] && network_str="${network_str},password=$password"
+
+    if qmicli -d "$qmi_dev" --wds-start-network="$network_str" --client-no-release-cid 2>/dev/null; then
+        log_success "LTE connected via QMI"
+
+        # Get WWAN interface
+        local wwan_iface
+        for iface in /sys/class/net/wwan*; do
+            if [ -d "$iface" ]; then
+                wwan_iface=$(basename "$iface")
+                export LTE_INTERFACE="$wwan_iface"
+                break
+            fi
+        done 2>/dev/null
+
+        return 0
+    fi
+
+    log_warn "Failed to connect via QMI"
+    return 1
+}
+
+# ============================================================
+# INTERACTIVE APN CONFIGURATION
+# ============================================================
+
+configure_apn_interactive() {
+    # Interactive APN configuration with prompts
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  LTE APN Configuration${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    # APN Name
+    local apn=""
+    read -p "Enter APN name (e.g., internet.vodafone.ro): " apn
+    [ -z "$apn" ] && { log_error "APN is required"; return 1; }
+
+    # Authentication type
+    echo ""
+    echo "Authentication types:"
+    echo "  1. none     - No authentication (most carriers)"
+    echo "  2. pap      - PAP authentication"
+    echo "  3. chap     - CHAP authentication"
+    echo "  4. mschapv2 - MS-CHAPv2 (enterprise/private APNs)"
+    echo ""
+
+    local auth_choice=""
+    read -p "Select authentication type [1-4] (default: 1): " auth_choice
+    auth_choice="${auth_choice:-1}"
+
+    local auth_type="none"
+    case "$auth_choice" in
+        1) auth_type="none" ;;
+        2) auth_type="pap" ;;
+        3) auth_type="chap" ;;
+        4) auth_type="mschapv2" ;;
+        *) auth_type="none" ;;
+    esac
+
+    # Username and password if needed
+    local username=""
+    local password=""
+
+    if [ "$auth_type" != "none" ]; then
+        echo ""
+        read -p "Enter username: " username
+        read -sp "Enter password: " password
+        echo ""
+    fi
+
+    # Confirm
+    echo ""
+    echo "Configuration summary:"
+    echo "  APN:            $apn"
+    echo "  Authentication: $auth_type"
+    [ -n "$username" ] && echo "  Username:       $username"
+    echo ""
+
+    read -p "Apply this configuration? [Y/n]: " confirm
+    confirm="${confirm:-Y}"
+
+    if [[ "${confirm,,}" =~ ^y ]]; then
+        configure_modem_apn "$apn" "$auth_type" "$username" "$password"
+        return $?
+    else
+        log_info "Configuration cancelled"
+        return 1
+    fi
 }
 
 connect_lte_modem() {
@@ -571,13 +853,25 @@ usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  detect       - Detect LTE modems"
-    echo "  status       - Show LTE and failover status"
-    echo "  connect      - Connect LTE modem"
-    echo "  disconnect   - Disconnect LTE modem"
-    echo "  setup-failover <primary_wan> - Configure WAN failover"
-    echo "  monitor      - Start failover monitoring (foreground)"
-    echo "  install      - Install failover systemd service"
+    echo "  detect                    - Detect LTE modems"
+    echo "  status                    - Show LTE and failover status"
+    echo "  configure                 - Interactive APN configuration"
+    echo "  configure-apn <apn> [auth] [user] [pass]"
+    echo "                            - Configure APN with authentication"
+    echo "                              auth: none, pap, chap, mschapv2"
+    echo "  connect                   - Connect LTE modem"
+    echo "  disconnect                - Disconnect LTE modem"
+    echo "  setup-failover <primary_wan> [lte_iface]"
+    echo "                            - Configure WAN failover"
+    echo "  monitor                   - Start failover monitoring (foreground)"
+    echo "  install                   - Install failover systemd service"
+    echo ""
+    echo "Examples:"
+    echo "  $0 detect"
+    echo "  $0 configure"
+    echo "  $0 configure-apn internet.vodafone.ro"
+    echo "  $0 configure-apn private.apn chap myuser mypass"
+    echo "  $0 setup-failover enp1s0 wwp0s20f0u4"
     echo ""
 }
 
@@ -588,6 +882,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             ;;
         status)
             show_lte_status
+            ;;
+        configure)
+            configure_apn_interactive
+            ;;
+        configure-apn)
+            configure_modem_apn "$2" "${3:-none}" "${4:-}" "${5:-}"
             ;;
         connect)
             connect_lte_modem "${2:-0}"
