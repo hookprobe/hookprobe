@@ -1,0 +1,116 @@
+/**
+ * HookProbe Fortress - Custom Styles
+ * Extends AdminLTE with HookProbe branding
+ */
+
+:root {
+    --hp-prussian: #002742;
+    --hp-siren: #850033;
+    --hp-tangerine: #e69500;
+    --hp-ebb: #e6dbdb;
+    --hp-black-pearl: #02040d;
+}
+
+/* Dark mode overrides */
+.dark-mode .main-sidebar {
+    background-color: var(--hp-prussian);
+}
+
+.dark-mode .brand-link {
+    background-color: var(--hp-black-pearl);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dark-mode .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active {
+    background-color: var(--hp-tangerine);
+    color: var(--hp-black-pearl);
+}
+
+.dark-mode .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active i {
+    color: var(--hp-black-pearl);
+}
+
+/* Info boxes */
+.info-box-icon.bg-success {
+    background-color: #28a745 !important;
+}
+
+.info-box-icon.bg-warning {
+    background-color: var(--hp-tangerine) !important;
+}
+
+.info-box-icon.bg-danger {
+    background-color: var(--hp-siren) !important;
+}
+
+/* Cards */
+.dark-mode .card {
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dark-mode .card-header {
+    background-color: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Tables */
+.dark-mode .table-hover tbody tr:hover {
+    background-color: rgba(230, 149, 0, 0.1);
+}
+
+/* Badges */
+.badge-success {
+    background-color: #28a745;
+}
+
+.badge-warning {
+    background-color: var(--hp-tangerine);
+    color: var(--hp-black-pearl);
+}
+
+.badge-danger {
+    background-color: var(--hp-siren);
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: var(--hp-tangerine);
+    border-color: var(--hp-tangerine);
+    color: var(--hp-black-pearl);
+}
+
+.btn-primary:hover {
+    background-color: #cc8400;
+    border-color: #cc8400;
+    color: var(--hp-black-pearl);
+}
+
+/* Footer */
+.dark-mode .main-footer {
+    background-color: var(--hp-black-pearl);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dark-mode .main-footer a {
+    color: var(--hp-tangerine);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--hp-black-pearl);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--hp-prussian);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--hp-tangerine);
+}

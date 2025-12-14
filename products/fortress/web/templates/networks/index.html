@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Networks - HookProbe Fortress{% endblock %}
+{% block page_title %}Network Configuration{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Networks</li>{% endblock %}
+
+{% block content %}
+<!-- Stats Cards -->
+<div class="row mb-4">
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-info">
+            <div class="inner">
+                <h3>{{ vlans|length }}</h3>
+                <p>Total VLANs</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-project-diagram"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-success">
+            <div class="inner">
+                <h3>{{ active_vlans }}</h3>
+                <p>Active VLANs</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-check-circle"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-warning">
+            <div class="inner">
+                <h3>{{ isolated_vlans }}</h3>
+                <p>Isolated VLANs</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-shield-alt"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-secondary">
+            <div class="inner">
+                <h3>{{ total_devices }}</h3>
+                <p>Total Devices</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-laptop"></i>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Action Buttons -->
+<div class="row mb-3">
+    <div class="col-12">
+        <a href="{{ url_for('networks.topology') }}" class="btn btn-outline-primary">
+            <i class="fas fa-sitemap"></i> View Topology
+        </a>
+    </div>
+</div>
+
+<!-- VLAN Cards -->
+<div class="row">
+    {% for vlan in vlans %}
+    <div class="col-md-6 col-lg-4">
+        <div class="card card-outline card-{% if vlan.vlan_id == 10 %}primary{% elif vlan.vlan_id == 20 %}success{% elif vlan.vlan_id == 30 %}info{% elif vlan.vlan_id == 40 %}secondary{% else %}warning{% endif %}">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-{% if vlan.vlan_id == 10 %}shield-alt{% elif vlan.vlan_id == 20 %}cash-register{% elif vlan.vlan_id == 30 %}users{% elif vlan.vlan_id == 40 %}wifi{% else %}microchip{% endif %} mr-2"></i>
+                    {{ vlan.name }}
+                </h3>
+                <div class="card-tools">
+                    <span class="badge badge-{% if vlan.interface_up %}success{% else %}danger{% endif %}">
+                        {{ 'UP' if vlan.interface_up else 'DOWN' }}
+                    </span>
+                </div>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm table-borderless mb-0">
+                    <tr>
+                        <td><strong>VLAN ID</strong></td>
+                        <td>{{ vlan.vlan_id }}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Subnet</strong></td>
+                        <td><code>{{ vlan.subnet }}</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Gateway</strong></td>
+                        <td><code>{{ vlan.gateway }}</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Devices</strong></td>
+                        <td>
+                            <span class="badge badge-info">{{ vlan.device_count }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>DHCP</strong></td>
+                        <td>
+                            {% if vlan.dhcp_enabled %}
+                            <span class="badge badge-success"><i class="fas fa-check"></i> Enabled</span>
+                            {% if vlan.dhcp_running %}
+                            <span class="badge badge-success"><i class="fas fa-play"></i> Running</span>
+                            {% endif %}
+                            {% else %}
+                            <span class="badge badge-secondary"><i class="fas fa-times"></i> Disabled</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>DNS Policy</strong></td>
+                        <td>
+                            <span class="badge badge-{% if vlan.dns_policy == 'strict' %}warning{% else %}info{% endif %}">
+                                {{ vlan.dns_policy|capitalize }}
+                            </span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Isolation</strong></td>
+                        <td>
+                            {% if vlan.is_isolated %}
+                            <span class="badge badge-danger"><i class="fas fa-lock"></i> Isolated</span>
+                            {% else %}
+                            <span class="badge badge-success"><i class="fas fa-unlock"></i> Open</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            <div class="card-footer">
+                <a href="{{ url_for('networks.detail', vlan_id=vlan.vlan_id) }}" class="btn btn-sm btn-primary">
+                    <i class="fas fa-cog"></i> Configure
+                </a>
+                <a href="{{ url_for('clients.index') }}?vlan={{ vlan.vlan_id }}" class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-laptop"></i> View Devices
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- VLAN Architecture Info -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>Network Segmentation Architecture</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>VLAN Purpose</h5>
+                        <ul class="list-unstyled">
+                            <li><i class="fas fa-shield-alt text-primary mr-2"></i><strong>Management (10)</strong> - Admin devices with full network access</li>
+                            <li><i class="fas fa-cash-register text-success mr-2"></i><strong>POS (20)</strong> - Payment terminals, isolated from other networks</li>
+                            <li><i class="fas fa-users text-info mr-2"></i><strong>Staff (30)</strong> - Employee devices with internet and internal access</li>
+                            <li><i class="fas fa-wifi text-secondary mr-2"></i><strong>Guest (40)</strong> - Customer WiFi, internet only, isolated</li>
+                            <li><i class="fas fa-microchip text-warning mr-2"></i><strong>IoT (99)</strong> - Cameras, sensors, strictly isolated</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h5>Security Features</h5>
+                        <ul class="list-unstyled">
+                            <li><i class="fas fa-lock text-danger mr-2"></i><strong>Isolation</strong> - Isolated VLANs cannot communicate with each other</li>
+                            <li><i class="fas fa-dns text-info mr-2"></i><strong>DNS Policies</strong> - Strict policy blocks ads, trackers, and malware</li>
+                            <li><i class="fas fa-tachometer-alt text-warning mr-2"></i><strong>Bandwidth Limits</strong> - Per-VLAN bandwidth control</li>
+                            <li><i class="fas fa-eye text-success mr-2"></i><strong>Monitoring</strong> - All traffic analyzed by QSecBit</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not db_available %}
+<div class="alert alert-warning mt-3">
+    <i class="fas fa-exclamation-triangle"></i>
+    <strong>Demo Mode:</strong> Database is not connected. Showing sample configuration.
+</div>
+{% endif %}
+{% endblock %}

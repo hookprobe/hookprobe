@@ -1,10 +1,60 @@
 # HookProbe Fortress
 
-> **"Your Digital Stronghold"** - Full-featured edge with monitoring
+> **"Your Digital Stronghold"** - Enterprise-grade security for small businesses
+
+## Target Market
+
+Fortress is designed for **sole traders and small businesses** who need professional-grade network security without the complexity or cost of enterprise solutions:
+
+| Business Type | Why Fortress? |
+|--------------|---------------|
+| **Flower Shops** | Protect POS systems, customer data, and prevent card skimmers |
+| **Bakeries & Cafes** | Secure guest WiFi, separate POS from customers, GDPR compliance |
+| **Pizza & Takeaway** | Protect online ordering systems, isolate delivery tablets |
+| **Computer Repair** | Secure customer devices, isolate diagnostic networks |
+| **Mobile Phone Repair** | Protect customer data, secure diagnostic equipment |
+| **Hair Salons** | Secure booking systems, protect payment terminals |
+| **Retail Shops** | VLAN separation for POS, staff, and guest networks |
+| **Professional Services** | Client data protection, secure document handling |
+| **Trades (Electricians, Plumbers)** | Secure office network, protect invoicing systems |
+
+### The Problem We Solve
+
+Small businesses face the same cyber threats as enterprises but lack:
+- Dedicated IT staff
+- Budget for enterprise firewalls ($5,000+)
+- Time to learn complex security tools
+- Visibility into their network
+
+### The Fortress Solution
+
+- **Plug-and-Play Security**: Deploy in minutes, not days
+- **Visual Dashboard**: See your network health at a glance
+- **Automatic Protection**: AI-powered threat detection
+- **Customer WiFi Isolation**: Keep your POS separate from guests
+- **Compliance Ready**: GDPR-friendly logging and reporting
+- **Affordable**: Runs on $200-400 mini PC hardware
+
+---
 
 ## Overview
 
 Fortress is a full-featured edge gateway with local monitoring, dashboards, and automation capabilities. Built for advanced deployments requiring comprehensive visibility and control.
+
+### What Makes Fortress Different from Guardian?
+
+| Feature | Guardian | Fortress |
+|---------|----------|----------|
+| **Target** | Personal/Travel | Small Business |
+| **RAM** | 1.5GB | 4GB+ |
+| **Web UI** | Single-user | Multi-user with auth |
+| **VLANs** | Basic | Full segmentation |
+| **Reporting** | Basic stats | Business reports |
+| **Dashboards** | Personal | AdminLTE professional |
+| **Updates** | Manual | Scheduled + alerts |
+| **Support** | Community | Priority (optional) |
+
+---
 
 ## Requirements
 
@@ -16,18 +66,48 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 | CPU Cores | 4 | 8 |
 | Internet | Required | Required |
 
-## Supported Platforms
+## Recommended Hardware
 
-- Intel N100/N95/N97 Mini PCs
-- Intel NUC
-- AMD Ryzen Mini PCs
-- Small form factor servers
-- Proxmox VMs (with passthrough)
-- Any x86_64 with 4GB+ RAM
+### Budget (~$200)
+- **Beelink Mini S12 Pro** (N100, 8GB, 256GB)
+- **GMKtec N100** (N100, 8GB, 256GB)
+- Any Intel N100/N95 mini PC
 
-## Features
+### Mid-Range (~$300)
+- **ASUS ExpertCenter PN42** (N100, 16GB)
+- **Intel NUC 12** (N100/N200)
+- **Minisforum UN100** (N100, 16GB)
+
+### Business (~$400+)
+- **Protectli VP2420** (4 LAN ports, fanless)
+- **Qotom Q355G4** (4 LAN, i5)
+- **Dell OptiPlex Micro** (i5/i7)
+
+---
+
+## Fortress Features
 
 ### All Guardian Features, Plus:
+
+### Admin Dashboard (AdminLTE)
+- **User Authentication** — Username/password login
+- **Role-Based Access** — Admin, Operator, Viewer roles
+- **Professional UI** — AdminLTE 3.x responsive dashboard
+- **Session Management** — Secure session handling
+- **Audit Logging** — Track all admin actions
+
+### Business Reporting
+- **Weekly Security Reports** — PDF email summaries
+- **Client Device Inventory** — Track all connected devices
+- **Bandwidth Usage** — Per-device and per-VLAN
+- **Threat Summary** — Blocked attacks overview
+- **Uptime Monitoring** — Service availability
+
+### Network Segmentation
+- **VLAN Isolation** — Separate POS, Staff, Guest, IoT
+- **Per-VLAN Policies** — Different protection per segment
+- **Inter-VLAN Firewall** — Control traffic between segments
+- **MAC-to-VLAN Assignment** — Auto-assign devices
 
 ### dnsXai Advanced
 - **Full ML Classifier** — All 20 features enabled with higher accuracy
@@ -54,13 +134,6 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 - **Webhook support**: Event-driven actions
 - **dnsXai Workflows**: Auto-update blocklists, threat notifications
 
-### Web Interface
-- Admin dashboard
-- Real-time metrics
-- Alert management
-- Configuration UI
-- **dnsXai Control Panel** — Full DNS protection management
-
 ### Advanced Security
 - Local AI threat detection
 - Full IDS/IPS with logging
@@ -74,6 +147,8 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 - LTE/5G failover (optional)
 - Multi-WAN support
 - Advanced traffic analysis
+
+---
 
 ## Installation
 
@@ -94,6 +169,33 @@ sudo ./install.sh --tier fortress \
   --enable-lte
 ```
 
+---
+
+## Web Interface
+
+### Admin Portal (https://localhost:8443)
+
+The Fortress admin portal provides:
+
+1. **Login Page** — Secure authentication
+2. **Dashboard** — Network overview, threat status, device count
+3. **Security** — QSecBit score, threat detection, blocked IPs
+4. **Clients** — Device inventory with VLAN assignment
+5. **Networks** — VLAN configuration, WiFi settings
+6. **dnsXai** — DNS protection settings
+7. **Reports** — Generate and schedule reports
+8. **Settings** — System configuration, user management
+
+### Default Credentials
+
+| Account | Username | Password |
+|---------|----------|----------|
+| Admin | admin | (set during install) |
+
+**Important**: Change the default password immediately after installation!
+
+---
+
 ## Resource Usage
 
 | Component | RAM | Storage |
@@ -106,6 +208,8 @@ sudo ./install.sh --tier fortress \
 
 **Total**: ~2-3GB RAM under normal operation
 
+---
+
 ## Configuration Files
 
 | File | Purpose |
@@ -114,6 +218,9 @@ sudo ./install.sh --tier fortress \
 | `/etc/hookprobe/monitoring.conf` | Monitoring settings |
 | `/etc/hookprobe/n8n.conf` | Automation config |
 | `/etc/hookprobe/clickhouse.conf` | Analytics config |
+| `/etc/hookprobe/users.json` | Admin portal users |
+
+---
 
 ## Service Management
 
@@ -133,33 +240,82 @@ sudo hookprobe-ctl status
 sudo journalctl -u hookprobe-fortress -f
 ```
 
+---
+
 ## Web Interfaces
 
 | Interface | URL | Purpose |
 |-----------|-----|---------|
-| Dashboard | https://localhost:8443 | Main admin UI |
+| Admin Portal | https://localhost:8443 | Main admin UI |
 | Grafana | http://localhost:3000 | Metrics dashboards |
 | n8n | http://localhost:5678 | Workflow automation |
+
+---
+
+## Small Business Deployment Guide
+
+### Step 1: Network Planning
+
+```
+Internet
+    │
+    ▼
+[ISP Router] ──► [Fortress] ──┬── VLAN 10: Management (Admin PCs)
+                              ├── VLAN 20: POS (Payment terminals)
+                              ├── VLAN 30: Staff (Employee devices)
+                              ├── VLAN 40: Guest WiFi (Customers)
+                              └── VLAN 99: IoT (Cameras, sensors)
+```
+
+### Step 2: Device Assignment
+
+| Device Type | Recommended VLAN |
+|-------------|------------------|
+| Cash registers, POS | VLAN 20 (isolated) |
+| Staff laptops | VLAN 30 |
+| Customer WiFi | VLAN 40 (rate limited) |
+| Security cameras | VLAN 99 |
+| Admin computers | VLAN 10 |
+
+### Step 3: Configure Guest WiFi
+
+```bash
+# Guest WiFi with captive portal
+hookprobe-ctl wifi guest enable --ssid "ShopName_Guest" --vlan 40
+
+# Rate limit guest network (5 Mbps per device)
+hookprobe-ctl qos set --vlan 40 --limit 5mbps
+```
+
+---
 
 ## Dashboards
 
 Pre-configured Grafana dashboards:
 
+- **Business Overview**: Revenue protection, uptime, bandwidth
 - **Network Overview**: Traffic, connections, bandwidth
 - **Security**: Threats detected, blocked attacks
 - **System Health**: CPU, RAM, disk, containers
 - **IDS/IPS**: Suricata/Zeek alerts
 
+---
+
 ## n8n Automation Examples
 
-### Alert to Slack
-Automatically send security alerts to Slack when threats are detected.
+### Daily Security Report
+Automatically send daily security summary to owner's email.
 
-### IP Blocklist Sync
-Sync blocked IPs across all your Guardian devices.
+### Alert to SMS
+Send SMS when critical threat detected (via Twilio).
 
-### Report Generation
-Generate weekly security reports automatically.
+### New Device Notification
+Alert when unknown device connects to network.
+
+### Weekly Backup
+Automated config backup to cloud storage.
+
+---
 
 ## LTE/5G Failover
 
@@ -176,6 +332,8 @@ hookprobe-ctl lte status
 hookprobe-ctl lte failover
 ```
 
+---
+
 ## Ports Used
 
 | Port | Service |
@@ -185,13 +343,15 @@ hookprobe-ctl lte failover
 | 3000 | Grafana |
 | 5678 | n8n |
 | 8080 | API |
-| 8443 | Admin UI |
+| 8443 | Admin Portal (HTTPS) |
 | 8428 | Victoria Metrics |
 | 9090 | Health endpoint |
 
+---
+
 ## Data Retention
 
-Default retention policies:
+Default retention policies (GDPR compliant):
 
 | Data Type | Retention |
 |-----------|-----------|
@@ -201,6 +361,8 @@ Default retention policies:
 | Analytics | 180 days |
 
 Configure in `/etc/hookprobe/retention.conf`.
+
+---
 
 ## Upgrading from Guardian
 
@@ -214,9 +376,25 @@ sudo ./install.sh --tier fortress
 # Guardian config is automatically migrated
 ```
 
+---
+
 ## Troubleshooting
 
+### Cannot Access Admin Portal
+
+```bash
+# Check if service is running
+sudo systemctl status hookprobe-fortress-web
+
+# Check firewall
+sudo iptables -L -n | grep 8443
+
+# View logs
+sudo journalctl -u hookprobe-fortress-web -f
+```
+
 ### High Memory Usage
+
 ```bash
 # Check container memory
 podman stats
@@ -227,6 +405,7 @@ GRAFANA_MEM_LIMIT=512m
 ```
 
 ### Grafana Not Loading
+
 ```bash
 # Check Grafana logs
 podman logs hookprobe-grafana
@@ -236,6 +415,7 @@ sudo systemctl restart hookprobe-monitoring
 ```
 
 ### n8n Workflows Not Running
+
 ```bash
 # Check n8n logs
 podman logs hookprobe-n8n
@@ -243,3 +423,21 @@ podman logs hookprobe-n8n
 # Verify webhook connectivity
 curl http://localhost:5678/healthz
 ```
+
+---
+
+## Support
+
+- **Community**: Discord, GitHub Issues
+- **Documentation**: https://docs.hookprobe.com
+- **Priority Support**: Available with commercial license
+
+---
+
+## License
+
+Fortress is dual-licensed:
+- **AGPL v3.0** for open source use
+- **Commercial License** for SaaS/OEM use
+
+See `LICENSING.md` in the project root for details.
