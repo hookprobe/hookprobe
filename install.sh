@@ -2363,46 +2363,42 @@ uninstall_fortress() {
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}This will remove:${NC}"
-    echo "  • All Guardian components"
-    echo "  • VictoriaMetrics (metrics storage)"
-    echo "  • Grafana (dashboards)"
-    echo "  • n8n (automation)"
-    echo "  • HookProbe Dashboard"
+    echo "  • Fortress systemd services"
+    echo "  • OVS bridge and VLAN configuration"
+    echo "  • MACsec and VXLAN tunnels"
+    echo "  • QSecBit agent"
+    echo "  • Monitoring stack (VictoriaMetrics, Grafana)"
+    echo "  • LTE failover configuration"
+    echo "  • Web dashboard"
+    echo "  • All configuration and secrets"
     echo ""
     read -p "Are you sure? Type 'yes' to confirm: " confirm
     if [ "$confirm" = "yes" ]; then
         echo ""
-        # First uninstall Guardian components
-        uninstall_guardian
+        # Use the dedicated Fortress uninstall script with --force (already confirmed)
+        if [ -f "$SCRIPT_DIR/products/fortress/uninstall.sh" ]; then
+            bash "$SCRIPT_DIR/products/fortress/uninstall.sh" --force
+        else
+            # Fallback if script not found
+            log_warn "Fortress uninstall script not found, performing basic cleanup..."
 
-        # Stop Fortress-specific services
-        echo "Stopping Fortress-specific services..."
-        for svc in hookprobe-fortress grafana victoriametrics n8n; do
-            systemctl stop "$svc" 2>/dev/null || true
-            systemctl disable "$svc" 2>/dev/null || true
-        done
-
-        # Remove Fortress containers
-        if command -v podman &>/dev/null; then
-            echo "Removing Fortress containers..."
-            for container in grafana victoriametrics n8n hookprobe-dashboard; do
-                podman stop "$container" 2>/dev/null || true
-                podman rm -f "$container" 2>/dev/null || true
+            # Stop services
+            for svc in hookprobe-fortress fortress-qsecbit fortress-lte-failover fortress-tunnel; do
+                systemctl stop "$svc" 2>/dev/null || true
+                systemctl disable "$svc" 2>/dev/null || true
+                rm -f "/etc/systemd/system/${svc}.service" 2>/dev/null || true
             done
+            systemctl daemon-reload
 
-            # Remove Fortress volumes
-            echo "Removing Fortress volumes..."
-            for vol in grafana-data victoriametrics-data n8n-data; do
-                podman volume rm -f "$vol" 2>/dev/null || true
-            done
+            # Remove directories
+            rm -rf /opt/hookprobe/fortress 2>/dev/null || true
+            rm -rf /var/lib/hookprobe/fortress 2>/dev/null || true
+            rm -rf /var/lib/fortress 2>/dev/null || true
+            rm -rf /etc/fortress 2>/dev/null || true
+            rm -f /etc/hookprobe/fortress.conf 2>/dev/null || true
+
+            echo -e "${GREEN}✓ Fortress uninstall complete${NC}"
         fi
-
-        # Remove Fortress directories
-        rm -rf /opt/hookprobe/fortress 2>/dev/null || true
-        rm -rf /var/lib/hookprobe/fortress 2>/dev/null || true
-
-        echo ""
-        echo -e "${GREEN}✓ Fortress uninstall complete${NC}"
     else
         echo "Cancelled."
     fi
