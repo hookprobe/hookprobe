@@ -224,11 +224,13 @@ configure_system_locale() {
             DEBIAN_FRONTEND=noninteractive apt-get install -y -qq locales 2>/dev/null || true
         fi
 
-        # Enable en_US.UTF-8 in locale.gen
+        # Enable ONLY en_US.UTF-8 in locale.gen
         if [ -f /etc/locale.gen ]; then
-            # Uncomment en_US.UTF-8 if commented
+            # Comment out all locales first (including en_GB)
+            sed -i 's/^[^#].*UTF-8/# &/' /etc/locale.gen 2>/dev/null || true
+            # Uncomment en_US.UTF-8
             sed -i 's/^# *\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
-            # Also ensure the line exists
+            # Ensure the line exists
             if ! grep -q "^en_US.UTF-8 UTF-8" /etc/locale.gen; then
                 echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
             fi
@@ -236,6 +238,14 @@ configure_system_locale() {
 
         # Generate the locale
         locale-gen $TARGET_LOCALE 2>/dev/null || locale-gen 2>/dev/null || true
+
+        # Apply immediately for this session BEFORE writing config files
+        # This prevents "cannot change locale" warnings during heredoc operations
+        export LANG=$TARGET_LOCALE
+        export LANGUAGE=$TARGET_LOCALE
+        export LC_ALL=$TARGET_LOCALE
+        export LC_CTYPE=$TARGET_LOCALE
+        export LC_MESSAGES=$TARGET_LOCALE
 
         # Write complete /etc/default/locale with ALL variables
         cat > /etc/default/locale << EOF
@@ -267,12 +277,6 @@ EOF
 
         # Run update-locale as backup
         update-locale LANG=$TARGET_LOCALE LANGUAGE=$TARGET_LOCALE LC_ALL=$TARGET_LOCALE 2>/dev/null || true
-
-        # Apply immediately for this session (and any subprocesses)
-        export LANG=$TARGET_LOCALE
-        export LANGUAGE=$TARGET_LOCALE
-        export LC_ALL=$TARGET_LOCALE
-        export LC_CTYPE=$TARGET_LOCALE
 
         # Verify locale is working
         if locale 2>&1 | grep -q "Cannot set"; then
