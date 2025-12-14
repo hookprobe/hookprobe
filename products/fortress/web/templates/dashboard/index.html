@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - HookProbe Fortress{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- Info boxes -->
+<div class="row">
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box">
+            <span class="info-box-icon bg-{{ 'success' if qsecbit_status == 'GREEN' else 'warning' if qsecbit_status == 'AMBER' else 'danger' }} elevation-1">
+                <i class="fas fa-shield-halved"></i>
+            </span>
+            <div class="info-box-content">
+                <span class="info-box-text">QSecBit</span>
+                <span class="info-box-number">{{ "%.0f"|format(qsecbit_score * 100) }}%</span>
+                <span class="badge badge-{{ 'success' if qsecbit_status == 'GREEN' else 'warning' if qsecbit_status == 'AMBER' else 'danger' }}">{{ qsecbit_status }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box">
+            <span class="info-box-icon bg-info elevation-1">
+                <i class="fas fa-laptop"></i>
+            </span>
+            <div class="info-box-content">
+                <span class="info-box-text">Connected Devices</span>
+                <span class="info-box-number">{{ device_count }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box">
+            <span class="info-box-icon bg-danger elevation-1">
+                <i class="fas fa-bug"></i>
+            </span>
+            <div class="info-box-content">
+                <span class="info-box-text">Threats Blocked</span>
+                <span class="info-box-number">{{ threats_blocked }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-md-3">
+        <div class="info-box">
+            <span class="info-box-icon bg-warning elevation-1">
+                <i class="fas fa-brain"></i>
+            </span>
+            <div class="info-box-content">
+                <span class="info-box-text">DNS Blocked</span>
+                <span class="info-box-number">{{ "{:,}".format(dns_blocked) }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Recent Threats -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-exclamation-triangle mr-1"></i>
+                    Recent Threats
+                </h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('security.index') }}" class="btn btn-tool">
+                        View All <i class="fas fa-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <ul class="list-group list-group-flush">
+                    {% for threat in recent_threats %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="badge badge-{{ 'danger' if threat.severity == 'high' else 'warning' if threat.severity == 'medium' else 'secondary' }} mr-2">
+                                {{ threat.severity|upper }}
+                            </span>
+                            <strong>{{ threat.type }}</strong>
+                            <small class="text-muted d-block">{{ threat.source }}</small>
+                        </div>
+                        <small class="text-muted">{{ threat.time }}</small>
+                    </li>
+                    {% else %}
+                    <li class="list-group-item text-center text-success">
+                        <i class="fas fa-check-circle"></i> No recent threats
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Devices -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-laptop mr-1"></i>
+                    Recently Connected
+                </h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('clients.index') }}" class="btn btn-tool">
+                        View All <i class="fas fa-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <ul class="list-group list-group-flush">
+                    {% for device in recent_devices %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="fas fa-{{ 'mobile-alt' if 'iPhone' in device.name or 'Phone' in device.name else 'laptop' }} mr-2 text-info"></i>
+                            <strong>{{ device.name }}</strong>
+                            <small class="text-muted d-block">{{ device.ip }} - {{ device.vlan }}</small>
+                        </div>
+                        <small class="text-muted">{{ device.time }}</small>
+                    </li>
+                    {% else %}
+                    <li class="list-group-item text-center text-muted">
+                        No devices connected
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Network Overview -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-network-wired mr-1"></i>
+                    Network Segments
+                </h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2 col-sm-4 col-6 text-center">
+                        <div class="info-box bg-info mb-0">
+                            <div class="info-box-content">
+                                <span class="info-box-text">Management</span>
+                                <span class="info-box-number">VLAN 10</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6 text-center">
+                        <div class="info-box bg-success mb-0">
+                            <div class="info-box-content">
+                                <span class="info-box-text">POS</span>
+                                <span class="info-box-number">VLAN 20</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6 text-center">
+                        <div class="info-box bg-primary mb-0">
+                            <div class="info-box-content">
+                                <span class="info-box-text">Staff</span>
+                                <span class="info-box-number">VLAN 30</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6 text-center">
+                        <div class="info-box bg-warning mb-0">
+                            <div class="info-box-content">
+                                <span class="info-box-text">Guest</span>
+                                <span class="info-box-number">VLAN 40</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6 text-center">
+                        <div class="info-box bg-secondary mb-0">
+                            <div class="info-box-content">
+                                <span class="info-box-text">IoT</span>
+                                <span class="info-box-number">VLAN 99</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6 text-center">
+                        <div class="info-box bg-danger mb-0">
+                            <div class="info-box-content">
+                                <span class="info-box-text">Quarantine</span>
+                                <span class="info-box-number">VLAN 99</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Auto-refresh dashboard stats every 30 seconds
+setInterval(function() {
+    fetch('/api/dashboard/stats')
+        .then(response => response.json())
+        .then(data => {
+            // Update QSecBit badge
+            const badge = document.getElementById('qsecbit-badge');
+            if (badge && data.qsecbit) {
+                badge.textContent = data.qsecbit.status;
+                badge.style.backgroundColor =
+                    data.qsecbit.status === 'GREEN' ? '#28a745' :
+                    data.qsecbit.status === 'AMBER' ? '#ffc107' : '#dc3545';
+            }
+        })
+        .catch(err => console.log('Stats refresh error:', err));
+}, 30000);
+</script>
+{% endblock %}
