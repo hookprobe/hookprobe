@@ -218,11 +218,35 @@ detect_platform() {
 detect_interfaces() {
     log_step "Detecting network interfaces..."
 
-    ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | tr '\n' ' ')
+    # Ethernet interfaces (eth*, enp*, eno*) - exclude WWAN
+    ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '^ww' | tr '\n' ' ')
     ETH_COUNT=$(echo $ETH_INTERFACES | wc -w)
 
+    # WiFi interfaces (wlan*, wlp*) - managed by iw
     WIFI_INTERFACES=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | tr '\n' ' ')
     WIFI_COUNT=$(echo $WIFI_INTERFACES | wc -w)
+
+    # WWAN/LTE interfaces (wwan*, wwp*) - double 'w' prefix
+    WWAN_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(wwan|wwp)' | tr '\n' ' ')
+    WWAN_COUNT=$(echo $WWAN_INTERFACES | wc -w)
+
+    # Detect modem control devices
+    MODEM_CTRL_DEVICES=""
+    # Check for CDC-WDM devices (QMI/MBIM modems)
+    for dev in /dev/cdc-wdm*; do
+        [ -c "$dev" ] && MODEM_CTRL_DEVICES="$MODEM_CTRL_DEVICES $(basename $dev)"
+    done 2>/dev/null
+    # Check for ttyUSB devices (AT command modems)
+    for dev in /dev/ttyUSB*; do
+        [ -c "$dev" ] && MODEM_CTRL_DEVICES="$MODEM_CTRL_DEVICES $(basename $dev)"
+    done 2>/dev/null
+    MODEM_CTRL_DEVICES=$(echo $MODEM_CTRL_DEVICES | xargs)  # trim whitespace
+
+    # Check NetworkManager for GSM connections
+    GSM_CONNECTIONS=""
+    if command -v nmcli &>/dev/null; then
+        GSM_CONNECTIONS=$(nmcli -t -f NAME,TYPE,DEVICE connection show 2>/dev/null | grep ":gsm:" | cut -d: -f1,3 | tr '\n' ' ')
+    fi
 
     # Check for VAP-capable WiFi (required for VLAN segmentation)
     WIFI_VAP_SUPPORT=false
@@ -234,8 +258,14 @@ detect_interfaces() {
         fi
     done
 
-    log_info "Ethernet interfaces ($ETH_COUNT): $ETH_INTERFACES"
-    log_info "WiFi interfaces ($WIFI_COUNT): $WIFI_INTERFACES"
+    log_info "Ethernet interfaces ($ETH_COUNT): ${ETH_INTERFACES:-none}"
+    log_info "WiFi interfaces ($WIFI_COUNT): ${WIFI_INTERFACES:-none}"
+    log_info "WWAN/LTE interfaces ($WWAN_COUNT): ${WWAN_INTERFACES:-none}"
+    [ -n "$MODEM_CTRL_DEVICES" ] && log_info "Modem control devices: $MODEM_CTRL_DEVICES"
+    [ -n "$GSM_CONNECTIONS" ] && log_info "GSM connections: $GSM_CONNECTIONS"
+
+    # Export for LTE manager
+    export WWAN_INTERFACES WWAN_COUNT MODEM_CTRL_DEVICES GSM_CONNECTIONS
 
     if [ "$WIFI_VAP_SUPPORT" = false ] && [ "$VLAN_SEGMENTATION" = true ]; then
         log_warn "No VAP-capable WiFi adapter found."
@@ -648,6 +678,303 @@ VXLAN_MASTER_PSK=/etc/hookprobe/secrets/vxlan/master.psk
 OVSEOF
 
     log_info "OVS bridge configured with OpenFlow 1.3"
+}
+
+# ============================================================
+# BRIDGE LAN INTERFACES
+# ============================================================
+setup_lan_bridge() {
+    log_step "Adding LAN interfaces to bridge..."
+
+    # Get LAN interfaces (exclude WAN which is typically the first one or has default route)
+    local wan_iface=""
+    wan_iface=$(ip route | grep default | awk '{print $5}' | head -1)
+
+    local lan_ifaces=""
+    for iface in $ETH_INTERFACES; do
+        # Skip WAN interface
+        if [ "$iface" = "$wan_iface" ]; then
+            log_info "Skipping WAN interface: $iface"
+            continue
+        fi
+        lan_ifaces="$lan_ifaces $iface"
+    done
+
+    lan_ifaces=$(echo $lan_ifaces | xargs)  # trim
+
+    if [ -z "$lan_ifaces" ]; then
+        log_warn "No LAN interfaces found to bridge"
+        log_info "WAN interface: ${wan_iface:-none}"
+        log_info "Available interfaces: $ETH_INTERFACES"
+        return 0
+    fi
+
+    log_info "WAN interface: $wan_iface"
+    log_info "LAN interfaces to bridge: $lan_ifaces"
+
+    # Add each LAN interface to the OVS bridge
+    for iface in $lan_ifaces; do
+        if ip link show "$iface" &>/dev/null; then
+            # Remove any existing IP from the interface
+            ip addr flush dev "$iface" 2>/dev/null || true
+
+            # Add to OVS bridge
+            if ! ovs-vsctl list-ports "$OVS_BRIDGE_NAME" 2>/dev/null | grep -q "^${iface}$"; then
+                log_info "Adding $iface to bridge $OVS_BRIDGE_NAME..."
+                ovs-vsctl add-port "$OVS_BRIDGE_NAME" "$iface" 2>/dev/null || {
+                    log_warn "Failed to add $iface to bridge"
+                    continue
+                }
+            else
+                log_info "$iface already in bridge"
+            fi
+
+            # Bring interface up
+            ip link set "$iface" up
+        fi
+    done
+
+    # Save LAN configuration
+    cat > /etc/hookprobe/lan-bridge.conf << EOF
+# HookProbe Fortress LAN Bridge Configuration
+WAN_INTERFACE=$wan_iface
+LAN_INTERFACES="$lan_ifaces"
+BRIDGE_NAME=$OVS_BRIDGE_NAME
+BRIDGE_IP=10.250.0.1
+BRIDGE_NETMASK=255.255.0.0
+DHCP_RANGE_START=10.250.1.100
+DHCP_RANGE_END=10.250.1.250
+EOF
+
+    log_info "LAN interfaces bridged"
+}
+
+# ============================================================
+# WIFI ACCESS POINT (hostapd)
+# ============================================================
+setup_wifi_ap() {
+    log_step "Setting up WiFi Access Point..."
+
+    if [ -z "$WIFI_INTERFACES" ]; then
+        log_info "No WiFi interfaces detected, skipping AP setup"
+        return 0
+    fi
+
+    if ! command -v hostapd &>/dev/null; then
+        log_warn "hostapd not installed, skipping WiFi AP setup"
+        return 0
+    fi
+
+    # Use first WiFi interface
+    local wifi_iface=$(echo $WIFI_INTERFACES | awk '{print $1}')
+    log_info "Configuring WiFi AP on: $wifi_iface"
+
+    # Generate random password if not set
+    local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
+    local ap_ssid="${FORTRESS_WIFI_SSID:-Fortress-$(hostname -s)}"
+
+    # Create hostapd configuration
+    mkdir -p /etc/hostapd
+    cat > /etc/hostapd/fortress.conf << EOF
+# HookProbe Fortress WiFi AP Configuration
+interface=$wifi_iface
+driver=nl80211
+ssid=$ap_ssid
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=$ap_password
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+
+# Bridge to OVS
+bridge=$OVS_BRIDGE_NAME
+EOF
+
+    chmod 600 /etc/hostapd/fortress.conf
+
+    # Point hostapd to our config
+    if [ -f /etc/default/hostapd ]; then
+        sed -i 's|^#*DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/fortress.conf"|' /etc/default/hostapd
+    fi
+
+    # Add WiFi interface to bridge (hostapd will handle this, but ensure it's ready)
+    ip link set "$wifi_iface" up 2>/dev/null || true
+
+    # Create systemd service for hostapd
+    cat > /etc/systemd/system/fortress-hostapd.service << EOF
+[Unit]
+Description=Fortress WiFi Access Point
+After=network.target sys-subsystem-net-devices-${wifi_iface}.device
+Wants=sys-subsystem-net-devices-${wifi_iface}.device
+
+[Service]
+Type=forking
+PIDFile=/run/hostapd.pid
+ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-hostapd 2>/dev/null || true
+
+    # Save WiFi credentials
+    cat > /etc/hookprobe/wifi-ap.conf << EOF
+# HookProbe Fortress WiFi AP Credentials
+WIFI_INTERFACE=$wifi_iface
+WIFI_SSID=$ap_ssid
+WIFI_PASSWORD=$ap_password
+EOF
+    chmod 600 /etc/hookprobe/wifi-ap.conf
+
+    log_info "WiFi AP configured:"
+    log_info "  SSID: $ap_ssid"
+    log_info "  Password: $ap_password"
+    log_info "  Interface: $wifi_iface"
+}
+
+# ============================================================
+# DHCP SERVER (dnsmasq)
+# ============================================================
+setup_dhcp_server() {
+    log_step "Setting up DHCP server (dnsmasq)..."
+
+    if ! command -v dnsmasq &>/dev/null; then
+        log_warn "dnsmasq not installed, skipping DHCP setup"
+        return 0
+    fi
+
+    # Create dnsmasq configuration for Fortress
+    mkdir -p /etc/dnsmasq.d
+    cat > /etc/dnsmasq.d/fortress.conf << EOF
+# HookProbe Fortress DHCP Configuration
+
+# Listen on the bridge interface
+interface=$OVS_BRIDGE_NAME
+bind-interfaces
+
+# DHCP range for the main network (10.250.0.0/16)
+dhcp-range=10.250.1.100,10.250.1.250,255.255.0.0,24h
+
+# Gateway (this Fortress)
+dhcp-option=option:router,10.250.0.1
+
+# DNS servers (Fortress itself + Cloudflare)
+dhcp-option=option:dns-server,10.250.0.1,1.1.1.1
+
+# Domain
+dhcp-option=option:domain-name,fortress.local
+local=/fortress.local/
+
+# Lease file
+dhcp-leasefile=/var/lib/misc/fortress-dnsmasq.leases
+
+# Logging
+log-queries
+log-dhcp
+log-facility=/var/log/fortress-dnsmasq.log
+
+# Don't read /etc/resolv.conf
+no-resolv
+
+# Upstream DNS
+server=1.1.1.1
+server=8.8.8.8
+
+# Local hostname
+address=/fortress.local/10.250.0.1
+address=/fortress/10.250.0.1
+
+# DHCP authoritative mode
+dhcp-authoritative
+
+# Fast DHCP
+dhcp-rapid-commit
+
+# Hostname for DHCP clients
+expand-hosts
+domain=fortress.local
+EOF
+
+    # Create lease file directory
+    mkdir -p /var/lib/misc
+    touch /var/lib/misc/fortress-dnsmasq.leases
+
+    # Stop system dnsmasq if running (we'll use our own config)
+    systemctl stop dnsmasq 2>/dev/null || true
+    systemctl disable dnsmasq 2>/dev/null || true
+
+    # Create fortress-dnsmasq service
+    cat > /etc/systemd/system/fortress-dnsmasq.service << EOF
+[Unit]
+Description=Fortress DHCP and DNS Server
+After=network.target fortress-hostapd.service
+Wants=network.target
+
+[Service]
+Type=forking
+PIDFile=/run/fortress-dnsmasq.pid
+ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress.conf
+ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress.conf --pid-file=/run/fortress-dnsmasq.pid
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-dnsmasq 2>/dev/null || true
+
+    log_info "DHCP server configured:"
+    log_info "  Range: 10.250.1.100 - 10.250.1.250"
+    log_info "  Gateway: 10.250.0.1"
+    log_info "  DNS: 10.250.0.1, 1.1.1.1"
+    log_info "  Domain: fortress.local"
+}
+
+# ============================================================
+# START NETWORK SERVICES
+# ============================================================
+start_network_services() {
+    log_step "Starting network services..."
+
+    # Start dnsmasq first (DHCP/DNS)
+    if [ -f /etc/systemd/system/fortress-dnsmasq.service ]; then
+        log_info "Starting DHCP server..."
+        systemctl start fortress-dnsmasq 2>/dev/null || log_warn "Failed to start dnsmasq"
+    fi
+
+    # Start hostapd (WiFi AP)
+    if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
+        log_info "Starting WiFi AP..."
+        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
+    fi
+
+    # Verify services
+    sleep 2
+    if systemctl is-active fortress-dnsmasq &>/dev/null; then
+        log_info "✓ DHCP server running"
+    else
+        log_warn "✗ DHCP server not running"
+    fi
+
+    if systemctl is-active fortress-hostapd &>/dev/null; then
+        log_info "✓ WiFi AP running"
+    else
+        log_warn "✗ WiFi AP not running (may need WiFi interface)"
+    fi
 }
 
 # ============================================================
@@ -1951,9 +2278,28 @@ show_completion() {
     echo ""
 
     echo -e "  ${BOLD}Network Configuration:${NC}"
+    echo -e "  Bridge: $OVS_BRIDGE_NAME (10.250.0.1)"
+    echo -e "  DHCP Range: 10.250.1.100 - 10.250.1.250"
     [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  Primary WAN: $FORTRESS_WAN_IFACE"
     [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
-    [ -n "$FORTRESS_LAN_IFACES" ] && echo -e "  LAN Bridge: br-lan ($FORTRESS_LAN_IFACES)"
+
+    # Show WiFi credentials if configured
+    if [ -f /etc/hookprobe/wifi-ap.conf ]; then
+        source /etc/hookprobe/wifi-ap.conf 2>/dev/null
+        if [ -n "$WIFI_SSID" ]; then
+            echo ""
+            echo -e "  ${BOLD}${GREEN}WiFi Access Point:${NC}"
+            echo -e "  SSID:     ${CYAN}$WIFI_SSID${NC}"
+            echo -e "  Password: ${CYAN}$WIFI_PASSWORD${NC}"
+        fi
+    fi
+    echo ""
+
+    echo -e "  ${BOLD}Connect to Fortress:${NC}"
+    echo -e "  1. Connect to WiFi: ${CYAN}${WIFI_SSID:-Fortress-$(hostname -s)}${NC}"
+    echo -e "  2. Or plug into a LAN port"
+    echo -e "  3. You'll get an IP in 10.250.1.x range"
+    echo -e "  4. Access dashboard: ${CYAN}https://10.250.0.1:8443${NC}"
     echo ""
 
     echo -e "  ${BOLD}Management Commands:${NC}"
@@ -1980,6 +2326,171 @@ show_completion() {
         echo -e "  ${BOLD}Device Profile:${NC}"
         echo -e "  $FORTRESS_PROFILE_DIR"
         echo ""
+    fi
+}
+
+# ============================================================
+# USER INPUT COLLECTION (before installation)
+# ============================================================
+collect_user_inputs() {
+    # Collect all user configuration BEFORE starting installation
+    # This allows users to provide all inputs upfront, then enjoy coffee
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Configuration Setup${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo "We'll collect a few settings before starting installation."
+    echo "After this, no further input is needed - grab a coffee! ☕"
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
+    # Feature Selection
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${YELLOW}Optional Features:${NC}"
+    echo ""
+
+    # LTE Failover
+    if [ "$ENABLE_LTE" != true ]; then
+        if [ "$WWAN_COUNT" -gt 0 ] || [ -n "$MODEM_CTRL_DEVICES" ]; then
+            echo -e "${GREEN}✓ LTE modem detected${NC}"
+            read -p "Enable LTE WAN failover? [Y/n]: " enable_lte_choice
+            enable_lte_choice="${enable_lte_choice:-Y}"
+            [[ "${enable_lte_choice,,}" =~ ^y ]] && ENABLE_LTE=true
+        else
+            read -p "Enable LTE WAN failover? (no modem detected) [y/N]: " enable_lte_choice
+            [[ "${enable_lte_choice,,}" =~ ^y ]] && ENABLE_LTE=true
+        fi
+    fi
+
+    # Remote Access (Cloudflare Tunnel)
+    if [ "$ENABLE_REMOTE_ACCESS" != true ]; then
+        read -p "Enable remote dashboard access (Cloudflare Tunnel)? [y/N]: " enable_remote_choice
+        [[ "${enable_remote_choice,,}" =~ ^y ]] && ENABLE_REMOTE_ACCESS=true
+    fi
+
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
+    # LTE Configuration
+    # ─────────────────────────────────────────────────────────────
+    if [ "$ENABLE_LTE" = true ] && [ -z "$HOOKPROBE_LTE_APN" ]; then
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo -e "${CYAN}  LTE Configuration${NC}"
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo ""
+
+        # Show detected modem
+        if [ -n "$MODEM_CTRL_DEVICES" ]; then
+            echo -e "${GREEN}✓ Modem device: $MODEM_CTRL_DEVICES${NC}"
+        fi
+        if [ -n "$WWAN_INTERFACES" ]; then
+            echo -e "${GREEN}✓ WWAN interface: $WWAN_INTERFACES${NC}"
+        fi
+        echo ""
+
+        # Common APNs
+        echo "Common APNs by carrier:"
+        echo "  Vodafone:   internet.vodafone.ro, web.vodafone.de, internet"
+        echo "  Orange:     internet, orange.ro, orange"
+        echo "  T-Mobile:   internet.t-mobile, fast.t-mobile.com"
+        echo "  AT&T:       broadband, phone"
+        echo "  Verizon:    vzwinternet"
+        echo "  Generic:    internet"
+        echo ""
+
+        read -p "Enter your APN name: " HOOKPROBE_LTE_APN
+        if [ -z "$HOOKPROBE_LTE_APN" ]; then
+            log_warn "No APN provided - using 'internet' as default"
+            HOOKPROBE_LTE_APN="internet"
+        fi
+
+        # Authentication (most don't need it)
+        echo ""
+        echo "Does your carrier require authentication? (most don't)"
+        read -p "Require auth? [y/N]: " need_auth
+        if [[ "${need_auth,,}" =~ ^y ]]; then
+            echo "Auth types: 1=PAP, 2=CHAP, 3=MSCHAPv2"
+            read -p "Select [1-3]: " auth_choice
+            case "$auth_choice" in
+                1) HOOKPROBE_LTE_AUTH="pap" ;;
+                2) HOOKPROBE_LTE_AUTH="chap" ;;
+                3) HOOKPROBE_LTE_AUTH="mschapv2" ;;
+                *) HOOKPROBE_LTE_AUTH="none" ;;
+            esac
+            if [ "$HOOKPROBE_LTE_AUTH" != "none" ]; then
+                read -p "Username: " HOOKPROBE_LTE_USER
+                read -sp "Password: " HOOKPROBE_LTE_PASS
+                echo ""
+            fi
+        else
+            HOOKPROBE_LTE_AUTH="none"
+        fi
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Cloudflare Tunnel Configuration
+    # ─────────────────────────────────────────────────────────────
+    if [ "$ENABLE_REMOTE_ACCESS" = true ]; then
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo -e "${CYAN}  Remote Access Configuration${NC}"
+        echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+        echo ""
+        echo "Cloudflare Tunnel allows secure remote access to your dashboard."
+        echo "You'll need a Cloudflare account and can set this up later via Web UI."
+        echo ""
+        echo "Setup options:"
+        echo "  1. Configure now (need Cloudflare tunnel token)"
+        echo "  2. Configure later via Web UI (recommended)"
+        echo ""
+        read -p "Select [1-2] (default: 2): " cf_choice
+        cf_choice="${cf_choice:-2}"
+
+        if [ "$cf_choice" = "1" ]; then
+            echo ""
+            echo "To get your tunnel token:"
+            echo "  1. Go to https://one.dash.cloudflare.com"
+            echo "  2. Networks → Tunnels → Create a tunnel"
+            echo "  3. Copy the tunnel token"
+            echo ""
+            read -p "Enter Cloudflare tunnel token (or press Enter to skip): " CLOUDFLARE_TUNNEL_TOKEN
+            if [ -n "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+                read -p "Enter hostname (e.g., fortress.yourdomain.com): " CLOUDFLARE_TUNNEL_HOSTNAME
+            fi
+        fi
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Configuration Summary
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Configuration Summary${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${BOLD}Core Features:${NC}"
+    echo "    ✓ OVS Bridge with OpenFlow 1.3"
+    echo "    ✓ VLAN Segmentation (5 VLANs)"
+    [ "$MACSEC_ENABLED" = true ] && echo "    ✓ MACsec Layer 2 Encryption"
+    echo "    ✓ QSecBit Security Agent"
+    echo "    ✓ Web Dashboard (https://localhost:8443)"
+    echo ""
+    echo -e "  ${BOLD}Optional Features:${NC}"
+    [ "$ENABLE_LTE" = true ] && echo "    ✓ LTE Failover (APN: $HOOKPROBE_LTE_APN)"
+    [ "$ENABLE_REMOTE_ACCESS" = true ] && echo "    ✓ Remote Access (Cloudflare Tunnel)"
+    [ "$ENABLE_MONITORING" = true ] && echo "    ✓ Monitoring (Grafana + Victoria Metrics)"
+    [ "$ENABLE_N8N" = true ] && echo "    ✓ n8n Workflow Automation"
+    [ "$ENABLE_LTE" != true ] && [ "$ENABLE_REMOTE_ACCESS" != true ] && echo "    (none selected)"
+    echo ""
+
+    # Confirm
+    read -p "Proceed with installation? [Y/n]: " confirm_install
+    confirm_install="${confirm_install:-Y}"
+    if [[ ! "${confirm_install,,}" =~ ^y ]]; then
+        echo "Installation cancelled."
+        exit 0
     fi
 }
 
@@ -2053,11 +2564,28 @@ main() {
         esac
     done
 
-    # Run installation steps
+    # Phase 1: Pre-flight checks
     check_root
     check_requirements
     detect_platform
     detect_interfaces
+
+    # Phase 2: Collect all user inputs BEFORE installation
+    if [ "$NON_INTERACTIVE" != true ]; then
+        collect_user_inputs
+    fi
+
+    # Phase 3: Installation - user can enjoy coffee ☕
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                                                              ║${NC}"
+    echo -e "${CYAN}║   ☕ Grab a coffee - Fortress is being configured for you   ║${NC}"
+    echo -e "${CYAN}║                                                              ║${NC}"
+    echo -e "${CYAN}║   This will take a few minutes. No further input needed.    ║${NC}"
+    echo -e "${CYAN}║                                                              ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    sleep 2
 
     install_packages
     verify_critical_packages
@@ -2066,6 +2594,9 @@ main() {
     install_openvswitch
 
     setup_ovs_bridge
+    setup_lan_bridge
+    setup_wifi_ap
+    setup_dhcp_server
     setup_vlans
     setup_vxlan_tunnels
     setup_macsec
@@ -2077,13 +2608,16 @@ main() {
     install_cloudflared
     setup_lte_failover
 
+    # Start network services (DHCP, WiFi AP)
+    start_network_services
+
     create_systemd_services
     create_config_file
 
     # Start services
     log_step "Starting services..."
-    systemctl start hookprobe-fortress
-    systemctl start fortress-qsecbit
+    systemctl start hookprobe-fortress 2>/dev/null || true
+    systemctl start fortress-qsecbit 2>/dev/null || true
 
     # Validate installation
     validate_installation
