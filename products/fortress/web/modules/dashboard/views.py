@@ -13,6 +13,37 @@ from flask_login import login_required
 from . import dashboard_bp
 
 
+def get_tunnel_status():
+    """Get Cloudflare Tunnel status."""
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
+        from cloudflare_tunnel import get_tunnel_status as _get_tunnel_status
+        return _get_tunnel_status()
+    except ImportError:
+        pass
+
+    # Fallback - check if config exists
+    config_file = Path('/opt/hookprobe/fortress/tunnel/config.json')
+    if config_file.exists():
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            return {
+                'state': 'configured',
+                'hostname': config.get('hostname'),
+                'cloudflared_version': None
+            }
+        except Exception:
+            pass
+
+    return {
+        'state': 'unconfigured',
+        'hostname': None,
+        'cloudflared_version': None
+    }
+
+
 def get_qsecbit_stats():
     """Load QSecBit stats from file."""
     stats_file = Path('/opt/hookprobe/fortress/data/qsecbit_stats.json')
@@ -67,6 +98,7 @@ def get_recent_devices():
 def index():
     """Main dashboard page."""
     stats = get_qsecbit_stats()
+    tunnel = get_tunnel_status()
 
     return render_template('dashboard/index.html',
                            qsecbit_score=stats.get('score', 0),
@@ -75,7 +107,8 @@ def index():
                            threats_blocked=stats.get('threats_detected', 0),
                            dns_blocked=get_dns_blocked_count(),
                            recent_threats=get_recent_threats(),
-                           recent_devices=get_recent_devices())
+                           recent_devices=get_recent_devices(),
+                           tunnel_status=tunnel)
 
 
 @dashboard_bp.route('/api/dashboard/stats')
@@ -83,6 +116,7 @@ def index():
 def api_stats():
     """API endpoint for dashboard stats (for real-time updates)."""
     stats = get_qsecbit_stats()
+    tunnel = get_tunnel_status()
     return jsonify({
         'qsecbit': {
             'score': stats.get('score', 0),
@@ -92,5 +126,6 @@ def api_stats():
         'devices': get_device_count(),
         'threats': stats.get('threats_detected', 0),
         'dns_blocked': get_dns_blocked_count(),
+        'tunnel': tunnel,
         'timestamp': datetime.now().isoformat()
     })
