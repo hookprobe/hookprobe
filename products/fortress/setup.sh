@@ -2210,6 +2210,156 @@ STOPEOF
 }
 
 # ============================================================
+# WEB DASHBOARD
+# ============================================================
+install_web_dashboard() {
+    log_step "Installing web dashboard..."
+
+    local WEB_DIR="/opt/hookprobe/fortress/web"
+    local SRC_WEB="$FORTRESS_ROOT/web"
+
+    # Create web directory
+    mkdir -p "$WEB_DIR"
+
+    # Copy web files from source
+    if [ -d "$SRC_WEB" ]; then
+        log_info "Copying web files from $SRC_WEB..."
+        cp -r "$SRC_WEB"/* "$WEB_DIR/"
+    else
+        log_error "Web source directory not found: $SRC_WEB"
+        return 1
+    fi
+
+    # Generate SSL certificates for HTTPS
+    local CERT_DIR="/etc/hookprobe/ssl"
+    mkdir -p "$CERT_DIR"
+
+    if [ ! -f "$CERT_DIR/fortress.crt" ] || [ ! -f "$CERT_DIR/fortress.key" ]; then
+        log_info "Generating self-signed SSL certificate..."
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "$CERT_DIR/fortress.key" \
+            -out "$CERT_DIR/fortress.crt" \
+            -subj "/C=US/ST=State/L=City/O=HookProbe/OU=Fortress/CN=$(hostname)" \
+            2>/dev/null
+        chmod 600 "$CERT_DIR/fortress.key"
+        chmod 644 "$CERT_DIR/fortress.crt"
+        log_info "SSL certificate generated"
+    fi
+
+    # Generate secret key for Flask sessions
+    local SECRET_DIR="/etc/hookprobe/secrets"
+    mkdir -p "$SECRET_DIR"
+    if [ ! -f "$SECRET_DIR/fortress_secret_key" ]; then
+        openssl rand -hex 32 > "$SECRET_DIR/fortress_secret_key"
+        chmod 600 "$SECRET_DIR/fortress_secret_key"
+    fi
+
+    # Create default admin user credentials file
+    local USERS_FILE="$WEB_DIR/users.json"
+    if [ ! -f "$USERS_FILE" ]; then
+        # Generate random password for admin
+        local ADMIN_PASS=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
+        # Hash password with Python
+        local PASS_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw('$ADMIN_PASS'.encode(), bcrypt.gensalt()).decode())" 2>/dev/null || echo "")
+
+        if [ -n "$PASS_HASH" ]; then
+            cat > "$USERS_FILE" << USERSEOF
+{
+    "admin": {
+        "password_hash": "$PASS_HASH",
+        "role": "admin",
+        "name": "Administrator"
+    }
+}
+USERSEOF
+            chmod 600 "$USERS_FILE"
+
+            # Save credentials for display
+            echo "$ADMIN_PASS" > "$SECRET_DIR/admin_password"
+            chmod 600 "$SECRET_DIR/admin_password"
+            log_info "Admin user created (password saved to $SECRET_DIR/admin_password)"
+        else
+            log_warn "Could not hash password - bcrypt may not be installed"
+        fi
+    fi
+
+    # Create gunicorn configuration
+    cat > "$WEB_DIR/gunicorn.conf.py" << 'GUNICORNEOF'
+# Gunicorn configuration for Fortress Web Dashboard
+import multiprocessing
+
+# Bind to all interfaces on port 8443
+bind = "0.0.0.0:8443"
+
+# SSL Configuration
+certfile = "/etc/hookprobe/ssl/fortress.crt"
+keyfile = "/etc/hookprobe/ssl/fortress.key"
+
+# Workers - 2 for small devices, more for larger
+workers = min(2, multiprocessing.cpu_count())
+worker_class = "sync"
+threads = 2
+
+# Timeouts
+timeout = 30
+keepalive = 2
+
+# Logging
+accesslog = "/var/log/hookprobe/fortress-web-access.log"
+errorlog = "/var/log/hookprobe/fortress-web-error.log"
+loglevel = "info"
+
+# Security
+limit_request_line = 4094
+limit_request_fields = 100
+limit_request_field_size = 8190
+GUNICORNEOF
+
+    # Create systemd service for web dashboard
+    cat > /etc/systemd/system/fortress-web.service << 'WEBSERVICEEOF'
+[Unit]
+Description=HookProbe Fortress Web Dashboard
+After=network.target openvswitch-switch.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/hookprobe/fortress/web
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 -m gunicorn --config gunicorn.conf.py app:app
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fortress-web
+
+[Install]
+WantedBy=multi-user.target
+WEBSERVICEEOF
+
+    # Enable and start the service
+    systemctl daemon-reload
+    systemctl enable fortress-web
+    systemctl start fortress-web
+
+    # Wait for startup
+    sleep 2
+
+    if systemctl is-active fortress-web &>/dev/null; then
+        log_info "Web dashboard started successfully on https://0.0.0.0:8443"
+    else
+        log_warn "Web dashboard may not have started - check: journalctl -u fortress-web"
+    fi
+
+    log_info "Web dashboard installed"
+}
+
+# ============================================================
 # MAIN CONFIGURATION FILE
 # ============================================================
 create_config_file() {
@@ -2449,6 +2599,19 @@ show_completion() {
             echo -e "  ${BOLD}${GREEN}WiFi Access Point:${NC}"
             echo -e "  SSID:     ${CYAN}$WIFI_SSID${NC}"
             echo -e "  Password: ${CYAN}$WIFI_PASSWORD${NC}"
+        fi
+    fi
+
+    # Show admin credentials
+    if [ -f /etc/hookprobe/secrets/admin_password ]; then
+        local ADMIN_PASS=$(cat /etc/hookprobe/secrets/admin_password 2>/dev/null)
+        if [ -n "$ADMIN_PASS" ]; then
+            echo ""
+            echo -e "  ${BOLD}${GREEN}Web Dashboard Login:${NC}"
+            echo -e "  URL:      ${CYAN}https://10.250.0.1:8443${NC}"
+            echo -e "  Username: ${CYAN}admin${NC}"
+            echo -e "  Password: ${CYAN}$ADMIN_PASS${NC}"
+            echo -e "  ${DIM}(Change this password after first login!)${NC}"
         fi
     fi
     echo ""
@@ -2772,6 +2935,7 @@ main() {
 
     create_systemd_services
     create_config_file
+    install_web_dashboard
 
     # Start services
     log_step "Starting services..."
