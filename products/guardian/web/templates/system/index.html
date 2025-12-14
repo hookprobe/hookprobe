@@ -642,21 +642,44 @@ function escapeHtml(text) {
 function formatGitDate(dateStr) {
     if (!dateStr || dateStr === 'unknown') return '---';
     try {
-        // Git date format: "2024-01-15 10:30:45 +0000"
-        // Convert to ISO 8601: "2024-01-15T10:30:45+00:00"
-        let normalized = dateStr;
+        // Git date format: "2024-01-15 10:30:45 +0000" or "2024-01-15 10:30:45"
+        // Manually parse to avoid Safari Date parsing issues
+        const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})[\sT]+(\d{2}):(\d{2}):(\d{2})(?:\s*([+-])(\d{2}):?(\d{2}))?/);
 
-        // Replace space between date and time with 'T'
-        // And fix timezone format ("+0000" -> "+00:00")
-        if (dateStr.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)) {
-            normalized = dateStr.replace(' ', 'T').replace(/ ([+-])(\d{2})(\d{2})$/, '$1$2:$3');
+        if (!match) {
+            return dateStr; // Can't parse, return original
         }
 
-        const date = new Date(normalized);
+        const [, year, month, day, hour, minute, second, tzSign, tzHour, tzMin] = match;
 
-        // Check if date is valid
+        // Create date using explicit numeric values (works on all browsers)
+        let date;
+        if (tzSign && tzHour && tzMin) {
+            // Has timezone offset - create as UTC then adjust
+            const tzOffsetMinutes = (parseInt(tzHour, 10) * 60 + parseInt(tzMin, 10)) * (tzSign === '-' ? 1 : -1);
+            date = new Date(Date.UTC(
+                parseInt(year, 10),
+                parseInt(month, 10) - 1,
+                parseInt(day, 10),
+                parseInt(hour, 10),
+                parseInt(minute, 10),
+                parseInt(second, 10)
+            ));
+            date = new Date(date.getTime() + tzOffsetMinutes * 60 * 1000);
+        } else {
+            // No timezone, assume local
+            date = new Date(
+                parseInt(year, 10),
+                parseInt(month, 10) - 1,
+                parseInt(day, 10),
+                parseInt(hour, 10),
+                parseInt(minute, 10),
+                parseInt(second, 10)
+            );
+        }
+
         if (isNaN(date.getTime())) {
-            return dateStr; // Return original if parsing failed
+            return dateStr;
         }
 
         return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
