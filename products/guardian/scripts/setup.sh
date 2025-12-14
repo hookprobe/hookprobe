@@ -3678,9 +3678,9 @@ ConditionFileNotEmpty=
 After=
 Wants=
 # Set Guardian-specific dependencies
-After=guardian-wlan.service guardian-offline.service local-fs.target
+# Use Wants (not Requires) so hostapd can still start if guardian-wlan has issues
+After=guardian-wlan.service local-fs.target
 Wants=guardian-wlan.service
-Requires=guardian-wlan.service
 
 [Service]
 Restart=on-failure
