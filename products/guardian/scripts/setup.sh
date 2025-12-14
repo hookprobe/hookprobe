@@ -3947,6 +3947,12 @@ install_web_ui() {
         log_warn "Could not install ML libraries - dnsXai will run in rule-based mode"
     fi
 
+    # If guardian-webui was already running, restart it to pick up new ML libraries
+    if systemctl is-active --quiet guardian-webui 2>/dev/null; then
+        log_info "Restarting guardian-webui to load ML libraries..."
+        systemctl restart guardian-webui
+    fi
+
     # Create systemd service
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
 [Unit]
