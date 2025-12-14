@@ -126,17 +126,26 @@ You benefit from global threat intelligence while keeping everything private.
 ## Quick Start
 
 ```bash
-# Clone HookProbe
-git clone https://github.com/hookprobe/hookprobe
+# First-time setup (fresh Raspberry Pi)
+sudo apt update && sudo apt install -y git
+
+# Clone and install
+git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
-
-# Install Guardian
-./install.sh --tier guardian
-
-# Access the dashboard
-# Connect to HookProbe-Guardian WiFi
-# Open http://192.168.4.1:8080
+sudo ./install.sh --tier guardian
 ```
+
+**That's it!** The install script handles everything automatically:
+- All system packages (hostapd, dnsmasq, suricata, python3, etc.)
+- Python dependencies
+- Locale configuration (en_US.UTF-8)
+- WiFi country auto-detection from your location
+- Network interface setup (wlan0 for WAN, wlan1 for AP)
+- Service configuration and startup
+
+**After installation:**
+1. Connect to **HookProbe-Guardian** WiFi
+2. Open **http://192.168.4.1:8080**
 
 **Time to protection:** ~5 minutes
 **Ongoing effort:** Zero - it learns and adapts automatically
