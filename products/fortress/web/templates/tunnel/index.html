@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+
+{% block title %}Remote Access - HookProbe Fortress{% endblock %}
+
+{% block page_title %}Remote Access{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Remote Access</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Status Card -->
+    <div class="col-lg-6">
+        <div class="card {% if status.state == 'connected' %}card-success{% elif status.state in ('configured', 'connecting') %}card-warning{% else %}card-secondary{% endif %}">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-cloud mr-2"></i>Tunnel Status</h3>
+            </div>
+            <div class="card-body">
+                <!-- Status Badge -->
+                <div class="text-center mb-4">
+                    {% if status.state == 'connected' %}
+                    <i class="fas fa-check-circle fa-4x text-success mb-3"></i>
+                    <h4 class="text-success">Connected</h4>
+                    {% elif status.state == 'connecting' %}
+                    <i class="fas fa-spinner fa-spin fa-4x text-warning mb-3"></i>
+                    <h4 class="text-warning">Connecting...</h4>
+                    {% elif status.state == 'configured' %}
+                    <i class="fas fa-pause-circle fa-4x text-warning mb-3"></i>
+                    <h4 class="text-warning">Configured (Stopped)</h4>
+                    {% elif status.state == 'not_installed' %}
+                    <i class="fas fa-download fa-4x text-muted mb-3"></i>
+                    <h4 class="text-muted">Not Installed</h4>
+                    {% else %}
+                    <i class="fas fa-times-circle fa-4x text-muted mb-3"></i>
+                    <h4 class="text-muted">Not Configured</h4>
+                    {% endif %}
+                </div>
+
+                {% if config and config.hostname %}
+                <div class="info-box bg-dark mb-3">
+                    <span class="info-box-icon"><i class="fas fa-globe"></i></span>
+                    <div class="info-box-content">
+                        <span class="info-box-text">Access URL</span>
+                        <span class="info-box-number">
+                            <a href="https://{{ config.hostname }}" target="_blank" class="text-info">
+                                https://{{ config.hostname }}
+                            </a>
+                        </span>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if status.state == 'connected' and status.uptime_seconds %}
+                <div class="row text-center">
+                    <div class="col-4">
+                        <div class="description-block border-right">
+                            <h5 class="description-header" id="uptime-display">
+                                {% set hours = status.uptime_seconds // 3600 %}
+                                {% set minutes = (status.uptime_seconds % 3600) // 60 %}
+                                {{ hours }}h {{ minutes }}m
+                            </h5>
+                            <span class="description-text text-muted">Uptime</span>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="description-block border-right">
+                            <h5 class="description-header">{{ status.cloudflared_version or 'N/A' }}</h5>
+                            <span class="description-text text-muted">Version</span>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="description-block">
+                            <h5 class="description-header">
+                                <span class="badge badge-success">Active</span>
+                            </h5>
+                            <span class="description-text text-muted">Service</span>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if status.last_error %}
+                <div class="alert alert-danger mt-3">
+                    <i class="fas fa-exclamation-triangle mr-2"></i>
+                    <strong>Error:</strong> {{ status.last_error }}
+                </div>
+                {% endif %}
+            </div>
+            <div class="card-footer">
+                {% if status.state in ('not_installed', 'unconfigured') %}
+                <a href="{{ url_for('tunnel.wizard') }}" class="btn btn-primary">
+                    <i class="fas fa-magic mr-2"></i>Setup Remote Access
+                </a>
+                {% elif status.state == 'connected' %}
+                <form action="{{ url_for('tunnel.stop') }}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-warning">
+                        <i class="fas fa-stop mr-2"></i>Stop
+                    </button>
+                </form>
+                <form action="{{ url_for('tunnel.restart') }}" method="post" class="d-inline ml-2">
+                    <button type="submit" class="btn btn-secondary">
+                        <i class="fas fa-sync mr-2"></i>Restart
+                    </button>
+                </form>
+                <button type="button" class="btn btn-info ml-2" onclick="testConnectivity()">
+                    <i class="fas fa-satellite-dish mr-2"></i>Test
+                </button>
+                {% else %}
+                <form action="{{ url_for('tunnel.start') }}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-success">
+                        <i class="fas fa-play mr-2"></i>Start
+                    </button>
+                </form>
+                <a href="{{ url_for('tunnel.wizard') }}" class="btn btn-secondary ml-2">
+                    <i class="fas fa-cog mr-2"></i>Reconfigure
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Card -->
+    <div class="col-lg-6">
+        <div class="card card-outline card-info">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>About Remote Access</h3>
+            </div>
+            <div class="card-body">
+                <p>
+                    <strong>Access your Fortress from anywhere!</strong>
+                </p>
+                <p>
+                    Remote Access uses Cloudflare Tunnels to securely expose your Fortress
+                    dashboard to the internet. This allows you to:
+                </p>
+                <ul>
+                    <li><i class="fas fa-mobile-alt text-info mr-2"></i>Check security status from your phone</li>
+                    <li><i class="fas fa-laptop text-info mr-2"></i>Manage your network while traveling</li>
+                    <li><i class="fas fa-bell text-info mr-2"></i>Receive and respond to alerts remotely</li>
+                    <li><i class="fas fa-users text-info mr-2"></i>Grant secure access to IT support</li>
+                </ul>
+
+                <div class="callout callout-info">
+                    <h5><i class="fas fa-shield-alt mr-2"></i>Secure by Design</h5>
+                    <p class="mb-0">
+                        Cloudflare Tunnels create an outbound-only connection from your network.
+                        No ports are opened on your firewall, and all traffic is encrypted.
+                    </p>
+                </div>
+
+                {% if config and config.hostname %}
+                <div class="callout callout-success">
+                    <h5><i class="fas fa-external-link-alt mr-2"></i>Your Access URL</h5>
+                    <p class="mb-0">
+                        <code>https://{{ config.hostname }}</code>
+                        <br>
+                        <small class="text-muted">Bookmark this on your phone for quick access!</small>
+                    </p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        {% if config %}
+        <div class="card card-outline card-secondary">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-tools mr-2"></i>Configuration</h3>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr>
+                        <td><strong>Hostname</strong></td>
+                        <td>{{ config.hostname or 'Not set' }}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Local Port</strong></td>
+                        <td>{{ config.local_port }}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Auto-start</strong></td>
+                        <td>
+                            {% if config.auto_start %}
+                            <span class="badge badge-success">Enabled</span>
+                            {% else %}
+                            <span class="badge badge-secondary">Disabled</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Configured</strong></td>
+                        <td>{{ config.created_at | datetime if config.created_at else 'Unknown' }}</td>
+                    </tr>
+                </table>
+            </div>
+            <div class="card-footer">
+                {% if current_user.is_admin %}
+                <form action="{{ url_for('tunnel.reset') }}" method="post"
+                      onsubmit="return confirm('Are you sure you want to remove the tunnel configuration?');">
+                    <button type="submit" class="btn btn-danger btn-sm">
+                        <i class="fas fa-trash mr-2"></i>Remove Configuration
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Test Result Modal -->
+<div class="modal fade" id="testModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Connectivity Test</h5>
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body text-center" id="testModalBody">
+                <i class="fas fa-spinner fa-spin fa-3x mb-3"></i>
+                <p>Testing connectivity...</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function testConnectivity() {
+    $('#testModalBody').html('<i class="fas fa-spinner fa-spin fa-3x mb-3"></i><p>Testing connectivity...</p>');
+    $('#testModal').modal('show');
+
+    fetch('{{ url_for("tunnel.test") }}', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                $('#testModalBody').html(
+                    '<i class="fas fa-check-circle fa-3x text-success mb-3"></i>' +
+                    '<p class="text-success">' + data.message + '</p>'
+                );
+            } else {
+                $('#testModalBody').html(
+                    '<i class="fas fa-times-circle fa-3x text-danger mb-3"></i>' +
+                    '<p class="text-danger">' + data.message + '</p>'
+                );
+            }
+        })
+        .catch(error => {
+            $('#testModalBody').html(
+                '<i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>' +
+                '<p class="text-warning">Test failed: ' + error + '</p>'
+            );
+        });
+}
+
+// Auto-refresh status every 30 seconds
+setInterval(function() {
+    fetch('{{ url_for("tunnel.api_status") }}')
+        .then(response => response.json())
+        .then(data => {
+            // Update uptime display
+            if (data.uptime_seconds) {
+                var hours = Math.floor(data.uptime_seconds / 3600);
+                var minutes = Math.floor((data.uptime_seconds % 3600) / 60);
+                $('#uptime-display').text(hours + 'h ' + minutes + 'm');
+            }
+        });
+}, 30000);
+</script>
+{% endblock %}
