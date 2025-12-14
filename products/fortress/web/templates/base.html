@@ -138,6 +138,12 @@
                             <p>Reports</p>
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ url_for('tunnel.index') }}" class="nav-link {% if 'tunnel' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-cloud"></i>
+                            <p>Remote Access</p>
+                        </a>
+                    </li>
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
                     <li class="nav-item">
