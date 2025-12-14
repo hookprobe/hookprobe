@@ -80,7 +80,7 @@
                 <li><a href="#" onclick="switchToTab('vpn'); closeMenu(); return false;">VPN</a></li>
                 <li><a href="#" onclick="switchToTab('system'); closeMenu(); return false;">System</a></li>
                 <li><a href="#" onclick="switchToTab('debug'); closeMenu(); return false;">Debug</a></li>
-                <li><a href="#" id="menu-cortex-link" onclick="switchToTab('cortex'); closeMenu(); return false;">Cortex</a></li>
+                <li><a href="#" onclick="switchToTab('cortex'); closeMenu(); setTimeout(function(){if(typeof initCortexGlobe==='function')initCortexGlobe();},400); return false;">Cortex</a></li>
             </ul>
         </div>
         <a href="#" class="close" onclick="closeMenu(); return false;">Close</a>
