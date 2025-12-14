@@ -840,10 +840,12 @@ NMEOF
 
     # Generate random password if not set
     local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
-    local ap_ssid="${FORTRESS_WIFI_SSID:-Fortress-$(hostname -s)}"
+    local ap_ssid="${FORTRESS_WIFI_SSID:-hookprobe}"
 
     # Create hostapd configuration
     # NOTE: Removed wpa_pairwise=TKIP - modern devices reject it
+    # NOTE: No bridge= option - OVS bridges don't work with hostapd's bridge option
+    #       We add the WiFi interface to OVS manually after hostapd starts
     mkdir -p /etc/hostapd
     cat > /etc/hostapd/fortress.conf << EOF
 # HookProbe Fortress WiFi AP Configuration
@@ -861,8 +863,8 @@ wpa_passphrase=$ap_password
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 
-# Bridge to OVS
-bridge=$OVS_BRIDGE_NAME
+# NOTE: OVS bridge integration handled via ExecStartPost
+# Do NOT use bridge= option with OVS bridges
 EOF
 
     chmod 600 /etc/hostapd/fortress.conf
@@ -900,7 +902,29 @@ fi
 PREPEOF
     chmod +x /usr/local/bin/fortress-wifi-prepare.sh
 
-    # Create systemd service for hostapd with pre-start preparation
+    # Create helper script to add WiFi to OVS bridge after hostapd starts
+    cat > /usr/local/bin/fortress-wifi-bridge.sh << BRIDGEOF
+#!/bin/bash
+# Add WiFi interface to OVS bridge after hostapd starts
+WIFI_IFACE="\$1"
+OVS_BRIDGE="$OVS_BRIDGE_NAME"
+
+sleep 1  # Wait for hostapd to fully initialize
+
+# Remove from OVS if already exists (cleanup)
+ovs-vsctl --if-exists del-port "\$OVS_BRIDGE" "\$WIFI_IFACE" 2>/dev/null || true
+
+# Add WiFi interface to OVS bridge
+if ovs-vsctl add-port "\$OVS_BRIDGE" "\$WIFI_IFACE" 2>/dev/null; then
+    echo "WiFi interface \$WIFI_IFACE added to OVS bridge \$OVS_BRIDGE"
+else
+    echo "Warning: Could not add \$WIFI_IFACE to OVS bridge"
+    exit 1
+fi
+BRIDGEOF
+    chmod +x /usr/local/bin/fortress-wifi-bridge.sh
+
+    # Create systemd service for hostapd with pre/post scripts
     cat > /etc/systemd/system/fortress-hostapd.service << EOF
 [Unit]
 Description=Fortress WiFi Access Point
@@ -913,7 +937,8 @@ Type=forking
 PIDFile=/run/hostapd.pid
 ExecStartPre=/usr/local/bin/fortress-wifi-prepare.sh ${wifi_iface}
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
-ExecReload=/bin/kill -HUP \$MAINPID
+ExecStartPost=/usr/local/bin/fortress-wifi-bridge.sh ${wifi_iface}
+ExecStopPost=/usr/bin/ovs-vsctl --if-exists del-port $OVS_BRIDGE_NAME ${wifi_iface}
 Restart=on-failure
 RestartSec=5
 
@@ -1968,32 +1993,207 @@ install_monitoring() {
 
     log_step "Installing monitoring stack..."
 
-    # Create monitoring directories
+    # Create directories with proper permissions
     mkdir -p /opt/hookprobe/fortress/monitoring
     mkdir -p /opt/hookprobe/fortress/grafana
+    mkdir -p /opt/hookprobe/fortress/postgres
 
-    # Victoria Metrics container
+    # CRITICAL: Fix Grafana permissions (runs as UID 472)
+    chown -R 472:472 /opt/hookprobe/fortress/grafana
+
+    # Generate Grafana admin password
+    local GRAFANA_PASS="${GRAFANA_ADMIN_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
+
+    # Save Grafana credentials
+    cat > /etc/hookprobe/secrets/grafana.conf << GRAFANAEOF
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=$GRAFANA_PASS
+GRAFANA_URL=http://localhost:3000
+GRAFANAEOF
+    chmod 600 /etc/hookprobe/secrets/grafana.conf
+
+    # Stop existing containers if running (for clean restart)
+    podman stop fortress-victoria fortress-grafana 2>/dev/null || true
+    podman rm fortress-victoria fortress-grafana 2>/dev/null || true
+
+    # Victoria Metrics container (time-series database)
+    log_info "Starting Victoria Metrics..."
     podman run -d \
         --name fortress-victoria \
         --restart unless-stopped \
         -p 8428:8428 \
         -v /opt/hookprobe/fortress/monitoring:/victoria-metrics-data:Z \
         docker.io/victoriametrics/victoria-metrics:latest \
-        2>/dev/null || log_warn "Victoria Metrics may already be running"
+        2>/dev/null && log_info "✓ Victoria Metrics started" || log_warn "Victoria Metrics may already be running"
 
-    # Grafana container
+    # Grafana container (dashboards)
+    log_info "Starting Grafana..."
     podman run -d \
         --name fortress-grafana \
         --restart unless-stopped \
         -p 3000:3000 \
         -v /opt/hookprobe/fortress/grafana:/var/lib/grafana:Z \
-        -e GF_SECURITY_ADMIN_PASSWORD=hookprobe \
+        -e GF_SECURITY_ADMIN_USER=admin \
+        -e GF_SECURITY_ADMIN_PASSWORD="$GRAFANA_PASS" \
+        -e GF_USERS_ALLOW_SIGN_UP=false \
+        -e GF_SERVER_ROOT_URL=http://localhost:3000 \
         docker.io/grafana/grafana:latest \
-        2>/dev/null || log_warn "Grafana may already be running"
+        2>/dev/null && log_info "✓ Grafana started" || log_warn "Grafana may already be running"
+
+    # Wait for containers to start
+    sleep 3
+
+    # Verify containers are running
+    if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-grafana"; then
+        log_info "✓ Grafana container verified running"
+    else
+        log_warn "Grafana container not running - checking logs..."
+        podman logs fortress-grafana 2>&1 | tail -5 || true
+    fi
 
     log_info "Monitoring stack installed"
     log_info "  Victoria Metrics: http://localhost:8428"
-    log_info "  Grafana: http://localhost:3000 (admin/hookprobe)"
+    log_info "  Grafana: http://localhost:3000 (admin/$GRAFANA_PASS)"
+}
+
+# ============================================================
+# DATABASE STACK (PostgreSQL)
+# ============================================================
+install_database() {
+    log_step "Installing database stack..."
+
+    # Create directories
+    mkdir -p /opt/hookprobe/fortress/postgres/data
+    mkdir -p /opt/hookprobe/fortress/postgres/init
+
+    # Generate PostgreSQL credentials
+    local PG_PASS="${POSTGRES_PASSWORD:-$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)}"
+
+    # Save PostgreSQL credentials
+    cat > /etc/hookprobe/secrets/postgres.conf << PGEOF
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=fortress
+POSTGRES_USER=fortress
+POSTGRES_PASSWORD=$PG_PASS
+DATABASE_URL=postgresql://fortress:$PG_PASS@localhost:5432/fortress
+PGEOF
+    chmod 600 /etc/hookprobe/secrets/postgres.conf
+
+    # Create init script for database schema
+    cat > /opt/hookprobe/fortress/postgres/init/01-init.sql << 'SQLEOF'
+-- HookProbe Fortress Database Schema
+
+-- Device tracking
+CREATE TABLE IF NOT EXISTS devices (
+    id SERIAL PRIMARY KEY,
+    mac_address VARCHAR(17) UNIQUE NOT NULL,
+    hostname VARCHAR(255),
+    ip_address VARCHAR(45),
+    vlan_id INTEGER DEFAULT 40,
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    device_type VARCHAR(100),
+    manufacturer VARCHAR(255),
+    is_blocked BOOLEAN DEFAULT FALSE,
+    notes TEXT
+);
+
+-- Threat events
+CREATE TABLE IF NOT EXISTS threats (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source_ip VARCHAR(45),
+    source_mac VARCHAR(17),
+    threat_type VARCHAR(100),
+    severity VARCHAR(20),
+    layer INTEGER,
+    description TEXT,
+    mitre_id VARCHAR(20),
+    blocked BOOLEAN DEFAULT FALSE
+);
+
+-- QSecBit history
+CREATE TABLE IF NOT EXISTS qsecbit_history (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    score FLOAT,
+    status VARCHAR(10),
+    l2_score FLOAT,
+    l3_score FLOAT,
+    l4_score FLOAT,
+    l5_score FLOAT,
+    l7_score FLOAT
+);
+
+-- DNS query logs
+CREATE TABLE IF NOT EXISTS dns_queries (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    client_ip VARCHAR(45),
+    domain VARCHAR(255),
+    query_type VARCHAR(10),
+    action VARCHAR(20),
+    category VARCHAR(100),
+    response_time_ms INTEGER
+);
+
+-- User audit log
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_id VARCHAR(100),
+    action VARCHAR(100),
+    resource VARCHAR(255),
+    details JSONB,
+    ip_address VARCHAR(45)
+);
+
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(mac_address);
+CREATE INDEX IF NOT EXISTS idx_devices_vlan ON devices(vlan_id);
+CREATE INDEX IF NOT EXISTS idx_threats_timestamp ON threats(timestamp);
+CREATE INDEX IF NOT EXISTS idx_qsecbit_timestamp ON qsecbit_history(timestamp);
+CREATE INDEX IF NOT EXISTS idx_dns_timestamp ON dns_queries(timestamp);
+CREATE INDEX IF NOT EXISTS idx_dns_domain ON dns_queries(domain);
+SQLEOF
+
+    # Stop existing container if running
+    podman stop fortress-postgres 2>/dev/null || true
+    podman rm fortress-postgres 2>/dev/null || true
+
+    # Start PostgreSQL container
+    log_info "Starting PostgreSQL..."
+    podman run -d \
+        --name fortress-postgres \
+        --restart unless-stopped \
+        -p 5432:5432 \
+        -v /opt/hookprobe/fortress/postgres/data:/var/lib/postgresql/data:Z \
+        -v /opt/hookprobe/fortress/postgres/init:/docker-entrypoint-initdb.d:Z \
+        -e POSTGRES_DB=fortress \
+        -e POSTGRES_USER=fortress \
+        -e POSTGRES_PASSWORD="$PG_PASS" \
+        docker.io/postgres:15-alpine \
+        2>/dev/null && log_info "✓ PostgreSQL started" || log_warn "PostgreSQL may already be running"
+
+    # Wait for PostgreSQL to be ready
+    log_info "Waiting for PostgreSQL to be ready..."
+    local retries=0
+    while [ $retries -lt 30 ]; do
+        if podman exec fortress-postgres pg_isready -U fortress &>/dev/null; then
+            log_info "✓ PostgreSQL is ready"
+            break
+        fi
+        sleep 1
+        retries=$((retries + 1))
+    done
+
+    if [ $retries -ge 30 ]; then
+        log_warn "PostgreSQL may not be fully ready yet"
+    fi
+
+    log_info "Database stack installed"
+    log_info "  PostgreSQL: localhost:5432 (fortress/***)"
 }
 
 # ============================================================
@@ -2710,10 +2910,41 @@ show_completion() {
             echo -e "  ${DIM}(Change this password after first login!)${NC}"
         fi
     fi
+
+    # Show Grafana credentials if monitoring enabled
+    if [ "$ENABLE_MONITORING" = true ] && [ -f /etc/hookprobe/secrets/grafana.conf ]; then
+        source /etc/hookprobe/secrets/grafana.conf 2>/dev/null
+        if [ -n "$GRAFANA_ADMIN_PASSWORD" ]; then
+            echo ""
+            echo -e "  ${BOLD}${GREEN}Grafana Dashboard:${NC}"
+            echo -e "  URL:      ${CYAN}http://10.250.0.1:3000${NC}"
+            echo -e "  Username: ${CYAN}admin${NC}"
+            echo -e "  Password: ${CYAN}$GRAFANA_ADMIN_PASSWORD${NC}"
+        fi
+    fi
+
+    # Show PostgreSQL credentials
+    if [ -f /etc/hookprobe/secrets/postgres.conf ]; then
+        source /etc/hookprobe/secrets/postgres.conf 2>/dev/null
+        if [ -n "$POSTGRES_PASSWORD" ]; then
+            echo ""
+            echo -e "  ${BOLD}${GREEN}PostgreSQL Database:${NC}"
+            echo -e "  Host:     ${CYAN}localhost:5432${NC}"
+            echo -e "  Database: ${CYAN}fortress${NC}"
+            echo -e "  Username: ${CYAN}fortress${NC}"
+            echo -e "  Password: ${CYAN}$POSTGRES_PASSWORD${NC}"
+        fi
+    fi
+    echo ""
+
+    # Summary box with all credentials
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${YELLOW}SAVE THESE CREDENTIALS - YOU'LL NEED THEM TO ACCESS FORTRESS${NC}"
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
     echo -e "  ${BOLD}Connect to Fortress:${NC}"
-    echo -e "  1. Connect to WiFi: ${CYAN}${WIFI_SSID:-Fortress-$(hostname -s)}${NC}"
+    echo -e "  1. Connect to WiFi: ${CYAN}${WIFI_SSID:-hookprobe}${NC}"
     echo -e "  2. Or plug into a LAN port"
     echo -e "  3. You'll get an IP in 10.250.1.x range"
     echo -e "  4. Access dashboard: ${CYAN}https://10.250.0.1:8443${NC}"
@@ -2726,9 +2957,9 @@ show_completion() {
     [ "$ENABLE_LTE" = true ] && echo -e "  ${CYAN}systemctl status${NC} fortress-lte-failover"
     echo ""
     echo -e "  ${BOLD}Web Interfaces:${NC}"
-    [ "$ENABLE_MONITORING" = true ] && echo -e "  Grafana:          http://localhost:3000"
-    [ "$ENABLE_MONITORING" = true ] && echo -e "  Victoria Metrics: http://localhost:8428"
-    echo -e "  Fortress Web UI:  https://localhost:8443"
+    echo -e "  Fortress Admin:   ${CYAN}https://10.250.0.1:8443${NC}"
+    [ "$ENABLE_MONITORING" = true ] && echo -e "  Grafana:          ${CYAN}http://10.250.0.1:3000${NC}"
+    [ "$ENABLE_MONITORING" = true ] && echo -e "  Victoria Metrics: ${CYAN}http://10.250.0.1:8428${NC}"
     [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e ""
     [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e "  ${BOLD}Remote Access:${NC}"
     [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e "  cloudflared installed - configure via Web UI > Remote Access"
@@ -3022,6 +3253,7 @@ main() {
 
     install_qsecbit_agent
     configure_freeradius_vlan
+    install_database
     install_monitoring
     install_cloudflared
     setup_lte_failover
