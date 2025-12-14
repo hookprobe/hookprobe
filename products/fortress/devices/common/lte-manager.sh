@@ -150,36 +150,185 @@ detect_usb_lte_modems() {
     export LTE_MODEMS_FOUND LTE_MODEM_COUNT
 }
 
-get_modem_interface() {
-    # Get network interface name for LTE modem
+get_modem_control_device() {
+    # Get the modem control device (for AT commands, QMI, MBIM)
     #
     # Args:
     #   $1 - Modem index (optional, defaults to first modem)
     #
-    # Returns: Interface name (e.g., wwan0, usb0)
+    # Returns: Control device path (e.g., /dev/cdc-wdm0, /dev/ttyUSB2)
+    #
+    # Modem control devices:
+    #   - /dev/cdc-wdm* : QMI/MBIM modems (modern USB modems)
+    #   - /dev/ttyUSB*  : AT command modems (legacy serial interface)
 
     local modem_idx="${1:-0}"
 
-    # Try ModemManager first
-    if command -v mmcli &>/dev/null; then
-        local bearer_path
-        bearer_path=$(mmcli -m "$modem_idx" 2>/dev/null | grep "primary port" | awk '{print $NF}')
+    # Method 1: Try ModemManager to get the primary port
+    if command -v mmcli &>/dev/null && systemctl is-active ModemManager &>/dev/null 2>&1; then
+        local primary_port
+        primary_port=$(mmcli -m "$modem_idx" 2>/dev/null | grep -E "primary port:" | awk '{print $NF}')
+        if [ -n "$primary_port" ]; then
+            # ModemManager returns device name like "cdc-wdm0"
+            if [ -c "/dev/$primary_port" ]; then
+                echo "/dev/$primary_port"
+                return 0
+            fi
+        fi
+    fi
 
-        if [ -n "$bearer_path" ]; then
-            echo "$bearer_path"
+    # Method 2: Find CDC-WDM devices (QMI/MBIM modems - preferred)
+    local cdc_devices=()
+    for dev in /dev/cdc-wdm*; do
+        [ -c "$dev" ] && cdc_devices+=("$dev")
+    done 2>/dev/null
+
+    if [ ${#cdc_devices[@]} -gt 0 ]; then
+        # Return the device at the specified index, or first one
+        if [ "$modem_idx" -lt ${#cdc_devices[@]} ]; then
+            echo "${cdc_devices[$modem_idx]}"
+        else
+            echo "${cdc_devices[0]}"
+        fi
+        return 0
+    fi
+
+    # Method 3: Find ttyUSB devices (AT command modems)
+    # Usually ttyUSB2 is the AT command port on most modems
+    local tty_devices=()
+    for dev in /dev/ttyUSB*; do
+        [ -c "$dev" ] && tty_devices+=("$dev")
+    done 2>/dev/null
+
+    if [ ${#tty_devices[@]} -gt 0 ]; then
+        # Return ttyUSB2 if available (common AT port), otherwise last one
+        if [ -c "/dev/ttyUSB2" ]; then
+            echo "/dev/ttyUSB2"
+        else
+            echo "${tty_devices[-1]}"
+        fi
+        return 0
+    fi
+
+    return 1
+}
+
+get_modem_interface() {
+    # Get network interface name for LTE modem (data interface)
+    #
+    # Args:
+    #   $1 - Modem index (optional, defaults to first modem)
+    #
+    # Returns: Interface name (e.g., wwan0, wwp0s20f0u4)
+    #
+    # WWAN interfaces have double 'w' prefix:
+    #   - wwan*   : Generic WWAN interface
+    #   - wwp*    : PCI-path based WWAN interface (e.g., wwp0s20f0u4)
+
+    local modem_idx="${1:-0}"
+
+    # Method 1: Try ModemManager bearer interface
+    if command -v mmcli &>/dev/null && systemctl is-active ModemManager &>/dev/null 2>&1; then
+        # Get active bearer
+        local bearer_num
+        bearer_num=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
+        if [ -n "$bearer_num" ]; then
+            local iface
+            iface=$(mmcli -b "$bearer_num" 2>/dev/null | grep -E "interface:" | awk '{print $NF}')
+            if [ -n "$iface" ] && [ -d "/sys/class/net/$iface" ]; then
+                echo "$iface"
+                return 0
+            fi
+        fi
+    fi
+
+    # Method 2: Check NetworkManager for GSM connection device
+    if command -v nmcli &>/dev/null; then
+        local gsm_device
+        gsm_device=$(nmcli -t -f TYPE,DEVICE connection show --active 2>/dev/null | grep "^gsm:" | cut -d: -f2 | head -1)
+        if [ -n "$gsm_device" ] && [ -d "/sys/class/net/$gsm_device" ]; then
+            echo "$gsm_device"
             return 0
         fi
     fi
 
-    # Fallback: Find first wwan interface
-    for iface in /sys/class/net/wwan* /sys/class/net/wwp*; do
+    # Method 3: Find WWAN interfaces in sysfs (wwp* or wwan*)
+    # These have double 'w' prefix to distinguish from WiFi (wlan/wlp)
+    local wwan_ifaces=()
+    for iface in /sys/class/net/wwp* /sys/class/net/wwan*; do
         if [ -d "$iface" ]; then
-            basename "$iface"
-            return 0
+            wwan_ifaces+=("$(basename "$iface")")
         fi
     done 2>/dev/null
 
+    if [ ${#wwan_ifaces[@]} -gt 0 ]; then
+        if [ "$modem_idx" -lt ${#wwan_ifaces[@]} ]; then
+            echo "${wwan_ifaces[$modem_idx]}"
+        else
+            echo "${wwan_ifaces[0]}"
+        fi
+        return 0
+    fi
+
     return 1
+}
+
+get_modem_info() {
+    # Get comprehensive modem information
+    #
+    # Args:
+    #   $1 - Modem index (optional, defaults to first modem)
+    #
+    # Exports:
+    #   MODEM_CTRL_DEV   - Control device (/dev/cdc-wdm0, /dev/ttyUSB2)
+    #   MODEM_NET_IFACE  - Network interface (wwp0s20f0u4, wwan0)
+    #   MODEM_TYPE       - Modem type (qmi, mbim, at)
+    #   MODEM_STATUS     - Connection status
+
+    local modem_idx="${1:-0}"
+
+    export MODEM_CTRL_DEV=""
+    export MODEM_NET_IFACE=""
+    export MODEM_TYPE="unknown"
+    export MODEM_STATUS="unknown"
+
+    # Get control device
+    MODEM_CTRL_DEV=$(get_modem_control_device "$modem_idx")
+
+    # Determine modem type from control device
+    if [ -n "$MODEM_CTRL_DEV" ]; then
+        case "$MODEM_CTRL_DEV" in
+            /dev/cdc-wdm*)
+                # Check if QMI or MBIM
+                if command -v qmicli &>/dev/null && qmicli -d "$MODEM_CTRL_DEV" --dms-get-manufacturer &>/dev/null 2>&1; then
+                    MODEM_TYPE="qmi"
+                elif command -v mbimcli &>/dev/null && mbimcli -d "$MODEM_CTRL_DEV" --query-device-caps &>/dev/null 2>&1; then
+                    MODEM_TYPE="mbim"
+                else
+                    MODEM_TYPE="cdc"
+                fi
+                ;;
+            /dev/ttyUSB*)
+                MODEM_TYPE="at"
+                ;;
+        esac
+    fi
+
+    # Get network interface
+    MODEM_NET_IFACE=$(get_modem_interface "$modem_idx")
+
+    # Get connection status from ModemManager
+    if command -v mmcli &>/dev/null && systemctl is-active ModemManager &>/dev/null 2>&1; then
+        local state
+        state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -E "state:" | awk '{print $NF}')
+        [ -n "$state" ] && MODEM_STATUS="$state"
+    fi
+
+    # Log findings
+    lte_log "Modem $modem_idx info:"
+    [ -n "$MODEM_CTRL_DEV" ] && lte_log "  Control device: $MODEM_CTRL_DEV ($MODEM_TYPE)"
+    [ -n "$MODEM_NET_IFACE" ] && lte_log "  Network interface: $MODEM_NET_IFACE"
+    [ -n "$MODEM_STATUS" ] && lte_log "  Status: $MODEM_STATUS"
 }
 
 # ============================================================
@@ -270,43 +419,70 @@ configure_apn_nmcli() {
         return 1
     fi
 
-    # Find the LTE/WWAN interface
-    local wwan_iface=""
-    for iface in /sys/class/net/wwan* /sys/class/net/wwp*; do
-        if [ -d "$iface" ]; then
-            wwan_iface=$(basename "$iface")
-            break
-        fi
-    done 2>/dev/null
+    # For GSM connections, we need the modem control device (cdc-wdm*), not the network interface
+    # The network interface (wwp*) is created AFTER the connection is established
+    local modem_device=""
 
-    if [ -z "$wwan_iface" ]; then
-        lte_warn "No WWAN interface found for nmcli"
+    # Method 1: Use get_modem_control_device if available
+    if modem_device=$(get_modem_control_device 2>/dev/null) && [ -n "$modem_device" ]; then
+        # Extract just the device name (e.g., cdc-wdm0 from /dev/cdc-wdm0)
+        modem_device=$(basename "$modem_device")
+        lte_log "Found modem control device: $modem_device"
+    fi
+
+    # Method 2: Check for cdc-wdm devices directly
+    if [ -z "$modem_device" ]; then
+        for dev in /dev/cdc-wdm*; do
+            if [ -c "$dev" ]; then
+                modem_device=$(basename "$dev")
+                lte_log "Found CDC-WDM device: $modem_device"
+                break
+            fi
+        done 2>/dev/null
+    fi
+
+    # Method 3: Check ModemManager for primary port
+    if [ -z "$modem_device" ] && command -v mmcli &>/dev/null; then
+        local mm_device
+        mm_device=$(mmcli -m 0 2>/dev/null | grep -E "primary port:" | awk '{print $NF}')
+        if [ -n "$mm_device" ]; then
+            modem_device="$mm_device"
+            lte_log "Found ModemManager device: $modem_device"
+        fi
+    fi
+
+    # Method 4: Fallback to WWAN interface (may not work for all modems)
+    if [ -z "$modem_device" ]; then
+        for iface in /sys/class/net/wwan* /sys/class/net/wwp*; do
+            if [ -d "$iface" ]; then
+                modem_device=$(basename "$iface")
+                lte_warn "Using WWAN interface as fallback: $modem_device"
+                break
+            fi
+        done 2>/dev/null
+    fi
+
+    if [ -z "$modem_device" ]; then
+        lte_error "No modem device found for nmcli connection"
+        lte_error "Please ensure your LTE modem is connected and detected"
         return 1
     fi
 
-    lte_log "Configuring LTE via NetworkManager (interface: $wwan_iface)"
+    lte_log "Configuring LTE via NetworkManager"
+    lte_log "  Device: $modem_device"
+    lte_log "  APN: $apn"
 
     # Delete existing connection if exists
     nmcli con delete "$con_name" 2>/dev/null || true
 
-    # Build nmcli command based on auth type
-    local nmcli_cmd="nmcli con add type gsm ifname $wwan_iface con-name $con_name apn $apn"
+    # Build nmcli command - use the modem control device as interface
+    local nmcli_cmd="nmcli con add type gsm ifname \"$modem_device\" con-name \"$con_name\" apn \"$apn\""
 
     case "$auth_type" in
-        pap)
+        pap|chap|mschapv2)
             nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
-            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username $username"
-            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password $password"
-            ;;
-        chap)
-            nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
-            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username $username"
-            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password $password"
-            ;;
-        mschapv2)
-            nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
-            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username $username"
-            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password $password"
+            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username \"$username\""
+            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password \"$password\""
             ;;
     esac
 
@@ -314,17 +490,25 @@ configure_apn_nmcli() {
     nmcli_cmd="$nmcli_cmd ipv4.method auto"
 
     # Execute
-    if eval "$nmcli_cmd" 2>/dev/null; then
-        lte_success "LTE connection created via NetworkManager"
+    lte_log "Creating connection: $con_name"
+    if eval "$nmcli_cmd" 2>&1; then
+        lte_success "LTE connection '$con_name' created successfully"
+        lte_log "  Interface: $modem_device"
+        lte_log "  APN: $apn"
 
-        # Export interface name
-        export LTE_INTERFACE="$wwan_iface"
+        # Export connection details
+        export LTE_MODEM_DEVICE="$modem_device"
         export LTE_NM_CONNECTION="$con_name"
+
+        # Try to get the network interface that will be used
+        local net_iface
+        net_iface=$(get_modem_interface 2>/dev/null)
+        [ -n "$net_iface" ] && export LTE_INTERFACE="$net_iface"
 
         return 0
     fi
 
-    lte_warn "Failed to create nmcli connection"
+    lte_error "Failed to create nmcli connection"
     return 1
 }
 
@@ -447,9 +631,63 @@ configure_apn_interactive() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
     echo ""
 
+    # First, detect and show modem information
+    echo -e "${YELLOW}Detecting LTE modem...${NC}"
+    local modem_device=""
+    local modem_info=""
+
+    # Find modem control device
+    for dev in /dev/cdc-wdm*; do
+        if [ -c "$dev" ]; then
+            modem_device=$(basename "$dev")
+            break
+        fi
+    done 2>/dev/null
+
+    if [ -z "$modem_device" ]; then
+        # Try ttyUSB
+        for dev in /dev/ttyUSB*; do
+            if [ -c "$dev" ]; then
+                modem_device=$(basename "$dev")
+                break
+            fi
+        done 2>/dev/null
+    fi
+
+    if [ -z "$modem_device" ]; then
+        echo -e "${RED}No LTE modem detected!${NC}"
+        echo "Please ensure your LTE modem is:"
+        echo "  1. Plugged in via USB"
+        echo "  2. Powered on"
+        echo "  3. Detected by the system (check 'lsusb')"
+        return 1
+    fi
+
+    echo -e "${GREEN}✓ Found modem: $modem_device${NC}"
+
+    # Show ModemManager info if available
+    if command -v mmcli &>/dev/null && systemctl is-active ModemManager &>/dev/null 2>&1; then
+        local mm_info
+        mm_info=$(mmcli -m 0 2>/dev/null | grep -E "manufacturer|model|state" | head -3)
+        if [ -n "$mm_info" ]; then
+            echo "$mm_info" | while read -r line; do
+                echo "  $line"
+            done
+        fi
+    fi
+
+    echo ""
+
     # APN Name
     local apn=""
-    read -p "Enter APN name (e.g., internet.vodafone.ro): " apn
+    echo "Common APNs by carrier:"
+    echo "  Vodafone:  internet.vodafone.ro, web.vodafone.de, internet"
+    echo "  Orange:    internet, orange.ro, orange"
+    echo "  T-Mobile:  internet.t-mobile, fast.t-mobile.com"
+    echo "  AT&T:      broadband, phone"
+    echo "  Verizon:   vzwinternet"
+    echo ""
+    read -p "Enter your APN name: " apn
     [ -z "$apn" ] && { lte_error "APN is required"; return 1; }
 
     # Authentication type
@@ -501,6 +739,76 @@ configure_apn_interactive() {
         return $?
     else
         lte_log "Configuration cancelled"
+        return 1
+    fi
+}
+
+quick_setup_lte() {
+    # Quick LTE setup - auto-detect modem and configure with provided APN
+    #
+    # Usage:
+    #   quick_setup_lte <apn>
+    #   quick_setup_lte internet.vodafone.ro
+    #
+    # This function:
+    #   1. Auto-detects the modem control device (cdc-wdm*)
+    #   2. Creates a NetworkManager GSM connection
+    #   3. Brings up the connection
+
+    local apn="$1"
+
+    if [ -z "$apn" ]; then
+        echo "Usage: quick_setup_lte <apn>"
+        echo ""
+        echo "Examples:"
+        echo "  quick_setup_lte internet.vodafone.ro"
+        echo "  quick_setup_lte web.vodafone.de"
+        echo "  quick_setup_lte internet"
+        echo ""
+        echo "For interactive setup with auth options, use:"
+        echo "  configure_apn_interactive"
+        return 1
+    fi
+
+    lte_log "Quick LTE Setup"
+    lte_log "  APN: $apn"
+
+    # Detect modem
+    local modem_device=""
+    for dev in /dev/cdc-wdm*; do
+        [ -c "$dev" ] && modem_device=$(basename "$dev") && break
+    done 2>/dev/null
+
+    if [ -z "$modem_device" ]; then
+        lte_error "No modem device found (no /dev/cdc-wdm* devices)"
+        lte_error "Make sure your LTE modem is connected"
+        return 1
+    fi
+
+    lte_log "  Device: $modem_device"
+
+    # Delete existing connection
+    nmcli con delete fortress-lte 2>/dev/null || true
+
+    # Create new connection
+    if nmcli con add type gsm ifname "$modem_device" con-name fortress-lte apn "$apn" ipv4.method auto; then
+        lte_success "LTE connection 'fortress-lte' created"
+
+        # Try to bring it up
+        lte_log "Activating connection..."
+        if nmcli con up fortress-lte 2>&1; then
+            lte_success "LTE connected!"
+
+            # Show connection info
+            echo ""
+            nmcli con show fortress-lte | grep -E "GENERAL|IP4" | head -10
+        else
+            lte_warn "Connection created but failed to activate"
+            lte_warn "Try manually: nmcli con up fortress-lte"
+        fi
+        return 0
+    else
+        lte_error "Failed to create connection"
         return 1
     fi
 }
