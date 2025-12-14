@@ -282,6 +282,11 @@ OPTIONAL_PACKAGES_APT=(
     "usb-modeswitch"
 )
 
+# Helper function to check if apt package is installed
+is_pkg_installed_apt() {
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
 install_packages() {
     log_step "Installing required packages..."
 
@@ -289,33 +294,37 @@ install_packages() {
         PKG_MGR="apt"
 
         log_info "Updating package lists..."
-        if ! apt-get update -qq; then
-            log_warn "apt-get update had warnings, continuing..."
-        fi
+        apt-get update -qq 2>&1 || log_warn "apt-get update had warnings, continuing..."
 
         # Install required packages first (will fail if any are missing)
-        log_info "Installing required packages: ${REQUIRED_PACKAGES_APT[*]}"
+        log_info "Installing required packages..."
         for pkg in "${REQUIRED_PACKAGES_APT[@]}"; do
-            if dpkg -l "$pkg" &>/dev/null; then
+            if is_pkg_installed_apt "$pkg"; then
                 log_info "  $pkg: already installed"
             else
                 log_info "  Installing $pkg..."
-                if ! apt-get install -y "$pkg"; then
+                if ! DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" 2>&1; then
                     log_error "Failed to install required package: $pkg"
                     log_error "This package is required for Fortress to function."
                     log_error "Please install it manually and re-run setup."
                     exit 1
                 fi
+                # Verify it actually installed
+                if ! is_pkg_installed_apt "$pkg"; then
+                    log_error "Package $pkg installation reported success but package not found"
+                    exit 1
+                fi
+                log_info "  $pkg: installed successfully"
             fi
         done
 
         # Install optional packages (won't fail)
         log_info "Installing optional packages..."
         for pkg in "${OPTIONAL_PACKAGES_APT[@]}"; do
-            if dpkg -l "$pkg" &>/dev/null 2>&1; then
+            if is_pkg_installed_apt "$pkg"; then
                 log_info "  $pkg: already installed"
             else
-                if apt-get install -y "$pkg" 2>/dev/null; then
+                if DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" 2>/dev/null; then
                     log_info "  $pkg: installed"
                 else
                     log_warn "  $pkg: not available (optional)"
@@ -323,7 +332,7 @@ install_packages() {
             fi
         done
 
-        log_info "Package installation complete"
+        log_info "System package installation complete"
 
     elif command -v dnf &>/dev/null; then
         PKG_MGR="dnf"
@@ -380,11 +389,79 @@ install_packages() {
             fi
         done
 
-        log_info "Package installation complete"
+        log_info "System package installation complete"
     else
         log_error "Unsupported package manager. Fortress requires apt (Debian/Ubuntu) or dnf (Fedora/RHEL)."
         exit 1
     fi
+}
+
+# Python package installation
+install_python_packages() {
+    log_step "Installing Python packages..."
+
+    # Ensure pip is available
+    if ! command -v pip3 &>/dev/null; then
+        log_error "pip3 not found. Please install python3-pip."
+        exit 1
+    fi
+
+    # Core Python packages for Fortress
+    local PYTHON_PACKAGES=(
+        "flask>=2.3.0"
+        "flask-login>=0.6.0"
+        "flask-wtf>=1.2.0"
+        "werkzeug>=2.3.0"
+        "bcrypt>=4.0.0"
+        "gunicorn>=21.0.0"
+        "requests>=2.31.0"
+        "psutil>=5.9.0"
+    )
+
+    # dnsXai ML packages (optional but recommended)
+    local ML_PACKAGES=(
+        "numpy"
+        "dnslib"
+    )
+
+    log_info "Installing core Python packages..."
+    for pkg in "${PYTHON_PACKAGES[@]}"; do
+        pkg_name=$(echo "$pkg" | cut -d'>' -f1 | cut -d'=' -f1)
+        if pip3 show "$pkg_name" &>/dev/null; then
+            log_info "  $pkg_name: already installed"
+        else
+            log_info "  Installing $pkg_name..."
+            if pip3 install --break-system-packages "$pkg" 2>/dev/null || pip3 install "$pkg" 2>/dev/null; then
+                log_info "  $pkg_name: installed"
+            else
+                log_warn "  $pkg_name: failed to install (may affect some features)"
+            fi
+        fi
+    done
+
+    log_info "Installing ML/AI packages for dnsXai..."
+    for pkg in "${ML_PACKAGES[@]}"; do
+        if pip3 show "$pkg" &>/dev/null; then
+            log_info "  $pkg: already installed"
+        else
+            log_info "  Installing $pkg..."
+            if pip3 install --break-system-packages "$pkg" 2>/dev/null || pip3 install "$pkg" 2>/dev/null; then
+                log_info "  $pkg: installed"
+            else
+                log_warn "  $pkg: not installed (dnsXai ML features limited)"
+            fi
+        fi
+    done
+
+    # Install from requirements.txt if it exists
+    if [ -f "$FORTRESS_ROOT/web/requirements.txt" ]; then
+        log_info "Installing from web/requirements.txt..."
+        pip3 install --break-system-packages -r "$FORTRESS_ROOT/web/requirements.txt" 2>/dev/null || \
+        pip3 install -r "$FORTRESS_ROOT/web/requirements.txt" 2>/dev/null || \
+        log_warn "Some web requirements may not have installed"
+    fi
+
+    log_info "Python package installation complete"
 }
 
 verify_critical_packages() {
@@ -1984,6 +2061,7 @@ main() {
 
     install_packages
     verify_critical_packages
+    install_python_packages
     install_podman
     install_openvswitch
 
