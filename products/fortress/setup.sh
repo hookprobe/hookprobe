@@ -75,6 +75,9 @@ ENABLE_MONITORING="${ENABLE_MONITORING:-true}"
 ENABLE_CLICKHOUSE="${ENABLE_CLICKHOUSE:-false}"
 ENABLE_LTE="${ENABLE_LTE:-false}"
 
+# Installation mode
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+
 # LTE Configuration
 HOOKPROBE_LTE_APN="${HOOKPROBE_LTE_APN:-}"
 HOOKPROBE_LTE_AUTH="${HOOKPROBE_LTE_AUTH:-none}"
@@ -1209,17 +1212,26 @@ setup_lte_failover() {
         # Configure modem with APN
         # Check if APN was provided via command line
         if [ -z "$HOOKPROBE_LTE_APN" ]; then
-            # No APN provided - use interactive configuration
-            log_info "No APN provided. Starting interactive configuration..."
-            echo ""
-
-            if configure_apn_interactive; then
-                log_info "LTE APN configured successfully via interactive setup"
+            if [ "$NON_INTERACTIVE" = true ]; then
+                # Non-interactive mode - use default APN
+                log_warn "No APN provided in non-interactive mode. Using default: internet"
+                log_warn "Configure APN later with: /opt/hookprobe/fortress/devices/common/lte-manager.sh configure"
+                HOOKPROBE_LTE_APN="internet"
             else
-                log_warn "Failed to configure LTE APN. You can configure it later with:"
-                log_warn "  /opt/hookprobe/fortress/devices/common/lte-manager.sh configure"
+                # Interactive mode - prompt for APN
+                log_info "No APN provided. Starting interactive configuration..."
+                echo ""
+
+                if configure_apn_interactive; then
+                    log_info "LTE APN configured successfully via interactive setup"
+                else
+                    log_warn "Failed to configure LTE APN. You can configure it later with:"
+                    log_warn "  /opt/hookprobe/fortress/devices/common/lte-manager.sh configure"
+                fi
             fi
-        else
+        fi
+
+        if [ -n "$HOOKPROBE_LTE_APN" ]; then
             # APN provided via command line - use full parameters
             local apn="$HOOKPROBE_LTE_APN"
             local auth_type="${HOOKPROBE_LTE_AUTH:-none}"
@@ -1476,6 +1488,115 @@ CONFEOF
 }
 
 # ============================================================
+# VALIDATION
+# ============================================================
+validate_installation() {
+    log_step "Validating installation..."
+
+    local errors=0
+    local warnings=0
+
+    # Check OVS bridge
+    if command -v ovs-vsctl &>/dev/null && ovs-vsctl br-exists "$OVS_BRIDGE_NAME" 2>/dev/null; then
+        log_info "✓ OVS bridge '$OVS_BRIDGE_NAME' exists"
+    else
+        log_error "✗ OVS bridge '$OVS_BRIDGE_NAME' not found"
+        errors=$((errors + 1))
+    fi
+
+    # Check systemd services are enabled
+    for service in hookprobe-fortress fortress-qsecbit; do
+        if systemctl is-enabled "$service" &>/dev/null; then
+            log_info "✓ Service $service enabled"
+        else
+            log_warn "⚠ Service $service not enabled"
+            warnings=$((warnings + 1))
+        fi
+    done
+
+    # Check management scripts exist
+    for script in hookprobe-macsec hookprobe-openflow; do
+        if [ -x "/usr/local/bin/$script" ]; then
+            log_info "✓ Script $script installed"
+        else
+            log_warn "⚠ Script $script not found"
+            warnings=$((warnings + 1))
+        fi
+    done
+
+    # Check QSecBit agent
+    if [ -f "/opt/hookprobe/fortress/qsecbit/fortress_agent.py" ]; then
+        log_info "✓ QSecBit Fortress agent installed"
+    else
+        log_error "✗ QSecBit Fortress agent not found"
+        errors=$((errors + 1))
+    fi
+
+    # Check config files
+    if [ -f "/etc/hookprobe/fortress.conf" ]; then
+        log_info "✓ Fortress configuration file created"
+    else
+        log_error "✗ Fortress configuration file not found"
+        errors=$((errors + 1))
+    fi
+
+    # Check VLAN setup
+    local vlan_count=0
+    for vlan_id in 10 20 30 40 99; do
+        if ip link show "vlan${vlan_id}" &>/dev/null 2>&1 || ovs-vsctl port-to-br "vlan${vlan_id}" &>/dev/null 2>&1; then
+            vlan_count=$((vlan_count + 1))
+        fi
+    done
+    if [ "$vlan_count" -ge 3 ]; then
+        log_info "✓ VLAN interfaces configured ($vlan_count/5)"
+    else
+        log_warn "⚠ Only $vlan_count/5 VLAN interfaces found"
+        warnings=$((warnings + 1))
+    fi
+
+    # Check monitoring containers if enabled
+    if [ "$ENABLE_MONITORING" = true ]; then
+        if command -v podman &>/dev/null; then
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-victoria"; then
+                log_info "✓ Victoria Metrics container running"
+            else
+                log_warn "⚠ Victoria Metrics container not running"
+                warnings=$((warnings + 1))
+            fi
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-grafana"; then
+                log_info "✓ Grafana container running"
+            else
+                log_warn "⚠ Grafana container not running"
+                warnings=$((warnings + 1))
+            fi
+        fi
+    fi
+
+    # Check LTE if enabled
+    if [ "$ENABLE_LTE" = true ]; then
+        if systemctl is-enabled fortress-lte-failover &>/dev/null; then
+            log_info "✓ LTE failover service enabled"
+        else
+            log_warn "⚠ LTE failover service not enabled"
+            warnings=$((warnings + 1))
+        fi
+    fi
+
+    # Summary
+    echo ""
+    if [ $errors -eq 0 ] && [ $warnings -eq 0 ]; then
+        log_info "Validation complete: All checks passed"
+        return 0
+    elif [ $errors -eq 0 ]; then
+        log_warn "Validation complete: $warnings warning(s)"
+        return 0
+    else
+        log_error "Validation failed: $errors error(s), $warnings warning(s)"
+        return 1
+    fi
+}
+
+# ============================================================
 # SHOW COMPLETION
 # ============================================================
 show_completion() {
@@ -1563,6 +1684,7 @@ main() {
             --enable-monitoring) ENABLE_MONITORING=true; shift ;;
             --enable-clickhouse) ENABLE_CLICKHOUSE=true; shift ;;
             --enable-lte) ENABLE_LTE=true; shift ;;
+            --non-interactive) NON_INTERACTIVE=true; shift ;;
             --lte-apn) HOOKPROBE_LTE_APN="$2"; shift 2 ;;
             --lte-auth) HOOKPROBE_LTE_AUTH="$2"; shift 2 ;;
             --lte-user) HOOKPROBE_LTE_USER="$2"; shift 2 ;;
@@ -1589,6 +1711,7 @@ main() {
                 echo "  --disable-vlan         Disable VLAN segmentation"
                 echo "  --node-id ID           Set node identifier"
                 echo "  --mssp-url URL         Set MSSP endpoint URL"
+                echo "  --non-interactive      Run without prompts (for automation)"
                 echo "  --help, -h             Show this help message"
                 echo ""
                 echo "Supported Devices:"
@@ -1637,6 +1760,9 @@ main() {
     log_step "Starting services..."
     systemctl start hookprobe-fortress
     systemctl start fortress-qsecbit
+
+    # Validate installation
+    validate_installation
 
     show_completion
 }
