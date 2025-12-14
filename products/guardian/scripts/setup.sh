@@ -102,22 +102,37 @@ detect_interfaces() {
     USB_WIFI=""
     for iface in $WIFI_INTERFACES; do
         local driver=$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null | xargs basename 2>/dev/null)
+        # Try alternate method if driver is empty
+        if [ -z "$driver" ]; then
+            driver=$(cat /sys/class/net/$iface/device/uevent 2>/dev/null | grep "^DRIVER=" | cut -d= -f2)
+        fi
+        log_info "Interface $iface has driver: ${driver:-unknown}"
+
         if [ "$driver" = "brcmfmac" ] || [ "$driver" = "brcmsmac" ]; then
             BUILTIN_WIFI="$iface"
-            log_info "Built-in WiFi detected: $iface (driver: $driver)"
+            log_info "Built-in WiFi (Raspberry Pi): $iface"
         else
+            # Any non-brcmfmac interface is considered USB/external
             USB_WIFI="$iface"
-            log_info "USB WiFi detected: $iface (driver: $driver)"
+            log_info "External WiFi (USB adapter): $iface"
         fi
     done
 
     # Set recommended interfaces based on detection
     # Built-in WiFi = WAN (connects to upstream network)
     # USB WiFi = AP (hosts the hotspot)
-    if [ -n "$USB_WIFI" ] && [ -n "$BUILTIN_WIFI" ]; then
+    if [ -n "$BUILTIN_WIFI" ]; then
         RECOMMENDED_WAN_IFACE="$BUILTIN_WIFI"
-        RECOMMENDED_AP_IFACE="$USB_WIFI"
-        log_info "Recommended: WAN=$RECOMMENDED_WAN_IFACE, AP=$RECOMMENDED_AP_IFACE"
+        # Find any interface that is NOT the built-in for AP
+        for iface in $WIFI_INTERFACES; do
+            if [ "$iface" != "$BUILTIN_WIFI" ]; then
+                RECOMMENDED_AP_IFACE="$iface"
+                break
+            fi
+        done
+        if [ -n "$RECOMMENDED_AP_IFACE" ]; then
+            log_info "Auto-detected: WAN=$RECOMMENDED_WAN_IFACE (built-in), AP=$RECOMMENDED_AP_IFACE (external)"
+        fi
     fi
 
     log_info "Ethernet interfaces ($ETH_COUNT): $ETH_INTERFACES"
