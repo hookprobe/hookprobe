@@ -357,15 +357,25 @@ Cortex is a real-time 3D visualization of your entire defense network. Watch thr
 ## ⚡ Quick Start
 
 ```bash
-# Clone the repo
+# First-time setup (fresh Raspberry Pi)
+sudo apt update && sudo apt install -y git
+
+# Clone and install
 git clone https://github.com/hookprobe/hookprobe.git
 cd hookprobe
+sudo ./install.sh --tier guardian   # 🏠 Home/Prosumer ($75 RPi, 1.5GB RAM)
 
-# Deploy in 5 minutes (choose your tier)
-./install.sh --tier guardian   # 🏠 Home/Prosumer ($75 RPi, 1.5GB RAM)
-./install.sh --tier fortress   # 🏢 Business ($200 Mini PC, 4GB RAM)
-./install.sh --tier nexus      # 🏗️ Enterprise ($2000 Server, 16GB+ RAM)
+# Other tiers available:
+# sudo ./install.sh --tier fortress   # 🏢 Business ($200 Mini PC, 4GB RAM)
+# sudo ./install.sh --tier nexus      # 🏗️ Enterprise ($2000 Server, 16GB+ RAM)
 ```
+
+**That's it!** The install script handles everything else automatically:
+- System packages (hostapd, dnsmasq, suricata, etc.)
+- Python dependencies
+- Locale and WiFi country configuration
+- Network interface setup
+- Service configuration
 
 **⏱️ Time to protection:** ~5 minutes
 **🔄 Ongoing maintenance:** Automatic
