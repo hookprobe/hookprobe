@@ -190,29 +190,81 @@ install_packages() {
 configure_system_locale() {
     log_step "Configuring system locale and regional settings..."
 
-    # Set locale to en_US.UTF-8
-    if command -v locale-gen &>/dev/null; then
-        # Debian/Ubuntu
-        log_info "Setting locale to en_US.UTF-8..."
+    local TARGET_LOCALE="en_US.UTF-8"
 
-        # Ensure en_US.UTF-8 is available
-        if [ -f /etc/locale.gen ]; then
-            sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
-            locale-gen en_US.UTF-8 2>/dev/null || true
+    # Debian/Ubuntu/Raspberry Pi OS
+    if command -v locale-gen &>/dev/null; then
+        log_info "Setting locale to $TARGET_LOCALE..."
+
+        # Install locales package if missing
+        if ! dpkg -l locales &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq locales 2>/dev/null || true
         fi
 
-        # Set as default locale
-        update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 2>/dev/null || true
+        # Enable en_US.UTF-8 in locale.gen
+        if [ -f /etc/locale.gen ]; then
+            # Uncomment en_US.UTF-8 if commented
+            sed -i 's/^# *\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+            # Also ensure the line exists
+            if ! grep -q "^en_US.UTF-8 UTF-8" /etc/locale.gen; then
+                echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+            fi
+        fi
 
-        # Apply immediately for this session
-        export LANG=en_US.UTF-8
-        export LC_ALL=en_US.UTF-8
+        # Generate the locale
+        locale-gen $TARGET_LOCALE 2>/dev/null || locale-gen 2>/dev/null || true
 
-        log_info "Locale set to en_US.UTF-8"
+        # Write complete /etc/default/locale with ALL variables
+        cat > /etc/default/locale << EOF
+LANG=$TARGET_LOCALE
+LANGUAGE=$TARGET_LOCALE
+LC_ALL=$TARGET_LOCALE
+LC_CTYPE=$TARGET_LOCALE
+LC_NUMERIC=$TARGET_LOCALE
+LC_TIME=$TARGET_LOCALE
+LC_COLLATE=$TARGET_LOCALE
+LC_MONETARY=$TARGET_LOCALE
+LC_MESSAGES=$TARGET_LOCALE
+LC_PAPER=$TARGET_LOCALE
+LC_NAME=$TARGET_LOCALE
+LC_ADDRESS=$TARGET_LOCALE
+LC_TELEPHONE=$TARGET_LOCALE
+LC_MEASUREMENT=$TARGET_LOCALE
+LC_IDENTIFICATION=$TARGET_LOCALE
+EOF
+
+        # Also update /etc/environment for system-wide effect
+        if [ -f /etc/environment ]; then
+            # Remove any existing LANG/LC_ lines
+            sed -i '/^LANG=/d; /^LC_/d; /^LANGUAGE=/d' /etc/environment
+            # Add our settings
+            echo "LANG=$TARGET_LOCALE" >> /etc/environment
+            echo "LC_ALL=$TARGET_LOCALE" >> /etc/environment
+        fi
+
+        # Run update-locale as backup
+        update-locale LANG=$TARGET_LOCALE LANGUAGE=$TARGET_LOCALE LC_ALL=$TARGET_LOCALE 2>/dev/null || true
+
+        # Apply immediately for this session (and any subprocesses)
+        export LANG=$TARGET_LOCALE
+        export LANGUAGE=$TARGET_LOCALE
+        export LC_ALL=$TARGET_LOCALE
+        export LC_CTYPE=$TARGET_LOCALE
+
+        # Verify locale is working
+        if locale 2>&1 | grep -q "Cannot set"; then
+            log_warn "Locale warnings detected, attempting dpkg-reconfigure..."
+            dpkg-reconfigure -f noninteractive locales 2>/dev/null || true
+        fi
+
+        log_info "Locale configured: $TARGET_LOCALE"
+
     elif command -v localectl &>/dev/null; then
-        # Fedora/RHEL
-        localectl set-locale LANG=en_US.UTF-8 2>/dev/null || true
-        log_info "Locale set to en_US.UTF-8"
+        # Fedora/RHEL/systemd systems
+        localectl set-locale LANG=$TARGET_LOCALE LC_ALL=$TARGET_LOCALE 2>/dev/null || true
+        export LANG=$TARGET_LOCALE
+        export LC_ALL=$TARGET_LOCALE
+        log_info "Locale configured: $TARGET_LOCALE"
     fi
 }
 
