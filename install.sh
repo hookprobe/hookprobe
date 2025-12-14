@@ -1642,6 +1642,42 @@ install_fortress() {
         fi
     fi
 
+    # ─────────────────────────────────────────────────────────────────
+    # WiFi Access Point Configuration
+    # ─────────────────────────────────────────────────────────────────
+    local wifi_ssid="hookprobe"
+    local wifi_password=""
+    if [ "$SYS_WIFI_COUNT" -gt 0 ]; then
+        echo ""
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${CYAN}WIFI ACCESS POINT CONFIGURATION${NC}"
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo "Fortress will create a WiFi Access Point for your devices."
+        echo ""
+
+        read -p "WiFi SSID [hookprobe]: " wifi_ssid
+        wifi_ssid=${wifi_ssid:-hookprobe}
+
+        echo ""
+        echo "Enter a password for the WiFi network (min 8 characters)."
+        echo "Leave blank to auto-generate a secure password."
+        read -sp "WiFi Password: " wifi_password
+        echo ""
+
+        if [ -z "$wifi_password" ]; then
+            wifi_password=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
+            echo -e "${GREEN}✓ Generated password: ${wifi_password}${NC}"
+        elif [ ${#wifi_password} -lt 8 ]; then
+            echo -e "${RED}Password too short. Auto-generating secure password...${NC}"
+            wifi_password=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
+            echo -e "${GREEN}✓ Generated password: ${wifi_password}${NC}"
+        else
+            echo -e "${GREEN}✓ WiFi password set${NC}"
+        fi
+        echo ""
+    fi
+
     echo ""
     read -p "Proceed with Fortress installation? (yes/no) [no]: " confirm
     if [ "$confirm" = "yes" ]; then
@@ -1676,6 +1712,8 @@ CFEOF
         echo ""
 
         export HOOKPROBE_TIER="fortress"
+        export FORTRESS_WIFI_SSID="$wifi_ssid"
+        export FORTRESS_WIFI_PASSWORD="$wifi_password"
         local extra_args="--non-interactive"
         [ "$enable_kali" = "yes" ] && extra_args="$extra_args --enable-kali"
         [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
