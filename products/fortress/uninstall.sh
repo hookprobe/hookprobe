@@ -40,7 +40,7 @@ SECRETS_DIR="/etc/hookprobe/secrets"
 DATA_DIR="/var/lib/hookprobe/fortress"
 LTE_STATE_DIR="/var/lib/fortress/lte"
 LOG_DIR="/var/log/hookprobe"
-OVS_BRIDGE="fortress"
+OVS_BRIDGE="fortress-lan"
 
 # ============================================================
 # OPTIONS
@@ -514,6 +514,9 @@ remove_sysctl_settings() {
     done
 
     # Clean up FORWARD rules for fortress bridge
+    iptables -D FORWARD -i fortress-lan -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o fortress-lan -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+    # Also clean up old "fortress" name in case of upgrade
     iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o fortress -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
