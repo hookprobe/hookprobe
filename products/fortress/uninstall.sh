@@ -350,8 +350,9 @@ remove_networkmanager_config() {
     # Remove LTE connection if it exists
     nmcli con delete "fortress-lte" 2>/dev/null || true
 
-    # Remove WiFi prepare helper script
+    # Remove WiFi helper scripts
     rm -f /usr/local/bin/fortress-wifi-prepare.sh 2>/dev/null || true
+    rm -f /usr/local/bin/fortress-wifi-bridge.sh 2>/dev/null || true
 
     # Restore WiFi interface to managed mode
     local wifi_conf="/etc/hookprobe/wifi-ap.conf"
