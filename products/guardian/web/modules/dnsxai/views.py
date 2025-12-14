@@ -15,11 +15,14 @@ from utils import load_json_file, save_json_file, load_text_file, save_text_file
 try:
     from .ml_engine import (
         get_classifier, get_uncloaker, get_federated, get_detector,
-        DomainFeatureExtractor
+        DomainFeatureExtractor, check_ml_libraries, HAS_NUMPY, HAS_SKLEARN
     )
     ML_AVAILABLE = True
 except ImportError as e:
     ML_AVAILABLE = False
+    check_ml_libraries = None
+    HAS_NUMPY = False
+    HAS_SKLEARN = False
     logging.warning(f"ML engine not available: {e}")
 
 # Packet Inspector imports
@@ -43,6 +46,31 @@ DNS_SHIELD_SOURCES = f'{DNS_SHIELD_DIR}/sources.json'
 DNS_SHIELD_PAUSE = f'{DNS_SHIELD_DIR}/pause_state.json'
 DNSMASQ_QUERY_LOG = '/var/log/hookprobe/dnsmasq-queries.log'
 DNSMASQ_SHIELD_CONF = '/etc/dnsmasq.d/dns-shield.conf'
+
+
+def _check_ml_ready():
+    """Check if ML libraries are available. Returns (ready, error_response)."""
+    if not ML_AVAILABLE:
+        return False, jsonify({
+            'success': False,
+            'error': 'ML engine not available'
+        }), 400
+
+    if check_ml_libraries:
+        has_numpy, has_sklearn = check_ml_libraries()
+        if not has_sklearn:
+            missing = []
+            if not has_numpy:
+                missing.append('numpy')
+            if not has_sklearn:
+                missing.append('scikit-learn')
+            return False, jsonify({
+                'success': False,
+                'error': f'ML libraries not installed ({", ".join(missing)} required)',
+                'hint': 'Run: pip3 install numpy scikit-learn joblib'
+            }), 400
+
+    return True, None
 
 
 def get_shield_level():
@@ -388,10 +416,26 @@ def api_update():
 @dnsxai_bp.route('/ml/status')
 def api_ml_status():
     """Get ML engine status and capabilities."""
-    if not ML_AVAILABLE:
+    # Dynamic check - allows detection after package installation
+    force_recheck = request.args.get('recheck', 'false').lower() == 'true'
+
+    if check_ml_libraries:
+        has_numpy, has_sklearn = check_ml_libraries(force_recheck=force_recheck)
+    else:
+        has_numpy, has_sklearn = False, False
+
+    if not ML_AVAILABLE or not has_sklearn:
+        missing = []
+        if not has_numpy:
+            missing.append('numpy')
+        if not has_sklearn:
+            missing.append('scikit-learn')
         return jsonify({
             'available': False,
-            'error': 'ML libraries not installed (numpy, scikit-learn required)'
+            'has_numpy': has_numpy,
+            'has_sklearn': has_sklearn,
+            'error': f'ML libraries not installed ({", ".join(missing)} required)',
+            'hint': 'Run: pip3 install numpy scikit-learn joblib'
         })
 
     try:
@@ -402,6 +446,8 @@ def api_ml_status():
 
         return jsonify({
             'available': True,
+            'has_numpy': True,
+            'has_sklearn': True,
             'classifier': classifier.get_status(),
             'uncloaker': uncloaker.get_stats(),
             'federated': federated.get_stats(),
@@ -414,11 +460,9 @@ def api_ml_status():
 @dnsxai_bp.route('/ml/train', methods=['POST'])
 def api_ml_train():
     """Train ML model on browsing history with seed data for ad detection."""
-    if not ML_AVAILABLE:
-        return jsonify({
-            'success': False,
-            'error': 'ML libraries not installed. Install with: pip3 install scikit-learn numpy'
-        }), 400
+    ready, error_response = _check_ml_ready()
+    if not ready:
+        return error_response
 
     try:
         data = request.get_json() or {}
@@ -463,11 +507,9 @@ def api_ml_train():
 @dnsxai_bp.route('/ml/classify', methods=['POST'])
 def api_ml_classify():
     """Classify a domain using ML."""
-    if not ML_AVAILABLE:
-        return jsonify({
-            'success': False,
-            'error': 'ML libraries not installed'
-        }), 400
+    ready, error_response = _check_ml_ready()
+    if not ready:
+        return error_response
 
     try:
         data = request.get_json()
@@ -491,11 +533,9 @@ def api_ml_classify():
 @dnsxai_bp.route('/ml/analyze', methods=['POST'])
 def api_ml_analyze():
     """Real-time threat analysis for a domain."""
-    if not ML_AVAILABLE:
-        return jsonify({
-            'success': False,
-            'error': 'ML libraries not installed'
-        }), 400
+    ready, error_response = _check_ml_ready()
+    if not ready:
+        return error_response
 
     try:
         data = request.get_json()
@@ -661,11 +701,9 @@ def api_blocked_domains():
 @dnsxai_bp.route('/cname/check', methods=['POST'])
 def api_cname_check():
     """Check if a CNAME is hiding a tracker."""
-    if not ML_AVAILABLE:
-        return jsonify({
-            'success': False,
-            'error': 'ML libraries not installed'
-        }), 400
+    ready, error_response = _check_ml_ready()
+    if not ready:
+        return error_response
 
     try:
         data = request.get_json()
@@ -745,8 +783,9 @@ def api_federated_export():
 @dnsxai_bp.route('/federated/import', methods=['POST'])
 def api_federated_import():
     """Import updates from other nodes."""
-    if not ML_AVAILABLE:
-        return jsonify({'success': False, 'error': 'ML not available'}), 400
+    ready, error_response = _check_ml_ready()
+    if not ready:
+        return error_response
 
     try:
         data = request.get_json()
