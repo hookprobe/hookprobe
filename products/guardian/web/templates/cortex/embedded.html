@@ -151,14 +151,7 @@
         }
 
         // 2. Mobile: Listen for Cortex link click in mobile menu
-        // Find link by text content since attribute selector may not match
-        const menuLinks = document.querySelectorAll('#menu .links a');
-        let cortexMenuLink = null;
-        menuLinks.forEach(function(link) {
-            if (link.textContent.trim() === 'Cortex') {
-                cortexMenuLink = link;
-            }
-        });
+        const cortexMenuLink = document.getElementById('menu-cortex-link');
         console.log('[Cortex] Menu link found:', !!cortexMenuLink);
 
         if (cortexMenuLink) {
@@ -176,6 +169,8 @@
                     }, 350);
                 }
             });
+        } else {
+            console.log('[Cortex] ERROR: menu-cortex-link not found in DOM');
         }
 
         // 3. Direct URL navigation (e.g., page load with #cortex)
