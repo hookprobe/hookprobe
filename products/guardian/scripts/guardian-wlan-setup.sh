@@ -2,11 +2,12 @@
 #
 # Guardian WLAN Setup Script
 # Prepares the AP interface (wlan1) for hostapd without requiring WAN connectivity
+# Also ensures WAN interface (wlan0) is up for upstream connectivity
 #
 # This script runs early in boot to ensure clients can connect to the Guardian
 # hotspot even when there's no upstream internet connection (eth0/wlan0)
 #
-# Version: 5.1.0
+# Version: 5.2.0
 # License: AGPL-3.0
 
 set -e
@@ -26,6 +27,76 @@ log_warn() {
 log_error() {
     logger -t "$LOG_TAG" -p user.err "$1"
     echo "[ERROR] $1"
+}
+
+# Ensure interface is up and running
+ensure_interface_up() {
+    local iface="$1"
+    local max_wait="${2:-10}"
+    local count=0
+
+    if [ ! -d "/sys/class/net/$iface" ]; then
+        log_warn "Interface $iface not found"
+        return 1
+    fi
+
+    # Check if interface is up
+    if ip link show "$iface" | grep -q "state UP"; then
+        log_info "$iface is already up"
+        return 0
+    fi
+
+    log_info "Bringing up $iface..."
+
+    # Unblock rfkill if needed
+    rfkill unblock wifi 2>/dev/null || true
+
+    # Bring interface up
+    ip link set "$iface" up 2>/dev/null || true
+
+    # Wait for interface to come up
+    while [ $count -lt $max_wait ]; do
+        if ip link show "$iface" 2>/dev/null | grep -q "state UP\|state UNKNOWN"; then
+            log_info "$iface is up"
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+
+    # Check final state
+    local state
+    state=$(cat "/sys/class/net/$iface/operstate" 2>/dev/null || echo "unknown")
+    if [ "$state" = "up" ] || [ "$state" = "unknown" ]; then
+        log_info "$iface state: $state (acceptable)"
+        return 0
+    fi
+
+    log_warn "$iface failed to come up (state: $state)"
+    return 1
+}
+
+# Setup WAN interface (wlan0) for upstream connectivity
+setup_wan_interface() {
+    local wan_iface="${HOOKPROBE_WAN_IFACE:-wlan0}"
+
+    if [ ! -d "/sys/class/net/$wan_iface" ]; then
+        log_info "WAN interface $wan_iface not present, skipping"
+        return 0
+    fi
+
+    log_info "Setting up WAN interface: $wan_iface"
+
+    # Ensure NetworkManager manages wlan0 for WAN connectivity
+    if command -v nmcli &>/dev/null; then
+        nmcli device set "$wan_iface" managed yes 2>/dev/null || true
+    fi
+
+    # Bring interface up
+    ensure_interface_up "$wan_iface" 15
+
+    # Write state
+    echo "$wan_iface" > /run/guardian/wan_interface 2>/dev/null || true
 }
 
 # Determine AP interface
@@ -172,6 +243,12 @@ set_regulatory_domain() {
 main() {
     log_info "Guardian WLAN Setup starting..."
 
+    # Create state directory
+    mkdir -p /run/guardian
+
+    # Setup WAN interface first (wlan0 for upstream connectivity)
+    setup_wan_interface
+
     # Detect AP interface
     local ap_iface
     if ! ap_iface=$(detect_ap_interface); then
@@ -213,11 +290,13 @@ main() {
         fi
     fi
 
-    log_info "Guardian WLAN Setup complete - interface $ap_iface ready for hostapd"
-
     # Write state file for other services
-    mkdir -p /run/guardian
     echo "$ap_iface" > /run/guardian/ap_interface
+
+    # Log interface status
+    log_info "Guardian WLAN Setup complete"
+    log_info "  WAN interface: $(cat /run/guardian/wan_interface 2>/dev/null || echo 'N/A')"
+    log_info "  AP interface: $ap_iface (ready for hostapd)"
 
     exit 0
 }
