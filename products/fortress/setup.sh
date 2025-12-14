@@ -75,6 +75,12 @@ ENABLE_MONITORING="${ENABLE_MONITORING:-true}"
 ENABLE_CLICKHOUSE="${ENABLE_CLICKHOUSE:-false}"
 ENABLE_LTE="${ENABLE_LTE:-false}"
 
+# LTE Configuration
+HOOKPROBE_LTE_APN="${HOOKPROBE_LTE_APN:-}"
+HOOKPROBE_LTE_AUTH="${HOOKPROBE_LTE_AUTH:-none}"
+HOOKPROBE_LTE_USER="${HOOKPROBE_LTE_USER:-}"
+HOOKPROBE_LTE_PASS="${HOOKPROBE_LTE_PASS:-}"
+
 # ============================================================
 # LOGGING
 # ============================================================
@@ -1201,13 +1207,35 @@ setup_lte_failover() {
         log_info "  Protocol: ${LTE_PROTOCOL:-unknown}"
 
         # Configure modem with APN
-        local apn="${HOOKPROBE_LTE_APN:-internet}"
-        log_info "Configuring modem with APN: $apn"
+        # Check if APN was provided via command line
+        if [ -z "$HOOKPROBE_LTE_APN" ]; then
+            # No APN provided - use interactive configuration
+            log_info "No APN provided. Starting interactive configuration..."
+            echo ""
 
-        if configure_lte_modem "$apn"; then
-            log_info "LTE modem configured successfully"
+            if configure_apn_interactive; then
+                log_info "LTE APN configured successfully via interactive setup"
+            else
+                log_warn "Failed to configure LTE APN. You can configure it later with:"
+                log_warn "  /opt/hookprobe/fortress/devices/common/lte-manager.sh configure"
+            fi
         else
-            log_warn "Failed to configure LTE modem"
+            # APN provided via command line - use full parameters
+            local apn="$HOOKPROBE_LTE_APN"
+            local auth_type="${HOOKPROBE_LTE_AUTH:-none}"
+            local username="${HOOKPROBE_LTE_USER:-}"
+            local password="${HOOKPROBE_LTE_PASS:-}"
+
+            log_info "Configuring LTE modem:"
+            log_info "  APN: $apn"
+            log_info "  Auth: $auth_type"
+            [ -n "$username" ] && log_info "  Username: $username"
+
+            if configure_modem_apn "$apn" "$auth_type" "$username" "$password"; then
+                log_info "LTE modem configured successfully"
+            else
+                log_warn "Failed to configure LTE modem"
+            fi
         fi
 
         # Setup WAN failover
@@ -1269,6 +1297,12 @@ LTEMONITOREOF
         chmod +x /usr/local/bin/fortress-lte-monitor
 
         # Save failover configuration
+        # Get APN from saved config if set via interactive mode
+        local saved_apn="${HOOKPROBE_LTE_APN:-}"
+        if [ -z "$saved_apn" ] && [ -f "/var/lib/fortress/lte/config.conf" ]; then
+            saved_apn=$(grep "^LTE_APN=" /var/lib/fortress/lte/config.conf 2>/dev/null | cut -d= -f2 | tr -d '"')
+        fi
+
         cat > /etc/hookprobe/lte-failover.conf << LTECONFEOF
 # HookProbe Fortress LTE Failover Configuration
 # Generated: $(date -Iseconds)
@@ -1284,7 +1318,8 @@ HEALTH_CHECK_TARGETS="8.8.8.8 1.1.1.1"
 LTE_VENDOR="${LTE_VENDOR:-}"
 LTE_MODEL="${LTE_MODEL:-}"
 LTE_INTERFACE="${LTE_INTERFACE:-}"
-LTE_APN="${apn}"
+LTE_APN="${saved_apn:-}"
+LTE_AUTH="${HOOKPROBE_LTE_AUTH:-none}"
 LTECONFEOF
 
         chmod 644 /etc/hookprobe/lte-failover.conf
@@ -1529,6 +1564,9 @@ main() {
             --enable-clickhouse) ENABLE_CLICKHOUSE=true; shift ;;
             --enable-lte) ENABLE_LTE=true; shift ;;
             --lte-apn) HOOKPROBE_LTE_APN="$2"; shift 2 ;;
+            --lte-auth) HOOKPROBE_LTE_AUTH="$2"; shift 2 ;;
+            --lte-user) HOOKPROBE_LTE_USER="$2"; shift 2 ;;
+            --lte-pass) HOOKPROBE_LTE_PASS="$2"; shift 2 ;;
             --disable-macsec) MACSEC_ENABLED=false; shift ;;
             --disable-vlan) VLAN_SEGMENTATION=false; shift ;;
             --node-id) HOOKPROBE_NODE_ID="$2"; shift 2 ;;
@@ -1543,7 +1581,10 @@ main() {
                 echo "  --enable-monitoring    Enable Grafana + Victoria Metrics"
                 echo "  --enable-clickhouse    Enable ClickHouse analytics"
                 echo "  --enable-lte           Enable LTE WAN failover"
-                echo "  --lte-apn APN          Set LTE APN (default: internet)"
+                echo "  --lte-apn APN          Set LTE APN (e.g., internet.vodafone.ro)"
+                echo "  --lte-auth TYPE        Set LTE auth type: none, pap, chap, mschapv2"
+                echo "  --lte-user USER        Set LTE username (for PAP/CHAP auth)"
+                echo "  --lte-pass PASS        Set LTE password (for PAP/CHAP auth)"
                 echo "  --disable-macsec       Disable MACsec L2 encryption"
                 echo "  --disable-vlan         Disable VLAN segmentation"
                 echo "  --node-id ID           Set node identifier"
