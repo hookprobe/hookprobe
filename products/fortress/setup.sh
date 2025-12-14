@@ -769,11 +769,81 @@ setup_wifi_ap() {
     local wifi_iface=$(echo $WIFI_INTERFACES | awk '{print $1}')
     log_info "Configuring WiFi AP on: $wifi_iface"
 
+    # =========================================
+    # CRITICAL: Remove WiFi from netplan/NetworkManager control
+    # =========================================
+    log_info "Removing $wifi_iface from netplan/NetworkManager control..."
+
+    # Remove WiFi interface from any netplan configuration
+    for netplan_file in /etc/netplan/*.yaml; do
+        if [ -f "$netplan_file" ]; then
+            # Check if this netplan file has WiFi configuration
+            if grep -q "wifis:" "$netplan_file" 2>/dev/null; then
+                log_info "Removing WiFi section from $netplan_file"
+                # Backup the file
+                cp "$netplan_file" "${netplan_file}.fortress-backup"
+                # Remove wifis section using Python for reliable YAML manipulation
+                python3 << PYEOF
+import yaml
+import sys
+
+try:
+    with open('$netplan_file', 'r') as f:
+        config = yaml.safe_load(f) or {}
+
+    if 'network' in config and 'wifis' in config['network']:
+        del config['network']['wifis']
+        with open('$netplan_file', 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+        print("Removed wifis section from $netplan_file")
+except Exception as e:
+    print(f"Warning: Could not modify netplan: {e}", file=sys.stderr)
+PYEOF
+            fi
+        fi
+    done
+
+    # Apply netplan changes
+    netplan apply 2>/dev/null || true
+
+    # Tell NetworkManager to ignore this interface
+    if [ -d /etc/NetworkManager/conf.d ]; then
+        cat > /etc/NetworkManager/conf.d/fortress-wifi.conf << NMEOF
+# HookProbe Fortress: Let hostapd manage WiFi AP
+[keyfile]
+unmanaged-devices=interface-name:$wifi_iface
+NMEOF
+        # Reload NetworkManager
+        systemctl reload NetworkManager 2>/dev/null || true
+    fi
+
+    # Disconnect and release the interface
+    nmcli device disconnect "$wifi_iface" 2>/dev/null || true
+    nmcli device set "$wifi_iface" managed no 2>/dev/null || true
+
+    # Wait a moment for release
+    sleep 1
+
+    # Bring down interface, set AP mode, bring up
+    ip link set "$wifi_iface" down 2>/dev/null || true
+    iw dev "$wifi_iface" set type __ap 2>/dev/null || true
+    ip link set "$wifi_iface" up 2>/dev/null || true
+
+    # Verify AP mode was set
+    local current_mode=$(iw dev "$wifi_iface" info 2>/dev/null | grep "type" | awk '{print $2}')
+    if [ "$current_mode" != "AP" ]; then
+        log_warn "Could not set $wifi_iface to AP mode (current: $current_mode)"
+        log_warn "WiFi AP may not work correctly - will retry during service start"
+    else
+        log_info "WiFi interface $wifi_iface set to AP mode"
+    fi
+
     # Generate random password if not set
     local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
     local ap_ssid="${FORTRESS_WIFI_SSID:-Fortress-$(hostname -s)}"
 
     # Create hostapd configuration
+    # NOTE: Removed wpa_pairwise=TKIP - modern devices reject it
     mkdir -p /etc/hostapd
     cat > /etc/hostapd/fortress.conf << EOF
 # HookProbe Fortress WiFi AP Configuration
@@ -789,7 +859,6 @@ ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase=$ap_password
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 
 # Bridge to OVS
@@ -803,19 +872,46 @@ EOF
         sed -i 's|^#*DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/fortress.conf"|' /etc/default/hostapd
     fi
 
-    # Add WiFi interface to bridge (hostapd will handle this, but ensure it's ready)
-    ip link set "$wifi_iface" up 2>/dev/null || true
+    # Create helper script to prepare interface for AP mode
+    cat > /usr/local/bin/fortress-wifi-prepare.sh << 'PREPEOF'
+#!/bin/bash
+# Prepare WiFi interface for AP mode
+WIFI_IFACE="$1"
 
-    # Create systemd service for hostapd
+# Ensure NetworkManager isn't managing it
+nmcli device set "$WIFI_IFACE" managed no 2>/dev/null || true
+nmcli device disconnect "$WIFI_IFACE" 2>/dev/null || true
+
+# Set AP mode
+ip link set "$WIFI_IFACE" down 2>/dev/null
+iw dev "$WIFI_IFACE" set type __ap 2>/dev/null
+ip link set "$WIFI_IFACE" up 2>/dev/null
+
+# Verify
+sleep 0.5
+MODE=$(iw dev "$WIFI_IFACE" info 2>/dev/null | grep "type" | awk '{print $2}')
+if [ "$MODE" = "AP" ]; then
+    echo "WiFi interface $WIFI_IFACE ready in AP mode"
+    exit 0
+else
+    echo "Warning: Could not set AP mode (current: $MODE)"
+    exit 1
+fi
+PREPEOF
+    chmod +x /usr/local/bin/fortress-wifi-prepare.sh
+
+    # Create systemd service for hostapd with pre-start preparation
     cat > /etc/systemd/system/fortress-hostapd.service << EOF
 [Unit]
 Description=Fortress WiFi Access Point
-After=network.target sys-subsystem-net-devices-${wifi_iface}.device
+After=network.target openvswitch-switch.service sys-subsystem-net-devices-${wifi_iface}.device
 Wants=sys-subsystem-net-devices-${wifi_iface}.device
+Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd.pid
+ExecStartPre=/usr/local/bin/fortress-wifi-prepare.sh ${wifi_iface}
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
