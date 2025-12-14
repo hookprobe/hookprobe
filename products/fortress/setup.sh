@@ -1265,6 +1265,164 @@ OFSCRIPT
 }
 
 # ============================================================
+# NAT AND ROUTING
+# ============================================================
+setup_nat_routing() {
+    log_step "Configuring NAT and routing for internet access..."
+
+    # Ensure IP forwarding is enabled (also done in setup_ovs_bridge but ensure it persists)
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+
+    # Make IP forwarding persistent
+    if [ ! -f /etc/sysctl.d/99-fortress-routing.conf ]; then
+        cat > /etc/sysctl.d/99-fortress-routing.conf << 'SYSCTL_EOF'
+# Fortress routing configuration
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.forwarding=1
+net.ipv6.conf.all.forwarding=1
+SYSCTL_EOF
+        sysctl -p /etc/sysctl.d/99-fortress-routing.conf >/dev/null 2>&1 || true
+    fi
+
+    # Determine WAN interface (interface with default route)
+    local wan_iface
+    wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+
+    if [ -z "$wan_iface" ]; then
+        # Fallback: first interface that's not loopback, bridge, or vlan
+        wan_iface=$(ip -o link show | awk -F': ' '!/lo|fortress|vlan|br-/ {print $2}' | head -1)
+    fi
+
+    if [ -z "$wan_iface" ]; then
+        log_warn "Could not determine WAN interface - NAT not configured"
+        log_warn "Configure manually: iptables -t nat -A POSTROUTING -o <wan_iface> -j MASQUERADE"
+        return 1
+    fi
+
+    log_info "WAN interface detected: $wan_iface"
+
+    # Clear any existing fortress NAT rules to avoid duplicates
+    iptables -t nat -D POSTROUTING -o "$wan_iface" -j MASQUERADE 2>/dev/null || true
+
+    # Setup MASQUERADE on WAN interface
+    iptables -t nat -A POSTROUTING -o "$wan_iface" -j MASQUERADE
+    log_info "MASQUERADE enabled on $wan_iface"
+
+    # Setup FORWARD rules for bridge traffic
+    local bridge="$OVS_BRIDGE_NAME"
+    if [ -z "$bridge" ]; then
+        bridge="fortress"
+    fi
+
+    # Clear existing FORWARD rules for bridge
+    iptables -D FORWARD -i "$bridge" -o "$wan_iface" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -i "$wan_iface" -o "$bridge" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -i "$bridge" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o "$bridge" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+
+    # Add FORWARD rules
+    iptables -A FORWARD -i "$bridge" -o "$wan_iface" -j ACCEPT
+    iptables -A FORWARD -i "$wan_iface" -o "$bridge" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    log_info "FORWARD rules configured for $bridge <-> $wan_iface"
+
+    # Also allow traffic from bridge to any destination (for failover scenarios)
+    iptables -A FORWARD -i "$bridge" -j ACCEPT
+    iptables -A FORWARD -o "$bridge" -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+    # If LTE interface exists, add MASQUERADE for it too (failover)
+    if [ -n "$WWAN_INTERFACES" ]; then
+        for lte_iface in $WWAN_INTERFACES; do
+            iptables -t nat -D POSTROUTING -o "$lte_iface" -j MASQUERADE 2>/dev/null || true
+            iptables -t nat -A POSTROUTING -o "$lte_iface" -j MASQUERADE
+            log_info "MASQUERADE enabled on LTE interface: $lte_iface"
+        done
+    fi
+
+    # Create systemd service for persistence
+    cat > /etc/systemd/system/fortress-nat.service << NATEOF
+[Unit]
+Description=Fortress NAT and Routing Rules
+After=network-online.target openvswitch-switch.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/fortress-nat-setup
+
+[Install]
+WantedBy=multi-user.target
+NATEOF
+
+    # Create NAT setup script
+    cat > /usr/local/bin/fortress-nat-setup << 'NATSCRIPT'
+#!/bin/bash
+# Fortress NAT Setup Script
+# Dynamically detects WAN and configures NAT
+
+set -e
+
+# Enable IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Find WAN interface
+WAN=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+if [ -z "$WAN" ]; then
+    WAN=$(ip -o link show | awk -F': ' '!/lo|fortress|vlan|br-/ {print $2}' | head -1)
+fi
+
+[ -z "$WAN" ] && { echo "No WAN interface found"; exit 1; }
+
+BRIDGE="fortress"
+
+# Setup MASQUERADE
+if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
+    iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE
+    echo "MASQUERADE enabled on $WAN"
+fi
+
+# Setup FORWARD rules
+if ! iptables -C FORWARD -i "$BRIDGE" -o "$WAN" -j ACCEPT 2>/dev/null; then
+    iptables -A FORWARD -i "$BRIDGE" -o "$WAN" -j ACCEPT
+fi
+
+if ! iptables -C FORWARD -i "$WAN" -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+    iptables -A FORWARD -i "$WAN" -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+fi
+
+# Generic bridge forwarding
+if ! iptables -C FORWARD -i "$BRIDGE" -j ACCEPT 2>/dev/null; then
+    iptables -A FORWARD -i "$BRIDGE" -j ACCEPT
+fi
+
+if ! iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+    iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+fi
+
+# LTE failover interfaces
+for LTE in /sys/class/net/wwan* /sys/class/net/wwp*; do
+    [ -e "$LTE" ] || continue
+    LTE_IFACE=$(basename "$LTE")
+    if ! iptables -t nat -C POSTROUTING -o "$LTE_IFACE" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -o "$LTE_IFACE" -j MASQUERADE
+        echo "MASQUERADE enabled on $LTE_IFACE"
+    fi
+done
+
+echo "Fortress NAT configured successfully"
+NATSCRIPT
+
+    chmod +x /usr/local/bin/fortress-nat-setup
+
+    # Enable and start NAT service
+    systemctl daemon-reload
+    systemctl enable fortress-nat 2>/dev/null || true
+    systemctl start fortress-nat 2>/dev/null || true
+
+    log_info "NAT and routing configured successfully"
+}
+
+# ============================================================
 # QSECBIT AGENT
 # ============================================================
 install_qsecbit_agent() {
@@ -2601,6 +2759,7 @@ main() {
     setup_vxlan_tunnels
     setup_macsec
     setup_openflow_rules
+    setup_nat_routing
 
     install_qsecbit_agent
     configure_freeradius_vlan
