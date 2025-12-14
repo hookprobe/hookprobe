@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}Clients - HookProbe Fortress{% endblock %}
+{% block page_title %}Connected Devices{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Clients</li>{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap4.min.css">
+{% endblock %}
+
+{% block content %}
+<!-- Stats Cards -->
+<div class="row mb-4">
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-info">
+            <div class="inner">
+                <h3>{{ device_counts.total }}</h3>
+                <p>Total Devices</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-network-wired"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-success">
+            <div class="inner">
+                <h3>{{ device_counts.active }}</h3>
+                <p>Active Now</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-wifi"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-danger">
+            <div class="inner">
+                <h3>{{ device_counts.blocked }}</h3>
+                <p>Blocked</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-ban"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-6">
+        <div class="small-box bg-warning">
+            <div class="inner">
+                <h3>{{ vlans|length }}</h3>
+                <p>VLANs</p>
+            </div>
+            <div class="icon">
+                <i class="fas fa-project-diagram"></i>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Action Buttons -->
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="btn-group">
+            <form action="{{ url_for('clients.discover') }}" method="post" class="d-inline">
+                <button type="submit" class="btn btn-primary" {% if not db_available %}disabled{% endif %}>
+                    <i class="fas fa-search"></i> Discover Devices
+                </button>
+            </form>
+            <a href="{{ url_for('clients.export', format='csv') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-download"></i> Export CSV
+            </a>
+            <a href="{{ url_for('clients.export', format='json') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-download"></i> Export JSON
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Device Table -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-laptop mr-2"></i>Device Inventory</h3>
+        <div class="card-tools">
+            <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-tool filter-btn active" data-filter="all">All</button>
+                {% for vlan in vlans %}
+                <button type="button" class="btn btn-tool filter-btn" data-filter="{{ vlan.vlan_id }}">{{ vlan.name }}</button>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <table id="devices-table" class="table table-bordered table-striped table-hover">
+            <thead>
+                <tr>
+                    <th>Hostname</th>
+                    <th>MAC Address</th>
+                    <th>IP Address</th>
+                    <th>VLAN</th>
+                    <th>Type</th>
+                    <th>Manufacturer</th>
+                    <th>Last Seen</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for device in devices %}
+                <tr data-vlan="{{ device.vlan_id }}" class="{% if device.is_blocked %}table-danger{% endif %}">
+                    <td>
+                        <a href="{{ url_for('clients.detail', mac_address=device.mac_address) }}">
+                            <i class="fas fa-{{ 'laptop' if device.device_type == 'laptop' else 'mobile-alt' if device.device_type == 'phone' else 'cash-register' if device.device_type == 'pos' else 'video' if device.device_type == 'camera' else 'microchip' }}"></i>
+                            {{ device.hostname or 'Unknown' }}
+                        </a>
+                    </td>
+                    <td><code>{{ device.mac_address }}</code></td>
+                    <td>{{ device.ip_address }}</td>
+                    <td>
+                        {% set vlan_names = {'10': 'Management', '20': 'POS', '30': 'Staff', '40': 'Guest', '99': 'IoT'} %}
+                        <span class="badge badge-{% if device.vlan_id == 10 %}primary{% elif device.vlan_id == 20 %}success{% elif device.vlan_id == 30 %}info{% elif device.vlan_id == 40 %}secondary{% else %}warning{% endif %}">
+                            {{ vlan_names.get(device.vlan_id|string, 'VLAN ' ~ device.vlan_id) }}
+                        </span>
+                    </td>
+                    <td>{{ device.device_type|capitalize }}</td>
+                    <td>{{ device.manufacturer or 'Unknown' }}</td>
+                    <td>{{ device.last_seen }}</td>
+                    <td>
+                        {% if device.is_blocked %}
+                        <span class="badge badge-danger"><i class="fas fa-ban"></i> Blocked</span>
+                        {% else %}
+                        <span class="badge badge-success"><i class="fas fa-check"></i> Active</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <a href="{{ url_for('clients.detail', mac_address=device.mac_address) }}" class="btn btn-info" title="Details">
+                                <i class="fas fa-eye"></i>
+                            </a>
+                            {% if device.is_blocked %}
+                            <form action="{{ url_for('clients.unblock', mac_address=device.mac_address) }}" method="post" class="d-inline">
+                                <button type="submit" class="btn btn-success" title="Unblock">
+                                    <i class="fas fa-unlock"></i>
+                                </button>
+                            </form>
+                            {% else %}
+                            <button type="button" class="btn btn-danger block-btn" data-mac="{{ device.mac_address }}" data-hostname="{{ device.hostname }}" title="Block">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Block Device Modal -->
+<div class="modal fade" id="blockModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger">
+                <h5 class="modal-title"><i class="fas fa-ban"></i> Block Device</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <form id="blockForm" method="post">
+                <div class="modal-body">
+                    <p>Are you sure you want to block <strong id="block-hostname"></strong>?</p>
+                    <p class="text-muted small">MAC: <code id="block-mac"></code></p>
+                    <div class="form-group">
+                        <label for="block-reason">Reason</label>
+                        <select name="reason" id="block-reason" class="form-control">
+                            <option value="manual_block">Manual Block</option>
+                            <option value="security_threat">Security Threat</option>
+                            <option value="policy_violation">Policy Violation</option>
+                            <option value="unauthorized">Unauthorized Device</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Block Device</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if not db_available %}
+<div class="alert alert-warning mt-3">
+    <i class="fas fa-exclamation-triangle"></i>
+    <strong>Demo Mode:</strong> Database is not connected. Showing sample data.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap4.min.js"></script>
+<script>
+$(document).ready(function() {
+    // Initialize DataTable
+    var table = $('#devices-table').DataTable({
+        "order": [[6, "desc"]],
+        "pageLength": 25,
+        "language": {
+            "search": "Search devices:",
+            "lengthMenu": "Show _MENU_ devices per page"
+        }
+    });
+
+    // VLAN Filter buttons
+    $('.filter-btn').on('click', function() {
+        $('.filter-btn').removeClass('active');
+        $(this).addClass('active');
+        var filter = $(this).data('filter');
+
+        if (filter === 'all') {
+            table.column(3).search('').draw();
+        } else {
+            table.column(3).search(filter).draw();
+        }
+    });
+
+    // Block modal
+    $('.block-btn').on('click', function() {
+        var mac = $(this).data('mac');
+        var hostname = $(this).data('hostname');
+        $('#block-mac').text(mac);
+        $('#block-hostname').text(hostname || mac);
+        $('#blockForm').attr('action', '/clients/' + mac + '/block');
+        $('#blockModal').modal('show');
+    });
+});
+</script>
+{% endblock %}
