@@ -1627,9 +1627,19 @@ install_fortress() {
     enable_clickhouse=${enable_clickhouse:-no}
 
     local enable_lte="no"
+    local lte_apn=""
     if [ "$SYS_LTE_COUNT" -gt 0 ]; then
         read -p "Enable LTE/5G failover? (yes/no) [yes]: " enable_lte
         enable_lte=${enable_lte:-yes}
+
+        # Prompt for APN if LTE is enabled
+        if [ "$enable_lte" = "yes" ]; then
+            echo ""
+            echo -e "${CYAN}LTE Configuration:${NC}"
+            echo "Common APNs: internet, internet.vodafone.ro, orange, vzwinternet"
+            read -p "Enter your carrier APN [internet]: " lte_apn
+            lte_apn=${lte_apn:-internet}
+        fi
     fi
 
     echo ""
@@ -1671,7 +1681,10 @@ CFEOF
         [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
         [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
         [ "$enable_clickhouse" = "yes" ] && extra_args="$extra_args --enable-clickhouse"
-        [ "$enable_lte" = "yes" ] && extra_args="$extra_args --enable-lte"
+        if [ "$enable_lte" = "yes" ]; then
+            extra_args="$extra_args --enable-lte"
+            [ -n "$lte_apn" ] && extra_args="$extra_args --lte-apn $lte_apn"
+        fi
         [ "$logto_local" = true ] && extra_args="$extra_args --enable-iam"
 
         if [ -f "$SCRIPT_DIR/products/fortress/setup.sh" ]; then
