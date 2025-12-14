@@ -840,10 +840,12 @@ NMEOF
 
     # Generate random password if not set
     local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
-    local ap_ssid="${FORTRESS_WIFI_SSID:-Fortress-$(hostname -s)}"
+    local ap_ssid="${FORTRESS_WIFI_SSID:-hookprobe}"
 
     # Create hostapd configuration
     # NOTE: Removed wpa_pairwise=TKIP - modern devices reject it
+    # NOTE: No bridge= option - OVS bridges don't work with hostapd's bridge option
+    #       We add the WiFi interface to OVS manually after hostapd starts
     mkdir -p /etc/hostapd
     cat > /etc/hostapd/fortress.conf << EOF
 # HookProbe Fortress WiFi AP Configuration
@@ -861,8 +863,8 @@ wpa_passphrase=$ap_password
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 
-# Bridge to OVS
-bridge=$OVS_BRIDGE_NAME
+# NOTE: OVS bridge integration handled via ExecStartPost
+# Do NOT use bridge= option with OVS bridges
 EOF
 
     chmod 600 /etc/hostapd/fortress.conf
@@ -900,7 +902,29 @@ fi
 PREPEOF
     chmod +x /usr/local/bin/fortress-wifi-prepare.sh
 
-    # Create systemd service for hostapd with pre-start preparation
+    # Create helper script to add WiFi to OVS bridge after hostapd starts
+    cat > /usr/local/bin/fortress-wifi-bridge.sh << BRIDGEOF
+#!/bin/bash
+# Add WiFi interface to OVS bridge after hostapd starts
+WIFI_IFACE="\$1"
+OVS_BRIDGE="$OVS_BRIDGE_NAME"
+
+sleep 1  # Wait for hostapd to fully initialize
+
+# Remove from OVS if already exists (cleanup)
+ovs-vsctl --if-exists del-port "\$OVS_BRIDGE" "\$WIFI_IFACE" 2>/dev/null || true
+
+# Add WiFi interface to OVS bridge
+if ovs-vsctl add-port "\$OVS_BRIDGE" "\$WIFI_IFACE" 2>/dev/null; then
+    echo "WiFi interface \$WIFI_IFACE added to OVS bridge \$OVS_BRIDGE"
+else
+    echo "Warning: Could not add \$WIFI_IFACE to OVS bridge"
+    exit 1
+fi
+BRIDGEOF
+    chmod +x /usr/local/bin/fortress-wifi-bridge.sh
+
+    # Create systemd service for hostapd with pre/post scripts
     cat > /etc/systemd/system/fortress-hostapd.service << EOF
 [Unit]
 Description=Fortress WiFi Access Point
@@ -913,7 +937,8 @@ Type=forking
 PIDFile=/run/hostapd.pid
 ExecStartPre=/usr/local/bin/fortress-wifi-prepare.sh ${wifi_iface}
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
-ExecReload=/bin/kill -HUP \$MAINPID
+ExecStartPost=/usr/local/bin/fortress-wifi-bridge.sh ${wifi_iface}
+ExecStopPost=/usr/bin/ovs-vsctl --if-exists del-port $OVS_BRIDGE_NAME ${wifi_iface}
 Restart=on-failure
 RestartSec=5
 
