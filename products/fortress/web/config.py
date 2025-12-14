@@ -1,9 +1,29 @@
 """
 Fortress Web Configuration
+
+Supports:
+- Local authentication (default)
+- Logto IAM (if configured)
+- PostgreSQL database (if available)
 """
 
 import os
 from pathlib import Path
+
+
+def load_config_file(filepath):
+    """Load a shell-style config file into a dict."""
+    config = {}
+    if filepath.exists():
+        with open(filepath) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    # Remove quotes
+                    value = value.strip().strip('"').strip("'")
+                    config[key.strip()] = value
+    return config
 
 
 class Config:
@@ -17,6 +37,7 @@ class Config:
     BASE_DIR = Path(__file__).parent
     DATA_DIR = Path('/opt/hookprobe/fortress/data')
     CONFIG_DIR = Path('/etc/hookprobe')
+    SECRETS_DIR = CONFIG_DIR / 'secrets'
 
     # User database (JSON for MVP, can migrate to SQLite later)
     USERS_FILE = CONFIG_DIR / 'users.json'
@@ -41,6 +62,51 @@ class Config:
     # AdminLTE settings
     ADMINLTE_SKIN = 'dark'  # dark, light
     SIDEBAR_COLLAPSED = False
+
+    # =========================================
+    # Logto IAM Configuration (optional)
+    # =========================================
+    # Load from /etc/hookprobe/logto.conf if available
+    _logto_config = load_config_file(CONFIG_DIR / 'logto.conf')
+
+    LOGTO_ENABLED = _logto_config.get('LOGTO_LOCAL', 'false').lower() == 'true'
+    LOGTO_ENDPOINT = _logto_config.get('LOGTO_ENDPOINT', '')
+    LOGTO_APP_ID = _logto_config.get('LOGTO_APP_ID', '')
+    LOGTO_APP_SECRET = _logto_config.get('LOGTO_APP_SECRET', '')
+
+    # OAuth2 redirect URI (for Logto)
+    LOGTO_REDIRECT_URI = os.environ.get(
+        'LOGTO_REDIRECT_URI',
+        'https://localhost:8443/auth/callback'
+    )
+
+    # =========================================
+    # PostgreSQL Database (optional)
+    # =========================================
+    # Load from /etc/hookprobe/secrets/postgres.conf if available
+    _pg_config = load_config_file(SECRETS_DIR / 'postgres.conf')
+
+    DATABASE_URL = _pg_config.get(
+        'DATABASE_URL',
+        os.environ.get('DATABASE_URL', '')
+    )
+    POSTGRES_HOST = _pg_config.get('POSTGRES_HOST', 'localhost')
+    POSTGRES_PORT = int(_pg_config.get('POSTGRES_PORT', '5432'))
+    POSTGRES_DB = _pg_config.get('POSTGRES_DB', 'fortress')
+    POSTGRES_USER = _pg_config.get('POSTGRES_USER', 'fortress')
+    POSTGRES_PASSWORD = _pg_config.get('POSTGRES_PASSWORD', '')
+
+    # Use PostgreSQL if configured, else use JSON files
+    USE_DATABASE = bool(DATABASE_URL or POSTGRES_PASSWORD)
+
+    # =========================================
+    # Grafana Integration
+    # =========================================
+    _grafana_config = load_config_file(SECRETS_DIR / 'grafana.conf')
+
+    GRAFANA_URL = _grafana_config.get('GRAFANA_URL', 'http://localhost:3000')
+    GRAFANA_ADMIN_USER = _grafana_config.get('GRAFANA_ADMIN_USER', 'admin')
+    GRAFANA_ADMIN_PASSWORD = _grafana_config.get('GRAFANA_ADMIN_PASSWORD', '')
 
 
 class DevelopmentConfig(Config):
