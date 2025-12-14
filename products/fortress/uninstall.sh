@@ -103,6 +103,8 @@ stop_services() {
         "fortress-lte-failover"
         "fortress-wan-failover"
         "fortress-tunnel"
+        "fortress-dnsmasq"
+        "fortress-hostapd"
     )
 
     for service in "${services[@]}"; do
@@ -130,6 +132,8 @@ remove_systemd_services() {
         "fortress-lte-failover"
         "fortress-wan-failover"
         "fortress-tunnel"
+        "fortress-dnsmasq"
+        "fortress-hostapd"
     )
 
     for service in "${services[@]}"; do
@@ -368,6 +372,18 @@ remove_configuration() {
 
     # Remove MACsec interface configs
     rm -f "$CONFIG_DIR"/macsec-*.conf 2>/dev/null || true
+
+    # Remove hostapd configuration
+    if [ -f /etc/hostapd/fortress.conf ]; then
+        log_info "Removing hostapd configuration..."
+        rm -f /etc/hostapd/fortress.conf
+    fi
+
+    # Remove dnsmasq configuration
+    if [ -f /etc/dnsmasq.d/fortress.conf ]; then
+        log_info "Removing dnsmasq configuration..."
+        rm -f /etc/dnsmasq.d/fortress.conf
+    fi
 
     # Remove VXLAN secrets
     if [ -d "$SECRETS_DIR/vxlan" ]; then
@@ -634,6 +650,8 @@ main() {
     echo -e "  • hookprobe-fortress service"
     echo -e "  • fortress-qsecbit service"
     echo -e "  • fortress-lte-failover service"
+    echo -e "  • fortress-dnsmasq (DHCP server)"
+    echo -e "  • fortress-hostapd (WiFi AP)"
     echo -e "  • Monitoring containers (VictoriaMetrics, Grafana)"
     echo -e "  • OVS bridge: $OVS_BRIDGE"
     echo -e "  • VLAN interfaces (10, 20, 30, 40, 99)"
