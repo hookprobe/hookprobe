@@ -102,6 +102,7 @@ stop_services() {
         "fortress-qsecbit"
         "fortress-lte-failover"
         "fortress-wan-failover"
+        "fortress-tunnel"
     )
 
     for service in "${services[@]}"; do
@@ -128,6 +129,7 @@ remove_systemd_services() {
         "fortress-qsecbit"
         "fortress-lte-failover"
         "fortress-wan-failover"
+        "fortress-tunnel"
     )
 
     for service in "${services[@]}"; do
@@ -377,6 +379,12 @@ remove_configuration() {
     if [ -d "$SECRETS_DIR/macsec" ]; then
         log_info "Removing MACsec secrets..."
         rm -rf "$SECRETS_DIR/macsec"
+    fi
+
+    # Remove Cloudflare Tunnel configuration
+    if [ -d "$INSTALL_DIR/tunnel" ]; then
+        log_info "Removing Cloudflare Tunnel configuration..."
+        rm -rf "$INSTALL_DIR/tunnel"
     fi
 
     # Clean up empty directories
