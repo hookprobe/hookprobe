@@ -185,6 +185,130 @@ install_packages() {
 }
 
 # ============================================================
+# SYSTEM LOCALE AND REGIONAL CONFIGURATION
+# ============================================================
+configure_system_locale() {
+    log_step "Configuring system locale and regional settings..."
+
+    # Set locale to en_US.UTF-8
+    if command -v locale-gen &>/dev/null; then
+        # Debian/Ubuntu
+        log_info "Setting locale to en_US.UTF-8..."
+
+        # Ensure en_US.UTF-8 is available
+        if [ -f /etc/locale.gen ]; then
+            sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+            locale-gen en_US.UTF-8 2>/dev/null || true
+        fi
+
+        # Set as default locale
+        update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 2>/dev/null || true
+
+        # Apply immediately for this session
+        export LANG=en_US.UTF-8
+        export LC_ALL=en_US.UTF-8
+
+        log_info "Locale set to en_US.UTF-8"
+    elif command -v localectl &>/dev/null; then
+        # Fedora/RHEL
+        localectl set-locale LANG=en_US.UTF-8 2>/dev/null || true
+        log_info "Locale set to en_US.UTF-8"
+    fi
+}
+
+configure_wifi_country() {
+    log_step "Auto-detecting WiFi regulatory country from public IP..."
+
+    # Try to get country from public IP geolocation
+    WIFI_COUNTRY=""
+
+    # Try multiple geolocation services (in case one is down)
+    for api in "http://ip-api.com/line/?fields=countryCode" \
+               "https://ipinfo.io/country" \
+               "https://ifconfig.co/country-iso"; do
+        if WIFI_COUNTRY=$(curl -s --connect-timeout 5 --max-time 10 "$api" 2>/dev/null); then
+            # Validate it's a 2-letter country code
+            if [[ "$WIFI_COUNTRY" =~ ^[A-Z]{2}$ ]]; then
+                log_info "Detected country from IP: $WIFI_COUNTRY"
+                break
+            fi
+        fi
+        WIFI_COUNTRY=""
+    done
+
+    # Fallback to US if detection failed
+    if [ -z "$WIFI_COUNTRY" ]; then
+        WIFI_COUNTRY="US"
+        log_warn "Could not detect country from IP, defaulting to US"
+    fi
+
+    # Set WiFi regulatory domain
+    log_info "Setting WiFi regulatory domain to $WIFI_COUNTRY..."
+
+    # Method 1: iw reg set (immediate)
+    if command -v iw &>/dev/null; then
+        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+    fi
+
+    # Method 2: CRDA config (persistent)
+    if [ -f /etc/default/crda ]; then
+        sed -i "s/^REGDOMAIN=.*/REGDOMAIN=$WIFI_COUNTRY/" /etc/default/crda
+    else
+        echo "REGDOMAIN=$WIFI_COUNTRY" > /etc/default/crda 2>/dev/null || true
+    fi
+
+    # Method 3: wpa_supplicant global config (for WiFi client)
+    if [ -d /etc/wpa_supplicant ]; then
+        # Update any existing wpa_supplicant configs
+        for conf in /etc/wpa_supplicant/*.conf; do
+            if [ -f "$conf" ]; then
+                if grep -q "^country=" "$conf"; then
+                    sed -i "s/^country=.*/country=$WIFI_COUNTRY/" "$conf"
+                else
+                    # Add country at the beginning of the file
+                    sed -i "1i country=$WIFI_COUNTRY" "$conf"
+                fi
+            fi
+        done
+    fi
+
+    # Method 4: Raspberry Pi specific - raspi-config style
+    if [ -f /boot/firmware/config.txt ] || [ -f /boot/config.txt ]; then
+        # Create/update wpa_supplicant.conf for first boot
+        WPA_CONF="/etc/wpa_supplicant/wpa_supplicant.conf"
+        if [ ! -f "$WPA_CONF" ]; then
+            mkdir -p /etc/wpa_supplicant
+            cat > "$WPA_CONF" << EOF
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=$WIFI_COUNTRY
+EOF
+        elif ! grep -q "^country=" "$WPA_CONF"; then
+            sed -i "1i country=$WIFI_COUNTRY" "$WPA_CONF"
+        else
+            sed -i "s/^country=.*/country=$WIFI_COUNTRY/" "$WPA_CONF"
+        fi
+    fi
+
+    # Method 5: NetworkManager regulatory domain
+    if [ -d /etc/NetworkManager/conf.d ]; then
+        cat > /etc/NetworkManager/conf.d/99-wifi-country.conf << EOF
+[device]
+wifi.scan-rand-mac-address=no
+
+[connection]
+wifi.cloned-mac-address=preserve
+EOF
+    fi
+
+    # Store detected country for other scripts to use
+    mkdir -p /etc/guardian
+    echo "$WIFI_COUNTRY" > /etc/guardian/wifi_country
+
+    log_info "WiFi country configured: $WIFI_COUNTRY"
+}
+
+# ============================================================
 # GUARDIAN CONFIGURATION DIRECTORY
 # ============================================================
 setup_guardian_config() {
@@ -4279,6 +4403,12 @@ main() {
     # Install base packages
     log_step "Installing base packages..."
     install_packages
+
+    # Configure system locale (en_US.UTF-8)
+    configure_system_locale
+
+    # Auto-detect and configure WiFi country from public IP
+    configure_wifi_country
 
     # Setup Guardian config directory
     log_step "Setting up Guardian configuration..."
