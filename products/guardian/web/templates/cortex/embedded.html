@@ -128,13 +128,52 @@
 <script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
 
 <script>
-    // Cortex initialization is handled by:
-    // 1. main.js loadTabData('cortex') for tab switches
-    // 2. cortexTabActivated event listener in cortex-embedded.js
-    // 3. This fallback for direct URL navigation (e.g., page load with #cortex)
+    // Cortex initialization
     document.addEventListener('DOMContentLoaded', function() {
+        console.log('[Cortex] DOMContentLoaded fired');
+
+        // 1. Desktop: Listen for Cortex tab button click
+        const cortexTabBtn = document.querySelector('button[data-tab="cortex"]');
+        console.log('[Cortex] Tab button found:', !!cortexTabBtn);
+
+        if (cortexTabBtn) {
+            cortexTabBtn.addEventListener('click', function() {
+                console.log('[Cortex] Tab clicked, initialized:', guardianCortex?.initialized);
+                if (typeof initCortexGlobe === 'function' && !guardianCortex?.initialized && !guardianCortex?.initializing) {
+                    console.log('[Cortex] Starting initialization from button click...');
+                    requestAnimationFrame(function() {
+                        requestAnimationFrame(function() {
+                            initCortexGlobe();
+                        });
+                    });
+                }
+            });
+        }
+
+        // 2. Mobile: Listen for Cortex link click in mobile menu
+        const cortexMenuLinks = document.querySelectorAll('#menu a[onclick*="cortex"], #menu a[onclick*="Cortex"]');
+        console.log('[Cortex] Menu links found:', cortexMenuLinks.length);
+
+        cortexMenuLinks.forEach(function(link) {
+            link.addEventListener('click', function() {
+                console.log('[Cortex] Mobile menu clicked, initialized:', guardianCortex?.initialized);
+                if (typeof initCortexGlobe === 'function' && !guardianCortex?.initialized && !guardianCortex?.initializing) {
+                    console.log('[Cortex] Starting initialization from mobile menu...');
+                    // Longer delay for mobile - menu animation needs to complete
+                    setTimeout(function() {
+                        requestAnimationFrame(function() {
+                            requestAnimationFrame(function() {
+                                initCortexGlobe();
+                            });
+                        });
+                    }, 350);
+                }
+            });
+        });
+
+        // 3. Direct URL navigation (e.g., page load with #cortex)
         if (window.location.hash === '#cortex') {
-            // Double RAF ensures layout is complete
+            console.log('[Cortex] Hash navigation detected');
             requestAnimationFrame(function() {
                 requestAnimationFrame(function() {
                     if (typeof initCortexGlobe === 'function') {
