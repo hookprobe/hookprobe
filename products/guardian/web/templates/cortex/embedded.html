@@ -129,10 +129,12 @@
 
 <script>
     // Cortex initialization
+    // Mobile menu onclick in base.html calls initCortexGlobe directly
+    // Desktop button click handled here
     document.addEventListener('DOMContentLoaded', function() {
         console.log('[Cortex] DOMContentLoaded fired');
 
-        // 1. Desktop: Listen for Cortex tab button click
+        // Desktop: Listen for Cortex tab button click
         const cortexTabBtn = document.querySelector('button[data-tab="cortex"]');
         console.log('[Cortex] Tab button found:', !!cortexTabBtn);
 
@@ -150,30 +152,7 @@
             });
         }
 
-        // 2. Mobile: Listen for Cortex link click in mobile menu
-        const cortexMenuLink = document.getElementById('menu-cortex-link');
-        console.log('[Cortex] Menu link found:', !!cortexMenuLink);
-
-        if (cortexMenuLink) {
-            cortexMenuLink.addEventListener('click', function() {
-                console.log('[Cortex] Mobile menu clicked, initialized:', guardianCortex?.initialized);
-                if (typeof initCortexGlobe === 'function' && !guardianCortex?.initialized && !guardianCortex?.initializing) {
-                    console.log('[Cortex] Starting initialization from mobile menu...');
-                    // Longer delay for mobile - menu animation needs to complete
-                    setTimeout(function() {
-                        requestAnimationFrame(function() {
-                            requestAnimationFrame(function() {
-                                initCortexGlobe();
-                            });
-                        });
-                    }, 350);
-                }
-            });
-        } else {
-            console.log('[Cortex] ERROR: menu-cortex-link not found in DOM');
-        }
-
-        // 3. Direct URL navigation (e.g., page load with #cortex)
+        // Direct URL navigation (e.g., page load with #cortex)
         if (window.location.hash === '#cortex') {
             console.log('[Cortex] Hash navigation detected');
             requestAnimationFrame(function() {
