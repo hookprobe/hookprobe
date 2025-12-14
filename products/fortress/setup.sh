@@ -218,11 +218,35 @@ detect_platform() {
 detect_interfaces() {
     log_step "Detecting network interfaces..."
 
-    ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | tr '\n' ' ')
+    # Ethernet interfaces (eth*, enp*, eno*) - exclude WWAN
+    ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '^ww' | tr '\n' ' ')
     ETH_COUNT=$(echo $ETH_INTERFACES | wc -w)
 
+    # WiFi interfaces (wlan*, wlp*) - managed by iw
     WIFI_INTERFACES=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | tr '\n' ' ')
     WIFI_COUNT=$(echo $WIFI_INTERFACES | wc -w)
+
+    # WWAN/LTE interfaces (wwan*, wwp*) - double 'w' prefix
+    WWAN_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(wwan|wwp)' | tr '\n' ' ')
+    WWAN_COUNT=$(echo $WWAN_INTERFACES | wc -w)
+
+    # Detect modem control devices
+    MODEM_CTRL_DEVICES=""
+    # Check for CDC-WDM devices (QMI/MBIM modems)
+    for dev in /dev/cdc-wdm*; do
+        [ -c "$dev" ] && MODEM_CTRL_DEVICES="$MODEM_CTRL_DEVICES $(basename $dev)"
+    done 2>/dev/null
+    # Check for ttyUSB devices (AT command modems)
+    for dev in /dev/ttyUSB*; do
+        [ -c "$dev" ] && MODEM_CTRL_DEVICES="$MODEM_CTRL_DEVICES $(basename $dev)"
+    done 2>/dev/null
+    MODEM_CTRL_DEVICES=$(echo $MODEM_CTRL_DEVICES | xargs)  # trim whitespace
+
+    # Check NetworkManager for GSM connections
+    GSM_CONNECTIONS=""
+    if command -v nmcli &>/dev/null; then
+        GSM_CONNECTIONS=$(nmcli -t -f NAME,TYPE,DEVICE connection show 2>/dev/null | grep ":gsm:" | cut -d: -f1,3 | tr '\n' ' ')
+    fi
 
     # Check for VAP-capable WiFi (required for VLAN segmentation)
     WIFI_VAP_SUPPORT=false
@@ -234,8 +258,14 @@ detect_interfaces() {
         fi
     done
 
-    log_info "Ethernet interfaces ($ETH_COUNT): $ETH_INTERFACES"
-    log_info "WiFi interfaces ($WIFI_COUNT): $WIFI_INTERFACES"
+    log_info "Ethernet interfaces ($ETH_COUNT): ${ETH_INTERFACES:-none}"
+    log_info "WiFi interfaces ($WIFI_COUNT): ${WIFI_INTERFACES:-none}"
+    log_info "WWAN/LTE interfaces ($WWAN_COUNT): ${WWAN_INTERFACES:-none}"
+    [ -n "$MODEM_CTRL_DEVICES" ] && log_info "Modem control devices: $MODEM_CTRL_DEVICES"
+    [ -n "$GSM_CONNECTIONS" ] && log_info "GSM connections: $GSM_CONNECTIONS"
+
+    # Export for LTE manager
+    export WWAN_INTERFACES WWAN_COUNT MODEM_CTRL_DEVICES GSM_CONNECTIONS
 
     if [ "$WIFI_VAP_SUPPORT" = false ] && [ "$VLAN_SEGMENTATION" = true ]; then
         log_warn "No VAP-capable WiFi adapter found."
