@@ -178,7 +178,8 @@ PLACEHOLDER
             python3-requests \
             python3-numpy \
             net-tools \
-            curl
+            curl \
+            jq
     elif command -v dnf &>/dev/null; then
         PKG_MGR="dnf"
         dnf install -y -q \
@@ -198,7 +199,8 @@ PLACEHOLDER
             python3-requests \
             python3-numpy \
             net-tools \
-            curl
+            curl \
+            jq
     else
         log_error "Unsupported package manager"
         exit 1
@@ -240,12 +242,15 @@ configure_system_locale() {
         locale-gen $TARGET_LOCALE 2>/dev/null || locale-gen 2>/dev/null || true
 
         # Apply immediately for this session BEFORE writing config files
-        # This prevents "cannot change locale" warnings during heredoc operations
+        # First unset LC_ALL to prevent "cannot change locale" warnings
+        # (bash validates the locale when setting LC_ALL, which fails if not yet loaded)
+        unset LC_ALL 2>/dev/null || true
         export LANG=$TARGET_LOCALE
         export LANGUAGE=$TARGET_LOCALE
-        export LC_ALL=$TARGET_LOCALE
         export LC_CTYPE=$TARGET_LOCALE
         export LC_MESSAGES=$TARGET_LOCALE
+        # Set LC_ALL last after other LC_* are set
+        export LC_ALL=$TARGET_LOCALE 2>/dev/null || true
 
         # Write complete /etc/default/locale with ALL variables
         cat > /etc/default/locale << EOF
@@ -3673,9 +3678,9 @@ ConditionFileNotEmpty=
 After=
 Wants=
 # Set Guardian-specific dependencies
-After=guardian-wlan.service guardian-offline.service local-fs.target
+# Use Wants (not Requires) so hostapd can still start if guardian-wlan has issues
+After=guardian-wlan.service local-fs.target
 Wants=guardian-wlan.service
-Requires=guardian-wlan.service
 
 [Service]
 Restart=on-failure
