@@ -1,0 +1,24 @@
+# HookProbe Fortress Web Requirements
+
+# Core Flask
+Flask>=2.3.0
+Flask-Login>=0.6.0
+Flask-WTF>=1.2.0
+Werkzeug>=2.3.0
+
+# Authentication
+bcrypt>=4.0.0
+
+# Production server
+gunicorn>=21.0.0
+
+# Utilities
+requests>=2.31.0
+psutil>=5.9.0
+
+# Optional - Reports
+# reportlab>=4.0.0     # PDF generation
+# xlsxwriter>=3.1.0    # Excel export
+
+# Development
+# pyOpenSSL>=23.0.0    # For self-signed certs in dev

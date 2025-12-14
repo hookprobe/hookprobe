@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.1
-**Last Updated**: 2025-12-12
+**Version**: 5.2
+**Last Updated**: 2025-12-14
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -29,6 +29,8 @@
 | **Modify DSM consensus** | Check shared DSM | `shared/dsm/` |
 | **GDPR compliance** | Check privacy module | `core/qsecbit/gdpr_privacy.py` |
 | **Guardian web UI** | Flask app | `products/guardian/web/` |
+| **Fortress admin portal** | Flask + AdminLTE | `products/fortress/web/` |
+| **Fortress development** | MVP plan | `products/fortress/DEVELOPMENT_PLAN.md` |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
@@ -111,9 +113,16 @@ HookProbe is a **federated cybersecurity mesh** - a family of protectors buildin
 |------|-----|----------|----------|
 | **Sentinel** | 256MB | IoT Validator | `products/sentinel/` |
 | **Guardian** | 1.5GB | Travel/Portable | `products/guardian/` |
-| **Fortress** | 4GB | Edge Router | `products/fortress/` |
+| **Fortress** | 4GB | Small Business | `products/fortress/` |
 | **Nexus** | 16GB+ | ML/AI Compute | `products/nexus/` |
 | **MSSP** | 16GB+ | Central Brain | `products/mssp/` |
+
+**Target Markets:**
+- **Sentinel**: IoT devices, validators, lightweight edge nodes
+- **Guardian**: Travelers, home users, portable protection
+- **Fortress**: Small businesses (flower shops, bakeries, retail, trades)
+- **Nexus**: AI/ML workloads, regional compute hubs
+- **MSSP**: Service providers, multi-tenant cloud platform
 
 ---
 
@@ -129,6 +138,7 @@ These directories are open source and can be freely modified:
 |-----------|----------|---------|
 | Deployment Scripts | `deploy/` | AGPL v3.0 |
 | Guardian Product | `products/guardian/` | AGPL v3.0 |
+| Fortress Product | `products/fortress/` | AGPL v3.0 |
 | Threat Response | `shared/response/` | AGPL v3.0 |
 | Mesh Communication | `shared/mesh/` | AGPL v3.0 |
 | HTP Base Protocol | `core/htp/` | AGPL v3.0 |
@@ -822,6 +832,79 @@ from products.guardian.lib.layer_threat_detector import LayerThreatDetector
 - Route: `/cortex-modules/<filename>` serves shared modules
 - Install path: `/opt/hookprobe/shared/cortex/frontend/js/`
 - Setup: `scripts/setup.sh` copies modules during installation
+
+### Fortress - Small Business Security
+
+**Location**: `products/fortress/`
+
+Enterprise-grade security for small businesses (flower shops, bakeries, retail, trades).
+
+**Target Market**:
+- Sole traders and small businesses
+- Need professional security without enterprise complexity
+- POS systems, guest WiFi, staff networks
+- GDPR compliance requirements
+
+**Architecture**:
+- **Backend**: `lib/` - Python modules (extends Guardian)
+- **Web UI**: `web/` - Flask app with AdminLTE 3.x dashboard
+- **QSecBit**: `qsecbit/` - Fortress-enhanced agent with VLAN/MACsec monitoring
+- **Config**: OVS bridge, VLANs, VXLAN tunnels
+
+**What Fortress Adds Over Guardian**:
+
+| Feature | Guardian | Fortress |
+|---------|----------|----------|
+| **Web UI** | Single-user | Multi-user with auth |
+| **VLANs** | Basic | Full segmentation (5 VLANs) |
+| **Reporting** | Basic stats | Business reports |
+| **Dashboard** | Forty theme | AdminLTE professional |
+| **Authentication** | None | Username/password + roles |
+
+**Web UI Design** (AdminLTE 3.x):
+- **Template**: AdminLTE 3.x (Bootstrap 4)
+- **Color Palette**: Same HookProbe branding
+- **Key Features**:
+  - User authentication (admin, operator, viewer roles)
+  - Sidebar navigation
+  - Professional dark theme
+  - DataTables for device management
+  - Business reporting
+
+**Web UI Files**:
+- `web/app.py` - Flask application factory with Flask-Login
+- `web/modules/auth/` - Authentication (login, logout, user management)
+- `web/modules/dashboard/` - Main dashboard with widgets
+- `web/modules/security/` - QSecBit and threat detection
+- `web/modules/clients/` - Device management with VLAN assignment
+- `web/modules/networks/` - VLAN configuration UI
+- `web/modules/dnsxai/` - DNS protection with per-VLAN policies
+- `web/modules/reports/` - Business reporting
+- `web/modules/settings/` - System settings, user management
+- `web/templates/base.html` - AdminLTE base layout
+
+**Web UI Modules** (`web/modules/`):
+- `auth/` - Login, logout, user management
+- `dashboard/` - Main overview with widgets
+- `security/` - QSecBit, threats, layer stats
+- `clients/` - Device inventory with VLAN assignment
+- `networks/` - VLAN configuration
+- `dnsxai/` - DNS protection settings
+- `reports/` - Weekly reports, device inventory
+- `settings/` - System config, user management
+- `api/` - REST API endpoints
+
+**VLAN Configuration** (default):
+
+| VLAN | ID | Purpose |
+|------|-----|---------|
+| Management | 10 | Admin devices |
+| POS | 20 | Payment terminals |
+| Staff | 30 | Employee devices |
+| Guest | 40 | Customer WiFi |
+| IoT | 99 | Cameras, sensors |
+
+**Development Plan**: See `products/fortress/DEVELOPMENT_PLAN.md`
 
 ### MSSP - Cloud Federation Platform
 
@@ -1603,6 +1686,53 @@ nano products/guardian/web/app.py
 # 3. Create templates
 mkdir products/guardian/web/templates/new_feature
 nano products/guardian/web/templates/new_feature/index.html
+```
+
+### Adding Fortress Web UI Feature
+
+```bash
+# 1. Create new blueprint module (similar to Guardian but with AdminLTE)
+mkdir products/fortress/web/modules/new_feature
+touch products/fortress/web/modules/new_feature/__init__.py
+touch products/fortress/web/modules/new_feature/views.py
+
+# 2. Add @login_required decorator for authentication
+# In views.py:
+from flask_login import login_required
+from ..auth.decorators import admin_required  # For admin-only pages
+
+@new_feature_bp.route('/')
+@login_required
+def index():
+    return render_template('new_feature/index.html')
+
+# 3. Register blueprint in modules/__init__.py
+nano products/fortress/web/modules/__init__.py
+
+# 4. Create AdminLTE-based template
+nano products/fortress/web/templates/new_feature/index.html
+# Extend base.html which provides AdminLTE layout
+```
+
+### Fortress Development Workflow
+
+```bash
+# 1. Read the development plan
+cat products/fortress/DEVELOPMENT_PLAN.md
+
+# 2. Check existing Guardian module to port
+ls products/guardian/web/modules/
+
+# 3. Copy and adapt module
+cp -r products/guardian/web/modules/security products/fortress/web/modules/
+# Then add authentication decorators and AdminLTE template conversion
+
+# 4. Run Fortress web UI (development)
+cd products/fortress/web
+pip install -r requirements.txt
+python app.py  # Runs on https://localhost:8443
+
+# Default login: admin / hookprobe (change immediately!)
 ```
 
 ### Adding MSSP Django App
