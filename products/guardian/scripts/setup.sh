@@ -95,6 +95,31 @@ detect_interfaces() {
         fi
     done
 
+    # Detect built-in vs USB WiFi based on driver
+    # Built-in Raspberry Pi WiFi uses brcmfmac driver
+    # USB adapters use various drivers (rtl8xxxu, ath9k_htc, mt76x0u, etc.)
+    BUILTIN_WIFI=""
+    USB_WIFI=""
+    for iface in $WIFI_INTERFACES; do
+        local driver=$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null | xargs basename 2>/dev/null)
+        if [ "$driver" = "brcmfmac" ] || [ "$driver" = "brcmsmac" ]; then
+            BUILTIN_WIFI="$iface"
+            log_info "Built-in WiFi detected: $iface (driver: $driver)"
+        else
+            USB_WIFI="$iface"
+            log_info "USB WiFi detected: $iface (driver: $driver)"
+        fi
+    done
+
+    # Set recommended interfaces based on detection
+    # Built-in WiFi = WAN (connects to upstream network)
+    # USB WiFi = AP (hosts the hotspot)
+    if [ -n "$USB_WIFI" ] && [ -n "$BUILTIN_WIFI" ]; then
+        RECOMMENDED_WAN_IFACE="$BUILTIN_WIFI"
+        RECOMMENDED_AP_IFACE="$USB_WIFI"
+        log_info "Recommended: WAN=$RECOMMENDED_WAN_IFACE, AP=$RECOMMENDED_AP_IFACE"
+    fi
+
     log_info "Ethernet interfaces ($ETH_COUNT): $ETH_INTERFACES"
     log_info "WiFi interfaces ($WIFI_COUNT): $WIFI_INTERFACES"
     log_info "WiFi AP mode: $WIFI_AP_SUPPORT"
@@ -2793,15 +2818,22 @@ configure_base_networking() {
     local NETMASK="255.255.255.224"
 
     # Determine interfaces
-    # AP Interface: Use wlan1 if available (wlan0 is for WAN uplink)
-    # Priority: HOOKPROBE_AP_IFACE env > wlan1 > first available wlan
+    # AP Interface selection priority:
+    # 1. HOOKPROBE_AP_IFACE env variable (user override)
+    # 2. RECOMMENDED_AP_IFACE from driver detection (USB WiFi)
+    # 3. wlan1 (legacy default)
+    # 4. First available wlan
     local WIFI_IFACE="${HOOKPROBE_AP_IFACE:-}"
     if [ -z "$WIFI_IFACE" ]; then
-        # Prefer wlan1 for AP (wlan0 is typically WAN/uplink)
-        if echo "$WIFI_INTERFACES" | grep -qw "wlan1"; then
+        if [ -n "$RECOMMENDED_AP_IFACE" ]; then
+            # Use driver-detected USB WiFi adapter for AP
+            WIFI_IFACE="$RECOMMENDED_AP_IFACE"
+            log_info "Using detected USB WiFi for AP: $WIFI_IFACE"
+        elif echo "$WIFI_INTERFACES" | grep -qw "wlan1"; then
+            # Legacy fallback to wlan1
             WIFI_IFACE="wlan1"
         else
-            # Fallback to first available
+            # Last resort: first available
             WIFI_IFACE=$(echo $WIFI_INTERFACES | awk '{print $1}')
         fi
     fi
@@ -3669,26 +3701,27 @@ install_ap_services() {
         # Create inline if source not found
         cat > /etc/systemd/system/hostapd.service.d/guardian-override.conf << 'HOSTAPD_OVERRIDE'
 # Guardian Override for hostapd.service
-# Removes dependency on network-online.target for offline-first operation
-# Clears ConditionFileNotEmpty to prevent startup race conditions
+# Minimal override - just clear problematic conditions and dependencies
 
 [Unit]
-# Clear default conditions and dependencies
+# Clear ALL conditions to prevent startup failures
 ConditionFileNotEmpty=
+ConditionPathExists=
+
+# Clear ALL dependencies - hostapd just needs the interface to exist
 After=
 Wants=
-# Set Guardian-specific dependencies
-# Use Wants (not Requires) so hostapd can still start if guardian-wlan has issues
-After=guardian-wlan.service local-fs.target
-Wants=guardian-wlan.service
+Requires=
+BindsTo=
+
+# Minimal dependencies - just local filesystem
+After=local-fs.target
 
 [Service]
 Restart=on-failure
-RestartSec=5
+RestartSec=3
 TimeoutStartSec=30
 Environment="DAEMON_CONF=/etc/hostapd/hostapd.conf"
-# Add ExecStartPre to verify config exists
-ExecStartPre=/bin/test -s /etc/hostapd/hostapd.conf
 HOSTAPD_OVERRIDE
     fi
 
