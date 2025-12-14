@@ -105,6 +105,7 @@ stop_services() {
         "fortress-tunnel"
         "fortress-dnsmasq"
         "fortress-hostapd"
+        "fortress-nat"
     )
 
     for service in "${services[@]}"; do
@@ -134,6 +135,7 @@ remove_systemd_services() {
         "fortress-tunnel"
         "fortress-dnsmasq"
         "fortress-hostapd"
+        "fortress-nat"
     )
 
     for service in "${services[@]}"; do
@@ -164,6 +166,7 @@ remove_management_scripts() {
         "/usr/local/bin/hookprobe-fortress-start"
         "/usr/local/bin/hookprobe-fortress-stop"
         "/usr/local/bin/fortress-lte-monitor"
+        "/usr/local/bin/fortress-nat-setup"
     )
 
     for script in "${scripts[@]}"; do
@@ -495,8 +498,24 @@ remove_sysctl_settings() {
     if [ -f /etc/sysctl.d/99-hookprobe.conf ]; then
         log_info "Removing /etc/sysctl.d/99-hookprobe.conf..."
         rm -f /etc/sysctl.d/99-hookprobe.conf
-        sysctl --system &>/dev/null || true
     fi
+
+    if [ -f /etc/sysctl.d/99-fortress-routing.conf ]; then
+        log_info "Removing /etc/sysctl.d/99-fortress-routing.conf..."
+        rm -f /etc/sysctl.d/99-fortress-routing.conf
+    fi
+
+    sysctl --system &>/dev/null || true
+
+    # Clean up iptables NAT rules
+    log_info "Cleaning up iptables NAT rules..."
+    for WAN in eth0 eth1 wlan0 wlan1 enp0s* wwan0 wwp0s*; do
+        iptables -t nat -D POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null || true
+    done
+
+    # Clean up FORWARD rules for fortress bridge
+    iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o fortress -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
     log_info "Sysctl settings removed"
 }
