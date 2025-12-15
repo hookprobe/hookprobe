@@ -16,6 +16,10 @@ import bcrypt
 from flask_login import UserMixin
 
 
+# Maximum users for Fortress (small business platform)
+MAX_USERS = 5
+
+
 class UserRole(Enum):
     """User roles for access control."""
     ADMIN = "admin"           # Full access
@@ -131,9 +135,18 @@ class User(UserMixin):
     @classmethod
     def create(cls, username: str, password: str, role: str = UserRole.VIEWER.value,
                email: str = None, display_name: str = None) -> Optional['User']:
-        """Create a new user."""
+        """Create a new user.
+
+        Enforces MAX_USERS limit (5 users for small business platform).
+        Returns None if user exists or max users reached.
+        """
         if cls.get(username):
             return None  # User already exists
+
+        # Check max users limit
+        users = cls._load_all_users()
+        if len(users) >= MAX_USERS:
+            return None  # Max users reached
 
         user = cls(
             id=username,
@@ -147,6 +160,17 @@ class User(UserMixin):
         user.set_password(password)
         user.save()
         return user
+
+    @classmethod
+    def can_create_user(cls) -> bool:
+        """Check if a new user can be created (under MAX_USERS limit)."""
+        users = cls._load_all_users()
+        return len(users) < MAX_USERS
+
+    @classmethod
+    def user_count(cls) -> int:
+        """Get current user count."""
+        return len(cls._load_all_users())
 
     @classmethod
     def get_all(cls) -> list:
