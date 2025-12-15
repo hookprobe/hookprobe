@@ -287,15 +287,16 @@ REQUIRED_PACKAGES_APT=(
     "jq"
     "openssl"
     "iptables"
+    "iproute2"
     "bridge-utils"
+    "iw"
+    "hostapd"
+    "dnsmasq"
 )
 
 # Optional packages - won't fail if unavailable
 OPTIONAL_PACKAGES_APT=(
-    "hostapd"
-    "dnsmasq"
     "nftables"
-    "iw"
     "wireless-tools"
     "wpasupplicant"
     "wpa_supplicant"
@@ -3724,6 +3725,12 @@ main() {
 
     install_packages
     verify_critical_packages
+
+    # Re-detect interfaces now that iw is installed
+    # This ensures WiFi interfaces are properly detected for AP setup
+    log_step "Re-detecting interfaces after package installation..."
+    detect_interfaces
+
     install_python_packages
     install_podman
     optimize_boot_time
