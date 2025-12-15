@@ -2396,6 +2396,271 @@ GRAFANAEOF
     log_info "Monitoring stack installed"
     log_info "  Victoria Metrics: http://localhost:8428"
     log_info "  Grafana: http://localhost:3000 (admin/$GRAFANA_PASS)"
+
+    # Install security monitoring (Suricata, Zeek, ML)
+    install_security_monitoring
+}
+
+# ============================================================
+# SECURITY MONITORING (Suricata, Zeek, ML/LSTM)
+# ============================================================
+install_security_monitoring() {
+    log_step "Installing security monitoring stack..."
+
+    # Create directories for security monitoring
+    mkdir -p /opt/hookprobe/fortress/data/{suricata-logs,suricata-rules}
+    mkdir -p /opt/hookprobe/fortress/data/{zeek-logs,zeek-spool}
+    mkdir -p /opt/hookprobe/fortress/data/{ml-models,threat-intel}
+    mkdir -p /opt/hookprobe/fortress/zeek
+    mkdir -p /var/log/hookprobe
+
+    # Determine interface to monitor
+    local MONITOR_IFACE=""
+    if [ -e /sys/class/net/eth0 ]; then
+        MONITOR_IFACE="eth0"
+    elif [ -e /sys/class/net/br0 ]; then
+        MONITOR_IFACE="br0"
+    elif [ -e /sys/class/net/fortress ]; then
+        MONITOR_IFACE="fortress"
+    else
+        MONITOR_IFACE="any"
+    fi
+    log_info "Security monitoring interface: $MONITOR_IFACE"
+
+    # Pull container images
+    log_info "Pulling security monitoring images..."
+    podman pull docker.io/jasonish/suricata:latest 2>/dev/null || log_warn "Failed to pull Suricata image"
+    podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
+
+    # Stop existing containers
+    podman stop fortress-suricata fortress-zeek 2>/dev/null || true
+    podman rm fortress-suricata fortress-zeek 2>/dev/null || true
+
+    # Start Suricata IDS container
+    log_info "Starting Suricata IDS..."
+    podman run -d \
+        --name fortress-suricata \
+        --network host \
+        --cap-add NET_ADMIN \
+        --cap-add NET_RAW \
+        --cap-add SYS_NICE \
+        --restart unless-stopped \
+        -v /opt/hookprobe/fortress/data/suricata-logs:/var/log/suricata:Z \
+        -v /opt/hookprobe/fortress/data/suricata-rules:/var/lib/suricata:Z \
+        docker.io/jasonish/suricata:latest \
+        -i "$MONITOR_IFACE" \
+        2>/dev/null && log_info "✓ Suricata started" || log_warn "Suricata may already be running"
+
+    # Create Zeek configuration
+    cat > /opt/hookprobe/fortress/zeek/local.zeek << 'ZEEKEOF'
+# Fortress Zeek Configuration - Threat Pattern Analysis
+# Focus: HOW users are targeted, NOT what they browse
+
+@load base/frameworks/notice
+@load base/protocols/conn
+@load base/protocols/dns
+@load base/protocols/http
+@load base/protocols/ssl
+@load policy/misc/detect-traceroute
+@load policy/protocols/conn/known-hosts
+@load policy/protocols/conn/known-services
+
+# Custom threat pattern detection
+redef Notice::policy += {
+    [$action = Notice::ACTION_LOG,
+     $pred(n: Notice::Info) = {
+        return n$note in set(
+            Scan::Port_Scan,
+            Scan::Address_Scan,
+            SSL::Invalid_Server_Cert,
+            DNS::External_Name
+        );
+     }]
+};
+ZEEKEOF
+
+    # Start Zeek Network Analyzer
+    log_info "Starting Zeek Network Analyzer..."
+    podman run -d \
+        --name fortress-zeek \
+        --network host \
+        --cap-add NET_ADMIN \
+        --cap-add NET_RAW \
+        --restart unless-stopped \
+        --memory 512m \
+        -v /opt/hookprobe/fortress/data/zeek-logs:/usr/local/zeek/logs:Z \
+        -v /opt/hookprobe/fortress/data/zeek-spool:/usr/local/zeek/spool:Z \
+        -v /opt/hookprobe/fortress/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro \
+        docker.io/zeek/zeek:latest \
+        zeek -i "$MONITOR_IFACE" local \
+        2>/dev/null && log_info "✓ Zeek started" || log_warn "Zeek may already be running"
+
+    # Install ML/LSTM components
+    install_ml_components
+
+    # Setup dnsXai privacy controls
+    setup_dnsxai_privacy_controls
+
+    log_info "Security monitoring stack installed"
+    log_info "  Suricata: monitoring $MONITOR_IFACE for threats"
+    log_info "  Zeek: analyzing network patterns"
+    log_info "  ML/LSTM: daily training at 3:00 AM"
+}
+
+# ============================================================
+# ML/LSTM THREAT DETECTION COMPONENTS
+# ============================================================
+install_ml_components() {
+    log_step "Installing ML/LSTM threat detection..."
+
+    # Copy LSTM module to installation directory
+    mkdir -p /opt/hookprobe/fortress/lib
+    if [ -f "$FORTRESS_ROOT/lib/lstm_threat_detector.py" ]; then
+        cp "$FORTRESS_ROOT/lib/lstm_threat_detector.py" /opt/hookprobe/fortress/lib/
+        chmod +x /opt/hookprobe/fortress/lib/lstm_threat_detector.py
+    fi
+
+    # Create ML aggregator service
+    cat > /etc/systemd/system/fortress-ml-aggregator.service << 'EOF'
+[Unit]
+Description=Fortress ML Threat Aggregator
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=30
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/containers/../../ml/threat_aggregator.py 2>/dev/null || /bin/true
+StandardOutput=append:/var/log/hookprobe/ml-aggregator.log
+StandardError=append:/var/log/hookprobe/ml-aggregator.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create LSTM daily training service
+    cat > /etc/systemd/system/fortress-lstm-train.service << 'EOF'
+[Unit]
+Description=Fortress LSTM Threat Model Training
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/lstm_threat_detector.py --train --epochs 100
+StandardOutput=append:/var/log/hookprobe/lstm-training.log
+StandardError=append:/var/log/hookprobe/lstm-training.log
+EOF
+
+    # Create daily training timer (runs at 3am)
+    cat > /etc/systemd/system/fortress-lstm-train.timer << 'EOF'
+[Unit]
+Description=Daily LSTM Threat Model Training (3:00 AM)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-lstm-train.timer 2>/dev/null || true
+
+    log_info "ML/LSTM components installed (daily training at 3:00 AM)"
+}
+
+# ============================================================
+# DNSXAI PRIVACY CONTROLS
+# ============================================================
+setup_dnsxai_privacy_controls() {
+    log_step "Setting up dnsXai privacy controls..."
+
+    mkdir -p /etc/hookprobe/dnsxai
+
+    # Create default privacy configuration (privacy-first defaults)
+    cat > /etc/hookprobe/dnsxai/privacy.json << 'PRIVEOF'
+{
+    "version": "1.0",
+    "description": "dnsXai Privacy Settings - Controls what data is collected",
+    "settings": {
+        "enable_query_logging": false,
+        "enable_domain_tracking": false,
+        "enable_ad_blocking_stats": true,
+        "enable_threat_detection": true,
+        "enable_ml_training_data": false,
+        "anonymize_client_ips": true,
+        "retention_days": 7,
+        "export_allowed": false
+    },
+    "explanation": {
+        "enable_query_logging": "Log individual DNS queries (PRIVACY IMPACT: HIGH). Disabled by default.",
+        "enable_domain_tracking": "Track domain visit frequency per client (PRIVACY IMPACT: HIGH). Disabled by default.",
+        "enable_ad_blocking_stats": "Count blocked ads/trackers (PRIVACY IMPACT: LOW). Enabled for statistics.",
+        "enable_threat_detection": "Detect malicious domains (PRIVACY IMPACT: LOW). Essential for security.",
+        "enable_ml_training_data": "Use anonymized query patterns for ML (PRIVACY IMPACT: MEDIUM). Disabled by default.",
+        "anonymize_client_ips": "Replace client IPs with hashes (PRIVACY IMPACT: NONE). Always recommended.",
+        "retention_days": "Days to keep logs before deletion. Shorter = more privacy.",
+        "export_allowed": "Allow exporting DNS data. Disabled by default."
+    }
+}
+PRIVEOF
+
+    chmod 644 /etc/hookprobe/dnsxai/privacy.json
+
+    # Create privacy management CLI tool
+    cat > /usr/local/bin/fortress-dnsxai-privacy << 'PRIVSCRIPT'
+#!/bin/bash
+# Fortress dnsXai Privacy Control Tool
+# Manages privacy settings for DNS query tracking
+
+PRIVACY_FILE="/etc/hookprobe/dnsxai/privacy.json"
+
+show_status() {
+    echo "=== dnsXai Privacy Settings ==="
+    echo ""
+    if [ -f "$PRIVACY_FILE" ]; then
+        python3 -c "
+import json
+with open('$PRIVACY_FILE') as f:
+    data = json.load(f)
+    settings = data.get('settings', {})
+    for key, value in settings.items():
+        status = '✓ Enabled' if value is True else ('✗ Disabled' if value is False else str(value))
+        print(f'  {key}: {status}')
+"
+    else
+        echo "Privacy file not found!"
+    fi
+}
+
+set_setting() {
+    local setting="$1"
+    local value="$2"
+    python3 -c "
+import json, sys
+with open('$PRIVACY_FILE', 'r') as f: data = json.load(f)
+val = True if '$value'.lower() in ('true','yes','1') else (False if '$value'.lower() in ('false','no','0') else int('$value') if '$value'.isdigit() else None)
+if val is None: print('Invalid value'); sys.exit(1)
+data['settings']['$setting'] = val
+with open('$PRIVACY_FILE', 'w') as f: json.dump(data, f, indent=2)
+print('Set $setting = ' + str(val))
+"
+}
+
+case "\${1:-status}" in
+    status) show_status ;;
+    set) set_setting "\$2" "\$3" ;;
+    max*) python3 -c "import json; f=open('$PRIVACY_FILE'); d=json.load(f); f.close(); d['settings']={'enable_query_logging':False,'enable_domain_tracking':False,'enable_ad_blocking_stats':False,'enable_threat_detection':True,'enable_ml_training_data':False,'anonymize_client_ips':True,'retention_days':1,'export_allowed':False}; f=open('$PRIVACY_FILE','w'); json.dump(d,f,indent=2); f.close(); print('Maximum privacy enabled')" ;;
+    *) echo "Usage: \$0 {status|set <key> <value>|maximum}" ;;
+esac
+PRIVSCRIPT
+
+    chmod +x /usr/local/bin/fortress-dnsxai-privacy
+
+    log_info "dnsXai privacy controls installed"
+    log_info "  Use 'fortress-dnsxai-privacy status' to view settings"
+    log_info "  Use 'fortress-dnsxai-privacy maximum' for maximum privacy"
 }
 
 # ============================================================
@@ -3350,7 +3615,36 @@ validate_installation() {
                 log_warn "⚠ Grafana container not running"
                 warnings=$((warnings + 1))
             fi
+            # Check security monitoring containers
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-suricata"; then
+                log_info "✓ Suricata IDS container running"
+            else
+                log_warn "⚠ Suricata IDS container not running"
+                warnings=$((warnings + 1))
+            fi
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-zeek"; then
+                log_info "✓ Zeek network analyzer running"
+            else
+                log_warn "⚠ Zeek network analyzer not running"
+                warnings=$((warnings + 1))
+            fi
         fi
+    fi
+
+    # Check LSTM training timer
+    if systemctl is-enabled fortress-lstm-train.timer &>/dev/null 2>&1; then
+        log_info "✓ LSTM daily training timer enabled"
+    else
+        log_warn "⚠ LSTM daily training timer not enabled"
+        warnings=$((warnings + 1))
+    fi
+
+    # Check dnsXai privacy controls
+    if [ -f "/etc/hookprobe/dnsxai/privacy.json" ]; then
+        log_info "✓ dnsXai privacy controls configured"
+    else
+        log_warn "⚠ dnsXai privacy controls not configured"
+        warnings=$((warnings + 1))
     fi
 
     # Check LTE if enabled
@@ -3408,6 +3702,9 @@ show_completion() {
     echo -e "  ${GREEN}✓${NC} QSecBit Fortress Agent"
     echo -e "  ${GREEN}✓${NC} FreeRADIUS with dynamic VLAN assignment"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Monitoring (Grafana + Victoria Metrics)"
+    [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Security Monitoring (Suricata IDS + Zeek Network Analyzer)"
+    [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} ML/LSTM Threat Detection (daily training at 3:00 AM)"
+    echo -e "  ${GREEN}✓${NC} dnsXai Privacy Controls (default: privacy-first)"
     [ "$ENABLE_N8N" = true ] && echo -e "  ${GREEN}✓${NC} n8n Workflow Automation"
     [ "$ENABLE_REMOTE_ACCESS" = true ] && echo -e "  ${GREEN}✓${NC} Cloudflare Tunnel (Remote Access)"
 
@@ -3501,6 +3798,7 @@ show_completion() {
     echo -e "  ${BOLD}Management Commands:${NC}"
     echo -e "  ${CYAN}hookprobe-macsec${NC} enable eth0  - Enable MACsec on interface"
     echo -e "  ${CYAN}hookprobe-openflow${NC} status     - View OpenFlow status"
+    echo -e "  ${CYAN}fortress-dnsxai-privacy${NC} status - View/change privacy settings"
     echo -e "  ${CYAN}systemctl status${NC} hookprobe-fortress"
     [ "$ENABLE_LTE" = true ] && echo -e "  ${CYAN}systemctl status${NC} fortress-lte-failover"
     echo ""
