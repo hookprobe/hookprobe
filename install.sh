@@ -1468,19 +1468,16 @@ install_fortress() {
 
     echo -e "${GREEN}███${NC}░ ${BOLD}${WHITE}FORTRESS${NC} - ${ITALIC}\"Your Digital Stronghold\"${NC}"
     echo ""
-    echo "Fortress is a full-featured edge gateway with local monitoring,"
-    echo "dashboards, and automation capabilities for advanced deployments."
+    echo "Fortress is a full-featured edge gateway for small businesses."
+    echo "Simple local authentication (max 5 users), no complex IAM needed."
     echo ""
     echo -e "${YELLOW}Core Components:${NC}"
     echo "  • All Guardian features, plus:"
-    echo "  • Nginx Web Server (reverse proxy)"
-    echo "  • PostgreSQL Database"
-    echo "  • Logto IAM (Identity & Access Management)"
+    echo "  • OVS Bridge with VLAN Segmentation"
+    echo "  • Local Auth (admin/operator/viewer roles)"
     echo "  • n8n Workflow Automation"
-    echo "  • Kali Security Module (pentest tools)"
-    echo "  • Victoria Metrics (time-series database)"
-    echo "  • Grafana Dashboards"
-    echo "  • Local AI Threat Detection"
+    echo "  • Victoria Metrics + Grafana Dashboards"
+    echo "  • QSecBit AI Threat Detection"
     if [ "$SYS_LTE_COUNT" -gt 0 ]; then
         echo "  • LTE/5G failover support"
     fi
@@ -1489,166 +1486,13 @@ install_fortress() {
     echo "  • RAM: ~4-6GB under normal operation"
     echo "  • Storage: ~20GB for containers and data"
     echo ""
-    echo -e "${YELLOW}Network Configuration:${NC}"
-    if [ -n "$SYS_WAN_INTERFACE" ]; then
-        echo "  • WAN Interface: $SYS_WAN_INTERFACE (detected)"
-    else
-        echo "  • WAN: Internet uplink"
-    fi
-    echo "  • LAN: Protected network(s)"
-    if [ "$SYS_BRIDGE_COUNT" -gt 0 ]; then
-        echo ""
-        echo -e "${CYAN}Bridge Configuration:${NC}"
-        echo "  • Detected Bridges: $SYS_BRIDGES"
-        if [ "$SYS_WIFI_BRIDGE_COUNT" -gt 0 ]; then
-            echo "  • WiFi Bridges: $SYS_WIFI_BRIDGES"
-        fi
-        if [ -n "$SYS_HOOKPROBE_BRIDGE" ]; then
-            echo -e "  • HookProbe Bridge: ${GREEN}$SYS_HOOKPROBE_BRIDGE (active)${NC}"
-        else
-            echo -e "  • HookProbe Bridge: ${YELLOW}Required - will be configured${NC}"
-        fi
-        echo "  • Route metrics will be configured for traffic control"
-    fi
-    echo ""
 
     # ─────────────────────────────────────────────────────────────────
-    # Logto IAM Configuration
-    # ─────────────────────────────────────────────────────────────────
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}LOGTO IAM CONFIGURATION${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "Logto provides identity and access management for the Fortress."
-    echo ""
-    echo -e "${YELLOW}Deployment Options:${NC}"
-    echo "  1) Local - Deploy Logto container locally (recommended)"
-    echo "  2) Cloud - Use external Logto cloud service"
-    echo ""
-    read -p "Select Logto deployment [1]: " logto_deployment
-    logto_deployment=${logto_deployment:-1}
-
-    local logto_endpoint=""
-    local logto_app_id=""
-    local logto_app_secret=""
-    local logto_local=false
-
-    if [ "$logto_deployment" = "1" ]; then
-        # Local Logto deployment
-        logto_local=true
-        logto_endpoint="http://localhost:3001"
-        logto_app_id="local-fortress-app"
-        logto_app_secret="auto-generated-on-startup"
-        echo -e "${GREEN}✓ Using local Logto container${NC}"
-        echo "  Logto will be deployed as part of Fortress installation"
-    else
-        # Cloud Logto
-        local default_endpoint="https://dvvud6.logto.app/"
-        echo ""
-        echo -e "Default Cloud Endpoint: ${GREEN}$default_endpoint${NC}"
-        read -p "Use default endpoint? (yes/no) [yes]: " use_default_logto
-        use_default_logto=${use_default_logto:-yes}
-        if [ "$use_default_logto" = "yes" ]; then
-            logto_endpoint="$default_endpoint"
-        else
-            read -p "Enter Logto endpoint URL: " logto_endpoint
-        fi
-
-        read -p "Enter Logto App ID: " logto_app_id
-        while [ -z "$logto_app_id" ]; do
-            echo -e "${RED}App ID is required${NC}"
-            read -p "Enter Logto App ID: " logto_app_id
-        done
-
-        read -sp "Enter Logto App Secret: " logto_app_secret
-        echo ""
-        while [ -z "$logto_app_secret" ]; do
-            echo -e "${RED}App Secret is required${NC}"
-            read -sp "Enter Logto App Secret: " logto_app_secret
-            echo ""
-        done
-        echo -e "${GREEN}✓ Logto cloud configuration captured${NC}"
-    fi
-    echo ""
-
-    # ─────────────────────────────────────────────────────────────────
-    # Cloudflare Tunnel Configuration
-    # ─────────────────────────────────────────────────────────────────
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}CLOUDFLARE TUNNEL CONFIGURATION${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "Cloudflare Tunnel provides secure access to your Fortress without"
-    echo "exposing ports to the internet."
-    echo ""
-    echo -e "${YELLOW}How to get your Tunnel Token:${NC}"
-    echo "  1. Go to: https://one.dash.cloudflare.com/"
-    echo "  2. Navigate to: Networks > Tunnels"
-    echo "  3. Create a new tunnel or select existing"
-    echo "  4. Click 'Configure' > 'Install connector'"
-    echo "  5. Copy the token from the install command"
-    echo ""
-    echo -e "${DIM}The token looks like: eyJhIjoiNz...${NC}"
-    echo ""
-
-    # Minimum required: Tunnel Token
-    read -sp "Enter Cloudflare Tunnel Token (required): " cf_tunnel_token
-    echo ""
-    while [ -z "$cf_tunnel_token" ]; do
-        echo -e "${RED}Tunnel Token is required${NC}"
-        read -sp "Enter Cloudflare Tunnel Token: " cf_tunnel_token
-        echo ""
-    done
-    echo -e "${GREEN}✓ Tunnel Token captured${NC}"
-    echo ""
-
-    # Optional: Tunnel ID and Account ID (for advanced API operations)
-    echo -e "${YELLOW}Optional - for advanced management:${NC}"
-    read -p "Enter Tunnel ID (or press Enter to skip): " cf_tunnel_id
-    read -p "Enter Account ID (or press Enter to skip): " cf_account_id
-
-    echo -e "${GREEN}✓ Cloudflare configuration complete${NC}"
-    echo ""
-
-    # ─────────────────────────────────────────────────────────────────
-    # Optional Features
-    # ─────────────────────────────────────────────────────────────────
-    echo -e "${YELLOW}Optional Features:${NC}"
-    read -p "Enable Kali security module? (yes/no) [yes]: " enable_kali
-    enable_kali=${enable_kali:-yes}
-
-    read -p "Enable n8n automation? (yes/no) [yes]: " enable_n8n
-    enable_n8n=${enable_n8n:-yes}
-
-    read -p "Enable Grafana dashboards? (yes/no) [yes]: " enable_grafana
-    enable_grafana=${enable_grafana:-yes}
-
-    read -p "Enable ClickHouse analytics? (yes/no) [no]: " enable_clickhouse
-    enable_clickhouse=${enable_clickhouse:-no}
-
-    local enable_lte="no"
-    local lte_apn=""
-    if [ "$SYS_LTE_COUNT" -gt 0 ]; then
-        read -p "Enable LTE/5G failover? (yes/no) [yes]: " enable_lte
-        enable_lte=${enable_lte:-yes}
-
-        # Prompt for APN if LTE is enabled
-        if [ "$enable_lte" = "yes" ]; then
-            echo ""
-            echo -e "${CYAN}LTE Configuration:${NC}"
-            echo "Common APNs: internet, internet.vodafone.ro, orange, vzwinternet"
-            read -p "Enter your carrier APN [internet]: " lte_apn
-            lte_apn=${lte_apn:-internet}
-        fi
-    fi
-
-    # ─────────────────────────────────────────────────────────────────
-    # WiFi Access Point Configuration
+    # WiFi Access Point Configuration (FIRST)
     # ─────────────────────────────────────────────────────────────────
     local wifi_ssid="hookprobe"
     local wifi_password=""
     if [ "$SYS_WIFI_COUNT" -gt 0 ]; then
-        echo ""
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${CYAN}WIFI ACCESS POINT CONFIGURATION${NC}"
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -1678,34 +1522,173 @@ install_fortress() {
         echo ""
     fi
 
+    # ─────────────────────────────────────────────────────────────────
+    # Network Size Configuration
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}NETWORK SIZE CONFIGURATION${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    read -p "Proceed with Fortress installation? (yes/no) [no]: " confirm
+    echo "Network size determines how many devices can connect:"
+    echo "  /29 = 6 devices     (very small office)"
+    echo "  /28 = 14 devices    (small office)"
+    echo "  /27 = 30 devices    (small business)"
+    echo "  /26 = 62 devices    (medium business)"
+    echo "  /25 = 126 devices   (larger office)"
+    echo "  /24 = 254 devices   (large network)"
+    echo "  /23 = 510 devices   (default - recommended)"
+    echo ""
+    read -p "Network size [/23]: " network_prefix
+    network_prefix=${network_prefix:-/23}
+    # Remove leading slash if present
+    network_prefix=${network_prefix#/}
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────────
+    # LTE Configuration
+    # ─────────────────────────────────────────────────────────────────
+    local enable_lte="no"
+    local lte_apn=""
+    local lte_auth="none"
+    local lte_user=""
+    local lte_pass=""
+
+    if [ "$SYS_LTE_COUNT" -gt 0 ]; then
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${CYAN}LTE/5G FAILOVER CONFIGURATION${NC}"
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo -e "${GREEN}✓ LTE modem detected${NC}"
+        read -p "Enable LTE/5G failover? (yes/no) [yes]: " enable_lte
+        enable_lte=${enable_lte:-yes}
+
+        if [ "$enable_lte" = "yes" ]; then
+            echo ""
+            echo "Common APNs: internet, internet.vodafone.ro, orange, vzwinternet"
+            read -p "Enter your carrier APN [internet]: " lte_apn
+            lte_apn=${lte_apn:-internet}
+
+            echo ""
+            echo "Authentication type (most carriers use 'none'):"
+            echo "  1. none     - No authentication (default, most common)"
+            echo "  2. pap      - PAP authentication"
+            echo "  3. chap     - CHAP authentication"
+            echo "  4. mschapv2 - MS-CHAPv2 authentication"
+            echo ""
+            read -p "Select [1-4] (default: 1): " auth_choice
+            auth_choice=${auth_choice:-1}
+
+            case "$auth_choice" in
+                2) lte_auth="pap" ;;
+                3) lte_auth="chap" ;;
+                4) lte_auth="mschapv2" ;;
+                *) lte_auth="none" ;;
+            esac
+
+            if [ "$lte_auth" != "none" ]; then
+                echo ""
+                echo -e "${YELLOW}Authentication: $lte_auth${NC}"
+                read -p "Username: " lte_user
+                read -sp "Password: " lte_pass
+                echo ""
+            fi
+        fi
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────────
+    # Cloudflare Tunnel (OPTIONAL)
+    # ─────────────────────────────────────────────────────────────────
+    local cf_tunnel_token=""
+    local enable_remote="no"
+
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}REMOTE ACCESS (OPTIONAL)${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Cloudflare Tunnel allows secure remote access to your dashboard."
+    echo "You can configure this later via the Web UI."
+    echo ""
+    read -p "Configure Cloudflare Tunnel now? (yes/no) [no]: " setup_cf
+    setup_cf=${setup_cf:-no}
+
+    if [ "$setup_cf" = "yes" ]; then
+        enable_remote="yes"
+        echo ""
+        echo -e "${YELLOW}How to get your Tunnel Token:${NC}"
+        echo "  1. Go to: https://one.dash.cloudflare.com/"
+        echo "  2. Navigate to: Networks > Tunnels"
+        echo "  3. Create a new tunnel, copy the token"
+        echo ""
+        read -sp "Enter Cloudflare Tunnel Token: " cf_tunnel_token
+        echo ""
+        if [ -n "$cf_tunnel_token" ]; then
+            echo -e "${GREEN}✓ Tunnel Token captured${NC}"
+        fi
+    fi
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────────
+    # Optional Features
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}OPTIONAL FEATURES${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    read -p "Enable n8n automation? (yes/no) [yes]: " enable_n8n
+    enable_n8n=${enable_n8n:-yes}
+
+    read -p "Enable Grafana dashboards? (yes/no) [yes]: " enable_grafana
+    enable_grafana=${enable_grafana:-yes}
+
+    read -p "Enable ClickHouse analytics? (yes/no) [no]: " enable_clickhouse
+    enable_clickhouse=${enable_clickhouse:-no}
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────────
+    # Configuration Summary
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}CONFIGURATION SUMMARY${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${BOLD}Network Settings:${NC}"
+    echo "  • Network size: /${network_prefix}"
+    [ -n "$wifi_ssid" ] && echo "  • WiFi SSID: $wifi_ssid"
+    echo ""
+    echo -e "${BOLD}Core Features:${NC}"
+    echo "  ✓ OVS Bridge with OpenFlow 1.3"
+    echo "  ✓ VLAN Segmentation (5 VLANs)"
+    echo "  ✓ QSecBit Security Agent"
+    echo "  ✓ Web Dashboard (https://localhost:8443)"
+    echo "  ✓ Local Auth (max 5 users)"
+    echo ""
+    echo -e "${BOLD}Optional Features:${NC}"
+    [ "$enable_lte" = "yes" ] && echo "  ✓ LTE Failover (APN: $lte_apn, Auth: $lte_auth)"
+    [ "$enable_remote" = "yes" ] && echo "  ✓ Remote Access (Cloudflare Tunnel)"
+    [ "$enable_grafana" = "yes" ] && echo "  ✓ Monitoring (Grafana + Victoria Metrics)"
+    [ "$enable_n8n" = "yes" ] && echo "  ✓ n8n Workflow Automation"
+    [ "$enable_clickhouse" = "yes" ] && echo "  ✓ ClickHouse Analytics"
+    echo ""
+
+    # Default YES for confirmation
+    read -p "Proceed with Fortress installation? (yes/no) [yes]: " confirm
+    confirm=${confirm:-yes}
+
     if [ "$confirm" = "yes" ]; then
         echo ""
 
-        # Save Logto configuration
+        # Save Cloudflare configuration if provided
         mkdir -p /etc/hookprobe/secrets
-        cat > /etc/hookprobe/logto.conf << LOGTOEOF
-# Logto IAM Configuration
-LOGTO_LOCAL=$logto_local
-LOGTO_ENDPOINT="$logto_endpoint"
-LOGTO_APP_ID="$logto_app_id"
-LOGTO_APP_SECRET="$logto_app_secret"
-LOGTOEOF
-        chmod 600 /etc/hookprobe/logto.conf
-        echo -e "${GREEN}✓ Logto configuration saved${NC}"
-
-        # Save Cloudflare configuration
-        cat > /etc/hookprobe/cloudflare.conf << CFEOF
+        if [ -n "$cf_tunnel_token" ]; then
+            cat > /etc/hookprobe/cloudflare.conf << CFEOF
 # Cloudflare Tunnel Configuration
-# Minimum required: TUNNEL_TOKEN
 CF_TUNNEL_TOKEN="$cf_tunnel_token"
-# Optional - for advanced API operations
-CF_TUNNEL_ID="${cf_tunnel_id:-}"
-CF_ACCOUNT_ID="${cf_account_id:-}"
 CFEOF
-        chmod 600 /etc/hookprobe/cloudflare.conf
-        echo -e "${GREEN}✓ Cloudflare configuration saved${NC}"
+            chmod 600 /etc/hookprobe/cloudflare.conf
+            echo -e "${GREEN}✓ Cloudflare configuration saved${NC}"
+        fi
 
         echo ""
         echo -e "${CYAN}Starting Fortress installation...${NC}"
@@ -1714,16 +1697,21 @@ CFEOF
         export HOOKPROBE_TIER="fortress"
         export FORTRESS_WIFI_SSID="$wifi_ssid"
         export FORTRESS_WIFI_PASSWORD="$wifi_password"
+        export FORTRESS_NETWORK_PREFIX="$network_prefix"
+
         local extra_args="--non-interactive"
-        [ "$enable_kali" = "yes" ] && extra_args="$extra_args --enable-kali"
         [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
         [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
         [ "$enable_clickhouse" = "yes" ] && extra_args="$extra_args --enable-clickhouse"
+        [ "$enable_remote" = "yes" ] && extra_args="$extra_args --enable-remote-access"
+
         if [ "$enable_lte" = "yes" ]; then
             extra_args="$extra_args --enable-lte"
-            [ -n "$lte_apn" ] && extra_args="$extra_args --lte-apn $lte_apn"
+            extra_args="$extra_args --lte-apn $lte_apn"
+            extra_args="$extra_args --lte-auth $lte_auth"
+            [ -n "$lte_user" ] && extra_args="$extra_args --lte-user $lte_user"
+            [ -n "$lte_pass" ] && extra_args="$extra_args --lte-pass $lte_pass"
         fi
-        [ "$logto_local" = true ] && extra_args="$extra_args --enable-iam"
 
         if [ -f "$SCRIPT_DIR/products/fortress/setup.sh" ]; then
             bash "$SCRIPT_DIR/products/fortress/setup.sh" $extra_args
