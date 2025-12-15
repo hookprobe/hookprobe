@@ -980,6 +980,13 @@ NMEOF
     # Scan for best channel (least congested)
     log_info "Scanning for optimal WiFi channel..."
     local best_channel=$(scan_wifi_channels "$wifi_iface")
+
+    # Ensure we have a valid channel (must be 1, 6, or 11 for 2.4GHz)
+    # If scan failed or returned invalid, default to channel 6
+    case "$best_channel" in
+        1|6|11) ;;  # Valid channels
+        *) best_channel=6 ;;  # Default fallback
+    esac
     log_info "Selected channel: $best_channel"
 
     # Detect if this is a dual-band adapter
@@ -1162,8 +1169,8 @@ PIDFile=/run/hostapd.pid
 ExecStartPre=/bin/sleep 2
 ExecStartPre=/usr/local/bin/fortress-wifi-prepare.sh ${wifi_iface}
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
-ExecStartPost=/usr/local/bin/fortress-wifi-bridge.sh ${wifi_iface}
-ExecStopPost=/usr/bin/ovs-vsctl --if-exists del-port $OVS_BRIDGE_NAME ${wifi_iface}
+# NOTE: Do NOT add WiFi interface to OVS bridge - it interferes with hostapd
+# WiFi clients are bridged internally by hostapd and routed via NAT
 Restart=on-failure
 RestartSec=5
 
