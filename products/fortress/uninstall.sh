@@ -108,6 +108,8 @@ stop_services() {
         "fortress-nat"
         "fortress-web"
         "fortress-channel-optimize"
+        "fortress-ml-aggregator"
+        "fortress-lstm-train"
     )
 
     # Stop the channel optimization timer first
@@ -144,12 +146,19 @@ remove_systemd_services() {
         "fortress-nat"
         "fortress-web"
         "fortress-channel-optimize"
+        "fortress-ml-aggregator"
+        "fortress-lstm-train"
     )
 
     # Disable and remove channel optimization timer
     log_info "Removing fortress-channel-optimize.timer..."
     systemctl disable fortress-channel-optimize.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fortress-channel-optimize.timer
+
+    # Disable and remove LSTM training timer
+    log_info "Removing fortress-lstm-train.timer..."
+    systemctl disable fortress-lstm-train.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fortress-lstm-train.timer
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
@@ -187,6 +196,7 @@ remove_management_scripts() {
         "/usr/local/bin/fortress-channel-optimize.sh"
         "/usr/local/bin/fortress-wifi-prepare.sh"
         "/usr/local/bin/fortress-wifi-bridge.sh"
+        "/usr/local/bin/fortress-dnsxai-privacy"
     )
 
     for script in "${scripts[@]}"; do
@@ -218,6 +228,9 @@ remove_containers() {
         "fortress-victoriametrics"  # Alternative name
         "fortress-n8n"
         "fortress-clickhouse"
+        "fortress-suricata"
+        "fortress-zeek"
+        "fortress-redis"
     )
 
     for container in "${containers[@]}"; do
@@ -429,6 +442,15 @@ remove_configuration() {
     # Remove MACsec interface configs
     rm -f "$CONFIG_DIR"/macsec-*.conf 2>/dev/null || true
 
+    # Remove dnsXai privacy configuration
+    if [ -d "$CONFIG_DIR/dnsxai" ]; then
+        log_info "Removing dnsXai privacy configuration..."
+        rm -rf "$CONFIG_DIR/dnsxai"
+    fi
+
+    # Remove users.json
+    rm -f "$CONFIG_DIR/users.json" 2>/dev/null || true
+
     # Remove hostapd configuration
     if [ -f /etc/hostapd/fortress.conf ]; then
         log_info "Removing hostapd configuration..."
@@ -523,6 +545,17 @@ remove_installation() {
     if [ "$KEEP_DATA" = false ]; then
         rm -rf /opt/hookprobe/fortress/monitoring 2>/dev/null || true
         rm -rf /opt/hookprobe/fortress/grafana 2>/dev/null || true
+        # Remove security monitoring data
+        rm -rf /opt/hookprobe/fortress/data/suricata-logs 2>/dev/null || true
+        rm -rf /opt/hookprobe/fortress/data/zeek-logs 2>/dev/null || true
+        rm -rf /opt/hookprobe/fortress/data/ml-models 2>/dev/null || true
+        rm -rf /opt/hookprobe/fortress/data/threat-intel 2>/dev/null || true
+        rm -rf /opt/hookprobe/fortress/ml 2>/dev/null || true
+        rm -rf /opt/hookprobe/fortress/zeek 2>/dev/null || true
+        rm -rf /opt/hookprobe/fortress/lib 2>/dev/null || true
+        # Remove ML training logs
+        rm -f /var/log/hookprobe/ml-aggregator.log 2>/dev/null || true
+        rm -f /var/log/hookprobe/lstm-training.log 2>/dev/null || true
     fi
 
     # Clean up parent directories if empty
@@ -645,7 +678,7 @@ verify_uninstall() {
 
     # Check containers
     if command -v podman &>/dev/null; then
-        for container in fortress-victoria fortress-grafana; do
+        for container in fortress-victoria fortress-grafana fortress-suricata fortress-zeek; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "Container still exists: $container"
                 issues=$((issues + 1))
@@ -735,6 +768,9 @@ main() {
     echo -e "  • fortress-dnsmasq (DHCP server)"
     echo -e "  • fortress-hostapd (WiFi AP)"
     echo -e "  • Monitoring containers (VictoriaMetrics, Grafana)"
+    echo -e "  • Security monitoring (Suricata, Zeek)"
+    echo -e "  • ML/LSTM threat detection"
+    echo -e "  • dnsXai privacy controls"
     echo -e "  • OVS bridge: $OVS_BRIDGE"
     echo -e "  • VLAN interfaces (10, 20, 30, 40, 99)"
     echo -e "  • VXLAN tunnels"

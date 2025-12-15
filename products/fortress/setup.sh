@@ -1303,30 +1303,45 @@ EOF
 start_network_services() {
     log_step "Starting network services..."
 
-    # Start dnsmasq first (DHCP/DNS)
+    # Start NAT routing first (required by other services)
+    if [ -f /etc/systemd/system/fortress-nat.service ]; then
+        log_info "Starting NAT routing..."
+        systemctl start fortress-nat 2>/dev/null || log_warn "Failed to start NAT"
+    fi
+
+    # Start hostapd (WiFi AP) - must start before dnsmasq
+    # dnsmasq depends on hostapd being up for proper interface binding
+    if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
+        log_info "Starting WiFi AP..."
+        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
+        # Give hostapd time to initialize the interface
+        sleep 3
+    fi
+
+    # Start dnsmasq (DHCP/DNS) - after hostapd
     if [ -f /etc/systemd/system/fortress-dnsmasq.service ]; then
         log_info "Starting DHCP server..."
         systemctl start fortress-dnsmasq 2>/dev/null || log_warn "Failed to start dnsmasq"
     fi
 
-    # Start hostapd (WiFi AP)
-    if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
-        log_info "Starting WiFi AP..."
-        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
-    fi
-
     # Verify services
     sleep 2
-    if systemctl is-active fortress-dnsmasq &>/dev/null; then
-        log_info "✓ DHCP server running"
+    if systemctl is-active fortress-nat &>/dev/null; then
+        log_info "✓ NAT routing active"
     else
-        log_warn "✗ DHCP server not running"
+        log_warn "✗ NAT routing not active"
     fi
 
     if systemctl is-active fortress-hostapd &>/dev/null; then
         log_info "✓ WiFi AP running"
     else
         log_warn "✗ WiFi AP not running (may need WiFi interface)"
+    fi
+
+    if systemctl is-active fortress-dnsmasq &>/dev/null; then
+        log_info "✓ DHCP server running"
+    else
+        log_warn "✗ DHCP server not running"
     fi
 }
 
@@ -3551,7 +3566,7 @@ validate_installation() {
     fi
 
     # Check systemd services are enabled
-    for service in hookprobe-fortress fortress-qsecbit; do
+    for service in hookprobe-fortress fortress-qsecbit fortress-nat fortress-hostapd fortress-dnsmasq; do
         if systemctl is-enabled "$service" &>/dev/null; then
             log_info "✓ Service $service enabled"
         else
@@ -3560,8 +3575,31 @@ validate_installation() {
         fi
     done
 
+    # Check network services are running
+    log_info "Checking network services..."
+    if systemctl is-active fortress-nat &>/dev/null; then
+        log_info "✓ NAT routing active"
+    else
+        log_warn "⚠ NAT routing not running"
+        warnings=$((warnings + 1))
+    fi
+
+    if systemctl is-active fortress-dnsmasq &>/dev/null; then
+        log_info "✓ DHCP server running"
+    else
+        log_warn "⚠ DHCP server not running"
+        warnings=$((warnings + 1))
+    fi
+
+    # hostapd may not start if no WiFi interface
+    if systemctl is-active fortress-hostapd &>/dev/null; then
+        log_info "✓ WiFi AP running"
+    else
+        log_warn "⚠ WiFi AP not running (check if WiFi interface is available)"
+    fi
+
     # Check management scripts exist
-    for script in hookprobe-macsec hookprobe-openflow; do
+    for script in hookprobe-macsec hookprobe-openflow fortress-dnsxai-privacy; do
         if [ -x "/usr/local/bin/$script" ]; then
             log_info "✓ Script $script installed"
         else
