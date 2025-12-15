@@ -3025,32 +3025,47 @@ install_web_dashboard() {
     fi
 
     # Create default admin user credentials file
-    local USERS_FILE="$WEB_DIR/users.json"
+    # IMPORTANT: Must match path in models.py: /etc/hookprobe/users.json
+    local USERS_FILE="/etc/hookprobe/users.json"
     if [ ! -f "$USERS_FILE" ]; then
         # Generate random password for admin
         local ADMIN_PASS=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
-        # Hash password with Python
+        # Hash password with Python/bcrypt
         local PASS_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw('$ADMIN_PASS'.encode(), bcrypt.gensalt()).decode())" 2>/dev/null || echo "")
 
         if [ -n "$PASS_HASH" ]; then
+            # JSON format must match User model expectations (see models.py)
             cat > "$USERS_FILE" << USERSEOF
 {
-    "admin": {
-        "password_hash": "$PASS_HASH",
-        "role": "admin",
-        "name": "Administrator"
-    }
+    "users": {
+        "admin": {
+            "password_hash": "$PASS_HASH",
+            "role": "admin",
+            "display_name": "Administrator",
+            "email": null,
+            "created_at": "$(date -Iseconds)",
+            "last_login": null,
+            "is_active": true
+        }
+    },
+    "version": "1.0"
 }
 USERSEOF
             chmod 600 "$USERS_FILE"
 
-            # Save credentials for display
+            # Save credentials for display at end of installation
             echo "$ADMIN_PASS" > "$SECRET_DIR/admin_password"
             chmod 600 "$SECRET_DIR/admin_password"
-            log_info "Admin user created (password saved to $SECRET_DIR/admin_password)"
+            log_info "Admin user created:"
+            log_info "  Username: admin"
+            log_info "  Password: $ADMIN_PASS"
+            log_info "  (saved to $SECRET_DIR/admin_password)"
         else
             log_warn "Could not hash password - bcrypt may not be installed"
+            log_warn "Default credentials will be: admin / hookprobe"
         fi
+    else
+        log_info "Users file already exists, keeping existing credentials"
     fi
 
     # Create gunicorn configuration
@@ -3372,18 +3387,30 @@ show_completion() {
         fi
     fi
 
-    # Show admin credentials
+    # Show admin credentials - CRITICAL INFO BOX
+    echo ""
+    echo -e "  ${YELLOW}┌──────────────────────────────────────────────────────────┐${NC}"
+    echo -e "  ${YELLOW}│${NC}  ${BOLD}${GREEN}🔐 FORTRESS ADMIN DASHBOARD${NC}                            ${YELLOW}│${NC}"
+    echo -e "  ${YELLOW}├──────────────────────────────────────────────────────────┤${NC}"
     if [ -f /etc/hookprobe/secrets/admin_password ]; then
         local ADMIN_PASS=$(cat /etc/hookprobe/secrets/admin_password 2>/dev/null)
         if [ -n "$ADMIN_PASS" ]; then
-            echo ""
-            echo -e "  ${BOLD}${GREEN}Web Dashboard Login:${NC}"
-            echo -e "  URL:      ${CYAN}https://10.250.0.1:8443${NC}"
-            echo -e "  Username: ${CYAN}admin${NC}"
-            echo -e "  Password: ${CYAN}$ADMIN_PASS${NC}"
-            echo -e "  ${DIM}(Change this password after first login!)${NC}"
+            echo -e "  ${YELLOW}│${NC}  URL:      ${CYAN}https://10.250.0.1:8443${NC}                   ${YELLOW}│${NC}"
+            echo -e "  ${YELLOW}│${NC}  Username: ${CYAN}admin${NC}                                     ${YELLOW}│${NC}"
+            echo -e "  ${YELLOW}│${NC}  Password: ${CYAN}$ADMIN_PASS${NC}                            ${YELLOW}│${NC}"
+        else
+            echo -e "  ${YELLOW}│${NC}  URL:      ${CYAN}https://10.250.0.1:8443${NC}                   ${YELLOW}│${NC}"
+            echo -e "  ${YELLOW}│${NC}  Username: ${CYAN}admin${NC}                                     ${YELLOW}│${NC}"
+            echo -e "  ${YELLOW}│${NC}  Password: ${CYAN}hookprobe${NC}  (default)                      ${YELLOW}│${NC}"
         fi
+    else
+        echo -e "  ${YELLOW}│${NC}  URL:      ${CYAN}https://10.250.0.1:8443${NC}                   ${YELLOW}│${NC}"
+        echo -e "  ${YELLOW}│${NC}  Username: ${CYAN}admin${NC}                                     ${YELLOW}│${NC}"
+        echo -e "  ${YELLOW}│${NC}  Password: ${CYAN}hookprobe${NC}  (default)                      ${YELLOW}│${NC}"
     fi
+    echo -e "  ${YELLOW}├──────────────────────────────────────────────────────────┤${NC}"
+    echo -e "  ${YELLOW}│${NC}  ${RED}⚠  CHANGE PASSWORD AFTER FIRST LOGIN!${NC}                  ${YELLOW}│${NC}"
+    echo -e "  ${YELLOW}└──────────────────────────────────────────────────────────┘${NC}"
 
     # Show Grafana credentials if monitoring enabled
     if [ "$ENABLE_MONITORING" = true ] && [ -f /etc/hookprobe/secrets/grafana.conf ]; then
@@ -3448,6 +3475,23 @@ show_completion() {
         echo -e "  ${BOLD}Device Profile:${NC}"
         echo -e "  $FORTRESS_PROFILE_DIR"
         echo ""
+    fi
+
+    # Wait for user to acknowledge before returning to shell
+    echo ""
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  ${GREEN}Installation complete!${NC}"
+    echo ""
+    echo -e "  ${BOLD}Next steps:${NC}"
+    echo -e "  1. Connect to WiFi '${CYAN}${WIFI_SSID:-hookprobe}${NC}' or plug into LAN port"
+    echo -e "  2. Open ${CYAN}https://10.250.0.1:8443${NC} in your browser"
+    echo -e "  3. Login with credentials shown above"
+    echo -e "  4. Change the default password immediately!"
+    echo ""
+    if [ "$NON_INTERACTIVE" != true ]; then
+        echo -e "  ${YELLOW}Press ENTER to return to shell, or Ctrl+C to stay here...${NC}"
+        read -r
     fi
 }
 
