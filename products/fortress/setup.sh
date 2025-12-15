@@ -750,6 +750,96 @@ EOF
 }
 
 # ============================================================
+# WIFI CHANNEL SCANNING AND SELECTION
+# ============================================================
+scan_wifi_channels() {
+    local iface="$1"
+    local best_channel=6  # Default fallback
+
+    # Ensure interface is up for scanning
+    ip link set "$iface" up 2>/dev/null || true
+    sleep 1
+
+    # Try to scan for networks
+    local scan_result
+    scan_result=$(iw dev "$iface" scan 2>/dev/null || true)
+
+    if [ -z "$scan_result" ]; then
+        # Scan failed, return default
+        echo "$best_channel"
+        return
+    fi
+
+    # Count networks on each non-overlapping 2.4GHz channel (1, 6, 11)
+    local ch1_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 1$" 2>/dev/null || echo 0)
+    local ch6_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 6$" 2>/dev/null || echo 0)
+    local ch11_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 11$" 2>/dev/null || echo 0)
+
+    # Also count adjacent channels (adds interference)
+    local ch2_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 2$" 2>/dev/null || echo 0)
+    local ch3_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 3$" 2>/dev/null || echo 0)
+    local ch4_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 4$" 2>/dev/null || echo 0)
+    local ch5_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 5$" 2>/dev/null || echo 0)
+    local ch7_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 7$" 2>/dev/null || echo 0)
+    local ch8_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 8$" 2>/dev/null || echo 0)
+    local ch9_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 9$" 2>/dev/null || echo 0)
+    local ch10_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 10$" 2>/dev/null || echo 0)
+
+    # Calculate interference scores (includes adjacent channel interference)
+    local score_1=$((ch1_count * 3 + ch2_count * 2 + ch3_count))
+    local score_6=$((ch6_count * 3 + ch4_count + ch5_count * 2 + ch7_count * 2 + ch8_count))
+    local score_11=$((ch11_count * 3 + ch9_count + ch10_count * 2))
+
+    log_info "Channel scan: CH1=$ch1_count(score:$score_1) CH6=$ch6_count(score:$score_6) CH11=$ch11_count(score:$score_11)"
+
+    # Select channel with lowest interference score
+    if [ "$score_1" -le "$score_6" ] && [ "$score_1" -le "$score_11" ]; then
+        best_channel=1
+    elif [ "$score_11" -le "$score_6" ]; then
+        best_channel=11
+    else
+        best_channel=6
+    fi
+
+    echo "$best_channel"
+}
+
+scan_wifi_channels_5ghz() {
+    local iface="$1"
+    local best_channel=36  # Default 5GHz channel
+
+    # Ensure interface is up for scanning
+    ip link set "$iface" up 2>/dev/null || true
+    sleep 1
+
+    # Try to scan for networks
+    local scan_result
+    scan_result=$(iw dev "$iface" scan 2>/dev/null || true)
+
+    if [ -z "$scan_result" ]; then
+        echo "$best_channel"
+        return
+    fi
+
+    # Check common 5GHz channels (UNII-1 and UNII-3)
+    # UNII-1: 36, 40, 44, 48 (indoor use, no DFS)
+    # UNII-3: 149, 153, 157, 161, 165 (high power, no DFS)
+    local channels_5g=(36 40 44 48 149 153 157 161 165)
+    local min_count=999
+    local min_channel=36
+
+    for ch in "${channels_5g[@]}"; do
+        local count=$(echo "$scan_result" | grep -c "DS Parameter set: channel $ch$" 2>/dev/null || echo 0)
+        if [ "$count" -lt "$min_count" ]; then
+            min_count=$count
+            min_channel=$ch
+        fi
+    done
+
+    echo "$min_channel"
+}
+
+# ============================================================
 # WIFI ACCESS POINT (hostapd)
 # ============================================================
 setup_wifi_ap() {
@@ -839,29 +929,124 @@ NMEOF
     fi
 
     # Generate random password if not set
-    local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
+    # IMPORTANT: Avoid special characters that might cause issues
+    local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
     local ap_ssid="${FORTRESS_WIFI_SSID:-hookprobe}"
 
+    # Detect country code from system settings or default to US
+    local country_code="${FORTRESS_COUNTRY_CODE:-US}"
+    if [ -f /etc/default/crda ]; then
+        country_code=$(grep "^REGDOMAIN=" /etc/default/crda 2>/dev/null | cut -d= -f2 || echo "US")
+    fi
+
+    # Scan for best channel (least congested)
+    log_info "Scanning for optimal WiFi channel..."
+    local best_channel=$(scan_wifi_channels "$wifi_iface")
+    log_info "Selected channel: $best_channel"
+
+    # Detect if this is a dual-band adapter
+    local supports_5ghz=false
+    local phy_name=$(iw dev "$wifi_iface" info 2>/dev/null | grep wiphy | awk '{print "phy"$2}')
+    if iw phy "$phy_name" info 2>/dev/null | grep -q "5[0-9][0-9][0-9] MHz"; then
+        supports_5ghz=true
+        log_info "Dual-band WiFi adapter detected (2.4GHz + 5GHz)"
+    fi
+
+    # Kill any running wpa_supplicant on this interface
+    # wpa_supplicant can interfere with hostapd
+    log_info "Stopping wpa_supplicant on $wifi_iface..."
+    wpa_cli -i "$wifi_iface" terminate 2>/dev/null || true
+    pkill -f "wpa_supplicant.*$wifi_iface" 2>/dev/null || true
+
+    # Disable wpa_supplicant service if it exists
+    systemctl disable wpa_supplicant@"$wifi_iface" 2>/dev/null || true
+    systemctl stop wpa_supplicant@"$wifi_iface" 2>/dev/null || true
+
+    # Unblock WiFi if blocked by rfkill
+    rfkill unblock wifi 2>/dev/null || true
+
     # Create hostapd configuration
-    # NOTE: Removed wpa_pairwise=TKIP - modern devices reject it
-    # NOTE: No bridge= option - OVS bridges don't work with hostapd's bridge option
-    #       We add the WiFi interface to OVS manually after hostapd starts
+    # Using complete config like Guardian for better compatibility
     mkdir -p /etc/hostapd
     cat > /etc/hostapd/fortress.conf << EOF
 # HookProbe Fortress WiFi AP Configuration
+# Auto-generated - modifications may be overwritten
+
+# ============================================
+# Interface Configuration
+# ============================================
 interface=$wifi_iface
 driver=nl80211
+
+# Control interface for hostapd_cli and debugging
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
+
+# ============================================
+# SSID Configuration
+# ============================================
 ssid=$ap_ssid
+utf8_ssid=1
+
+# ============================================
+# Wireless Mode
+# ============================================
 hw_mode=g
-channel=7
-wmm_enabled=0
-macaddr_acl=0
+channel=$best_channel
+
+# Regulatory domain - IMPORTANT for proper operation
+country_code=$country_code
+ieee80211d=1
+
+# ============================================
+# 802.11n Support (2.4GHz)
+# ============================================
+ieee80211n=1
+wmm_enabled=1
+
+# HT capabilities for 2.4GHz
+# Compatible with most adapters
+ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40]
+
+# ============================================
+# Security - WPA2-PSK with AES/CCMP
+# ============================================
 auth_algs=1
-ignore_broadcast_ssid=0
 wpa=2
-wpa_passphrase=$ap_password
 wpa_key_mgmt=WPA-PSK
+wpa_pairwise=CCMP
 rsn_pairwise=CCMP
+wpa_passphrase=$ap_password
+
+# Key management
+wpa_group_rekey=600
+wpa_ptk_rekey=600
+wpa_gmk_rekey=86400
+
+# Workaround for older devices
+eapol_key_index_workaround=0
+
+# ============================================
+# Client Management
+# ============================================
+macaddr_acl=0
+ap_isolate=0
+max_num_sta=64
+
+# ============================================
+# Performance
+# ============================================
+beacon_int=100
+dtim_period=2
+ignore_broadcast_ssid=0
+
+# ============================================
+# Logging (enable for debugging)
+# ============================================
+logger_syslog=-1
+logger_syslog_level=2
+logger_stdout=-1
+logger_stdout_level=2
 
 # NOTE: OVS bridge integration handled via ExecStartPost
 # Do NOT use bridge= option with OVS bridges
@@ -2506,6 +2691,184 @@ STOPEOF
 }
 
 # ============================================================
+# WIFI CHANNEL OPTIMIZATION SERVICE (4am daily)
+# ============================================================
+install_channel_optimization_service() {
+    log_step "Installing WiFi Channel Optimization service..."
+
+    # Create the channel optimization script
+    cat > /usr/local/bin/fortress-channel-optimize.sh << 'CHANNEL_SCRIPT'
+#!/bin/bash
+# Fortress WiFi Channel Optimization
+# Automatically selects the best WiFi channel based on RF environment
+# Runs at boot and daily at 4:00 AM
+
+set -e
+
+LOG_FILE="/var/log/hookprobe/channel-optimization.log"
+STATE_FILE="/var/lib/fortress/channel_state.json"
+HOSTAPD_CONF="/etc/hostapd/fortress.conf"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    echo "$1"
+}
+
+# Ensure log directory exists
+mkdir -p /var/log/hookprobe
+mkdir -p /var/lib/fortress
+
+# Find WiFi interface from hostapd config
+AP_INTERFACE=$(grep "^interface=" "$HOSTAPD_CONF" 2>/dev/null | cut -d= -f2 || echo "")
+
+if [ -z "$AP_INTERFACE" ] || [ ! -e "/sys/class/net/$AP_INTERFACE" ]; then
+    log "ERROR: No WiFi interface found in hostapd config"
+    exit 1
+fi
+
+log "Starting WiFi channel optimization on $AP_INTERFACE..."
+
+# Get current channel from hostapd config
+CURRENT_CHANNEL=$(grep "^channel=" "$HOSTAPD_CONF" 2>/dev/null | cut -d= -f2 || echo "6")
+log "Current channel: $CURRENT_CHANNEL"
+
+# Check if AP is running - if so, use survey dump instead of scan
+SCAN_DATA=""
+if systemctl is-active --quiet fortress-hostapd; then
+    # AP is running - temporarily stop for scan
+    log "Stopping hostapd for channel scan..."
+    systemctl stop fortress-hostapd
+    sleep 2
+
+    # Put interface in managed mode for scanning
+    ip link set "$AP_INTERFACE" down 2>/dev/null || true
+    iw dev "$AP_INTERFACE" set type managed 2>/dev/null || true
+    ip link set "$AP_INTERFACE" up 2>/dev/null || true
+    sleep 1
+
+    SCAN_DATA=$(iw dev "$AP_INTERFACE" scan 2>/dev/null || true)
+
+    # Restore AP mode and restart hostapd
+    ip link set "$AP_INTERFACE" down 2>/dev/null || true
+    iw dev "$AP_INTERFACE" set type __ap 2>/dev/null || true
+    ip link set "$AP_INTERFACE" up 2>/dev/null || true
+else
+    # AP not running - can do full scan
+    log "AP not running, performing full scan..."
+    ip link set "$AP_INTERFACE" up 2>/dev/null || true
+    sleep 1
+    SCAN_DATA=$(iw dev "$AP_INTERFACE" scan 2>/dev/null || true)
+fi
+
+if [ -z "$SCAN_DATA" ]; then
+    log "Scan failed, keeping current channel"
+    systemctl start fortress-hostapd 2>/dev/null || true
+    exit 0
+fi
+
+# Count networks on each non-overlapping 2.4GHz channel (1, 6, 11)
+ch1_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 1$" || echo 0)
+ch6_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 6$" || echo 0)
+ch11_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 11$" || echo 0)
+
+# Also count adjacent channels
+ch2_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 2$" || echo 0)
+ch3_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 3$" || echo 0)
+ch4_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 4$" || echo 0)
+ch5_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 5$" || echo 0)
+ch7_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 7$" || echo 0)
+ch8_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 8$" || echo 0)
+ch9_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 9$" || echo 0)
+ch10_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 10$" || echo 0)
+
+# Calculate interference scores
+score_1=$((ch1_count * 3 + ch2_count * 2 + ch3_count))
+score_6=$((ch6_count * 3 + ch4_count + ch5_count * 2 + ch7_count * 2 + ch8_count))
+score_11=$((ch11_count * 3 + ch9_count + ch10_count * 2))
+
+log "Channel scan results:"
+log "  Channel 1:  $ch1_count networks (interference score: $score_1)"
+log "  Channel 6:  $ch6_count networks (interference score: $score_6)"
+log "  Channel 11: $ch11_count networks (interference score: $score_11)"
+
+# Select best channel
+BEST_CHANNEL=6
+if [ "$score_1" -le "$score_6" ] && [ "$score_1" -le "$score_11" ]; then
+    BEST_CHANNEL=1
+elif [ "$score_11" -le "$score_6" ]; then
+    BEST_CHANNEL=11
+fi
+
+log "Best channel: $BEST_CHANNEL (current: $CURRENT_CHANNEL)"
+
+# Only change if different and significant improvement
+if [ "$BEST_CHANNEL" != "$CURRENT_CHANNEL" ]; then
+    log "Updating hostapd config to channel $BEST_CHANNEL"
+    sed -i "s/^channel=.*/channel=$BEST_CHANNEL/" "$HOSTAPD_CONF"
+
+    # Save state
+    cat > "$STATE_FILE" << EOF
+{
+    "last_scan": "$(date -Iseconds)",
+    "selected_channel": $BEST_CHANNEL,
+    "previous_channel": $CURRENT_CHANNEL,
+    "scores": {"ch1": $score_1, "ch6": $score_6, "ch11": $score_11}
+}
+EOF
+else
+    log "Channel $CURRENT_CHANNEL is already optimal, no change needed"
+fi
+
+# Restart hostapd
+log "Restarting hostapd..."
+systemctl start fortress-hostapd
+
+log "Channel optimization complete"
+CHANNEL_SCRIPT
+
+    chmod +x /usr/local/bin/fortress-channel-optimize.sh
+
+    # Create systemd service
+    cat > /etc/systemd/system/fortress-channel-optimize.service << 'SERVICEEOF'
+[Unit]
+Description=Fortress WiFi Channel Optimization
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fortress-channel-optimize.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+    # Create systemd timer for daily 4am execution
+    cat > /etc/systemd/system/fortress-channel-optimize.timer << 'TIMEREOF'
+[Unit]
+Description=Daily WiFi Channel Optimization (4:00 AM)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMEREOF
+
+    # Enable and start the timer
+    systemctl daemon-reload
+    systemctl enable fortress-channel-optimize.timer
+    systemctl start fortress-channel-optimize.timer
+
+    log_info "WiFi Channel Optimization installed"
+    log_info "  - Runs at install and daily at 4:00 AM"
+    log_info "  - Selects best channel from 1, 6, 11"
+}
+
+# ============================================================
 # WEB DASHBOARD
 # ============================================================
 install_web_dashboard() {
@@ -2994,6 +3357,83 @@ collect_user_inputs() {
     echo ""
 
     # ─────────────────────────────────────────────────────────────
+    # WiFi Access Point Configuration
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}  WiFi Access Point Configuration${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    if [ -n "$WIFI_INTERFACES" ]; then
+        echo -e "${GREEN}✓ WiFi adapter detected: $(echo $WIFI_INTERFACES | awk '{print $1}')${NC}"
+        echo ""
+
+        # SSID
+        read -p "WiFi Network Name (SSID) [hookprobe]: " user_ssid
+        FORTRESS_WIFI_SSID="${user_ssid:-hookprobe}"
+
+        # Password
+        echo ""
+        echo "WiFi Password options:"
+        echo "  1. Enter custom password"
+        echo "  2. Generate random password (recommended)"
+        echo ""
+        read -p "Select [1-2] (default: 2): " pw_choice
+        pw_choice="${pw_choice:-2}"
+
+        if [ "$pw_choice" = "1" ]; then
+            while true; do
+                read -sp "Enter WiFi password (min 8 chars): " user_password
+                echo ""
+                if [ ${#user_password} -lt 8 ]; then
+                    echo -e "${RED}Password must be at least 8 characters.${NC}"
+                else
+                    FORTRESS_WIFI_PASSWORD="$user_password"
+                    break
+                fi
+            done
+        else
+            # Generate random password (12 chars, alphanumeric only for compatibility)
+            FORTRESS_WIFI_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 12)
+            echo -e "Generated password: ${CYAN}$FORTRESS_WIFI_PASSWORD${NC}"
+            echo -e "${YELLOW}(Save this password - you'll need it to connect!)${NC}"
+        fi
+        echo ""
+    else
+        echo -e "${YELLOW}⚠ No WiFi adapter detected - WiFi AP will be skipped${NC}"
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Network Configuration
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}  Network Configuration${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    echo "Network size determines how many devices can connect:"
+    echo "  /29 = 6 devices     (very small office)"
+    echo "  /28 = 14 devices    (small office)"
+    echo "  /27 = 30 devices    (small business)"
+    echo "  /26 = 62 devices    (medium business)"
+    echo "  /25 = 126 devices   (larger office)"
+    echo "  /24 = 254 devices   (large network)"
+    echo "  /23 = 510 devices   (default - recommended for growth)"
+    echo ""
+    read -p "Network size [/23]: " user_netmask
+    user_netmask="${user_netmask:-/23}"
+    # Remove leading slash if present
+    FORTRESS_NETWORK_PREFIX="${user_netmask#/}"
+
+    # Validate network size
+    if ! [[ "$FORTRESS_NETWORK_PREFIX" =~ ^(23|24|25|26|27|28|29)$ ]]; then
+        echo -e "${YELLOW}Invalid network size. Using default /23${NC}"
+        FORTRESS_NETWORK_PREFIX="23"
+    fi
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
     # Feature Selection
     # ─────────────────────────────────────────────────────────────
     echo -e "${YELLOW}Optional Features:${NC}"
@@ -3048,32 +3488,34 @@ collect_user_inputs() {
         echo "  Generic:    internet"
         echo ""
 
-        read -p "Enter your APN name: " HOOKPROBE_LTE_APN
-        if [ -z "$HOOKPROBE_LTE_APN" ]; then
-            log_warn "No APN provided - using 'internet' as default"
-            HOOKPROBE_LTE_APN="internet"
-        fi
+        read -p "Enter your APN name [internet]: " HOOKPROBE_LTE_APN
+        HOOKPROBE_LTE_APN="${HOOKPROBE_LTE_APN:-internet}"
 
-        # Authentication (most don't need it)
+        # Authentication type
         echo ""
-        echo "Does your carrier require authentication? (most don't)"
-        read -p "Require auth? [y/N]: " need_auth
-        if [[ "${need_auth,,}" =~ ^y ]]; then
-            echo "Auth types: 1=PAP, 2=CHAP, 3=MSCHAPv2"
-            read -p "Select [1-3]: " auth_choice
-            case "$auth_choice" in
-                1) HOOKPROBE_LTE_AUTH="pap" ;;
-                2) HOOKPROBE_LTE_AUTH="chap" ;;
-                3) HOOKPROBE_LTE_AUTH="mschapv2" ;;
-                *) HOOKPROBE_LTE_AUTH="none" ;;
-            esac
-            if [ "$HOOKPROBE_LTE_AUTH" != "none" ]; then
-                read -p "Username: " HOOKPROBE_LTE_USER
-                read -sp "Password: " HOOKPROBE_LTE_PASS
-                echo ""
-            fi
-        else
-            HOOKPROBE_LTE_AUTH="none"
+        echo "Authentication type (most carriers use 'none'):"
+        echo "  1. none     - No authentication (default, most common)"
+        echo "  2. pap      - PAP authentication"
+        echo "  3. chap     - CHAP authentication"
+        echo "  4. mschapv2 - MS-CHAPv2 authentication"
+        echo ""
+        read -p "Select [1-4] (default: 1): " auth_choice
+        auth_choice="${auth_choice:-1}"
+
+        case "$auth_choice" in
+            2) HOOKPROBE_LTE_AUTH="pap" ;;
+            3) HOOKPROBE_LTE_AUTH="chap" ;;
+            4) HOOKPROBE_LTE_AUTH="mschapv2" ;;
+            *) HOOKPROBE_LTE_AUTH="none" ;;
+        esac
+
+        # If auth selected, get credentials
+        if [ "$HOOKPROBE_LTE_AUTH" != "none" ]; then
+            echo ""
+            echo -e "${YELLOW}Authentication: $HOOKPROBE_LTE_AUTH${NC}"
+            read -p "Username: " HOOKPROBE_LTE_USER
+            read -sp "Password: " HOOKPROBE_LTE_PASS
+            echo ""
         fi
         echo ""
     fi
@@ -3118,22 +3560,30 @@ collect_user_inputs() {
     echo -e "${CYAN}  Configuration Summary${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
     echo ""
+
+    echo -e "  ${BOLD}Network Settings:${NC}"
+    echo "    Network size: /${FORTRESS_NETWORK_PREFIX:-23}"
+    [ -n "$FORTRESS_WIFI_SSID" ] && echo "    WiFi SSID: $FORTRESS_WIFI_SSID"
+    echo ""
+
     echo -e "  ${BOLD}Core Features:${NC}"
     echo "    ✓ OVS Bridge with OpenFlow 1.3"
     echo "    ✓ VLAN Segmentation (5 VLANs)"
     [ "$MACSEC_ENABLED" = true ] && echo "    ✓ MACsec Layer 2 Encryption"
     echo "    ✓ QSecBit Security Agent"
     echo "    ✓ Web Dashboard (https://localhost:8443)"
+    echo "    ✓ Local Auth (max 5 users)"
     echo ""
+
     echo -e "  ${BOLD}Optional Features:${NC}"
-    [ "$ENABLE_LTE" = true ] && echo "    ✓ LTE Failover (APN: $HOOKPROBE_LTE_APN)"
+    [ "$ENABLE_LTE" = true ] && echo "    ✓ LTE Failover (APN: $HOOKPROBE_LTE_APN, Auth: ${HOOKPROBE_LTE_AUTH:-none})"
     [ "$ENABLE_REMOTE_ACCESS" = true ] && echo "    ✓ Remote Access (Cloudflare Tunnel)"
     [ "$ENABLE_MONITORING" = true ] && echo "    ✓ Monitoring (Grafana + Victoria Metrics)"
     [ "$ENABLE_N8N" = true ] && echo "    ✓ n8n Workflow Automation"
-    [ "$ENABLE_LTE" != true ] && [ "$ENABLE_REMOTE_ACCESS" != true ] && echo "    (none selected)"
+    [ "$ENABLE_LTE" != true ] && [ "$ENABLE_REMOTE_ACCESS" != true ] && [ "$ENABLE_MONITORING" != true ] && [ "$ENABLE_N8N" != true ] && echo "    (none selected)"
     echo ""
 
-    # Confirm
+    # Confirm - default YES
     read -p "Proceed with installation? [Y/n]: " confirm_install
     confirm_install="${confirm_install:-Y}"
     if [[ ! "${confirm_install,,}" =~ ^y ]]; then
@@ -3265,10 +3715,16 @@ main() {
     create_config_file
     install_web_dashboard
 
+    # Install channel optimization service (daily 4am calibration)
+    install_channel_optimization_service
+
     # Start services
     log_step "Starting services..."
     systemctl start hookprobe-fortress 2>/dev/null || true
     systemctl start fortress-qsecbit 2>/dev/null || true
+
+    # Start channel optimization timer
+    systemctl enable --now fortress-channel-optimize.timer 2>/dev/null || true
 
     # Validate installation
     validate_installation
