@@ -1151,13 +1151,15 @@ BRIDGEOF
     cat > /etc/systemd/system/fortress-hostapd.service << EOF
 [Unit]
 Description=Fortress WiFi Access Point
-After=network.target openvswitch-switch.service sys-subsystem-net-devices-${wifi_iface}.device
-Wants=sys-subsystem-net-devices-${wifi_iface}.device
+After=network.target openvswitch-switch.service fortress-nat.service sys-subsystem-net-devices-${wifi_iface}.device
+Wants=sys-subsystem-net-devices-${wifi_iface}.device fortress-nat.service
 Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd.pid
+# Small delay to ensure regulatory domain is set
+ExecStartPre=/bin/sleep 2
 ExecStartPre=/usr/local/bin/fortress-wifi-prepare.sh ${wifi_iface}
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge.sh ${wifi_iface}
@@ -1262,8 +1264,8 @@ EOF
     cat > /etc/systemd/system/fortress-dnsmasq.service << EOF
 [Unit]
 Description=Fortress DHCP and DNS Server
-After=network.target fortress-hostapd.service
-Wants=network.target
+After=network.target fortress-nat.service fortress-hostapd.service
+Wants=network.target fortress-nat.service
 
 [Service]
 Type=forking
@@ -1702,23 +1704,93 @@ NATEOF
     cat > /usr/local/bin/fortress-nat-setup << 'NATSCRIPT'
 #!/bin/bash
 # Fortress NAT Setup Script
-# Dynamically detects WAN and configures NAT
+# Configures bridge IP, NAT, and regulatory domain
 
 set -e
 
-# Enable IP forwarding
+BRIDGE="fortress"
+BRIDGE_IP="10.250.0.1"
+BRIDGE_SUBNET="16"
+
+# ============================================================
+# BRIDGE IP CONFIGURATION
+# ============================================================
+# Ensure bridge exists and has IP address
+if ip link show "$BRIDGE" &>/dev/null; then
+    # Check if bridge already has IP
+    if ! ip addr show "$BRIDGE" | grep -q "$BRIDGE_IP"; then
+        ip addr add ${BRIDGE_IP}/${BRIDGE_SUBNET} dev "$BRIDGE" 2>/dev/null || true
+        echo "Bridge IP configured: ${BRIDGE_IP}/${BRIDGE_SUBNET}"
+    fi
+    # Ensure bridge is up
+    ip link set "$BRIDGE" up 2>/dev/null || true
+else
+    echo "WARNING: Bridge $BRIDGE does not exist"
+fi
+
+# ============================================================
+# COUNTRY CODE DETECTION (for WiFi regulatory domain)
+# ============================================================
+detect_country_code() {
+    local country=""
+
+    # Try multiple geolocation services
+    # Method 1: ipinfo.io (most reliable)
+    country=$(curl -sf --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '\n' | grep -E '^[A-Z]{2}$' || true)
+
+    # Method 2: ip-api.com (fallback)
+    if [ -z "$country" ]; then
+        country=$(curl -sf --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '\n' | grep -E '^[A-Z]{2}$' || true)
+    fi
+
+    # Method 3: ifconfig.co (another fallback)
+    if [ -z "$country" ]; then
+        country=$(curl -sf --max-time 5 "https://ifconfig.co/country-iso" 2>/dev/null | tr -d '\n' | grep -E '^[A-Z]{2}$' || true)
+    fi
+
+    # Default to US if detection fails
+    echo "${country:-US}"
+}
+
+# Set WiFi regulatory domain based on geolocation
+COUNTRY=$(detect_country_code)
+echo "Detected country code: $COUNTRY"
+
+# Set regulatory domain
+if command -v iw &>/dev/null; then
+    iw reg set "$COUNTRY" 2>/dev/null || true
+    echo "WiFi regulatory domain set to: $COUNTRY"
+
+    # Save to CRDA config for persistence
+    if [ -d /etc/default ]; then
+        echo "REGDOMAIN=$COUNTRY" > /etc/default/crda 2>/dev/null || true
+    fi
+fi
+
+# ============================================================
+# IP FORWARDING
+# ============================================================
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
-# Find WAN interface
+# Make persistent
+if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
+    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+fi
+
+# ============================================================
+# WAN DETECTION
+# ============================================================
 WAN=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
 if [ -z "$WAN" ]; then
     WAN=$(ip -o link show | awk -F': ' '!/lo|fortress|vlan|br-/ {print $2}' | head -1)
 fi
 
 [ -z "$WAN" ] && { echo "No WAN interface found"; exit 1; }
+echo "WAN interface: $WAN"
 
-BRIDGE="fortress"
-
+# ============================================================
+# NAT RULES
+# ============================================================
 # Setup MASQUERADE
 if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
     iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE
