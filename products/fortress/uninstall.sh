@@ -214,7 +214,6 @@ remove_containers() {
         "fortress-victoriametrics"  # Alternative name
         "fortress-n8n"
         "fortress-clickhouse"
-        "fortress-logto"
     )
 
     for container in "${containers[@]}"; do
