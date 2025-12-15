@@ -33,6 +33,10 @@ POD_GATEWAY="10.250.100.1"
 # Container images
 POSTGRES_IMAGE="docker.io/library/postgres:15-alpine"
 REDIS_IMAGE="docker.io/library/redis:7-alpine"
+VICTORIAMETRICS_IMAGE="docker.io/victoriametrics/victoria-metrics:latest"
+SURICATA_IMAGE="docker.io/jasonish/suricata:latest"
+ZEEK_IMAGE="docker.io/zeek/zeek:latest"
+PYTHON_IMAGE="docker.io/library/python:3.11-slim"
 
 # Secrets directory
 SECRETS_DIR="/etc/hookprobe/secrets"
@@ -113,6 +117,8 @@ setup_data_dirs() {
     log_step "Setting up data directories..."
 
     mkdir -p "$DATA_DIR"/{postgres,redis,logs,reports}
+    mkdir -p "$DATA_DIR"/{victoriametrics,suricata-logs,suricata-rules}
+    mkdir -p "$DATA_DIR"/{zeek-logs,zeek-spool,ml-models,threat-intel}
     chmod 755 "$DATA_DIR"
 
     # PostgreSQL needs specific permissions
@@ -449,6 +455,651 @@ create_redis_container() {
 }
 
 # ============================================================
+# VICTORIA METRICS CONTAINER (Time-series for ML training)
+# ============================================================
+create_victoriametrics_container() {
+    log_step "Creating Victoria Metrics container..."
+
+    podman run -d \
+        --pod "$POD_NAME" \
+        --name fortress-victoriametrics \
+        --restart unless-stopped \
+        -v "$DATA_DIR/victoriametrics:/victoria-metrics-data:Z" \
+        "${VICTORIAMETRICS_IMAGE}" \
+        -retentionPeriod=30d \
+        -httpListenAddr=:8428
+
+    log_info "Victoria Metrics container created (port 8428)"
+}
+
+# ============================================================
+# SURICATA IDS CONTAINER
+# ============================================================
+create_suricata_container() {
+    log_step "Creating Suricata IDS container..."
+
+    # Determine interface to monitor (prefer wired interfaces)
+    local MONITOR_IFACE=""
+    if [ -e /sys/class/net/eth0 ]; then
+        MONITOR_IFACE="eth0"
+    elif [ -e /sys/class/net/br0 ]; then
+        MONITOR_IFACE="br0"
+    elif [ -e /sys/class/net/fortress ]; then
+        MONITOR_IFACE="fortress"
+    else
+        log_warn "No suitable interface found for Suricata, using any"
+        MONITOR_IFACE="any"
+    fi
+
+    log_info "Suricata will monitor interface: $MONITOR_IFACE"
+
+    # Run Suricata with host network for traffic visibility
+    podman run -d \
+        --name fortress-suricata \
+        --network host \
+        --cap-add NET_ADMIN \
+        --cap-add NET_RAW \
+        --cap-add SYS_NICE \
+        --restart unless-stopped \
+        -v "$DATA_DIR/suricata-logs:/var/log/suricata:Z" \
+        -v "$DATA_DIR/suricata-rules:/var/lib/suricata:Z" \
+        "${SURICATA_IMAGE}" \
+        -i "$MONITOR_IFACE"
+
+    log_info "Suricata IDS container created"
+}
+
+# ============================================================
+# ZEEK NETWORK ANALYZER CONTAINER
+# ============================================================
+create_zeek_container() {
+    log_step "Creating Zeek Network Analyzer container..."
+
+    # Determine interface to monitor
+    local MONITOR_IFACE=""
+    if [ -e /sys/class/net/eth0 ]; then
+        MONITOR_IFACE="eth0"
+    elif [ -e /sys/class/net/br0 ]; then
+        MONITOR_IFACE="br0"
+    elif [ -e /sys/class/net/fortress ]; then
+        MONITOR_IFACE="fortress"
+    else
+        log_warn "No suitable interface found for Zeek"
+        MONITOR_IFACE="eth0"
+    fi
+
+    log_info "Zeek will monitor interface: $MONITOR_IFACE"
+
+    # Create Zeek configuration
+    mkdir -p /opt/hookprobe/fortress/zeek
+    cat > /opt/hookprobe/fortress/zeek/local.zeek << 'ZEEKEOF'
+# Fortress Zeek Configuration - Threat Pattern Analysis
+# Focus: HOW users are targeted, NOT what they browse
+
+@load base/frameworks/notice
+@load base/protocols/conn
+@load base/protocols/dns
+@load base/protocols/http
+@load base/protocols/ssl
+@load policy/misc/detect-traceroute
+@load policy/protocols/conn/known-hosts
+@load policy/protocols/conn/known-services
+
+# Custom threat pattern detection
+redef Notice::policy += {
+    [$action = Notice::ACTION_LOG,
+     $pred(n: Notice::Info) = {
+        return n$note in set(
+            Scan::Port_Scan,
+            Scan::Address_Scan,
+            SSL::Invalid_Server_Cert,
+            DNS::External_Name
+        );
+     }]
+};
+ZEEKEOF
+
+    # Run Zeek with host network
+    podman run -d \
+        --name fortress-zeek \
+        --network host \
+        --cap-add NET_ADMIN \
+        --cap-add NET_RAW \
+        --restart unless-stopped \
+        --memory 512m \
+        -v "$DATA_DIR/zeek-logs:/usr/local/zeek/logs:Z" \
+        -v "$DATA_DIR/zeek-spool:/usr/local/zeek/spool:Z" \
+        -v "/opt/hookprobe/fortress/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro" \
+        "${ZEEK_IMAGE}" \
+        zeek -i "$MONITOR_IFACE" local
+
+    log_info "Zeek Network Analyzer container created"
+}
+
+# ============================================================
+# ML THREAT AGGREGATOR SERVICE
+# ============================================================
+setup_ml_aggregator() {
+    log_step "Setting up ML Threat Aggregator..."
+
+    # Create ML aggregator Python script
+    mkdir -p /opt/hookprobe/fortress/ml
+    cat > /opt/hookprobe/fortress/ml/threat_aggregator.py << 'PYEOF'
+#!/usr/bin/env python3
+"""
+Fortress ML Threat Aggregator
+
+Aggregates threat data from Suricata, Zeek, and XDP for LSTM training.
+Focus: HOW users are targeted (attack patterns), NOT what they browse.
+
+Privacy-first design:
+- No domain logging (handled by dnsXai separately, if enabled)
+- No URL content storage
+- Only attack signatures and patterns
+- IP addresses anonymized after 24h
+"""
+
+import json
+import time
+import hashlib
+from pathlib import Path
+from datetime import datetime, timedelta
+from collections import defaultdict
+from typing import Dict, List, Any
+
+# Data paths
+SURICATA_LOG = Path("/opt/hookprobe/fortress/data/suricata-logs/eve.json")
+ZEEK_LOG_DIR = Path("/opt/hookprobe/fortress/data/zeek-logs/current")
+OUTPUT_DIR = Path("/opt/hookprobe/fortress/data/threat-intel")
+ML_DATA_DIR = Path("/opt/hookprobe/fortress/data/ml-models")
+
+class ThreatAggregator:
+    """Aggregates threats for ML training - privacy preserving"""
+
+    def __init__(self):
+        self.threats = []
+        self.patterns = defaultdict(int)
+        self.attack_sequences = []
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        ML_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def anonymize_ip(self, ip: str) -> str:
+        """Anonymize IP for privacy - keep only network class"""
+        if not ip:
+            return "0.0.0.0"
+        parts = ip.split('.')
+        if len(parts) == 4:
+            return f"{parts[0]}.{parts[1]}.0.0"
+        return "0.0.0.0"
+
+    def parse_suricata_alerts(self, limit: int = 1000) -> List[Dict]:
+        """Parse Suricata alerts - extract attack patterns only"""
+        alerts = []
+        try:
+            if not SURICATA_LOG.exists():
+                return alerts
+
+            with open(SURICATA_LOG, 'r') as f:
+                # Read last N lines
+                lines = f.readlines()[-limit:]
+
+            for line in lines:
+                try:
+                    event = json.loads(line.strip())
+                    if event.get("event_type") == "alert":
+                        alert_data = event.get("alert", {})
+                        # Extract ONLY attack pattern, not content
+                        pattern = {
+                            "timestamp": event.get("timestamp"),
+                            "signature_id": alert_data.get("signature_id"),
+                            "signature": alert_data.get("signature", ""),
+                            "category": alert_data.get("category", ""),
+                            "severity": alert_data.get("severity", 3),
+                            "src_ip_anon": self.anonymize_ip(event.get("src_ip")),
+                            "dest_port": event.get("dest_port"),
+                            "protocol": event.get("proto", ""),
+                            # NO: dest_ip (target), NO: HTTP content, NO: DNS queries
+                        }
+                        alerts.append(pattern)
+                        self.patterns[alert_data.get("category", "unknown")] += 1
+                except json.JSONDecodeError:
+                    continue
+        except Exception as e:
+            print(f"Error parsing Suricata: {e}")
+        return alerts
+
+    def parse_zeek_notices(self, limit: int = 500) -> List[Dict]:
+        """Parse Zeek notices - extract attack indicators only"""
+        notices = []
+        try:
+            notice_log = ZEEK_LOG_DIR / "notice.log"
+            if not notice_log.exists():
+                return notices
+
+            with open(notice_log, 'r') as f:
+                lines = f.readlines()[-limit:]
+
+            for line in lines:
+                if line.startswith('#'):
+                    continue
+                try:
+                    event = json.loads(line.strip())
+                    notice = {
+                        "timestamp": event.get("ts"),
+                        "note": event.get("note", ""),
+                        "msg": event.get("msg", "")[:100],  # Truncate message
+                        "src_ip_anon": self.anonymize_ip(event.get("src")),
+                        "dest_port": event.get("p"),
+                        # NO: full message content, NO: domain names
+                    }
+                    notices.append(notice)
+                except json.JSONDecodeError:
+                    continue
+        except Exception as e:
+            print(f"Error parsing Zeek: {e}")
+        return notices
+
+    def extract_attack_sequences(self) -> List[Dict]:
+        """Extract temporal attack sequences for LSTM training"""
+        sequences = []
+
+        # Group alerts by source (anonymized)
+        source_events = defaultdict(list)
+
+        for alert in self.threats:
+            src = alert.get("src_ip_anon", "unknown")
+            source_events[src].append({
+                "time": alert.get("timestamp"),
+                "category": alert.get("category", "unknown"),
+                "severity": alert.get("severity", 3),
+                "port": alert.get("dest_port", 0)
+            })
+
+        # Build sequences (attack chains)
+        for src, events in source_events.items():
+            if len(events) >= 3:  # Only sequences with 3+ events
+                sequences.append({
+                    "source_hash": hashlib.md5(src.encode()).hexdigest()[:8],
+                    "event_count": len(events),
+                    "categories": [e["category"] for e in events[:20]],
+                    "severity_pattern": [e["severity"] for e in events[:20]],
+                    "port_pattern": [e["port"] for e in events[:20]]
+                })
+
+        return sequences
+
+    def aggregate(self) -> Dict:
+        """Aggregate all threat data for ML training"""
+        # Collect from sources
+        suricata_alerts = self.parse_suricata_alerts()
+        zeek_notices = self.parse_zeek_notices()
+
+        self.threats = suricata_alerts + zeek_notices
+
+        # Extract sequences for LSTM
+        sequences = self.extract_attack_sequences()
+
+        result = {
+            "timestamp": datetime.now().isoformat(),
+            "stats": {
+                "suricata_alerts": len(suricata_alerts),
+                "zeek_notices": len(zeek_notices),
+                "unique_patterns": len(self.patterns),
+                "attack_sequences": len(sequences)
+            },
+            "pattern_distribution": dict(self.patterns),
+            "training_ready": len(sequences) >= 10
+        }
+
+        # Save for ML training
+        self._save_training_data(sequences)
+
+        # Save summary
+        with open(OUTPUT_DIR / "aggregated.json", 'w') as f:
+            json.dump(result, f, indent=2)
+
+        return result
+
+    def _save_training_data(self, sequences: List[Dict]):
+        """Save training data for LSTM model"""
+        training_file = ML_DATA_DIR / f"training_{datetime.now().strftime('%Y%m%d')}.jsonl"
+
+        with open(training_file, 'a') as f:
+            for seq in sequences:
+                f.write(json.dumps(seq) + '\n')
+
+
+def main():
+    """Run aggregator continuously"""
+    aggregator = ThreatAggregator()
+
+    while True:
+        try:
+            result = aggregator.aggregate()
+            print(f"[{datetime.now()}] Aggregated: "
+                  f"Suricata={result['stats']['suricata_alerts']}, "
+                  f"Zeek={result['stats']['zeek_notices']}, "
+                  f"Sequences={result['stats']['attack_sequences']}")
+        except Exception as e:
+            print(f"Error: {e}")
+
+        time.sleep(60)  # Run every minute
+
+
+if __name__ == "__main__":
+    main()
+PYEOF
+
+    chmod +x /opt/hookprobe/fortress/ml/threat_aggregator.py
+
+    # Create systemd service for ML aggregator
+    cat > /etc/systemd/system/fortress-ml-aggregator.service << 'EOF'
+[Unit]
+Description=Fortress ML Threat Aggregator
+After=network.target fortress-suricata.service fortress-zeek.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=30
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/ml/threat_aggregator.py
+StandardOutput=append:/var/log/hookprobe/ml-aggregator.log
+StandardError=append:/var/log/hookprobe/ml-aggregator.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-ml-aggregator 2>/dev/null || true
+
+    log_info "ML Threat Aggregator service created"
+}
+
+# ============================================================
+# LSTM DAILY TRAINING SERVICE
+# ============================================================
+setup_lstm_training() {
+    log_step "Setting up LSTM daily training service..."
+
+    # Create daily training service
+    cat > /etc/systemd/system/fortress-lstm-train.service << 'EOF'
+[Unit]
+Description=Fortress LSTM Threat Model Training
+After=network.target fortress-ml-aggregator.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/lstm_threat_detector.py --train --epochs 100
+StandardOutput=append:/var/log/hookprobe/lstm-training.log
+StandardError=append:/var/log/hookprobe/lstm-training.log
+EOF
+
+    # Create daily training timer (runs at 3am to avoid 4am channel optimization)
+    cat > /etc/systemd/system/fortress-lstm-train.timer << 'EOF'
+[Unit]
+Description=Daily LSTM Threat Model Training (3:00 AM)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=600
+# DO NOT set Persistent=true - we don't want to run at boot
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-lstm-train.timer 2>/dev/null || true
+
+    log_info "LSTM daily training timer created (runs at 3:00 AM)"
+}
+
+# ============================================================
+# DNSXAI PRIVACY CONTROLS
+# ============================================================
+setup_dnsxai_privacy() {
+    log_step "Setting up dnsXai privacy controls..."
+
+    mkdir -p /etc/hookprobe/dnsxai
+
+    # Create default privacy configuration
+    cat > /etc/hookprobe/dnsxai/privacy.json << 'PRIVEOF'
+{
+    "version": "1.0",
+    "description": "dnsXai Privacy Settings - Controls what data is collected",
+    "settings": {
+        "enable_query_logging": false,
+        "enable_domain_tracking": false,
+        "enable_ad_blocking_stats": true,
+        "enable_threat_detection": true,
+        "enable_ml_training_data": false,
+        "anonymize_client_ips": true,
+        "retention_days": 7,
+        "export_allowed": false
+    },
+    "explanation": {
+        "enable_query_logging": "Log individual DNS queries (PRIVACY IMPACT: HIGH). Disabled by default.",
+        "enable_domain_tracking": "Track domain visit frequency per client (PRIVACY IMPACT: HIGH). Disabled by default.",
+        "enable_ad_blocking_stats": "Count blocked ads/trackers (PRIVACY IMPACT: LOW). Enabled for statistics.",
+        "enable_threat_detection": "Detect malicious domains (PRIVACY IMPACT: LOW). Essential for security.",
+        "enable_ml_training_data": "Use anonymized query patterns for ML (PRIVACY IMPACT: MEDIUM). Disabled by default.",
+        "anonymize_client_ips": "Replace client IPs with hashes (PRIVACY IMPACT: NONE). Always recommended.",
+        "retention_days": "Days to keep logs before deletion. Shorter = more privacy.",
+        "export_allowed": "Allow exporting DNS data. Disabled by default."
+    }
+}
+PRIVEOF
+
+    chmod 644 /etc/hookprobe/dnsxai/privacy.json
+
+    # Create privacy management script
+    cat > /usr/local/bin/fortress-dnsxai-privacy << 'PRIVSCRIPT'
+#!/bin/bash
+#
+# Fortress dnsXai Privacy Control Tool
+#
+# Manages privacy settings for DNS query tracking
+# Users can enable/disable tracking at any time
+
+PRIVACY_FILE="/etc/hookprobe/dnsxai/privacy.json"
+
+show_status() {
+    echo "=== dnsXai Privacy Settings ==="
+    echo ""
+    if [ -f "$PRIVACY_FILE" ]; then
+        python3 -c "
+import json
+with open('$PRIVACY_FILE') as f:
+    data = json.load(f)
+    settings = data.get('settings', {})
+    explain = data.get('explanation', {})
+    for key, value in settings.items():
+        status = '✓ Enabled' if value else '✗ Disabled'
+        if isinstance(value, int):
+            status = str(value)
+        print(f'  {key}: {status}')
+        if key in explain:
+            print(f'    → {explain[key]}')
+        print()
+"
+    else
+        echo "Privacy file not found!"
+    fi
+}
+
+set_privacy() {
+    local setting="$1"
+    local value="$2"
+
+    if [ -z "$setting" ] || [ -z "$value" ]; then
+        echo "Usage: $0 set <setting> <true|false>"
+        exit 1
+    fi
+
+    python3 -c "
+import json
+import sys
+
+with open('$PRIVACY_FILE', 'r') as f:
+    data = json.load(f)
+
+setting = '$setting'
+value_str = '$value'.lower()
+
+if setting not in data.get('settings', {}):
+    print(f'Unknown setting: {setting}')
+    print('Available settings:', ', '.join(data.get('settings', {}).keys()))
+    sys.exit(1)
+
+if value_str in ('true', 'yes', '1', 'on'):
+    value = True
+elif value_str in ('false', 'no', '0', 'off'):
+    value = False
+elif value_str.isdigit():
+    value = int(value_str)
+else:
+    print(f'Invalid value: {value_str}')
+    sys.exit(1)
+
+data['settings'][setting] = value
+
+with open('$PRIVACY_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+
+print(f'Set {setting} = {value}')
+"
+}
+
+maximum_privacy() {
+    echo "Setting maximum privacy mode..."
+    python3 -c "
+import json
+
+with open('$PRIVACY_FILE', 'r') as f:
+    data = json.load(f)
+
+data['settings'] = {
+    'enable_query_logging': False,
+    'enable_domain_tracking': False,
+    'enable_ad_blocking_stats': False,
+    'enable_threat_detection': True,
+    'enable_ml_training_data': False,
+    'anonymize_client_ips': True,
+    'retention_days': 1,
+    'export_allowed': False
+}
+
+with open('$PRIVACY_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+
+print('Maximum privacy mode enabled.')
+print('Only essential threat detection remains active.')
+"
+}
+
+balanced_mode() {
+    echo "Setting balanced privacy mode..."
+    python3 -c "
+import json
+
+with open('$PRIVACY_FILE', 'r') as f:
+    data = json.load(f)
+
+data['settings'] = {
+    'enable_query_logging': False,
+    'enable_domain_tracking': False,
+    'enable_ad_blocking_stats': True,
+    'enable_threat_detection': True,
+    'enable_ml_training_data': False,
+    'anonymize_client_ips': True,
+    'retention_days': 7,
+    'export_allowed': False
+}
+
+with open('$PRIVACY_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+
+print('Balanced privacy mode enabled.')
+print('Threat detection + anonymous ad blocking stats.')
+"
+}
+
+full_analytics() {
+    echo "Setting full analytics mode..."
+    echo "WARNING: This enables domain tracking!"
+    read -p "Are you sure? (yes/no): " confirm
+    if [ "$confirm" != "yes" ]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    python3 -c "
+import json
+
+with open('$PRIVACY_FILE', 'r') as f:
+    data = json.load(f)
+
+data['settings'] = {
+    'enable_query_logging': True,
+    'enable_domain_tracking': True,
+    'enable_ad_blocking_stats': True,
+    'enable_threat_detection': True,
+    'enable_ml_training_data': True,
+    'anonymize_client_ips': True,
+    'retention_days': 30,
+    'export_allowed': False
+}
+
+with open('$PRIVACY_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+
+print('Full analytics mode enabled.')
+print('All tracking enabled with anonymized IPs.')
+"
+}
+
+case "${1:-status}" in
+    status|show)
+        show_status
+        ;;
+    set)
+        set_privacy "$2" "$3"
+        ;;
+    maximum|max)
+        maximum_privacy
+        ;;
+    balanced|default)
+        balanced_mode
+        ;;
+    full|analytics)
+        full_analytics
+        ;;
+    help|*)
+        echo "dnsXai Privacy Control Tool"
+        echo ""
+        echo "Usage: $0 <command>"
+        echo ""
+        echo "Commands:"
+        echo "  status     - Show current privacy settings"
+        echo "  set <key> <value> - Set a specific setting"
+        echo "  maximum    - Maximum privacy (minimal tracking)"
+        echo "  balanced   - Balanced mode (default)"
+        echo "  full       - Full analytics (requires confirmation)"
+        echo ""
+        echo "Your privacy, your choice."
+        ;;
+esac
+PRIVSCRIPT
+
+    chmod +x /usr/local/bin/fortress-dnsxai-privacy
+
+    log_info "dnsXai privacy controls installed"
+    log_info "Use 'fortress-dnsxai-privacy status' to view settings"
+    log_info "Use 'fortress-dnsxai-privacy maximum' for maximum privacy"
+}
+
+# ============================================================
 # STATUS CHECK
 # ============================================================
 check_status() {
@@ -493,10 +1144,20 @@ main() {
             create_pod
             create_postgres_container
             create_redis_container
+            create_victoriametrics_container
+            create_suricata_container
+            create_zeek_container
+            setup_ml_aggregator
+            setup_lstm_training
+            setup_dnsxai_privacy
             check_status
             log_info "Fortress pod started successfully"
             log_info "PostgreSQL: localhost:5432 (user: fortress)"
             log_info "Redis: localhost:6379"
+            log_info "Victoria Metrics: localhost:8428"
+            log_info "Suricata IDS: monitoring network traffic"
+            log_info "Zeek: analyzing network patterns"
+            log_info "ML Aggregator: collecting threat data for LSTM training"
             log_info "Web Portal: https://localhost:8443"
             ;;
         stop|down)
