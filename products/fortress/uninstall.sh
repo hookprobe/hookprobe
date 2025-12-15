@@ -163,6 +163,10 @@ remove_systemd_services() {
         fi
     done
 
+    # Remove boot optimization overrides
+    rm -rf /etc/systemd/system/systemd-networkd-wait-online.service.d 2>/dev/null || true
+    rm -rf /etc/systemd/system/NetworkManager-wait-online.service.d 2>/dev/null || true
+
     systemctl daemon-reload
     log_info "Systemd services removed"
 }
