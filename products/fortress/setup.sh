@@ -2870,7 +2870,7 @@ CHANNEL_SCRIPT
     cat > /etc/systemd/system/fortress-channel-optimize.service << 'SERVICEEOF'
 [Unit]
 Description=Fortress WiFi Channel Optimization
-After=network.target
+After=network.target fortress-hostapd.service
 
 [Service]
 Type=oneshot
@@ -2878,8 +2878,8 @@ ExecStart=/usr/local/bin/fortress-channel-optimize.sh
 StandardOutput=journal
 StandardError=journal
 
-[Install]
-WantedBy=multi-user.target
+# Note: No [Install] section - this service is only triggered by timer
+# Do NOT add WantedBy=multi-user.target as it would stop hostapd at every boot
 SERVICEEOF
 
     # Create systemd timer for daily 4am execution
@@ -2902,8 +2902,9 @@ TIMEREOF
     systemctl start fortress-channel-optimize.timer
 
     log_info "WiFi Channel Optimization installed"
-    log_info "  - Runs at install and daily at 4:00 AM"
+    log_info "  - Runs daily at 4:00 AM (timer-triggered)"
     log_info "  - Selects best channel from 1, 6, 11"
+    log_info "  - Run manually: systemctl start fortress-channel-optimize"
 }
 
 # ============================================================
