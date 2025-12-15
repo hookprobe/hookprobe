@@ -1729,28 +1729,64 @@ else
 fi
 
 # ============================================================
+# WAIT FOR INTERNET CONNECTIVITY
+# ============================================================
+wait_for_internet() {
+    local max_attempts=30
+    local attempt=0
+    echo "Waiting for internet connectivity..."
+
+    while [ $attempt -lt $max_attempts ]; do
+        # Try to reach a reliable endpoint
+        if curl -sf --max-time 3 "http://connectivitycheck.gstatic.com/generate_204" &>/dev/null || \
+           ping -c 1 -W 2 8.8.8.8 &>/dev/null || \
+           ping -c 1 -W 2 1.1.1.1 &>/dev/null; then
+            echo "Internet connectivity confirmed"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        echo "Waiting for internet... (attempt $attempt/$max_attempts)"
+        sleep 2
+    done
+
+    echo "WARNING: Internet connectivity check failed after $max_attempts attempts"
+    return 1
+}
+
+# ============================================================
 # COUNTRY CODE DETECTION (for WiFi regulatory domain)
 # ============================================================
 detect_country_code() {
     local country=""
+    local max_retries=3
+    local retry=0
 
-    # Try multiple geolocation services
-    # Method 1: ipinfo.io (most reliable)
-    country=$(curl -sf --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '\n' | grep -E '^[A-Z]{2}$' || true)
+    while [ $retry -lt $max_retries ] && [ -z "$country" ]; do
+        # Method 1: ipinfo.io (most reliable)
+        country=$(curl -sf --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
 
-    # Method 2: ip-api.com (fallback)
-    if [ -z "$country" ]; then
-        country=$(curl -sf --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '\n' | grep -E '^[A-Z]{2}$' || true)
-    fi
+        # Method 2: ip-api.com (fallback)
+        if [ -z "$country" ]; then
+            country=$(curl -sf --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
+        fi
 
-    # Method 3: ifconfig.co (another fallback)
-    if [ -z "$country" ]; then
-        country=$(curl -sf --max-time 5 "https://ifconfig.co/country-iso" 2>/dev/null | tr -d '\n' | grep -E '^[A-Z]{2}$' || true)
-    fi
+        # Method 3: ifconfig.co (another fallback)
+        if [ -z "$country" ]; then
+            country=$(curl -sf --max-time 5 "https://ifconfig.co/country-iso" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
+        fi
+
+        if [ -z "$country" ]; then
+            retry=$((retry + 1))
+            [ $retry -lt $max_retries ] && sleep 2
+        fi
+    done
 
     # Default to US if detection fails
     echo "${country:-US}"
 }
+
+# Wait for internet before detecting country
+wait_for_internet
 
 # Set WiFi regulatory domain based on geolocation
 COUNTRY=$(detect_country_code)
@@ -1762,8 +1798,12 @@ if command -v iw &>/dev/null; then
     echo "WiFi regulatory domain set to: $COUNTRY"
 
     # Save to CRDA config for persistence
-    if [ -d /etc/default ]; then
-        echo "REGDOMAIN=$COUNTRY" > /etc/default/crda 2>/dev/null || true
+    echo "REGDOMAIN=$COUNTRY" > /etc/default/crda 2>/dev/null || true
+
+    # Also update hostapd config if it exists
+    if [ -f /etc/hostapd/fortress.conf ]; then
+        sed -i "s/^country_code=.*/country_code=$COUNTRY/" /etc/hostapd/fortress.conf 2>/dev/null || true
+        echo "Updated hostapd config with country_code=$COUNTRY"
     fi
 fi
 
@@ -2962,7 +3002,7 @@ Description=Daily WiFi Channel Optimization (4:00 AM)
 [Timer]
 OnCalendar=*-*-* 04:00:00
 RandomizedDelaySec=300
-Persistent=true
+# DO NOT set Persistent=true - it would run at boot and stop hostapd!
 
 [Install]
 WantedBy=timers.target

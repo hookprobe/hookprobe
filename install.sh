@@ -1715,6 +1715,55 @@ CFEOF
 
         if [ -f "$SCRIPT_DIR/products/fortress/setup.sh" ]; then
             bash "$SCRIPT_DIR/products/fortress/setup.sh" $extra_args
+            local exit_code=$?
+
+            # Show completion message if setup succeeded
+            if [ $exit_code -eq 0 ]; then
+                echo ""
+                echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${CYAN}║${NC}  ${GREEN}🎉 FORTRESS INSTALLATION COMPLETE${NC}                          ${CYAN}║${NC}"
+                echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+
+                # Show admin credentials
+                local admin_pass=""
+                if [ -f /etc/hookprobe/secrets/admin_password ]; then
+                    admin_pass=$(cat /etc/hookprobe/secrets/admin_password 2>/dev/null)
+                fi
+
+                echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  ${BOLD}🔐 ADMIN DASHBOARD${NC}                                         ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  URL:      ${GREEN}https://10.250.0.1:8443${NC}                       ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  Username: ${GREEN}admin${NC}                                         ${CYAN}║${NC}"
+                if [ -n "$admin_pass" ]; then
+                    echo -e "${CYAN}║${NC}  Password: ${GREEN}$admin_pass${NC}                            ${CYAN}║${NC}"
+                else
+                    echo -e "${CYAN}║${NC}  Password: ${GREEN}hookprobe${NC}  (default)                      ${CYAN}║${NC}"
+                fi
+                echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+
+                # Show WiFi credentials
+                if [ -f /etc/hookprobe/wifi-ap.conf ]; then
+                    source /etc/hookprobe/wifi-ap.conf 2>/dev/null
+                    if [ -n "$WIFI_SSID" ]; then
+                        echo -e "${CYAN}║${NC}  ${BOLD}📶 WIFI ACCESS POINT${NC}                                      ${CYAN}║${NC}"
+                        echo -e "${CYAN}║${NC}  SSID:     ${GREEN}$WIFI_SSID${NC}                                   ${CYAN}║${NC}"
+                        echo -e "${CYAN}║${NC}  Password: ${GREEN}$WIFI_PASSWORD${NC}                            ${CYAN}║${NC}"
+                        echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+                    fi
+                fi
+
+                echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+                echo -e "${CYAN}║${NC}  ${RED}⚠  CHANGE DEFAULT PASSWORD AFTER FIRST LOGIN!${NC}              ${CYAN}║${NC}"
+                echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+                echo ""
+                echo -e "${BOLD}Next Steps:${NC}"
+                echo -e "  1. Connect to WiFi '${GREEN}${wifi_ssid:-hookprobe}${NC}' or plug into LAN port"
+                echo -e "  2. Open ${GREEN}https://10.250.0.1:8443${NC} in your browser"
+                echo -e "  3. Login with credentials shown above"
+                echo -e "  4. Change the default password immediately!"
+                echo ""
+                read -p "Press ENTER to continue..." < /dev/tty
+            fi
         elif [ -f "$SCRIPT_DIR/scripts/install-edge.sh" ]; then
             bash "$SCRIPT_DIR/scripts/install-edge.sh" --tier fortress $extra_args
         else
