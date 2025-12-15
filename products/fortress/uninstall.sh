@@ -107,7 +107,12 @@ stop_services() {
         "fortress-hostapd"
         "fortress-nat"
         "fortress-web"
+        "fortress-channel-optimize"
     )
+
+    # Stop the channel optimization timer first
+    log_info "Stopping fortress-channel-optimize.timer..."
+    systemctl stop fortress-channel-optimize.timer 2>/dev/null || true
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -138,7 +143,13 @@ remove_systemd_services() {
         "fortress-hostapd"
         "fortress-nat"
         "fortress-web"
+        "fortress-channel-optimize"
     )
+
+    # Disable and remove channel optimization timer
+    log_info "Removing fortress-channel-optimize.timer..."
+    systemctl disable fortress-channel-optimize.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fortress-channel-optimize.timer
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
@@ -169,6 +180,9 @@ remove_management_scripts() {
         "/usr/local/bin/hookprobe-fortress-stop"
         "/usr/local/bin/fortress-lte-monitor"
         "/usr/local/bin/fortress-nat-setup"
+        "/usr/local/bin/fortress-channel-optimize.sh"
+        "/usr/local/bin/fortress-wifi-prepare.sh"
+        "/usr/local/bin/fortress-wifi-bridge.sh"
     )
 
     for script in "${scripts[@]}"; do
