@@ -3357,6 +3357,83 @@ collect_user_inputs() {
     echo ""
 
     # ─────────────────────────────────────────────────────────────
+    # WiFi Access Point Configuration
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}  WiFi Access Point Configuration${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    if [ -n "$WIFI_INTERFACES" ]; then
+        echo -e "${GREEN}✓ WiFi adapter detected: $(echo $WIFI_INTERFACES | awk '{print $1}')${NC}"
+        echo ""
+
+        # SSID
+        read -p "WiFi Network Name (SSID) [hookprobe]: " user_ssid
+        FORTRESS_WIFI_SSID="${user_ssid:-hookprobe}"
+
+        # Password
+        echo ""
+        echo "WiFi Password options:"
+        echo "  1. Enter custom password"
+        echo "  2. Generate random password (recommended)"
+        echo ""
+        read -p "Select [1-2] (default: 2): " pw_choice
+        pw_choice="${pw_choice:-2}"
+
+        if [ "$pw_choice" = "1" ]; then
+            while true; do
+                read -sp "Enter WiFi password (min 8 chars): " user_password
+                echo ""
+                if [ ${#user_password} -lt 8 ]; then
+                    echo -e "${RED}Password must be at least 8 characters.${NC}"
+                else
+                    FORTRESS_WIFI_PASSWORD="$user_password"
+                    break
+                fi
+            done
+        else
+            # Generate random password (12 chars, alphanumeric only for compatibility)
+            FORTRESS_WIFI_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 12)
+            echo -e "Generated password: ${CYAN}$FORTRESS_WIFI_PASSWORD${NC}"
+            echo -e "${YELLOW}(Save this password - you'll need it to connect!)${NC}"
+        fi
+        echo ""
+    else
+        echo -e "${YELLOW}⚠ No WiFi adapter detected - WiFi AP will be skipped${NC}"
+        echo ""
+    fi
+
+    # ─────────────────────────────────────────────────────────────
+    # Network Configuration
+    # ─────────────────────────────────────────────────────────────
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}  Network Configuration${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    echo "Network size determines how many devices can connect:"
+    echo "  /29 = 6 devices     (very small office)"
+    echo "  /28 = 14 devices    (small office)"
+    echo "  /27 = 30 devices    (small business)"
+    echo "  /26 = 62 devices    (medium business)"
+    echo "  /25 = 126 devices   (larger office)"
+    echo "  /24 = 254 devices   (large network)"
+    echo "  /23 = 510 devices   (default - recommended for growth)"
+    echo ""
+    read -p "Network size [/23]: " user_netmask
+    user_netmask="${user_netmask:-/23}"
+    # Remove leading slash if present
+    FORTRESS_NETWORK_PREFIX="${user_netmask#/}"
+
+    # Validate network size
+    if ! [[ "$FORTRESS_NETWORK_PREFIX" =~ ^(23|24|25|26|27|28|29)$ ]]; then
+        echo -e "${YELLOW}Invalid network size. Using default /23${NC}"
+        FORTRESS_NETWORK_PREFIX="23"
+    fi
+    echo ""
+
+    # ─────────────────────────────────────────────────────────────
     # Feature Selection
     # ─────────────────────────────────────────────────────────────
     echo -e "${YELLOW}Optional Features:${NC}"
@@ -3411,32 +3488,34 @@ collect_user_inputs() {
         echo "  Generic:    internet"
         echo ""
 
-        read -p "Enter your APN name: " HOOKPROBE_LTE_APN
-        if [ -z "$HOOKPROBE_LTE_APN" ]; then
-            log_warn "No APN provided - using 'internet' as default"
-            HOOKPROBE_LTE_APN="internet"
-        fi
+        read -p "Enter your APN name [internet]: " HOOKPROBE_LTE_APN
+        HOOKPROBE_LTE_APN="${HOOKPROBE_LTE_APN:-internet}"
 
-        # Authentication (most don't need it)
+        # Authentication type
         echo ""
-        echo "Does your carrier require authentication? (most don't)"
-        read -p "Require auth? [y/N]: " need_auth
-        if [[ "${need_auth,,}" =~ ^y ]]; then
-            echo "Auth types: 1=PAP, 2=CHAP, 3=MSCHAPv2"
-            read -p "Select [1-3]: " auth_choice
-            case "$auth_choice" in
-                1) HOOKPROBE_LTE_AUTH="pap" ;;
-                2) HOOKPROBE_LTE_AUTH="chap" ;;
-                3) HOOKPROBE_LTE_AUTH="mschapv2" ;;
-                *) HOOKPROBE_LTE_AUTH="none" ;;
-            esac
-            if [ "$HOOKPROBE_LTE_AUTH" != "none" ]; then
-                read -p "Username: " HOOKPROBE_LTE_USER
-                read -sp "Password: " HOOKPROBE_LTE_PASS
-                echo ""
-            fi
-        else
-            HOOKPROBE_LTE_AUTH="none"
+        echo "Authentication type (most carriers use 'none'):"
+        echo "  1. none     - No authentication (default, most common)"
+        echo "  2. pap      - PAP authentication"
+        echo "  3. chap     - CHAP authentication"
+        echo "  4. mschapv2 - MS-CHAPv2 authentication"
+        echo ""
+        read -p "Select [1-4] (default: 1): " auth_choice
+        auth_choice="${auth_choice:-1}"
+
+        case "$auth_choice" in
+            2) HOOKPROBE_LTE_AUTH="pap" ;;
+            3) HOOKPROBE_LTE_AUTH="chap" ;;
+            4) HOOKPROBE_LTE_AUTH="mschapv2" ;;
+            *) HOOKPROBE_LTE_AUTH="none" ;;
+        esac
+
+        # If auth selected, get credentials
+        if [ "$HOOKPROBE_LTE_AUTH" != "none" ]; then
+            echo ""
+            echo -e "${YELLOW}Authentication: $HOOKPROBE_LTE_AUTH${NC}"
+            read -p "Username: " HOOKPROBE_LTE_USER
+            read -sp "Password: " HOOKPROBE_LTE_PASS
+            echo ""
         fi
         echo ""
     fi
@@ -3481,22 +3560,30 @@ collect_user_inputs() {
     echo -e "${CYAN}  Configuration Summary${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
     echo ""
+
+    echo -e "  ${BOLD}Network Settings:${NC}"
+    echo "    Network size: /${FORTRESS_NETWORK_PREFIX:-23}"
+    [ -n "$FORTRESS_WIFI_SSID" ] && echo "    WiFi SSID: $FORTRESS_WIFI_SSID"
+    echo ""
+
     echo -e "  ${BOLD}Core Features:${NC}"
     echo "    ✓ OVS Bridge with OpenFlow 1.3"
     echo "    ✓ VLAN Segmentation (5 VLANs)"
     [ "$MACSEC_ENABLED" = true ] && echo "    ✓ MACsec Layer 2 Encryption"
     echo "    ✓ QSecBit Security Agent"
     echo "    ✓ Web Dashboard (https://localhost:8443)"
+    echo "    ✓ Local Auth (max 5 users)"
     echo ""
+
     echo -e "  ${BOLD}Optional Features:${NC}"
-    [ "$ENABLE_LTE" = true ] && echo "    ✓ LTE Failover (APN: $HOOKPROBE_LTE_APN)"
+    [ "$ENABLE_LTE" = true ] && echo "    ✓ LTE Failover (APN: $HOOKPROBE_LTE_APN, Auth: ${HOOKPROBE_LTE_AUTH:-none})"
     [ "$ENABLE_REMOTE_ACCESS" = true ] && echo "    ✓ Remote Access (Cloudflare Tunnel)"
     [ "$ENABLE_MONITORING" = true ] && echo "    ✓ Monitoring (Grafana + Victoria Metrics)"
     [ "$ENABLE_N8N" = true ] && echo "    ✓ n8n Workflow Automation"
-    [ "$ENABLE_LTE" != true ] && [ "$ENABLE_REMOTE_ACCESS" != true ] && echo "    (none selected)"
+    [ "$ENABLE_LTE" != true ] && [ "$ENABLE_REMOTE_ACCESS" != true ] && [ "$ENABLE_MONITORING" != true ] && [ "$ENABLE_N8N" != true ] && echo "    (none selected)"
     echo ""
 
-    # Confirm
+    # Confirm - default YES
     read -p "Proceed with installation? [Y/n]: " confirm_install
     confirm_install="${confirm_install:-Y}"
     if [[ ! "${confirm_install,,}" =~ ^y ]]; then

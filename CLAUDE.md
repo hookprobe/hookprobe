@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.2
-**Last Updated**: 2025-12-14
+**Version**: 5.3
+**Last Updated**: 2025-12-15
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -31,6 +31,10 @@
 | **Guardian web UI** | Flask app | `products/guardian/web/` |
 | **Fortress admin portal** | Flask + AdminLTE | `products/fortress/web/` |
 | **Fortress development** | MVP plan | `products/fortress/DEVELOPMENT_PLAN.md` |
+| **Fortress user auth** | Local auth (max 5) | `products/fortress/web/modules/auth/models.py` |
+| **Fortress WiFi setup** | Channel scanning | `products/fortress/setup.sh` (search `setup_wifi_ap`) |
+| **Fortress LTE config** | APN + auth | `products/fortress/setup.sh` (search `HOOKPROBE_LTE`) |
+| **Fortress network size** | /23-/29 config | `products/fortress/setup.sh` (search `FORTRESS_NETWORK_PREFIX`) |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
@@ -851,15 +855,38 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 - **QSecBit**: `qsecbit/` - Fortress-enhanced agent with VLAN/MACsec monitoring
 - **Config**: OVS bridge, VLANs, VXLAN tunnels
 
+**Installation Prompts** (collected before install):
+
+| Prompt | Default | Description |
+|--------|---------|-------------|
+| WiFi SSID | `hookprobe` | Access point network name |
+| WiFi Password | Random 12-char | Or user-specified (min 8 chars) |
+| Network Size | `/23` (510 devices) | Options: /29 to /23 |
+| LTE APN | `internet` | Carrier APN name |
+| LTE Auth Type | `none` | Options: none/pap/chap/mschapv2 |
+| LTE Username | - | Only if auth != none |
+| LTE Password | - | Only if auth != none |
+| Cloudflare Tunnel | Later | Configure now or via web UI |
+
 **What Fortress Adds Over Guardian**:
 
 | Feature | Guardian | Fortress |
 |---------|----------|----------|
-| **Web UI** | Single-user | Multi-user with auth |
+| **Web UI** | Single-user | Multi-user (max 5) |
 | **VLANs** | Basic | Full segmentation (5 VLANs) |
 | **Reporting** | Basic stats | Business reports |
 | **Dashboard** | Forty theme | AdminLTE professional |
-| **Authentication** | None | Username/password + roles |
+| **Authentication** | None | Local auth + roles |
+| **Network Size** | Fixed | Configurable /23-/29 |
+| **LTE Failover** | Basic | Full APN + auth config |
+| **Channel Optimization** | Manual | Daily 4am auto-calibration |
+
+**Authentication** (Simple Local Auth):
+- **Storage**: JSON file (`/etc/hookprobe/users.json`)
+- **Max Users**: 5 (sufficient for small business)
+- **Password Hashing**: bcrypt
+- **Roles**: admin, operator, viewer
+- **Default Admin**: `admin` / `hookprobe` (change immediately!)
 
 **Web UI Design** (AdminLTE 3.x):
 - **Template**: AdminLTE 3.x (Bootstrap 4)
@@ -874,6 +901,7 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 **Web UI Files**:
 - `web/app.py` - Flask application factory with Flask-Login
 - `web/modules/auth/` - Authentication (login, logout, user management)
+- `web/modules/auth/models.py` - User model with MAX_USERS=5 limit
 - `web/modules/dashboard/` - Main dashboard with widgets
 - `web/modules/security/` - QSecBit and threat detection
 - `web/modules/clients/` - Device management with VLAN assignment
@@ -882,9 +910,10 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 - `web/modules/reports/` - Business reporting
 - `web/modules/settings/` - System settings, user management
 - `web/templates/base.html` - AdminLTE base layout
+- `web/config.py` - Simple config (no external IAM)
 
 **Web UI Modules** (`web/modules/`):
-- `auth/` - Login, logout, user management
+- `auth/` - Login, logout, user management (local only)
 - `dashboard/` - Main overview with widgets
 - `security/` - QSecBit, threats, layer stats
 - `clients/` - Device inventory with VLAN assignment
@@ -903,6 +932,12 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 | Staff | 30 | Employee devices |
 | Guest | 40 | Customer WiFi |
 | IoT | 99 | Cameras, sensors |
+
+**WiFi Channel Optimization**:
+- Auto-selects least congested channel at install
+- Daily 4am calibration via systemd timer
+- Supports dual-band adapters (2.4GHz + 5GHz)
+- Service: `fortress-channel-optimize.timer`
 
 **Development Plan**: See `products/fortress/DEVELOPMENT_PLAN.md`
 
