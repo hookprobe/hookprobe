@@ -317,6 +317,43 @@ is_pkg_installed_apt() {
     dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
 }
 
+# ============================================================
+# BOOT OPTIMIZATION - Reduce network-wait timeout
+# ============================================================
+optimize_boot_time() {
+    log_step "Optimizing boot time..."
+
+    # systemd-networkd-wait-online.service can cause 2+ minute boot delays
+    # when waiting for all interfaces (WiFi, LTE may not always connect)
+
+    # Option 1: Reduce timeout to 10 seconds and wait for any interface
+    mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d
+    cat > /etc/systemd/system/systemd-networkd-wait-online.service.d/override.conf << 'EOF'
+[Service]
+# Fortress: Reduce boot delay from 2min to 10sec
+# Only wait for any one interface to be online, not all
+ExecStart=
+ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any --timeout=10
+EOF
+
+    # Also configure NetworkManager's wait-online if present
+    if [ -f /etc/systemd/system/NetworkManager-wait-online.service ] || \
+       systemctl list-unit-files | grep -q NetworkManager-wait-online; then
+        mkdir -p /etc/systemd/system/NetworkManager-wait-online.service.d
+        cat > /etc/systemd/system/NetworkManager-wait-online.service.d/override.conf << 'EOF'
+[Service]
+# Fortress: Reduce boot delay
+ExecStart=
+ExecStart=/usr/bin/nm-online -s -q --timeout=10
+EOF
+    fi
+
+    # Reload systemd to apply changes
+    systemctl daemon-reload
+
+    log_info "Boot optimization applied (network wait timeout: 10s)"
+}
+
 install_packages() {
     log_step "Installing required packages..."
 
@@ -3689,6 +3726,7 @@ main() {
     verify_critical_packages
     install_python_packages
     install_podman
+    optimize_boot_time
     install_openvswitch
 
     setup_ovs_bridge
