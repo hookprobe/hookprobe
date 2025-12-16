@@ -939,6 +939,41 @@ EOF
     echo "$HOSTAPD_24GHZ_CONF"
 }
 
+# EU/ETSI countries - UNII-3 (149-165) typically not allowed without special license
+EU_COUNTRIES="AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE"
+# Also include EEA and other ETSI countries
+ETSI_COUNTRIES="$EU_COUNTRIES GB CH NO IS LI"
+
+is_eu_country() {
+    # Check if country code is in EU/ETSI region
+    local country="$1"
+    echo "$ETSI_COUNTRIES" | grep -qw "$country"
+}
+
+get_safe_5ghz_channel() {
+    # Get a safe 5GHz channel based on regulatory domain
+    # EU/ETSI: Use UNII-1 (36-48) - always allowed
+    # Other: Can use UNII-3 (149-165) as well
+    #
+    # Args:
+    #   $1 - Country code
+    #   $2 - Interface (for scanning)
+
+    local country="$1"
+    local iface="$2"
+
+    if is_eu_country "$country"; then
+        # EU/ETSI: UNII-1 only (channels 36, 40, 44, 48)
+        # These are always allowed without DFS
+        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)"
+        echo "36"
+    else
+        # Non-EU: Can use UNII-3 (149-165) which often has less interference
+        log_info "  Non-EU country - UNII-3 band available (channels 149-165)"
+        echo "149"
+    fi
+}
+
 generate_hostapd_5ghz() {
     # Generate hostapd config for 5GHz band with WPA3
     #
@@ -978,11 +1013,39 @@ generate_hostapd_5ghz() {
     log_info "  Bridge: $bridge"
     log_info "  Country: $country_code (auto-detected)"
 
-    # Auto channel selection
+    # Auto channel selection - EU/ETSI aware
     if [ "$channel" = "auto" ]; then
-        channel=36  # Default if scan not available
+        # Get safe default based on regulatory domain
+        channel=$(get_safe_5ghz_channel "$country_code" "$iface")
+
+        # Try to scan for best channel if scanner available
         if [ -x "$SCRIPT_DIR/network-interface-detector.sh" ]; then
-            channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || channel=36
+            local scanned_channel
+            scanned_channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || true
+
+            # Only use scanned channel if it's in the allowed range for this region
+            if [ -n "$scanned_channel" ]; then
+                if is_eu_country "$country_code"; then
+                    # EU: Only accept UNII-1 channels (36-48)
+                    if [ "$scanned_channel" -ge 36 ] && [ "$scanned_channel" -le 48 ] 2>/dev/null; then
+                        channel="$scanned_channel"
+                        log_info "  Using scanned channel $channel (UNII-1)"
+                    else
+                        log_warn "  Scanned channel $scanned_channel not allowed in EU, using $channel"
+                    fi
+                else
+                    # Non-EU: Accept any valid 5GHz channel
+                    channel="$scanned_channel"
+                fi
+            fi
+        fi
+    else
+        # Manual channel specified - validate for EU
+        if is_eu_country "$country_code"; then
+            if [ "$channel" -ge 149 ] && [ "$channel" -le 177 ] 2>/dev/null; then
+                log_warn "  Channel $channel (UNII-3) may not be allowed in EU country $country_code"
+                log_warn "  Consider using channels 36-48 (UNII-1) instead"
+            fi
         fi
     fi
 
