@@ -543,35 +543,76 @@ check_wifi_capability() {
 
     local iface_upper="${iface^^}"
 
+    # First check state file variables
     case "$capability" in
         80211n)
-            eval "[ \"\$NET_WIFI_${iface_upper}_80211N\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_80211N\" = 'true' ]" && return 0
             ;;
         80211ac)
-            eval "[ \"\$NET_WIFI_${iface_upper}_80211AC\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_80211AC\" = 'true' ]" && return 0
             ;;
         80211ax)
-            eval "[ \"\$NET_WIFI_${iface_upper}_80211AX\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_80211AX\" = 'true' ]" && return 0
             ;;
         80211be)
-            eval "[ \"\$NET_WIFI_${iface_upper}_80211BE\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_80211BE\" = 'true' ]" && return 0
             ;;
         5ghz)
-            eval "[ \"\$NET_WIFI_${iface_upper}_5GHZ\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_5GHZ\" = 'true' ]" && return 0
             ;;
         6ghz)
-            eval "[ \"\$NET_WIFI_${iface_upper}_6GHZ\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_6GHZ\" = 'true' ]" && return 0
             ;;
         24ghz)
-            eval "[ \"\$NET_WIFI_${iface_upper}_24GHZ\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_24GHZ\" = 'true' ]" && return 0
             ;;
         ap)
-            eval "[ \"\$NET_WIFI_${iface_upper}_AP\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_AP\" = 'true' ]" && return 0
             ;;
         vap)
-            eval "[ \"\$NET_WIFI_${iface_upper}_VAP\" = 'true' ]"
+            eval "[ \"\$NET_WIFI_${iface_upper}_VAP\" = 'true' ]" && return 0
             ;;
     esac
+
+    # Fallback: directly check iw phy output for capabilities
+    local phy
+    phy=$(get_phy_for_iface "$iface")
+    [ -z "$phy" ] && return 1
+
+    local phy_info=""
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
+    case "$capability" in
+        80211n)
+            echo "$phy_info" | grep -qE "HT20|HT40|Capabilities.*0x" && return 0
+            ;;
+        80211ac)
+            echo "$phy_info" | grep -qE "VHT Capabilities" && return 0
+            ;;
+        80211ax)
+            echo "$phy_info" | grep -qE "HE Capabilities|HE PHY|HE MAC" && return 0
+            ;;
+        80211be)
+            echo "$phy_info" | grep -qE "EHT Capabilities|EHT PHY|EHT MAC" && return 0
+            ;;
+        5ghz)
+            echo "$phy_info" | grep -qE "5[0-9]{3} MHz" && return 0
+            ;;
+        6ghz)
+            echo "$phy_info" | grep -qE "(59[2-9][0-9]|6[0-9]{3}|7[01][0-9]{2}) MHz" && return 0
+            ;;
+        24ghz)
+            echo "$phy_info" | grep -qE "24[0-9]{2} MHz" && return 0
+            ;;
+        ap)
+            echo "$phy_info" | grep -qE "AP$|AP\s" && return 0
+            ;;
+    esac
+
+    return 1
 }
 
 detect_ht_capabilities() {
