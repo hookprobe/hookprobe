@@ -386,6 +386,201 @@ get_phy_for_iface() {
     fi
 }
 
+get_wifi_driver() {
+    # Get the WiFi driver name for an interface
+    #
+    # Args:
+    #   $1 - Interface name
+    #
+    # Returns: Driver name (e.g., "ath12k_pci", "iwlwifi", "mt76x2u")
+
+    local iface="$1"
+    local driver=""
+
+    # Method 1: Check /sys/class/net/*/device/driver
+    if [ -L "/sys/class/net/$iface/device/driver" ]; then
+        driver=$(basename "$(readlink -f /sys/class/net/$iface/device/driver)")
+    fi
+
+    # Method 2: Try phy80211 driver
+    if [ -z "$driver" ] && [ -L "/sys/class/net/$iface/phy80211" ]; then
+        local phy
+        phy=$(basename "$(readlink -f /sys/class/net/$iface/phy80211)")
+        if [ -L "/sys/class/ieee80211/$phy/device/driver" ]; then
+            driver=$(basename "$(readlink -f /sys/class/ieee80211/$phy/device/driver)")
+        fi
+    fi
+
+    # Method 3: ethtool -i
+    if [ -z "$driver" ] && command -v ethtool &>/dev/null; then
+        driver=$(ethtool -i "$iface" 2>/dev/null | grep "^driver:" | awk '{print $2}')
+    fi
+
+    echo "$driver"
+}
+
+is_ath12k_driver() {
+    # Check if interface uses ath12k driver (WiFi 7 / QCN9274)
+    # ath12k has known limitations:
+    #   - fragm_threshold not supported (-95 Operation not supported)
+    #   - "iw phy <name> info" doesn't work, must use "iw phy | sed"
+    #
+    # Args:
+    #   $1 - Interface name
+    #
+    # Returns: 0 if ath12k, 1 otherwise
+
+    local iface="$1"
+    local driver
+    driver=$(get_wifi_driver "$iface")
+
+    case "$driver" in
+        ath12k*|ath11k*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+prepare_interface_for_hostapd() {
+    # Prepare interface for hostapd by releasing it from other services
+    #
+    # This ensures NetworkManager and wpa_supplicant don't hold the interface
+    # which would cause "Device or resource busy" errors
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+
+    log_info "Preparing interface $iface for hostapd..."
+
+    # Stop wpa_supplicant if running on this interface
+    if pgrep -f "wpa_supplicant.*$iface" &>/dev/null; then
+        log_info "  Stopping wpa_supplicant on $iface"
+        pkill -f "wpa_supplicant.*-i$iface" 2>/dev/null || true
+        pkill -f "wpa_supplicant.*$iface" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Tell NetworkManager to unmanage this interface
+    if command -v nmcli &>/dev/null; then
+        # Check if NM is managing this interface
+        if nmcli -t -f DEVICE,STATE device 2>/dev/null | grep -q "^$iface:"; then
+            log_info "  Setting $iface as unmanaged by NetworkManager"
+            nmcli device set "$iface" managed no 2>/dev/null || true
+        fi
+    fi
+
+    # Release any IP address
+    ip addr flush dev "$iface" 2>/dev/null || true
+
+    # Ensure interface is up but not connected
+    ip link set "$iface" up 2>/dev/null || true
+
+    # Set interface to monitor mode and back to managed to reset state
+    # This clears any stale connection attempts
+    iw dev "$iface" set type managed 2>/dev/null || true
+
+    log_success "  Interface $iface prepared for hostapd"
+}
+
+ensure_bridge_exists() {
+    # Ensure the bridge exists for hostapd VLAN tagging
+    #
+    # Args:
+    #   $1 - Bridge name (default: br-lan)
+    #   $2 - Gateway IP (default: 10.200.1.1)
+    #   $3 - Netmask (default: 24)
+    #
+    # If bridge doesn't exist, create it using bridge-manager.sh or manually
+
+    local bridge="${1:-br-lan}"
+    local gateway="${2:-10.200.1.1}"
+    local netmask="${3:-24}"
+
+    # Check if bridge exists
+    if ip link show "$bridge" &>/dev/null; then
+        return 0
+    fi
+
+    log_info "Creating bridge $bridge for VLAN tagging..."
+
+    # Try using bridge-manager.sh if available
+    if [ -x "$SCRIPT_DIR/bridge-manager.sh" ]; then
+        "$SCRIPT_DIR/bridge-manager.sh" create "$bridge" "$gateway" 2>/dev/null && return 0
+    fi
+
+    # Manual bridge creation
+    if ! ip link add name "$bridge" type bridge 2>/dev/null; then
+        log_warn "Could not create bridge $bridge (may need root)"
+        return 1
+    fi
+
+    # Configure bridge
+    ip link set "$bridge" up 2>/dev/null || true
+
+    # Add IP if not already present
+    if ! ip addr show "$bridge" 2>/dev/null | grep -q "$gateway"; then
+        ip addr add "${gateway}/${netmask}" dev "$bridge" 2>/dev/null || true
+    fi
+
+    # Enable STP
+    echo 1 > /sys/class/net/"$bridge"/bridge/stp_state 2>/dev/null || true
+
+    log_success "Bridge $bridge created with gateway $gateway/$netmask"
+    return 0
+}
+
+create_networkmanager_unmanaged_rule() {
+    # Create udev/NetworkManager rule to mark WiFi AP interfaces as unmanaged
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+    local nm_conf="/etc/NetworkManager/conf.d/10-fortress-unmanaged.conf"
+
+    # Only if NetworkManager is installed
+    if ! command -v nmcli &>/dev/null; then
+        return 0
+    fi
+
+    mkdir -p /etc/NetworkManager/conf.d
+
+    # Check if rule already exists
+    if [ -f "$nm_conf" ] && grep -q "$iface" "$nm_conf"; then
+        return 0
+    fi
+
+    log_info "Creating NetworkManager unmanaged rule for $iface"
+
+    # Append to existing file or create new
+    if [ -f "$nm_conf" ]; then
+        # Add interface to keyfile unmanaged list if not in [keyfile] section
+        if ! grep -q "\[keyfile\]" "$nm_conf"; then
+            echo "" >> "$nm_conf"
+            echo "[keyfile]" >> "$nm_conf"
+            echo "unmanaged-devices=interface-name:$iface" >> "$nm_conf"
+        else
+            # Append to existing unmanaged-devices line
+            sed -i "/^unmanaged-devices=/ s/$/;interface-name:$iface/" "$nm_conf"
+        fi
+    else
+        cat > "$nm_conf" << EOF
+# Fortress WiFi AP interfaces - do not manage with NetworkManager
+[keyfile]
+unmanaged-devices=interface-name:$iface
+EOF
+    fi
+
+    # Reload NetworkManager if running
+    if systemctl is-active --quiet NetworkManager; then
+        nmcli general reload conf 2>/dev/null || true
+    fi
+}
+
 verify_band_support() {
     # Verify that hardware actually supports a specific band
     # This checks the phy capabilities directly, not just the state file
@@ -831,6 +1026,24 @@ generate_hostapd_24ghz() {
     local ht_capab
     ht_capab=$(detect_ht_capabilities "$iface" "$channel")
 
+    # Detect driver for capability restrictions
+    local wifi_driver
+    wifi_driver=$(get_wifi_driver "$iface")
+    local skip_fragm=false
+    if is_ath12k_driver "$iface"; then
+        log_info "  Driver: $wifi_driver (ath12k - fragm_threshold disabled)"
+        skip_fragm=true
+    else
+        log_info "  Driver: ${wifi_driver:-unknown}"
+    fi
+
+    # Prepare interface (stop wpa_supplicant, unmanage from NetworkManager)
+    prepare_interface_for_hostapd "$iface"
+    create_networkmanager_unmanaged_rule "$iface"
+
+    # Ensure bridge exists for VLAN tagging
+    ensure_bridge_exists "$bridge"
+
     local supports_ax=false
     # Check hardware capability for WiFi 6
     local hw_supports_ax=false
@@ -921,7 +1134,16 @@ vlan_naming=1
 beacon_int=100
 dtim_period=2
 rts_threshold=2347
-fragm_threshold=2346
+EOF
+
+    # Add fragm_threshold only if driver supports it (ath12k does not)
+    if ! $skip_fragm; then
+        echo "fragm_threshold=2346" >> "$HOSTAPD_24GHZ_CONF"
+    else
+        echo "# fragm_threshold disabled - not supported by $wifi_driver driver" >> "$HOSTAPD_24GHZ_CONF"
+    fi
+
+    cat >> "$HOSTAPD_24GHZ_CONF" << EOF
 
 # Logging
 logger_syslog=-1
@@ -937,6 +1159,41 @@ EOF
     log_success "  Channel: $channel"
 
     echo "$HOSTAPD_24GHZ_CONF"
+}
+
+# EU/ETSI countries - UNII-3 (149-165) typically not allowed without special license
+EU_COUNTRIES="AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE"
+# Also include EEA and other ETSI countries
+ETSI_COUNTRIES="$EU_COUNTRIES GB CH NO IS LI"
+
+is_eu_country() {
+    # Check if country code is in EU/ETSI region
+    local country="$1"
+    echo "$ETSI_COUNTRIES" | grep -qw "$country"
+}
+
+get_safe_5ghz_channel() {
+    # Get a safe 5GHz channel based on regulatory domain
+    # EU/ETSI: Use UNII-1 (36-48) - always allowed
+    # Other: Can use UNII-3 (149-165) as well
+    #
+    # Args:
+    #   $1 - Country code
+    #   $2 - Interface (for scanning)
+
+    local country="$1"
+    local iface="$2"
+
+    if is_eu_country "$country"; then
+        # EU/ETSI: UNII-1 only (channels 36, 40, 44, 48)
+        # These are always allowed without DFS
+        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)"
+        echo "36"
+    else
+        # Non-EU: Can use UNII-3 (149-165) which often has less interference
+        log_info "  Non-EU country - UNII-3 band available (channels 149-165)"
+        echo "149"
+    fi
 }
 
 generate_hostapd_5ghz() {
@@ -978,17 +1235,63 @@ generate_hostapd_5ghz() {
     log_info "  Bridge: $bridge"
     log_info "  Country: $country_code (auto-detected)"
 
-    # Auto channel selection
+    # Auto channel selection - EU/ETSI aware
     if [ "$channel" = "auto" ]; then
-        channel=36  # Default if scan not available
+        # Get safe default based on regulatory domain
+        channel=$(get_safe_5ghz_channel "$country_code" "$iface")
+
+        # Try to scan for best channel if scanner available
         if [ -x "$SCRIPT_DIR/network-interface-detector.sh" ]; then
-            channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || channel=36
+            local scanned_channel
+            scanned_channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || true
+
+            # Only use scanned channel if it's in the allowed range for this region
+            if [ -n "$scanned_channel" ]; then
+                if is_eu_country "$country_code"; then
+                    # EU: Only accept UNII-1 channels (36-48)
+                    if [ "$scanned_channel" -ge 36 ] && [ "$scanned_channel" -le 48 ] 2>/dev/null; then
+                        channel="$scanned_channel"
+                        log_info "  Using scanned channel $channel (UNII-1)"
+                    else
+                        log_warn "  Scanned channel $scanned_channel not allowed in EU, using $channel"
+                    fi
+                else
+                    # Non-EU: Accept any valid 5GHz channel
+                    channel="$scanned_channel"
+                fi
+            fi
+        fi
+    else
+        # Manual channel specified - validate for EU
+        if is_eu_country "$country_code"; then
+            if [ "$channel" -ge 149 ] && [ "$channel" -le 177 ] 2>/dev/null; then
+                log_warn "  Channel $channel (UNII-3) may not be allowed in EU country $country_code"
+                log_warn "  Consider using channels 36-48 (UNII-1) instead"
+            fi
         fi
     fi
 
     # Detect capabilities
     local vht_capab
     vht_capab=$(detect_vht_capabilities "$iface")
+
+    # Detect driver for capability restrictions
+    local wifi_driver
+    wifi_driver=$(get_wifi_driver "$iface")
+    local skip_fragm=false
+    if is_ath12k_driver "$iface"; then
+        log_info "  Driver: $wifi_driver (ath12k - fragm_threshold disabled)"
+        skip_fragm=true
+    else
+        log_info "  Driver: ${wifi_driver:-unknown}"
+    fi
+
+    # Prepare interface (stop wpa_supplicant, unmanage from NetworkManager)
+    prepare_interface_for_hostapd "$iface"
+    create_networkmanager_unmanaged_rule "$iface"
+
+    # Ensure bridge exists for VLAN tagging
+    ensure_bridge_exists "$bridge"
 
     local supports_ac=false
     local supports_ax=false
@@ -1179,7 +1482,16 @@ vlan_naming=1
 beacon_int=100
 dtim_period=2
 rts_threshold=2347
-fragm_threshold=2346
+EOF
+
+    # Add fragm_threshold only if driver supports it (ath12k does not)
+    if ! $skip_fragm; then
+        echo "fragm_threshold=2346" >> "$HOSTAPD_5GHZ_CONF"
+    else
+        echo "# fragm_threshold disabled - not supported by $wifi_driver driver" >> "$HOSTAPD_5GHZ_CONF"
+    fi
+
+    cat >> "$HOSTAPD_5GHZ_CONF" << EOF
 
 # Logging
 logger_syslog=-1
