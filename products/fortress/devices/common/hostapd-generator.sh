@@ -1123,12 +1123,14 @@ macaddr_acl=0
 ap_isolate=0
 max_num_sta=64
 
-# Dynamic VLAN Assignment
+# Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
+# To enable: set dynamic_vlan=1, create /etc/hostapd/hostapd.vlan,
+# and ensure VLAN bridges (br-mgmt, br-pos, br-staff, br-guest, br-iot) exist
 # VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
-dynamic_vlan=1
-vlan_file=$HOSTAPD_VLAN_FILE
-vlan_tagged_interface=$bridge
-vlan_naming=1
+dynamic_vlan=0
+#vlan_file=$HOSTAPD_VLAN_FILE
+#vlan_tagged_interface=$bridge
+#vlan_naming=1
 
 # Performance Tuning
 beacon_int=100
@@ -1180,6 +1182,8 @@ get_safe_5ghz_channel() {
     # Args:
     #   $1 - Country code
     #   $2 - Interface (for scanning)
+    #
+    # Note: log_info redirected to stderr to avoid polluting channel output
 
     local country="$1"
     local iface="$2"
@@ -1187,11 +1191,11 @@ get_safe_5ghz_channel() {
     if is_eu_country "$country"; then
         # EU/ETSI: UNII-1 only (channels 36, 40, 44, 48)
         # These are always allowed without DFS
-        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)"
+        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)" >&2
         echo "36"
     else
         # Non-EU: Can use UNII-3 (149-165) which often has less interference
-        log_info "  Non-EU country - UNII-3 band available (channels 149-165)"
+        log_info "  Non-EU country - UNII-3 band available (channels 149-165)" >&2
         echo "149"
     fi
 }
@@ -1471,12 +1475,14 @@ macaddr_acl=0
 ap_isolate=0
 max_num_sta=128
 
-# Dynamic VLAN Assignment
+# Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
+# To enable: set dynamic_vlan=1, create /etc/hostapd/hostapd.vlan,
+# and ensure VLAN bridges (br-mgmt, br-pos, br-staff, br-guest, br-iot) exist
 # VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
-dynamic_vlan=1
-vlan_file=$HOSTAPD_VLAN_FILE
-vlan_tagged_interface=$bridge
-vlan_naming=1
+dynamic_vlan=0
+#vlan_file=$HOSTAPD_VLAN_FILE
+#vlan_tagged_interface=$bridge
+#vlan_naming=1
 
 # Performance Tuning (High Throughput)
 beacon_int=100
@@ -1731,6 +1737,85 @@ EOF
 }
 
 # ============================================================
+# VLAN SETUP HELPER
+# ============================================================
+
+setup_vlan_infrastructure() {
+    # Set up VLAN infrastructure for hostapd dynamic VLANs
+    #
+    # This creates:
+    #   1. VLAN bridges (br-mgmt, br-pos, br-staff, br-guest, br-iot)
+    #   2. hostapd.vlan mapping file
+    #   3. Enables dynamic_vlan in hostapd configs
+    #
+    # Run this AFTER generating hostapd configs if you want VLAN segregation
+
+    log_info "Setting up VLAN infrastructure for hostapd..."
+
+    # Create VLAN bridges
+    local vlan_bridges="br-mgmt br-pos br-staff br-guest br-iot"
+    for bridge in $vlan_bridges; do
+        if ! ip link show "$bridge" &>/dev/null; then
+            log_info "  Creating bridge $bridge"
+            ip link add name "$bridge" type bridge 2>/dev/null || true
+            ip link set "$bridge" up 2>/dev/null || true
+        else
+            log_info "  Bridge $bridge already exists"
+        fi
+    done
+
+    # Create hostapd.vlan mapping file
+    log_info "  Creating $HOSTAPD_VLAN_FILE"
+    cat > "$HOSTAPD_VLAN_FILE" << 'EOF'
+# hostapd VLAN mapping file
+# Format: vlan_id bridge_name
+# VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
+10 br-mgmt
+20 br-pos
+30 br-staff
+40 br-guest
+99 br-iot
+EOF
+    chmod 644 "$HOSTAPD_VLAN_FILE"
+
+    # Enable dynamic VLANs in existing configs
+    for conf in "$HOSTAPD_24GHZ_CONF" "$HOSTAPD_5GHZ_CONF"; do
+        if [ -f "$conf" ]; then
+            log_info "  Enabling dynamic VLANs in $conf"
+            sed -i 's/^dynamic_vlan=0/dynamic_vlan=1/' "$conf"
+            sed -i 's/^#vlan_file=/vlan_file=/' "$conf"
+            sed -i 's/^#vlan_tagged_interface=/vlan_tagged_interface=/' "$conf"
+            sed -i 's/^#vlan_naming=/vlan_naming=/' "$conf"
+        fi
+    done
+
+    log_success "VLAN infrastructure ready"
+    log_info "  Restart hostapd services to apply: systemctl restart fortress-hostapd-*"
+}
+
+disable_vlan_infrastructure() {
+    # Disable dynamic VLANs in hostapd configs
+    #
+    # Use this if you want to run without VLAN segregation
+
+    log_info "Disabling VLAN infrastructure..."
+
+    for conf in "$HOSTAPD_24GHZ_CONF" "$HOSTAPD_5GHZ_CONF"; do
+        if [ -f "$conf" ]; then
+            log_info "  Disabling dynamic VLANs in $conf"
+            sed -i 's/^dynamic_vlan=1/dynamic_vlan=0/' "$conf"
+            sed -i 's/^dynamic_vlan=2/dynamic_vlan=0/' "$conf"
+            sed -i 's/^vlan_file=/#vlan_file=/' "$conf"
+            sed -i 's/^vlan_tagged_interface=/#vlan_tagged_interface=/' "$conf"
+            sed -i 's/^vlan_naming=/#vlan_naming=/' "$conf"
+        fi
+    done
+
+    log_success "Dynamic VLANs disabled"
+    log_info "  Restart hostapd services to apply: systemctl restart fortress-hostapd-*"
+}
+
+# ============================================================
 # MAIN CONFIGURATION WORKFLOW
 # ============================================================
 
@@ -1900,18 +1985,22 @@ usage() {
     echo "                    - Generate 2.4GHz config only"
     echo "  5ghz <iface> <ssid> <password> [channel] [bridge]"
     echo "                    - Generate 5GHz config only"
-    echo "  vlan              - Generate VLAN configuration"
+    echo "  vlan              - Generate VLAN file only"
     echo "  systemd           - Generate systemd services"
+    echo "  setup-vlan        - Set up VLAN infrastructure (bridges + enable in configs)"
+    echo "  disable-vlan      - Disable VLAN infrastructure in configs"
     echo ""
     echo "Examples:"
     echo "  $0 configure MyNetwork 'MySecurePassword123'"
     echo "  $0 24ghz wlan0 MyNetwork 'MyPassword' 6 br-lan"
     echo "  $0 5ghz wlan1 MyNetwork 'MyPassword' 36 br-lan"
+    echo "  $0 setup-vlan     # Enable VLAN segregation after config"
     echo ""
     echo "Security:"
     echo "  - 2.4GHz uses WPA2-PSK for IoT device compatibility"
     echo "  - 5GHz uses WPA3-SAE with WPA2-PSK fallback"
     echo "  - Passwords must be at least 8 characters"
+    echo "  - Dynamic VLANs disabled by default (use 'setup-vlan' to enable)"
     echo ""
 }
 
@@ -1935,6 +2024,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             ;;
         systemd)
             generate_systemd_services "true" "true"
+            ;;
+        setup-vlan)
+            setup_vlan_infrastructure
+            ;;
+        disable-vlan)
+            disable_vlan_infrastructure
             ;;
         *)
             usage
