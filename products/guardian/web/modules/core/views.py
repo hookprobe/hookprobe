@@ -197,11 +197,42 @@ def api_dashboard():
     try:
         system = get_system_info()
 
-        # Get network stats for multiple interfaces
-        wan_interface = current_app.config.get('WAN_INTERFACE', 'eth0')
-        lan_interface = current_app.config.get('LAN_INTERFACE', 'wlan0')
-        wan_stats = get_network_stats(wan_interface)
-        lan_stats = get_network_stats(lan_interface)
+        # Auto-detect network interfaces if not configured
+        available = _get_available_interfaces()
+
+        # Find WAN interface (prefer config, then first wired interface)
+        wan_interface = current_app.config.get('WAN_INTERFACE', '')
+        if not wan_interface or not _interface_exists(wan_interface):
+            # Try common wired interface names
+            for iface in ['eth0', 'enp0s3', 'enp0s25', 'ens33', 'en0']:
+                if _interface_exists(iface):
+                    wan_interface = iface
+                    break
+            # Fallback to any wired interface
+            if not wan_interface:
+                for iface in available:
+                    if iface.get('type') == 'wired' and iface.get('state') == 'up':
+                        wan_interface = iface.get('name')
+                        break
+
+        # Find LAN interface (prefer config, then first wireless interface)
+        lan_interface = current_app.config.get('LAN_INTERFACE', '')
+        if not lan_interface or not _interface_exists(lan_interface):
+            # Try common wireless interface names
+            for iface in ['wlan0', 'wlan1', 'wlp2s0', 'wlp3s0']:
+                if _interface_exists(iface):
+                    lan_interface = iface
+                    break
+            # Fallback to any wireless interface
+            if not lan_interface:
+                for iface in available:
+                    if iface.get('type') == 'wireless' and iface.get('state') == 'up':
+                        lan_interface = iface.get('name')
+                        break
+
+        # Get stats for detected interfaces
+        wan_stats = get_network_stats(wan_interface) if wan_interface else {'rx_bytes': 0, 'tx_bytes': 0, 'rx_packets': 0, 'tx_packets': 0}
+        lan_stats = get_network_stats(lan_interface) if lan_interface else {'rx_bytes': 0, 'tx_bytes': 0, 'rx_packets': 0, 'tx_packets': 0}
 
         # Get list of available interfaces
         interfaces = _get_available_interfaces()
@@ -282,6 +313,13 @@ def _get_connected_clients_count():
         return 0
 
 
+def _interface_exists(iface_name):
+    """Check if a network interface exists."""
+    if not iface_name:
+        return False
+    return os.path.exists(f'/sys/class/net/{iface_name}')
+
+
 def _get_available_interfaces():
     """Get list of available network interfaces."""
     interfaces = []
@@ -298,10 +336,16 @@ def _get_available_interfaces():
                         if os.path.exists(operstate_file):
                             with open(operstate_file, 'r') as f:
                                 state = f.read().strip()
+                        # Determine interface type
+                        iface_type = 'wired'
+                        if iface.startswith(('wlan', 'wlp', 'wifi')):
+                            iface_type = 'wireless'
+                        elif iface.startswith(('eth', 'enp', 'ens', 'en')):
+                            iface_type = 'wired'
                         interfaces.append({
                             'name': iface,
                             'state': state,
-                            'type': 'wireless' if iface.startswith('wlan') else 'wired'
+                            'type': iface_type
                         })
     except (IOError, OSError):
         pass
