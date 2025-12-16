@@ -359,6 +359,145 @@ EOF
 }
 
 # ========================================
+# DHCP Server Setup (dnsmasq)
+# ========================================
+
+# Configure dnsmasq for VLAN-based DHCP
+setup_dnsmasq_vlans() {
+    log_info "Configuring dnsmasq for VLAN-based DHCP..."
+
+    if ! command -v dnsmasq &>/dev/null; then
+        log_warn "dnsmasq not installed, skipping DHCP setup"
+        log_info "Install with: apt-get install dnsmasq"
+        return 1
+    fi
+
+    # Create dnsmasq config directory
+    mkdir -p /etc/dnsmasq.d
+
+    # Create main Fortress dnsmasq config
+    cat > /etc/dnsmasq.d/fortress-vlans.conf << EOF
+# HookProbe Fortress VLAN DHCP Configuration
+# Generated: $(date -Iseconds)
+#
+# Each VLAN interface provides DHCP for its subnet
+
+# Global settings
+domain-needed
+bogus-priv
+no-resolv
+no-poll
+
+# Upstream DNS servers
+server=1.1.1.1
+server=8.8.8.8
+
+# Local domain
+domain=fortress.local
+local=/fortress.local/
+
+# Logging
+log-dhcp
+log-facility=/var/log/fortress-dnsmasq.log
+
+# Lease file
+dhcp-leasefile=/var/lib/misc/fortress-dnsmasq.leases
+
+# VLAN 10 - Management (${SUBNET_PREFIX}.10.x)
+interface=vlan10
+dhcp-range=vlan10,${SUBNET_PREFIX}.10.100,${SUBNET_PREFIX}.10.200,255.255.255.0,12h
+dhcp-option=vlan10,3,${SUBNET_PREFIX}.10.1
+dhcp-option=vlan10,6,${SUBNET_PREFIX}.10.1,1.1.1.1
+
+# VLAN 20 - POS (${SUBNET_PREFIX}.20.x)
+interface=vlan20
+dhcp-range=vlan20,${SUBNET_PREFIX}.20.100,${SUBNET_PREFIX}.20.200,255.255.255.0,12h
+dhcp-option=vlan20,3,${SUBNET_PREFIX}.20.1
+dhcp-option=vlan20,6,${SUBNET_PREFIX}.20.1,1.1.1.1
+
+# VLAN 30 - Staff (${SUBNET_PREFIX}.30.x)
+interface=vlan30
+dhcp-range=vlan30,${SUBNET_PREFIX}.30.100,${SUBNET_PREFIX}.30.200,255.255.255.0,12h
+dhcp-option=vlan30,3,${SUBNET_PREFIX}.30.1
+dhcp-option=vlan30,6,${SUBNET_PREFIX}.30.1,1.1.1.1
+
+# VLAN 40 - Guest (${SUBNET_PREFIX}.40.x)
+interface=vlan40
+dhcp-range=vlan40,${SUBNET_PREFIX}.40.100,${SUBNET_PREFIX}.40.200,255.255.255.0,12h
+dhcp-option=vlan40,3,${SUBNET_PREFIX}.40.1
+dhcp-option=vlan40,6,${SUBNET_PREFIX}.40.1,1.1.1.1
+
+# VLAN 99 - IoT (${SUBNET_PREFIX}.99.x)
+interface=vlan99
+dhcp-range=vlan99,${SUBNET_PREFIX}.99.100,${SUBNET_PREFIX}.99.200,255.255.255.0,12h
+dhcp-option=vlan99,3,${SUBNET_PREFIX}.99.1
+dhcp-option=vlan99,6,${SUBNET_PREFIX}.99.1,1.1.1.1
+
+# Also listen on main bridge for untagged traffic
+interface=${OVS_BRIDGE}
+dhcp-range=${OVS_BRIDGE},${SUBNET_PREFIX}.0.100,${SUBNET_PREFIX}.0.200,255.255.0.0,12h
+dhcp-option=${OVS_BRIDGE},3,${SUBNET_PREFIX}.0.1
+dhcp-option=${OVS_BRIDGE},6,${SUBNET_PREFIX}.0.1,1.1.1.1
+
+# Bind only to specified interfaces
+bind-interfaces
+EOF
+
+    # Create lease directory and file
+    mkdir -p /var/lib/misc
+    touch /var/lib/misc/fortress-dnsmasq.leases
+
+    # Create systemd service for fortress-dnsmasq if not exists
+    if [ ! -f /etc/systemd/system/fortress-dnsmasq.service ]; then
+        cat > /etc/systemd/system/fortress-dnsmasq.service << 'SVCEOF'
+[Unit]
+Description=Fortress DHCP and DNS Server
+After=network.target
+Wants=network.target
+
+[Service]
+Type=forking
+PIDFile=/run/fortress-dnsmasq.pid
+ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress-vlans.conf
+ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress-vlans.conf --pid-file=/run/fortress-dnsmasq.pid
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+
+    # Stop conflicting dnsmasq instances
+    systemctl stop dnsmasq 2>/dev/null || true
+    systemctl disable dnsmasq 2>/dev/null || true
+    pkill -f "dnsmasq.*fortress-bridge" 2>/dev/null || true
+
+    # Enable and restart fortress-dnsmasq
+    systemctl enable fortress-dnsmasq 2>/dev/null || true
+    systemctl restart fortress-dnsmasq 2>/dev/null || {
+        log_warn "Failed to start fortress-dnsmasq via systemd"
+        # Try starting directly
+        pkill dnsmasq 2>/dev/null || true
+        sleep 1
+        /usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress-vlans.conf --pid-file=/run/fortress-dnsmasq.pid &
+    }
+
+    # Verify dnsmasq is running
+    sleep 2
+    if pgrep -f "dnsmasq.*fortress-vlans" >/dev/null; then
+        log_success "dnsmasq DHCP server running"
+    else
+        log_error "dnsmasq failed to start - check /var/log/fortress-dnsmasq.log"
+        return 1
+    fi
+
+    log_success "DHCP configured for all VLANs"
+}
+
+# ========================================
 # Hostapd Update
 # ========================================
 
@@ -425,6 +564,24 @@ show_network_status() {
     done
     echo ""
 
+    echo "DHCP Status:"
+    if pgrep -f "dnsmasq" >/dev/null 2>&1; then
+        echo "  dnsmasq: RUNNING (PID: $(pgrep -f dnsmasq | head -1))"
+        if [ -f /etc/dnsmasq.d/fortress-vlans.conf ]; then
+            echo "  Config: /etc/dnsmasq.d/fortress-vlans.conf"
+            echo "  Listening on interfaces:"
+            grep "^interface=" /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null | sed 's/interface=/    - /'
+        fi
+        if [ -f /var/lib/misc/fortress-dnsmasq.leases ]; then
+            local lease_count
+            lease_count=$(wc -l < /var/lib/misc/fortress-dnsmasq.leases 2>/dev/null || echo "0")
+            echo "  Active leases: $lease_count"
+        fi
+    else
+        echo "  dnsmasq: NOT RUNNING"
+    fi
+    echo ""
+
     echo "OVS Flow Rules (MAC-to-VLAN):"
     ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep "dl_src=" | head -10
     echo ""
@@ -478,6 +635,10 @@ cleanup_network() {
     update_hostapd_configs
     echo ""
 
+    # Step 8: Configure DHCP server for VLANs
+    setup_dnsmasq_vlans
+    echo ""
+
     log_success "Network cleanup complete!"
 }
 
@@ -505,7 +666,8 @@ usage() {
     echo "Commands:"
     echo "  cleanup       - Clean up redundant bridges and consolidate on OVS"
     echo "  podman        - Set up Podman OVS integration"
-    echo "  full          - Full cleanup + Podman setup"
+    echo "  dhcp          - Configure DHCP server for all VLANs"
+    echo "  full          - Full cleanup + Podman + DHCP setup"
     echo "  status        - Show current network status"
     echo ""
     echo "Environment Variables:"
@@ -514,8 +676,17 @@ usage() {
     echo "  WIFI_5GHZ_VLAN      - VLAN for 5GHz AP (default: 30 Staff)"
     echo "  FORTRESS_SUBNET     - Subnet prefix (default: 10.250)"
     echo ""
+    echo "DHCP Ranges (per VLAN):"
+    echo "  VLAN 10 (Management): ${SUBNET_PREFIX}.10.100-200"
+    echo "  VLAN 20 (POS):        ${SUBNET_PREFIX}.20.100-200"
+    echo "  VLAN 30 (Staff):      ${SUBNET_PREFIX}.30.100-200"
+    echo "  VLAN 40 (Guest):      ${SUBNET_PREFIX}.40.100-200"
+    echo "  VLAN 99 (IoT):        ${SUBNET_PREFIX}.99.100-200"
+    echo "  Main bridge:          ${SUBNET_PREFIX}.0.100-200"
+    echo ""
     echo "Examples:"
     echo "  $0 cleanup                      # Clean up network"
+    echo "  $0 dhcp                         # Configure DHCP only"
     echo "  $0 full                         # Full setup"
     echo "  WIFI_5GHZ_VLAN=10 $0 cleanup    # 5GHz on Management VLAN"
     echo ""
@@ -528,6 +699,9 @@ case "${1:-}" in
         ;;
     podman)
         setup_podman
+        ;;
+    dhcp)
+        setup_dnsmasq_vlans
         ;;
     full)
         full_setup
