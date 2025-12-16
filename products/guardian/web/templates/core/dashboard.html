@@ -512,7 +512,7 @@
     setInterval(update, 1000);
 })();
 
-// Network Traffic Visualization - Vertical Bars with Particles
+// Network Traffic Visualization - Vertical Bars with RAG Status
 (function initTrafficViz() {
     const canvas = document.getElementById('traffic-canvas');
     const hero = document.getElementById('dashboard-hero');
@@ -524,10 +524,12 @@
     let interfaceBars = [];
     let lastThreatCount = 0;
     let totalBlocks = 0;
-    let lastRxBytes = {};
-    let lastTxBytes = {};
 
-    // RAG color thresholds for blocks
+    // Traffic tracking for rate calculation
+    let lastUpdateTime = Date.now();
+    let trafficHistory = {};  // Keyed by interface name (eth0, wlan0, etc.)
+
+    // RAG color thresholds for blocks (per minute basis)
     const RAG_THRESHOLDS = {
         GREEN: 5,   // 0-5 blocks = green
         AMBER: 20   // 6-20 blocks = amber, 21+ = red
@@ -535,24 +537,29 @@
 
     // Colors
     const colors = {
-        barBg: 'rgba(255, 255, 255, 0.08)',
-        barBorder: 'rgba(255, 255, 255, 0.15)',
-        rxParticle: 'rgba(59, 130, 246, 0.8)',     // Blue for RX (download)
-        rxGlow: 'rgba(59, 130, 246, 0.4)',
-        txParticle: 'rgba(16, 185, 129, 0.8)',     // Green for TX (upload)
-        txGlow: 'rgba(16, 185, 129, 0.4)',
-        threat: '#FF6B8A',                         // Watermelon
-        threatGlow: 'rgba(255, 107, 138, 0.5)',
-        // RAG colors
-        green: 'rgba(16, 185, 129, 0.9)',
-        amber: 'rgba(245, 158, 11, 0.9)',
-        red: 'rgba(239, 68, 68, 0.9)'
+        barBg: 'rgba(255, 255, 255, 0.05)',
+        barBorder: 'rgba(255, 255, 255, 0.2)',
+        // RAG colors for fill
+        greenFill: 'rgba(16, 185, 129, 0.7)',
+        greenBorder: 'rgba(16, 185, 129, 1)',
+        amberFill: 'rgba(245, 158, 11, 0.7)',
+        amberBorder: 'rgba(245, 158, 11, 1)',
+        redFill: 'rgba(239, 68, 68, 0.7)',
+        redBorder: 'rgba(239, 68, 68, 1)',
+        // Particle colors
+        rxParticle: 'rgba(59, 130, 246, 0.9)',     // Blue for RX
+        txParticle: 'rgba(16, 185, 129, 0.9)',     // Green for TX
+        threat: '#FF6B8A'
     };
 
-    function getRAGColor(blockCount) {
-        if (blockCount <= RAG_THRESHOLDS.GREEN) return colors.green;
-        if (blockCount <= RAG_THRESHOLDS.AMBER) return colors.amber;
-        return colors.red;
+    function getRAGColors(blockCount) {
+        if (blockCount <= RAG_THRESHOLDS.GREEN) {
+            return { fill: colors.greenFill, border: colors.greenBorder };
+        }
+        if (blockCount <= RAG_THRESHOLDS.AMBER) {
+            return { fill: colors.amberFill, border: colors.amberBorder };
+        }
+        return { fill: colors.redFill, border: colors.redBorder };
     }
 
     function resize() {
@@ -564,221 +571,228 @@
 
     function initInterfaceBars() {
         interfaceBars = [];
-        // Create bars on the right side of the hero section
-        const barWidth = 24;
-        const barSpacing = 40;
-        const startX = width - 120; // Position from right edge
-        const barHeight = height - 50; // Leave room for labels
-        const topPadding = 15;
+        // Position bars prominently on the right side
+        const barWidth = 40;
+        const barSpacing = 20;
+        const rightMargin = 30;
+        const startX = width - rightMargin - (barWidth * 2) - barSpacing;
+        const barHeight = height - 70;
+        const topPadding = 25;
 
-        // WAN bar (primary)
+        // WAN bar (eth0) - shows combined RX+TX traffic rate
         interfaceBars.push({
-            name: 'WAN',
+            name: 'eth0',
+            label: 'WAN',
             x: startX,
             y: topPadding,
             width: barWidth,
             height: barHeight,
-            rxRate: 0,
-            txRate: 0,
+            fillLevel: 0,        // 0-1 fill based on traffic rate
+            targetFillLevel: 0,  // For smooth animation
             type: 'wan',
-            ragColor: colors.green
+            iface: 'eth0',       // Actual interface name
+            ragColors: getRAGColors(0),
+            rate: 0              // Current rate in bytes/sec
         });
 
-        // LAN bar (secondary)
+        // LAN bar (wlan0)
         interfaceBars.push({
-            name: 'LAN',
-            x: startX + barSpacing,
+            name: 'wlan0',
+            label: 'LAN',
+            x: startX + barWidth + barSpacing,
             y: topPadding,
             width: barWidth,
             height: barHeight,
-            rxRate: 0,
-            txRate: 0,
+            fillLevel: 0,
+            targetFillLevel: 0,
             type: 'lan',
-            ragColor: colors.green
+            iface: 'wlan0',
+            ragColors: getRAGColors(0),
+            rate: 0
         });
     }
 
     function spawnParticle(bar, direction, isThreat = false) {
-        // direction: 'up' for TX (sending), 'down' for RX (receiving)
         const isRx = direction === 'down';
+        const fillTop = bar.y + bar.height * (1 - bar.fillLevel);
         const startY = isRx ? bar.y : bar.y + bar.height;
-        const speed = 1.5 + Math.random() * 2;
+        const speed = 1.2 + Math.random() * 1.5;
 
         particles.push({
-            x: bar.x + bar.width / 2 + (Math.random() - 0.5) * (bar.width - 6),
+            x: bar.x + bar.width / 2 + (Math.random() - 0.5) * (bar.width - 10),
             y: startY,
             bar: bar,
             direction: direction,
-            speed: isRx ? speed : -speed, // Negative for going up
-            size: isThreat ? 4 : 2 + Math.random() * 1.5,
+            speed: isRx ? speed : -speed,
+            size: isThreat ? 5 : 2.5 + Math.random() * 1.5,
             isThreat: isThreat,
             isRx: isRx,
-            alpha: 1,
-            trail: []
+            alpha: 1
         });
     }
 
     function spawnBlockArrow(bar) {
-        // Create red arrow pointing at the bar
         const arrow = document.createElement('div');
         arrow.className = 'block-arrow';
         arrow.innerHTML = `<svg viewBox="0 0 24 24" fill="#FF6B8A">
             <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
         </svg>`;
         arrow.style.left = (bar.x - 45) + 'px';
-        arrow.style.top = (bar.y + bar.height / 2 - 16 + Math.random() * 40 - 20) + 'px';
+        arrow.style.top = (bar.y + bar.height / 2 - 16) + 'px';
         hero.appendChild(arrow);
         setTimeout(() => arrow.remove(), 1200);
 
-        // Also spawn threat particles going down the bar
+        // Spawn threat particles
         for (let i = 0; i < 3; i++) {
             setTimeout(() => spawnParticle(bar, 'down', true), i * 100);
         }
     }
 
     function spawnThreatDart() {
-        // Create DOM element for dart flash effect (legacy support)
         const dart = document.createElement('div');
         dart.className = 'threat-dart';
-        dart.style.left = (Math.random() * (width - 150) + 25) + 'px';
+        dart.style.left = (Math.random() * (width - 200) + 25) + 'px';
         dart.style.top = (Math.random() * (height - 30) + 15) + 'px';
         hero.appendChild(dart);
         setTimeout(() => dart.remove(), 800);
 
-        // Spawn block arrow on primary (WAN) bar
         if (interfaceBars.length > 0) {
             spawnBlockArrow(interfaceBars[0]);
         }
     }
 
     function update() {
+        // Smooth fill level animation
+        interfaceBars.forEach(bar => {
+            const diff = bar.targetFillLevel - bar.fillLevel;
+            bar.fillLevel += diff * 0.1;
+        });
+
         // Update particles
         for (let i = particles.length - 1; i >= 0; i--) {
             const p = particles[i];
             p.y += p.speed;
 
-            // Add slight horizontal drift
-            p.x += (Math.random() - 0.5) * 0.5;
-
-            // Keep within bar bounds
-            const minX = p.bar.x + 3;
-            const maxX = p.bar.x + p.bar.width - 3;
+            // Slight drift
+            p.x += (Math.random() - 0.5) * 0.3;
+            const minX = p.bar.x + 5;
+            const maxX = p.bar.x + p.bar.width - 5;
             p.x = Math.max(minX, Math.min(maxX, p.x));
 
-            // Store trail
-            p.trail.push({ x: p.x, y: p.y });
-            if (p.trail.length > 6) p.trail.shift();
-
-            // Fade out near edges
+            // Fade at edges
             const barTop = p.bar.y;
             const barBottom = p.bar.y + p.bar.height;
-            if (p.direction === 'down') {
-                if (p.y > barBottom - 20) {
-                    p.alpha = Math.max(0, (barBottom - p.y) / 20);
-                }
-            } else {
-                if (p.y < barTop + 20) {
-                    p.alpha = Math.max(0, (p.y - barTop) / 20);
-                }
+            if (p.direction === 'down' && p.y > barBottom - 15) {
+                p.alpha = Math.max(0, (barBottom - p.y) / 15);
+            } else if (p.direction === 'up' && p.y < barTop + 15) {
+                p.alpha = Math.max(0, (p.y - barTop) / 15);
             }
 
-            // Remove if off bar
-            if (p.y > barBottom + 10 || p.y < barTop - 10 || p.alpha <= 0) {
+            if (p.y > barBottom + 5 || p.y < barTop - 5 || p.alpha <= 0) {
                 particles.splice(i, 1);
             }
         }
 
-        // Spawn particles based on traffic rate for each bar
+        // Spawn particles based on traffic rate
         interfaceBars.forEach(bar => {
-            // RX particles (flowing down)
-            if (Math.random() < 0.02 + bar.rxRate * 0.15) {
-                spawnParticle(bar, 'down');
-            }
-            // TX particles (flowing up)
-            if (Math.random() < 0.02 + bar.txRate * 0.15) {
-                spawnParticle(bar, 'up');
+            const spawnRate = 0.02 + bar.fillLevel * 0.15;
+            if (Math.random() < spawnRate) {
+                spawnParticle(bar, Math.random() > 0.5 ? 'down' : 'up');
             }
         });
+    }
+
+    function formatRate(bytesPerSec) {
+        if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
+        if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+        return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
     }
 
     function draw() {
         ctx.clearRect(0, 0, width, height);
 
-        // Draw interface bars
         interfaceBars.forEach(bar => {
-            // Bar background with RAG-colored border
-            ctx.fillStyle = colors.barBg;
-            ctx.strokeStyle = bar.ragColor;
-            ctx.lineWidth = 2;
-
-            // Rounded rectangle
+            const fillHeight = bar.height * bar.fillLevel;
+            const fillY = bar.y + bar.height - fillHeight;
             const radius = 6;
-            ctx.beginPath();
-            ctx.moveTo(bar.x + radius, bar.y);
-            ctx.lineTo(bar.x + bar.width - radius, bar.y);
-            ctx.quadraticCurveTo(bar.x + bar.width, bar.y, bar.x + bar.width, bar.y + radius);
-            ctx.lineTo(bar.x + bar.width, bar.y + bar.height - radius);
-            ctx.quadraticCurveTo(bar.x + bar.width, bar.y + bar.height, bar.x + bar.width - radius, bar.y + bar.height);
-            ctx.lineTo(bar.x + radius, bar.y + bar.height);
-            ctx.quadraticCurveTo(bar.x, bar.y + bar.height, bar.x, bar.y + bar.height - radius);
-            ctx.lineTo(bar.x, bar.y + radius);
-            ctx.quadraticCurveTo(bar.x, bar.y, bar.x + radius, bar.y);
-            ctx.closePath();
+
+            // Draw bar background
+            ctx.fillStyle = colors.barBg;
+            ctx.strokeStyle = colors.barBorder;
+            ctx.lineWidth = 1;
+            drawRoundedRect(ctx, bar.x, bar.y, bar.width, bar.height, radius);
             ctx.fill();
             ctx.stroke();
 
-            // Add subtle glow effect based on RAG color
-            ctx.shadowColor = bar.ragColor;
-            ctx.shadowBlur = 8;
-            ctx.stroke();
-            ctx.shadowBlur = 0;
+            // Draw filled portion with RAG color
+            if (fillHeight > 0) {
+                ctx.fillStyle = bar.ragColors.fill;
+                ctx.strokeStyle = bar.ragColors.border;
+                ctx.lineWidth = 2;
 
-            // Draw interface label
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-            ctx.font = '600 10px system-ui, -apple-system, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(bar.name, bar.x + bar.width / 2, bar.y + bar.height + 14);
-
-            // Draw direction indicators
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-            ctx.font = '8px system-ui';
-            ctx.fillText('↓RX', bar.x + bar.width / 2, bar.y + 12);
-            ctx.fillText('↑TX', bar.x + bar.width / 2, bar.y + bar.height - 6);
-        });
-
-        // Draw particles with trails
-        particles.forEach(p => {
-            const baseColor = p.isThreat ? colors.threat :
-                             (p.isRx ? colors.rxParticle : colors.txParticle);
-            const glowColor = p.isThreat ? colors.threatGlow :
-                             (p.isRx ? colors.rxGlow : colors.txGlow);
-
-            // Draw trail
-            if (p.trail.length > 1) {
+                // Clip to bar bounds for fill
+                ctx.save();
                 ctx.beginPath();
-                ctx.strokeStyle = glowColor;
-                ctx.lineWidth = p.size * 0.6;
-                ctx.lineCap = 'round';
-                ctx.globalAlpha = p.alpha * 0.5;
-                p.trail.forEach((pt, i) => {
-                    if (i === 0) ctx.moveTo(pt.x, pt.y);
-                    else ctx.lineTo(pt.x, pt.y);
-                });
+                drawRoundedRect(ctx, bar.x, bar.y, bar.width, bar.height, radius);
+                ctx.clip();
+
+                // Draw fill from bottom
+                ctx.fillRect(bar.x, fillY, bar.width, fillHeight);
+                ctx.restore();
+
+                // Glow effect on border
+                ctx.shadowColor = bar.ragColors.border;
+                ctx.shadowBlur = 10;
+                drawRoundedRect(ctx, bar.x, bar.y, bar.width, bar.height, radius);
                 ctx.stroke();
-                ctx.globalAlpha = 1;
+                ctx.shadowBlur = 0;
             }
 
-            // Draw particle
+            // Draw interface label (show both label and interface name)
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(bar.label || bar.name, bar.x + bar.width / 2, bar.y + bar.height + 16);
+
+            // Draw rate below label
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.font = '9px system-ui';
+            ctx.fillText(formatRate(bar.rate), bar.x + bar.width / 2, bar.y + bar.height + 28);
+
+            // Draw directional indicators inside bar
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.font = '10px system-ui';
+            ctx.fillText('▼', bar.x + bar.width / 2, bar.y + 14);
+            ctx.fillText('▲', bar.x + bar.width / 2, bar.y + bar.height - 6);
+        });
+
+        // Draw particles
+        particles.forEach(p => {
+            const color = p.isThreat ? colors.threat : (p.isRx ? colors.rxParticle : colors.txParticle);
             ctx.beginPath();
-            ctx.fillStyle = baseColor;
-            ctx.shadowColor = baseColor;
-            ctx.shadowBlur = p.isThreat ? 12 : 6;
+            ctx.fillStyle = color;
             ctx.globalAlpha = p.alpha;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = p.isThreat ? 10 : 4;
             ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
             ctx.fill();
             ctx.shadowBlur = 0;
             ctx.globalAlpha = 1;
         });
+    }
+
+    function drawRoundedRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
     }
 
     function animate() {
@@ -787,7 +801,6 @@
         requestAnimationFrame(animate);
     }
 
-    // Format bytes to human readable
     function formatBytes(bytes) {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -795,78 +808,99 @@
         return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
     }
 
-    // Calculate traffic rate from byte changes
-    function calcRate(current, last) {
-        if (!last) return 0;
-        const diff = current - last;
-        if (diff <= 0) return 0;
-        // Normalize to 0-1 range (assume max ~10MB/s)
-        return Math.min(1, diff / (10 * 1024 * 1024));
-    }
-
-    // Fetch traffic stats and spawn threats on new blocks
     async function fetchTrafficStats() {
         try {
             const response = await fetch('/api/core/dashboard');
             if (response.ok) {
                 const data = await response.json();
+                const now = Date.now();
+                const timeDelta = (now - lastUpdateTime) / 1000; // seconds
+                lastUpdateTime = now;
 
-                // Update hero stats display
+                // Update hero stats
                 const rxEl = document.getElementById('hero-rx');
                 const txEl = document.getElementById('hero-tx');
                 const blockedEl = document.getElementById('hero-blocked');
                 const threatStat = document.getElementById('hero-threat-stat');
 
-                // Update total RX/TX display from primary interface
                 if (data.network) {
                     if (rxEl) rxEl.textContent = formatBytes(data.network.rx_bytes || 0);
                     if (txEl) txEl.textContent = formatBytes(data.network.tx_bytes || 0);
                 }
 
-                // Update interface bars with traffic data
+                // Calculate rates and update bars for each interface
                 if (data.interfaces) {
-                    Object.entries(data.interfaces).forEach(([iface, stats]) => {
-                        const bar = interfaceBars.find(b =>
-                            (b.type === 'wan' && stats.type === 'wan') ||
-                            (b.type === 'lan' && stats.type === 'lan')
-                        );
-                        if (bar) {
-                            bar.rxRate = calcRate(stats.rx_bytes, lastRxBytes[iface]);
-                            bar.txRate = calcRate(stats.tx_bytes, lastTxBytes[iface]);
-                            lastRxBytes[iface] = stats.rx_bytes;
-                            lastTxBytes[iface] = stats.tx_bytes;
+                    Object.entries(data.interfaces).forEach(([ifaceName, stats]) => {
+                        // Initialize history for this interface if needed
+                        if (!trafficHistory[ifaceName]) {
+                            trafficHistory[ifaceName] = {
+                                rxBytes: 0, txBytes: 0,
+                                rxRate: 0, txRate: 0,
+                                maxRate: 1024 * 1024  // 1 MB/s default max
+                            };
                         }
+                        const hist = trafficHistory[ifaceName];
+
+                        if (hist.rxBytes > 0 || hist.txBytes > 0) {
+                            // Calculate rate (bytes per second)
+                            const rxDelta = Math.max(0, stats.rx_bytes - hist.rxBytes);
+                            const txDelta = Math.max(0, stats.tx_bytes - hist.txBytes);
+                            const totalRate = (rxDelta + txDelta) / Math.max(timeDelta, 1);
+
+                            hist.rxRate = rxDelta / Math.max(timeDelta, 1);
+                            hist.txRate = txDelta / Math.max(timeDelta, 1);
+
+                            // Update max rate for scaling (with decay)
+                            hist.maxRate = Math.max(hist.maxRate * 0.99, totalRate, 1024);
+
+                            // Find bar by interface name OR by type
+                            const bar = interfaceBars.find(b =>
+                                b.iface === ifaceName || b.name === ifaceName || b.type === stats.type
+                            );
+                            if (bar) {
+                                bar.rate = totalRate;
+                                bar.targetFillLevel = Math.min(1, totalRate / hist.maxRate);
+                                // Update bar's interface name if we matched by type
+                                if (bar.iface !== ifaceName) {
+                                    bar.iface = ifaceName;
+                                    bar.name = ifaceName;
+                                }
+                            }
+                        }
+
+                        // Store current values for next calculation
+                        hist.rxBytes = stats.rx_bytes;
+                        hist.txBytes = stats.tx_bytes;
                     });
                 }
 
-                // Check for new threat blocks
+                // Update block count and RAG colors
                 const currentBlocks = (data.threats?.blocked || 0);
                 totalBlocks = currentBlocks;
                 if (blockedEl) blockedEl.textContent = currentBlocks;
 
-                // Update RAG colors on bars based on total blocks
-                const ragColor = getRAGColor(currentBlocks);
+                // Update RAG colors on all bars
+                const ragColors = getRAGColors(currentBlocks);
                 interfaceBars.forEach(bar => {
-                    bar.ragColor = ragColor;
+                    bar.ragColors = ragColors;
                 });
 
+                // Spawn visual effects for new blocks
                 if (currentBlocks > lastThreatCount && lastThreatCount > 0) {
-                    // New threats blocked - spawn arrows!
                     const newThreats = Math.min(currentBlocks - lastThreatCount, 5);
                     for (let i = 0; i < newThreats; i++) {
                         setTimeout(() => spawnThreatDart(), i * 200);
                     }
-                    // Pulse the blocked stat
                     if (threatStat) {
                         threatStat.classList.remove('has-threats');
-                        void threatStat.offsetWidth; // Trigger reflow
+                        void threatStat.offsetWidth;
                         threatStat.classList.add('has-threats');
                     }
                 }
                 lastThreatCount = currentBlocks;
             }
         } catch (e) {
-            // Silent fail - visualization continues
+            // Continue visualization even on error
         }
     }
 
@@ -875,11 +909,11 @@
     window.addEventListener('resize', resize);
     animate();
 
-    // Poll for traffic stats every 3 seconds
+    // Poll every 3 seconds
     fetchTrafficStats();
     setInterval(fetchTrafficStats, 3000);
 
-    // Expose methods for testing
+    // Expose for testing
     window.triggerThreatDart = spawnThreatDart;
     window.triggerBlockArrow = () => {
         if (interfaceBars.length > 0) spawnBlockArrow(interfaceBars[0]);
