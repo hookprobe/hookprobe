@@ -147,9 +147,8 @@ def get_dashboard_context():
     threat_file = current_app.config.get('THREAT_FILE', '/var/log/hookprobe/threats/aggregated.json')
     threats = load_json_file(threat_file, {'stats': {}})
 
-    # Get connected clients
-    output, success = run_command("ip neigh show | grep -v FAILED | wc -l")
-    connected_clients = int(output) if success and output.isdigit() else 0
+    # Get connected clients (without shell pipes)
+    connected_clients = _get_connected_clients_count()
 
     # Get layer threat data for security tab
     layer_threats = get_layer_threat_data()
@@ -195,62 +194,92 @@ def api_layer_threats():
 @core_bp.route('/api/core/dashboard')
 def api_dashboard():
     """Get dashboard data for real-time updates including traffic stats."""
-    system = get_system_info()
+    try:
+        system = get_system_info()
 
-    # Get network stats for multiple interfaces
-    wan_interface = current_app.config.get('WAN_INTERFACE', 'eth0')
-    lan_interface = current_app.config.get('LAN_INTERFACE', 'wlan0')
-    wan_stats = get_network_stats(wan_interface)
-    lan_stats = get_network_stats(lan_interface)
+        # Get network stats for multiple interfaces
+        wan_interface = current_app.config.get('WAN_INTERFACE', 'eth0')
+        lan_interface = current_app.config.get('LAN_INTERFACE', 'wlan0')
+        wan_stats = get_network_stats(wan_interface)
+        lan_stats = get_network_stats(lan_interface)
 
-    # Get list of available interfaces
-    interfaces = _get_available_interfaces()
+        # Get list of available interfaces
+        interfaces = _get_available_interfaces()
 
-    # Load threat data
-    threat_file = current_app.config.get('THREAT_FILE', '/var/log/hookprobe/threats/aggregated.json')
-    threats = load_json_file(threat_file, {'stats': {'blocked': 0}})
+        # Load threat data
+        threat_file = current_app.config.get('THREAT_FILE', '/var/log/hookprobe/threats/aggregated.json')
+        threats = load_json_file(threat_file, {'stats': {'blocked': 0}})
 
-    # Load recent blocks for visualization
-    block_file = current_app.config.get('BLOCK_FILE', '/var/log/hookprobe/security/blocks.json')
-    blocks = load_json_file(block_file, {'blocks': []})
-    recent_blocks = blocks.get('blocks', [])[-10:]  # Last 10 blocks
+        # Load recent blocks for visualization
+        block_file = current_app.config.get('BLOCK_FILE', '/var/log/hookprobe/security/blocks.json')
+        blocks = load_json_file(block_file, {'blocks': []})
+        recent_blocks = blocks.get('blocks', [])[-10:]  # Last 10 blocks
 
-    # Get connected clients
-    output, success = run_command("ip neigh show | grep -v FAILED | wc -l")
-    connected_clients = int(output) if success and output.isdigit() else 0
+        # Get connected clients (without using shell pipes)
+        connected_clients = _get_connected_clients_count()
 
-    return jsonify({
-        'connected_clients': connected_clients,
-        'network': {
-            'rx_bytes': wan_stats.get('rx_bytes', 0),
-            'tx_bytes': wan_stats.get('tx_bytes', 0),
-            'interface': wan_interface
-        },
-        'interfaces': {
-            wan_interface: {
-                'type': 'wan',
+        return jsonify({
+            'connected_clients': connected_clients,
+            'network': {
                 'rx_bytes': wan_stats.get('rx_bytes', 0),
                 'tx_bytes': wan_stats.get('tx_bytes', 0),
-                'rx_packets': wan_stats.get('rx_packets', 0),
-                'tx_packets': wan_stats.get('tx_packets', 0)
+                'interface': wan_interface
             },
-            lan_interface: {
-                'type': 'lan',
-                'rx_bytes': lan_stats.get('rx_bytes', 0),
-                'tx_bytes': lan_stats.get('tx_bytes', 0),
-                'rx_packets': lan_stats.get('rx_packets', 0),
-                'tx_packets': lan_stats.get('tx_packets', 0)
+            'interfaces': {
+                wan_interface: {
+                    'type': 'wan',
+                    'rx_bytes': wan_stats.get('rx_bytes', 0),
+                    'tx_bytes': wan_stats.get('tx_bytes', 0),
+                    'rx_packets': wan_stats.get('rx_packets', 0),
+                    'tx_packets': wan_stats.get('tx_packets', 0)
+                },
+                lan_interface: {
+                    'type': 'lan',
+                    'rx_bytes': lan_stats.get('rx_bytes', 0),
+                    'tx_bytes': lan_stats.get('tx_bytes', 0),
+                    'rx_packets': lan_stats.get('rx_packets', 0),
+                    'tx_packets': lan_stats.get('tx_packets', 0)
+                }
+            },
+            'available_interfaces': interfaces,
+            'threats': threats.get('stats', {'blocked': 0}),
+            'recent_blocks': recent_blocks,
+            'system': {
+                'uptime': system.get('uptime', '0:00'),
+                'load': system.get('load', [0, 0, 0]),
+                'temperature': system.get('temperature', 0)
             }
-        },
-        'available_interfaces': interfaces,
-        'threats': threats.get('stats', {'blocked': 0}),
-        'recent_blocks': recent_blocks,
-        'system': {
-            'uptime': system.get('uptime', '0:00'),
-            'load': system.get('load', [0, 0, 0]),
-            'temperature': system.get('temperature', 0)
-        }
-    })
+        })
+    except Exception as e:
+        # Return minimal data on error so frontend doesn't break
+        return jsonify({
+            'connected_clients': 0,
+            'network': {'rx_bytes': 0, 'tx_bytes': 0, 'interface': 'eth0'},
+            'interfaces': {},
+            'available_interfaces': [],
+            'threats': {'blocked': 0},
+            'recent_blocks': [],
+            'system': {'uptime': '0:00', 'load': [0, 0, 0], 'temperature': 0},
+            'error': str(e)
+        })
+
+
+def _get_connected_clients_count():
+    """Get count of connected clients without using shell pipes."""
+    try:
+        # Run ip neigh show and parse output in Python
+        output, success = run_command(['ip', 'neigh', 'show'])
+        if not success or not output:
+            return 0
+
+        # Count lines that don't contain "FAILED"
+        count = 0
+        for line in output.splitlines():
+            if line.strip() and 'FAILED' not in line:
+                count += 1
+        return count
+    except Exception:
+        return 0
 
 
 def _get_available_interfaces():
