@@ -403,6 +403,36 @@ detect_wifi_bands_direct() {
         done
     fi
 
+    # Method 4: Driver-based fallback for known WiFi chipsets
+    if ! $supports_24ghz && ! $supports_5ghz; then
+        local driver
+        driver=$(get_interface_driver "$iface")
+        log_info "  Frequency detection failed, using driver fallback: $driver"
+        case "$driver" in
+            ath12k*|ath12k_pci)
+                # WiFi 7 - tri-band
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_6ghz=true
+                ;;
+            ath11k*|ath11k_pci|mt76*|mt7921*|mt7922*)
+                # WiFi 6/6E - tri-band
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_6ghz=true
+                ;;
+            iwlwifi|ath10k*|ath10k_pci|ath9k*|rtw88*|rtw89*|rtl8*|brcmfmac*|brcmsmac*)
+                # Dual-band adapters
+                supports_24ghz=true
+                supports_5ghz=true
+                ;;
+            *)
+                # Unknown - assume 2.4GHz only
+                supports_24ghz=true
+                ;;
+        esac
+    fi
+
     # Export capabilities
     local iface_upper="${iface^^}"
     eval "export NET_WIFI_${iface_upper}_24GHZ=\"$supports_24ghz\""
@@ -485,6 +515,10 @@ detect_wifi_radio_capabilities() {
     local supports_ap=false
     local supports_vap=false
 
+    # Get driver name for fallback logic
+    local driver
+    driver=$(get_interface_driver "$iface")
+
     # Band detection using frequency ranges (more reliable than "Band N:" which varies by driver)
     # 2.4GHz: 2412-2484 MHz (channels 1-14)
     # 5GHz:   5180-5825 MHz (channels 36-165)
@@ -499,6 +533,99 @@ detect_wifi_radio_capabilities() {
     fi
     if echo "$phy_info" | grep -qE "(59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
         supports_6ghz=true
+    fi
+
+    # Driver-based fallback for known modern WiFi chipsets
+    # When iw commands don't return parseable frequency data, use driver knowledge
+    if ! $supports_24ghz && ! $supports_5ghz; then
+        log_info "  Frequency detection failed, checking driver: $driver"
+        case "$driver" in
+            ath12k*|ath12k_pci)
+                # Qualcomm WiFi 7 (802.11be) - supports 2.4/5/6GHz
+                log_info "  Driver $driver is WiFi 7 - assuming tri-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_6ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_80211ax=true
+                supports_80211be=true
+                supports_ap=true
+                ;;
+            ath11k*|ath11k_pci)
+                # Qualcomm WiFi 6/6E - supports 2.4/5/6GHz
+                log_info "  Driver $driver is WiFi 6E - assuming tri-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_6ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_80211ax=true
+                supports_ap=true
+                ;;
+            mt76*|mt7921*|mt7922*)
+                # MediaTek WiFi 6/6E - dual/tri-band
+                log_info "  Driver $driver is WiFi 6/6E - assuming dual-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_80211ax=true
+                supports_ap=true
+                ;;
+            iwlwifi)
+                # Intel WiFi - check for AX/BE in module info or assume dual-band
+                log_info "  Driver $driver - assuming dual-band WiFi 6 support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_80211ax=true
+                supports_ap=true
+                ;;
+            ath10k*|ath10k_pci)
+                # Qualcomm WiFi 5 - dual-band
+                log_info "  Driver $driver is WiFi 5 - assuming dual-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_ap=true
+                ;;
+            ath9k*)
+                # Atheros WiFi 4 - typically dual-band
+                log_info "  Driver $driver is WiFi 4 - assuming dual-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_80211n=true
+                supports_ap=true
+                ;;
+            rtw88*|rtw89*|rtl8*|r8188*|r8192*)
+                # Realtek WiFi adapters - typically dual-band for modern ones
+                log_info "  Driver $driver - assuming dual-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_ap=true
+                ;;
+            brcmfmac*|brcmsmac*)
+                # Broadcom WiFi - typically dual-band
+                log_info "  Driver $driver - assuming dual-band support"
+                supports_24ghz=true
+                supports_5ghz=true
+                supports_80211n=true
+                supports_80211ac=true
+                supports_ap=true
+                ;;
+            *)
+                # Unknown driver - assume at least 2.4GHz
+                log_warn "  Unknown driver $driver - assuming 2.4GHz only"
+                supports_24ghz=true
+                supports_80211n=true
+                supports_ap=true
+                ;;
+        esac
     fi
 
     # Check 802.11 capabilities
