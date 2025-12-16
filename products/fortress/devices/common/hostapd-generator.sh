@@ -33,6 +33,12 @@ HOSTAPD_VLAN_FILE="$HOSTAPD_DIR/hostapd.vlan"
 # State file from network-interface-detector.sh
 INTERFACE_STATE_FILE="/var/lib/fortress/network-interfaces.conf"
 
+# OVS Bridge Configuration
+# Fortress uses OVS for SDN-based network segmentation
+# WiFi interfaces are added to OVS bridge with VLAN tagging
+DEFAULT_BRIDGE="${FORTRESS_BRIDGE:-fortress}"
+SUBNET_PREFIX="${FORTRESS_SUBNET:-10.250}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -487,32 +493,62 @@ prepare_interface_for_hostapd() {
 }
 
 ensure_bridge_exists() {
-    # Ensure the bridge exists for hostapd VLAN tagging
+    # Ensure the bridge exists for hostapd
+    #
+    # Fortress prefers OVS bridges for SDN capabilities.
+    # Falls back to Linux bridge if OVS is not available.
     #
     # Args:
-    #   $1 - Bridge name (default: br-lan)
-    #   $2 - Gateway IP (default: 10.200.1.1)
-    #   $3 - Netmask (default: 24)
+    #   $1 - Bridge name (default: fortress OVS bridge)
+    #   $2 - Gateway IP (default: 10.250.0.1)
+    #   $3 - Netmask (default: 16)
     #
-    # If bridge doesn't exist, create it using bridge-manager.sh or manually
+    # If bridge doesn't exist, create it
 
-    local bridge="${1:-br-lan}"
-    local gateway="${2:-10.200.1.1}"
-    local netmask="${3:-24}"
+    local bridge="${1:-$DEFAULT_BRIDGE}"
+    local gateway="${2:-${SUBNET_PREFIX}.0.1}"
+    local netmask="${3:-16}"
 
-    # Check if bridge exists
+    # Check if bridge already exists
     if ip link show "$bridge" &>/dev/null; then
         return 0
     fi
 
-    log_info "Creating bridge $bridge for VLAN tagging..."
+    log_info "Creating bridge $bridge..."
 
-    # Try using bridge-manager.sh if available
-    if [ -x "$SCRIPT_DIR/bridge-manager.sh" ]; then
-        "$SCRIPT_DIR/bridge-manager.sh" create "$bridge" "$gateway" 2>/dev/null && return 0
+    # Prefer OVS bridge for SDN capabilities
+    if command -v ovs-vsctl &>/dev/null; then
+        log_info "  Using OVS bridge (SDN enabled)"
+
+        # Create OVS bridge
+        if ! ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            ovs-vsctl add-br "$bridge" 2>/dev/null || {
+                log_warn "Could not create OVS bridge $bridge"
+                # Fall through to Linux bridge
+            }
+        fi
+
+        # If OVS bridge was created successfully
+        if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            ip link set "$bridge" up 2>/dev/null || true
+
+            # Add IP if not already present
+            if ! ip addr show "$bridge" 2>/dev/null | grep -q "$gateway"; then
+                ip addr add "${gateway}/${netmask}" dev "$bridge" 2>/dev/null || true
+            fi
+
+            log_success "OVS bridge $bridge created with gateway $gateway/$netmask"
+            return 0
+        fi
     fi
 
-    # Manual bridge creation
+    # Fallback: Try network-cleanup.sh if available
+    if [ -x "$SCRIPT_DIR/network-cleanup.sh" ]; then
+        "$SCRIPT_DIR/network-cleanup.sh" cleanup 2>/dev/null && return 0
+    fi
+
+    # Fallback: Linux bridge
+    log_info "  Falling back to Linux bridge"
     if ! ip link add name "$bridge" type bridge 2>/dev/null; then
         log_warn "Could not create bridge $bridge (may need root)"
         return 1
@@ -529,7 +565,7 @@ ensure_bridge_exists() {
     # Enable STP
     echo 1 > /sys/class/net/"$bridge"/bridge/stp_state 2>/dev/null || true
 
-    log_success "Bridge $bridge created with gateway $gateway/$netmask"
+    log_success "Linux bridge $bridge created with gateway $gateway/$netmask"
     return 0
 }
 
@@ -989,7 +1025,7 @@ generate_hostapd_24ghz() {
     local ssid="${2:-HookProbe-Fortress}"
     local password="$3"
     local channel="${4:-auto}"
-    local bridge="${5:-br-lan}"
+    local bridge="${5:-$DEFAULT_BRIDGE}"
 
     [ -z "$iface" ] && { log_error "Interface required"; return 1; }
     [ -z "$password" ] && { log_error "Password required"; return 1; }
@@ -1214,7 +1250,7 @@ generate_hostapd_5ghz() {
     local ssid="${2:-HookProbe-Fortress}"
     local password="$3"
     local channel="${4:-auto}"
-    local bridge="${5:-br-lan}"
+    local bridge="${5:-$DEFAULT_BRIDGE}"
 
     [ -z "$iface" ] && { log_error "Interface required"; return 1; }
     [ -z "$password" ] && { log_error "Password required"; return 1; }
@@ -1825,11 +1861,11 @@ configure_dual_band_wifi() {
     # Args:
     #   $1 - SSID
     #   $2 - Password
-    #   $3 - Bridge name (optional)
+    #   $3 - Bridge name (optional, defaults to OVS fortress bridge)
 
     local ssid="${1:-HookProbe-Fortress}"
     local password="$2"
-    local bridge="${3:-br-lan}"
+    local bridge="${3:-$DEFAULT_BRIDGE}"
 
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
