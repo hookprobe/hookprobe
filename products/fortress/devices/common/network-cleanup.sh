@@ -1,0 +1,541 @@
+#!/bin/bash
+#
+# network-cleanup.sh - Clean up and consolidate Fortress network on OVS
+# Part of HookProbe Fortress - Small Business Security Gateway
+#
+# This script:
+#   - Removes redundant Linux bridges
+#   - Migrates WiFi interfaces to OVS fortress bridge
+#   - Configures proper VLAN tagging for WiFi APs
+#   - Sets up podman networking via OVS
+#
+# Version: 1.0.0
+# License: AGPL-3.0
+#
+
+set -e
+
+# Configuration
+OVS_BRIDGE="${FORTRESS_BRIDGE:-fortress}"
+WIFI_24GHZ_VLAN="${WIFI_24GHZ_VLAN:-40}"  # Guest by default
+WIFI_5GHZ_VLAN="${WIFI_5GHZ_VLAN:-30}"    # Staff by default
+MANAGEMENT_VLAN="${MANAGEMENT_VLAN:-10}"
+SUBNET_PREFIX="${FORTRESS_SUBNET:-10.250}"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+log_info() { echo -e "${CYAN}[NETWORK]${NC} $*"; }
+log_success() { echo -e "${GREEN}[NETWORK]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[NETWORK]${NC} $*"; }
+log_error() { echo -e "${RED}[NETWORK]${NC} $*"; }
+
+# ========================================
+# Detection Functions
+# ========================================
+
+# Get all WiFi interfaces
+get_wifi_interfaces() {
+    iw dev 2>/dev/null | grep "Interface" | awk '{print $2}' | sort -u
+}
+
+# Get WiFi interface frequency band
+get_wifi_band() {
+    local iface="$1"
+    local freq
+
+    freq=$(iw dev "$iface" info 2>/dev/null | grep "channel" | awk '{print $2}')
+
+    if [ -z "$freq" ]; then
+        # Not associated, check capabilities
+        local phy
+        phy=$(iw dev "$iface" info 2>/dev/null | grep wiphy | awk '{print $2}')
+        if [ -n "$phy" ]; then
+            if iw phy "phy$phy" info 2>/dev/null | grep -q "5180 MHz"; then
+                # Has 5GHz capability - check interface name pattern
+                if [[ "$iface" =~ wlp.*s0 ]] || [[ "$iface" =~ wlan1 ]]; then
+                    echo "5ghz"
+                    return
+                fi
+            fi
+        fi
+        echo "2.4ghz"
+        return
+    fi
+
+    if [ "$freq" -ge 5000 ]; then
+        echo "5ghz"
+    else
+        echo "2.4ghz"
+    fi
+}
+
+# Get physical Ethernet interfaces (not virtual)
+get_physical_ethernet() {
+    for iface in /sys/class/net/*; do
+        iface=$(basename "$iface")
+
+        # Skip virtual interfaces
+        [[ "$iface" =~ ^(lo|veth|br-|vlan|ovs|docker|podman|virbr|tun|tap) ]] && continue
+
+        # Check if it's ethernet (has carrier file and is not wireless)
+        if [ -f "/sys/class/net/$iface/carrier" ] && \
+           [ ! -d "/sys/class/net/$iface/wireless" ]; then
+            # Check if it has a physical device
+            if [ -L "/sys/class/net/$iface/device" ]; then
+                echo "$iface"
+            fi
+        fi
+    done
+}
+
+# ========================================
+# Cleanup Functions
+# ========================================
+
+# Remove redundant Linux bridges
+remove_redundant_bridges() {
+    log_info "Removing redundant Linux bridges..."
+
+    local bridges=("br-mgmt" "br-pos" "br-staff" "br-guest" "br-iot")
+
+    for br in "${bridges[@]}"; do
+        if ip link show "$br" &>/dev/null; then
+            log_info "  Removing $br"
+            ip link set "$br" down 2>/dev/null || true
+            ip link delete "$br" type bridge 2>/dev/null || true
+        fi
+    done
+
+    log_success "Redundant bridges removed"
+}
+
+# Release WiFi interfaces from br-lan
+release_wifi_from_brlan() {
+    log_info "Releasing WiFi interfaces from br-lan..."
+
+    for iface in $(get_wifi_interfaces); do
+        local master
+        master=$(ip link show "$iface" 2>/dev/null | grep -oP 'master \K\S+')
+
+        if [ "$master" = "br-lan" ]; then
+            log_info "  Releasing $iface from br-lan"
+            ip link set "$iface" nomaster 2>/dev/null || true
+        fi
+    done
+
+    # Remove br-lan if empty and exists
+    if ip link show br-lan &>/dev/null; then
+        local slaves
+        slaves=$(ip link show master br-lan 2>/dev/null | wc -l)
+        if [ "$slaves" -eq 0 ]; then
+            log_info "  Removing empty br-lan"
+            ip link set br-lan down 2>/dev/null || true
+            ip link delete br-lan type bridge 2>/dev/null || true
+        fi
+    fi
+
+    log_success "WiFi interfaces released"
+}
+
+# ========================================
+# OVS Setup Functions
+# ========================================
+
+# Ensure OVS bridge exists
+ensure_ovs_bridge() {
+    log_info "Ensuring OVS bridge $OVS_BRIDGE exists..."
+
+    if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+        log_info "  Creating OVS bridge $OVS_BRIDGE"
+        ovs-vsctl add-br "$OVS_BRIDGE"
+    fi
+
+    # Set up bridge IP on management VLAN
+    ip link set "$OVS_BRIDGE" up
+
+    # Remove old IP if exists
+    ip addr flush dev "$OVS_BRIDGE" 2>/dev/null || true
+
+    # Add management IP
+    ip addr add "${SUBNET_PREFIX}.0.1/16" dev "$OVS_BRIDGE" 2>/dev/null || true
+
+    log_success "OVS bridge ready: $OVS_BRIDGE"
+}
+
+# Add WiFi interface to OVS with VLAN tagging
+add_wifi_to_ovs() {
+    local iface="$1"
+    local vlan="$2"
+
+    log_info "Adding $iface to OVS bridge with VLAN $vlan..."
+
+    # Remove from any existing bridge first
+    local master
+    master=$(ip link show "$iface" 2>/dev/null | grep -oP 'master \K\S+')
+    if [ -n "$master" ]; then
+        ip link set "$iface" nomaster 2>/dev/null || true
+    fi
+
+    # Check if already in OVS
+    if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${iface}$"; then
+        log_info "  $iface already in OVS, updating VLAN tag"
+        ovs-vsctl set port "$iface" tag="$vlan"
+    else
+        # Add to OVS with VLAN tag
+        ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$iface" tag="$vlan"
+    fi
+
+    log_success "  $iface -> VLAN $vlan"
+}
+
+# Create VLAN internal ports
+create_vlan_ports() {
+    log_info "Creating VLAN internal ports..."
+
+    local vlans=(
+        "10:${SUBNET_PREFIX}.10.1/24"   # Management
+        "20:${SUBNET_PREFIX}.20.1/24"   # POS
+        "30:${SUBNET_PREFIX}.30.1/24"   # Staff
+        "40:${SUBNET_PREFIX}.40.1/24"   # Guest
+        "99:${SUBNET_PREFIX}.99.1/24"   # IoT
+    )
+
+    for vlan_info in "${vlans[@]}"; do
+        local vlan_id="${vlan_info%%:*}"
+        local vlan_ip="${vlan_info#*:}"
+        local port_name="vlan${vlan_id}"
+
+        # Create internal port if not exists
+        if ! ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${port_name}$"; then
+            log_info "  Creating $port_name"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
+                -- set interface "$port_name" type=internal \
+                -- set port "$port_name" tag="$vlan_id"
+        fi
+
+        # Configure IP
+        ip link set "$port_name" up 2>/dev/null || true
+        ip addr flush dev "$port_name" 2>/dev/null || true
+        ip addr add "$vlan_ip" dev "$port_name" 2>/dev/null || true
+    done
+
+    log_success "VLAN ports created"
+}
+
+# Add physical Ethernet to OVS as trunk
+add_ethernet_to_ovs() {
+    log_info "Adding physical Ethernet interfaces to OVS..."
+
+    for iface in $(get_physical_ethernet); do
+        # Skip WAN interface (usually first one or has default route)
+        if ip route show default 2>/dev/null | grep -q "dev $iface"; then
+            log_info "  Skipping WAN interface: $iface"
+            continue
+        fi
+
+        # Check if already in OVS
+        if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${iface}$"; then
+            log_info "  $iface already in OVS"
+            continue
+        fi
+
+        log_info "  Adding $iface as trunk port"
+        ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$iface"
+
+        # Set as trunk (no tag = all VLANs)
+        ovs-vsctl set port "$iface" trunks=10,20,30,40,99
+    done
+
+    log_success "Ethernet interfaces configured"
+}
+
+# ========================================
+# Podman Integration
+# ========================================
+
+# Create podman network using OVS
+setup_podman_ovs_network() {
+    log_info "Setting up Podman OVS integration..."
+
+    # Create CNI config directory
+    mkdir -p /etc/cni/net.d
+
+    # Create OVS CNI config for each VLAN
+    local vlans=(
+        "management:10:${SUBNET_PREFIX}.10"
+        "pos:20:${SUBNET_PREFIX}.20"
+        "staff:30:${SUBNET_PREFIX}.30"
+        "guest:40:${SUBNET_PREFIX}.40"
+        "iot:99:${SUBNET_PREFIX}.99"
+    )
+
+    for vlan_info in "${vlans[@]}"; do
+        local name="${vlan_info%%:*}"
+        local rest="${vlan_info#*:}"
+        local vlan_id="${rest%%:*}"
+        local subnet="${rest#*:}"
+
+        local config_file="/etc/cni/net.d/fortress-${name}.conflist"
+
+        cat > "$config_file" << EOF
+{
+  "cniVersion": "0.4.0",
+  "name": "fortress-${name}",
+  "plugins": [
+    {
+      "type": "ovs",
+      "bridge": "${OVS_BRIDGE}",
+      "vlan": ${vlan_id},
+      "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [
+            {
+              "subnet": "${subnet}.0/24",
+              "rangeStart": "${subnet}.100",
+              "rangeEnd": "${subnet}.199",
+              "gateway": "${subnet}.1"
+            }
+          ]
+        ],
+        "routes": [
+          { "dst": "0.0.0.0/0" }
+        ]
+      }
+    }
+  ]
+}
+EOF
+        log_info "  Created network config: fortress-${name}"
+    done
+
+    # Install OVS CNI plugin if not present
+    if [ ! -f /opt/cni/bin/ovs ]; then
+        log_warn "  OVS CNI plugin not found at /opt/cni/bin/ovs"
+        log_info "  Install with: https://github.com/k8snetworkplumbingwg/ovs-cni"
+    fi
+
+    log_success "Podman OVS networks configured"
+    echo ""
+    log_info "To use Podman with OVS VLANs:"
+    echo "  podman run --network fortress-management ...  # VLAN 10"
+    echo "  podman run --network fortress-staff ...       # VLAN 30"
+    echo "  podman run --network fortress-iot ...         # VLAN 99"
+}
+
+# Remove default podman network usage
+disable_default_podman_network() {
+    log_info "Configuring Podman to avoid default network..."
+
+    # Create containers.conf override
+    mkdir -p /etc/containers
+
+    # Check if file exists and has our setting
+    if [ -f /etc/containers/containers.conf ]; then
+        if ! grep -q "default_network" /etc/containers/containers.conf; then
+            cat >> /etc/containers/containers.conf << 'EOF'
+
+# HookProbe Fortress: Use OVS networks by default
+[network]
+default_network = "fortress-management"
+EOF
+        fi
+    else
+        cat > /etc/containers/containers.conf << 'EOF'
+# HookProbe Fortress Container Configuration
+
+[network]
+# Use OVS networks by default instead of podman0
+default_network = "fortress-management"
+EOF
+    fi
+
+    log_success "Podman default network configured"
+}
+
+# ========================================
+# Hostapd Update
+# ========================================
+
+# Update hostapd configs to use OVS bridge
+update_hostapd_configs() {
+    log_info "Updating hostapd configs for OVS bridge..."
+
+    local configs=(
+        "/etc/hostapd/hostapd-24ghz.conf"
+        "/etc/hostapd/hostapd-5ghz.conf"
+    )
+
+    for config in "${configs[@]}"; do
+        if [ -f "$config" ]; then
+            # Update bridge setting
+            if grep -q "^bridge=" "$config"; then
+                sed -i "s/^bridge=.*/bridge=${OVS_BRIDGE}/" "$config"
+                log_info "  Updated $config: bridge=${OVS_BRIDGE}"
+            else
+                echo "bridge=${OVS_BRIDGE}" >> "$config"
+                log_info "  Added bridge to $config"
+            fi
+        fi
+    done
+
+    log_success "Hostapd configs updated"
+}
+
+# ========================================
+# Status Display
+# ========================================
+
+show_network_status() {
+    echo ""
+    echo "========================================"
+    echo "Fortress Network Status"
+    echo "========================================"
+    echo ""
+
+    echo "OVS Bridge: $OVS_BRIDGE"
+    ovs-vsctl show 2>/dev/null | head -30
+    echo ""
+
+    echo "VLAN Interfaces:"
+    for vlan in 10 20 30 40 99; do
+        local iface="vlan${vlan}"
+        if ip link show "$iface" &>/dev/null; then
+            local ip
+            ip=$(ip -4 addr show "$iface" 2>/dev/null | grep inet | awk '{print $2}')
+            local state
+            state=$(ip link show "$iface" 2>/dev/null | grep -oP 'state \K\S+')
+            echo "  $iface: $ip ($state)"
+        fi
+    done
+    echo ""
+
+    echo "WiFi Interfaces:"
+    for iface in $(get_wifi_interfaces); do
+        local band
+        band=$(get_wifi_band "$iface")
+        local vlan
+        vlan=$(ovs-vsctl get port "$iface" tag 2>/dev/null || echo "none")
+        echo "  $iface: $band, VLAN=$vlan"
+    done
+    echo ""
+
+    echo "OVS Flow Rules (MAC-to-VLAN):"
+    ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep "dl_src=" | head -10
+    echo ""
+}
+
+# ========================================
+# Main Functions
+# ========================================
+
+cleanup_network() {
+    log_info "Starting network cleanup..."
+    echo ""
+
+    # Step 1: Remove redundant bridges
+    remove_redundant_bridges
+    echo ""
+
+    # Step 2: Release WiFi from br-lan
+    release_wifi_from_brlan
+    echo ""
+
+    # Step 3: Ensure OVS bridge
+    ensure_ovs_bridge
+    echo ""
+
+    # Step 4: Create VLAN ports
+    create_vlan_ports
+    echo ""
+
+    # Step 5: Add WiFi to OVS with proper VLANs
+    for iface in $(get_wifi_interfaces); do
+        local band
+        band=$(get_wifi_band "$iface")
+        local vlan
+
+        if [ "$band" = "5ghz" ]; then
+            vlan="$WIFI_5GHZ_VLAN"
+        else
+            vlan="$WIFI_24GHZ_VLAN"
+        fi
+
+        add_wifi_to_ovs "$iface" "$vlan"
+    done
+    echo ""
+
+    # Step 6: Add Ethernet trunk ports
+    add_ethernet_to_ovs
+    echo ""
+
+    # Step 7: Update hostapd configs
+    update_hostapd_configs
+    echo ""
+
+    log_success "Network cleanup complete!"
+}
+
+setup_podman() {
+    setup_podman_ovs_network
+    echo ""
+    disable_default_podman_network
+}
+
+full_setup() {
+    cleanup_network
+    echo ""
+    setup_podman
+    echo ""
+    show_network_status
+}
+
+# ========================================
+# Usage
+# ========================================
+
+usage() {
+    echo "Usage: $0 <command>"
+    echo ""
+    echo "Commands:"
+    echo "  cleanup       - Clean up redundant bridges and consolidate on OVS"
+    echo "  podman        - Set up Podman OVS integration"
+    echo "  full          - Full cleanup + Podman setup"
+    echo "  status        - Show current network status"
+    echo ""
+    echo "Environment Variables:"
+    echo "  FORTRESS_BRIDGE     - OVS bridge name (default: fortress)"
+    echo "  WIFI_24GHZ_VLAN     - VLAN for 2.4GHz AP (default: 40 Guest)"
+    echo "  WIFI_5GHZ_VLAN      - VLAN for 5GHz AP (default: 30 Staff)"
+    echo "  FORTRESS_SUBNET     - Subnet prefix (default: 10.250)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 cleanup                      # Clean up network"
+    echo "  $0 full                         # Full setup"
+    echo "  WIFI_5GHZ_VLAN=10 $0 cleanup    # 5GHz on Management VLAN"
+    echo ""
+}
+
+# Main
+case "${1:-}" in
+    cleanup)
+        cleanup_network
+        ;;
+    podman)
+        setup_podman
+        ;;
+    full)
+        full_setup
+        ;;
+    status)
+        show_network_status
+        ;;
+    *)
+        usage
+        ;;
+esac

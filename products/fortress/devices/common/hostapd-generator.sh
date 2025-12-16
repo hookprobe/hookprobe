@@ -33,6 +33,12 @@ HOSTAPD_VLAN_FILE="$HOSTAPD_DIR/hostapd.vlan"
 # State file from network-interface-detector.sh
 INTERFACE_STATE_FILE="/var/lib/fortress/network-interfaces.conf"
 
+# OVS Bridge Configuration
+# Fortress uses OVS for SDN-based network segmentation
+# WiFi interfaces are added to OVS bridge with VLAN tagging
+DEFAULT_BRIDGE="${FORTRESS_BRIDGE:-fortress}"
+SUBNET_PREFIX="${FORTRESS_SUBNET:-10.250}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -487,32 +493,62 @@ prepare_interface_for_hostapd() {
 }
 
 ensure_bridge_exists() {
-    # Ensure the bridge exists for hostapd VLAN tagging
+    # Ensure the bridge exists for hostapd
+    #
+    # Fortress prefers OVS bridges for SDN capabilities.
+    # Falls back to Linux bridge if OVS is not available.
     #
     # Args:
-    #   $1 - Bridge name (default: br-lan)
-    #   $2 - Gateway IP (default: 10.200.1.1)
-    #   $3 - Netmask (default: 24)
+    #   $1 - Bridge name (default: fortress OVS bridge)
+    #   $2 - Gateway IP (default: 10.250.0.1)
+    #   $3 - Netmask (default: 16)
     #
-    # If bridge doesn't exist, create it using bridge-manager.sh or manually
+    # If bridge doesn't exist, create it
 
-    local bridge="${1:-br-lan}"
-    local gateway="${2:-10.200.1.1}"
-    local netmask="${3:-24}"
+    local bridge="${1:-$DEFAULT_BRIDGE}"
+    local gateway="${2:-${SUBNET_PREFIX}.0.1}"
+    local netmask="${3:-16}"
 
-    # Check if bridge exists
+    # Check if bridge already exists
     if ip link show "$bridge" &>/dev/null; then
         return 0
     fi
 
-    log_info "Creating bridge $bridge for VLAN tagging..."
+    log_info "Creating bridge $bridge..."
 
-    # Try using bridge-manager.sh if available
-    if [ -x "$SCRIPT_DIR/bridge-manager.sh" ]; then
-        "$SCRIPT_DIR/bridge-manager.sh" create "$bridge" "$gateway" 2>/dev/null && return 0
+    # Prefer OVS bridge for SDN capabilities
+    if command -v ovs-vsctl &>/dev/null; then
+        log_info "  Using OVS bridge (SDN enabled)"
+
+        # Create OVS bridge
+        if ! ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            ovs-vsctl add-br "$bridge" 2>/dev/null || {
+                log_warn "Could not create OVS bridge $bridge"
+                # Fall through to Linux bridge
+            }
+        fi
+
+        # If OVS bridge was created successfully
+        if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            ip link set "$bridge" up 2>/dev/null || true
+
+            # Add IP if not already present
+            if ! ip addr show "$bridge" 2>/dev/null | grep -q "$gateway"; then
+                ip addr add "${gateway}/${netmask}" dev "$bridge" 2>/dev/null || true
+            fi
+
+            log_success "OVS bridge $bridge created with gateway $gateway/$netmask"
+            return 0
+        fi
     fi
 
-    # Manual bridge creation
+    # Fallback: Try network-cleanup.sh if available
+    if [ -x "$SCRIPT_DIR/network-cleanup.sh" ]; then
+        "$SCRIPT_DIR/network-cleanup.sh" cleanup 2>/dev/null && return 0
+    fi
+
+    # Fallback: Linux bridge
+    log_info "  Falling back to Linux bridge"
     if ! ip link add name "$bridge" type bridge 2>/dev/null; then
         log_warn "Could not create bridge $bridge (may need root)"
         return 1
@@ -529,7 +565,7 @@ ensure_bridge_exists() {
     # Enable STP
     echo 1 > /sys/class/net/"$bridge"/bridge/stp_state 2>/dev/null || true
 
-    log_success "Bridge $bridge created with gateway $gateway/$netmask"
+    log_success "Linux bridge $bridge created with gateway $gateway/$netmask"
     return 0
 }
 
@@ -989,7 +1025,7 @@ generate_hostapd_24ghz() {
     local ssid="${2:-HookProbe-Fortress}"
     local password="$3"
     local channel="${4:-auto}"
-    local bridge="${5:-br-lan}"
+    local bridge="${5:-$DEFAULT_BRIDGE}"
 
     [ -z "$iface" ] && { log_error "Interface required"; return 1; }
     [ -z "$password" ] && { log_error "Password required"; return 1; }
@@ -1123,12 +1159,14 @@ macaddr_acl=0
 ap_isolate=0
 max_num_sta=64
 
-# Dynamic VLAN Assignment
+# Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
+# To enable: set dynamic_vlan=1, create /etc/hostapd/hostapd.vlan,
+# and ensure VLAN bridges (br-mgmt, br-pos, br-staff, br-guest, br-iot) exist
 # VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
-dynamic_vlan=1
-vlan_file=$HOSTAPD_VLAN_FILE
-vlan_tagged_interface=$bridge
-vlan_naming=1
+dynamic_vlan=0
+#vlan_file=$HOSTAPD_VLAN_FILE
+#vlan_tagged_interface=$bridge
+#vlan_naming=1
 
 # Performance Tuning
 beacon_int=100
@@ -1180,6 +1218,8 @@ get_safe_5ghz_channel() {
     # Args:
     #   $1 - Country code
     #   $2 - Interface (for scanning)
+    #
+    # Note: log_info redirected to stderr to avoid polluting channel output
 
     local country="$1"
     local iface="$2"
@@ -1187,11 +1227,11 @@ get_safe_5ghz_channel() {
     if is_eu_country "$country"; then
         # EU/ETSI: UNII-1 only (channels 36, 40, 44, 48)
         # These are always allowed without DFS
-        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)"
+        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)" >&2
         echo "36"
     else
         # Non-EU: Can use UNII-3 (149-165) which often has less interference
-        log_info "  Non-EU country - UNII-3 band available (channels 149-165)"
+        log_info "  Non-EU country - UNII-3 band available (channels 149-165)" >&2
         echo "149"
     fi
 }
@@ -1210,7 +1250,7 @@ generate_hostapd_5ghz() {
     local ssid="${2:-HookProbe-Fortress}"
     local password="$3"
     local channel="${4:-auto}"
-    local bridge="${5:-br-lan}"
+    local bridge="${5:-$DEFAULT_BRIDGE}"
 
     [ -z "$iface" ] && { log_error "Interface required"; return 1; }
     [ -z "$password" ] && { log_error "Password required"; return 1; }
@@ -1471,12 +1511,14 @@ macaddr_acl=0
 ap_isolate=0
 max_num_sta=128
 
-# Dynamic VLAN Assignment
+# Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
+# To enable: set dynamic_vlan=1, create /etc/hostapd/hostapd.vlan,
+# and ensure VLAN bridges (br-mgmt, br-pos, br-staff, br-guest, br-iot) exist
 # VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
-dynamic_vlan=1
-vlan_file=$HOSTAPD_VLAN_FILE
-vlan_tagged_interface=$bridge
-vlan_naming=1
+dynamic_vlan=0
+#vlan_file=$HOSTAPD_VLAN_FILE
+#vlan_tagged_interface=$bridge
+#vlan_naming=1
 
 # Performance Tuning (High Throughput)
 beacon_int=100
@@ -1731,6 +1773,85 @@ EOF
 }
 
 # ============================================================
+# VLAN SETUP HELPER
+# ============================================================
+
+setup_vlan_infrastructure() {
+    # Set up VLAN infrastructure for hostapd dynamic VLANs
+    #
+    # This creates:
+    #   1. VLAN bridges (br-mgmt, br-pos, br-staff, br-guest, br-iot)
+    #   2. hostapd.vlan mapping file
+    #   3. Enables dynamic_vlan in hostapd configs
+    #
+    # Run this AFTER generating hostapd configs if you want VLAN segregation
+
+    log_info "Setting up VLAN infrastructure for hostapd..."
+
+    # Create VLAN bridges
+    local vlan_bridges="br-mgmt br-pos br-staff br-guest br-iot"
+    for bridge in $vlan_bridges; do
+        if ! ip link show "$bridge" &>/dev/null; then
+            log_info "  Creating bridge $bridge"
+            ip link add name "$bridge" type bridge 2>/dev/null || true
+            ip link set "$bridge" up 2>/dev/null || true
+        else
+            log_info "  Bridge $bridge already exists"
+        fi
+    done
+
+    # Create hostapd.vlan mapping file
+    log_info "  Creating $HOSTAPD_VLAN_FILE"
+    cat > "$HOSTAPD_VLAN_FILE" << 'EOF'
+# hostapd VLAN mapping file
+# Format: vlan_id bridge_name
+# VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
+10 br-mgmt
+20 br-pos
+30 br-staff
+40 br-guest
+99 br-iot
+EOF
+    chmod 644 "$HOSTAPD_VLAN_FILE"
+
+    # Enable dynamic VLANs in existing configs
+    for conf in "$HOSTAPD_24GHZ_CONF" "$HOSTAPD_5GHZ_CONF"; do
+        if [ -f "$conf" ]; then
+            log_info "  Enabling dynamic VLANs in $conf"
+            sed -i 's/^dynamic_vlan=0/dynamic_vlan=1/' "$conf"
+            sed -i 's/^#vlan_file=/vlan_file=/' "$conf"
+            sed -i 's/^#vlan_tagged_interface=/vlan_tagged_interface=/' "$conf"
+            sed -i 's/^#vlan_naming=/vlan_naming=/' "$conf"
+        fi
+    done
+
+    log_success "VLAN infrastructure ready"
+    log_info "  Restart hostapd services to apply: systemctl restart fortress-hostapd-*"
+}
+
+disable_vlan_infrastructure() {
+    # Disable dynamic VLANs in hostapd configs
+    #
+    # Use this if you want to run without VLAN segregation
+
+    log_info "Disabling VLAN infrastructure..."
+
+    for conf in "$HOSTAPD_24GHZ_CONF" "$HOSTAPD_5GHZ_CONF"; do
+        if [ -f "$conf" ]; then
+            log_info "  Disabling dynamic VLANs in $conf"
+            sed -i 's/^dynamic_vlan=1/dynamic_vlan=0/' "$conf"
+            sed -i 's/^dynamic_vlan=2/dynamic_vlan=0/' "$conf"
+            sed -i 's/^vlan_file=/#vlan_file=/' "$conf"
+            sed -i 's/^vlan_tagged_interface=/#vlan_tagged_interface=/' "$conf"
+            sed -i 's/^vlan_naming=/#vlan_naming=/' "$conf"
+        fi
+    done
+
+    log_success "Dynamic VLANs disabled"
+    log_info "  Restart hostapd services to apply: systemctl restart fortress-hostapd-*"
+}
+
+# ============================================================
 # MAIN CONFIGURATION WORKFLOW
 # ============================================================
 
@@ -1740,11 +1861,11 @@ configure_dual_band_wifi() {
     # Args:
     #   $1 - SSID
     #   $2 - Password
-    #   $3 - Bridge name (optional)
+    #   $3 - Bridge name (optional, defaults to OVS fortress bridge)
 
     local ssid="${1:-HookProbe-Fortress}"
     local password="$2"
-    local bridge="${3:-br-lan}"
+    local bridge="${3:-$DEFAULT_BRIDGE}"
 
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
@@ -1900,18 +2021,22 @@ usage() {
     echo "                    - Generate 2.4GHz config only"
     echo "  5ghz <iface> <ssid> <password> [channel] [bridge]"
     echo "                    - Generate 5GHz config only"
-    echo "  vlan              - Generate VLAN configuration"
+    echo "  vlan              - Generate VLAN file only"
     echo "  systemd           - Generate systemd services"
+    echo "  setup-vlan        - Set up VLAN infrastructure (bridges + enable in configs)"
+    echo "  disable-vlan      - Disable VLAN infrastructure in configs"
     echo ""
     echo "Examples:"
     echo "  $0 configure MyNetwork 'MySecurePassword123'"
     echo "  $0 24ghz wlan0 MyNetwork 'MyPassword' 6 br-lan"
     echo "  $0 5ghz wlan1 MyNetwork 'MyPassword' 36 br-lan"
+    echo "  $0 setup-vlan     # Enable VLAN segregation after config"
     echo ""
     echo "Security:"
     echo "  - 2.4GHz uses WPA2-PSK for IoT device compatibility"
     echo "  - 5GHz uses WPA3-SAE with WPA2-PSK fallback"
     echo "  - Passwords must be at least 8 characters"
+    echo "  - Dynamic VLANs disabled by default (use 'setup-vlan' to enable)"
     echo ""
 }
 
@@ -1935,6 +2060,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             ;;
         systemd)
             generate_systemd_services "true" "true"
+            ;;
+        setup-vlan)
+            setup_vlan_infrastructure
+            ;;
+        disable-vlan)
+            disable_vlan_infrastructure
             ;;
         *)
             usage
