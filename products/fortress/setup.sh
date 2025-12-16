@@ -231,30 +231,35 @@ detect_platform() {
 }
 
 detect_interfaces() {
-    log_step "Detecting network interfaces..."
+    # NET_QUIET_MODE=true suppresses verbose detector output
+    # NET_SKIP_SUMMARY=true also suppresses the summary display
+
+    [ "$NET_SKIP_SUMMARY" = "true" ] || log_step "Detecting network interfaces..."
 
     # Use new unified network detection if available
     if [ "$NETWORK_INTEGRATION_AVAILABLE" = true ]; then
-        log_info "Using unified network interface detection..."
+        [ "$NET_SKIP_SUMMARY" = "true" ] || log_info "Using unified network interface detection..."
         network_integration_init
 
-        # Show summary of detected interfaces
-        log_info "Ethernet interfaces ($NET_ETH_COUNT): ${NET_ETH_INTERFACES:-none}"
-        log_info "  WAN: ${NET_WAN_IFACE:-not assigned}"
-        log_info "  LAN: ${NET_LAN_IFACES:-not assigned}"
-        log_info "WiFi interfaces ($NET_WIFI_COUNT): ${NET_WIFI_INTERFACES:-none}"
-        log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not available}"
-        log_info "  5GHz: ${NET_WIFI_5GHZ_IFACE:-not available}"
-        log_info "  Config Mode: ${NET_WIFI_CONFIG_MODE:-unknown}"
-        log_info "WWAN/LTE interfaces ($NET_WWAN_COUNT): ${NET_WWAN_INTERFACES:-none}"
-        [ -n "$NET_WWAN_CONTROL" ] && log_info "  Control device: $NET_WWAN_CONTROL"
+        # Show summary of detected interfaces (unless NET_SKIP_SUMMARY is set)
+        if [ "$NET_SKIP_SUMMARY" != "true" ]; then
+            log_info "Ethernet interfaces ($NET_ETH_COUNT): ${NET_ETH_INTERFACES:-none}"
+            log_info "  WAN: ${NET_WAN_IFACE:-not assigned}"
+            log_info "  LAN: ${NET_LAN_IFACES:-not assigned}"
+            log_info "WiFi interfaces ($NET_WIFI_COUNT): ${NET_WIFI_INTERFACES:-none}"
+            log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not available}"
+            log_info "  5GHz: ${NET_WIFI_5GHZ_IFACE:-not available}"
+            log_info "  Config Mode: ${NET_WIFI_CONFIG_MODE:-unknown}"
+            log_info "WWAN/LTE interfaces ($NET_WWAN_COUNT): ${NET_WWAN_INTERFACES:-none}"
+            [ -n "$NET_WWAN_CONTROL" ] && log_info "  Control device: $NET_WWAN_CONTROL"
+        fi
 
         # Variables are exported by network_integration_init via export_for_setup
         return 0
     fi
 
     # Fallback to legacy detection
-    log_info "Using legacy interface detection..."
+    [ "$NET_SKIP_SUMMARY" = "true" ] || log_info "Using legacy interface detection..."
 
     # Ethernet interfaces (eth*, enp*, eno*) - exclude WWAN
     ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '^ww' | tr '\n' ' ')
@@ -291,16 +296,19 @@ detect_interfaces() {
     for iface in $WIFI_INTERFACES; do
         if iw list 2>/dev/null | grep -A 20 "Supported interface modes" | grep -q "AP/VLAN"; then
             WIFI_VAP_SUPPORT=true
-            log_info "VAP-capable WiFi detected - VLAN segmentation available"
+            [ "$NET_SKIP_SUMMARY" = "true" ] || log_info "VAP-capable WiFi detected - VLAN segmentation available"
             break
         fi
     done
 
-    log_info "Ethernet interfaces ($ETH_COUNT): ${ETH_INTERFACES:-none}"
-    log_info "WiFi interfaces ($WIFI_COUNT): ${WIFI_INTERFACES:-none}"
-    log_info "WWAN/LTE interfaces ($WWAN_COUNT): ${WWAN_INTERFACES:-none}"
-    [ -n "$MODEM_CTRL_DEVICES" ] && log_info "Modem control devices: $MODEM_CTRL_DEVICES"
-    [ -n "$GSM_CONNECTIONS" ] && log_info "GSM connections: $GSM_CONNECTIONS"
+    # Show summary (unless NET_SKIP_SUMMARY is set)
+    if [ "$NET_SKIP_SUMMARY" != "true" ]; then
+        log_info "Ethernet interfaces ($ETH_COUNT): ${ETH_INTERFACES:-none}"
+        log_info "WiFi interfaces ($WIFI_COUNT): ${WIFI_INTERFACES:-none}"
+        log_info "WWAN/LTE interfaces ($WWAN_COUNT): ${WWAN_INTERFACES:-none}"
+        [ -n "$MODEM_CTRL_DEVICES" ] && log_info "Modem control devices: $MODEM_CTRL_DEVICES"
+        [ -n "$GSM_CONNECTIONS" ] && log_info "GSM connections: $GSM_CONNECTIONS"
+    fi
 
     # Export for LTE manager
     export WWAN_INTERFACES WWAN_COUNT MODEM_CTRL_DEVICES GSM_CONNECTIONS
@@ -1315,62 +1323,102 @@ setup_dhcp_server() {
         break
     done
 
-    # Create dnsmasq configuration for Fortress
+    # Remove any old conflicting configs
+    rm -f /etc/dnsmasq.d/fortress.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+
+    # Create dnsmasq configuration for Fortress with VLAN support
     mkdir -p /etc/dnsmasq.d
-    cat > /etc/dnsmasq.d/fortress.conf << EOF
-# HookProbe Fortress DHCP Configuration
+    cat > /etc/dnsmasq.d/fortress-vlans.conf << EOF
+# HookProbe Fortress VLAN DHCP Configuration
+# Generated: $(date -Iseconds)
+#
+# Provides DHCP on all VLAN interfaces for proper network segmentation
 
-# Listen on the bridge interface (for wired clients)
-interface=$OVS_BRIDGE_NAME
-# Listen on WiFi interface (for wireless clients)
-${wifi_iface:+interface=$wifi_iface}
-bind-interfaces
+# Global settings
+domain-needed
+bogus-priv
+no-resolv
+no-poll
 
-# DHCP range for wired network via bridge (10.250.1.x)
-dhcp-range=$OVS_BRIDGE_NAME,10.250.1.100,10.250.1.250,255.255.0.0,24h
+# Upstream DNS servers
+server=1.1.1.1
+server=8.8.8.8
 
-# DHCP range for WiFi clients (10.250.2.x) - separate subnet
-${wifi_iface:+dhcp-range=$wifi_iface,10.250.2.100,10.250.2.250,255.255.255.0,12h}
-
-# Gateway (this Fortress) - different for each interface
-dhcp-option=$OVS_BRIDGE_NAME,option:router,10.250.0.1
-${wifi_iface:+dhcp-option=$wifi_iface,option:router,10.250.2.1}
-
-# DNS servers (Fortress itself + Cloudflare)
-dhcp-option=option:dns-server,10.250.0.1,1.1.1.1
-
-# Domain
-dhcp-option=option:domain-name,fortress.local
+# Local domain
+domain=fortress.local
 local=/fortress.local/
+expand-hosts
 
-# Lease file
-dhcp-leasefile=/var/lib/misc/fortress-dnsmasq.leases
+# Local hostname resolution
+address=/fortress.local/10.250.0.1
+address=/fortress/10.250.0.1
 
 # Logging
 log-queries
 log-dhcp
 log-facility=/var/log/fortress-dnsmasq.log
 
-# Don't read /etc/resolv.conf
-no-resolv
-
-# Upstream DNS
-server=1.1.1.1
-server=8.8.8.8
-
-# Local hostname
-address=/fortress.local/10.250.0.1
-address=/fortress/10.250.0.1
+# Lease file
+dhcp-leasefile=/var/lib/misc/fortress-dnsmasq.leases
 
 # DHCP authoritative mode
 dhcp-authoritative
-
-# Fast DHCP
 dhcp-rapid-commit
 
-# Hostname for DHCP clients
-expand-hosts
-domain=fortress.local
+# ─────────────────────────────────────────────────────────────
+# VLAN Interfaces - Each VLAN has its own DHCP range
+# ─────────────────────────────────────────────────────────────
+
+# VLAN 10 - Management (10.250.10.x)
+interface=vlan10
+dhcp-range=vlan10,10.250.10.100,10.250.10.200,255.255.255.0,12h
+dhcp-option=vlan10,3,10.250.10.1
+dhcp-option=vlan10,6,10.250.10.1,1.1.1.1
+
+# VLAN 20 - Trusted/Staff (10.250.20.x)
+interface=vlan20
+dhcp-range=vlan20,10.250.20.100,10.250.20.200,255.255.255.0,12h
+dhcp-option=vlan20,3,10.250.20.1
+dhcp-option=vlan20,6,10.250.20.1,1.1.1.1
+
+# VLAN 30 - IoT Devices (10.250.30.x)
+interface=vlan30
+dhcp-range=vlan30,10.250.30.100,10.250.30.200,255.255.255.0,12h
+dhcp-option=vlan30,3,10.250.30.1
+dhcp-option=vlan30,6,10.250.30.1,1.1.1.1
+
+# VLAN 40 - Guest Network (10.250.40.x)
+interface=vlan40
+dhcp-range=vlan40,10.250.40.100,10.250.40.200,255.255.255.0,12h
+dhcp-option=vlan40,3,10.250.40.1
+dhcp-option=vlan40,6,10.250.40.1,1.1.1.1
+
+# VLAN 99 - Quarantine (10.250.99.x)
+interface=vlan99
+dhcp-range=vlan99,10.250.99.100,10.250.99.200,255.255.255.0,12h
+dhcp-option=vlan99,3,10.250.99.1
+dhcp-option=vlan99,6,10.250.99.1,1.1.1.1
+
+# ─────────────────────────────────────────────────────────────
+# Main Bridge - For untagged/default traffic (10.250.0.x)
+# ─────────────────────────────────────────────────────────────
+interface=$OVS_BRIDGE_NAME
+dhcp-range=$OVS_BRIDGE_NAME,10.250.0.100,10.250.0.200,255.255.0.0,24h
+dhcp-option=$OVS_BRIDGE_NAME,3,10.250.0.1
+dhcp-option=$OVS_BRIDGE_NAME,6,10.250.0.1,1.1.1.1
+
+# ─────────────────────────────────────────────────────────────
+# WiFi Interface (if available)
+# ─────────────────────────────────────────────────────────────
+${wifi_iface:+# WiFi clients get IPs from Guest VLAN range by default}
+${wifi_iface:+interface=$wifi_iface}
+${wifi_iface:+dhcp-range=$wifi_iface,10.250.40.201,10.250.40.250,255.255.255.0,12h}
+${wifi_iface:+dhcp-option=$wifi_iface,3,10.250.40.1}
+${wifi_iface:+dhcp-option=$wifi_iface,6,10.250.40.1,1.1.1.1}
+
+# Bind only to specified interfaces
+bind-interfaces
 EOF
 
     # Create lease file directory
@@ -1391,8 +1439,8 @@ Wants=network.target fortress-nat.service
 [Service]
 Type=forking
 PIDFile=/run/fortress-dnsmasq.pid
-ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress.conf
-ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress.conf --pid-file=/run/fortress-dnsmasq.pid
+ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress-vlans.conf
+ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress-vlans.conf --pid-file=/run/fortress-dnsmasq.pid
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1404,11 +1452,13 @@ EOF
     systemctl daemon-reload
     systemctl enable fortress-dnsmasq 2>/dev/null || true
 
-    log_info "DHCP server configured:"
-    log_info "  Range: 10.250.1.100 - 10.250.1.250"
-    log_info "  Gateway: 10.250.0.1"
-    log_info "  DNS: 10.250.0.1, 1.1.1.1"
-    log_info "  Domain: fortress.local"
+    log_info "DHCP server configured for VLAN segmentation:"
+    log_info "  VLAN 10 (Management): 10.250.10.100-200"
+    log_info "  VLAN 20 (Trusted):    10.250.20.100-200"
+    log_info "  VLAN 30 (IoT):        10.250.30.100-200"
+    log_info "  VLAN 40 (Guest):      10.250.40.100-200"
+    log_info "  VLAN 99 (Quarantine): 10.250.99.100-200"
+    log_info "  Bridge (default):     10.250.0.100-200"
 }
 
 # ============================================================
@@ -3962,7 +4012,12 @@ show_completion() {
 
     echo -e "  ${BOLD}Network Configuration:${NC}"
     echo -e "  Bridge: $OVS_BRIDGE_NAME (10.250.0.1)"
-    echo -e "  DHCP Range: 10.250.1.100 - 10.250.1.250"
+    echo -e "  DHCP per VLAN:"
+    echo -e "    VLAN 10 (Management): 10.250.10.100-200"
+    echo -e "    VLAN 20 (Trusted):    10.250.20.100-200"
+    echo -e "    VLAN 30 (IoT):        10.250.30.100-200"
+    echo -e "    VLAN 40 (Guest):      10.250.40.100-200"
+    echo -e "    VLAN 99 (Quarantine): 10.250.99.100-200"
     [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  Primary WAN: $FORTRESS_WAN_IFACE"
     [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
 
@@ -4412,7 +4467,9 @@ main() {
     check_root
     check_requirements
     detect_platform
-    detect_interfaces
+    # Use quiet mode for detector to suppress verbose output
+    # The summary will still be shown (controlled by detect_interfaces)
+    NET_QUIET_MODE=true detect_interfaces
 
     # Phase 2: Collect all user inputs BEFORE installation
     if [ "$NON_INTERACTIVE" != true ]; then
@@ -4436,8 +4493,8 @@ main() {
 
     # Re-detect interfaces now that iw is installed
     # This ensures WiFi interfaces are properly detected for AP setup
-    log_step "Re-detecting interfaces after package installation..."
-    detect_interfaces
+    # Use quiet mode and skip summary to avoid duplicate output
+    NET_QUIET_MODE=true NET_SKIP_SUMMARY=true detect_interfaces
 
     install_python_packages
     install_podman
