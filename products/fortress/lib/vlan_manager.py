@@ -215,7 +215,13 @@ class VLANManager:
 
     def auto_assign_device(self, mac_address: str, device_type: str = None) -> int:
         """
-        Automatically assign device to appropriate VLAN based on type.
+        Automatically assign device to appropriate VLAN based on OUI (vendor) and type.
+
+        Priority:
+        1. Manual assignment in mac_vlan.json
+        2. OUI-based vendor detection
+        3. Device type mapping
+        4. Default to Guest VLAN (40)
 
         Returns the assigned VLAN ID.
         """
@@ -226,25 +232,97 @@ class VLANManager:
         if device and device.get('is_known'):
             return device['vlan_id']
 
-        # Default VLAN assignments by device type
+        # Check OUI rules file first
+        vlan_id = self._lookup_oui_vlan(mac)
+        if vlan_id:
+            self.assign_device_to_vlan(mac, vlan_id, reason="oui_auto_assignment")
+            return vlan_id
+
+        # Fallback to device type mapping
         vlan_map = {
             'pos_terminal': 20,      # POS VLAN
             'payment': 20,
             'staff_laptop': 30,      # Staff VLAN
             'staff_phone': 30,
+            'mobile_phone': 30,      # Staff mobile
+            'laptop': 30,
+            'desktop': 30,
+            'tablet': 30,
+            'apple_device': 30,      # Apple devices
             'camera': 99,            # IoT VLAN
             'sensor': 99,
             'smart_device': 99,
-            'printer': 30,           # Staff (shared resource)
+            'printer': 99,           # IoT (separate from staff)
+            'iot': 99,
         }
 
-        # Determine VLAN
+        # Determine VLAN from device type
         vlan_id = vlan_map.get(device_type, 40)  # Default to Guest
 
         # Assign
-        self.assign_device_to_vlan(mac, vlan_id, reason="auto_assignment")
+        self.assign_device_to_vlan(mac, vlan_id, reason="type_auto_assignment")
 
         return vlan_id
+
+    def _lookup_oui_vlan(self, mac_address: str) -> Optional[int]:
+        """
+        Look up VLAN assignment based on OUI (vendor) from rules file.
+
+        Args:
+            mac_address: MAC address in format XX:XX:XX:XX:XX:XX
+
+        Returns:
+            VLAN ID if found, None otherwise
+        """
+        oui_rules_file = Path('/etc/fortress/oui_vlan_rules.conf')
+        if not oui_rules_file.exists():
+            return None
+
+        # Get OUI prefix (first 3 bytes)
+        oui = mac_address[:8].upper()
+
+        try:
+            content = oui_rules_file.read_text()
+            for line in content.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                # Format: OUI:VLAN_ID:VENDOR_NAME
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    rule_oui = parts[0].upper()
+                    if oui == rule_oui:
+                        return int(parts[1])
+        except Exception as e:
+            logger.error(f"Error reading OUI rules: {e}")
+
+        return None
+
+    def get_vendor_from_oui(self, mac_address: str) -> Optional[str]:
+        """Get vendor name from OUI database."""
+        oui_rules_file = Path('/etc/fortress/oui_vlan_rules.conf')
+        if not oui_rules_file.exists():
+            return None
+
+        oui = mac_address[:8].upper()
+
+        try:
+            content = oui_rules_file.read_text()
+            for line in content.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.split(':')
+                if len(parts) >= 3:
+                    rule_oui = parts[0].upper()
+                    if oui == rule_oui:
+                        return parts[2]
+        except Exception:
+            pass
+
+        return None
 
     def quarantine_device(self, mac_address: str, reason: str = "security_threat") -> bool:
         """Move device to quarantine VLAN."""
