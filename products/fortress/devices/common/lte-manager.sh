@@ -897,11 +897,31 @@ get_lte_signal_strength() {
 }
 
 # ============================================================
-# WAN FAILOVER
+# WAN FAILOVER (Metric-Based)
 # ============================================================
+#
+# Simplified failover using route metrics:
+#   - Primary WAN (Ethernet): metric 100 (preferred)
+#   - Backup WAN (LTE):       metric 200 (fallback)
+#
+# The kernel automatically uses the lowest-metric available route.
+# When primary goes down, traffic automatically fails over to LTE.
+# When primary recovers, traffic automatically switches back.
+#
+# No monitoring daemon required - NetworkManager handles this!
+
+# Metric values (lower = higher priority)
+PRIMARY_WAN_METRIC=100
+LTE_WAN_METRIC=200
 
 setup_wan_failover() {
-    # Set up WAN failover between primary WAN and LTE
+    # Set up WAN failover using route metrics
+    #
+    # This approach is simpler and more reliable than script-based failover:
+    #   1. Configure primary WAN with metric 100
+    #   2. Configure LTE with metric 200
+    #   3. Both routes exist simultaneously
+    #   4. Kernel automatically handles failover based on link state
     #
     # Args:
     #   $1 - Primary WAN interface
@@ -913,43 +933,218 @@ setup_wan_failover() {
     [ -z "$primary_wan" ] && { lte_error "Primary WAN interface required"; return 1; }
     [ -z "$lte_iface" ] && { lte_error "LTE interface not found"; return 1; }
 
-    lte_log "Setting up WAN failover:"
-    lte_log "  Primary: $primary_wan"
-    lte_log "  Backup:  $lte_iface (LTE)"
+    lte_log "Setting up metric-based WAN failover:"
+    lte_log "  Primary: $primary_wan (metric $PRIMARY_WAN_METRIC)"
+    lte_log "  Backup:  $lte_iface (metric $LTE_WAN_METRIC)"
 
     # Create state directory
     mkdir -p "$LTE_STATE_DIR"
 
     # Save failover configuration
     cat > "$LTE_STATE_DIR/failover.conf" << EOF
-# Fortress WAN Failover Configuration
+# Fortress WAN Failover Configuration (Metric-Based)
+# Generated: $(date -Iseconds)
+#
+# How it works:
+#   - Primary route has metric $PRIMARY_WAN_METRIC (lower = preferred)
+#   - LTE route has metric $LTE_WAN_METRIC (higher = fallback)
+#   - Kernel automatically uses lowest-metric available route
+#   - No monitoring daemon needed - NetworkManager handles failover
+#
 PRIMARY_WAN="$primary_wan"
+PRIMARY_WAN_METRIC=$PRIMARY_WAN_METRIC
 BACKUP_WAN="$lte_iface"
-HEALTH_CHECK_INTERVAL=$HEALTH_CHECK_INTERVAL
-FAILOVER_THRESHOLD=$FAILOVER_THRESHOLD
-HEALTH_CHECK_HOSTS="1.1.1.1 8.8.8.8 9.9.9.9"
+BACKUP_WAN_METRIC=$LTE_WAN_METRIC
 EOF
 
-    # Initialize state
-    echo "primary" > "$FAILOVER_STATE_FILE"
+    # Configure route metrics
+    setup_metric_failover "$primary_wan" "$lte_iface"
 
-    # Set up routing tables for failover
-    setup_failover_routing "$primary_wan" "$lte_iface"
-
-    lte_success "WAN failover configured"
+    lte_success "Metric-based WAN failover configured"
+    lte_log ""
+    lte_log "Validation: Run 'ip route' to verify metrics:"
+    lte_log "  - Primary should have metric $PRIMARY_WAN_METRIC"
+    lte_log "  - LTE should have metric $LTE_WAN_METRIC"
 }
 
-setup_failover_routing() {
-    # Configure policy routing for failover
+setup_metric_failover() {
+    # Configure route metrics for automatic failover
+    #
+    # Args:
+    #   $1 - Primary WAN interface
+    #   $2 - LTE interface
+
     local primary="$1"
-    local backup="$2"
+    local lte="$2"
 
-    # Add routing tables if not exist
-    grep -q "200 primary_wan" /etc/iproute2/rt_tables || echo "200 primary_wan" >> /etc/iproute2/rt_tables
-    grep -q "201 backup_wan" /etc/iproute2/rt_tables || echo "201 backup_wan" >> /etc/iproute2/rt_tables
+    lte_log "Configuring route metrics..."
 
-    # Rules will be added dynamically during failover
-    lte_log "Routing tables configured"
+    # Method 1: Configure via NetworkManager (preferred)
+    if command -v nmcli &>/dev/null; then
+        configure_nm_metrics "$primary" "$lte"
+        return $?
+    fi
+
+    # Method 2: Direct route manipulation (fallback)
+    configure_direct_metrics "$primary" "$lte"
+}
+
+configure_nm_metrics() {
+    # Configure metrics via NetworkManager connection profiles
+    #
+    # This is the cleanest approach - NM handles everything automatically
+
+    local primary="$1"
+    local lte="$2"
+
+    lte_log "Configuring NetworkManager route metrics..."
+
+    # Find and update primary WAN connection
+    local primary_con
+    primary_con=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep ":${primary}$" | cut -d: -f1 | head -1)
+
+    if [ -n "$primary_con" ]; then
+        lte_log "  Setting $primary_con (primary) metric to $PRIMARY_WAN_METRIC"
+        nmcli con mod "$primary_con" ipv4.route-metric "$PRIMARY_WAN_METRIC" 2>/dev/null || true
+        nmcli con mod "$primary_con" ipv6.route-metric "$PRIMARY_WAN_METRIC" 2>/dev/null || true
+    else
+        # Try to find by device type
+        primary_con=$(nmcli -t -f NAME,TYPE con show 2>/dev/null | grep -E "ethernet|802-3-ethernet" | cut -d: -f1 | head -1)
+        if [ -n "$primary_con" ]; then
+            lte_log "  Setting $primary_con (ethernet) metric to $PRIMARY_WAN_METRIC"
+            nmcli con mod "$primary_con" ipv4.route-metric "$PRIMARY_WAN_METRIC" 2>/dev/null || true
+        fi
+    fi
+
+    # Find and update LTE connection
+    local lte_con
+    lte_con=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep ":${lte}$" | cut -d: -f1 | head -1)
+
+    if [ -z "$lte_con" ]; then
+        # Try fortress-lte connection
+        lte_con="fortress-lte"
+    fi
+
+    if nmcli con show "$lte_con" &>/dev/null; then
+        lte_log "  Setting $lte_con (LTE) metric to $LTE_WAN_METRIC"
+        nmcli con mod "$lte_con" ipv4.route-metric "$LTE_WAN_METRIC" 2>/dev/null || true
+        nmcli con mod "$lte_con" ipv6.route-metric "$LTE_WAN_METRIC" 2>/dev/null || true
+    fi
+
+    # Reactivate connections to apply metrics
+    [ -n "$primary_con" ] && nmcli con up "$primary_con" 2>/dev/null || true
+    [ -n "$lte_con" ] && nmcli con up "$lte_con" 2>/dev/null || true
+
+    return 0
+}
+
+configure_direct_metrics() {
+    # Configure metrics via direct route manipulation
+    #
+    # Fallback when NetworkManager is not available
+
+    local primary="$1"
+    local lte="$2"
+
+    lte_log "Configuring route metrics directly..."
+
+    # Get current default routes
+    local primary_gw lte_gw
+
+    primary_gw=$(ip route show dev "$primary" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
+    lte_gw=$(ip route show dev "$lte" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
+
+    # Remove existing default routes and re-add with metrics
+    if [ -n "$primary_gw" ]; then
+        ip route del default via "$primary_gw" dev "$primary" 2>/dev/null || true
+        ip route add default via "$primary_gw" dev "$primary" metric "$PRIMARY_WAN_METRIC" 2>/dev/null || true
+        lte_log "  Primary route: default via $primary_gw dev $primary metric $PRIMARY_WAN_METRIC"
+    fi
+
+    if [ -n "$lte_gw" ]; then
+        ip route del default via "$lte_gw" dev "$lte" 2>/dev/null || true
+        ip route add default via "$lte_gw" dev "$lte" metric "$LTE_WAN_METRIC" 2>/dev/null || true
+        lte_log "  LTE route: default via $lte_gw dev $lte metric $LTE_WAN_METRIC"
+    fi
+
+    return 0
+}
+
+validate_failover_metrics() {
+    # Validate that failover is properly configured
+    #
+    # Returns: 0 if valid, 1 if issues found
+
+    lte_log "Validating WAN failover configuration..."
+
+    local errors=0
+
+    # Load config
+    if [ ! -f "$LTE_STATE_DIR/failover.conf" ]; then
+        lte_error "Failover not configured (missing failover.conf)"
+        return 1
+    fi
+
+    source "$LTE_STATE_DIR/failover.conf"
+
+    # Check primary WAN route metric
+    local primary_metric
+    primary_metric=$(ip route show dev "$PRIMARY_WAN" 2>/dev/null | grep "^default" | grep -oE "metric [0-9]+" | awk '{print $2}')
+
+    if [ -z "$primary_metric" ]; then
+        lte_warn "Primary WAN ($PRIMARY_WAN) has no default route"
+        errors=$((errors + 1))
+    elif [ "$primary_metric" != "$PRIMARY_WAN_METRIC" ]; then
+        lte_warn "Primary WAN metric is $primary_metric (expected $PRIMARY_WAN_METRIC)"
+        errors=$((errors + 1))
+    else
+        lte_success "Primary WAN ($PRIMARY_WAN): metric $primary_metric ✓"
+    fi
+
+    # Check LTE route metric
+    local lte_metric
+    lte_metric=$(ip route show dev "$BACKUP_WAN" 2>/dev/null | grep "^default" | grep -oE "metric [0-9]+" | awk '{print $2}')
+
+    if [ -z "$lte_metric" ]; then
+        lte_warn "LTE ($BACKUP_WAN) has no default route (may be disconnected)"
+    elif [ "$lte_metric" != "$BACKUP_WAN_METRIC" ]; then
+        lte_warn "LTE metric is $lte_metric (expected $BACKUP_WAN_METRIC)"
+        errors=$((errors + 1))
+    else
+        lte_success "LTE ($BACKUP_WAN): metric $lte_metric ✓"
+    fi
+
+    # Check metric ordering (primary should be lower than LTE)
+    if [ -n "$primary_metric" ] && [ -n "$lte_metric" ]; then
+        if [ "$primary_metric" -lt "$lte_metric" ]; then
+            lte_success "Route priority: Primary < LTE ✓"
+        else
+            lte_error "Route priority wrong: Primary ($primary_metric) >= LTE ($lte_metric)"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    # Show current routing table
+    lte_log ""
+    lte_log "Current default routes:"
+    ip route show default 2>/dev/null | while read -r line; do
+        lte_log "  $line"
+    done
+
+    if [ "$errors" -gt 0 ]; then
+        lte_error "Validation found $errors issue(s)"
+        return 1
+    fi
+
+    lte_success "WAN failover validation passed"
+    return 0
+}
+
+# Keep old function names for backward compatibility
+setup_failover_routing() {
+    # Deprecated: Use setup_metric_failover instead
+    lte_warn "setup_failover_routing is deprecated, using metric-based failover"
+    setup_metric_failover "$@"
 }
 
 check_wan_health() {
@@ -1171,7 +1366,8 @@ usage() {
     echo "  connect                   - Connect LTE modem"
     echo "  disconnect                - Disconnect LTE modem"
     echo "  setup-failover <primary_wan> [lte_iface]"
-    echo "                            - Configure WAN failover"
+    echo "                            - Configure WAN failover (metric-based)"
+    echo "  validate-failover         - Validate failover route metrics"
     echo "  monitor                   - Start failover monitoring (foreground)"
     echo "  install                   - Install failover systemd service"
     echo ""
@@ -1181,6 +1377,11 @@ usage() {
     echo "  $0 configure-apn internet.vodafone.ro"
     echo "  $0 configure-apn private.apn chap myuser mypass"
     echo "  $0 setup-failover enp1s0 wwp0s20f0u4"
+    echo "  $0 validate-failover"
+    echo ""
+    echo "Failover uses route metrics (no monitoring daemon required):"
+    echo "  - Primary WAN: metric 100 (preferred)"
+    echo "  - LTE backup:  metric 200 (fallback)"
     echo ""
 }
 
@@ -1206,6 +1407,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             ;;
         setup-failover)
             setup_wan_failover "$2" "$3"
+            ;;
+        validate-failover)
+            validate_failover_metrics
             ;;
         monitor)
             monitor_wan_failover
