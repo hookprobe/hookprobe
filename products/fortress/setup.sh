@@ -1207,20 +1207,33 @@ setup_dhcp_server() {
         return 0
     fi
 
+    # Get the WiFi interface from detection
+    local wifi_iface=""
+    for iface in $WIFI_INTERFACES; do
+        wifi_iface="$iface"
+        break
+    done
+
     # Create dnsmasq configuration for Fortress
     mkdir -p /etc/dnsmasq.d
     cat > /etc/dnsmasq.d/fortress.conf << EOF
 # HookProbe Fortress DHCP Configuration
 
-# Listen on the bridge interface
+# Listen on the bridge interface (for wired clients)
 interface=$OVS_BRIDGE_NAME
+# Listen on WiFi interface (for wireless clients)
+${wifi_iface:+interface=$wifi_iface}
 bind-interfaces
 
-# DHCP range for the main network (10.250.0.0/16)
-dhcp-range=10.250.1.100,10.250.1.250,255.255.0.0,24h
+# DHCP range for wired network via bridge (10.250.1.x)
+dhcp-range=$OVS_BRIDGE_NAME,10.250.1.100,10.250.1.250,255.255.0.0,24h
 
-# Gateway (this Fortress)
-dhcp-option=option:router,10.250.0.1
+# DHCP range for WiFi clients (10.250.2.x) - separate subnet
+${wifi_iface:+dhcp-range=$wifi_iface,10.250.2.100,10.250.2.250,255.255.255.0,12h}
+
+# Gateway (this Fortress) - different for each interface
+dhcp-option=$OVS_BRIDGE_NAME,option:router,10.250.0.1
+${wifi_iface:+dhcp-option=$wifi_iface,option:router,10.250.2.1}
 
 # DNS servers (Fortress itself + Cloudflare)
 dhcp-option=option:dns-server,10.250.0.1,1.1.1.1
@@ -1303,14 +1316,7 @@ EOF
 start_network_services() {
     log_step "Starting network services..."
 
-    # Start NAT routing first (required by other services)
-    if [ -f /etc/systemd/system/fortress-nat.service ]; then
-        log_info "Starting NAT routing..."
-        systemctl start fortress-nat 2>/dev/null || log_warn "Failed to start NAT"
-    fi
-
-    # Start hostapd (WiFi AP) - must start before dnsmasq
-    # dnsmasq depends on hostapd being up for proper interface binding
+    # Start hostapd (WiFi AP) FIRST - creates the WiFi interface
     if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
         log_info "Starting WiFi AP..."
         systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
@@ -1318,10 +1324,18 @@ start_network_services() {
         sleep 3
     fi
 
-    # Start dnsmasq (DHCP/DNS) - after hostapd
+    # Start NAT routing AFTER hostapd - needs WiFi interface to exist
+    # This assigns IPs to bridge AND WiFi interface
+    if [ -f /etc/systemd/system/fortress-nat.service ]; then
+        log_info "Starting NAT routing..."
+        systemctl restart fortress-nat 2>/dev/null || log_warn "Failed to start NAT"
+        sleep 1
+    fi
+
+    # Start dnsmasq (DHCP/DNS) LAST - needs interfaces with IPs
     if [ -f /etc/systemd/system/fortress-dnsmasq.service ]; then
         log_info "Starting DHCP server..."
-        systemctl start fortress-dnsmasq 2>/dev/null || log_warn "Failed to start dnsmasq"
+        systemctl restart fortress-dnsmasq 2>/dev/null || log_warn "Failed to start dnsmasq"
     fi
 
     # Verify services
@@ -1733,6 +1747,8 @@ set -e
 BRIDGE="fortress"
 BRIDGE_IP="10.250.0.1"
 BRIDGE_SUBNET="16"
+WIFI_IP="10.250.2.1"
+WIFI_SUBNET="24"
 
 # ============================================================
 # BRIDGE IP CONFIGURATION
@@ -1748,6 +1764,31 @@ if ip link show "$BRIDGE" &>/dev/null; then
     ip link set "$BRIDGE" up 2>/dev/null || true
 else
     echo "WARNING: Bridge $BRIDGE does not exist"
+fi
+
+# ============================================================
+# WIFI INTERFACE IP CONFIGURATION
+# ============================================================
+# Find WiFi interface (hostapd config or scan for wireless)
+WIFI_IFACE=""
+if [ -f /etc/hostapd/fortress.conf ]; then
+    WIFI_IFACE=$(grep "^interface=" /etc/hostapd/fortress.conf | cut -d= -f2)
+fi
+if [ -z "$WIFI_IFACE" ]; then
+    for iface in /sys/class/net/wl*; do
+        [ -e "$iface" ] && WIFI_IFACE=$(basename "$iface") && break
+    done
+fi
+
+if [ -n "$WIFI_IFACE" ] && ip link show "$WIFI_IFACE" &>/dev/null; then
+    echo "Configuring WiFi interface: $WIFI_IFACE"
+    # Assign IP for DHCP to work
+    if ! ip addr show "$WIFI_IFACE" | grep -q "$WIFI_IP"; then
+        ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
+        echo "WiFi interface IP configured: ${WIFI_IP}/${WIFI_SUBNET}"
+    fi
+else
+    echo "No WiFi interface found"
 fi
 
 # ============================================================
@@ -1875,6 +1916,40 @@ fi
 
 if ! iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
     iptables -A FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+fi
+
+# ============================================================
+# WIFI FORWARDING RULES
+# ============================================================
+if [ -n "$WIFI_IFACE" ]; then
+    echo "Setting up WiFi forwarding for $WIFI_IFACE"
+
+    # WiFi to WAN forwarding
+    if ! iptables -C FORWARD -i "$WIFI_IFACE" -o "$WAN" -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -i "$WIFI_IFACE" -o "$WAN" -j ACCEPT
+    fi
+
+    # WAN to WiFi established connections
+    if ! iptables -C FORWARD -i "$WAN" -o "$WIFI_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -i "$WAN" -o "$WIFI_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    fi
+
+    # WiFi to bridge (for local network access)
+    if ! iptables -C FORWARD -i "$WIFI_IFACE" -o "$BRIDGE" -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -i "$WIFI_IFACE" -o "$BRIDGE" -j ACCEPT
+    fi
+
+    # Bridge to WiFi
+    if ! iptables -C FORWARD -i "$BRIDGE" -o "$WIFI_IFACE" -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -i "$BRIDGE" -o "$WIFI_IFACE" -j ACCEPT
+    fi
+
+    # Allow DHCP on WiFi interface
+    if ! iptables -C INPUT -i "$WIFI_IFACE" -p udp --dport 67 -j ACCEPT 2>/dev/null; then
+        iptables -A INPUT -i "$WIFI_IFACE" -p udp --dport 67 -j ACCEPT
+    fi
+
+    echo "WiFi forwarding configured for $WIFI_IFACE"
 fi
 
 # LTE failover interfaces
