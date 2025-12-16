@@ -553,10 +553,12 @@ remove_configuration() {
         rm -f /etc/hostapd/fortress.conf
     fi
 
-    # Remove dnsmasq configuration
-    if [ -f /etc/dnsmasq.d/fortress.conf ]; then
+    # Remove dnsmasq configuration (both old and new VLAN config)
+    if [ -f /etc/dnsmasq.d/fortress.conf ] || [ -f /etc/dnsmasq.d/fortress-vlans.conf ]; then
         log_info "Removing dnsmasq configuration..."
         rm -f /etc/dnsmasq.d/fortress.conf
+        rm -f /etc/dnsmasq.d/fortress-vlans.conf
+        rm -f /etc/dnsmasq.d/fortress-bridge.conf
     fi
 
     # Remove VXLAN secrets
