@@ -4583,6 +4583,481 @@ prompt_network_config() {
 }
 
 # ============================================================
+# VM SUPPORT (QEMU/KVM for Home Assistant, OpenMediaVault)
+# ============================================================
+
+# Detect system RAM in GB
+detect_system_ram() {
+    local mem_kb
+    mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    # Convert KB to GB (integer)
+    echo $(( mem_kb / 1024 / 1024 ))
+}
+
+# Check if VM support is available (6GB+ RAM required)
+check_vm_support_available() {
+    local ram_gb
+    ram_gb=$(detect_system_ram)
+    if [ "$ram_gb" -ge 6 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Prompt user for VM support installation
+prompt_vm_support() {
+    local ram_gb
+    ram_gb=$(detect_system_ram)
+
+    # Skip if less than 6GB RAM
+    if [ "$ram_gb" -lt 6 ]; then
+        log_info "VM support requires 6GB+ RAM (detected: ${ram_gb}GB) - skipping"
+        export HOOKPROBE_VM_SUPPORT="no"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${CYAN}║          VM Support Available (${ram_gb}GB RAM detected)            ║${NC}"
+    echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  Guardian can run lightweight VMs alongside security services:"
+    echo ""
+    echo -e "  ${GREEN}•${NC} Home Assistant    - Smart home automation (1GB RAM)"
+    echo -e "  ${GREEN}•${NC} OpenMediaVault   - NAS/Storage management (1GB RAM)"
+    echo ""
+    echo -e "  ${DIM}Uses QEMU/KVM virtualization with libvirt management${NC}"
+    echo -e "  ${DIM}VMs will be accessible from Guardian dashboard${NC}"
+    echo ""
+
+    read -p "Install VM support with Home Assistant + OpenMediaVault? (yes/no) [yes]: " vm_choice
+    vm_choice=${vm_choice:-yes}
+
+    if [ "$vm_choice" = "yes" ] || [ "$vm_choice" = "y" ]; then
+        export HOOKPROBE_VM_SUPPORT="yes"
+        log_info "VM support will be installed"
+    else
+        export HOOKPROBE_VM_SUPPORT="no"
+        log_info "VM support skipped"
+    fi
+}
+
+# Install QEMU/KVM and libvirt packages
+install_vm_packages() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Installing VM support packages (QEMU/KVM)..."
+
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y -qq \
+            qemu-system-arm \
+            qemu-utils \
+            libvirt-daemon-system \
+            libvirt-clients \
+            virtinst \
+            virt-manager \
+            bridge-utils \
+            genisoimage \
+            cloud-image-utils \
+            2>/dev/null || {
+            log_warn "Some VM packages may not be available, installing core packages..."
+            apt-get install -y -qq qemu-system libvirt-daemon-system libvirt-clients 2>/dev/null || true
+        }
+    fi
+
+    # Enable and start libvirtd
+    systemctl enable libvirtd 2>/dev/null || true
+    systemctl start libvirtd 2>/dev/null || true
+
+    # Add current user to libvirt group
+    if [ -n "${SUDO_USER:-}" ]; then
+        usermod -aG libvirt "$SUDO_USER" 2>/dev/null || true
+        usermod -aG kvm "$SUDO_USER" 2>/dev/null || true
+    fi
+
+    log_info "VM packages installed"
+}
+
+# Configure libvirt network to use Guardian's br0 bridge
+configure_libvirt_network() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Configuring libvirt network..."
+
+    # Create hookprobe network definition using existing br0 bridge
+    local net_xml="/tmp/hookprobe-network.xml"
+    cat > "$net_xml" << 'NETXML'
+<network>
+  <name>hookprobe</name>
+  <forward mode="bridge"/>
+  <bridge name="br0"/>
+</network>
+NETXML
+
+    # Define and start the network
+    virsh net-define "$net_xml" 2>/dev/null || true
+    virsh net-start hookprobe 2>/dev/null || true
+    virsh net-autostart hookprobe 2>/dev/null || true
+
+    rm -f "$net_xml"
+    log_info "Libvirt 'hookprobe' network configured (bridge: br0)"
+}
+
+# Configure DHCP reservations for VMs
+configure_vm_dhcp_reservations() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    local dnsmasq_conf="/etc/dnsmasq.d/hookprobe-vms.conf"
+
+    log_step "Configuring VM DHCP reservations..."
+
+    cat > "$dnsmasq_conf" << 'VMDHCP'
+# HookProbe VM DHCP Reservations
+# Home Assistant: 192.168.4.10
+dhcp-host=52:54:00:HP:HA:01,192.168.4.10,homeassistant
+# OpenMediaVault: 192.168.4.11
+dhcp-host=52:54:00:HP:OM:01,192.168.4.11,openmediavault
+
+# DNS entries for VMs
+address=/homeassistant.local/192.168.4.10
+address=/ha.local/192.168.4.10
+address=/openmediavault.local/192.168.4.11
+address=/omv.local/192.168.4.11
+address=/nas.local/192.168.4.11
+VMDHCP
+
+    log_info "VM DHCP reservations configured"
+}
+
+# Create VM storage directory
+setup_vm_storage() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Setting up VM storage..."
+
+    local vm_dir="/var/lib/hookprobe/vms"
+    local images_dir="$vm_dir/images"
+    local disks_dir="$vm_dir/disks"
+
+    mkdir -p "$images_dir" "$disks_dir"
+    chmod 755 "$vm_dir"
+
+    # Create libvirt storage pool
+    virsh pool-define-as hookprobe-vms dir --target "$disks_dir" 2>/dev/null || true
+    virsh pool-build hookprobe-vms 2>/dev/null || true
+    virsh pool-start hookprobe-vms 2>/dev/null || true
+    virsh pool-autostart hookprobe-vms 2>/dev/null || true
+
+    log_info "VM storage configured at $vm_dir"
+}
+
+# Download and deploy Home Assistant VM
+deploy_homeassistant_vm() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Deploying Home Assistant VM..."
+
+    local vm_dir="/var/lib/hookprobe/vms"
+    local ha_image="$vm_dir/images/haos_ova-12.4.qcow2"
+    local ha_disk="$vm_dir/disks/homeassistant.qcow2"
+
+    # Download Home Assistant OS image if not exists
+    if [ ! -f "$ha_image" ]; then
+        log_info "Downloading Home Assistant OS (this may take a few minutes)..."
+        local ha_url="https://github.com/home-assistant/operating-system/releases/download/12.4/haos_generic-aarch64-12.4.qcow2.xz"
+
+        if curl -L -o "${ha_image}.xz" "$ha_url" 2>/dev/null; then
+            log_info "Extracting Home Assistant image..."
+            xz -d "${ha_image}.xz" 2>/dev/null || {
+                log_warn "Failed to extract, trying uncompressed download..."
+                rm -f "${ha_image}.xz"
+                curl -L -o "$ha_image" "https://github.com/home-assistant/operating-system/releases/download/12.4/haos_generic-aarch64-12.4.qcow2" 2>/dev/null || {
+                    log_error "Failed to download Home Assistant image"
+                    return 1
+                }
+            }
+        else
+            log_error "Failed to download Home Assistant image"
+            return 1
+        fi
+    fi
+
+    # Create VM disk from image
+    if [ ! -f "$ha_disk" ]; then
+        log_info "Creating Home Assistant VM disk..."
+        cp "$ha_image" "$ha_disk"
+        # Resize disk to 32GB
+        qemu-img resize "$ha_disk" 32G 2>/dev/null || true
+    fi
+
+    # Define VM
+    local ha_xml="/tmp/homeassistant-vm.xml"
+    cat > "$ha_xml" << 'HAXML'
+<domain type='kvm'>
+  <name>homeassistant</name>
+  <uuid>a1b2c3d4-e5f6-7890-abcd-ef1234567890</uuid>
+  <memory unit='GiB'>1</memory>
+  <vcpu>2</vcpu>
+  <os>
+    <type arch='aarch64' machine='virt'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='utc'/>
+  <devices>
+    <emulator>/usr/bin/qemu-system-aarch64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/hookprobe/vms/disks/homeassistant.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <mac address='52:54:00:48:50:01'/>
+      <source network='hookprobe'/>
+      <model type='virtio'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
+  </devices>
+</domain>
+HAXML
+
+    # Check if VM already exists
+    if virsh dominfo homeassistant &>/dev/null; then
+        log_info "Home Assistant VM already exists"
+    else
+        virsh define "$ha_xml" 2>/dev/null || {
+            log_warn "Failed to define Home Assistant VM"
+            rm -f "$ha_xml"
+            return 1
+        }
+        log_info "Home Assistant VM defined"
+    fi
+
+    rm -f "$ha_xml"
+
+    # Set VM to autostart
+    virsh autostart homeassistant 2>/dev/null || true
+
+    # Start VM
+    virsh start homeassistant 2>/dev/null || log_warn "Home Assistant VM not started (may already be running)"
+
+    log_info "Home Assistant VM deployed - access at http://192.168.4.10:8123"
+}
+
+# Download and deploy OpenMediaVault VM
+deploy_openmediavault_vm() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Deploying OpenMediaVault VM..."
+
+    local vm_dir="/var/lib/hookprobe/vms"
+    local omv_disk="$vm_dir/disks/openmediavault.qcow2"
+
+    # Create blank disk for OMV (will need manual install or cloud-init)
+    if [ ! -f "$omv_disk" ]; then
+        log_info "Creating OpenMediaVault VM disk (32GB)..."
+        qemu-img create -f qcow2 "$omv_disk" 32G 2>/dev/null || {
+            log_error "Failed to create OMV disk"
+            return 1
+        }
+    fi
+
+    # For OMV, we'll use Debian cloud image as base and configure OMV on first boot
+    local debian_image="$vm_dir/images/debian-12-genericcloud-arm64.qcow2"
+    if [ ! -f "$debian_image" ]; then
+        log_info "Downloading Debian cloud image for OpenMediaVault..."
+        curl -L -o "$debian_image" \
+            "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2" 2>/dev/null || {
+            log_warn "Failed to download Debian image - OMV VM will need manual setup"
+        }
+    fi
+
+    # Create OMV disk from Debian base if image exists and disk is empty
+    if [ -f "$debian_image" ]; then
+        local disk_size
+        disk_size=$(stat -c%s "$omv_disk" 2>/dev/null || echo "0")
+        if [ "$disk_size" -lt 1000000 ]; then
+            cp "$debian_image" "$omv_disk"
+            qemu-img resize "$omv_disk" 32G 2>/dev/null || true
+        fi
+    fi
+
+    # Create cloud-init config for OMV
+    local ci_dir="$vm_dir/cloud-init/omv"
+    mkdir -p "$ci_dir"
+
+    cat > "$ci_dir/user-data" << 'CIUSERDATA'
+#cloud-config
+hostname: openmediavault
+manage_etc_hosts: true
+users:
+  - name: admin
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: $6$rounds=4096$hookprobe$YQ3vPgH.5qG8qP5K5GyBVYKj3z9TmCBaJ1X5vYbKrL0T9QZJX5yP8fGh3d6wKmN7pL2s1vR8cB4x9nM0qT5w.
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - gnupg
+runcmd:
+  - curl -sSL https://github.com/OpenMediaVault-Plugin-Developers/installScript/raw/master/install | bash
+  - systemctl enable openmediavault
+CIUSERDATA
+
+    cat > "$ci_dir/meta-data" << 'CIMETADATA'
+instance-id: omv-001
+local-hostname: openmediavault
+CIMETADATA
+
+    # Create cloud-init ISO
+    local ci_iso="$vm_dir/disks/omv-cloud-init.iso"
+    if command -v genisoimage &>/dev/null; then
+        genisoimage -output "$ci_iso" -volid cidata -joliet -rock \
+            "$ci_dir/user-data" "$ci_dir/meta-data" 2>/dev/null || true
+    fi
+
+    # Define VM
+    local omv_xml="/tmp/openmediavault-vm.xml"
+    cat > "$omv_xml" << 'OMVXML'
+<domain type='kvm'>
+  <name>openmediavault</name>
+  <uuid>b2c3d4e5-f6a7-8901-bcde-f23456789012</uuid>
+  <memory unit='GiB'>1</memory>
+  <vcpu>2</vcpu>
+  <os>
+    <type arch='aarch64' machine='virt'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='utc'/>
+  <devices>
+    <emulator>/usr/bin/qemu-system-aarch64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/hookprobe/vms/disks/openmediavault.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/hookprobe/vms/disks/omv-cloud-init.iso'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+    </disk>
+    <interface type='network'>
+      <mac address='52:54:00:48:50:02'/>
+      <source network='hookprobe'/>
+      <model type='virtio'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
+  </devices>
+</domain>
+OMVXML
+
+    # Check if VM already exists
+    if virsh dominfo openmediavault &>/dev/null; then
+        log_info "OpenMediaVault VM already exists"
+    else
+        virsh define "$omv_xml" 2>/dev/null || {
+            log_warn "Failed to define OpenMediaVault VM"
+            rm -f "$omv_xml"
+            return 1
+        }
+        log_info "OpenMediaVault VM defined"
+    fi
+
+    rm -f "$omv_xml"
+
+    # Set VM to autostart
+    virsh autostart openmediavault 2>/dev/null || true
+
+    # Start VM
+    virsh start openmediavault 2>/dev/null || log_warn "OpenMediaVault VM not started (may already be running)"
+
+    log_info "OpenMediaVault VM deployed - access at http://192.168.4.11"
+    log_info "Default credentials: admin / openmediavault"
+}
+
+# Install VM management service for Guardian
+install_vm_management_service() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Installing VM management service..."
+
+    # Create systemd service for VM health monitoring
+    cat > /etc/systemd/system/guardian-vms.service << 'VMSERVICE'
+[Unit]
+Description=HookProbe Guardian VM Management
+After=libvirtd.service network-online.target
+Wants=network-online.target
+Requires=libvirtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'virsh start homeassistant 2>/dev/null || true; virsh start openmediavault 2>/dev/null || true'
+ExecStop=/bin/bash -c 'virsh shutdown homeassistant 2>/dev/null || true; virsh shutdown openmediavault 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
+VMSERVICE
+
+    systemctl daemon-reload
+    systemctl enable guardian-vms.service 2>/dev/null || true
+
+    log_info "VM management service installed"
+}
+
+# Main VM support installation function
+install_vm_support() {
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" != "yes" ]; then
+        return 0
+    fi
+
+    log_step "Installing VM support..."
+
+    install_vm_packages
+    setup_vm_storage
+    configure_libvirt_network
+    configure_vm_dhcp_reservations
+
+    # Deploy VMs
+    deploy_homeassistant_vm
+    deploy_openmediavault_vm
+
+    install_vm_management_service
+
+    log_info "VM support installation complete"
+}
+
+# ============================================================
 # MAIN INSTALLATION
 # ============================================================
 main() {
@@ -4639,6 +5114,9 @@ main() {
     # Network configuration prompt
     prompt_network_config
 
+    # VM support prompt (only on 6GB+ RAM systems)
+    prompt_vm_support
+
     # Install security containers (Suricata IDS, WAF, Neuro, AdGuard)
     log_step "Installing security containers..."
     install_security_containers
@@ -4680,6 +5158,9 @@ main() {
     # Install Web UI
     log_step "Installing Web UI..."
     install_web_ui
+
+    # Install VM support (if enabled)
+    install_vm_support
 
     # Enable and start services
     log_step "Starting services..."
@@ -4725,6 +5206,13 @@ main() {
         echo -e "    ML-powered domain classification, CNAME uncloaking, threat detection"
         echo ""
     fi
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" = "yes" ]; then
+        echo -e "  ${BOLD}${CYAN}VM Support:${NC}"
+        echo -e "  • Home Assistant:    ${BOLD}http://192.168.4.10:8123${NC} (ha.local)"
+        echo -e "  • OpenMediaVault:    ${BOLD}http://192.168.4.11${NC} (omv.local)"
+        echo -e "  ${DIM}  Manage VMs from Guardian dashboard or via 'virsh' command${NC}"
+        echo ""
+    fi
     echo -e "  ${BOLD}Service Status:${NC}"
     echo -e "  $(systemctl is-active hostapd 2>/dev/null || echo 'inactive') hostapd (WiFi AP)"
     echo -e "  $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive') dnsmasq (DHCP/DNS)"
@@ -4732,6 +5220,11 @@ main() {
     echo -e "  $(systemctl is-active guardian-suricata 2>/dev/null || echo 'inactive') guardian-suricata (IDS)"
     echo -e "  $(systemctl is-active guardian-waf 2>/dev/null || echo 'inactive') guardian-waf (WAF)"
     echo -e "  $(systemctl is-active guardian-qsecbit 2>/dev/null || echo 'inactive') guardian-qsecbit"
+    if [ "${HOOKPROBE_VM_SUPPORT:-no}" = "yes" ]; then
+        echo -e "  $(systemctl is-active libvirtd 2>/dev/null || echo 'inactive') libvirtd (VMs)"
+        echo -e "  $(virsh domstate homeassistant 2>/dev/null || echo 'not defined') homeassistant VM"
+        echo -e "  $(virsh domstate openmediavault 2>/dev/null || echo 'not defined') openmediavault VM"
+    fi
     echo ""
     echo -e "  ${YELLOW}Next steps:${NC}"
     echo -e "  1. Connect to '${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}' WiFi network"
