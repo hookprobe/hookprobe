@@ -18,7 +18,7 @@ django-celery-beat==2.7.0
 django-celery-results==2.5.1
 
 # Authentication & Security
-django-allauth==0.61.1
+django-allauth==65.13.0
 pyjwt==2.8.0
 cryptography==44.0.1
 
