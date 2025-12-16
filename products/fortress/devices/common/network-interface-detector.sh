@@ -378,30 +378,24 @@ detect_wifi_bands_direct() {
         fi
     fi
 
-    # Method 3: Check sysfs for supported bands
+    # Method 3: Check sysfs for supported bands using "iw phy" (no args)
     if ! $supports_24ghz && ! $supports_5ghz; then
-        # Look for any phy directory and check its bands
-        for phy_dir in /sys/class/ieee80211/phy*; do
-            if [ -d "$phy_dir" ]; then
-                local phy_name
-                phy_name=$(basename "$phy_dir")
-                # Use iw phy (without 'info') or iw list
-                freq_info=$(iw phy "$phy_name" 2>/dev/null) || true
-                if [ -z "$freq_info" ]; then
-                    freq_info=$(iw list 2>/dev/null) || true
-                fi
-                if [ -n "$freq_info" ]; then
-                    if echo "$freq_info" | grep -qE "24[0-9][0-9] MHz"; then
-                        supports_24ghz=true
-                    fi
-                    if echo "$freq_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
-                        supports_5ghz=true
-                    fi
-                    # Found info, assign to this interface
-                    break
-                fi
+        # Use "iw phy" without arguments and grep for frequencies
+        freq_info=$(iw phy 2>/dev/null) || true
+        if [ -z "$freq_info" ]; then
+            freq_info=$(iw list 2>/dev/null) || true
+        fi
+        if [ -n "$freq_info" ]; then
+            if echo "$freq_info" | grep -qE "24[0-9][0-9] MHz"; then
+                supports_24ghz=true
             fi
-        done
+            if echo "$freq_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
+                supports_5ghz=true
+            fi
+            if echo "$freq_info" | grep -qE "(59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
+                supports_6ghz=true
+            fi
+        fi
     fi
 
     # Method 4: Driver-based fallback for known WiFi chipsets
@@ -469,27 +463,22 @@ detect_wifi_radio_capabilities() {
     local phy_info=""
     # Try multiple methods to get PHY info
     # Note: All iw commands use "|| true" to prevent script exit with set -e
+    # IMPORTANT: Use "iw phy" (no args) then grep - "iw phy <name>" doesn't work on some drivers
 
-    # Method 1: iw phy <name> (without 'info' subcommand)
-    phy_info=$(iw phy "$phy" 2>/dev/null) || true
+    # Method 1: Use "iw phy" and extract section for our phy
+    log_info "  Querying iw phy for $phy..."
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
 
-    # Method 2: Extract from iw list output for specific phy
+    # Method 2: If that didn't work, try full iw phy output
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        log_info "  Trying iw list for $phy..."
-        phy_info=$(iw list 2>/dev/null | sed -n "/^Wiphy $phy$/,/^Wiphy /p" | head -n -1) || true
+        log_info "  Using full iw phy output..."
+        phy_info=$(iw phy 2>/dev/null) || true
     fi
 
-    # Method 3: Use full iw list if single phy
+    # Method 3: Try iw list as fallback
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        log_info "  Using full iw list output..."
+        log_info "  Trying iw list..."
         phy_info=$(iw list 2>/dev/null) || true
-    fi
-
-    # Method 4: For ath12k/newer drivers, try iw dev directly
-    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        log_info "  Trying iw phy $phy channels..."
-        # Get available frequencies from channel list
-        phy_info=$(iw phy "$phy" channels 2>/dev/null) || true
     fi
 
     # Check if we got any frequency data
