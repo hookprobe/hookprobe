@@ -115,6 +115,21 @@ else
     LTE_MANAGER_AVAILABLE=false
 fi
 
+# Source network integration module (new unified detection)
+if [ -f "$DEVICES_DIR/common/network-integration.sh" ]; then
+    source "$DEVICES_DIR/common/network-integration.sh"
+    NETWORK_INTEGRATION_AVAILABLE=true
+else
+    NETWORK_INTEGRATION_AVAILABLE=false
+fi
+
+# Source hostapd generator for dual-band WiFi
+if [ -f "$DEVICES_DIR/common/hostapd-generator.sh" ]; then
+    HOSTAPD_GENERATOR_AVAILABLE=true
+else
+    HOSTAPD_GENERATOR_AVAILABLE=false
+fi
+
 # ============================================================
 # PREREQUISITES
 # ============================================================
@@ -217,6 +232,29 @@ detect_platform() {
 
 detect_interfaces() {
     log_step "Detecting network interfaces..."
+
+    # Use new unified network detection if available
+    if [ "$NETWORK_INTEGRATION_AVAILABLE" = true ]; then
+        log_info "Using unified network interface detection..."
+        network_integration_init
+
+        # Show summary of detected interfaces
+        log_info "Ethernet interfaces ($NET_ETH_COUNT): ${NET_ETH_INTERFACES:-none}"
+        log_info "  WAN: ${NET_WAN_IFACE:-not assigned}"
+        log_info "  LAN: ${NET_LAN_IFACES:-not assigned}"
+        log_info "WiFi interfaces ($NET_WIFI_COUNT): ${NET_WIFI_INTERFACES:-none}"
+        log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not available}"
+        log_info "  5GHz: ${NET_WIFI_5GHZ_IFACE:-not available}"
+        log_info "  Config Mode: ${NET_WIFI_CONFIG_MODE:-unknown}"
+        log_info "WWAN/LTE interfaces ($NET_WWAN_COUNT): ${NET_WWAN_INTERFACES:-none}"
+        [ -n "$NET_WWAN_CONTROL" ] && log_info "  Control device: $NET_WWAN_CONTROL"
+
+        # Variables are exported by network_integration_init via export_for_setup
+        return 0
+    fi
+
+    # Fallback to legacy detection
+    log_info "Using legacy interface detection..."
 
     # Ethernet interfaces (eth*, enp*, eno*) - exclude WWAN
     ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '^ww' | tr '\n' ' ')
