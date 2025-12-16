@@ -409,24 +409,79 @@ verify_band_support() {
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
         phy_info=$(iw list 2>/dev/null)
     fi
-    [ -z "$phy_info" ] && return 1
 
-    case "$band" in
-        24ghz|2.4ghz)
-            # 2.4GHz band frequencies: 2412-2484 MHz (channels 1-14)
-            if echo "$phy_info" | grep -qE "24[0-9][0-9] MHz"; then
-                return 0
-            fi
+    # First try frequency-based detection
+    if [ -n "$phy_info" ]; then
+        case "$band" in
+            24ghz|2.4ghz)
+                # 2.4GHz band frequencies: 2412-2484 MHz (channels 1-14)
+                if echo "$phy_info" | grep -qE "24[0-9][0-9] MHz"; then
+                    return 0
+                fi
+                ;;
+            5ghz)
+                # 5GHz band frequencies: 5180-5825 MHz (channels 36-165)
+                if echo "$phy_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
+                    return 0
+                fi
+                ;;
+            6ghz)
+                # 6GHz band frequencies: 5925-7125 MHz (WiFi 6E/7)
+                if echo "$phy_info" | grep -qE "(59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+
+    # Driver-based fallback for known WiFi chipsets
+    # When iw commands don't return parseable frequency data, use driver knowledge
+    local driver
+    driver=$(cat "/sys/class/net/$iface/device/driver/module/drivers/"*/uevent 2>/dev/null | grep "DRIVER=" | cut -d= -f2 | head -1)
+    if [ -z "$driver" ]; then
+        # Fallback to readlink method
+        local driver_path="/sys/class/net/$iface/device/driver"
+        if [ -L "$driver_path" ]; then
+            driver=$(basename "$(readlink -f "$driver_path")" 2>/dev/null)
+        fi
+    fi
+
+    log_info "  Band verification fallback: driver=$driver, band=$band"
+
+    case "$driver" in
+        ath12k*|ath12k_pci)
+            # Qualcomm WiFi 7 - supports 2.4/5/6GHz
+            case "$band" in
+                24ghz|2.4ghz|5ghz|6ghz) return 0 ;;
+            esac
             ;;
-        5ghz)
-            # 5GHz band frequencies: 5180-5825 MHz (channels 36-165)
-            if echo "$phy_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
-                return 0
-            fi
+        ath11k*|ath11k_pci)
+            # Qualcomm WiFi 6E - supports 2.4/5/6GHz
+            case "$band" in
+                24ghz|2.4ghz|5ghz|6ghz) return 0 ;;
+            esac
             ;;
-        6ghz)
-            # 6GHz band frequencies: 5925-7125 MHz (WiFi 6E/7)
-            if echo "$phy_info" | grep -qE "(59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
+        mt76*|mt7921*|mt7922*)
+            # MediaTek WiFi 6/6E - dual/tri-band
+            case "$band" in
+                24ghz|2.4ghz|5ghz|6ghz) return 0 ;;
+            esac
+            ;;
+        iwlwifi|ath10k*|ath10k_pci|ath9k*)
+            # Intel/Qualcomm dual-band adapters
+            case "$band" in
+                24ghz|2.4ghz|5ghz) return 0 ;;
+            esac
+            ;;
+        rtw88*|rtw89*|rtl8*|r8188*|r8192*|brcmfmac*|brcmsmac*)
+            # Realtek/Broadcom typically dual-band
+            case "$band" in
+                24ghz|2.4ghz|5ghz) return 0 ;;
+            esac
+            ;;
+        *)
+            # Unknown driver - assume at least 2.4GHz
+            if [ "$band" = "24ghz" ] || [ "$band" = "2.4ghz" ]; then
                 return 0
             fi
             ;;
