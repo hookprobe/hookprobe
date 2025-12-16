@@ -51,3 +51,7 @@ def register_blueprints(app: Flask):
     # Qsecbit Live module - Real-time Unified score display
     from .qsecbit import qsecbit_bp
     app.register_blueprint(qsecbit_bp)
+
+    # VMs module - Virtual Machine Management (Home Assistant, OpenMediaVault)
+    from .vms import vms_bp
+    app.register_blueprint(vms_bp)
