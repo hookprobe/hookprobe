@@ -1164,6 +1164,165 @@
     </div>
 </div>
 
+<!-- VM Management Section (hidden by default, shown via JS if VMs available) -->
+<div class="vm-section" id="vm-section" style="display: none;">
+    <h3 class="section-title" style="margin: var(--spacing-xl) 0 var(--spacing-lg); font-size: 1.25rem; color: var(--text-primary);">
+        <svg fill="currentColor" viewBox="0 0 24 24" style="width: 24px; height: 24px; vertical-align: middle; margin-right: 8px;">
+            <path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/>
+        </svg>
+        Virtual Machines
+    </h3>
+    <div class="nav-tiles">
+        <!-- Home Assistant -->
+        <div class="nav-tile vm-tile" id="vm-tile-homeassistant">
+            <div class="nav-tile-header">
+                <div class="nav-tile-icon" style="background: linear-gradient(135deg, #18bcf2, #0d9dd9);">
+                    <svg fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2L4 7v10l8 5 8-5V7l-8-5zm0 2.31l6 3.75v7.88l-6 3.75-6-3.75V8.06l6-3.75z"/>
+                        <path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 6a2 2 0 110-4 2 2 0 010 4z"/>
+                    </svg>
+                </div>
+                <div class="nav-tile-info">
+                    <h4>Home Assistant</h4>
+                    <p>Smart home automation platform</p>
+                </div>
+            </div>
+            <div class="nav-tile-footer">
+                <span class="nav-tile-stat vm-status" id="vm-status-homeassistant">
+                    <span class="status-indicator stopped"></span> Checking...
+                </span>
+                <a href="http://192.168.4.10:8123" target="_blank" class="nav-tile-arrow" id="vm-link-homeassistant" style="text-decoration: none;">Open &rarr;</a>
+            </div>
+        </div>
+
+        <!-- OpenMediaVault -->
+        <div class="nav-tile vm-tile" id="vm-tile-openmediavault">
+            <div class="nav-tile-header">
+                <div class="nav-tile-icon" style="background: linear-gradient(135deg, #5c6bc0, #3949ab);">
+                    <svg fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M2 20h20v-4H2v4zm2-3h2v2H4v-2zM2 4v4h20V4H2zm4 3H4V5h2v2zm-4 7h20v-4H2v4zm2-3h2v2H4v-2z"/>
+                    </svg>
+                </div>
+                <div class="nav-tile-info">
+                    <h4>OpenMediaVault</h4>
+                    <p>NAS &amp; storage management</p>
+                </div>
+            </div>
+            <div class="nav-tile-footer">
+                <span class="nav-tile-stat vm-status" id="vm-status-openmediavault">
+                    <span class="status-indicator stopped"></span> Checking...
+                </span>
+                <a href="http://192.168.4.11" target="_blank" class="nav-tile-arrow" id="vm-link-openmediavault" style="text-decoration: none;">Open &rarr;</a>
+            </div>
+        </div>
+    </div>
+    <div class="vm-actions" style="margin-top: var(--spacing-md); display: flex; gap: var(--spacing-sm);">
+        <button class="btn btn-sm" onclick="vmAction('homeassistant', 'start')" id="btn-start-ha" style="display: none;">Start HA</button>
+        <button class="btn btn-sm" onclick="vmAction('openmediavault', 'start')" id="btn-start-omv" style="display: none;">Start OMV</button>
+    </div>
+</div>
+
+<style>
+/* VM Section Styles */
+.vm-tile .nav-tile-footer {
+    justify-content: space-between;
+}
+.vm-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.status-indicator.running {
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
+}
+.status-indicator.stopped {
+    background: #6b7280;
+}
+.status-indicator.error {
+    background: #ef4444;
+}
+</style>
+
+<script>
+// VM Management Functions
+let vmSupportEnabled = false;
+
+async function checkVMSupport() {
+    try {
+        const response = await fetch('/api/vms/status');
+        const data = await response.json();
+        vmSupportEnabled = data.enabled;
+
+        if (vmSupportEnabled) {
+            document.getElementById('vm-section').style.display = 'block';
+            fetchVMStatus();
+            // Poll VM status every 30 seconds
+            setInterval(fetchVMStatus, 30000);
+        }
+    } catch (e) {
+        console.log('VM support check failed:', e);
+    }
+}
+
+async function fetchVMStatus() {
+    if (!vmSupportEnabled) return;
+
+    try {
+        const response = await fetch('/api/vms');
+        const data = await response.json();
+
+        data.vms.forEach(vm => {
+            const statusEl = document.getElementById(`vm-status-${vm.name}`);
+            const linkEl = document.getElementById(`vm-link-${vm.name}`);
+            const startBtn = document.getElementById(`btn-start-${vm.name === 'homeassistant' ? 'ha' : 'omv'}`);
+
+            if (statusEl) {
+                const indicator = statusEl.querySelector('.status-indicator');
+                if (vm.state === 'running') {
+                    indicator.className = 'status-indicator running';
+                    statusEl.innerHTML = `<span class="status-indicator running"></span> Running`;
+                    if (startBtn) startBtn.style.display = 'none';
+                } else {
+                    indicator.className = 'status-indicator stopped';
+                    statusEl.innerHTML = `<span class="status-indicator stopped"></span> ${vm.state}`;
+                    if (startBtn) startBtn.style.display = 'inline-block';
+                }
+            }
+        });
+    } catch (e) {
+        console.log('VM status fetch failed:', e);
+    }
+}
+
+async function vmAction(vmName, action) {
+    try {
+        const response = await fetch(`/api/vms/${vmName}/${action}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            setTimeout(fetchVMStatus, 2000);
+        } else {
+            alert(`Failed to ${action} ${vmName}: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+// Initialize VM support check
+document.addEventListener('DOMContentLoaded', checkVMSupport);
+</script>
+
 <script>
 // Update health rings animation
 function updateHealthRings() {
