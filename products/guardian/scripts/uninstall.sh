@@ -816,6 +816,109 @@ remove_packages() {
 }
 
 # ============================================================
+# REMOVE VM SUPPORT (QEMU/KVM/libvirt)
+# ============================================================
+remove_vm_support() {
+    log_step "Checking for VM support installation..."
+
+    # Check if libvirt is installed
+    if ! command -v virsh &>/dev/null; then
+        log_info "VM support (libvirt) not installed, skipping"
+        return 0
+    fi
+
+    log_info "VM support detected, cleaning up..."
+
+    # Stop and remove all Guardian-managed VMs
+    log_info "Stopping Guardian-managed VMs..."
+    local vms
+    vms=$(virsh list --all --name 2>/dev/null | grep -v "^$" || true)
+
+    if [ -n "$vms" ]; then
+        echo ""
+        echo -e "${YELLOW}Found the following VMs:${NC}"
+        virsh list --all 2>/dev/null || true
+        echo ""
+        read -p "Remove all VMs? This will destroy VM data! (yes/no) [no]: " remove_vms
+
+        if [ "$remove_vms" == "yes" ]; then
+            for vm in $vms; do
+                log_info "Stopping VM: $vm"
+                virsh destroy "$vm" 2>/dev/null || true
+                log_info "Removing VM: $vm"
+                virsh undefine "$vm" --remove-all-storage 2>/dev/null || \
+                virsh undefine "$vm" 2>/dev/null || true
+            done
+            log_info "All VMs removed"
+        else
+            log_info "VMs preserved - you can manage them with 'virsh'"
+        fi
+    fi
+
+    # Remove Guardian libvirt network
+    if virsh net-info guardian &>/dev/null 2>&1; then
+        log_info "Removing libvirt network: guardian"
+        virsh net-destroy guardian 2>/dev/null || true
+        virsh net-undefine guardian 2>/dev/null || true
+    fi
+
+    # Remove VM management systemd service
+    if systemctl is-enabled guardian-vms &>/dev/null 2>&1; then
+        log_info "Disabling guardian-vms service..."
+        systemctl stop guardian-vms 2>/dev/null || true
+        systemctl disable guardian-vms 2>/dev/null || true
+    fi
+    rm -f /etc/systemd/system/guardian-vms.service 2>/dev/null || true
+
+    # Remove VM autostart script
+    rm -f /opt/hookprobe/guardian/scripts/vm-autostart.sh 2>/dev/null || true
+
+    # Remove VM storage directory
+    if [ -d /var/lib/hookprobe/vms ]; then
+        read -p "Remove VM storage directory (/var/lib/hookprobe/vms)? (yes/no) [no]: " remove_vm_storage
+        if [ "$remove_vm_storage" == "yes" ]; then
+            log_info "Removing VM storage directory..."
+            rm -rf /var/lib/hookprobe/vms
+            log_info "VM storage removed"
+        else
+            log_info "VM storage preserved at /var/lib/hookprobe/vms"
+        fi
+    fi
+
+    # Remove dnsmasq VM static reservations
+    if [ -f /etc/dnsmasq.d/guardian-vms.conf ]; then
+        log_info "Removing VM DNS/DHCP reservations..."
+        rm -f /etc/dnsmasq.d/guardian-vms.conf
+    fi
+
+    # Optional: Remove libvirt packages
+    echo ""
+    read -p "Remove VM packages (qemu, libvirt)? (yes/no) [no]: " remove_vm_pkgs
+    if [ "$remove_vm_pkgs" == "yes" ]; then
+        log_info "Removing VM packages..."
+
+        # Stop libvirt services
+        systemctl stop libvirtd 2>/dev/null || true
+        systemctl disable libvirtd 2>/dev/null || true
+
+        if command -v apt-get &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y \
+                qemu-system-arm qemu-utils libvirt-daemon-system \
+                libvirt-clients virtinst 2>/dev/null || true
+            apt-get autoremove -y 2>/dev/null || true
+        elif command -v dnf &>/dev/null; then
+            dnf remove -y qemu-kvm libvirt virt-install 2>/dev/null || true
+        fi
+        log_info "VM packages removed"
+    else
+        log_info "VM packages preserved"
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+    log_info "VM support cleanup complete"
+}
+
+# ============================================================
 # REMOVE ML PYTHON PACKAGES
 # ============================================================
 remove_ml_packages() {
@@ -904,6 +1007,7 @@ main() {
     echo -e "  - Guardian log files (/var/log/hookprobe/)"
     echo -e "  - Shared Cortex visualization modules"
     echo -e "  - Guardian data directories (/opt/hookprobe/guardian/)"
+    echo -e "  - VM support (QEMU/KVM, libvirt, VMs if installed)"
     echo ""
 
     read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
@@ -936,6 +1040,9 @@ main() {
     # Remove ML Python packages (dnsXai)
     remove_ml_packages
 
+    # Remove VM support (QEMU/KVM/libvirt)
+    remove_vm_support
+
     # Restore network
     restore_network
 
@@ -966,6 +1073,7 @@ main() {
     echo -e "  • Guardian helper scripts (/usr/local/bin/guardian-*, fix-dns-nat.sh, update-*, etc.)"
     echo -e "  • Guardian log files (/var/log/hookprobe/)"
     echo -e "  • Guardian directories (/opt/hookprobe/guardian/)"
+    echo -e "  • VM support (libvirt network, VMs, QEMU/KVM packages if selected)"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
     echo -e "  ${DIM}Reboot: sudo reboot${NC}"
