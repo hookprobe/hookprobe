@@ -566,10 +566,10 @@
         const rect = hero.getBoundingClientRect();
         width = canvas.width = rect.width;
         height = canvas.height = rect.height;
-        initInterfaceBars();
+        initInterfaceBars(detectedWanInterface, detectedLanInterface);
     }
 
-    function initInterfaceBars() {
+    function initInterfaceBars(wanName, lanName) {
         interfaceBars = [];
         // Position bars prominently on the right side
         const barWidth = 40;
@@ -579,9 +579,9 @@
         const barHeight = height - 70;
         const topPadding = 25;
 
-        // WAN bar (eth0) - shows combined RX+TX traffic rate
+        // WAN bar - shows combined RX+TX traffic rate
         interfaceBars.push({
-            name: 'eth0',
+            name: wanName || 'WAN',
             label: 'WAN',
             x: startX,
             y: topPadding,
@@ -590,14 +590,14 @@
             fillLevel: 0,        // 0-1 fill based on traffic rate
             targetFillLevel: 0,  // For smooth animation
             type: 'wan',
-            iface: 'eth0',       // Actual interface name
+            iface: wanName || '',  // Actual interface name from API
             ragColors: getRAGColors(0),
             rate: 0              // Current rate in bytes/sec
         });
 
-        // LAN bar (wlan0)
+        // LAN bar
         interfaceBars.push({
-            name: 'wlan0',
+            name: lanName || 'LAN',
             label: 'LAN',
             x: startX + barWidth + barSpacing,
             y: topPadding,
@@ -606,11 +606,15 @@
             fillLevel: 0,
             targetFillLevel: 0,
             type: 'lan',
-            iface: 'wlan0',
+            iface: lanName || '',
             ragColors: getRAGColors(0),
             rate: 0
         });
     }
+
+    // Store detected interface names for reuse
+    let detectedWanInterface = '';
+    let detectedLanInterface = '';
 
     function spawnParticle(bar, direction, isThreat = false) {
         const isRx = direction === 'down';
@@ -748,11 +752,13 @@
                 ctx.shadowBlur = 0;
             }
 
-            // Draw interface label (show both label and interface name)
+            // Draw interface label and name
             ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
             ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(bar.label || bar.name, bar.x + bar.width / 2, bar.y + bar.height + 16);
+            // Show label (WAN/LAN) and interface name if detected
+            const displayLabel = bar.iface ? `${bar.label} (${bar.iface})` : bar.label;
+            ctx.fillText(displayLabel, bar.x + bar.width / 2, bar.y + bar.height + 16);
 
             // Draw rate below label
             ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
@@ -828,20 +834,47 @@
                     if (txEl) txEl.textContent = formatBytes(data.network.tx_bytes || 0);
                 }
 
-                // Calculate rates and update bars for each interface
+                // Detect interface names from API response and update bars if needed
                 if (data.interfaces) {
+                    const ifaceNames = Object.keys(data.interfaces);
+                    let wanIface = '';
+                    let lanIface = '';
+
+                    // Find WAN and LAN interfaces from the response
+                    ifaceNames.forEach(name => {
+                        const stats = data.interfaces[name];
+                        if (stats.type === 'wan' && !wanIface) wanIface = name;
+                        if (stats.type === 'lan' && !lanIface) lanIface = name;
+                    });
+
+                    // Update detected interfaces if they changed
+                    if ((wanIface && wanIface !== detectedWanInterface) ||
+                        (lanIface && lanIface !== detectedLanInterface)) {
+                        detectedWanInterface = wanIface || detectedWanInterface;
+                        detectedLanInterface = lanIface || detectedLanInterface;
+                        // Reinitialize bars with new interface names
+                        initInterfaceBars(detectedWanInterface, detectedLanInterface);
+                    }
+
+                    // Calculate rates and update bars for each interface
                     Object.entries(data.interfaces).forEach(([ifaceName, stats]) => {
+                        // Skip if no actual bytes (interface doesn't exist)
+                        if (stats.rx_bytes === 0 && stats.tx_bytes === 0 && !trafficHistory[ifaceName]) {
+                            // Only skip on first call if truly zero
+                            // Allow subsequent updates even if zero (idle interface)
+                        }
+
                         // Initialize history for this interface if needed
                         if (!trafficHistory[ifaceName]) {
                             trafficHistory[ifaceName] = {
-                                rxBytes: 0, txBytes: 0,
+                                rxBytes: stats.rx_bytes, txBytes: stats.tx_bytes,
                                 rxRate: 0, txRate: 0,
                                 maxRate: 1024 * 1024  // 1 MB/s default max
                             };
-                        }
-                        const hist = trafficHistory[ifaceName];
+                            // Skip rate calculation on first data point
+                        } else {
+                            const hist = trafficHistory[ifaceName];
 
-                        if (hist.rxBytes > 0 || hist.txBytes > 0) {
                             // Calculate rate (bytes per second)
                             const rxDelta = Math.max(0, stats.rx_bytes - hist.rxBytes);
                             const txDelta = Math.max(0, stats.tx_bytes - hist.txBytes);
@@ -866,11 +899,11 @@
                                     bar.name = ifaceName;
                                 }
                             }
-                        }
 
-                        // Store current values for next calculation
-                        hist.rxBytes = stats.rx_bytes;
-                        hist.txBytes = stats.tx_bytes;
+                            // Store current values for next calculation
+                            hist.rxBytes = stats.rx_bytes;
+                            hist.txBytes = stats.tx_bytes;
+                        }
                     });
                 }
 
