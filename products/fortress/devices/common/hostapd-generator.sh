@@ -12,8 +12,10 @@
 #   - Separate radios (two hostapds, dedicated bands)
 #   - WiFi 7 (802.11be), WiFi 6 (802.11ax) and WiFi 5 (802.11ac) features
 #   - VLAN segregation via AP/VLAN mode
+#   - Hardware band verification (detects 5GHz-only or 2.4GHz-only adapters)
+#   - hostapd version detection (WiFi 6 requires 2.9+, WiFi 7 requires 2.11+)
 #
-# Version: 1.0.0
+# Version: 1.1.0
 # License: AGPL-3.0
 #
 
@@ -292,6 +294,88 @@ save_regulatory_domain() {
 }
 
 # ============================================================
+# HOSTAPD VERSION DETECTION
+# ============================================================
+
+get_hostapd_version() {
+    # Get hostapd version as a comparable number
+    # Returns: Version string (e.g., "2.10", "2.11") or empty if not found
+
+    local version=""
+
+    if command -v hostapd &>/dev/null; then
+        # hostapd -v outputs version to stderr
+        version=$(hostapd -v 2>&1 | head -1 | grep -oE 'v[0-9]+\.[0-9]+' | sed 's/v//')
+
+        # Alternative parsing if first method fails
+        if [ -z "$version" ]; then
+            version=$(hostapd -v 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        fi
+    fi
+
+    echo "$version"
+}
+
+check_hostapd_supports_wifi7() {
+    # Check if hostapd supports WiFi 7 (802.11be/EHT)
+    # WiFi 7 support requires hostapd 2.11 or later
+    #
+    # Returns: 0 (true) if supported, 1 (false) if not
+
+    local version
+    version=$(get_hostapd_version)
+
+    if [ -z "$version" ]; then
+        log_warn "hostapd not found, cannot determine WiFi 7 support"
+        return 1
+    fi
+
+    # Parse major.minor version
+    local major minor
+    major=$(echo "$version" | cut -d. -f1)
+    minor=$(echo "$version" | cut -d. -f2)
+
+    # WiFi 7 (EHT) requires hostapd 2.11+
+    if [ "${major:-0}" -gt 2 ]; then
+        return 0
+    elif [ "${major:-0}" -eq 2 ] && [ "${minor:-0}" -ge 11 ]; then
+        return 0
+    fi
+
+    log_warn "hostapd $version does not support WiFi 7 (requires 2.11+)"
+    return 1
+}
+
+check_hostapd_supports_wifi6() {
+    # Check if hostapd supports WiFi 6 (802.11ax/HE)
+    # WiFi 6 support requires hostapd 2.9 or later
+    #
+    # Returns: 0 (true) if supported, 1 (false) if not
+
+    local version
+    version=$(get_hostapd_version)
+
+    if [ -z "$version" ]; then
+        log_warn "hostapd not found, cannot determine WiFi 6 support"
+        return 1
+    fi
+
+    local major minor
+    major=$(echo "$version" | cut -d. -f1)
+    minor=$(echo "$version" | cut -d. -f2)
+
+    # WiFi 6 (HE) requires hostapd 2.9+
+    if [ "${major:-0}" -gt 2 ]; then
+        return 0
+    elif [ "${major:-0}" -eq 2 ] && [ "${minor:-0}" -ge 9 ]; then
+        return 0
+    fi
+
+    log_warn "hostapd $version does not support WiFi 6 (requires 2.9+)"
+    return 1
+}
+
+# ============================================================
 # CAPABILITY DETECTION HELPERS
 # ============================================================
 
@@ -299,6 +383,90 @@ get_phy_for_iface() {
     local iface="$1"
     if [ -L "/sys/class/net/$iface/phy80211" ]; then
         basename "$(readlink -f /sys/class/net/$iface/phy80211)"
+    fi
+}
+
+verify_band_support() {
+    # Verify that hardware actually supports a specific band
+    # This checks the phy capabilities directly, not just the state file
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Band: "24ghz" or "5ghz"
+    #
+    # Returns: 0 (true) if supported, 1 (false) if not
+
+    local iface="$1"
+    local band="$2"
+    local phy
+
+    phy=$(get_phy_for_iface "$iface")
+    [ -z "$phy" ] && return 1
+
+    local phy_info
+    phy_info=$(iw phy "$phy" info 2>/dev/null)
+    [ -z "$phy_info" ] && return 1
+
+    case "$band" in
+        24ghz|2.4ghz)
+            # 2.4GHz band frequencies: 2412-2484 MHz (channels 1-14)
+            if echo "$phy_info" | grep -qE "24[0-9][0-9] MHz"; then
+                return 0
+            fi
+            ;;
+        5ghz)
+            # 5GHz band frequencies: 5180-5825 MHz
+            if echo "$phy_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
+                return 0
+            fi
+            ;;
+        6ghz)
+            # 6GHz band frequencies: 5925-7125 MHz (WiFi 6E/7)
+            if echo "$phy_info" | grep -qE "59[2-9][0-9] MHz|6[0-9][0-9][0-9] MHz|7[0-1][0-9][0-9] MHz"; then
+                return 0
+            fi
+            ;;
+    esac
+
+    return 1
+}
+
+get_supported_channels_24ghz() {
+    # Get list of available 2.4GHz channels for interface
+    #
+    # Args:
+    #   $1 - Interface name
+    #
+    # Returns: Space-separated list of channels (e.g., "1 6 11")
+
+    local iface="$1"
+    local phy
+
+    phy=$(get_phy_for_iface "$iface")
+    [ -z "$phy" ] && { echo "6"; return; }
+
+    # Parse iw phy info for 2.4GHz frequencies and convert to channels
+    local channels=""
+    local phy_info
+    phy_info=$(iw phy "$phy" info 2>/dev/null)
+
+    # Look for 2.4GHz frequencies (2412-2484 MHz)
+    while read -r line; do
+        if echo "$line" | grep -qE "^\s*\* 24[0-9][0-9] MHz \[([0-9]+)\]"; then
+            local ch
+            ch=$(echo "$line" | grep -oE '\[[0-9]+\]' | tr -d '[]')
+            # Check if channel is disabled
+            if ! echo "$line" | grep -qE "disabled|no IR|radar"; then
+                channels="$channels $ch"
+            fi
+        fi
+    done <<< "$phy_info"
+
+    # Return available channels or default to 6
+    if [ -n "$channels" ]; then
+        echo "$channels" | xargs
+    else
+        echo "6"
     fi
 }
 
@@ -477,6 +645,14 @@ generate_hostapd_24ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
+    # Verify hardware actually supports 2.4GHz band
+    if ! verify_band_support "$iface" "24ghz"; then
+        log_error "Interface $iface does not support 2.4GHz band"
+        log_error "  This adapter appears to be 5GHz-only"
+        log_error "  Skipping 2.4GHz configuration"
+        return 1
+    fi
+
     # Auto-detect regulatory domain
     local country_code
     country_code=$(detect_regulatory_domain)
@@ -501,8 +677,18 @@ generate_hostapd_24ghz() {
     ht_capab=$(detect_ht_capabilities "$iface")
 
     local supports_ax=false
+    # Check hardware capability for WiFi 6
+    local hw_supports_ax=false
     if check_wifi_capability "$iface" "80211ax"; then
+        hw_supports_ax=true
+    fi
+
+    # Only enable WiFi 6 if BOTH hardware AND hostapd support it
+    if $hw_supports_ax && check_hostapd_supports_wifi6; then
         supports_ax=true
+        log_info "  WiFi 6 (802.11ax) on 2.4GHz: enabled"
+    elif $hw_supports_ax; then
+        log_warn "  WiFi 6 (802.11ax) on 2.4GHz: hardware supported but hostapd too old"
     fi
 
     mkdir -p "$HOSTAPD_DIR"
@@ -611,6 +797,14 @@ generate_hostapd_5ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
+    # Verify hardware actually supports 5GHz band
+    if ! verify_band_support "$iface" "5ghz"; then
+        log_error "Interface $iface does not support 5GHz band"
+        log_error "  This adapter appears to be 2.4GHz-only"
+        log_error "  Skipping 5GHz configuration"
+        return 1
+    fi
+
     # Auto-detect regulatory domain
     local country_code
     country_code=$(detect_regulatory_domain)
@@ -638,14 +832,37 @@ generate_hostapd_5ghz() {
     local supports_ax=false
     local supports_be=false  # WiFi 7
 
+    # Check hardware capabilities
+    local hw_supports_ac=false
+    local hw_supports_ax=false
+    local hw_supports_be=false
+
     if check_wifi_capability "$iface" "80211ac"; then
-        supports_ac=true
+        hw_supports_ac=true
     fi
     if check_wifi_capability "$iface" "80211ax"; then
-        supports_ax=true
+        hw_supports_ax=true
     fi
     if check_wifi_capability "$iface" "80211be"; then
+        hw_supports_be=true
+    fi
+
+    # Check hostapd version support
+    # Only enable features if BOTH hardware AND hostapd support them
+    if $hw_supports_ac; then
+        supports_ac=true  # WiFi 5 (802.11ac) supported in all hostapd versions
+    fi
+    if $hw_supports_ax && check_hostapd_supports_wifi6; then
+        supports_ax=true
+        log_info "  WiFi 6 (802.11ax): hardware + hostapd supported"
+    elif $hw_supports_ax; then
+        log_warn "  WiFi 6 (802.11ax): hardware supported but hostapd too old"
+    fi
+    if $hw_supports_be && check_hostapd_supports_wifi7; then
         supports_be=true
+        log_info "  WiFi 7 (802.11be): hardware + hostapd supported"
+    elif $hw_supports_be; then
+        log_warn "  WiFi 7 (802.11be): hardware supported but hostapd too old (needs 2.11+)"
     fi
 
     # Calculate VHT center frequency
@@ -994,12 +1211,18 @@ configure_dual_band_wifi() {
         separate-radios)
             # Two separate radios - create two hostapd configs
             if [ -n "$NET_WIFI_24GHZ_IFACE" ]; then
-                generate_hostapd_24ghz "$NET_WIFI_24GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"
-                has_24ghz=true
+                if generate_hostapd_24ghz "$NET_WIFI_24GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"; then
+                    has_24ghz=true
+                else
+                    log_warn "2.4GHz configuration skipped (hardware may not support this band)"
+                fi
             fi
             if [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
-                generate_hostapd_5ghz "$NET_WIFI_5GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"
-                has_5ghz=true
+                if generate_hostapd_5ghz "$NET_WIFI_5GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"; then
+                    has_5ghz=true
+                else
+                    log_warn "5GHz configuration skipped (hardware may not support this band)"
+                fi
             fi
             ;;
 
@@ -1007,14 +1230,24 @@ configure_dual_band_wifi() {
             # Single dual-band radio - create both configs for same interface
             # User can choose to run one or both (if radio supports it)
             if [ -n "$NET_WIFI_24GHZ_IFACE" ]; then
-                generate_hostapd_24ghz "$NET_WIFI_24GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"
-                has_24ghz=true
+                if generate_hostapd_24ghz "$NET_WIFI_24GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"; then
+                    has_24ghz=true
+                else
+                    log_warn "2.4GHz configuration skipped (hardware may not support this band)"
+                fi
+            fi
 
+            if [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
                 # Only add 5GHz if it's a different physical operation mode
                 # Some radios can do both simultaneously, others cannot
-                generate_hostapd_5ghz "$NET_WIFI_5GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"
-                has_5ghz=true
+                if generate_hostapd_5ghz "$NET_WIFI_5GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"; then
+                    has_5ghz=true
+                else
+                    log_warn "5GHz configuration skipped (hardware may not support this band)"
+                fi
+            fi
 
+            if $has_24ghz && $has_5ghz; then
                 log_warn "Single dual-band radio detected"
                 log_warn "  You may need to choose one band or use VAP if supported"
             fi
@@ -1022,15 +1255,21 @@ configure_dual_band_wifi() {
 
         24ghz-only)
             if [ -n "$NET_WIFI_24GHZ_IFACE" ]; then
-                generate_hostapd_24ghz "$NET_WIFI_24GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"
-                has_24ghz=true
+                if generate_hostapd_24ghz "$NET_WIFI_24GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"; then
+                    has_24ghz=true
+                else
+                    log_error "2.4GHz configuration failed"
+                fi
             fi
             ;;
 
         5ghz-only)
             if [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
-                generate_hostapd_5ghz "$NET_WIFI_5GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"
-                has_5ghz=true
+                if generate_hostapd_5ghz "$NET_WIFI_5GHZ_IFACE" "$ssid" "$password" "auto" "$bridge"; then
+                    has_5ghz=true
+                else
+                    log_error "5GHz configuration failed"
+                fi
             fi
             ;;
 
@@ -1040,14 +1279,29 @@ configure_dual_band_wifi() {
             ;;
     esac
 
+    # Check if at least one band was configured
+    if ! $has_24ghz && ! $has_5ghz; then
+        log_error "No WiFi bands could be configured!"
+        log_error "  Please check your WiFi hardware and hostapd installation"
+        return 1
+    fi
+
     # Generate VLAN file
     generate_vlan_file
 
-    # Generate systemd services
+    # Generate systemd services only for configured bands
     generate_systemd_services "$has_24ghz" "$has_5ghz"
 
     echo ""
-    log_success "Dual-band WiFi configuration complete!"
+    if $has_24ghz && $has_5ghz; then
+        log_success "Dual-band WiFi configuration complete!"
+    elif $has_5ghz; then
+        log_success "5GHz WiFi configuration complete!"
+        log_warn "  2.4GHz not available (hardware may not support it)"
+    else
+        log_success "2.4GHz WiFi configuration complete!"
+        log_warn "  5GHz not available (hardware may not support it)"
+    fi
     echo ""
     echo "Generated files:"
     [ "$has_24ghz" = "true" ] && echo "  2.4GHz: $HOSTAPD_24GHZ_CONF"
