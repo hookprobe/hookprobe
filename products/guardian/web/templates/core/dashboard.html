@@ -527,10 +527,7 @@
 
     // Traffic tracking for rate calculation
     let lastUpdateTime = Date.now();
-    let trafficHistory = {
-        wan: { rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0, maxRate: 1024 * 1024 },
-        lan: { rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0, maxRate: 1024 * 1024 }
-    };
+    let trafficHistory = {};  // Keyed by interface name (eth0, wlan0, etc.)
 
     // RAG color thresholds for blocks (per minute basis)
     const RAG_THRESHOLDS = {
@@ -582,9 +579,10 @@
         const barHeight = height - 70;
         const topPadding = 25;
 
-        // WAN bar (primary - shows combined RX+TX)
+        // WAN bar (eth0) - shows combined RX+TX traffic rate
         interfaceBars.push({
-            name: 'WAN',
+            name: 'eth0',
+            label: 'WAN',
             x: startX,
             y: topPadding,
             width: barWidth,
@@ -592,13 +590,15 @@
             fillLevel: 0,        // 0-1 fill based on traffic rate
             targetFillLevel: 0,  // For smooth animation
             type: 'wan',
+            iface: 'eth0',       // Actual interface name
             ragColors: getRAGColors(0),
             rate: 0              // Current rate in bytes/sec
         });
 
-        // LAN bar
+        // LAN bar (wlan0)
         interfaceBars.push({
-            name: 'LAN',
+            name: 'wlan0',
+            label: 'LAN',
             x: startX + barWidth + barSpacing,
             y: topPadding,
             width: barWidth,
@@ -606,6 +606,7 @@
             fillLevel: 0,
             targetFillLevel: 0,
             type: 'lan',
+            iface: 'wlan0',
             ragColors: getRAGColors(0),
             rate: 0
         });
@@ -747,11 +748,11 @@
                 ctx.shadowBlur = 0;
             }
 
-            // Draw interface label
+            // Draw interface label (show both label and interface name)
             ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
             ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(bar.name, bar.x + bar.width / 2, bar.y + bar.height + 16);
+            ctx.fillText(bar.label || bar.name, bar.x + bar.width / 2, bar.y + bar.height + 16);
 
             // Draw rate below label
             ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
@@ -827,13 +828,20 @@
                     if (txEl) txEl.textContent = formatBytes(data.network.tx_bytes || 0);
                 }
 
-                // Calculate rates and update bars
+                // Calculate rates and update bars for each interface
                 if (data.interfaces) {
-                    Object.entries(data.interfaces).forEach(([iface, stats]) => {
-                        const histKey = stats.type; // 'wan' or 'lan'
-                        const hist = trafficHistory[histKey];
+                    Object.entries(data.interfaces).forEach(([ifaceName, stats]) => {
+                        // Initialize history for this interface if needed
+                        if (!trafficHistory[ifaceName]) {
+                            trafficHistory[ifaceName] = {
+                                rxBytes: 0, txBytes: 0,
+                                rxRate: 0, txRate: 0,
+                                maxRate: 1024 * 1024  // 1 MB/s default max
+                            };
+                        }
+                        const hist = trafficHistory[ifaceName];
 
-                        if (hist && hist.rxBytes > 0) {
+                        if (hist.rxBytes > 0 || hist.txBytes > 0) {
                             // Calculate rate (bytes per second)
                             const rxDelta = Math.max(0, stats.rx_bytes - hist.rxBytes);
                             const txDelta = Math.max(0, stats.tx_bytes - hist.txBytes);
@@ -845,19 +853,24 @@
                             // Update max rate for scaling (with decay)
                             hist.maxRate = Math.max(hist.maxRate * 0.99, totalRate, 1024);
 
-                            // Find and update corresponding bar
-                            const bar = interfaceBars.find(b => b.type === histKey);
+                            // Find bar by interface name OR by type
+                            const bar = interfaceBars.find(b =>
+                                b.iface === ifaceName || b.name === ifaceName || b.type === stats.type
+                            );
                             if (bar) {
                                 bar.rate = totalRate;
                                 bar.targetFillLevel = Math.min(1, totalRate / hist.maxRate);
+                                // Update bar's interface name if we matched by type
+                                if (bar.iface !== ifaceName) {
+                                    bar.iface = ifaceName;
+                                    bar.name = ifaceName;
+                                }
                             }
                         }
 
                         // Store current values for next calculation
-                        if (hist) {
-                            hist.rxBytes = stats.rx_bytes;
-                            hist.txBytes = stats.tx_bytes;
-                        }
+                        hist.rxBytes = stats.rx_bytes;
+                        hist.txBytes = stats.tx_bytes;
                     });
                 }
 
