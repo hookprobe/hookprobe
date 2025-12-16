@@ -410,20 +410,19 @@ verify_band_support() {
     case "$band" in
         24ghz|2.4ghz)
             # 2.4GHz band frequencies: 2412-2484 MHz (channels 1-14)
-            # Match "* 2412 MHz" format from iw phy info output
-            if echo "$phy_info" | grep -qE "\* 24[0-9][0-9] MHz"; then
+            if echo "$phy_info" | grep -qE "24[0-9][0-9] MHz"; then
                 return 0
             fi
             ;;
         5ghz)
             # 5GHz band frequencies: 5180-5825 MHz (channels 36-165)
-            if echo "$phy_info" | grep -qE "\* 5[0-9][0-9][0-9] MHz"; then
+            if echo "$phy_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
                 return 0
             fi
             ;;
         6ghz)
             # 6GHz band frequencies: 5925-7125 MHz (WiFi 6E/7)
-            if echo "$phy_info" | grep -qE "\* (59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
+            if echo "$phy_info" | grep -qE "(59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
                 return 0
             fi
             ;;
