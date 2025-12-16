@@ -337,6 +337,7 @@ detect_wifi_radio_capabilities() {
     local supports_80211n=false
     local supports_80211ac=false
     local supports_80211ax=false
+    local supports_80211be=false  # WiFi 7
     local supports_ap=false
     local supports_vap=false
 
@@ -360,6 +361,10 @@ detect_wifi_radio_capabilities() {
     fi
     if echo "$phy_info" | grep -qE "HE Capabilities|HE PHY"; then
         supports_80211ax=true
+    fi
+    # WiFi 7 (802.11be) uses EHT (Extremely High Throughput)
+    if echo "$phy_info" | grep -qE "EHT Capabilities|EHT PHY|EHT MAC"; then
+        supports_80211be=true
     fi
 
     # Check interface modes
@@ -389,7 +394,9 @@ detect_wifi_radio_capabilities() {
 
     # WiFi generation
     local wifi_gen="WiFi 4 (802.11n)"
-    if $supports_80211ax; then
+    if $supports_80211be; then
+        wifi_gen="WiFi 7 (802.11be)"
+    elif $supports_80211ax; then
         if $supports_6ghz; then
             wifi_gen="WiFi 6E (802.11ax)"
         else
@@ -414,6 +421,7 @@ detect_wifi_radio_capabilities() {
     eval "export NET_WIFI_${iface^^}_80211N=\"$supports_80211n\""
     eval "export NET_WIFI_${iface^^}_80211AC=\"$supports_80211ac\""
     eval "export NET_WIFI_${iface^^}_80211AX=\"$supports_80211ax\""
+    eval "export NET_WIFI_${iface^^}_80211BE=\"$supports_80211be\""
     eval "export NET_WIFI_${iface^^}_AP=\"$supports_ap\""
     eval "export NET_WIFI_${iface^^}_VAP=\"$supports_vap\""
     eval "export NET_WIFI_${iface^^}_TYPE=\"$radio_type\""
