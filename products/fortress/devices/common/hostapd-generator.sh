@@ -508,10 +508,14 @@ get_supported_channels_24ghz() {
     phy=$(get_phy_for_iface "$iface")
     [ -z "$phy" ] && { echo "6"; return; }
 
-    # Parse iw phy info for 2.4GHz frequencies and convert to channels
+    # Parse iw phy for 2.4GHz frequencies and convert to channels
+    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
     local channels=""
-    local phy_info
-    phy_info=$(iw phy "$phy" info 2>/dev/null)
+    local phy_info=""
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
 
     # Look for 2.4GHz frequencies (2412-2484 MHz)
     while read -r line; do
@@ -572,31 +576,53 @@ check_wifi_capability() {
 
 detect_ht_capabilities() {
     # Detect 802.11n HT capabilities for 2.4GHz
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Channel (optional, for HT40+/- selection)
     local iface="$1"
+    local channel="${2:-6}"
     local phy
     phy=$(get_phy_for_iface "$iface")
 
-    [ -z "$phy" ] && { echo "[HT40+][SHORT-GI-20]"; return; }
+    [ -z "$phy" ] && { echo "[SHORT-GI-20]"; return; }
 
     local caps=""
+    local phy_info=""
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "HT40"; then
-        caps="[HT40+]"
+    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
     fi
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "SHORT-GI-20"; then
+    # HT40 channel selection based on 2.4GHz channel rules:
+    # - Channels 1-7: Can use HT40+ (secondary channel above)
+    # - Channels 5-9: Can use HT40- (secondary channel below)
+    # - Channels 10-13: Can only use HT40-
+    # - Channel 14: No HT40 (Japan only)
+    if echo "$phy_info" | grep -q "HT40"; then
+        if [ "$channel" -le 7 ] 2>/dev/null; then
+            caps="[HT40+]"
+        elif [ "$channel" -ge 5 ] && [ "$channel" -le 13 ] 2>/dev/null; then
+            caps="[HT40-]"
+        fi
+        # No HT40 for channel 14 or invalid channels
+    fi
+
+    if echo "$phy_info" | grep -q "SHORT-GI-20"; then
         caps="${caps}[SHORT-GI-20]"
     fi
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "SHORT-GI-40"; then
+    if echo "$phy_info" | grep -q "SHORT-GI-40"; then
         caps="${caps}[SHORT-GI-40]"
     fi
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "DSSS_CCK-40"; then
+    if echo "$phy_info" | grep -q "DSSS_CCK-40"; then
         caps="${caps}[DSSS_CCK-40]"
     fi
 
-    echo "${caps:-[HT40+][SHORT-GI-20]}"
+    # Default to safe capabilities if detection failed
+    echo "${caps:-[SHORT-GI-20]}"
 }
 
 detect_vht_capabilities() {
@@ -608,20 +634,27 @@ detect_vht_capabilities() {
     [ -z "$phy" ] && { echo "[MAX-MPDU-11454][SHORT-GI-80]"; return; }
 
     local caps=""
+    local phy_info=""
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "MAX-MPDU-11454"; then
+    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
+    if echo "$phy_info" | grep -q "MAX-MPDU-11454"; then
         caps="[MAX-MPDU-11454]"
     fi
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "SHORT-GI-80"; then
+    if echo "$phy_info" | grep -q "SHORT-GI-80"; then
         caps="${caps}[SHORT-GI-80]"
     fi
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "SU-BEAMFORMER"; then
+    if echo "$phy_info" | grep -q "SU-BEAMFORMER"; then
         caps="${caps}[SU-BEAMFORMER]"
     fi
 
-    if iw phy "$phy" info 2>/dev/null | grep -q "SU-BEAMFORMEE"; then
+    if echo "$phy_info" | grep -q "SU-BEAMFORMEE"; then
         caps="${caps}[SU-BEAMFORMEE]"
     fi
 
@@ -636,8 +669,15 @@ detect_he_capabilities() {
 
     [ -z "$phy" ] && return 1
 
+    local phy_info=""
+    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
     # Check if HE is supported
-    if ! iw phy "$phy" info 2>/dev/null | grep -qE "HE Capabilities|HE PHY"; then
+    if ! echo "$phy_info" | grep -qE "HE Capabilities|HE PHY"; then
         return 1
     fi
 
@@ -652,8 +692,15 @@ detect_eht_capabilities() {
 
     [ -z "$phy" ] && return 1
 
+    local phy_info=""
+    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
     # Check if EHT (802.11be/WiFi 7) is supported
-    if ! iw phy "$phy" info 2>/dev/null | grep -qE "EHT Capabilities|EHT PHY|EHT MAC"; then
+    if ! echo "$phy_info" | grep -qE "EHT Capabilities|EHT PHY|EHT MAC"; then
         return 1
     fi
 
@@ -669,8 +716,12 @@ detect_eht_channel_width() {
 
     [ -z "$phy" ] && { echo "80"; return; }
 
-    local phy_info
-    phy_info=$(iw phy "$phy" info 2>/dev/null)
+    local phy_info=""
+    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
 
     # WiFi 7 can support up to 320 MHz channels
     if echo "$phy_info" | grep -qE "320 MHz|EHT.*320"; then
@@ -735,9 +786,9 @@ generate_hostapd_24ghz() {
         fi
     fi
 
-    # Detect capabilities
+    # Detect capabilities (pass channel for HT40+/- selection)
     local ht_capab
-    ht_capab=$(detect_ht_capabilities "$iface")
+    ht_capab=$(detect_ht_capabilities "$iface" "$channel")
 
     local supports_ax=false
     # Check hardware capability for WiFi 6
