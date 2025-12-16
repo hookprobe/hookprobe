@@ -384,7 +384,11 @@ detect_wifi_bands_direct() {
             if [ -d "$phy_dir" ]; then
                 local phy_name
                 phy_name=$(basename "$phy_dir")
-                freq_info=$(iw phy "$phy_name" info 2>/dev/null)
+                # Use iw phy (without 'info') or iw list
+                freq_info=$(iw phy "$phy_name" 2>/dev/null)
+                if [ -z "$freq_info" ]; then
+                    freq_info=$(iw list 2>/dev/null)
+                fi
                 if [ -n "$freq_info" ]; then
                     if echo "$freq_info" | grep -qE "24[0-9][0-9] MHz"; then
                         supports_24ghz=true
@@ -432,7 +436,19 @@ detect_wifi_radio_capabilities() {
     [ -z "$phy" ] && return 1
 
     local phy_info
-    phy_info=$(iw phy "$phy" info 2>/dev/null)
+    # Try multiple methods to get PHY info
+    # Method 1: iw phy <name> (without 'info' subcommand)
+    phy_info=$(iw phy "$phy" 2>/dev/null)
+
+    # Method 2: Extract from iw list output
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw list 2>/dev/null | sed -n "/^Wiphy $phy/,/^Wiphy /p" | head -n -1)
+    fi
+
+    # Method 3: Use full iw list if single phy
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw list 2>/dev/null)
+    fi
 
     # Detect supported bands
     local supports_24ghz=false

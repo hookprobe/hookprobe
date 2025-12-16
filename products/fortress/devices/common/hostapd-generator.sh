@@ -404,7 +404,11 @@ verify_band_support() {
     [ -z "$phy" ] && return 1
 
     local phy_info
-    phy_info=$(iw phy "$phy" info 2>/dev/null)
+    # Try iw phy (without 'info'), fall back to iw list
+    phy_info=$(iw phy "$phy" 2>/dev/null)
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw list 2>/dev/null)
+    fi
     [ -z "$phy_info" ] && return 1
 
     case "$band" in
