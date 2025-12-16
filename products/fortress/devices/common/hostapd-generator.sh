@@ -10,7 +10,7 @@
 # Supports:
 #   - Single dual-band radio (one hostapd, band steering)
 #   - Separate radios (two hostapds, dedicated bands)
-#   - WiFi 6 (802.11ax) and WiFi 5 (802.11ac) features
+#   - WiFi 7 (802.11be), WiFi 6 (802.11ax) and WiFi 5 (802.11ac) features
 #   - VLAN segregation via AP/VLAN mode
 #
 # Version: 1.0.0
@@ -44,6 +44,254 @@ log_warn() { echo -e "${YELLOW}[WIFI]${NC} $*"; }
 log_error() { echo -e "${RED}[WIFI]${NC} $*"; }
 
 # ============================================================
+# REGULATORY DOMAIN AUTO-DETECTION
+# ============================================================
+
+detect_regulatory_domain() {
+    # Auto-detect regulatory domain for WiFi configuration
+    #
+    # Detection priority:
+    #   1. Environment variable (WIFI_COUNTRY_CODE)
+    #   2. Saved configuration (/etc/hookprobe/wifi.conf)
+    #   3. Timezone-based detection (most reliable)
+    #   4. Locale-based detection
+    #   5. GeoIP lookup (if available)
+    #   6. Default to US
+    #
+    # Returns: Two-letter ISO 3166-1 country code (e.g., US, GB, DE)
+
+    # Check environment variable first
+    if [ -n "$WIFI_COUNTRY_CODE" ]; then
+        echo "${WIFI_COUNTRY_CODE^^}"
+        return
+    fi
+
+    # Check saved configuration
+    if [ -f /etc/hookprobe/wifi.conf ]; then
+        local saved_country
+        saved_country=$(grep "^WIFI_COUNTRY=" /etc/hookprobe/wifi.conf 2>/dev/null | cut -d= -f2 | tr -d '"')
+        if [ -n "$saved_country" ]; then
+            echo "${saved_country^^}"
+            return
+        fi
+    fi
+
+    # Timezone-based detection (most reliable offline method)
+    local tz_country
+    tz_country=$(detect_country_from_timezone)
+    if [ -n "$tz_country" ]; then
+        echo "$tz_country"
+        return
+    fi
+
+    # Locale-based detection
+    local locale_country
+    locale_country=$(detect_country_from_locale)
+    if [ -n "$locale_country" ]; then
+        echo "$locale_country"
+        return
+    fi
+
+    # GeoIP lookup (optional, requires internet)
+    local geoip_country
+    geoip_country=$(detect_country_from_geoip)
+    if [ -n "$geoip_country" ]; then
+        echo "$geoip_country"
+        return
+    fi
+
+    # Default to US
+    echo "US"
+}
+
+detect_country_from_timezone() {
+    # Map timezone to country code
+    # Uses timedatectl or /etc/timezone
+
+    local timezone=""
+
+    # Try timedatectl first
+    if command -v timedatectl &>/dev/null; then
+        timezone=$(timedatectl show -p Timezone --value 2>/dev/null)
+    fi
+
+    # Fallback to /etc/timezone
+    if [ -z "$timezone" ] && [ -f /etc/timezone ]; then
+        timezone=$(cat /etc/timezone 2>/dev/null)
+    fi
+
+    # Fallback to readlink /etc/localtime
+    if [ -z "$timezone" ] && [ -L /etc/localtime ]; then
+        timezone=$(readlink -f /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+    fi
+
+    [ -z "$timezone" ] && return 1
+
+    # Map timezones to country codes
+    # Common timezone → country mappings
+    case "$timezone" in
+        # Europe
+        Europe/London|Europe/Belfast)                    echo "GB" ;;
+        Europe/Dublin)                                   echo "IE" ;;
+        Europe/Paris)                                    echo "FR" ;;
+        Europe/Berlin|Europe/Munich)                     echo "DE" ;;
+        Europe/Rome)                                     echo "IT" ;;
+        Europe/Madrid|Europe/Barcelona)                  echo "ES" ;;
+        Europe/Amsterdam)                                echo "NL" ;;
+        Europe/Brussels)                                 echo "BE" ;;
+        Europe/Vienna)                                   echo "AT" ;;
+        Europe/Zurich)                                   echo "CH" ;;
+        Europe/Stockholm)                                echo "SE" ;;
+        Europe/Oslo)                                     echo "NO" ;;
+        Europe/Copenhagen)                               echo "DK" ;;
+        Europe/Helsinki)                                 echo "FI" ;;
+        Europe/Warsaw)                                   echo "PL" ;;
+        Europe/Prague)                                   echo "CZ" ;;
+        Europe/Budapest)                                 echo "HU" ;;
+        Europe/Bucharest)                                echo "RO" ;;
+        Europe/Sofia)                                    echo "BG" ;;
+        Europe/Athens)                                   echo "GR" ;;
+        Europe/Istanbul)                                 echo "TR" ;;
+        Europe/Moscow|Europe/St_Petersburg)              echo "RU" ;;
+        Europe/Kiev|Europe/Kyiv)                         echo "UA" ;;
+        Europe/Lisbon)                                   echo "PT" ;;
+
+        # Americas
+        America/New_York|America/Chicago|America/Denver|America/Los_Angeles)
+                                                         echo "US" ;;
+        America/Phoenix|America/Detroit|America/Indiana/*)
+                                                         echo "US" ;;
+        America/Anchorage|America/Juneau|US/*)           echo "US" ;;
+        America/Toronto|America/Vancouver|America/Montreal|Canada/*)
+                                                         echo "CA" ;;
+        America/Mexico_City|America/Tijuana|America/Cancun)
+                                                         echo "MX" ;;
+        America/Sao_Paulo|America/Rio_Branco|Brazil/*)   echo "BR" ;;
+        America/Argentina/*)                             echo "AR" ;;
+        America/Santiago)                                echo "CL" ;;
+        America/Lima)                                    echo "PE" ;;
+        America/Bogota)                                  echo "CO" ;;
+
+        # Asia Pacific
+        Asia/Tokyo)                                      echo "JP" ;;
+        Asia/Seoul)                                      echo "KR" ;;
+        Asia/Shanghai|Asia/Hong_Kong|Asia/Chongqing)     echo "CN" ;;
+        Asia/Taipei)                                     echo "TW" ;;
+        Asia/Singapore)                                  echo "SG" ;;
+        Asia/Bangkok)                                    echo "TH" ;;
+        Asia/Jakarta)                                    echo "ID" ;;
+        Asia/Kuala_Lumpur)                               echo "MY" ;;
+        Asia/Manila)                                     echo "PH" ;;
+        Asia/Ho_Chi_Minh|Asia/Hanoi)                     echo "VN" ;;
+        Asia/Kolkata|Asia/Mumbai|Asia/Calcutta)          echo "IN" ;;
+        Asia/Dubai)                                      echo "AE" ;;
+        Asia/Riyadh)                                     echo "SA" ;;
+        Asia/Jerusalem|Asia/Tel_Aviv)                    echo "IL" ;;
+
+        # Oceania
+        Australia/Sydney|Australia/Melbourne|Australia/Brisbane)
+                                                         echo "AU" ;;
+        Australia/Perth|Australia/Adelaide|Australia/*) echo "AU" ;;
+        Pacific/Auckland|Pacific/Wellington|NZ)         echo "NZ" ;;
+
+        # Africa
+        Africa/Cairo)                                    echo "EG" ;;
+        Africa/Johannesburg)                             echo "ZA" ;;
+        Africa/Lagos)                                    echo "NG" ;;
+        Africa/Nairobi)                                  echo "KE" ;;
+
+        # Generic patterns
+        US/*|America/US/*)                               echo "US" ;;
+        *)
+            # Try to extract country from timezone path (e.g., Europe/London → GB)
+            # This is a fallback for less common timezones
+            return 1
+            ;;
+    esac
+}
+
+detect_country_from_locale() {
+    # Extract country from system locale (e.g., en_US.UTF-8 → US)
+
+    local locale=""
+
+    # Try LANG environment variable
+    locale="${LANG:-}"
+
+    # Fallback to localectl
+    if [ -z "$locale" ] && command -v localectl &>/dev/null; then
+        locale=$(localectl status 2>/dev/null | grep "System Locale" | sed 's/.*LANG=//' | cut -d' ' -f1)
+    fi
+
+    # Fallback to /etc/default/locale
+    if [ -z "$locale" ] && [ -f /etc/default/locale ]; then
+        locale=$(grep "^LANG=" /etc/default/locale 2>/dev/null | cut -d= -f2 | tr -d '"')
+    fi
+
+    [ -z "$locale" ] && return 1
+
+    # Extract country code (e.g., en_US.UTF-8 → US, de_DE → DE)
+    local country
+    country=$(echo "$locale" | sed -n 's/.*_\([A-Z][A-Z]\).*/\1/p')
+
+    if [ -n "$country" ] && [ ${#country} -eq 2 ]; then
+        echo "$country"
+        return 0
+    fi
+
+    return 1
+}
+
+detect_country_from_geoip() {
+    # Use GeoIP lookup to detect country
+    # Only used as last resort (requires internet)
+
+    # Check if we have internet connectivity (quick check)
+    if ! ping -c 1 -W 2 8.8.8.8 &>/dev/null && ! ping -c 1 -W 2 1.1.1.1 &>/dev/null; then
+        return 1
+    fi
+
+    local country=""
+
+    # Try multiple GeoIP services (all return plain text country code)
+    for service in \
+        "http://ip-api.com/line/?fields=countryCode" \
+        "https://ipapi.co/country/" \
+        "https://ifconfig.co/country-iso"; do
+
+        country=$(curl -sf --max-time 3 "$service" 2>/dev/null | head -1 | tr -d '\r\n')
+
+        if [ -n "$country" ] && [ ${#country} -eq 2 ]; then
+            echo "${country^^}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+save_regulatory_domain() {
+    # Save detected regulatory domain to config
+    local country="$1"
+
+    mkdir -p /etc/hookprobe
+
+    if [ -f /etc/hookprobe/wifi.conf ]; then
+        # Update existing config
+        if grep -q "^WIFI_COUNTRY=" /etc/hookprobe/wifi.conf; then
+            sed -i "s/^WIFI_COUNTRY=.*/WIFI_COUNTRY=\"$country\"/" /etc/hookprobe/wifi.conf
+        else
+            echo "WIFI_COUNTRY=\"$country\"" >> /etc/hookprobe/wifi.conf
+        fi
+    else
+        # Create new config
+        echo "WIFI_COUNTRY=\"$country\"" > /etc/hookprobe/wifi.conf
+    fi
+
+    log_info "Regulatory domain saved: $country"
+}
+
+# ============================================================
 # CAPABILITY DETECTION HELPERS
 # ============================================================
 
@@ -56,7 +304,7 @@ get_phy_for_iface() {
 
 check_wifi_capability() {
     local iface="$1"
-    local capability="$2"  # 80211n, 80211ac, 80211ax, WPA3
+    local capability="$2"  # 80211n, 80211ac, 80211ax, 80211be, WPA3
 
     local iface_upper="${iface^^}"
 
@@ -70,8 +318,14 @@ check_wifi_capability() {
         80211ax)
             eval "[ \"\$NET_WIFI_${iface_upper}_80211AX\" = 'true' ]"
             ;;
+        80211be)
+            eval "[ \"\$NET_WIFI_${iface_upper}_80211BE\" = 'true' ]"
+            ;;
         5ghz)
             eval "[ \"\$NET_WIFI_${iface_upper}_5GHZ\" = 'true' ]"
+            ;;
+        6ghz)
+            eval "[ \"\$NET_WIFI_${iface_upper}_6GHZ\" = 'true' ]"
             ;;
         24ghz)
             eval "[ \"\$NET_WIFI_${iface_upper}_24GHZ\" = 'true' ]"
@@ -159,6 +413,46 @@ detect_he_capabilities() {
     echo "true"
 }
 
+detect_eht_capabilities() {
+    # Detect 802.11be EHT capabilities for WiFi 7
+    local iface="$1"
+    local phy
+    phy=$(get_phy_for_iface "$iface")
+
+    [ -z "$phy" ] && return 1
+
+    # Check if EHT (802.11be/WiFi 7) is supported
+    if ! iw phy "$phy" info 2>/dev/null | grep -qE "EHT Capabilities|EHT PHY|EHT MAC"; then
+        return 1
+    fi
+
+    echo "true"
+}
+
+detect_eht_channel_width() {
+    # Detect maximum EHT channel width supported (WiFi 7)
+    # Returns: 20, 40, 80, 160, or 320
+    local iface="$1"
+    local phy
+    phy=$(get_phy_for_iface "$iface")
+
+    [ -z "$phy" ] && { echo "80"; return; }
+
+    local phy_info
+    phy_info=$(iw phy "$phy" info 2>/dev/null)
+
+    # WiFi 7 can support up to 320 MHz channels
+    if echo "$phy_info" | grep -qE "320 MHz|EHT.*320"; then
+        echo "320"
+    elif echo "$phy_info" | grep -qE "160 MHz"; then
+        echo "160"
+    elif echo "$phy_info" | grep -qE "80.*80|80\+80"; then
+        echo "160"
+    else
+        echo "80"
+    fi
+}
+
 # ============================================================
 # HOSTAPD CONFIGURATION GENERATORS
 # ============================================================
@@ -183,11 +477,16 @@ generate_hostapd_24ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
+    # Auto-detect regulatory domain
+    local country_code
+    country_code=$(detect_regulatory_domain)
+
     log_info "Generating 2.4GHz hostapd configuration"
     log_info "  Interface: $iface"
     log_info "  SSID: $ssid"
     log_info "  Channel: $channel"
     log_info "  Bridge: $bridge"
+    log_info "  Country: $country_code (auto-detected)"
 
     # Auto channel selection
     if [ "$channel" = "auto" ]; then
@@ -223,7 +522,7 @@ bridge=$bridge
 # Network Settings
 ssid=$ssid
 utf8_ssid=1
-country_code=US
+country_code=$country_code
 ieee80211d=1
 ieee80211h=1
 
@@ -312,11 +611,16 @@ generate_hostapd_5ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
+    # Auto-detect regulatory domain
+    local country_code
+    country_code=$(detect_regulatory_domain)
+
     log_info "Generating 5GHz hostapd configuration"
     log_info "  Interface: $iface"
     log_info "  SSID: $ssid"
     log_info "  Channel: $channel"
     log_info "  Bridge: $bridge"
+    log_info "  Country: $country_code (auto-detected)"
 
     # Auto channel selection
     if [ "$channel" = "auto" ]; then
@@ -332,12 +636,16 @@ generate_hostapd_5ghz() {
 
     local supports_ac=false
     local supports_ax=false
+    local supports_be=false  # WiFi 7
 
     if check_wifi_capability "$iface" "80211ac"; then
         supports_ac=true
     fi
     if check_wifi_capability "$iface" "80211ax"; then
         supports_ax=true
+    fi
+    if check_wifi_capability "$iface" "80211be"; then
+        supports_be=true
     fi
 
     # Calculate VHT center frequency
@@ -359,7 +667,7 @@ generate_hostapd_5ghz() {
 # Generated: $(date -Iseconds)
 #
 # Purpose: High-throughput access with WPA3 security
-# Band: 5GHz (802.11ac/ax)
+# Band: 5GHz (802.11ac/ax/be)
 #
 
 interface=$iface
@@ -369,7 +677,7 @@ bridge=$bridge
 # Network Settings
 ssid=$ssid
 utf8_ssid=1
-country_code=US
+country_code=$country_code
 ieee80211d=1
 ieee80211h=1
 
@@ -420,6 +728,40 @@ he_mu_edca_qos_info_txop_request=0
 EOF
     fi
 
+    # Add 802.11be (WiFi 7) if supported
+    # Note: WiFi 7 requires hostapd 2.11+ with EHT support
+    if $supports_be; then
+        local eht_channel_width
+        eht_channel_width=$(detect_eht_channel_width "$iface")
+
+        cat >> "$HOSTAPD_5GHZ_CONF" << EOF
+# 802.11be (WiFi 7) - EHT (Extremely High Throughput)
+# Requires hostapd 2.11+ and compatible driver
+ieee80211be=1
+eht_su_beamformer=1
+eht_su_beamformee=1
+eht_mu_beamformer=1
+
+# WiFi 7 channel width (up to 320 MHz supported)
+# eht_oper_chwidth: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz, 4=320MHz
+EOF
+        case "$eht_channel_width" in
+            320) echo "eht_oper_chwidth=4" >> "$HOSTAPD_5GHZ_CONF" ;;
+            160) echo "eht_oper_chwidth=3" >> "$HOSTAPD_5GHZ_CONF" ;;
+            80)  echo "eht_oper_chwidth=2" >> "$HOSTAPD_5GHZ_CONF" ;;
+            *)   echo "eht_oper_chwidth=2" >> "$HOSTAPD_5GHZ_CONF" ;;
+        esac
+
+        cat >> "$HOSTAPD_5GHZ_CONF" << EOF
+
+# Multi-Link Operation (MLO) - disabled by default
+# Enable for dual-band simultaneous operation (requires compatible clients)
+# mlo_enabled=0
+
+EOF
+        log_info "  WiFi 7 (802.11be): enabled (${eht_channel_width}MHz max width)"
+    fi
+
     # WPA3/WPA2 Transition Mode (SAE + PSK)
     cat >> "$HOSTAPD_5GHZ_CONF" << EOF
 # Security: WPA3/WPA2 Transition Mode
@@ -467,6 +809,7 @@ EOF
     log_success "  Channel: $channel"
     $supports_ac && log_success "  WiFi 5 (802.11ac): enabled"
     $supports_ax && log_success "  WiFi 6 (802.11ax): enabled"
+    $supports_be && log_success "  WiFi 7 (802.11be): enabled"
 
     echo "$HOSTAPD_5GHZ_CONF"
 }
