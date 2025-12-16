@@ -404,9 +404,12 @@ verify_band_support() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Try iw phy (without 'info'), fall back to iw list
+    # Use "iw phy" (no args) - "iw phy <name>" doesn't work on some drivers like ath12k
     # Note: Use "|| true" to prevent script exit with set -e
-    phy_info=$(iw phy "$phy" 2>/dev/null) || true
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
         phy_info=$(iw list 2>/dev/null) || true
     fi
