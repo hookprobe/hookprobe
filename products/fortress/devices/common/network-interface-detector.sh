@@ -440,15 +440,39 @@ detect_wifi_radio_capabilities() {
     # Method 1: iw phy <name> (without 'info' subcommand)
     phy_info=$(iw phy "$phy" 2>/dev/null)
 
-    # Method 2: Extract from iw list output
+    # Method 2: Extract from iw list output for specific phy
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        phy_info=$(iw list 2>/dev/null | sed -n "/^Wiphy $phy/,/^Wiphy /p" | head -n -1)
+        log_info "  Trying iw list for $phy..."
+        phy_info=$(iw list 2>/dev/null | sed -n "/^Wiphy $phy$/,/^Wiphy /p" | head -n -1)
     fi
 
     # Method 3: Use full iw list if single phy
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        log_info "  Using full iw list output..."
         phy_info=$(iw list 2>/dev/null)
     fi
+
+    # Method 4: For ath12k/newer drivers, try iw dev directly
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        log_info "  Trying iw dev $iface scan frequencies..."
+        # Get available frequencies from channel list
+        phy_info=$(iw phy "$phy" channels 2>/dev/null)
+    fi
+
+    # Check if we got any frequency data
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        log_warn "  No frequency data found via iw - checking sysfs"
+        # Last resort: check if phy directories exist for bands
+        if [ -d "/sys/class/ieee80211/$phy" ]; then
+            # Just use iw list and assume it works
+            phy_info=$(iw list 2>/dev/null)
+        fi
+    fi
+
+    # Debug: Show if we found frequencies
+    local freq_count
+    freq_count=$(echo "$phy_info" | grep -cE "[0-9]+ MHz" 2>/dev/null || echo "0")
+    log_info "  Frequencies found: $freq_count"
 
     # Detect supported bands
     local supports_24ghz=false
