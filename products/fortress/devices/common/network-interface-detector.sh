@@ -341,14 +341,17 @@ detect_wifi_radio_capabilities() {
     local supports_ap=false
     local supports_vap=false
 
-    # Band detection (Band 1=2.4GHz, Band 2=5GHz, Band 4=6GHz)
-    if echo "$phy_info" | grep -q "Band 1:"; then
+    # Band detection using frequency ranges (more reliable than "Band N:" which varies by driver)
+    # 2.4GHz: 2412-2484 MHz (channels 1-14)
+    # 5GHz:   5180-5825 MHz (channels 36-165)
+    # 6GHz:   5925-7125 MHz (WiFi 6E/7)
+    if echo "$phy_info" | grep -qE "\* 24[0-9][0-9] MHz"; then
         supports_24ghz=true
     fi
-    if echo "$phy_info" | grep -q "Band 2:"; then
+    if echo "$phy_info" | grep -qE "\* 5[0-9][0-9][0-9] MHz"; then
         supports_5ghz=true
     fi
-    if echo "$phy_info" | grep -q "Band 4:"; then
+    if echo "$phy_info" | grep -qE "\* (59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
         supports_6ghz=true
     fi
 
