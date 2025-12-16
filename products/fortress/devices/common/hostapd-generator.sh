@@ -818,6 +818,13 @@ macaddr_acl=0
 ap_isolate=0
 max_num_sta=64
 
+# Dynamic VLAN Assignment
+# VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
+dynamic_vlan=1
+vlan_file=$HOSTAPD_VLAN_FILE
+vlan_tagged_interface=$bridge
+vlan_naming=1
+
 # Performance Tuning
 beacon_int=100
 dtim_period=2
@@ -1069,6 +1076,13 @@ macaddr_acl=0
 ap_isolate=0
 max_num_sta=128
 
+# Dynamic VLAN Assignment
+# VLANs: 10=Management, 20=POS, 30=Staff, 40=Guest, 99=IoT
+dynamic_vlan=1
+vlan_file=$HOSTAPD_VLAN_FILE
+vlan_tagged_interface=$bridge
+vlan_naming=1
+
 # Performance Tuning (High Throughput)
 beacon_int=100
 dtim_period=2
@@ -1135,6 +1149,95 @@ EOF
 
     chmod 644 "$HOSTAPD_VLAN_FILE"
     log_success "VLAN file saved: $HOSTAPD_VLAN_FILE"
+}
+
+generate_radius_config() {
+    # Generate RADIUS server configuration for hostapd
+    # This enables WPA-Enterprise with FreeRADIUS for dynamic VLAN assignment
+    #
+    # Args:
+    #   $1 - config file path (hostapd-24ghz.conf or hostapd-5ghz.conf)
+    #   $2 - RADIUS secret (optional, defaults to hookprobe_fortress)
+
+    local config_file="$1"
+    local radius_secret="${2:-hookprobe_fortress}"
+
+    if [ ! -f "$config_file" ]; then
+        log_warn "Config file not found: $config_file"
+        return 1
+    fi
+
+    log_info "Adding WPA-Enterprise RADIUS configuration to $config_file"
+
+    # Append RADIUS configuration
+    cat >> "$config_file" << EOF
+
+# ============================================================
+# WPA-Enterprise (RADIUS) Configuration
+# ============================================================
+# For dynamic VLAN assignment based on MAC/vendor
+# Requires FreeRADIUS running locally
+
+# RADIUS Authentication Server
+auth_server_addr=127.0.0.1
+auth_server_port=1812
+auth_server_shared_secret=$radius_secret
+
+# RADIUS Accounting Server (optional but recommended)
+acct_server_addr=127.0.0.1
+acct_server_port=1813
+acct_server_shared_secret=$radius_secret
+
+# EAP Configuration
+eap_server=0
+ieee8021x=1
+eapol_version=2
+
+# MAC Authentication (MAC-based RADIUS auth for non-802.1X clients)
+# This allows PSK clients to still get VLAN assignment via RADIUS
+macaddr_acl=2
+EOF
+
+    log_success "RADIUS configuration added to $config_file"
+}
+
+enable_enterprise_mode() {
+    # Convert a hostapd config from PSK to WPA-Enterprise mode
+    # This enables full RADIUS-based authentication and dynamic VLAN
+    #
+    # Args:
+    #   $1 - config file path
+    #   $2 - RADIUS secret (optional)
+
+    local config_file="$1"
+    local radius_secret="${2:-hookprobe_fortress}"
+
+    if [ ! -f "$config_file" ]; then
+        log_error "Config file not found: $config_file"
+        return 1
+    fi
+
+    log_info "Converting to WPA-Enterprise mode: $config_file"
+
+    # Change WPA key management from PSK to EAP
+    sed -i 's/wpa_key_mgmt=WPA-PSK.*/wpa_key_mgmt=WPA-EAP/' "$config_file"
+
+    # Comment out PSK passphrase (no longer needed for Enterprise)
+    sed -i 's/^wpa_passphrase=/#wpa_passphrase=/' "$config_file"
+    sed -i 's/^sae_password=/#sae_password=/' "$config_file"
+
+    # Set macaddr_acl to 2 for RADIUS-based MAC authentication
+    sed -i 's/macaddr_acl=0/macaddr_acl=2/' "$config_file"
+
+    # Set dynamic_vlan to 2 (required for WPA-Enterprise)
+    sed -i 's/dynamic_vlan=1/dynamic_vlan=2/' "$config_file"
+
+    # Add RADIUS configuration
+    generate_radius_config "$config_file" "$radius_secret"
+
+    log_success "WPA-Enterprise mode enabled"
+    log_info "  Authentication: FreeRADIUS (127.0.0.1:1812)"
+    log_info "  VLAN Assignment: Dynamic (based on MAC/vendor OUI)"
 }
 
 generate_dual_band_single_radio() {
