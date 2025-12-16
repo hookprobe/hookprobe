@@ -105,6 +105,8 @@ stop_services() {
         "fortress-tunnel"
         "fortress-dnsmasq"
         "fortress-hostapd"
+        "fortress-hostapd-24ghz"
+        "fortress-hostapd-5ghz"
         "fortress-nat"
         "fortress-web"
         "fortress-channel-optimize"
@@ -130,6 +132,98 @@ stop_services() {
 }
 
 # ============================================================
+# CLEAN UP NETWORK INTERFACES
+# ============================================================
+cleanup_network_interfaces() {
+    log_step "Cleaning up network interfaces..."
+
+    # Stop hostapd services (dual-band)
+    log_info "Stopping hostapd services..."
+    systemctl stop fortress-hostapd-24ghz 2>/dev/null || true
+    systemctl stop fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl stop hostapd 2>/dev/null || true
+    pkill -f hostapd 2>/dev/null || true
+
+    # Stop dnsmasq
+    systemctl stop fortress-dnsmasq 2>/dev/null || true
+
+    # Find and clean up WiFi interfaces
+    log_info "Cleaning up WiFi interface state..."
+    for iface in $(find /sys/class/net -maxdepth 1 -name "wlan*" -o -name "wlp*" 2>/dev/null | xargs -I{} basename {}); do
+        if [ -d "/sys/class/net/$iface" ]; then
+            log_info "  Resetting interface: $iface"
+
+            # Flush IP addresses
+            ip addr flush dev "$iface" 2>/dev/null || true
+
+            # Remove from any bridge
+            ip link set "$iface" nomaster 2>/dev/null || true
+
+            # Bring down and back up to reset state
+            ip link set "$iface" down 2>/dev/null || true
+
+            # Reset to managed mode for NetworkManager
+            if command -v nmcli &>/dev/null; then
+                nmcli device set "$iface" managed yes 2>/dev/null || true
+            fi
+        fi
+    done
+
+    # Clean up WWAN/LTE interfaces
+    log_info "Cleaning up WWAN interfaces..."
+    for iface in $(find /sys/class/net -maxdepth 1 -name "wwan*" -o -name "wwp*" 2>/dev/null | xargs -I{} basename {}); do
+        if [ -d "/sys/class/net/$iface" ]; then
+            log_info "  Resetting interface: $iface"
+            ip addr flush dev "$iface" 2>/dev/null || true
+            ip link set "$iface" down 2>/dev/null || true
+        fi
+    done
+
+    # Clean up bridge interfaces created by Fortress
+    log_info "Cleaning up bridge interfaces..."
+    for bridge in br-lan br-mgmt br-pos br-staff br-guest br-iot; do
+        if ip link show "$bridge" &>/dev/null; then
+            log_info "  Removing bridge: $bridge"
+
+            # Remove all ports from bridge first
+            for port in $(ip link show master "$bridge" 2>/dev/null | grep -oP '^\d+:\s+\K[^:@]+'); do
+                ip link set "$port" nomaster 2>/dev/null || true
+            done
+
+            ip link set "$bridge" down 2>/dev/null || true
+            ip link delete "$bridge" type bridge 2>/dev/null || true
+        fi
+    done
+
+    # Clean up any stale default routes with fortress metrics
+    log_info "Cleaning up route metrics..."
+    # Remove routes with metric 100 and 200 that may be leftover
+    ip route del default metric 100 2>/dev/null || true
+    ip route del default metric 200 2>/dev/null || true
+
+    # Remove hostapd configuration files
+    log_info "Removing hostapd configuration files..."
+    rm -f /etc/hostapd/hostapd-24ghz.conf 2>/dev/null || true
+    rm -f /etc/hostapd/hostapd-5ghz.conf 2>/dev/null || true
+    rm -f /etc/hostapd/hostapd.conf 2>/dev/null || true
+    rm -f /etc/hostapd/hostapd.vlan 2>/dev/null || true
+    rm -f /etc/hostapd/fortress.conf 2>/dev/null || true
+
+    # Remove dnsmasq configuration
+    rm -f /etc/dnsmasq.d/fortress*.conf 2>/dev/null || true
+
+    # Remove WiFi configuration state
+    rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/wifi-ap.conf 2>/dev/null || true
+    rm -rf /var/lib/fortress/network-interfaces.conf 2>/dev/null || true
+
+    # Kill any remaining wpa_supplicant processes on AP interfaces
+    pkill -f "wpa_supplicant.*wlan" 2>/dev/null || true
+
+    log_info "Network interfaces cleaned up"
+}
+
+# ============================================================
 # DISABLE AND REMOVE SYSTEMD SERVICES
 # ============================================================
 remove_systemd_services() {
@@ -143,6 +237,8 @@ remove_systemd_services() {
         "fortress-tunnel"
         "fortress-dnsmasq"
         "fortress-hostapd"
+        "fortress-hostapd-24ghz"
+        "fortress-hostapd-5ghz"
         "fortress-nat"
         "fortress-web"
         "fortress-channel-optimize"
@@ -740,6 +836,7 @@ main() {
     echo ""
 
     stop_services
+    cleanup_network_interfaces
     remove_containers
     remove_ovs_config
     remove_vlan_interfaces
