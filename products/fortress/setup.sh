@@ -2459,47 +2459,53 @@ SERVICEEOF
 }
 
 # ============================================================
-# FREERADIUS WITH VLAN ASSIGNMENT
+# FREERADIUS WITH VLAN ASSIGNMENT (OUI-BASED)
 # ============================================================
 configure_freeradius_vlan() {
     log_step "Configuring FreeRADIUS for VLAN assignment..."
 
     local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_fortress}"
+    local VLAN_SCRIPT="$SCRIPT_DIR/devices/common/vlan-assignment.sh"
 
     mkdir -p /etc/fortress
+    mkdir -p /var/lib/fortress
     chmod 755 /etc/fortress
 
-    # Create MAC-to-VLAN database
-    cat > /etc/fortress/mac_vlan.json << 'MACVLANEOF'
+    # Install the vlan-assignment script to system path
+    if [ -f "$VLAN_SCRIPT" ]; then
+        cp "$VLAN_SCRIPT" /usr/local/bin/fortress-vlan
+        chmod +x /usr/local/bin/fortress-vlan
+        log_info "Installed vlan-assignment script to /usr/local/bin/fortress-vlan"
+    fi
+
+    # Initialize VLAN assignment system with OUI rules
+    if [ -f /usr/local/bin/fortress-vlan ]; then
+        log_info "Initializing OUI-based VLAN assignment..."
+        /usr/local/bin/fortress-vlan init
+    else
+        # Fallback: Create basic MAC-to-VLAN database
+        cat > /etc/fortress/mac_vlan.json << 'MACVLANEOF'
 {
   "version": "1.0",
   "description": "HookProbe Fortress - MAC to VLAN Assignment",
   "default_vlan": 40,
   "vlans": {
-    "10": {"name": "management", "description": "Management devices"},
-    "20": {"name": "trusted", "description": "Trusted devices"},
-    "30": {"name": "iot", "description": "IoT devices"},
-    "40": {"name": "guest", "description": "Guest devices"},
-    "99": {"name": "quarantine", "description": "Quarantined devices"}
+    "10": {"name": "management", "description": "Admin/Network devices"},
+    "20": {"name": "pos", "description": "Payment terminals"},
+    "30": {"name": "staff", "description": "Employee devices"},
+    "40": {"name": "guest", "description": "Guest/Unknown devices"},
+    "99": {"name": "iot", "description": "IoT/Cameras/Sensors"}
   },
   "devices": {}
 }
 MACVLANEOF
+        chmod 644 /etc/fortress/mac_vlan.json
 
-    chmod 644 /etc/fortress/mac_vlan.json
-
-    # Configure FreeRADIUS for dynamic VLAN
-    if [ -d /etc/freeradius/3.0/mods-config/files ]; then
-        cat > /etc/freeradius/3.0/mods-config/files/authorize << 'USERSEOF'
+        # Fallback: Basic FreeRADIUS config
+        if [ -d /etc/freeradius/3.0/mods-config/files ]; then
+            cat > /etc/freeradius/3.0/mods-config/files/authorize << 'USERSEOF'
 # HookProbe Fortress - MAC Authentication with VLAN Assignment
-# Devices are assigned to VLANs based on their MAC address
-
-# Management VLAN (10) - Known admin devices
-# Add trusted MAC addresses here
-# AA:BB:CC:DD:EE:FF Cleartext-Password := "AA:BB:CC:DD:EE:FF"
-#     Tunnel-Type = VLAN,
-#     Tunnel-Medium-Type = IEEE-802,
-#     Tunnel-Private-Group-Id = 10
+# For OUI-based auto-assignment, run: fortress-vlan init
 
 # DEFAULT: Guest VLAN (40)
 DEFAULT Cleartext-Password := "%{User-Name}"
@@ -2508,11 +2514,37 @@ DEFAULT Cleartext-Password := "%{User-Name}"
     Tunnel-Private-Group-Id = 40,
     Reply-Message = "Welcome to HookProbe Fortress - Guest Network"
 USERSEOF
-        chmod 640 /etc/freeradius/3.0/mods-config/files/authorize
-        chown freerad:freerad /etc/freeradius/3.0/mods-config/files/authorize 2>/dev/null || true
+            chmod 640 /etc/freeradius/3.0/mods-config/files/authorize
+            chown freerad:freerad /etc/freeradius/3.0/mods-config/files/authorize 2>/dev/null || true
+        fi
     fi
 
-    log_info "FreeRADIUS configured for VLAN assignment"
+    # Configure FreeRADIUS clients.conf for hostapd
+    if [ -d /etc/freeradius/3.0 ]; then
+        # Add hostapd as a RADIUS client if not already configured
+        if ! grep -q "hookprobe-hostapd" /etc/freeradius/3.0/clients.conf 2>/dev/null; then
+            cat >> /etc/freeradius/3.0/clients.conf << CLIENTSEOF
+
+# HookProbe Fortress - hostapd RADIUS client
+client hookprobe-hostapd {
+    ipaddr = 127.0.0.1
+    secret = $RADIUS_SECRET
+    require_message_authenticator = no
+    nas_type = other
+}
+CLIENTSEOF
+            log_info "Added hostapd RADIUS client configuration"
+        fi
+    fi
+
+    # Enable and start FreeRADIUS
+    systemctl enable freeradius 2>/dev/null || true
+    systemctl restart freeradius 2>/dev/null || true
+
+    log_info "FreeRADIUS configured for OUI-based VLAN assignment"
+    log_info "  OUI rules: /etc/fortress/oui_vlan_rules.conf"
+    log_info "  MAC database: /etc/fortress/mac_vlan.json"
+    log_info "  Management: fortress-vlan add-device MAC VLAN NAME"
 }
 
 # ============================================================
