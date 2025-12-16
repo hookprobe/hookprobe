@@ -231,30 +231,35 @@ detect_platform() {
 }
 
 detect_interfaces() {
-    log_step "Detecting network interfaces..."
+    # NET_QUIET_MODE=true suppresses verbose detector output
+    # NET_SKIP_SUMMARY=true also suppresses the summary display
+
+    [ "$NET_SKIP_SUMMARY" = "true" ] || log_step "Detecting network interfaces..."
 
     # Use new unified network detection if available
     if [ "$NETWORK_INTEGRATION_AVAILABLE" = true ]; then
-        log_info "Using unified network interface detection..."
+        [ "$NET_SKIP_SUMMARY" = "true" ] || log_info "Using unified network interface detection..."
         network_integration_init
 
-        # Show summary of detected interfaces
-        log_info "Ethernet interfaces ($NET_ETH_COUNT): ${NET_ETH_INTERFACES:-none}"
-        log_info "  WAN: ${NET_WAN_IFACE:-not assigned}"
-        log_info "  LAN: ${NET_LAN_IFACES:-not assigned}"
-        log_info "WiFi interfaces ($NET_WIFI_COUNT): ${NET_WIFI_INTERFACES:-none}"
-        log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not available}"
-        log_info "  5GHz: ${NET_WIFI_5GHZ_IFACE:-not available}"
-        log_info "  Config Mode: ${NET_WIFI_CONFIG_MODE:-unknown}"
-        log_info "WWAN/LTE interfaces ($NET_WWAN_COUNT): ${NET_WWAN_INTERFACES:-none}"
-        [ -n "$NET_WWAN_CONTROL" ] && log_info "  Control device: $NET_WWAN_CONTROL"
+        # Show summary of detected interfaces (unless NET_SKIP_SUMMARY is set)
+        if [ "$NET_SKIP_SUMMARY" != "true" ]; then
+            log_info "Ethernet interfaces ($NET_ETH_COUNT): ${NET_ETH_INTERFACES:-none}"
+            log_info "  WAN: ${NET_WAN_IFACE:-not assigned}"
+            log_info "  LAN: ${NET_LAN_IFACES:-not assigned}"
+            log_info "WiFi interfaces ($NET_WIFI_COUNT): ${NET_WIFI_INTERFACES:-none}"
+            log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not available}"
+            log_info "  5GHz: ${NET_WIFI_5GHZ_IFACE:-not available}"
+            log_info "  Config Mode: ${NET_WIFI_CONFIG_MODE:-unknown}"
+            log_info "WWAN/LTE interfaces ($NET_WWAN_COUNT): ${NET_WWAN_INTERFACES:-none}"
+            [ -n "$NET_WWAN_CONTROL" ] && log_info "  Control device: $NET_WWAN_CONTROL"
+        fi
 
         # Variables are exported by network_integration_init via export_for_setup
         return 0
     fi
 
     # Fallback to legacy detection
-    log_info "Using legacy interface detection..."
+    [ "$NET_SKIP_SUMMARY" = "true" ] || log_info "Using legacy interface detection..."
 
     # Ethernet interfaces (eth*, enp*, eno*) - exclude WWAN
     ETH_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '^ww' | tr '\n' ' ')
@@ -291,16 +296,19 @@ detect_interfaces() {
     for iface in $WIFI_INTERFACES; do
         if iw list 2>/dev/null | grep -A 20 "Supported interface modes" | grep -q "AP/VLAN"; then
             WIFI_VAP_SUPPORT=true
-            log_info "VAP-capable WiFi detected - VLAN segmentation available"
+            [ "$NET_SKIP_SUMMARY" = "true" ] || log_info "VAP-capable WiFi detected - VLAN segmentation available"
             break
         fi
     done
 
-    log_info "Ethernet interfaces ($ETH_COUNT): ${ETH_INTERFACES:-none}"
-    log_info "WiFi interfaces ($WIFI_COUNT): ${WIFI_INTERFACES:-none}"
-    log_info "WWAN/LTE interfaces ($WWAN_COUNT): ${WWAN_INTERFACES:-none}"
-    [ -n "$MODEM_CTRL_DEVICES" ] && log_info "Modem control devices: $MODEM_CTRL_DEVICES"
-    [ -n "$GSM_CONNECTIONS" ] && log_info "GSM connections: $GSM_CONNECTIONS"
+    # Show summary (unless NET_SKIP_SUMMARY is set)
+    if [ "$NET_SKIP_SUMMARY" != "true" ]; then
+        log_info "Ethernet interfaces ($ETH_COUNT): ${ETH_INTERFACES:-none}"
+        log_info "WiFi interfaces ($WIFI_COUNT): ${WIFI_INTERFACES:-none}"
+        log_info "WWAN/LTE interfaces ($WWAN_COUNT): ${WWAN_INTERFACES:-none}"
+        [ -n "$MODEM_CTRL_DEVICES" ] && log_info "Modem control devices: $MODEM_CTRL_DEVICES"
+        [ -n "$GSM_CONNECTIONS" ] && log_info "GSM connections: $GSM_CONNECTIONS"
+    fi
 
     # Export for LTE manager
     export WWAN_INTERFACES WWAN_COUNT MODEM_CTRL_DEVICES GSM_CONNECTIONS
@@ -4459,7 +4467,9 @@ main() {
     check_root
     check_requirements
     detect_platform
-    detect_interfaces
+    # Use quiet mode for detector to suppress verbose output
+    # The summary will still be shown (controlled by detect_interfaces)
+    NET_QUIET_MODE=true detect_interfaces
 
     # Phase 2: Collect all user inputs BEFORE installation
     if [ "$NON_INTERACTIVE" != true ]; then
@@ -4483,8 +4493,8 @@ main() {
 
     # Re-detect interfaces now that iw is installed
     # This ensures WiFi interfaces are properly detected for AP setup
-    log_step "Re-detecting interfaces after package installation..."
-    detect_interfaces
+    # Use quiet mode and skip summary to avoid duplicate output
+    NET_QUIET_MODE=true NET_SKIP_SUMMARY=true detect_interfaces
 
     install_python_packages
     install_podman
