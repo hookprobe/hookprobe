@@ -346,7 +346,11 @@ setup_lte_connection() {
 }
 
 setup_wan_failover() {
-    # Configure WAN failover from Ethernet to LTE
+    # Configure WAN failover from Ethernet to LTE using route metrics
+    #
+    # This function sets up automatic failover:
+    #   - Primary WAN (Ethernet): metric 100 (preferred)
+    #   - LTE backup: metric 200 (fallback)
     #
     # Args:
     #   $1 - Primary WAN interface
@@ -355,19 +359,67 @@ setup_wan_failover() {
     local primary_wan="${1:-$NET_WAN_IFACE}"
     local lte_iface="${2:-$NET_WWAN_IFACE}"
 
-    [ -z "$primary_wan" ] && { log_error "Primary WAN interface required"; return 1; }
-    [ -z "$lte_iface" ] && { log_warn "No LTE interface for failover"; return 1; }
+    [ -z "$primary_wan" ] && { log_error "[WAN] Primary WAN interface required"; return 1; }
+    [ -z "$lte_iface" ] && { log_warn "[WAN] No LTE interface for failover"; return 1; }
 
-    log_step "Configuring WAN failover..."
+    log_step "[WAN] Configuring metric-based failover..."
+    log_info "[WAN]   Primary: $primary_wan (metric 100)"
+    log_info "[WAN]   Backup:  $lte_iface (metric 200)"
 
-    # Use LTE manager if available
+    # Method 1: Use LTE manager if available (call directly, not source)
     if [ -x "$LTE_MANAGER" ]; then
         "$LTE_MANAGER" setup-failover "$primary_wan" "$lte_iface"
-    else
-        log_warn "LTE manager not available, manual failover configuration required"
-        return 1
+        return $?
     fi
 
+    # Method 2: Configure directly via NetworkManager (fallback)
+    if command -v nmcli &>/dev/null; then
+        log_info "[WAN] Using NetworkManager for failover configuration"
+
+        # Configure primary WAN metric
+        local primary_con
+        primary_con=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep ":${primary_wan}$" | cut -d: -f1 | head -1)
+        if [ -n "$primary_con" ]; then
+            nmcli con mod "$primary_con" ipv4.route-metric 100 2>/dev/null || true
+            log_info "[WAN]   Set $primary_con metric to 100"
+        fi
+
+        # Configure LTE metric
+        local lte_con="fortress-lte"
+        if nmcli con show "$lte_con" &>/dev/null; then
+            nmcli con mod "$lte_con" ipv4.route-metric 200 2>/dev/null || true
+            log_info "[WAN]   Set $lte_con metric to 200"
+        fi
+
+        # Reactivate to apply
+        [ -n "$primary_con" ] && nmcli con up "$primary_con" 2>/dev/null || true
+
+        log_info "[WAN] Metric-based failover configured"
+        return 0
+    fi
+
+    # Method 3: Direct route manipulation (last resort)
+    log_info "[WAN] Using direct route manipulation"
+
+    local primary_gw
+    primary_gw=$(ip route show dev "$primary_wan" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
+
+    if [ -n "$primary_gw" ]; then
+        ip route del default via "$primary_gw" dev "$primary_wan" 2>/dev/null || true
+        ip route add default via "$primary_gw" dev "$primary_wan" metric 100 2>/dev/null || true
+        log_info "[WAN]   Primary route: metric 100"
+    fi
+
+    local lte_gw
+    lte_gw=$(ip route show dev "$lte_iface" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
+
+    if [ -n "$lte_gw" ]; then
+        ip route del default via "$lte_gw" dev "$lte_iface" 2>/dev/null || true
+        ip route add default via "$lte_gw" dev "$lte_iface" metric 200 2>/dev/null || true
+        log_info "[WAN]   LTE route: metric 200"
+    fi
+
+    log_info "[WAN] Failover configured"
     return 0
 }
 
