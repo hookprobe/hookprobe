@@ -51,8 +51,11 @@ network_integration_init() {
     #   2. Sources network detector
     #   3. Runs interface detection
     #   4. Exports results for setup.sh
+    #
+    # Set NET_QUIET_MODE=true before calling to suppress verbose output
+    # Useful for re-detection after package installation
 
-    log_step "Initializing network integration..."
+    [ "$NET_QUIET_MODE" = "true" ] || log_step "Initializing network integration..."
 
     # Check for network detector
     if [ ! -x "$NETWORK_DETECTOR" ]; then
@@ -61,7 +64,7 @@ network_integration_init() {
         return 1
     fi
 
-    # Source and run network detector
+    # Source and run network detector (respects NET_QUIET_MODE)
     source "$NETWORK_DETECTOR"
     detect_all_interfaces
 
@@ -120,7 +123,7 @@ export_for_setup() {
         export WIFI_VAP_SUPPORT
     fi
 
-    log_info "Exported interface configuration for setup.sh"
+    [ "$NET_QUIET_MODE" = "true" ] || log_info "Exported interface configuration for setup.sh"
 }
 
 # ============================================================
