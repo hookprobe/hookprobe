@@ -13,6 +13,7 @@ class Config:
     GUARDIAN_BASE = '/opt/hookprobe/guardian'
     LOG_PATH = '/var/log/hookprobe'
     THREAT_FILE = f'{LOG_PATH}/threats/aggregated.json'
+    BLOCK_FILE = f'{LOG_PATH}/security/blocks.json'
 
     # dnsXai paths
     DNSXAI_CONFIG = f'{GUARDIAN_BASE}/dnsxai/config.json'
