@@ -403,11 +403,12 @@ verify_band_support() {
     phy=$(get_phy_for_iface "$iface")
     [ -z "$phy" ] && return 1
 
-    local phy_info
+    local phy_info=""
     # Try iw phy (without 'info'), fall back to iw list
-    phy_info=$(iw phy "$phy" 2>/dev/null)
+    # Note: Use "|| true" to prevent script exit with set -e
+    phy_info=$(iw phy "$phy" 2>/dev/null) || true
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        phy_info=$(iw list 2>/dev/null)
+        phy_info=$(iw list 2>/dev/null) || true
     fi
 
     # First try frequency-based detection
