@@ -197,13 +197,23 @@ def api_dashboard():
     """Get dashboard data for real-time updates including traffic stats."""
     system = get_system_info()
 
-    # Get network stats (raw bytes for traffic visualization)
+    # Get network stats for multiple interfaces
     wan_interface = current_app.config.get('WAN_INTERFACE', 'eth0')
+    lan_interface = current_app.config.get('LAN_INTERFACE', 'wlan0')
     wan_stats = get_network_stats(wan_interface)
+    lan_stats = get_network_stats(lan_interface)
+
+    # Get list of available interfaces
+    interfaces = _get_available_interfaces()
 
     # Load threat data
     threat_file = current_app.config.get('THREAT_FILE', '/var/log/hookprobe/threats/aggregated.json')
     threats = load_json_file(threat_file, {'stats': {'blocked': 0}})
+
+    # Load recent blocks for visualization
+    block_file = current_app.config.get('BLOCK_FILE', '/var/log/hookprobe/security/blocks.json')
+    blocks = load_json_file(block_file, {'blocks': []})
+    recent_blocks = blocks.get('blocks', [])[-10:]  # Last 10 blocks
 
     # Get connected clients
     output, success = run_command("ip neigh show | grep -v FAILED | wc -l")
@@ -216,10 +226,54 @@ def api_dashboard():
             'tx_bytes': wan_stats.get('tx_bytes', 0),
             'interface': wan_interface
         },
+        'interfaces': {
+            wan_interface: {
+                'type': 'wan',
+                'rx_bytes': wan_stats.get('rx_bytes', 0),
+                'tx_bytes': wan_stats.get('tx_bytes', 0),
+                'rx_packets': wan_stats.get('rx_packets', 0),
+                'tx_packets': wan_stats.get('tx_packets', 0)
+            },
+            lan_interface: {
+                'type': 'lan',
+                'rx_bytes': lan_stats.get('rx_bytes', 0),
+                'tx_bytes': lan_stats.get('tx_bytes', 0),
+                'rx_packets': lan_stats.get('rx_packets', 0),
+                'tx_packets': lan_stats.get('tx_packets', 0)
+            }
+        },
+        'available_interfaces': interfaces,
         'threats': threats.get('stats', {'blocked': 0}),
+        'recent_blocks': recent_blocks,
         'system': {
             'uptime': system.get('uptime', '0:00'),
             'load': system.get('load', [0, 0, 0]),
             'temperature': system.get('temperature', 0)
         }
     })
+
+
+def _get_available_interfaces():
+    """Get list of available network interfaces."""
+    interfaces = []
+    try:
+        net_dir = '/sys/class/net'
+        if os.path.exists(net_dir):
+            for iface in os.listdir(net_dir):
+                if iface != 'lo':  # Skip loopback
+                    iface_path = os.path.join(net_dir, iface)
+                    if os.path.isdir(iface_path):
+                        # Check if interface is up
+                        operstate_file = os.path.join(iface_path, 'operstate')
+                        state = 'unknown'
+                        if os.path.exists(operstate_file):
+                            with open(operstate_file, 'r') as f:
+                                state = f.read().strip()
+                        interfaces.append({
+                            'name': iface,
+                            'state': state,
+                            'type': 'wireless' if iface.startswith('wlan') else 'wired'
+                        })
+    except (IOError, OSError):
+        pass
+    return interfaces
