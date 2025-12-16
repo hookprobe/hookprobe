@@ -37,12 +37,16 @@ CYAN='\033[0;36m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Logging
-log_info() { echo -e "${CYAN}[NET]${NC} $*"; }
-log_success() { echo -e "${GREEN}[NET]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[NET]${NC} $*"; }
-log_error() { echo -e "${RED}[NET]${NC} $*"; }
-log_section() { echo -e "\n${BLUE}═══ $* ═══${NC}"; }
+# Quiet mode - set NET_QUIET_MODE=true to suppress verbose output
+# This is typically set by setup.sh when re-detecting after package install
+NET_QUIET_MODE="${NET_QUIET_MODE:-false}"
+
+# Logging (respects NET_QUIET_MODE)
+log_info() { [ "$NET_QUIET_MODE" = "true" ] || echo -e "${CYAN}[NET]${NC} $*"; }
+log_success() { [ "$NET_QUIET_MODE" = "true" ] || echo -e "${GREEN}[NET]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[NET]${NC} $*"; }  # Always show warnings
+log_error() { echo -e "${RED}[NET]${NC} $*"; }    # Always show errors
+log_section() { [ "$NET_QUIET_MODE" = "true" ] || echo -e "\n${BLUE}═══ $* ═══${NC}"; }
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -1159,13 +1163,18 @@ print_network_summary() {
 
 detect_all_interfaces() {
     # Main detection function - detects all network interfaces
+    #
+    # Set NET_QUIET_MODE=true before calling to suppress output
+    # Useful for re-detection after package installation
 
-    echo ""
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  HookProbe Fortress - Network Interface Detection${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    if [ "$NET_QUIET_MODE" != "true" ]; then
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}  HookProbe Fortress - Network Interface Detection${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
+    fi
 
-    # Detect each type
+    # Detect each type (these have their own NET_QUIET_MODE checks)
     detect_ethernet_interfaces
     classify_wan_lan_interfaces
     detect_wifi_interfaces
@@ -1175,8 +1184,10 @@ detect_all_interfaces() {
     # Save state
     save_network_state
 
-    # Print summary
-    print_network_summary
+    # Print summary only in verbose mode
+    if [ "$NET_QUIET_MODE" != "true" ]; then
+        print_network_summary
+    fi
 }
 
 usage() {
