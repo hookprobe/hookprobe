@@ -289,9 +289,24 @@ detect_wifi_interfaces() {
             driver=$(get_interface_driver "$iface")
             mac=$(get_interface_mac "$iface")
 
-            # Get PHY name
+            # Get PHY name - try multiple methods
             if [ -L "$iface_path/phy80211" ]; then
                 phy=$(basename "$(readlink -f "$iface_path/phy80211")")
+            fi
+
+            # Fallback: use iw dev to find PHY
+            if [ -z "$phy" ] && command -v iw &>/dev/null; then
+                phy=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/ {print "phy"$2}')
+            fi
+
+            # Another fallback: look in /sys/class/ieee80211
+            if [ -z "$phy" ]; then
+                for p in /sys/class/ieee80211/phy*; do
+                    if [ -d "$p" ] && ls "$p/device/net/" 2>/dev/null | grep -q "^${iface}$"; then
+                        phy=$(basename "$p")
+                        break
+                    fi
+                done
             fi
 
             log_info "Found WiFi: $iface"
@@ -300,7 +315,12 @@ detect_wifi_interfaces() {
             log_info "  PHY: ${phy:-unknown}"
 
             # Detect bands and capabilities
-            detect_wifi_radio_capabilities "$iface" "$phy"
+            if [ -n "$phy" ]; then
+                detect_wifi_radio_capabilities "$iface" "$phy"
+            else
+                log_warn "  Cannot detect PHY for $iface - trying direct frequency scan"
+                detect_wifi_bands_direct "$iface"
+            fi
         fi
     done
 
@@ -308,6 +328,90 @@ detect_wifi_interfaces() {
     export NET_WIFI_COUNT=${#wifi_interfaces[@]}
 
     log_success "Found $NET_WIFI_COUNT WiFi interface(s): $NET_WIFI_INTERFACES"
+}
+
+detect_wifi_bands_direct() {
+    # Fallback band detection when PHY cannot be determined
+    # Uses iwlist or iw dev to scan for available frequencies
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+    local supports_24ghz=false
+    local supports_5ghz=false
+    local supports_6ghz=false
+    local freq_info=""
+
+    log_info "  Attempting direct frequency detection for $iface..."
+
+    # Method 1: Use iwlist frequency
+    if command -v iwlist &>/dev/null; then
+        freq_info=$(iwlist "$iface" frequency 2>/dev/null)
+        if [ -n "$freq_info" ]; then
+            # Check for 2.4GHz channels (2.4xx GHz)
+            if echo "$freq_info" | grep -qE "2\.[0-9]+ GHz|24[0-9][0-9]"; then
+                supports_24ghz=true
+            fi
+            # Check for 5GHz channels (5.xxx GHz)
+            if echo "$freq_info" | grep -qE "5\.[0-9]+ GHz|5[0-9][0-9][0-9]"; then
+                supports_5ghz=true
+            fi
+        fi
+    fi
+
+    # Method 2: Try iw list and find our interface's phy info
+    if ! $supports_24ghz && ! $supports_5ghz && command -v iw &>/dev/null; then
+        freq_info=$(iw list 2>/dev/null)
+        if [ -n "$freq_info" ]; then
+            # Look for frequency entries
+            if echo "$freq_info" | grep -qE "24[0-9][0-9] MHz"; then
+                supports_24ghz=true
+            fi
+            if echo "$freq_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
+                supports_5ghz=true
+            fi
+            if echo "$freq_info" | grep -qE "(59[2-9][0-9]|6[0-9][0-9][0-9]|7[0-1][0-9][0-9]) MHz"; then
+                supports_6ghz=true
+            fi
+        fi
+    fi
+
+    # Method 3: Check sysfs for supported bands
+    if ! $supports_24ghz && ! $supports_5ghz; then
+        # Look for any phy directory and check its bands
+        for phy_dir in /sys/class/ieee80211/phy*; do
+            if [ -d "$phy_dir" ]; then
+                local phy_name
+                phy_name=$(basename "$phy_dir")
+                freq_info=$(iw phy "$phy_name" info 2>/dev/null)
+                if [ -n "$freq_info" ]; then
+                    if echo "$freq_info" | grep -qE "24[0-9][0-9] MHz"; then
+                        supports_24ghz=true
+                    fi
+                    if echo "$freq_info" | grep -qE "5[0-9][0-9][0-9] MHz"; then
+                        supports_5ghz=true
+                    fi
+                    # Found info, assign to this interface
+                    break
+                fi
+            fi
+        done
+    fi
+
+    # Export capabilities
+    local iface_upper="${iface^^}"
+    eval "export NET_WIFI_${iface_upper}_24GHZ=\"$supports_24ghz\""
+    eval "export NET_WIFI_${iface_upper}_5GHZ=\"$supports_5ghz\""
+    eval "export NET_WIFI_${iface_upper}_6GHZ=\"$supports_6ghz\""
+    eval "export NET_WIFI_${iface_upper}_AP=\"true\""  # Assume AP mode supported
+    eval "export NET_WIFI_${iface_upper}_TYPE=\"unknown\""
+
+    if $supports_24ghz || $supports_5ghz; then
+        log_info "  Bands detected: ${supports_24ghz:+2.4GHz }${supports_5ghz:+5GHz }${supports_6ghz:+6GHz}"
+    else
+        log_warn "  Could not detect supported bands for $iface"
+    fi
 }
 
 detect_wifi_radio_capabilities() {
