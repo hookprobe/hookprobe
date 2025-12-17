@@ -1180,8 +1180,6 @@ UDEV_HEADER
     fi
 
     log_success "Created $udev_rule_file"
-    log_info "  ⚠️  Reboot required for new interface names to take effect"
-    log_info "  After reboot, interfaces will be: wlan_24ghz, wlan_5ghz"
 
     # Save current mapping for hostapd config update
     cat > /etc/hookprobe/wifi-interfaces.conf << EOF
@@ -1194,6 +1192,46 @@ WIFI_5GHZ_MAC=$mac_5ghz
 WIFI_5GHZ_CURRENT=$iface_5ghz
 WIFI_5GHZ_STABLE=wlan_5ghz
 EOF
+
+    # =========================================
+    # UPDATE HOSTAPD CONFIGS TO USE STABLE NAMES
+    # =========================================
+    # This ensures configs work AFTER reboot when udev renames interfaces
+    log_info "Updating hostapd configs to use stable interface names..."
+
+    if [ -n "$mac_24ghz" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        log_info "  Updating 2.4GHz config: $iface_24ghz -> wlan_24ghz"
+        sed -i "s/^interface=.*/interface=wlan_24ghz/" /etc/hostapd/hostapd-24ghz.conf
+    fi
+
+    if [ -n "$mac_5ghz" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        log_info "  Updating 5GHz config: $iface_5ghz -> wlan_5ghz"
+        sed -i "s/^interface=.*/interface=wlan_5ghz/" /etc/hostapd/hostapd-5ghz.conf
+    fi
+
+    # Update systemd service files to use stable names
+    if [ -n "$mac_24ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
+        log_info "  Updating 2.4GHz service: $iface_24ghz -> wlan_24ghz"
+        sed -i "s/$iface_24ghz/wlan_24ghz/g" /etc/systemd/system/fortress-hostapd-24ghz.service
+    fi
+
+    if [ -n "$mac_5ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        log_info "  Updating 5GHz service: $iface_5ghz -> wlan_5ghz"
+        sed -i "s/$iface_5ghz/wlan_5ghz/g" /etc/systemd/system/fortress-hostapd-5ghz.service
+    fi
+
+    # Update network state file to use stable names
+    if [ -f /var/lib/fortress/network-interfaces.conf ]; then
+        log_info "  Updating network state file..."
+        [ -n "$iface_24ghz" ] && sed -i "s/$iface_24ghz/wlan_24ghz/g" /var/lib/fortress/network-interfaces.conf
+        [ -n "$iface_5ghz" ] && sed -i "s/$iface_5ghz/wlan_5ghz/g" /var/lib/fortress/network-interfaces.conf
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+
+    log_success "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
+    log_info "  ⚠️  Reboot required for interface renaming to take effect"
+    log_info "  After reboot: WiFi will work automatically with stable names"
 
     return 0
 }
