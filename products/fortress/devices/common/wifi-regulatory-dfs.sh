@@ -42,11 +42,12 @@ REGULATORY_STATE="/var/lib/fortress/regulatory-state.json"
 CHANNEL_CACHE="/var/lib/fortress/channel-cache.json"
 DFS_STATE="/var/lib/fortress/dfs-state.json"
 
-log_info() { echo -e "${CYAN}[REG]${NC} $*"; }
-log_success() { echo -e "${GREEN}[REG]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[REG]${NC} $*"; }
-log_error() { echo -e "${RED}[REG]${NC} $*"; }
-log_debug() { [ "${DEBUG:-0}" = "1" ] && echo -e "${BLUE}[DBG]${NC} $*" || true; }
+# Log to stderr so command substitution only captures return values
+log_info() { echo -e "${CYAN}[WIFI]${NC} $*" >&2; }
+log_success() { echo -e "${GREEN}[WIFI]${NC} $*" >&2; }
+log_warn() { echo -e "${YELLOW}[WIFI]${NC} $*" >&2; }
+log_error() { echo -e "${RED}[WIFI]${NC} $*" >&2; }
+log_debug() { [ "${DEBUG:-0}" = "1" ] && echo -e "${BLUE}[DBG]${NC} $*" >&2 || true; }
 
 # ============================================================
 # EUROPEAN 5GHz CHANNEL DEFINITIONS
