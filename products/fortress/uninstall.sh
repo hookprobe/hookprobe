@@ -278,6 +278,8 @@ remove_systemd_services() {
         "fortress-nat"
         "fortress-web"
         "fortress-channel-optimize"
+        "fortress-dfs-monitor"
+        "fortress-dfs-api"
         "fortress-ml-aggregator"
         "fortress-lstm-train"
     )
@@ -329,6 +331,7 @@ remove_management_scripts() {
         "/usr/local/bin/fortress-wifi-prepare.sh"
         "/usr/local/bin/fortress-wifi-bridge.sh"
         "/usr/local/bin/fortress-dnsxai-privacy"
+        "/usr/local/bin/dfs-channel-selector"
     )
 
     for script in "${scripts[@]}"; do
@@ -472,6 +475,45 @@ remove_nftables_filtering() {
     rm -rf /var/lib/fortress/filters
 
     log_info "nftables filtering removed"
+}
+
+# ============================================================
+# REMOVE DFS INTELLIGENCE
+# ============================================================
+remove_dfs_intelligence() {
+    log_step "Removing DFS intelligence..."
+
+    # Stop DFS services
+    systemctl stop fortress-dfs-monitor 2>/dev/null || true
+    systemctl stop fortress-dfs-api 2>/dev/null || true
+    systemctl disable fortress-dfs-monitor 2>/dev/null || true
+    systemctl disable fortress-dfs-api 2>/dev/null || true
+
+    # Remove service files
+    rm -f /etc/systemd/system/fortress-dfs-monitor.service
+    rm -f /etc/systemd/system/fortress-dfs-api.service
+
+    # Remove DFS directory and scripts
+    rm -rf /opt/hookprobe/fortress/dfs
+    rm -f /usr/local/bin/dfs-channel-selector
+
+    # Remove DFS database (keep by default - user may want history)
+    if [ "$REMOVE_DATA" = true ]; then
+        rm -f /var/lib/hookprobe/dfs_intelligence.db
+    else
+        log_info "DFS database preserved: /var/lib/hookprobe/dfs_intelligence.db"
+        log_info "  (Use --remove-data to delete)"
+    fi
+
+    # Remove DFS state files
+    rm -rf /var/lib/fortress/dfs
+
+    # Remove shared wireless module (if not used by other products)
+    if [ ! -d /opt/hookprobe/guardian ] && [ ! -d /opt/hookprobe/nexus ]; then
+        rm -rf /opt/hookprobe/shared/wireless
+    fi
+
+    log_info "DFS intelligence removed"
 }
 
 # ============================================================
@@ -969,6 +1011,7 @@ main() {
     remove_vlan_interfaces
     remove_macsec_interfaces
     remove_nftables_filtering
+    remove_dfs_intelligence
 
     # Stage 5: Remove systemd services
     log_step "Stage 5/10: Removing systemd services"
