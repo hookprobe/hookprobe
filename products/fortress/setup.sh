@@ -1864,47 +1864,6 @@ EOF
 }
 
 # ============================================================
-# VLAN SEGMENTATION (LEGACY - not used by default)
-# Kept for users who need true L2 isolation with managed switches
-# ============================================================
-setup_vlans() {
-    log_step "Setting up VLAN segmentation..."
-
-    # Load 8021q kernel module
-    modprobe 8021q 2>/dev/null || true
-    echo "8021q" >> /etc/modules 2>/dev/null || true
-
-    # Create VLAN configuration file
-    cat > /etc/hookprobe/vlans.conf << 'VLANHEADER'
-# HookProbe Fortress VLAN Configuration
-# Format: VLAN_NAME|VLAN_ID|SUBNET|DESCRIPTION
-VLANHEADER
-
-    for vlan_name in "${!VLAN_CONFIG[@]}"; do
-        local config="${VLAN_CONFIG[$vlan_name]}"
-        local vlan_id=$(echo "$config" | cut -d: -f1)
-        local subnet=$(echo "$config" | cut -d: -f2)
-
-        # Add VLAN to OVS bridge
-        ovs-vsctl --may-exist add-port "$OVS_BRIDGE_NAME" "vlan${vlan_id}" \
-            -- set interface "vlan${vlan_id}" type=internal \
-            -- set port "vlan${vlan_id}" tag="${vlan_id}" 2>/dev/null || true
-
-        # Configure VLAN interface
-        ip link set "vlan${vlan_id}" up 2>/dev/null || true
-        local gateway=$(echo "$subnet" | sed 's/.0\/24/.1/')
-        ip addr add "$gateway/24" dev "vlan${vlan_id}" 2>/dev/null || true
-
-        # Save to config
-        echo "${vlan_name}|${vlan_id}|${subnet}|${vlan_name} network" >> /etc/hookprobe/vlans.conf
-
-        log_info "VLAN $vlan_id ($vlan_name) configured: $subnet"
-    done
-
-    log_info "VLAN segmentation complete"
-}
-
-# ============================================================
 # VXLAN TUNNELS WITH VNI AND PSK
 # ============================================================
 setup_vxlan_tunnels() {
@@ -2096,19 +2055,6 @@ setup_openflow_rules() {
 
     # Allow established connections
     ovs-ofctl add-flow "$OVS_BRIDGE_NAME" "priority=50,ip,actions=normal" 2>/dev/null || true
-
-    # VLAN-specific rules
-    for vlan_name in "${!VLAN_CONFIG[@]}"; do
-        local config="${VLAN_CONFIG[$vlan_name]}"
-        local vlan_id=$(echo "$config" | cut -d: -f1)
-
-        # Allow intra-VLAN traffic
-        ovs-ofctl add-flow "$OVS_BRIDGE_NAME" \
-            "priority=200,dl_vlan=${vlan_id},actions=normal" 2>/dev/null || true
-
-        # Log inter-VLAN attempts (for security monitoring)
-        # These would be blocked by default drop rule
-    done
 
     # VXLAN tunnel rules
     for port in 4800 4801 4802 4803 4900; do
@@ -2461,7 +2407,7 @@ License: AGPL-3.0
 
 Fortress-enhanced QSecBit with:
 - Extended telemetry from monitoring stack
-- VLAN security scoring
+- nftables policy scoring
 - MACsec status monitoring
 - OpenFlow flow analysis
 """
@@ -2516,7 +2462,7 @@ class QSecBitConfig:
     red_threshold: float = 0.30
 
     # Fortress-specific weights
-    vlan_weight: float = 0.10
+    nftables_weight: float = 0.10
     macsec_weight: float = 0.10
     openflow_weight: float = 0.10
 
@@ -2530,7 +2476,7 @@ class QSecBitSample:
     components: Dict[str, float]
     threats_detected: int
     suricata_alerts: int
-    vlan_violations: int
+    policy_violations: int
     macsec_status: str
     openflow_flows: int
 
@@ -2556,20 +2502,24 @@ class QSecBitFortressAgent:
         logger.info(f"Received signal {signum}, shutting down...")
         self.running.clear()
 
-    def get_vlan_violations(self) -> int:
-        """Check for VLAN policy violations"""
+    def get_policy_violations(self) -> int:
+        """Check for nftables policy violations (dropped packets)"""
         try:
-            # Check OVS logs for inter-VLAN attempts
+            # Check nftables counters for dropped packets
             result = subprocess.run(
-                ['ovs-ofctl', 'dump-flows', 'fortress'],
+                ['nft', 'list', 'chain', 'inet', 'fortress', 'forward'],
                 capture_output=True, text=True, timeout=5
             )
-            # Count dropped packets (potential violations)
+            # Count dropped packets (policy violations)
             violations = 0
             for line in result.stdout.split('\n'):
-                if 'n_packets=' in line and 'actions=drop' in line:
-                    packets = int(line.split('n_packets=')[1].split(',')[0])
-                    violations += packets
+                if 'drop' in line and 'packets' in line:
+                    # Parse "packets X bytes Y" format
+                    parts = line.split()
+                    for i, part in enumerate(parts):
+                        if part == 'packets' and i + 1 < len(parts):
+                            violations += int(parts[i + 1])
+                            break
             return violations
         except Exception:
             return 0
@@ -2622,7 +2572,7 @@ class QSecBitFortressAgent:
             'threats': 0.0,
             'energy': 0.0,
             'infrastructure': 0.0,
-            'vlan': 0.0,
+            'nftables': 0.0,
             'macsec': 0.0,
             'openflow': 0.0
         }
@@ -2660,9 +2610,9 @@ class QSecBitFortressAgent:
         except Exception:
             components['infrastructure'] = 0.5
 
-        # VLAN security
-        violations = self.get_vlan_violations()
-        components['vlan'] = max(0, 1.0 - (violations / 100))
+        # nftables policy enforcement
+        violations = self.get_policy_violations()
+        components['nftables'] = max(0, 1.0 - (violations / 100))
 
         # MACsec status
         macsec = self.get_macsec_status()
@@ -2679,7 +2629,7 @@ class QSecBitFortressAgent:
             self.config.gamma * components['threats'] +
             self.config.delta * components['energy'] +
             self.config.epsilon * components['infrastructure'] +
-            self.config.vlan_weight * components['vlan'] +
+            self.config.nftables_weight * components['nftables'] +
             self.config.macsec_weight * components['macsec'] +
             self.config.openflow_weight * components['openflow']
         )
@@ -2705,7 +2655,7 @@ class QSecBitFortressAgent:
             components=components,
             threats_detected=0,
             suricata_alerts=self.get_suricata_alerts(),
-            vlan_violations=self.get_vlan_violations(),
+            policy_violations=self.get_policy_violations(),
             macsec_status=self.get_macsec_status(),
             openflow_flows=self.get_openflow_stats()
         )
@@ -2727,7 +2677,7 @@ class QSecBitFortressAgent:
                 'components': sample.components,
                 'threats_detected': sample.threats_detected,
                 'suricata_alerts': sample.suricata_alerts,
-                'vlan_violations': sample.vlan_violations,
+                'policy_violations': sample.policy_violations,
                 'macsec_status': sample.macsec_status,
                 'openflow_flows': sample.openflow_flows,
                 'uptime_seconds': int(time.time() - self.start_time)
@@ -2749,7 +2699,7 @@ class QSecBitFortressAgent:
 
                 logger.info(
                     f"QSecBit: {sample.rag_status} score={sample.score:.3f} "
-                    f"vlan_violations={sample.vlan_violations} "
+                    f"policy_violations={sample.policy_violations} "
                     f"macsec={sample.macsec_status}"
                 )
 
@@ -2815,95 +2765,6 @@ SERVICEEOF
     systemctl enable fortress-qsecbit
 
     log_info "QSecBit Fortress Agent installed"
-}
-
-# ============================================================
-# FREERADIUS WITH VLAN ASSIGNMENT (OUI-BASED)
-# ============================================================
-configure_freeradius_vlan() {
-    log_step "Configuring FreeRADIUS for VLAN assignment..."
-
-    local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_fortress}"
-    local VLAN_SCRIPT="$FORTRESS_ROOT/devices/common/vlan-assignment.sh"
-
-    mkdir -p /etc/fortress
-    mkdir -p /var/lib/fortress
-    chmod 755 /etc/fortress
-
-    # Install the vlan-assignment script to system path
-    if [ -f "$VLAN_SCRIPT" ]; then
-        cp "$VLAN_SCRIPT" /usr/local/bin/fortress-vlan
-        chmod +x /usr/local/bin/fortress-vlan
-        log_info "Installed vlan-assignment script to /usr/local/bin/fortress-vlan"
-    fi
-
-    # Initialize VLAN assignment system with OUI rules
-    if [ -f /usr/local/bin/fortress-vlan ]; then
-        log_info "Initializing OUI-based VLAN assignment..."
-        /usr/local/bin/fortress-vlan init
-    else
-        # Fallback: Create basic MAC-to-VLAN database
-        cat > /etc/fortress/mac_vlan.json << 'MACVLANEOF'
-{
-  "version": "1.0",
-  "description": "HookProbe Fortress - MAC to VLAN Assignment",
-  "default_vlan": 40,
-  "vlans": {
-    "10": {"name": "management", "description": "Admin/Network devices"},
-    "20": {"name": "pos", "description": "Payment terminals"},
-    "30": {"name": "staff", "description": "Employee devices"},
-    "40": {"name": "guest", "description": "Guest/Unknown devices"},
-    "99": {"name": "iot", "description": "IoT/Cameras/Sensors"}
-  },
-  "devices": {}
-}
-MACVLANEOF
-        chmod 644 /etc/fortress/mac_vlan.json
-
-        # Fallback: Basic FreeRADIUS config
-        if [ -d /etc/freeradius/3.0/mods-config/files ]; then
-            cat > /etc/freeradius/3.0/mods-config/files/authorize << 'USERSEOF'
-# HookProbe Fortress - MAC Authentication with VLAN Assignment
-# For OUI-based auto-assignment, run: fortress-vlan init
-
-# DEFAULT: Guest VLAN (40)
-DEFAULT Cleartext-Password := "%{User-Name}"
-    Tunnel-Type = VLAN,
-    Tunnel-Medium-Type = IEEE-802,
-    Tunnel-Private-Group-Id = 40,
-    Reply-Message = "Welcome to HookProbe Fortress - Guest Network"
-USERSEOF
-            chmod 640 /etc/freeradius/3.0/mods-config/files/authorize
-            chown freerad:freerad /etc/freeradius/3.0/mods-config/files/authorize 2>/dev/null || true
-        fi
-    fi
-
-    # Configure FreeRADIUS clients.conf for hostapd
-    if [ -d /etc/freeradius/3.0 ]; then
-        # Add hostapd as a RADIUS client if not already configured
-        if ! grep -q "hookprobe-hostapd" /etc/freeradius/3.0/clients.conf 2>/dev/null; then
-            cat >> /etc/freeradius/3.0/clients.conf << CLIENTSEOF
-
-# HookProbe Fortress - hostapd RADIUS client
-client hookprobe-hostapd {
-    ipaddr = 127.0.0.1
-    secret = $RADIUS_SECRET
-    require_message_authenticator = no
-    nas_type = other
-}
-CLIENTSEOF
-            log_info "Added hostapd RADIUS client configuration"
-        fi
-    fi
-
-    # Enable and start FreeRADIUS
-    systemctl enable freeradius 2>/dev/null || true
-    systemctl restart freeradius 2>/dev/null || true
-
-    log_info "FreeRADIUS configured for OUI-based VLAN assignment"
-    log_info "  OUI rules: /etc/fortress/oui_vlan_rules.conf"
-    log_info "  MAC database: /etc/fortress/mac_vlan.json"
-    log_info "  Management: fortress-vlan add-device MAC VLAN NAME"
 }
 
 # ============================================================
@@ -3325,7 +3186,7 @@ CREATE TABLE IF NOT EXISTS devices (
     mac_address VARCHAR(17) UNIQUE NOT NULL,
     hostname VARCHAR(255),
     ip_address VARCHAR(45),
-    vlan_id INTEGER DEFAULT 40,
+    policy VARCHAR(50) DEFAULT 'full_access',
     first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     device_type VARCHAR(100),
@@ -3386,7 +3247,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 -- Create indexes
 CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(mac_address);
-CREATE INDEX IF NOT EXISTS idx_devices_vlan ON devices(vlan_id);
+CREATE INDEX IF NOT EXISTS idx_devices_policy ON devices(policy);
 CREATE INDEX IF NOT EXISTS idx_threats_timestamp ON threats(timestamp);
 CREATE INDEX IF NOT EXISTS idx_qsecbit_timestamp ON qsecbit_history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_dns_timestamp ON dns_queries(timestamp);
@@ -4494,10 +4355,11 @@ CONFEOF
     log_info "Configuration file created: /etc/hookprobe/fortress.conf"
 
     # Copy device profiles to installation directory
-    if [ -d "$DEVICES_DIR" ]; then
+    # Use FORTRESS_ROOT directly (never overwritten by sourced scripts)
+    if [ -d "$FORTRESS_ROOT/devices" ]; then
         log_info "Installing device profiles..."
         mkdir -p /opt/hookprobe/fortress/devices
-        cp -r "$DEVICES_DIR"/* /opt/hookprobe/fortress/devices/
+        cp -r "$FORTRESS_ROOT/devices"/* /opt/hookprobe/fortress/devices/
         log_info "Device profiles installed to /opt/hookprobe/fortress/devices/"
     fi
 }
@@ -5246,8 +5108,6 @@ main() {
     setup_nat_routing
 
     install_qsecbit_agent
-    # FreeRADIUS removed - using nftables for device filtering
-    # configure_freeradius_vlan
     install_database
     install_monitoring
     install_cloudflared
