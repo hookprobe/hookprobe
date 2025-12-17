@@ -1,9 +1,289 @@
 {% extends "base.html" %}
+
 {% block title %}Settings - HookProbe Fortress{% endblock %}
+
 {% block page_title %}System Settings{% endblock %}
-{% block breadcrumb %}<li class="breadcrumb-item active">Settings</li>{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Settings</li>
+{% endblock %}
+
 {% block content %}
-<div class="alert alert-info">
-    <i class="fas fa-info-circle"></i> Settings module - System configuration
+<div class="row">
+    <!-- System Status -->
+    <div class="col-lg-4">
+        <div class="card card-outline card-primary">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-server mr-2"></i>System Status</h3>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm table-borderless">
+                    <tr>
+                        <td class="text-muted">Hostname</td>
+                        <td><strong>{{ system_info.hostname }}</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Uptime</td>
+                        <td>{{ system_info.uptime }}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">CPU Usage</td>
+                        <td>
+                            <div class="progress progress-sm">
+                                <div class="progress-bar bg-{{ 'danger' if system_info.cpu_usage > 80 else 'warning' if system_info.cpu_usage > 60 else 'success' }}"
+                                     style="width: {{ system_info.cpu_usage }}%"></div>
+                            </div>
+                            <small>{{ system_info.cpu_usage }}%</small>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Memory</td>
+                        <td>
+                            <div class="progress progress-sm">
+                                <div class="progress-bar bg-{{ 'danger' if system_info.memory_usage > 80 else 'warning' if system_info.memory_usage > 60 else 'info' }}"
+                                     style="width: {{ system_info.memory_usage }}%"></div>
+                            </div>
+                            <small>{{ system_info.memory_usage }}%</small>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Disk</td>
+                        <td>
+                            <div class="progress progress-sm">
+                                <div class="progress-bar bg-{{ 'danger' if system_info.disk_usage > 90 else 'warning' if system_info.disk_usage > 70 else 'primary' }}"
+                                     style="width: {{ system_info.disk_usage }}%"></div>
+                            </div>
+                            <small>{{ system_info.disk_usage }}%</small>
+                        </td>
+                    </tr>
+                    {% if system_info.temperature %}
+                    <tr>
+                        <td class="text-muted">Temperature</td>
+                        <td>
+                            <span class="badge badge-{{ 'danger' if system_info.temperature > 70 else 'warning' if system_info.temperature > 50 else 'success' }}">
+                                {{ system_info.temperature }}°C
+                            </span>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </div>
+        </div>
+
+        <!-- Service Control -->
+        <div class="card card-outline card-warning">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-cogs mr-2"></i>Services</h3>
+            </div>
+            <div class="card-body p-0">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span><i class="fas fa-wifi mr-2"></i>WiFi (hostapd)</span>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('hostapd')">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span><i class="fas fa-network-wired mr-2"></i>DHCP (dnsmasq)</span>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('dnsmasq')">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span><i class="fas fa-shield-halved mr-2"></i>Fortress Agent</span>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('fortress-agent')">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration -->
+    <div class="col-lg-8">
+        <div class="card card-outline card-info">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-sliders-h mr-2"></i>Configuration</h3>
+            </div>
+            <div class="card-body">
+                <form id="config-form">
+                    <!-- WiFi Settings -->
+                    <h5 class="text-muted mb-3"><i class="fas fa-wifi mr-2"></i>WiFi Settings</h5>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="form-group">
+                                <label>Network Name (SSID)</label>
+                                <input type="text" class="form-control" name="wifi_ssid"
+                                       value="{{ config.wifi_ssid }}" placeholder="HookProbe-Fortress">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-group">
+                                <label>Channel</label>
+                                <select class="form-control" name="wifi_channel">
+                                    <option value="auto" {% if config.wifi_channel == 'auto' %}selected{% endif %}>Auto</option>
+                                    {% for ch in range(1, 12) %}
+                                    <option value="{{ ch }}" {% if config.wifi_channel == ch|string %}selected{% endif %}>{{ ch }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-group">
+                                <label>Band</label>
+                                <select class="form-control" name="wifi_band">
+                                    <option value="2.4GHz" {% if config.wifi_band == '2.4GHz' %}selected{% endif %}>2.4 GHz</option>
+                                    <option value="5GHz" {% if config.wifi_band == '5GHz' %}selected{% endif %}>5 GHz</option>
+                                    <option value="dual" {% if config.wifi_band == 'dual' %}selected{% endif %}>Dual Band</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- Network Settings -->
+                    <h5 class="text-muted mb-3"><i class="fas fa-network-wired mr-2"></i>Network Settings</h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Network Size</label>
+                                <select class="form-control" name="network_size">
+                                    <option value="/29" {% if config.network_size == '/29' %}selected{% endif %}>/29 (6 devices)</option>
+                                    <option value="/28" {% if config.network_size == '/28' %}selected{% endif %}>/28 (14 devices)</option>
+                                    <option value="/27" {% if config.network_size == '/27' %}selected{% endif %}>/27 (30 devices)</option>
+                                    <option value="/26" {% if config.network_size == '/26' %}selected{% endif %}>/26 (62 devices)</option>
+                                    <option value="/25" {% if config.network_size == '/25' %}selected{% endif %}>/25 (126 devices)</option>
+                                    <option value="/24" {% if config.network_size == '/24' %}selected{% endif %}>/24 (254 devices)</option>
+                                    <option value="/23" {% if config.network_size == '/23' %}selected{% endif %}>/23 (510 devices)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Gateway IP</label>
+                                <input type="text" class="form-control" name="gateway_ip"
+                                       value="{{ config.gateway_ip }}" placeholder="10.250.0.1">
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>DNS Servers</label>
+                                <input type="text" class="form-control" name="dns_upstream"
+                                       value="{{ config.dns_upstream|join(', ') }}" placeholder="1.1.1.1, 8.8.8.8">
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- LTE Settings -->
+                    <h5 class="text-muted mb-3"><i class="fas fa-signal mr-2"></i>LTE Failover</h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <div class="custom-control custom-switch">
+                                    <input type="checkbox" class="custom-control-input" id="lte_enabled" name="lte_enabled"
+                                           {% if config.lte_enabled %}checked{% endif %}>
+                                    <label class="custom-control-label" for="lte_enabled">Enable LTE Failover</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>APN</label>
+                                <input type="text" class="form-control" name="lte_apn"
+                                       value="{{ config.lte_apn }}" placeholder="internet">
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- System Settings -->
+                    <h5 class="text-muted mb-3"><i class="fas fa-cog mr-2"></i>System</h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Timezone</label>
+                                <select class="form-control" name="timezone">
+                                    <option value="UTC" {% if config.timezone == 'UTC' %}selected{% endif %}>UTC</option>
+                                    <option value="America/New_York" {% if config.timezone == 'America/New_York' %}selected{% endif %}>Eastern (US)</option>
+                                    <option value="America/Chicago" {% if config.timezone == 'America/Chicago' %}selected{% endif %}>Central (US)</option>
+                                    <option value="America/Los_Angeles" {% if config.timezone == 'America/Los_Angeles' %}selected{% endif %}>Pacific (US)</option>
+                                    <option value="Europe/London" {% if config.timezone == 'Europe/London' %}selected{% endif %}>London</option>
+                                    <option value="Europe/Paris" {% if config.timezone == 'Europe/Paris' %}selected{% endif %}>Paris</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <div class="custom-control custom-switch">
+                                    <input type="checkbox" class="custom-control-input" id="auto_update" name="auto_update"
+                                           {% if config.auto_update %}checked{% endif %}>
+                                    <label class="custom-control-label" for="auto_update">Auto Updates</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save mr-1"></i> Save Configuration
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="location.reload()">
+                            <i class="fas fa-undo mr-1"></i> Reset
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    $('#config-form').on('submit', function(e) {
+        e.preventDefault();
+        var formData = {};
+        $(this).serializeArray().forEach(function(item) {
+            if (item.name === 'dns_upstream') {
+                formData[item.name] = item.value.split(',').map(s => s.trim());
+            } else {
+                formData[item.name] = item.value;
+            }
+        });
+        formData.lte_enabled = $('#lte_enabled').is(':checked');
+        formData.auto_update = $('#auto_update').is(':checked');
+
+        $.ajax({
+            url: '{{ url_for("settings.api_save_config") }}',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(formData),
+            success: function(response) {
+                alert(response.success ? 'Configuration saved!' : (response.error || 'Failed to save'));
+            },
+            error: function() { alert('Network error'); }
+        });
+    });
+});
+
+function restartService(service) {
+    if (!confirm('Restart ' + service + '?')) return;
+    $.ajax({
+        url: '{{ url_for("settings.api_restart_service") }}',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({service: service}),
+        success: function(response) {
+            alert(response.success ? service + ' restarted' : (response.error || 'Failed'));
+        },
+        error: function() { alert('Network error'); }
+    });
+}
+</script>
 {% endblock %}
