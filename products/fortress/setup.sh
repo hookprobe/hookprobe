@@ -796,39 +796,34 @@ setup_lan_bridge() {
     log_info "WAN interface: $wan_iface"
     log_info "LAN interfaces to bridge: $lan_ifaces"
 
-    # Default VLAN for untagged LAN traffic (Trusted/Staff network)
-    local default_lan_vlan="${LAN_DEFAULT_VLAN:-20}"
-
     # Add each LAN interface to the OVS bridge
+    # Using simple access mode (no VLAN tagging) for basic client connectivity
+    # Clients get IPs from main bridge range (10.250.0.x)
     for iface in $lan_ifaces; do
         if ip link show "$iface" &>/dev/null; then
             # Remove any existing IP from the interface
             ip addr flush dev "$iface" 2>/dev/null || true
 
-            # Add to OVS bridge
+            # Add to OVS bridge as simple port (no VLAN tagging)
             if ! ovs-vsctl list-ports "$OVS_BRIDGE_NAME" 2>/dev/null | grep -q "^${iface}$"; then
                 log_info "Adding $iface to bridge $OVS_BRIDGE_NAME..."
-                ovs-vsctl add-port "$OVS_BRIDGE_NAME" "$iface" 2>/dev/null || {
+                ovs-vsctl --may-exist add-port "$OVS_BRIDGE_NAME" "$iface" 2>/dev/null || {
                     log_warn "Failed to add $iface to bridge"
                     continue
                 }
             else
-                log_info "$iface already in bridge"
+                log_info "$iface already in bridge, updating config"
             fi
 
-            # Configure as hybrid port:
-            # - Untagged traffic maps to default VLAN (native-untagged mode)
-            # - Also accepts tagged traffic for other VLANs (trunk)
-            # This allows regular clients to plug in and get DHCP
-            ovs-vsctl set port "$iface" tag="$default_lan_vlan" \
-                vlan_mode=native-untagged \
-                trunks=10,20,30,40,99 2>/dev/null || {
-                log_warn "Failed to set VLAN mode for $iface"
-            }
+            # Clear any VLAN settings - make it a simple access port
+            # This ensures untagged traffic flows to/from the bridge
+            ovs-vsctl clear port "$iface" tag 2>/dev/null || true
+            ovs-vsctl clear port "$iface" trunks 2>/dev/null || true
+            ovs-vsctl clear port "$iface" vlan_mode 2>/dev/null || true
 
             # Bring interface up
             ip link set "$iface" up
-            log_info "$iface configured: untagged->VLAN $default_lan_vlan"
+            log_info "$iface added to bridge (no VLAN - direct access)"
         fi
     done
 
@@ -837,16 +832,14 @@ setup_lan_bridge() {
 # HookProbe Fortress LAN Bridge Configuration
 WAN_INTERFACE=$wan_iface
 LAN_INTERFACES="$lan_ifaces"
-LAN_DEFAULT_VLAN=$default_lan_vlan
 BRIDGE_NAME=$OVS_BRIDGE_NAME
 BRIDGE_IP=10.250.0.1
 BRIDGE_NETMASK=255.255.0.0
-# LAN ports use native-untagged mode:
-# - Untagged traffic -> VLAN $default_lan_vlan (${SUBNET_PREFIX:-10.250}.$default_lan_vlan.x)
-# - Tagged traffic for VLANs 10,20,30,40,99 also accepted
+# LAN ports are simple access ports on the main bridge
+# Clients get DHCP from 10.250.0.100-200 range
 EOF
 
-    log_info "LAN interfaces bridged (default VLAN: $default_lan_vlan)"
+    log_info "LAN interfaces bridged to $OVS_BRIDGE_NAME"
 }
 
 # ============================================================
@@ -1425,13 +1418,12 @@ dhcp-option=$OVS_BRIDGE_NAME,3,10.250.0.1
 dhcp-option=$OVS_BRIDGE_NAME,6,10.250.0.1,1.1.1.1
 
 # ─────────────────────────────────────────────────────────────
-# WiFi Interface (if available)
+# WiFi Interface - Handled via OVS Bridge
 # ─────────────────────────────────────────────────────────────
-${wifi_iface:+# WiFi clients get IPs from Guest VLAN range by default}
-${wifi_iface:+interface=$wifi_iface}
-${wifi_iface:+dhcp-range=$wifi_iface,10.250.40.201,10.250.40.250,255.255.255.0,12h}
-${wifi_iface:+dhcp-option=$wifi_iface,3,10.250.40.1}
-${wifi_iface:+dhcp-option=$wifi_iface,6,10.250.40.1,1.1.1.1}
+# Note: WiFi interface is added to OVS bridge by hostapd service
+# (via ExecStartPost in fortress-hostapd-*.service)
+# WiFi clients receive DHCP from the bridge interface above
+# No separate WiFi DHCP configuration needed
 
 # Bind only to specified interfaces
 bind-interfaces
@@ -1972,10 +1964,24 @@ fi
 # ============================================================
 # WIFI INTERFACE IP CONFIGURATION
 # ============================================================
-# Find WiFi interface (hostapd config or scan for wireless)
+# Note: When WiFi interface is added to OVS bridge (via hostapd ExecStartPost),
+# it becomes a bridge port and should NOT have its own IP address.
+# Clients get DHCP from the bridge interface instead.
+#
+# Only assign WiFi IP if NOT using OVS bridge mode (legacy standalone mode)
+
 WIFI_IFACE=""
 if [ -f /etc/hostapd/fortress.conf ]; then
     WIFI_IFACE=$(grep "^interface=" /etc/hostapd/fortress.conf | cut -d= -f2)
+fi
+if [ -z "$WIFI_IFACE" ]; then
+    # Check 2.4GHz and 5GHz configs
+    for conf in /etc/hostapd/hostapd-24ghz.conf /etc/hostapd/hostapd-5ghz.conf; do
+        if [ -f "$conf" ]; then
+            WIFI_IFACE=$(grep "^interface=" "$conf" | cut -d= -f2)
+            [ -n "$WIFI_IFACE" ] && break
+        fi
+    done
 fi
 if [ -z "$WIFI_IFACE" ]; then
     for iface in /sys/class/net/wl*; do
@@ -1984,11 +1990,22 @@ if [ -z "$WIFI_IFACE" ]; then
 fi
 
 if [ -n "$WIFI_IFACE" ] && ip link show "$WIFI_IFACE" &>/dev/null; then
-    echo "Configuring WiFi interface: $WIFI_IFACE"
-    # Assign IP for DHCP to work
-    if ! ip addr show "$WIFI_IFACE" | grep -q "$WIFI_IP"; then
-        ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
-        echo "WiFi interface IP configured: ${WIFI_IP}/${WIFI_SUBNET}"
+    echo "Found WiFi interface: $WIFI_IFACE"
+
+    # Check if WiFi is part of OVS bridge (no IP needed - bridge handles routing)
+    if command -v ovs-vsctl &>/dev/null && \
+       ovs-vsctl br-exists "$BRIDGE" 2>/dev/null && \
+       ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${WIFI_IFACE}$"; then
+        echo "WiFi interface $WIFI_IFACE is part of OVS bridge $BRIDGE"
+        echo "  Clients will get DHCP from bridge (gateway: $BRIDGE_IP)"
+        echo "  No separate WiFi IP needed"
+    else
+        # Legacy mode: WiFi not in bridge, needs own IP for DHCP
+        echo "Configuring WiFi interface IP (standalone mode): $WIFI_IFACE"
+        if ! ip addr show "$WIFI_IFACE" | grep -q "$WIFI_IP"; then
+            ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
+            echo "WiFi interface IP configured: ${WIFI_IP}/${WIFI_SUBNET}"
+        fi
     fi
 else
     echo "No WiFi interface found"

@@ -492,6 +492,17 @@ prepare_interface_for_hostapd() {
     log_success "  Interface $iface prepared for hostapd"
 }
 
+is_ovs_bridge() {
+    # Check if a bridge is an OVS bridge
+    # Returns 0 (true) if OVS bridge, 1 (false) otherwise
+    local bridge="$1"
+
+    if command -v ovs-vsctl &>/dev/null; then
+        ovs-vsctl br-exists "$bridge" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
 ensure_bridge_exists() {
     # Ensure the bridge exists for hostapd
     #
@@ -1097,6 +1108,16 @@ generate_hostapd_24ghz() {
 
     mkdir -p "$HOSTAPD_DIR"
 
+    # Check if bridge is OVS - don't use nl80211 bridge mode for OVS
+    # OVS doesn't support nl80211 bridge integration - we'll add interface to OVS post-start
+    local use_bridge=""
+    if ! is_ovs_bridge "$bridge"; then
+        use_bridge="bridge=$bridge"
+        log_info "  Using Linux bridge mode"
+    else
+        log_info "  OVS bridge detected - will add WiFi to OVS after hostapd starts"
+    fi
+
     cat > "$HOSTAPD_24GHZ_CONF" << EOF
 # HookProbe Fortress - 2.4GHz WiFi Configuration
 # Generated: $(date -Iseconds)
@@ -1107,7 +1128,7 @@ generate_hostapd_24ghz() {
 
 interface=$iface
 driver=nl80211
-bridge=$bridge
+${use_bridge}
 
 # Network Settings
 ssid=$ssid
@@ -1212,8 +1233,9 @@ is_eu_country() {
 
 get_safe_5ghz_channel() {
     # Get a safe 5GHz channel based on regulatory domain
-    # EU/ETSI: Use UNII-1 (36-48) - always allowed
-    # Other: Can use UNII-3 (149-165) as well
+    #
+    # IMPORTANT: Always default to UNII-1 (36-48) which is universally allowed
+    # UNII-3 (149-165) requires DFS radar detection in many regions and may fail
     #
     # Args:
     #   $1 - Country code
@@ -1224,16 +1246,11 @@ get_safe_5ghz_channel() {
     local country="$1"
     local iface="$2"
 
-    if is_eu_country "$country"; then
-        # EU/ETSI: UNII-1 only (channels 36, 40, 44, 48)
-        # These are always allowed without DFS
-        log_info "  EU/ETSI country detected - using UNII-1 band (channels 36-48)" >&2
-        echo "36"
-    else
-        # Non-EU: Can use UNII-3 (149-165) which often has less interference
-        log_info "  Non-EU country - UNII-3 band available (channels 149-165)" >&2
-        echo "149"
-    fi
+    # Always use UNII-1 band (channels 36-48) by default
+    # These channels are allowed worldwide without DFS radar detection
+    # UNII-3 (149-165) often fails due to regulatory restrictions
+    log_info "  Using UNII-1 band (channel 36) - universally allowed without DFS" >&2
+    echo "36"
 }
 
 generate_hostapd_5ghz() {
@@ -1384,6 +1401,16 @@ generate_hostapd_5ghz() {
 
     mkdir -p "$HOSTAPD_DIR"
 
+    # Check if bridge is OVS - don't use nl80211 bridge mode for OVS
+    # OVS doesn't support nl80211 bridge integration - we'll add interface to OVS post-start
+    local use_bridge=""
+    if ! is_ovs_bridge "$bridge"; then
+        use_bridge="bridge=$bridge"
+        log_info "  Using Linux bridge mode"
+    else
+        log_info "  OVS bridge detected - will add WiFi to OVS after hostapd starts"
+    fi
+
     cat > "$HOSTAPD_5GHZ_CONF" << EOF
 # HookProbe Fortress - 5GHz WiFi Configuration
 # Generated: $(date -Iseconds)
@@ -1394,7 +1421,7 @@ generate_hostapd_5ghz() {
 
 interface=$iface
 driver=nl80211
-bridge=$bridge
+${use_bridge}
 
 # Network Settings
 ssid=$ssid
@@ -1717,26 +1744,118 @@ generate_dual_band_single_radio() {
 # SYSTEMD SERVICE GENERATION
 # ============================================================
 
+generate_wifi_bridge_helper() {
+    # Generate helper script to add WiFi interface to OVS bridge after hostapd starts
+    #
+    # OVS bridges don't support nl80211 bridge mode, so we need to add the
+    # WiFi interface to OVS manually after hostapd creates it.
+
+    local helper_script="/usr/local/bin/fortress-wifi-bridge-helper.sh"
+
+    log_info "Generating WiFi bridge helper script"
+
+    cat > "$helper_script" << 'HELPER_EOF'
+#!/bin/bash
+# Fortress WiFi Bridge Helper
+# Adds WiFi interface to OVS bridge after hostapd starts
+
+IFACE="$1"
+BRIDGE="${2:-fortress}"
+ACTION="${3:-add}"
+
+[ -z "$IFACE" ] && exit 1
+
+# Wait for interface to be ready
+for i in {1..10}; do
+    if ip link show "$IFACE" &>/dev/null; then
+        break
+    fi
+    sleep 0.5
+done
+
+if ! ip link show "$IFACE" &>/dev/null; then
+    echo "Interface $IFACE not found after waiting"
+    exit 1
+fi
+
+# Check if OVS is available and bridge exists
+if ! command -v ovs-vsctl &>/dev/null; then
+    echo "OVS not available, skipping bridge configuration"
+    exit 0
+fi
+
+if ! ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
+    echo "OVS bridge $BRIDGE does not exist, skipping"
+    exit 0
+fi
+
+if [ "$ACTION" = "add" ]; then
+    # Add interface to OVS bridge
+    if ! ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
+        echo "Adding $IFACE to OVS bridge $BRIDGE"
+        ovs-vsctl --may-exist add-port "$BRIDGE" "$IFACE" 2>/dev/null || {
+            echo "Failed to add $IFACE to $BRIDGE"
+            exit 1
+        }
+    fi
+    ip link set "$IFACE" up 2>/dev/null || true
+    echo "WiFi interface $IFACE added to OVS bridge $BRIDGE"
+elif [ "$ACTION" = "remove" ]; then
+    # Remove interface from OVS bridge
+    if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
+        echo "Removing $IFACE from OVS bridge $BRIDGE"
+        ovs-vsctl del-port "$BRIDGE" "$IFACE" 2>/dev/null || true
+    fi
+fi
+
+exit 0
+HELPER_EOF
+
+    chmod +x "$helper_script"
+    log_success "Created: $helper_script"
+}
+
 generate_systemd_services() {
     # Generate systemd service files for hostapd
+    #
+    # Args:
+    #   $1 - has_24ghz (true/false)
+    #   $2 - has_5ghz (true/false)
+    #   $3 - 24ghz interface name (optional)
+    #   $4 - 5ghz interface name (optional)
+    #   $5 - bridge name (optional, default: fortress)
 
     local has_24ghz="$1"
     local has_5ghz="$2"
+    local iface_24ghz="${3:-}"
+    local iface_5ghz="${4:-}"
+    local bridge="${5:-$DEFAULT_BRIDGE}"
 
     log_info "Generating systemd service files"
 
+    # Generate helper script for OVS bridge integration
+    generate_wifi_bridge_helper
+
     if [ "$has_24ghz" = "true" ]; then
+        # Extract interface from config if not provided
+        if [ -z "$iface_24ghz" ] && [ -f "$HOSTAPD_24GHZ_CONF" ]; then
+            iface_24ghz=$(grep "^interface=" "$HOSTAPD_24GHZ_CONF" | cut -d= -f2)
+        fi
+
         cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
-After=network.target
+After=network.target openvswitch-switch.service
 Wants=network.target
+Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd-24ghz.pid
 ExecStartPre=/bin/sleep 2
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
+ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} add
+ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1748,17 +1867,25 @@ EOF
     fi
 
     if [ "$has_5ghz" = "true" ]; then
+        # Extract interface from config if not provided
+        if [ -z "$iface_5ghz" ] && [ -f "$HOSTAPD_5GHZ_CONF" ]; then
+            iface_5ghz=$(grep "^interface=" "$HOSTAPD_5GHZ_CONF" | cut -d= -f2)
+        fi
+
         cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
-After=network.target
+After=network.target openvswitch-switch.service
 Wants=network.target
+Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd-5ghz.pid
 ExecStartPre=/bin/sleep 2
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
+ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} add
+ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1981,7 +2108,9 @@ configure_dual_band_wifi() {
     generate_vlan_file
 
     # Generate systemd services only for configured bands
-    generate_systemd_services "$has_24ghz" "$has_5ghz"
+    # Pass interface names for OVS bridge integration
+    generate_systemd_services "$has_24ghz" "$has_5ghz" \
+        "${NET_WIFI_24GHZ_IFACE:-}" "${NET_WIFI_5GHZ_IFACE:-}" "$bridge"
 
     echo ""
     if $has_24ghz && $has_5ghz; then
@@ -2028,8 +2157,8 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  $0 configure MyNetwork 'MySecurePassword123'"
-    echo "  $0 24ghz wlan0 MyNetwork 'MyPassword' 6 br-lan"
-    echo "  $0 5ghz wlan1 MyNetwork 'MyPassword' 36 br-lan"
+    echo "  $0 24ghz wlan0 MyNetwork 'MyPassword' 6 fortress"
+    echo "  $0 5ghz wlan1 MyNetwork 'MyPassword' 36 fortress"
     echo "  $0 setup-vlan     # Enable VLAN segregation after config"
     echo ""
     echo "Security:"
@@ -2047,13 +2176,13 @@ usage() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         configure)
-            configure_dual_band_wifi "$2" "$3" "${4:-br-lan}"
+            configure_dual_band_wifi "$2" "$3" "${4:-fortress}"
             ;;
         24ghz)
-            generate_hostapd_24ghz "$2" "$3" "$4" "${5:-auto}" "${6:-br-lan}"
+            generate_hostapd_24ghz "$2" "$3" "$4" "${5:-auto}" "${6:-fortress}"
             ;;
         5ghz)
-            generate_hostapd_5ghz "$2" "$3" "$4" "${5:-auto}" "${6:-br-lan}"
+            generate_hostapd_5ghz "$2" "$3" "$4" "${5:-auto}" "${6:-fortress}"
             ;;
         vlan)
             generate_vlan_file
