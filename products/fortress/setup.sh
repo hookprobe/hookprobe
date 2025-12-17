@@ -796,6 +796,9 @@ setup_lan_bridge() {
     log_info "WAN interface: $wan_iface"
     log_info "LAN interfaces to bridge: $lan_ifaces"
 
+    # Default VLAN for untagged LAN traffic (Trusted/Staff network)
+    local default_lan_vlan="${LAN_DEFAULT_VLAN:-20}"
+
     # Add each LAN interface to the OVS bridge
     for iface in $lan_ifaces; do
         if ip link show "$iface" &>/dev/null; then
@@ -813,8 +816,19 @@ setup_lan_bridge() {
                 log_info "$iface already in bridge"
             fi
 
+            # Configure as hybrid port:
+            # - Untagged traffic maps to default VLAN (native-untagged mode)
+            # - Also accepts tagged traffic for other VLANs (trunk)
+            # This allows regular clients to plug in and get DHCP
+            ovs-vsctl set port "$iface" tag="$default_lan_vlan" \
+                vlan_mode=native-untagged \
+                trunks=10,20,30,40,99 2>/dev/null || {
+                log_warn "Failed to set VLAN mode for $iface"
+            }
+
             # Bring interface up
             ip link set "$iface" up
+            log_info "$iface configured: untagged->VLAN $default_lan_vlan"
         fi
     done
 
@@ -823,14 +837,16 @@ setup_lan_bridge() {
 # HookProbe Fortress LAN Bridge Configuration
 WAN_INTERFACE=$wan_iface
 LAN_INTERFACES="$lan_ifaces"
+LAN_DEFAULT_VLAN=$default_lan_vlan
 BRIDGE_NAME=$OVS_BRIDGE_NAME
 BRIDGE_IP=10.250.0.1
 BRIDGE_NETMASK=255.255.0.0
-DHCP_RANGE_START=10.250.1.100
-DHCP_RANGE_END=10.250.1.250
+# LAN ports use native-untagged mode:
+# - Untagged traffic -> VLAN $default_lan_vlan (${SUBNET_PREFIX:-10.250}.$default_lan_vlan.x)
+# - Tagged traffic for VLANs 10,20,30,40,99 also accepted
 EOF
 
-    log_info "LAN interfaces bridged"
+    log_info "LAN interfaces bridged (default VLAN: $default_lan_vlan)"
 }
 
 # ============================================================
@@ -1468,12 +1484,31 @@ start_network_services() {
     log_step "Starting network services..."
 
     # Start hostapd (WiFi AP) FIRST - creates the WiFi interface
-    if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
-        log_info "Starting WiFi AP..."
-        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
-        # Give hostapd time to initialize the interface
-        sleep 3
+    # Check for band-specific services first (created by hostapd-generator)
+    local wifi_started=false
+
+    if [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
+        log_info "Starting 2.4GHz WiFi AP..."
+        systemctl start fortress-hostapd-24ghz 2>/dev/null || log_warn "Failed to start 2.4GHz hostapd"
+        wifi_started=true
     fi
+
+    if [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        log_info "Starting 5GHz WiFi AP..."
+        # 5GHz with DFS channels may take 60+ seconds for radar detection
+        # Start in background and continue
+        systemctl start fortress-hostapd-5ghz 2>/dev/null || log_warn "Failed to start 5GHz hostapd"
+        wifi_started=true
+    fi
+
+    # Fallback to generic service if band-specific don't exist
+    if [ "$wifi_started" = false ] && [ -f /etc/systemd/system/fortress-hostapd.service ]; then
+        log_info "Starting WiFi AP (legacy)..."
+        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
+    fi
+
+    # Give hostapd time to initialize the interface
+    sleep 3
 
     # Start NAT routing AFTER hostapd - needs WiFi interface to exist
     # This assigns IPs to bridge AND WiFi interface
@@ -1497,10 +1532,25 @@ start_network_services() {
         log_warn "✗ NAT routing not active"
     fi
 
-    if systemctl is-active fortress-hostapd &>/dev/null; then
-        log_info "✓ WiFi AP running"
-    else
-        log_warn "✗ WiFi AP not running (may need WiFi interface)"
+    # Check WiFi AP status
+    local wifi_active=false
+    if systemctl is-active fortress-hostapd-24ghz &>/dev/null; then
+        log_info "✓ 2.4GHz WiFi AP running"
+        wifi_active=true
+    fi
+    if systemctl is-active fortress-hostapd-5ghz &>/dev/null; then
+        log_info "✓ 5GHz WiFi AP running"
+        wifi_active=true
+    elif [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        # 5GHz may still be in DFS radar detection period (60s)
+        log_info "⏳ 5GHz WiFi AP starting (DFS radar detection may take 60s)"
+    fi
+    if [ "$wifi_active" = false ]; then
+        if systemctl is-active fortress-hostapd &>/dev/null; then
+            log_info "✓ WiFi AP running"
+        else
+            log_warn "✗ WiFi AP not running (may need WiFi interface)"
+        fi
     fi
 
     if systemctl is-active fortress-dnsmasq &>/dev/null; then
@@ -1898,7 +1948,9 @@ set -e
 BRIDGE="fortress"
 BRIDGE_IP="10.250.0.1"
 BRIDGE_SUBNET="16"
-WIFI_IP="10.250.2.1"
+# WiFi clients get Guest VLAN IPs (10.250.40.x) via DHCP
+# WiFi interface must be the gateway for that subnet
+WIFI_IP="10.250.40.1"
 WIFI_SUBNET="24"
 
 # ============================================================
