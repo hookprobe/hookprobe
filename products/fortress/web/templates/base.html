@@ -115,7 +115,14 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a href="{{ url_for('clients.index') }}" class="nav-link {% if 'clients' in request.endpoint %}active{% endif %}">
+                        <a href="{{ url_for('sdn.index') }}" class="nav-link {% if 'sdn' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-project-diagram"></i>
+                            <p>SDN Management</p>
+                            <span class="badge badge-warning right">New</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="{{ url_for('clients.index') }}" class="nav-link {% if 'clients' in request.endpoint and 'sdn' not in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-laptop"></i>
                             <p>Clients</p>
                         </a>
