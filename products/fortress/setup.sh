@@ -1468,12 +1468,31 @@ start_network_services() {
     log_step "Starting network services..."
 
     # Start hostapd (WiFi AP) FIRST - creates the WiFi interface
-    if [ -f /etc/systemd/system/fortress-hostapd.service ]; then
-        log_info "Starting WiFi AP..."
-        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
-        # Give hostapd time to initialize the interface
-        sleep 3
+    # Check for band-specific services first (created by hostapd-generator)
+    local wifi_started=false
+
+    if [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
+        log_info "Starting 2.4GHz WiFi AP..."
+        systemctl start fortress-hostapd-24ghz 2>/dev/null || log_warn "Failed to start 2.4GHz hostapd"
+        wifi_started=true
     fi
+
+    if [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        log_info "Starting 5GHz WiFi AP..."
+        # 5GHz with DFS channels may take 60+ seconds for radar detection
+        # Start in background and continue
+        systemctl start fortress-hostapd-5ghz 2>/dev/null || log_warn "Failed to start 5GHz hostapd"
+        wifi_started=true
+    fi
+
+    # Fallback to generic service if band-specific don't exist
+    if [ "$wifi_started" = false ] && [ -f /etc/systemd/system/fortress-hostapd.service ]; then
+        log_info "Starting WiFi AP (legacy)..."
+        systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
+    fi
+
+    # Give hostapd time to initialize the interface
+    sleep 3
 
     # Start NAT routing AFTER hostapd - needs WiFi interface to exist
     # This assigns IPs to bridge AND WiFi interface
@@ -1497,10 +1516,25 @@ start_network_services() {
         log_warn "✗ NAT routing not active"
     fi
 
-    if systemctl is-active fortress-hostapd &>/dev/null; then
-        log_info "✓ WiFi AP running"
-    else
-        log_warn "✗ WiFi AP not running (may need WiFi interface)"
+    # Check WiFi AP status
+    local wifi_active=false
+    if systemctl is-active fortress-hostapd-24ghz &>/dev/null; then
+        log_info "✓ 2.4GHz WiFi AP running"
+        wifi_active=true
+    fi
+    if systemctl is-active fortress-hostapd-5ghz &>/dev/null; then
+        log_info "✓ 5GHz WiFi AP running"
+        wifi_active=true
+    elif [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        # 5GHz may still be in DFS radar detection period (60s)
+        log_info "⏳ 5GHz WiFi AP starting (DFS radar detection may take 60s)"
+    fi
+    if [ "$wifi_active" = false ]; then
+        if systemctl is-active fortress-hostapd &>/dev/null; then
+            log_info "✓ WiFi AP running"
+        else
+            log_warn "✗ WiFi AP not running (may need WiFi interface)"
+        fi
     fi
 
     if systemctl is-active fortress-dnsmasq &>/dev/null; then
@@ -1898,7 +1932,9 @@ set -e
 BRIDGE="fortress"
 BRIDGE_IP="10.250.0.1"
 BRIDGE_SUBNET="16"
-WIFI_IP="10.250.2.1"
+# WiFi clients get Guest VLAN IPs (10.250.40.x) via DHCP
+# WiFi interface must be the gateway for that subnet
+WIFI_IP="10.250.40.1"
 WIFI_SUBNET="24"
 
 # ============================================================
