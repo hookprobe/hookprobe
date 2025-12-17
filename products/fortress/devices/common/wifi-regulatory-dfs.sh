@@ -733,29 +733,44 @@ scan_for_best_channel() {
     #
     # Args:
     #   $1 - Interface name
-    #   $2 - Prefer non-DFS (true/false, default: true)
+    #   $2 - Include DFS channels (true/false, default: false)
     #   $3 - Country code
+    #   $4 - Prefer UNII-2A DFS (52-64) over UNII-1 (true/false, default: false)
     #
     # Output: Best channel number
 
     local iface="$1"
-    local prefer_non_dfs="${2:-true}"
+    local include_dfs="${2:-false}"
     local country="${3:-$(get_current_regdomain)}"
+    local prefer_unii2a="${4:-false}"
 
     log_info "Scanning for best 5GHz channel..."
+    log_info "  Include DFS: $include_dfs"
+    log_info "  Country: $country"
 
-    # Get available channels
-    local channels
-    if [ "$prefer_non_dfs" = "true" ]; then
-        channels=$(get_non_dfs_channels "$iface" "$country")
+    # Build channel list based on mode
+    local channels=""
+
+    if [ "$include_dfs" = "true" ]; then
+        # Include DFS channels - prioritize UNII-2A (52-64) as they're often clearer
+        if [ "$prefer_unii2a" = "true" ]; then
+            # UNII-2A first (52-64), then UNII-1 (36-48)
+            channels="52 56 60 64 36 40 44 48"
+            log_info "  Priority: UNII-2A (52-64) > UNII-1 (36-48)"
+        else
+            # All available DFS + non-DFS
+            channels=$(get_available_channels_5ghz "$iface" true)
+        fi
     else
-        channels=$(get_available_channels_5ghz "$iface" true)
+        # Non-DFS only
+        channels=$(get_non_dfs_channels "$iface" "$country")
     fi
 
     [ -z "$channels" ] && { echo "36"; return; }
 
     # Bring interface up for scanning
     ip link set "$iface" up 2>/dev/null || true
+    sleep 1
 
     # Scan for APs
     local scan_results
@@ -764,6 +779,7 @@ scan_for_best_channel() {
     # Count APs per channel
     local best_channel=36
     local min_aps=999
+    local channel_scores=""
 
     for ch in $channels; do
         local freq
@@ -772,15 +788,45 @@ scan_for_best_channel() {
         local ap_count
         ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
 
-        log_debug "Channel $ch ($freq MHz): $ap_count APs"
+        # Add DFS penalty score (prefer non-DFS if equal AP count)
+        local score="$ap_count"
+        if is_dfs_channel "$ch" 2>/dev/null && [ "$prefer_unii2a" != "true" ]; then
+            # Add small penalty to DFS channels unless explicitly preferred
+            score=$((ap_count + 1))
+        fi
 
-        if [ "$ap_count" -lt "$min_aps" ]; then
-            min_aps="$ap_count"
+        log_debug "Channel $ch ($freq MHz): $ap_count APs (score: $score)"
+        channel_scores="${channel_scores}$ch:$score "
+
+        if [ "$score" -lt "$min_aps" ]; then
+            min_aps="$score"
             best_channel="$ch"
         fi
     done
 
-    log_success "Best channel: $best_channel ($min_aps nearby APs)"
+    # If DFS preferred and UNII-2A is clear, prefer it over UNII-1
+    if [ "$prefer_unii2a" = "true" ]; then
+        for ch in 52 56 60 64; do
+            local freq
+            freq=$(channel_to_freq "$ch")
+            local ap_count
+            ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
+
+            # If UNII-2A channel is clear (0 APs), prefer it
+            if [ "$ap_count" -eq 0 ]; then
+                best_channel="$ch"
+                log_info "  Found clear UNII-2A channel: $ch"
+                break
+            fi
+        done
+    fi
+
+    local dfs_marker=""
+    if is_dfs_channel "$best_channel" 2>/dev/null; then
+        dfs_marker=" (DFS)"
+    fi
+
+    log_success "Best channel: $best_channel$dfs_marker ($min_aps nearby APs)"
     echo "$best_channel"
 }
 
@@ -790,27 +836,34 @@ scan_for_best_channel() {
 
 calibrate_channel() {
     # Perform full channel calibration
-    # Designed to run at 4AM daily for minimal disruption
+    # At 4AM: Includes DFS channels (52-64) with CAC wait
+    # Quick mode: Non-DFS only for fast startup
     #
     # Args:
     #   $1 - Interface name
     #   $2 - Config file to update
-    #   $3 - Dry run (true/false, default: false)
+    #   $3 - Mode: "full" (4AM, includes DFS) or "quick" (non-DFS only)
+    #   $4 - Dry run (true/false, default: false)
 
     local iface="$1"
     local config_file="${2:-/etc/hostapd/hostapd-5ghz.conf}"
-    local dry_run="${3:-false}"
+    local mode="${3:-full}"
+    local dry_run="${4:-false}"
 
     log_info "=========================================="
     log_info "WiFi Channel Calibration"
     log_info "Time: $(date -Iseconds)"
     log_info "Interface: $iface"
+    log_info "Mode: $mode"
     log_info "=========================================="
 
     # Get current country
     local country
     country=$(get_current_regdomain)
     log_info "Regulatory domain: $country"
+
+    # Ensure regulatory domain is set before any operations
+    set_regulatory_domain "$country" "$iface" 2>/dev/null || true
 
     # Get current channel from config
     local current_channel
@@ -819,10 +872,34 @@ calibrate_channel() {
     fi
     log_info "Current channel: ${current_channel:-unknown}"
 
-    # Scan for best channel
+    # Scan for best channel based on mode
     local best_channel
-    best_channel=$(scan_for_best_channel "$iface" true "$country")
+    local include_dfs=false
+    local prefer_unii2a=false
+
+    if [ "$mode" = "full" ]; then
+        # Full mode (4AM): Include DFS, prefer UNII-2A (52-64) which are often clearer
+        include_dfs=true
+        prefer_unii2a=true
+        log_info "Full calibration: Including DFS channels (52-64), will wait for CAC"
+    else
+        # Quick mode: Non-DFS only for fast startup
+        include_dfs=false
+        log_info "Quick calibration: Non-DFS only (36-48) for fast startup"
+    fi
+
+    best_channel=$(scan_for_best_channel "$iface" "$include_dfs" "$country" "$prefer_unii2a")
     log_info "Recommended channel: $best_channel"
+
+    # Check if selected channel is DFS
+    local is_dfs=false
+    local cac_time=0
+    if is_dfs_channel "$best_channel" 2>/dev/null; then
+        is_dfs=true
+        cac_time=$(get_cac_time "$best_channel")
+        log_warn "Selected channel $best_channel is DFS (UNII-2A)"
+        log_warn "CAC (radar detection) required: ${cac_time}s"
+    fi
 
     # Compare with current
     if [ "$best_channel" = "$current_channel" ]; then
@@ -831,14 +908,38 @@ calibrate_channel() {
     fi
 
     # Validate new channel
-    if ! test_channel "$iface" "$best_channel"; then
-        log_error "New channel $best_channel failed validation, keeping current"
-        return 1
+    if ! test_channel "$iface" "$best_channel" 5; then
+        log_warn "Channel $best_channel test failed"
+
+        # If DFS failed, try falling back to UNII-1
+        if [ "$is_dfs" = "true" ]; then
+            log_info "Falling back to non-DFS channel scan..."
+            best_channel=$(scan_for_best_channel "$iface" false "$country" false)
+            log_info "Fallback channel: $best_channel"
+            is_dfs=false
+            cac_time=0
+        else
+            log_error "Channel validation failed, keeping current"
+            return 1
+        fi
     fi
 
     if [ "$dry_run" = "true" ]; then
         log_info "DRY RUN: Would switch from channel $current_channel to $best_channel"
+        [ "$is_dfs" = "true" ] && log_info "DRY RUN: Would wait ${cac_time}s for DFS CAC"
         return 0
+    fi
+
+    # For DFS channels, we need to wait for CAC before hostapd can use it
+    # hostapd handles this automatically, but we should inform the user
+    if [ "$is_dfs" = "true" ] && [ "$cac_time" -gt 0 ]; then
+        log_warn "=========================================="
+        log_warn "DFS Channel Selected: $best_channel"
+        log_warn "=========================================="
+        log_warn "hostapd will perform ${cac_time}s CAC (radar detection)"
+        log_warn "AP will not be available during this time"
+        log_warn "This is normal for UNII-2A channels in EU/ETSI regions"
+        log_warn "=========================================="
     fi
 
     # Update configuration
@@ -875,12 +976,61 @@ calibrate_channel() {
     "interface": "$iface",
     "previous_channel": ${current_channel:-null},
     "new_channel": $best_channel,
+    "is_dfs": $is_dfs,
+    "cac_time_sec": $cac_time,
+    "mode": "$mode",
     "calibrated_at": "$(date -Iseconds)",
     "country": "$country"
 }
 EOF
 
     return 0
+}
+
+quick_start_channel() {
+    # Quick channel selection for boot/restart scenarios
+    # Uses ONLY non-DFS channels for immediate availability
+    # No CAC wait - AP starts immediately
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Config file to update (optional)
+    #
+    # Returns: Selected channel number
+
+    local iface="$1"
+    local config_file="${2:-}"
+
+    log_info "=========================================="
+    log_info "Quick Start Channel Selection"
+    log_info "=========================================="
+    log_info "Mode: Non-DFS only (immediate startup)"
+
+    local country
+    country=$(get_current_regdomain)
+
+    # Set regulatory domain
+    set_regulatory_domain "$country" "$iface" 2>/dev/null || true
+
+    # Scan only non-DFS channels (36-48, and 149-165 where allowed)
+    local best_channel
+    best_channel=$(scan_for_best_channel "$iface" false "$country" false)
+
+    log_success "Quick start channel: $best_channel (non-DFS)"
+
+    # Update config if specified
+    if [ -n "$config_file" ] && [ -f "$config_file" ]; then
+        log_info "Updating $config_file: channel=$best_channel"
+        sed -i "s/^channel=.*/channel=$best_channel/" "$config_file"
+
+        local center_freq
+        center_freq=$(get_vht_center_freq "$best_channel" 80)
+        if grep -q "vht_oper_centr_freq_seg0_idx" "$config_file"; then
+            sed -i "s/^vht_oper_centr_freq_seg0_idx=.*/vht_oper_centr_freq_seg0_idx=$center_freq/" "$config_file"
+        fi
+    fi
+
+    echo "$best_channel"
 }
 
 install_calibration_timer() {
@@ -899,17 +1049,21 @@ install_calibration_timer() {
         [ -z "$iface" ] && { log_error "No WiFi interface found"; return 1; }
     fi
 
-    # Create calibration service
+    # Create calibration service - uses FULL mode at 4AM to include DFS channels
     cat > /etc/systemd/system/fortress-channel-calibrate.service << EOF
 [Unit]
-Description=HookProbe Fortress WiFi Channel Calibration
+Description=HookProbe Fortress WiFi Channel Calibration (4AM Full Mode with DFS)
 After=network.target hostapd.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/hookprobe/fortress/devices/common/wifi-regulatory-dfs.sh calibrate $iface
+# Full mode: Scans DFS channels (52-64), waits for CAC if needed
+# This is safe at 4AM when we have time for the 60s radar detection
+ExecStart=/opt/hookprobe/fortress/devices/common/wifi-regulatory-dfs.sh calibrate-full $iface
 StandardOutput=journal
 StandardError=journal
+# Allow up to 10 minutes for DFS CAC
+TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target
@@ -918,15 +1072,36 @@ EOF
     # Create timer for 4AM daily
     cat > /etc/systemd/system/fortress-channel-calibrate.timer << EOF
 [Unit]
-Description=Daily WiFi Channel Calibration at 4AM
+Description=Daily WiFi Channel Calibration at 4AM (includes DFS channels)
 
 [Timer]
+# Run at 4AM - low traffic time, safe to wait for DFS CAC
 OnCalendar=*-*-* 04:00:00
+# Add randomization to avoid all devices calibrating at once
 RandomizedDelaySec=300
 Persistent=true
 
 [Install]
 WantedBy=timers.target
+EOF
+
+    # Create quick-start service for boot/reboot (non-DFS only)
+    cat > /etc/systemd/system/fortress-channel-quickstart.service << EOF
+[Unit]
+Description=HookProbe Fortress WiFi Quick Start (Non-DFS only)
+After=network.target
+Before=hostapd.service hostapd-5ghz.service
+
+[Service]
+Type=oneshot
+# Quick mode: Only non-DFS channels (36-48) for immediate AP availability
+ExecStart=/opt/hookprobe/fortress/devices/common/wifi-regulatory-dfs.sh quick-start $iface /etc/hostapd/hostapd-5ghz.conf
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
     # Enable timer
@@ -935,9 +1110,16 @@ EOF
     systemctl start fortress-channel-calibrate.timer
 
     log_success "Channel calibration timer installed (runs daily at 4AM)"
-    log_info "  Service: fortress-channel-calibrate.service"
+    log_info "  4AM Service: fortress-channel-calibrate.service (full mode with DFS)"
     log_info "  Timer: fortress-channel-calibrate.timer"
-    log_info "  Status: systemctl status fortress-channel-calibrate.timer"
+    log_info "  Quick Start: fortress-channel-quickstart.service (non-DFS for boot)"
+    log_info ""
+    log_info "Modes:"
+    log_info "  4AM (full): Scans DFS channels (52-64), may wait 60s for CAC"
+    log_info "  Boot (quick): Non-DFS only (36-48), immediate startup"
+    log_info ""
+    log_info "To enable quick-start on boot:"
+    log_info "  systemctl enable fortress-channel-quickstart.service"
 }
 
 # ============================================================
@@ -1106,30 +1288,41 @@ Usage: $(basename "$0") <command> [options]
 
 Commands:
   preflight <iface> [country]    Pre-flight validation before WiFi config
-  set-regdomain <country>        Set regulatory domain
+  set-regdomain <country>        Set regulatory domain (MUST be done first!)
   get-channels <iface>           List available 5GHz channels
   get-dfs <iface>                List DFS channels requiring CAC
   get-bandwidth <iface>          Detect maximum bandwidth capability
   test-channel <iface> <ch>      Test if a channel works
   wait-dfs <iface> <ch>          Wait for DFS CAC on a channel
-  scan <iface>                   Scan for best channel
-  calibrate <iface>              Perform channel calibration
-  install-timer [iface]          Install 4AM calibration timer
+  scan <iface> [include-dfs]     Scan for best channel (default: non-DFS only)
+  scan-dfs <iface>               Scan including DFS channels (52-64)
+
+Calibration Commands:
+  quick-start <iface> [config]   Fast channel selection (non-DFS only, for boot)
+  calibrate <iface> [config]     Quick calibration (non-DFS only)
+  calibrate-full <iface> [conf]  Full calibration with DFS (52-64), for 4AM
+  install-timer [iface]          Install 4AM timer + boot quick-start service
+
+EU/ETSI 5GHz Channel Bands:
+  UNII-1 (36-48):    No DFS - Always safe, immediate startup
+  UNII-2A (52-64):   DFS, 60s CAC - Often clearer, use at 4AM
+  UNII-2C (100-144): DFS, 600s CAC - Weather radar, long wait
+  UNII-3 (149-165):  NOT allowed in DE, FR, IT, ES, NL, BE, etc.
 
 Examples:
-  # Set regulatory domain before configuration
+  # Set regulatory domain FIRST (before any config)
   $(basename "$0") set-regdomain GB
 
-  # Run pre-flight check
+  # Pre-flight check for EU deployment
   $(basename "$0") preflight wlan0 DE
 
-  # Find best channel
-  $(basename "$0") scan wlan0
+  # Quick start on boot (non-DFS, immediate)
+  $(basename "$0") quick-start wlan0 /etc/hostapd/hostapd-5ghz.conf
 
-  # Wait for DFS CAC on channel 100
-  $(basename "$0") wait-dfs wlan0 100
+  # Full calibration at 4AM (includes DFS 52-64, may wait 60s)
+  $(basename "$0") calibrate-full wlan0 /etc/hostapd/hostapd-5ghz.conf
 
-  # Install daily calibration timer
+  # Install both 4AM timer and boot quick-start
   $(basename "$0") install-timer wlan0
 
 Environment Variables:
@@ -1168,10 +1361,31 @@ main() {
             wait_for_dfs "$@"
             ;;
         scan)
-            scan_for_best_channel "$@"
+            # Default scan: non-DFS only
+            local iface="$1"
+            local include_dfs="${2:-false}"
+            scan_for_best_channel "$iface" "$include_dfs"
+            ;;
+        scan-dfs)
+            # Scan including DFS channels (52-64), prefer UNII-2A
+            local iface="$1"
+            scan_for_best_channel "$iface" true "" true
+            ;;
+        quick-start|quickstart)
+            # Quick start: non-DFS only, for boot/restart
+            quick_start_channel "$@"
             ;;
         calibrate)
-            calibrate_channel "$@"
+            # Quick calibration: non-DFS only
+            local iface="$1"
+            local config="${2:-/etc/hostapd/hostapd-5ghz.conf}"
+            calibrate_channel "$iface" "$config" "quick"
+            ;;
+        calibrate-full|calibrate-dfs)
+            # Full calibration: includes DFS (52-64), for 4AM
+            local iface="$1"
+            local config="${2:-/etc/hostapd/hostapd-5ghz.conf}"
+            calibrate_channel "$iface" "$config" "full"
             ;;
         install-timer|timer)
             install_calibration_timer "$@"
