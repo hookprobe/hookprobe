@@ -1,0 +1,102 @@
+# ============================================================
+# HookProbe Fortress DFS Intelligence Container
+# ============================================================
+#
+# ML-powered DFS channel selection with sklearn/numpy
+#
+# Build:
+#   podman build -t fortress-dfs-intelligence:latest -f Containerfile .
+#
+# Run:
+#   podman run -d --name dfs-intelligence \
+#     -v fortress-dfs-data:/var/lib/fortress:Z \
+#     -v /var/run/hostapd:/var/run/hostapd:ro \
+#     -p 127.0.0.1:8767:8767 \
+#     fortress-dfs-intelligence:latest
+#
+# ============================================================
+
+# Build stage - compile dependencies
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    python3-dev \
+    libopenblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ============================================================
+# Production stage - minimal runtime
+# ============================================================
+FROM python:3.11-slim-bookworm AS production
+
+LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
+LABEL description="DFS Intelligence Service - ML-powered channel selection"
+LABEL version="1.0.0"
+
+# Runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    curl \
+    jq \
+    hostapd \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Create non-root user
+RUN groupadd -g 1000 dfs && \
+    useradd -u 1000 -g dfs -d /app -s /sbin/nologin dfs
+
+# Create directories
+RUN mkdir -p /var/lib/fortress /var/log/fortress /var/run/fortress /app && \
+    chown -R dfs:dfs /var/lib/fortress /var/log/fortress /var/run/fortress /app
+
+# Copy application code
+WORKDIR /app
+COPY --chown=dfs:dfs dfs_intelligence.py /app/
+COPY --chown=dfs:dfs dfs_api_server.py /app/
+COPY --chown=dfs:dfs entrypoint.sh /app/
+
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.sh
+
+# Environment variables
+ENV DFS_DB_PATH=/var/lib/fortress/dfs_intelligence.db
+ENV DFS_LOG_PATH=/var/log/fortress/dfs_intelligence.log
+ENV DFS_MODEL_PATH=/var/lib/fortress/dfs_model.json
+ENV DFS_API_HOST=0.0.0.0
+ENV DFS_API_PORT=8767
+
+# Volume mounts
+VOLUME ["/var/lib/fortress", "/var/log/fortress"]
+
+# Expose API port
+EXPOSE 8767
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -sf http://localhost:8767/health || exit 1
+
+# Switch to non-root user
+USER dfs
+
+# Entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["server"]

@@ -1192,19 +1192,144 @@ show_dfs_status() {
 #
 # Integration with products/fortress/lib/dfs_intelligence.py
 # Provides ML-powered channel scoring when Python module is available.
-# Falls back to bash-based scoring if Python unavailable.
+# Supports both native Python and containerized API modes.
+# Falls back to bash-based scoring if unavailable.
+#
+# Modes:
+#   container: Use DFS Intelligence container API (preferred)
+#   native:    Use local Python module directly
+#   fallback:  Use bash-based scoring (no ML)
 
 DFS_INTELLIGENCE_PY="${DFS_INTELLIGENCE_PY:-/opt/hookprobe/products/fortress/lib/dfs_intelligence.py}"
 DFS_INTELLIGENCE_DEV="${SCRIPT_DIR}/../../lib/dfs_intelligence.py"
+DFS_CAPABILITIES_SCRIPT="${SCRIPT_DIR}/wifi-dfs-capabilities.sh"
+DFS_CONTAINER_CTL="${DFS_CONTAINER_CTL:-/opt/hookprobe/products/fortress/containers/dfs-intelligence/dfs-container-ctl.sh}"
+DFS_API_PORT="${DFS_API_PORT:-8767}"
+DFS_API_URL="http://127.0.0.1:${DFS_API_PORT}"
 
-dfs_ml_available() {
-    # Check if ML-enhanced DFS intelligence is available
+# DFS operation mode (set by detect_dfs_mode)
+DFS_MODE="${DFS_MODE:-auto}"
+DFS_CAPABILITY_LEVEL=""
+
+# ============================================================
+# VENDOR/CAPABILITY DETECTION
+# ============================================================
+
+source_capabilities_script() {
+    # Source the capabilities detection script if available
+    if [ -f "$DFS_CAPABILITIES_SCRIPT" ]; then
+        # shellcheck source=/dev/null
+        source "$DFS_CAPABILITIES_SCRIPT"
+        return 0
+    elif [ -f "${SCRIPT_DIR}/wifi-dfs-capabilities.sh" ]; then
+        # shellcheck source=/dev/null
+        source "${SCRIPT_DIR}/wifi-dfs-capabilities.sh"
+        return 0
+    fi
+    return 1
+}
+
+detect_vendor_dfs_capability() {
+    # Detect vendor-specific DFS capability for an interface
     #
-    # Returns 0 if Python module is available, 1 otherwise
+    # Args:
+    #   $1 - Interface name
+    #
+    # Output: Capability level (full/partial/basic/none)
+    # Sets: DFS_CAPABILITY_LEVEL global variable
+
+    local iface="$1"
+
+    # Try to source and use the capabilities script
+    if source_capabilities_script 2>/dev/null; then
+        if command -v get_chipset_dfs_capability &>/dev/null; then
+            local cap_info
+            cap_info=$(get_chipset_dfs_capability "$iface" 2>/dev/null)
+            DFS_CAPABILITY_LEVEL="${cap_info%%:*}"
+            echo "$DFS_CAPABILITY_LEVEL"
+            return 0
+        fi
+    fi
+
+    # Fallback: probe driver capabilities directly
+    local driver phy
+    driver=$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)" 2>/dev/null)
+    phy=$(basename "$(readlink -f /sys/class/net/$iface/phy80211 2>/dev/null)" 2>/dev/null)
+
+    # Check for DFS support via iw
+    if iw phy "$phy" info 2>/dev/null | grep -q "DFS"; then
+        # Has some DFS support, determine level by driver
+        case "$driver" in
+            iwlwifi|mt76*|mt792*|ath10k*|ath11k*|ath12k*)
+                DFS_CAPABILITY_LEVEL="full"
+                ;;
+            rtw89*|brcmfmac*)
+                DFS_CAPABILITY_LEVEL="partial"
+                ;;
+            rtw88*|ath9k*|brcmsmac*)
+                DFS_CAPABILITY_LEVEL="basic"
+                ;;
+            *)
+                DFS_CAPABILITY_LEVEL="partial"
+                ;;
+        esac
+    else
+        DFS_CAPABILITY_LEVEL="none"
+    fi
+
+    echo "$DFS_CAPABILITY_LEVEL"
+}
+
+get_dfs_recommendation() {
+    # Get DFS mode recommendation based on hardware capability
+    #
+    # Args:
+    #   $1 - Interface name
+    #
+    # Output: JSON recommendation (if jq available) or text
+
+    local iface="$1"
+
+    if source_capabilities_script 2>/dev/null; then
+        if command -v get_dfs_recommendation &>/dev/null; then
+            get_dfs_recommendation "$iface"
+            return 0
+        fi
+    fi
+
+    # Fallback: basic recommendation
+    local cap
+    cap=$(detect_vendor_dfs_capability "$iface")
+
+    cat << EOF
+{
+    "interface": "$iface",
+    "capability_level": "$cap",
+    "recommended_mode": "$(case "$cap" in full) echo "advanced";; partial) echo "standard";; basic) echo "basic";; *) echo "disabled";; esac)",
+    "features": {
+        "use_ml_prediction": $([ "$cap" = "full" ] || [ "$cap" = "partial" ] && echo "true" || echo "false"),
+        "use_radar_detection": $([ "$cap" = "full" ] || [ "$cap" = "partial" ] && echo "true" || echo "false"),
+        "use_csa_switching": $([ "$cap" = "full" ] || [ "$cap" = "partial" ] && echo "true" || echo "false"),
+        "use_nop_tracking": $([ "$cap" != "none" ] && echo "true" || echo "false")
+    }
+}
+EOF
+}
+
+# ============================================================
+# MODE DETECTION (Container vs Native vs Fallback)
+# ============================================================
+
+dfs_container_available() {
+    # Check if DFS Intelligence container API is available
+    curl -sf "${DFS_API_URL}/health" &>/dev/null
+}
+
+dfs_native_available() {
+    # Check if native Python module is available
 
     # Check Python3 is available
     if ! command -v python3 &>/dev/null; then
-        log_debug "Python3 not available, using bash fallback"
         return 1
     fi
 
@@ -1215,17 +1340,55 @@ dfs_ml_available() {
     elif [ -f "$DFS_INTELLIGENCE_DEV" ]; then
         py_script="$DFS_INTELLIGENCE_DEV"
     else
-        log_debug "DFS intelligence module not found, using bash fallback"
         return 1
     fi
 
-    # Verify Python script is executable
-    if python3 -c "import sys; sys.path.insert(0, '$(dirname "$py_script")'); import dfs_intelligence" 2>/dev/null; then
+    # Verify Python script is loadable
+    python3 -c "import sys; sys.path.insert(0, '$(dirname "$py_script")'); import dfs_intelligence" 2>/dev/null
+}
+
+dfs_ml_available() {
+    # Check if ML-enhanced DFS intelligence is available (any mode)
+    #
+    # Returns 0 if container OR native is available
+
+    # Prefer container mode
+    if dfs_container_available; then
+        DFS_MODE="container"
         return 0
-    else
-        log_debug "DFS intelligence module not loadable, using bash fallback"
-        return 1
     fi
+
+    # Fall back to native
+    if dfs_native_available; then
+        DFS_MODE="native"
+        return 0
+    fi
+
+    DFS_MODE="fallback"
+    return 1
+}
+
+detect_dfs_mode() {
+    # Detect and set the DFS operation mode
+    #
+    # Sets: DFS_MODE global variable
+    # Returns: mode string
+
+    if [ "$DFS_MODE" != "auto" ]; then
+        echo "$DFS_MODE"
+        return 0
+    fi
+
+    if dfs_container_available; then
+        DFS_MODE="container"
+    elif dfs_native_available; then
+        DFS_MODE="native"
+    else
+        DFS_MODE="fallback"
+    fi
+
+    log_debug "DFS mode detected: $DFS_MODE"
+    echo "$DFS_MODE"
 }
 
 _get_dfs_py_script() {
@@ -1237,6 +1400,10 @@ _get_dfs_py_script() {
     fi
 }
 
+# ============================================================
+# ML FUNCTIONS (Container + Native modes)
+# ============================================================
+
 ml_score_channel() {
     # Get ML-enhanced score for a channel
     #
@@ -1244,16 +1411,30 @@ ml_score_channel() {
     #   $1 - Channel number
     #   $2 - Hour of day (optional)
     #
-    # Output: Score (0.0-1.0) and recommendation
+    # Output: Score and recommendation
 
     local channel="$1"
     local hour="${2:-$(date +%H)}"
-    local py_script
 
-    py_script=$(_get_dfs_py_script)
-    [ -z "$py_script" ] && return 1
+    detect_dfs_mode >/dev/null
 
-    python3 "$py_script" score --channel "$channel" --hour "$hour" 2>/dev/null
+    case "$DFS_MODE" in
+        container)
+            curl -sf -X POST "${DFS_API_URL}/score" \
+                -H "Content-Type: application/json" \
+                -d "{\"channel\": $channel, \"hour\": $hour}" 2>/dev/null
+            ;;
+        native)
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            [ -z "$py_script" ] && return 1
+            python3 "$py_script" score --channel "$channel" --hour "$hour" 2>/dev/null
+            ;;
+        *)
+            log_error "ML scoring not available (mode: $DFS_MODE)"
+            return 1
+            ;;
+    esac
 }
 
 ml_best_channel() {
@@ -1269,16 +1450,39 @@ ml_best_channel() {
     local prefer_dfs="${1:-false}"
     local min_bw="${2:-20}"
     local exclude="${3:-}"
-    local py_script
 
-    py_script=$(_get_dfs_py_script)
-    [ -z "$py_script" ] && return 1
+    detect_dfs_mode >/dev/null
 
-    local args=("--min-bandwidth" "$min_bw")
-    [ "$prefer_dfs" = "true" ] && args+=("--prefer-dfs")
-    [ -n "$exclude" ] && args+=("--exclude" $exclude)
+    case "$DFS_MODE" in
+        container)
+            local exclude_json="[]"
+            if [ -n "$exclude" ]; then
+                exclude_json="[$(echo "$exclude" | tr ' ' ',')]"
+            fi
+            curl -sf -X POST "${DFS_API_URL}/best" \
+                -H "Content-Type: application/json" \
+                -d "{\"prefer_dfs\": $prefer_dfs, \"min_bandwidth\": $min_bw, \"exclude\": $exclude_json}" 2>/dev/null | \
+                jq -r '.channel' 2>/dev/null || \
+                curl -sf -X POST "${DFS_API_URL}/best" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"prefer_dfs\": $prefer_dfs, \"min_bandwidth\": $min_bw}" 2>/dev/null | \
+                    grep -oP '"channel":\s*\K[0-9]+'
+            ;;
+        native)
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            [ -z "$py_script" ] && return 1
 
-    python3 "$py_script" best "${args[@]}" 2>/dev/null | grep -oP "Best Channel: \K[0-9]+"
+            local args=("--min-bandwidth" "$min_bw")
+            [ "$prefer_dfs" = "true" ] && args+=("--prefer-dfs")
+            [ -n "$exclude" ] && args+=("--exclude" $exclude)
+
+            python3 "$py_script" best "${args[@]}" 2>/dev/null | grep -oP "Best Channel: \K[0-9]+"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 ml_rank_channels() {
@@ -1292,16 +1496,28 @@ ml_rank_channels() {
 
     local include_dfs="${1:-true}"
     local format="${2:-text}"
-    local py_script
 
-    py_script=$(_get_dfs_py_script)
-    [ -z "$py_script" ] && return 1
+    detect_dfs_mode >/dev/null
 
-    local args=()
-    [ "$include_dfs" = "true" ] && args+=("--include-dfs")
-    [ "$format" = "json" ] && args+=("--json")
+    case "$DFS_MODE" in
+        container)
+            curl -sf "${DFS_API_URL}/rank?include_dfs=$include_dfs" 2>/dev/null
+            ;;
+        native)
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            [ -z "$py_script" ] && return 1
 
-    python3 "$py_script" rank "${args[@]}" 2>/dev/null
+            local args=()
+            [ "$include_dfs" = "true" ] && args+=("--include-dfs")
+            [ "$format" = "json" ] && args+=("--json")
+
+            python3 "$py_script" rank "${args[@]}" 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 ml_log_radar() {
@@ -1313,15 +1529,32 @@ ml_log_radar() {
 
     local channel="$1"
     local frequency="${2:-}"
-    local py_script
 
-    py_script=$(_get_dfs_py_script)
-    [ -z "$py_script" ] && return 1
+    detect_dfs_mode >/dev/null
 
-    local args=("--channel" "$channel")
-    [ -n "$frequency" ] && args+=("--frequency" "$frequency")
+    case "$DFS_MODE" in
+        container)
+            local data="{\"channel\": $channel"
+            [ -n "$frequency" ] && data="$data, \"frequency\": $frequency"
+            data="$data}"
+            curl -sf -X POST "${DFS_API_URL}/radar" \
+                -H "Content-Type: application/json" \
+                -d "$data" 2>/dev/null
+            ;;
+        native)
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            [ -z "$py_script" ] && return 1
 
-    python3 "$py_script" log-radar "${args[@]}" 2>/dev/null
+            local args=("--channel" "$channel")
+            [ -n "$frequency" ] && args+=("--frequency" "$frequency")
+
+            python3 "$py_script" log-radar "${args[@]}" 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 ml_train_model() {
@@ -1331,12 +1564,27 @@ ml_train_model() {
     #   $1 - Minimum samples required
 
     local min_samples="${1:-50}"
-    local py_script
 
-    py_script=$(_get_dfs_py_script)
-    [ -z "$py_script" ] && return 1
+    detect_dfs_mode >/dev/null
 
-    python3 "$py_script" train --min-samples "$min_samples" 2>/dev/null
+    case "$DFS_MODE" in
+        container)
+            curl -sf -X POST "${DFS_API_URL}/train" \
+                -H "Content-Type: application/json" \
+                -d "{\"min_samples\": $min_samples}" 2>/dev/null
+            ;;
+        native)
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            [ -z "$py_script" ] && return 1
+
+            python3 "$py_script" train --min-samples "$min_samples" 2>/dev/null
+            ;;
+        *)
+            log_error "ML training not available (mode: $DFS_MODE)"
+            return 1
+            ;;
+    esac
 }
 
 ml_start_monitor() {
@@ -1346,16 +1594,31 @@ ml_start_monitor() {
     #   $1 - Interface name
 
     local iface="$1"
-    local py_script
 
-    py_script=$(_get_dfs_py_script)
-    [ -z "$py_script" ] && return 1
+    detect_dfs_mode >/dev/null
 
-    log_info "Starting ML-enhanced radar monitor on $iface..."
-    python3 "$py_script" monitor --interface "$iface" &
-    local pid=$!
-    echo "$pid" > /var/run/fortress/dfs-ml-monitor.pid
-    log_success "ML radar monitor started (PID: $pid)"
+    case "$DFS_MODE" in
+        container)
+            log_info "Container mode: radar monitoring handled by container"
+            log_info "Container already monitors via hostapd socket mount"
+            ;;
+        native)
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            [ -z "$py_script" ] && return 1
+
+            mkdir -p /var/run/fortress
+            log_info "Starting ML-enhanced radar monitor on $iface..."
+            python3 "$py_script" monitor --interface "$iface" &
+            local pid=$!
+            echo "$pid" > /var/run/fortress/dfs-ml-monitor.pid
+            log_success "ML radar monitor started (PID: $pid)"
+            ;;
+        *)
+            log_warn "ML not available, falling back to basic monitor"
+            start_radar_monitor "$iface"
+            ;;
+    esac
 }
 
 ml_stop_monitor() {
@@ -1375,6 +1638,7 @@ ml_stop_monitor() {
 
 select_optimal_channel_ml() {
     # Select optimal channel using ML when available, fallback to bash
+    # Also considers hardware capability level
     #
     # Args:
     #   $1 - Interface name
@@ -1387,13 +1651,27 @@ select_optimal_channel_ml() {
     local include_dfs="${2:-true}"
     local min_bw="${3:-20}"
 
+    # Check hardware capability first
+    local cap_level
+    cap_level=$(detect_vendor_dfs_capability "$iface" 2>/dev/null || echo "unknown")
+
+    case "$cap_level" in
+        none)
+            log_warn "Hardware does not support DFS, using UNII-1 only"
+            include_dfs="false"
+            ;;
+        basic)
+            log_warn "Basic DFS support, avoiding UNII-2C channels"
+            ;;
+    esac
+
     # Try ML-based selection first
     if dfs_ml_available; then
-        log_info "Using ML-enhanced channel selection..."
+        log_info "Using ML-enhanced channel selection (mode: $DFS_MODE)..."
         local best_channel
         best_channel=$(ml_best_channel "$include_dfs" "$min_bw")
 
-        if [ -n "$best_channel" ]; then
+        if [ -n "$best_channel" ] && [ "$best_channel" -gt 0 ] 2>/dev/null; then
             log_success "ML recommendation: Channel $best_channel"
             echo "$best_channel"
             return 0
@@ -1421,72 +1699,95 @@ select_optimal_channel_ml() {
 }
 
 show_ml_status() {
-    # Show ML subsystem status
+    # Show ML subsystem status with container/native mode detection
 
     log_info "=========================================="
-    log_info "ML INTELLIGENCE STATUS"
+    log_info "DFS INTELLIGENCE STATUS"
     log_info "=========================================="
 
-    # Check Python availability
-    if command -v python3 &>/dev/null; then
-        local py_version
-        py_version=$(python3 --version 2>&1)
-        log_success "Python: $py_version"
-    else
-        log_error "Python: Not installed"
-    fi
+    # Detect mode
+    local mode
+    mode=$(detect_dfs_mode)
+    echo ""
+    case "$mode" in
+        container)
+            log_success "Mode: Container API"
+            echo "  API URL: ${DFS_API_URL}"
 
-    # Check ML module
-    local py_script
-    py_script=$(_get_dfs_py_script)
-    if [ -n "$py_script" ]; then
-        log_success "ML Module: $py_script"
-    else
-        log_warn "ML Module: Not found"
-    fi
-
-    # Check ML availability
-    if dfs_ml_available; then
-        log_success "ML Status: Available"
-
-        # Check for sklearn/numpy
-        if python3 -c "import sklearn" 2>/dev/null; then
-            log_success "  sklearn: Installed"
-        else
-            log_warn "  sklearn: Not installed (basic scoring only)"
-        fi
-
-        if python3 -c "import numpy" 2>/dev/null; then
-            log_success "  numpy: Installed"
-        else
-            log_warn "  numpy: Not installed"
-        fi
-
-        # Check model status
-        if [ -f "/var/lib/fortress/dfs_model.json" ]; then
-            local trained_at
-            trained_at=$(jq -r '.trained_at // "unknown"' /var/lib/fortress/dfs_model.json 2>/dev/null)
-            log_success "  ML Model: Trained at $trained_at"
-        else
-            log_info "  ML Model: Not trained (run 'ml-train' to train)"
-        fi
-
-        # Check monitor status
-        local pidfile="/var/run/fortress/dfs-ml-monitor.pid"
-        if [ -f "$pidfile" ]; then
-            local pid
-            pid=$(cat "$pidfile")
-            if kill -0 "$pid" 2>/dev/null; then
-                log_success "  Radar Monitor: Running (PID: $pid)"
+            # Get container status
+            if curl -sf "${DFS_API_URL}/status" &>/dev/null; then
+                local status
+                status=$(curl -sf "${DFS_API_URL}/status")
+                log_success "  Container: Running"
+                echo "$status" | jq -r '
+                    "  sklearn: \(if .sklearn_installed then "Installed" else "Not installed" end)",
+                    "  numpy: \(if .numpy_installed then "Installed" else "Not installed" end)",
+                    "  Model trained: \(if .model_trained then "Yes" else "No" end)"
+                ' 2>/dev/null || true
             else
-                log_warn "  Radar Monitor: Stale PID file"
+                log_error "  Container: Not responding"
             fi
-        else
-            log_info "  Radar Monitor: Not running"
-        fi
-    else
-        log_warn "ML Status: Unavailable (using bash fallback)"
-    fi
+            ;;
+        native)
+            log_success "Mode: Native Python"
+
+            # Check Python availability
+            if command -v python3 &>/dev/null; then
+                local py_version
+                py_version=$(python3 --version 2>&1)
+                log_success "  Python: $py_version"
+            fi
+
+            # Check ML module
+            local py_script
+            py_script=$(_get_dfs_py_script)
+            if [ -n "$py_script" ]; then
+                log_success "  ML Module: $py_script"
+            fi
+
+            # Check for sklearn/numpy
+            if python3 -c "import sklearn" 2>/dev/null; then
+                log_success "  sklearn: Installed"
+            else
+                log_warn "  sklearn: Not installed (basic scoring only)"
+            fi
+
+            if python3 -c "import numpy" 2>/dev/null; then
+                log_success "  numpy: Installed"
+            else
+                log_warn "  numpy: Not installed"
+            fi
+
+            # Check model status
+            if [ -f "/var/lib/fortress/dfs_model.json" ]; then
+                local trained_at
+                trained_at=$(jq -r '.trained_at // "unknown"' /var/lib/fortress/dfs_model.json 2>/dev/null)
+                log_success "  ML Model: Trained at $trained_at"
+            else
+                log_info "  ML Model: Not trained (run 'ml-train' to train)"
+            fi
+
+            # Check monitor status
+            local pidfile="/var/run/fortress/dfs-ml-monitor.pid"
+            if [ -f "$pidfile" ]; then
+                local pid
+                pid=$(cat "$pidfile")
+                if kill -0 "$pid" 2>/dev/null; then
+                    log_success "  Radar Monitor: Running (PID: $pid)"
+                else
+                    log_warn "  Radar Monitor: Stale PID file"
+                fi
+            else
+                log_info "  Radar Monitor: Not running"
+            fi
+            ;;
+        fallback|*)
+            log_warn "Mode: Fallback (bash-based scoring)"
+            log_info "  Container API not available"
+            log_info "  Native Python not available"
+            log_info "  Using basic bash scoring algorithm"
+            ;;
+    esac
 
     log_info "=========================================="
 }
