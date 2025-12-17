@@ -1818,6 +1818,257 @@ get_current_regdomain() {
     fi
 }
 
+get_phy_regdomain() {
+    # Get regulatory domain for a specific phy/interface
+    # Some WiFi adapters have "self-managed" regulatory domains that ignore
+    # the global setting from 'iw reg set'. This function detects that.
+    #
+    # Args:
+    #   $1 - Interface name (e.g., wlan0) or phy name (e.g., phy0)
+    #
+    # Returns:
+    #   Country code for the phy (may differ from global)
+    #   "self-managed" flag if applicable
+
+    local iface="$1"
+    local phy=""
+
+    # Get phy name from interface
+    if [[ "$iface" == phy* ]]; then
+        phy="$iface"
+    else
+        phy=$(get_phy_name "$iface" 2>/dev/null)
+    fi
+
+    if [ -z "$phy" ] || ! command -v iw &>/dev/null; then
+        # Fall back to global
+        get_current_regdomain
+        return
+    fi
+
+    # Parse iw reg get output for this specific phy
+    # Format: "phy#N (self-managed)" followed by "country XX: DFS-XXX"
+    local reg_output
+    reg_output=$(iw reg get 2>/dev/null)
+
+    # Check if this phy is self-managed
+    local phy_section=""
+    local in_phy=false
+    local phy_num="${phy#phy}"
+
+    while IFS= read -r line; do
+        if [[ "$line" == "phy#$phy_num"* ]]; then
+            in_phy=true
+            phy_section="$line"
+        elif [[ "$line" == "phy#"* ]] || [[ "$line" == "global" ]]; then
+            in_phy=false
+        elif $in_phy && [[ "$line" == *"country"* ]]; then
+            # Extract country from "country XX: DFS-XXX"
+            local country
+            country=$(echo "$line" | grep -oP "country \K[A-Z]{2}")
+            if [ -n "$country" ]; then
+                # Check if self-managed
+                if [[ "$phy_section" == *"self-managed"* ]]; then
+                    echo "$country:self-managed"
+                else
+                    echo "$country"
+                fi
+                return
+            fi
+        fi
+    done <<< "$reg_output"
+
+    # Fall back to global
+    get_current_regdomain
+}
+
+is_self_managed_regdomain() {
+    # Check if a phy has a self-managed regulatory domain
+    # Self-managed domains are firmware-controlled and ignore iw reg set
+    #
+    # Args:
+    #   $1 - Interface or phy name
+    #
+    # Returns:
+    #   0 (true) if self-managed
+    #   1 (false) if not
+
+    local result
+    result=$(get_phy_regdomain "$1")
+    [[ "$result" == *":self-managed"* ]]
+}
+
+get_effective_regdomain() {
+    # Get the EFFECTIVE regulatory domain for channel selection
+    # When a phy has self-managed domain, we must use the most restrictive
+    # constraints from BOTH the global and self-managed domains.
+    #
+    # Args:
+    #   $1 - Interface name
+    #
+    # Returns:
+    #   JSON object with regulatory info:
+    #   {
+    #     "global": "RO",
+    #     "phy": "US",
+    #     "self_managed": true,
+    #     "effective": "US",  # Use more restrictive for channels
+    #     "dfs_type": "FCC"   # DFS-FCC, DFS-ETSI, etc.
+    #   }
+
+    local iface="$1"
+
+    local global_domain
+    global_domain=$(get_current_regdomain)
+
+    local phy_result
+    phy_result=$(get_phy_regdomain "$iface")
+
+    local phy_domain="${phy_result%%:*}"
+    local self_managed=false
+    [[ "$phy_result" == *":self-managed"* ]] && self_managed=true
+
+    # Determine DFS type
+    local dfs_type="ETSI"
+    if [[ "$phy_domain" == "US" ]] || [[ "$phy_domain" == "CA" ]] || [[ "$phy_domain" == "TW" ]]; then
+        dfs_type="FCC"
+    elif [[ "$phy_domain" == "JP" ]]; then
+        dfs_type="JP"
+    fi
+
+    # For self-managed domains, we use the PHY's domain as effective
+    # because that's what the firmware will enforce
+    local effective="$phy_domain"
+    if ! $self_managed; then
+        effective="$global_domain"
+    fi
+
+    cat << EOF
+{
+  "global": "$global_domain",
+  "phy": "$phy_domain",
+  "self_managed": $self_managed,
+  "effective": "$effective",
+  "dfs_type": "$dfs_type"
+}
+EOF
+}
+
+get_safe_channels_for_regdomain() {
+    # Get channels that are SAFE given potential regulatory domain mismatches
+    # When self-managed domain differs from global, return only universally safe channels
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Mode: "quick" (non-DFS only), "standard", "full"
+    #
+    # Returns:
+    #   Space-separated list of safe channel numbers
+
+    local iface="$1"
+    local mode="${2:-quick}"
+
+    local global_domain phy_domain self_managed
+    global_domain=$(get_current_regdomain)
+
+    local phy_result
+    phy_result=$(get_phy_regdomain "$iface")
+    phy_domain="${phy_result%%:*}"
+    [[ "$phy_result" == *":self-managed"* ]] && self_managed=true || self_managed=false
+
+    # If domains match or not self-managed, use normal channel selection
+    if ! $self_managed || [ "$global_domain" = "$phy_domain" ]; then
+        build_calibration_channel_list "$iface" "$mode" "$global_domain"
+        return
+    fi
+
+    # DOMAINS MISMATCH AND SELF-MANAGED
+    # Use most conservative approach - only universally safe channels
+    log_warn "Regulatory domain mismatch detected!"
+    log_warn "  Global: $global_domain, PHY: $phy_domain (self-managed)"
+    log_warn "  Using conservative channel selection"
+
+    local safe_channels=""
+
+    # UNII-1 (36-48): Safe in ALL regulatory domains
+    # These channels never require DFS and are always allowed
+    safe_channels="36 40 44 48"
+
+    case "$mode" in
+        quick)
+            # Quick mode: ONLY use UNII-1 for guaranteed safety
+            # UNII-3 varies too much between regions to be safe
+            echo "$safe_channels"
+            ;;
+        standard|full|extended)
+            # Standard/Full mode: Add UNII-3 only if allowed in BOTH domains
+            local global_unii3=false
+            local phy_unii3=false
+
+            is_unii3_allowed "$global_domain" && global_unii3=true
+            is_unii3_allowed "$phy_domain" && phy_unii3=true
+
+            if $global_unii3 && $phy_unii3; then
+                # US allows UNII-3 (149-165), check if global domain also allows
+                safe_channels="$safe_channels 149 153 157 161 165"
+            else
+                log_info "  UNII-3 (149-165) not safe - disabled"
+            fi
+
+            # DFS channels are risky with domain mismatch
+            # Different domains have different CAC times and channel restrictions
+            if [ "$mode" = "full" ] || [ "$mode" = "extended" ]; then
+                log_warn "  DFS channels disabled due to regulatory mismatch"
+                log_warn "  To use DFS, ensure adapter firmware matches your country"
+            fi
+
+            echo "$safe_channels"
+            ;;
+        *)
+            echo "$safe_channels"
+            ;;
+    esac
+}
+
+log_regulatory_status() {
+    # Log detailed regulatory status for debugging
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+
+    log_info "=========================================="
+    log_info "REGULATORY DOMAIN STATUS"
+    log_info "=========================================="
+
+    local global_domain
+    global_domain=$(get_current_regdomain)
+    log_info "Global domain: ${global_domain:-UNKNOWN}"
+
+    local phy_result
+    phy_result=$(get_phy_regdomain "$iface")
+    local phy_domain="${phy_result%%:*}"
+    local self_managed=""
+    [[ "$phy_result" == *":self-managed"* ]] && self_managed=" (SELF-MANAGED)"
+
+    log_info "PHY domain for $iface: ${phy_domain:-UNKNOWN}$self_managed"
+
+    if [ -n "$self_managed" ]; then
+        log_warn "⚠️  This adapter has SELF-MANAGED regulatory domain"
+        log_warn "   The firmware ignores 'iw reg set' commands"
+        log_warn "   Channel availability is controlled by adapter firmware"
+
+        if [ "$global_domain" != "$phy_domain" ]; then
+            log_warn "⚠️  DOMAIN MISMATCH: Global=$global_domain, PHY=$phy_domain"
+            log_warn "   Using conservative channel selection (UNII-1 only)"
+            log_warn "   For full channel access, check adapter firmware country setting"
+        fi
+    fi
+
+    log_info "=========================================="
+}
+
 set_regulatory_domain() {
     # Set regulatory domain for WiFi operation
     # MUST be called BEFORE any hostapd configuration
