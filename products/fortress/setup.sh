@@ -796,6 +796,9 @@ setup_lan_bridge() {
     log_info "WAN interface: $wan_iface"
     log_info "LAN interfaces to bridge: $lan_ifaces"
 
+    # Default VLAN for untagged LAN traffic (Trusted/Staff network)
+    local default_lan_vlan="${LAN_DEFAULT_VLAN:-20}"
+
     # Add each LAN interface to the OVS bridge
     for iface in $lan_ifaces; do
         if ip link show "$iface" &>/dev/null; then
@@ -813,8 +816,19 @@ setup_lan_bridge() {
                 log_info "$iface already in bridge"
             fi
 
+            # Configure as hybrid port:
+            # - Untagged traffic maps to default VLAN (native-untagged mode)
+            # - Also accepts tagged traffic for other VLANs (trunk)
+            # This allows regular clients to plug in and get DHCP
+            ovs-vsctl set port "$iface" tag="$default_lan_vlan" \
+                vlan_mode=native-untagged \
+                trunks=10,20,30,40,99 2>/dev/null || {
+                log_warn "Failed to set VLAN mode for $iface"
+            }
+
             # Bring interface up
             ip link set "$iface" up
+            log_info "$iface configured: untagged->VLAN $default_lan_vlan"
         fi
     done
 
@@ -823,14 +837,16 @@ setup_lan_bridge() {
 # HookProbe Fortress LAN Bridge Configuration
 WAN_INTERFACE=$wan_iface
 LAN_INTERFACES="$lan_ifaces"
+LAN_DEFAULT_VLAN=$default_lan_vlan
 BRIDGE_NAME=$OVS_BRIDGE_NAME
 BRIDGE_IP=10.250.0.1
 BRIDGE_NETMASK=255.255.0.0
-DHCP_RANGE_START=10.250.1.100
-DHCP_RANGE_END=10.250.1.250
+# LAN ports use native-untagged mode:
+# - Untagged traffic -> VLAN $default_lan_vlan (${SUBNET_PREFIX:-10.250}.$default_lan_vlan.x)
+# - Tagged traffic for VLANs 10,20,30,40,99 also accepted
 EOF
 
-    log_info "LAN interfaces bridged"
+    log_info "LAN interfaces bridged (default VLAN: $default_lan_vlan)"
 }
 
 # ============================================================
