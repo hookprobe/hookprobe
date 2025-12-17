@@ -1,0 +1,15 @@
+# HookProbe Fortress DFS Intelligence Dependencies
+# ================================================
+#
+# Core (required):
+#   - Python 3.8+ (standard library only for basic operation)
+#
+# Optional (for ML features):
+#   - numpy: Array operations for ML
+#   - scikit-learn: Random Forest classifier
+#
+# Install: pip install -r requirements-dfs.txt
+
+# Optional ML dependencies (graceful fallback without these)
+numpy>=1.20.0
+scikit-learn>=1.0.0
