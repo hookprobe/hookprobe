@@ -23,6 +23,16 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Source DFS/Regulatory management script if available
+DFS_SCRIPT="$SCRIPT_DIR/wifi-regulatory-dfs.sh"
+if [ -f "$DFS_SCRIPT" ]; then
+    # shellcheck source=wifi-regulatory-dfs.sh
+    source "$DFS_SCRIPT"
+    DFS_AVAILABLE=true
+else
+    DFS_AVAILABLE=false
+fi
+
 # Configuration paths
 HOSTAPD_DIR="/etc/hostapd"
 HOSTAPD_24GHZ_CONF="$HOSTAPD_DIR/hostapd-24ghz.conf"
@@ -1285,6 +1295,19 @@ generate_hostapd_5ghz() {
     local country_code
     country_code=$(detect_regulatory_domain)
 
+    # Set regulatory domain BEFORE any configuration
+    # This is critical for EU/ETSI compliance and DFS
+    if [ "$DFS_AVAILABLE" = "true" ]; then
+        log_info "Setting regulatory domain before configuration..."
+        if ! set_regulatory_domain "$country_code" "$iface"; then
+            log_warn "Could not set regulatory domain - continuing anyway"
+        fi
+    else
+        # Fallback: use iw directly
+        iw reg set "$country_code" 2>/dev/null || true
+    fi
+    sleep 1  # Allow regulatory database to update
+
     log_info "Generating 5GHz hostapd configuration"
     log_info "  Interface: $iface"
     log_info "  SSID: $ssid"
@@ -1292,13 +1315,21 @@ generate_hostapd_5ghz() {
     log_info "  Bridge: $bridge"
     log_info "  Country: $country_code (auto-detected)"
 
-    # Auto channel selection - EU/ETSI aware
+    # Auto channel selection - EU/ETSI aware with DFS handling
     if [ "$channel" = "auto" ]; then
-        # Get safe default based on regulatory domain
-        channel=$(get_safe_5ghz_channel "$country_code" "$iface")
+        if [ "$DFS_AVAILABLE" = "true" ]; then
+            # Use advanced channel scanning from DFS script
+            log_info "  Scanning for optimal channel..."
+            channel=$(scan_for_best_channel "$iface" true "$country_code" 2>/dev/null) || channel=""
+        fi
 
-        # Try to scan for best channel if scanner available
-        if [ -x "$SCRIPT_DIR/network-interface-detector.sh" ]; then
+        # Fallback to default safe channel
+        if [ -z "$channel" ]; then
+            channel=$(get_safe_5ghz_channel "$country_code" "$iface")
+        fi
+
+        # Secondary fallback: Try network-interface-detector.sh
+        if [ -x "$SCRIPT_DIR/network-interface-detector.sh" ] && [ "$channel" = "36" ]; then
             local scanned_channel
             scanned_channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || true
 
@@ -1325,6 +1356,36 @@ generate_hostapd_5ghz() {
                 log_warn "  Channel $channel (UNII-3) may not be allowed in EU country $country_code"
                 log_warn "  Consider using channels 36-48 (UNII-1) instead"
             fi
+        fi
+    fi
+
+    # Test channel before configuration if DFS script available
+    if [ "$DFS_AVAILABLE" = "true" ]; then
+        log_info "  Testing channel $channel..."
+        if ! test_channel "$iface" "$channel" 3 2>/dev/null; then
+            log_warn "  Channel $channel test failed, falling back to channel 36"
+            channel=36
+        fi
+
+        # Check if DFS channel requires CAC wait
+        if is_dfs_channel "$channel" 2>/dev/null; then
+            local cac_time
+            cac_time=$(get_cac_time "$channel")
+            log_warn "  Channel $channel is DFS, requires ${cac_time}s CAC"
+            log_info "  hostapd will handle radar detection automatically"
+        fi
+    fi
+
+    # Validate and detect maximum bandwidth
+    local max_bandwidth=80
+    if [ "$DFS_AVAILABLE" = "true" ]; then
+        max_bandwidth=$(detect_max_bandwidth "$iface" "5ghz" 2>/dev/null) || max_bandwidth=80
+        log_info "  Maximum bandwidth: ${max_bandwidth}MHz"
+
+        # Validate bandwidth for selected channel
+        if ! validate_bandwidth "$iface" "$max_bandwidth" "$channel" 2>/dev/null; then
+            log_warn "  Reducing bandwidth to 80MHz for channel $channel"
+            max_bandwidth=80
         fi
     fi
 
@@ -2155,17 +2216,34 @@ usage() {
     echo "  setup-vlan        - Set up VLAN infrastructure (bridges + enable in configs)"
     echo "  disable-vlan      - Disable VLAN infrastructure in configs"
     echo ""
+    echo "DFS/Regulatory Commands (EU 5GHz compliance):"
+    echo "  preflight <iface> [country]  - Pre-flight validation before WiFi config"
+    echo "  set-regdomain <country>      - Set regulatory domain (GB, DE, FR, etc.)"
+    echo "  get-channels <iface>         - List available 5GHz channels"
+    echo "  calibrate <iface>            - Find optimal channel (least congested)"
+    echo "  install-timer [iface]        - Install 4AM daily calibration timer"
+    echo ""
     echo "Examples:"
     echo "  $0 configure MyNetwork 'MySecurePassword123'"
     echo "  $0 24ghz wlan0 MyNetwork 'MyPassword' 6 fortress"
     echo "  $0 5ghz wlan1 MyNetwork 'MyPassword' 36 fortress"
-    echo "  $0 setup-vlan     # Enable VLAN segregation after config"
+    echo "  $0 setup-vlan                # Enable VLAN segregation"
+    echo "  $0 preflight wlan0 GB        # Validate before EU deployment"
+    echo "  $0 set-regdomain DE          # Set German regulatory domain"
+    echo "  $0 calibrate wlan0           # Find best 5GHz channel"
+    echo "  $0 install-timer wlan0       # Install 4AM optimization"
     echo ""
     echo "Security:"
     echo "  - 2.4GHz uses WPA2-PSK for IoT device compatibility"
     echo "  - 5GHz uses WPA3-SAE with WPA2-PSK fallback"
     echo "  - Passwords must be at least 8 characters"
     echo "  - Dynamic VLANs disabled by default (use 'setup-vlan' to enable)"
+    echo ""
+    echo "EU/ETSI 5GHz Channels:"
+    echo "  UNII-1 (36-48):   No DFS, safe for all EU countries"
+    echo "  UNII-2A (52-64):  DFS required, 1-min CAC, indoor only"
+    echo "  UNII-2C (100-144): DFS required, 10-min CAC (weather radar)"
+    echo "  UNII-3 (149-165): NOT allowed in DE, FR, IT, ES, NL, etc."
     echo ""
 }
 
@@ -2195,6 +2273,47 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             ;;
         disable-vlan)
             disable_vlan_infrastructure
+            ;;
+        # DFS/Regulatory commands (delegate to wifi-regulatory-dfs.sh)
+        preflight)
+            if [ "$DFS_AVAILABLE" = "true" ]; then
+                preflight_check "$2" "${3:-}"
+            else
+                log_error "DFS script not available. Install wifi-regulatory-dfs.sh"
+                exit 1
+            fi
+            ;;
+        set-regdomain|set-reg)
+            if [ "$DFS_AVAILABLE" = "true" ]; then
+                set_regulatory_domain "$2"
+            else
+                iw reg set "${2:-US}" 2>/dev/null || log_error "Failed to set regdomain"
+            fi
+            ;;
+        get-channels|channels)
+            if [ "$DFS_AVAILABLE" = "true" ]; then
+                echo "Non-DFS channels: $(get_non_dfs_channels "$2")"
+                echo "DFS channels: $(get_dfs_channels "$2")"
+            else
+                log_error "DFS script not available"
+                exit 1
+            fi
+            ;;
+        calibrate)
+            if [ "$DFS_AVAILABLE" = "true" ]; then
+                calibrate_channel "$2" "${3:-/etc/hostapd/hostapd-5ghz.conf}"
+            else
+                log_error "DFS script not available"
+                exit 1
+            fi
+            ;;
+        install-timer|timer)
+            if [ "$DFS_AVAILABLE" = "true" ]; then
+                install_calibration_timer "$2"
+            else
+                log_error "DFS script not available"
+                exit 1
+            fi
             ;;
         *)
             usage
