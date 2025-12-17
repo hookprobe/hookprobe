@@ -1078,7 +1078,8 @@ select_optimal_dfs_channel() {
     for ch in $available_candidates; do
         local freq ap_count risk_penalty score
         freq=$(channel_to_freq "$ch")
-        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
+        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null) || true
+        ap_count=${ap_count:-0}
 
         # Get risk penalty from history
         local risk
@@ -2888,7 +2889,8 @@ scan_for_best_channel() {
         local freq band ap_count score cac_time
         freq=$(channel_to_freq "$ch")
         band=$(get_band_for_channel "$ch")
-        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
+        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null) || true
+        ap_count=${ap_count:-0}
         cac_time=$(get_cac_time "$ch")
 
         # Calculate score: AP count + CAC penalty (unless in DFS-preferred mode)
@@ -2923,7 +2925,8 @@ scan_for_best_channel() {
         for ch in $UNII2A_CHANNELS; do
             local freq ap_count
             freq=$(channel_to_freq "$ch")
-            ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
+            ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null) || true
+            ap_count=${ap_count:-0}
 
             if [ "$ap_count" -eq 0 ]; then
                 best_channel="$ch"
@@ -2938,12 +2941,14 @@ scan_for_best_channel() {
             for ch in $UNII2C_CHANNELS; do
                 local freq ap_count
                 freq=$(channel_to_freq "$ch")
-                ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
+                ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null) || true
+                ap_count=${ap_count:-0}
 
                 # Only use UNII-2C if it's significantly clearer (0 APs)
                 if [ "$ap_count" -eq 0 ]; then
                     local current_best_aps
-                    current_best_aps=$(echo "$scan_results" | grep -c "freq: $(channel_to_freq "$best_channel")" 2>/dev/null || echo "0")
+                    current_best_aps=$(echo "$scan_results" | grep -c "freq: $(channel_to_freq "$best_channel")" 2>/dev/null) || true
+                    current_best_aps=${current_best_aps:-0}
 
                     if [ "$current_best_aps" -gt 2 ]; then
                         best_channel="$ch"
