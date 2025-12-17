@@ -56,10 +56,11 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log_info() { echo -e "${CYAN}[WIFI]${NC} $*"; }
-log_success() { echo -e "${GREEN}[WIFI]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[WIFI]${NC} $*"; }
-log_error() { echo -e "${RED}[WIFI]${NC} $*"; }
+# Log to stderr so command substitution only captures return values
+log_info() { echo -e "${CYAN}[WIFI]${NC} $*" >&2; }
+log_success() { echo -e "${GREEN}[WIFI]${NC} $*" >&2; }
+log_warn() { echo -e "${YELLOW}[WIFI]${NC} $*" >&2; }
+log_error() { echo -e "${RED}[WIFI]${NC} $*" >&2; }
 
 # ============================================================
 # REGULATORY DOMAIN AUTO-DETECTION
@@ -1351,14 +1352,14 @@ generate_hostapd_5ghz() {
                 # DOMAIN MISMATCH: Use safe channels only
                 log_info "  Using safe channels due to regulatory mismatch..."
                 local safe_channels
-                safe_channels=$(get_safe_channels_for_regdomain "$iface" "quick" 2>/dev/null)
+                safe_channels=$(get_safe_channels_for_regdomain "$iface" "quick")
                 # Pick first safe channel (36)
                 channel=$(echo "$safe_channels" | awk '{print $1}')
                 log_info "  Selected safe channel: $channel (from: $safe_channels)"
             else
                 # Normal case: Use advanced channel scanning
                 log_info "  Scanning for optimal channel..."
-                channel=$(scan_for_best_channel "$iface" true "$effective_country" 2>/dev/null) || channel=""
+                channel=$(scan_for_best_channel "$iface" true "$effective_country") || channel=""
             fi
         fi
 
