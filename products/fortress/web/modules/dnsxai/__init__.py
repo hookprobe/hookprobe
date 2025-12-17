@@ -1,4 +1,4 @@
 """Fortress dnsXai Module"""
 from flask import Blueprint
-dnsxai_bp = Blueprint('dnsxai', __name__, template_folder='../../templates/dnsxai')
+dnsxai_bp = Blueprint('dnsxai', __name__)
 from . import views  # noqa

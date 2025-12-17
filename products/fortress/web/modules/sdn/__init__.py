@@ -16,4 +16,4 @@ Features:
 
 from flask import Blueprint
 
-sdn_bp = Blueprint('sdn', __name__, template_folder='../../templates/sdn')
+sdn_bp = Blueprint('sdn', __name__)
