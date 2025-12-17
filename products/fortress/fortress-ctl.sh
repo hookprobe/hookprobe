@@ -1,0 +1,738 @@
+#!/bin/bash
+#
+# HookProbe Fortress Control Script (fortress-ctl)
+# Version: 5.1.0
+# License: AGPL-3.0
+#
+# Unified installation, upgrade, backup, and uninstall management.
+# Supports staged operations with data preservation.
+#
+# Usage:
+#   fortress-ctl install [--container|--native] [--quick]
+#   fortress-ctl upgrade [--app|--full] [--backup]
+#   fortress-ctl uninstall [--keep-data|--keep-config|--purge]
+#   fortress-ctl backup [--full|--db|--config]
+#   fortress-ctl restore <backup-file>
+#   fortress-ctl status
+#   fortress-ctl rollback
+#
+# Component Tiers:
+#   Tier 1 (Data):     PostgreSQL, users.json, SSL certs, audit logs
+#   Tier 2 (Infra):    Redis, nftables, systemd services, secrets
+#   Tier 3 (App):      Flask web app, templates, static assets
+#   Tier 4 (Core):     QSecBit, dnsXai models, device profiles
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION="5.1.0"
+
+# ============================================================
+# PATHS
+# ============================================================
+INSTALL_DIR="/opt/hookprobe/fortress"
+CONFIG_DIR="/etc/hookprobe"
+DATA_DIR="/var/lib/hookprobe/fortress"
+BACKUP_DIR="/var/backups/fortress"
+LOG_DIR="/var/log/hookprobe"
+CONTAINERS_DIR="${SCRIPT_DIR}/containers"
+
+# State files
+STATE_FILE="${CONFIG_DIR}/fortress-state.json"
+VERSION_FILE="${INSTALL_DIR}/VERSION"
+
+# ============================================================
+# COLORS
+# ============================================================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ============================================================
+# LOGGING
+# ============================================================
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "\n${CYAN}${BOLD}==> $1${NC}"; }
+log_substep() { echo -e "  ${BLUE}→${NC} $1"; }
+
+# ============================================================
+# STATE MANAGEMENT
+# ============================================================
+get_state() {
+    local key="$1"
+    if [ -f "$STATE_FILE" ]; then
+        python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('$key', ''))" 2>/dev/null || echo ""
+    fi
+}
+
+set_state() {
+    local key="$1"
+    local value="$2"
+    mkdir -p "$(dirname "$STATE_FILE")"
+
+    if [ -f "$STATE_FILE" ]; then
+        python3 -c "
+import json
+with open('$STATE_FILE', 'r') as f:
+    d = json.load(f)
+d['$key'] = '$value'
+with open('$STATE_FILE', 'w') as f:
+    json.dump(d, f, indent=2)
+"
+    else
+        echo "{\"$key\": \"$value\"}" > "$STATE_FILE"
+    fi
+}
+
+get_installed_version() {
+    if [ -f "$VERSION_FILE" ]; then
+        cat "$VERSION_FILE"
+    else
+        echo "unknown"
+    fi
+}
+
+get_deployment_mode() {
+    get_state "deployment_mode" || echo "unknown"
+}
+
+# ============================================================
+# BACKUP FUNCTIONS
+# ============================================================
+create_backup() {
+    local backup_type="${1:-full}"  # full, db, config, app
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_name="fortress_${backup_type}_${timestamp}"
+    local backup_path="${BACKUP_DIR}/${backup_name}"
+
+    log_step "Creating ${backup_type} backup"
+    mkdir -p "$BACKUP_DIR"
+    mkdir -p "$backup_path"
+
+    case "$backup_type" in
+        full|db)
+            # Database backup
+            log_substep "Backing up PostgreSQL database..."
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-postgres"; then
+                podman exec fortress-postgres pg_dump -U fortress fortress > "${backup_path}/database.sql" 2>/dev/null || {
+                    log_warn "Database backup failed (container may not be running)"
+                }
+            elif [ -f /var/lib/postgresql/data/PG_VERSION ]; then
+                sudo -u postgres pg_dump fortress > "${backup_path}/database.sql" 2>/dev/null || true
+            fi
+            ;;&
+
+        full|config)
+            # Configuration backup
+            log_substep "Backing up configuration..."
+            if [ -d "$CONFIG_DIR" ]; then
+                cp -r "$CONFIG_DIR" "${backup_path}/config"
+            fi
+
+            # Systemd services
+            mkdir -p "${backup_path}/systemd"
+            cp /etc/systemd/system/fortress*.service "${backup_path}/systemd/" 2>/dev/null || true
+            cp /etc/systemd/system/fortress*.timer "${backup_path}/systemd/" 2>/dev/null || true
+
+            # Network configuration
+            mkdir -p "${backup_path}/network"
+            nft list ruleset > "${backup_path}/network/nftables.conf" 2>/dev/null || true
+            ovs-vsctl show > "${backup_path}/network/ovs.conf" 2>/dev/null || true
+            ;;&
+
+        full|app)
+            # Application backup (web app code)
+            log_substep "Backing up application..."
+            if [ -d "$INSTALL_DIR/web" ]; then
+                tar -czf "${backup_path}/web-app.tar.gz" -C "$INSTALL_DIR" web lib 2>/dev/null || true
+            fi
+
+            # Container image tag
+            if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -q "fortress-web"; then
+                podman images --format "{{.Repository}}:{{.Tag}}:{{.ID}}" | grep fortress > "${backup_path}/images.txt" 2>/dev/null || true
+            fi
+            ;;
+    esac
+
+    # Create manifest
+    cat > "${backup_path}/manifest.json" << EOF
+{
+    "type": "${backup_type}",
+    "timestamp": "${timestamp}",
+    "version": "$(get_installed_version)",
+    "deployment_mode": "$(get_deployment_mode)",
+    "created_by": "fortress-ctl ${VERSION}"
+}
+EOF
+
+    # Create archive
+    tar -czf "${BACKUP_DIR}/${backup_name}.tar.gz" -C "$BACKUP_DIR" "$backup_name"
+    rm -rf "$backup_path"
+
+    log_info "Backup created: ${BACKUP_DIR}/${backup_name}.tar.gz"
+    echo "${BACKUP_DIR}/${backup_name}.tar.gz"
+}
+
+restore_backup() {
+    local backup_file="$1"
+
+    if [ ! -f "$backup_file" ]; then
+        log_error "Backup file not found: $backup_file"
+        exit 1
+    fi
+
+    log_step "Restoring from backup: $backup_file"
+
+    local temp_dir=$(mktemp -d)
+    tar -xzf "$backup_file" -C "$temp_dir"
+    local backup_dir=$(ls "$temp_dir")
+    local restore_path="${temp_dir}/${backup_dir}"
+
+    # Read manifest
+    local backup_type=$(python3 -c "import json; print(json.load(open('${restore_path}/manifest.json'))['type'])")
+    log_info "Backup type: $backup_type"
+
+    # Restore database
+    if [ -f "${restore_path}/database.sql" ]; then
+        log_substep "Restoring database..."
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-postgres"; then
+            podman exec -i fortress-postgres psql -U fortress fortress < "${restore_path}/database.sql"
+        fi
+    fi
+
+    # Restore configuration
+    if [ -d "${restore_path}/config" ]; then
+        log_substep "Restoring configuration..."
+        cp -r "${restore_path}/config/"* "$CONFIG_DIR/" 2>/dev/null || true
+    fi
+
+    # Restore application
+    if [ -f "${restore_path}/web-app.tar.gz" ]; then
+        log_substep "Restoring application..."
+        tar -xzf "${restore_path}/web-app.tar.gz" -C "$INSTALL_DIR"
+    fi
+
+    rm -rf "$temp_dir"
+    log_info "Restore complete"
+}
+
+list_backups() {
+    log_step "Available backups"
+    if [ -d "$BACKUP_DIR" ]; then
+        ls -la "$BACKUP_DIR"/*.tar.gz 2>/dev/null || log_info "No backups found"
+    else
+        log_info "No backup directory found"
+    fi
+}
+
+# ============================================================
+# UPGRADE FUNCTIONS
+# ============================================================
+upgrade_app() {
+    # Tier 3 upgrade - Application only (hot upgrade)
+    log_step "Upgrading application (Tier 3)"
+
+    # Pre-upgrade backup
+    local backup_file=$(create_backup "app")
+    set_state "last_app_backup" "$backup_file"
+
+    # Deployment mode check
+    local mode=$(get_deployment_mode)
+
+    if [ "$mode" = "container" ]; then
+        log_substep "Rebuilding web container..."
+
+        # Build new image with different tag
+        local new_tag="fortress-web:$(date +%Y%m%d%H%M%S)"
+        podman build -f "${CONTAINERS_DIR}/Containerfile.web" -t "localhost/${new_tag}" "$SCRIPT_DIR" || {
+            log_error "Build failed, aborting upgrade"
+            exit 1
+        }
+
+        # Health check new image
+        log_substep "Testing new image..."
+        podman run --rm -d --name fortress-web-test "localhost/${new_tag}" &>/dev/null || {
+            log_error "New image failed to start"
+            podman rmi "localhost/${new_tag}" 2>/dev/null
+            exit 1
+        }
+        sleep 5
+        podman stop fortress-web-test 2>/dev/null || true
+
+        # Rolling update
+        log_substep "Performing rolling update..."
+        cd "$CONTAINERS_DIR"
+
+        # Update compose file to use new image
+        sed -i "s|image: localhost/fortress-web:.*|image: localhost/${new_tag}|" podman-compose.yml
+
+        # Recreate web container only
+        podman-compose up -d --no-deps web
+
+        # Wait for health check
+        local retries=30
+        while [ $retries -gt 0 ]; do
+            if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
+                log_info "New container is healthy"
+                break
+            fi
+            sleep 2
+            ((retries--))
+        done
+
+        if [ $retries -eq 0 ]; then
+            log_error "Health check failed, rolling back..."
+            rollback_app
+            exit 1
+        fi
+
+        # Clean old image
+        podman rmi localhost/fortress-web:latest 2>/dev/null || true
+        podman tag "localhost/${new_tag}" localhost/fortress-web:latest
+
+    else
+        # Native deployment - update files in place
+        log_substep "Updating application files..."
+
+        # Stop web service briefly
+        systemctl stop fortress-web 2>/dev/null || true
+
+        # Copy new files
+        cp -r "${SCRIPT_DIR}/web/"* "${INSTALL_DIR}/web/"
+        cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
+
+        # Restart
+        systemctl start fortress-web 2>/dev/null || true
+    fi
+
+    # Update version
+    echo "$VERSION" > "$VERSION_FILE"
+    set_state "last_upgrade" "$(date -Iseconds)"
+    set_state "last_upgrade_type" "app"
+
+    log_info "Application upgrade complete"
+}
+
+upgrade_full() {
+    # Full upgrade - all tiers
+    log_step "Performing full upgrade"
+
+    # Pre-upgrade backup
+    local backup_file=$(create_backup "full")
+    set_state "last_full_backup" "$backup_file"
+
+    # Check for database migrations
+    log_substep "Checking database schema..."
+    # TODO: Run alembic migrations if needed
+
+    # Upgrade infrastructure (Tier 2)
+    log_substep "Upgrading infrastructure..."
+
+    # Regenerate secrets if needed (rotate)
+    if [ "$(get_state 'secrets_rotated')" != "$(date +%Y%m)" ]; then
+        log_substep "Rotating secrets (monthly)..."
+        # Generate new Flask secret
+        openssl rand -base64 48 | tr -d '/+=' | head -c 48 > "${CONTAINERS_DIR}/secrets/flask_secret.new"
+        # Note: Don't rotate during upgrade, just flag for next maintenance window
+        set_state "secrets_pending_rotation" "true"
+    fi
+
+    # Update systemd services
+    log_substep "Updating systemd services..."
+    # Copy updated service files if they exist
+    if [ -d "${SCRIPT_DIR}/systemd" ]; then
+        cp "${SCRIPT_DIR}/systemd/"*.service /etc/systemd/system/ 2>/dev/null || true
+        cp "${SCRIPT_DIR}/systemd/"*.timer /etc/systemd/system/ 2>/dev/null || true
+        systemctl daemon-reload
+    fi
+
+    # Upgrade application (Tier 3)
+    upgrade_app
+
+    # Note: Tier 4 (core) upgrades are not automatic
+    local core_version=$(cat "${SCRIPT_DIR}/../../core/VERSION" 2>/dev/null || echo "unknown")
+    if [ "$core_version" != "$(get_state 'core_version')" ]; then
+        log_warn "Core components have changed. Full reinstall may be required."
+        log_warn "Current core: $(get_state 'core_version'), Available: $core_version"
+    fi
+
+    log_info "Full upgrade complete"
+}
+
+rollback_app() {
+    log_step "Rolling back application"
+
+    local backup_file=$(get_state "last_app_backup")
+    if [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; then
+        log_error "No backup available for rollback"
+        exit 1
+    fi
+
+    restore_backup "$backup_file"
+
+    # Restart services
+    local mode=$(get_deployment_mode)
+    if [ "$mode" = "container" ]; then
+        cd "$CONTAINERS_DIR"
+        podman-compose restart web
+    else
+        systemctl restart fortress-web 2>/dev/null || true
+    fi
+
+    log_info "Rollback complete"
+}
+
+# ============================================================
+# UNINSTALL FUNCTIONS
+# ============================================================
+uninstall_staged() {
+    local keep_data="${1:-false}"
+    local keep_config="${2:-false}"
+    local purge="${3:-false}"
+
+    log_step "Staged Uninstall"
+    echo ""
+    echo "Uninstall options:"
+    echo "  --keep-data   : Preserve database and user data"
+    echo "  --keep-config : Preserve configuration files"
+    echo "  --purge       : Remove everything including backups"
+    echo ""
+
+    if [ "$purge" = "true" ]; then
+        keep_data="false"
+        keep_config="false"
+    fi
+
+    # Stage 1: Stop services (always)
+    log_substep "Stage 1: Stopping services..."
+    local mode=$(get_deployment_mode)
+
+    if [ "$mode" = "container" ]; then
+        cd "$CONTAINERS_DIR" 2>/dev/null
+        podman-compose down 2>/dev/null || true
+    fi
+
+    systemctl stop fortress-web fortress-agent fortress 2>/dev/null || true
+
+    # Stage 2: Remove application (Tier 3)
+    log_substep "Stage 2: Removing application..."
+
+    if [ "$mode" = "container" ]; then
+        # Remove containers but not volumes
+        podman rm -f fortress-web fortress-agent 2>/dev/null || true
+        podman rmi localhost/fortress-web:latest localhost/fortress-agent:latest 2>/dev/null || true
+    fi
+
+    rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" 2>/dev/null || true
+
+    # Stage 3: Remove infrastructure (Tier 2)
+    log_substep "Stage 3: Removing infrastructure..."
+
+    # Remove systemd services
+    systemctl disable fortress fortress-web fortress-agent 2>/dev/null || true
+    rm -f /etc/systemd/system/fortress*.service /etc/systemd/system/fortress*.timer 2>/dev/null || true
+    systemctl daemon-reload
+
+    # Remove nftables rules
+    nft delete table inet fortress_filter 2>/dev/null || true
+
+    # Remove redis container/data if not keeping data
+    if [ "$keep_data" = "false" ]; then
+        podman rm -f fortress-redis 2>/dev/null || true
+        podman volume rm fortress-redis-data 2>/dev/null || true
+    fi
+
+    # Stage 4: Handle data (Tier 1)
+    if [ "$keep_data" = "false" ]; then
+        log_substep "Stage 4: Removing data (database, logs)..."
+
+        # Backup before removal (safety)
+        if [ "$purge" != "true" ]; then
+            log_info "Creating safety backup before data removal..."
+            create_backup "db" >/dev/null 2>&1 || true
+        fi
+
+        podman rm -f fortress-postgres 2>/dev/null || true
+        podman volume rm fortress-postgres-data fortress-web-data fortress-web-logs fortress-config 2>/dev/null || true
+
+        rm -rf "$DATA_DIR" "$LOG_DIR/fortress"* 2>/dev/null || true
+    else
+        log_info "Preserving data volumes and database"
+    fi
+
+    # Stage 5: Handle configuration
+    if [ "$keep_config" = "false" ]; then
+        log_substep "Stage 5: Removing configuration..."
+        rm -rf "$CONFIG_DIR/fortress.conf" "$CONFIG_DIR/users.json" 2>/dev/null || true
+        rm -rf "${CONTAINERS_DIR}/secrets" 2>/dev/null || true
+    else
+        log_info "Preserving configuration in $CONFIG_DIR"
+    fi
+
+    # Stage 6: Purge (if requested)
+    if [ "$purge" = "true" ]; then
+        log_substep "Stage 6: Purging all data including backups..."
+        rm -rf "$BACKUP_DIR" 2>/dev/null || true
+        rm -rf "$CONFIG_DIR" 2>/dev/null || true
+        rm -rf "$INSTALL_DIR" 2>/dev/null || true
+        rm -f "$STATE_FILE" 2>/dev/null || true
+    fi
+
+    # Clean empty directories
+    rmdir "$INSTALL_DIR" 2>/dev/null || true
+    rmdir /opt/hookprobe 2>/dev/null || true
+
+    log_info "Uninstall complete"
+
+    if [ "$keep_data" = "true" ]; then
+        echo ""
+        log_info "Data preserved. To reinstall with existing data:"
+        log_info "  fortress-ctl install --container --preserve-data"
+    fi
+
+    if [ "$keep_config" = "true" ]; then
+        log_info "Configuration preserved in: $CONFIG_DIR"
+    fi
+}
+
+# ============================================================
+# STATUS
+# ============================================================
+show_status() {
+    log_step "Fortress Status"
+
+    echo ""
+    echo "Installation:"
+    echo "  Version:     $(get_installed_version)"
+    echo "  Mode:        $(get_deployment_mode)"
+    echo "  State file:  $STATE_FILE"
+    echo ""
+
+    echo "Services:"
+    if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress"; then
+        podman ps --filter "name=fortress" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    else
+        systemctl is-active fortress fortress-web fortress-agent 2>/dev/null || echo "  No services running"
+    fi
+    echo ""
+
+    echo "Volumes:"
+    podman volume ls --filter "name=fortress" 2>/dev/null || echo "  No volumes found"
+    echo ""
+
+    echo "Backups:"
+    if [ -d "$BACKUP_DIR" ]; then
+        ls -lh "$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -5 || echo "  No backups found"
+    else
+        echo "  No backup directory"
+    fi
+    echo ""
+
+    echo "Health:"
+    if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
+        echo -e "  Web UI: ${GREEN}healthy${NC}"
+    else
+        echo -e "  Web UI: ${RED}unhealthy${NC}"
+    fi
+}
+
+# ============================================================
+# HELP
+# ============================================================
+show_help() {
+    cat << EOF
+HookProbe Fortress Control (v${VERSION})
+
+Usage: fortress-ctl <command> [options]
+
+Commands:
+  install       Install Fortress
+    --container   Container-based deployment (recommended)
+    --native      Native installation with setup.sh
+    --quick       Use defaults, minimal prompts
+    --preserve-data  Reuse existing data volumes
+
+  upgrade       Upgrade Fortress installation
+    --app         Application only (Tier 3, hot upgrade)
+    --full        Full upgrade (Tiers 2-3)
+    --backup      Create backup before upgrade (default: yes)
+    --no-backup   Skip pre-upgrade backup
+
+  uninstall     Remove Fortress installation
+    --keep-data   Preserve database and user data (Tier 1)
+    --keep-config Preserve configuration files
+    --purge       Remove everything including backups
+
+  backup        Create backup
+    --full        Full backup (all tiers)
+    --db          Database only
+    --config      Configuration only
+    --app         Application only
+
+  restore       Restore from backup
+    <file>        Path to backup file
+
+  rollback      Rollback last application upgrade
+
+  status        Show installation status
+
+  list-backups  List available backups
+
+Component Tiers:
+  Tier 1 (Data):   PostgreSQL, user data, SSL certs - preserved by default
+  Tier 2 (Infra):  Redis, nftables, systemd services - upgraded cautiously
+  Tier 3 (App):    Flask web app, templates, static - hot upgradeable
+  Tier 4 (Core):   QSecBit, dnsXai, HTP - requires full reinstall
+
+Examples:
+  fortress-ctl install --container
+  fortress-ctl upgrade --app
+  fortress-ctl backup --full
+  fortress-ctl uninstall --keep-data
+  fortress-ctl restore /var/backups/fortress/fortress_full_20250101.tar.gz
+
+EOF
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+main() {
+    local command="${1:-help}"
+    shift || true
+
+    # Check root for most commands
+    case "$command" in
+        status|list-backups|help|--help|-h)
+            ;;
+        *)
+            if [ "$EUID" -ne 0 ]; then
+                log_error "This command requires root privileges"
+                exit 1
+            fi
+            ;;
+    esac
+
+    case "$command" in
+        install)
+            local mode="container"
+            local quick=false
+            local preserve_data=false
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --container) mode="container"; shift ;;
+                    --native) mode="native"; shift ;;
+                    --quick) quick=true; shift ;;
+                    --preserve-data) preserve_data=true; shift ;;
+                    *) shift ;;
+                esac
+            done
+
+            if [ "$mode" = "container" ]; then
+                if [ "$quick" = true ]; then
+                    exec "${SCRIPT_DIR}/install-container.sh" --quick
+                else
+                    exec "${SCRIPT_DIR}/install-container.sh"
+                fi
+            else
+                exec "${SCRIPT_DIR}/setup.sh"
+            fi
+            ;;
+
+        upgrade)
+            local upgrade_type="app"
+            local do_backup=true
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --app) upgrade_type="app"; shift ;;
+                    --full) upgrade_type="full"; shift ;;
+                    --backup) do_backup=true; shift ;;
+                    --no-backup) do_backup=false; shift ;;
+                    *) shift ;;
+                esac
+            done
+
+            case "$upgrade_type" in
+                app) upgrade_app ;;
+                full) upgrade_full ;;
+            esac
+            ;;
+
+        uninstall)
+            local keep_data=false
+            local keep_config=false
+            local purge=false
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --keep-data) keep_data=true; shift ;;
+                    --keep-config) keep_config=true; shift ;;
+                    --purge) purge=true; shift ;;
+                    *) shift ;;
+                esac
+            done
+
+            uninstall_staged "$keep_data" "$keep_config" "$purge"
+            ;;
+
+        backup)
+            local backup_type="full"
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --full) backup_type="full"; shift ;;
+                    --db) backup_type="db"; shift ;;
+                    --config) backup_type="config"; shift ;;
+                    --app) backup_type="app"; shift ;;
+                    *) shift ;;
+                esac
+            done
+
+            create_backup "$backup_type"
+            ;;
+
+        restore)
+            local backup_file="${1:-}"
+            if [ -z "$backup_file" ]; then
+                log_error "Backup file required"
+                echo "Usage: fortress-ctl restore <backup-file>"
+                exit 1
+            fi
+            restore_backup "$backup_file"
+            ;;
+
+        rollback)
+            rollback_app
+            ;;
+
+        status)
+            show_status
+            ;;
+
+        list-backups)
+            list_backups
+            ;;
+
+        help|--help|-h)
+            show_help
+            ;;
+
+        *)
+            log_error "Unknown command: $command"
+            echo "Run 'fortress-ctl help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
