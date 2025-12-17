@@ -1,12 +1,30 @@
 -- HookProbe Fortress Database Initialization
 -- This file is mounted into postgres and runs on first startup
 --
--- Version: 5.0.0
+-- Version: 5.1.0
+-- Schema Version: 1
 -- License: AGPL-3.0
 
 -- Enable extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
+-- ============================================================
+-- SCHEMA VERSION TABLE (Migrations tracking)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS schema_version (
+    id SERIAL PRIMARY KEY,
+    version INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    applied_by VARCHAR(100) DEFAULT current_user,
+    checksum VARCHAR(64)
+);
+
+-- Initialize schema version
+INSERT INTO schema_version (version, description) VALUES
+    (1, 'Initial schema - devices, vlans, policies, threats, dns, audit')
+ON CONFLICT DO NOTHING;
 
 -- ============================================================
 -- DEVICES TABLE (Connected clients)
@@ -292,6 +310,137 @@ SELECT
 FROM devices d
 LEFT JOIN network_policies p ON d.network_policy = p.name;
 
+-- ============================================================
+-- BACKUP HISTORY TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS backup_history (
+    id SERIAL PRIMARY KEY,
+    backup_type VARCHAR(20) NOT NULL,  -- 'full', 'db', 'config', 'app'
+    backup_file VARCHAR(255) NOT NULL,
+    file_size BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_by VARCHAR(50) DEFAULT 'system',
+    notes TEXT
+);
+
+-- ============================================================
+-- SYSTEM EVENTS TABLE (for tracking upgrades, restarts, etc)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS system_events (
+    id SERIAL PRIMARY KEY,
+    event_type VARCHAR(50) NOT NULL,  -- 'upgrade', 'restart', 'backup', 'restore', 'config_change'
+    severity VARCHAR(20) DEFAULT 'info',  -- 'info', 'warning', 'error', 'critical'
+    description TEXT NOT NULL,
+    details JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_events_type ON system_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_system_events_created ON system_events(created_at);
+
+-- ============================================================
+-- MIGRATION HELPER FUNCTION
+-- ============================================================
+CREATE OR REPLACE FUNCTION apply_migration(
+    p_version INTEGER,
+    p_description TEXT,
+    p_sql TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    current_version INTEGER;
+BEGIN
+    -- Get current schema version
+    SELECT COALESCE(MAX(version), 0) INTO current_version FROM schema_version;
+
+    -- Check if migration already applied
+    IF p_version <= current_version THEN
+        RAISE NOTICE 'Migration % already applied, skipping', p_version;
+        RETURN FALSE;
+    END IF;
+
+    -- Check if this is the next sequential migration
+    IF p_version != current_version + 1 THEN
+        RAISE EXCEPTION 'Migration % cannot be applied. Current version is %, expected %',
+            p_version, current_version, current_version + 1;
+    END IF;
+
+    -- Execute migration SQL
+    EXECUTE p_sql;
+
+    -- Record migration
+    INSERT INTO schema_version (version, description, checksum)
+    VALUES (p_version, p_description, md5(p_sql));
+
+    -- Log event
+    INSERT INTO system_events (event_type, description, details)
+    VALUES ('upgrade', 'Database migration applied', jsonb_build_object('version', p_version, 'description', p_description));
+
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================
+-- CLEANUP FUNCTIONS (for data retention/GDPR)
+-- ============================================================
+CREATE OR REPLACE FUNCTION cleanup_old_dns_queries(retention_days INTEGER DEFAULT 7) RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM dns_queries
+    WHERE queried_at < NOW() - (retention_days || ' days')::INTERVAL;
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cleanup_old_threats(retention_days INTEGER DEFAULT 30) RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM threats
+    WHERE detected_at < NOW() - (retention_days || ' days')::INTERVAL;
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cleanup_old_qsecbit_history(retention_days INTEGER DEFAULT 7) RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM qsecbit_history
+    WHERE recorded_at < NOW() - (retention_days || ' days')::INTERVAL;
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cleanup_old_audit_logs(retention_days INTEGER DEFAULT 90) RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM audit_log
+    WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL;
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Master cleanup function
+CREATE OR REPLACE FUNCTION run_data_retention() RETURNS TABLE(table_name TEXT, deleted_count INTEGER) AS $$
+BEGIN
+    RETURN QUERY SELECT 'dns_queries'::TEXT, cleanup_old_dns_queries(7);
+    RETURN QUERY SELECT 'threats'::TEXT, cleanup_old_threats(30);
+    RETURN QUERY SELECT 'qsecbit_history'::TEXT, cleanup_old_qsecbit_history(7);
+    RETURN QUERY SELECT 'audit_log'::TEXT, cleanup_old_audit_logs(90);
+END;
+$$ LANGUAGE plpgsql;
+
 -- Grant permissions
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO fortress;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO fortress;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO fortress;

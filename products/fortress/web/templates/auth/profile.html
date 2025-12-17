@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - HookProbe Fortress{% endblock %}
+
+{% block page_title %}User Profile{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Profile</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Profile Information -->
+    <div class="col-lg-4">
+        <div class="card card-outline card-primary">
+            <div class="card-body box-profile">
+                <div class="text-center">
+                    <div class="profile-user-img img-fluid img-circle"
+                         style="width: 100px; height: 100px; background: linear-gradient(135deg, #e69500, #cc8400);
+                                display: flex; align-items: center; justify-content: center; margin: 0 auto;">
+                        <i class="fas fa-user fa-3x text-white"></i>
+                    </div>
+                </div>
+
+                <h3 class="profile-username text-center">{{ user.display_name or user.id }}</h3>
+                <p class="text-muted text-center">
+                    <span class="badge badge-{{ 'danger' if user.role == 'admin' else 'warning' if user.role == 'operator' else 'secondary' }}">
+                        {{ user.role|title }}
+                    </span>
+                </p>
+
+                <ul class="list-group list-group-unbordered mb-3">
+                    <li class="list-group-item">
+                        <b>Username</b> <span class="float-right">{{ user.id }}</span>
+                    </li>
+                    <li class="list-group-item">
+                        <b>Created</b> <span class="float-right">{{ user.created_at[:10] if user.created_at else 'N/A' }}</span>
+                    </li>
+                    <li class="list-group-item">
+                        <b>Last Login</b> <span class="float-right">{{ user.last_login[:16].replace('T', ' ') if user.last_login else 'Never' }}</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Account Limits -->
+        <div class="card card-outline card-info">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-users mr-2"></i>Account Limits</h3>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-2">User accounts</p>
+                <div class="progress mb-1">
+                    <div class="progress-bar bg-{{ 'danger' if user_count >= max_users else 'warning' if user_count >= max_users - 1 else 'success' }}"
+                         style="width: {{ (user_count / max_users * 100)|int }}%"></div>
+                </div>
+                <small class="text-muted">{{ user_count }} of {{ max_users }} accounts used</small>
+
+                {% if user_count >= max_users %}
+                <div class="alert alert-warning mt-3 mb-0">
+                    <i class="fas fa-exclamation-triangle mr-2"></i>
+                    Maximum user limit reached. Remove an account to add new users.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password & Settings -->
+    <div class="col-lg-8">
+        <!-- Change Password Card -->
+        <div class="card card-outline card-warning">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-key mr-2"></i>Change Password</h3>
+            </div>
+            <form method="POST" action="{{ url_for('auth.change_password') }}">
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="current_password">Current Password</label>
+                        <div class="input-group">
+                            <input type="password" name="current_password" id="current_password"
+                                   class="form-control" placeholder="Enter current password" required>
+                            <div class="input-group-append">
+                                <button type="button" class="btn btn-outline-secondary toggle-password"
+                                        data-target="current_password">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="new_password">New Password</label>
+                        <div class="input-group">
+                            <input type="password" name="new_password" id="new_password"
+                                   class="form-control" placeholder="Enter new password (min 8 characters)" required>
+                            <div class="input-group-append">
+                                <button type="button" class="btn btn-outline-secondary toggle-password"
+                                        data-target="new_password">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <small class="text-muted">Minimum 8 characters</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="confirm_password">Confirm New Password</label>
+                        <div class="input-group">
+                            <input type="password" name="confirm_password" id="confirm_password"
+                                   class="form-control" placeholder="Confirm new password" required>
+                            <div class="input-group-append">
+                                <button type="button" class="btn btn-outline-secondary toggle-password"
+                                        data-target="confirm_password">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <button type="submit" class="btn btn-warning">
+                        <i class="fas fa-save mr-2"></i>Update Password
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Display Name Card (for admins or own profile) -->
+        <div class="card card-outline card-secondary">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-id-card mr-2"></i>Display Settings</h3>
+            </div>
+            <form method="POST" action="{{ url_for('auth.update_display_name') }}">
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="display_name">Display Name</label>
+                        <input type="text" name="display_name" id="display_name"
+                               class="form-control" placeholder="Enter display name"
+                               value="{{ user.display_name or '' }}">
+                        <small class="text-muted">This name will be shown in the navigation bar</small>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <button type="submit" class="btn btn-secondary">
+                        <i class="fas fa-save mr-2"></i>Update Display Name
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Security Info -->
+        <div class="card card-outline card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shield-halved mr-2"></i>Security Information</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="info-box bg-dark">
+                            <span class="info-box-icon"><i class="fas fa-user-shield"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Role Permissions</span>
+                                <span class="info-box-number">
+                                    {% if user.role == 'admin' %}
+                                    Full Access
+                                    {% elif user.role == 'operator' %}
+                                    Read/Write
+                                    {% else %}
+                                    Read Only
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="info-box bg-dark">
+                            <span class="info-box-icon"><i class="fas fa-clock"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Session Timeout</span>
+                                <span class="info-box-number">30 minutes</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="callout callout-info">
+                    <h5><i class="fas fa-info-circle mr-2"></i>Role Descriptions</h5>
+                    <ul class="mb-0">
+                        <li><strong>Admin:</strong> Full system access, user management, configuration changes</li>
+                        <li><strong>Operator:</strong> Device management, network operations, monitoring</li>
+                        <li><strong>Viewer:</strong> Read-only access to dashboards and reports</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Toggle password visibility
+document.querySelectorAll('.toggle-password').forEach(function(button) {
+    button.addEventListener('click', function() {
+        var targetId = this.getAttribute('data-target');
+        var input = document.getElementById(targetId);
+        var icon = this.querySelector('i');
+
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            input.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    });
+});
+
+// Password confirmation validation
+document.getElementById('confirm_password').addEventListener('input', function() {
+    var newPassword = document.getElementById('new_password').value;
+    if (this.value !== newPassword) {
+        this.setCustomValidity('Passwords do not match');
+    } else {
+        this.setCustomValidity('');
+    }
+});
+</script>
+{% endblock %}
