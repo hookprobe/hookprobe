@@ -268,7 +268,7 @@ EOF
         cat >> "$output_file" << EOF
 
   bridges:
-    br-lan:
+    fortress:
       interfaces:
 EOF
         for iface in $lan_ifaces; do
@@ -277,7 +277,7 @@ EOF
 
         cat >> "$output_file" << EOF
       addresses:
-        - 10.200.0.1/24
+        - 10.250.0.1/24
       dhcp4: false
       parameters:
         stp: false
