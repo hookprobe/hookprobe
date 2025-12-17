@@ -226,38 +226,84 @@ detect_ethernet_interfaces() {
 }
 
 classify_wan_lan_interfaces() {
-    # Classify interfaces into WAN (first) and LAN (remaining)
+    # Classify interfaces into WAN (internet-connected) and LAN (to be bridged)
     #
-    # Strategy:
-    #   1. First Ethernet interface (by PCI order) = WAN
-    #   2. All other Ethernet interfaces = LAN (bridged together)
+    # IMPORTANT: The WAN interface must NOT be modified or added to any bridge!
+    # Users may have pre-configured DHCP to access the machine initially.
     #
-    # This follows the standard router convention:
-    #   - Port 1 (eth0/enp1s0): WAN uplink
-    #   - Ports 2-N (eth1+/enp2s0+): LAN ports
+    # Strategy (in order of priority):
+    #   1. Interface with default route = WAN (already providing internet)
+    #   2. Interface with any IP address = WAN (likely DHCP configured)
+    #   3. First Ethernet interface (fallback) = WAN
+    #   All other Ethernet interfaces = LAN (bridged together)
+    #
+    # This preserves user's existing network configuration!
 
     log_section "WAN/LAN Classification"
 
-    local first=true
     local wan_iface=""
     local lan_ifaces=""
 
+    # Method 1: Find interface with default route (strongest indicator of WAN)
+    # This is the interface providing internet connectivity
+    local default_route_iface
+    default_route_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+
+    if [ -n "$default_route_iface" ]; then
+        # Verify it's in our detected ethernet interfaces
+        if echo "$NET_ETH_INTERFACES" | grep -qw "$default_route_iface"; then
+            wan_iface="$default_route_iface"
+            log_info "WAN: $wan_iface (has default route - internet connected)"
+            log_info "  This interface will NOT be modified (preserving existing config)"
+        fi
+    fi
+
+    # Method 2: If no default route, find interface with an IP address (DHCP configured)
+    if [ -z "$wan_iface" ]; then
+        for iface in $NET_ETH_INTERFACES; do
+            if ip addr show "$iface" 2>/dev/null | grep -q "inet "; then
+                wan_iface="$iface"
+                local ip_addr
+                ip_addr=$(ip addr show "$iface" 2>/dev/null | grep "inet " | awk '{print $2}' | head -1)
+                log_info "WAN: $wan_iface (has IP: $ip_addr - existing DHCP config)"
+                log_info "  This interface will NOT be modified (preserving existing config)"
+                break
+            fi
+        done
+    fi
+
+    # Method 3: Fallback to first interface (by PCI order)
+    if [ -z "$wan_iface" ]; then
+        wan_iface=$(echo "$NET_ETH_INTERFACES" | awk '{print $1}')
+        if [ -n "$wan_iface" ]; then
+            log_info "WAN: $wan_iface (first physical port - fallback)"
+            log_warn "  No existing config detected - interface may need DHCP setup"
+        fi
+    fi
+
+    # Classify remaining interfaces as LAN
     for iface in $NET_ETH_INTERFACES; do
-        if $first; then
-            wan_iface="$iface"
-            first=false
-            log_info "WAN: $iface (first physical port)"
-        else
+        if [ "$iface" != "$wan_iface" ]; then
             lan_ifaces="$lan_ifaces $iface"
-            log_info "LAN: $iface (bridge member)"
+            log_info "LAN: $iface (will be added to bridge)"
         fi
     done
 
     export NET_WAN_IFACE="$wan_iface"
     export NET_LAN_IFACES=$(echo "$lan_ifaces" | xargs)
 
-    log_success "WAN Interface: ${NET_WAN_IFACE:-none}"
-    log_success "LAN Interfaces: ${NET_LAN_IFACES:-none}"
+    # Save WAN interface info for other scripts
+    export NET_WAN_PRESERVED=true  # Flag indicating WAN should not be modified
+
+    log_success "WAN Interface: ${NET_WAN_IFACE:-none} (PRESERVED - not modified by Fortress)"
+    log_success "LAN Interfaces: ${NET_LAN_IFACES:-none} (bridged)"
+
+    # Warning if only one interface (common on RPi5)
+    if [ -z "$NET_LAN_IFACES" ] && [ -n "$NET_WAN_IFACE" ]; then
+        log_warn "Single ethernet interface detected!"
+        log_warn "WAN ($NET_WAN_IFACE) will be used for internet - NO LAN ports available"
+        log_warn "Use WiFi AP for client connectivity, or add USB ethernet adapter for LAN"
+    fi
 }
 
 # ============================================================
@@ -1075,6 +1121,7 @@ save_network_state() {
 NET_ETH_INTERFACES="$NET_ETH_INTERFACES"
 NET_ETH_COUNT="$NET_ETH_COUNT"
 NET_WAN_IFACE="$NET_WAN_IFACE"
+NET_WAN_PRESERVED="$NET_WAN_PRESERVED"
 NET_LAN_IFACES="$NET_LAN_IFACES"
 
 # WiFi Interfaces

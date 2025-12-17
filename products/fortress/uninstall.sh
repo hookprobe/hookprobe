@@ -413,19 +413,61 @@ remove_ovs_config() {
         return 0
     fi
 
+    # Load saved LAN configuration to identify WAN (which must NOT be touched)
+    local wan_iface=""
+    local lan_ifaces=""
+    if [ -f /etc/hookprobe/lan-bridge.conf ]; then
+        source /etc/hookprobe/lan-bridge.conf
+        wan_iface="${WAN_INTERFACE:-}"
+        lan_ifaces="${LAN_INTERFACES:-}"
+        log_info "Loaded bridge config - WAN: ${wan_iface:-none}, LAN: ${lan_ifaces:-none}"
+    fi
+
+    # Fallback: detect WAN from default route
+    if [ -z "$wan_iface" ]; then
+        wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+        [ -n "$wan_iface" ] && log_info "WAN detected from default route: $wan_iface"
+    fi
+
     # Remove all ports from the bridge
     local ports
     ports=$(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null || true)
 
     for port in $ports; do
+        # CRITICAL: Skip WAN interface - it should never have been in bridge anyway
+        if [ "$port" = "$wan_iface" ]; then
+            log_warn "WAN interface $wan_iface found in OVS bridge - removing safely"
+            log_warn "WAN configuration will be preserved"
+        fi
+
         log_info "Removing OVS port: $port"
         ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$port" 2>/dev/null || true
+
+        # Restore ethernet LAN interfaces to normal state (but not WAN!)
+        if [ "$port" != "$wan_iface" ]; then
+            # Check if this is a physical ethernet interface (not VLAN/internal)
+            if [[ "$port" =~ ^(eth|enp|eno|ens)[0-9] ]]; then
+                log_info "  Restoring interface $port to normal state"
+                # Enable DHCP on the interface via NetworkManager if available
+                if command -v nmcli &>/dev/null; then
+                    nmcli device set "$port" managed yes 2>/dev/null || true
+                fi
+            fi
+        fi
     done
 
     # Remove the bridge itself
     log_info "Removing OVS bridge: $OVS_BRIDGE"
     ip link set "$OVS_BRIDGE" down 2>/dev/null || true
     ovs-vsctl --if-exists del-br "$OVS_BRIDGE" 2>/dev/null || true
+
+    # Log WAN preservation notice
+    if [ -n "$wan_iface" ]; then
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_info "WAN INTERFACE PRESERVED: $wan_iface"
+        log_info "  Your internet connection through this interface is intact"
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    fi
 
     log_info "OVS configuration removed"
 }
