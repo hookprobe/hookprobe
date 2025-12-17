@@ -143,7 +143,7 @@ setup_dual_band_wifi() {
 
     local ssid="${1:-HookProbe-Fortress}"
     local password="$2"
-    local bridge="${3:-br-lan}"
+    local bridge="${3:-fortress}"
 
     [ -z "$password" ] && { log_error "WiFi password required"; return 1; }
 
@@ -455,7 +455,7 @@ setup_lan_bridge_auto() {
         setup_lan_bridge "$NET_WAN_IFACE" "$NET_WWAN_IFACE"
     else
         # Manual bridge creation
-        local bridge_name="${OVS_BRIDGE_NAME:-br-lan}"
+        local bridge_name="${OVS_BRIDGE_NAME:-fortress}"
 
         ip link add name "$bridge_name" type bridge 2>/dev/null || true
         ip link set "$bridge_name" up

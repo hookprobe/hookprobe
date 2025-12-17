@@ -254,7 +254,7 @@ configure_wan_interface() {
 
 configure_lan_bridge() {
     # Create LAN bridge combining all LAN interfaces
-    local bridge_name="${1:-br-lan}"
+    local bridge_name="${1:-fortress}"
     local lan_ifaces="${2:-$FORTRESS_LAN_IFACES}"
 
     [ -z "$lan_ifaces" ] && { log_warn "No LAN interfaces specified"; return 1; }
@@ -349,10 +349,10 @@ EOF
     # Add bridge configuration
     cat >> "$config_file" << EOF
   bridges:
-    br-lan:
+    fortress:
       interfaces: [$(echo "$FORTRESS_LAN_IFACES" | tr ' ' ',')]
       addresses:
-        - 10.250.1.1/24
+        - 10.250.0.1/24
       dhcp4: false
       parameters:
         stp: false
