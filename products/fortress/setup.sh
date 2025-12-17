@@ -900,6 +900,86 @@ EOF
 }
 
 # ============================================================
+# REGULATORY DOMAIN SETUP - MUST RUN BEFORE WIFI AP
+# ============================================================
+# This MUST be called BEFORE hostapd configuration to ensure
+# correct country code is set for 5GHz channels and DFS
+setup_regulatory_domain() {
+    log_step "Setting up WiFi regulatory domain..."
+
+    local country=""
+    local max_retries=3
+    local retry=0
+
+    # Check if we already have a country code set
+    if [ -n "$FORTRESS_COUNTRY_CODE" ]; then
+        country="$FORTRESS_COUNTRY_CODE"
+        log_info "Using pre-configured country code: $country"
+    fi
+
+    # Try geolocation detection if no country set
+    if [ -z "$country" ]; then
+        log_info "Detecting country via geolocation..."
+
+        while [ $retry -lt $max_retries ] && [ -z "$country" ]; do
+            # Method 1: ipinfo.io (most reliable)
+            country=$(curl -sf --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
+
+            # Method 2: ip-api.com (fallback)
+            if [ -z "$country" ]; then
+                country=$(curl -sf --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
+            fi
+
+            # Method 3: ifconfig.co (another fallback)
+            if [ -z "$country" ]; then
+                country=$(curl -sf --max-time 5 "https://ifconfig.co/country-iso" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
+            fi
+
+            if [ -z "$country" ]; then
+                retry=$((retry + 1))
+                [ $retry -lt $max_retries ] && sleep 2
+            fi
+        done
+    fi
+
+    # Default to US if detection fails
+    country="${country:-US}"
+    log_info "Detected country code: $country"
+
+    # Export for other functions
+    export FORTRESS_COUNTRY_CODE="$country"
+
+    # Set regulatory domain via iw
+    if command -v iw &>/dev/null; then
+        log_info "Setting regulatory domain to $country..."
+        iw reg set "$country" 2>/dev/null || log_warn "Failed to set regulatory domain"
+
+        # Wait for regulatory domain to propagate
+        sleep 1
+
+        # Verify it was set
+        local current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | tr -d ':')
+        if [ "$current_reg" = "$country" ]; then
+            log_info "Regulatory domain verified: $country"
+        else
+            log_warn "Regulatory domain may not have been set correctly (got: $current_reg)"
+        fi
+    else
+        log_warn "iw command not available - regulatory domain not set"
+    fi
+
+    # Save to CRDA config for persistence across reboots
+    echo "REGDOMAIN=$country" > /etc/default/crda 2>/dev/null || true
+
+    # Also save to wireless-regdb if available
+    if [ -f /etc/default/wireless-regdb ]; then
+        sed -i "s/^REGDOMAIN=.*/REGDOMAIN=$country/" /etc/default/wireless-regdb 2>/dev/null || true
+    fi
+
+    log_info "Regulatory domain setup complete: $country"
+}
+
+# ============================================================
 # WIFI CHANNEL SCANNING AND SELECTION
 # ============================================================
 scan_wifi_channels() {
@@ -1181,11 +1261,14 @@ NMEOF
     local ap_password="${FORTRESS_WIFI_PASSWORD:-$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
     local ap_ssid="${FORTRESS_WIFI_SSID:-hookprobe}"
 
-    # Detect country code from system settings or default to US
-    local country_code="${FORTRESS_COUNTRY_CODE:-US}"
-    if [ -f /etc/default/crda ]; then
-        country_code=$(grep "^REGDOMAIN=" /etc/default/crda 2>/dev/null | cut -d= -f2 || echo "US")
+    # Use country code from setup_regulatory_domain (already set and exported)
+    # Fallback to CRDA config or US if not set
+    local country_code="${FORTRESS_COUNTRY_CODE:-}"
+    if [ -z "$country_code" ] && [ -f /etc/default/crda ]; then
+        country_code=$(grep "^REGDOMAIN=" /etc/default/crda 2>/dev/null | cut -d= -f2 || echo "")
     fi
+    country_code="${country_code:-US}"
+    log_info "Using regulatory domain: $country_code"
 
     # Scan for best channel (least congested)
     log_info "Scanning for optimal WiFi channel..."
@@ -2125,81 +2208,25 @@ else
 fi
 
 # ============================================================
-# WAIT FOR INTERNET CONNECTIVITY
+# REGULATORY DOMAIN VERIFICATION
 # ============================================================
-wait_for_internet() {
-    local max_attempts=30
-    local attempt=0
-    echo "Waiting for internet connectivity..."
+# Country code is set during initial install by setup_regulatory_domain()
+# This just verifies it's still set on boot/restart
+COUNTRY=""
+if [ -f /etc/default/crda ]; then
+    COUNTRY=$(grep "^REGDOMAIN=" /etc/default/crda 2>/dev/null | cut -d= -f2)
+fi
+COUNTRY="${COUNTRY:-US}"
+echo "Regulatory domain from config: $COUNTRY"
 
-    while [ $attempt -lt $max_attempts ]; do
-        # Try to reach a reliable endpoint
-        if curl -sf --max-time 3 "http://connectivitycheck.gstatic.com/generate_204" &>/dev/null || \
-           ping -c 1 -W 2 8.8.8.8 &>/dev/null || \
-           ping -c 1 -W 2 1.1.1.1 &>/dev/null; then
-            echo "Internet connectivity confirmed"
-            return 0
-        fi
-        attempt=$((attempt + 1))
-        echo "Waiting for internet... (attempt $attempt/$max_attempts)"
-        sleep 2
-    done
-
-    echo "WARNING: Internet connectivity check failed after $max_attempts attempts"
-    return 1
-}
-
-# ============================================================
-# COUNTRY CODE DETECTION (for WiFi regulatory domain)
-# ============================================================
-detect_country_code() {
-    local country=""
-    local max_retries=3
-    local retry=0
-
-    while [ $retry -lt $max_retries ] && [ -z "$country" ]; do
-        # Method 1: ipinfo.io (most reliable)
-        country=$(curl -sf --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
-
-        # Method 2: ip-api.com (fallback)
-        if [ -z "$country" ]; then
-            country=$(curl -sf --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
-        fi
-
-        # Method 3: ifconfig.co (another fallback)
-        if [ -z "$country" ]; then
-            country=$(curl -sf --max-time 5 "https://ifconfig.co/country-iso" 2>/dev/null | tr -d '\n\r ' | grep -E '^[A-Z]{2}$' || true)
-        fi
-
-        if [ -z "$country" ]; then
-            retry=$((retry + 1))
-            [ $retry -lt $max_retries ] && sleep 2
-        fi
-    done
-
-    # Default to US if detection fails
-    echo "${country:-US}"
-}
-
-# Wait for internet before detecting country
-wait_for_internet
-
-# Set WiFi regulatory domain based on geolocation
-COUNTRY=$(detect_country_code)
-echo "Detected country code: $COUNTRY"
-
-# Set regulatory domain
+# Ensure regulatory domain is set (may have been cleared on reboot)
 if command -v iw &>/dev/null; then
-    iw reg set "$COUNTRY" 2>/dev/null || true
-    echo "WiFi regulatory domain set to: $COUNTRY"
-
-    # Save to CRDA config for persistence
-    echo "REGDOMAIN=$COUNTRY" > /etc/default/crda 2>/dev/null || true
-
-    # Also update hostapd config if it exists
-    if [ -f /etc/hostapd/fortress.conf ]; then
-        sed -i "s/^country_code=.*/country_code=$COUNTRY/" /etc/hostapd/fortress.conf 2>/dev/null || true
-        echo "Updated hostapd config with country_code=$COUNTRY"
+    current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | tr -d ':')
+    if [ "$current_reg" != "$COUNTRY" ]; then
+        echo "Setting regulatory domain to $COUNTRY (was: $current_reg)"
+        iw reg set "$COUNTRY" 2>/dev/null || true
+    else
+        echo "Regulatory domain already set: $COUNTRY"
     fi
 fi
 
@@ -5089,6 +5116,18 @@ main() {
 
     setup_ovs_bridge
     setup_lan_bridge
+
+    # CRITICAL: Set regulatory domain BEFORE WiFi AP setup
+    # This ensures correct country code for 5GHz and DFS channels
+    setup_regulatory_domain
+
+    # Install DFS intelligence BEFORE WiFi setup so dfs-channel-selector is available
+    setup_dfs_intelligence
+
+    # Install channel optimization service (daily 4am calibration)
+    install_channel_optimization_service
+
+    # Now configure WiFi AP with correct regulatory domain
     setup_wifi_ap
     setup_dhcp_server
 
@@ -5118,12 +5157,6 @@ main() {
     create_systemd_services
     create_config_file
     install_web_dashboard
-
-    # Install channel optimization service (daily 4am calibration)
-    install_channel_optimization_service
-
-    # Install DFS intelligence for autonomous WiFi management
-    setup_dfs_intelligence
 
     # Start services
     log_step "Starting services..."
