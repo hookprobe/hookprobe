@@ -290,8 +290,13 @@ activate_primary() {
 
     log_info "Activating PRIMARY WAN: $PRIMARY_IFACE via $primary_gw (metric $PRIMARY_METRIC)"
 
-    # Remove existing default routes
-    ip route del default 2>/dev/null || true
+    # Remove ALL existing default routes (ip route del only removes one at a time)
+    # Loop until no more defaults exist
+    local max_tries=10
+    while ip route show default 2>/dev/null | grep -q "^default" && [ $max_tries -gt 0 ]; do
+        ip route del default 2>/dev/null || break
+        max_tries=$((max_tries - 1))
+    done
 
     # Add primary route with low metric (preferred)
     ip route add default via "$primary_gw" dev "$PRIMARY_IFACE" metric "$PRIMARY_METRIC" 2>/dev/null || {
@@ -332,8 +337,13 @@ activate_backup() {
 
     log_warn "Activating BACKUP WAN: $BACKUP_IFACE via $backup_gw (metric $PRIMARY_METRIC)"
 
-    # Remove existing default routes
-    ip route del default 2>/dev/null || true
+    # Remove ALL existing default routes (ip route del only removes one at a time)
+    # Loop until no more defaults exist
+    local max_tries=10
+    while ip route show default 2>/dev/null | grep -q "^default" && [ $max_tries -gt 0 ]; do
+        ip route del default 2>/dev/null || break
+        max_tries=$((max_tries - 1))
+    done
 
     # Add backup route with low metric (now preferred)
     ip route add default via "$backup_gw" dev "$BACKUP_IFACE" metric "$PRIMARY_METRIC" 2>/dev/null || {
