@@ -237,17 +237,21 @@ create_wifi_services() {
 
     # 2.4GHz service
     if [ -n "$NET_WIFI_24GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        # Systemd device unit - waits for interface to exist before starting
+        local dev_unit_24ghz="sys-subsystem-net-devices-${NET_WIFI_24GHZ_IFACE}.device"
+
         cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
-After=network.target openvswitch-switch.service
-Wants=network.target
+After=network.target openvswitch-switch.service ${dev_unit_24ghz}
+Wants=network.target ${dev_unit_24ghz}
 Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd-24ghz.pid
-ExecStartPre=/bin/sleep 2
+# Small delay after interface appears to ensure it's fully initialized
+ExecStartPre=/bin/sleep 1
 ExecStartPre=-/sbin/ip link set ${NET_WIFI_24GHZ_IFACE} up
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
 ExecStartPost=/bin/sleep 1
@@ -260,24 +264,28 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable fortress-hostapd-24ghz
-        log_info "Created service: fortress-hostapd-24ghz"
+        log_info "Created service: fortress-hostapd-24ghz (waits for ${NET_WIFI_24GHZ_IFACE})"
     fi
 
     # 5GHz service
     if [ -n "$NET_WIFI_5GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
         # Only create separate service if different interface
         if [ "$NET_WIFI_5GHZ_IFACE" != "$NET_WIFI_24GHZ_IFACE" ]; then
+            # Systemd device unit - waits for interface to exist before starting
+            local dev_unit_5ghz="sys-subsystem-net-devices-${NET_WIFI_5GHZ_IFACE}.device"
+
             cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
-After=network.target openvswitch-switch.service
-Wants=network.target
+After=network.target openvswitch-switch.service ${dev_unit_5ghz}
+Wants=network.target ${dev_unit_5ghz}
 Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd-5ghz.pid
-ExecStartPre=/bin/sleep 2
+# Small delay after interface appears to ensure it's fully initialized
+ExecStartPre=/bin/sleep 1
 ExecStartPre=-/sbin/ip link set ${NET_WIFI_5GHZ_IFACE} up
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
 ExecStartPost=/bin/sleep 1
@@ -290,7 +298,7 @@ WantedBy=multi-user.target
 EOF
             systemctl daemon-reload
             systemctl enable fortress-hostapd-5ghz
-            log_info "Created service: fortress-hostapd-5ghz"
+            log_info "Created service: fortress-hostapd-5ghz (waits for ${NET_WIFI_5GHZ_IFACE})"
         else
             log_info "Single dual-band radio - using 2.4GHz service for both bands"
         fi

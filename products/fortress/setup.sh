@@ -819,8 +819,33 @@ setup_lan_bridge() {
     local eth_ifaces="$ETH_INTERFACES"
     if [ -z "$eth_ifaces" ]; then
         log_warn "ETH_INTERFACES not set, detecting directly..."
-        eth_ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '@' | tr '\n' ' ')
+        # Match all common ethernet naming schemes:
+        # eth* = legacy naming (eth0, eth1, eth2, eth4)
+        # enp* = predictable PCI (enp2s0, enp3s0, enp4s0)
+        # eno* = predictable onboard (eno1, eno2)
+        # ens* = predictable slot (ens3, ens192)
+        # enx* = predictable MAC-based
+        eth_ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno|ens|enx)[0-9]' | grep -v '@' | tr '\n' ' ')
         log_info "Detected ethernet interfaces: $eth_ifaces"
+    fi
+
+    # Also detect any interfaces we might have missed - look for physical NICs via /sys
+    if [ -z "$eth_ifaces" ] || [ "$(echo $eth_ifaces | wc -w)" -lt 2 ]; then
+        log_info "Scanning /sys/class/net for additional physical NICs..."
+        for netdir in /sys/class/net/*/device; do
+            if [ -d "$netdir" ]; then
+                local iface
+                iface=$(basename "$(dirname "$netdir")")
+                # Skip wireless, virtual, and already-found interfaces
+                if [ ! -d "/sys/class/net/$iface/wireless" ] && \
+                   [[ ! "$iface" =~ ^(lo|docker|br|veth|virbr|ovs|vxlan|tap|tun|wlan|wlp|wwan|wwp) ]] && \
+                   [[ ! " $eth_ifaces " =~ " $iface " ]]; then
+                    eth_ifaces="$eth_ifaces $iface"
+                    log_info "  Found additional NIC: $iface"
+                fi
+            fi
+        done
+        eth_ifaces=$(echo $eth_ifaces | xargs)  # trim
     fi
 
     local lan_ifaces=""
