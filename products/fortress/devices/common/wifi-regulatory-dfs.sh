@@ -1187,6 +1187,311 @@ show_dfs_status() {
 }
 
 # ============================================================
+# ML-ENHANCED CHANNEL SELECTION (Python Integration)
+# ============================================================
+#
+# Integration with products/fortress/lib/dfs_intelligence.py
+# Provides ML-powered channel scoring when Python module is available.
+# Falls back to bash-based scoring if Python unavailable.
+
+DFS_INTELLIGENCE_PY="${DFS_INTELLIGENCE_PY:-/opt/hookprobe/products/fortress/lib/dfs_intelligence.py}"
+DFS_INTELLIGENCE_DEV="${SCRIPT_DIR}/../../lib/dfs_intelligence.py"
+
+dfs_ml_available() {
+    # Check if ML-enhanced DFS intelligence is available
+    #
+    # Returns 0 if Python module is available, 1 otherwise
+
+    # Check Python3 is available
+    if ! command -v python3 &>/dev/null; then
+        log_debug "Python3 not available, using bash fallback"
+        return 1
+    fi
+
+    # Check if DFS intelligence module exists
+    local py_script=""
+    if [ -f "$DFS_INTELLIGENCE_PY" ]; then
+        py_script="$DFS_INTELLIGENCE_PY"
+    elif [ -f "$DFS_INTELLIGENCE_DEV" ]; then
+        py_script="$DFS_INTELLIGENCE_DEV"
+    else
+        log_debug "DFS intelligence module not found, using bash fallback"
+        return 1
+    fi
+
+    # Verify Python script is executable
+    if python3 -c "import sys; sys.path.insert(0, '$(dirname "$py_script")'); import dfs_intelligence" 2>/dev/null; then
+        return 0
+    else
+        log_debug "DFS intelligence module not loadable, using bash fallback"
+        return 1
+    fi
+}
+
+_get_dfs_py_script() {
+    # Get path to DFS intelligence Python script
+    if [ -f "$DFS_INTELLIGENCE_PY" ]; then
+        echo "$DFS_INTELLIGENCE_PY"
+    elif [ -f "$DFS_INTELLIGENCE_DEV" ]; then
+        echo "$DFS_INTELLIGENCE_DEV"
+    fi
+}
+
+ml_score_channel() {
+    # Get ML-enhanced score for a channel
+    #
+    # Args:
+    #   $1 - Channel number
+    #   $2 - Hour of day (optional)
+    #
+    # Output: Score (0.0-1.0) and recommendation
+
+    local channel="$1"
+    local hour="${2:-$(date +%H)}"
+    local py_script
+
+    py_script=$(_get_dfs_py_script)
+    [ -z "$py_script" ] && return 1
+
+    python3 "$py_script" score --channel "$channel" --hour "$hour" 2>/dev/null
+}
+
+ml_best_channel() {
+    # Get ML-recommended best channel
+    #
+    # Args:
+    #   $1 - Prefer DFS (true/false)
+    #   $2 - Minimum bandwidth (MHz)
+    #   $3 - Exclude channels (space-separated)
+    #
+    # Output: Best channel number
+
+    local prefer_dfs="${1:-false}"
+    local min_bw="${2:-20}"
+    local exclude="${3:-}"
+    local py_script
+
+    py_script=$(_get_dfs_py_script)
+    [ -z "$py_script" ] && return 1
+
+    local args=("--min-bandwidth" "$min_bw")
+    [ "$prefer_dfs" = "true" ] && args+=("--prefer-dfs")
+    [ -n "$exclude" ] && args+=("--exclude" $exclude)
+
+    python3 "$py_script" best "${args[@]}" 2>/dev/null | grep -oP "Best Channel: \K[0-9]+"
+}
+
+ml_rank_channels() {
+    # Get ML-based channel rankings
+    #
+    # Args:
+    #   $1 - Include DFS (true/false)
+    #   $2 - Output format (text/json)
+    #
+    # Output: Ranked channel list
+
+    local include_dfs="${1:-true}"
+    local format="${2:-text}"
+    local py_script
+
+    py_script=$(_get_dfs_py_script)
+    [ -z "$py_script" ] && return 1
+
+    local args=()
+    [ "$include_dfs" = "true" ] && args+=("--include-dfs")
+    [ "$format" = "json" ] && args+=("--json")
+
+    python3 "$py_script" rank "${args[@]}" 2>/dev/null
+}
+
+ml_log_radar() {
+    # Log radar event to ML database
+    #
+    # Args:
+    #   $1 - Channel number
+    #   $2 - Frequency (optional)
+
+    local channel="$1"
+    local frequency="${2:-}"
+    local py_script
+
+    py_script=$(_get_dfs_py_script)
+    [ -z "$py_script" ] && return 1
+
+    local args=("--channel" "$channel")
+    [ -n "$frequency" ] && args+=("--frequency" "$frequency")
+
+    python3 "$py_script" log-radar "${args[@]}" 2>/dev/null
+}
+
+ml_train_model() {
+    # Train the ML model on historical data
+    #
+    # Args:
+    #   $1 - Minimum samples required
+
+    local min_samples="${1:-50}"
+    local py_script
+
+    py_script=$(_get_dfs_py_script)
+    [ -z "$py_script" ] && return 1
+
+    python3 "$py_script" train --min-samples "$min_samples" 2>/dev/null
+}
+
+ml_start_monitor() {
+    # Start ML-based radar monitoring
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+    local py_script
+
+    py_script=$(_get_dfs_py_script)
+    [ -z "$py_script" ] && return 1
+
+    log_info "Starting ML-enhanced radar monitor on $iface..."
+    python3 "$py_script" monitor --interface "$iface" &
+    local pid=$!
+    echo "$pid" > /var/run/fortress/dfs-ml-monitor.pid
+    log_success "ML radar monitor started (PID: $pid)"
+}
+
+ml_stop_monitor() {
+    # Stop ML-based radar monitoring
+
+    local pidfile="/var/run/fortress/dfs-ml-monitor.pid"
+    if [ -f "$pidfile" ]; then
+        local pid
+        pid=$(cat "$pidfile")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            log_info "ML radar monitor stopped (PID: $pid)"
+        fi
+        rm -f "$pidfile"
+    fi
+}
+
+select_optimal_channel_ml() {
+    # Select optimal channel using ML when available, fallback to bash
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Include DFS (true/false)
+    #   $3 - Minimum bandwidth (MHz)
+    #
+    # Output: Best channel number
+
+    local iface="$1"
+    local include_dfs="${2:-true}"
+    local min_bw="${3:-20}"
+
+    # Try ML-based selection first
+    if dfs_ml_available; then
+        log_info "Using ML-enhanced channel selection..."
+        local best_channel
+        best_channel=$(ml_best_channel "$include_dfs" "$min_bw")
+
+        if [ -n "$best_channel" ]; then
+            log_success "ML recommendation: Channel $best_channel"
+            echo "$best_channel"
+            return 0
+        fi
+        log_warn "ML selection failed, falling back to bash scoring"
+    fi
+
+    # Fallback to bash-based selection
+    if [ "$include_dfs" = "true" ]; then
+        select_optimal_dfs_channel "$iface" "false"
+    else
+        # Non-DFS only: use UNII-1
+        local nop_channels best_ch=""
+        nop_channels=$(get_nop_channels)
+
+        for ch in $UNII1_CHANNELS; do
+            if ! echo " $nop_channels " | grep -q " $ch "; then
+                best_ch="$ch"
+                break
+            fi
+        done
+
+        echo "${best_ch:-36}"
+    fi
+}
+
+show_ml_status() {
+    # Show ML subsystem status
+
+    log_info "=========================================="
+    log_info "ML INTELLIGENCE STATUS"
+    log_info "=========================================="
+
+    # Check Python availability
+    if command -v python3 &>/dev/null; then
+        local py_version
+        py_version=$(python3 --version 2>&1)
+        log_success "Python: $py_version"
+    else
+        log_error "Python: Not installed"
+    fi
+
+    # Check ML module
+    local py_script
+    py_script=$(_get_dfs_py_script)
+    if [ -n "$py_script" ]; then
+        log_success "ML Module: $py_script"
+    else
+        log_warn "ML Module: Not found"
+    fi
+
+    # Check ML availability
+    if dfs_ml_available; then
+        log_success "ML Status: Available"
+
+        # Check for sklearn/numpy
+        if python3 -c "import sklearn" 2>/dev/null; then
+            log_success "  sklearn: Installed"
+        else
+            log_warn "  sklearn: Not installed (basic scoring only)"
+        fi
+
+        if python3 -c "import numpy" 2>/dev/null; then
+            log_success "  numpy: Installed"
+        else
+            log_warn "  numpy: Not installed"
+        fi
+
+        # Check model status
+        if [ -f "/var/lib/fortress/dfs_model.json" ]; then
+            local trained_at
+            trained_at=$(jq -r '.trained_at // "unknown"' /var/lib/fortress/dfs_model.json 2>/dev/null)
+            log_success "  ML Model: Trained at $trained_at"
+        else
+            log_info "  ML Model: Not trained (run 'ml-train' to train)"
+        fi
+
+        # Check monitor status
+        local pidfile="/var/run/fortress/dfs-ml-monitor.pid"
+        if [ -f "$pidfile" ]; then
+            local pid
+            pid=$(cat "$pidfile")
+            if kill -0 "$pid" 2>/dev/null; then
+                log_success "  Radar Monitor: Running (PID: $pid)"
+            else
+                log_warn "  Radar Monitor: Stale PID file"
+            fi
+        else
+            log_info "  Radar Monitor: Not running"
+        fi
+    else
+        log_warn "ML Status: Unavailable (using bash fallback)"
+    fi
+
+    log_info "=========================================="
+}
+
+# ============================================================
 # REGULATORY DOMAIN MANAGEMENT
 # ============================================================
 
@@ -3033,6 +3338,18 @@ DFS Compliance Commands (ETSI EN 301 893):
   csa-switch <iface> <channel>   Execute fast channel switch with CSA frames
   prepare-fallback <iface>       Pre-compute fallback channel for fast switch
 
+ML-Enhanced Channel Selection:
+  ml-status                      Show ML intelligence subsystem status
+  ml-score <channel>             Get ML-based score for a channel
+  ml-best [--prefer-dfs] [--min-bandwidth N]
+                                 Get ML-recommended best channel
+  ml-rank [--include-dfs] [--json]
+                                 Rank all channels using ML scoring
+  ml-train [min_samples]         Train ML model on historical data
+  ml-monitor-start <iface>       Start ML-enhanced radar monitoring
+  ml-monitor-stop                Stop ML radar monitoring
+  ml-select <iface>              Select channel using ML (with fallback)
+
 Testing & Validation:
   backtest <iface> [country]     Run comprehensive backtest of all modes
   validate-countries <iface>     Validate channel selection for EU countries
@@ -3096,6 +3413,13 @@ Examples:
 
   # Validate all EU countries
   $(basename "$0") validate-countries wlan0
+
+  # ML-enhanced channel selection
+  $(basename "$0") ml-status
+  $(basename "$0") ml-best --prefer-dfs --min-bandwidth 80
+  $(basename "$0") ml-rank --include-dfs --json
+  $(basename "$0") ml-train 50
+  $(basename "$0") ml-monitor-start wlan0
 
 Environment Variables:
   WIFI_COUNTRY_CODE    Override country code
@@ -3266,6 +3590,91 @@ main() {
             # Pre-compute fallback channel for fast switch
             local iface="${1:?Interface required}"
             prepare_fallback_channel "$iface"
+            ;;
+        # ML-Enhanced Commands
+        ml-status)
+            # Show ML intelligence status
+            show_ml_status
+            ;;
+        ml-score)
+            # Get ML score for a channel
+            local channel="${1:?Channel required}"
+            local hour="${2:-}"
+            if dfs_ml_available; then
+                ml_score_channel "$channel" "$hour"
+            else
+                log_error "ML intelligence not available"
+                exit 1
+            fi
+            ;;
+        ml-best)
+            # Get ML-recommended best channel
+            local prefer_dfs="false"
+            local min_bw="20"
+            local exclude=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --prefer-dfs) prefer_dfs="true"; shift ;;
+                    --min-bandwidth) min_bw="$2"; shift 2 ;;
+                    --exclude) exclude="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            if dfs_ml_available; then
+                ml_best_channel "$prefer_dfs" "$min_bw" "$exclude"
+            else
+                log_error "ML intelligence not available"
+                exit 1
+            fi
+            ;;
+        ml-rank)
+            # Rank all channels using ML
+            local include_dfs="false"
+            local format="text"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --include-dfs) include_dfs="true"; shift ;;
+                    --json) format="json"; shift ;;
+                    *) shift ;;
+                esac
+            done
+            if dfs_ml_available; then
+                ml_rank_channels "$include_dfs" "$format"
+            else
+                log_error "ML intelligence not available"
+                exit 1
+            fi
+            ;;
+        ml-train)
+            # Train ML model
+            local min_samples="${1:-50}"
+            if dfs_ml_available; then
+                ml_train_model "$min_samples"
+            else
+                log_error "ML intelligence not available (check Python installation)"
+                exit 1
+            fi
+            ;;
+        ml-monitor-start)
+            # Start ML-enhanced radar monitoring
+            local iface="${1:?Interface required}"
+            if dfs_ml_available; then
+                ml_start_monitor "$iface"
+            else
+                log_warn "ML not available, falling back to basic monitor"
+                start_radar_monitor "$iface"
+            fi
+            ;;
+        ml-monitor-stop)
+            # Stop ML radar monitoring
+            ml_stop_monitor
+            ;;
+        ml-select)
+            # Select channel using ML with fallback
+            local iface="${1:?Interface required}"
+            local include_dfs="${2:-true}"
+            local min_bw="${3:-20}"
+            select_optimal_channel_ml "$iface" "$include_dfs" "$min_bw"
             ;;
         backtest|test-all)
             # Comprehensive backtest of all modes
