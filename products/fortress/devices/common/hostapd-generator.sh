@@ -889,31 +889,21 @@ detect_ht_capabilities() {
         phy_info=$(iw phy 2>/dev/null) || true
     fi
 
-    # HT40 channel selection based on 2.4GHz channel rules:
-    # - Channels 1-7: Can use HT40+ (secondary channel above)
-    # - Channels 5-9: Can use HT40- (secondary channel below)
-    # - Channels 10-13: Can only use HT40-
-    # - Channel 14: No HT40 (Japan only)
-    if echo "$phy_info" | grep -q "HT40"; then
-        if [ "$channel" -le 7 ] 2>/dev/null; then
-            caps="[HT40+]"
-        elif [ "$channel" -ge 5 ] && [ "$channel" -le 13 ] 2>/dev/null; then
-            caps="[HT40-]"
-        fi
-        # No HT40 for channel 14 or invalid channels
-    fi
+    # NOTE: HT40 (40MHz) on 2.4GHz is disabled intentionally
+    # Reasons:
+    # 1. Only 3 non-overlapping 20MHz channels (1, 6, 11) in 2.4GHz band
+    # 2. HT40 requires clear adjacent channels - rarely works in real environments
+    # 3. Causes hostapd to get stuck in HT_SCAN state on many drivers (incl. ath12k)
+    # 4. 20MHz (HT20) provides reliable connectivity with less interference
+    # For high throughput, use 5GHz band instead
+    # caps="" - intentionally not setting HT40 for 2.4GHz
 
     if echo "$phy_info" | grep -q "SHORT-GI-20"; then
         caps="${caps}[SHORT-GI-20]"
     fi
 
-    if echo "$phy_info" | grep -q "SHORT-GI-40"; then
-        caps="${caps}[SHORT-GI-40]"
-    fi
-
-    if echo "$phy_info" | grep -q "DSSS_CCK-40"; then
-        caps="${caps}[DSSS_CCK-40]"
-    fi
+    # Note: SHORT-GI-40 and DSSS_CCK-40 are only useful with HT40
+    # Since we disabled HT40 for 2.4GHz reliability, we skip these too
 
     # Default to safe capabilities if detection failed
     echo "${caps:-[SHORT-GI-20]}"
@@ -1140,6 +1130,10 @@ generate_hostapd_24ghz() {
 interface=$iface
 driver=nl80211
 ${use_bridge}
+
+# Control interface for hostapd_cli
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
 
 # Network Settings
 ssid=$ssid
@@ -1537,6 +1531,10 @@ generate_hostapd_5ghz() {
 interface=$iface
 driver=nl80211
 ${use_bridge}
+
+# Control interface for hostapd_cli
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
 
 # Network Settings
 ssid=$ssid
