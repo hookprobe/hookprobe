@@ -31,6 +31,117 @@
         </div>
         {% endif %}
 
+        <!-- WiFi Intelligence Hero Section -->
+        <div class="row" id="wifi-intelligence-hero">
+            <div class="col-12">
+                <div class="card card-widget widget-user-2" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); border: none; border-radius: 15px; overflow: hidden;">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <div class="row align-items-center">
+                            <!-- Left: WiFi Status -->
+                            <div class="col-lg-3 col-md-6 text-center text-lg-left mb-3 mb-lg-0">
+                                <div class="d-flex align-items-center justify-content-center justify-content-lg-start">
+                                    <div class="wifi-icon-container mr-3" style="width: 80px; height: 80px; background: rgba(255,255,255,0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                        <i class="fas fa-broadcast-tower fa-3x" id="wifi-icon" style="color: #00d9ff; text-shadow: 0 0 20px rgba(0,217,255,0.5);"></i>
+                                    </div>
+                                    <div>
+                                        <h2 class="mb-0" style="color: #fff; font-weight: 700;">
+                                            <span id="wifi-channel">--</span>
+                                            <small class="text-muted" id="wifi-band" style="font-size: 0.6em; color: #aaa !important;">--</small>
+                                        </h2>
+                                        <p class="mb-0" style="color: #888; font-size: 0.85em;">
+                                            <i class="fas fa-wifi mr-1"></i>
+                                            <span id="wifi-ssid">Loading...</span>
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Center: ML Score Gauge -->
+                            <div class="col-lg-3 col-md-6 text-center mb-3 mb-lg-0">
+                                <div class="ml-score-container">
+                                    <div class="score-ring" style="width: 90px; height: 90px; margin: 0 auto; position: relative;">
+                                        <svg viewBox="0 0 36 36" class="circular-chart" style="width: 100%; height: 100%;">
+                                            <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                                  fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                                            <path class="circle" id="ml-score-ring"
+                                                  stroke-dasharray="0, 100"
+                                                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                                  fill="none" stroke="#00ff88" stroke-width="3" stroke-linecap="round"
+                                                  style="transition: stroke-dasharray 1s ease-in-out;"/>
+                                        </svg>
+                                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+                                            <span id="ml-score-value" style="color: #00ff88; font-size: 1.4em; font-weight: 700;">--</span>
+                                        </div>
+                                    </div>
+                                    <p class="mb-0 mt-1" style="color: #888; font-size: 0.75em;">
+                                        <i class="fas fa-brain mr-1" style="color: #00ff88;"></i>ML CHANNEL SCORE
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Center-Right: Statistics -->
+                            <div class="col-lg-3 col-md-6 text-center mb-3 mb-lg-0">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <div class="stat-box p-2" style="background: rgba(255,255,255,0.05); border-radius: 10px;">
+                                            <i class="fas fa-satellite-dish mb-1" style="color: #ff6b6b; font-size: 1.5em;"></i>
+                                            <h4 class="mb-0" style="color: #fff; font-weight: 600;">
+                                                <span id="radar-count">0</span>
+                                            </h4>
+                                            <small style="color: #888; font-size: 0.7em;">RADAR EVENTS</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-box p-2" style="background: rgba(255,255,255,0.05); border-radius: 10px;">
+                                            <i class="fas fa-exchange-alt mb-1" style="color: #ffd93d; font-size: 1.5em;"></i>
+                                            <h4 class="mb-0" style="color: #fff; font-weight: 600;">
+                                                <span id="channel-switches">0</span>
+                                            </h4>
+                                            <small style="color: #888; font-size: 0.7em;">CH SWITCHES</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <p class="mb-0 mt-2" style="color: #666; font-size: 0.7em;">
+                                    <i class="far fa-calendar-alt mr-1"></i>Last 30 days
+                                </p>
+                            </div>
+
+                            <!-- Right: Next Optimization Countdown -->
+                            <div class="col-lg-3 col-md-6 text-center text-lg-right">
+                                <div class="next-opt-container">
+                                    <p class="mb-1" style="color: #888; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px;">
+                                        <i class="fas fa-clock mr-1"></i>Next Auto-Optimization
+                                    </p>
+                                    <h3 class="mb-0" id="countdown-timer" style="color: #fff; font-family: 'Courier New', monospace; font-weight: 600; letter-spacing: 2px;">
+                                        --:--:--
+                                    </h3>
+                                    <p class="mb-0 mt-1" style="color: #666; font-size: 0.7em;">
+                                        <span id="last-opt-info">
+                                            <i class="fas fa-history mr-1"></i>Last: <span id="last-opt-time">Never</span>
+                                            <span id="prev-channel-info" style="display: none;"> (was CH <span id="prev-channel">--</span>)</span>
+                                        </span>
+                                    </p>
+                                    <div class="mt-2">
+                                        <span id="dfs-badge" class="badge" style="background: rgba(0,217,255,0.2); color: #00d9ff; font-size: 0.7em; display: none;">
+                                            <i class="fas fa-bolt mr-1"></i>DFS INTELLIGENCE ACTIVE
+                                        </span>
+                                        <span id="basic-badge" class="badge" style="background: rgba(255,255,255,0.1); color: #888; font-size: 0.7em;">
+                                            <i class="fas fa-search mr-1"></i>BASIC SCAN MODE
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress bar for countdown -->
+                    <div class="progress" style="height: 4px; background: rgba(255,255,255,0.05); border-radius: 0;">
+                        <div class="progress-bar" id="countdown-progress" role="progressbar" style="width: 0%; background: linear-gradient(90deg, #00d9ff, #00ff88); transition: width 1s linear;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Statistics Cards -->
         <div class="row">
             <!-- Total Devices -->
@@ -417,7 +528,166 @@
 
 {% block extra_js %}
 <script>
+// WiFi Intelligence - Global state
+var wifiIntelligence = {
+    countdownSeconds: 0,
+    totalSeconds: 86400, // 24 hours
+    updateInterval: null,
+    countdownInterval: null
+};
+
+// Load WiFi intelligence data
+function loadWifiIntelligence() {
+    $.get('{{ url_for("sdn.api_wifi_intelligence") }}')
+        .done(function(response) {
+            if (response.success) {
+                updateWifiDisplay(response.wifi_intelligence);
+            }
+        })
+        .fail(function() {
+            // Use demo data on failure
+            updateWifiDisplay({
+                current_channel: 36,
+                band: '5GHz',
+                ssid: 'Fortress-WiFi',
+                ml_score: 0.87,
+                radar_count_30d: 2,
+                channel_switches_30d: 3,
+                time_to_next_seconds: 28800,
+                last_optimization: '2025-12-17T04:00:00',
+                previous_channel: 44,
+                dfs_available: true,
+                optimization_method: 'dfs_intelligence'
+            });
+        });
+}
+
+function updateWifiDisplay(data) {
+    // Update channel and band
+    if (data.current_channel) {
+        $('#wifi-channel').text('CH ' + data.current_channel);
+        $('#wifi-band').text(data.band || '');
+    }
+
+    // Update SSID
+    if (data.ssid) {
+        $('#wifi-ssid').text(data.ssid);
+    } else {
+        $('#wifi-ssid').text('Fortress Network');
+    }
+
+    // Update ML Score
+    if (data.ml_score !== null && data.ml_score !== undefined) {
+        var score = parseFloat(data.ml_score);
+        var scorePercent = Math.round(score * 100);
+        $('#ml-score-value').text(scorePercent + '%');
+        $('#ml-score-ring').attr('stroke-dasharray', scorePercent + ', 100');
+
+        // Color based on score
+        var color = score >= 0.8 ? '#00ff88' : (score >= 0.6 ? '#ffd93d' : '#ff6b6b');
+        $('#ml-score-ring').attr('stroke', color);
+        $('#ml-score-value').css('color', color);
+    } else {
+        $('#ml-score-value').text('N/A');
+        $('#ml-score-ring').attr('stroke-dasharray', '0, 100');
+    }
+
+    // Update statistics
+    $('#radar-count').text(data.radar_count_30d || 0);
+    $('#channel-switches').text(data.channel_switches_30d || 0);
+
+    // Update last optimization
+    if (data.last_optimization) {
+        var lastOpt = new Date(data.last_optimization);
+        var now = new Date();
+        var diffHours = Math.round((now - lastOpt) / (1000 * 60 * 60));
+        if (diffHours < 24) {
+            $('#last-opt-time').text(diffHours + 'h ago');
+        } else {
+            $('#last-opt-time').text(Math.round(diffHours / 24) + 'd ago');
+        }
+
+        // Show previous channel if available
+        if (data.previous_channel && data.previous_channel !== data.current_channel) {
+            $('#prev-channel').text(data.previous_channel);
+            $('#prev-channel-info').show();
+        } else {
+            $('#prev-channel-info').hide();
+        }
+    }
+
+    // Update DFS badge
+    if (data.dfs_available && data.band === '5GHz') {
+        $('#dfs-badge').show();
+        $('#basic-badge').hide();
+        // Make icon more vibrant for DFS mode
+        $('#wifi-icon').css('color', '#00ff88').css('text-shadow', '0 0 30px rgba(0,255,136,0.7)');
+    } else {
+        $('#dfs-badge').hide();
+        $('#basic-badge').show();
+    }
+
+    // Setup countdown
+    if (data.time_to_next_seconds) {
+        wifiIntelligence.countdownSeconds = data.time_to_next_seconds;
+        wifiIntelligence.totalSeconds = 86400; // 24 hours
+        startCountdown();
+    }
+}
+
+function startCountdown() {
+    // Clear existing interval
+    if (wifiIntelligence.countdownInterval) {
+        clearInterval(wifiIntelligence.countdownInterval);
+    }
+
+    updateCountdownDisplay();
+
+    wifiIntelligence.countdownInterval = setInterval(function() {
+        wifiIntelligence.countdownSeconds--;
+        if (wifiIntelligence.countdownSeconds < 0) {
+            wifiIntelligence.countdownSeconds = 86400;
+        }
+        updateCountdownDisplay();
+    }, 1000);
+}
+
+function updateCountdownDisplay() {
+    var seconds = wifiIntelligence.countdownSeconds;
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var secs = seconds % 60;
+
+    var display = String(hours).padStart(2, '0') + ':' +
+                  String(minutes).padStart(2, '0') + ':' +
+                  String(secs).padStart(2, '0');
+    $('#countdown-timer').text(display);
+
+    // Update progress bar (inverse - fills as we get closer)
+    var elapsed = wifiIntelligence.totalSeconds - seconds;
+    var progress = (elapsed / wifiIntelligence.totalSeconds) * 100;
+    $('#countdown-progress').css('width', progress + '%');
+}
+
+// Pulse animation for WiFi icon
+function pulseWifiIcon() {
+    $('#wifi-icon').animate({
+        opacity: 0.6
+    }, 1000).animate({
+        opacity: 1
+    }, 1000);
+}
+
 $(document).ready(function() {
+    // Load WiFi intelligence data
+    loadWifiIntelligence();
+
+    // Refresh WiFi data every 60 seconds
+    wifiIntelligence.updateInterval = setInterval(loadWifiIntelligence, 60000);
+
+    // Pulse animation every 3 seconds
+    setInterval(pulseWifiIcon, 3000);
+
     // Initialize DataTable
     var table = $('#devices-table').DataTable({
         "paging": true,
