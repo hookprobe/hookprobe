@@ -1315,17 +1315,56 @@ generate_hostapd_5ghz() {
     log_info "  Bridge: $bridge"
     log_info "  Country: $country_code (auto-detected)"
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # REGULATORY DOMAIN CHECK
+    # Some WiFi adapters have "self-managed" regulatory domains that ignore
+    # the system's iw reg set command. We must detect this and use safe channels.
+    # ═══════════════════════════════════════════════════════════════════════════
+    local self_managed_regdomain=false
+    local effective_country="$country_code"
+
+    if [ "$DFS_AVAILABLE" = "true" ]; then
+        # Log regulatory status
+        log_regulatory_status "$iface" 2>/dev/null || true
+
+        # Check if adapter has self-managed regulatory domain
+        if is_self_managed_regdomain "$iface" 2>/dev/null; then
+            self_managed_regdomain=true
+            local phy_reg
+            phy_reg=$(get_phy_regdomain "$iface" 2>/dev/null)
+            effective_country="${phy_reg%%:*}"  # Strip :self-managed suffix
+
+            log_warn "  ⚠️  Adapter has SELF-MANAGED regulatory domain: $effective_country"
+            log_warn "     System country ($country_code) will be IGNORED by firmware"
+
+            if [ "$effective_country" != "$country_code" ]; then
+                log_warn "  ⚠️  REGULATORY MISMATCH: System=$country_code, Firmware=$effective_country"
+                log_warn "     Using conservative channel selection (UNII-1: 36-48 only)"
+            fi
+        fi
+    fi
+
     # Auto channel selection - EU/ETSI aware with DFS handling
     if [ "$channel" = "auto" ]; then
         if [ "$DFS_AVAILABLE" = "true" ]; then
-            # Use advanced channel scanning from DFS script
-            log_info "  Scanning for optimal channel..."
-            channel=$(scan_for_best_channel "$iface" true "$country_code" 2>/dev/null) || channel=""
+            if $self_managed_regdomain && [ "$effective_country" != "$country_code" ]; then
+                # DOMAIN MISMATCH: Use safe channels only
+                log_info "  Using safe channels due to regulatory mismatch..."
+                local safe_channels
+                safe_channels=$(get_safe_channels_for_regdomain "$iface" "quick" 2>/dev/null)
+                # Pick first safe channel (36)
+                channel=$(echo "$safe_channels" | awk '{print $1}')
+                log_info "  Selected safe channel: $channel (from: $safe_channels)"
+            else
+                # Normal case: Use advanced channel scanning
+                log_info "  Scanning for optimal channel..."
+                channel=$(scan_for_best_channel "$iface" true "$effective_country" 2>/dev/null) || channel=""
+            fi
         fi
 
         # Fallback to default safe channel
         if [ -z "$channel" ]; then
-            channel=$(get_safe_5ghz_channel "$country_code" "$iface")
+            channel=$(get_safe_5ghz_channel "$effective_country" "$iface")
         fi
 
         # Secondary fallback: Try network-interface-detector.sh
@@ -1333,9 +1372,17 @@ generate_hostapd_5ghz() {
             local scanned_channel
             scanned_channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || true
 
-            # Only use scanned channel if it's in the allowed range for this region
+            # Only use scanned channel if it's safe for the effective regulatory domain
             if [ -n "$scanned_channel" ]; then
-                if is_eu_country "$country_code"; then
+                # With self-managed domain mismatch, only allow UNII-1 (36-48)
+                if $self_managed_regdomain && [ "$effective_country" != "$country_code" ]; then
+                    if [ "$scanned_channel" -ge 36 ] && [ "$scanned_channel" -le 48 ] 2>/dev/null; then
+                        channel="$scanned_channel"
+                        log_info "  Using scanned UNII-1 channel $channel"
+                    else
+                        log_warn "  Scanned channel $scanned_channel unsafe with domain mismatch, keeping $channel"
+                    fi
+                elif is_eu_country "$effective_country"; then
                     # EU: Only accept UNII-1 channels (36-48)
                     if [ "$scanned_channel" -ge 36 ] && [ "$scanned_channel" -le 48 ] 2>/dev/null; then
                         channel="$scanned_channel"
@@ -1350,10 +1397,16 @@ generate_hostapd_5ghz() {
             fi
         fi
     else
-        # Manual channel specified - validate for EU
-        if is_eu_country "$country_code"; then
+        # Manual channel specified - validate for regulatory domain
+        if $self_managed_regdomain && [ "$effective_country" != "$country_code" ]; then
+            # With domain mismatch, warn if not in UNII-1
+            if [ "$channel" -lt 36 ] || [ "$channel" -gt 48 ] 2>/dev/null; then
+                log_warn "  ⚠️  Channel $channel may fail with domain mismatch (System=$country_code, Firmware=$effective_country)"
+                log_warn "     Consider using channels 36-48 (UNII-1) for guaranteed compatibility"
+            fi
+        elif is_eu_country "$effective_country"; then
             if [ "$channel" -ge 149 ] && [ "$channel" -le 177 ] 2>/dev/null; then
-                log_warn "  Channel $channel (UNII-3) may not be allowed in EU country $country_code"
+                log_warn "  Channel $channel (UNII-3) may not be allowed in EU country $effective_country"
                 log_warn "  Consider using channels 36-48 (UNII-1) instead"
             fi
         fi
@@ -1487,7 +1540,8 @@ ${use_bridge}
 # Network Settings
 ssid=$ssid
 utf8_ssid=1
-country_code=$country_code
+# Use effective country code (from adapter firmware if self-managed)
+country_code=$effective_country
 ieee80211d=1
 ieee80211h=1
 
