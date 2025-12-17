@@ -1,18 +1,19 @@
 # ============================================================
-# HookProbe Fortress DFS Intelligence Container
+# HookProbe DFS Intelligence Container
 # ============================================================
 #
 # ML-powered DFS channel selection with sklearn/numpy
+# Part of shared/wireless/ module - used by Guardian, Fortress, Nexus
 #
 # Build:
-#   podman build -t fortress-dfs-intelligence:latest -f Containerfile .
+#   podman build -t hookprobe-dfs-intelligence:latest -f Containerfile .
 #
 # Run:
 #   podman run -d --name dfs-intelligence \
-#     -v fortress-dfs-data:/var/lib/fortress:Z \
+#     -v hookprobe-dfs-data:/var/lib/hookprobe:Z \
 #     -v /var/run/hostapd:/var/run/hostapd:ro \
 #     -p 127.0.0.1:8767:8767 \
-#     fortress-dfs-intelligence:latest
+#     hookprobe-dfs-intelligence:latest
 #
 # ============================================================
 
@@ -43,7 +44,7 @@ FROM python:3.11-slim-bookworm AS production
 
 LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
 LABEL description="DFS Intelligence Service - ML-powered channel selection"
-LABEL version="1.0.0"
+LABEL version="1.1.0"
 
 # Runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -65,8 +66,8 @@ RUN groupadd -g 1000 dfs && \
     useradd -u 1000 -g dfs -d /app -s /sbin/nologin dfs
 
 # Create directories
-RUN mkdir -p /var/lib/fortress /var/log/fortress /var/run/fortress /app && \
-    chown -R dfs:dfs /var/lib/fortress /var/log/fortress /var/run/fortress /app
+RUN mkdir -p /var/lib/hookprobe /var/log/hookprobe /var/run/hookprobe /app && \
+    chown -R dfs:dfs /var/lib/hookprobe /var/log/hookprobe /var/run/hookprobe /app
 
 # Copy application code
 WORKDIR /app
@@ -78,14 +79,14 @@ COPY --chown=dfs:dfs entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
 # Environment variables
-ENV DFS_DB_PATH=/var/lib/fortress/dfs_intelligence.db
-ENV DFS_LOG_PATH=/var/log/fortress/dfs_intelligence.log
-ENV DFS_MODEL_PATH=/var/lib/fortress/dfs_model.json
+ENV DFS_DB_PATH=/var/lib/hookprobe/dfs_intelligence.db
+ENV DFS_LOG_PATH=/var/log/hookprobe/dfs_intelligence.log
+ENV DFS_MODEL_PATH=/var/lib/hookprobe/dfs_model.json
 ENV DFS_API_HOST=0.0.0.0
 ENV DFS_API_PORT=8767
 
 # Volume mounts
-VOLUME ["/var/lib/fortress", "/var/log/fortress"]
+VOLUME ["/var/lib/hookprobe", "/var/log/hookprobe"]
 
 # Expose API port
 EXPOSE 8767

@@ -2812,6 +2812,9 @@ ZEEKEOF
     # Install ML/LSTM components
     install_ml_components
 
+    # Install shared wireless/DFS intelligence module
+    install_shared_wireless_module
+
     # Setup dnsXai privacy controls
     setup_dnsxai_privacy_controls
 
@@ -2819,6 +2822,7 @@ ZEEKEOF
     log_info "  Suricata: monitoring $MONITOR_IFACE for threats"
     log_info "  Zeek: analyzing network patterns"
     log_info "  ML/LSTM: daily training at 3:00 AM"
+    log_info "  DFS Intelligence: ML-powered channel selection (QCN9274/QCN6224 supported)"
 }
 
 # ============================================================
@@ -2882,6 +2886,48 @@ EOF
     systemctl enable fortress-lstm-train.timer 2>/dev/null || true
 
     log_info "ML/LSTM components installed (daily training at 3:00 AM)"
+}
+
+# ============================================================
+# SHARED WIRELESS MODULE (DFS Intelligence)
+# ============================================================
+install_shared_wireless_module() {
+    log_step "Installing shared wireless/DFS intelligence module..."
+
+    # Create shared module directories
+    mkdir -p /opt/hookprobe/shared/wireless/containers/dfs-intelligence
+    mkdir -p /var/lib/hookprobe
+    mkdir -p /var/log/hookprobe
+
+    # Copy DFS intelligence module from shared location
+    local SHARED_WIRELESS="${REPO_ROOT}/shared/wireless"
+    if [ -d "$SHARED_WIRELESS" ]; then
+        # Copy Python modules
+        cp -f "$SHARED_WIRELESS/dfs_intelligence.py" /opt/hookprobe/shared/wireless/ 2>/dev/null || true
+        cp -f "$SHARED_WIRELESS/channel_scanner.py" /opt/hookprobe/shared/wireless/ 2>/dev/null || true
+        cp -f "$SHARED_WIRELESS/__init__.py" /opt/hookprobe/shared/wireless/ 2>/dev/null || true
+
+        # Copy capabilities detection script
+        cp -f "$SHARED_WIRELESS/dfs_capabilities.sh" /opt/hookprobe/shared/wireless/ 2>/dev/null || true
+        chmod +x /opt/hookprobe/shared/wireless/dfs_capabilities.sh 2>/dev/null || true
+
+        # Copy container files for DFS container mode
+        if [ -d "$SHARED_WIRELESS/containers/dfs-intelligence" ]; then
+            cp -f "$SHARED_WIRELESS/containers/dfs-intelligence"/* \
+                /opt/hookprobe/shared/wireless/containers/dfs-intelligence/ 2>/dev/null || true
+            chmod +x /opt/hookprobe/shared/wireless/containers/dfs-intelligence/*.sh 2>/dev/null || true
+        fi
+
+        log_info "DFS intelligence module installed to /opt/hookprobe/shared/wireless/"
+    else
+        log_warn "Shared wireless module not found at $SHARED_WIRELESS"
+    fi
+
+    # Set up DFS database directory with correct permissions
+    chown -R root:root /var/lib/hookprobe 2>/dev/null || true
+    chmod 755 /var/lib/hookprobe
+
+    log_info "Shared wireless module installation complete"
 }
 
 # ============================================================
