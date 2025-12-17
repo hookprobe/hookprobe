@@ -108,6 +108,1085 @@ UNII2A_CAC_TIME=60    # 1 minute
 UNII2C_CAC_TIME=600   # 10 minutes (weather radar)
 
 # ============================================================
+# DFS COMPLIANCE & RADAR DETECTION (ETSI EN 301 893)
+# ============================================================
+#
+# ETSI DFS Requirements:
+#   - CAC (Channel Availability Check): 60s UNII-2A, 600s UNII-2C
+#   - NOP (Non-Occupancy Period): 30 minutes after radar detection
+#   - Channel Move Time: Must vacate within 10 seconds of radar
+#   - CSA (Channel Switch Announcement): Announce switch in beacons
+#   - In-Service Monitoring: Continuous radar detection while operating
+#
+# State Machine:
+#   AVAILABLE → CAC_IN_PROGRESS → OPERATIONAL → NOP_ACTIVE → AVAILABLE
+#                    ↓                 ↓
+#              (timeout/fail)    (radar detected)
+#                    ↓                 ↓
+#               UNAVAILABLE      NOP_ACTIVE (30 min)
+#
+
+# DFS State Files
+DFS_RADAR_HISTORY="/var/lib/fortress/dfs-radar-history.json"
+DFS_NOP_STATE="/var/lib/fortress/dfs-nop-state.json"
+DFS_CHANNEL_STATE="/var/lib/fortress/dfs-channel-state.json"
+DFS_EVENT_LOG="/var/log/fortress/dfs-events.log"
+DFS_FALLBACK_CHANNELS="/var/lib/fortress/dfs-fallback-channels.json"
+
+# ETSI Timing Constants (seconds)
+NOP_DURATION=1800           # 30 minutes Non-Occupancy Period
+CHANNEL_MOVE_TIME=10        # Must vacate within 10 seconds
+CSA_BEACON_COUNT=5          # Number of CSA beacons before switch
+CAC_TIMEOUT_BUFFER=5        # Extra buffer for CAC completion
+RADAR_HISTORY_RETENTION=604800  # 7 days of radar history
+
+# DFS Channel States
+DFS_STATE_AVAILABLE="available"
+DFS_STATE_CAC="cac_in_progress"
+DFS_STATE_OPERATIONAL="operational"
+DFS_STATE_NOP="nop_active"
+DFS_STATE_UNAVAILABLE="unavailable"
+
+# ============================================================
+# DFS STATE MANAGEMENT
+# ============================================================
+
+init_dfs_state() {
+    # Initialize DFS state tracking files
+    #
+    # Creates necessary directories and initializes state files
+    # with empty/default values if they don't exist
+
+    log_info "Initializing DFS state management..."
+
+    # Create directories
+    mkdir -p /var/lib/fortress
+    mkdir -p /var/log/fortress
+
+    # Initialize radar history if not exists
+    if [ ! -f "$DFS_RADAR_HISTORY" ]; then
+        cat > "$DFS_RADAR_HISTORY" << 'EOF'
+{
+    "version": "1.0",
+    "created": "",
+    "radar_events": [],
+    "channel_stats": {}
+}
+EOF
+        # Set creation time
+        local now
+        now=$(date -Iseconds)
+        sed -i "s/\"created\": \"\"/\"created\": \"$now\"/" "$DFS_RADAR_HISTORY"
+    fi
+
+    # Initialize NOP state if not exists
+    if [ ! -f "$DFS_NOP_STATE" ]; then
+        cat > "$DFS_NOP_STATE" << 'EOF'
+{
+    "nop_channels": {},
+    "last_updated": ""
+}
+EOF
+    fi
+
+    # Initialize channel state if not exists
+    if [ ! -f "$DFS_CHANNEL_STATE" ]; then
+        cat > "$DFS_CHANNEL_STATE" << 'EOF'
+{
+    "channels": {},
+    "current_channel": null,
+    "fallback_channel": null,
+    "last_cac": null
+}
+EOF
+    fi
+
+    # Initialize fallback channels
+    if [ ! -f "$DFS_FALLBACK_CHANNELS" ]; then
+        cat > "$DFS_FALLBACK_CHANNELS" << 'EOF'
+{
+    "primary_fallback": 36,
+    "secondary_fallback": 44,
+    "precomputed": false,
+    "last_computed": null
+}
+EOF
+    fi
+
+    log_success "DFS state initialized"
+}
+
+get_channel_dfs_state() {
+    # Get the current DFS state of a channel
+    #
+    # Args:
+    #   $1 - Channel number
+    #
+    # Output: State string (available, cac_in_progress, operational, nop_active, unavailable)
+
+    local channel="$1"
+
+    # Check if channel is in NOP
+    if is_channel_in_nop "$channel"; then
+        echo "$DFS_STATE_NOP"
+        return
+    fi
+
+    # Check channel state file
+    if [ -f "$DFS_CHANNEL_STATE" ]; then
+        local state
+        state=$(jq -r ".channels[\"$channel\"].state // \"$DFS_STATE_AVAILABLE\"" "$DFS_CHANNEL_STATE" 2>/dev/null)
+        echo "$state"
+    else
+        # Non-DFS channels are always available
+        if ! is_dfs_channel "$channel"; then
+            echo "$DFS_STATE_AVAILABLE"
+        else
+            echo "$DFS_STATE_AVAILABLE"
+        fi
+    fi
+}
+
+set_channel_dfs_state() {
+    # Set the DFS state of a channel
+    #
+    # Args:
+    #   $1 - Channel number
+    #   $2 - State
+    #   $3 - Additional info (optional)
+
+    local channel="$1"
+    local state="$2"
+    local info="${3:-}"
+    local now
+    now=$(date -Iseconds)
+
+    [ ! -f "$DFS_CHANNEL_STATE" ] && init_dfs_state
+
+    # Update state
+    local tmp
+    tmp=$(mktemp)
+    jq --arg ch "$channel" \
+       --arg state "$state" \
+       --arg time "$now" \
+       --arg info "$info" \
+       '.channels[$ch] = {
+           "state": $state,
+           "updated_at": $time,
+           "info": $info
+       }' "$DFS_CHANNEL_STATE" > "$tmp" && mv "$tmp" "$DFS_CHANNEL_STATE"
+
+    log_debug "Channel $channel state: $state"
+}
+
+# ============================================================
+# NON-OCCUPANCY PERIOD (NOP) TRACKING
+# ============================================================
+
+is_channel_in_nop() {
+    # Check if a channel is currently in Non-Occupancy Period
+    #
+    # Args:
+    #   $1 - Channel number
+    #
+    # Returns: 0 if in NOP, 1 if available
+
+    local channel="$1"
+
+    [ ! -f "$DFS_NOP_STATE" ] && return 1
+
+    local nop_end
+    nop_end=$(jq -r ".nop_channels[\"$channel\"].nop_ends // empty" "$DFS_NOP_STATE" 2>/dev/null)
+
+    [ -z "$nop_end" ] && return 1
+
+    # Check if NOP has expired
+    local now nop_epoch now_epoch
+    now=$(date +%s)
+    nop_epoch=$(date -d "$nop_end" +%s 2>/dev/null || echo 0)
+
+    if [ "$now" -lt "$nop_epoch" ]; then
+        return 0  # Still in NOP
+    else
+        # NOP expired, clean up
+        remove_channel_from_nop "$channel"
+        return 1
+    fi
+}
+
+add_channel_to_nop() {
+    # Add a channel to Non-Occupancy Period after radar detection
+    #
+    # Args:
+    #   $1 - Channel number
+    #   $2 - Radar type (optional)
+
+    local channel="$1"
+    local radar_type="${2:-unknown}"
+    local now nop_ends
+    now=$(date -Iseconds)
+    nop_ends=$(date -d "+$NOP_DURATION seconds" -Iseconds)
+
+    [ ! -f "$DFS_NOP_STATE" ] && init_dfs_state
+
+    log_warn "Adding channel $channel to NOP (30 minutes)"
+    log_warn "  Radar type: $radar_type"
+    log_warn "  NOP ends: $nop_ends"
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg ch "$channel" \
+       --arg start "$now" \
+       --arg ends "$nop_ends" \
+       --arg radar "$radar_type" \
+       '.nop_channels[$ch] = {
+           "nop_started": $start,
+           "nop_ends": $ends,
+           "radar_type": $radar,
+           "duration_sec": '"$NOP_DURATION"'
+       } | .last_updated = $start' "$DFS_NOP_STATE" > "$tmp" && mv "$tmp" "$DFS_NOP_STATE"
+
+    # Log the event
+    log_dfs_event "NOP_START" "$channel" "Radar: $radar_type, NOP ends: $nop_ends"
+
+    # Update channel state
+    set_channel_dfs_state "$channel" "$DFS_STATE_NOP" "radar_detected"
+}
+
+remove_channel_from_nop() {
+    # Remove a channel from NOP (after 30 min expiry)
+    #
+    # Args:
+    #   $1 - Channel number
+
+    local channel="$1"
+
+    [ ! -f "$DFS_NOP_STATE" ] && return
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg ch "$channel" 'del(.nop_channels[$ch])' "$DFS_NOP_STATE" > "$tmp" && mv "$tmp" "$DFS_NOP_STATE"
+
+    log_info "Channel $channel NOP expired, now available"
+    log_dfs_event "NOP_END" "$channel" "Channel available after 30-min NOP"
+
+    # Update channel state
+    set_channel_dfs_state "$channel" "$DFS_STATE_AVAILABLE" "nop_expired"
+}
+
+get_nop_channels() {
+    # Get list of all channels currently in NOP
+    #
+    # Output: Space-separated list of channels
+
+    [ ! -f "$DFS_NOP_STATE" ] && return
+
+    local channels=""
+    local now
+    now=$(date +%s)
+
+    # Get all NOP channels and check if still valid
+    while read -r ch nop_end; do
+        [ -z "$ch" ] && continue
+        local nop_epoch
+        nop_epoch=$(date -d "$nop_end" +%s 2>/dev/null || echo 0)
+
+        if [ "$now" -lt "$nop_epoch" ]; then
+            channels="$channels $ch"
+        fi
+    done < <(jq -r '.nop_channels | to_entries[] | "\(.key) \(.value.nop_ends)"' "$DFS_NOP_STATE" 2>/dev/null)
+
+    echo "$channels" | xargs
+}
+
+get_nop_remaining() {
+    # Get remaining NOP time for a channel
+    #
+    # Args:
+    #   $1 - Channel number
+    #
+    # Output: Remaining seconds, or 0 if not in NOP
+
+    local channel="$1"
+
+    [ ! -f "$DFS_NOP_STATE" ] && { echo "0"; return; }
+
+    local nop_end
+    nop_end=$(jq -r ".nop_channels[\"$channel\"].nop_ends // empty" "$DFS_NOP_STATE" 2>/dev/null)
+
+    [ -z "$nop_end" ] && { echo "0"; return; }
+
+    local now nop_epoch remaining
+    now=$(date +%s)
+    nop_epoch=$(date -d "$nop_end" +%s 2>/dev/null || echo 0)
+    remaining=$((nop_epoch - now))
+
+    [ "$remaining" -lt 0 ] && remaining=0
+    echo "$remaining"
+}
+
+# ============================================================
+# RADAR HISTORY & LEARNING ALGORITHM
+# ============================================================
+
+log_dfs_event() {
+    # Log a DFS event to the event log
+    #
+    # Args:
+    #   $1 - Event type
+    #   $2 - Channel
+    #   $3 - Details
+
+    local event_type="$1"
+    local channel="$2"
+    local details="${3:-}"
+    local timestamp
+    timestamp=$(date -Iseconds)
+
+    mkdir -p "$(dirname "$DFS_EVENT_LOG")"
+
+    echo "[$timestamp] $event_type channel=$channel $details" >> "$DFS_EVENT_LOG"
+}
+
+record_radar_event() {
+    # Record a radar detection event to history
+    # This data is used by the learning algorithm
+    #
+    # Args:
+    #   $1 - Channel number
+    #   $2 - Radar type
+    #   $3 - Signal strength (optional, dBm)
+
+    local channel="$1"
+    local radar_type="${2:-unknown}"
+    local signal="${3:-0}"
+    local now
+    now=$(date -Iseconds)
+    local hour
+    hour=$(date +%H)
+    local day_of_week
+    day_of_week=$(date +%u)
+
+    [ ! -f "$DFS_RADAR_HISTORY" ] && init_dfs_state
+
+    log_info "Recording radar event: channel=$channel, type=$radar_type"
+
+    # Add event to history
+    local tmp
+    tmp=$(mktemp)
+    jq --arg ch "$channel" \
+       --arg type "$radar_type" \
+       --arg time "$now" \
+       --arg hour "$hour" \
+       --arg dow "$day_of_week" \
+       --argjson sig "$signal" \
+       '.radar_events += [{
+           "channel": ($ch | tonumber),
+           "radar_type": $type,
+           "timestamp": $time,
+           "hour": ($hour | tonumber),
+           "day_of_week": ($dow | tonumber),
+           "signal_dbm": $sig
+       }]' "$DFS_RADAR_HISTORY" > "$tmp" && mv "$tmp" "$DFS_RADAR_HISTORY"
+
+    # Update channel statistics
+    update_channel_radar_stats "$channel"
+
+    # Clean old events (keep last 7 days)
+    cleanup_radar_history
+}
+
+update_channel_radar_stats() {
+    # Update radar statistics for a channel
+    #
+    # Args:
+    #   $1 - Channel number
+
+    local channel="$1"
+
+    [ ! -f "$DFS_RADAR_HISTORY" ] && return
+
+    # Count total radar events for this channel
+    local count
+    count=$(jq --arg ch "$channel" '[.radar_events[] | select(.channel == ($ch | tonumber))] | length' "$DFS_RADAR_HISTORY" 2>/dev/null || echo 0)
+
+    # Get last event time
+    local last_event
+    last_event=$(jq -r --arg ch "$channel" '[.radar_events[] | select(.channel == ($ch | tonumber))] | last | .timestamp // empty' "$DFS_RADAR_HISTORY" 2>/dev/null)
+
+    # Calculate radar frequency (events per day)
+    local first_event days_active freq
+    first_event=$(jq -r '.radar_events[0].timestamp // empty' "$DFS_RADAR_HISTORY" 2>/dev/null)
+
+    if [ -n "$first_event" ] && [ -n "$last_event" ]; then
+        local first_epoch last_epoch
+        first_epoch=$(date -d "$first_event" +%s 2>/dev/null || echo 0)
+        last_epoch=$(date -d "$last_event" +%s 2>/dev/null || date +%s)
+        days_active=$(( (last_epoch - first_epoch) / 86400 + 1 ))
+        [ "$days_active" -lt 1 ] && days_active=1
+        freq=$(echo "scale=2; $count / $days_active" | bc 2>/dev/null || echo "0")
+    else
+        freq="0"
+    fi
+
+    # Update stats
+    local tmp
+    tmp=$(mktemp)
+    jq --arg ch "$channel" \
+       --argjson count "$count" \
+       --arg last "$last_event" \
+       --arg freq "$freq" \
+       '.channel_stats[$ch] = {
+           "total_events": $count,
+           "last_event": $last,
+           "events_per_day": ($freq | tonumber),
+           "risk_score": (if $count > 10 then "high" elif $count > 3 then "medium" else "low" end)
+       }' "$DFS_RADAR_HISTORY" > "$tmp" && mv "$tmp" "$DFS_RADAR_HISTORY"
+}
+
+cleanup_radar_history() {
+    # Remove radar events older than retention period
+    #
+    # Keeps the last 7 days of history
+
+    [ ! -f "$DFS_RADAR_HISTORY" ] && return
+
+    local cutoff
+    cutoff=$(date -d "-$RADAR_HISTORY_RETENTION seconds" -Iseconds 2>/dev/null)
+
+    [ -z "$cutoff" ] && return
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg cutoff "$cutoff" \
+       '.radar_events = [.radar_events[] | select(.timestamp >= $cutoff)]' \
+       "$DFS_RADAR_HISTORY" > "$tmp" && mv "$tmp" "$DFS_RADAR_HISTORY"
+}
+
+get_channel_radar_risk() {
+    # Get the radar risk score for a channel
+    #
+    # Args:
+    #   $1 - Channel number
+    #
+    # Output: Risk score (low, medium, high) or "unknown"
+
+    local channel="$1"
+
+    # Non-DFS channels have no radar risk
+    if ! is_dfs_channel "$channel"; then
+        echo "none"
+        return
+    fi
+
+    [ ! -f "$DFS_RADAR_HISTORY" ] && { echo "unknown"; return; }
+
+    local risk
+    risk=$(jq -r --arg ch "$channel" '.channel_stats[$ch].risk_score // "unknown"' "$DFS_RADAR_HISTORY" 2>/dev/null)
+    echo "$risk"
+}
+
+get_safest_dfs_channels() {
+    # Get DFS channels sorted by radar risk (safest first)
+    #
+    # Args:
+    #   $1 - Include UNII-2C (true/false)
+    #
+    # Output: Space-separated channel list
+
+    local include_unii2c="${1:-false}"
+
+    local channels=""
+
+    # Start with UNII-2A
+    channels="$UNII2A_CHANNELS"
+
+    # Add UNII-2C if requested
+    if [ "$include_unii2c" = "true" ]; then
+        channels="$channels $UNII2C_CHANNELS"
+    fi
+
+    # If no history, return as-is
+    [ ! -f "$DFS_RADAR_HISTORY" ] && { echo "$channels"; return; }
+
+    # Sort by risk (low first, then unknown, then medium, then high)
+    local sorted=""
+    for risk_level in "low" "unknown" "medium" "high"; do
+        for ch in $channels; do
+            local ch_risk
+            ch_risk=$(get_channel_radar_risk "$ch")
+            if [ "$ch_risk" = "$risk_level" ]; then
+                # Skip if in NOP
+                is_channel_in_nop "$ch" && continue
+                sorted="$sorted $ch"
+            fi
+        done
+    done
+
+    echo "$sorted" | xargs
+}
+
+# ============================================================
+# CSA (CHANNEL SWITCH ANNOUNCEMENT) HANDLING
+# ============================================================
+
+generate_csa_hostapd_config() {
+    # Generate hostapd configuration for CSA and DFS
+    #
+    # Args:
+    #   $1 - Channel number
+    #   $2 - Country code
+    #
+    # Output: Hostapd config snippet for DFS/CSA
+
+    local channel="$1"
+    local country="${2:-$(get_current_regdomain)}"
+
+    cat << EOF
+# ============================================================
+# DFS & CSA Configuration (ETSI EN 301 893 Compliant)
+# ============================================================
+
+# Regulatory settings
+country_code=$country
+ieee80211d=1
+EOF
+
+    if is_dfs_channel "$channel"; then
+        local cac_time
+        cac_time=$(get_cac_time "$channel")
+
+        cat << EOF
+
+# DFS (Dynamic Frequency Selection) - Required for channel $channel
+ieee80211h=1
+
+# Channel Switch Announcement (CSA)
+# Announce channel switch in beacons before switching
+# This ensures clients can follow to the new channel
+spectrum_mgmt_required=1
+
+# Number of beacons to send with CSA before switching
+# ETSI requires advance notice (typically 3-5 beacons)
+# With 100ms beacon interval, 5 beacons = 500ms warning
+# hostapd default is usually 3
+
+# CAC time for this channel: ${cac_time}s
+# Channel band: $(get_band_for_channel "$channel")
+EOF
+
+    else
+        cat << EOF
+
+# Non-DFS channel - No radar detection required
+ieee80211h=0
+EOF
+    fi
+}
+
+prepare_fallback_channel() {
+    # Pre-compute and cache a fallback channel for quick switching
+    # This channel should be non-DFS for immediate availability
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Current channel
+
+    local iface="$1"
+    local current_channel="${2:-}"
+    local country
+    country=$(get_current_regdomain)
+
+    log_info "Preparing fallback channel for fast CSA..."
+
+    # Get best non-DFS channel (excluding current)
+    local fallback
+    fallback=$(scan_for_best_channel "$iface" "quick" "$country" 2>/dev/null | tail -1)
+
+    # If current is non-DFS, pick a different non-DFS
+    if [ "$fallback" = "$current_channel" ]; then
+        # Pick next best
+        for ch in $UNII1_CHANNELS; do
+            if [ "$ch" != "$current_channel" ]; then
+                fallback="$ch"
+                break
+            fi
+        done
+    fi
+
+    # Secondary fallback (different from primary)
+    local secondary=36
+    for ch in $UNII1_CHANNELS; do
+        if [ "$ch" != "$fallback" ]; then
+            secondary="$ch"
+            break
+        fi
+    done
+
+    log_info "  Primary fallback: $fallback ($(get_band_for_channel "$fallback"))"
+    log_info "  Secondary fallback: $secondary"
+
+    # Save fallback channels
+    cat > "$DFS_FALLBACK_CHANNELS" << EOF
+{
+    "primary_fallback": $fallback,
+    "secondary_fallback": $secondary,
+    "current_channel": ${current_channel:-null},
+    "precomputed": true,
+    "last_computed": "$(date -Iseconds)",
+    "country": "$country"
+}
+EOF
+
+    echo "$fallback"
+}
+
+get_fallback_channel() {
+    # Get the pre-computed fallback channel
+    #
+    # Output: Fallback channel number
+
+    if [ -f "$DFS_FALLBACK_CHANNELS" ]; then
+        jq -r '.primary_fallback // 36' "$DFS_FALLBACK_CHANNELS" 2>/dev/null
+    else
+        echo "36"
+    fi
+}
+
+execute_fast_channel_switch() {
+    # Execute a fast channel switch using CSA
+    # This is called when radar is detected
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Target channel (optional, uses fallback if not specified)
+    #   $3 - CSA beacon count (optional, default: 5)
+
+    local iface="$1"
+    local target_channel="${2:-}"
+    local csa_count="${3:-$CSA_BEACON_COUNT}"
+
+    log_warn "=========================================="
+    log_warn "FAST CHANNEL SWITCH INITIATED"
+    log_warn "=========================================="
+
+    # Get current channel
+    local current_channel
+    current_channel=$(iw dev "$iface" info 2>/dev/null | grep -oP "channel \K[0-9]+" | head -1)
+    log_info "Current channel: $current_channel"
+
+    # Get target channel
+    if [ -z "$target_channel" ]; then
+        target_channel=$(get_fallback_channel)
+    fi
+    log_info "Target channel: $target_channel"
+
+    # Verify target is not in NOP
+    if is_channel_in_nop "$target_channel"; then
+        log_warn "Target channel $target_channel is in NOP, using secondary fallback"
+        target_channel=$(jq -r '.secondary_fallback // 36' "$DFS_FALLBACK_CHANNELS" 2>/dev/null)
+    fi
+
+    local target_freq
+    target_freq=$(channel_to_freq "$target_channel")
+
+    # Method 1: hostapd_cli (preferred - uses CSA)
+    if command -v hostapd_cli &>/dev/null; then
+        log_info "Executing CSA via hostapd_cli..."
+
+        # Find hostapd control socket
+        local ctrl_sock=""
+        for sock in /var/run/hostapd/"$iface" /var/run/hostapd-"$iface" /run/hostapd/"$iface"; do
+            [ -S "$sock" ] && { ctrl_sock="$sock"; break; }
+        done
+
+        if [ -n "$ctrl_sock" ]; then
+            # Execute channel switch with CSA
+            # Format: chan_switch <cs_count> <freq> [sec_channel_offset=] [center_freq1=] [center_freq2=] [bandwidth=] [blocktx] [ht|vht]
+            local result
+            result=$(hostapd_cli -p "$(dirname "$ctrl_sock")" chan_switch "$csa_count" "$target_freq" 2>&1)
+
+            if echo "$result" | grep -qi "ok"; then
+                log_success "CSA initiated: $current_channel → $target_channel"
+                log_info "  CSA beacons: $csa_count"
+                log_info "  Target frequency: $target_freq MHz"
+
+                # Log the event
+                log_dfs_event "CSA_SWITCH" "$target_channel" "from=$current_channel csa_count=$csa_count"
+
+                # Update state
+                set_channel_dfs_state "$target_channel" "$DFS_STATE_OPERATIONAL" "csa_switch"
+
+                return 0
+            else
+                log_warn "hostapd_cli chan_switch failed: $result"
+            fi
+        else
+            log_warn "hostapd control socket not found"
+        fi
+    fi
+
+    # Method 2: Direct iw command (fallback - no CSA)
+    log_warn "Falling back to direct channel switch (no CSA)"
+
+    if iw dev "$iface" set freq "$target_freq" 2>/dev/null; then
+        log_success "Channel switched: $current_channel → $target_channel"
+        log_dfs_event "DIRECT_SWITCH" "$target_channel" "from=$current_channel"
+        return 0
+    else
+        log_error "Channel switch failed!"
+        return 1
+    fi
+}
+
+# ============================================================
+# RADAR EVENT MONITORING
+# ============================================================
+
+start_radar_monitor() {
+    # Start monitoring for radar events
+    # Monitors kernel messages and hostapd for DFS events
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Run in foreground (true/false)
+
+    local iface="$1"
+    local foreground="${2:-false}"
+
+    log_info "Starting DFS radar monitor for $iface..."
+
+    # Initialize state
+    init_dfs_state
+
+    # Prepare fallback channel
+    prepare_fallback_channel "$iface"
+
+    if [ "$foreground" = "true" ]; then
+        _radar_monitor_loop "$iface"
+    else
+        # Run in background
+        _radar_monitor_loop "$iface" &
+        local pid=$!
+        echo "$pid" > /var/run/fortress-radar-monitor.pid
+        log_success "Radar monitor started (PID: $pid)"
+    fi
+}
+
+_radar_monitor_loop() {
+    # Internal radar monitoring loop
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+
+    log_info "Radar monitor active, watching for DFS events..."
+
+    # Monitor kernel messages for radar detection
+    # dmesg format varies by driver, common patterns:
+    #   ath10k: "radar detected"
+    #   ath11k: "Radar detected"
+    #   ath12k: "DFS radar detected"
+    #   iwlwifi: "radar detected on frequency"
+    #   mt76: "radar detected"
+
+    # Use journalctl for real-time monitoring
+    journalctl -k -f --no-pager 2>/dev/null | while read -r line; do
+        # Check for radar detection
+        if echo "$line" | grep -qiE "radar.*(detect|found)|dfs.*(radar|event)"; then
+            log_warn "RADAR DETECTED!"
+            log_warn "  Event: $line"
+
+            # Extract channel if possible
+            local channel freq
+            freq=$(echo "$line" | grep -oE "[0-9]{4}\s*MHz" | grep -oE "[0-9]{4}" | head -1)
+            if [ -n "$freq" ]; then
+                channel=$(freq_to_channel "$freq")
+            else
+                # Try to get current channel
+                channel=$(iw dev "$iface" info 2>/dev/null | grep -oP "channel \K[0-9]+" | head -1)
+            fi
+
+            if [ -n "$channel" ]; then
+                # Handle radar event
+                handle_radar_event "$iface" "$channel" "kernel_event"
+            fi
+        fi
+
+        # Check for CAC completion
+        if echo "$line" | grep -qiE "cac.*(complet|finish|done)|dfs.*available"; then
+            log_success "CAC completed"
+            log_dfs_event "CAC_COMPLETE" "" "$line"
+        fi
+
+        # Check for NOP expiry
+        if echo "$line" | grep -qiE "nop.*(expir|end|finish)|channel.*available"; then
+            log_info "NOP expired notification"
+        fi
+    done
+}
+
+handle_radar_event() {
+    # Handle a radar detection event
+    # This triggers the fast channel switch procedure
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Channel where radar was detected
+    #   $3 - Radar type
+
+    local iface="$1"
+    local channel="$2"
+    local radar_type="${3:-unknown}"
+
+    log_error "=========================================="
+    log_error "RADAR DETECTED ON CHANNEL $channel"
+    log_error "=========================================="
+    log_error "Time: $(date -Iseconds)"
+    log_error "Radar type: $radar_type"
+    log_error "Action: Initiating fast channel switch"
+
+    # Record the event
+    record_radar_event "$channel" "$radar_type"
+
+    # Add channel to NOP
+    add_channel_to_nop "$channel" "$radar_type"
+
+    # Execute fast channel switch
+    execute_fast_channel_switch "$iface"
+
+    # Update fallback channel for next event
+    prepare_fallback_channel "$iface"
+
+    log_warn "=========================================="
+    log_warn "Radar event handled"
+    log_warn "Channel $channel in NOP for 30 minutes"
+    log_warn "=========================================="
+}
+
+freq_to_channel() {
+    # Convert frequency in MHz to channel number
+    #
+    # Args:
+    #   $1 - Frequency in MHz
+    #
+    # Output: Channel number
+
+    local freq="$1"
+
+    # 5 GHz band
+    if [ "$freq" -ge 5180 ] && [ "$freq" -le 5825 ]; then
+        echo $(( (freq - 5000) / 5 ))
+        return
+    fi
+
+    # 2.4 GHz band
+    if [ "$freq" -ge 2412 ] && [ "$freq" -le 2484 ]; then
+        if [ "$freq" -eq 2484 ]; then
+            echo "14"
+        else
+            echo $(( (freq - 2407) / 5 ))
+        fi
+        return
+    fi
+
+    echo "0"
+}
+
+stop_radar_monitor() {
+    # Stop the radar monitor daemon
+    #
+
+    if [ -f /var/run/fortress-radar-monitor.pid ]; then
+        local pid
+        pid=$(cat /var/run/fortress-radar-monitor.pid)
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            log_info "Radar monitor stopped (PID: $pid)"
+        fi
+        rm -f /var/run/fortress-radar-monitor.pid
+    fi
+}
+
+# ============================================================
+# SMART CHANNEL SELECTION WITH HISTORY
+# ============================================================
+
+select_optimal_dfs_channel() {
+    # Select the optimal DFS channel considering:
+    # - Current congestion (AP scan)
+    # - Radar history (avoid high-risk channels)
+    # - NOP status (avoid channels in NOP)
+    # - Band preference (UNII-2A preferred over UNII-2C)
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Include UNII-2C (true/false)
+    #   $3 - Country code
+    #
+    # Output: Best channel number
+
+    local iface="$1"
+    local include_unii2c="${2:-false}"
+    local country="${3:-$(get_current_regdomain)}"
+
+    log_info "Selecting optimal DFS channel..."
+    log_info "  Include UNII-2C: $include_unii2c"
+    log_info "  Country: $country"
+
+    # Get channels sorted by radar risk
+    local candidates
+    candidates=$(get_safest_dfs_channels "$include_unii2c")
+
+    log_info "  Candidates (by radar risk): $candidates"
+
+    # Filter out NOP channels
+    local available_candidates=""
+    local nop_channels
+    nop_channels=$(get_nop_channels)
+
+    for ch in $candidates; do
+        if ! echo " $nop_channels " | grep -q " $ch "; then
+            available_candidates="$available_candidates $ch"
+        else
+            local remaining
+            remaining=$(get_nop_remaining "$ch")
+            log_debug "  Channel $ch in NOP ($remaining seconds remaining)"
+        fi
+    done
+
+    available_candidates=$(echo "$available_candidates" | xargs)
+    log_info "  After NOP filter: $available_candidates"
+
+    [ -z "$available_candidates" ] && {
+        log_warn "No DFS channels available, falling back to UNII-1"
+        echo "36"
+        return
+    }
+
+    # Scan for congestion among available candidates
+    ip link set "$iface" up 2>/dev/null || true
+    sleep 1
+    local scan_results
+    scan_results=$(iw dev "$iface" scan 2>/dev/null) || true
+
+    local best_channel=""
+    local best_score=9999
+
+    for ch in $available_candidates; do
+        local freq ap_count risk_penalty score
+        freq=$(channel_to_freq "$ch")
+        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null || echo "0")
+
+        # Get risk penalty from history
+        local risk
+        risk=$(get_channel_radar_risk "$ch")
+        case "$risk" in
+            high)   risk_penalty=10 ;;
+            medium) risk_penalty=3 ;;
+            low)    risk_penalty=0 ;;
+            *)      risk_penalty=1 ;;
+        esac
+
+        # UNII-2C penalty (prefer UNII-2A due to shorter CAC)
+        local band_penalty=0
+        if [ "$ch" -ge 100 ] && [ "$ch" -le 144 ]; then
+            band_penalty=2
+        fi
+
+        score=$((ap_count + risk_penalty + band_penalty))
+
+        log_debug "  Channel $ch: APs=$ap_count, risk=$risk (+$risk_penalty), band_penalty=$band_penalty, score=$score"
+
+        if [ "$score" -lt "$best_score" ]; then
+            best_score="$score"
+            best_channel="$ch"
+        fi
+
+        # If we find a perfect channel (0 APs, low risk), use it
+        if [ "$score" -eq 0 ]; then
+            break
+        fi
+    done
+
+    log_success "Selected channel: $best_channel ($(get_band_for_channel "$best_channel"), score=$best_score)"
+    echo "$best_channel"
+}
+
+show_dfs_status() {
+    # Display comprehensive DFS status
+    #
+    # Args:
+    #   $1 - Interface name
+
+    local iface="$1"
+
+    log_info "=========================================="
+    log_info "DFS STATUS REPORT"
+    log_info "=========================================="
+
+    # Current channel
+    local current_ch
+    current_ch=$(iw dev "$iface" info 2>/dev/null | grep -oP "channel \K[0-9]+" | head -1)
+    if [ -n "$current_ch" ]; then
+        local band dfs_state
+        band=$(get_band_for_channel "$current_ch")
+        dfs_state=$(get_channel_dfs_state "$current_ch")
+        log_info "Current: Channel $current_ch [$band] - State: $dfs_state"
+    fi
+
+    # Fallback channels
+    if [ -f "$DFS_FALLBACK_CHANNELS" ]; then
+        local primary secondary
+        primary=$(jq -r '.primary_fallback' "$DFS_FALLBACK_CHANNELS" 2>/dev/null)
+        secondary=$(jq -r '.secondary_fallback' "$DFS_FALLBACK_CHANNELS" 2>/dev/null)
+        log_info "Fallback: Primary=$primary, Secondary=$secondary"
+    fi
+
+    # NOP channels
+    log_info ""
+    log_info "Channels in NOP (Non-Occupancy Period):"
+    local nop_list
+    nop_list=$(get_nop_channels)
+    if [ -n "$nop_list" ]; then
+        for ch in $nop_list; do
+            local remaining
+            remaining=$(get_nop_remaining "$ch")
+            local mins=$((remaining / 60))
+            local secs=$((remaining % 60))
+            log_warn "  Channel $ch: ${mins}m ${secs}s remaining"
+        done
+    else
+        log_success "  None (all DFS channels available)"
+    fi
+
+    # Radar history summary
+    log_info ""
+    log_info "Radar History Summary:"
+    if [ -f "$DFS_RADAR_HISTORY" ]; then
+        local total_events
+        total_events=$(jq '.radar_events | length' "$DFS_RADAR_HISTORY" 2>/dev/null || echo 0)
+        log_info "  Total radar events (last 7 days): $total_events"
+
+        # Show high-risk channels
+        log_info "  Channel risk levels:"
+        for ch in $UNII2A_CHANNELS $UNII2C_CHANNELS; do
+            local risk count
+            risk=$(get_channel_radar_risk "$ch")
+            count=$(jq -r --arg ch "$ch" '.channel_stats[$ch].total_events // 0' "$DFS_RADAR_HISTORY" 2>/dev/null)
+            if [ "$count" -gt 0 ]; then
+                log_info "    Channel $ch: $risk ($count events)"
+            fi
+        done
+    else
+        log_info "  No radar history recorded"
+    fi
+
+    log_info "=========================================="
+}
+
+# ============================================================
 # REGULATORY DOMAIN MANAGEMENT
 # ============================================================
 
@@ -1943,6 +3022,17 @@ Calibration Commands:
   calibrate-extended <iface>     Extended mode (all bands including 100-144)
   install-timer [iface] [mode]   Install 4AM timer (mode: full or extended)
 
+DFS Compliance Commands (ETSI EN 301 893):
+  dfs-init                       Initialize DFS state management
+  dfs-status <iface>             Show comprehensive DFS status & radar history
+  radar-monitor-start <iface>    Start background radar detection monitor
+  radar-monitor-stop             Stop radar detection monitor
+  nop-status                     Show channels in Non-Occupancy Period
+  radar-history [channel]        Show radar event history
+  select-dfs-channel <iface>     Select optimal DFS channel using history
+  csa-switch <iface> <channel>   Execute fast channel switch with CSA frames
+  prepare-fallback <iface>       Pre-compute fallback channel for fast switch
+
 Testing & Validation:
   backtest <iface> [country]     Run comprehensive backtest of all modes
   validate-countries <iface>     Validate channel selection for EU countries
@@ -1952,6 +3042,12 @@ EU/ETSI 5GHz Channel Bands:
   UNII-2A (52-64):   DFS, 60s CAC - Often clearer, use at 4AM
   UNII-2C (100-144): DFS, 600s CAC - Weather radar, long wait (10 min)
   UNII-3 (149-165):  NOT allowed in DE, FR, IT, ES, NL, BE, AT, etc.
+
+DFS Compliance (ETSI EN 301 893):
+  - CAC: Channel Availability Check (60s UNII-2A, 600s UNII-2C)
+  - NOP: Non-Occupancy Period (30 minutes after radar detection)
+  - CSA: Channel Switch Announcement (beacon frames before switch)
+  - Channel Move Time: Must vacate within 10 seconds of radar
 
 Calibration Modes:
   quick:    UNII-1 only (36-48) - No CAC, immediate
@@ -1980,6 +3076,20 @@ Examples:
 
   # Install 4AM timer with extended mode
   $(basename "$0") install-timer wlan0 extended
+
+  # DFS compliance: Start radar monitoring
+  $(basename "$0") dfs-init
+  $(basename "$0") radar-monitor-start wlan0
+
+  # Check DFS status and radar history
+  $(basename "$0") dfs-status wlan0
+  $(basename "$0") radar-history
+
+  # Select safest DFS channel based on history
+  $(basename "$0") select-dfs-channel wlan0
+
+  # Fast channel switch after radar detection
+  $(basename "$0") csa-switch wlan0 36
 
   # Run comprehensive backtest
   $(basename "$0") backtest wlan0 DE
@@ -2074,6 +3184,88 @@ main() {
             ;;
         install-timer|timer)
             install_calibration_timer "$@"
+            ;;
+        # DFS Compliance Commands
+        dfs-init|init-dfs)
+            # Initialize DFS state management
+            init_dfs_state
+            log_success "DFS state management initialized"
+            ;;
+        dfs-status|status)
+            # Show comprehensive DFS status
+            show_dfs_status "$@"
+            ;;
+        radar-monitor-start|monitor-start)
+            # Start radar detection monitor
+            local iface="${1:?Interface required}"
+            start_radar_monitor "$iface"
+            ;;
+        radar-monitor-stop|monitor-stop)
+            # Stop radar detection monitor
+            stop_radar_monitor
+            ;;
+        nop-status|nop)
+            # Show channels in NOP
+            local nop_channels
+            nop_channels=$(get_nop_channels)
+            if [ -z "$nop_channels" ]; then
+                log_info "No channels currently in Non-Occupancy Period"
+            else
+                echo "Channels in NOP (30-minute exclusion after radar):"
+                for ch in $nop_channels; do
+                    local remaining
+                    remaining=$(get_nop_remaining "$ch")
+                    echo "  Channel $ch: ${remaining}s remaining"
+                done
+            fi
+            ;;
+        radar-history|history)
+            # Show radar event history
+            local channel="${1:-}"
+            if [ -n "$channel" ]; then
+                log_info "Radar history for channel $channel:"
+                local risk
+                risk=$(get_channel_radar_risk "$channel")
+                echo "  Risk level: $risk"
+                if [ -f "$DFS_RADAR_HISTORY" ]; then
+                    jq -r ".channel_stats.\"$channel\" // \"No data\"" "$DFS_RADAR_HISTORY"
+                fi
+            else
+                log_info "Radar event history:"
+                if [ -f "$DFS_RADAR_HISTORY" ]; then
+                    echo "Recent events:"
+                    jq -r '.radar_events[-10:] | .[] | "  \(.timestamp): Ch \(.channel) - \(.event_type)"' "$DFS_RADAR_HISTORY" 2>/dev/null || echo "  No events recorded"
+                    echo ""
+                    echo "Channel statistics:"
+                    jq -r '.channel_stats | to_entries[] | "  Ch \(.key): \(.value.radar_count // 0) events, risk: \(.value.risk_score // "unknown")"' "$DFS_RADAR_HISTORY" 2>/dev/null || echo "  No statistics"
+                else
+                    echo "No radar history file found. Run 'dfs-init' first."
+                fi
+            fi
+            ;;
+        select-dfs-channel|select-dfs)
+            # Select optimal DFS channel using radar history
+            local iface="${1:?Interface required}"
+            local safest
+            safest=$(get_safest_dfs_channels "$iface" | head -1)
+            if [ -n "$safest" ]; then
+                log_success "Optimal DFS channel: $safest"
+                echo "$safest"
+            else
+                log_warn "No safe DFS channels available, using UNII-1"
+                echo "36"
+            fi
+            ;;
+        csa-switch|fast-switch)
+            # Execute fast channel switch with CSA
+            local iface="${1:?Interface required}"
+            local target_ch="${2:?Target channel required}"
+            execute_fast_channel_switch "$iface" "$target_ch"
+            ;;
+        prepare-fallback|fallback)
+            # Pre-compute fallback channel for fast switch
+            local iface="${1:?Interface required}"
+            prepare_fallback_channel "$iface"
             ;;
         backtest|test-all)
             # Comprehensive backtest of all modes
