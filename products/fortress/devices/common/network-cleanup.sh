@@ -228,13 +228,9 @@ create_vlan_ports() {
 }
 
 # Add physical Ethernet to OVS bridge
-# LAN ports accept untagged traffic and map to default VLAN
+# LAN ports as simple access ports for direct bridge connectivity
 add_ethernet_to_ovs() {
     log_info "Adding physical Ethernet interfaces to OVS..."
-
-    # Default VLAN for untagged traffic on LAN ports
-    # VLAN 20 = Trusted/Staff by default, can be overridden
-    local default_lan_vlan="${LAN_DEFAULT_VLAN:-20}"
 
     for iface in $(get_physical_ethernet); do
         # Skip WAN interface (usually first one or has default route)
@@ -249,7 +245,7 @@ add_ethernet_to_ovs() {
         # Bring interface up
         ip link set "$iface" up 2>/dev/null || true
 
-        # Check if already in OVS
+        # Add to OVS bridge
         if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${iface}$"; then
             log_info "  $iface already in OVS, updating config"
         else
@@ -257,15 +253,14 @@ add_ethernet_to_ovs() {
             ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$iface"
         fi
 
-        # Configure as hybrid port:
-        # - Untagged traffic maps to default VLAN (native-untagged mode)
-        # - Also accepts tagged traffic for other VLANs (trunk)
-        # This allows regular clients to plug in and get DHCP from default VLAN
-        ovs-vsctl set port "$iface" tag="$default_lan_vlan" \
-            vlan_mode=native-untagged \
-            trunks=10,20,30,40,99
+        # Clear any VLAN settings - make it a simple access port
+        # This ensures untagged traffic flows to/from the bridge
+        # Clients get DHCP from main bridge (10.250.0.x)
+        ovs-vsctl clear port "$iface" tag 2>/dev/null || true
+        ovs-vsctl clear port "$iface" trunks 2>/dev/null || true
+        ovs-vsctl clear port "$iface" vlan_mode 2>/dev/null || true
 
-        log_info "  $iface configured: untagged->VLAN $default_lan_vlan, trunk VLANs 10,20,30,40,99"
+        log_info "  $iface added to bridge (direct access)"
     done
 
     log_success "Ethernet LAN interfaces configured"
