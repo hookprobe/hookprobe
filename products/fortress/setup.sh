@@ -1706,6 +1706,7 @@ start_network_services() {
 
     if [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
         log_info "Starting 2.4GHz WiFi AP..."
+        systemctl enable fortress-hostapd-24ghz 2>/dev/null || true
         systemctl start fortress-hostapd-24ghz 2>/dev/null || log_warn "Failed to start 2.4GHz hostapd"
         wifi_started=true
     fi
@@ -1713,7 +1714,7 @@ start_network_services() {
     if [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
         log_info "Starting 5GHz WiFi AP..."
         # 5GHz with DFS channels may take 60+ seconds for radar detection
-        # Start in background and continue
+        systemctl enable fortress-hostapd-5ghz 2>/dev/null || true
         systemctl start fortress-hostapd-5ghz 2>/dev/null || log_warn "Failed to start 5GHz hostapd"
         wifi_started=true
     fi
@@ -1721,6 +1722,7 @@ start_network_services() {
     # Fallback to generic service if band-specific don't exist
     if [ "$wifi_started" = false ] && [ -f /etc/systemd/system/fortress-hostapd.service ]; then
         log_info "Starting WiFi AP (legacy)..."
+        systemctl enable fortress-hostapd 2>/dev/null || true
         systemctl start fortress-hostapd 2>/dev/null || log_warn "Failed to start hostapd"
     fi
 
@@ -1731,6 +1733,7 @@ start_network_services() {
     # This assigns IPs to bridge AND WiFi interface
     if [ -f /etc/systemd/system/fortress-nat.service ]; then
         log_info "Starting NAT routing..."
+        systemctl enable fortress-nat 2>/dev/null || true
         systemctl restart fortress-nat 2>/dev/null || log_warn "Failed to start NAT"
         sleep 1
     fi
@@ -1738,6 +1741,7 @@ start_network_services() {
     # Start dnsmasq (DHCP/DNS) LAST - needs interfaces with IPs
     if [ -f /etc/systemd/system/fortress-dnsmasq.service ]; then
         log_info "Starting DHCP server..."
+        systemctl enable fortress-dnsmasq 2>/dev/null || true
         systemctl restart fortress-dnsmasq 2>/dev/null || log_warn "Failed to start dnsmasq"
     fi
 
