@@ -3469,50 +3469,58 @@ setup_lte_failover() {
             log_warn "Failed to setup WAN failover"
         fi
 
-        # Create LTE failover systemd service
-        cat > /etc/systemd/system/fortress-lte-failover.service << 'LTESERVICEEOF'
+        # Install IP SLA-style WAN failover monitor
+        log_info "Installing IP SLA WAN failover monitor..."
+
+        # Copy the monitor script
+        local monitor_script="$DEVICES_DIR/common/wan-failover-monitor.sh"
+        if [ -f "$monitor_script" ]; then
+            cp "$monitor_script" /usr/local/bin/fortress-wan-failover
+            chmod +x /usr/local/bin/fortress-wan-failover
+        else
+            log_warn "WAN failover monitor script not found"
+        fi
+
+        # Create WAN failover systemd service (IP SLA-style health monitoring)
+        cat > /etc/systemd/system/fortress-wan-failover.service << 'WANFAILOVEREOF'
 [Unit]
-Description=HookProbe Fortress LTE WAN Failover Monitor
-After=network.target ModemManager.service
-Wants=ModemManager.service
+Description=HookProbe Fortress WAN Failover Monitor (IP SLA)
+Documentation=https://hookprobe.com/docs/wan-failover
+After=network-online.target ModemManager.service
+Wants=network-online.target ModemManager.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/fortress-lte-monitor
+ExecStart=/usr/local/bin/fortress-wan-failover start
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
-RestartSec=30
-Environment=HEALTH_CHECK_INTERVAL=30
-Environment=FAILOVER_THRESHOLD=3
-Environment=FAILBACK_THRESHOLD=5
+RestartSec=10
+# Ensure we have network access
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+WANFAILOVEREOF
+
+        # Create legacy symlink for compatibility
+        ln -sf /usr/local/bin/fortress-wan-failover /usr/local/bin/fortress-lte-monitor 2>/dev/null || true
+
+        # Also create LTE-specific service that starts the main monitor
+        cat > /etc/systemd/system/fortress-lte-failover.service << 'LTESERVICEEOF'
+[Unit]
+Description=HookProbe Fortress LTE WAN Failover (alias for wan-failover)
+After=fortress-wan-failover.service
+Requires=fortress-wan-failover.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
 
 [Install]
 WantedBy=multi-user.target
 LTESERVICEEOF
-
-        # Create LTE monitor script
-        cat > /usr/local/bin/fortress-lte-monitor << 'LTEMONITOREOF'
-#!/bin/bash
-# HookProbe Fortress LTE Failover Monitor
-
-source /etc/hookprobe/lte-failover.conf 2>/dev/null || {
-    PRIMARY_WAN="eth0"
-    BACKUP_WAN="wwan0"
-    HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-30}"
-    FAILOVER_THRESHOLD="${FAILOVER_THRESHOLD:-3}"
-    FAILBACK_THRESHOLD="${FAILBACK_THRESHOLD:-5}"
-}
-
-DEVICES_DIR="/opt/hookprobe/fortress/devices"
-if [ -f "$DEVICES_DIR/common/lte-manager.sh" ]; then
-    source "$DEVICES_DIR/common/lte-manager.sh"
-    monitor_wan_failover
-else
-    echo "LTE manager not found"
-    exit 1
-fi
-LTEMONITOREOF
-
-        chmod +x /usr/local/bin/fortress-lte-monitor
 
         # Save failover configuration
         # Get APN from saved config if set via interactive mode
@@ -3521,29 +3529,68 @@ LTEMONITOREOF
             saved_apn=$(grep "^LTE_APN=" /var/lib/fortress/lte/config.conf 2>/dev/null | cut -d= -f2 | tr -d '"')
         fi
 
-        cat > /etc/hookprobe/lte-failover.conf << LTECONFEOF
-# HookProbe Fortress LTE Failover Configuration
+        # Create unified WAN failover configuration
+        cat > /etc/hookprobe/wan-failover.conf << WANCONFEOF
+# HookProbe Fortress - WAN Failover Configuration
 # Generated: $(date -Iseconds)
+#
+# IP SLA-style health monitoring for WAN failover
+# Pings targets through primary interface, fails over when unreachable
 
-PRIMARY_WAN="${primary_wan}"
-BACKUP_WAN="${backup_wan}"
-HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30}
-FAILOVER_THRESHOLD=${FAILOVER_THRESHOLD:-3}
-FAILBACK_THRESHOLD=${FAILBACK_THRESHOLD:-5}
-HEALTH_CHECK_TARGETS="8.8.8.8 1.1.1.1"
+# ============================================================
+# INTERFACES
+# ============================================================
+# Primary WAN (ethernet uplink)
+PRIMARY_IFACE="${primary_wan}"
 
-# LTE Modem Info
+# Backup WAN (LTE modem)
+BACKUP_IFACE="${backup_wan}"
+
+# ============================================================
+# ROUTE METRICS
+# ============================================================
+PRIMARY_METRIC=100
+BACKUP_METRIC=200
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+# Targets to ping (multiple for reliability)
+HEALTH_TARGETS="8.8.8.8 1.1.1.1 9.9.9.9"
+
+# Timing
+CHECK_INTERVAL=5       # Seconds between checks
+PING_TIMEOUT=2         # Ping timeout
+PING_COUNT=1           # Pings per target
+
+# ============================================================
+# FAILOVER THRESHOLDS (Hysteresis)
+# ============================================================
+# Consecutive failures before failover
+FAIL_THRESHOLD=3
+
+# Consecutive successes before failback
+RECOVER_THRESHOLD=5
+
+# ============================================================
+# LTE MODEM INFO (for reference)
+# ============================================================
 LTE_VENDOR="${LTE_VENDOR:-}"
 LTE_MODEL="${LTE_MODEL:-}"
 LTE_INTERFACE="${LTE_INTERFACE:-}"
 LTE_APN="${saved_apn:-}"
 LTE_AUTH="${HOOKPROBE_LTE_AUTH:-none}"
-LTECONFEOF
+WANCONFEOF
 
-        chmod 644 /etc/hookprobe/lte-failover.conf
+        chmod 644 /etc/hookprobe/wan-failover.conf
+
+        # Create symlink for legacy config
+        ln -sf /etc/hookprobe/wan-failover.conf /etc/hookprobe/lte-failover.conf 2>/dev/null || true
 
         systemctl daemon-reload
+        systemctl enable fortress-wan-failover
         systemctl enable fortress-lte-failover
+        systemctl start fortress-wan-failover
 
         log_info "LTE failover setup complete"
     else
