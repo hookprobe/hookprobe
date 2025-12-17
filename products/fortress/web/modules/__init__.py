@@ -32,10 +32,6 @@ def register_blueprints(app: Flask):
     from .dnsxai import dnsxai_bp
     app.register_blueprint(dnsxai_bp, url_prefix='/dnsxai')
 
-    # Reports module - Business reports
-    from .reports import reports_bp
-    app.register_blueprint(reports_bp, url_prefix='/reports')
-
     # Settings module - System settings, user management
     from .settings import settings_bp
     app.register_blueprint(settings_bp, url_prefix='/settings')
