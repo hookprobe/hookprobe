@@ -1813,6 +1813,7 @@ setup_nftables_filtering() {
     # Use FORTRESS_ROOT directly (never overwritten by sourced scripts)
     local filter_script="$FORTRESS_ROOT/devices/common/network-filter-manager.sh"
     if [ -f "$filter_script" ]; then
+        mkdir -p /opt/hookprobe/fortress/bin
         install -m 755 "$filter_script" /opt/hookprobe/fortress/bin/network-filter-manager.sh
 
         # Initialize nftables rules
@@ -1832,6 +1833,7 @@ setup_nftables_filtering() {
     # Copy Python policy manager
     local py_policy="$FORTRESS_ROOT/lib/network_policy_manager.py"
     if [ -f "$py_policy" ]; then
+        mkdir -p /opt/hookprobe/fortress/lib
         install -m 644 "$py_policy" /opt/hookprobe/fortress/lib/network_policy_manager.py
         log_info "Python policy manager installed"
     fi
