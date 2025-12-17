@@ -7,8 +7,7 @@
 # Fortress - Full-Featured Edge Gateway with Monitoring
 #
 # Fortress Mode Features:
-#   - OVS bridge for wired LAN (10.250.0.0/24)
-#   - WiFi AP with separate subnet (10.250.1.0/24)
+#   - Unified LAN: OVS bridge for wired + WiFi (10.250.0.0/24)
 #   - nftables-based device filtering (replaces VLANs)
 #   - MACsec (802.1AE) Layer 2 encryption (optional)
 #   - OpenFlow 1.3 SDN for advanced traffic control
@@ -21,8 +20,7 @@
 #
 # Network Layout:
 #   - WAN: Preserved (existing DHCP/config untouched)
-#   - LAN: 10.250.0.0/24 via OVS bridge "fortress"
-#   - WiFi: 10.250.1.0/24 via hostapd
+#   - LAN: 10.250.0.0/24 via OVS bridge "fortress" (wired + WiFi)
 #
 # Requirements:
 #   - 4GB+ RAM (8GB recommended)
@@ -64,8 +62,7 @@ ENABLE_MESH="${ENABLE_MESH:-false}"
 NETWORK_FILTER_MODE="nftables"
 
 # Network Layout:
-#   - Wired LAN (fortress bridge): 10.250.0.0/24
-#   - WiFi network: 10.250.1.0/24
+#   - Unified LAN (fortress bridge): 10.250.0.0/24 (wired + WiFi)
 # Device filtering is handled by nftables MAC rules, not VLANs
 
 # VXLAN Configuration for mesh connectivity
@@ -1260,8 +1257,8 @@ PIDFile=/run/hostapd.pid
 ExecStartPre=/bin/sleep 2
 ExecStartPre=/usr/local/bin/fortress-wifi-prepare.sh ${wifi_iface}
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid /etc/hostapd/fortress.conf
-# NOTE: Do NOT add WiFi interface to OVS bridge - it interferes with hostapd
-# WiFi clients are bridged internally by hostapd and routed via NAT
+# Add WiFi interface to OVS bridge so WiFi clients get same subnet as wired clients
+ExecStartPost=/usr/local/bin/fortress-wifi-bridge.sh ${wifi_iface}
 Restart=on-failure
 RestartSec=5
 
@@ -1419,7 +1416,8 @@ NMEOF
         # Configure dual-band WiFi using our generator
         # This creates configs at /etc/hostapd/hostapd-24ghz.conf and hostapd-5ghz.conf
         # with auto-detected regulatory domain, WPA2 on 2.4GHz, WPA3 on 5GHz
-        configure_dual_band_wifi "$ap_ssid" "$ap_password" "br-lan"
+        # WiFi is bridged to OVS 'fortress' bridge so all clients share same subnet
+        configure_dual_band_wifi "$ap_ssid" "$ap_password" "$OVS_BRIDGE_NAME"
         local generator_result=$?
 
         if [ $generator_result -eq 0 ]; then
@@ -1596,18 +1594,18 @@ setup_dhcp_server() {
 
     # Create dnsmasq configuration for Fortress
     # Note: VLANs have been removed in favor of nftables-based filtering
-    # We now have two networks:
-    #   1. Wired LAN via OVS bridge (10.250.0.x)
-    #   2. WiFi via hostapd (10.250.1.x)
+    # All interfaces (wired LAN + WiFi) are bridged together on OVS bridge
+    # Single DHCP pool serves all clients
     mkdir -p /etc/dnsmasq.d
     cat > /etc/dnsmasq.d/fortress.conf << EOF
 # HookProbe Fortress DHCP Configuration
 # Generated: $(date -Iseconds)
 #
 # Network Layout:
-#   - Bridge (fortress): Wired LAN clients (10.250.0.x)
-#   - WiFi ($wifi_iface): Wireless clients (10.250.1.x)
-# Device filtering is handled by nftables, not VLANs
+#   - All interfaces bridged to OVS 'fortress' bridge
+#   - Single subnet: 10.250.0.0/24
+#   - WiFi clients join same network as wired clients
+# Device filtering is handled by nftables MAC rules
 
 # Global settings
 domain-needed
@@ -1641,33 +1639,16 @@ dhcp-authoritative
 dhcp-rapid-commit
 
 # ─────────────────────────────────────────────────────────────
-# Wired LAN - OVS Bridge (10.250.0.x)
+# Unified LAN - OVS Bridge (10.250.0.x)
 # ─────────────────────────────────────────────────────────────
-# All wired LAN interfaces are bridged to OVS 'fortress' bridge
-# Clients get DHCP from this interface
+# All interfaces (wired + WiFi) are bridged to OVS 'fortress' bridge
+# Single DHCP pool for all clients
 interface=$OVS_BRIDGE_NAME
 dhcp-range=$OVS_BRIDGE_NAME,10.250.0.100,10.250.0.200,255.255.255.0,24h
 dhcp-option=$OVS_BRIDGE_NAME,3,10.250.0.1
 dhcp-option=$OVS_BRIDGE_NAME,6,10.250.0.1,1.1.1.1
 
-# ─────────────────────────────────────────────────────────────
-# WiFi Network (10.250.1.x)
-# ─────────────────────────────────────────────────────────────
-# WiFi is managed by hostapd with its own subnet
-# This keeps WiFi isolated from wired LAN for security
-# Routing between subnets is handled by iptables
-$(if [ -n "$wifi_iface" ]; then
-cat << WIFI_DHCP
-interface=$wifi_iface
-dhcp-range=$wifi_iface,10.250.1.100,10.250.1.200,255.255.255.0,12h
-dhcp-option=$wifi_iface,3,10.250.1.1
-dhcp-option=$wifi_iface,6,10.250.1.1,1.1.1.1
-WIFI_DHCP
-else
-echo "# No WiFi interface detected - WiFi DHCP disabled"
-fi)
-
-# Bind only to specified interfaces (security)
+# Bind only to bridge interface (security)
 bind-interfaces
 
 # Ignore unknown interfaces to prevent startup errors
@@ -1709,12 +1690,8 @@ EOF
     systemctl enable fortress-dnsmasq 2>/dev/null || true
 
     log_info "DHCP server configured:"
-    log_info "  Wired LAN (bridge): 10.250.0.100-200 (gateway: 10.250.0.1)"
-    if [ -n "$wifi_iface" ]; then
-        log_info "  WiFi ($wifi_iface):  10.250.1.100-200 (gateway: 10.250.1.1)"
-    else
-        log_info "  WiFi: not configured (no WiFi interface detected)"
-    fi
+    log_info "  Unified LAN (bridge): 10.250.0.100-200 (gateway: 10.250.0.1)"
+    log_info "  All clients (wired + WiFi) share the same subnet"
 }
 
 # ============================================================
@@ -2207,11 +2184,8 @@ set -e
 BRIDGE="fortress"
 BRIDGE_IP="10.250.0.1"
 BRIDGE_SUBNET="24"
-WIFI_IP="10.250.1.1"
-WIFI_SUBNET="24"
 # Network layout:
-#   - Bridge (fortress): 10.250.0.0/24 - Wired LAN clients
-#   - WiFi: 10.250.1.0/24 - Wireless clients
+#   - Unified LAN (fortress bridge): 10.250.0.0/24 - All clients (wired + WiFi)
 
 # ============================================================
 # BRIDGE IP CONFIGURATION
@@ -4328,8 +4302,7 @@ profile_dir = ${FORTRESS_PROFILE_DIR:-}
 
 [network]
 ovs_bridge = $OVS_BRIDGE_NAME
-bridge_subnet = 10.250.0.0/24
-wifi_subnet = 10.250.1.0/24
+lan_subnet = 10.250.0.0/24
 filtering_mode = nftables
 macsec_enabled = $MACSEC_ENABLED
 wan_interface = ${WAN_INTERFACE:-${FORTRESS_WAN_IFACE:-}}
@@ -4599,8 +4572,7 @@ show_completion() {
     [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
     echo ""
     echo -e "  ${BOLD}Network Layout:${NC}"
-    echo -e "    ${CYAN}Wired LAN:${NC}  10.250.0.100-200 (OVS bridge)"
-    echo -e "    ${CYAN}WiFi:${NC}       10.250.1.100-200 (hostapd)"
+    echo -e "    ${CYAN}All clients:${NC} 10.250.0.100-200 (wired + WiFi on OVS bridge)"
     echo ""
     echo -e "  ${BOLD}Device Policies (via nftables):${NC}"
     echo -e "    ${GREEN}full_access${NC}    - Internet + LAN (staff laptops)"
@@ -4683,7 +4655,7 @@ show_completion() {
     echo -e "  ${BOLD}Connect to Fortress:${NC}"
     echo -e "  1. Connect to WiFi: ${CYAN}${WIFI_SSID:-hookprobe}${NC}"
     echo -e "  2. Or plug into a LAN port"
-    echo -e "  3. You'll get an IP in 10.250.1.x range"
+    echo -e "  3. You'll get an IP in 10.250.0.x range"
     echo -e "  4. Access dashboard: ${CYAN}https://10.250.0.1:8443${NC}"
     echo ""
 
