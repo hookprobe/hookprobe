@@ -448,6 +448,33 @@ remove_vlan_interfaces() {
 }
 
 # ============================================================
+# REMOVE NFTABLES FILTERING
+# ============================================================
+remove_nftables_filtering() {
+    log_step "Removing nftables filter rules..."
+
+    # Stop device monitor service
+    systemctl stop fortress-device-monitor 2>/dev/null || true
+    systemctl disable fortress-device-monitor 2>/dev/null || true
+    rm -f /etc/systemd/system/fortress-device-monitor.service
+
+    # Remove nftables rules
+    if command -v nft &>/dev/null; then
+        log_info "Removing nftables fortress_filter table..."
+        nft delete table inet fortress_filter 2>/dev/null || true
+    fi
+
+    # Remove nftables config file
+    rm -f /etc/nftables.d/fortress-filters.nft
+
+    # Remove OUI database and policy files
+    rm -f /etc/hookprobe/oui_policies.conf
+    rm -rf /var/lib/fortress/filters
+
+    log_info "nftables filtering removed"
+}
+
+# ============================================================
 # REMOVE MACSEC INTERFACES
 # ============================================================
 remove_macsec_interfaces() {
@@ -941,6 +968,7 @@ main() {
     remove_ovs_config
     remove_vlan_interfaces
     remove_macsec_interfaces
+    remove_nftables_filtering
 
     # Stage 5: Remove systemd services
     log_step "Stage 5/10: Removing systemd services"
