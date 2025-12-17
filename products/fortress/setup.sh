@@ -48,10 +48,17 @@ NC='\033[0m'
 # ============================================================
 OVS_BRIDGE_NAME="fortress"
 OVS_BRIDGE_SUBNET="10.250.0.0/16"
-MACSEC_ENABLED=true
-VLAN_SEGMENTATION=true
+MACSEC_ENABLED=false
+ENABLE_MESH="${ENABLE_MESH:-false}"
 
-# VLAN Configuration for IoT isolation
+# Network filtering: nftables-based (simpler than VLANs)
+# Device policies: full_access, lan_only, internet_only, isolated
+# See: devices/common/network-filter-manager.sh
+NETWORK_FILTER_MODE="nftables"
+
+# VLAN Configuration - LEGACY (not used, kept for reference)
+# VLANs have been replaced with nftables-based filtering
+# which is simpler and doesn't require managed switches
 declare -A VLAN_CONFIG=(
     ["management"]="10:10.250.10.0/24"
     ["trusted"]="20:10.250.20.0/24"
@@ -349,14 +356,15 @@ OPTIONAL_PACKAGES_APT=(
     "python3-flask"
     "python3-requests"
     "net-tools"
-    "freeradius"
-    "freeradius-utils"
-    "vlan"
     "network-manager"
     "modemmanager"
     "libqmi-utils"
     "libmbim-utils"
     "usb-modeswitch"
+    # FreeRADIUS removed - using nftables for device filtering instead
+    # "freeradius"
+    # "freeradius-utils"
+    # "vlan" - not needed with nftables approach
 )
 
 # Helper function to check if apt package is installed
@@ -473,12 +481,12 @@ install_packages() {
             "python3-flask"
             "python3-requests"
             "net-tools"
-            "freeradius"
             "NetworkManager"
             "ModemManager"
             "libqmi-utils"
             "libmbim-utils"
             "usb_modeswitch"
+            # FreeRADIUS removed - using nftables for device filtering
         )
 
         log_info "Installing required packages..."
@@ -1553,7 +1561,77 @@ start_network_services() {
 }
 
 # ============================================================
-# VLAN SEGMENTATION
+# NFTABLES FILTERING - Simpler alternative to VLANs
+# ============================================================
+setup_nftables_filtering() {
+    log_step "Setting up nftables device filtering..."
+
+    # Check if nftables is available
+    if ! command -v nft &>/dev/null; then
+        log_warn "nftables not available, skipping device filtering setup"
+        return 0
+    fi
+
+    # Ensure nftables service is enabled
+    systemctl enable nftables 2>/dev/null || true
+    systemctl start nftables 2>/dev/null || true
+
+    # Copy the network filter manager script
+    local filter_script="$SCRIPT_DIR/devices/common/network-filter-manager.sh"
+    if [ -f "$filter_script" ]; then
+        install -m 755 "$filter_script" /opt/hookprobe/fortress/bin/network-filter-manager.sh
+
+        # Initialize nftables rules
+        log_info "Initializing nftables filter rules..."
+        /opt/hookprobe/fortress/bin/network-filter-manager.sh init 2>/dev/null || {
+            log_warn "Failed to initialize nftables rules - will retry on first boot"
+        }
+
+        # Copy OUI database if it was created
+        if [ -f "/etc/hookprobe/oui_policies.conf" ]; then
+            log_info "OUI device classification database ready"
+        fi
+    else
+        log_warn "Network filter manager script not found: $filter_script"
+    fi
+
+    # Copy Python policy manager
+    local py_policy="$SCRIPT_DIR/lib/network_policy_manager.py"
+    if [ -f "$py_policy" ]; then
+        install -m 644 "$py_policy" /opt/hookprobe/fortress/lib/network_policy_manager.py
+        log_info "Python policy manager installed"
+    fi
+
+    # Create systemd service for device monitoring (auto-classify new devices)
+    cat > /etc/systemd/system/fortress-device-monitor.service << 'EOF'
+[Unit]
+Description=HookProbe Fortress Device Monitor
+Documentation=https://hookprobe.com/fortress
+After=network.target nftables.service
+Wants=nftables.service
+
+[Service]
+Type=simple
+ExecStart=/opt/hookprobe/fortress/bin/network-filter-manager.sh monitor
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-device-monitor 2>/dev/null || true
+
+    log_info "nftables device filtering configured"
+    log_info "  Policies: full_access, lan_only, internet_only, isolated"
+    log_info "  Auto-classification based on OUI (manufacturer)"
+    log_info "  Web UI: SDN Dashboard for management"
+}
+
+# ============================================================
+# VLAN SEGMENTATION (LEGACY - not used by default)
+# Kept for users who need true L2 isolation with managed switches
 # ============================================================
 setup_vlans() {
     log_step "Setting up VLAN segmentation..."
@@ -4104,14 +4182,18 @@ show_completion() {
     [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  Primary WAN: $FORTRESS_WAN_IFACE"
     [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
     echo ""
-    echo -e "  ${BOLD}DHCP Ranges:${NC}"
-    echo -e "    ${CYAN}LAN Clients (RJ45):${NC}  10.250.0.100-199 (direct bridge)"
-    echo -e "    ${CYAN}WiFi Clients:${NC}        10.250.0.100-199 (via bridge)"
-    echo -e "    VLAN 10 (Management): 10.250.10.100-199"
-    echo -e "    VLAN 20 (POS/Trusted): 10.250.20.100-199"
-    echo -e "    VLAN 30 (Staff):       10.250.30.100-199"
-    echo -e "    VLAN 40 (Guest):       10.250.40.100-199"
-    echo -e "    VLAN 99 (IoT):         10.250.99.100-199"
+    echo -e "  ${BOLD}Network (Single Subnet + nftables Filtering):${NC}"
+    echo -e "    ${CYAN}All Clients:${NC}  10.250.0.100-199 (LAN/WiFi)"
+    echo ""
+    echo -e "  ${BOLD}Device Policies (via nftables):${NC}"
+    echo -e "    ${GREEN}full_access${NC}    - Internet + LAN (staff laptops)"
+    echo -e "    ${CYAN}internet_only${NC}  - Internet only (POS, voice assistants)"
+    echo -e "    ${BLUE}lan_only${NC}       - LAN only (cameras, printers, IoT)"
+    echo -e "    ${RED}isolated${NC}       - Blocked (quarantined devices)"
+    echo ""
+    echo -e "  ${BOLD}Auto-Classification:${NC}"
+    echo -e "    Devices auto-classified by OUI (manufacturer)"
+    echo -e "    Manage via: SDN Dashboard or CLI"
 
     # Show WiFi credentials if configured
     if [ -f /etc/hookprobe/wifi-ap.conf ]; then
@@ -4597,14 +4679,22 @@ main() {
     setup_lan_bridge
     setup_wifi_ap
     setup_dhcp_server
-    setup_vlans
-    setup_vxlan_tunnels
-    setup_macsec
+
+    # Network filtering via nftables (simpler than VLANs)
+    setup_nftables_filtering
+
+    # VXLAN only if mesh networking enabled
+    [ "$ENABLE_MESH" = true ] && setup_vxlan_tunnels
+
+    # MACsec only if explicitly enabled
+    [ "$MACSEC_ENABLED" = true ] && setup_macsec
+
     setup_openflow_rules
     setup_nat_routing
 
     install_qsecbit_agent
-    configure_freeradius_vlan
+    # FreeRADIUS removed - using nftables for device filtering
+    # configure_freeradius_vlan
     install_database
     install_monitoring
     install_cloudflared
