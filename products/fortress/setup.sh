@@ -1001,19 +1001,24 @@ scan_wifi_channels() {
     fi
 
     # Count networks on each non-overlapping 2.4GHz channel (1, 6, 11)
-    local ch1_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 1$" 2>/dev/null || echo 0)
-    local ch6_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 6$" 2>/dev/null || echo 0)
-    local ch11_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 11$" 2>/dev/null || echo 0)
+    local ch1_count ch6_count ch11_count
+    ch1_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 1$" 2>/dev/null) || true
+    ch6_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 6$" 2>/dev/null) || true
+    ch11_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 11$" 2>/dev/null) || true
+    ch1_count=${ch1_count:-0}; ch6_count=${ch6_count:-0}; ch11_count=${ch11_count:-0}
 
     # Also count adjacent channels (adds interference)
-    local ch2_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 2$" 2>/dev/null || echo 0)
-    local ch3_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 3$" 2>/dev/null || echo 0)
-    local ch4_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 4$" 2>/dev/null || echo 0)
-    local ch5_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 5$" 2>/dev/null || echo 0)
-    local ch7_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 7$" 2>/dev/null || echo 0)
-    local ch8_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 8$" 2>/dev/null || echo 0)
-    local ch9_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 9$" 2>/dev/null || echo 0)
-    local ch10_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 10$" 2>/dev/null || echo 0)
+    local ch2_count ch3_count ch4_count ch5_count ch7_count ch8_count ch9_count ch10_count
+    ch2_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 2$" 2>/dev/null) || true
+    ch3_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 3$" 2>/dev/null) || true
+    ch4_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 4$" 2>/dev/null) || true
+    ch5_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 5$" 2>/dev/null) || true
+    ch7_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 7$" 2>/dev/null) || true
+    ch8_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 8$" 2>/dev/null) || true
+    ch9_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 9$" 2>/dev/null) || true
+    ch10_count=$(echo "$scan_result" | grep -c "DS Parameter set: channel 10$" 2>/dev/null) || true
+    ch2_count=${ch2_count:-0}; ch3_count=${ch3_count:-0}; ch4_count=${ch4_count:-0}; ch5_count=${ch5_count:-0}
+    ch7_count=${ch7_count:-0}; ch8_count=${ch8_count:-0}; ch9_count=${ch9_count:-0}; ch10_count=${ch10_count:-0}
 
     # Calculate interference scores (includes adjacent channel interference)
     local score_1=$((ch1_count * 3 + ch2_count * 2 + ch3_count))
@@ -1071,7 +1076,9 @@ scan_wifi_channels_5ghz() {
     local min_channel=36
 
     for ch in "${channels_5g[@]}"; do
-        local count=$(echo "$scan_result" | grep -c "DS Parameter set: channel $ch$" 2>/dev/null || echo 0)
+        local count
+        count=$(echo "$scan_result" | grep -c "DS Parameter set: channel $ch$" 2>/dev/null) || true
+        count=${count:-0}
         if [ "$count" -lt "$min_count" ]; then
             min_count=$count
             min_channel=$ch
@@ -3773,19 +3780,22 @@ if [ -z "$SCAN_DATA" ]; then
 fi
 
 # Count networks on each non-overlapping 2.4GHz channel (1, 6, 11)
-ch1_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 1$" || echo 0)
-ch6_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 6$" || echo 0)
-ch11_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 11$" || echo 0)
+ch1_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 1$") || true
+ch6_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 6$") || true
+ch11_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 11$") || true
+ch1_count=${ch1_count:-0}; ch6_count=${ch6_count:-0}; ch11_count=${ch11_count:-0}
 
 # Also count adjacent channels
-ch2_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 2$" || echo 0)
-ch3_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 3$" || echo 0)
-ch4_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 4$" || echo 0)
-ch5_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 5$" || echo 0)
-ch7_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 7$" || echo 0)
-ch8_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 8$" || echo 0)
-ch9_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 9$" || echo 0)
-ch10_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 10$" || echo 0)
+ch2_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 2$") || true
+ch3_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 3$") || true
+ch4_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 4$") || true
+ch5_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 5$") || true
+ch7_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 7$") || true
+ch8_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 8$") || true
+ch9_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 9$") || true
+ch10_count=$(echo "$SCAN_DATA" | grep -c "DS Parameter set: channel 10$") || true
+ch2_count=${ch2_count:-0}; ch3_count=${ch3_count:-0}; ch4_count=${ch4_count:-0}; ch5_count=${ch5_count:-0}
+ch7_count=${ch7_count:-0}; ch8_count=${ch8_count:-0}; ch9_count=${ch9_count:-0}; ch10_count=${ch10_count:-0}
 
 # Calculate interference scores
 score_1=$((ch1_count * 3 + ch2_count * 2 + ch3_count))
