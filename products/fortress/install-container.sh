@@ -415,59 +415,147 @@ EOF
 }
 
 # ============================================================
-# UNINSTALL
+# STATE MANAGEMENT
+# ============================================================
+STATE_FILE="${CONFIG_DIR}/fortress-state.json"
+
+save_installation_state() {
+    log_step "Saving installation state"
+
+    mkdir -p "$(dirname "$STATE_FILE")"
+
+    cat > "$STATE_FILE" << EOF
+{
+    "deployment_mode": "container",
+    "version": "5.0.0",
+    "installed_at": "$(date -Iseconds)",
+    "network_mode": "${NETWORK_MODE}",
+    "web_port": "${WEB_PORT}",
+    "admin_user": "${ADMIN_USER}",
+    "containers": ["fortress-web", "fortress-postgres", "fortress-redis"],
+    "volumes": ["fortress-postgres-data", "fortress-redis-data", "fortress-web-data", "fortress-web-logs", "fortress-config"]
+}
+EOF
+
+    chmod 600 "$STATE_FILE"
+
+    # Create VERSION file
+    echo "5.0.0" > "${INSTALL_DIR}/VERSION"
+
+    log_info "Installation state saved"
+}
+
+# ============================================================
+# UNINSTALL (Staged)
 # ============================================================
 uninstall() {
-    log_step "Uninstalling Fortress"
+    log_step "Staged Uninstall"
+
+    local keep_data=false
+    local keep_config=false
+
+    # Parse uninstall options
+    for arg in "$@"; do
+        case "$arg" in
+            --keep-data) keep_data=true ;;
+            --keep-config) keep_config=true ;;
+            --purge) keep_data=false; keep_config=false ;;
+        esac
+    done
 
     echo ""
-    echo -e "${RED}WARNING: This will remove:${NC}"
-    echo "  - All Fortress containers"
-    echo "  - All Fortress volumes (database, logs, data)"
+    echo -e "${YELLOW}Uninstall Options:${NC}"
+    echo "  --keep-data   : Preserve database and user data"
+    echo "  --keep-config : Preserve configuration files"
+    echo "  --purge       : Remove everything"
+    echo ""
+    echo -e "${RED}This will remove:${NC}"
+    echo "  - Fortress containers (web, postgres, redis)"
+    [ "$keep_data" = false ] && echo "  - Database volumes (all user data)"
+    [ "$keep_config" = false ] && echo "  - Configuration files"
     echo "  - Container images"
     echo "  - Systemd service"
     echo ""
-    echo "Configuration in /etc/hookprobe will be preserved."
-    echo ""
-    read -p "Type 'yes' to confirm uninstall: " confirm
 
+    if [ "$keep_data" = true ]; then
+        echo -e "${GREEN}Data will be preserved for reinstallation.${NC}"
+    fi
+    echo ""
+
+    read -p "Type 'yes' to confirm uninstall: " confirm
     if [ "$confirm" != "yes" ]; then
         log_info "Uninstall cancelled"
         exit 0
     fi
 
-    # Stop and remove containers
-    log_info "Stopping containers..."
-    cd "$CONTAINERS_DIR" 2>/dev/null && podman-compose down -v 2>/dev/null || true
-
-    # Remove volumes
-    log_info "Removing volumes..."
-    podman volume rm -f fortress-postgres-data fortress-redis-data fortress-web-data fortress-web-logs fortress-agent-data fortress-config 2>/dev/null || true
-
-    # Remove images
-    log_info "Removing images..."
-    podman rmi -f localhost/fortress-web:latest 2>/dev/null || true
-
-    # Remove systemd service
-    log_info "Removing systemd service..."
+    # Stage 1: Stop services
+    log_info "Stage 1: Stopping services..."
     systemctl stop fortress 2>/dev/null || true
+    cd "$CONTAINERS_DIR" 2>/dev/null && podman-compose down 2>/dev/null || true
+
+    # Stage 2: Remove application containers
+    log_info "Stage 2: Removing application containers..."
+    podman rm -f fortress-web 2>/dev/null || true
+    podman rmi -f localhost/fortress-web:latest localhost/fortress-agent:latest 2>/dev/null || true
+
+    # Stage 3: Handle data containers/volumes
+    if [ "$keep_data" = false ]; then
+        log_info "Stage 3: Removing data containers and volumes..."
+        podman rm -f fortress-postgres fortress-redis 2>/dev/null || true
+        podman volume rm -f fortress-postgres-data fortress-redis-data fortress-web-data fortress-web-logs fortress-agent-data fortress-config 2>/dev/null || true
+    else
+        log_info "Stage 3: Preserving data containers and volumes..."
+        # Only stop data containers, don't remove
+        podman stop fortress-postgres fortress-redis 2>/dev/null || true
+    fi
+
+    # Stage 4: Remove systemd service
+    log_info "Stage 4: Removing systemd service..."
     systemctl disable fortress 2>/dev/null || true
     rm -f /etc/systemd/system/fortress.service
     systemctl daemon-reload
 
-    # Remove nftables rules
-    log_info "Removing network filters..."
+    # Stage 5: Remove network configuration
+    log_info "Stage 5: Removing network filters..."
     nft delete table inet fortress_filter 2>/dev/null || true
 
-    # Remove installation directory
-    log_info "Removing installation directory..."
-    rm -rf "$INSTALL_DIR"
-    rm -rf "$DATA_DIR"
+    # Stage 6: Handle configuration
+    if [ "$keep_config" = false ]; then
+        log_info "Stage 6: Removing configuration..."
+        rm -f "$CONFIG_DIR/fortress.conf" 2>/dev/null || true
+        rm -f "$CONFIG_DIR/users.json" 2>/dev/null || true
+        rm -f "$STATE_FILE" 2>/dev/null || true
+        rm -rf "${CONTAINERS_DIR}/secrets" 2>/dev/null || true
+    else
+        log_info "Stage 6: Preserving configuration..."
+    fi
+
+    # Stage 7: Remove installation directory
+    log_info "Stage 7: Removing installation files..."
+    rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" 2>/dev/null || true
+    [ "$keep_data" = false ] && rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
+
+    # Clean empty directories
+    rmdir "$INSTALL_DIR" 2>/dev/null || true
+    rmdir /opt/hookprobe 2>/dev/null || true
 
     echo ""
     log_info "Uninstall complete!"
-    log_info "Configuration preserved in: $CONFIG_DIR"
-    log_info "To remove config: rm -rf $CONFIG_DIR"
+    echo ""
+
+    if [ "$keep_data" = true ]; then
+        echo -e "${GREEN}Data preserved!${NC}"
+        echo "  To reinstall with existing data:"
+        echo "    ./install-container.sh --preserve-data"
+        echo ""
+        echo "  To completely remove data later:"
+        echo "    podman volume rm fortress-postgres-data fortress-redis-data"
+        echo ""
+    fi
+
+    if [ "$keep_config" = true ]; then
+        echo "Configuration preserved in: $CONFIG_DIR"
+    fi
 }
 
 # ============================================================
@@ -491,22 +579,41 @@ main() {
 
     case "${1:-}" in
         --uninstall|uninstall|remove)
+            shift || true
             check_prerequisites
-            uninstall
+            uninstall "$@"
             exit 0
             ;;
         --quick|quick)
             check_prerequisites
             quick_install
             ;;
+        --preserve-data)
+            check_prerequisites
+            log_info "Reinstalling with preserved data..."
+            PRESERVE_DATA=true
+            collect_configuration
+            ;;
         --help|help|-h)
             echo "Usage: $0 [options]"
             echo ""
-            echo "Options:"
-            echo "  (none)       Interactive installation"
-            echo "  --quick      Quick install with defaults"
-            echo "  --uninstall  Complete removal"
-            echo "  --help       Show this help"
+            echo "Installation Options:"
+            echo "  (none)          Interactive installation"
+            echo "  --quick         Quick install with defaults"
+            echo "  --preserve-data Reinstall using existing data volumes"
+            echo ""
+            echo "Uninstall Options:"
+            echo "  --uninstall              Remove Fortress"
+            echo "  --uninstall --keep-data  Remove but preserve database"
+            echo "  --uninstall --keep-config Remove but preserve config"
+            echo "  --uninstall --purge      Remove everything"
+            echo ""
+            echo "Upgrade (use fortress-ctl for advanced operations):"
+            echo "  fortress-ctl upgrade --app   Hot upgrade application only"
+            echo "  fortress-ctl upgrade --full  Full system upgrade"
+            echo "  fortress-ctl backup          Create backup"
+            echo "  fortress-ctl status          Show status"
+            echo ""
             exit 0
             ;;
         *)
@@ -524,6 +631,7 @@ main() {
     setup_network_filter
     start_containers
     create_systemd_service
+    save_installation_state
 
     # Final message
     echo ""
