@@ -1065,12 +1065,35 @@ generate_hostapd_24ghz() {
     local country_code
     country_code=$(detect_regulatory_domain)
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SELF-MANAGED REGULATORY DOMAIN CHECK
+    # Some WiFi adapters (e.g., ath12k) have "self-managed" regulatory domains
+    # that ignore the system's iw reg set command. We must use the adapter's
+    # firmware country code, not the system's, or hostapd will fail with
+    # "Could not determine operating frequency"
+    # ═══════════════════════════════════════════════════════════════════════════
+    local effective_country="$country_code"
+
+    if is_self_managed_regdomain "$iface" 2>/dev/null; then
+        local phy_reg
+        phy_reg=$(get_phy_regdomain "$iface" 2>/dev/null)
+        effective_country="${phy_reg%%:*}"  # Strip :self-managed suffix
+
+        log_warn "  ⚠️  Adapter has SELF-MANAGED regulatory domain: $effective_country"
+        log_warn "     System country ($country_code) will be IGNORED by firmware"
+
+        if [ "$effective_country" != "$country_code" ]; then
+            log_warn "  ⚠️  REGULATORY MISMATCH: System=$country_code, Firmware=$effective_country"
+            log_warn "     Using firmware country code ($effective_country) in hostapd config"
+        fi
+    fi
+
     log_info "Generating 2.4GHz hostapd configuration"
     log_info "  Interface: $iface"
     log_info "  SSID: $ssid"
     log_info "  Channel: $channel"
     log_info "  Bridge: $bridge"
-    log_info "  Country: $country_code (auto-detected)"
+    log_info "  Country: $effective_country (effective)"
 
     # Auto channel selection
     if [ "$channel" = "auto" ]; then
@@ -1148,7 +1171,7 @@ ctrl_interface_group=0
 # Network Settings
 ssid=$ssid
 utf8_ssid=1
-country_code=$country_code
+country_code=$effective_country
 ieee80211d=1
 ieee80211h=1
 
