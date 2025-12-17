@@ -909,6 +909,18 @@ scan_wifi_channels_5ghz() {
     local iface="$1"
     local best_channel=36  # Default 5GHz channel
 
+    # Try DFS intelligence first (uses ML scoring + radar history)
+    if [ -x /usr/local/bin/dfs-channel-selector ]; then
+        local dfs_result
+        dfs_result=$(/usr/local/bin/dfs-channel-selector best 2>/dev/null || true)
+        if [ -n "$dfs_result" ] && [ "$dfs_result" -gt 0 ] 2>/dev/null; then
+            log_info "DFS intelligence selected channel: $dfs_result"
+            echo "$dfs_result"
+            return
+        fi
+    fi
+
+    # Fallback: basic scanning for 5GHz channels
     # Ensure interface is up for scanning
     ip link set "$iface" up 2>/dev/null || true
     sleep 1
@@ -3561,13 +3573,15 @@ install_channel_optimization_service() {
 #!/bin/bash
 # Fortress WiFi Channel Optimization
 # Automatically selects the best WiFi channel based on RF environment
-# Runs at boot and daily at 4:00 AM
+# Uses DFS intelligence for 5GHz, basic scanning for 2.4GHz
+# Runs daily at 4:00 AM
 
 set -e
 
 LOG_FILE="/var/log/hookprobe/channel-optimization.log"
 STATE_FILE="/var/lib/fortress/channel_state.json"
 HOSTAPD_CONF="/etc/hostapd/fortress.conf"
+DFS_SELECTOR="/usr/local/bin/dfs-channel-selector"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
@@ -3588,14 +3602,69 @@ fi
 
 log "Starting WiFi channel optimization on $AP_INTERFACE..."
 
-# Get current channel from hostapd config
+# Get current channel and band from hostapd config
 CURRENT_CHANNEL=$(grep "^channel=" "$HOSTAPD_CONF" 2>/dev/null | cut -d= -f2 || echo "6")
-log "Current channel: $CURRENT_CHANNEL"
+HW_MODE=$(grep "^hw_mode=" "$HOSTAPD_CONF" 2>/dev/null | cut -d= -f2 || echo "g")
+log "Current channel: $CURRENT_CHANNEL (hw_mode: $HW_MODE)"
 
-# Check if AP is running - if so, use survey dump instead of scan
+# Detect if using 5GHz (hw_mode=a or channel > 14)
+IS_5GHZ=false
+if [ "$HW_MODE" = "a" ] || [ "$CURRENT_CHANNEL" -gt 14 ] 2>/dev/null; then
+    IS_5GHZ=true
+fi
+
+# For 5GHz: Use DFS intelligence if available
+if [ "$IS_5GHZ" = true ] && [ -x "$DFS_SELECTOR" ]; then
+    log "5GHz band detected - using DFS intelligence for channel selection"
+
+    # Get best channel from DFS intelligence
+    BEST_CHANNEL=$("$DFS_SELECTOR" best 2>/dev/null || echo "")
+
+    if [ -n "$BEST_CHANNEL" ] && [ "$BEST_CHANNEL" -gt 0 ] 2>/dev/null; then
+        log "DFS intelligence selected channel: $BEST_CHANNEL"
+
+        # Get channel score for logging
+        SCORE=$("$DFS_SELECTOR" score "$BEST_CHANNEL" 2>/dev/null || echo "N/A")
+        log "Channel $BEST_CHANNEL ML score: $SCORE"
+
+        if [ "$BEST_CHANNEL" != "$CURRENT_CHANNEL" ]; then
+            log "Updating hostapd config to channel $BEST_CHANNEL (was: $CURRENT_CHANNEL)"
+            sed -i "s/^channel=.*/channel=$BEST_CHANNEL/" "$HOSTAPD_CONF"
+
+            # Save state
+            cat > "$STATE_FILE" << EOF
+{
+    "last_scan": "$(date -Iseconds)",
+    "selected_channel": $BEST_CHANNEL,
+    "previous_channel": $CURRENT_CHANNEL,
+    "band": "5GHz",
+    "method": "dfs_intelligence",
+    "score": "$SCORE"
+}
+EOF
+            # Restart hostapd if running
+            if systemctl is-active --quiet fortress-hostapd; then
+                log "Restarting hostapd with new channel..."
+                systemctl restart fortress-hostapd
+            fi
+        else
+            log "Channel $CURRENT_CHANNEL is already optimal"
+        fi
+
+        log "Channel optimization complete (DFS intelligence)"
+        exit 0
+    else
+        log "DFS intelligence unavailable, falling back to basic scan"
+    fi
+fi
+
+# For 2.4GHz or fallback: Use basic channel scanning
+
+# Check if AP is running - if so, temporarily stop for scan
 SCAN_DATA=""
+HOSTAPD_WAS_RUNNING=false
 if systemctl is-active --quiet fortress-hostapd; then
-    # AP is running - temporarily stop for scan
+    HOSTAPD_WAS_RUNNING=true
     log "Stopping hostapd for channel scan..."
     systemctl stop fortress-hostapd
     sleep 2
@@ -3605,24 +3674,13 @@ if systemctl is-active --quiet fortress-hostapd; then
     iw dev "$AP_INTERFACE" set type managed 2>/dev/null || true
     ip link set "$AP_INTERFACE" up 2>/dev/null || true
     sleep 1
-
-    SCAN_DATA=$(iw dev "$AP_INTERFACE" scan 2>/dev/null || true)
-
-    # Restore AP mode and restart hostapd
-    ip link set "$AP_INTERFACE" down 2>/dev/null || true
-    iw dev "$AP_INTERFACE" set type __ap 2>/dev/null || true
-    ip link set "$AP_INTERFACE" up 2>/dev/null || true
-else
-    # AP not running - can do full scan
-    log "AP not running, performing full scan..."
-    ip link set "$AP_INTERFACE" up 2>/dev/null || true
-    sleep 1
-    SCAN_DATA=$(iw dev "$AP_INTERFACE" scan 2>/dev/null || true)
 fi
+
+SCAN_DATA=$(iw dev "$AP_INTERFACE" scan 2>/dev/null || true)
 
 if [ -z "$SCAN_DATA" ]; then
     log "Scan failed, keeping current channel"
-    systemctl start fortress-hostapd 2>/dev/null || true
+    [ "$HOSTAPD_WAS_RUNNING" = true ] && systemctl start fortress-hostapd 2>/dev/null || true
     exit 0
 fi
 
@@ -3661,7 +3719,7 @@ fi
 
 log "Best channel: $BEST_CHANNEL (current: $CURRENT_CHANNEL)"
 
-# Only change if different and significant improvement
+# Only change if different
 if [ "$BEST_CHANNEL" != "$CURRENT_CHANNEL" ]; then
     log "Updating hostapd config to channel $BEST_CHANNEL"
     sed -i "s/^channel=.*/channel=$BEST_CHANNEL/" "$HOSTAPD_CONF"
@@ -3672,6 +3730,8 @@ if [ "$BEST_CHANNEL" != "$CURRENT_CHANNEL" ]; then
     "last_scan": "$(date -Iseconds)",
     "selected_channel": $BEST_CHANNEL,
     "previous_channel": $CURRENT_CHANNEL,
+    "band": "2.4GHz",
+    "method": "interference_score",
     "scores": {"ch1": $score_1, "ch6": $score_6, "ch11": $score_11}
 }
 EOF
@@ -3679,9 +3739,14 @@ else
     log "Channel $CURRENT_CHANNEL is already optimal, no change needed"
 fi
 
-# Restart hostapd
-log "Restarting hostapd..."
-systemctl start fortress-hostapd
+# Restore AP mode and restart hostapd if it was running
+if [ "$HOSTAPD_WAS_RUNNING" = true ]; then
+    ip link set "$AP_INTERFACE" down 2>/dev/null || true
+    iw dev "$AP_INTERFACE" set type __ap 2>/dev/null || true
+    ip link set "$AP_INTERFACE" up 2>/dev/null || true
+    log "Restarting hostapd..."
+    systemctl start fortress-hostapd
+fi
 
 log "Channel optimization complete"
 CHANNEL_SCRIPT
@@ -3725,8 +3790,252 @@ TIMEREOF
 
     log_info "WiFi Channel Optimization installed"
     log_info "  - Runs daily at 4:00 AM (timer-triggered)"
-    log_info "  - Selects best channel from 1, 6, 11"
+    log_info "  - 2.4GHz: Selects best channel from 1, 6, 11"
+    log_info "  - 5GHz: Uses DFS intelligence with ML scoring"
     log_info "  - Run manually: systemctl start fortress-channel-optimize"
+}
+
+# ============================================================
+# DFS INTELLIGENCE - AUTONOMOUS CHANNEL MANAGEMENT
+# ============================================================
+setup_dfs_intelligence() {
+    log_step "Setting up DFS intelligence for autonomous WiFi management..."
+
+    local DFS_DIR="/opt/hookprobe/fortress/dfs"
+    local DFS_DB_DIR="/var/lib/hookprobe"
+    local DFS_LOG_DIR="/var/log/fortress"
+    local DFS_SRC="$SCRIPT_DIR/devices/common"
+    local SHARED_WIRELESS="$REPO_ROOT/shared/wireless"
+
+    # Create directories
+    mkdir -p "$DFS_DIR"
+    mkdir -p "$DFS_DB_DIR"
+    mkdir -p "$DFS_LOG_DIR"
+    mkdir -p /var/lib/fortress/dfs
+
+    # Install DFS channel selector shell script
+    if [ -f "$DFS_SRC/dfs-channel-selector.sh" ]; then
+        log_info "Installing DFS channel selector..."
+        cp "$DFS_SRC/dfs-channel-selector.sh" "$DFS_DIR/"
+        chmod +x "$DFS_DIR/dfs-channel-selector.sh"
+        ln -sf "$DFS_DIR/dfs-channel-selector.sh" /usr/local/bin/dfs-channel-selector
+    else
+        log_warn "DFS channel selector not found: $DFS_SRC/dfs-channel-selector.sh"
+    fi
+
+    # Install DFS radar monitor Python script
+    if [ -f "$DFS_SRC/dfs-radar-monitor.py" ]; then
+        log_info "Installing DFS radar monitor..."
+        cp "$DFS_SRC/dfs-radar-monitor.py" "$DFS_DIR/"
+        chmod +x "$DFS_DIR/dfs-radar-monitor.py"
+    else
+        log_warn "DFS radar monitor not found: $DFS_SRC/dfs-radar-monitor.py"
+    fi
+
+    # Install shared wireless DFS intelligence module
+    if [ -d "$SHARED_WIRELESS" ]; then
+        log_info "Installing shared DFS intelligence module..."
+        mkdir -p /opt/hookprobe/shared/wireless
+        cp -r "$SHARED_WIRELESS"/* /opt/hookprobe/shared/wireless/ 2>/dev/null || true
+
+        # Install Python dependencies for DFS intelligence
+        if [ -f "$SHARED_WIRELESS/requirements.txt" ]; then
+            pip3 install -r "$SHARED_WIRELESS/requirements.txt" --quiet 2>/dev/null || true
+        fi
+    fi
+
+    # Initialize DFS database
+    if [ -f "/opt/hookprobe/shared/wireless/dfs_intelligence.py" ]; then
+        log_info "Initializing DFS intelligence database..."
+        python3 -c "
+import sys
+sys.path.insert(0, '/opt/hookprobe/shared/wireless')
+try:
+    from dfs_intelligence import DFSDatabase
+    db = DFSDatabase('/var/lib/hookprobe/dfs_intelligence.db')
+    print('DFS database initialized')
+except Exception as e:
+    print(f'DFS init skipped: {e}')
+" 2>/dev/null || log_warn "DFS database initialization skipped"
+    fi
+
+    # Create DFS radar monitor systemd service
+    cat > /etc/systemd/system/fortress-dfs-monitor.service << 'DFSEOF'
+[Unit]
+Description=Fortress DFS Radar Monitor
+Documentation=https://hookprobe.com/docs/fortress/dfs
+After=network.target fortress-hostapd.service
+Wants=fortress-hostapd.service
+
+[Service]
+Type=simple
+ExecStart=/opt/hookprobe/fortress/dfs/dfs-radar-monitor.py --interface wlan0
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=DFS_DB_PATH=/var/lib/hookprobe/dfs_intelligence.db
+Environment=DFS_API_URL=http://localhost:8767
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe /var/lib/fortress /var/log/fortress /var/run/hostapd
+
+[Install]
+WantedBy=multi-user.target
+DFSEOF
+
+    # Create DFS intelligence API service (lightweight Flask API)
+    cat > /etc/systemd/system/fortress-dfs-api.service << 'APIEOF'
+[Unit]
+Description=Fortress DFS Intelligence API
+Documentation=https://hookprobe.com/docs/fortress/dfs
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/hookprobe/fortress/dfs/dfs-api.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=DFS_DB_PATH=/var/lib/hookprobe/dfs_intelligence.db
+WorkingDirectory=/opt/hookprobe/fortress/dfs
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe /var/lib/fortress
+
+[Install]
+WantedBy=multi-user.target
+APIEOF
+
+    # Create simple DFS API script if not exists
+    if [ ! -f "$DFS_DIR/dfs-api.py" ]; then
+        cat > "$DFS_DIR/dfs-api.py" << 'PYEOF'
+#!/usr/bin/env python3
+"""
+Minimal DFS Intelligence REST API.
+Provides /best, /radar, /status endpoints for channel selection.
+"""
+import json
+import os
+import sys
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime
+
+# Add shared wireless to path
+sys.path.insert(0, '/opt/hookprobe/shared/wireless')
+
+DFS_DB_PATH = os.environ.get('DFS_DB_PATH', '/var/lib/hookprobe/dfs_intelligence.db')
+PORT = 8767
+
+# Try to import DFS intelligence
+try:
+    from dfs_intelligence import DFSDatabase, DFSChannelScorer, RadarEvent
+    DB = DFSDatabase(DFS_DB_PATH)
+    SCORER = DFSChannelScorer(DB)
+    DFS_AVAILABLE = True
+except ImportError:
+    DB = None
+    SCORER = None
+    DFS_AVAILABLE = False
+    print("DFS intelligence module not available, using fallback")
+
+
+class DFSHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass  # Suppress default logging
+
+    def send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def do_GET(self):
+        if self.path == '/status':
+            self.send_json({
+                'status': 'ok',
+                'dfs_available': DFS_AVAILABLE,
+                'db_path': DFS_DB_PATH
+            })
+        elif self.path == '/channels':
+            if DFS_AVAILABLE:
+                channels = SCORER.get_channel_scores()
+                self.send_json({'channels': channels})
+            else:
+                self.send_json({'channels': [], 'error': 'DFS not available'})
+        else:
+            self.send_json({'error': 'Not found'}, 404)
+
+    def do_POST(self):
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length).decode() if content_length else '{}'
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            data = {}
+
+        if self.path == '/best':
+            prefer_dfs = data.get('prefer_dfs', False)
+            exclude = data.get('exclude_channel')
+
+            if DFS_AVAILABLE:
+                best = SCORER.get_best_channel(prefer_dfs=prefer_dfs, exclude_channels=[exclude] if exclude else [])
+                self.send_json({'best_channel': best, 'method': 'ml_scoring'})
+            else:
+                # Fallback: safe non-DFS channels
+                safe = [36, 40, 44, 48, 149, 153, 157, 161, 165]
+                best = safe[0] if not exclude else [c for c in safe if c != exclude][0]
+                self.send_json({'best_channel': best, 'method': 'fallback'})
+
+        elif self.path == '/radar':
+            channel = data.get('channel')
+            timestamp = data.get('timestamp', datetime.now().isoformat())
+
+            if channel and DFS_AVAILABLE:
+                event = RadarEvent(
+                    channel=int(channel),
+                    timestamp=datetime.fromisoformat(timestamp) if isinstance(timestamp, str) else timestamp,
+                    duration_ms=data.get('duration_ms', 0),
+                    cac_failed=data.get('cac_failed', False)
+                )
+                DB.record_radar_event(event)
+                self.send_json({'status': 'recorded', 'channel': channel})
+            else:
+                self.send_json({'status': 'skipped', 'reason': 'no channel or DFS unavailable'})
+
+        else:
+            self.send_json({'error': 'Not found'}, 404)
+
+
+if __name__ == '__main__':
+    print(f"DFS API starting on port {PORT} (DFS available: {DFS_AVAILABLE})")
+    server = HTTPServer(('127.0.0.1', PORT), DFSHandler)
+    server.serve_forever()
+PYEOF
+        chmod +x "$DFS_DIR/dfs-api.py"
+    fi
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    # Enable services (don't start yet - WiFi may not be configured)
+    systemctl enable fortress-dfs-api 2>/dev/null || true
+
+    # Only enable radar monitor if hostapd will be used
+    if [ -f /etc/hostapd/fortress.conf ]; then
+        systemctl enable fortress-dfs-monitor 2>/dev/null || true
+    fi
+
+    log_info "DFS Intelligence setup complete"
+    log_info "  - Channel selector: /usr/local/bin/dfs-channel-selector"
+    log_info "  - Radar monitor: fortress-dfs-monitor.service"
+    log_info "  - DFS API: fortress-dfs-api.service (port 8767)"
+    log_info "  - Database: $DFS_DB_DIR/dfs_intelligence.db"
 }
 
 # ============================================================
@@ -4047,17 +4356,28 @@ validate_installation() {
         errors=$((errors + 1))
     fi
 
-    # Check VLAN setup
-    local vlan_count=0
-    for vlan_id in 10 20 30 40 99; do
-        if ip link show "vlan${vlan_id}" &>/dev/null 2>&1 || ovs-vsctl port-to-br "vlan${vlan_id}" &>/dev/null 2>&1; then
-            vlan_count=$((vlan_count + 1))
+    # Check nftables device filtering
+    if command -v nft &>/dev/null; then
+        if nft list table inet fortress_filter &>/dev/null 2>&1; then
+            log_info "✓ nftables device filtering configured"
+        else
+            log_warn "⚠ nftables fortress_filter table not found"
+            warnings=$((warnings + 1))
         fi
-    done
-    if [ "$vlan_count" -ge 3 ]; then
-        log_info "✓ VLAN interfaces configured ($vlan_count/5)"
+    fi
+
+    # Check DFS intelligence
+    if [ -x "/usr/local/bin/dfs-channel-selector" ]; then
+        log_info "✓ DFS channel selector installed"
     else
-        log_warn "⚠ Only $vlan_count/5 VLAN interfaces found"
+        log_warn "⚠ DFS channel selector not found"
+        warnings=$((warnings + 1))
+    fi
+
+    if systemctl is-enabled fortress-dfs-api &>/dev/null 2>&1; then
+        log_info "✓ DFS API service enabled"
+    else
+        log_warn "⚠ DFS API service not enabled"
         warnings=$((warnings + 1))
     fi
 
@@ -4158,12 +4478,12 @@ show_completion() {
     echo -e "  ${BOLD}Installed Components:${NC}"
     echo -e "  ${GREEN}✓${NC} Open vSwitch Bridge with LAN/WiFi Integration"
     echo -e "  ${GREEN}✓${NC} DHCP Server (dnsmasq) for LAN and WiFi clients"
-    echo -e "  ${GREEN}✓${NC} VLAN Segmentation (management, trusted, iot, guest, quarantine)"
+    echo -e "  ${GREEN}✓${NC} nftables Device Filtering (MAC-based policies)"
     echo -e "  ${GREEN}✓${NC} QSecBit Fortress Agent (threat detection)"
+    echo -e "  ${GREEN}✓${NC} DFS Intelligence (ML-powered channel selection)"
     [ "$MACSEC_ENABLED" = true ] && echo -e "  ${GREEN}✓${NC} MACsec (802.1AE) Layer 2 encryption"
     [ "$ENABLE_MESH" = true ] && echo -e "  ${GREEN}✓${NC} VXLAN Tunnels with VNI and PSK encryption"
     echo -e "  ${GREEN}✓${NC} NAT/Routing (internet access for clients)"
-    [ -x /usr/sbin/freeradius ] && echo -e "  ${GREEN}✓${NC} FreeRADIUS (MAC-based VLAN assignment)"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Monitoring (Grafana + Victoria Metrics)"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Security Monitoring (Suricata IDS + Zeek Network Analyzer)"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} ML/LSTM Threat Detection (daily training at 3:00 AM)"
@@ -4710,10 +5030,18 @@ main() {
     # Install channel optimization service (daily 4am calibration)
     install_channel_optimization_service
 
+    # Install DFS intelligence for autonomous WiFi management
+    setup_dfs_intelligence
+
     # Start services
     log_step "Starting services..."
     systemctl start hookprobe-fortress 2>/dev/null || true
     systemctl start fortress-qsecbit 2>/dev/null || true
+
+    # Start DFS intelligence services
+    systemctl start fortress-dfs-api 2>/dev/null || true
+    # DFS monitor starts only when hostapd is running with DFS channels
+    systemctl start fortress-dfs-monitor 2>/dev/null || true
 
     # Start channel optimization timer
     systemctl enable --now fortress-channel-optimize.timer 2>/dev/null || true
