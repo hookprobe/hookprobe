@@ -943,6 +943,158 @@ def api_policies():
     })
 
 
+@sdn_bp.route('/api/wifi-intelligence')
+@login_required
+def api_wifi_intelligence():
+    """Get WiFi channel optimization and DFS intelligence data."""
+    import subprocess
+    import os
+    from datetime import datetime, timedelta
+
+    data = {
+        'current_channel': None,
+        'band': '2.4GHz',
+        'hw_mode': 'g',
+        'last_optimization': None,
+        'previous_channel': None,
+        'next_optimization': None,
+        'time_to_next': None,
+        'ml_score': None,
+        'radar_events': [],
+        'radar_count_30d': 0,
+        'channel_switches_30d': 0,
+        'dfs_available': False,
+        'optimization_method': 'basic_scan',
+        'wifi_interface': None,
+        'ssid': None,
+    }
+
+    # Read hostapd config for current channel
+    hostapd_conf = '/etc/hostapd/fortress.conf'
+    if os.path.exists(hostapd_conf):
+        try:
+            with open(hostapd_conf, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('channel='):
+                        data['current_channel'] = int(line.split('=')[1])
+                    elif line.startswith('hw_mode='):
+                        data['hw_mode'] = line.split('=')[1]
+                    elif line.startswith('interface='):
+                        data['wifi_interface'] = line.split('=')[1]
+                    elif line.startswith('ssid='):
+                        data['ssid'] = line.split('=')[1]
+
+            # Determine band from hw_mode or channel
+            if data['hw_mode'] == 'a' or (data['current_channel'] and data['current_channel'] > 14):
+                data['band'] = '5GHz'
+        except Exception:
+            pass
+
+    # Read channel state file for optimization history
+    state_file = '/var/lib/fortress/channel_state.json'
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+                data['last_optimization'] = state.get('last_scan')
+                data['previous_channel'] = state.get('previous_channel')
+                data['optimization_method'] = state.get('method', 'interference_score')
+                if state.get('score'):
+                    data['ml_score'] = state.get('score')
+        except Exception:
+            pass
+
+    # Calculate next optimization time (4:00 AM)
+    now = datetime.now()
+    next_4am = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    if now.hour >= 4:
+        next_4am += timedelta(days=1)
+    data['next_optimization'] = next_4am.isoformat()
+    time_diff = next_4am - now
+    hours, remainder = divmod(int(time_diff.total_seconds()), 3600)
+    minutes = remainder // 60
+    data['time_to_next'] = f'{hours}h {minutes}m'
+    data['time_to_next_seconds'] = int(time_diff.total_seconds())
+
+    # Check if DFS intelligence is available
+    dfs_selector = '/usr/local/bin/dfs-channel-selector'
+    if os.path.exists(dfs_selector) and os.access(dfs_selector, os.X_OK):
+        data['dfs_available'] = True
+
+        # Try to get DFS status
+        try:
+            result = subprocess.run(
+                [dfs_selector, 'status'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                # Parse status output
+                for line in result.stdout.strip().split('\n'):
+                    if 'radar events' in line.lower():
+                        try:
+                            data['radar_count_30d'] = int(line.split(':')[1].strip().split()[0])
+                        except (ValueError, IndexError):
+                            pass
+        except Exception:
+            pass
+
+        # Try to get current channel score
+        if data['current_channel'] and data['band'] == '5GHz':
+            try:
+                result = subprocess.run(
+                    [dfs_selector, 'score', str(data['current_channel'])],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    try:
+                        data['ml_score'] = float(result.stdout.strip())
+                    except ValueError:
+                        pass
+            except Exception:
+                pass
+
+    # Read radar events from DFS log
+    radar_log = '/var/lib/fortress/dfs/radar_events.jsonl'
+    if os.path.exists(radar_log):
+        try:
+            events = []
+            with open(radar_log, 'r') as f:
+                for line in f:
+                    try:
+                        event = json.loads(line.strip())
+                        events.append(event)
+                    except json.JSONDecodeError:
+                        pass
+            # Return last 10 events
+            data['radar_events'] = events[-10:]
+            # Count events in last 30 days
+            cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+            data['radar_count_30d'] = len([e for e in events if e.get('timestamp', '') > cutoff])
+        except Exception:
+            pass
+
+    # Read channel switch count from optimization log
+    opt_log = '/var/log/hookprobe/channel-optimization.log'
+    if os.path.exists(opt_log):
+        try:
+            with open(opt_log, 'r') as f:
+                content = f.read()
+                # Count "Updating hostapd config to channel" lines
+                data['channel_switches_30d'] = content.count('Updating hostapd config to channel')
+        except Exception:
+            pass
+
+    return jsonify({
+        'success': True,
+        'wifi_intelligence': data
+    })
+
+
 # ============================================================
 # EXPORT
 # ============================================================
