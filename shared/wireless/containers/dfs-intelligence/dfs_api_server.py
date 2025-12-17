@@ -41,7 +41,7 @@ from dfs_intelligence import (
 # Configuration
 API_HOST = os.environ.get("DFS_API_HOST", "0.0.0.0")
 API_PORT = int(os.environ.get("DFS_API_PORT", "8767"))
-DB_PATH = os.environ.get("DFS_DB_PATH", "/var/lib/fortress/dfs_intelligence.db")
+DB_PATH = os.environ.get("DFS_DB_PATH", "/var/lib/hookprobe/dfs_intelligence.db")
 
 # Setup logging
 logging.basicConfig(
@@ -76,7 +76,7 @@ def health():
 @app.route('/status', methods=['GET'])
 def status():
     """Get ML system status."""
-    model_path = os.environ.get("DFS_MODEL_PATH", "/var/lib/fortress/dfs_model.json")
+    model_path = os.environ.get("DFS_MODEL_PATH", "/var/lib/hookprobe/dfs_model.json")
     model_trained = os.path.exists(model_path)
     model_info = {}
 
