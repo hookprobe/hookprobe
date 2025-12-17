@@ -253,6 +253,18 @@ cleanup_network_interfaces() {
     rm -f /etc/hookprobe/wifi-ap.conf 2>/dev/null || true
     rm -rf /var/lib/fortress/network-interfaces.conf 2>/dev/null || true
 
+    # Remove WiFi interface udev rules (stable naming)
+    if [ -f /etc/udev/rules.d/80-fortress-wifi.rules ]; then
+        log_info "Removing WiFi interface udev rules..."
+        rm -f /etc/udev/rules.d/80-fortress-wifi.rules
+        # Reload udev so interface names revert on next boot
+        udevadm control --reload-rules 2>/dev/null || true
+        log_info "  WiFi interfaces will revert to default names after reboot"
+    fi
+
+    # Remove WiFi interface mapping file (keeps original→stable name mapping)
+    rm -f /etc/hookprobe/wifi-interfaces.conf 2>/dev/null || true
+
     # Kill any remaining wpa_supplicant processes on AP interfaces
     pkill -f "wpa_supplicant.*wlan" 2>/dev/null || true
 
@@ -1122,6 +1134,7 @@ main() {
     echo -e "  • Management scripts"
     echo -e "  • Configuration: $CONFIG_DIR, $FORTRESS_CONFIG_DIR"
     echo -e "  • Secrets: VXLAN, MACsec"
+    echo -e "  • WiFi udev rules (interface names revert after reboot)"
     echo -e "  • Installation: $INSTALL_DIR"
     [ "$KEEP_DATA" = false ] && echo -e "  • Data: $DATA_DIR"
     [ "$KEEP_LOGS" = true ] && echo -e "  ${DIM}(Logs preserved at $LOG_DIR)${NC}"
