@@ -889,21 +889,31 @@ detect_ht_capabilities() {
         phy_info=$(iw phy 2>/dev/null) || true
     fi
 
-    # NOTE: HT40 (40MHz) on 2.4GHz is disabled intentionally
-    # Reasons:
-    # 1. Only 3 non-overlapping 20MHz channels (1, 6, 11) in 2.4GHz band
-    # 2. HT40 requires clear adjacent channels - rarely works in real environments
-    # 3. Causes hostapd to get stuck in HT_SCAN state on many drivers (incl. ath12k)
-    # 4. 20MHz (HT20) provides reliable connectivity with less interference
-    # For high throughput, use 5GHz band instead
-    # caps="" - intentionally not setting HT40 for 2.4GHz
+    # HT40 channel selection based on 2.4GHz channel rules:
+    # - Channels 1-7: Can use HT40+ (secondary channel above)
+    # - Channels 5-9: Can use HT40- (secondary channel below)
+    # - Channels 10-13: Can only use HT40-
+    # - Channel 14: No HT40 (Japan only)
+    # Best practice: Use channel 1 or 6 with HT40+ for maximum compatibility
+    if echo "$phy_info" | grep -q "HT40"; then
+        if [ "$channel" -le 7 ] 2>/dev/null; then
+            caps="[HT40+]"
+        elif [ "$channel" -ge 5 ] && [ "$channel" -le 13 ] 2>/dev/null; then
+            caps="[HT40-]"
+        fi
+    fi
 
     if echo "$phy_info" | grep -q "SHORT-GI-20"; then
         caps="${caps}[SHORT-GI-20]"
     fi
 
-    # Note: SHORT-GI-40 and DSSS_CCK-40 are only useful with HT40
-    # Since we disabled HT40 for 2.4GHz reliability, we skip these too
+    if echo "$phy_info" | grep -q "SHORT-GI-40"; then
+        caps="${caps}[SHORT-GI-40]"
+    fi
+
+    if echo "$phy_info" | grep -q "DSSS_CCK-40"; then
+        caps="${caps}[DSSS_CCK-40]"
+    fi
 
     # Default to safe capabilities if detection failed
     echo "${caps:-[SHORT-GI-20]}"
@@ -1150,6 +1160,11 @@ channel=$channel
 ieee80211n=1
 require_ht=0
 ht_capab=$ht_capab
+
+# Disable Overlapping BSS scan to prevent HT_SCAN hang
+# The scan can cause hostapd to get stuck on some drivers (e.g., ath12k)
+# HT40 coexistence is handled by channel selection instead
+obss_interval=0
 
 # WMM (QoS) - Required for 802.11n
 wmm_enabled=1
