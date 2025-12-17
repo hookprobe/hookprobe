@@ -2104,9 +2104,10 @@ set_regulatory_domain() {
         wpa_cli -g /var/run/wpa_supplicant/ctrl set country "$country" 2>/dev/null || true
     fi
 
-    # Method 3: Kernel module parameter (requires root and write access)
-    if [ -f /sys/module/cfg80211/parameters/ieee80211_regdom ] && [ -w /sys/module/cfg80211/parameters/ieee80211_regdom ]; then
-        echo "$country" > /sys/module/cfg80211/parameters/ieee80211_regdom 2>/dev/null || true
+    # Method 3: Kernel module parameter (best effort - sysfs files may reject writes)
+    # Note: Wrap in braces to capture shell redirect errors, not just echo errors
+    if [ -f /sys/module/cfg80211/parameters/ieee80211_regdom ]; then
+        { echo "$country" > /sys/module/cfg80211/parameters/ieee80211_regdom; } 2>/dev/null || true
     fi
 
     # Wait for regulatory database to update
