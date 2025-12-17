@@ -85,6 +85,7 @@ export_for_setup() {
 
     # WAN/LAN assignment
     export WAN_INTERFACE="$NET_WAN_IFACE"
+    export WAN_PRESERVED="$NET_WAN_PRESERVED"  # Flag: WAN should not be modified
     export LAN_INTERFACES="$NET_LAN_IFACES"
 
     # WiFi interfaces

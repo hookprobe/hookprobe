@@ -778,15 +778,56 @@ OVSEOF
 setup_lan_bridge() {
     log_step "Adding LAN interfaces to bridge..."
 
-    # Get LAN interfaces (exclude WAN which is typically the first one or has default route)
+    # Get WAN interface - CRITICAL: This interface must NOT be modified!
+    # Users may have pre-configured DHCP to access the machine.
+    # Priority:
+    #   1. Use pre-detected WAN from network integration module
+    #   2. Find interface with default route (internet connected)
+    #   3. Find interface with existing IP (DHCP configured)
     local wan_iface=""
-    wan_iface=$(ip route | grep default | awk '{print $5}' | head -1)
 
+    # Use network integration detected WAN if available
+    if [ -n "$WAN_INTERFACE" ]; then
+        wan_iface="$WAN_INTERFACE"
+        log_info "Using pre-detected WAN interface: $wan_iface"
+    elif [ -n "$NET_WAN_IFACE" ]; then
+        wan_iface="$NET_WAN_IFACE"
+        log_info "Using network module WAN interface: $wan_iface"
+    else
+        # Fallback: detect from default route
+        wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+        if [ -n "$wan_iface" ]; then
+            log_info "WAN interface detected from default route: $wan_iface"
+        fi
+    fi
+
+    # If still no WAN, check for interface with IP (existing DHCP)
+    if [ -z "$wan_iface" ]; then
+        for iface in $ETH_INTERFACES; do
+            if ip addr show "$iface" 2>/dev/null | grep -q "inet "; then
+                wan_iface="$iface"
+                log_info "WAN interface detected from existing IP: $wan_iface"
+                break
+            fi
+        done
+    fi
+
+    # Log important warning about WAN preservation
+    if [ -n "$wan_iface" ]; then
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_info "WAN INTERFACE PRESERVED: $wan_iface"
+        log_info "  - Existing IP/DHCP configuration will NOT be modified"
+        log_info "  - Interface will NOT be added to OVS bridge"
+        log_info "  - Internet connectivity through this interface is preserved"
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    fi
+
+    # Get LAN interfaces (everything except WAN)
     local lan_ifaces=""
     for iface in $ETH_INTERFACES; do
-        # Skip WAN interface
+        # Skip WAN interface - NEVER add to bridge
         if [ "$iface" = "$wan_iface" ]; then
-            log_info "Skipping WAN interface: $iface"
+            log_info "Skipping WAN interface: $iface (preserved for internet)"
             continue
         fi
         lan_ifaces="$lan_ifaces $iface"
@@ -798,18 +839,25 @@ setup_lan_bridge() {
         log_warn "No LAN interfaces found to bridge"
         log_info "WAN interface: ${wan_iface:-none}"
         log_info "Available interfaces: $ETH_INTERFACES"
+        log_warn "Single-interface mode: Use WiFi AP for client connectivity"
         return 0
     fi
 
-    log_info "WAN interface: $wan_iface"
+    log_info "WAN interface (preserved): $wan_iface"
     log_info "LAN interfaces to bridge: $lan_ifaces"
 
     # Add each LAN interface to the OVS bridge
     # Using simple access mode (no VLAN tagging) for basic client connectivity
     # Clients get IPs from main bridge range (10.250.0.x)
     for iface in $lan_ifaces; do
+        # Double-check: NEVER add WAN to bridge
+        if [ "$iface" = "$wan_iface" ]; then
+            log_error "SAFETY CHECK: Prevented adding WAN ($wan_iface) to bridge!"
+            continue
+        fi
+
         if ip link show "$iface" &>/dev/null; then
-            # Remove any existing IP from the interface
+            # Remove any existing IP from the LAN interface (not WAN!)
             ip addr flush dev "$iface" 2>/dev/null || true
 
             # Add to OVS bridge as simple port (no VLAN tagging)
@@ -838,7 +886,13 @@ setup_lan_bridge() {
     # Save LAN configuration
     cat > /etc/hookprobe/lan-bridge.conf << EOF
 # HookProbe Fortress LAN Bridge Configuration
+# Generated: $(date -Iseconds)
+#
+# IMPORTANT: WAN interface is NEVER added to bridge!
+# Its existing network configuration is preserved.
+
 WAN_INTERFACE=$wan_iface
+WAN_PRESERVED=true
 LAN_INTERFACES="$lan_ifaces"
 BRIDGE_NAME=$OVS_BRIDGE_NAME
 BRIDGE_IP=10.250.0.1
