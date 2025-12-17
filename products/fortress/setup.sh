@@ -1093,26 +1093,125 @@ _create_hostapd_service() {
     cat > /usr/local/bin/fortress-wifi-prepare.sh << 'PREPEOF'
 #!/bin/bash
 # Prepare WiFi interface for AP mode
+# This script MUST run before hostapd to ensure the interface is ready
+set -e
+
 WIFI_IFACE="$1"
 
-# Ensure NetworkManager isn't managing it
-nmcli device set "$WIFI_IFACE" managed no 2>/dev/null || true
-nmcli device disconnect "$WIFI_IFACE" 2>/dev/null || true
+if [ -z "$WIFI_IFACE" ]; then
+    echo "ERROR: No interface specified"
+    exit 1
+fi
 
-# Set AP mode
-ip link set "$WIFI_IFACE" down 2>/dev/null
-iw dev "$WIFI_IFACE" set type __ap 2>/dev/null
-ip link set "$WIFI_IFACE" up 2>/dev/null
+echo "Preparing WiFi interface $WIFI_IFACE for AP mode..."
 
-# Verify
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 1: Kill any conflicting processes
+# ═══════════════════════════════════════════════════════════════════════════
+echo "Stopping conflicting processes..."
+
+# Kill wpa_supplicant on this interface (common cause of "interface busy")
+if pgrep -f "wpa_supplicant.*$WIFI_IFACE" &>/dev/null; then
+    echo "  Killing wpa_supplicant on $WIFI_IFACE"
+    pkill -9 -f "wpa_supplicant.*-i$WIFI_IFACE" 2>/dev/null || true
+    pkill -9 -f "wpa_supplicant.*$WIFI_IFACE" 2>/dev/null || true
+    sleep 1
+fi
+
+# Also try wpa_cli terminate
+wpa_cli -i "$WIFI_IFACE" terminate 2>/dev/null || true
+
+# Kill any hostapd already running on this interface
+pkill -9 -f "hostapd.*$WIFI_IFACE" 2>/dev/null || true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 2: Release from NetworkManager
+# ═══════════════════════════════════════════════════════════════════════════
+if command -v nmcli &>/dev/null; then
+    echo "  Releasing from NetworkManager..."
+    nmcli device set "$WIFI_IFACE" managed no 2>/dev/null || true
+    nmcli device disconnect "$WIFI_IFACE" 2>/dev/null || true
+    sleep 0.5
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 3: Verify regulatory domain
+# ═══════════════════════════════════════════════════════════════════════════
+echo "Checking regulatory domain..."
+
+# Load country from config if available
+COUNTRY=""
+if [ -f /etc/default/crda ]; then
+    COUNTRY=$(grep "^REGDOMAIN=" /etc/default/crda 2>/dev/null | cut -d= -f2)
+fi
+COUNTRY="${COUNTRY:-US}"
+
+# Set regulatory domain
+if command -v iw &>/dev/null; then
+    iw reg set "$COUNTRY" 2>/dev/null || true
+    sleep 1
+
+    # Verify
+    CURRENT_REG=$(iw reg get 2>/dev/null | grep -m1 "country" | grep -oP "country \K[A-Z]{2}" || echo "")
+    echo "  Global regulatory domain: ${CURRENT_REG:-UNKNOWN}"
+
+    # Check for self-managed (firmware-controlled) regulatory domain
+    PHY=$(iw dev "$WIFI_IFACE" info 2>/dev/null | grep wiphy | awk '{print "phy"$2}')
+    if [ -n "$PHY" ]; then
+        PHY_REG=$(iw reg get 2>/dev/null | grep -A1 "$PHY" | grep "country" | grep -oP "country \K[A-Z]{2}" || echo "")
+        if [ -n "$PHY_REG" ] && [ "$PHY_REG" != "$CURRENT_REG" ]; then
+            echo "  ⚠️  PHY $PHY has self-managed domain: $PHY_REG"
+            echo "     Adapter firmware ignores system regulatory setting"
+        fi
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 4: Set interface to AP mode
+# ═══════════════════════════════════════════════════════════════════════════
+echo "Setting interface to AP mode..."
+
+# Bring interface down first
+ip link set "$WIFI_IFACE" down 2>/dev/null || true
 sleep 0.5
+
+# Unblock WiFi if blocked by rfkill
+rfkill unblock wifi 2>/dev/null || true
+rfkill unblock all 2>/dev/null || true
+
+# Set type to AP
+if ! iw dev "$WIFI_IFACE" set type __ap 2>/dev/null; then
+    echo "  Warning: Could not set type to AP (may already be AP or driver limitation)"
+fi
+
+# Bring interface up
+ip link set "$WIFI_IFACE" up 2>/dev/null || true
+sleep 1
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 5: Verify
+# ═══════════════════════════════════════════════════════════════════════════
+echo "Verifying interface state..."
+
+# Check interface exists and is up
+if ! ip link show "$WIFI_IFACE" &>/dev/null; then
+    echo "ERROR: Interface $WIFI_IFACE does not exist"
+    exit 1
+fi
+
+STATE=$(ip link show "$WIFI_IFACE" 2>/dev/null | grep -o "state [A-Z]*" | awk '{print $2}')
 MODE=$(iw dev "$WIFI_IFACE" info 2>/dev/null | grep "type" | awk '{print $2}')
-if [ "$MODE" = "AP" ]; then
-    echo "WiFi interface $WIFI_IFACE ready in AP mode"
+
+echo "  Interface state: ${STATE:-UNKNOWN}"
+echo "  Interface mode: ${MODE:-UNKNOWN}"
+
+# Success if mode is AP or managed (hostapd will switch to AP)
+if [ "$MODE" = "AP" ] || [ "$MODE" = "managed" ]; then
+    echo "✓ WiFi interface $WIFI_IFACE ready for hostapd"
     exit 0
 else
-    echo "Warning: Could not set AP mode (current: $MODE)"
-    exit 1
+    echo "⚠️  Interface mode is $MODE - hostapd will attempt to use it anyway"
+    exit 0  # Don't fail - let hostapd try
 fi
 PREPEOF
     chmod +x /usr/local/bin/fortress-wifi-prepare.sh
