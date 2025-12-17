@@ -1994,17 +1994,21 @@ generate_systemd_services() {
             iface_24ghz=$(grep "^interface=" "$HOSTAPD_24GHZ_CONF" | cut -d= -f2)
         fi
 
+        # Systemd device unit for the WiFi interface (waits for interface to exist)
+        local dev_unit_24ghz="sys-subsystem-net-devices-${iface_24ghz}.device"
+
         cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
-After=network.target openvswitch-switch.service
-Wants=network.target
+After=network.target openvswitch-switch.service ${dev_unit_24ghz}
+Wants=network.target ${dev_unit_24ghz}
 Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd-24ghz.pid
-ExecStartPre=/bin/sleep 2
+# Small delay after interface appears to ensure it's fully initialized
+ExecStartPre=/bin/sleep 1
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} add
 ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} remove
@@ -2015,7 +2019,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-        log_success "Created: fortress-hostapd-24ghz.service"
+        log_success "Created: fortress-hostapd-24ghz.service (waits for ${iface_24ghz})"
     fi
 
     if [ "$has_5ghz" = "true" ]; then
@@ -2024,17 +2028,21 @@ EOF
             iface_5ghz=$(grep "^interface=" "$HOSTAPD_5GHZ_CONF" | cut -d= -f2)
         fi
 
+        # Systemd device unit for the WiFi interface (waits for interface to exist)
+        local dev_unit_5ghz="sys-subsystem-net-devices-${iface_5ghz}.device"
+
         cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
-After=network.target openvswitch-switch.service
-Wants=network.target
+After=network.target openvswitch-switch.service ${dev_unit_5ghz}
+Wants=network.target ${dev_unit_5ghz}
 Requires=openvswitch-switch.service
 
 [Service]
 Type=forking
 PIDFile=/run/hostapd-5ghz.pid
-ExecStartPre=/bin/sleep 2
+# Small delay after interface appears to ensure it's fully initialized
+ExecStartPre=/bin/sleep 1
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} add
 ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} remove
@@ -2045,7 +2053,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-        log_success "Created: fortress-hostapd-5ghz.service"
+        log_success "Created: fortress-hostapd-5ghz.service (waits for ${iface_5ghz})"
     fi
 
     systemctl daemon-reload
