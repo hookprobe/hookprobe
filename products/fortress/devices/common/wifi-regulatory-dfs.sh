@@ -1190,7 +1190,7 @@ show_dfs_status() {
 # ML-ENHANCED CHANNEL SELECTION (Python Integration)
 # ============================================================
 #
-# Integration with products/fortress/lib/dfs_intelligence.py
+# Integration with shared/wireless/dfs_intelligence.py
 # Provides ML-powered channel scoring when Python module is available.
 # Supports both native Python and containerized API modes.
 # Falls back to bash-based scoring if unavailable.
@@ -1200,10 +1200,12 @@ show_dfs_status() {
 #   native:    Use local Python module directly
 #   fallback:  Use bash-based scoring (no ML)
 
-DFS_INTELLIGENCE_PY="${DFS_INTELLIGENCE_PY:-/opt/hookprobe/products/fortress/lib/dfs_intelligence.py}"
-DFS_INTELLIGENCE_DEV="${SCRIPT_DIR}/../../lib/dfs_intelligence.py"
-DFS_CAPABILITIES_SCRIPT="${SCRIPT_DIR}/wifi-dfs-capabilities.sh"
-DFS_CONTAINER_CTL="${DFS_CONTAINER_CTL:-/opt/hookprobe/products/fortress/containers/dfs-intelligence/dfs-container-ctl.sh}"
+# Shared module paths (canonical location)
+DFS_INTELLIGENCE_PY="${DFS_INTELLIGENCE_PY:-/opt/hookprobe/shared/wireless/dfs_intelligence.py}"
+DFS_INTELLIGENCE_DEV="${SCRIPT_DIR}/../../../../shared/wireless/dfs_intelligence.py"
+DFS_CAPABILITIES_SCRIPT="${DFS_CAPABILITIES_SCRIPT:-/opt/hookprobe/shared/wireless/dfs_capabilities.sh}"
+DFS_CAPABILITIES_DEV="${SCRIPT_DIR}/../../../../shared/wireless/dfs_capabilities.sh"
+DFS_CONTAINER_CTL="${DFS_CONTAINER_CTL:-/opt/hookprobe/shared/wireless/containers/dfs-intelligence/dfs-container-ctl.sh}"
 DFS_API_PORT="${DFS_API_PORT:-8767}"
 DFS_API_URL="http://127.0.0.1:${DFS_API_PORT}"
 
@@ -1217,11 +1219,17 @@ DFS_CAPABILITY_LEVEL=""
 
 source_capabilities_script() {
     # Source the capabilities detection script if available
+    # Priority: DFS_CAPABILITIES_SCRIPT -> shared location -> dev location -> local
     if [ -f "$DFS_CAPABILITIES_SCRIPT" ]; then
         # shellcheck source=/dev/null
         source "$DFS_CAPABILITIES_SCRIPT"
         return 0
+    elif [ -f "$DFS_CAPABILITIES_DEV" ]; then
+        # shellcheck source=/dev/null
+        source "$DFS_CAPABILITIES_DEV"
+        return 0
     elif [ -f "${SCRIPT_DIR}/wifi-dfs-capabilities.sh" ]; then
+        # Fallback to local (deprecated)
         # shellcheck source=/dev/null
         source "${SCRIPT_DIR}/wifi-dfs-capabilities.sh"
         return 0
