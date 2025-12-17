@@ -269,6 +269,9 @@ get_device_info() {
 init_nftables() {
     log_info "Initializing nftables rules..."
 
+    # Delete existing table first (ignore error if doesn't exist)
+    nft delete table inet fortress_filter 2>/dev/null || true
+
     # Create the Fortress nftables configuration
     cat > "$NFTABLES_CONFIG" << 'NFTEOF'
 #!/usr/sbin/nft -f
@@ -290,8 +293,6 @@ init_nftables() {
 #   internet_only_macs - Internet-only devices (no LAN)
 #   full_access_macs  - Full access devices
 #
-
-flush table inet fortress_filter
 
 table inet fortress_filter {
 
@@ -426,10 +427,12 @@ table inet fortress_filter {
 NFTEOF
 
     # Apply the rules
-    nft -f "$NFTABLES_CONFIG" 2>/dev/null || {
+    local nft_error
+    if ! nft_error=$(nft -f "$NFTABLES_CONFIG" 2>&1); then
         log_error "Failed to apply nftables rules"
+        log_error "Error: $nft_error"
         return 1
-    }
+    fi
 
     log_success "nftables rules initialized"
 }
