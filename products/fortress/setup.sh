@@ -1711,7 +1711,8 @@ setup_nftables_filtering() {
     systemctl start nftables 2>/dev/null || true
 
     # Copy the network filter manager script
-    local filter_script="$SCRIPT_DIR/devices/common/network-filter-manager.sh"
+    # Note: Use DEVICES_DIR (set from FORTRESS_ROOT before sourcing) to avoid path issues
+    local filter_script="$DEVICES_DIR/common/network-filter-manager.sh"
     if [ -f "$filter_script" ]; then
         install -m 755 "$filter_script" /opt/hookprobe/fortress/bin/network-filter-manager.sh
 
@@ -1730,7 +1731,7 @@ setup_nftables_filtering() {
     fi
 
     # Copy Python policy manager
-    local py_policy="$SCRIPT_DIR/lib/network_policy_manager.py"
+    local py_policy="$FORTRESS_ROOT/lib/network_policy_manager.py"
     if [ -f "$py_policy" ]; then
         install -m 644 "$py_policy" /opt/hookprobe/fortress/lib/network_policy_manager.py
         log_info "Python policy manager installed"
@@ -2724,7 +2725,7 @@ configure_freeradius_vlan() {
     log_step "Configuring FreeRADIUS for VLAN assignment..."
 
     local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_fortress}"
-    local VLAN_SCRIPT="$SCRIPT_DIR/devices/common/vlan-assignment.sh"
+    local VLAN_SCRIPT="$DEVICES_DIR/common/vlan-assignment.sh"
 
     mkdir -p /etc/fortress
     mkdir -p /var/lib/fortress
@@ -3929,7 +3930,9 @@ setup_dfs_intelligence() {
     local DFS_DIR="/opt/hookprobe/fortress/dfs"
     local DFS_DB_DIR="/var/lib/hookprobe"
     local DFS_LOG_DIR="/var/log/fortress"
-    local DFS_SRC="$SCRIPT_DIR/devices/common"
+    # Note: Use DEVICES_DIR (set from FORTRESS_ROOT before sourcing) to avoid path issues
+    # SCRIPT_DIR may be overwritten by sourced scripts
+    local DFS_SRC="$DEVICES_DIR/common"
     local SHARED_WIRELESS="$REPO_ROOT/shared/wireless"
 
     # Create directories
