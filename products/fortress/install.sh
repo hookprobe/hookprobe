@@ -1,0 +1,831 @@
+#!/bin/bash
+#
+# HookProbe Fortress - Unified Installer
+# Version: 5.1.0
+# License: AGPL-3.0
+#
+# Single entry point for all Fortress operations:
+#   - Install (native or container mode)
+#   - Upgrade (application, full, or specific components)
+#   - Uninstall (staged with data preservation options)
+#   - Backup/Restore
+#   - Status and diagnostics
+#
+# Usage:
+#   ./install.sh                      # Interactive install (choose mode)
+#   ./install.sh --native             # Full native installation
+#   ./install.sh --container          # Container-based installation
+#   ./install.sh upgrade              # Upgrade existing installation
+#   ./install.sh uninstall            # Uninstall with options
+#   ./install.sh status               # Show installation status
+#
+# For detailed help: ./install.sh --help
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION="5.1.0"
+
+# ============================================================
+# PATHS
+# ============================================================
+INSTALL_DIR="/opt/hookprobe/fortress"
+CONFIG_DIR="/etc/hookprobe"
+DATA_DIR="/var/lib/hookprobe/fortress"
+BACKUP_DIR="/var/backups/fortress"
+LOG_DIR="/var/log/hookprobe"
+STATE_FILE="${CONFIG_DIR}/fortress-state.json"
+VERSION_FILE="${INSTALL_DIR}/VERSION"
+
+# ============================================================
+# COLORS
+# ============================================================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ============================================================
+# LOGGING
+# ============================================================
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "\n${CYAN}${BOLD}==> $1${NC}"; }
+
+# ============================================================
+# BANNER
+# ============================================================
+show_banner() {
+    echo -e "${CYAN}"
+    cat << 'EOF'
+  _   _             _    ____            _
+ | | | | ___   ___ | | _|  _ \ _ __ ___ | |__   ___
+ | |_| |/ _ \ / _ \| |/ / |_) | '__/ _ \| '_ \ / _ \
+ |  _  | (_) | (_) |   <|  __/| | | (_) | |_) |  __/
+ |_| |_|\___/ \___/|_|\_\_|   |_|  \___/|_.__/ \___|
+
+           F O R T R E S S   v5.1.0
+        Unified Security Gateway Installer
+EOF
+    echo -e "${NC}"
+}
+
+# ============================================================
+# STATE DETECTION
+# ============================================================
+detect_installation() {
+    # Check if Fortress is already installed
+    if [ -f "$STATE_FILE" ]; then
+        INSTALLED=true
+        DEPLOYMENT_MODE=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('deployment_mode', 'unknown'))" 2>/dev/null || echo "unknown")
+        INSTALLED_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
+        return 0
+    fi
+
+    # Fallback detection
+    if [ -d "$INSTALL_DIR" ] || systemctl is-active fortress &>/dev/null || systemctl is-active hookprobe-fortress &>/dev/null; then
+        INSTALLED=true
+        # Try to detect mode
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress"; then
+            DEPLOYMENT_MODE="container"
+        elif systemctl is-enabled hookprobe-fortress &>/dev/null; then
+            DEPLOYMENT_MODE="native"
+        else
+            DEPLOYMENT_MODE="unknown"
+        fi
+        INSTALLED_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
+        return 0
+    fi
+
+    INSTALLED=false
+    DEPLOYMENT_MODE=""
+    INSTALLED_VERSION=""
+    return 1
+}
+
+save_state() {
+    local mode="$1"
+
+    mkdir -p "$(dirname "$STATE_FILE")"
+    cat > "$STATE_FILE" << EOF
+{
+    "deployment_mode": "${mode}",
+    "version": "${VERSION}",
+    "installed_at": "$(date -Iseconds)",
+    "installer_version": "${VERSION}",
+    "last_action": "install"
+}
+EOF
+    chmod 600 "$STATE_FILE"
+
+    # Create VERSION file
+    mkdir -p "$INSTALL_DIR"
+    echo "$VERSION" > "$VERSION_FILE"
+}
+
+update_state() {
+    local key="$1"
+    local value="$2"
+
+    if [ -f "$STATE_FILE" ]; then
+        python3 -c "
+import json
+with open('$STATE_FILE', 'r') as f:
+    d = json.load(f)
+d['$key'] = '$value'
+d['last_updated'] = '$(date -Iseconds)'
+with open('$STATE_FILE', 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || true
+    fi
+}
+
+# ============================================================
+# PRE-FLIGHT CHECKS
+# ============================================================
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        log_error "This script must be run as root"
+        echo "Try: sudo $0 $*"
+        exit 1
+    fi
+}
+
+check_system() {
+    log_step "System Check"
+
+    # RAM check
+    local total_ram=$(free -m | awk '/^Mem:/{print $2}')
+    if [ "$total_ram" -lt 2048 ]; then
+        log_warn "Low RAM: ${total_ram}MB. Container mode recommended for <4GB."
+    else
+        log_info "RAM: ${total_ram}MB"
+    fi
+
+    # Disk check
+    local free_disk=$(df -BG / | awk 'NR==2{print $4}' | tr -d 'G')
+    if [ "$free_disk" -lt 10 ]; then
+        log_warn "Low disk space: ${free_disk}GB free. Recommend 20GB+."
+    else
+        log_info "Disk: ${free_disk}GB free"
+    fi
+
+    # Architecture
+    local arch=$(uname -m)
+    log_info "Architecture: ${arch}"
+
+    # Check for existing installation
+    detect_installation
+    if [ "$INSTALLED" = true ]; then
+        log_info "Existing installation detected: ${DEPLOYMENT_MODE} mode, version ${INSTALLED_VERSION}"
+    fi
+}
+
+# ============================================================
+# MODE SELECTION
+# ============================================================
+select_installation_mode() {
+    echo ""
+    echo -e "${BOLD}Installation Mode Selection${NC}"
+    echo ""
+    echo "Choose your deployment mode:"
+    echo ""
+    echo -e "  ${CYAN}1)${NC} ${BOLD}Container${NC} (Recommended for most users)"
+    echo "     • Self-contained Flask app in Podman containers"
+    echo "     • PostgreSQL database with persistent volumes"
+    echo "     • Easy upgrades, backup, and restore"
+    echo "     • Requires: 2GB+ RAM, Podman"
+    echo ""
+    echo -e "  ${CYAN}2)${NC} ${BOLD}Native${NC} (Full-featured, hardware-optimized)"
+    echo "     • OVS bridge with VLAN segmentation"
+    echo "     • MACsec L2 encryption, VXLAN tunnels"
+    echo "     • Grafana + VictoriaMetrics monitoring"
+    echo "     • WiFi AP with channel optimization"
+    echo "     • LTE/5G failover support"
+    echo "     • Requires: 4GB+ RAM, multiple NICs"
+    echo ""
+
+    read -p "Select mode [1/2]: " mode_choice
+    case "${mode_choice:-1}" in
+        2|native|n)
+            SELECTED_MODE="native"
+            ;;
+        *)
+            SELECTED_MODE="container"
+            ;;
+    esac
+
+    log_info "Selected mode: ${SELECTED_MODE}"
+}
+
+# ============================================================
+# INSTALL FUNCTIONS
+# ============================================================
+do_install() {
+    local mode="${1:-}"
+    local extra_args="${@:2}"
+
+    if [ "$INSTALLED" = true ]; then
+        echo ""
+        log_warn "Fortress is already installed (${DEPLOYMENT_MODE} mode, v${INSTALLED_VERSION})"
+        echo ""
+        echo "Options:"
+        echo "  1) Upgrade existing installation"
+        echo "  2) Uninstall and reinstall"
+        echo "  3) Cancel"
+        echo ""
+        read -p "Select [1-3]: " choice
+
+        case "$choice" in
+            1)
+                do_upgrade
+                return
+                ;;
+            2)
+                do_uninstall --force
+                INSTALLED=false
+                ;;
+            *)
+                log_info "Installation cancelled"
+                exit 0
+                ;;
+        esac
+    fi
+
+    # Select mode if not specified
+    if [ -z "$mode" ]; then
+        select_installation_mode
+        mode="$SELECTED_MODE"
+    fi
+
+    case "$mode" in
+        container)
+            log_step "Starting container-based installation"
+            save_state "container"
+            exec "${SCRIPT_DIR}/install-container.sh" $extra_args
+            ;;
+        native)
+            log_step "Starting native installation"
+            save_state "native"
+            exec "${SCRIPT_DIR}/setup.sh" $extra_args
+            ;;
+        *)
+            log_error "Unknown mode: $mode"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
+# UPGRADE FUNCTIONS
+# ============================================================
+do_upgrade() {
+    local upgrade_type="${1:-}"
+
+    if [ "$INSTALLED" != true ]; then
+        log_error "No existing installation found"
+        echo "Run: $0 install"
+        exit 1
+    fi
+
+    log_step "Upgrade (${DEPLOYMENT_MODE} mode, ${INSTALLED_VERSION} -> ${VERSION})"
+
+    # Use fortress-ctl for container mode
+    if [ "$DEPLOYMENT_MODE" = "container" ]; then
+        if [ -x "${SCRIPT_DIR}/fortress-ctl.sh" ]; then
+            case "$upgrade_type" in
+                --app|app)
+                    exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --app
+                    ;;
+                --full|full)
+                    exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --full
+                    ;;
+                *)
+                    echo ""
+                    echo "Upgrade options:"
+                    echo "  1) Application only (hot upgrade, no downtime)"
+                    echo "  2) Full upgrade (includes infrastructure)"
+                    echo ""
+                    read -p "Select [1/2]: " choice
+                    case "$choice" in
+                        2) exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --full ;;
+                        *) exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --app ;;
+                    esac
+                    ;;
+            esac
+        fi
+    fi
+
+    # Native mode upgrade
+    if [ "$DEPLOYMENT_MODE" = "native" ]; then
+        echo ""
+        echo "Native mode upgrade options:"
+        echo ""
+        echo "  1) Web application only (Flask app, templates, static files)"
+        echo "  2) QSecBit agent only"
+        echo "  3) Configuration only (dnsmasq, hostapd)"
+        echo "  4) Full upgrade (backup + reinstall preserving data)"
+        echo ""
+        read -p "Select [1-4]: " choice
+
+        case "$choice" in
+            1) upgrade_native_webapp ;;
+            2) upgrade_native_qsecbit ;;
+            3) upgrade_native_config ;;
+            4) upgrade_native_full ;;
+            *)
+                log_info "Upgrade cancelled"
+                exit 0
+                ;;
+        esac
+    fi
+}
+
+upgrade_native_webapp() {
+    log_step "Upgrading web application"
+
+    # Backup current
+    local backup_dir="${BACKUP_DIR}/webapp_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+
+    if [ -d "${INSTALL_DIR}/web" ]; then
+        cp -r "${INSTALL_DIR}/web" "$backup_dir/"
+        log_info "Backed up to: $backup_dir"
+    fi
+
+    # Stop web service
+    systemctl stop fortress-web 2>/dev/null || true
+
+    # Copy new files
+    if [ -d "${SCRIPT_DIR}/web" ]; then
+        cp -r "${SCRIPT_DIR}/web/"* "${INSTALL_DIR}/web/"
+        log_info "Web application files updated"
+    fi
+
+    if [ -d "${SCRIPT_DIR}/lib" ]; then
+        cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
+        log_info "Library files updated"
+    fi
+
+    # Restart
+    systemctl start fortress-web 2>/dev/null || true
+
+    update_state "last_upgrade" "$(date -Iseconds)"
+    update_state "last_upgrade_type" "webapp"
+    echo "$VERSION" > "$VERSION_FILE"
+
+    log_info "Web application upgrade complete"
+}
+
+upgrade_native_qsecbit() {
+    log_step "Upgrading QSecBit agent"
+
+    # Stop agent
+    systemctl stop fortress-qsecbit 2>/dev/null || true
+
+    # Copy new QSecBit files
+    local qsecbit_src="${SCRIPT_DIR}/qsecbit"
+    local qsecbit_dst="${INSTALL_DIR}/qsecbit"
+
+    if [ -d "$qsecbit_src" ]; then
+        mkdir -p "$qsecbit_dst"
+        cp -r "${qsecbit_src}/"* "$qsecbit_dst/"
+        log_info "QSecBit files updated"
+    fi
+
+    # Restart
+    systemctl start fortress-qsecbit 2>/dev/null || true
+
+    update_state "last_upgrade_type" "qsecbit"
+    log_info "QSecBit agent upgrade complete"
+}
+
+upgrade_native_config() {
+    log_step "Upgrading configuration"
+
+    # Backup configs
+    local backup_dir="${BACKUP_DIR}/config_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+
+    cp /etc/dnsmasq.d/fortress*.conf "$backup_dir/" 2>/dev/null || true
+    cp /etc/hostapd/fortress*.conf "$backup_dir/" 2>/dev/null || true
+    cp "${CONFIG_DIR}/fortress.conf" "$backup_dir/" 2>/dev/null || true
+
+    log_info "Configuration backed up to: $backup_dir"
+
+    # Regenerate configs (user will need to restart services)
+    log_warn "Configuration files backed up. Manual review required before applying changes."
+    log_info "Review backup at: $backup_dir"
+    log_info "After review, restart services: systemctl restart fortress-dnsmasq fortress-hostapd"
+}
+
+upgrade_native_full() {
+    log_step "Full native upgrade"
+
+    echo ""
+    log_warn "Full upgrade will:"
+    echo "  1. Create full backup"
+    echo "  2. Stop all services"
+    echo "  3. Update all components"
+    echo "  4. Restart services"
+    echo ""
+    echo "Data (database, configuration) will be preserved."
+    echo ""
+    read -p "Continue? [y/N]: " confirm
+
+    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
+        log_info "Upgrade cancelled"
+        exit 0
+    fi
+
+    # Create backup
+    do_backup --full
+
+    # Run setup.sh which handles everything
+    log_info "Running full installation (preserving data)..."
+    exec "${SCRIPT_DIR}/setup.sh" --non-interactive
+}
+
+# ============================================================
+# UNINSTALL FUNCTIONS
+# ============================================================
+do_uninstall() {
+    local force=false
+    local keep_data=false
+    local keep_config=false
+    local purge=false
+
+    # Parse options
+    for arg in "$@"; do
+        case "$arg" in
+            --force|-f) force=true ;;
+            --keep-data) keep_data=true ;;
+            --keep-config) keep_config=true ;;
+            --purge) purge=true ;;
+        esac
+    done
+
+    if [ "$INSTALLED" != true ]; then
+        log_warn "No installation detected"
+        exit 0
+    fi
+
+    if [ "$force" != true ]; then
+        echo ""
+        echo -e "${RED}Uninstall Fortress${NC}"
+        echo ""
+        echo "Current installation:"
+        echo "  Mode:    ${DEPLOYMENT_MODE}"
+        echo "  Version: ${INSTALLED_VERSION}"
+        echo ""
+        echo "Options:"
+        echo "  1) Remove but keep data (can reinstall later)"
+        echo "  2) Remove but keep configuration"
+        echo "  3) Remove everything (purge)"
+        echo "  4) Cancel"
+        echo ""
+        read -p "Select [1-4]: " choice
+
+        case "$choice" in
+            1) keep_data=true ;;
+            2) keep_config=true ;;
+            3) purge=true ;;
+            *)
+                log_info "Uninstall cancelled"
+                exit 0
+                ;;
+        esac
+    fi
+
+    # Delegate to appropriate uninstaller
+    case "$DEPLOYMENT_MODE" in
+        container)
+            local args=""
+            [ "$keep_data" = true ] && args="$args --keep-data"
+            [ "$keep_config" = true ] && args="$args --keep-config"
+            [ "$purge" = true ] && args="$args --purge"
+            exec "${SCRIPT_DIR}/install-container.sh" --uninstall $args
+            ;;
+        native)
+            local args=""
+            [ "$force" = true ] && args="$args --force"
+            [ "$keep_data" = true ] && args="$args --keep-data"
+            exec "${SCRIPT_DIR}/uninstall.sh" $args
+            ;;
+        *)
+            log_warn "Unknown deployment mode. Attempting generic uninstall..."
+            exec "${SCRIPT_DIR}/uninstall.sh" --force
+            ;;
+    esac
+}
+
+# ============================================================
+# BACKUP/RESTORE FUNCTIONS
+# ============================================================
+do_backup() {
+    local backup_type="${1:---full}"
+
+    if [ "$INSTALLED" != true ]; then
+        log_error "No installation to backup"
+        exit 1
+    fi
+
+    # Use fortress-ctl for container mode
+    if [ "$DEPLOYMENT_MODE" = "container" ] && [ -x "${SCRIPT_DIR}/fortress-ctl.sh" ]; then
+        exec "${SCRIPT_DIR}/fortress-ctl.sh" backup "$backup_type"
+    fi
+
+    # Native mode backup
+    log_step "Creating backup (${DEPLOYMENT_MODE} mode)"
+
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_name="fortress_${backup_type#--}_${timestamp}"
+    local backup_path="${BACKUP_DIR}/${backup_name}"
+
+    mkdir -p "$backup_path"
+
+    # Configuration
+    log_info "Backing up configuration..."
+    if [ -d "$CONFIG_DIR" ]; then
+        cp -r "$CONFIG_DIR" "${backup_path}/config"
+    fi
+
+    # Database (if PostgreSQL is local)
+    if systemctl is-active postgresql &>/dev/null; then
+        log_info "Backing up PostgreSQL..."
+        sudo -u postgres pg_dump fortress > "${backup_path}/database.sql" 2>/dev/null || true
+    fi
+
+    # Web application
+    if [ -d "${INSTALL_DIR}/web" ]; then
+        log_info "Backing up web application..."
+        tar -czf "${backup_path}/webapp.tar.gz" -C "$INSTALL_DIR" web lib 2>/dev/null || true
+    fi
+
+    # Systemd services
+    mkdir -p "${backup_path}/systemd"
+    cp /etc/systemd/system/fortress*.service "${backup_path}/systemd/" 2>/dev/null || true
+    cp /etc/systemd/system/hookprobe*.service "${backup_path}/systemd/" 2>/dev/null || true
+
+    # Network configuration
+    mkdir -p "${backup_path}/network"
+    cp /etc/dnsmasq.d/fortress*.conf "${backup_path}/network/" 2>/dev/null || true
+    cp /etc/hostapd/*.conf "${backup_path}/network/" 2>/dev/null || true
+    ovs-vsctl show > "${backup_path}/network/ovs.txt" 2>/dev/null || true
+    nft list ruleset > "${backup_path}/network/nftables.conf" 2>/dev/null || true
+
+    # Create manifest
+    cat > "${backup_path}/manifest.json" << EOF
+{
+    "type": "${backup_type#--}",
+    "timestamp": "${timestamp}",
+    "version": "${INSTALLED_VERSION}",
+    "deployment_mode": "${DEPLOYMENT_MODE}",
+    "created_by": "install.sh ${VERSION}"
+}
+EOF
+
+    # Create archive
+    tar -czf "${BACKUP_DIR}/${backup_name}.tar.gz" -C "$BACKUP_DIR" "$backup_name"
+    rm -rf "$backup_path"
+
+    log_info "Backup created: ${BACKUP_DIR}/${backup_name}.tar.gz"
+}
+
+do_restore() {
+    local backup_file="$1"
+
+    if [ -z "$backup_file" ]; then
+        log_step "Available backups"
+        ls -la "${BACKUP_DIR}/"*.tar.gz 2>/dev/null || {
+            log_warn "No backups found in $BACKUP_DIR"
+            exit 1
+        }
+        echo ""
+        read -p "Enter backup filename to restore: " backup_file
+    fi
+
+    if [ ! -f "$backup_file" ]; then
+        # Try with backup dir prefix
+        if [ -f "${BACKUP_DIR}/${backup_file}" ]; then
+            backup_file="${BACKUP_DIR}/${backup_file}"
+        else
+            log_error "Backup file not found: $backup_file"
+            exit 1
+        fi
+    fi
+
+    # Use fortress-ctl for container mode
+    if [ "$DEPLOYMENT_MODE" = "container" ] && [ -x "${SCRIPT_DIR}/fortress-ctl.sh" ]; then
+        exec "${SCRIPT_DIR}/fortress-ctl.sh" restore "$backup_file"
+    fi
+
+    log_step "Restoring from: $backup_file"
+    # TODO: Implement native restore
+    log_warn "Native restore not yet implemented"
+    log_info "Backup location: $backup_file"
+}
+
+# ============================================================
+# STATUS
+# ============================================================
+do_status() {
+    show_banner
+
+    log_step "Installation Status"
+
+    detect_installation
+
+    if [ "$INSTALLED" = true ]; then
+        echo ""
+        echo "Installation:"
+        echo "  Status:  ${GREEN}Installed${NC}"
+        echo "  Mode:    ${DEPLOYMENT_MODE}"
+        echo "  Version: ${INSTALLED_VERSION}"
+        echo "  State:   ${STATE_FILE}"
+        echo ""
+    else
+        echo ""
+        echo -e "Installation: ${YELLOW}Not installed${NC}"
+        echo ""
+        echo "To install: $0 install"
+        exit 0
+    fi
+
+    # Services status
+    echo "Services:"
+    if [ "$DEPLOYMENT_MODE" = "container" ]; then
+        if command -v podman &>/dev/null; then
+            podman ps --filter "name=fortress" --format "  {{.Names}}: {{.Status}}" 2>/dev/null || echo "  No containers running"
+        fi
+    else
+        for svc in hookprobe-fortress fortress-qsecbit fortress-web fortress-dnsmasq fortress-hostapd; do
+            if systemctl is-active "$svc" &>/dev/null; then
+                echo -e "  ${svc}: ${GREEN}active${NC}"
+            elif systemctl is-enabled "$svc" &>/dev/null; then
+                echo -e "  ${svc}: ${YELLOW}inactive${NC}"
+            fi
+        done
+    fi
+    echo ""
+
+    # Health check
+    echo "Health:"
+    if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
+        echo -e "  Web UI: ${GREEN}healthy${NC} (https://localhost:8443)"
+    else
+        echo -e "  Web UI: ${RED}unhealthy${NC}"
+    fi
+    echo ""
+
+    # Backups
+    echo "Backups:"
+    if [ -d "$BACKUP_DIR" ]; then
+        local count=$(ls -1 "${BACKUP_DIR}/"*.tar.gz 2>/dev/null | wc -l)
+        echo "  Location: $BACKUP_DIR"
+        echo "  Count: $count backup(s)"
+        ls -lh "${BACKUP_DIR}/"*.tar.gz 2>/dev/null | tail -3 | while read line; do
+            echo "  $line"
+        done
+    else
+        echo "  No backups found"
+    fi
+}
+
+# ============================================================
+# HELP
+# ============================================================
+show_help() {
+    cat << EOF
+HookProbe Fortress - Unified Installer v${VERSION}
+
+USAGE:
+    $0 [COMMAND] [OPTIONS]
+
+COMMANDS:
+    install              Install Fortress (interactive mode selection)
+    upgrade              Upgrade existing installation
+    uninstall            Remove Fortress installation
+    backup               Create backup
+    restore [FILE]       Restore from backup
+    status               Show installation status
+
+INSTALL OPTIONS:
+    --native             Full native installation (OVS, VLANs, WiFi AP)
+    --container          Container-based installation (Podman)
+    --quick              Quick install with defaults
+
+UPGRADE OPTIONS:
+    --app                Application only (hot upgrade)
+    --full               Full upgrade (all components)
+
+UNINSTALL OPTIONS:
+    --keep-data          Preserve database and user data
+    --keep-config        Preserve configuration files
+    --purge              Remove everything including backups
+    --force              Skip confirmation prompts
+
+BACKUP OPTIONS:
+    --full               Full backup (default)
+    --db                 Database only
+    --config             Configuration only
+
+EXAMPLES:
+    $0                           # Interactive install
+    $0 install --container       # Container mode install
+    $0 install --native          # Native mode install
+    $0 upgrade --app             # Hot upgrade application
+    $0 uninstall --keep-data     # Uninstall but keep data
+    $0 backup --full             # Create full backup
+    $0 status                    # Show installation status
+
+DEPLOYMENT MODES:
+
+    Container Mode (Recommended):
+      - Self-contained Podman deployment
+      - PostgreSQL + Redis + Flask
+      - Easy upgrades and rollback
+      - Requirements: 2GB+ RAM, Podman
+
+    Native Mode (Full-featured):
+      - OVS bridge with VLAN segmentation
+      - MACsec L2 encryption
+      - WiFi AP with channel optimization
+      - LTE/5G WAN failover
+      - Grafana + VictoriaMetrics monitoring
+      - Requirements: 4GB+ RAM, multiple NICs
+
+For more information, see:
+    https://github.com/hookprobe/hookprobe
+
+EOF
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+main() {
+    local command="${1:-}"
+    shift 2>/dev/null || true
+
+    # Check root for most commands
+    case "$command" in
+        status|--help|-h|help)
+            ;;
+        *)
+            check_root
+            ;;
+    esac
+
+    # Pre-flight checks
+    case "$command" in
+        --help|-h|help)
+            show_help
+            exit 0
+            ;;
+        status)
+            do_status
+            exit 0
+            ;;
+    esac
+
+    show_banner
+    check_system
+
+    case "$command" in
+        install|--native|--container|--quick|"")
+            case "$command" in
+                --native) do_install native "$@" ;;
+                --container) do_install container "$@" ;;
+                --quick) do_install container --quick "$@" ;;
+                install) do_install "$@" ;;
+                "") do_install "$@" ;;
+            esac
+            ;;
+        upgrade)
+            do_upgrade "$@"
+            ;;
+        uninstall|remove)
+            do_uninstall "$@"
+            ;;
+        backup)
+            do_backup "$@"
+            ;;
+        restore)
+            do_restore "$@"
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            echo "Run '$0 --help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
