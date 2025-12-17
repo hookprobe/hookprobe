@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-HookProbe Fortress DFS Intelligence Module
-==========================================
+HookProbe Shared DFS Intelligence Module
+=========================================
 
 ML-powered Dynamic Frequency Selection with intelligent channel scoring.
+Shared across product tiers: Guardian, Fortress, Nexus.
 
 Features:
 - Time-weighted radar history analysis
@@ -54,9 +55,10 @@ except ImportError:
 # Configuration
 # ============================================================
 
-DB_PATH = os.environ.get("DFS_DB_PATH", "/var/lib/fortress/dfs_intelligence.db")
-LOG_PATH = os.environ.get("DFS_LOG_PATH", "/var/log/fortress/dfs_intelligence.log")
-MODEL_PATH = os.environ.get("DFS_MODEL_PATH", "/var/lib/fortress/dfs_model.json")
+# Path defaults - can be overridden by product tier
+DB_PATH = os.environ.get("DFS_DB_PATH", "/var/lib/hookprobe/dfs_intelligence.db")
+LOG_PATH = os.environ.get("DFS_LOG_PATH", "/var/log/hookprobe/dfs_intelligence.log")
+MODEL_PATH = os.environ.get("DFS_MODEL_PATH", "/var/lib/hookprobe/dfs_model.json")
 
 # ETSI Timing Constants
 NOP_DURATION_SEC = 1800  # 30 minutes
@@ -111,14 +113,22 @@ CHANNEL_INFO = {
 WEATHER_RADAR_FREQS = [(5600, 5650)]  # Primary weather radar band
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_PATH, mode='a') if os.path.exists(os.path.dirname(LOG_PATH) or '/var/log') else logging.NullHandler()
-    ]
-)
+def _setup_logging():
+    """Setup logging with fallback to NullHandler if log path doesn't exist."""
+    log_dir = os.path.dirname(LOG_PATH) or '/var/log'
+    handlers = [logging.StreamHandler()]
+    if os.path.exists(log_dir):
+        try:
+            handlers.append(logging.FileHandler(LOG_PATH, mode='a'))
+        except (IOError, PermissionError):
+            pass
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=handlers
+    )
+
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -1180,7 +1190,7 @@ Examples:
             min_bandwidth=args.min_bandwidth,
             exclude_channels=args.exclude
         )
-        print(f"\n🎯 Best Channel: {best.channel}")
+        print(f"\nBest Channel: {best.channel}")
         print(f"   Score: {best.total_score:.3f}")
         print(f"   {best.recommendation}")
         info = CHANNEL_INFO.get(best.channel, {})
@@ -1204,7 +1214,7 @@ Examples:
             ]
             print(json.dumps(output, indent=2))
         else:
-            print("\n📊 Channel Rankings:")
+            print("\nChannel Rankings:")
             print("-" * 70)
             for i, score in enumerate(rankings, 1):
                 info = CHANNEL_INFO.get(score.channel, {})
@@ -1221,29 +1231,29 @@ Examples:
     elif args.command == "train":
         trainer = DFSMLTrainer(db)
         if trainer.train(min_samples=args.min_samples):
-            print("✅ ML model trained successfully")
+            print("ML model trained successfully")
         else:
-            print("❌ ML model training failed (insufficient data or dependencies)")
+            print("ML model training failed (insufficient data or dependencies)")
 
     elif args.command == "status":
-        print("\n📡 DFS Intelligence Status")
+        print("\nDFS Intelligence Status")
         print("=" * 50)
 
         # NOP channels
         nop = db.get_nop_channels()
         if nop:
-            print("\n🚫 Channels in NOP (Non-Occupancy Period):")
+            print("\nChannels in NOP (Non-Occupancy Period):")
             for ch, remaining in nop.items():
                 mins = remaining // 60
                 secs = remaining % 60
                 print(f"   Channel {ch}: {mins}m {secs}s remaining")
         else:
-            print("\n✅ No channels in NOP")
+            print("\nNo channels in NOP")
 
         # Recent radar events
         events = db.get_radar_events(limit=5)
         if events:
-            print("\n📜 Recent Radar Events:")
+            print("\nRecent Radar Events:")
             for e in events:
                 age = datetime.now() - e.timestamp
                 age_str = f"{age.seconds // 3600}h {(age.seconds % 3600) // 60}m ago"
@@ -1253,7 +1263,7 @@ Examples:
         if args.channel:
             stats = db.get_channel_stats(args.channel)
             if stats:
-                print(f"\n📊 Channel {args.channel} Statistics:")
+                print(f"\nChannel {args.channel} Statistics:")
                 print(f"   Total radar events: {stats['total_events']}")
                 print(f"   Avg events/day: {stats['avg_per_day']:.2f}")
                 print(f"   Risk score: {stats['risk_score']:.2f}")
@@ -1275,7 +1285,7 @@ Examples:
             raw_payload=f"test event channel={args.channel} freq={freq}"
         )
         db.add_nop(args.channel, freq, event_id)
-        print(f"✅ Logged radar event #{event_id} for channel {args.channel}")
+        print(f"Logged radar event #{event_id} for channel {args.channel}")
 
     else:
         parser.print_help()
