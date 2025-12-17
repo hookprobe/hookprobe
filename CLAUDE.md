@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.3
-**Last Updated**: 2025-12-15
+**Version**: 5.4
+**Last Updated**: 2025-12-17
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -49,6 +49,10 @@
 | **E2E integration tests** | Full flow validation | `tests/test_e2e_integration.py` |
 | **Mesh propagation** | Threat gossip protocol | `shared/mesh/consciousness.py` |
 | **Response orchestration** | Automated mitigation | `core/qsecbit/response/orchestrator.py` |
+| **WiFi DFS intelligence** | ML channel scoring | `shared/wireless/dfs_intelligence.py` |
+| **WiFi channel scanning** | Congestion analysis | `shared/wireless/channel_scanner.py` |
+| **Fortress LAN bridging** | OVS bridge + DHCP | `products/fortress/setup.sh` (search `setup_lan_bridge`) |
+| **Fortress device scripts** | Hardware profiles | `products/fortress/devices/common/` |
 
 ---
 
@@ -295,7 +299,13 @@ hookprobe/
 │   ├── network/                      # Network utilities
 │   │   └── sdn/                     # SDN integration
 │   │
-│   ├── wireless/                     # Wireless security tools
+│   ├── wireless/                     # WIRELESS & DFS INTELLIGENCE
+│   │   ├── __init__.py              # Module exports
+│   │   ├── channel_scanner.py       # WiFi channel scanning
+│   │   ├── dfs_intelligence.py      # ML-powered DFS channel scoring
+│   │   └── containers/              # Containerized DFS API
+│   │       └── dfs-intelligence/
+│   │           └── dfs_api_server.py
 │   │
 │   └── cortex/                       # HOOKPROBE CORTEX - Neural Command Center
 │       ├── README.md                # Documentation
@@ -392,7 +402,35 @@ hookprobe/
 │   │
 │   ├── fortress/                     # Edge Router (4GB)
 │   │   ├── README.md
-│   │   └── setup.sh
+│   │   ├── DEVELOPMENT_PLAN.md      # MVP implementation roadmap
+│   │   ├── install.sh               # Unified installer (container + native)
+│   │   ├── install-container.sh     # Container-based installation
+│   │   ├── setup.sh                 # Native mode installation
+│   │   ├── uninstall.sh             # Uninstall script
+│   │   ├── fortress-ctl.sh          # CLI management tool
+│   │   ├── lib/                     # Python libraries
+│   │   │   ├── config.py            # Configuration loading
+│   │   │   ├── device_manager.py    # Device discovery, OUI lookup
+│   │   │   ├── vlan_manager.py      # VLAN creation, DHCP config
+│   │   │   └── cloudflare_tunnel.py # Remote access integration
+│   │   ├── web/                     # Flask + AdminLTE UI
+│   │   │   ├── app.py               # Flask app with Flask-Login
+│   │   │   └── modules/             # Blueprints (auth, dashboard, clients...)
+│   │   ├── devices/                 # Hardware-specific profiles
+│   │   │   ├── common/              # Shared network scripts
+│   │   │   │   ├── detect-hardware.sh
+│   │   │   │   ├── network-integration.sh  # NIC + LTE detection
+│   │   │   │   ├── bridge-manager.sh       # Linux bridge setup
+│   │   │   │   ├── setup-dhcp.sh           # dnsmasq DHCP config
+│   │   │   │   ├── hostapd-generator.sh    # WiFi AP config
+│   │   │   │   ├── wifi-regulatory-dfs.sh  # DFS channel management
+│   │   │   │   └── lte-manager.sh          # LTE modem setup
+│   │   │   ├── intel-n100/          # Intel N100 profile
+│   │   │   ├── rpi-cm5/             # Raspberry Pi CM5 profile
+│   │   │   └── radxa-rock5b/        # Radxa Rock5B profile
+│   │   └── containers/              # Podman deployment
+│   │       ├── podman-compose.yml   # Container orchestration
+│   │       └── Containerfile.*      # Container definitions
 │   │
 │   ├── nexus/                        # ML/AI Compute (16GB+)
 │   │   └── (minimal - future expansion)
@@ -777,6 +815,70 @@ Kali Linux on-demand for automated response.
 | `attack-mitigation-orchestrator.sh` | Main orchestrator |
 | `kali-scripts.sh` | Kali tooling |
 | `mitigation-maintenance.sh` | Maintenance tasks |
+
+### Wireless - DFS Intelligence & Channel Management
+
+**Location**: `shared/wireless/`
+
+ML-powered WiFi channel selection and DFS (Dynamic Frequency Selection) intelligence.
+
+| File | Purpose |
+|------|---------|
+| `__init__.py` | Module exports (DFSDatabase, ChannelScorer, etc.) |
+| `channel_scanner.py` | WiFi channel scanning and congestion analysis |
+| `dfs_intelligence.py` | ML-powered DFS with radar event tracking |
+| `containers/dfs-intelligence/` | Containerized DFS API server |
+
+**DFS Intelligence Features**:
+- **Radar Event Tracking**: SQLite database for radar detection history
+- **NOP Management**: 30-minute Non-Occupancy Period compliance (ETSI EN 301 893)
+- **ML Channel Scoring**: Multi-factor scoring with configurable weights:
+  - Time since last radar (exponential decay)
+  - Historical radar frequency
+  - Bandwidth capability
+  - Time-of-day risk patterns
+  - Weather radar proximity
+  - ML prediction confidence
+- **Channel Switch Announcement (CSA)**: Automated channel switching via hostapd_cli
+- **Reinforcement Learning**: Learns from channel switch outcomes
+
+**Channel Information** (5GHz Bands):
+
+| Band | Channels | DFS | CAC Time | Use Case |
+|------|----------|-----|----------|----------|
+| UNII-1 | 36-48 | No | 0s | Indoor, always safe |
+| UNII-2A | 52-64 | Yes | 60s | Short CAC, moderate risk |
+| UNII-2C | 100-144 | Yes | 600s | Weather radar band, high risk |
+| UNII-3 | 149-165 | No | 0s | High power, country-restricted |
+
+**CLI Usage**:
+```bash
+# Score a specific channel
+python -m shared.wireless.dfs_intelligence score --channel 52
+
+# Get best channel recommendation
+python -m shared.wireless.dfs_intelligence best --prefer-dfs --min-bandwidth 80
+
+# Rank all channels
+python -m shared.wireless.dfs_intelligence rank --include-dfs
+
+# Start radar monitoring
+python -m shared.wireless.dfs_intelligence monitor --interface wlan0
+
+# Show DFS status
+python -m shared.wireless.dfs_intelligence status
+```
+
+**Key Classes**:
+```python
+from shared.wireless import (
+    WiFiChannelScanner,  # Channel scanning
+    DFSDatabase,         # Radar event storage
+    ChannelScorer,       # ML-powered scoring
+    RadarMonitor,        # Real-time monitoring
+    DFSMLTrainer,        # Model training
+)
+```
 
 ---
 
