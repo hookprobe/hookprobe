@@ -326,6 +326,7 @@ remove_management_scripts() {
         "/usr/local/bin/hookprobe-fortress-start"
         "/usr/local/bin/hookprobe-fortress-stop"
         "/usr/local/bin/fortress-lte-monitor"
+        "/usr/local/bin/fortress-wan-failover"
         "/usr/local/bin/fortress-nat-setup"
         "/usr/local/bin/fortress-channel-optimize.sh"
         "/usr/local/bin/fortress-wifi-prepare.sh"
@@ -673,6 +674,7 @@ remove_configuration() {
         "$CONFIG_DIR/vxlan-networks.conf"
         "$CONFIG_DIR/macsec.conf"
         "$CONFIG_DIR/lte-failover.conf"
+        "$CONFIG_DIR/wan-failover.conf"
     )
 
     for conf in "${config_files[@]}"; do
@@ -749,10 +751,19 @@ remove_configuration() {
 }
 
 # ============================================================
-# REMOVE LTE CONFIGURATION
+# REMOVE LTE AND WAN FAILOVER CONFIGURATION
 # ============================================================
 remove_lte_config() {
-    log_step "Removing LTE configuration..."
+    log_step "Removing LTE and WAN failover configuration..."
+
+    # Remove WAN failover state file
+    if [ -f "/var/lib/fortress/wan-failover-state.json" ]; then
+        log_info "Removing WAN failover state..."
+        rm -f /var/lib/fortress/wan-failover-state.json
+    fi
+
+    # Remove WAN failover lock file
+    rm -f /var/run/fortress-wan-failover.lock 2>/dev/null || true
 
     # Remove LTE state directory
     if [ -d "$LTE_STATE_DIR" ]; then
@@ -765,7 +776,7 @@ remove_lte_config() {
         rmdir "/var/lib/fortress" 2>/dev/null || true
     fi
 
-    log_info "LTE configuration removed"
+    log_info "LTE and WAN failover configuration removed"
 }
 
 # ============================================================
