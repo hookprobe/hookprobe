@@ -894,13 +894,13 @@ detect_ht_capabilities() {
     # - Channels 5-9: Can use HT40- (secondary channel below)
     # - Channels 10-13: Can only use HT40-
     # - Channel 14: No HT40 (Japan only)
+    # Best practice: Use channel 1 or 6 with HT40+ for maximum compatibility
     if echo "$phy_info" | grep -q "HT40"; then
         if [ "$channel" -le 7 ] 2>/dev/null; then
             caps="[HT40+]"
         elif [ "$channel" -ge 5 ] && [ "$channel" -le 13 ] 2>/dev/null; then
             caps="[HT40-]"
         fi
-        # No HT40 for channel 14 or invalid channels
     fi
 
     if echo "$phy_info" | grep -q "SHORT-GI-20"; then
@@ -1141,6 +1141,10 @@ interface=$iface
 driver=nl80211
 ${use_bridge}
 
+# Control interface for hostapd_cli
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
+
 # Network Settings
 ssid=$ssid
 utf8_ssid=1
@@ -1156,6 +1160,11 @@ channel=$channel
 ieee80211n=1
 require_ht=0
 ht_capab=$ht_capab
+
+# Disable Overlapping BSS scan to prevent HT_SCAN hang
+# The scan can cause hostapd to get stuck on some drivers (e.g., ath12k)
+# HT40 coexistence is handled by channel selection instead
+obss_interval=0
 
 # WMM (QoS) - Required for 802.11n
 wmm_enabled=1
@@ -1537,6 +1546,10 @@ generate_hostapd_5ghz() {
 interface=$iface
 driver=nl80211
 ${use_bridge}
+
+# Control interface for hostapd_cli
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
 
 # Network Settings
 ssid=$ssid
