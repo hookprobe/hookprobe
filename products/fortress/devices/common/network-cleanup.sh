@@ -114,26 +114,37 @@ remove_redundant_bridges() {
     log_success "Redundant bridges removed"
 }
 
-# Release WiFi interfaces from br-lan
-release_wifi_from_brlan() {
-    log_info "Releasing WiFi interfaces from br-lan..."
+# Release WiFi interfaces from bridges (fortress or legacy br-lan)
+release_wifi_from_bridge() {
+    log_info "Releasing WiFi interfaces from bridges..."
 
     for iface in $(get_wifi_interfaces); do
         local master
         master=$(ip link show "$iface" 2>/dev/null | grep -oP 'master \K\S+')
 
-        if [ "$master" = "br-lan" ]; then
-            log_info "  Releasing $iface from br-lan"
+        if [ "$master" = "fortress" ] || [ "$master" = "br-lan" ]; then
+            log_info "  Releasing $iface from $master"
             ip link set "$iface" nomaster 2>/dev/null || true
         fi
     done
 
-    # Remove br-lan if empty and exists
+    # Remove fortress bridge if empty and exists
+    if ip link show fortress &>/dev/null; then
+        local slaves
+        slaves=$(ip link show master fortress 2>/dev/null | wc -l)
+        if [ "$slaves" -eq 0 ]; then
+            log_info "  Removing empty fortress bridge"
+            ip link set fortress down 2>/dev/null || true
+            ip link delete fortress type bridge 2>/dev/null || true
+        fi
+    fi
+
+    # Also cleanup legacy br-lan if it exists
     if ip link show br-lan &>/dev/null; then
         local slaves
         slaves=$(ip link show master br-lan 2>/dev/null | wc -l)
         if [ "$slaves" -eq 0 ]; then
-            log_info "  Removing empty br-lan"
+            log_info "  Removing empty br-lan (legacy)"
             ip link set br-lan down 2>/dev/null || true
             ip link delete br-lan type bridge 2>/dev/null || true
         fi
@@ -611,8 +622,8 @@ cleanup_network() {
     remove_redundant_bridges
     echo ""
 
-    # Step 2: Release WiFi from br-lan
-    release_wifi_from_brlan
+    # Step 2: Release WiFi from bridges
+    release_wifi_from_bridge
     echo ""
 
     # Step 3: Ensure OVS bridge
