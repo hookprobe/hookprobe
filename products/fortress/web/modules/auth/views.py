@@ -94,3 +94,26 @@ def change_password():
 
     flash('Password changed successfully.', 'success')
     return redirect(url_for('auth.profile'))
+
+
+@auth_bp.route('/update-display-name', methods=['POST'])
+@login_required
+def update_display_name():
+    """Update user's display name."""
+    display_name = request.form.get('display_name', '').strip()
+
+    # Sanitize display name (max 50 chars, alphanumeric + spaces)
+    if display_name:
+        display_name = display_name[:50]
+
+    # Update display name
+    user = User.get(current_user.id)
+    user.display_name = display_name if display_name else None
+    user.save()
+
+    if display_name:
+        flash(f'Display name updated to "{display_name}".', 'success')
+    else:
+        flash('Display name cleared.', 'info')
+
+    return redirect(url_for('auth.profile'))
