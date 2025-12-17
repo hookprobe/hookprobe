@@ -47,3 +47,7 @@ def register_blueprints(app: Flask):
     # Tunnel module - Cloudflare Tunnel remote access
     from .tunnel import tunnel_bp
     app.register_blueprint(tunnel_bp, url_prefix='/tunnel')
+
+    # SDN module - Unified Software-Defined Network management
+    from .sdn import sdn_bp
+    app.register_blueprint(sdn_bp, url_prefix='/sdn')

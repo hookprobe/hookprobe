@@ -1,0 +1,97 @@
+# HookProbe Fortress - Flask Web Application Container
+# Self-contained with all dependencies - no system-wide pip
+#
+# Build: podman build -f Containerfile.web -t fortress-web .
+# Run:   podman run -d -p 8443:8443 -v /etc/hookprobe:/etc/hookprobe:ro fortress-web
+#
+# Version: 5.0.0
+# License: AGPL-3.0
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements and install dependencies
+COPY web/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    pip install --no-cache-dir psycopg2-binary redis
+
+# ============================================================
+# Production Stage
+# ============================================================
+FROM python:3.11-slim-bookworm
+
+LABEL maintainer="HookProbe Security <qsecbit@hookprobe.com>"
+LABEL version="5.0.0"
+LABEL description="HookProbe Fortress Admin Portal - Self-contained Flask application"
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r fortress -g 1000 \
+    && useradd -r -g fortress -u 1000 -d /app fortress
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Application directory
+WORKDIR /app
+
+# Copy application code
+COPY web/ /app/web/
+COPY lib/ /app/lib/
+
+# Create necessary directories
+RUN mkdir -p /app/data /app/logs /app/certs && \
+    chown -R fortress:fortress /app
+
+# Generate self-signed certificate for development
+RUN openssl req -x509 -newkey rsa:4096 -keyout /app/certs/key.pem \
+    -out /app/certs/cert.pem -days 365 -nodes \
+    -subj "/C=US/ST=State/L=City/O=HookProbe/OU=Fortress/CN=localhost" && \
+    chmod 600 /app/certs/key.pem && \
+    chown fortress:fortress /app/certs/*
+
+# Copy entrypoint script
+COPY containers/entrypoint-web.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Environment configuration
+ENV FLASK_APP=web.app:app
+ENV FLASK_ENV=production
+ENV FORTRESS_DATA_DIR=/app/data
+ENV FORTRESS_CONFIG_DIR=/etc/hookprobe
+ENV GUNICORN_WORKERS=2
+ENV GUNICORN_THREADS=4
+ENV GUNICORN_BIND=0.0.0.0:8443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f -k https://localhost:8443/health || exit 1
+
+# Expose HTTPS port
+EXPOSE 8443
+
+# Run as non-root user
+USER fortress
+
+# Volumes for persistent data
+VOLUME ["/app/data", "/etc/hookprobe"]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["gunicorn", "--config", "/app/gunicorn.conf.py", "web.app:app"]
