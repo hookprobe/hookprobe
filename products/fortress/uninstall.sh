@@ -278,6 +278,8 @@ remove_systemd_services() {
         "fortress-nat"
         "fortress-web"
         "fortress-channel-optimize"
+        "fortress-dfs-monitor"
+        "fortress-dfs-api"
         "fortress-ml-aggregator"
         "fortress-lstm-train"
     )
@@ -324,11 +326,13 @@ remove_management_scripts() {
         "/usr/local/bin/hookprobe-fortress-start"
         "/usr/local/bin/hookprobe-fortress-stop"
         "/usr/local/bin/fortress-lte-monitor"
+        "/usr/local/bin/fortress-wan-failover"
         "/usr/local/bin/fortress-nat-setup"
         "/usr/local/bin/fortress-channel-optimize.sh"
         "/usr/local/bin/fortress-wifi-prepare.sh"
         "/usr/local/bin/fortress-wifi-bridge.sh"
         "/usr/local/bin/fortress-dnsxai-privacy"
+        "/usr/local/bin/dfs-channel-selector"
     )
 
     for script in "${scripts[@]}"; do
@@ -410,19 +414,61 @@ remove_ovs_config() {
         return 0
     fi
 
+    # Load saved LAN configuration to identify WAN (which must NOT be touched)
+    local wan_iface=""
+    local lan_ifaces=""
+    if [ -f /etc/hookprobe/lan-bridge.conf ]; then
+        source /etc/hookprobe/lan-bridge.conf
+        wan_iface="${WAN_INTERFACE:-}"
+        lan_ifaces="${LAN_INTERFACES:-}"
+        log_info "Loaded bridge config - WAN: ${wan_iface:-none}, LAN: ${lan_ifaces:-none}"
+    fi
+
+    # Fallback: detect WAN from default route
+    if [ -z "$wan_iface" ]; then
+        wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+        [ -n "$wan_iface" ] && log_info "WAN detected from default route: $wan_iface"
+    fi
+
     # Remove all ports from the bridge
     local ports
     ports=$(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null || true)
 
     for port in $ports; do
+        # CRITICAL: Skip WAN interface - it should never have been in bridge anyway
+        if [ "$port" = "$wan_iface" ]; then
+            log_warn "WAN interface $wan_iface found in OVS bridge - removing safely"
+            log_warn "WAN configuration will be preserved"
+        fi
+
         log_info "Removing OVS port: $port"
         ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$port" 2>/dev/null || true
+
+        # Restore ethernet LAN interfaces to normal state (but not WAN!)
+        if [ "$port" != "$wan_iface" ]; then
+            # Check if this is a physical ethernet interface (not VLAN/internal)
+            if [[ "$port" =~ ^(eth|enp|eno|ens)[0-9] ]]; then
+                log_info "  Restoring interface $port to normal state"
+                # Enable DHCP on the interface via NetworkManager if available
+                if command -v nmcli &>/dev/null; then
+                    nmcli device set "$port" managed yes 2>/dev/null || true
+                fi
+            fi
+        fi
     done
 
     # Remove the bridge itself
     log_info "Removing OVS bridge: $OVS_BRIDGE"
     ip link set "$OVS_BRIDGE" down 2>/dev/null || true
     ovs-vsctl --if-exists del-br "$OVS_BRIDGE" 2>/dev/null || true
+
+    # Log WAN preservation notice
+    if [ -n "$wan_iface" ]; then
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_info "WAN INTERFACE PRESERVED: $wan_iface"
+        log_info "  Your internet connection through this interface is intact"
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    fi
 
     log_info "OVS configuration removed"
 }
@@ -472,6 +518,45 @@ remove_nftables_filtering() {
     rm -rf /var/lib/fortress/filters
 
     log_info "nftables filtering removed"
+}
+
+# ============================================================
+# REMOVE DFS INTELLIGENCE
+# ============================================================
+remove_dfs_intelligence() {
+    log_step "Removing DFS intelligence..."
+
+    # Stop DFS services
+    systemctl stop fortress-dfs-monitor 2>/dev/null || true
+    systemctl stop fortress-dfs-api 2>/dev/null || true
+    systemctl disable fortress-dfs-monitor 2>/dev/null || true
+    systemctl disable fortress-dfs-api 2>/dev/null || true
+
+    # Remove service files
+    rm -f /etc/systemd/system/fortress-dfs-monitor.service
+    rm -f /etc/systemd/system/fortress-dfs-api.service
+
+    # Remove DFS directory and scripts
+    rm -rf /opt/hookprobe/fortress/dfs
+    rm -f /usr/local/bin/dfs-channel-selector
+
+    # Remove DFS database (keep by default - user may want history)
+    if [ "$REMOVE_DATA" = true ]; then
+        rm -f /var/lib/hookprobe/dfs_intelligence.db
+    else
+        log_info "DFS database preserved: /var/lib/hookprobe/dfs_intelligence.db"
+        log_info "  (Use --remove-data to delete)"
+    fi
+
+    # Remove DFS state files
+    rm -rf /var/lib/fortress/dfs
+
+    # Remove shared wireless module (if not used by other products)
+    if [ ! -d /opt/hookprobe/guardian ] && [ ! -d /opt/hookprobe/nexus ]; then
+        rm -rf /opt/hookprobe/shared/wireless
+    fi
+
+    log_info "DFS intelligence removed"
 }
 
 # ============================================================
@@ -589,6 +674,7 @@ remove_configuration() {
         "$CONFIG_DIR/vxlan-networks.conf"
         "$CONFIG_DIR/macsec.conf"
         "$CONFIG_DIR/lte-failover.conf"
+        "$CONFIG_DIR/wan-failover.conf"
     )
 
     for conf in "${config_files[@]}"; do
@@ -665,10 +751,19 @@ remove_configuration() {
 }
 
 # ============================================================
-# REMOVE LTE CONFIGURATION
+# REMOVE LTE AND WAN FAILOVER CONFIGURATION
 # ============================================================
 remove_lte_config() {
-    log_step "Removing LTE configuration..."
+    log_step "Removing LTE and WAN failover configuration..."
+
+    # Remove WAN failover state file
+    if [ -f "/var/lib/fortress/wan-failover-state.json" ]; then
+        log_info "Removing WAN failover state..."
+        rm -f /var/lib/fortress/wan-failover-state.json
+    fi
+
+    # Remove WAN failover lock file
+    rm -f /var/run/fortress-wan-failover.lock 2>/dev/null || true
 
     # Remove LTE state directory
     if [ -d "$LTE_STATE_DIR" ]; then
@@ -681,7 +776,7 @@ remove_lte_config() {
         rmdir "/var/lib/fortress" 2>/dev/null || true
     fi
 
-    log_info "LTE configuration removed"
+    log_info "LTE and WAN failover configuration removed"
 }
 
 # ============================================================
@@ -969,6 +1064,7 @@ main() {
     remove_vlan_interfaces
     remove_macsec_interfaces
     remove_nftables_filtering
+    remove_dfs_intelligence
 
     # Stage 5: Remove systemd services
     log_step "Stage 5/10: Removing systemd services"
