@@ -815,8 +815,16 @@ setup_lan_bridge() {
     fi
 
     # Get LAN interfaces (everything except WAN)
+    # FALLBACK: If ETH_INTERFACES is empty, detect directly
+    local eth_ifaces="$ETH_INTERFACES"
+    if [ -z "$eth_ifaces" ]; then
+        log_warn "ETH_INTERFACES not set, detecting directly..."
+        eth_ifaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno)' | grep -v '@' | tr '\n' ' ')
+        log_info "Detected ethernet interfaces: $eth_ifaces"
+    fi
+
     local lan_ifaces=""
-    for iface in $ETH_INTERFACES; do
+    for iface in $eth_ifaces; do
         # Skip WAN interface - NEVER add to bridge
         if [ "$iface" = "$wan_iface" ]; then
             log_info "Skipping WAN interface: $iface (preserved for internet)"
@@ -1086,6 +1094,111 @@ scan_wifi_channels_5ghz() {
 }
 
 # ============================================================
+# WIFI UDEV RULES FOR STABLE NAMING
+# ============================================================
+create_wifi_udev_rules() {
+    # Create udev rules for stable WiFi interface naming
+    # This prevents wlan0/wlan1 from swapping on reboot
+    #
+    # Uses MAC addresses to assign stable names:
+    #   - wlan_24ghz for 2.4GHz adapter
+    #   - wlan_5ghz for 5GHz adapter (or dual-band)
+
+    log_info "Creating udev rules for stable WiFi interface naming..."
+
+    local udev_rule_file="/etc/udev/rules.d/70-fortress-wifi.rules"
+
+    # Detect WiFi interfaces and their bands
+    local rules=""
+    local iface_24ghz=""
+    local iface_5ghz=""
+    local mac_24ghz=""
+    local mac_5ghz=""
+
+    # Use hostapd-generator classification if available
+    if [ -n "$NET_WIFI_24GHZ_IFACE" ]; then
+        iface_24ghz="$NET_WIFI_24GHZ_IFACE"
+        mac_24ghz=$(cat /sys/class/net/$iface_24ghz/address 2>/dev/null)
+    fi
+    if [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
+        iface_5ghz="$NET_WIFI_5GHZ_IFACE"
+        mac_5ghz=$(cat /sys/class/net/$iface_5ghz/address 2>/dev/null)
+    fi
+
+    # Fallback: detect from iw dev
+    if [ -z "$mac_24ghz" ] && [ -z "$mac_5ghz" ]; then
+        log_info "  Detecting WiFi adapters from iw dev..."
+        for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+            local mac=$(cat /sys/class/net/$iface/address 2>/dev/null)
+            [ -z "$mac" ] && continue
+
+            # Check band support
+            local phy=$(iw dev $iface info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+            local has_5ghz=$(iw phy $phy info 2>/dev/null | grep -c "5[0-9][0-9][0-9] MHz")
+            local has_24ghz=$(iw phy $phy info 2>/dev/null | grep -c "24[0-9][0-9] MHz")
+
+            if [ "$has_5ghz" -gt 0 ] && [ -z "$mac_5ghz" ]; then
+                iface_5ghz="$iface"
+                mac_5ghz="$mac"
+                log_info "  5GHz adapter: $iface ($mac)"
+            elif [ "$has_24ghz" -gt 0 ] && [ -z "$mac_24ghz" ]; then
+                iface_24ghz="$iface"
+                mac_24ghz="$mac"
+                log_info "  2.4GHz adapter: $iface ($mac)"
+            fi
+        done
+    fi
+
+    # Generate udev rules
+    cat > "$udev_rule_file" << 'UDEV_HEADER'
+# HookProbe Fortress - WiFi Interface Stable Naming
+# Generated automatically - do not edit manually
+#
+# These rules ensure WiFi interfaces have stable names across reboots
+# by matching on MAC address instead of kernel enumeration order.
+#
+# To regenerate: re-run fortress setup or remove this file
+
+UDEV_HEADER
+
+    if [ -n "$mac_24ghz" ]; then
+        echo "# 2.4GHz WiFi adapter (original: $iface_24ghz)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_24ghz\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
+        log_info "  Created rule: $mac_24ghz -> wlan_24ghz"
+    fi
+
+    if [ -n "$mac_5ghz" ]; then
+        echo "# 5GHz WiFi adapter (original: $iface_5ghz)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_5ghz\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
+        log_info "  Created rule: $mac_5ghz -> wlan_5ghz"
+    fi
+
+    if [ ! -s "$udev_rule_file" ] || [ -z "$mac_24ghz$mac_5ghz" ]; then
+        log_warn "  No WiFi adapters detected for udev rules"
+        rm -f "$udev_rule_file"
+        return 1
+    fi
+
+    log_success "Created $udev_rule_file"
+    log_info "  ⚠️  Reboot required for new interface names to take effect"
+    log_info "  After reboot, interfaces will be: wlan_24ghz, wlan_5ghz"
+
+    # Save current mapping for hostapd config update
+    cat > /etc/hookprobe/wifi-interfaces.conf << EOF
+# WiFi Interface Mapping
+# Generated: $(date -Iseconds)
+WIFI_24GHZ_MAC=$mac_24ghz
+WIFI_24GHZ_CURRENT=$iface_24ghz
+WIFI_24GHZ_STABLE=wlan_24ghz
+WIFI_5GHZ_MAC=$mac_5ghz
+WIFI_5GHZ_CURRENT=$iface_5ghz
+WIFI_5GHZ_STABLE=wlan_5ghz
+EOF
+
+    return 0
+}
+
+# ============================================================
 # WIFI ACCESS POINT HELPERS
 # ============================================================
 _create_hostapd_service() {
@@ -1285,6 +1398,12 @@ setup_wifi_ap() {
         log_warn "hostapd not installed, skipping WiFi AP setup"
         return 0
     fi
+
+    # =========================================
+    # CREATE UDEV RULES FOR STABLE INTERFACE NAMING
+    # =========================================
+    # Prevents wlan0/wlan1 from swapping on reboot by using MAC addresses
+    create_wifi_udev_rules || log_warn "Could not create WiFi udev rules"
 
     # Use first WiFi interface
     local wifi_iface=$(echo $WIFI_INTERFACES | awk '{print $1}')
