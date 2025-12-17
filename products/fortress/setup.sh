@@ -1,27 +1,34 @@
 #!/bin/bash
 #
 # HookProbe Fortress Setup Script
-# Version: 5.0.0
+# Version: 5.1.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Fortress - Full-Featured Edge Gateway with Monitoring
 #
 # Fortress Mode Features:
-#   - VLAN segmentation with VAP-capable WiFi (IoT isolation)
-#   - MACsec (802.1AE) Layer 2 encryption
+#   - OVS bridge for wired LAN (10.250.0.0/24)
+#   - WiFi AP with separate subnet (10.250.1.0/24)
+#   - nftables-based device filtering (replaces VLANs)
+#   - MACsec (802.1AE) Layer 2 encryption (optional)
 #   - OpenFlow 1.3 SDN for advanced traffic control
-#   - VXLAN tunnels with VNI and PSK encryption
+#   - VXLAN tunnels with VNI and PSK encryption (mesh mode)
 #   - Full monitoring stack (Grafana + Victoria Metrics)
 #   - n8n workflow automation (optional)
 #   - ClickHouse analytics (optional)
-#   - LTE/5G failover (optional)
+#   - LTE/5G failover with IP SLA health monitoring
+#   - DFS-aware WiFi channel selection
+#
+# Network Layout:
+#   - WAN: Preserved (existing DHCP/config untouched)
+#   - LAN: 10.250.0.0/24 via OVS bridge "fortress"
+#   - WiFi: 10.250.1.0/24 via hostapd
 #
 # Requirements:
-#   - 8GB+ RAM (16GB recommended)
+#   - 4GB+ RAM (8GB recommended)
 #   - 32GB+ storage
-#   - 2+ Ethernet interfaces
-#   - VAP-capable WiFi adapter for VLAN segmentation (optional)
-#     Recommended: Atheros AR9271, MediaTek MT7612U
+#   - 1+ Ethernet interfaces
+#   - WiFi adapter for AP (optional but recommended)
 #
 
 set -e
@@ -47,7 +54,7 @@ NC='\033[0m'
 # CONFIGURATION
 # ============================================================
 OVS_BRIDGE_NAME="fortress"
-OVS_BRIDGE_SUBNET="10.250.0.0/16"
+OVS_BRIDGE_SUBNET="10.250.0.0/24"
 MACSEC_ENABLED=false
 ENABLE_MESH="${ENABLE_MESH:-false}"
 
@@ -56,16 +63,10 @@ ENABLE_MESH="${ENABLE_MESH:-false}"
 # See: devices/common/network-filter-manager.sh
 NETWORK_FILTER_MODE="nftables"
 
-# VLAN Configuration - LEGACY (not used, kept for reference)
-# VLANs have been replaced with nftables-based filtering
-# which is simpler and doesn't require managed switches
-declare -A VLAN_CONFIG=(
-    ["management"]="10:10.250.10.0/24"
-    ["trusted"]="20:10.250.20.0/24"
-    ["iot"]="30:10.250.30.0/24"
-    ["guest"]="40:10.250.40.0/24"
-    ["quarantine"]="99:10.250.99.0/24"
-)
+# Network Layout:
+#   - Wired LAN (fortress bridge): 10.250.0.0/24
+#   - WiFi network: 10.250.1.0/24
+# Device filtering is handled by nftables MAC rules, not VLANs
 
 # VXLAN Configuration for mesh connectivity
 declare -A VXLAN_CONFIG=(
@@ -319,12 +320,6 @@ detect_interfaces() {
 
     # Export for LTE manager
     export WWAN_INTERFACES WWAN_COUNT MODEM_CTRL_DEVICES GSM_CONNECTIONS
-
-    if [ "$WIFI_VAP_SUPPORT" = false ] && [ "$VLAN_SEGMENTATION" = true ]; then
-        log_warn "No VAP-capable WiFi adapter found."
-        log_warn "VLAN segmentation will use wired interfaces only."
-        log_warn "For WiFi VLAN, use Atheros AR9271 or MediaTek MT7612U adapters."
-    fi
 }
 
 # ============================================================
@@ -738,7 +733,7 @@ setup_ovs_bridge() {
 
     # Configure bridge IP
     ip link set "$OVS_BRIDGE_NAME" up
-    ip addr add 10.250.0.1/16 dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
+    ip addr add 10.250.0.1/24 dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
 
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
@@ -896,7 +891,7 @@ WAN_PRESERVED=true
 LAN_INTERFACES="$lan_ifaces"
 BRIDGE_NAME=$OVS_BRIDGE_NAME
 BRIDGE_IP=10.250.0.1
-BRIDGE_NETMASK=255.255.0.0
+BRIDGE_NETMASK=255.255.255.0
 # LAN ports are simple access ports on the main bridge
 # Clients get DHCP from 10.250.0.100-200 range
 EOF
@@ -1410,13 +1405,20 @@ setup_dhcp_server() {
     rm -f /etc/dnsmasq.d/fortress.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
 
-    # Create dnsmasq configuration for Fortress with VLAN support
+    # Create dnsmasq configuration for Fortress
+    # Note: VLANs have been removed in favor of nftables-based filtering
+    # We now have two networks:
+    #   1. Wired LAN via OVS bridge (10.250.0.x)
+    #   2. WiFi via hostapd (10.250.1.x)
     mkdir -p /etc/dnsmasq.d
-    cat > /etc/dnsmasq.d/fortress-vlans.conf << EOF
-# HookProbe Fortress VLAN DHCP Configuration
+    cat > /etc/dnsmasq.d/fortress.conf << EOF
+# HookProbe Fortress DHCP Configuration
 # Generated: $(date -Iseconds)
 #
-# Provides DHCP on all VLAN interfaces for proper network segmentation
+# Network Layout:
+#   - Bridge (fortress): Wired LAN clients (10.250.0.x)
+#   - WiFi ($wifi_iface): Wireless clients (10.250.1.x)
+# Device filtering is handled by nftables, not VLANs
 
 # Global settings
 domain-needed
@@ -1424,7 +1426,7 @@ bogus-priv
 no-resolv
 no-poll
 
-# Upstream DNS servers
+# Upstream DNS servers (use local DNS if dnsXai enabled, otherwise public)
 server=1.1.1.1
 server=8.8.8.8
 
@@ -1437,8 +1439,8 @@ expand-hosts
 address=/fortress.local/10.250.0.1
 address=/fortress/10.250.0.1
 
-# Logging
-log-queries
+# Logging (reduce verbosity in production)
+# log-queries
 log-dhcp
 log-facility=/var/log/fortress-dnsmasq.log
 
@@ -1450,57 +1452,37 @@ dhcp-authoritative
 dhcp-rapid-commit
 
 # ─────────────────────────────────────────────────────────────
-# VLAN Interfaces - Each VLAN has its own DHCP range
+# Wired LAN - OVS Bridge (10.250.0.x)
 # ─────────────────────────────────────────────────────────────
-
-# VLAN 10 - Management (10.250.10.x)
-interface=vlan10
-dhcp-range=vlan10,10.250.10.100,10.250.10.200,255.255.255.0,12h
-dhcp-option=vlan10,3,10.250.10.1
-dhcp-option=vlan10,6,10.250.10.1,1.1.1.1
-
-# VLAN 20 - Trusted/Staff (10.250.20.x)
-interface=vlan20
-dhcp-range=vlan20,10.250.20.100,10.250.20.200,255.255.255.0,12h
-dhcp-option=vlan20,3,10.250.20.1
-dhcp-option=vlan20,6,10.250.20.1,1.1.1.1
-
-# VLAN 30 - IoT Devices (10.250.30.x)
-interface=vlan30
-dhcp-range=vlan30,10.250.30.100,10.250.30.200,255.255.255.0,12h
-dhcp-option=vlan30,3,10.250.30.1
-dhcp-option=vlan30,6,10.250.30.1,1.1.1.1
-
-# VLAN 40 - Guest Network (10.250.40.x)
-interface=vlan40
-dhcp-range=vlan40,10.250.40.100,10.250.40.200,255.255.255.0,12h
-dhcp-option=vlan40,3,10.250.40.1
-dhcp-option=vlan40,6,10.250.40.1,1.1.1.1
-
-# VLAN 99 - Quarantine (10.250.99.x)
-interface=vlan99
-dhcp-range=vlan99,10.250.99.100,10.250.99.200,255.255.255.0,12h
-dhcp-option=vlan99,3,10.250.99.1
-dhcp-option=vlan99,6,10.250.99.1,1.1.1.1
-
-# ─────────────────────────────────────────────────────────────
-# Main Bridge - For untagged/default traffic (10.250.0.x)
-# ─────────────────────────────────────────────────────────────
+# All wired LAN interfaces are bridged to OVS 'fortress' bridge
+# Clients get DHCP from this interface
 interface=$OVS_BRIDGE_NAME
-dhcp-range=$OVS_BRIDGE_NAME,10.250.0.100,10.250.0.200,255.255.0.0,24h
+dhcp-range=$OVS_BRIDGE_NAME,10.250.0.100,10.250.0.200,255.255.255.0,24h
 dhcp-option=$OVS_BRIDGE_NAME,3,10.250.0.1
 dhcp-option=$OVS_BRIDGE_NAME,6,10.250.0.1,1.1.1.1
 
 # ─────────────────────────────────────────────────────────────
-# WiFi Interface - Handled via OVS Bridge
+# WiFi Network (10.250.1.x)
 # ─────────────────────────────────────────────────────────────
-# Note: WiFi interface is added to OVS bridge by hostapd service
-# (via ExecStartPost in fortress-hostapd-*.service)
-# WiFi clients receive DHCP from the bridge interface above
-# No separate WiFi DHCP configuration needed
+# WiFi is managed by hostapd with its own subnet
+# This keeps WiFi isolated from wired LAN for security
+# Routing between subnets is handled by iptables
+$(if [ -n "$wifi_iface" ]; then
+cat << WIFI_DHCP
+interface=$wifi_iface
+dhcp-range=$wifi_iface,10.250.1.100,10.250.1.200,255.255.255.0,12h
+dhcp-option=$wifi_iface,3,10.250.1.1
+dhcp-option=$wifi_iface,6,10.250.1.1,1.1.1.1
+WIFI_DHCP
+else
+echo "# No WiFi interface detected - WiFi DHCP disabled"
+fi)
 
-# Bind only to specified interfaces
+# Bind only to specified interfaces (security)
 bind-interfaces
+
+# Ignore unknown interfaces to prevent startup errors
+except-interface=lo
 EOF
 
     # Create lease file directory
@@ -1510,6 +1492,9 @@ EOF
     # Stop system dnsmasq if running (we'll use our own config)
     systemctl stop dnsmasq 2>/dev/null || true
     systemctl disable dnsmasq 2>/dev/null || true
+
+    # Also clean up old VLAN config file if it exists
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
 
     # Create fortress-dnsmasq service
     cat > /etc/systemd/system/fortress-dnsmasq.service << EOF
@@ -1521,8 +1506,8 @@ Wants=network.target fortress-nat.service
 [Service]
 Type=forking
 PIDFile=/run/fortress-dnsmasq.pid
-ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress-vlans.conf
-ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress-vlans.conf --pid-file=/run/fortress-dnsmasq.pid
+ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress.conf
+ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress.conf --pid-file=/run/fortress-dnsmasq.pid
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1534,13 +1519,13 @@ EOF
     systemctl daemon-reload
     systemctl enable fortress-dnsmasq 2>/dev/null || true
 
-    log_info "DHCP server configured for VLAN segmentation:"
-    log_info "  VLAN 10 (Management): 10.250.10.100-200"
-    log_info "  VLAN 20 (Trusted):    10.250.20.100-200"
-    log_info "  VLAN 30 (IoT):        10.250.30.100-200"
-    log_info "  VLAN 40 (Guest):      10.250.40.100-200"
-    log_info "  VLAN 99 (Quarantine): 10.250.99.100-200"
-    log_info "  Bridge (default):     10.250.0.100-200"
+    log_info "DHCP server configured:"
+    log_info "  Wired LAN (bridge): 10.250.0.100-200 (gateway: 10.250.0.1)"
+    if [ -n "$wifi_iface" ]; then
+        log_info "  WiFi ($wifi_iface):  10.250.1.100-200 (gateway: 10.250.1.1)"
+    else
+        log_info "  WiFi: not configured (no WiFi interface detected)"
+    fi
 }
 
 # ============================================================
@@ -2083,9 +2068,12 @@ set -e
 
 BRIDGE="fortress"
 BRIDGE_IP="10.250.0.1"
-BRIDGE_SUBNET="16"
-# All clients (LAN + WiFi) get DHCP from bridge interface
-# WiFi interfaces are bridge ports - they don't have their own IPs
+BRIDGE_SUBNET="24"
+WIFI_IP="10.250.1.1"
+WIFI_SUBNET="24"
+# Network layout:
+#   - Bridge (fortress): 10.250.0.0/24 - Wired LAN clients
+#   - WiFi: 10.250.1.0/24 - Wireless clients
 
 # ============================================================
 # BRIDGE IP CONFIGURATION
@@ -2104,28 +2092,37 @@ else
 fi
 
 # ============================================================
-# WIFI INTERFACE IP CONFIGURATION - DISABLED FOR OVS MODE
+# WIFI INTERFACE IP CONFIGURATION
 # ============================================================
-# WiFi interfaces are added to OVS bridge by hostapd services
-# (via ExecStartPost in fortress-hostapd-*.service)
+# WiFi interface runs as a separate subnet from wired LAN
+# This provides network isolation between wired and wireless clients
+# Device filtering is handled by nftables, routing by iptables
 #
-# When WiFi is part of OVS bridge:
-# - WiFi interface is a bridge PORT, not an endpoint
-# - It should NOT have its own IP address
-# - All clients (LAN + WiFi) get DHCP from bridge interface
-# - Gateway is bridge IP (10.250.0.1)
-#
-# Remove any stale WiFi IPs from previous configurations
-for wifi_if in /sys/class/net/wl*; do
-    [ -e "$wifi_if" ] || continue
-    wifi_name=$(basename "$wifi_if")
-    if ip addr show "$wifi_name" 2>/dev/null | grep -q "inet "; then
-        echo "Removing stale IP from WiFi interface: $wifi_name"
-        ip addr flush dev "$wifi_name" 2>/dev/null || true
-    fi
-done
-echo "WiFi interfaces managed via OVS bridge - no separate IP needed"
-echo "  WiFi clients will get DHCP from bridge (gateway: $BRIDGE_IP)"
+# Find WiFi interface from hostapd config or system
+WIFI_IFACE=""
+if [ -f /etc/hostapd/fortress.conf ]; then
+    WIFI_IFACE=$(grep "^interface=" /etc/hostapd/fortress.conf 2>/dev/null | cut -d= -f2)
+fi
+if [ -z "$WIFI_IFACE" ]; then
+    # Fallback: find first wireless interface
+    for wifi_if in /sys/class/net/wl*; do
+        [ -e "$wifi_if" ] || continue
+        WIFI_IFACE=$(basename "$wifi_if")
+        break
+    done
+fi
+
+# Configure WiFi interface IP
+if [ -n "$WIFI_IFACE" ] && ip link show "$WIFI_IFACE" &>/dev/null; then
+    echo "Configuring WiFi interface: $WIFI_IFACE"
+    # Remove any existing IP and assign new one
+    ip addr flush dev "$WIFI_IFACE" 2>/dev/null || true
+    ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
+    ip link set "$WIFI_IFACE" up 2>/dev/null || true
+    echo "WiFi IP configured: ${WIFI_IP}/${WIFI_SUBNET} on $WIFI_IFACE"
+else
+    echo "No WiFi interface found - wireless DHCP will not be available"
+fi
 
 # ============================================================
 # WAIT FOR INTERNET CONNECTIVITY
@@ -4329,18 +4326,13 @@ profile_dir = ${FORTRESS_PROFILE_DIR:-}
 
 [network]
 ovs_bridge = $OVS_BRIDGE_NAME
-vlan_segmentation = $VLAN_SEGMENTATION
+bridge_subnet = 10.250.0.0/24
+wifi_subnet = 10.250.1.0/24
+filtering_mode = nftables
 macsec_enabled = $MACSEC_ENABLED
 wan_interface = ${WAN_INTERFACE:-${FORTRESS_WAN_IFACE:-}}
 lan_interfaces = ${LAN_INTERFACES:-${FORTRESS_LAN_IFACES:-}}
 total_nics = ${FORTRESS_TOTAL_NICS:-0}
-
-[vlans]
-management = 10
-trusted = 20
-iot = 30
-guest = 40
-quarantine = 99
 
 [vxlan]
 enabled = true
@@ -4603,8 +4595,9 @@ show_completion() {
     [ -n "$FORTRESS_WAN_IFACE" ] && echo -e "  Primary WAN: $FORTRESS_WAN_IFACE"
     [ "$ENABLE_LTE" = true ] && [ -n "$LTE_INTERFACE" ] && echo -e "  Backup WAN (LTE): $LTE_INTERFACE"
     echo ""
-    echo -e "  ${BOLD}Network (Single Subnet + nftables Filtering):${NC}"
-    echo -e "    ${CYAN}All Clients:${NC}  10.250.0.100-199 (LAN/WiFi)"
+    echo -e "  ${BOLD}Network Layout:${NC}"
+    echo -e "    ${CYAN}Wired LAN:${NC}  10.250.0.100-200 (OVS bridge)"
+    echo -e "    ${CYAN}WiFi:${NC}       10.250.1.100-200 (hostapd)"
     echo ""
     echo -e "  ${BOLD}Device Policies (via nftables):${NC}"
     echo -e "    ${GREEN}full_access${NC}    - Internet + LAN (staff laptops)"
@@ -4964,7 +4957,7 @@ collect_user_inputs() {
 
     echo -e "  ${BOLD}Core Features:${NC}"
     echo "    ✓ OVS Bridge with OpenFlow 1.3"
-    echo "    ✓ VLAN Segmentation (5 VLANs)"
+    echo "    ✓ nftables Device Filtering (replaces VLANs)"
     [ "$MACSEC_ENABLED" = true ] && echo "    ✓ MACsec Layer 2 Encryption"
     echo "    ✓ QSecBit Security Agent"
     echo "    ✓ Web Dashboard (https://localhost:8443)"
@@ -4996,7 +4989,7 @@ main() {
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║                                                              ║${NC}"
     echo -e "${CYAN}║              HookProbe Fortress Installer                    ║${NC}"
-    echo -e "${CYAN}║                    Version 5.0.0                             ║${NC}"
+    echo -e "${CYAN}║                    Version 5.1.0                             ║${NC}"
     echo -e "${CYAN}║                                                              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -5015,11 +5008,10 @@ main() {
             --lte-user) HOOKPROBE_LTE_USER="$2"; shift 2 ;;
             --lte-pass) HOOKPROBE_LTE_PASS="$2"; shift 2 ;;
             --disable-macsec) MACSEC_ENABLED=false; shift ;;
-            --disable-vlan) VLAN_SEGMENTATION=false; shift ;;
             --node-id) HOOKPROBE_NODE_ID="$2"; shift 2 ;;
             --mssp-url) HOOKPROBE_MSSP_URL="$2"; shift 2 ;;
             --help|-h)
-                echo "HookProbe Fortress Installer v5.0.0"
+                echo "HookProbe Fortress Installer v5.1.0"
                 echo ""
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
@@ -5034,7 +5026,6 @@ main() {
                 echo "  --lte-user USER        Set LTE username (for PAP/CHAP auth)"
                 echo "  --lte-pass PASS        Set LTE password (for PAP/CHAP auth)"
                 echo "  --disable-macsec       Disable MACsec L2 encryption"
-                echo "  --disable-vlan         Disable VLAN segmentation"
                 echo "  --node-id ID           Set node identifier"
                 echo "  --mssp-url URL         Set MSSP endpoint URL"
                 echo "  --non-interactive      Run without prompts (for automation)"
