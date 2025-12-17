@@ -1,0 +1,160 @@
+#!/bin/bash
+# HookProbe Fortress Web Container Entrypoint
+#
+# Initializes the web application environment and starts gunicorn
+# Version: 5.0.0
+
+set -e
+
+# Colors for logging
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INIT]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# ============================================================
+# INITIALIZATION
+# ============================================================
+
+log_info "Starting HookProbe Fortress Web Container"
+
+# Check required environment variables
+: "${FORTRESS_CONFIG_DIR:=/etc/hookprobe}"
+: "${FORTRESS_DATA_DIR:=/app/data}"
+
+# Create gunicorn config if not exists
+if [ ! -f /app/gunicorn.conf.py ]; then
+    log_info "Creating gunicorn configuration..."
+    cat > /app/gunicorn.conf.py << 'GUNICORN'
+# Gunicorn configuration for Fortress Web
+import os
+import multiprocessing
+
+# Server socket
+bind = os.environ.get('GUNICORN_BIND', '0.0.0.0:8443')
+
+# Worker processes
+workers = int(os.environ.get('GUNICORN_WORKERS', min(2, multiprocessing.cpu_count())))
+threads = int(os.environ.get('GUNICORN_THREADS', 4))
+worker_class = 'sync'
+worker_connections = 1000
+timeout = 120
+keepalive = 2
+
+# SSL/TLS
+certfile = '/app/certs/cert.pem'
+keyfile = '/app/certs/key.pem'
+ssl_version = 'TLSv1_2'
+
+# Logging
+accesslog = '/app/logs/access.log'
+errorlog = '/app/logs/error.log'
+loglevel = os.environ.get('LOG_LEVEL', 'info')
+access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
+
+# Security headers
+forwarded_allow_ips = '*'
+proxy_protocol = False
+
+# Process naming
+proc_name = 'fortress-web'
+
+# Limits
+limit_request_line = 4094
+limit_request_fields = 100
+limit_request_field_size = 8190
+
+# Preload app
+preload_app = True
+
+def on_starting(server):
+    print("Fortress Web - Starting...")
+
+def on_reload(server):
+    print("Fortress Web - Reloading...")
+
+def worker_int(worker):
+    print(f"Worker {worker.pid} received SIGINT")
+
+def worker_abort(worker):
+    print(f"Worker {worker.pid} received SIGABRT")
+GUNICORN
+fi
+
+# Initialize users.json if not exists
+if [ ! -f "${FORTRESS_CONFIG_DIR}/users.json" ]; then
+    log_warn "No users.json found - creating default admin user"
+    if [ -w "${FORTRESS_CONFIG_DIR}" ]; then
+        # Default admin password: hookprobe (must be changed!)
+        cat > "${FORTRESS_CONFIG_DIR}/users.json" << 'EOF'
+{
+  "users": [
+    {
+      "id": "admin",
+      "username": "admin",
+      "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X.rN3vyJIg3.5lE7K",
+      "role": "admin",
+      "created_at": "2025-01-01T00:00:00Z",
+      "email": "admin@localhost"
+    }
+  ]
+}
+EOF
+        log_warn "Default admin user created - LOGIN: admin / hookprobe"
+        log_warn "CHANGE THIS PASSWORD IMMEDIATELY!"
+    else
+        log_error "Cannot create users.json - ${FORTRESS_CONFIG_DIR} not writable"
+    fi
+fi
+
+# Create data directory structure
+mkdir -p "${FORTRESS_DATA_DIR}"/{reports,cache,uploads} 2>/dev/null || true
+mkdir -p /app/logs 2>/dev/null || true
+
+# Wait for database to be ready (if using PostgreSQL)
+if [ -n "${DATABASE_HOST}" ]; then
+    log_info "Waiting for database..."
+    max_attempts=30
+    attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if python3 -c "import psycopg2; psycopg2.connect(host='${DATABASE_HOST}', port='${DATABASE_PORT:-5432}', user='${DATABASE_USER:-fortress}', password='${DATABASE_PASSWORD:-}', dbname='${DATABASE_NAME:-fortress}')" 2>/dev/null; then
+            log_info "Database is ready"
+            break
+        fi
+        attempt=$((attempt + 1))
+        log_info "Waiting for database... ($attempt/$max_attempts)"
+        sleep 2
+    done
+
+    if [ $attempt -eq $max_attempts ]; then
+        log_error "Database not available after ${max_attempts} attempts"
+        exit 1
+    fi
+fi
+
+# Wait for Redis (if configured)
+if [ -n "${REDIS_HOST}" ]; then
+    log_info "Waiting for Redis..."
+    max_attempts=15
+    attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if python3 -c "import redis; r = redis.Redis(host='${REDIS_HOST}', port=${REDIS_PORT:-6379}); r.ping()" 2>/dev/null; then
+            log_info "Redis is ready"
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+fi
+
+log_info "Initialization complete"
+
+# ============================================================
+# START APPLICATION
+# ============================================================
+
+exec "$@"
