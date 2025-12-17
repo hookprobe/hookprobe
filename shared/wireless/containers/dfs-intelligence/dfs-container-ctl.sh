@@ -21,7 +21,7 @@
 #   api         Make API request to container
 #   health      Check container health
 #
-# Version: 1.0.0
+# Version: 1.1.0
 # License: AGPL-3.0
 # ============================================================
 
@@ -30,11 +30,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Container configuration
-CONTAINER_NAME="${DFS_CONTAINER_NAME:-fortress-dfs-intelligence}"
-IMAGE_NAME="${DFS_IMAGE_NAME:-localhost/fortress-dfs-intelligence:latest}"
+CONTAINER_NAME="${DFS_CONTAINER_NAME:-hookprobe-dfs-intelligence}"
+IMAGE_NAME="${DFS_IMAGE_NAME:-localhost/hookprobe-dfs-intelligence:latest}"
 API_PORT="${DFS_API_PORT:-8767}"
-DATA_VOLUME="${DFS_DATA_VOLUME:-fortress-dfs-data}"
-LOG_VOLUME="${DFS_LOG_VOLUME:-fortress-dfs-logs}"
+DATA_VOLUME="${DFS_DATA_VOLUME:-hookprobe-dfs-data}"
+LOG_VOLUME="${DFS_LOG_VOLUME:-hookprobe-dfs-logs}"
 
 # Colors
 RED='\033[0;31m'
@@ -80,11 +80,21 @@ build_image() {
 
     cd "$SCRIPT_DIR"
 
+    # Copy the shared dfs_intelligence.py into container build context
+    log_info "Copying shared dfs_intelligence.py..."
+    cp -f "$SCRIPT_DIR/../dfs_intelligence.py" "$SCRIPT_DIR/dfs_intelligence.py" 2>/dev/null || {
+        # If running from shared/wireless/containers/dfs-intelligence
+        cp -f "$SCRIPT_DIR/../../dfs_intelligence.py" "$SCRIPT_DIR/dfs_intelligence.py"
+    }
+
     $RUNTIME build \
         -t "$IMAGE_NAME" \
         -f Containerfile \
         $build_args \
         .
+
+    # Cleanup copied file
+    rm -f "$SCRIPT_DIR/dfs_intelligence.py"
 
     log_success "Image built: $IMAGE_NAME"
 }
@@ -119,8 +129,8 @@ start_container() {
         --name "$CONTAINER_NAME" \
         --restart unless-stopped \
         -p "127.0.0.1:${API_PORT}:8767" \
-        -v "${DATA_VOLUME}:/var/lib/fortress:Z" \
-        -v "${LOG_VOLUME}:/var/log/fortress:Z" \
+        -v "${DATA_VOLUME}:/var/lib/hookprobe:Z" \
+        -v "${LOG_VOLUME}:/var/log/hookprobe:Z" \
         -v "/var/run/hostapd:/var/run/hostapd:ro" \
         --health-cmd "curl -sf http://localhost:8767/health || exit 1" \
         --health-interval 30s \
@@ -367,10 +377,10 @@ API Commands:
   train [min_samples] Train ML model
 
 Environment Variables:
-  DFS_CONTAINER_NAME  Container name (default: fortress-dfs-intelligence)
-  DFS_IMAGE_NAME      Image name (default: localhost/fortress-dfs-intelligence:latest)
+  DFS_CONTAINER_NAME  Container name (default: hookprobe-dfs-intelligence)
+  DFS_IMAGE_NAME      Image name (default: localhost/hookprobe-dfs-intelligence:latest)
   DFS_API_PORT        API port (default: 8767)
-  DFS_DATA_VOLUME     Data volume name (default: fortress-dfs-data)
+  DFS_DATA_VOLUME     Data volume name (default: hookprobe-dfs-data)
 
 Examples:
   # Build and start

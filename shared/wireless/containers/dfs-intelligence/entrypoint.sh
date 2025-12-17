@@ -10,7 +10,7 @@ log_info() { echo "[INFO] $*"; }
 log_error() { echo "[ERROR] $*" >&2; }
 
 # Ensure directories exist
-mkdir -p /var/lib/fortress /var/log/fortress /var/run/fortress
+mkdir -p /var/lib/hookprobe /var/log/hookprobe /var/run/hookprobe
 
 # Initialize database if needed
 log_info "Initializing DFS database..."
