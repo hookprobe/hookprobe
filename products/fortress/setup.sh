@@ -1670,8 +1670,9 @@ EOF
     cat > /etc/systemd/system/fortress-dnsmasq.service << EOF
 [Unit]
 Description=Fortress DHCP and DNS Server
-After=network.target fortress-nat.service fortress-hostapd.service
+After=network.target fortress-nat.service openvswitch-switch.service
 Wants=network.target fortress-nat.service
+# Note: hostapd services are optional - dnsmasq can start before WiFi
 
 [Service]
 Type=forking
@@ -2208,37 +2209,13 @@ else
 fi
 
 # ============================================================
-# WIFI INTERFACE IP CONFIGURATION
+# WIFI INTERFACE - BRIDGED TO OVS
 # ============================================================
-# WiFi interface runs as a separate subnet from wired LAN
-# This provides network isolation between wired and wireless clients
-# Device filtering is handled by nftables, routing by iptables
-#
-# Find WiFi interface from hostapd config or system
-WIFI_IFACE=""
-if [ -f /etc/hostapd/fortress.conf ]; then
-    WIFI_IFACE=$(grep "^interface=" /etc/hostapd/fortress.conf 2>/dev/null | cut -d= -f2)
-fi
-if [ -z "$WIFI_IFACE" ]; then
-    # Fallback: find first wireless interface
-    for wifi_if in /sys/class/net/wl*; do
-        [ -e "$wifi_if" ] || continue
-        WIFI_IFACE=$(basename "$wifi_if")
-        break
-    done
-fi
-
-# Configure WiFi interface IP
-if [ -n "$WIFI_IFACE" ] && ip link show "$WIFI_IFACE" &>/dev/null; then
-    echo "Configuring WiFi interface: $WIFI_IFACE"
-    # Remove any existing IP and assign new one
-    ip addr flush dev "$WIFI_IFACE" 2>/dev/null || true
-    ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
-    ip link set "$WIFI_IFACE" up 2>/dev/null || true
-    echo "WiFi IP configured: ${WIFI_IP}/${WIFI_SUBNET} on $WIFI_IFACE"
-else
-    echo "No WiFi interface found - wireless DHCP will not be available"
-fi
+# WiFi interfaces are added to the OVS 'fortress' bridge by hostapd
+# ExecStartPost. No separate IP is needed - clients get DHCP from
+# the bridge range (10.250.0.100-200) same as wired clients.
+# Device filtering is handled by nftables MAC-based rules.
+echo "WiFi interfaces are bridged to $BRIDGE by hostapd services"
 
 # ============================================================
 # REGULATORY DOMAIN VERIFICATION
@@ -2312,38 +2289,12 @@ if ! iptables -C FORWARD -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j AC
 fi
 
 # ============================================================
-# WIFI FORWARDING RULES
+# WIFI - NO SEPARATE FORWARDING NEEDED
 # ============================================================
-if [ -n "$WIFI_IFACE" ]; then
-    echo "Setting up WiFi forwarding for $WIFI_IFACE"
-
-    # WiFi to WAN forwarding
-    if ! iptables -C FORWARD -i "$WIFI_IFACE" -o "$WAN" -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -i "$WIFI_IFACE" -o "$WAN" -j ACCEPT
-    fi
-
-    # WAN to WiFi established connections
-    if ! iptables -C FORWARD -i "$WAN" -o "$WIFI_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -i "$WAN" -o "$WIFI_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-    fi
-
-    # WiFi to bridge (for local network access)
-    if ! iptables -C FORWARD -i "$WIFI_IFACE" -o "$BRIDGE" -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -i "$WIFI_IFACE" -o "$BRIDGE" -j ACCEPT
-    fi
-
-    # Bridge to WiFi
-    if ! iptables -C FORWARD -i "$BRIDGE" -o "$WIFI_IFACE" -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -i "$BRIDGE" -o "$WIFI_IFACE" -j ACCEPT
-    fi
-
-    # Allow DHCP on WiFi interface
-    if ! iptables -C INPUT -i "$WIFI_IFACE" -p udp --dport 67 -j ACCEPT 2>/dev/null; then
-        iptables -A INPUT -i "$WIFI_IFACE" -p udp --dport 67 -j ACCEPT
-    fi
-
-    echo "WiFi forwarding configured for $WIFI_IFACE"
-fi
+# WiFi interfaces are bridged to OVS 'fortress' bridge.
+# Traffic flows through the bridge, so no separate WiFi forwarding rules.
+# DHCP is served on the bridge interface, not on WiFi interfaces directly.
+echo "WiFi traffic flows through $BRIDGE (bridged)"
 
 # LTE failover interfaces
 for LTE in /sys/class/net/wwan* /sys/class/net/wwp*; do
