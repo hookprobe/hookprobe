@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Fortress Uninstall Script
-# Version: 5.0.0
+# Version: 5.1.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Fortress components installed by setup.sh:
@@ -12,7 +12,19 @@
 # - Configuration files and secrets
 # - Data and log directories
 #
-# Usage: sudo ./uninstall.sh [--force] [--keep-logs] [--keep-data]
+# Usage: sudo ./uninstall.sh [--force] [--keep-logs] [--keep-data] [--keep-config]
+#
+# Stages:
+#   1. Stop services
+#   2. Clean network interfaces
+#   3. Remove containers
+#   4. Remove OVS/VLAN configuration
+#   5. Remove systemd services
+#   6. Remove management scripts
+#   7. Handle configuration (optional preserve)
+#   8. Handle data (optional preserve)
+#   9. Handle logs (optional preserve)
+#   10. Cleanup and verify
 #
 
 set -e
@@ -40,6 +52,8 @@ SECRETS_DIR="/etc/hookprobe/secrets"
 DATA_DIR="/var/lib/hookprobe/fortress"
 LTE_STATE_DIR="/var/lib/fortress/lte"
 LOG_DIR="/var/log/hookprobe"
+BACKUP_DIR="/var/backups/fortress"
+STATE_FILE="${CONFIG_DIR}/fortress-state.json"
 OVS_BRIDGE="fortress"
 
 # ============================================================
@@ -48,6 +62,7 @@ OVS_BRIDGE="fortress"
 FORCE_MODE=false
 KEEP_LOGS=false
 KEEP_DATA=false
+KEEP_CONFIG=false
 
 # ============================================================
 # LOGGING
@@ -55,7 +70,8 @@ KEEP_DATA=false
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
+log_step() { echo -e "\n${CYAN}[STAGE]${NC} $1"; }
+log_substep() { echo -e "  ${BLUE}→${NC} $1"; }
 
 # ============================================================
 # PREREQUISITES
@@ -73,16 +89,36 @@ parse_args() {
             --force|-f) FORCE_MODE=true; shift ;;
             --keep-logs) KEEP_LOGS=true; shift ;;
             --keep-data) KEEP_DATA=true; shift ;;
+            --keep-config) KEEP_CONFIG=true; shift ;;
             --help|-h)
-                echo "HookProbe Fortress Uninstaller"
+                echo "HookProbe Fortress Uninstaller v5.1.0"
                 echo ""
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
                 echo "Options:"
-                echo "  --force, -f    Skip confirmation prompts"
-                echo "  --keep-logs    Preserve log files"
-                echo "  --keep-data    Preserve data directories"
-                echo "  --help, -h     Show this help message"
+                echo "  --force, -f     Skip confirmation prompts"
+                echo "  --keep-logs     Preserve log files"
+                echo "  --keep-data     Preserve data directories and database"
+                echo "  --keep-config   Preserve configuration files (for reinstall)"
+                echo "  --help, -h      Show this help message"
+                echo ""
+                echo "Stages performed:"
+                echo "  1. Stop services"
+                echo "  2. Clean network interfaces"
+                echo "  3. Remove containers (monitoring, etc)"
+                echo "  4. Remove OVS/VLAN configuration"
+                echo "  5. Remove systemd services"
+                echo "  6. Remove management scripts"
+                echo "  7. Handle configuration"
+                echo "  8. Handle data directories"
+                echo "  9. Handle log files"
+                echo "  10. Verify uninstall"
+                echo ""
+                echo "Examples:"
+                echo "  $0                    # Interactive uninstall"
+                echo "  $0 --force            # Non-interactive, remove all"
+                echo "  $0 --keep-data        # Keep database for reinstall"
+                echo "  $0 --keep-config      # Keep config for reinstall"
                 echo ""
                 exit 0
                 ;;
@@ -800,6 +836,32 @@ verify_uninstall() {
 }
 
 # ============================================================
+# STATE FILE HANDLING
+# ============================================================
+remove_state_file() {
+    if [ "$KEEP_CONFIG" = true ]; then
+        log_info "Preserving state file: $STATE_FILE"
+        # Update state to indicate uninstalled
+        if [ -f "$STATE_FILE" ]; then
+            python3 -c "
+import json
+with open('$STATE_FILE', 'r') as f:
+    d = json.load(f)
+d['last_action'] = 'uninstalled'
+d['uninstalled_at'] = '$(date -Iseconds)'
+with open('$STATE_FILE', 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || true
+        fi
+    else
+        if [ -f "$STATE_FILE" ]; then
+            log_info "Removing state file: $STATE_FILE"
+            rm -f "$STATE_FILE"
+        fi
+    fi
+}
+
+# ============================================================
 # MAIN
 # ============================================================
 main() {
@@ -808,24 +870,49 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Fortress Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                    Version 5.0.0                           ║${NC}"
+    echo -e "${BOLD}${RED}║                    Version 5.1.0                           ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     check_root
 
+    # Show current state if available
+    if [ -f "$STATE_FILE" ]; then
+        local mode=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('deployment_mode', 'native'))" 2>/dev/null || echo "native")
+        local version=$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null || echo "unknown")
+        log_info "Detected installation: ${mode} mode, version ${version}"
+    fi
+
     if [ "$FORCE_MODE" = false ]; then
-        echo -e "${YELLOW}This will remove all Fortress components including:${NC}"
-        echo -e "  • Fortress systemd services"
-        echo -e "  • Podman containers (VictoriaMetrics, Grafana)"
-        echo -e "  • OVS bridge and VLAN/VXLAN configuration"
-        echo -e "  • MACsec interfaces and configuration"
-        echo -e "  • LTE failover configuration"
-        echo -e "  • Management scripts (hookprobe-macsec, hookprobe-openflow)"
-        echo -e "  • Configuration files ($CONFIG_DIR, $FORTRESS_CONFIG_DIR)"
-        echo -e "  • Secrets (VXLAN, MACsec)"
-        echo -e "  • Installation directory ($INSTALL_DIR)"
-        [ "$KEEP_DATA" = false ] && echo -e "  • Data directory ($DATA_DIR)"
+        echo ""
+        echo -e "${YELLOW}This will remove the following components:${NC}"
+        echo ""
+        echo -e "  ${BOLD}Services:${NC}"
+        echo -e "    • Fortress systemd services (hookprobe-fortress, fortress-qsecbit)"
+        echo -e "    • WiFi AP (hostapd), DHCP (dnsmasq)"
+        echo ""
+        echo -e "  ${BOLD}Containers:${NC}"
+        echo -e "    • VictoriaMetrics, Grafana, Suricata, Zeek"
+        echo ""
+        echo -e "  ${BOLD}Network:${NC}"
+        echo -e "    • OVS bridge and VLAN/VXLAN configuration"
+        echo -e "    • MACsec interfaces and configuration"
+        echo -e "    • LTE failover configuration"
+        echo ""
+        echo -e "  ${BOLD}Files:${NC}"
+        echo -e "    • Management scripts"
+        [ "$KEEP_CONFIG" = false ] && echo -e "    • Configuration files ($CONFIG_DIR)"
+        echo -e "    • Installation directory ($INSTALL_DIR)"
+        [ "$KEEP_DATA" = false ] && echo -e "    • Data directory ($DATA_DIR)"
+        [ "$KEEP_LOGS" = false ] && echo -e "    • Log files ($LOG_DIR)"
+        echo ""
+
+        if [ "$KEEP_DATA" = true ]; then
+            echo -e "${GREEN}  Data will be PRESERVED for reinstallation.${NC}"
+        fi
+        if [ "$KEEP_CONFIG" = true ]; then
+            echo -e "${GREEN}  Configuration will be PRESERVED for reinstallation.${NC}"
+        fi
         echo ""
 
         read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
@@ -837,22 +924,56 @@ main() {
 
     echo ""
 
+    # Stage 1: Stop services
+    log_step "Stage 1/10: Stopping services"
     stop_services
+
+    # Stage 2: Clean network interfaces
+    log_step "Stage 2/10: Cleaning network interfaces"
     cleanup_network_interfaces
+
+    # Stage 3: Remove containers
+    log_step "Stage 3/10: Removing containers"
     remove_containers
+
+    # Stage 4: Remove OVS configuration
+    log_step "Stage 4/10: Removing OVS configuration"
     remove_ovs_config
     remove_vlan_interfaces
     remove_macsec_interfaces
+
+    # Stage 5: Remove systemd services
+    log_step "Stage 5/10: Removing systemd services"
     remove_systemd_services
+
+    # Stage 6: Remove management scripts
+    log_step "Stage 6/10: Removing management scripts"
     remove_management_scripts
     remove_freeradius_config
     remove_networkmanager_config
-    remove_lte_config
-    remove_configuration
+
+    # Stage 7: Handle configuration
+    log_step "Stage 7/10: Handling configuration"
+    if [ "$KEEP_CONFIG" = true ]; then
+        log_info "Preserving configuration files"
+    else
+        remove_lte_config
+        remove_configuration
+    fi
+
+    # Stage 8: Handle data and installation
+    log_step "Stage 8/10: Handling data and installation"
     remove_routing_tables
     remove_sysctl_settings
     remove_installation
+
+    # Stage 9: Handle logs
+    log_step "Stage 9/10: Handling logs"
     handle_logs
+
+    # Stage 10: Cleanup and verify
+    log_step "Stage 10/10: Final cleanup and verification"
+    remove_state_file
     verify_uninstall
 
     echo ""
