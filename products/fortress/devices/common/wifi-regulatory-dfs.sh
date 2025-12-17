@@ -2745,16 +2745,28 @@ test_channel() {
     # Test if a channel can be used before configuration
     # Performs actual frequency switch to verify
     #
+    # NOTE: DFS channels (52-144) CANNOT be tested this way because they require
+    # CAC (Channel Availability Check) radar detection which only hostapd can do.
+    # For DFS channels, we skip the test and trust hostapd to handle CAC.
+    #
     # Args:
     #   $1 - Interface name
     #   $2 - Channel number
     #   $3 - Timeout in seconds (default: 5)
     #
-    # Returns: 0 if channel works, 1 if not
+    # Returns: 0 if channel works (or DFS channel), 1 if not
 
     local iface="$1"
     local channel="$2"
     local timeout="${3:-5}"
+
+    # Check if this is a DFS channel - if so, skip testing
+    # DFS channels require CAC radar detection which only hostapd can perform
+    # Channels 52-144 are DFS in most regulatory domains
+    if [ "$channel" -ge 52 ] && [ "$channel" -le 144 ] 2>/dev/null; then
+        log_info "Channel $channel is DFS - skipping test (requires CAC via hostapd)"
+        return 0  # Trust hostapd to handle DFS CAC
+    fi
 
     log_info "Testing channel $channel on $iface..."
 
