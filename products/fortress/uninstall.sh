@@ -217,7 +217,7 @@ cleanup_network_interfaces() {
 
     # Clean up bridge interfaces created by Fortress
     log_info "Cleaning up bridge interfaces..."
-    for bridge in br-lan br-mgmt br-pos br-staff br-guest br-iot; do
+    for bridge in fortress br-lan br-mgmt br-pos br-staff br-guest br-iot; do
         if ip link show "$bridge" &>/dev/null; then
             log_info "  Removing bridge: $bridge"
 
