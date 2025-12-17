@@ -1,0 +1,510 @@
+{% extends "base.html" %}
+
+{% block title %}Device: {{ device.hostname }} - HookProbe Fortress{% endblock %}
+
+{% block extra_css %}
+<style>
+    .device-header {
+        background: linear-gradient(135deg, #1a2d3d 0%, #002742 100%);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    .device-header .device-icon {
+        font-size: 3rem;
+        color: #e69500;
+    }
+    .device-header h2 {
+        color: #fff;
+        margin-bottom: 0.25rem;
+    }
+    .device-header .mac-address {
+        font-family: 'Courier New', monospace;
+        color: #adb5bd;
+    }
+    .status-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+    }
+    .status-online { background-color: #28a745; box-shadow: 0 0 8px #28a745; }
+    .status-offline { background-color: #6c757d; }
+    .status-blocked { background-color: #dc3545; box-shadow: 0 0 8px #dc3545; }
+    .info-card {
+        background: #1e3a50;
+        border-radius: 8px;
+        padding: 1rem;
+        height: 100%;
+    }
+    .info-card .label {
+        color: #6c757d;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        margin-bottom: 0.25rem;
+    }
+    .info-card .value {
+        color: #fff;
+        font-size: 1.1rem;
+        font-weight: 500;
+    }
+    .policy-badge {
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 600;
+        display: inline-block;
+    }
+    .policy-full_access { background: #28a745; color: #fff; }
+    .policy-lan_only { background: #17a2b8; color: #fff; }
+    .policy-internet_only { background: #ffc107; color: #000; }
+    .policy-isolated { background: #dc3545; color: #fff; }
+    .policy-default { background: #6c757d; color: #fff; }
+    .access-icon {
+        font-size: 1.5rem;
+        padding: 0.5rem;
+        border-radius: 8px;
+        margin-right: 0.5rem;
+    }
+    .access-allowed {
+        color: #28a745;
+        background: rgba(40, 167, 69, 0.1);
+    }
+    .access-denied {
+        color: #dc3545;
+        background: rgba(220, 53, 69, 0.1);
+    }
+    .timeline-item {
+        padding: 1rem;
+        border-left: 3px solid #e69500;
+        background: rgba(230, 149, 0, 0.05);
+        margin-bottom: 0.5rem;
+        border-radius: 0 4px 4px 0;
+    }
+    .action-btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        font-weight: 600;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .card-dark {
+        background: #1e3a50;
+        border: none;
+    }
+    .card-dark .card-header {
+        background: transparent;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+</style>
+{% endblock %}
+
+{% block page_title %}Device Details{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('sdn.index') }}">SDN Management</a></li>
+<li class="breadcrumb-item active">{{ device.hostname }}</li>
+{% endblock %}
+
+{% block content %}
+<!-- Device Header -->
+<div class="device-header">
+    <div class="row align-items-center">
+        <div class="col-auto">
+            <i class="device-icon fas {{ device.icon or 'fa-laptop' }}"></i>
+        </div>
+        <div class="col">
+            <h2>
+                <span class="status-indicator status-{{ device.status }}"></span>
+                {{ device.hostname }}
+            </h2>
+            <div class="mac-address">{{ device.mac }}</div>
+            <div class="mt-2">
+                <span class="policy-badge policy-{{ device.policy }}">
+                    <i class="fas fa-shield-halved mr-1"></i>
+                    {{ device.policy|replace('_', ' ')|title }}
+                </span>
+                <span class="badge badge-secondary ml-2">
+                    <i class="fas fa-tag mr-1"></i>
+                    {{ device.category|title }}
+                </span>
+            </div>
+        </div>
+        <div class="col-auto">
+            <!-- Quick Actions -->
+            <div class="btn-group-vertical">
+                {% if device.status != 'blocked' %}
+                <button type="button" class="btn btn-danger action-btn" onclick="blockDevice('{{ device.mac }}')">
+                    <i class="fas fa-ban mr-1"></i> Block
+                </button>
+                <button type="button" class="btn btn-warning action-btn" onclick="disconnectDevice('{{ device.mac }}')">
+                    <i class="fas fa-plug mr-1"></i> Disconnect
+                </button>
+                {% else %}
+                <button type="button" class="btn btn-success action-btn" onclick="unblockDevice('{{ device.mac }}')">
+                    <i class="fas fa-check mr-1"></i> Unblock
+                </button>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Device Information -->
+    <div class="col-lg-8">
+        <!-- Basic Info -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>Device Information</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <div class="info-card">
+                            <div class="label">IP Address</div>
+                            <div class="value">{{ device.ip }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="info-card">
+                            <div class="label">MAC Address</div>
+                            <div class="value" style="font-family: monospace;">{{ device.mac }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="info-card">
+                            <div class="label">Vendor</div>
+                            <div class="value">{{ device.vendor }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="info-card">
+                            <div class="label">Category</div>
+                            <div class="value">{{ device.category|title }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="info-card">
+                            <div class="label">First Seen</div>
+                            <div class="value">{{ device.first_seen }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="info-card">
+                            <div class="label">Last Seen</div>
+                            <div class="value">{{ device.last_seen }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Network Access -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-network-wired mr-2"></i>Network Access</h3>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <div class="access-icon {{ 'access-allowed' if device.can_access_lan else 'access-denied' }}">
+                            <i class="fas fa-home"></i>
+                        </div>
+                        <p class="mt-2 mb-0">LAN Access</p>
+                        <small class="text-{{ 'success' if device.can_access_lan else 'danger' }}">
+                            {{ 'Allowed' if device.can_access_lan else 'Denied' }}
+                        </small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="access-icon {{ 'access-allowed' if device.can_access_internet else 'access-denied' }}">
+                            <i class="fas fa-globe"></i>
+                        </div>
+                        <p class="mt-2 mb-0">Internet Access</p>
+                        <small class="text-{{ 'success' if device.can_access_internet else 'danger' }}">
+                            {{ 'Allowed' if device.can_access_internet else 'Denied' }}
+                        </small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="access-icon {{ 'access-allowed' if device.can_access_gateway else 'access-denied' }}">
+                            <i class="fas fa-server"></i>
+                        </div>
+                        <p class="mt-2 mb-0">Gateway Access</p>
+                        <small class="text-{{ 'success' if device.can_access_gateway else 'danger' }}">
+                            {{ 'Allowed' if device.can_access_gateway else 'Denied' }}
+                        </small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="access-icon {{ 'access-allowed' if device.can_access_dns else 'access-denied' }}">
+                            <i class="fas fa-sitemap"></i>
+                        </div>
+                        <p class="mt-2 mb-0">DNS Access</p>
+                        <small class="text-{{ 'success' if device.can_access_dns else 'danger' }}">
+                            {{ 'Allowed' if device.can_access_dns else 'Denied' }}
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Traffic Statistics -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-chart-line mr-2"></i>Traffic Statistics</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="info-card">
+                            <div class="label">Data Downloaded</div>
+                            <div class="value">
+                                <i class="fas fa-download text-info mr-2"></i>
+                                {{ device.bytes_received|default('0 B') }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="info-card">
+                            <div class="label">Data Uploaded</div>
+                            <div class="value">
+                                <i class="fas fa-upload text-warning mr-2"></i>
+                                {{ device.bytes_sent|default('0 B') }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Policy & Actions -->
+    <div class="col-lg-4">
+        <!-- Policy Management -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shield-halved mr-2"></i>Policy Management</h3>
+            </div>
+            <div class="card-body">
+                <form id="policy-form" action="{{ url_for('sdn.set_policy') }}" method="POST">
+                    <input type="hidden" name="mac" value="{{ device.mac }}">
+
+                    <div class="form-group">
+                        <label for="policy">Network Policy</label>
+                        <select name="policy" id="policy" class="form-control bg-dark text-white">
+                            <option value="full_access" {% if device.policy == 'full_access' %}selected{% endif %}>
+                                Full Access - LAN + Internet
+                            </option>
+                            <option value="lan_only" {% if device.policy == 'lan_only' %}selected{% endif %}>
+                                LAN Only - No Internet
+                            </option>
+                            <option value="internet_only" {% if device.policy == 'internet_only' %}selected{% endif %}>
+                                Internet Only - No LAN
+                            </option>
+                            <option value="isolated" {% if device.policy == 'isolated' %}selected{% endif %}>
+                                Isolated - Gateway Only
+                            </option>
+                        </select>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle mr-2"></i>
+                        <small>
+                            <strong>Current:</strong> {{ device.policy|replace('_', ' ')|title }}<br>
+                            <strong>Auto-detected:</strong> {{ device.recommended_policy|replace('_', ' ')|title }}
+                        </small>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-block">
+                        <i class="fas fa-save mr-1"></i> Apply Policy
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-block" onclick="autoClassify('{{ device.mac }}')">
+                        <i class="fas fa-magic mr-1"></i> Auto-Classify
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- OUI Classification -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-fingerprint mr-2"></i>OUI Classification</h3>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm table-borderless text-white">
+                    <tr>
+                        <td class="text-muted">OUI Prefix</td>
+                        <td><code>{{ device.mac[:8] }}</code></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Vendor Match</td>
+                        <td>{{ device.vendor }}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Device Category</td>
+                        <td>
+                            <span class="badge badge-info">{{ device.category|title }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Recommended</td>
+                        <td>
+                            <span class="badge badge-secondary">{{ device.recommended_policy|replace('_', ' ')|title }}</span>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-history mr-2"></i>Recent Activity</h3>
+            </div>
+            <div class="card-body p-0">
+                <div class="timeline-container p-3">
+                    {% for event in device.recent_events|default([]) %}
+                    <div class="timeline-item">
+                        <small class="text-muted">{{ event.time }}</small>
+                        <p class="mb-0">{{ event.description }}</p>
+                    </div>
+                    {% else %}
+                    <div class="text-center py-4 text-muted">
+                        <i class="fas fa-clock fa-2x mb-2"></i>
+                        <p>No recent activity</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark">
+            <div class="modal-header">
+                <h5 class="modal-title" id="confirmModalTitle">Confirm Action</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body" id="confirmModalBody">
+                Are you sure you want to perform this action?
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmModalAction">Confirm</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Block device
+function blockDevice(mac) {
+    showConfirmModal(
+        'Block Device',
+        'Are you sure you want to block this device? It will lose all network access.',
+        function() {
+            $.post('{{ url_for("sdn.block_device") }}', { mac: mac })
+                .done(function(response) {
+                    if (response.success) {
+                        location.reload();
+                    } else {
+                        toastr.error(response.error || 'Failed to block device');
+                    }
+                })
+                .fail(function() {
+                    toastr.error('Network error');
+                });
+        }
+    );
+}
+
+// Unblock device
+function unblockDevice(mac) {
+    $.post('{{ url_for("sdn.unblock_device") }}', { mac: mac })
+        .done(function(response) {
+            if (response.success) {
+                location.reload();
+            } else {
+                toastr.error(response.error || 'Failed to unblock device');
+            }
+        })
+        .fail(function() {
+            toastr.error('Network error');
+        });
+}
+
+// Disconnect device
+function disconnectDevice(mac) {
+    showConfirmModal(
+        'Disconnect Device',
+        'Are you sure you want to disconnect this device? It may reconnect automatically.',
+        function() {
+            $.post('{{ url_for("sdn.disconnect_device") }}', { mac: mac })
+                .done(function(response) {
+                    if (response.success) {
+                        toastr.success('Device disconnected');
+                        setTimeout(function() { location.reload(); }, 1500);
+                    } else {
+                        toastr.error(response.error || 'Failed to disconnect device');
+                    }
+                })
+                .fail(function() {
+                    toastr.error('Network error');
+                });
+        }
+    );
+}
+
+// Auto-classify device
+function autoClassify(mac) {
+    $.post('{{ url_for("sdn.auto_classify") }}', { mac: mac })
+        .done(function(response) {
+            if (response.success) {
+                toastr.success('Device classified as ' + response.category + ' with ' + response.policy + ' policy');
+                setTimeout(function() { location.reload(); }, 1500);
+            } else {
+                toastr.error(response.error || 'Failed to classify device');
+            }
+        })
+        .fail(function() {
+            toastr.error('Network error');
+        });
+}
+
+// Confirmation modal helper
+function showConfirmModal(title, body, onConfirm) {
+    $('#confirmModalTitle').text(title);
+    $('#confirmModalBody').text(body);
+    $('#confirmModalAction').off('click').on('click', function() {
+        $('#confirmModal').modal('hide');
+        onConfirm();
+    });
+    $('#confirmModal').modal('show');
+}
+
+// Handle policy form submission via AJAX
+$('#policy-form').on('submit', function(e) {
+    e.preventDefault();
+    var form = $(this);
+
+    $.post(form.attr('action'), form.serialize())
+        .done(function(response) {
+            if (response.success) {
+                toastr.success('Policy updated successfully');
+                setTimeout(function() { location.reload(); }, 1500);
+            } else {
+                toastr.error(response.error || 'Failed to update policy');
+            }
+        })
+        .fail(function() {
+            toastr.error('Network error');
+        });
+});
+</script>
+{% endblock %}
