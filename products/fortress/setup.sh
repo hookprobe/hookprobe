@@ -1418,13 +1418,12 @@ dhcp-option=$OVS_BRIDGE_NAME,3,10.250.0.1
 dhcp-option=$OVS_BRIDGE_NAME,6,10.250.0.1,1.1.1.1
 
 # ─────────────────────────────────────────────────────────────
-# WiFi Interface (if available)
+# WiFi Interface - Handled via OVS Bridge
 # ─────────────────────────────────────────────────────────────
-${wifi_iface:+# WiFi clients get IPs from Guest VLAN range by default}
-${wifi_iface:+interface=$wifi_iface}
-${wifi_iface:+dhcp-range=$wifi_iface,10.250.40.201,10.250.40.250,255.255.255.0,12h}
-${wifi_iface:+dhcp-option=$wifi_iface,3,10.250.40.1}
-${wifi_iface:+dhcp-option=$wifi_iface,6,10.250.40.1,1.1.1.1}
+# Note: WiFi interface is added to OVS bridge by hostapd service
+# (via ExecStartPost in fortress-hostapd-*.service)
+# WiFi clients receive DHCP from the bridge interface above
+# No separate WiFi DHCP configuration needed
 
 # Bind only to specified interfaces
 bind-interfaces
@@ -1965,10 +1964,24 @@ fi
 # ============================================================
 # WIFI INTERFACE IP CONFIGURATION
 # ============================================================
-# Find WiFi interface (hostapd config or scan for wireless)
+# Note: When WiFi interface is added to OVS bridge (via hostapd ExecStartPost),
+# it becomes a bridge port and should NOT have its own IP address.
+# Clients get DHCP from the bridge interface instead.
+#
+# Only assign WiFi IP if NOT using OVS bridge mode (legacy standalone mode)
+
 WIFI_IFACE=""
 if [ -f /etc/hostapd/fortress.conf ]; then
     WIFI_IFACE=$(grep "^interface=" /etc/hostapd/fortress.conf | cut -d= -f2)
+fi
+if [ -z "$WIFI_IFACE" ]; then
+    # Check 2.4GHz and 5GHz configs
+    for conf in /etc/hostapd/hostapd-24ghz.conf /etc/hostapd/hostapd-5ghz.conf; do
+        if [ -f "$conf" ]; then
+            WIFI_IFACE=$(grep "^interface=" "$conf" | cut -d= -f2)
+            [ -n "$WIFI_IFACE" ] && break
+        fi
+    done
 fi
 if [ -z "$WIFI_IFACE" ]; then
     for iface in /sys/class/net/wl*; do
@@ -1977,11 +1990,22 @@ if [ -z "$WIFI_IFACE" ]; then
 fi
 
 if [ -n "$WIFI_IFACE" ] && ip link show "$WIFI_IFACE" &>/dev/null; then
-    echo "Configuring WiFi interface: $WIFI_IFACE"
-    # Assign IP for DHCP to work
-    if ! ip addr show "$WIFI_IFACE" | grep -q "$WIFI_IP"; then
-        ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
-        echo "WiFi interface IP configured: ${WIFI_IP}/${WIFI_SUBNET}"
+    echo "Found WiFi interface: $WIFI_IFACE"
+
+    # Check if WiFi is part of OVS bridge (no IP needed - bridge handles routing)
+    if command -v ovs-vsctl &>/dev/null && \
+       ovs-vsctl br-exists "$BRIDGE" 2>/dev/null && \
+       ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${WIFI_IFACE}$"; then
+        echo "WiFi interface $WIFI_IFACE is part of OVS bridge $BRIDGE"
+        echo "  Clients will get DHCP from bridge (gateway: $BRIDGE_IP)"
+        echo "  No separate WiFi IP needed"
+    else
+        # Legacy mode: WiFi not in bridge, needs own IP for DHCP
+        echo "Configuring WiFi interface IP (standalone mode): $WIFI_IFACE"
+        if ! ip addr show "$WIFI_IFACE" | grep -q "$WIFI_IP"; then
+            ip addr add ${WIFI_IP}/${WIFI_SUBNET} dev "$WIFI_IFACE" 2>/dev/null || true
+            echo "WiFi interface IP configured: ${WIFI_IP}/${WIFI_SUBNET}"
+        fi
     fi
 else
     echo "No WiFi interface found"
