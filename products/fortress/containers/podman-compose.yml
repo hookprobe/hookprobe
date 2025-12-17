@@ -1,0 +1,211 @@
+# HookProbe Fortress - Container Orchestration
+#
+# Self-contained, modular deployment with persistent volumes.
+# All services run in isolation with dedicated storage.
+#
+# Usage:
+#   podman-compose up -d          # Start all services
+#   podman-compose down           # Stop all services
+#   podman-compose down -v        # Stop and remove volumes (clean uninstall)
+#   podman-compose logs -f web    # Follow web container logs
+#
+# Version: 5.0.0
+# License: AGPL-3.0
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # PostgreSQL Database
+  # ============================================================
+  postgres:
+    image: docker.io/library/postgres:15-alpine
+    container_name: fortress-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fortress
+      POSTGRES_USER: fortress
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fortress -d fortress"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - fortress-internal
+
+  # ============================================================
+  # Redis Cache (Sessions + Rate Limiting)
+  # ============================================================
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: fortress-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fortress-internal
+
+  # ============================================================
+  # Fortress Web Application (Flask)
+  # ============================================================
+  web:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.web
+    image: localhost/fortress-web:latest
+    container_name: fortress-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database connection
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      # Redis connection
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Flask settings
+      FLASK_ENV: production
+      FLASK_SECRET_KEY_FILE: /run/secrets/flask_secret
+      # Gunicorn settings
+      GUNICORN_WORKERS: 2
+      GUNICORN_THREADS: 4
+    secrets:
+      - postgres_password
+      - flask_secret
+    volumes:
+      - web_data:/app/data
+      - web_logs:/app/logs
+      - fortress_config:/etc/hookprobe
+    ports:
+      - "8443:8443"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - fortress-internal
+      - fortress-external
+
+  # ============================================================
+  # QSecBit Agent (Optional - Threat Detection)
+  # ============================================================
+  qsecbit-agent:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.agent
+    image: localhost/fortress-agent:latest
+    container_name: fortress-agent
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    secrets:
+      - postgres_password
+    volumes:
+      - agent_data:/app/data
+      - /var/log/fortress:/app/logs
+      - fortress_config:/etc/hookprobe:ro
+    # Network access for traffic analysis
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    profiles:
+      - full  # Only start with: podman-compose --profile full up
+
+# ============================================================
+# SECRETS (file-based for security)
+# ============================================================
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  flask_secret:
+    file: ./secrets/flask_secret
+
+# ============================================================
+# VOLUMES (persistent storage)
+# ============================================================
+volumes:
+  # Database storage - critical for persistence
+  postgres_data:
+    driver: local
+    name: fortress-postgres-data
+
+  # Redis storage - sessions and cache
+  redis_data:
+    driver: local
+    name: fortress-redis-data
+
+  # Web application data
+  web_data:
+    driver: local
+    name: fortress-web-data
+
+  # Web logs
+  web_logs:
+    driver: local
+    name: fortress-web-logs
+
+  # Agent data
+  agent_data:
+    driver: local
+    name: fortress-agent-data
+
+  # Shared configuration
+  fortress_config:
+    driver: local
+    name: fortress-config
+
+# ============================================================
+# NETWORKS
+# ============================================================
+networks:
+  # Internal network (database, redis, web)
+  fortress-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.250.100.0/24
+          gateway: 10.250.100.1
+
+  # External network (web only)
+  fortress-external:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.250.101.0/24
+          gateway: 10.250.101.1
