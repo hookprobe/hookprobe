@@ -1,0 +1,690 @@
+{% extends "base.html" %}
+
+{% block title %}SDN Management - Network Control{% endblock %}
+
+{% block content %}
+<div class="content-header">
+    <div class="container-fluid">
+        <div class="row mb-2">
+            <div class="col-sm-6">
+                <h1 class="m-0"><i class="fas fa-network-wired mr-2"></i>SDN Management</h1>
+            </div>
+            <div class="col-sm-6">
+                <ol class="breadcrumb float-sm-right">
+                    <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
+                    <li class="breadcrumb-item active">SDN Management</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="content">
+    <div class="container-fluid">
+
+        <!-- Demo Mode Alert -->
+        {% if not db_available %}
+        <div class="alert alert-warning alert-dismissible">
+            <button type="button" class="close" data-dismiss="alert">&times;</button>
+            <i class="fas fa-info-circle mr-2"></i>
+            <strong>Demo Mode:</strong> Database not connected. Showing sample data.
+        </div>
+        {% endif %}
+
+        <!-- Statistics Cards -->
+        <div class="row">
+            <!-- Total Devices -->
+            <div class="col-lg-3 col-6">
+                <div class="small-box bg-info">
+                    <div class="inner">
+                        <h3>{{ stats.total_devices }}</h3>
+                        <p>Total Devices</p>
+                    </div>
+                    <div class="icon"><i class="fas fa-laptop"></i></div>
+                </div>
+            </div>
+
+            <!-- Online Devices -->
+            <div class="col-lg-3 col-6">
+                <div class="small-box bg-success">
+                    <div class="inner">
+                        <h3>{{ stats.online_devices }}</h3>
+                        <p>Online</p>
+                    </div>
+                    <div class="icon"><i class="fas fa-wifi"></i></div>
+                </div>
+            </div>
+
+            <!-- Offline Devices -->
+            <div class="col-lg-3 col-6">
+                <div class="small-box bg-warning">
+                    <div class="inner">
+                        <h3>{{ stats.offline_devices }}</h3>
+                        <p>Offline</p>
+                    </div>
+                    <div class="icon"><i class="fas fa-power-off"></i></div>
+                </div>
+            </div>
+
+            <!-- Blocked Devices -->
+            <div class="col-lg-3 col-6">
+                <div class="small-box bg-danger">
+                    <div class="inner">
+                        <h3>{{ stats.blocked_devices }}</h3>
+                        <p>Blocked</p>
+                    </div>
+                    <div class="icon"><i class="fas fa-ban"></i></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters and Actions Row -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card card-outline card-primary">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="fas fa-filter mr-2"></i>Filters & Actions</h3>
+                        <div class="card-tools">
+                            <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                                <i class="fas fa-minus"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <!-- Policy Filter -->
+                            <div class="col-md-3">
+                                <label>Filter by Policy</label>
+                                <select id="filter-policy" class="form-control">
+                                    <option value="">All Policies</option>
+                                    {% for policy in policies %}
+                                    <option value="{{ policy.name }}">{{ policy.display_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <!-- Category Filter -->
+                            <div class="col-md-3">
+                                <label>Filter by Category</label>
+                                <select id="filter-category" class="form-control">
+                                    <option value="">All Categories</option>
+                                    <option value="iot">IoT Devices</option>
+                                    <option value="camera">Cameras</option>
+                                    <option value="pos">POS Terminals</option>
+                                    <option value="printer">Printers</option>
+                                    <option value="workstation">Workstations</option>
+                                    <option value="voice_assistant">Voice Assistants</option>
+                                    <option value="unknown">Unknown</option>
+                                </select>
+                            </div>
+
+                            <!-- Status Filter -->
+                            <div class="col-md-2">
+                                <label>Status</label>
+                                <select id="filter-status" class="form-control">
+                                    <option value="">All</option>
+                                    <option value="online">Online</option>
+                                    <option value="offline">Offline</option>
+                                    <option value="blocked">Blocked</option>
+                                </select>
+                            </div>
+
+                            <!-- Actions -->
+                            <div class="col-md-4">
+                                <label>&nbsp;</label>
+                                <div class="btn-group d-block">
+                                    <button type="button" id="btn-discover" class="btn btn-primary">
+                                        <i class="fas fa-search mr-1"></i> Discover
+                                    </button>
+                                    <button type="button" id="btn-refresh" class="btn btn-default">
+                                        <i class="fas fa-sync-alt mr-1"></i> Refresh
+                                    </button>
+                                    <div class="btn-group">
+                                        <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+                                            <i class="fas fa-download mr-1"></i> Export
+                                        </button>
+                                        <div class="dropdown-menu">
+                                            <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='csv') }}">
+                                                <i class="fas fa-file-csv mr-2"></i> CSV
+                                            </a>
+                                            <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='json') }}">
+                                                <i class="fas fa-file-code mr-2"></i> JSON
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bulk Actions (shown when devices selected) -->
+                        <div class="row mt-3" id="bulk-actions" style="display: none;">
+                            <div class="col-12">
+                                <div class="alert alert-info mb-0">
+                                    <strong><span id="selected-count">0</span> devices selected</strong>
+                                    <div class="btn-group float-right">
+                                        <button type="button" class="btn btn-sm btn-primary" id="bulk-auto-classify">
+                                            <i class="fas fa-magic mr-1"></i> Auto-Classify
+                                        </button>
+                                        <div class="btn-group">
+                                            <button type="button" class="btn btn-sm btn-warning dropdown-toggle" data-toggle="dropdown">
+                                                <i class="fas fa-exchange-alt mr-1"></i> Set Policy
+                                            </button>
+                                            <div class="dropdown-menu">
+                                                {% for policy in policies %}
+                                                <a class="dropdown-item bulk-policy" data-policy="{{ policy.name }}">
+                                                    <i class="fas {{ policy.icon }} mr-2 text-{{ policy.color }}"></i>
+                                                    {{ policy.display_name }}
+                                                </a>
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-danger" id="bulk-block">
+                                            <i class="fas fa-ban mr-1"></i> Block All
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Table -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="fas fa-list mr-2"></i>Network Devices</h3>
+                    </div>
+                    <div class="card-body table-responsive p-0">
+                        <table id="devices-table" class="table table-hover table-striped">
+                            <thead>
+                                <tr>
+                                    <th style="width: 30px;">
+                                        <div class="custom-control custom-checkbox">
+                                            <input type="checkbox" class="custom-control-input" id="select-all">
+                                            <label class="custom-control-label" for="select-all"></label>
+                                        </div>
+                                    </th>
+                                    <th>Status</th>
+                                    <th>Hostname</th>
+                                    <th>IP Address</th>
+                                    <th>MAC Address</th>
+                                    <th>Vendor</th>
+                                    <th>Category</th>
+                                    <th>Policy</th>
+                                    <th>Access</th>
+                                    <th>Last Seen</th>
+                                    <th style="width: 150px;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for device in devices %}
+                                <tr data-mac="{{ device.mac_address }}"
+                                    data-policy="{{ device.network_policy }}"
+                                    data-category="{{ device.oui_category }}"
+                                    data-online="{{ 'true' if device.is_online else 'false' }}"
+                                    data-blocked="{{ 'true' if device.is_blocked else 'false' }}">
+                                    <td>
+                                        <div class="custom-control custom-checkbox">
+                                            <input type="checkbox" class="custom-control-input device-select"
+                                                   id="select-{{ device.mac_address | replace(':', '') }}"
+                                                   value="{{ device.mac_address }}">
+                                            <label class="custom-control-label"
+                                                   for="select-{{ device.mac_address | replace(':', '') }}"></label>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        {% if device.is_blocked %}
+                                        <span class="badge badge-danger"><i class="fas fa-ban"></i> Blocked</span>
+                                        {% elif device.is_online %}
+                                        <span class="badge badge-success"><i class="fas fa-circle"></i> Online</span>
+                                        {% else %}
+                                        <span class="badge badge-secondary"><i class="far fa-circle"></i> Offline</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <a href="{{ url_for('sdn.device_detail', mac_address=device.mac_address) }}">
+                                            <strong>{{ device.hostname or 'Unknown' }}</strong>
+                                        </a>
+                                    </td>
+                                    <td><code>{{ device.ip_address or 'N/A' }}</code></td>
+                                    <td><code>{{ device.mac_address }}</code></td>
+                                    <td>{{ device.manufacturer or 'Unknown' }}</td>
+                                    <td>
+                                        {% set category_icons = {
+                                            'iot': 'fa-microchip',
+                                            'camera': 'fa-video',
+                                            'pos': 'fa-cash-register',
+                                            'printer': 'fa-print',
+                                            'workstation': 'fa-desktop',
+                                            'voice_assistant': 'fa-volume-up',
+                                            'mobile': 'fa-mobile-alt',
+                                            'network': 'fa-network-wired',
+                                            'unknown': 'fa-question'
+                                        } %}
+                                        <i class="fas {{ category_icons.get(device.oui_category, 'fa-question') }} mr-1"></i>
+                                        {{ device.oui_category | capitalize }}
+                                    </td>
+                                    <td>
+                                        {% set policy_colors = {
+                                            'full_access': 'success',
+                                            'lan_only': 'info',
+                                            'internet_only': 'primary',
+                                            'isolated': 'danger',
+                                            'default': 'secondary'
+                                        } %}
+                                        <span class="badge badge-{{ policy_colors.get(device.network_policy, 'secondary') }}">
+                                            {{ device.network_policy | replace('_', ' ') | title }}
+                                        </span>
+                                        {% if device.network_policy != device.auto_policy %}
+                                        <i class="fas fa-user-edit text-warning ml-1" title="Manual override (OUI: {{ device.auto_policy }})"></i>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if device.internet_access %}
+                                        <span class="badge badge-light" title="Internet Access"><i class="fas fa-globe text-success"></i></span>
+                                        {% else %}
+                                        <span class="badge badge-light" title="No Internet"><i class="fas fa-globe text-muted"></i></span>
+                                        {% endif %}
+                                        {% if device.lan_access %}
+                                        <span class="badge badge-light" title="LAN Access"><i class="fas fa-network-wired text-success"></i></span>
+                                        {% else %}
+                                        <span class="badge badge-light" title="No LAN"><i class="fas fa-network-wired text-muted"></i></span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">{{ device.last_seen }}</small>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group btn-group-sm">
+                                            <a href="{{ url_for('sdn.device_detail', mac_address=device.mac_address) }}"
+                                               class="btn btn-default" title="Details">
+                                                <i class="fas fa-eye"></i>
+                                            </a>
+                                            <button type="button" class="btn btn-default dropdown-toggle dropdown-toggle-split"
+                                                    data-toggle="dropdown">
+                                                <span class="sr-only">Actions</span>
+                                            </button>
+                                            <div class="dropdown-menu dropdown-menu-right">
+                                                <a class="dropdown-item btn-auto-classify" href="#"
+                                                   data-mac="{{ device.mac_address }}">
+                                                    <i class="fas fa-magic mr-2"></i> Auto-Classify
+                                                </a>
+                                                <div class="dropdown-divider"></div>
+                                                <h6 class="dropdown-header">Set Policy</h6>
+                                                {% for policy in policies %}
+                                                <a class="dropdown-item btn-set-policy" href="#"
+                                                   data-mac="{{ device.mac_address }}"
+                                                   data-policy="{{ policy.name }}">
+                                                    <i class="fas {{ policy.icon }} mr-2 text-{{ policy.color }}"></i>
+                                                    {{ policy.display_name }}
+                                                </a>
+                                                {% endfor %}
+                                                <div class="dropdown-divider"></div>
+                                                {% if device.is_blocked %}
+                                                <a class="dropdown-item text-success btn-unblock" href="#"
+                                                   data-mac="{{ device.mac_address }}">
+                                                    <i class="fas fa-check mr-2"></i> Unblock
+                                                </a>
+                                                {% else %}
+                                                <a class="dropdown-item btn-disconnect" href="#"
+                                                   data-mac="{{ device.mac_address }}">
+                                                    <i class="fas fa-plug mr-2"></i> Disconnect
+                                                </a>
+                                                <a class="dropdown-item text-danger btn-block" href="#"
+                                                   data-mac="{{ device.mac_address }}">
+                                                    <i class="fas fa-ban mr-2"></i> Block
+                                                </a>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Policy Legend -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card card-outline card-secondary collapsed-card">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>Policy Reference</h3>
+                        <div class="card-tools">
+                            <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            {% for policy in policies %}
+                            <div class="col-md-4 col-lg-2">
+                                <div class="info-box bg-{{ policy.color }}">
+                                    <span class="info-box-icon"><i class="fas {{ policy.icon }}"></i></span>
+                                    <div class="info-box-content">
+                                        <span class="info-box-text">{{ policy.display_name }}</span>
+                                        <span class="info-box-number">
+                                            {{ stats.policy_counts.get(policy.name, 0) }} devices
+                                        </span>
+                                        <small>{{ policy.description }}</small>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+<!-- Block Device Modal -->
+<div class="modal fade" id="modal-block" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger">
+                <h5 class="modal-title"><i class="fas fa-ban mr-2"></i>Block Device</h5>
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+            </div>
+            <form id="form-block" method="POST">
+                <div class="modal-body">
+                    <p>Block device <strong id="block-mac"></strong>?</p>
+                    <p class="text-muted">This device will be completely isolated from the network.</p>
+                    <div class="form-group">
+                        <label>Reason (optional)</label>
+                        <input type="text" name="reason" class="form-control" placeholder="Security concern, unauthorized, etc.">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Block Device</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Initialize DataTable
+    var table = $('#devices-table').DataTable({
+        "paging": true,
+        "pageLength": 25,
+        "lengthChange": true,
+        "searching": true,
+        "ordering": true,
+        "order": [[2, 'asc']],
+        "info": true,
+        "autoWidth": false,
+        "responsive": true,
+        "columnDefs": [
+            { "orderable": false, "targets": [0, 10] }
+        ]
+    });
+
+    // Filter by policy
+    $('#filter-policy').on('change', function() {
+        var policy = $(this).val();
+        table.column(7).search(policy).draw();
+    });
+
+    // Filter by category
+    $('#filter-category').on('change', function() {
+        var category = $(this).val();
+        table.column(6).search(category).draw();
+    });
+
+    // Filter by status
+    $('#filter-status').on('change', function() {
+        var status = $(this).val();
+        if (status === 'online') {
+            table.column(1).search('Online').draw();
+        } else if (status === 'offline') {
+            table.column(1).search('Offline').draw();
+        } else if (status === 'blocked') {
+            table.column(1).search('Blocked').draw();
+        } else {
+            table.column(1).search('').draw();
+        }
+    });
+
+    // Select all checkbox
+    $('#select-all').on('change', function() {
+        $('.device-select').prop('checked', this.checked);
+        updateBulkActions();
+    });
+
+    // Individual checkbox
+    $(document).on('change', '.device-select', function() {
+        updateBulkActions();
+    });
+
+    function updateBulkActions() {
+        var count = $('.device-select:checked').length;
+        $('#selected-count').text(count);
+        if (count > 0) {
+            $('#bulk-actions').slideDown();
+        } else {
+            $('#bulk-actions').slideUp();
+        }
+    }
+
+    function getSelectedMacs() {
+        return $('.device-select:checked').map(function() {
+            return $(this).val();
+        }).get();
+    }
+
+    // Refresh button
+    $('#btn-refresh').on('click', function() {
+        location.reload();
+    });
+
+    // Discover button
+    $('#btn-discover').on('click', function() {
+        var btn = $(this);
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-1"></i> Scanning...');
+
+        $.post('{{ url_for("sdn.discover_devices") }}')
+            .done(function(data) {
+                if (data.success) {
+                    toastr.success('Found ' + data.total + ' devices (' + data.new + ' new)');
+                    setTimeout(function() { location.reload(); }, 1500);
+                } else {
+                    toastr.error(data.error || 'Discovery failed');
+                }
+            })
+            .fail(function() {
+                toastr.error('Discovery request failed');
+            })
+            .always(function() {
+                btn.prop('disabled', false).html('<i class="fas fa-search mr-1"></i> Discover');
+            });
+    });
+
+    // Set policy (single device)
+    $(document).on('click', '.btn-set-policy', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+        var policy = $(this).data('policy');
+
+        $.post('{{ url_for("sdn.set_policy", mac_address="MAC") }}'.replace('MAC', mac), {
+            policy: policy,
+            source: 'dropdown'
+        }, function(data) {
+            if (data.success) {
+                toastr.success(data.message);
+                setTimeout(function() { location.reload(); }, 1000);
+            } else {
+                toastr.error(data.error || 'Failed to set policy');
+            }
+        }).fail(function() {
+            // Fallback to form submit
+            var form = $('<form method="POST" action="{{ url_for("sdn.set_policy", mac_address="MAC") }}">'.replace('MAC', mac));
+            form.append($('<input type="hidden" name="policy">').val(policy));
+            $('body').append(form);
+            form.submit();
+        });
+    });
+
+    // Auto-classify (single device)
+    $(document).on('click', '.btn-auto-classify', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+
+        $.post('{{ url_for("sdn.auto_classify", mac_address="MAC") }}'.replace('MAC', mac))
+            .done(function(data) {
+                if (data.success) {
+                    toastr.success('Classified as ' + data.classification.category + ', policy: ' + data.policy_applied);
+                    setTimeout(function() { location.reload(); }, 1000);
+                } else {
+                    toastr.error(data.error || 'Classification failed');
+                }
+            })
+            .fail(function() {
+                toastr.error('Request failed');
+            });
+    });
+
+    // Disconnect device
+    $(document).on('click', '.btn-disconnect', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+
+        if (confirm('Disconnect device ' + mac + '?')) {
+            $.post('{{ url_for("sdn.disconnect_device", mac_address="MAC") }}'.replace('MAC', mac))
+                .done(function(data) {
+                    if (data.success) {
+                        toastr.success('Device disconnected');
+                        setTimeout(function() { location.reload(); }, 1000);
+                    } else {
+                        toastr.error(data.error || 'Failed to disconnect');
+                    }
+                })
+                .fail(function() {
+                    toastr.error('Request failed');
+                });
+        }
+    });
+
+    // Block device - show modal
+    $(document).on('click', '.btn-block', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+        $('#block-mac').text(mac);
+        $('#form-block').attr('action', '{{ url_for("sdn.block_device", mac_address="MAC") }}'.replace('MAC', mac));
+        $('#modal-block').modal('show');
+    });
+
+    // Unblock device
+    $(document).on('click', '.btn-unblock', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+
+        if (confirm('Unblock device ' + mac + '?')) {
+            $.post('{{ url_for("sdn.unblock_device", mac_address="MAC") }}'.replace('MAC', mac))
+                .done(function(data) {
+                    if (data.success) {
+                        toastr.success(data.message);
+                        setTimeout(function() { location.reload(); }, 1000);
+                    } else {
+                        toastr.error(data.error || 'Failed to unblock');
+                    }
+                })
+                .fail(function() {
+                    toastr.error('Request failed');
+                });
+        }
+    });
+
+    // Bulk auto-classify
+    $('#bulk-auto-classify').on('click', function() {
+        var macs = getSelectedMacs();
+        if (macs.length === 0) return;
+
+        if (confirm('Auto-classify ' + macs.length + ' devices based on OUI?')) {
+            $.ajax({
+                url: '{{ url_for("sdn.bulk_auto_classify") }}',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ mac_addresses: macs }),
+                success: function(data) {
+                    if (data.success) {
+                        toastr.success(data.message);
+                        setTimeout(function() { location.reload(); }, 1500);
+                    } else {
+                        toastr.warning(data.message);
+                    }
+                },
+                error: function() {
+                    toastr.error('Bulk classification failed');
+                }
+            });
+        }
+    });
+
+    // Bulk set policy
+    $(document).on('click', '.bulk-policy', function(e) {
+        e.preventDefault();
+        var policy = $(this).data('policy');
+        var macs = getSelectedMacs();
+
+        if (macs.length === 0) return;
+
+        if (confirm('Set policy "' + policy + '" for ' + macs.length + ' devices?')) {
+            $.ajax({
+                url: '{{ url_for("sdn.bulk_set_policy") }}',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ mac_addresses: macs, policy: policy }),
+                success: function(data) {
+                    if (data.success) {
+                        toastr.success(data.message);
+                        setTimeout(function() { location.reload(); }, 1500);
+                    } else {
+                        toastr.warning(data.message);
+                    }
+                },
+                error: function() {
+                    toastr.error('Bulk policy update failed');
+                }
+            });
+        }
+    });
+
+    // Bulk block
+    $('#bulk-block').on('click', function() {
+        var macs = getSelectedMacs();
+        if (macs.length === 0) return;
+
+        if (confirm('Block ' + macs.length + ' devices? They will be isolated from the network.')) {
+            $.ajax({
+                url: '{{ url_for("sdn.bulk_set_policy") }}',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ mac_addresses: macs, policy: 'isolated' }),
+                success: function(data) {
+                    toastr.success(data.message);
+                    setTimeout(function() { location.reload(); }, 1500);
+                },
+                error: function() {
+                    toastr.error('Bulk block failed');
+                }
+            });
+        }
+    });
+});
+</script>
+{% endblock %}
