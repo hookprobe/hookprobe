@@ -1407,7 +1407,7 @@ NMEOF
         log_info "Using advanced dual-band WiFi configuration (WiFi 6/7 supported)"
 
         # Source the hostapd generator
-        source "$DEVICES_DIR/common/hostapd-generator.sh"
+        source "$FORTRESS_ROOT/devices/common/hostapd-generator.sh"
 
         # Configure dual-band WiFi using our generator
         # This creates configs at /etc/hostapd/hostapd-24ghz.conf and hostapd-5ghz.conf
@@ -1810,8 +1810,8 @@ setup_nftables_filtering() {
     systemctl start nftables 2>/dev/null || true
 
     # Copy the network filter manager script
-    # Note: Use DEVICES_DIR (set from FORTRESS_ROOT before sourcing) to avoid path issues
-    local filter_script="$DEVICES_DIR/common/network-filter-manager.sh"
+    # Use FORTRESS_ROOT directly (never overwritten by sourced scripts)
+    local filter_script="$FORTRESS_ROOT/devices/common/network-filter-manager.sh"
     if [ -f "$filter_script" ]; then
         install -m 755 "$filter_script" /opt/hookprobe/fortress/bin/network-filter-manager.sh
 
@@ -2824,7 +2824,7 @@ configure_freeradius_vlan() {
     log_step "Configuring FreeRADIUS for VLAN assignment..."
 
     local RADIUS_SECRET="${HOOKPROBE_RADIUS_SECRET:-hookprobe_fortress}"
-    local VLAN_SCRIPT="$DEVICES_DIR/common/vlan-assignment.sh"
+    local VLAN_SCRIPT="$FORTRESS_ROOT/devices/common/vlan-assignment.sh"
 
     mkdir -p /etc/fortress
     mkdir -p /var/lib/fortress
@@ -3597,7 +3597,7 @@ setup_lte_failover() {
         log_info "Installing IP SLA WAN failover monitor..."
 
         # Copy the monitor script
-        local monitor_script="$DEVICES_DIR/common/wan-failover-monitor.sh"
+        local monitor_script="$FORTRESS_ROOT/devices/common/wan-failover-monitor.sh"
         if [ -f "$monitor_script" ]; then
             cp "$monitor_script" /usr/local/bin/fortress-wan-failover
             chmod +x /usr/local/bin/fortress-wan-failover
@@ -4029,9 +4029,9 @@ setup_dfs_intelligence() {
     local DFS_DIR="/opt/hookprobe/fortress/dfs"
     local DFS_DB_DIR="/var/lib/hookprobe"
     local DFS_LOG_DIR="/var/log/fortress"
-    # Note: Use DEVICES_DIR (set from FORTRESS_ROOT before sourcing) to avoid path issues
-    # SCRIPT_DIR may be overwritten by sourced scripts
-    local DFS_SRC="$DEVICES_DIR/common"
+    # Use FORTRESS_ROOT directly (set at script start, never overwritten)
+    # DEVICES_DIR and SCRIPT_DIR may be overwritten by sourced scripts
+    local DFS_SRC="$FORTRESS_ROOT/devices/common"
     local SHARED_WIRELESS="$REPO_ROOT/shared/wireless"
 
     # Create directories
