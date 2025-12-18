@@ -891,13 +891,38 @@ uninstall() {
     echo "  --keep-config : Preserve configuration files"
     echo "  --purge       : Remove everything"
     echo ""
-    echo -e "${RED}This will remove:${NC}"
-    echo "  - Fortress containers (web, postgres, redis, ML services)"
-    [ "$keep_data" = false ] && echo "  - Database volumes (all user data)"
-    [ "$keep_data" = false ] && echo "  - ML model data and blocklists"
-    [ "$keep_config" = false ] && echo "  - Configuration files"
-    echo "  - Container images"
-    echo "  - Systemd service"
+    echo -e "${RED}Components to be removed:${NC}"
+    echo ""
+    echo "  Services:"
+    echo "    - fortress (main systemd service)"
+    echo "    - fortress-hostapd-* (WiFi AP services)"
+    echo ""
+    echo "  Containers:"
+    echo "    - fortress-web (Flask admin portal)"
+    echo "    - fortress-postgres (database)"
+    echo "    - fortress-redis (cache/sessions)"
+    echo "    - fortress-qsecbit (threat detection)"
+    echo "    - fortress-dnsxai (DNS ML protection)"
+    echo "    - fortress-dfs (WiFi DFS intelligence)"
+    echo "    - fortress-lstm-trainer (ML training)"
+    echo "    - fortress-grafana (monitoring dashboard)"
+    echo "    - fortress-victoria (metrics database)"
+    echo ""
+    echo "  OVS Network:"
+    echo "    - OVS bridge: fortress"
+    echo "    - Internal ports: fortress-data, fortress-services, fortress-ml, fortress-mgmt, fortress-lan"
+    echo "    - Traffic mirror port: fortress-mirror"
+    echo "    - Container veth interfaces"
+    echo "    - VXLAN tunnel configurations"
+    echo "    - OpenFlow rules"
+    echo "    - sFlow/IPFIX export"
+    echo ""
+    [ "$keep_data" = false ] && echo "  Data volumes (all user data, ML models, blocklists)"
+    [ "$keep_config" = false ] && echo "  Configuration: /etc/hookprobe"
+    [ "$keep_config" = false ] && echo "  Secrets: VXLAN PSK, admin credentials, WiFi passwords"
+    echo "  Installation: /opt/hookprobe/fortress"
+    echo "  DHCP config: /etc/dnsmasq.d/fortress-ovs.conf"
+    echo "  WiFi config: /etc/hostapd/fortress-*.conf"
     echo ""
 
     if [ "$keep_data" = true ]; then
@@ -914,12 +939,15 @@ uninstall() {
     # Stage 1: Stop services
     log_info "Stage 1: Stopping services..."
     systemctl stop fortress 2>/dev/null || true
-    systemctl stop fortress-ml 2>/dev/null || true
-    cd "$CONTAINERS_DIR" 2>/dev/null && podman-compose --profile full --profile training down 2>/dev/null || true
+    systemctl stop fortress-hostapd-2g 2>/dev/null || true
+    systemctl stop fortress-hostapd-5g 2>/dev/null || true
+    cd "${INSTALL_DIR}/containers" 2>/dev/null && \
+        podman-compose --profile monitoring --profile training down 2>/dev/null || true
 
     # Stage 2: Remove application containers
     log_info "Stage 2: Removing application containers..."
     podman rm -f fortress-web fortress-qsecbit fortress-dnsxai fortress-dfs fortress-lstm-trainer 2>/dev/null || true
+    podman rm -f fortress-grafana fortress-victoria 2>/dev/null || true
 
     # Stage 2b: Remove container images
     log_info "Stage 2b: Removing container images..."
@@ -936,6 +964,7 @@ uninstall() {
         # Remove all Fortress volumes
         podman volume rm -f \
             fortress-postgres-data \
+            fortress-postgres-certs \
             fortress-redis-data \
             fortress-web-data \
             fortress-web-logs \
@@ -944,6 +973,8 @@ uninstall() {
             fortress-dnsxai-blocklists \
             fortress-dfs-data \
             fortress-ml-models \
+            fortress-grafana-data \
+            fortress-victoria-data \
             fortress-config \
             2>/dev/null || true
     else
@@ -952,38 +983,87 @@ uninstall() {
         podman stop fortress-postgres fortress-redis 2>/dev/null || true
     fi
 
-    # Stage 4: Remove systemd service
-    log_info "Stage 4: Removing systemd service..."
+    # Stage 4: Remove systemd services
+    log_info "Stage 4: Removing systemd services..."
     systemctl disable fortress 2>/dev/null || true
+    systemctl disable fortress-hostapd-2g 2>/dev/null || true
+    systemctl disable fortress-hostapd-5g 2>/dev/null || true
     rm -f /etc/systemd/system/fortress.service
+    rm -f /etc/systemd/system/fortress-hostapd-*.service
     systemctl daemon-reload
 
-    # Stage 5: Remove network configuration
-    log_info "Stage 5: Removing network filters..."
+    # Stage 5: Remove OVS network configuration
+    log_info "Stage 5: Removing OVS network..."
+
+    # Remove container veth interfaces from OVS
+    for veth in veth-fortress-postgres veth-fortress-redis veth-fortress-web \
+                veth-fortress-dnsxai veth-fortress-dfs veth-fortress-lstm-trainer \
+                veth-fortress-grafana veth-fortress-victoria; do
+        ovs-vsctl del-port fortress "$veth" 2>/dev/null || true
+        ip link del "$veth" 2>/dev/null || true
+    done
+
+    # Remove VXLAN tunnels
+    for tunnel in vxlan-mesh-core vxlan-mesh-threat vxlan-mssp-uplink; do
+        ovs-vsctl del-port fortress "$tunnel" 2>/dev/null || true
+    done
+
+    # Clear OVS mirrors, sFlow, IPFIX
+    ovs-vsctl clear bridge fortress mirrors 2>/dev/null || true
+    ovs-vsctl clear bridge fortress sflow 2>/dev/null || true
+    ovs-vsctl clear bridge fortress ipfix 2>/dev/null || true
+
+    # Delete OVS bridge (removes all ports including internal ports)
+    ovs-vsctl del-br fortress 2>/dev/null || true
+
+    # Remove nftables rules if any
     nft delete table inet fortress_filter 2>/dev/null || true
 
-    # Stage 6: Handle configuration
+    # Remove NAT rules
+    iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o fortress -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+
+    log_info "  OVS bridge and network rules removed"
+
+    # Stage 6: Remove DHCP and WiFi configuration
+    log_info "Stage 6: Removing DHCP and WiFi config..."
+    rm -f /etc/dnsmasq.d/fortress-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+    rm -f /etc/hostapd/fortress-*.conf 2>/dev/null || true
+    systemctl restart dnsmasq 2>/dev/null || true
+
+    # Stage 7: Handle configuration
     if [ "$keep_config" = false ]; then
-        log_info "Stage 6: Removing configuration..."
+        log_info "Stage 7: Removing configuration..."
         rm -f "$CONFIG_DIR/fortress.conf" 2>/dev/null || true
         rm -f "$CONFIG_DIR/users.json" 2>/dev/null || true
         rm -f "$STATE_FILE" 2>/dev/null || true
-        rm -rf "${CONTAINERS_DIR}/secrets" 2>/dev/null || true
+        rm -rf "$CONFIG_DIR/secrets" 2>/dev/null || true
+        rm -f /var/lib/fortress/ovs/*.conf 2>/dev/null || true
+        rm -rf /var/lib/fortress 2>/dev/null || true
     else
-        log_info "Stage 6: Preserving configuration..."
+        log_info "Stage 7: Preserving configuration..."
     fi
 
-    # Stage 7: Remove installation directory
-    log_info "Stage 7: Removing installation files..."
-    rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" 2>/dev/null || true
+    # Stage 8: Remove installation directory
+    log_info "Stage 8: Removing installation files..."
+    rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" "$INSTALL_DIR/bin" 2>/dev/null || true
+    rm -rf "$INSTALL_DIR/devices" "$INSTALL_DIR/containers" 2>/dev/null || true
     [ "$keep_data" = false ] && rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
+
+    # Remove sysctl config
+    rm -f /etc/sysctl.d/99-fortress-forward.conf 2>/dev/null || true
 
     # Clean empty directories
     rmdir "$INSTALL_DIR" 2>/dev/null || true
     rmdir /opt/hookprobe 2>/dev/null || true
 
     echo ""
+    echo "════════════════════════════════════════════════════════════════"
     log_info "Uninstall complete!"
+    echo "════════════════════════════════════════════════════════════════"
     echo ""
 
     if [ "$keep_data" = true ]; then
@@ -998,7 +1078,12 @@ uninstall() {
 
     if [ "$keep_config" = true ]; then
         echo "Configuration preserved in: $CONFIG_DIR"
+        echo ""
     fi
+
+    echo "Note: WiFi interface names may revert to default after reboot"
+    echo "      (e.g., wlp2s0 instead of wlan-2g)"
+    echo ""
 }
 
 # ============================================================
