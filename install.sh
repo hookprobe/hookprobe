@@ -1721,10 +1721,12 @@ CFEOF
             # Export environment variables for the container installer
             export WIFI_SSID="$wifi_ssid"
             export WIFI_PASSWORD="$wifi_password"
+            export FORTRESS_NETWORK_PREFIX="$network_prefix"
+            export NON_INTERACTIVE=true
             [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
 
-            # Run the container installer (handles its own prompts and completion message)
-            bash "$SCRIPT_DIR/products/fortress/install.sh"
+            # Run the container installer with args (non-interactive uses env vars)
+            bash "$SCRIPT_DIR/products/fortress/install.sh" $extra_args
             local exit_code=$?
 
             if [ $exit_code -eq 0 ]; then
@@ -1735,9 +1737,11 @@ CFEOF
             # Fallback to direct container installer
             export WIFI_SSID="$wifi_ssid"
             export WIFI_PASSWORD="$wifi_password"
+            export FORTRESS_NETWORK_PREFIX="$network_prefix"
+            export NON_INTERACTIVE=true
             [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
 
-            bash "$SCRIPT_DIR/products/fortress/install-container.sh"
+            bash "$SCRIPT_DIR/products/fortress/install-container.sh" $extra_args
         else
             echo -e "${RED}Fortress installer not found${NC}"
             echo "Expected: $SCRIPT_DIR/products/fortress/install.sh"
