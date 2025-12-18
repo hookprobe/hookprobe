@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.4
-**Last Updated**: 2025-12-17
+**Version**: 5.5
+**Last Updated**: 2025-12-18
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -14,7 +14,7 @@
 | **Check code quality** | `make lint` | `.pre-commit-config.yaml`, `Makefile` |
 | **Deploy Sentinel** | `./install.sh --tier sentinel` | `products/sentinel/` |
 | **Deploy Guardian** | `./install.sh --tier guardian` | `products/guardian/` |
-| **Deploy Fortress** | `./install.sh --tier fortress` | `products/fortress/` |
+| **Deploy Fortress** | `./install.sh` (container mode) | `products/fortress/install.sh` |
 | **Deploy Nexus** | `./install.sh --tier nexus` | `products/nexus/` |
 | **Modify Qsecbit algorithm** | Edit core logic | `core/qsecbit/qsecbit.py` |
 | **Add XDP/eBPF rules** | Edit XDP manager | `core/qsecbit/xdp_manager.py` |
@@ -32,9 +32,9 @@
 | **Fortress admin portal** | Flask + AdminLTE | `products/fortress/web/` |
 | **Fortress development** | MVP plan | `products/fortress/DEVELOPMENT_PLAN.md` |
 | **Fortress user auth** | Local auth (max 5) | `products/fortress/web/modules/auth/models.py` |
-| **Fortress WiFi setup** | Channel scanning | `products/fortress/setup.sh` (search `setup_wifi_ap`) |
-| **Fortress LTE config** | APN + auth | `products/fortress/setup.sh` (search `HOOKPROBE_LTE`) |
-| **Fortress network size** | /23-/29 config | `products/fortress/setup.sh` (search `FORTRESS_NETWORK_PREFIX`) |
+| **Fortress WiFi setup** | hostapd config | `products/fortress/devices/common/hostapd-generator.sh` |
+| **Fortress network setup** | Bridge, DHCP, NAT | `products/fortress/devices/common/bridge-manager.sh` |
+| **Fortress containers** | Podman compose | `products/fortress/containers/podman-compose.yml` |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
@@ -951,95 +951,98 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 - POS systems, guest WiFi, staff networks
 - GDPR compliance requirements
 
-**Architecture**:
-- **Backend**: `lib/` - Python modules (extends Guardian)
-- **Web UI**: `web/` - Flask app with AdminLTE 3.x dashboard
-- **QSecBit**: `qsecbit/` - Fortress-enhanced agent with VLAN/MACsec monitoring
-- **Config**: OVS bridge, VLANs, VXLAN tunnels
+**Architecture** (Container Mode):
+- **Deployment**: Podman containers with podman-compose
+- **Web UI**: Flask app with AdminLTE 3.x in container
+- **Database**: PostgreSQL container with persistent volume
+- **Cache**: Redis container for sessions/rate limiting
+- **Network**: Linux bridge with DHCP and NAT
+- **WiFi**: Dual-band hostapd AP with bridge integration
+- **ML Services** (optional): QSecBit, dnsXai, DFS intelligence
 
-**Installation Prompts** (collected before install):
+**Installation**:
+```bash
+# Interactive install (recommended)
+sudo ./install.sh
+
+# Quick install with defaults (for testing)
+sudo ./install.sh --quick
+```
+
+**Installation Prompts**:
 
 | Prompt | Default | Description |
 |--------|---------|-------------|
-| WiFi SSID | `hookprobe` | Access point network name |
+| Network Mode | `filter` | nftables filtering (simpler) or VLAN |
+| ML Services | `Full` | Include QSecBit, dnsXai, DFS (recommended) |
+| Admin Username | `admin` | Web UI admin username |
+| Admin Password | (required) | Min 8 chars |
+| WiFi SSID | `HookProbe-Fortress` | Access point network name |
 | WiFi Password | Random 12-char | Or user-specified (min 8 chars) |
-| Network Size | `/23` (510 devices) | Options: /29 to /23 |
-| LTE APN | `internet` | Carrier APN name |
-| LTE Auth Type | `none` | Options: none/pap/chap/mschapv2 |
-| LTE Username | - | Only if auth != none |
-| LTE Password | - | Only if auth != none |
-| Cloudflare Tunnel | Later | Configure now or via web UI |
+| Web Port | `8443` | HTTPS port for admin UI |
 
-**What Fortress Adds Over Guardian**:
+**Container Architecture**:
 
-| Feature | Guardian | Fortress |
-|---------|----------|----------|
-| **Web UI** | Single-user | Multi-user (max 5) |
-| **VLANs** | Basic | Full segmentation (5 VLANs) |
-| **Reporting** | Basic stats | Business reports |
-| **Dashboard** | Forty theme | AdminLTE professional |
-| **Authentication** | None | Local auth + roles |
-| **Network Size** | Fixed | Configurable /23-/29 |
-| **LTE Failover** | Basic | Full APN + auth config |
-| **Channel Optimization** | Manual | Daily 4am auto-calibration |
+| Container | Purpose | Profile |
+|-----------|---------|---------|
+| fortress-postgres | PostgreSQL database | Core (always) |
+| fortress-redis | Session cache, rate limiting | Core (always) |
+| fortress-web | Flask admin UI (gunicorn) | Core (always) |
+| fortress-qsecbit | Threat detection agent | `--profile full` |
+| fortress-dnsxai | DNS ML protection | `--profile full` |
+| fortress-dfs | WiFi DFS intelligence | `--profile full` |
+| fortress-grafana | Monitoring dashboard | `--profile monitoring` |
+| fortress-victoria | Metrics database | `--profile monitoring` |
+| fortress-lstm-trainer | ML training (one-shot) | `--profile training` |
 
-**Authentication** (Simple Local Auth):
+**Network Configuration**:
+- **Bridge**: `fortress` (10.200.0.1/24)
+- **DHCP Range**: 10.200.0.100 - 10.200.0.200
+- **DNS**: dnsmasq on bridge interface
+- **NAT**: iptables masquerade on WAN interface
+- **WiFi**: hostapd dual-band (2.4GHz + 5GHz if available)
+
+**Key Files**:
+- `install.sh` - Unified installer (defaults to container mode)
+- `install-container.sh` - Container-based installation
+- `uninstall.sh` - Complete removal with data preservation options
+- `fortress-ctl.sh` - Runtime management (upgrade, backup, status)
+- `containers/podman-compose.yml` - Container orchestration
+- `containers/Containerfile.*` - Container definitions
+- `devices/common/` - Network detection and configuration scripts
+
+**Web UI**:
+- `web/app.py` - Flask application factory with Flask-Login
+- `web/modules/` - Blueprint modules (auth, dashboard, security, clients, etc.)
+- `web/templates/base.html` - AdminLTE base layout
+
+**Authentication**:
 - **Storage**: JSON file (`/etc/hookprobe/users.json`)
 - **Max Users**: 5 (sufficient for small business)
 - **Password Hashing**: bcrypt
 - **Roles**: admin, operator, viewer
-- **Default Admin**: `admin` / `hookprobe` (change immediately!)
+- **Default Admin**: Created during install
 
-**Web UI Design** (AdminLTE 3.x):
-- **Template**: AdminLTE 3.x (Bootstrap 4)
-- **Color Palette**: Same HookProbe branding
-- **Key Features**:
-  - User authentication (admin, operator, viewer roles)
-  - Sidebar navigation
-  - Professional dark theme
-  - DataTables for device management
-  - Business reporting
+**Useful Commands**:
+```bash
+# Service management
+systemctl status fortress           # Check container status
+systemctl restart fortress          # Restart containers
+systemctl status fortress-hostapd-* # WiFi AP status
 
-**Web UI Files**:
-- `web/app.py` - Flask application factory with Flask-Login
-- `web/modules/auth/` - Authentication (login, logout, user management)
-- `web/modules/auth/models.py` - User model with MAX_USERS=5 limit
-- `web/modules/dashboard/` - Main dashboard with widgets
-- `web/modules/security/` - QSecBit and threat detection
-- `web/modules/clients/` - Device management with VLAN assignment
-- `web/modules/networks/` - VLAN configuration UI
-- `web/modules/dnsxai/` - DNS protection with per-VLAN policies
-- `web/modules/reports/` - Business reporting
-- `web/modules/settings/` - System settings, user management
-- `web/templates/base.html` - AdminLTE base layout
-- `web/config.py` - Simple config (no external IAM)
+# Container logs
+podman logs fortress-web            # Web app logs
+podman logs fortress-postgres       # Database logs
+podman logs fortress-qsecbit        # Threat detection logs
 
-**Web UI Modules** (`web/modules/`):
-- `auth/` - Login, logout, user management (local only)
-- `dashboard/` - Main overview with widgets
-- `security/` - QSecBit, threats, layer stats
-- `clients/` - Device inventory with VLAN assignment
-- `networks/` - VLAN configuration
-- `dnsxai/` - DNS protection settings
-- `reports/` - Weekly reports, device inventory
-- `settings/` - System config, user management
-- `api/` - REST API endpoints
+# Network status
+ip link show fortress               # Bridge status
+cat /etc/dnsmasq.d/fortress-bridge.conf  # DHCP config
 
-**VLAN Configuration** (default):
-
-| VLAN | ID | Purpose |
-|------|-----|---------|
-| Management | 10 | Admin devices |
-| POS | 20 | Payment terminals |
-| Staff | 30 | Employee devices |
-| Guest | 40 | Customer WiFi |
-| IoT | 99 | Cameras, sensors |
-
-**WiFi Channel Optimization**:
-- Auto-selects least congested channel at install
-- Daily 4am calibration via systemd timer
-- Supports dual-band adapters (2.4GHz + 5GHz)
-- Service: `fortress-channel-optimize.timer`
+# Backup and upgrade
+./fortress-ctl.sh backup            # Create backup
+./fortress-ctl.sh upgrade --app     # Hot upgrade
+```
 
 **Development Plan**: See `products/fortress/DEVELOPMENT_PLAN.md`
 
