@@ -196,10 +196,20 @@ create_tier_ports() {
         fi
 
         # Assign IP to internal port
-        if ! ip link set "$port_name" up 2>/dev/null; then
-            log_error "Failed to bring up port: $port_name"
-            return 1
-        fi
+        # Wait briefly for OVS to create the interface in the kernel
+        local retries=5
+        while [ $retries -gt 0 ]; do
+            if ip link set "$port_name" up 2>/dev/null; then
+                break
+            fi
+            retries=$((retries - 1))
+            if [ $retries -eq 0 ]; then
+                log_error "Failed to bring up port: $port_name"
+                log_error "Interface may not have been created. Check: ip link show $port_name"
+                return 1
+            fi
+            sleep 0.5
+        done
 
         # Remove existing IPs and set new one
         ip addr flush dev "$port_name" 2>/dev/null || true
