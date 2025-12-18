@@ -456,29 +456,43 @@ start_containers() {
 create_systemd_service() {
     log_step "Creating systemd service"
 
+    # Build profile flags based on installation options
+    local profile_flags=""
+    if [ "${INSTALL_ML:-false}" = true ]; then
+        profile_flags="--profile full"
+    fi
+    if [ "${INSTALL_MONITORING:-true}" = true ]; then
+        profile_flags="$profile_flags --profile monitoring"
+    fi
+    profile_flags=$(echo "$profile_flags" | xargs)  # trim whitespace
+
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]
 Description=HookProbe Fortress Security Gateway
-After=network.target
+After=network.target openvswitch-switch.service
 Requires=podman.socket
+Wants=openvswitch-switch.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${CONTAINERS_DIR}
-ExecStart=/usr/bin/podman-compose -f podman-compose.yml up -d
-ExecStop=/usr/bin/podman-compose -f podman-compose.yml down
-ExecReload=/usr/bin/podman-compose -f podman-compose.yml restart
+ExecStart=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml up -d
+ExecStop=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml down
+ExecReload=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml restart
 TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+    # Also save profile config for reference
+    echo "FORTRESS_PROFILES=\"${profile_flags}\"" >> /etc/hookprobe/fortress.conf
+
     systemctl daemon-reload
     systemctl enable fortress
 
-    log_info "Systemd service created and enabled"
+    log_info "Systemd service created with profiles: ${profile_flags:-none (core only)}"
 }
 
 # ============================================================
