@@ -1,0 +1,78 @@
+# ==============================================================================
+# Fortress DFS Intelligence Container
+# ==============================================================================
+# ML-powered WiFi DFS channel optimization
+#
+# Build:
+#   podman build -f Containerfile.dfs -t fortress-dfs:latest ../..
+#
+# Run:
+#   podman run -p 8050:8050 fortress-dfs:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for sklearn
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libopenblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    numpy>=1.24.0,<2.0.0 \
+    scikit-learn>=1.3.0,<2.0.0 \
+    flask>=2.3.0 \
+    gunicorn>=21.0.0
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    libgomp1 \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe dfs
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/shared/wireless/data \
+             /var/log/hookprobe \
+    && chown -R dfs:nogroup /opt/hookprobe /var/log/hookprobe
+
+# Copy wireless module
+COPY --chown=dfs:nogroup shared/wireless/ /opt/hookprobe/shared/wireless/
+COPY --chown=dfs:nogroup shared/__init__.py /opt/hookprobe/shared/
+
+# Copy DFS API server
+COPY --chown=dfs:nogroup shared/wireless/containers/dfs-intelligence/ /opt/hookprobe/dfs-api/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV DFS_DATA_DIR=/opt/hookprobe/shared/wireless/data
+ENV DFS_DB_PATH=/opt/hookprobe/shared/wireless/data/dfs_radar.db
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8050/health || exit 1
+
+EXPOSE 8050
+
+USER dfs
+
+WORKDIR /opt/hookprobe/dfs-api
+
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8050", "-w", "2", "--timeout", "30", "dfs_api_server:app"]
