@@ -18,7 +18,7 @@ from datetime import timedelta
 from flask import Flask, redirect, url_for
 from flask_login import LoginManager
 
-from config import Config
+from .config import Config
 
 
 def create_app(config_class=Config):
@@ -52,11 +52,11 @@ def create_app(config_class=Config):
 
     @login_manager.user_loader
     def load_user(user_id):
-        from modules.auth.models import User
+        from .modules.auth.models import User
         return User.get(user_id)
 
     # Register blueprints
-    from modules import register_blueprints
+    from .modules import register_blueprints
     register_blueprints(app)
 
     # Root redirect
@@ -84,6 +84,10 @@ def create_app(config_class=Config):
 
     @app.errorhandler(500)
     def server_error(e):
+        # Log the actual error for debugging
+        import traceback
+        app.logger.error(f"Internal Server Error: {e}")
+        app.logger.error(traceback.format_exc())
         return {'error': 'Internal server error'}, 500
 
     # Context processor for templates
