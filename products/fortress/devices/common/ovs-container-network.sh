@@ -205,7 +205,14 @@ create_tier_ports() {
 
             # Give OVS time to create the kernel interface
             # This is especially important when creating multiple ports rapidly
-            sleep 1
+            sleep 2
+
+            # Check for OVS interface errors
+            local ovs_iface_error
+            ovs_iface_error=$(ovs-vsctl get interface "$port_name" error 2>/dev/null || echo "")
+            if [ -n "$ovs_iface_error" ] && [ "$ovs_iface_error" != '[]' ] && [ "$ovs_iface_error" != '""' ]; then
+                log_error "OVS interface error for $port_name: $ovs_iface_error"
+            fi
         fi
 
         # Assign IP to internal port
@@ -219,8 +226,10 @@ create_tier_ports() {
             retries=$((retries - 1))
             if [ $retries -eq 0 ]; then
                 log_error "Failed to bring up port: $port_name"
-                log_error "Interface not found in kernel after 5 seconds"
-                log_error "OVS interface state: $(ovs-vsctl get interface "$port_name" admin_state 2>/dev/null || echo 'unknown')"
+                log_error "Interface not found in kernel after 10 seconds"
+                log_error "OVS interface error: $(ovs-vsctl get interface "$port_name" error 2>/dev/null || echo 'none')"
+                log_error "OVS interface ofport: $(ovs-vsctl get interface "$port_name" ofport 2>/dev/null || echo 'none')"
+                log_error "OVS ports on bridge: $(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | tr '\n' ' ')"
                 log_error "Kernel interfaces: $(ip link show 2>/dev/null | grep -E "^[0-9]+:" | head -20)"
                 return 1
             fi
