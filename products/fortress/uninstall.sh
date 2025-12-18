@@ -257,10 +257,24 @@ cleanup_network_interfaces() {
     if [ -f /etc/udev/rules.d/80-fortress-wifi.rules ]; then
         log_info "Removing WiFi interface udev rules..."
         rm -f /etc/udev/rules.d/80-fortress-wifi.rules
-        # Reload udev so interface names revert on next boot
+        # Reload udev rules AND trigger to rename interfaces immediately
         udevadm control --reload-rules 2>/dev/null || true
-        log_info "  WiFi interfaces will revert to default names after reboot"
+        udevadm trigger --action=add --subsystem-match=net 2>/dev/null || true
+        log_info "  WiFi interface names will revert (may need reboot for full effect)"
     fi
+
+    # Remove LAN bridge service and script
+    if [ -f /etc/systemd/system/fortress-lan-bridge.service ]; then
+        log_info "Removing LAN bridge service..."
+        systemctl stop fortress-lan-bridge.service 2>/dev/null || true
+        systemctl disable fortress-lan-bridge.service 2>/dev/null || true
+        rm -f /etc/systemd/system/fortress-lan-bridge.service
+        rm -f /usr/local/bin/fortress-lan-bridge.sh
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+
+    # Remove LAN bridge configuration
+    rm -f /etc/hookprobe/lan-bridge.conf 2>/dev/null || true
 
     # Remove WiFi interface mapping file (keeps original→stable name mapping)
     rm -f /etc/hookprobe/wifi-interfaces.conf 2>/dev/null || true
