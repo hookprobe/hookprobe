@@ -6,6 +6,7 @@
 # Usage:
 #   podman-compose up -d                       # Start core services (web, db, cache)
 #   podman-compose --profile full up -d        # Start with ML services
+#   podman-compose --profile monitoring up -d  # Start with monitoring
 #   podman-compose --profile training run lstm # Run LSTM training job
 #   podman-compose down                        # Stop all services
 #   podman-compose down -v                     # Stop and remove volumes
@@ -14,19 +15,26 @@
 # Container Groups:
 #   - Core: postgres, redis, web (always running)
 #   - ML: qsecbit-agent, dnsxai, dfs-intelligence (--profile full)
+#   - Monitoring: grafana, victoria (--profile monitoring)
 #   - Jobs: lstm-trainer (--profile training, one-shot)
 #
-# Version: 5.2.0
+# Network Security Tiers:
+#   - fortress-data: Database/cache (internal, no internet)
+#   - fortress-services: Web/DNS/DFS (limited internet for DNS upstream)
+#   - fortress-ml: ML inference (internal, no internet)
+#   - fortress-mgmt: Monitoring (internal, no internet)
+#
+# Version: 5.3.0
 # License: AGPL-3.0
 
 version: '3.8'
 
 services:
   # ============================================================
-  # DATA GROUP - Always Running
+  # DATA TIER - Isolated Database Layer (fortress-data)
   # ============================================================
 
-  # PostgreSQL Database
+  # PostgreSQL Database - Most sensitive, fully isolated
   postgres:
     image: docker.io/library/postgres:15-alpine
     container_name: fortress-postgres
@@ -35,11 +43,14 @@ services:
       POSTGRES_DB: fortress
       POSTGRES_USER: fortress
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Enable SSL (certificates mounted from volume)
+      PGSSLMODE: prefer
     secrets:
       - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - postgres_certs:/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fortress -d fortress"]
       interval: 10s
@@ -47,7 +58,8 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - fortress-internal
+      fortress-data:
+        ipv4_address: 10.250.200.10
 
   # Redis Cache (Sessions + Rate Limiting)
   redis:
@@ -59,18 +71,20 @@ services:
       --appendonly yes
       --maxmemory 128mb
       --maxmemory-policy allkeys-lru
+      --requirepass "${REDIS_PASSWORD:-fortress_redis_secret}"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-fortress_redis_secret}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - fortress-internal
+      fortress-data:
+        ipv4_address: 10.250.200.11
 
   # ============================================================
-  # WEB GROUP - Always Running
+  # SERVICES TIER - Web and DNS (fortress-services)
   # ============================================================
 
   # Fortress Web Application (Flask + Gunicorn)
@@ -87,25 +101,28 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database connection
-      DATABASE_HOST: postgres
+      # Database connection (via data network)
+      DATABASE_HOST: 10.250.200.10
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      # Redis connection
-      REDIS_HOST: redis
+      # Redis connection (via data network)
+      REDIS_HOST: 10.250.200.11
       REDIS_PORT: 6379
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
       FLASK_ENV: production
       FLASK_SECRET_KEY_FILE: /run/secrets/flask_secret
       # Gunicorn settings
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
-      # ML service endpoints (for API calls)
+      # ML service endpoints (via services network)
       QSECBIT_API_URL: http://localhost:9090
-      DNSXAI_API_URL: http://dnsxai:5353
-      DFS_API_URL: http://dfs-intelligence:8050
+      DNSXAI_API_URL: http://10.250.201.11:5353
+      DFS_API_URL: http://10.250.201.12:8050
+      # Monitoring endpoints (via mgmt network)
+      VICTORIA_URL: http://10.250.203.11:8428
     secrets:
       - postgres_password
       - flask_secret
@@ -122,50 +139,16 @@ services:
       retries: 3
       start_period: 15s
     networks:
-      - fortress-internal
-      - fortress-external
+      fortress-data:
+        ipv4_address: 10.250.200.20
+      fortress-services:
+        ipv4_address: 10.250.201.10
+      fortress-ml:
+        ipv4_address: 10.250.202.20
+      fortress-mgmt:
+        ipv4_address: 10.250.203.20
 
-  # ============================================================
-  # ML/AI GROUP - Optional (--profile full)
-  # ============================================================
-
-  # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
-  qsecbit-agent:
-    build:
-      context: ../..
-      dockerfile: products/fortress/containers/Containerfile.agent
-    image: localhost/fortress-agent:latest
-    container_name: fortress-qsecbit
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      QSECBIT_MODE: fortress
-      DATABASE_HOST: localhost  # Using host network
-      DATABASE_PORT: 5432
-      DATABASE_NAME: fortress
-      DATABASE_USER: fortress
-      REDIS_HOST: localhost
-      REDIS_PORT: 6379
-      QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
-    secrets:
-      - postgres_password
-    volumes:
-      - agent_data:/opt/hookprobe/fortress/data
-      - fortress_config:/etc/hookprobe:ro
-      - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
-    # Host network required for traffic analysis
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    profiles:
-      - full
-
-  # dnsXai Engine - DNS ML Protection (numpy, dnslib)
+  # dnsXai Engine - DNS ML Protection
   dnsxai:
     build:
       context: ../..
@@ -190,11 +173,12 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - fortress-internal
+      fortress-services:
+        ipv4_address: 10.250.201.11
     profiles:
       - full
 
-  # DFS Intelligence - WiFi Channel ML (numpy, sklearn)
+  # DFS Intelligence - WiFi Channel ML
   dfs-intelligence:
     build:
       context: ../..
@@ -217,13 +201,55 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - fortress-internal
+      fortress-services:
+        ipv4_address: 10.250.201.12
     profiles:
       - full
 
   # ============================================================
-  # TRAINING GROUP - One-shot jobs (--profile training)
+  # ML TIER - Threat Detection (fortress-ml)
   # ============================================================
+
+  # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
+  # Uses host network for traffic capture
+  qsecbit-agent:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.agent
+    image: localhost/fortress-agent:latest
+    container_name: fortress-qsecbit
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      QSECBIT_MODE: fortress
+      # Database via host network (postgres exposed via port forward)
+      DATABASE_HOST: localhost
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
+      QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
+      # Metrics export to Victoria
+      VICTORIA_PUSH_URL: http://localhost:8428/api/v1/write
+    secrets:
+      - postgres_password
+    volumes:
+      - agent_data:/opt/hookprobe/fortress/data
+      - fortress_config:/etc/hookprobe:ro
+      - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
+    # Host network REQUIRED for traffic analysis on all interfaces
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    profiles:
+      - full
 
   # LSTM Trainer - PyTorch model training (scheduled job)
   lstm-trainer:
@@ -239,11 +265,70 @@ services:
       - ml_models:/opt/hookprobe/fortress/data/ml-models
       - agent_data:/opt/hookprobe/fortress/data:ro  # Read threat data
     networks:
-      - fortress-internal
+      fortress-ml:
+        ipv4_address: 10.250.202.10
     profiles:
       - training
     # One-shot job - doesn't restart
     restart: "no"
+
+  # ============================================================
+  # MANAGEMENT TIER - Monitoring (fortress-mgmt)
+  # ============================================================
+
+  # Grafana - Visualization Dashboard
+  grafana:
+    image: docker.io/grafana/grafana:10-alpine
+    container_name: fortress-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+    secrets:
+      - grafana_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      fortress-mgmt:
+        ipv4_address: 10.250.203.10
+    profiles:
+      - monitoring
+
+  # VictoriaMetrics - Time Series Database
+  victoria:
+    image: docker.io/victoriametrics/victoria-metrics:stable
+    container_name: fortress-victoria
+    restart: unless-stopped
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=30d"
+      - "-httpListenAddr=:8428"
+    volumes:
+      - victoria_data:/storage
+    ports:
+      - "8428:8428"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8428/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      fortress-mgmt:
+        ipv4_address: 10.250.203.11
+    profiles:
+      - monitoring
 
 # ============================================================
 # SECRETS (file-based for security)
@@ -253,31 +338,31 @@ secrets:
     file: ./secrets/postgres_password
   flask_secret:
     file: ./secrets/flask_secret
+  grafana_password:
+    file: ./secrets/grafana_password
 
 # ============================================================
 # VOLUMES (persistent storage)
 # ============================================================
 volumes:
-  # Data Group
+  # Data Tier
   postgres_data:
     driver: local
     name: fortress-postgres-data
+  postgres_certs:
+    driver: local
+    name: fortress-postgres-certs
   redis_data:
     driver: local
     name: fortress-redis-data
 
-  # Web Group
+  # Services Tier
   web_data:
     driver: local
     name: fortress-web-data
   web_logs:
     driver: local
     name: fortress-web-logs
-
-  # ML Group
-  agent_data:
-    driver: local
-    name: fortress-agent-data
   dnsxai_data:
     driver: local
     name: fortress-dnsxai-data
@@ -287,9 +372,22 @@ volumes:
   dfs_data:
     driver: local
     name: fortress-dfs-data
+
+  # ML Tier
+  agent_data:
+    driver: local
+    name: fortress-agent-data
   ml_models:
     driver: local
     name: fortress-ml-models
+
+  # Management Tier
+  grafana_data:
+    driver: local
+    name: fortress-grafana-data
+  victoria_data:
+    driver: local
+    name: fortress-victoria-data
 
   # Shared
   fortress_config:
@@ -297,22 +395,58 @@ volumes:
     name: fortress-config
 
 # ============================================================
-# NETWORKS
+# NETWORKS - 4-Tier Security Architecture
 # ============================================================
 networks:
-  # Internal network (database, redis, web, ML services)
-  fortress-internal:
+  # Tier 1: DATA - Most sensitive (database, cache)
+  # - NO internet access (internal: true)
+  # - Jumbo frames for DB traffic performance
+  # - Only postgres and redis have primary IPs here
+  # - Web connects as client for DB/cache access
+  fortress-data:
     driver: bridge
-    internal: true
+    internal: true  # NO internet access
     ipam:
       config:
-        - subnet: 10.250.100.0/24
-          gateway: 10.250.100.1
+        - subnet: 10.250.200.0/24
+          gateway: 10.250.200.1
+    driver_opts:
+      mtu: "9000"  # Jumbo frames for DB traffic
+      com.docker.network.bridge.enable_icc: "true"
 
-  # External network (web only - HTTPS access)
-  fortress-external:
+  # Tier 2: SERVICES - Web, DNS, APIs
+  # - Limited internet (dnsXai needs upstream DNS)
+  # - Standard MTU
+  # - Web serves HTTPS, dnsXai serves DNS, DFS serves API
+  fortress-services:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.250.101.0/24
-          gateway: 10.250.101.1
+        - subnet: 10.250.201.0/24
+          gateway: 10.250.201.1
+    driver_opts:
+      mtu: "1500"
+
+  # Tier 3: ML - Threat detection, inference
+  # - NO internet access (internal: true)
+  # - QSecBit uses host network for traffic capture
+  # - LSTM trainer runs here for model training
+  fortress-ml:
+    driver: bridge
+    internal: true  # NO internet access
+    ipam:
+      config:
+        - subnet: 10.250.202.0/24
+          gateway: 10.250.202.1
+
+  # Tier 4: MANAGEMENT - Monitoring, metrics
+  # - NO internet access (internal: true)
+  # - Grafana, VictoriaMetrics
+  # - Web connects to query metrics
+  fortress-mgmt:
+    driver: bridge
+    internal: true  # NO internet access
+    ipam:
+      config:
+        - subnet: 10.250.203.0/24
+          gateway: 10.250.203.1
