@@ -916,7 +916,10 @@ main() {
     echo ""
     echo "Login credentials:"
     echo -e "  Username: ${BOLD}${ADMIN_USER}${NC}"
-    echo -e "  Password: ${BOLD}(your configured password)${NC}"
+    echo -e "  Password: ${BOLD}(saved to ${CONFIG_DIR}/secrets/admin_password)${NC}"
+    echo ""
+    echo "To retrieve your admin password:"
+    echo "  sudo cat ${CONFIG_DIR}/secrets/admin_password"
     echo ""
     if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PASSWORD" ]; then
         echo "WiFi Access Point:"
