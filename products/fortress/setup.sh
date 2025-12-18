@@ -1060,15 +1060,27 @@ fi
 
 # Add each LAN port to the bridge
 for iface in $LAN_PORTS; do
+    # Wait for interface to appear (up to 10 seconds)
+    local wait_count=0
+    while [ ! -e "/sys/class/net/$iface" ] && [ $wait_count -lt 20 ]; do
+        sleep 0.5
+        ((wait_count++))
+    done
+
     if ip link show "$iface" &>/dev/null; then
         # Skip if already in bridge
         if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${iface}$"; then
             log "$iface already in bridge $BRIDGE"
+            # Ensure it's UP
+            ip link set "$iface" up 2>/dev/null || true
             continue
         fi
 
         log "Adding $iface to bridge $BRIDGE"
+        # Bring down, flush, then bring back up for clean state
+        ip link set "$iface" down 2>/dev/null || true
         ip addr flush dev "$iface" 2>/dev/null || true
+
         ovs-vsctl --may-exist add-port "$BRIDGE" "$iface" || {
             log "Failed to add $iface to bridge"
             continue
@@ -1077,10 +1089,20 @@ for iface in $LAN_PORTS; do
         ovs-vsctl clear port "$iface" tag 2>/dev/null || true
         ovs-vsctl clear port "$iface" trunks 2>/dev/null || true
         ovs-vsctl clear port "$iface" vlan_mode 2>/dev/null || true
+
+        # Bring interface UP and wait for link
         ip link set "$iface" up
-        log "$iface added to bridge $BRIDGE"
+        sleep 1
+
+        # Check link state
+        local link_state=$(cat /sys/class/net/$iface/carrier 2>/dev/null || echo "0")
+        if [ "$link_state" = "1" ]; then
+            log "$iface added to bridge $BRIDGE (link UP)"
+        else
+            log "$iface added to bridge $BRIDGE (link DOWN - cable unplugged?)"
+        fi
     else
-        log "Interface $iface not found (cable unplugged?)"
+        log "Interface $iface not found after waiting"
     fi
 done
 

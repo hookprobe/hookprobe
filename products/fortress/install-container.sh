@@ -257,6 +257,8 @@ generate_secrets() {
     log_step "Generating secrets"
 
     local secrets_dir="${CONTAINERS_DIR}/secrets"
+    mkdir -p "$secrets_dir"
+    mkdir -p "${CONFIG_DIR}/secrets"
 
     # PostgreSQL password
     if [ ! -f "$secrets_dir/postgres_password" ]; then
@@ -272,7 +274,14 @@ generate_secrets() {
         log_info "Generated Flask secret key"
     fi
 
-    # Copy to config dir
+    # Grafana admin password (required for monitoring profile)
+    if [ ! -f "$secrets_dir/grafana_password" ]; then
+        openssl rand -base64 24 | tr -d '/+=' | head -c 24 > "$secrets_dir/grafana_password"
+        chmod 600 "$secrets_dir/grafana_password"
+        log_info "Generated Grafana password"
+    fi
+
+    # Copy to config dir for web app access
     cp "$secrets_dir/flask_secret" "${CONFIG_DIR}/secrets/fortress_secret_key" 2>/dev/null || true
 
     log_info "Secrets generated"
@@ -301,20 +310,21 @@ print(hash.decode('utf-8'))
 ")
     }
 
-    # Create users.json
+    # Create users.json (dict format keyed by user ID - required by models.py)
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/users.json" << EOF
 {
-  "users": [
-    {
-      "id": "${ADMIN_USER}",
-      "username": "${ADMIN_USER}",
+  "users": {
+    "${ADMIN_USER}": {
       "password_hash": "${password_hash}",
       "role": "admin",
       "created_at": "$(date -Iseconds)",
-      "email": "${ADMIN_USER}@localhost"
+      "email": "${ADMIN_USER}@localhost",
+      "display_name": "Administrator",
+      "is_active": true
     }
-  ]
+  },
+  "version": "1.0"
 }
 EOF
     chmod 600 "$CONFIG_DIR/users.json"
