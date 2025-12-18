@@ -231,11 +231,46 @@ EOF
 create_wifi_services() {
     # Create systemd services for WiFi APs
     #
-    # Creates separate services for 2.4GHz and 5GHz if available
+    # Creates:
+    #   1. fortress-wifi-allocator.service - Detects bands and updates configs at boot
+    #   2. fortress-hostapd-24ghz.service - 2.4GHz AP (depends on allocator)
+    #   3. fortress-hostapd-5ghz.service - 5GHz AP (depends on allocator)
+    #   4. fortress-hostapd.service - Combined service for backward compatibility
 
     local ovs_bridge="${OVS_BRIDGE_NAME:-fortress}"
+    local allocator_script="/opt/hookprobe/fortress/devices/common/wifi-band-allocator.sh"
 
-    # 2.4GHz service
+    # Install the allocator script
+    if [ -f "$SCRIPT_DIR/wifi-band-allocator.sh" ]; then
+        mkdir -p "$(dirname "$allocator_script")"
+        cp "$SCRIPT_DIR/wifi-band-allocator.sh" "$allocator_script"
+        chmod +x "$allocator_script"
+    fi
+
+    # Create WiFi band allocator service (runs before hostapd to detect bands)
+    cat > /etc/systemd/system/fortress-wifi-allocator.service << EOF
+[Unit]
+Description=HookProbe Fortress - WiFi Band Allocator
+# Run after network but before hostapd
+After=network.target
+Before=fortress-hostapd-24ghz.service fortress-hostapd-5ghz.service fortress-hostapd.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Wait for WiFi interfaces to appear, detect bands, update hostapd configs
+ExecStart=$allocator_script wait
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable fortress-wifi-allocator
+    log_info "Created service: fortress-wifi-allocator (detects bands at boot)"
+
+    # 2.4GHz service - now depends on allocator
     if [ -n "$NET_WIFI_24GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
         # Systemd device unit - waits for interface to exist before starting
         local dev_unit_24ghz="sys-subsystem-net-devices-${NET_WIFI_24GHZ_IFACE}.device"
@@ -243,9 +278,9 @@ create_wifi_services() {
         cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
-After=network.target openvswitch-switch.service ${dev_unit_24ghz}
+After=network.target fortress-wifi-allocator.service ${dev_unit_24ghz}
 Wants=network.target ${dev_unit_24ghz}
-Requires=openvswitch-switch.service
+Requires=fortress-wifi-allocator.service
 
 [Service]
 Type=forking
@@ -267,7 +302,7 @@ EOF
         log_info "Created service: fortress-hostapd-24ghz (waits for ${NET_WIFI_24GHZ_IFACE})"
     fi
 
-    # 5GHz service
+    # 5GHz service - now depends on allocator
     if [ -n "$NET_WIFI_5GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
         # Only create separate service if different interface
         if [ "$NET_WIFI_5GHZ_IFACE" != "$NET_WIFI_24GHZ_IFACE" ]; then
@@ -277,9 +312,9 @@ EOF
             cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
-After=network.target openvswitch-switch.service ${dev_unit_5ghz}
+After=network.target fortress-wifi-allocator.service ${dev_unit_5ghz}
 Wants=network.target ${dev_unit_5ghz}
-Requires=openvswitch-switch.service
+Requires=fortress-wifi-allocator.service
 
 [Service]
 Type=forking
@@ -308,8 +343,9 @@ EOF
     cat > /etc/systemd/system/fortress-hostapd.service << EOF
 [Unit]
 Description=HookProbe Fortress - WiFi Access Points (All Bands)
-After=network.target openvswitch-switch.service
+After=network.target fortress-wifi-allocator.service
 Wants=fortress-hostapd-24ghz.service fortress-hostapd-5ghz.service
+Requires=fortress-wifi-allocator.service
 
 [Service]
 Type=oneshot
