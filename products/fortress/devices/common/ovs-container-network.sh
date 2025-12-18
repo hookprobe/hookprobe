@@ -9,13 +9,16 @@
 #   - Per-tier internet isolation
 #
 # Network Tiers:
-#   - fortress-data    (10.250.200.0/24) - NO internet - postgres, redis
-#   - fortress-services (10.250.201.0/24) - internet OK - web, dnsxai, dfs
-#   - fortress-ml      (10.250.202.0/24) - NO internet - lstm-trainer
-#   - fortress-mgmt    (10.250.203.0/24) - NO internet - grafana, victoria
-#   - fortress-lan     (10.200.0.0/24)   - LAN clients + WiFi AP
+#   - fortress-data    (10.250.200.0/24)      - NO internet - postgres, redis
+#   - fortress-services (10.250.201.0/24)     - internet OK - web, dnsxai, dfs
+#   - fortress-ml      (10.250.202.0/24)      - NO internet - lstm-trainer
+#   - fortress-mgmt    (10.250.203.0/24)      - NO internet - grafana, victoria
+#   - fortress-lan     (10.200.0.0/MASK)      - LAN clients + WiFi AP
 #
-# Version: 5.3.0
+# LAN subnet is configurable via LAN_SUBNET_MASK environment variable
+# Supports /23 (510 devices) to /29 (6 devices), default is /23
+#
+# Version: 5.4.0
 # License: AGPL-3.0
 #
 
@@ -30,13 +33,32 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # OVS Bridge
 OVS_BRIDGE="${OVS_BRIDGE:-fortress}"
 
+# LAN subnet configuration (can be overridden by environment)
+# Supports /23 to /29 - defaults to /23 for maximum flexibility
+LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-23}"
+LAN_BASE_IP="10.200.0.1"
+
+# Calculate LAN CIDR based on subnet mask
+get_lan_cidr() {
+    case "$LAN_SUBNET_MASK" in
+        29) echo "10.200.0.0/29" ;;
+        28) echo "10.200.0.0/28" ;;
+        27) echo "10.200.0.0/27" ;;
+        26) echo "10.200.0.0/26" ;;
+        25) echo "10.200.0.0/25" ;;
+        24) echo "10.200.0.0/24" ;;
+        23) echo "10.200.0.0/23" ;;
+        *)  echo "10.200.0.0/23" ;;  # Default to /23
+    esac
+}
+
 # Container network tiers (OVS internal ports)
 declare -A TIER_CONFIG=(
     ["data"]="10.250.200.1/24:false"      # gateway:internet_allowed
     ["services"]="10.250.201.1/24:true"
     ["ml"]="10.250.202.1/24:false"
     ["mgmt"]="10.250.203.1/24:false"
-    ["lan"]="10.200.0.1/24:true"          # LAN clients need NAT
+    ["lan"]="${LAN_BASE_IP}/${LAN_SUBNET_MASK}:true"  # LAN clients need NAT
 )
 
 # Container IP assignments
@@ -230,6 +252,11 @@ add_wifi_interface() {
 install_openflow_rules() {
     log_section "Installing OpenFlow Rules"
 
+    # Get dynamic LAN CIDR based on configured subnet
+    local lan_cidr
+    lan_cidr=$(get_lan_cidr)
+    log_info "LAN CIDR: $lan_cidr (configurable via LAN_SUBNET_MASK=$LAN_SUBNET_MASK)"
+
     # Clear existing flows
     ovs-ofctl del-flows "$OVS_BRIDGE"
 
@@ -249,7 +276,7 @@ install_openflow_rules() {
     # DNS to dnsXai (redirect LAN DNS queries)
     local dnsxai_ip="${CONTAINER_IPS[dnsxai]}"
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_INGRESS,priority=800,udp,nw_src=10.200.0.0/24,tp_dst=53,actions=mod_nw_dst:$dnsxai_ip,resubmit(,$OF_TABLE_TIER_ISOLATION)"
+        "table=$OF_TABLE_INGRESS,priority=800,udp,nw_src=${lan_cidr},tp_dst=53,actions=mod_nw_dst:$dnsxai_ip,resubmit(,$OF_TABLE_TIER_ISOLATION)"
 
     # All other traffic - continue to tier isolation
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -278,9 +305,9 @@ install_openflow_rules() {
     ovs-ofctl add-flow "$OVS_BRIDGE" \
         "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.250.203.0/24,nw_dst=10.250.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
 
-    # LAN tier - can reach services and internet
+    # LAN tier - can reach services and internet (dynamic CIDR)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.200.0.0/24,actions=resubmit(,$OF_TABLE_INTERNET_CONTROL)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=${lan_cidr},actions=resubmit(,$OF_TABLE_INTERNET_CONTROL)"
 
     # Default: allow within same /16
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -297,9 +324,9 @@ install_openflow_rules() {
     ovs-ofctl add-flow "$OVS_BRIDGE" \
         "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=10.250.201.0/24,actions=resubmit(,$OF_TABLE_MIRROR)"
 
-    # LAN - allow internet (will be NATed)
+    # LAN - allow internet (will be NATed) - dynamic CIDR
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=10.200.0.0/24,actions=resubmit(,$OF_TABLE_MIRROR)"
+        "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=${lan_cidr},actions=resubmit(,$OF_TABLE_MIRROR)"
 
     # Block internet for other tiers
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -522,13 +549,17 @@ setup_nat() {
 
     log_section "Setting Up NAT"
 
+    # Get dynamic LAN CIDR
+    local lan_cidr
+    lan_cidr=$(get_lan_cidr)
+
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
 
-    # NAT for LAN clients
-    iptables -t nat -C POSTROUTING -s 10.200.0.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 10.200.0.0/24 -o "$wan_iface" -j MASQUERADE
+    # NAT for LAN clients (dynamic CIDR based on LAN_SUBNET_MASK)
+    iptables -t nat -C POSTROUTING -s "${lan_cidr}" -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s "${lan_cidr}" -o "$wan_iface" -j MASQUERADE
 
     # NAT for services tier (dnsxai needs upstream DNS)
     iptables -t nat -C POSTROUTING -s 10.250.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
@@ -541,7 +572,7 @@ setup_nat() {
     iptables -C FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-    log_info "NAT configured for LAN (10.200.0.0/24) and Services (10.250.201.0/24)"
+    log_info "NAT configured for LAN (${lan_cidr}) and Services (10.250.201.0/24)"
 }
 
 # ============================================================
@@ -554,18 +585,36 @@ setup_dhcp() {
     local lan_port="${OVS_BRIDGE}-lan"
     local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
 
+    # Use environment variables if set, otherwise use defaults based on subnet
+    local dhcp_start="${LAN_DHCP_START:-10.200.0.100}"
+    local dhcp_end="${LAN_DHCP_END:-10.200.1.200}"
+
+    # Calculate sensible defaults based on subnet mask if not explicitly set
+    if [ -z "${LAN_DHCP_START:-}" ]; then
+        case "$LAN_SUBNET_MASK" in
+            29) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.6" ;;
+            28) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.14" ;;
+            27) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.30" ;;
+            26) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.62" ;;
+            25) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.126" ;;
+            24) dhcp_start="10.200.0.100"; dhcp_end="10.200.0.200" ;;
+            23) dhcp_start="10.200.0.100"; dhcp_end="10.200.1.200" ;;
+        esac
+    fi
+
     mkdir -p "$(dirname "$config_file")"
 
     cat > "$config_file" << EOF
 # HookProbe Fortress DHCP Configuration (OVS)
 # Generated: $(date -Iseconds)
+# LAN Subnet: $(get_lan_cidr)
 
 # Bind to OVS LAN internal port
 interface=${lan_port}
 bind-interfaces
 
-# LAN DHCP range
-dhcp-range=10.200.0.100,10.200.0.200,12h
+# LAN DHCP range (configured for /${LAN_SUBNET_MASK} subnet)
+dhcp-range=${dhcp_start},${dhcp_end},12h
 
 # Gateway (this device via OVS port)
 dhcp-option=3,10.200.0.1
@@ -593,7 +642,7 @@ EOF
     # Restart dnsmasq
     systemctl restart dnsmasq 2>/dev/null || true
 
-    log_info "DHCP configured on $lan_port"
+    log_info "DHCP configured on $lan_port (range: ${dhcp_start} - ${dhcp_end})"
 }
 
 # ============================================================
@@ -688,8 +737,11 @@ cleanup_ovs_network() {
     # Delete bridge
     ovs-vsctl del-br "$OVS_BRIDGE" 2>/dev/null || true
 
-    # Remove NAT rules
-    iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
+    # Remove NAT rules for all possible LAN subnet sizes
+    # Try to remove each possible CIDR to ensure cleanup works regardless of configuration
+    for mask in 23 24 25 26 27 28 29; do
+        iptables -t nat -D POSTROUTING -s "10.200.0.0/${mask}" -j MASQUERADE 2>/dev/null || true
+    done
     iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
 
     # Remove DHCP config
@@ -903,11 +955,16 @@ Examples:
   $0 vxlan-peer mssp 203.0.113.1 2000
 
 Container Network Tiers:
-  data      10.250.200.0/24  postgres, redis (NO internet)
-  services  10.250.201.0/24  web, dnsxai, dfs (internet OK)
-  ml        10.250.202.0/24  lstm-trainer (NO internet)
-  mgmt      10.250.203.0/24  grafana, victoria (NO internet)
-  lan       10.200.0.0/24    WiFi/LAN clients (NAT to internet)
+  data      10.250.200.0/24      postgres, redis (NO internet)
+  services  10.250.201.0/24      web, dnsxai, dfs (internet OK)
+  ml        10.250.202.0/24      lstm-trainer (NO internet)
+  mgmt      10.250.203.0/24      grafana, victoria (NO internet)
+  lan       10.200.0.0/MASK      WiFi/LAN clients (NAT to internet)
+
+LAN Subnet Configuration:
+  Export LAN_SUBNET_MASK before calling init/nat/dhcp commands.
+  Supported values: 23 (510 devices), 24 (254), 25 (126), 26 (62), 27 (30), 28 (14), 29 (6)
+  Example: LAN_SUBNET_MASK=24 $0 init
 
 EOF
 }
