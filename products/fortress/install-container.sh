@@ -102,15 +102,40 @@ check_prerequisites() {
     fi
     log_info "Podman: $(podman --version)"
 
-    # podman-compose check
+    # podman-compose check (handle PEP 668 on modern Ubuntu/Debian)
     if ! command -v podman-compose &>/dev/null; then
         log_warn "podman-compose not found. Installing..."
-        pip3 install podman-compose || {
-            log_error "Failed to install podman-compose"
-            exit 1
-        }
+
+        # Method 1: Try apt (available on Ubuntu 23.04+)
+        if apt-get install -y podman-compose 2>/dev/null; then
+            log_info "podman-compose installed via apt"
+        # Method 2: Try pipx (recommended for PEP 668 systems)
+        elif command -v pipx &>/dev/null; then
+            pipx install podman-compose || {
+                log_error "Failed to install podman-compose via pipx"
+                exit 1
+            }
+            # Add pipx bin to PATH for this session
+            export PATH="$HOME/.local/bin:$PATH"
+        # Method 3: Install pipx first, then podman-compose
+        elif apt-get install -y pipx 2>/dev/null; then
+            pipx ensurepath
+            export PATH="$HOME/.local/bin:$PATH"
+            pipx install podman-compose || {
+                log_error "Failed to install podman-compose via pipx"
+                exit 1
+            }
+        # Method 4: pip with --break-system-packages (last resort)
+        else
+            log_warn "Using pip3 with --break-system-packages..."
+            pip3 install --break-system-packages podman-compose || {
+                log_error "Failed to install podman-compose"
+                log_error "Try: apt install pipx && pipx install podman-compose"
+                exit 1
+            }
+        fi
     fi
-    log_info "podman-compose: available"
+    log_info "podman-compose: $(podman-compose --version 2>/dev/null || echo 'available')"
 
     # Check for nftables (optional, for additional filtering)
     if command -v nft &>/dev/null; then
