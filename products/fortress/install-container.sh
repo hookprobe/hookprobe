@@ -274,6 +274,20 @@ copy_application_files() {
         fi
     done
 
+    # Create grafana provisioning directory (for monitoring profile)
+    mkdir -p "${INSTALL_DIR}/containers/grafana/provisioning"/{dashboards,datasources,alerting}
+    # Create basic datasource config for VictoriaMetrics
+    cat > "${INSTALL_DIR}/containers/grafana/provisioning/datasources/victoria.yml" << 'EOF'
+apiVersion: 1
+datasources:
+  - name: VictoriaMetrics
+    type: prometheus
+    access: proxy
+    url: http://10.250.203.11:8428
+    isDefault: true
+    editable: false
+EOF
+
     # Copy device profiles
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
@@ -627,7 +641,9 @@ create_systemd_service() {
     if [ "${INSTALL_ML:-false}" = true ]; then
         profile_flags="--profile full"
     fi
-    if [ "${INSTALL_MONITORING:-true}" = true ]; then
+    # Note: Monitoring profile (--profile monitoring) is optional and disabled by default
+    # Enable with INSTALL_MONITORING=true before running install
+    if [ "${INSTALL_MONITORING:-false}" = true ]; then
         profile_flags="$profile_flags --profile monitoring"
     fi
     profile_flags=$(echo "$profile_flags" | xargs)  # trim whitespace
