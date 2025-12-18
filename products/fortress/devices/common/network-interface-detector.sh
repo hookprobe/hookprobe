@@ -511,25 +511,28 @@ detect_wifi_radio_capabilities() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Try multiple methods to get PHY info
+    # Try multiple methods to get PHY info for THIS SPECIFIC phy only
     # Note: All iw commands use "|| true" to prevent script exit with set -e
-    # IMPORTANT: Use "iw phy" (no args) then grep - "iw phy <name>" doesn't work on some drivers
+    # CRITICAL: Never use full "iw phy" or "iw list" output - it contains ALL phys
+    #           and would make single-band radios appear as dual-band!
 
-    # Method 1: Use "iw phy" and extract section for our phy
-    log_info "  Querying iw phy for $phy..."
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    # Method 1: Use "iw phy <name> info" - the proper way
+    log_info "  Querying iw phy $phy info..."
+    phy_info=$(iw phy "$phy" info 2>/dev/null) || true
 
-    # Method 2: If that didn't work, try full iw phy output
+    # Method 2: If that didn't work, extract section from "iw phy" output
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        log_info "  Using full iw phy output..."
-        phy_info=$(iw phy 2>/dev/null) || true
+        log_info "  Trying to extract $phy section from iw phy..."
+        # Use awk for more robust section extraction
+        phy_info=$(iw phy 2>/dev/null | awk "/^Wiphy $phy\$/,/^Wiphy /" | head -n -1) || true
+        # If only one phy exists, head -n -1 might remove too much, try without it
+        if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+            phy_info=$(iw phy 2>/dev/null | awk "/^Wiphy $phy\$/,/^Wiphy /") || true
+        fi
     fi
 
-    # Method 3: Try iw list as fallback
-    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        log_info "  Trying iw list..."
-        phy_info=$(iw list 2>/dev/null) || true
-    fi
+    # Method 3: Do NOT fall back to full iw phy/iw list - that would mix all phys!
+    # Instead, we'll rely on driver-based detection below if phy_info is empty
 
     # Check if we got any frequency data
     if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
