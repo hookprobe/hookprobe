@@ -51,7 +51,7 @@ NC='\033[0m'
 # ============================================================
 # CONFIGURATION
 # ============================================================
-OVS_BRIDGE_NAME="fortress"
+OVS_BRIDGE_NAME="43ess"
 OVS_BRIDGE_SUBNET="10.250.0.0/24"
 MACSEC_ENABLED=false
 ENABLE_MESH="${ENABLE_MESH:-false}"
@@ -1037,7 +1037,7 @@ fi
 
 source "$CONFIG_FILE"
 
-BRIDGE="${BRIDGE_NAME:-fortress}"
+BRIDGE="${BRIDGE_NAME:-43ess}"
 LAN_PORTS="${LAN_INTERFACES:-}"
 
 if [ -z "$LAN_PORTS" ]; then
@@ -2486,7 +2486,7 @@ setup_openflow_rules() {
 #!/bin/bash
 # HookProbe OpenFlow Monitoring
 
-OVS_BRIDGE="${1:-fortress}"
+OVS_BRIDGE="${1:-43ess}"
 
 case "${2:-status}" in
     flows)

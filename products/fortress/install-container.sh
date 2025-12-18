@@ -611,7 +611,7 @@ setup_network() {
     log_info "Initializing OVS network fabric..."
     if [ -f "$ovs_script" ]; then
         # Export configuration for OVS script
-        export OVS_BRIDGE="fortress"
+        export OVS_BRIDGE="43ess"
         export LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
         # Initialize OVS bridge with all tiers
