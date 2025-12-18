@@ -17,7 +17,7 @@
 #   ./install-container.sh --quick      # Quick install with defaults
 #   ./install-container.sh --uninstall  # Complete removal
 #
-# Version: 5.2.0
+# Version: 5.4.0
 # License: AGPL-3.0
 
 set -e
@@ -57,7 +57,7 @@ show_banner() {
  |  _  | (_) | (_) |   <|  __/| | | (_) | |_) |  __/
  |_| |_|\___/ \___/|_|\_\_|   |_|  \___/|_.__/ \___|
 
-           F O R T R E S S   v5.2.0
+           F O R T R E S S   v5.3.0
        Container-based Security Gateway
 EOF
     echo -e "${NC}"
@@ -141,109 +141,205 @@ check_prerequisites() {
 }
 
 # ============================================================
-# CONFIGURATION PROMPTS
+# CONFIGURATION - Environment Variables & Non-Interactive Mode
 # ============================================================
+#
+# This installer supports configuration via environment variables
+# (set by the root install.sh) or interactive prompts.
+#
+# Environment Variables (from root installer):
+#   WIFI_SSID / FORTRESS_WIFI_SSID     - WiFi network name
+#   WIFI_PASSWORD / FORTRESS_WIFI_PASSWORD - WiFi password
+#   FORTRESS_NETWORK_PREFIX            - Subnet mask (e.g., "23" or "/23")
+#   ADMIN_USER                         - Admin username (default: admin)
+#   ADMIN_PASS                         - Admin password (auto-generated if not set)
+#   WEB_PORT                           - Web UI port (default: 8443)
+#   NETWORK_MODE                       - filter or vlan (default: filter)
+#   NON_INTERACTIVE                    - Set to skip all prompts
+#
+# ============================================================
+
+# Helper to set subnet DHCP ranges based on mask
+set_subnet_ranges() {
+    local mask="$1"
+    case "$mask" in
+        29) LAN_SUBNET_MASK="29"; LAN_DHCP_START="10.200.0.2"; LAN_DHCP_END="10.200.0.6" ;;
+        28) LAN_SUBNET_MASK="28"; LAN_DHCP_START="10.200.0.2"; LAN_DHCP_END="10.200.0.14" ;;
+        27) LAN_SUBNET_MASK="27"; LAN_DHCP_START="10.200.0.10"; LAN_DHCP_END="10.200.0.30" ;;
+        26) LAN_SUBNET_MASK="26"; LAN_DHCP_START="10.200.0.10"; LAN_DHCP_END="10.200.0.62" ;;
+        25) LAN_SUBNET_MASK="25"; LAN_DHCP_START="10.200.0.10"; LAN_DHCP_END="10.200.0.126" ;;
+        24) LAN_SUBNET_MASK="24"; LAN_DHCP_START="10.200.0.100"; LAN_DHCP_END="10.200.0.200" ;;
+        *)  LAN_SUBNET_MASK="23"; LAN_DHCP_START="10.200.0.100"; LAN_DHCP_END="10.200.1.200" ;;
+    esac
+}
+
 collect_configuration() {
     log_step "Configuration"
 
-    # Network mode selection
-    echo ""
-    echo "Network Segmentation Mode:"
-    echo "  1) filter  - nftables-based per-device filtering (simpler, recommended)"
-    echo "  2) vlan    - OVS VLAN-based segmentation (requires OVS setup)"
-    echo ""
-    read -p "Select mode [1]: " mode_choice
-    case "${mode_choice:-1}" in
-        2|vlan)
-            NETWORK_MODE="vlan"
-            ;;
-        *)
-            NETWORK_MODE="filter"
-            ;;
-    esac
-    log_info "Network mode: $NETWORK_MODE"
-
     # Security services are ALWAYS installed (core backbone of HookProbe mesh)
-    # QSecBit, dnsXai, DFS intelligence are not optional
     INSTALL_ML=true
     BUILD_ML_CONTAINERS=true
 
-    # LAN subnet configuration
-    echo ""
-    echo "LAN Subnet Size:"
-    echo "  1) /24 - 254 devices (10.200.0.0/24) - recommended for most"
-    echo "  2) /26 - 62 devices  (10.200.0.0/26) - small office"
-    echo "  3) /28 - 14 devices  (10.200.0.0/28) - very small"
-    echo ""
-    read -p "Select subnet [1]: " subnet_choice
-    case "${subnet_choice:-1}" in
-        2)
-            LAN_SUBNET_MASK="26"
-            LAN_DHCP_START="10.200.0.10"
-            LAN_DHCP_END="10.200.0.62"
-            ;;
-        3)
-            LAN_SUBNET_MASK="28"
-            LAN_DHCP_START="10.200.0.2"
-            LAN_DHCP_END="10.200.0.14"
-            ;;
-        *)
-            LAN_SUBNET_MASK="24"
-            LAN_DHCP_START="10.200.0.100"
-            LAN_DHCP_END="10.200.0.200"
-            ;;
-    esac
-    log_info "LAN subnet: 10.200.0.0/$LAN_SUBNET_MASK"
+    # ============================================================
+    # Check for environment variables from root installer first
+    # ============================================================
 
-    # Admin password
-    echo ""
-    echo "Admin Portal Access:"
-    read -p "Admin username [admin]: " ADMIN_USER
+    # WiFi - check both naming conventions
+    if [ -n "${WIFI_SSID:-}" ]; then
+        : # Already set
+    elif [ -n "${FORTRESS_WIFI_SSID:-}" ]; then
+        WIFI_SSID="$FORTRESS_WIFI_SSID"
+    fi
+
+    if [ -n "${WIFI_PASSWORD:-}" ]; then
+        : # Already set
+    elif [ -n "${FORTRESS_WIFI_PASSWORD:-}" ]; then
+        WIFI_PASSWORD="$FORTRESS_WIFI_PASSWORD"
+    fi
+
+    # Network prefix - normalize (remove leading /)
+    if [ -n "${FORTRESS_NETWORK_PREFIX:-}" ]; then
+        local prefix="${FORTRESS_NETWORK_PREFIX#/}"
+        set_subnet_ranges "$prefix"
+    fi
+
+    # Other defaults from environment
+    NETWORK_MODE="${NETWORK_MODE:-filter}"
     ADMIN_USER="${ADMIN_USER:-admin}"
-
-    while true; do
-        read -sp "Admin password (min 8 chars): " ADMIN_PASS
-        echo ""
-        if [ ${#ADMIN_PASS} -lt 8 ]; then
-            log_warn "Password must be at least 8 characters"
-            continue
-        fi
-        read -sp "Confirm password: " ADMIN_PASS_CONFIRM
-        echo ""
-        if [ "$ADMIN_PASS" != "$ADMIN_PASS_CONFIRM" ]; then
-            log_warn "Passwords do not match"
-            continue
-        fi
-        break
-    done
-
-    # WiFi configuration
-    echo ""
-    echo "WiFi Access Point:"
-    read -p "WiFi SSID [HookProbe-Fortress]: " WIFI_SSID
-    WIFI_SSID="${WIFI_SSID:-HookProbe-Fortress}"
-
-    while true; do
-        read -sp "WiFi password (min 8 chars, or press Enter for random): " WIFI_PASSWORD
-        echo ""
-        if [ -z "$WIFI_PASSWORD" ]; then
-            WIFI_PASSWORD=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
-            log_info "Generated random WiFi password"
-            break
-        elif [ ${#WIFI_PASSWORD} -lt 8 ]; then
-            log_warn "Password must be at least 8 characters"
-            continue
-        else
-            break
-        fi
-    done
-
-    # Port configuration
-    echo ""
-    read -p "Web UI port [8443]: " WEB_PORT
     WEB_PORT="${WEB_PORT:-8443}"
 
-    # Confirm
+    # ============================================================
+    # Non-interactive mode - use defaults/env vars, no prompts
+    # ============================================================
+    if [ "${NON_INTERACTIVE:-false}" = true ]; then
+        log_info "Non-interactive mode - using environment variables and defaults"
+
+        # Set remaining defaults if not already set
+        WIFI_SSID="${WIFI_SSID:-HookProbe-Fortress}"
+        if [ -z "${WIFI_PASSWORD:-}" ]; then
+            WIFI_PASSWORD=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
+            log_info "Generated random WiFi password"
+        fi
+        if [ -z "${ADMIN_PASS:-}" ]; then
+            ADMIN_PASS=$(openssl rand -base64 16 | tr -d '/+=' | head -c 16)
+            log_info "Generated random admin password"
+        fi
+        if [ -z "${LAN_SUBNET_MASK:-}" ]; then
+            set_subnet_ranges "23"
+        fi
+
+        # Show configuration summary
+        log_info "Configuration:"
+        log_info "  Network Mode:  $NETWORK_MODE"
+        log_info "  LAN Subnet:    10.200.0.0/$LAN_SUBNET_MASK"
+        log_info "  Admin User:    $ADMIN_USER"
+        log_info "  WiFi SSID:     $WIFI_SSID"
+        log_info "  Web Port:      $WEB_PORT"
+        return 0
+    fi
+
+    # ============================================================
+    # Interactive mode - prompt for any missing configuration
+    # ============================================================
+
+    # Network mode (only if not set)
+    if [ -z "${NETWORK_MODE:-}" ] || [ "$NETWORK_MODE" = "filter" ]; then
+        echo ""
+        echo "Network Segmentation Mode:"
+        echo "  1) filter  - nftables-based per-device filtering (simpler, recommended)"
+        echo "  2) vlan    - OVS VLAN-based segmentation (advanced)"
+        echo ""
+        read -p "Select mode [1]: " mode_choice
+        case "${mode_choice:-1}" in
+            2|vlan) NETWORK_MODE="vlan" ;;
+            *) NETWORK_MODE="filter" ;;
+        esac
+    fi
+    log_info "Network mode: $NETWORK_MODE"
+
+    # LAN subnet (only if not set via FORTRESS_NETWORK_PREFIX)
+    if [ -z "${LAN_SUBNET_MASK:-}" ]; then
+        echo ""
+        echo -e "${BOLD}NETWORK SIZE CONFIGURATION${NC}"
+        echo ""
+        echo "Select the network size based on expected number of devices:"
+        echo ""
+        echo "  1) /29 -   6 devices  (10.200.0.0/29)  - very small office"
+        echo "  2) /28 -  14 devices  (10.200.0.0/28)  - small office"
+        echo "  3) /27 -  30 devices  (10.200.0.0/27)  - small business"
+        echo "  4) /26 -  62 devices  (10.200.0.0/26)  - medium business"
+        echo "  5) /25 - 126 devices  (10.200.0.0/25)  - larger office"
+        echo "  6) /24 - 254 devices  (10.200.0.0/24)  - large network"
+        echo "  7) /23 - 510 devices  (10.200.0.0/23)  - default (recommended)"
+        echo ""
+        read -p "Select subnet [7]: " subnet_choice
+        set_subnet_ranges "${subnet_choice:-7}"
+    fi
+    log_info "LAN subnet: 10.200.0.0/$LAN_SUBNET_MASK (DHCP: $LAN_DHCP_START - $LAN_DHCP_END)"
+
+    # Admin credentials (only if not set)
+    if [ -z "${ADMIN_PASS:-}" ]; then
+        echo ""
+        echo "Admin Portal Access:"
+        read -p "Admin username [${ADMIN_USER}]: " admin_input
+        ADMIN_USER="${admin_input:-$ADMIN_USER}"
+
+        while true; do
+            read -sp "Admin password (min 8 chars): " ADMIN_PASS
+            echo ""
+            if [ ${#ADMIN_PASS} -lt 8 ]; then
+                log_warn "Password must be at least 8 characters"
+                continue
+            fi
+            read -sp "Confirm password: " ADMIN_PASS_CONFIRM
+            echo ""
+            if [ "$ADMIN_PASS" != "$ADMIN_PASS_CONFIRM" ]; then
+                log_warn "Passwords do not match"
+                continue
+            fi
+            break
+        done
+    else
+        log_info "Admin user: $ADMIN_USER (password from environment)"
+    fi
+
+    # WiFi configuration (only if not set)
+    if [ -z "${WIFI_SSID:-}" ]; then
+        echo ""
+        echo "WiFi Access Point:"
+        read -p "WiFi SSID [HookProbe-Fortress]: " WIFI_SSID
+        WIFI_SSID="${WIFI_SSID:-HookProbe-Fortress}"
+    else
+        log_info "WiFi SSID: $WIFI_SSID (from environment)"
+    fi
+
+    if [ -z "${WIFI_PASSWORD:-}" ]; then
+        while true; do
+            read -sp "WiFi password (min 8 chars, or press Enter for random): " WIFI_PASSWORD
+            echo ""
+            if [ -z "$WIFI_PASSWORD" ]; then
+                WIFI_PASSWORD=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
+                log_info "Generated random WiFi password"
+                break
+            elif [ ${#WIFI_PASSWORD} -lt 8 ]; then
+                log_warn "Password must be at least 8 characters"
+                continue
+            else
+                break
+            fi
+        done
+    else
+        log_info "WiFi password: (from environment)"
+    fi
+
+    # Web port (only if not already customized)
+    if [ "$WEB_PORT" = "8443" ]; then
+        echo ""
+        read -p "Web UI port [8443]: " port_input
+        WEB_PORT="${port_input:-8443}"
+    fi
+
+    # Confirm installation
     echo ""
     echo "Installation Summary:"
     echo "====================="
@@ -411,7 +507,7 @@ create_configuration() {
 
 # Deployment mode
 FORTRESS_MODE=container
-FORTRESS_VERSION=5.0.0
+FORTRESS_VERSION=5.4.0
 
 # Network mode (vlan or filter)
 NETWORK_MODE=${NETWORK_MODE}
@@ -848,7 +944,7 @@ save_installation_state() {
     cat > "$STATE_FILE" << EOF
 {
     "deployment_mode": "container",
-    "version": "5.2.0",
+    "version": "5.4.0",
     "installed_at": "$(date -Iseconds)",
     "network_mode": "${NETWORK_MODE}",
     "security_core": true,
@@ -1019,8 +1115,10 @@ uninstall() {
     # Remove nftables rules if any
     nft delete table inet fortress_filter 2>/dev/null || true
 
-    # Remove NAT rules
-    iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
+    # Remove NAT rules - try all possible LAN subnet sizes
+    for mask in 23 24 25 26 27 28 29; do
+        iptables -t nat -D POSTROUTING -s 10.200.0.0/$mask -j MASQUERADE 2>/dev/null || true
+    done
     iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o fortress -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
@@ -1098,10 +1196,10 @@ quick_install() {
     BUILD_ML_CONTAINERS=true
     WIFI_SSID="HookProbe-Fortress"
     WIFI_PASSWORD="hookprobe123"
-    # Subnet defaults
-    LAN_SUBNET_MASK="24"
+    # Subnet defaults - /23 for maximum flexibility (510 devices)
+    LAN_SUBNET_MASK="23"
     LAN_DHCP_START="10.200.0.100"
-    LAN_DHCP_END="10.200.0.200"
+    LAN_DHCP_END="10.200.1.200"
 
     log_warn "Quick install with default credentials"
     log_warn "Admin: admin / hookprobe - CHANGE THIS IMMEDIATELY!"
@@ -1112,52 +1210,109 @@ quick_install() {
 # MAIN
 # ============================================================
 main() {
+    # Parse all arguments first
+    local do_uninstall=false
+    local do_quick=false
+    local preserve_data=false
+    local uninstall_args=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --uninstall|uninstall|remove)
+                do_uninstall=true
+                ;;
+            --quick|quick)
+                do_quick=true
+                ;;
+            --non-interactive)
+                NON_INTERACTIVE=true
+                export NON_INTERACTIVE
+                ;;
+            --preserve-data)
+                preserve_data=true
+                ;;
+            --keep-data|--keep-config|--purge)
+                uninstall_args="$uninstall_args $1"
+                ;;
+            --enable-monitoring)
+                export INSTALL_MONITORING=true
+                ;;
+            --enable-n8n)
+                # n8n addon - handled separately
+                ;;
+            --enable-clickhouse)
+                # ClickHouse addon - handled separately
+                ;;
+            --enable-remote-access)
+                # Cloudflare tunnel - config already saved by root installer
+                ;;
+            --enable-lte)
+                # LTE failover - handled by network scripts
+                ;;
+            --lte-apn|--lte-auth|--lte-user|--lte-pass)
+                # Skip LTE config args (followed by value)
+                shift
+                ;;
+            --help|help|-h)
+                echo "Usage: $0 [options]"
+                echo ""
+                echo "Installation Options:"
+                echo "  (none)              Interactive installation"
+                echo "  --quick             Quick install with defaults"
+                echo "  --non-interactive   Use environment variables, no prompts"
+                echo "  --preserve-data     Reinstall using existing data volumes"
+                echo ""
+                echo "Environment Variables (for --non-interactive):"
+                echo "  WIFI_SSID           WiFi network name"
+                echo "  WIFI_PASSWORD       WiFi password"
+                echo "  FORTRESS_NETWORK_PREFIX  Subnet mask (e.g., 23)"
+                echo "  ADMIN_USER          Admin username"
+                echo "  ADMIN_PASS          Admin password"
+                echo "  WEB_PORT            Web UI port"
+                echo ""
+                echo "Uninstall Options:"
+                echo "  --uninstall              Remove Fortress"
+                echo "  --uninstall --keep-data  Remove but preserve database"
+                echo "  --uninstall --keep-config Remove but preserve config"
+                echo "  --uninstall --purge      Remove everything"
+                echo ""
+                echo "Upgrade (use fortress-ctl for advanced operations):"
+                echo "  fortress-ctl upgrade --app   Hot upgrade application only"
+                echo "  fortress-ctl upgrade --full  Full system upgrade"
+                echo "  fortress-ctl backup          Create backup"
+                echo "  fortress-ctl status          Show status"
+                echo ""
+                exit 0
+                ;;
+            *)
+                # Ignore unknown arguments
+                ;;
+        esac
+        shift
+    done
+
     show_banner
 
-    case "${1:-}" in
-        --uninstall|uninstall|remove)
-            shift || true
-            check_prerequisites
-            uninstall "$@"
-            exit 0
-            ;;
-        --quick|quick)
-            check_prerequisites
-            quick_install
-            ;;
-        --preserve-data)
-            check_prerequisites
-            log_info "Reinstalling with preserved data..."
-            PRESERVE_DATA=true
-            collect_configuration
-            ;;
-        --help|help|-h)
-            echo "Usage: $0 [options]"
-            echo ""
-            echo "Installation Options:"
-            echo "  (none)          Interactive installation"
-            echo "  --quick         Quick install with defaults"
-            echo "  --preserve-data Reinstall using existing data volumes"
-            echo ""
-            echo "Uninstall Options:"
-            echo "  --uninstall              Remove Fortress"
-            echo "  --uninstall --keep-data  Remove but preserve database"
-            echo "  --uninstall --keep-config Remove but preserve config"
-            echo "  --uninstall --purge      Remove everything"
-            echo ""
-            echo "Upgrade (use fortress-ctl for advanced operations):"
-            echo "  fortress-ctl upgrade --app   Hot upgrade application only"
-            echo "  fortress-ctl upgrade --full  Full system upgrade"
-            echo "  fortress-ctl backup          Create backup"
-            echo "  fortress-ctl status          Show status"
-            echo ""
-            exit 0
-            ;;
-        *)
-            check_prerequisites
-            collect_configuration
-            ;;
-    esac
+    # Handle uninstall
+    if [ "$do_uninstall" = true ]; then
+        check_prerequisites
+        uninstall $uninstall_args
+        exit 0
+    fi
+
+    # Handle quick install
+    if [ "$do_quick" = true ]; then
+        check_prerequisites
+        quick_install
+    elif [ "$preserve_data" = true ]; then
+        check_prerequisites
+        log_info "Reinstalling with preserved data..."
+        PRESERVE_DATA=true
+        collect_configuration
+    else
+        check_prerequisites
+        collect_configuration
+    fi
 
     # Run installation
     create_directories
