@@ -90,18 +90,20 @@ if [ ! -f "${FORTRESS_CONFIG_DIR}/users.json" ]; then
     log_warn "No users.json found - creating default admin user"
     if [ -w "${FORTRESS_CONFIG_DIR}" ]; then
         # Default admin password: hookprobe (must be changed!)
+        # Format: dict keyed by user ID (expected by models.py)
         cat > "${FORTRESS_CONFIG_DIR}/users.json" << 'EOF'
 {
-  "users": [
-    {
-      "id": "admin",
-      "username": "admin",
+  "users": {
+    "admin": {
       "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X.rN3vyJIg3.5lE7K",
       "role": "admin",
       "created_at": "2025-01-01T00:00:00Z",
-      "email": "admin@localhost"
+      "email": "admin@localhost",
+      "display_name": "Administrator",
+      "is_active": true
     }
-  ]
+  },
+  "version": "1.0"
 }
 EOF
         log_warn "Default admin user created - LOGIN: admin / hookprobe"
