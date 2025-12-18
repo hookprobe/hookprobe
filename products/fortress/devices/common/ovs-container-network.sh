@@ -180,11 +180,13 @@ create_tier_ports() {
         if ! ovs-vsctl port-to-br "$port_name" &>/dev/null; then
             log_info "Creating internal port: $port_name ($gateway)"
 
-            # Try to create internal port - may fail if OVS kernel module doesn't support it
-            if ! ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
-                -- set interface "$port_name" type=internal 2>/dev/null; then
+            # Try to create internal port - capture any errors for diagnostics
+            local ovs_error
+            if ! ovs_error=$(ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
+                -- set interface "$port_name" type=internal 2>&1); then
 
                 log_error "Failed to create OVS internal port: $port_name"
+                log_error "OVS error: $ovs_error"
                 log_error "This usually means the OVS kernel module is not loaded or incompatible."
                 log_error "Try: modprobe openvswitch"
                 log_error "Or check: dmesg | grep -i openvswitch"
@@ -193,19 +195,33 @@ create_tier_ports() {
                 log_error "See: products/fortress/devices/common/bridge-manager.sh"
                 return 1
             fi
+
+            # Verify port was added to OVS
+            if ! ovs-vsctl port-to-br "$port_name" &>/dev/null; then
+                log_error "OVS port $port_name not found after creation"
+                log_error "OVS ports: $(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null)"
+                return 1
+            fi
+
+            # Give OVS time to create the kernel interface
+            # This is especially important when creating multiple ports rapidly
+            sleep 1
         fi
 
         # Assign IP to internal port
-        # Wait briefly for OVS to create the interface in the kernel
-        local retries=5
+        # Wait for OVS to create the kernel interface (can take a moment)
+        local retries=20
         while [ $retries -gt 0 ]; do
-            if ip link set "$port_name" up 2>/dev/null; then
-                break
+            # Check if interface exists in kernel
+            if ip link show "$port_name" &>/dev/null; then
+                ip link set "$port_name" up 2>/dev/null && break
             fi
             retries=$((retries - 1))
             if [ $retries -eq 0 ]; then
                 log_error "Failed to bring up port: $port_name"
-                log_error "Interface may not have been created. Check: ip link show $port_name"
+                log_error "Interface not found in kernel after 5 seconds"
+                log_error "OVS interface state: $(ovs-vsctl get interface "$port_name" admin_state 2>/dev/null || echo 'unknown')"
+                log_error "Kernel interfaces: $(ip link show 2>/dev/null | grep -E "^[0-9]+:" | head -20)"
                 return 1
             fi
             sleep 0.5
