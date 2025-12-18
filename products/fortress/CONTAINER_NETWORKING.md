@@ -1,6 +1,6 @@
 # Fortress Container Network Architecture
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-12-18
 
 ---
@@ -53,10 +53,23 @@ ISSUES:
 
 | Network | Subnet | Purpose | Internet | Encryption |
 |---------|--------|---------|----------|------------|
-| **fortress-data** | 10.250.200.0/24 | PostgreSQL, Redis (sensitive) | NO | Internal only |
-| **fortress-services** | 10.250.201.0/24 | Web, dnsXai, DFS (services) | Limited | WireGuard mesh |
-| **fortress-ml** | 10.250.202.0/24 | QSecBit, ML inference | NO | WireGuard mesh |
-| **fortress-mgmt** | 10.250.203.0/24 | Monitoring (Grafana, Victoria) | NO | Internal only |
+| **fortress-data** | 10.250.200.0/24 | PostgreSQL, Redis (sensitive) | NO | TLS (PostgreSQL SSL, Redis AUTH) |
+| **fortress-services** | 10.250.201.0/24 | Web, dnsXai, DFS (services) | Limited | TLS + HTP for mesh participation |
+| **fortress-ml** | 10.250.202.0/24 | QSecBit, ML inference | NO | Internal isolation |
+| **fortress-mgmt** | 10.250.203.0/24 | Monitoring (Grafana, Victoria) | NO | Internal isolation |
+
+### Security Model
+
+**Intra-Host Communication** (container-to-container on same Fortress):
+- Network isolation via internal podman bridges
+- TLS for database connections (PostgreSQL SSL, Redis with password)
+- Firewall rules (nftables) for port-level access control
+
+**Inter-Node Communication** (Fortress-to-Fortress, Fortress-to-Guardian):
+- **HTP** - HookProbe Transport Protocol with post-quantum Kyber KEM
+- **DSM** - Decentralized Security Mesh for consensus and validation
+- **Neuro** - Neural Resonance Protocol for keyless authentication
+- QSecBit agent participates in mesh via host network
 
 ### Container Network Access Matrix
 
@@ -81,10 +94,11 @@ ISSUES:
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                    FORTRESS-DATA (10.250.200.0/24)                   │   │
 │  │                    internal=true (NO internet)                       │   │
+│  │                    PostgreSQL SSL + Redis AUTH                       │   │
 │  │  ┌─────────────┐            ┌─────────────┐                         │   │
 │  │  │  postgres   │            │    redis    │                         │   │
 │  │  │ .200.10     │            │  .200.11    │                         │   │
-│  │  │ :5432       │            │  :6379      │                         │   │
+│  │  │ :5432 (SSL) │            │  :6379      │                         │   │
 │  │  └──────┬──────┘            └──────┬──────┘                         │   │
 │  │         │                          │                                 │   │
 │  └─────────┼──────────────────────────┼─────────────────────────────────┘   │
@@ -93,7 +107,7 @@ ISSUES:
 │            ▼                          ▼                                      │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                  FORTRESS-SERVICES (10.250.201.0/24)                 │   │
-│  │                  WireGuard encrypted mesh                            │   │
+│  │                  TLS encrypted, HTP mesh participation               │   │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │   │
 │  │  │    web      │  │   dnsxai    │  │     dfs     │                  │   │
 │  │  │ .201.10     │  │  .201.11    │  │   .201.12   │                  │   │
@@ -112,6 +126,7 @@ ISSUES:
 │  │  ┌───────────────────────────────────────────────────────────────┐  │   │
 │  │  │                    qsecbit-agent                               │  │   │
 │  │  │                    network_mode: host (traffic capture)        │  │   │
+│  │  │                    Participates in HTP/DSM/Neuro mesh          │  │   │
 │  │  │                    Reads: eth0, wlan0, fortress bridge         │  │   │
 │  │  └───────────────────────────────────────────────────────────────┘  │   │
 │  │                                                                      │   │
@@ -146,6 +161,14 @@ ISSUES:
 │                                       │  (DNS queries forwarded)       │   │
 │                                       └─────────────────────────────────┘   │
 │                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                     HTP/DSM/NEURO MESH                               │   │
+│  │  QSecBit agent (host network) participates in:                       │   │
+│  │  - HTP: Post-quantum encrypted transport (Kyber KEM + ChaCha20)     │   │
+│  │  - DSM: Threat consensus with other nodes (BLS signatures)          │   │
+│  │  - Neuro: Neural resonance authentication (keyless)                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -153,54 +176,51 @@ ISSUES:
 
 ## Implementation
 
-### 1. Network Encryption Options
+### 1. Security Layers
 
-#### Option A: WireGuard Mesh (Recommended)
+#### Intra-Host: TLS + Network Isolation
 
-```yaml
-# Container runs WireGuard sidecar for encrypted communication
-services:
-  web:
-    networks:
-      fortress-services:
-        ipv4_address: 10.250.201.10
-    # WireGuard key exchange via shared volume
-    volumes:
-      - wireguard_keys:/etc/wireguard:ro
-```
-
-**Pros**: Strong encryption, low latency, kernel-level performance
-**Cons**: Requires WireGuard kernel module on host
-
-#### Option B: Container-level TLS
+For container-to-container communication within the same Fortress:
 
 ```yaml
-# Each service uses TLS for inter-container communication
+# PostgreSQL with SSL
 services:
   postgres:
     environment:
       POSTGRES_SSL: "on"
       POSTGRES_SSL_CERT_FILE: /certs/server.crt
       POSTGRES_SSL_KEY_FILE: /certs/server.key
+    volumes:
+      - postgres_certs:/certs:ro
+
+# Redis with password authentication
+  redis:
+    command: >
+      redis-server
+      --requirepass "${REDIS_PASSWORD}"
+      --appendonly yes
 ```
 
-**Pros**: No kernel module needed, standard TLS
-**Cons**: Higher latency, more complex cert management
+**Pros**: Standard, well-supported, no external dependencies
+**Cons**: Certificate management required
 
-#### Option C: VXLAN with IPsec (Enterprise)
+#### Inter-Node: HTP/DSM/Neuro Stack
 
-```yaml
-# VXLAN overlay with IPsec encryption
-networks:
-  fortress-data:
-    driver: macvlan
-    driver_opts:
-      parent: vxlan100
-      mode: bridge
+For communication between Fortress nodes and other HookProbe devices:
+
+```python
+# QSecBit agent uses HTP for mesh communication
+from core.htp.transport import HTPTransport
+from shared.dsm.consensus import ConsensusEngine
+from core.neuro.identity import HardwareFingerprint
+
+# Threat intelligence propagation uses DSM
+dsm_node.create_microblock(event_type='threat_intel', payload=threat.to_bytes())
+
+# Authentication via Neuro (keyless)
+fingerprint = HardwareFingerprint.generate()
+posf_signature = neuro_engine.sign(message, fingerprint)
 ```
-
-**Pros**: Network-level isolation, VXLAN segmentation
-**Cons**: Complex setup, requires OVS integration
 
 ---
 
@@ -295,8 +315,10 @@ services:
       - "8050:8050"
 
   qsecbit-agent:
-    network_mode: host  # REQUIRED for traffic capture
-    # Uses host network to see all traffic
+    network_mode: host  # REQUIRED for traffic capture + HTP mesh
+    # Uses host network to:
+    # 1. Capture traffic on all interfaces
+    # 2. Participate in HTP/DSM/Neuro mesh with other nodes
 
   grafana:
     networks:
@@ -406,12 +428,52 @@ table inet fortress_containers {
 
 ---
 
+## HookProbe Security Stack Integration
+
+### QSecBit Agent - Mesh Participant
+
+The QSecBit agent runs with `network_mode: host` to:
+
+1. **Traffic Capture**: Monitor all network interfaces (eth0, wlan0, br-fortress)
+2. **HTP Mesh**: Participate in encrypted mesh communication with other nodes
+3. **DSM Consensus**: Create microblocks for threat intelligence propagation
+4. **Neuro Auth**: Keyless authentication via neural resonance
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    QSECBIT AGENT (HOST NETWORK)                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │    HTP      │  │    DSM      │  │   NEURO     │             │
+│  │  Transport  │  │  Consensus  │  │   Auth      │             │
+│  │ (Kyber KEM) │  │ (BLS sigs)  │  │ (Keyless)   │             │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
+│         │                │                │                      │
+│         └────────────────┼────────────────┘                      │
+│                          │                                       │
+│                  ┌───────▼───────┐                              │
+│                  │ Threat Intel  │                              │
+│                  │ Propagation   │                              │
+│                  └───────────────┘                              │
+│                          │                                       │
+│  ┌───────────────────────▼───────────────────────────────────┐  │
+│  │              OTHER HOOKPROBE NODES                         │  │
+│  │  Guardian ←→ Fortress ←→ Nexus ←→ MSSP                    │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Summary
 
 | Aspect | Before | After |
 |--------|--------|-------|
 | **Networks** | 2 (internal, external) | 4 (data, services, ml, mgmt) |
-| **Encryption** | None | TLS + optional WireGuard |
+| **Intra-Host Security** | None | TLS + network isolation |
+| **Inter-Node Security** | None | HTP/DSM/Neuro stack |
 | **Isolation** | Basic | Tiered by sensitivity |
 | **DNS Integration** | None | dnsXai serves fortress clients |
 | **Firewall** | None | nftables per-network rules |
@@ -421,7 +483,7 @@ table inet fortress_containers {
 
 ## Next Steps
 
-1. [ ] Update podman-compose.yml with new networks
+1. [x] Update podman-compose.yml with new networks
 2. [ ] Create TLS certificate generation script
 3. [ ] Update dnsmasq to forward to dnsXai
 4. [ ] Add nftables rules for container networks
