@@ -1005,6 +1005,110 @@ BRIDGE_NETMASK=255.255.255.0
 EOF
 
     log_info "LAN interfaces bridged to $OVS_BRIDGE_NAME"
+
+    # Create systemd service to persist LAN bridge on reboot
+    create_lan_bridge_service "$lan_ifaces"
+}
+
+create_lan_bridge_service() {
+    # Create a systemd service that re-adds LAN ports to the OVS bridge after reboot
+    # This is necessary because OVS doesn't persist port configuration across reboots
+    # by default when using transient port adds (ovs-vsctl add-port)
+    local lan_ifaces="$1"
+
+    log_info "Creating LAN bridge persistence service..."
+
+    # Create the bridge restore script
+    cat > /usr/local/bin/fortress-lan-bridge.sh << 'LANEOF'
+#!/bin/bash
+# HookProbe Fortress - LAN Bridge Restore Script
+# Adds LAN interfaces to OVS bridge after reboot
+set -e
+
+CONFIG_FILE="/etc/hookprobe/lan-bridge.conf"
+LOG_TAG="[BRIDGE]"
+
+log() { echo "$LOG_TAG $1"; logger -t fortress-bridge "$1"; }
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    log "No LAN bridge config found, skipping"
+    exit 0
+fi
+
+source "$CONFIG_FILE"
+
+BRIDGE="${BRIDGE_NAME:-fortress}"
+LAN_PORTS="${LAN_INTERFACES:-}"
+
+if [ -z "$LAN_PORTS" ]; then
+    log "No LAN interfaces configured"
+    exit 0
+fi
+
+# Wait for OVS bridge to be ready
+for i in {1..30}; do
+    if ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+
+if ! ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
+    log "ERROR: Bridge $BRIDGE not found after 30s"
+    exit 1
+fi
+
+# Add each LAN port to the bridge
+for iface in $LAN_PORTS; do
+    if ip link show "$iface" &>/dev/null; then
+        # Skip if already in bridge
+        if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${iface}$"; then
+            log "$iface already in bridge $BRIDGE"
+            continue
+        fi
+
+        log "Adding $iface to bridge $BRIDGE"
+        ip addr flush dev "$iface" 2>/dev/null || true
+        ovs-vsctl --may-exist add-port "$BRIDGE" "$iface" || {
+            log "Failed to add $iface to bridge"
+            continue
+        }
+        # Clear VLAN settings for simple access
+        ovs-vsctl clear port "$iface" tag 2>/dev/null || true
+        ovs-vsctl clear port "$iface" trunks 2>/dev/null || true
+        ovs-vsctl clear port "$iface" vlan_mode 2>/dev/null || true
+        ip link set "$iface" up
+        log "$iface added to bridge $BRIDGE"
+    else
+        log "Interface $iface not found (cable unplugged?)"
+    fi
+done
+
+log "LAN bridge restore complete"
+LANEOF
+    chmod +x /usr/local/bin/fortress-lan-bridge.sh
+
+    # Create systemd service
+    cat > /etc/systemd/system/fortress-lan-bridge.service << EOF
+[Unit]
+Description=HookProbe Fortress LAN Bridge Restore
+After=openvswitch-switch.service network-online.target
+Wants=network-online.target
+Requires=openvswitch-switch.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/fortress-lan-bridge.sh
+ExecReload=/usr/local/bin/fortress-lan-bridge.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-lan-bridge.service
+    log_info "LAN bridge persistence service created and enabled"
 }
 
 # ============================================================
@@ -1283,6 +1387,33 @@ UDEV_HEADER
     fi
 
     log_success "Created $udev_rule_file"
+
+    # =========================================
+    # TRIGGER UDEV TO RENAME INTERFACES NOW
+    # =========================================
+    # This allows hostapd to use stable names immediately without reboot
+    log_info "Triggering udev to apply interface naming rules..."
+    udevadm control --reload-rules
+    udevadm trigger --action=add --subsystem-match=net
+
+    # Wait for interfaces to be renamed (max 10 seconds)
+    local wait_count=0
+    local max_wait=10
+    while [ $wait_count -lt $max_wait ]; do
+        local renamed=true
+        [ -n "$mac_24ghz" ] && [ ! -d "/sys/class/net/wlan_24ghz" ] && renamed=false
+        [ -n "$mac_5ghz" ] && [ ! -d "/sys/class/net/wlan_5ghz" ] && renamed=false
+        if $renamed; then
+            log_info "  Interface renaming complete"
+            break
+        fi
+        sleep 1
+        ((wait_count++))
+    done
+
+    if [ $wait_count -ge $max_wait ]; then
+        log_warn "  Interface renaming may require reboot (driver limitation)"
+    fi
 
     # Save current mapping for hostapd config update
     cat > /etc/hookprobe/wifi-interfaces.conf << EOF
