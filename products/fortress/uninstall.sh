@@ -254,13 +254,43 @@ cleanup_network_interfaces() {
     rm -rf /var/lib/fortress/network-interfaces.conf 2>/dev/null || true
 
     # Remove WiFi interface udev rules (stable naming)
-    if [ -f /etc/udev/rules.d/80-fortress-wifi.rules ]; then
-        log_info "Removing WiFi interface udev rules..."
-        rm -f /etc/udev/rules.d/80-fortress-wifi.rules
-        # Reload udev rules AND trigger to rename interfaces immediately
+    # Note: setup.sh creates 70-fortress-wifi.rules, but check both for compatibility
+    local udev_removed=false
+    for rule_file in /etc/udev/rules.d/70-fortress-wifi.rules /etc/udev/rules.d/80-fortress-wifi.rules; do
+        if [ -f "$rule_file" ]; then
+            log_info "Removing WiFi interface udev rules: $rule_file"
+            rm -f "$rule_file"
+            udev_removed=true
+        fi
+    done
+
+    if [ "$udev_removed" = true ]; then
+        # Reload udev rules
         udevadm control --reload-rules 2>/dev/null || true
+
+        # Try to rename interfaces back to original names
+        # This requires unbinding and rebinding the driver
+        log_info "  Attempting to restore original interface names..."
+        for iface in wlan_24ghz wlan_5ghz; do
+            if [ -d "/sys/class/net/$iface" ]; then
+                # Get the device path for driver rebind
+                local dev_path=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null)
+                local driver_path=$(readlink -f "/sys/class/net/$iface/device/driver" 2>/dev/null)
+
+                if [ -n "$dev_path" ] && [ -n "$driver_path" ]; then
+                    local dev_name=$(basename "$dev_path")
+                    log_info "  Rebinding $iface to restore original name..."
+                    # Unbind and rebind to trigger re-enumeration
+                    echo "$dev_name" > "$driver_path/unbind" 2>/dev/null || true
+                    sleep 1
+                    echo "$dev_name" > "$driver_path/bind" 2>/dev/null || true
+                fi
+            fi
+        done
+
+        # Trigger udev for any remaining interfaces
         udevadm trigger --action=add --subsystem-match=net 2>/dev/null || true
-        log_info "  WiFi interface names will revert (may need reboot for full effect)"
+        log_info "  WiFi interface names will revert after reboot if not already"
     fi
 
     # Remove LAN bridge service and script
