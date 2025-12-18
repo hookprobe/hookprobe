@@ -75,6 +75,22 @@ check_prerequisites() {
         exit 1
     fi
 
+    # Open vSwitch (required for secure container networking)
+    if ! command -v ovs-vsctl &>/dev/null; then
+        log_warn "Open vSwitch not found. Installing..."
+        apt-get update
+        apt-get install -y openvswitch-switch || {
+            log_error "Failed to install openvswitch-switch"
+            exit 1
+        }
+    fi
+    # Ensure OVS is running
+    if ! systemctl is-active openvswitch-switch &>/dev/null; then
+        systemctl start openvswitch-switch
+        systemctl enable openvswitch-switch
+    fi
+    log_info "Open vSwitch: $(ovs-vsctl --version | head -1)"
+
     # Podman check
     if ! command -v podman &>/dev/null; then
         log_warn "Podman not found. Installing..."
@@ -96,12 +112,12 @@ check_prerequisites() {
     fi
     log_info "podman-compose: available"
 
-    # Check for nftables (optional, for filter mode)
+    # Check for nftables (optional, for additional filtering)
     if command -v nft &>/dev/null; then
         log_info "nftables: available"
         NFTABLES_AVAILABLE=true
     else
-        log_warn "nftables not found (filter mode will not be available)"
+        log_warn "nftables not found (additional filtering will not be available)"
         NFTABLES_AVAILABLE=false
     fi
 
@@ -151,6 +167,33 @@ collect_configuration() {
     # QSecBit, dnsXai, DFS intelligence are not optional
     INSTALL_ML=true
     BUILD_ML_CONTAINERS=true
+
+    # LAN subnet configuration
+    echo ""
+    echo "LAN Subnet Size:"
+    echo "  1) /24 - 254 devices (10.200.0.0/24) - recommended for most"
+    echo "  2) /26 - 62 devices  (10.200.0.0/26) - small office"
+    echo "  3) /28 - 14 devices  (10.200.0.0/28) - very small"
+    echo ""
+    read -p "Select subnet [1]: " subnet_choice
+    case "${subnet_choice:-1}" in
+        2)
+            LAN_SUBNET_MASK="26"
+            LAN_DHCP_START="10.200.0.10"
+            LAN_DHCP_END="10.200.0.62"
+            ;;
+        3)
+            LAN_SUBNET_MASK="28"
+            LAN_DHCP_START="10.200.0.2"
+            LAN_DHCP_END="10.200.0.14"
+            ;;
+        *)
+            LAN_SUBNET_MASK="24"
+            LAN_DHCP_START="10.200.0.100"
+            LAN_DHCP_END="10.200.0.200"
+            ;;
+    esac
+    log_info "LAN subnet: 10.200.0.0/$LAN_SUBNET_MASK"
 
     # Admin password
     echo ""
@@ -205,6 +248,7 @@ collect_configuration() {
     echo "Installation Summary:"
     echo "====================="
     echo "  Network Mode:  $NETWORK_MODE"
+    echo "  LAN Subnet:    10.200.0.0/$LAN_SUBNET_MASK (DHCP: $LAN_DHCP_START - $LAN_DHCP_END)"
     echo "  Security Core: QSecBit + dnsXai + DFS Intelligence"
     echo "  Admin User:    $ADMIN_USER"
     echo "  WiFi SSID:     $WIFI_SSID"
@@ -413,15 +457,15 @@ setup_network_filter() {
 }
 
 setup_network() {
-    log_step "Setting up network infrastructure"
+    log_step "Setting up OVS network infrastructure"
 
-    # Source network integration module
+    # Source network integration module for interface detection
     local integration_script="${DEVICES_DIR}/common/network-integration.sh"
-    local bridge_script="${DEVICES_DIR}/common/bridge-manager.sh"
+    local ovs_script="${DEVICES_DIR}/common/ovs-container-network.sh"
     local hostapd_script="${DEVICES_DIR}/common/hostapd-generator.sh"
 
     # Make scripts executable
-    chmod +x "$integration_script" "$bridge_script" "$hostapd_script" 2>/dev/null || true
+    chmod +x "$integration_script" "$ovs_script" "$hostapd_script" 2>/dev/null || true
 
     # Detect network interfaces
     log_info "Detecting network interfaces..."
@@ -442,42 +486,48 @@ setup_network() {
     log_info "  WiFi: ${NET_WIFI_24GHZ_IFACE:-none} (2.4G) / ${NET_WIFI_5GHZ_IFACE:-none} (5G)"
     log_info "  LTE:  ${NET_WWAN_IFACE:-none}"
 
-    # Create LAN bridge
-    log_info "Creating LAN bridge..."
-    local bridge_name="fortress"
-    local bridge_ip="10.200.0.1"
+    # Initialize OVS network fabric
+    log_info "Initializing OVS network fabric..."
+    if [ -f "$ovs_script" ]; then
+        # Export configuration for OVS script
+        export OVS_BRIDGE="fortress"
+        export LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
-    if [ -f "$bridge_script" ]; then
-        source "$bridge_script"
-        create_bridge "$bridge_name" "$bridge_ip" || {
-            log_warn "Failed to create bridge - may already exist"
+        # Initialize OVS bridge with all tiers
+        "$ovs_script" init || {
+            log_error "Failed to initialize OVS network"
+            return 1
         }
 
-        # Add LAN interfaces to bridge
+        # Add LAN physical interfaces to OVS bridge
         if [ -n "$NET_LAN_IFACES" ]; then
             for iface in $NET_LAN_IFACES; do
-                add_interface_to_bridge "$iface" "$bridge_name" || {
-                    log_warn "Failed to add $iface to bridge"
+                log_info "  Adding LAN interface $iface to OVS bridge..."
+                "$ovs_script" add-lan "$iface" || {
+                    log_warn "Failed to add $iface to OVS bridge"
                 }
             done
+        else
+            log_warn "No LAN interfaces detected to add to bridge"
+            log_info "  WiFi AP will provide client connectivity"
         fi
-
-        # Configure DHCP
-        configure_dnsmasq_bridge || {
-            log_warn "DHCP configuration had issues"
-        }
 
         # Setup NAT if we have a WAN interface
         if [ -n "$NET_WAN_IFACE" ]; then
-            setup_nat "$NET_WAN_IFACE" || {
+            "$ovs_script" nat "$NET_WAN_IFACE" || {
                 log_warn "NAT setup had issues"
             }
         fi
+
+        # Configure DHCP on OVS LAN port
+        setup_ovs_dhcp
+
     else
-        log_warn "Bridge manager not found - manual network config required"
+        log_error "OVS network manager not found: $ovs_script"
+        return 1
     fi
 
-    # Setup WiFi AP
+    # Setup WiFi AP (bridges to OVS)
     if [ -n "$NET_WIFI_24GHZ_IFACE" ] || [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
         log_info "Configuring WiFi access point..."
 
@@ -495,8 +545,8 @@ setup_network() {
             # Prepare interfaces
             prepare_wifi_interfaces 2>/dev/null || true
 
-            # Generate hostapd config
-            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$bridge_name" || {
+            # Generate hostapd config with OVS bridge
+            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "fortress" || {
                 log_warn "Hostapd configuration had issues"
             }
 
@@ -508,7 +558,7 @@ setup_network() {
             echo "$wifi_pass" > "$CONFIG_DIR/secrets/wifi_password"
             chmod 600 "$CONFIG_DIR/secrets/wifi_password"
 
-            log_info "WiFi AP configured:"
+            log_info "WiFi AP configured (bridged to OVS):"
             log_info "  SSID: $wifi_ssid"
             log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not configured}"
             log_info "  5GHz:   ${NET_WIFI_5GHZ_IFACE:-not configured}"
@@ -521,17 +571,65 @@ setup_network() {
         WIFI_PASSWORD=""
     fi
 
-    # Start networking services
-    log_info "Starting network services..."
-    systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null || {
-        log_warn "dnsmasq service not available"
-    }
-
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
 
-    log_info "Network infrastructure configured"
+    log_info "OVS network infrastructure configured"
+    log_info "  OpenFlow: Tier isolation rules installed"
+    log_info "  Mirror:   Traffic mirroring to QSecBit enabled"
+    log_info "  sFlow:    Flow export to 127.0.0.1:6343"
+    log_info "  IPFIX:    Flow export to 127.0.0.1:4739"
+}
+
+setup_ovs_dhcp() {
+    log_info "Configuring DHCP on OVS LAN port..."
+
+    local lan_port="fortress-lan"
+    local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
+
+    mkdir -p "$(dirname "$config_file")"
+
+    cat > "$config_file" << EOF
+# HookProbe Fortress DHCP Configuration (OVS)
+# Generated: $(date -Iseconds)
+
+# Bind to OVS LAN internal port
+interface=${lan_port}
+bind-interfaces
+
+# LAN DHCP range (configured subnet: /${LAN_SUBNET_MASK:-24})
+dhcp-range=${LAN_DHCP_START:-10.200.0.100},${LAN_DHCP_END:-10.200.0.200},12h
+
+# Gateway (fortress OVS LAN port)
+dhcp-option=3,10.200.0.1
+
+# DNS (dnsXai via OVS - clients query gateway, forwarded to dnsXai)
+dhcp-option=6,10.200.0.1
+
+# Domain
+domain=fortress.local
+local=/fortress.local/
+
+# Logging
+log-dhcp
+log-queries
+
+# Cache
+cache-size=1000
+
+# Forward DNS to dnsXai container
+server=10.250.201.11#5353
+EOF
+
+    chmod 644 "$config_file"
+
+    # Restart dnsmasq
+    systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null || {
+        log_warn "dnsmasq service not available"
+    }
+
+    log_info "DHCP configured on $lan_port"
 }
 
 build_containers() {
@@ -606,6 +704,54 @@ start_containers() {
     if [ $retries -eq 0 ]; then
         log_warn "Services may not be fully ready - check logs"
     fi
+
+    # Connect containers to OVS for flow monitoring
+    connect_containers_to_ovs
+}
+
+connect_containers_to_ovs() {
+    log_step "Connecting containers to OVS"
+
+    local ovs_script="${DEVICES_DIR}/common/ovs-container-network.sh"
+
+    if [ ! -f "$ovs_script" ]; then
+        log_warn "OVS script not found - skipping container OVS integration"
+        return 0
+    fi
+
+    # Give containers a moment to fully initialize
+    sleep 3
+
+    # Connect each container to its OVS tier via veth pair
+    # This provides OpenFlow-controlled traffic monitoring alongside Podman networking
+
+    log_info "Attaching containers to OVS bridge for flow monitoring..."
+
+    # Data tier containers
+    "$ovs_script" attach fortress-postgres 10.250.200.10 data 2>/dev/null || \
+        log_warn "Could not attach postgres to OVS (may not be running)"
+    "$ovs_script" attach fortress-redis 10.250.200.11 data 2>/dev/null || \
+        log_warn "Could not attach redis to OVS (may not be running)"
+
+    # Services tier containers
+    "$ovs_script" attach fortress-web 10.250.201.10 services 2>/dev/null || \
+        log_warn "Could not attach web to OVS (may not be running)"
+    "$ovs_script" attach fortress-dnsxai 10.250.201.11 services 2>/dev/null || \
+        log_warn "Could not attach dnsxai to OVS (may not be running)"
+    "$ovs_script" attach fortress-dfs 10.250.201.12 services 2>/dev/null || \
+        log_warn "Could not attach dfs to OVS (may not be running)"
+
+    # ML tier (optional containers)
+    "$ovs_script" attach fortress-lstm-trainer 10.250.202.10 ml 2>/dev/null || true
+
+    # Mgmt tier (optional containers)
+    "$ovs_script" attach fortress-grafana 10.250.203.10 mgmt 2>/dev/null || true
+    "$ovs_script" attach fortress-victoria 10.250.203.11 mgmt 2>/dev/null || true
+
+    log_info "Containers connected to OVS for OpenFlow monitoring"
+    log_info "  Traffic mirroring: all container traffic → fortress-mirror"
+    log_info "  sFlow export: 127.0.0.1:6343"
+    log_info "  IPFIX export: 127.0.0.1:4739"
 }
 
 create_systemd_service() {
@@ -623,19 +769,51 @@ create_systemd_service() {
 
     # Use the INSTALLED containers directory for systemd service
     local compose_dir="${INSTALL_DIR}/containers"
+    local ovs_script="${INSTALL_DIR}/devices/common/ovs-container-network.sh"
+
+    # Create OVS post-start hook script
+    cat > "${INSTALL_DIR}/bin/fortress-ovs-connect.sh" << 'OVSEOF'
+#!/bin/bash
+# Connect fortress containers to OVS after startup
+# Called by systemd ExecStartPost
+
+OVS_SCRIPT="/opt/hookprobe/fortress/devices/common/ovs-container-network.sh"
+
+# Wait for containers to be fully up
+sleep 5
+
+if [ -f "$OVS_SCRIPT" ]; then
+    # Data tier
+    "$OVS_SCRIPT" attach fortress-postgres 10.250.200.10 data 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-redis 10.250.200.11 data 2>/dev/null || true
+
+    # Services tier
+    "$OVS_SCRIPT" attach fortress-web 10.250.201.10 services 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-dnsxai 10.250.201.11 services 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-dfs 10.250.201.12 services 2>/dev/null || true
+
+    # Optional tiers
+    "$OVS_SCRIPT" attach fortress-lstm-trainer 10.250.202.10 ml 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-grafana 10.250.203.10 mgmt 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-victoria 10.250.203.11 mgmt 2>/dev/null || true
+fi
+OVSEOF
+
+    mkdir -p "${INSTALL_DIR}/bin"
+    chmod +x "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
 
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]
 Description=HookProbe Fortress Security Gateway
 After=network.target openvswitch-switch.service
-Requires=podman.socket
-Wants=openvswitch-switch.service
+Requires=podman.socket openvswitch-switch.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
 ExecStart=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml up -d
+ExecStartPost=${INSTALL_DIR}/bin/fortress-ovs-connect.sh
 ExecStop=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml down
 ExecReload=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml restart
 TimeoutStartSec=300
@@ -650,7 +828,7 @@ EOF
     systemctl daemon-reload
     systemctl enable fortress
 
-    log_info "Systemd service created (security core always enabled)"
+    log_info "Systemd service created with OVS post-start hook"
 }
 
 # ============================================================
@@ -713,13 +891,38 @@ uninstall() {
     echo "  --keep-config : Preserve configuration files"
     echo "  --purge       : Remove everything"
     echo ""
-    echo -e "${RED}This will remove:${NC}"
-    echo "  - Fortress containers (web, postgres, redis, ML services)"
-    [ "$keep_data" = false ] && echo "  - Database volumes (all user data)"
-    [ "$keep_data" = false ] && echo "  - ML model data and blocklists"
-    [ "$keep_config" = false ] && echo "  - Configuration files"
-    echo "  - Container images"
-    echo "  - Systemd service"
+    echo -e "${RED}Components to be removed:${NC}"
+    echo ""
+    echo "  Services:"
+    echo "    - fortress (main systemd service)"
+    echo "    - fortress-hostapd-* (WiFi AP services)"
+    echo ""
+    echo "  Containers:"
+    echo "    - fortress-web (Flask admin portal)"
+    echo "    - fortress-postgres (database)"
+    echo "    - fortress-redis (cache/sessions)"
+    echo "    - fortress-qsecbit (threat detection)"
+    echo "    - fortress-dnsxai (DNS ML protection)"
+    echo "    - fortress-dfs (WiFi DFS intelligence)"
+    echo "    - fortress-lstm-trainer (ML training)"
+    echo "    - fortress-grafana (monitoring dashboard)"
+    echo "    - fortress-victoria (metrics database)"
+    echo ""
+    echo "  OVS Network:"
+    echo "    - OVS bridge: fortress"
+    echo "    - Internal ports: fortress-data, fortress-services, fortress-ml, fortress-mgmt, fortress-lan"
+    echo "    - Traffic mirror port: fortress-mirror"
+    echo "    - Container veth interfaces"
+    echo "    - VXLAN tunnel configurations"
+    echo "    - OpenFlow rules"
+    echo "    - sFlow/IPFIX export"
+    echo ""
+    [ "$keep_data" = false ] && echo "  Data volumes (all user data, ML models, blocklists)"
+    [ "$keep_config" = false ] && echo "  Configuration: /etc/hookprobe"
+    [ "$keep_config" = false ] && echo "  Secrets: VXLAN PSK, admin credentials, WiFi passwords"
+    echo "  Installation: /opt/hookprobe/fortress"
+    echo "  DHCP config: /etc/dnsmasq.d/fortress-ovs.conf"
+    echo "  WiFi config: /etc/hostapd/fortress-*.conf"
     echo ""
 
     if [ "$keep_data" = true ]; then
@@ -736,12 +939,15 @@ uninstall() {
     # Stage 1: Stop services
     log_info "Stage 1: Stopping services..."
     systemctl stop fortress 2>/dev/null || true
-    systemctl stop fortress-ml 2>/dev/null || true
-    cd "$CONTAINERS_DIR" 2>/dev/null && podman-compose --profile full --profile training down 2>/dev/null || true
+    systemctl stop fortress-hostapd-2g 2>/dev/null || true
+    systemctl stop fortress-hostapd-5g 2>/dev/null || true
+    cd "${INSTALL_DIR}/containers" 2>/dev/null && \
+        podman-compose --profile monitoring --profile training down 2>/dev/null || true
 
     # Stage 2: Remove application containers
     log_info "Stage 2: Removing application containers..."
     podman rm -f fortress-web fortress-qsecbit fortress-dnsxai fortress-dfs fortress-lstm-trainer 2>/dev/null || true
+    podman rm -f fortress-grafana fortress-victoria 2>/dev/null || true
 
     # Stage 2b: Remove container images
     log_info "Stage 2b: Removing container images..."
@@ -758,6 +964,7 @@ uninstall() {
         # Remove all Fortress volumes
         podman volume rm -f \
             fortress-postgres-data \
+            fortress-postgres-certs \
             fortress-redis-data \
             fortress-web-data \
             fortress-web-logs \
@@ -766,6 +973,8 @@ uninstall() {
             fortress-dnsxai-blocklists \
             fortress-dfs-data \
             fortress-ml-models \
+            fortress-grafana-data \
+            fortress-victoria-data \
             fortress-config \
             2>/dev/null || true
     else
@@ -774,38 +983,87 @@ uninstall() {
         podman stop fortress-postgres fortress-redis 2>/dev/null || true
     fi
 
-    # Stage 4: Remove systemd service
-    log_info "Stage 4: Removing systemd service..."
+    # Stage 4: Remove systemd services
+    log_info "Stage 4: Removing systemd services..."
     systemctl disable fortress 2>/dev/null || true
+    systemctl disable fortress-hostapd-2g 2>/dev/null || true
+    systemctl disable fortress-hostapd-5g 2>/dev/null || true
     rm -f /etc/systemd/system/fortress.service
+    rm -f /etc/systemd/system/fortress-hostapd-*.service
     systemctl daemon-reload
 
-    # Stage 5: Remove network configuration
-    log_info "Stage 5: Removing network filters..."
+    # Stage 5: Remove OVS network configuration
+    log_info "Stage 5: Removing OVS network..."
+
+    # Remove container veth interfaces from OVS
+    for veth in veth-fortress-postgres veth-fortress-redis veth-fortress-web \
+                veth-fortress-dnsxai veth-fortress-dfs veth-fortress-lstm-trainer \
+                veth-fortress-grafana veth-fortress-victoria; do
+        ovs-vsctl del-port fortress "$veth" 2>/dev/null || true
+        ip link del "$veth" 2>/dev/null || true
+    done
+
+    # Remove VXLAN tunnels
+    for tunnel in vxlan-mesh-core vxlan-mesh-threat vxlan-mssp-uplink; do
+        ovs-vsctl del-port fortress "$tunnel" 2>/dev/null || true
+    done
+
+    # Clear OVS mirrors, sFlow, IPFIX
+    ovs-vsctl clear bridge fortress mirrors 2>/dev/null || true
+    ovs-vsctl clear bridge fortress sflow 2>/dev/null || true
+    ovs-vsctl clear bridge fortress ipfix 2>/dev/null || true
+
+    # Delete OVS bridge (removes all ports including internal ports)
+    ovs-vsctl del-br fortress 2>/dev/null || true
+
+    # Remove nftables rules if any
     nft delete table inet fortress_filter 2>/dev/null || true
 
-    # Stage 6: Handle configuration
+    # Remove NAT rules
+    iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o fortress -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+
+    log_info "  OVS bridge and network rules removed"
+
+    # Stage 6: Remove DHCP and WiFi configuration
+    log_info "Stage 6: Removing DHCP and WiFi config..."
+    rm -f /etc/dnsmasq.d/fortress-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+    rm -f /etc/hostapd/fortress-*.conf 2>/dev/null || true
+    systemctl restart dnsmasq 2>/dev/null || true
+
+    # Stage 7: Handle configuration
     if [ "$keep_config" = false ]; then
-        log_info "Stage 6: Removing configuration..."
+        log_info "Stage 7: Removing configuration..."
         rm -f "$CONFIG_DIR/fortress.conf" 2>/dev/null || true
         rm -f "$CONFIG_DIR/users.json" 2>/dev/null || true
         rm -f "$STATE_FILE" 2>/dev/null || true
-        rm -rf "${CONTAINERS_DIR}/secrets" 2>/dev/null || true
+        rm -rf "$CONFIG_DIR/secrets" 2>/dev/null || true
+        rm -f /var/lib/fortress/ovs/*.conf 2>/dev/null || true
+        rm -rf /var/lib/fortress 2>/dev/null || true
     else
-        log_info "Stage 6: Preserving configuration..."
+        log_info "Stage 7: Preserving configuration..."
     fi
 
-    # Stage 7: Remove installation directory
-    log_info "Stage 7: Removing installation files..."
-    rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" 2>/dev/null || true
+    # Stage 8: Remove installation directory
+    log_info "Stage 8: Removing installation files..."
+    rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" "$INSTALL_DIR/bin" 2>/dev/null || true
+    rm -rf "$INSTALL_DIR/devices" "$INSTALL_DIR/containers" 2>/dev/null || true
     [ "$keep_data" = false ] && rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
+
+    # Remove sysctl config
+    rm -f /etc/sysctl.d/99-fortress-forward.conf 2>/dev/null || true
 
     # Clean empty directories
     rmdir "$INSTALL_DIR" 2>/dev/null || true
     rmdir /opt/hookprobe 2>/dev/null || true
 
     echo ""
+    echo "════════════════════════════════════════════════════════════════"
     log_info "Uninstall complete!"
+    echo "════════════════════════════════════════════════════════════════"
     echo ""
 
     if [ "$keep_data" = true ]; then
@@ -820,7 +1078,12 @@ uninstall() {
 
     if [ "$keep_config" = true ]; then
         echo "Configuration preserved in: $CONFIG_DIR"
+        echo ""
     fi
+
+    echo "Note: WiFi interface names may revert to default after reboot"
+    echo "      (e.g., wlp2s0 instead of wlan-2g)"
+    echo ""
 }
 
 # ============================================================
@@ -835,6 +1098,10 @@ quick_install() {
     BUILD_ML_CONTAINERS=true
     WIFI_SSID="HookProbe-Fortress"
     WIFI_PASSWORD="hookprobe123"
+    # Subnet defaults
+    LAN_SUBNET_MASK="24"
+    LAN_DHCP_START="10.200.0.100"
+    LAN_DHCP_END="10.200.0.200"
 
     log_warn "Quick install with default credentials"
     log_warn "Admin: admin / hookprobe - CHANGE THIS IMMEDIATELY!"
@@ -907,9 +1174,9 @@ main() {
 
     # Final message
     echo ""
-    echo "========================================"
-    echo -e "${GREEN}Installation Complete!${NC}"
-    echo "========================================"
+    echo "════════════════════════════════════════════════════════════════"
+    echo -e "${GREEN}  HookProbe Fortress Installation Complete!${NC}"
+    echo "════════════════════════════════════════════════════════════════"
     echo ""
     echo "Access the admin portal at:"
     echo -e "  ${CYAN}https://localhost:${WEB_PORT}${NC}"
@@ -927,22 +1194,30 @@ main() {
         echo -e "  Password: ${BOLD}${WIFI_PASSWORD}${NC}"
         echo ""
     fi
-    echo "Network Configuration:"
-    echo -e "  Bridge:   fortress (10.200.0.1/24)"
-    echo -e "  DHCP:     10.200.0.100 - 10.200.0.200"
+    echo "OVS Network Configuration:"
+    echo -e "  Bridge:     fortress (OVS with OpenFlow 1.3+)"
+    echo -e "  LAN Tier:   10.200.0.0/${LAN_SUBNET_MASK:-24}"
+    echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
+    echo ""
+    echo "Container Network Tiers (isolated via OpenFlow):"
+    echo "  Data Tier:     10.250.200.0/24 (postgres, redis) - NO internet"
+    echo "  Services Tier: 10.250.201.0/24 (web, dnsxai, dfs) - internet OK"
+    echo "  ML Tier:       10.250.202.0/24 (lstm-trainer) - NO internet"
+    echo "  Mgmt Tier:     10.250.203.0/24 (grafana, victoria) - NO internet"
+    echo ""
+    echo "Security Features:"
+    echo "  - OpenFlow tier isolation (containers can't reach unauthorized tiers)"
+    echo "  - Traffic mirroring to QSecBit (all traffic analyzed)"
+    echo "  - sFlow/IPFIX export for ML analysis"
+    echo "  - QoS meters for rate limiting threats"
+    echo "  - VXLAN tunnels ready for mesh connectivity"
     echo ""
     echo "Useful commands:"
-    echo "  systemctl status fortress           # Check container status"
-    echo "  systemctl status fortress-hostapd-* # Check WiFi AP status"
-    echo "  podman logs fortress-web            # View web logs"
-    echo "  ip link show fortress               # View bridge status"
-    echo ""
-    echo "Network filtering:"
-    if [ "$NETWORK_MODE" = "filter" ]; then
-        echo "  ${INSTALL_DIR}/devices/common/network-filter-manager.sh status"
-    else
-        echo "  VLAN mode configured"
-    fi
+    echo "  systemctl status fortress             # Check container status"
+    echo "  systemctl status fortress-hostapd-*   # Check WiFi AP status"
+    echo "  ovs-vsctl show                        # View OVS bridge"
+    echo "  ovs-ofctl dump-flows fortress         # View OpenFlow rules"
+    echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"
     echo ""
 }
 

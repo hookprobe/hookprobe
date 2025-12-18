@@ -1,30 +1,47 @@
-# HookProbe Fortress - Container Orchestration
+# HookProbe Fortress - Container Orchestration with OVS
 #
-# Self-contained, modular deployment with persistent volumes.
-# All services run in isolation with dedicated storage.
+# Self-contained, modular deployment with OVS-based network security.
+# All services run in isolation with OpenFlow-controlled traffic.
+#
+# Architecture:
+#   - OVS bridge (fortress) provides OpenFlow-based tier isolation
+#   - Podman bridge networks for container-to-container communication
+#   - veth pairs connect containers to OVS for flow monitoring
+#   - sFlow/IPFIX export to QSecBit for ML analysis
+#   - Traffic mirroring captures all packets for threat detection
 #
 # Usage:
-#   podman-compose up -d                       # Start core services (web, db, cache)
-#   podman-compose --profile full up -d        # Start with ML services
-#   podman-compose --profile monitoring up -d  # Start with monitoring
+#   podman-compose up -d                       # Start core services
+#   podman-compose --profile monitoring up -d  # Start with Grafana/Victoria
 #   podman-compose --profile training run lstm # Run LSTM training job
 #   podman-compose down                        # Stop all services
-#   podman-compose down -v                     # Stop and remove volumes
 #   podman-compose logs -f web                 # Follow web container logs
+#
+# After startup, connect containers to OVS:
+#   /opt/hookprobe/fortress/devices/common/ovs-container-network.sh connect-containers
 #
 # Container Groups:
 #   - Core: postgres, redis, web (always running)
-#   - ML: qsecbit-agent, dnsxai, dfs-intelligence (--profile full)
+#   - Security: qsecbit-agent, dnsxai, dfs-intelligence (always running)
 #   - Monitoring: grafana, victoria (--profile monitoring)
 #   - Jobs: lstm-trainer (--profile training, one-shot)
 #
-# Network Security Tiers:
-#   - fortress-data: Database/cache (internal, no internet)
-#   - fortress-services: Web/DNS/DFS (limited internet for DNS upstream)
-#   - fortress-ml: ML inference (internal, no internet)
-#   - fortress-mgmt: Monitoring (internal, no internet)
+# Network Security Tiers (via OVS OpenFlow):
+#   - fortress-data:     10.250.200.0/24 (postgres, redis) - NO internet
+#   - fortress-services: 10.250.201.0/24 (web, dnsxai, dfs) - internet OK
+#   - fortress-ml:       10.250.202.0/24 (lstm-trainer) - NO internet
+#   - fortress-mgmt:     10.250.203.0/24 (grafana, victoria) - NO internet
+#   - fortress-lan:      10.200.0.0/24   (WiFi/LAN clients) - NAT to internet
 #
-# Version: 5.3.0
+# OVS Security Features:
+#   - OpenFlow 1.3+ tier isolation rules
+#   - Traffic mirroring to fortress-mirror port
+#   - sFlow export to 127.0.0.1:6343
+#   - IPFIX export to 127.0.0.1:4739
+#   - QoS meters for rate limiting
+#   - VXLAN tunnels for mesh connectivity
+#
+# Version: 5.4.0
 # License: AGPL-3.0
 
 version: '3.8'
@@ -396,14 +413,40 @@ volumes:
     name: fortress-config
 
 # ============================================================
-# NETWORKS - 4-Tier Security Architecture
+# NETWORKS - OVS-Integrated 4-Tier Security Architecture
 # ============================================================
+#
+# These Podman bridge networks provide basic container connectivity.
+# The OVS bridge (fortress) provides the security layer:
+#
+#   ┌─────────────────────────────────────────────────────────┐
+#   │                  OVS Bridge: fortress                   │
+#   │  ┌─────────────┬─────────────┬──────────┬────────────┐ │
+#   │  │fortress-data│fortress-svc │fortress-ml│fortress-mgmt│
+#   │  │(internal)   │(internet OK)│(internal) │(internal)  │ │
+#   │  └──────┬──────┴──────┬──────┴─────┬─────┴──────┬─────┘ │
+#   │         │             │            │            │       │
+#   │    ┌────┴────┐   ┌────┴────┐  ┌────┴────┐ ┌─────┴────┐ │
+#   │    │postgres │   │  web    │  │  lstm   │ │ grafana  │ │
+#   │    │redis    │   │dnsxai   │  │         │ │ victoria │ │
+#   │    └─────────┘   │dfs      │  └─────────┘ └──────────┘ │
+#   │                  └─────────┘                           │
+#   │  ┌───────────────────────────────────────────────────┐ │
+#   │  │ fortress-lan (10.200.0.0/24) - WiFi/LAN clients   │ │
+#   │  └───────────────────────────────────────────────────┘ │
+#   │                                                        │
+#   │  OpenFlow Rules:                                       │
+#   │  - Table 0:  Ingress classification (ARP, DHCP, DNS)   │
+#   │  - Table 10: Tier isolation (drop cross-tier traffic)  │
+#   │  - Table 20: Internet control (allow/deny per tier)    │
+#   │  - Table 30: Mirror (copy to QSecBit)                  │
+#   │  - Table 40: Output (L2 forwarding)                    │
+#   └─────────────────────────────────────────────────────────┘
+#
 networks:
   # Tier 1: DATA - Most sensitive (database, cache)
-  # - NO internet access (internal: true)
-  # - Jumbo frames for DB traffic performance
-  # - Only postgres and redis have primary IPs here
-  # - Web connects as client for DB/cache access
+  # OVS port: fortress-data (10.250.200.1/24)
+  # OpenFlow: NO internet, only web can reach this tier
   fortress-data:
     driver: bridge
     internal: true  # NO internet access
@@ -416,9 +459,8 @@ networks:
       com.docker.network.bridge.enable_icc: "true"
 
   # Tier 2: SERVICES - Web, DNS, APIs
-  # - Limited internet (dnsXai needs upstream DNS)
-  # - Standard MTU
-  # - Web serves HTTPS, dnsXai serves DNS, DFS serves API
+  # OVS port: fortress-services (10.250.201.1/24)
+  # OpenFlow: Internet OK (dnsXai needs upstream DNS)
   fortress-services:
     driver: bridge
     ipam:
@@ -429,9 +471,8 @@ networks:
       mtu: "1500"
 
   # Tier 3: ML - Threat detection, inference
-  # - NO internet access (internal: true)
-  # - QSecBit uses host network for traffic capture
-  # - LSTM trainer runs here for model training
+  # OVS port: fortress-ml (10.250.202.1/24)
+  # OpenFlow: NO internet, QSecBit uses host network
   fortress-ml:
     driver: bridge
     internal: true  # NO internet access
@@ -441,9 +482,8 @@ networks:
           gateway: 10.250.202.1
 
   # Tier 4: MANAGEMENT - Monitoring, metrics
-  # - NO internet access (internal: true)
-  # - Grafana, VictoriaMetrics
-  # - Web connects to query metrics
+  # OVS port: fortress-mgmt (10.250.203.1/24)
+  # OpenFlow: NO internet, web can query metrics
   fortress-mgmt:
     driver: bridge
     internal: true  # NO internet access
