@@ -1,0 +1,23 @@
+# ==============================================================================
+# Fortress ML/AI Container Dependencies
+# ==============================================================================
+# Pinned versions for reproducible builds
+# Compatible with Python 3.11 on ARM64 and x86_64
+# ==============================================================================
+
+# Core numerical computing
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+
+# Machine learning
+scikit-learn>=1.3.0,<2.0.0
+
+# System monitoring
+psutil>=5.9.0,<6.0.0
+
+# Optional: Database drivers (uncomment if needed)
+# clickhouse-driver>=0.2.6,<1.0.0
+# pymysql>=1.1.0,<2.0.0
+
+# Optional: Network packet analysis
+# scapy>=2.5.0,<3.0.0
