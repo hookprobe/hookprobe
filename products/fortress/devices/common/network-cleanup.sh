@@ -16,7 +16,7 @@
 set -e
 
 # Configuration
-OVS_BRIDGE="${FORTRESS_BRIDGE:-fortress}"
+OVS_BRIDGE="${FORTRESS_BRIDGE:-43ess}"
 WIFI_24GHZ_VLAN="${WIFI_24GHZ_VLAN:-40}"  # Guest by default
 WIFI_5GHZ_VLAN="${WIFI_5GHZ_VLAN:-30}"    # Staff by default
 MANAGEMENT_VLAN="${MANAGEMENT_VLAN:-10}"
