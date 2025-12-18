@@ -1,0 +1,82 @@
+# ==============================================================================
+# Fortress Qsecbit Agent Container
+# ==============================================================================
+# ML-powered threat detection agent with numpy/scipy/sklearn
+#
+# Build:
+#   podman build -f Containerfile.agent -t fortress-agent:latest ../..
+#
+# Run:
+#   podman run --network=host --cap-add=NET_ADMIN,NET_RAW fortress-agent:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for numpy/scipy compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libopenblas-dev \
+    liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install ML dependencies
+COPY products/fortress/containers/requirements-ml.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-ml.txt
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    libgomp1 \
+    iproute2 \
+    nftables \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/core/qsecbit \
+             /opt/hookprobe/fortress/qsecbit \
+             /opt/hookprobe/fortress/data \
+             /var/log/hookprobe \
+    && chown -R fortress:nogroup /opt/hookprobe /var/log/hookprobe
+
+# Copy Qsecbit core modules
+COPY --chown=fortress:nogroup core/qsecbit/ /opt/hookprobe/core/qsecbit/
+COPY --chown=fortress:nogroup core/__init__.py /opt/hookprobe/core/
+
+# Copy Fortress-specific agent
+COPY --chown=fortress:nogroup products/fortress/qsecbit/ /opt/hookprobe/fortress/qsecbit/
+COPY --chown=fortress:nogroup products/fortress/lib/ /opt/hookprobe/fortress/lib/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV QSECBIT_MODE=fortress
+ENV QSECBIT_DATA_DIR=/opt/hookprobe/fortress/data
+ENV QSECBIT_LOG_DIR=/var/log/hookprobe
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost', 9090)); s.close()" || exit 1
+
+# Note: This container typically runs with --network=host for traffic analysis
+EXPOSE 9090
+
+# Run as non-root (but needs CAP_NET_ADMIN, CAP_NET_RAW for packet capture)
+USER fortress
+
+ENTRYPOINT ["python", "-m", "fortress.qsecbit.fortress_agent"]
+CMD ["--config", "/etc/hookprobe/qsecbit.conf"]
