@@ -572,23 +572,34 @@ remove_ovs_config() {
 }
 
 # ============================================================
-# REMOVE VLAN INTERFACES
+# REMOVE NETWORK INTERFACES
 # ============================================================
 remove_vlan_interfaces() {
-    log_step "Removing VLAN interfaces..."
+    log_step "Removing network interfaces..."
 
-    local vlans=(10 20 30 40 99)
-
-    for vlan_id in "${vlans[@]}"; do
-        local iface="vlan${vlan_id}"
+    # New tier-based interfaces (43ess-*)
+    local tiers=(data services ml mgmt lan)
+    for tier in "${tiers[@]}"; do
+        local iface="${OVS_BRIDGE}-${tier}"
         if ip link show "$iface" &>/dev/null; then
-            log_info "Removing VLAN interface: $iface"
+            log_info "Removing tier interface: $iface"
             ip link set "$iface" down 2>/dev/null || true
             ip link delete "$iface" 2>/dev/null || true
         fi
     done
 
-    log_info "VLAN interfaces removed"
+    # Legacy VLAN interfaces (for upgrades from older versions)
+    local vlans=(10 20 30 40 99)
+    for vlan_id in "${vlans[@]}"; do
+        local iface="vlan${vlan_id}"
+        if ip link show "$iface" &>/dev/null; then
+            log_info "Removing legacy VLAN interface: $iface"
+            ip link set "$iface" down 2>/dev/null || true
+            ip link delete "$iface" 2>/dev/null || true
+        fi
+    done
+
+    log_info "Network interfaces removed"
 }
 
 # ============================================================
@@ -1214,7 +1225,7 @@ main() {
     echo -e "  • ML/LSTM threat detection"
     echo -e "  • dnsXai privacy controls"
     echo -e "  • OVS bridge: $OVS_BRIDGE"
-    echo -e "  • VLAN interfaces (10, 20, 30, 40, 99)"
+    echo -e "  • Network interfaces (${OVS_BRIDGE}-data, -services, -ml, -mgmt, -lan)"
     echo -e "  • VXLAN tunnels"
     echo -e "  • MACsec configuration"
     echo -e "  • Management scripts"
