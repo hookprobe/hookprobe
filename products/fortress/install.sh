@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Fortress - Unified Installer
-# Version: 5.1.0
+# Version: 5.4.0
 # License: AGPL-3.0
 #
 # Single entry point for all Fortress operations:
@@ -25,7 +25,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="5.1.0"
+VERSION="5.4.0"
 
 # ============================================================
 # PATHS
@@ -106,7 +106,7 @@ detect_installation() {
     INSTALLED=false
     DEPLOYMENT_MODE=""
     INSTALLED_VERSION=""
-    return 1
+    return 0  # Return 0 to avoid set -e exit; INSTALLED=false indicates no installation
 }
 
 save_state() {
@@ -742,48 +742,83 @@ EOF
 # MAIN
 # ============================================================
 main() {
-    local command="${1:-}"
-    shift 2>/dev/null || true
+    local command=""
+    local install_args=""
+    local mode="container"
+
+    # Parse arguments - separate command from flags
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            # Commands
+            install|upgrade|uninstall|remove|backup|restore|status)
+                command="$1"
+                shift
+                break  # Remaining args go to the command handler
+                ;;
+            # Help
+            --help|-h|help)
+                show_help
+                exit 0
+                ;;
+            # Installation mode flags
+            --native)
+                mode="native"
+                ;;
+            --container)
+                mode="container"
+                ;;
+            --quick)
+                install_args="$install_args --quick"
+                ;;
+            # Pass-through flags to install-container.sh
+            --non-interactive|--preserve-data|--enable-monitoring|--enable-n8n|--enable-clickhouse|--enable-remote-access|--enable-lte|--keep-data|--keep-config|--purge)
+                install_args="$install_args $1"
+                ;;
+            # Flags with values (for LTE config)
+            --lte-apn|--lte-auth|--lte-user|--lte-pass)
+                install_args="$install_args $1 $2"
+                shift
+                ;;
+            *)
+                # Unknown arg - pass through
+                install_args="$install_args $1"
+                ;;
+        esac
+        shift
+    done
 
     # Check root for most commands
     case "$command" in
-        status|--help|-h|help)
+        status)
             ;;
         *)
             check_root
             ;;
     esac
 
-    # Pre-flight checks
-    case "$command" in
-        --help|-h|help)
-            show_help
-            exit 0
-            ;;
-        status)
-            do_status
-            exit 0
-            ;;
-    esac
+    # Handle status without banner
+    if [ "$command" = "status" ]; then
+        do_status
+        exit 0
+    fi
 
     show_banner
     check_system
 
+    # Default to install if no command specified
+    if [ -z "$command" ]; then
+        command="install"
+    fi
+
     case "$command" in
-        install|--native|--container|--quick|"")
-            case "$command" in
-                --native) do_install native "$@" ;;
-                --container) do_install container "$@" ;;
-                --quick) do_install container --quick "$@" ;;
-                install) do_install "$@" ;;
-                "") do_install "$@" ;;
-            esac
+        install)
+            do_install "$mode" $install_args "$@"
             ;;
         upgrade)
             do_upgrade "$@"
             ;;
         uninstall|remove)
-            do_uninstall "$@"
+            do_uninstall $install_args "$@"
             ;;
         backup)
             do_backup "$@"
