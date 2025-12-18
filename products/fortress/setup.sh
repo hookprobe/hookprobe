@@ -93,10 +93,85 @@ HOOKPROBE_LTE_PASS="${HOOKPROBE_LTE_PASS:-}"
 # ============================================================
 # LOGGING
 # ============================================================
+# Base logging functions - these are the defaults
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
+
+# Domain-specific logging (not overwritten by sourced scripts)
+# Use these for non-WiFi/non-network operations
+log_db() { echo -e "${BLUE}[DB]${NC} $1"; }
+log_mon() { echo -e "${CYAN}[MON]${NC} $1"; }
+log_sec() { echo -e "${GREEN}[SEC]${NC} $1"; }
+log_lte() { echo -e "${YELLOW}[LTE]${NC} $1"; }
+log_web() { echo -e "${WHITE}[WEB]${NC} $1"; }
+log_svc() { echo -e "${GREEN}[SVC]${NC} $1"; }
+
+# Save original log functions to restore after sourcing external scripts
+_original_log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+_original_log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+_original_log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Restore original log functions (call after sourcing external scripts)
+restore_log_functions() {
+    log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+    log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+    log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+}
+
+# ============================================================
+# NETWORK PREFIX CALCULATIONS
+# ============================================================
+# These functions calculate proper IP ranges based on CIDR prefix
+
+# Get the number of usable hosts for a given prefix
+get_host_count() {
+    local prefix="${1:-24}"
+    local total=$((2 ** (32 - prefix)))
+    # Subtract 2 for network and broadcast addresses
+    echo $((total - 2))
+}
+
+# Get the netmask in dotted decimal format
+get_netmask() {
+    local prefix="${1:-24}"
+    local mask=$((0xFFFFFFFF << (32 - prefix)))
+    printf "%d.%d.%d.%d\n" \
+        $(( (mask >> 24) & 255 )) \
+        $(( (mask >> 16) & 255 )) \
+        $(( (mask >> 8) & 255 )) \
+        $(( mask & 255 ))
+}
+
+# Calculate DHCP range based on prefix
+# Gateway is .1, DHCP starts at .2 and goes up to (broadcast - 1)
+# Returns: start_ip end_ip
+get_dhcp_range() {
+    local base_network="${1:-10.250.0}"  # e.g., "10.250.0"
+    local prefix="${2:-24}"
+
+    local host_count=$(get_host_count "$prefix")
+
+    # Start at .2 (after gateway)
+    local start=2
+    # End at host_count (e.g., for /28: .14, for /24: .254)
+    local end=$host_count
+
+    # Cap at reasonable values
+    [ "$end" -gt 254 ] && end=254
+
+    echo "${base_network}.${start} ${base_network}.${end}"
+}
+
+# Get broadcast address for display (not used in config, but helpful)
+get_broadcast() {
+    local base_network="${1:-10.250.0}"
+    local prefix="${2:-24}"
+    local host_count=$(get_host_count "$prefix")
+    local broadcast=$((host_count + 1))
+    echo "${base_network}.${broadcast}"
+}
 
 # ============================================================
 # DEVICE DETECTION
@@ -728,9 +803,12 @@ setup_ovs_bridge() {
     ovs-vsctl set bridge "$OVS_BRIDGE_NAME" protocols=OpenFlow10,OpenFlow13 2>/dev/null || true
     log_info "OpenFlow 1.3 enabled"
 
-    # Configure bridge IP
+    # Configure bridge IP using user-selected network prefix
+    # Default to /24 if FORTRESS_NETWORK_PREFIX is not set
+    local net_prefix="${FORTRESS_NETWORK_PREFIX:-24}"
     ip link set "$OVS_BRIDGE_NAME" up
-    ip addr add 10.250.0.1/24 dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
+    ip addr add "10.250.0.1/${net_prefix}" dev "$OVS_BRIDGE_NAME" 2>/dev/null || true
+    log_info "Bridge IP: 10.250.0.1/${net_prefix} ($(get_host_count "$net_prefix") usable hosts)"
 
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
@@ -1774,6 +1852,20 @@ setup_dhcp_server() {
     rm -f /etc/dnsmasq.d/fortress.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
 
+    # Calculate DHCP range based on user-selected network prefix
+    local net_prefix="${FORTRESS_NETWORK_PREFIX:-24}"
+    local dhcp_range_output=$(get_dhcp_range "10.250.0" "$net_prefix")
+    local dhcp_start=$(echo "$dhcp_range_output" | cut -d' ' -f1)
+    local dhcp_end=$(echo "$dhcp_range_output" | cut -d' ' -f2)
+    local netmask=$(get_netmask "$net_prefix")
+    local host_count=$(get_host_count "$net_prefix")
+
+    log_info "Network configuration:"
+    log_info "  Prefix: /${net_prefix} (${host_count} usable hosts)"
+    log_info "  Gateway: 10.250.0.1"
+    log_info "  DHCP Range: ${dhcp_start} - ${dhcp_end}"
+    log_info "  Netmask: ${netmask}"
+
     # Create dnsmasq configuration for Fortress
     # Note: VLANs have been removed in favor of nftables-based filtering
     # All interfaces (wired LAN + WiFi) are bridged together on OVS bridge
@@ -1785,7 +1877,7 @@ setup_dhcp_server() {
 #
 # Network Layout:
 #   - All interfaces bridged to OVS 'fortress' bridge
-#   - Single subnet: 10.250.0.0/24
+#   - Subnet: 10.250.0.0/${net_prefix} (${host_count} usable hosts)
 #   - WiFi clients join same network as wired clients
 # Device filtering is handled by nftables MAC rules
 
@@ -1821,12 +1913,12 @@ dhcp-authoritative
 dhcp-rapid-commit
 
 # ─────────────────────────────────────────────────────────────
-# Unified LAN - OVS Bridge (10.250.0.x)
+# Unified LAN - OVS Bridge (10.250.0.x/${net_prefix})
 # ─────────────────────────────────────────────────────────────
 # All interfaces (wired + WiFi) are bridged to OVS 'fortress' bridge
-# Single DHCP pool for all clients
+# Single DHCP pool for all clients, sized according to network prefix
 interface=$OVS_BRIDGE_NAME
-dhcp-range=$OVS_BRIDGE_NAME,10.250.0.100,10.250.0.200,255.255.255.0,24h
+dhcp-range=$OVS_BRIDGE_NAME,${dhcp_start},${dhcp_end},${netmask},24h
 dhcp-option=$OVS_BRIDGE_NAME,3,10.250.0.1
 dhcp-option=$OVS_BRIDGE_NAME,6,10.250.0.1,1.1.1.1
 
@@ -1873,8 +1965,9 @@ EOF
     systemctl enable fortress-dnsmasq 2>/dev/null || true
 
     log_info "DHCP server configured:"
-    log_info "  Unified LAN (bridge): 10.250.0.100-200 (gateway: 10.250.0.1)"
-    log_info "  All clients (wired + WiFi) share the same subnet"
+    log_info "  Network: 10.250.0.0/${net_prefix} (${host_count} hosts)"
+    log_info "  DHCP Pool: ${dhcp_start} - ${dhcp_end}"
+    log_info "  Gateway: 10.250.0.1"
 }
 
 # ============================================================
@@ -2505,7 +2598,7 @@ NATSCRIPT
 # QSECBIT AGENT
 # ============================================================
 install_qsecbit_agent() {
-    log_step "Installing QSecBit agent..."
+    log_step "Installing QSecBit security agent..."
 
     mkdir -p /opt/hookprobe/fortress/qsecbit
     mkdir -p /opt/hookprobe/fortress/data
@@ -2513,7 +2606,7 @@ install_qsecbit_agent() {
     # Copy QSecBit modules from source if available
     local QSECBIT_SRC="$REPO_ROOT/core/qsecbit"
     if [ -d "$QSECBIT_SRC" ]; then
-        log_info "Copying QSecBit modules from source..."
+        log_sec "Copying QSecBit modules from source..."
         cp -r "$QSECBIT_SRC"/*.py /opt/hookprobe/fortress/qsecbit/ 2>/dev/null || true
     fi
 
@@ -2884,7 +2977,7 @@ SERVICEEOF
     systemctl daemon-reload
     systemctl enable fortress-qsecbit
 
-    log_info "QSecBit Fortress Agent installed"
+    log_sec "QSecBit Fortress Agent installed"
 }
 
 # ============================================================
@@ -2896,7 +2989,7 @@ install_monitoring() {
         return 0
     fi
 
-    log_step "Installing monitoring stack..."
+    log_step "Installing monitoring stack (Grafana + Victoria Metrics)..."
 
     # Create directories with proper permissions
     mkdir -p /opt/hookprobe/fortress/monitoring
@@ -2922,17 +3015,17 @@ GRAFANAEOF
     podman rm fortress-victoria fortress-grafana 2>/dev/null || true
 
     # Victoria Metrics container (time-series database)
-    log_info "Starting Victoria Metrics..."
+    log_mon "Starting Victoria Metrics..."
     podman run -d \
         --name fortress-victoria \
         --restart unless-stopped \
         -p 8428:8428 \
         -v /opt/hookprobe/fortress/monitoring:/victoria-metrics-data:Z \
         docker.io/victoriametrics/victoria-metrics:latest \
-        2>/dev/null && log_info "✓ Victoria Metrics started" || log_warn "Victoria Metrics may already be running"
+        2>/dev/null && log_mon "✓ Victoria Metrics started" || log_warn "Victoria Metrics may already be running"
 
     # Grafana container (dashboards)
-    log_info "Starting Grafana..."
+    log_mon "Starting Grafana..."
     podman run -d \
         --name fortress-grafana \
         --restart unless-stopped \
@@ -2943,22 +3036,22 @@ GRAFANAEOF
         -e GF_USERS_ALLOW_SIGN_UP=false \
         -e GF_SERVER_ROOT_URL=http://localhost:3000 \
         docker.io/grafana/grafana:latest \
-        2>/dev/null && log_info "✓ Grafana started" || log_warn "Grafana may already be running"
+        2>/dev/null && log_mon "✓ Grafana started" || log_warn "Grafana may already be running"
 
     # Wait for containers to start
     sleep 3
 
     # Verify containers are running
     if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-grafana"; then
-        log_info "✓ Grafana container verified running"
+        log_mon "✓ Grafana container verified running"
     else
         log_warn "Grafana container not running - checking logs..."
         podman logs fortress-grafana 2>&1 | tail -5 || true
     fi
 
-    log_info "Monitoring stack installed"
-    log_info "  Victoria Metrics: http://localhost:8428"
-    log_info "  Grafana: http://localhost:3000 (admin/$GRAFANA_PASS)"
+    log_mon "Monitoring stack installed"
+    log_mon "  Victoria Metrics: http://localhost:8428"
+    log_mon "  Grafana: http://localhost:3000 (admin/$GRAFANA_PASS)"
 
     # Install security monitoring (Suricata, Zeek, ML)
     install_security_monitoring
@@ -2968,7 +3061,7 @@ GRAFANAEOF
 # SECURITY MONITORING (Suricata, Zeek, ML/LSTM)
 # ============================================================
 install_security_monitoring() {
-    log_step "Installing security monitoring stack..."
+    log_step "Installing security monitoring stack (Suricata + Zeek)..."
 
     # Create directories for security monitoring
     mkdir -p /opt/hookprobe/fortress/data/{suricata-logs,suricata-rules}
@@ -2988,10 +3081,10 @@ install_security_monitoring() {
     else
         MONITOR_IFACE="any"
     fi
-    log_info "Security monitoring interface: $MONITOR_IFACE"
+    log_sec "Monitoring interface: $MONITOR_IFACE"
 
     # Pull container images
-    log_info "Pulling security monitoring images..."
+    log_sec "Pulling security monitoring images..."
     podman pull docker.io/jasonish/suricata:latest 2>/dev/null || log_warn "Failed to pull Suricata image"
     podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
 
@@ -3000,7 +3093,7 @@ install_security_monitoring() {
     podman rm fortress-suricata fortress-zeek 2>/dev/null || true
 
     # Start Suricata IDS container
-    log_info "Starting Suricata IDS..."
+    log_sec "Starting Suricata IDS..."
     podman run -d \
         --name fortress-suricata \
         --network host \
@@ -3012,7 +3105,7 @@ install_security_monitoring() {
         -v /opt/hookprobe/fortress/data/suricata-rules:/var/lib/suricata:Z \
         docker.io/jasonish/suricata:latest \
         -i "$MONITOR_IFACE" \
-        2>/dev/null && log_info "✓ Suricata started" || log_warn "Suricata may already be running"
+        2>/dev/null && log_sec "✓ Suricata started" || log_warn "Suricata may already be running"
 
     # Create Zeek configuration
     cat > /opt/hookprobe/fortress/zeek/local.zeek << 'ZEEKEOF'
@@ -3043,7 +3136,7 @@ redef Notice::policy += {
 ZEEKEOF
 
     # Start Zeek Network Analyzer
-    log_info "Starting Zeek Network Analyzer..."
+    log_sec "Starting Zeek Network Analyzer..."
     podman run -d \
         --name fortress-zeek \
         --network host \
@@ -3056,7 +3149,7 @@ ZEEKEOF
         -v /opt/hookprobe/fortress/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro \
         docker.io/zeek/zeek:latest \
         zeek -i "$MONITOR_IFACE" local \
-        2>/dev/null && log_info "✓ Zeek started" || log_warn "Zeek may already be running"
+        2>/dev/null && log_sec "✓ Zeek started" || log_warn "Zeek may already be running"
 
     # Install ML/LSTM components
     install_ml_components
@@ -3067,11 +3160,11 @@ ZEEKEOF
     # Setup dnsXai privacy controls
     setup_dnsxai_privacy_controls
 
-    log_info "Security monitoring stack installed"
-    log_info "  Suricata: monitoring $MONITOR_IFACE for threats"
-    log_info "  Zeek: analyzing network patterns"
-    log_info "  ML/LSTM: daily training at 3:00 AM"
-    log_info "  DFS Intelligence: ML-powered channel selection (QCN9274/QCN6224 supported)"
+    log_sec "Security monitoring stack installed"
+    log_sec "  Suricata: monitoring $MONITOR_IFACE for threats"
+    log_sec "  Zeek: analyzing network patterns"
+    log_sec "  ML/LSTM: daily training at 3:00 AM"
+    log_sec "  DFS Intelligence: ML-powered channel selection (QCN9274/QCN6224 supported)"
 }
 
 # ============================================================
@@ -3276,7 +3369,7 @@ PRIVSCRIPT
 # DATABASE STACK (PostgreSQL)
 # ============================================================
 install_database() {
-    log_step "Installing database stack..."
+    log_step "Installing database stack (PostgreSQL)..."
 
     # Create directories
     mkdir -p /opt/hookprobe/fortress/postgres/data
@@ -3379,7 +3472,7 @@ SQLEOF
     podman rm fortress-postgres 2>/dev/null || true
 
     # Start PostgreSQL container
-    log_info "Starting PostgreSQL..."
+    log_db "Starting PostgreSQL..."
     podman run -d \
         --name fortress-postgres \
         --restart unless-stopped \
@@ -3390,14 +3483,14 @@ SQLEOF
         -e POSTGRES_USER=fortress \
         -e POSTGRES_PASSWORD="$PG_PASS" \
         docker.io/postgres:15-alpine \
-        2>/dev/null && log_info "✓ PostgreSQL started" || log_warn "PostgreSQL may already be running"
+        2>/dev/null && log_db "✓ PostgreSQL started" || log_warn "PostgreSQL may already be running"
 
     # Wait for PostgreSQL to be ready
-    log_info "Waiting for PostgreSQL to be ready..."
+    log_db "Waiting for PostgreSQL to be ready..."
     local retries=0
     while [ $retries -lt 30 ]; do
         if podman exec fortress-postgres pg_isready -U fortress &>/dev/null; then
-            log_info "✓ PostgreSQL is ready"
+            log_db "✓ PostgreSQL is ready"
             break
         fi
         sleep 1
@@ -3408,8 +3501,8 @@ SQLEOF
         log_warn "PostgreSQL may not be fully ready yet"
     fi
 
-    log_info "Database stack installed"
-    log_info "  PostgreSQL: localhost:5432 (fortress/***)"
+    log_db "Database stack installed"
+    log_db "  PostgreSQL: localhost:5432 (fortress/***)"
 }
 
 # ============================================================
@@ -3503,7 +3596,7 @@ setup_lte_failover() {
 
     # Install ModemManager if not present
     if ! command -v mmcli &>/dev/null; then
-        log_info "Installing ModemManager..."
+        log_lte "Installing ModemManager..."
         if [ "$PKG_MGR" = "apt" ]; then
             apt-get install -y -qq modemmanager libqmi-utils libmbim-utils 2>/dev/null || true
         else
@@ -3512,13 +3605,13 @@ setup_lte_failover() {
     fi
 
     # Detect LTE modem
-    log_info "Detecting LTE modem..."
+    log_lte "Detecting LTE modem..."
     if detect_lte_modem; then
-        log_info "LTE modem detected:"
-        log_info "  Vendor: ${LTE_VENDOR:-unknown}"
-        log_info "  Model: ${LTE_MODEL:-unknown}"
-        log_info "  Interface: ${LTE_INTERFACE:-unknown}"
-        log_info "  Protocol: ${LTE_PROTOCOL:-unknown}"
+        log_lte "LTE modem detected:"
+        log_lte "  Vendor: ${LTE_VENDOR:-unknown}"
+        log_lte "  Model: ${LTE_MODEL:-unknown}"
+        log_lte "  Interface: ${LTE_INTERFACE:-unknown}"
+        log_lte "  Protocol: ${LTE_PROTOCOL:-unknown}"
 
         # Configure modem with APN
         # Check if APN was provided via command line
@@ -3530,11 +3623,11 @@ setup_lte_failover() {
                 HOOKPROBE_LTE_APN="internet"
             else
                 # Interactive mode - prompt for APN
-                log_info "No APN provided. Starting interactive configuration..."
+                log_lte "No APN provided. Starting interactive configuration..."
                 echo ""
 
                 if configure_apn_interactive; then
-                    log_info "LTE APN configured successfully via interactive setup"
+                    log_lte "LTE APN configured successfully via interactive setup"
                 else
                     log_warn "Failed to configure LTE APN. You can configure it later with:"
                     log_warn "  /opt/hookprobe/fortress/devices/common/lte-manager.sh configure"
@@ -3549,33 +3642,33 @@ setup_lte_failover() {
             local username="${HOOKPROBE_LTE_USER:-}"
             local password="${HOOKPROBE_LTE_PASS:-}"
 
-            log_info "Configuring LTE modem:"
-            log_info "  APN: $apn"
-            log_info "  Auth: $auth_type"
-            [ -n "$username" ] && log_info "  Username: $username"
+            log_lte "Configuring LTE modem:"
+            log_lte "  APN: $apn"
+            log_lte "  Auth: $auth_type"
+            [ -n "$username" ] && log_lte "  Username: $username"
 
             if configure_modem_apn "$apn" "$auth_type" "$username" "$password"; then
-                log_info "LTE modem configured successfully"
+                log_lte "LTE modem configured successfully"
             else
                 log_warn "Failed to configure LTE modem"
             fi
         fi
 
         # Setup WAN failover
-        log_info "Setting up WAN failover..."
+        log_lte "Setting up WAN failover..."
         local primary_wan="${WAN_INTERFACE:-eth0}"
         local backup_wan="${LTE_INTERFACE:-wwan0}"
 
         if setup_wan_failover "$primary_wan" "$backup_wan"; then
-            log_info "WAN failover configured:"
-            log_info "  Primary WAN: $primary_wan"
-            log_info "  Backup WAN: $backup_wan"
+            log_lte "WAN failover configured:"
+            log_lte "  Primary WAN: $primary_wan"
+            log_lte "  Backup WAN: $backup_wan"
         else
             log_warn "Failed to setup WAN failover"
         fi
 
         # Install IP SLA-style WAN failover monitor
-        log_info "Installing IP SLA WAN failover monitor..."
+        log_lte "Installing IP SLA WAN failover monitor..."
 
         # Copy the monitor script
         local monitor_script="$FORTRESS_ROOT/devices/common/wan-failover-monitor.sh"
@@ -3697,7 +3790,7 @@ WANCONFEOF
         systemctl enable fortress-lte-failover
         systemctl start fortress-wan-failover
 
-        log_info "LTE failover setup complete"
+        log_lte "LTE failover setup complete"
     else
         log_warn "No LTE modem detected. LTE failover not configured."
         log_warn "Connect a supported LTE modem and re-run setup with --enable-lte"
@@ -3708,7 +3801,7 @@ WANCONFEOF
 # SYSTEMD SERVICES
 # ============================================================
 create_systemd_services() {
-    log_step "Creating systemd services..."
+    log_step "Creating systemd services (hookprobe-fortress)..."
 
     # Main Fortress service
     cat > /etc/systemd/system/hookprobe-fortress.service << 'SERVICEEOF'
@@ -3765,7 +3858,7 @@ STOPEOF
     systemctl daemon-reload
     systemctl enable hookprobe-fortress
 
-    log_info "Systemd services created"
+    log_svc "Systemd services created"
 }
 
 # ============================================================
@@ -4253,7 +4346,7 @@ PYEOF
 # WEB DASHBOARD
 # ============================================================
 install_web_dashboard() {
-    log_step "Installing web dashboard..."
+    log_step "Installing web dashboard (Flask + AdminLTE)..."
 
     local WEB_DIR="/opt/hookprobe/fortress/web"
     local SRC_WEB="$FORTRESS_ROOT/web"
@@ -4263,7 +4356,7 @@ install_web_dashboard() {
 
     # Copy web files from source
     if [ -d "$SRC_WEB" ]; then
-        log_info "Copying web files from $SRC_WEB..."
+        log_web "Copying web files from $SRC_WEB..."
         cp -r "$SRC_WEB"/* "$WEB_DIR/"
     else
         log_error "Web source directory not found: $SRC_WEB"
@@ -4275,7 +4368,7 @@ install_web_dashboard() {
     mkdir -p "$CERT_DIR"
 
     if [ ! -f "$CERT_DIR/fortress.crt" ] || [ ! -f "$CERT_DIR/fortress.key" ]; then
-        log_info "Generating self-signed SSL certificate..."
+        log_web "Generating self-signed SSL certificate..."
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$CERT_DIR/fortress.key" \
             -out "$CERT_DIR/fortress.crt" \
@@ -4283,7 +4376,7 @@ install_web_dashboard() {
             2>/dev/null
         chmod 600 "$CERT_DIR/fortress.key"
         chmod 644 "$CERT_DIR/fortress.crt"
-        log_info "SSL certificate generated"
+        log_web "SSL certificate generated"
     fi
 
     # Generate secret key for Flask sessions
@@ -4326,16 +4419,16 @@ USERSEOF
             # Save credentials for display at end of installation
             echo "$ADMIN_PASS" > "$SECRET_DIR/admin_password"
             chmod 600 "$SECRET_DIR/admin_password"
-            log_info "Admin user created:"
-            log_info "  Username: admin"
-            log_info "  Password: $ADMIN_PASS"
-            log_info "  (saved to $SECRET_DIR/admin_password)"
+            log_web "Admin user created:"
+            log_web "  Username: admin"
+            log_web "  Password: $ADMIN_PASS"
+            log_web "  (saved to $SECRET_DIR/admin_password)"
         else
             log_warn "Could not hash password - bcrypt may not be installed"
             log_warn "Default credentials will be: admin / hookprobe"
         fi
     else
-        log_info "Users file already exists, keeping existing credentials"
+        log_web "Users file already exists, keeping existing credentials"
     fi
 
     # Create gunicorn configuration
@@ -4406,12 +4499,12 @@ WEBSERVICEEOF
     sleep 2
 
     if systemctl is-active fortress-web &>/dev/null; then
-        log_info "Web dashboard started successfully on https://0.0.0.0:8443"
+        log_web "Web dashboard started successfully on https://0.0.0.0:8443"
     else
         log_warn "Web dashboard may not have started - check: journalctl -u fortress-web"
     fi
 
-    log_info "Web dashboard installed"
+    log_web "Web dashboard installed"
 }
 
 # ============================================================
@@ -4439,7 +4532,7 @@ profile_dir = ${FORTRESS_PROFILE_DIR:-}
 
 [network]
 ovs_bridge = $OVS_BRIDGE_NAME
-lan_subnet = 10.250.0.0/24
+lan_subnet = 10.250.0.0/${FORTRESS_NETWORK_PREFIX:-24}
 filtering_mode = nftables
 macsec_enabled = $MACSEC_ENABLED
 wan_interface = ${WAN_INTERFACE:-${FORTRESS_WAN_IFACE:-}}
@@ -5214,6 +5307,12 @@ main() {
 
     # Now configure WiFi AP with correct regulatory domain
     setup_wifi_ap
+
+    # IMPORTANT: Restore log functions after WiFi setup
+    # hostapd-generator.sh overrides log_info/log_warn/log_error to use [WIFI] prefix
+    # We need to restore them for subsequent non-WiFi operations
+    restore_log_functions
+
     setup_dhcp_server
 
     # Network filtering via nftables (simpler than VLANs)

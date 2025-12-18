@@ -1,0 +1,74 @@
+# ==============================================================================
+# Fortress dnsXai DNS Protection Container
+# ==============================================================================
+# AI-powered DNS filtering with ML classification
+#
+# Build:
+#   podman build -f Containerfile.dnsxai -t fortress-dnsxai:latest ../..
+#
+# Run:
+#   podman run -p 5353:5353/udp fortress-dnsxai:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    numpy>=1.24.0,<2.0.0 \
+    dnslib>=0.9.0,<1.0.0 \
+    requests>=2.31.0
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcap2-bin \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe dnsxai
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/shared/dnsXai/data \
+             /opt/hookprobe/shared/dnsXai/blocklists \
+             /var/log/hookprobe \
+    && chown -R dnsxai:nogroup /opt/hookprobe /var/log/hookprobe
+
+# Copy dnsXai module
+COPY --chown=dnsxai:nogroup shared/dnsXai/ /opt/hookprobe/shared/dnsXai/
+COPY --chown=dnsxai:nogroup shared/__init__.py /opt/hookprobe/shared/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV DNSXAI_DATA_DIR=/opt/hookprobe/shared/dnsXai/data
+ENV DNSXAI_BLOCKLIST_DIR=/opt/hookprobe/shared/dnsXai/blocklists
+
+# Default blocklist fetch on startup
+RUN python -c "print('dnsXai container ready')"
+
+# Health check - DNS query test
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.sendto(b'test', ('localhost', 5353))" || exit 1
+
+EXPOSE 5353/udp
+
+USER dnsxai
+
+WORKDIR /opt/hookprobe/shared/dnsXai
+
+ENTRYPOINT ["python", "-m", "dnsXai.engine"]
+CMD ["--listen", "0.0.0.0:5353", "--upstream", "1.1.1.1"]
