@@ -179,8 +179,7 @@ services:
     networks:
       fortress-services:
         ipv4_address: 10.250.201.11
-    profiles:
-      - full
+    # Core service - always started (provides mesh DNS protection)
 
   # DFS Intelligence - WiFi Channel ML
   dfs-intelligence:
@@ -207,11 +206,10 @@ services:
     networks:
       fortress-services:
         ipv4_address: 10.250.201.12
-    profiles:
-      - full
+    # Core service - always started (provides WiFi DFS intelligence)
 
   # ============================================================
-  # ML TIER - Threat Detection (fortress-ml)
+  # SECURITY TIER - Threat Detection (fortress-ml)
   # ============================================================
 
   # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
@@ -252,8 +250,7 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    profiles:
-      - full
+    # Core service - always started (provides mesh threat detection)
 
   # LSTM Trainer - PyTorch model training (scheduled job)
   lstm-trainer:
