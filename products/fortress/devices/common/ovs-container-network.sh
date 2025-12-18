@@ -10,7 +10,7 @@
 #
 # Network Tiers:
 #   - fortress-data    (10.250.200.0/24)      - NO internet - postgres, redis
-#   - fortress-services (10.250.201.0/24)     - internet OK - web, dnsxai, dfs
+#   - fortress-svc     (10.250.201.0/24)      - internet OK - web, dnsxai, dfs
 #   - fortress-ml      (10.250.202.0/24)      - NO internet - lstm-trainer
 #   - fortress-mgmt    (10.250.203.0/24)      - NO internet - grafana, victoria
 #   - fortress-lan     (10.200.0.0/MASK)      - LAN clients + WiFi AP
@@ -53,9 +53,11 @@ get_lan_cidr() {
 }
 
 # Container network tiers (OVS internal ports)
+# NOTE: Interface names must be <= 15 chars (Linux IFNAMSIZ limit)
+# With "fortress-" prefix (9 chars), tier names must be <= 6 chars
 declare -A TIER_CONFIG=(
     ["data"]="10.250.200.1/24:false"      # gateway:internet_allowed
-    ["services"]="10.250.201.1/24:true"
+    ["svc"]="10.250.201.1/24:true"        # services tier (shortened for 15-char limit)
     ["ml"]="10.250.202.1/24:false"
     ["mgmt"]="10.250.203.1/24:false"
     ["lan"]="${LAN_BASE_IP}/${LAN_SUBNET_MASK}:true"  # LAN clients need NAT
@@ -822,7 +824,7 @@ create_podman_networks() {
     mkdir -p "$cni_dir"
 
     # For each tier, create a macvlan network attached to OVS internal port
-    for tier in data services ml mgmt; do
+    for tier in data svc ml mgmt; do
         local port_name="${OVS_BRIDGE}-${tier}"
         local config="${TIER_CONFIG[$tier]}"
         local gateway="${config%%:*}"
@@ -883,7 +885,7 @@ create_container_veths() {
         # Determine tier from IP
         case "$ip" in
             10.250.200.*) tier="data" ;;
-            10.250.201.*) tier="services" ;;
+            10.250.201.*) tier="svc" ;;
             10.250.202.*) tier="ml" ;;
             10.250.203.*) tier="mgmt" ;;
             *) continue ;;
@@ -1009,14 +1011,14 @@ Examples:
   $0 nat eth0                       # Setup NAT
   $0 dhcp                           # Configure DHCP
   $0 podman-networks                # Create Podman CNI networks
-  $0 attach fortress-web 10.250.201.10 services
+  $0 attach fortress-web 10.250.201.10 svc
   $0 connect-containers             # Connect all containers
   $0 block 10.200.0.50              # Block IP
   $0 vxlan-peer mssp 203.0.113.1 2000
 
 Container Network Tiers:
   data      10.250.200.0/24      postgres, redis (NO internet)
-  services  10.250.201.0/24      web, dnsxai, dfs (internet OK)
+  svc       10.250.201.0/24      web, dnsxai, dfs (internet OK)
   ml        10.250.202.0/24      lstm-trainer (NO internet)
   mgmt      10.250.203.0/24      grafana, victoria (NO internet)
   lan       10.200.0.0/MASK      WiFi/LAN clients (NAT to internet)
