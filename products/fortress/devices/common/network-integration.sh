@@ -237,7 +237,7 @@ create_wifi_services() {
     #   3. fortress-hostapd-5ghz.service - 5GHz AP (depends on allocator)
     #   4. fortress-hostapd.service - Combined service for backward compatibility
 
-    local ovs_bridge="${OVS_BRIDGE_NAME:-fortress}"
+    local ovs_bridge="${OVS_BRIDGE_NAME:-43ess}"
     local allocator_script="/opt/hookprobe/fortress/devices/common/wifi-band-allocator.sh"
 
     # Install the allocator script
@@ -499,7 +499,7 @@ setup_lan_bridge_auto() {
         setup_lan_bridge "$NET_WAN_IFACE" "$NET_WWAN_IFACE"
     else
         # Manual bridge creation
-        local bridge_name="${OVS_BRIDGE_NAME:-fortress}"
+        local bridge_name="${OVS_BRIDGE_NAME:-43ess}"
 
         ip link add name "$bridge_name" type bridge 2>/dev/null || true
         ip link set "$bridge_name" up
