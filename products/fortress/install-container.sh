@@ -591,7 +591,10 @@ setup_network() {
     # Detect network interfaces
     log_info "Detecting network interfaces..."
     if [ -f "$integration_script" ]; then
+        # Save SCRIPT_DIR before sourcing - network-integration.sh overwrites it
+        local _saved_script_dir="$SCRIPT_DIR"
         source "$integration_script"
+        SCRIPT_DIR="$_saved_script_dir"  # Restore after sourcing
         network_integration_init || {
             log_warn "Network detection had issues - continuing with defaults"
         }
