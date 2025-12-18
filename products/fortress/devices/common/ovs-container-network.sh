@@ -8,12 +8,12 @@
 #   - Traffic mirroring to QSecBit for analysis
 #   - Per-tier internet isolation
 #
-# Network Tiers:
-#   - fortress-data    (10.250.200.0/24)      - NO internet - postgres, redis
-#   - fortress-services (10.250.201.0/24)     - internet OK - web, dnsxai, dfs
-#   - fortress-ml      (10.250.202.0/24)      - NO internet - lstm-trainer
-#   - fortress-mgmt    (10.250.203.0/24)      - NO internet - grafana, victoria
-#   - fortress-lan     (10.200.0.0/MASK)      - LAN clients + WiFi AP
+# Network Tiers (43ess = leetspeak for "fortress"):
+#   - 43ess-data      (10.250.200.0/24)      - NO internet - postgres, redis
+#   - 43ess-services  (10.250.201.0/24)      - internet OK - web, dnsxai, dfs
+#   - 43ess-ml        (10.250.202.0/24)      - NO internet - lstm-trainer
+#   - 43ess-mgmt      (10.250.203.0/24)      - NO internet - grafana, victoria
+#   - 43ess-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
 #
 # LAN subnet is configurable via LAN_SUBNET_MASK environment variable
 # Supports /23 (510 devices) to /29 (6 devices), default is /23
@@ -31,7 +31,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ============================================================
 
 # OVS Bridge
-OVS_BRIDGE="${OVS_BRIDGE:-fortress}"
+# Using "43ess" (leetspeak for "fortress") to keep interface names short
+# Linux IFNAMSIZ limit is 15 chars, so "43ess-" (6 chars) leaves 9 for tier names
+OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
 
 # LAN subnet configuration (can be overridden by environment)
 # Supports /23 to /29 - defaults to /23 for maximum flexibility
@@ -53,9 +55,11 @@ get_lan_cidr() {
 }
 
 # Container network tiers (OVS internal ports)
+# NOTE: Interface names must be <= 15 chars (Linux IFNAMSIZ limit)
+# With "43ess-" prefix (6 chars), tier names can be up to 9 chars
 declare -A TIER_CONFIG=(
     ["data"]="10.250.200.1/24:false"      # gateway:internet_allowed
-    ["services"]="10.250.201.1/24:true"
+    ["services"]="10.250.201.1/24:true"   # web, dnsxai, dfs
     ["ml"]="10.250.202.1/24:false"
     ["mgmt"]="10.250.203.1/24:false"
     ["lan"]="${LAN_BASE_IP}/${LAN_SUBNET_MASK}:true"  # LAN clients need NAT
@@ -1014,7 +1018,7 @@ Examples:
   $0 block 10.200.0.50              # Block IP
   $0 vxlan-peer mssp 203.0.113.1 2000
 
-Container Network Tiers:
+Container Network Tiers (43ess = leetspeak for "fortress"):
   data      10.250.200.0/24      postgres, redis (NO internet)
   services  10.250.201.0/24      web, dnsxai, dfs (internet OK)
   ml        10.250.202.0/24      lstm-trainer (NO internet)
