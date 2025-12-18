@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Fortress Uninstall Script
-# Version: 5.2.0
+# Version: 5.4.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Fortress components installed by setup.sh:
