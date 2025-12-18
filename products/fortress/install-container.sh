@@ -57,7 +57,7 @@ show_banner() {
  |  _  | (_) | (_) |   <|  __/| | | (_) | |_) |  __/
  |_| |_|\___/ \___/|_|\_\_|   |_|  \___/|_.__/ \___|
 
-           F O R T R E S S   v5.3.0
+           F O R T R E S S   v5.4.0
        Container-based Security Gateway
 EOF
     echo -e "${NC}"
