@@ -4,20 +4,29 @@
 # All services run in isolation with dedicated storage.
 #
 # Usage:
-#   podman-compose up -d          # Start all services
-#   podman-compose down           # Stop all services
-#   podman-compose down -v        # Stop and remove volumes (clean uninstall)
-#   podman-compose logs -f web    # Follow web container logs
+#   podman-compose up -d                       # Start core services (web, db, cache)
+#   podman-compose --profile full up -d        # Start with ML services
+#   podman-compose --profile training run lstm # Run LSTM training job
+#   podman-compose down                        # Stop all services
+#   podman-compose down -v                     # Stop and remove volumes
+#   podman-compose logs -f web                 # Follow web container logs
 #
-# Version: 5.0.0
+# Container Groups:
+#   - Core: postgres, redis, web (always running)
+#   - ML: qsecbit-agent, dnsxai, dfs-intelligence (--profile full)
+#   - Jobs: lstm-trainer (--profile training, one-shot)
+#
+# Version: 5.2.0
 # License: AGPL-3.0
 
 version: '3.8'
 
 services:
   # ============================================================
-  # PostgreSQL Database
+  # DATA GROUP - Always Running
   # ============================================================
+
+  # PostgreSQL Database
   postgres:
     image: docker.io/library/postgres:15-alpine
     container_name: fortress-postgres
@@ -40,9 +49,7 @@ services:
     networks:
       - fortress-internal
 
-  # ============================================================
   # Redis Cache (Sessions + Rate Limiting)
-  # ============================================================
   redis:
     image: docker.io/library/redis:7-alpine
     container_name: fortress-redis
@@ -63,8 +70,10 @@ services:
       - fortress-internal
 
   # ============================================================
-  # Fortress Web Application (Flask)
+  # WEB GROUP - Always Running
   # ============================================================
+
+  # Fortress Web Application (Flask + Gunicorn)
   web:
     build:
       context: ..
@@ -93,13 +102,17 @@ services:
       # Gunicorn settings
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
+      # ML service endpoints (for API calls)
+      QSECBIT_API_URL: http://localhost:9090
+      DNSXAI_API_URL: http://dnsxai:5353
+      DFS_API_URL: http://dfs-intelligence:8050
     secrets:
       - postgres_password
       - flask_secret
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
-      - fortress_config:/etc/hookprobe
+      - fortress_config:/etc/hookprobe:ro
     ports:
       - "8443:8443"
     healthcheck:
@@ -113,38 +126,124 @@ services:
       - fortress-external
 
   # ============================================================
-  # QSecBit Agent (Optional - Threat Detection)
+  # ML/AI GROUP - Optional (--profile full)
   # ============================================================
+
+  # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
   qsecbit-agent:
     build:
-      context: ..
-      dockerfile: containers/Containerfile.agent
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.agent
     image: localhost/fortress-agent:latest
-    container_name: fortress-agent
+    container_name: fortress-qsecbit
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      DATABASE_HOST: postgres
+      QSECBIT_MODE: fortress
+      DATABASE_HOST: localhost  # Using host network
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
-      REDIS_HOST: redis
+      REDIS_HOST: localhost
       REDIS_PORT: 6379
+      QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
     secrets:
       - postgres_password
     volumes:
-      - agent_data:/app/data
-      - /var/log/fortress:/app/logs
+      - agent_data:/opt/hookprobe/fortress/data
       - fortress_config:/etc/hookprobe:ro
-    # Network access for traffic analysis
+      - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
+    # Host network required for traffic analysis
     network_mode: host
     cap_add:
       - NET_ADMIN
       - NET_RAW
     profiles:
-      - full  # Only start with: podman-compose --profile full up
+      - full
+
+  # dnsXai Engine - DNS ML Protection (numpy, dnslib)
+  dnsxai:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.dnsxai
+    image: localhost/fortress-dnsxai:latest
+    container_name: fortress-dnsxai
+    restart: unless-stopped
+    environment:
+      DNSXAI_UPSTREAM: "1.1.1.1"
+      DNSXAI_PROTECTION_LEVEL: 3
+      DNSXAI_DATA_DIR: /opt/hookprobe/dnsXai/data
+    volumes:
+      - dnsxai_data:/opt/hookprobe/dnsXai/data
+      - dnsxai_blocklists:/opt/hookprobe/dnsXai/blocklists
+      - fortress_config:/etc/hookprobe:ro
+    ports:
+      - "5353:5353/udp"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.sendto(b'test', ('localhost', 5353))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - fortress-internal
+    profiles:
+      - full
+
+  # DFS Intelligence - WiFi Channel ML (numpy, sklearn)
+  dfs-intelligence:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.dfs
+    image: localhost/fortress-dfs:latest
+    container_name: fortress-dfs
+    restart: unless-stopped
+    environment:
+      DFS_DATA_DIR: /opt/hookprobe/wireless/data
+      DFS_DB_PATH: /opt/hookprobe/wireless/data/dfs_radar.db
+    volumes:
+      - dfs_data:/opt/hookprobe/wireless/data
+      - fortress_config:/etc/hookprobe:ro
+    ports:
+      - "8050:8050"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - fortress-internal
+    profiles:
+      - full
+
+  # ============================================================
+  # TRAINING GROUP - One-shot jobs (--profile training)
+  # ============================================================
+
+  # LSTM Trainer - PyTorch model training (scheduled job)
+  lstm-trainer:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.lstm
+    image: localhost/fortress-lstm:latest
+    container_name: fortress-lstm-trainer
+    environment:
+      LSTM_MODEL_DIR: /opt/hookprobe/fortress/data/ml-models/trained
+      LSTM_CHECKPOINT_DIR: /opt/hookprobe/fortress/data/ml-models/checkpoints
+    volumes:
+      - ml_models:/opt/hookprobe/fortress/data/ml-models
+      - agent_data:/opt/hookprobe/fortress/data:ro  # Read threat data
+    networks:
+      - fortress-internal
+    profiles:
+      - training
+    # One-shot job - doesn't restart
+    restart: "no"
 
 # ============================================================
 # SECRETS (file-based for security)
@@ -159,32 +258,40 @@ secrets:
 # VOLUMES (persistent storage)
 # ============================================================
 volumes:
-  # Database storage - critical for persistence
+  # Data Group
   postgres_data:
     driver: local
     name: fortress-postgres-data
-
-  # Redis storage - sessions and cache
   redis_data:
     driver: local
     name: fortress-redis-data
 
-  # Web application data
+  # Web Group
   web_data:
     driver: local
     name: fortress-web-data
-
-  # Web logs
   web_logs:
     driver: local
     name: fortress-web-logs
 
-  # Agent data
+  # ML Group
   agent_data:
     driver: local
     name: fortress-agent-data
+  dnsxai_data:
+    driver: local
+    name: fortress-dnsxai-data
+  dnsxai_blocklists:
+    driver: local
+    name: fortress-dnsxai-blocklists
+  dfs_data:
+    driver: local
+    name: fortress-dfs-data
+  ml_models:
+    driver: local
+    name: fortress-ml-models
 
-  # Shared configuration
+  # Shared
   fortress_config:
     driver: local
     name: fortress-config
@@ -193,7 +300,7 @@ volumes:
 # NETWORKS
 # ============================================================
 networks:
-  # Internal network (database, redis, web)
+  # Internal network (database, redis, web, ML services)
   fortress-internal:
     driver: bridge
     internal: true
@@ -202,7 +309,7 @@ networks:
         - subnet: 10.250.100.0/24
           gateway: 10.250.100.1
 
-  # External network (web only)
+  # External network (web only - HTTPS access)
   fortress-external:
     driver: bridge
     ipam:

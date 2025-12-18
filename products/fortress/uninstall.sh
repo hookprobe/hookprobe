@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Fortress Uninstall Script
-# Version: 5.1.0
+# Version: 5.2.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Fortress components installed by setup.sh:
@@ -91,7 +91,7 @@ parse_args() {
             --keep-data) KEEP_DATA=true; shift ;;
             --keep-config) KEEP_CONFIG=true; shift ;;
             --help|-h)
-                echo "HookProbe Fortress Uninstaller v5.1.0"
+                echo "HookProbe Fortress Uninstaller v5.2.0"
                 echo ""
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
@@ -368,17 +368,26 @@ remove_containers() {
         return 0
     fi
 
-    # Container names as created by setup.sh
+    # Container names - includes monitoring, ML, and data containers
     local containers=(
+        # Core containers (container mode)
+        "fortress-web"
+        "fortress-postgres"
+        "fortress-redis"
+        # ML/AI containers
+        "fortress-qsecbit"
+        "fortress-agent"
+        "fortress-dnsxai"
+        "fortress-dfs"
+        "fortress-lstm-trainer"
+        # Monitoring containers (native mode)
         "fortress-victoria"
         "fortress-grafana"
-        "fortress-postgres"
-        "fortress-victoriametrics"  # Alternative name
+        "fortress-victoriametrics"
         "fortress-n8n"
         "fortress-clickhouse"
         "fortress-suricata"
         "fortress-zeek"
-        "fortress-redis"
     )
 
     for container in "${containers[@]}"; do
@@ -389,13 +398,42 @@ remove_containers() {
         fi
     done
 
+    # Remove container images
+    log_info "Removing container images..."
+    local images=(
+        "localhost/fortress-web:latest"
+        "localhost/fortress-agent:latest"
+        "localhost/fortress-dnsxai:latest"
+        "localhost/fortress-dfs:latest"
+        "localhost/fortress-lstm:latest"
+    )
+
+    for image in "${images[@]}"; do
+        if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -q "^${image}$"; then
+            log_info "Removing image: $image"
+            podman rmi -f "$image" 2>/dev/null || true
+        fi
+    done
+
     # Remove volumes
     log_info "Removing Podman volumes..."
     local volumes=(
+        # Core volumes
+        "fortress-postgres-data"
+        "fortress-redis-data"
+        "fortress-web-data"
+        "fortress-web-logs"
+        "fortress-config"
+        # ML volumes
+        "fortress-agent-data"
+        "fortress-dnsxai-data"
+        "fortress-dnsxai-blocklists"
+        "fortress-dfs-data"
+        "fortress-ml-models"
+        # Monitoring volumes
         "fortress-victoriametrics-data"
         "fortress-victoria-data"
         "fortress-grafana-data"
-        "fortress-postgres-data"
         "fortress-n8n-data"
         "fortress-clickhouse-data"
     )
