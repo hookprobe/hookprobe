@@ -134,6 +134,7 @@ stop_services() {
     log_step "Stopping Fortress services..."
 
     local services=(
+        "fortress"
         "hookprobe-fortress"
         "fortress-qsecbit"
         "fortress-lte-failover"
@@ -322,6 +323,7 @@ remove_systemd_services() {
     log_step "Removing systemd services..."
 
     local services=(
+        "fortress"
         "hookprobe-fortress"
         "fortress-qsecbit"
         "fortress-lte-failover"
@@ -1013,7 +1015,7 @@ verify_uninstall() {
     local issues=0
 
     # Check services
-    for svc in hookprobe-fortress fortress-qsecbit fortress-lte-failover; do
+    for svc in fortress hookprobe-fortress fortress-qsecbit fortress-lte-failover; do
         if systemctl is-active "$svc" &>/dev/null; then
             log_warn "Service still running: $svc"
             issues=$((issues + 1))
@@ -1026,9 +1028,9 @@ verify_uninstall() {
         issues=$((issues + 1))
     fi
 
-    # Check containers
+    # Check containers (core + monitoring)
     if command -v podman &>/dev/null; then
-        for container in fortress-victoria fortress-grafana fortress-suricata fortress-zeek; do
+        for container in fortress-web fortress-postgres fortress-redis fortress-qsecbit fortress-dnsxai fortress-dfs fortress-victoria fortress-grafana fortress-suricata fortress-zeek; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "Container still exists: $container"
                 issues=$((issues + 1))

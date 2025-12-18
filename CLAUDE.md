@@ -951,14 +951,14 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 - POS systems, guest WiFi, staff networks
 - GDPR compliance requirements
 
-**Architecture** (Container Mode):
-- **Deployment**: Podman containers with podman-compose
-- **Web UI**: Flask app with AdminLTE 3.x in container
-- **Database**: PostgreSQL container with persistent volume
-- **Cache**: Redis container for sessions/rate limiting
-- **Network**: Linux bridge with DHCP and NAT
-- **WiFi**: Dual-band hostapd AP with bridge integration
-- **ML Services** (optional): QSecBit, dnsXai, DFS intelligence
+**Architecture**:
+- **Containers**: Podman with podman-compose orchestration
+- **Web UI**: Flask + AdminLTE 3.x (gunicorn in container)
+- **Database**: PostgreSQL 15 with persistent volume
+- **Cache**: Redis 7 for sessions and rate limiting
+- **Network**: Linux bridge (`fortress`) with DHCP and NAT
+- **WiFi**: Dual-band hostapd AP bridged to LAN
+- **Security Core**: QSecBit threat detection, dnsXai DNS protection, DFS WiFi intelligence
 
 **Installation**:
 ```bash
@@ -981,19 +981,19 @@ sudo ./install.sh --quick
 | WiFi Password | Random 12-char | Or user-specified (min 8 chars) |
 | Web Port | `8443` | HTTPS port for admin UI |
 
-**Container Architecture**:
+**Services**:
 
 | Container | Purpose | Profile |
 |-----------|---------|---------|
-| fortress-postgres | PostgreSQL database | Core (always) |
-| fortress-redis | Session cache, rate limiting | Core (always) |
-| fortress-web | Flask admin UI (gunicorn) | Core (always) |
-| fortress-qsecbit | Threat detection agent | `--profile full` |
-| fortress-dnsxai | DNS ML protection | `--profile full` |
-| fortress-dfs | WiFi DFS intelligence | `--profile full` |
-| fortress-grafana | Monitoring dashboard | `--profile monitoring` |
-| fortress-victoria | Metrics database | `--profile monitoring` |
-| fortress-lstm-trainer | ML training (one-shot) | `--profile training` |
+| fortress-postgres | PostgreSQL database | Core |
+| fortress-redis | Session cache, rate limiting | Core |
+| fortress-web | Flask admin UI (gunicorn) | Core |
+| fortress-qsecbit | QSecBit threat detection | Core |
+| fortress-dnsxai | dnsXai DNS ML protection | Core |
+| fortress-dfs | DFS WiFi channel intelligence | Core |
+| fortress-grafana | Monitoring dashboard | Optional (`--profile monitoring`) |
+| fortress-victoria | Metrics database | Optional (`--profile monitoring`) |
+| fortress-lstm-trainer | ML training (one-shot) | Optional (`--profile training`) |
 
 **Network Configuration**:
 - **Bridge**: `fortress` (10.200.0.1/24)
