@@ -152,6 +152,33 @@ collect_configuration() {
     INSTALL_ML=true
     BUILD_ML_CONTAINERS=true
 
+    # LAN subnet configuration
+    echo ""
+    echo "LAN Subnet Size:"
+    echo "  1) /24 - 254 devices (10.200.0.0/24) - recommended for most"
+    echo "  2) /26 - 62 devices  (10.200.0.0/26) - small office"
+    echo "  3) /28 - 14 devices  (10.200.0.0/28) - very small"
+    echo ""
+    read -p "Select subnet [1]: " subnet_choice
+    case "${subnet_choice:-1}" in
+        2)
+            LAN_SUBNET_MASK="26"
+            LAN_DHCP_START="10.200.0.10"
+            LAN_DHCP_END="10.200.0.62"
+            ;;
+        3)
+            LAN_SUBNET_MASK="28"
+            LAN_DHCP_START="10.200.0.2"
+            LAN_DHCP_END="10.200.0.14"
+            ;;
+        *)
+            LAN_SUBNET_MASK="24"
+            LAN_DHCP_START="10.200.0.100"
+            LAN_DHCP_END="10.200.0.200"
+            ;;
+    esac
+    log_info "LAN subnet: 10.200.0.0/$LAN_SUBNET_MASK"
+
     # Admin password
     echo ""
     echo "Admin Portal Access:"
@@ -205,6 +232,7 @@ collect_configuration() {
     echo "Installation Summary:"
     echo "====================="
     echo "  Network Mode:  $NETWORK_MODE"
+    echo "  LAN Subnet:    10.200.0.0/$LAN_SUBNET_MASK (DHCP: $LAN_DHCP_START - $LAN_DHCP_END)"
     echo "  Security Core: QSecBit + dnsXai + DFS Intelligence"
     echo "  Admin User:    $ADMIN_USER"
     echo "  WiFi SSID:     $WIFI_SSID"
@@ -442,10 +470,16 @@ setup_network() {
     log_info "  WiFi: ${NET_WIFI_24GHZ_IFACE:-none} (2.4G) / ${NET_WIFI_5GHZ_IFACE:-none} (5G)"
     log_info "  LTE:  ${NET_WWAN_IFACE:-none}"
 
-    # Create LAN bridge
+    # Create LAN bridge with configured subnet
     log_info "Creating LAN bridge..."
     local bridge_name="fortress"
     local bridge_ip="10.200.0.1"
+
+    # Export subnet configuration for bridge-manager.sh
+    export FORTRESS_BRIDGE_NAME="$bridge_name"
+    export FORTRESS_BRIDGE_IP="$bridge_ip"
+    export FORTRESS_BRIDGE_NETMASK="${LAN_SUBNET_MASK:-24}"
+    export FORTRESS_BRIDGE_NETWORK="10.200.0.0/${LAN_SUBNET_MASK:-24}"
 
     if [ -f "$bridge_script" ]; then
         source "$bridge_script"
@@ -454,16 +488,22 @@ setup_network() {
         }
 
         # Add LAN interfaces to bridge
+        log_info "Adding LAN interfaces to bridge..."
         if [ -n "$NET_LAN_IFACES" ]; then
             for iface in $NET_LAN_IFACES; do
+                log_info "  Adding $iface to $bridge_name..."
                 add_interface_to_bridge "$iface" "$bridge_name" || {
                     log_warn "Failed to add $iface to bridge"
                 }
             done
+        else
+            log_warn "No LAN interfaces detected to add to bridge"
+            log_info "  WiFi AP will provide client connectivity"
         fi
 
-        # Configure DHCP
-        configure_dnsmasq_bridge || {
+        # Configure DHCP with selected subnet range
+        configure_dnsmasq_bridge_custom "$bridge_name" "$bridge_ip" \
+            "${LAN_DHCP_START:-10.200.0.100}" "${LAN_DHCP_END:-10.200.0.200}" || {
             log_warn "DHCP configuration had issues"
         }
 
@@ -835,6 +875,10 @@ quick_install() {
     BUILD_ML_CONTAINERS=true
     WIFI_SSID="HookProbe-Fortress"
     WIFI_PASSWORD="hookprobe123"
+    # Subnet defaults
+    LAN_SUBNET_MASK="24"
+    LAN_DHCP_START="10.200.0.100"
+    LAN_DHCP_END="10.200.0.200"
 
     log_warn "Quick install with default credentials"
     log_warn "Admin: admin / hookprobe - CHANGE THIS IMMEDIATELY!"
@@ -928,8 +972,8 @@ main() {
         echo ""
     fi
     echo "Network Configuration:"
-    echo -e "  Bridge:   fortress (10.200.0.1/24)"
-    echo -e "  DHCP:     10.200.0.100 - 10.200.0.200"
+    echo -e "  Bridge:   fortress (10.200.0.1/${LAN_SUBNET_MASK:-24})"
+    echo -e "  DHCP:     ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
     echo ""
     echo "Useful commands:"
     echo "  systemctl status fortress           # Check container status"
