@@ -461,10 +461,11 @@ detect_wifi_bands_direct() {
                 supports_6ghz=true
                 ;;
             ath11k*|ath11k_pci|mt76*|mt7921*|mt7922*)
-                # WiFi 6/6E - tri-band
+                # WiFi 6/6E capable - but 6GHz depends on specific hardware
+                # Do NOT assume 6GHz - only frequency detection can confirm it
                 supports_24ghz=true
                 supports_5ghz=true
-                supports_6ghz=true
+                # supports_6ghz intentionally NOT set - requires frequency detection
                 ;;
             iwlwifi|ath10k*|ath10k_pci|ath9k*|rtw88*|rtw89*|rtl8*|brcmfmac*|brcmsmac*)
                 # Dual-band adapters
@@ -593,11 +594,13 @@ detect_wifi_radio_capabilities() {
                 supports_ap=true
                 ;;
             ath11k*|ath11k_pci)
-                # Qualcomm WiFi 6/6E - supports 2.4/5/6GHz
-                log_info "  Driver $driver is WiFi 6E - assuming tri-band support"
+                # Qualcomm WiFi 6/6E driver - 6GHz depends on specific hardware
+                # ath11k supports both WiFi 6 (no 6GHz) and WiFi 6E (with 6GHz)
+                # Do NOT assume 6GHz - only frequency detection can confirm it
+                log_info "  Driver $driver is WiFi 6/6E capable - checking bands via frequency detection"
                 supports_24ghz=true
                 supports_5ghz=true
-                supports_6ghz=true
+                # supports_6ghz intentionally NOT set - requires frequency detection
                 supports_80211n=true
                 supports_80211ac=true
                 supports_80211ax=true
