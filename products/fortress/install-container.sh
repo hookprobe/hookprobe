@@ -194,6 +194,27 @@ collect_configuration() {
         break
     done
 
+    # WiFi configuration
+    echo ""
+    echo "WiFi Access Point:"
+    read -p "WiFi SSID [HookProbe-Fortress]: " WIFI_SSID
+    WIFI_SSID="${WIFI_SSID:-HookProbe-Fortress}"
+
+    while true; do
+        read -sp "WiFi password (min 8 chars, or press Enter for random): " WIFI_PASSWORD
+        echo ""
+        if [ -z "$WIFI_PASSWORD" ]; then
+            WIFI_PASSWORD=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
+            log_info "Generated random WiFi password"
+            break
+        elif [ ${#WIFI_PASSWORD} -lt 8 ]; then
+            log_warn "Password must be at least 8 characters"
+            continue
+        else
+            break
+        fi
+    done
+
     # Port configuration
     echo ""
     read -p "Web UI port [8443]: " WEB_PORT
@@ -206,6 +227,7 @@ collect_configuration() {
     echo "  Network Mode:  $NETWORK_MODE"
     echo "  ML Services:   $([ "$INSTALL_ML" = true ] && echo "Full (QSecBit, dnsXai, DFS)" || echo "Core only")"
     echo "  Admin User:    $ADMIN_USER"
+    echo "  WiFi SSID:     $WIFI_SSID"
     echo "  Web Port:      $WEB_PORT"
     echo "  Install Dir:   $INSTALL_DIR"
     echo ""
@@ -222,13 +244,13 @@ collect_configuration() {
 create_directories() {
     log_step "Creating directories"
 
-    mkdir -p "$INSTALL_DIR"/{web,lib,data,backups}
-    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$INSTALL_DIR"/{web,lib,data,backups,containers/secrets}
+    mkdir -p "$CONFIG_DIR/secrets"
     mkdir -p "$LOG_DIR"
-    mkdir -p "${CONTAINERS_DIR}/secrets"
 
     chmod 755 "$INSTALL_DIR" "$CONFIG_DIR"
-    chmod 700 "${CONTAINERS_DIR}/secrets"
+    chmod 700 "$INSTALL_DIR/containers/secrets"
+    chmod 700 "$CONFIG_DIR/secrets"
     chmod 755 "$LOG_DIR"
 
     log_info "Directories created"
@@ -243,20 +265,41 @@ copy_application_files() {
     # Copy library files
     cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
 
-    # Copy container files
-    cp -r "${CONTAINERS_DIR}/"* "${INSTALL_DIR}/containers/" 2>/dev/null || true
+    # Copy container files (compose file, Containerfiles, etc.)
+    # Note: Don't overwrite secrets directory if it exists
+    for f in "${CONTAINERS_DIR}"/*; do
+        local fname=$(basename "$f")
+        if [ "$fname" != "secrets" ]; then
+            cp -r "$f" "${INSTALL_DIR}/containers/" 2>/dev/null || true
+        fi
+    done
+
+    # Create grafana provisioning directory (for monitoring profile)
+    mkdir -p "${INSTALL_DIR}/containers/grafana/provisioning"/{dashboards,datasources,alerting}
+    # Create basic datasource config for VictoriaMetrics
+    cat > "${INSTALL_DIR}/containers/grafana/provisioning/datasources/victoria.yml" << 'EOF'
+apiVersion: 1
+datasources:
+  - name: VictoriaMetrics
+    type: prometheus
+    access: proxy
+    url: http://10.250.203.11:8428
+    isDefault: true
+    editable: false
+EOF
 
     # Copy device profiles
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
 
-    log_info "Application files copied"
+    log_info "Application files copied to ${INSTALL_DIR}"
 }
 
 generate_secrets() {
     log_step "Generating secrets"
 
-    local secrets_dir="${CONTAINERS_DIR}/secrets"
+    # Secrets go in the INSTALLED containers directory (where compose runs from)
+    local secrets_dir="${INSTALL_DIR}/containers/secrets"
     mkdir -p "$secrets_dir"
     mkdir -p "${CONFIG_DIR}/secrets"
 
@@ -284,7 +327,11 @@ generate_secrets() {
     # Copy to config dir for web app access
     cp "$secrets_dir/flask_secret" "${CONFIG_DIR}/secrets/fortress_secret_key" 2>/dev/null || true
 
-    log_info "Secrets generated"
+    # Save admin password for display
+    echo "${ADMIN_PASS}" > "${CONFIG_DIR}/secrets/admin_password"
+    chmod 600 "${CONFIG_DIR}/secrets/admin_password"
+
+    log_info "Secrets generated in $secrets_dir"
 }
 
 create_admin_user() {
@@ -373,17 +420,138 @@ setup_network_filter() {
 
     if [ "$NETWORK_MODE" = "filter" ] && [ "$NFTABLES_AVAILABLE" = true ]; then
         # Initialize nftables filter manager
-        chmod +x "${DEVICES_DIR}/common/network-filter-manager.sh"
+        chmod +x "${DEVICES_DIR}/common/network-filter-manager.sh" 2>/dev/null || true
         "${DEVICES_DIR}/common/network-filter-manager.sh" init || {
             log_warn "Failed to initialize nftables filters (may need manual setup)"
         }
         log_info "nftables filter mode initialized"
     elif [ "$NETWORK_MODE" = "vlan" ]; then
-        log_info "VLAN mode selected - OVS setup required separately"
-        log_warn "Run setup.sh for full VLAN configuration"
+        log_info "VLAN mode - OVS bridge will be configured"
     else
         log_warn "Network filtering not configured"
     fi
+}
+
+setup_network() {
+    log_step "Setting up network infrastructure"
+
+    # Source network integration module
+    local integration_script="${DEVICES_DIR}/common/network-integration.sh"
+    local bridge_script="${DEVICES_DIR}/common/bridge-manager.sh"
+    local hostapd_script="${DEVICES_DIR}/common/hostapd-generator.sh"
+
+    # Make scripts executable
+    chmod +x "$integration_script" "$bridge_script" "$hostapd_script" 2>/dev/null || true
+
+    # Detect network interfaces
+    log_info "Detecting network interfaces..."
+    if [ -f "$integration_script" ]; then
+        source "$integration_script"
+        network_integration_init || {
+            log_warn "Network detection had issues - continuing with defaults"
+        }
+    else
+        log_error "Network integration script not found: $integration_script"
+        return 1
+    fi
+
+    # Show what we detected
+    log_info "Detected interfaces:"
+    log_info "  WAN:  ${NET_WAN_IFACE:-auto-detect}"
+    log_info "  LAN:  ${NET_LAN_IFACES:-none}"
+    log_info "  WiFi: ${NET_WIFI_24GHZ_IFACE:-none} (2.4G) / ${NET_WIFI_5GHZ_IFACE:-none} (5G)"
+    log_info "  LTE:  ${NET_WWAN_IFACE:-none}"
+
+    # Create LAN bridge
+    log_info "Creating LAN bridge..."
+    local bridge_name="fortress"
+    local bridge_ip="10.200.0.1"
+
+    if [ -f "$bridge_script" ]; then
+        source "$bridge_script"
+        create_bridge "$bridge_name" "$bridge_ip" || {
+            log_warn "Failed to create bridge - may already exist"
+        }
+
+        # Add LAN interfaces to bridge
+        if [ -n "$NET_LAN_IFACES" ]; then
+            for iface in $NET_LAN_IFACES; do
+                add_interface_to_bridge "$iface" "$bridge_name" || {
+                    log_warn "Failed to add $iface to bridge"
+                }
+            done
+        fi
+
+        # Configure DHCP
+        configure_dnsmasq_bridge || {
+            log_warn "DHCP configuration had issues"
+        }
+
+        # Setup NAT if we have a WAN interface
+        if [ -n "$NET_WAN_IFACE" ]; then
+            setup_nat "$NET_WAN_IFACE" || {
+                log_warn "NAT setup had issues"
+            }
+        fi
+    else
+        log_warn "Bridge manager not found - manual network config required"
+    fi
+
+    # Setup WiFi AP
+    if [ -n "$NET_WIFI_24GHZ_IFACE" ] || [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
+        log_info "Configuring WiFi access point..."
+
+        # Use the configured WIFI_SSID and WIFI_PASSWORD from collect_configuration()
+        local wifi_ssid="${WIFI_SSID:-HookProbe-Fortress}"
+        local wifi_pass="${WIFI_PASSWORD:-}"
+
+        # Generate password if not set
+        if [ -z "$wifi_pass" ]; then
+            wifi_pass=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
+            WIFI_PASSWORD="$wifi_pass"  # Update global for final message
+        fi
+
+        if [ -f "$hostapd_script" ]; then
+            # Prepare interfaces
+            prepare_wifi_interfaces 2>/dev/null || true
+
+            # Generate hostapd config
+            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$bridge_name" || {
+                log_warn "Hostapd configuration had issues"
+            }
+
+            # Create systemd services for WiFi
+            create_wifi_services 2>/dev/null || true
+
+            # Save WiFi credentials
+            echo "WIFI_SSID=$wifi_ssid" >> "$CONFIG_DIR/fortress.conf"
+            echo "$wifi_pass" > "$CONFIG_DIR/secrets/wifi_password"
+            chmod 600 "$CONFIG_DIR/secrets/wifi_password"
+
+            log_info "WiFi AP configured:"
+            log_info "  SSID: $wifi_ssid"
+            log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not configured}"
+            log_info "  5GHz:   ${NET_WIFI_5GHZ_IFACE:-not configured}"
+        else
+            log_warn "Hostapd generator not found - WiFi not configured"
+        fi
+    else
+        log_info "No WiFi interfaces detected - skipping AP setup"
+        WIFI_SSID=""
+        WIFI_PASSWORD=""
+    fi
+
+    # Start networking services
+    log_info "Starting network services..."
+    systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null || {
+        log_warn "dnsmasq service not available"
+    }
+
+    # Enable IP forwarding
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
+
+    log_info "Network infrastructure configured"
 }
 
 build_containers() {
@@ -432,7 +600,9 @@ build_containers() {
 start_containers() {
     log_step "Starting containers"
 
-    cd "$CONTAINERS_DIR"
+    # Use the INSTALLED containers directory
+    local compose_dir="${INSTALL_DIR}/containers"
+    cd "$compose_dir"
 
     # Update compose file with configured port
     sed -i "s/8443:8443/${WEB_PORT}:8443/" podman-compose.yml 2>/dev/null || true
@@ -471,10 +641,15 @@ create_systemd_service() {
     if [ "${INSTALL_ML:-false}" = true ]; then
         profile_flags="--profile full"
     fi
-    if [ "${INSTALL_MONITORING:-true}" = true ]; then
+    # Note: Monitoring profile (--profile monitoring) is optional and disabled by default
+    # Enable with INSTALL_MONITORING=true before running install
+    if [ "${INSTALL_MONITORING:-false}" = true ]; then
         profile_flags="$profile_flags --profile monitoring"
     fi
     profile_flags=$(echo "$profile_flags" | xargs)  # trim whitespace
+
+    # Use the INSTALLED containers directory for systemd service
+    local compose_dir="${INSTALL_DIR}/containers"
 
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]
@@ -486,7 +661,7 @@ Wants=openvswitch-switch.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=${CONTAINERS_DIR}
+WorkingDirectory=${compose_dir}
 ExecStart=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml up -d
 ExecStop=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml down
 ExecReload=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml restart
@@ -692,9 +867,12 @@ quick_install() {
     WEB_PORT="8443"
     INSTALL_ML=true
     BUILD_ML_CONTAINERS=true
+    WIFI_SSID="HookProbe-Fortress"
+    WIFI_PASSWORD="hookprobe123"
 
     log_warn "Quick install with default credentials"
     log_warn "Admin: admin / hookprobe - CHANGE THIS IMMEDIATELY!"
+    log_warn "WiFi:  HookProbe-Fortress / hookprobe123"
 }
 
 # ============================================================
@@ -755,6 +933,7 @@ main() {
     create_admin_user
     create_configuration
     setup_network_filter
+    setup_network
     build_containers
     start_containers
     create_systemd_service
@@ -773,18 +952,27 @@ main() {
     echo -e "  Username: ${BOLD}${ADMIN_USER}${NC}"
     echo -e "  Password: ${BOLD}(your configured password)${NC}"
     echo ""
+    if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PASSWORD" ]; then
+        echo "WiFi Access Point:"
+        echo -e "  SSID:     ${BOLD}${WIFI_SSID}${NC}"
+        echo -e "  Password: ${BOLD}${WIFI_PASSWORD}${NC}"
+        echo ""
+    fi
+    echo "Network Configuration:"
+    echo -e "  Bridge:   fortress (10.200.0.1/24)"
+    echo -e "  DHCP:     10.200.0.100 - 10.200.0.200"
+    echo ""
     echo "Useful commands:"
-    echo "  systemctl status fortress    # Check service status"
-    echo "  systemctl restart fortress   # Restart services"
-    echo "  podman logs fortress-web     # View web logs"
-    echo "  podman logs fortress-postgres # View database logs"
+    echo "  systemctl status fortress           # Check container status"
+    echo "  systemctl status fortress-hostapd-* # Check WiFi AP status"
+    echo "  podman logs fortress-web            # View web logs"
+    echo "  ip link show fortress               # View bridge status"
     echo ""
     echo "Network filtering:"
     if [ "$NETWORK_MODE" = "filter" ]; then
-        echo "  ${DEVICES_DIR}/common/network-filter-manager.sh status"
-        echo "  ${DEVICES_DIR}/common/network-filter-manager.sh set-policy <mac> <policy>"
+        echo "  ${INSTALL_DIR}/devices/common/network-filter-manager.sh status"
     else
-        echo "  VLAN mode - use setup.sh for full configuration"
+        echo "  VLAN mode configured"
     fi
     echo ""
 }
