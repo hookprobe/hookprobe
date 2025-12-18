@@ -2,7 +2,7 @@
 # HookProbe Fortress Web Container Entrypoint
 #
 # Initializes the web application environment and starts gunicorn
-# Version: 5.0.0
+# Version: 5.4.0
 
 set -e
 
