@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Fortress Control Script (fortress-ctl)
-# Version: 5.1.0
+# Version: 5.4.0
 # License: AGPL-3.0
 #
 # Unified installation, upgrade, backup, and uninstall management.
@@ -26,7 +26,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="5.1.0"
+VERSION="5.4.0"
 
 # ============================================================
 # PATHS
