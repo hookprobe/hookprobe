@@ -54,7 +54,7 @@ LTE_STATE_DIR="/var/lib/fortress/lte"
 LOG_DIR="/var/log/hookprobe"
 BACKUP_DIR="/var/backups/fortress"
 STATE_FILE="${CONFIG_DIR}/fortress-state.json"
-OVS_BRIDGE="fortress"
+OVS_BRIDGE="43ess"
 
 # ============================================================
 # OPTIONS
