@@ -17,7 +17,7 @@
 #   ./install-container.sh --quick      # Quick install with defaults
 #   ./install-container.sh --uninstall  # Complete removal
 #
-# Version: 5.0.0
+# Version: 5.2.0
 # License: AGPL-3.0
 
 set -e
@@ -57,7 +57,7 @@ show_banner() {
  |  _  | (_) | (_) |   <|  __/| | | (_) | |_) |  __/
  |_| |_|\___/ \___/|_|\_\_|   |_|  \___/|_.__/ \___|
 
-           F O R T R E S S   v5.0.0
+           F O R T R E S S   v5.2.0
        Container-based Security Gateway
 EOF
     echo -e "${NC}"
@@ -147,6 +147,31 @@ collect_configuration() {
     esac
     log_info "Network mode: $NETWORK_MODE"
 
+    # ML/AI services selection
+    echo ""
+    echo "ML/AI Services:"
+    echo "  1) Core only  - Web UI, database, cache (lightweight)"
+    echo "  2) Full       - Include QSecBit, dnsXai, DFS intelligence (recommended)"
+    echo ""
+    echo "  Full mode includes:"
+    echo "    - QSecBit threat detection (numpy, scipy, sklearn)"
+    echo "    - dnsXai DNS ML protection"
+    echo "    - DFS WiFi channel intelligence"
+    echo "    - LSTM threat pattern training"
+    echo ""
+    read -p "Select mode [2]: " ml_choice
+    case "${ml_choice:-2}" in
+        1|core)
+            INSTALL_ML=false
+            BUILD_ML_CONTAINERS=false
+            ;;
+        *)
+            INSTALL_ML=true
+            BUILD_ML_CONTAINERS=true
+            ;;
+    esac
+    log_info "ML services: $([ "$INSTALL_ML" = true ] && echo "enabled" || echo "disabled")"
+
     # Admin password
     echo ""
     echo "Admin Portal Access:"
@@ -179,6 +204,7 @@ collect_configuration() {
     echo "Installation Summary:"
     echo "====================="
     echo "  Network Mode:  $NETWORK_MODE"
+    echo "  ML Services:   $([ "$INSTALL_ML" = true ] && echo "Full (QSecBit, dnsXai, DFS)" || echo "Core only")"
     echo "  Admin User:    $ADMIN_USER"
     echo "  Web Port:      $WEB_PORT"
     echo "  Install Dir:   $INSTALL_DIR"
@@ -350,24 +376,65 @@ setup_network_filter() {
     fi
 }
 
-start_containers() {
-    log_step "Starting containers"
+build_containers() {
+    log_step "Building container images"
 
     cd "$CONTAINERS_DIR"
+    local repo_root="${SCRIPT_DIR}/../.."
 
-    # Build images
-    log_info "Building container images..."
+    # Core containers (always built)
+    log_info "Building web container..."
     podman build -f Containerfile.web -t localhost/fortress-web:latest "$SCRIPT_DIR" || {
         log_error "Failed to build web container"
         exit 1
     }
 
+    # ML containers (built if --full mode or explicitly requested)
+    if [ "${BUILD_ML_CONTAINERS:-false}" = true ] || [ "${INSTALL_ML:-false}" = true ]; then
+        log_info "Building ML/AI containers..."
+
+        log_info "  - Building qsecbit-agent (numpy, scipy, sklearn)..."
+        podman build -f Containerfile.agent -t localhost/fortress-agent:latest "$repo_root" || {
+            log_warn "Failed to build agent container (ML features may be limited)"
+        }
+
+        log_info "  - Building dnsxai (DNS ML protection)..."
+        podman build -f Containerfile.dnsxai -t localhost/fortress-dnsxai:latest "$repo_root" || {
+            log_warn "Failed to build dnsxai container"
+        }
+
+        log_info "  - Building dfs-intelligence (WiFi ML)..."
+        podman build -f Containerfile.dfs -t localhost/fortress-dfs:latest "$repo_root" || {
+            log_warn "Failed to build dfs container"
+        }
+
+        log_info "  - Building lstm-trainer (PyTorch)..."
+        podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
+            log_warn "Failed to build lstm container (training will be unavailable)"
+        }
+
+        log_info "ML containers built successfully"
+    else
+        log_info "Skipping ML containers (use --full to include)"
+    fi
+}
+
+start_containers() {
+    log_step "Starting containers"
+
+    cd "$CONTAINERS_DIR"
+
     # Update compose file with configured port
     sed -i "s/8443:8443/${WEB_PORT}:8443/" podman-compose.yml 2>/dev/null || true
 
-    # Start services
-    log_info "Starting services..."
-    podman-compose up -d
+    # Start services based on mode
+    if [ "${INSTALL_ML:-false}" = true ]; then
+        log_info "Starting all services (including ML)..."
+        podman-compose --profile full up -d
+    else
+        log_info "Starting core services..."
+        podman-compose up -d
+    fi
 
     # Wait for services
     log_info "Waiting for services to be ready..."
@@ -424,23 +491,35 @@ save_installation_state() {
 
     mkdir -p "$(dirname "$STATE_FILE")"
 
+    # Build container and volume lists based on installation mode
+    local containers='["fortress-web", "fortress-postgres", "fortress-redis"'
+    local volumes='["fortress-postgres-data", "fortress-redis-data", "fortress-web-data", "fortress-web-logs", "fortress-config"'
+
+    if [ "${INSTALL_ML:-false}" = true ]; then
+        containers="${containers}, \"fortress-qsecbit\", \"fortress-dnsxai\", \"fortress-dfs\""
+        volumes="${volumes}, \"fortress-agent-data\", \"fortress-dnsxai-data\", \"fortress-dnsxai-blocklists\", \"fortress-dfs-data\", \"fortress-ml-models\""
+    fi
+    containers="${containers}]"
+    volumes="${volumes}]"
+
     cat > "$STATE_FILE" << EOF
 {
     "deployment_mode": "container",
-    "version": "5.0.0",
+    "version": "5.2.0",
     "installed_at": "$(date -Iseconds)",
     "network_mode": "${NETWORK_MODE}",
+    "ml_enabled": ${INSTALL_ML:-false},
     "web_port": "${WEB_PORT}",
     "admin_user": "${ADMIN_USER}",
-    "containers": ["fortress-web", "fortress-postgres", "fortress-redis"],
-    "volumes": ["fortress-postgres-data", "fortress-redis-data", "fortress-web-data", "fortress-web-logs", "fortress-config"]
+    "containers": ${containers},
+    "volumes": ${volumes}
 }
 EOF
 
     chmod 600 "$STATE_FILE"
 
     # Create VERSION file
-    echo "5.0.0" > "${INSTALL_DIR}/VERSION"
+    echo "5.2.0" > "${INSTALL_DIR}/VERSION"
 
     log_info "Installation state saved"
 }
@@ -470,8 +549,9 @@ uninstall() {
     echo "  --purge       : Remove everything"
     echo ""
     echo -e "${RED}This will remove:${NC}"
-    echo "  - Fortress containers (web, postgres, redis)"
+    echo "  - Fortress containers (web, postgres, redis, ML services)"
     [ "$keep_data" = false ] && echo "  - Database volumes (all user data)"
+    [ "$keep_data" = false ] && echo "  - ML model data and blocklists"
     [ "$keep_config" = false ] && echo "  - Configuration files"
     echo "  - Container images"
     echo "  - Systemd service"
@@ -491,18 +571,38 @@ uninstall() {
     # Stage 1: Stop services
     log_info "Stage 1: Stopping services..."
     systemctl stop fortress 2>/dev/null || true
-    cd "$CONTAINERS_DIR" 2>/dev/null && podman-compose down 2>/dev/null || true
+    systemctl stop fortress-ml 2>/dev/null || true
+    cd "$CONTAINERS_DIR" 2>/dev/null && podman-compose --profile full --profile training down 2>/dev/null || true
 
     # Stage 2: Remove application containers
     log_info "Stage 2: Removing application containers..."
-    podman rm -f fortress-web 2>/dev/null || true
-    podman rmi -f localhost/fortress-web:latest localhost/fortress-agent:latest 2>/dev/null || true
+    podman rm -f fortress-web fortress-qsecbit fortress-dnsxai fortress-dfs fortress-lstm-trainer 2>/dev/null || true
+
+    # Stage 2b: Remove container images
+    log_info "Stage 2b: Removing container images..."
+    podman rmi -f localhost/fortress-web:latest 2>/dev/null || true
+    podman rmi -f localhost/fortress-agent:latest 2>/dev/null || true
+    podman rmi -f localhost/fortress-dnsxai:latest 2>/dev/null || true
+    podman rmi -f localhost/fortress-dfs:latest 2>/dev/null || true
+    podman rmi -f localhost/fortress-lstm:latest 2>/dev/null || true
 
     # Stage 3: Handle data containers/volumes
     if [ "$keep_data" = false ]; then
         log_info "Stage 3: Removing data containers and volumes..."
         podman rm -f fortress-postgres fortress-redis 2>/dev/null || true
-        podman volume rm -f fortress-postgres-data fortress-redis-data fortress-web-data fortress-web-logs fortress-agent-data fortress-config 2>/dev/null || true
+        # Remove all Fortress volumes
+        podman volume rm -f \
+            fortress-postgres-data \
+            fortress-redis-data \
+            fortress-web-data \
+            fortress-web-logs \
+            fortress-agent-data \
+            fortress-dnsxai-data \
+            fortress-dnsxai-blocklists \
+            fortress-dfs-data \
+            fortress-ml-models \
+            fortress-config \
+            2>/dev/null || true
     else
         log_info "Stage 3: Preserving data containers and volumes..."
         # Only stop data containers, don't remove
@@ -566,6 +666,8 @@ quick_install() {
     ADMIN_USER="admin"
     ADMIN_PASS="hookprobe"
     WEB_PORT="8443"
+    INSTALL_ML=true
+    BUILD_ML_CONTAINERS=true
 
     log_warn "Quick install with default credentials"
     log_warn "Admin: admin / hookprobe - CHANGE THIS IMMEDIATELY!"
@@ -629,6 +731,7 @@ main() {
     create_admin_user
     create_configuration
     setup_network_filter
+    build_containers
     start_containers
     create_systemd_service
     save_installation_state
