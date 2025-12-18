@@ -141,8 +141,10 @@ create_ovs_bridge() {
         ovs-vsctl set bridge "$OVS_BRIDGE" \
             protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14,OpenFlow15
 
-        # Set datapath type (use system for better performance)
-        ovs-vsctl set bridge "$OVS_BRIDGE" datapath_type=system
+        # Note: We do NOT set datapath_type=system as it requires full kernel OVS
+        # module support for internal ports. The default datapath works more reliably.
+        # If you need kernel datapath for performance, ensure openvswitch kernel
+        # module is loaded and compatible: modprobe openvswitch
 
         # Enable STP for loop prevention (optional, disable for faster convergence)
         ovs-vsctl set bridge "$OVS_BRIDGE" stp_enable=false
@@ -161,6 +163,14 @@ create_ovs_bridge() {
 create_tier_ports() {
     log_section "Creating Tier Internal Ports"
 
+    # Check if OVS kernel module supports internal ports
+    # This is required for type=internal ports to work
+    if ! lsmod | grep -q "^openvswitch"; then
+        log_warn "OVS kernel module not loaded. Attempting to load..."
+        modprobe openvswitch 2>/dev/null || true
+        sleep 1
+    fi
+
     for tier in "${!TIER_CONFIG[@]}"; do
         local config="${TIER_CONFIG[$tier]}"
         local gateway="${config%%:*}"
@@ -169,12 +179,27 @@ create_tier_ports() {
         # Create internal port if not exists
         if ! ovs-vsctl port-to-br "$port_name" &>/dev/null; then
             log_info "Creating internal port: $port_name ($gateway)"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
-                -- set interface "$port_name" type=internal
+
+            # Try to create internal port - may fail if OVS kernel module doesn't support it
+            if ! ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
+                -- set interface "$port_name" type=internal 2>/dev/null; then
+
+                log_error "Failed to create OVS internal port: $port_name"
+                log_error "This usually means the OVS kernel module is not loaded or incompatible."
+                log_error "Try: modprobe openvswitch"
+                log_error "Or check: dmesg | grep -i openvswitch"
+                log_error ""
+                log_error "Alternative: Use Linux bridge instead of OVS for simpler setups."
+                log_error "See: products/fortress/devices/common/bridge-manager.sh"
+                return 1
+            fi
         fi
 
         # Assign IP to internal port
-        ip link set "$port_name" up
+        if ! ip link set "$port_name" up 2>/dev/null; then
+            log_error "Failed to bring up port: $port_name"
+            return 1
+        fi
 
         # Remove existing IPs and set new one
         ip addr flush dev "$port_name" 2>/dev/null || true
@@ -182,7 +207,7 @@ create_tier_ports() {
 
         # Get port number for OpenFlow rules
         local ofport
-        ofport=$(ovs-vsctl get interface "$port_name" ofport)
+        ofport=$(ovs-vsctl get interface "$port_name" ofport 2>/dev/null || echo "?")
 
         log_info "  Port $port_name: ofport=$ofport, gateway=$gateway"
     done
