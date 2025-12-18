@@ -1,0 +1,75 @@
+# ==============================================================================
+# Fortress LSTM Trainer Container
+# ==============================================================================
+# PyTorch-based LSTM model training for threat pattern detection
+# This is a scheduled job container, not an always-running service
+#
+# Build:
+#   podman build -f Containerfile.lstm -t fortress-lstm:latest ../..
+#
+# Run (one-shot training):
+#   podman run --rm fortress-lstm:latest --train --epochs 100
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libopenblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch (CPU-only for edge devices - much smaller)
+# For GPU support, use: --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install other dependencies
+RUN pip install --no-cache-dir \
+    numpy>=1.24.0,<2.0.0
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe lstm
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/fortress/lib \
+             /opt/hookprobe/fortress/data/ml-models/trained \
+             /opt/hookprobe/fortress/data/ml-models/checkpoints \
+             /var/log/hookprobe \
+    && chown -R lstm:nogroup /opt/hookprobe /var/log/hookprobe
+
+# Copy LSTM module
+COPY --chown=lstm:nogroup products/fortress/lib/lstm_threat_detector.py /opt/hookprobe/fortress/lib/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV LSTM_MODEL_DIR=/opt/hookprobe/fortress/data/ml-models/trained
+ENV LSTM_CHECKPOINT_DIR=/opt/hookprobe/fortress/data/ml-models/checkpoints
+ENV LSTM_LOG_DIR=/var/log/hookprobe
+
+# No health check - this is a one-shot job
+
+USER lstm
+
+WORKDIR /opt/hookprobe/fortress/lib
+
+ENTRYPOINT ["python", "lstm_threat_detector.py"]
+CMD ["--train", "--epochs", "100", "--save-model"]
