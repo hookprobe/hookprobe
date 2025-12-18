@@ -202,11 +202,15 @@ create_tier_ports() {
                 log_error "OVS ports: $(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null)"
                 return 1
             fi
+
+            # Give OVS time to create the kernel interface
+            # This is especially important when creating multiple ports rapidly
+            sleep 1
         fi
 
         # Assign IP to internal port
         # Wait for OVS to create the kernel interface (can take a moment)
-        local retries=10
+        local retries=20
         while [ $retries -gt 0 ]; do
             # Check if interface exists in kernel
             if ip link show "$port_name" &>/dev/null; then
