@@ -473,6 +473,68 @@ DNSMASQEOF
     fi
 }
 
+configure_dnsmasq_bridge_custom() {
+    # Configure dnsmasq for DHCP on the bridge with custom parameters
+    #
+    # Args:
+    #   $1 - Bridge name
+    #   $2 - Bridge IP (gateway)
+    #   $3 - DHCP range start
+    #   $4 - DHCP range end
+    #   $5 - Lease time (optional, default 12h)
+
+    local bridge="${1:-$BRIDGE_NAME}"
+    local bridge_ip="${2:-$BRIDGE_IP}"
+    local dhcp_start="${3:-10.200.0.100}"
+    local dhcp_end="${4:-10.200.0.200}"
+    local dhcp_lease="${5:-12h}"
+    local config_file="/etc/dnsmasq.d/fortress-bridge.conf"
+
+    log_info "Configuring dnsmasq for bridge DHCP..."
+    log_info "  Bridge:     $bridge"
+    log_info "  Gateway:    $bridge_ip"
+    log_info "  DHCP range: $dhcp_start - $dhcp_end"
+
+    mkdir -p "$(dirname "$config_file")"
+
+    cat > "$config_file" << DNSMASQEOF
+# HookProbe Fortress DHCP Configuration
+# Generated: $(date -Iseconds)
+
+# Interface binding
+interface=$bridge
+bind-interfaces
+
+# DHCP range
+dhcp-range=$dhcp_start,$dhcp_end,$dhcp_lease
+
+# Gateway (this device)
+dhcp-option=3,$bridge_ip
+
+# DNS (this device)
+dhcp-option=6,$bridge_ip
+
+# Domain
+domain=fortress.local
+local=/fortress.local/
+
+# Logging
+log-dhcp
+log-queries
+
+# Cache
+cache-size=1000
+DNSMASQEOF
+
+    chmod 644 "$config_file"
+    log_success "dnsmasq config created: $config_file"
+
+    # Restart dnsmasq if running
+    if systemctl is-active dnsmasq &>/dev/null; then
+        systemctl restart dnsmasq 2>/dev/null || true
+    fi
+}
+
 # ============================================================
 # NAT/Masquerade Setup
 # ============================================================

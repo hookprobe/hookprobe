@@ -1469,22 +1469,24 @@ install_fortress() {
     echo -e "${GREEN}███${NC}░ ${BOLD}${WHITE}FORTRESS${NC} - ${ITALIC}\"Your Digital Stronghold\"${NC}"
     echo ""
     echo "Fortress is a full-featured edge gateway for small businesses."
-    echo "Simple local authentication (max 5 users), no complex IAM needed."
+    echo "Container-based deployment with simple local authentication."
     echo ""
     echo -e "${YELLOW}Core Components:${NC}"
-    echo "  • All Guardian features, plus:"
-    echo "  • OVS Bridge with VLAN Segmentation"
-    echo "  • Local Auth (admin/operator/viewer roles)"
-    echo "  • n8n Workflow Automation"
-    echo "  • Victoria Metrics + Grafana Dashboards"
+    echo "  • Linux Bridge with LAN interface bridging"
+    echo "  • Dual-band WiFi Access Point (hostapd)"
+    echo "  • DHCP Server (dnsmasq)"
     echo "  • QSecBit AI Threat Detection"
+    echo "  • dnsXai DNS ML Protection"
+    echo "  • DFS WiFi Intelligence"
+    echo "  • PostgreSQL + Redis (containerized)"
+    echo "  • Flask Admin UI (https://localhost:8443)"
     if [ "$SYS_LTE_COUNT" -gt 0 ]; then
         echo "  • LTE/5G failover support"
     fi
     echo ""
     echo -e "${YELLOW}Resource Usage:${NC}"
-    echo "  • RAM: ~4-6GB under normal operation"
-    echo "  • Storage: ~20GB for containers and data"
+    echo "  • RAM: ~2-4GB under normal operation"
+    echo "  • Storage: ~15GB for containers and data"
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
@@ -1658,9 +1660,10 @@ install_fortress() {
     [ -n "$wifi_ssid" ] && echo "  • WiFi SSID: $wifi_ssid"
     echo ""
     echo -e "${BOLD}Core Features:${NC}"
-    echo "  ✓ OVS Bridge with OpenFlow 1.3"
-    echo "  ✓ VLAN Segmentation (5 VLANs)"
+    echo "  ✓ Linux Bridge (fortress) for LAN"
     echo "  ✓ QSecBit Security Agent"
+    echo "  ✓ dnsXai DNS Protection"
+    echo "  ✓ DFS WiFi Intelligence"
     echo "  ✓ Web Dashboard (https://localhost:8443)"
     echo "  ✓ Local Auth (max 5 users)"
     echo ""
@@ -1713,61 +1716,31 @@ CFEOF
             [ -n "$lte_pass" ] && extra_args="$extra_args --lte-pass $lte_pass"
         fi
 
-        if [ -f "$SCRIPT_DIR/products/fortress/setup.sh" ]; then
-            bash "$SCRIPT_DIR/products/fortress/setup.sh" $extra_args
+        # Container-based Fortress installation (primary method)
+        if [ -f "$SCRIPT_DIR/products/fortress/install.sh" ]; then
+            # Export environment variables for the container installer
+            export WIFI_SSID="$wifi_ssid"
+            export WIFI_PASSWORD="$wifi_password"
+            [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
+
+            # Run the container installer (handles its own prompts and completion message)
+            bash "$SCRIPT_DIR/products/fortress/install.sh"
             local exit_code=$?
 
-            # Show completion message if setup succeeded
             if [ $exit_code -eq 0 ]; then
-                echo ""
-                echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-                echo -e "${CYAN}║${NC}  ${GREEN}🎉 FORTRESS INSTALLATION COMPLETE${NC}                          ${CYAN}║${NC}"
-                echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
-
-                # Show admin credentials
-                local admin_pass=""
-                if [ -f /etc/hookprobe/secrets/admin_password ]; then
-                    admin_pass=$(cat /etc/hookprobe/secrets/admin_password 2>/dev/null)
-                fi
-
-                echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
-                echo -e "${CYAN}║${NC}  ${BOLD}🔐 ADMIN DASHBOARD${NC}                                         ${CYAN}║${NC}"
-                echo -e "${CYAN}║${NC}  URL:      ${GREEN}https://10.250.0.1:8443${NC}                       ${CYAN}║${NC}"
-                echo -e "${CYAN}║${NC}  Username: ${GREEN}admin${NC}                                         ${CYAN}║${NC}"
-                if [ -n "$admin_pass" ]; then
-                    echo -e "${CYAN}║${NC}  Password: ${GREEN}$admin_pass${NC}                            ${CYAN}║${NC}"
-                else
-                    echo -e "${CYAN}║${NC}  Password: ${GREEN}hookprobe${NC}  (default)                      ${CYAN}║${NC}"
-                fi
-                echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
-
-                # Show WiFi credentials
-                if [ -f /etc/hookprobe/wifi-ap.conf ]; then
-                    source /etc/hookprobe/wifi-ap.conf 2>/dev/null
-                    if [ -n "$WIFI_SSID" ]; then
-                        echo -e "${CYAN}║${NC}  ${BOLD}📶 WIFI ACCESS POINT${NC}                                      ${CYAN}║${NC}"
-                        echo -e "${CYAN}║${NC}  SSID:     ${GREEN}$WIFI_SSID${NC}                                   ${CYAN}║${NC}"
-                        echo -e "${CYAN}║${NC}  Password: ${GREEN}$WIFI_PASSWORD${NC}                            ${CYAN}║${NC}"
-                        echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
-                    fi
-                fi
-
-                echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
-                echo -e "${CYAN}║${NC}  ${RED}⚠  CHANGE DEFAULT PASSWORD AFTER FIRST LOGIN!${NC}              ${CYAN}║${NC}"
-                echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
-                echo ""
-                echo -e "${BOLD}Next Steps:${NC}"
-                echo -e "  1. Connect to WiFi '${GREEN}${wifi_ssid:-hookprobe}${NC}' or plug into LAN port"
-                echo -e "  2. Open ${GREEN}https://10.250.0.1:8443${NC} in your browser"
-                echo -e "  3. Login with credentials shown above"
-                echo -e "  4. Change the default password immediately!"
                 echo ""
                 read -p "Press ENTER to continue..." < /dev/tty
             fi
-        elif [ -f "$SCRIPT_DIR/scripts/install-edge.sh" ]; then
-            bash "$SCRIPT_DIR/scripts/install-edge.sh" --tier fortress $extra_args
+        elif [ -f "$SCRIPT_DIR/products/fortress/install-container.sh" ]; then
+            # Fallback to direct container installer
+            export WIFI_SSID="$wifi_ssid"
+            export WIFI_PASSWORD="$wifi_password"
+            [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
+
+            bash "$SCRIPT_DIR/products/fortress/install-container.sh"
         else
             echo -e "${RED}Fortress installer not found${NC}"
+            echo "Expected: $SCRIPT_DIR/products/fortress/install.sh"
         fi
     else
         echo "Installation cancelled."
