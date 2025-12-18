@@ -191,37 +191,10 @@ check_system() {
 # MODE SELECTION
 # ============================================================
 select_installation_mode() {
-    echo ""
-    echo -e "${BOLD}Installation Mode Selection${NC}"
-    echo ""
-    echo "Choose your deployment mode:"
-    echo ""
-    echo -e "  ${CYAN}1)${NC} ${BOLD}Container${NC} (Recommended for most users)"
-    echo "     • Self-contained Flask app in Podman containers"
-    echo "     • PostgreSQL database with persistent volumes"
-    echo "     • Easy upgrades, backup, and restore"
-    echo "     • Requires: 2GB+ RAM, Podman"
-    echo ""
-    echo -e "  ${CYAN}2)${NC} ${BOLD}Native${NC} (Full-featured, hardware-optimized)"
-    echo "     • OVS bridge with VLAN segmentation"
-    echo "     • MACsec L2 encryption, VXLAN tunnels"
-    echo "     • Grafana + VictoriaMetrics monitoring"
-    echo "     • WiFi AP with channel optimization"
-    echo "     • LTE/5G failover support"
-    echo "     • Requires: 4GB+ RAM, multiple NICs"
-    echo ""
-
-    read -p "Select mode [1/2]: " mode_choice
-    case "${mode_choice:-1}" in
-        2|native|n)
-            SELECTED_MODE="native"
-            ;;
-        *)
-            SELECTED_MODE="container"
-            ;;
-    esac
-
-    log_info "Selected mode: ${SELECTED_MODE}"
+    # Fortress uses container mode by default
+    # All components (web, network, WiFi) are handled by install-container.sh
+    SELECTED_MODE="container"
+    log_info "Using container mode (default for Fortress)"
 }
 
 # ============================================================
@@ -258,10 +231,9 @@ do_install() {
         esac
     fi
 
-    # Select mode if not specified
+    # Default to container mode
     if [ -z "$mode" ]; then
-        select_installation_mode
-        mode="$SELECTED_MODE"
+        mode="container"
     fi
 
     case "$mode" in
@@ -271,9 +243,11 @@ do_install() {
             exec "${SCRIPT_DIR}/install-container.sh" $extra_args
             ;;
         native)
-            log_step "Starting native installation"
-            save_state "native"
-            exec "${SCRIPT_DIR}/setup.sh" $extra_args
+            # Native mode is deprecated - redirect to container mode
+            log_warn "Native mode is deprecated. Using container mode instead."
+            log_info "Container mode now includes all network features (bridge, WiFi AP, DHCP, NAT)"
+            save_state "container"
+            exec "${SCRIPT_DIR}/install-container.sh" $extra_args
             ;;
         *)
             log_error "Unknown mode: $mode"
@@ -717,9 +691,9 @@ COMMANDS:
     status               Show installation status
 
 INSTALL OPTIONS:
-    --native             Full native installation (OVS, VLANs, WiFi AP)
-    --container          Container-based installation (Podman)
+    --container          Container-based installation (default)
     --quick              Quick install with defaults
+    --native             (Deprecated - redirects to container mode)
 
 UPGRADE OPTIONS:
     --app                Application only (hot upgrade)
@@ -745,21 +719,18 @@ EXAMPLES:
     $0 backup --full             # Create full backup
     $0 status                    # Show installation status
 
-DEPLOYMENT MODES:
+DEPLOYMENT MODE:
 
-    Container Mode (Recommended):
+    Container Mode (Default):
       - Self-contained Podman deployment
-      - PostgreSQL + Redis + Flask
-      - Easy upgrades and rollback
+      - PostgreSQL + Redis + Flask web UI
+      - Linux bridge with LAN interface bridging
+      - WiFi AP with dual-band support (hostapd)
+      - DHCP server (dnsmasq)
+      - NAT for internet access
+      - ML/AI services (QSecBit, dnsXai, DFS)
+      - Easy upgrades, backup, and rollback
       - Requirements: 2GB+ RAM, Podman
-
-    Native Mode (Full-featured):
-      - OVS bridge with VLAN segmentation
-      - MACsec L2 encryption
-      - WiFi AP with channel optimization
-      - LTE/5G WAN failover
-      - Grafana + VictoriaMetrics monitoring
-      - Requirements: 4GB+ RAM, multiple NICs
 
 For more information, see:
     https://github.com/hookprobe/hookprobe
