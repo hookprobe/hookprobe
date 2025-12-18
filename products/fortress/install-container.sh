@@ -147,30 +147,10 @@ collect_configuration() {
     esac
     log_info "Network mode: $NETWORK_MODE"
 
-    # ML/AI services selection
-    echo ""
-    echo "ML/AI Services:"
-    echo "  1) Core only  - Web UI, database, cache (lightweight)"
-    echo "  2) Full       - Include QSecBit, dnsXai, DFS intelligence (recommended)"
-    echo ""
-    echo "  Full mode includes:"
-    echo "    - QSecBit threat detection (numpy, scipy, sklearn)"
-    echo "    - dnsXai DNS ML protection"
-    echo "    - DFS WiFi channel intelligence"
-    echo "    - LSTM threat pattern training"
-    echo ""
-    read -p "Select mode [2]: " ml_choice
-    case "${ml_choice:-2}" in
-        1|core)
-            INSTALL_ML=false
-            BUILD_ML_CONTAINERS=false
-            ;;
-        *)
-            INSTALL_ML=true
-            BUILD_ML_CONTAINERS=true
-            ;;
-    esac
-    log_info "ML services: $([ "$INSTALL_ML" = true ] && echo "enabled" || echo "disabled")"
+    # Security services are ALWAYS installed (core backbone of HookProbe mesh)
+    # QSecBit, dnsXai, DFS intelligence are not optional
+    INSTALL_ML=true
+    BUILD_ML_CONTAINERS=true
 
     # Admin password
     echo ""
@@ -225,7 +205,7 @@ collect_configuration() {
     echo "Installation Summary:"
     echo "====================="
     echo "  Network Mode:  $NETWORK_MODE"
-    echo "  ML Services:   $([ "$INSTALL_ML" = true ] && echo "Full (QSecBit, dnsXai, DFS)" || echo "Core only")"
+    echo "  Security Core: QSecBit + dnsXai + DFS Intelligence"
     echo "  Admin User:    $ADMIN_USER"
     echo "  WiFi SSID:     $WIFI_SSID"
     echo "  Web Port:      $WEB_PORT"
@@ -560,41 +540,41 @@ build_containers() {
     cd "$CONTAINERS_DIR"
     local repo_root="${SCRIPT_DIR}/../.."
 
-    # Core containers (always built)
+    # Web container
     log_info "Building web container..."
     podman build -f Containerfile.web -t localhost/fortress-web:latest "$SCRIPT_DIR" || {
         log_error "Failed to build web container"
         exit 1
     }
 
-    # ML containers (built if --full mode or explicitly requested)
-    if [ "${BUILD_ML_CONTAINERS:-false}" = true ] || [ "${INSTALL_ML:-false}" = true ]; then
-        log_info "Building ML/AI containers..."
+    # Security Core - QSecBit, dnsXai, DFS (backbone of HookProbe mesh)
+    log_info "Building security core containers..."
 
-        log_info "  - Building qsecbit-agent (numpy, scipy, sklearn)..."
-        podman build -f Containerfile.agent -t localhost/fortress-agent:latest "$repo_root" || {
-            log_warn "Failed to build agent container (ML features may be limited)"
-        }
+    log_info "  - Building qsecbit-agent (threat detection)..."
+    podman build -f Containerfile.agent -t localhost/fortress-agent:latest "$repo_root" || {
+        log_error "Failed to build qsecbit-agent container"
+        exit 1
+    }
 
-        log_info "  - Building dnsxai (DNS ML protection)..."
-        podman build -f Containerfile.dnsxai -t localhost/fortress-dnsxai:latest "$repo_root" || {
-            log_warn "Failed to build dnsxai container"
-        }
+    log_info "  - Building dnsxai (DNS ML protection)..."
+    podman build -f Containerfile.dnsxai -t localhost/fortress-dnsxai:latest "$repo_root" || {
+        log_error "Failed to build dnsxai container"
+        exit 1
+    }
 
-        log_info "  - Building dfs-intelligence (WiFi ML)..."
-        podman build -f Containerfile.dfs -t localhost/fortress-dfs:latest "$repo_root" || {
-            log_warn "Failed to build dfs container"
-        }
+    log_info "  - Building dfs-intelligence (WiFi intelligence)..."
+    podman build -f Containerfile.dfs -t localhost/fortress-dfs:latest "$repo_root" || {
+        log_error "Failed to build dfs-intelligence container"
+        exit 1
+    }
 
-        log_info "  - Building lstm-trainer (PyTorch)..."
-        podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
-            log_warn "Failed to build lstm container (training will be unavailable)"
-        }
+    # LSTM trainer is optional (used for retraining models)
+    log_info "  - Building lstm-trainer (optional training)..."
+    podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
+        log_warn "Failed to build lstm container (training will be unavailable)"
+    }
 
-        log_info "ML containers built successfully"
-    else
-        log_info "Skipping ML containers (use --full to include)"
-    fi
+    log_info "All security containers built successfully"
 }
 
 start_containers() {
@@ -607,14 +587,9 @@ start_containers() {
     # Update compose file with configured port
     sed -i "s/8443:8443/${WEB_PORT}:8443/" podman-compose.yml 2>/dev/null || true
 
-    # Start services based on mode
-    if [ "${INSTALL_ML:-false}" = true ]; then
-        log_info "Starting all services (including ML)..."
-        podman-compose --profile full up -d
-    else
-        log_info "Starting core services..."
-        podman-compose up -d
-    fi
+    # Start all services (security core + data tier)
+    log_info "Starting Fortress services..."
+    podman-compose up -d
 
     # Wait for services
     log_info "Waiting for services to be ready..."
@@ -636,15 +611,13 @@ start_containers() {
 create_systemd_service() {
     log_step "Creating systemd service"
 
-    # Build profile flags based on installation options
+    # Build profile flags for optional services only
+    # Security core (QSecBit, dnsXai, DFS) are always started - no profile needed
     local profile_flags=""
-    if [ "${INSTALL_ML:-false}" = true ]; then
-        profile_flags="--profile full"
-    fi
-    # Note: Monitoring profile (--profile monitoring) is optional and disabled by default
+    # Monitoring profile (--profile monitoring) is optional and disabled by default
     # Enable with INSTALL_MONITORING=true before running install
     if [ "${INSTALL_MONITORING:-false}" = true ]; then
-        profile_flags="$profile_flags --profile monitoring"
+        profile_flags="--profile monitoring"
     fi
     profile_flags=$(echo "$profile_flags" | xargs)  # trim whitespace
 
@@ -672,12 +645,12 @@ WantedBy=multi-user.target
 EOF
 
     # Also save profile config for reference
-    echo "FORTRESS_PROFILES=\"${profile_flags}\"" >> /etc/hookprobe/fortress.conf
+    echo "FORTRESS_PROFILES=\"${profile_flags:-core}\"" >> /etc/hookprobe/fortress.conf
 
     systemctl daemon-reload
     systemctl enable fortress
 
-    log_info "Systemd service created with profiles: ${profile_flags:-none (core only)}"
+    log_info "Systemd service created (security core always enabled)"
 }
 
 # ============================================================
@@ -690,16 +663,9 @@ save_installation_state() {
 
     mkdir -p "$(dirname "$STATE_FILE")"
 
-    # Build container and volume lists based on installation mode
-    local containers='["fortress-web", "fortress-postgres", "fortress-redis"'
-    local volumes='["fortress-postgres-data", "fortress-redis-data", "fortress-web-data", "fortress-web-logs", "fortress-config"'
-
-    if [ "${INSTALL_ML:-false}" = true ]; then
-        containers="${containers}, \"fortress-qsecbit\", \"fortress-dnsxai\", \"fortress-dfs\""
-        volumes="${volumes}, \"fortress-agent-data\", \"fortress-dnsxai-data\", \"fortress-dnsxai-blocklists\", \"fortress-dfs-data\", \"fortress-ml-models\""
-    fi
-    containers="${containers}]"
-    volumes="${volumes}]"
+    # All security core containers are always installed
+    local containers='["fortress-web", "fortress-postgres", "fortress-redis", "fortress-qsecbit", "fortress-dnsxai", "fortress-dfs"]'
+    local volumes='["fortress-postgres-data", "fortress-redis-data", "fortress-web-data", "fortress-web-logs", "fortress-config", "fortress-agent-data", "fortress-dnsxai-data", "fortress-dnsxai-blocklists", "fortress-dfs-data", "fortress-ml-models"]'
 
     cat > "$STATE_FILE" << EOF
 {
@@ -707,7 +673,7 @@ save_installation_state() {
     "version": "5.2.0",
     "installed_at": "$(date -Iseconds)",
     "network_mode": "${NETWORK_MODE}",
-    "ml_enabled": ${INSTALL_ML:-false},
+    "security_core": true,
     "web_port": "${WEB_PORT}",
     "admin_user": "${ADMIN_USER}",
     "containers": ${containers},
