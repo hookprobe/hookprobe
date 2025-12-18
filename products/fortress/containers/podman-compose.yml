@@ -31,7 +31,7 @@
 #   - fortress-services: 10.250.201.0/24 (web, dnsxai, dfs) - internet OK
 #   - fortress-ml:       10.250.202.0/24 (lstm-trainer) - NO internet
 #   - fortress-mgmt:     10.250.203.0/24 (grafana, victoria) - NO internet
-#   - fortress-lan:      10.200.0.0/24   (WiFi/LAN clients) - NAT to internet
+#   - fortress-lan:      10.200.0.0/23-29 (WiFi/LAN clients, configurable) - NAT to internet
 #
 # OVS Security Features:
 #   - OpenFlow 1.3+ tier isolation rules
@@ -432,7 +432,7 @@ volumes:
 #   │    └─────────┘   │dfs      │  └─────────┘ └──────────┘ │
 #   │                  └─────────┘                           │
 #   │  ┌───────────────────────────────────────────────────┐ │
-#   │  │ fortress-lan (10.200.0.0/24) - WiFi/LAN clients   │ │
+#   │  │ fortress-lan (10.200.0.0/23-29) - WiFi/LAN clients │ │
 #   │  └───────────────────────────────────────────────────┘ │
 #   │                                                        │
 #   │  OpenFlow Rules:                                       │
