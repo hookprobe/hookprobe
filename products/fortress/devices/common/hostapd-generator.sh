@@ -2007,14 +2007,24 @@ Requires=openvswitch-switch.service
 [Service]
 Type=forking
 PIDFile=/run/hostapd-24ghz.pid
-# Small delay after interface appears to ensure it's fully initialized
+# Wait for interface to be ready (handles udev rename timing)
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${iface_24ghz} ] && break; sleep 0.5; done; [ -e /sys/class/net/${iface_24ghz} ] || exit 1'
+# Clean up interface state before starting (fixes "Match already configured" error)
+ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${iface_24ghz}" 2>/dev/null; rm -f /run/hostapd-24ghz.pid'
+ExecStartPre=/sbin/ip link set ${iface_24ghz} down
+ExecStartPre=/sbin/iw dev ${iface_24ghz} set type managed
+ExecStartPre=/sbin/ip link set ${iface_24ghz} up
 ExecStartPre=/bin/sleep 1
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} add
+ExecStop=-/bin/kill -TERM \$MAINPID
+ExecStopPost=-/sbin/ip link set ${iface_24ghz} down
 ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
-RestartSec=5
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
@@ -2041,14 +2051,24 @@ Requires=openvswitch-switch.service
 [Service]
 Type=forking
 PIDFile=/run/hostapd-5ghz.pid
-# Small delay after interface appears to ensure it's fully initialized
+# Wait for interface to be ready (handles udev rename timing)
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${iface_5ghz} ] && break; sleep 0.5; done; [ -e /sys/class/net/${iface_5ghz} ] || exit 1'
+# Clean up interface state before starting (fixes "Match already configured" error)
+ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${iface_5ghz}" 2>/dev/null; rm -f /run/hostapd-5ghz.pid'
+ExecStartPre=/sbin/ip link set ${iface_5ghz} down
+ExecStartPre=/sbin/iw dev ${iface_5ghz} set type managed
+ExecStartPre=/sbin/ip link set ${iface_5ghz} up
 ExecStartPre=/bin/sleep 1
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} add
+ExecStop=-/bin/kill -TERM \$MAINPID
+ExecStopPost=-/sbin/ip link set ${iface_5ghz} down
 ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
-RestartSec=5
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

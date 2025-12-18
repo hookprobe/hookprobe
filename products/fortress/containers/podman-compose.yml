@@ -75,10 +75,14 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-fortress_redis_secret}", "ping"]
+      # Use shell form for proper env var expansion
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD:-fortress_redis_secret} ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 5s
+    ports:
+      - "6379:6379"
     networks:
       fortress-data:
         ipv4_address: 10.250.200.11
