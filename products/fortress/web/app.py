@@ -97,7 +97,7 @@ def create_app(config_class=Config):
         return {
             'now': datetime.now(),
             'app_name': 'HookProbe Fortress',
-            'app_version': '5.0.0'
+            'app_version': '5.4.0'
         }
 
     return app
