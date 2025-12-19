@@ -484,8 +484,8 @@ create_suricata_container() {
         MONITOR_IFACE="eth0"
     elif [ -e /sys/class/net/br0 ]; then
         MONITOR_IFACE="br0"
-    elif [ -e /sys/class/net/fortress ]; then
-        MONITOR_IFACE="fortress"
+    elif [ -e /sys/class/net/43ess ]; then
+        MONITOR_IFACE="43ess"
     else
         log_warn "No suitable interface found for Suricata, using any"
         MONITOR_IFACE="any"
@@ -521,8 +521,8 @@ create_zeek_container() {
         MONITOR_IFACE="eth0"
     elif [ -e /sys/class/net/br0 ]; then
         MONITOR_IFACE="br0"
-    elif [ -e /sys/class/net/fortress ]; then
-        MONITOR_IFACE="fortress"
+    elif [ -e /sys/class/net/43ess ]; then
+        MONITOR_IFACE="43ess"
     else
         log_warn "No suitable interface found for Zeek"
         MONITOR_IFACE="eth0"
