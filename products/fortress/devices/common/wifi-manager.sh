@@ -351,7 +351,7 @@ prepare_ap_interface() {
 
 add_wifi_to_bridge() {
     local iface="$1"
-    local bridge="${2:-fortress}"
+    local bridge="${2:-43ess}"
 
     # Ensure bridge exists
     if [ ! -d "/sys/class/net/$bridge" ]; then

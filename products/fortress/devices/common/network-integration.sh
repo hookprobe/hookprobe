@@ -143,7 +143,7 @@ setup_dual_band_wifi() {
 
     local ssid="${1:-HookProbe-Fortress}"
     local password="$2"
-    local bridge="${3:-fortress}"
+    local bridge="${3:-43ess}"
 
     [ -z "$password" ] && { log_error "WiFi password required"; return 1; }
 
