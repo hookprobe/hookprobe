@@ -790,6 +790,35 @@ init_ovs_network() {
     echo "INITIALIZED=$(date -Iseconds)" > "$STATE_DIR/state"
 }
 
+# Initialize OVS for podman-compose mode
+# Skips creating tier internal ports since podman-compose creates its own networks
+# with those IPs (10.250.200.0/24, etc). OVS is only used for traffic monitoring.
+init_ovs_network_podman() {
+    log_section "Initializing OVS for Podman Mode"
+
+    mkdir -p "$STATE_DIR"
+
+    check_ovs_installed || return 1
+    create_ovs_bridge
+
+    # Skip create_tier_ports - podman-compose creates networks with these IPs
+    log_info "Skipping tier internal ports (podman-compose manages container networks)"
+
+    install_openflow_rules
+    setup_traffic_mirror
+    setup_vxlan_tunnels
+    setup_flow_export
+    setup_qos_meters
+
+    log_info "OVS network initialized (podman mode)"
+    log_info "Container networks will be created by podman-compose"
+    log_info "Use 'connect-containers' after starting containers to attach them to OVS"
+
+    # Save state
+    echo "INITIALIZED=$(date -Iseconds)" > "$STATE_DIR/state"
+    echo "MODE=podman" >> "$STATE_DIR/state"
+}
+
 cleanup_ovs_network() {
     log_section "Cleaning Up OVS Network"
 
@@ -989,6 +1018,7 @@ Usage: $0 <command> [options]
 
 Commands:
   init                    Initialize OVS network (bridge, tiers, flows)
+  init-podman             Initialize for podman-compose (skip tier ports)
   cleanup                 Remove OVS network configuration
   add-lan <iface>         Add LAN interface to bridge
   add-wifi <iface>        Configure WiFi AP interface
@@ -1037,6 +1067,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     case "${1:-}" in
         init)
             init_ovs_network
+            ;;
+        init-podman)
+            init_ovs_network_podman
             ;;
         cleanup)
             cleanup_ovs_network
