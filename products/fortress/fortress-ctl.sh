@@ -354,6 +354,8 @@ upgrade_full() {
     # Regenerate secrets if needed (rotate)
     if [ "$(get_state 'secrets_rotated')" != "$(date +%Y%m)" ]; then
         log_substep "Rotating secrets (monthly)..."
+        # Ensure secrets directory exists
+        mkdir -p "${CONTAINERS_DIR}/secrets"
         # Generate new Flask secret
         openssl rand -base64 48 | tr -d '/+=' | head -c 48 > "${CONTAINERS_DIR}/secrets/flask_secret.new"
         # Note: Don't rotate during upgrade, just flag for next maintenance window
