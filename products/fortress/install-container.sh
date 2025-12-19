@@ -269,20 +269,10 @@ collect_configuration() {
     # Interactive mode - prompt for any missing configuration
     # ============================================================
 
-    # Network mode (only if not set)
-    if [ -z "${NETWORK_MODE:-}" ] || [ "$NETWORK_MODE" = "filter" ]; then
-        echo ""
-        echo "Network Segmentation Mode:"
-        echo "  1) filter  - nftables-based per-device filtering (simpler, recommended)"
-        echo "  2) vlan    - OVS VLAN-based segmentation (advanced)"
-        echo ""
-        read -p "Select mode [1]: " mode_choice
-        case "${mode_choice:-1}" in
-            2|vlan) NETWORK_MODE="vlan" ;;
-            *) NETWORK_MODE="filter" ;;
-        esac
-    fi
-    log_info "Network mode: $NETWORK_MODE"
+    # Network mode - nftables filter is the only implemented mode
+    # VLAN mode was planned but not implemented, so we default to filter
+    NETWORK_MODE="filter"
+    log_info "Network mode: nftables filter (per-device policies)"
 
     # LAN subnet (only if not set via FORTRESS_NETWORK_PREFIX)
     if [ -z "${LAN_SUBNET_MASK:-}" ]; then
@@ -565,17 +555,15 @@ EOF
 setup_network_filter() {
     log_step "Setting up network filtering"
 
-    if [ "$NETWORK_MODE" = "filter" ] && [ "$NFTABLES_AVAILABLE" = true ]; then
-        # Initialize nftables filter manager
+    if [ "$NFTABLES_AVAILABLE" = true ]; then
+        # Initialize nftables filter manager for per-device policies
         chmod +x "${DEVICES_DIR}/common/network-filter-manager.sh" 2>/dev/null || true
         "${DEVICES_DIR}/common/network-filter-manager.sh" init || {
             log_warn "Failed to initialize nftables filters (may need manual setup)"
         }
         log_info "nftables filter mode initialized"
-    elif [ "$NETWORK_MODE" = "vlan" ]; then
-        log_info "VLAN mode - OVS bridge will be configured"
     else
-        log_warn "Network filtering not configured"
+        log_warn "nftables not available - network filtering disabled"
     fi
 }
 
@@ -1034,9 +1022,9 @@ uninstall() {
     echo "    - fortress-victoria (metrics database)"
     echo ""
     echo "  OVS Network:"
-    echo "    - OVS bridge: fortress"
-    echo "    - Internal ports: fortress-data, fortress-services, fortress-ml, fortress-mgmt, fortress-lan"
-    echo "    - Traffic mirror port: fortress-mirror"
+    echo "    - OVS bridge: $OVS_BRIDGE"
+    echo "    - Internal ports: ${OVS_BRIDGE}-data, ${OVS_BRIDGE}-services, ${OVS_BRIDGE}-ml, ${OVS_BRIDGE}-mgmt, ${OVS_BRIDGE}-lan"
+    echo "    - Traffic mirror port: ${OVS_BRIDGE}-mirror"
     echo "    - Container veth interfaces"
     echo "    - VXLAN tunnel configurations"
     echo "    - OpenFlow rules"
@@ -1124,21 +1112,23 @@ uninstall() {
     for veth in veth-fortress-postgres veth-fortress-redis veth-fortress-web \
                 veth-fortress-dnsxai veth-fortress-dfs veth-fortress-lstm-trainer \
                 veth-fortress-grafana veth-fortress-victoria; do
-        ovs-vsctl del-port fortress "$veth" 2>/dev/null || true
+        ovs-vsctl del-port "$OVS_BRIDGE" "$veth" 2>/dev/null || true
         ip link del "$veth" 2>/dev/null || true
     done
 
     # Remove VXLAN tunnels
     for tunnel in vxlan-mesh-core vxlan-mesh-threat vxlan-mssp-uplink; do
-        ovs-vsctl del-port fortress "$tunnel" 2>/dev/null || true
+        ovs-vsctl del-port "$OVS_BRIDGE" "$tunnel" 2>/dev/null || true
     done
 
     # Clear OVS mirrors, sFlow, IPFIX
-    ovs-vsctl clear bridge fortress mirrors 2>/dev/null || true
-    ovs-vsctl clear bridge fortress sflow 2>/dev/null || true
-    ovs-vsctl clear bridge fortress ipfix 2>/dev/null || true
+    ovs-vsctl clear bridge "$OVS_BRIDGE" mirrors 2>/dev/null || true
+    ovs-vsctl clear bridge "$OVS_BRIDGE" sflow 2>/dev/null || true
+    ovs-vsctl clear bridge "$OVS_BRIDGE" ipfix 2>/dev/null || true
 
     # Delete OVS bridge (removes all ports including internal ports)
+    ovs-vsctl del-br "$OVS_BRIDGE" 2>/dev/null || true
+    # Also clean up legacy 'fortress' bridge if it exists
     ovs-vsctl del-br fortress 2>/dev/null || true
 
     # Remove nftables rules if any
@@ -1149,6 +1139,9 @@ uninstall() {
         iptables -t nat -D POSTROUTING -s 10.200.0.0/$mask -j MASQUERADE 2>/dev/null || true
     done
     iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -i "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    # Also clean up legacy 'fortress' bridge rules
     iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o fortress -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 
@@ -1379,7 +1372,7 @@ main() {
         echo ""
     fi
     echo "OVS Network Configuration:"
-    echo -e "  Bridge:     fortress (OVS with OpenFlow 1.3+)"
+    echo -e "  Bridge:     $OVS_BRIDGE (OVS with OpenFlow 1.3+)"
     echo -e "  LAN Tier:   10.200.0.0/${LAN_SUBNET_MASK:-24}"
     echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
     echo ""
@@ -1400,7 +1393,7 @@ main() {
     echo "  systemctl status fortress             # Check container status"
     echo "  systemctl status fortress-hostapd-*   # Check WiFi AP status"
     echo "  ovs-vsctl show                        # View OVS bridge"
-    echo "  ovs-ofctl dump-flows fortress         # View OpenFlow rules"
+    echo "  ovs-ofctl dump-flows $OVS_BRIDGE         # View OpenFlow rules"
     echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"
     echo ""
 }
