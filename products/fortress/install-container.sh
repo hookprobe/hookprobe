@@ -23,6 +23,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# FORTRESS_ROOT is preserved even when sourced scripts overwrite SCRIPT_DIR
+FORTRESS_ROOT="$SCRIPT_DIR"
 CONTAINERS_DIR="${SCRIPT_DIR}/containers"
 DEVICES_DIR="${SCRIPT_DIR}/devices"
 
@@ -589,12 +591,10 @@ setup_network() {
     chmod +x "$integration_script" "$ovs_script" "$hostapd_script" 2>/dev/null || true
 
     # Detect network interfaces
+    # Note: Sourced scripts may overwrite SCRIPT_DIR - we use FORTRESS_ROOT where needed
     log_info "Detecting network interfaces..."
     if [ -f "$integration_script" ]; then
-        # Save SCRIPT_DIR before sourcing - network-integration.sh overwrites it
-        local _saved_script_dir="$SCRIPT_DIR"
         source "$integration_script"
-        SCRIPT_DIR="$_saved_script_dir"  # Restore after sourcing
         network_integration_init || {
             log_warn "Network detection had issues - continuing with defaults"
         }
@@ -760,11 +760,12 @@ build_containers() {
     log_step "Building container images"
 
     cd "$CONTAINERS_DIR"
-    local repo_root="${SCRIPT_DIR}/../.."
+    # Use FORTRESS_ROOT (not SCRIPT_DIR) since sourced scripts may overwrite SCRIPT_DIR
+    local repo_root="${FORTRESS_ROOT}/../.."
 
-    # Web container
+    # Web container - needs fortress root dir as context (contains web/ directory)
     log_info "Building web container..."
-    podman build -f Containerfile.web -t localhost/fortress-web:latest "$SCRIPT_DIR" || {
+    podman build -f Containerfile.web -t localhost/fortress-web:latest "$FORTRESS_ROOT" || {
         log_error "Failed to build web container"
         exit 1
     }

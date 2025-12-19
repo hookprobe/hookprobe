@@ -212,10 +212,11 @@ detect_ethernet_interfaces() {
     done
 
     # Sort interfaces by PCI slot order
+    # Use '|' as delimiter since PCI addresses contain ':'
     local sorted_ifaces=""
     for iface in $(for k in "${!iface_pci_order[@]}"; do
-        echo "${iface_pci_order[$k]}:$k"
-    done | sort | cut -d: -f2-); do
+        echo "${iface_pci_order[$k]}|$k"
+    done | sort | cut -d'|' -f2); do
         sorted_ifaces="$sorted_ifaces $iface"
     done
 
