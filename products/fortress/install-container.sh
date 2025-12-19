@@ -93,6 +93,19 @@ check_prerequisites() {
     fi
     log_info "Open vSwitch: $(ovs-vsctl --version | head -1)"
 
+    # dnsmasq (required for DHCP)
+    if ! command -v dnsmasq &>/dev/null; then
+        log_warn "dnsmasq not found. Installing..."
+        apt-get update
+        apt-get install -y dnsmasq || {
+            log_error "Failed to install dnsmasq"
+            exit 1
+        }
+    fi
+    # Ensure dnsmasq is enabled
+    systemctl enable dnsmasq 2>/dev/null || true
+    log_info "dnsmasq: $(dnsmasq --version | head -1)"
+
     # Podman check
     if ! command -v podman &>/dev/null; then
         log_warn "Podman not found. Installing..."
