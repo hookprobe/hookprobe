@@ -812,10 +812,10 @@ build_containers() {
             log_error "Failed to build web container"
             exit 1
         }
-        ((built_count++))
+        built_count=$((built_count + 1))
     else
         log_info "Skipping web container (already built)"
-        ((skipped_count++))
+        skipped_count=$((skipped_count + 1))
     fi
 
     # Security Core - QSecBit, dnsXai, DFS (backbone of HookProbe mesh)
@@ -827,10 +827,10 @@ build_containers() {
             log_error "Failed to build qsecbit-agent container"
             exit 1
         }
-        ((built_count++))
+        built_count=$((built_count + 1))
     else
         log_info "  - Skipping qsecbit-agent (already built)"
-        ((skipped_count++))
+        skipped_count=$((skipped_count + 1))
     fi
 
     if needs_rebuild "localhost/fortress-dnsxai:latest" "Containerfile.dnsxai" "$repo_root"; then
@@ -839,10 +839,10 @@ build_containers() {
             log_error "Failed to build dnsxai container"
             exit 1
         }
-        ((built_count++))
+        built_count=$((built_count + 1))
     else
         log_info "  - Skipping dnsxai (already built)"
-        ((skipped_count++))
+        skipped_count=$((skipped_count + 1))
     fi
 
     if needs_rebuild "localhost/fortress-dfs:latest" "Containerfile.dfs" "$repo_root"; then
@@ -851,10 +851,10 @@ build_containers() {
             log_error "Failed to build dfs-intelligence container"
             exit 1
         }
-        ((built_count++))
+        built_count=$((built_count + 1))
     else
         log_info "  - Skipping dfs-intelligence (already built)"
-        ((skipped_count++))
+        skipped_count=$((skipped_count + 1))
     fi
 
     # LSTM trainer is optional (used for retraining models)
@@ -863,10 +863,10 @@ build_containers() {
         podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
             log_warn "Failed to build lstm container (training will be unavailable)"
         }
-        ((built_count++))
+        built_count=$((built_count + 1))
     else
         log_info "  - Skipping lstm-trainer (already built)"
-        ((skipped_count++))
+        skipped_count=$((skipped_count + 1))
     fi
 
     if [ "$built_count" -gt 0 ]; then
