@@ -744,48 +744,123 @@ EOF
     log_info "DHCP configured on $lan_port"
 }
 
+# Check if container image needs rebuilding
+# Returns 0 if rebuild needed, 1 if image is current
+needs_rebuild() {
+    local image_name="$1"
+    local containerfile="$2"
+    local context_dir="$3"
+
+    # If --force-rebuild was specified, always rebuild
+    if [ "${FORCE_REBUILD:-false}" = true ]; then
+        return 0
+    fi
+
+    # Check if image exists
+    if ! podman image exists "$image_name" 2>/dev/null; then
+        return 0  # Image doesn't exist, need to build
+    fi
+
+    # Get image creation time
+    local image_time
+    image_time=$(podman image inspect "$image_name" --format '{{.Created}}' 2>/dev/null | head -1)
+    if [ -z "$image_time" ]; then
+        return 0  # Can't get image time, rebuild
+    fi
+
+    # Convert to epoch seconds
+    local image_epoch
+    image_epoch=$(date -d "$image_time" +%s 2>/dev/null || echo 0)
+
+    # Check if Containerfile is newer than image
+    local containerfile_time
+    containerfile_time=$(stat -c %Y "$containerfile" 2>/dev/null || echo 0)
+    if [ "$containerfile_time" -gt "$image_epoch" ]; then
+        return 0  # Containerfile changed, rebuild
+    fi
+
+    # Image exists and is current
+    return 1
+}
+
 build_containers() {
     log_step "Building container images"
 
     cd "$CONTAINERS_DIR"
     # Use FORTRESS_ROOT (not SCRIPT_DIR) since sourced scripts may overwrite SCRIPT_DIR
     local repo_root="${FORTRESS_ROOT}/../.."
+    local built_count=0
+    local skipped_count=0
 
     # Web container - needs fortress root dir as context (contains web/ directory)
-    log_info "Building web container..."
-    podman build -f Containerfile.web -t localhost/fortress-web:latest "$FORTRESS_ROOT" || {
-        log_error "Failed to build web container"
-        exit 1
-    }
+    if needs_rebuild "localhost/fortress-web:latest" "Containerfile.web" "$FORTRESS_ROOT"; then
+        log_info "Building web container..."
+        podman build -f Containerfile.web -t localhost/fortress-web:latest "$FORTRESS_ROOT" || {
+            log_error "Failed to build web container"
+            exit 1
+        }
+        ((built_count++))
+    else
+        log_info "Skipping web container (already built)"
+        ((skipped_count++))
+    fi
 
     # Security Core - QSecBit, dnsXai, DFS (backbone of HookProbe mesh)
-    log_info "Building security core containers..."
+    log_info "Checking security core containers..."
 
-    log_info "  - Building qsecbit-agent (threat detection)..."
-    podman build -f Containerfile.agent -t localhost/fortress-agent:latest "$repo_root" || {
-        log_error "Failed to build qsecbit-agent container"
-        exit 1
-    }
+    if needs_rebuild "localhost/fortress-agent:latest" "Containerfile.agent" "$repo_root"; then
+        log_info "  - Building qsecbit-agent (threat detection)..."
+        podman build -f Containerfile.agent -t localhost/fortress-agent:latest "$repo_root" || {
+            log_error "Failed to build qsecbit-agent container"
+            exit 1
+        }
+        ((built_count++))
+    else
+        log_info "  - Skipping qsecbit-agent (already built)"
+        ((skipped_count++))
+    fi
 
-    log_info "  - Building dnsxai (DNS ML protection)..."
-    podman build -f Containerfile.dnsxai -t localhost/fortress-dnsxai:latest "$repo_root" || {
-        log_error "Failed to build dnsxai container"
-        exit 1
-    }
+    if needs_rebuild "localhost/fortress-dnsxai:latest" "Containerfile.dnsxai" "$repo_root"; then
+        log_info "  - Building dnsxai (DNS ML protection)..."
+        podman build -f Containerfile.dnsxai -t localhost/fortress-dnsxai:latest "$repo_root" || {
+            log_error "Failed to build dnsxai container"
+            exit 1
+        }
+        ((built_count++))
+    else
+        log_info "  - Skipping dnsxai (already built)"
+        ((skipped_count++))
+    fi
 
-    log_info "  - Building dfs-intelligence (WiFi intelligence)..."
-    podman build -f Containerfile.dfs -t localhost/fortress-dfs:latest "$repo_root" || {
-        log_error "Failed to build dfs-intelligence container"
-        exit 1
-    }
+    if needs_rebuild "localhost/fortress-dfs:latest" "Containerfile.dfs" "$repo_root"; then
+        log_info "  - Building dfs-intelligence (WiFi intelligence)..."
+        podman build -f Containerfile.dfs -t localhost/fortress-dfs:latest "$repo_root" || {
+            log_error "Failed to build dfs-intelligence container"
+            exit 1
+        }
+        ((built_count++))
+    else
+        log_info "  - Skipping dfs-intelligence (already built)"
+        ((skipped_count++))
+    fi
 
     # LSTM trainer is optional (used for retraining models)
-    log_info "  - Building lstm-trainer (optional training)..."
-    podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
-        log_warn "Failed to build lstm container (training will be unavailable)"
-    }
+    if needs_rebuild "localhost/fortress-lstm:latest" "Containerfile.lstm" "$repo_root"; then
+        log_info "  - Building lstm-trainer (optional training)..."
+        podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
+            log_warn "Failed to build lstm container (training will be unavailable)"
+        }
+        ((built_count++))
+    else
+        log_info "  - Skipping lstm-trainer (already built)"
+        ((skipped_count++))
+    fi
 
-    log_info "All security containers built successfully"
+    if [ "$built_count" -gt 0 ]; then
+        log_info "Built $built_count container(s), skipped $skipped_count"
+    else
+        log_info "All containers already built (use --force-rebuild to rebuild)"
+    fi
 }
 
 start_containers() {
@@ -1253,6 +1328,10 @@ main() {
             --preserve-data)
                 preserve_data=true
                 ;;
+            --force-rebuild)
+                FORCE_REBUILD=true
+                export FORCE_REBUILD
+                ;;
             --keep-data|--keep-config|--purge)
                 uninstall_args="$uninstall_args $1"
                 ;;
@@ -1283,6 +1362,7 @@ main() {
                 echo "  --quick             Quick install with defaults"
                 echo "  --non-interactive   Use environment variables, no prompts"
                 echo "  --preserve-data     Reinstall using existing data volumes"
+                echo "  --force-rebuild     Force rebuild of all containers"
                 echo ""
                 echo "Environment Variables (for --non-interactive):"
                 echo "  WIFI_SSID           WiFi network name"
