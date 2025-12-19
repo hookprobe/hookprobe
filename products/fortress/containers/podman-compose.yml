@@ -456,7 +456,7 @@ networks:
           gateway: 10.250.200.1
     driver_opts:
       mtu: "9000"  # Jumbo frames for DB traffic
-      com.docker.network.bridge.enable_icc: "true"
+      # Note: Docker's enable_icc is not needed - Podman enables ICC by default
 
   # Tier 2: SERVICES - Web, DNS, APIs
   # OVS port: fortress-services (10.250.201.1/24)
