@@ -4,7 +4,7 @@
 # All services run in isolation with OpenFlow-controlled traffic.
 #
 # Architecture:
-#   - OVS bridge (fortress) provides OpenFlow-based tier isolation
+#   - OVS bridge (43ess) provides OpenFlow-based tier isolation
 #   - Podman bridge networks for container-to-container communication
 #   - veth pairs connect containers to OVS for flow monitoring
 #   - sFlow/IPFIX export to QSecBit for ML analysis
@@ -417,12 +417,12 @@ volumes:
 # ============================================================
 #
 # These Podman bridge networks provide basic container connectivity.
-# The OVS bridge (fortress) provides the security layer:
+# The OVS bridge (43ess) provides the security layer:
 #
 #   ┌─────────────────────────────────────────────────────────┐
-#   │                  OVS Bridge: fortress                   │
+#   │                  OVS Bridge: 43ess                      │
 #   │  ┌─────────────┬─────────────┬──────────┬────────────┐ │
-#   │  │fortress-data│fortress-svc │fortress-ml│fortress-mgmt│
+#   │  │43ess-data   │43ess-svc    │43ess-ml  │43ess-mgmt  │ │
 #   │  │(internal)   │(internet OK)│(internal) │(internal)  │ │
 #   │  └──────┬──────┴──────┬──────┴─────┬─────┴──────┬─────┘ │
 #   │         │             │            │            │       │
