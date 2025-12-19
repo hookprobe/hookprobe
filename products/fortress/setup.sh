@@ -2906,8 +2906,9 @@ class QSecBitFortressAgent:
     def get_openflow_stats(self) -> int:
         """Get OpenFlow flow count"""
         try:
+            ovs_bridge = os.environ.get('OVS_BRIDGE', '43ess')
             result = subprocess.run(
-                ['ovs-ofctl', 'dump-flows', 'fortress'],
+                ['ovs-ofctl', 'dump-flows', ovs_bridge],
                 capture_output=True, text=True, timeout=5
             )
             return len([l for l in result.stdout.split('\n') if l.strip()])

@@ -10,6 +10,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# OVS Bridge name (43ess = leetspeak for fortress)
+OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -81,10 +84,10 @@ diagnose() {
             echo "   $iface: master=$master, state=$state"
 
             # Check if in OVS
-            if ovs-vsctl list-ports fortress 2>/dev/null | grep -q "^${iface}$"; then
+            if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${iface}$"; then
                 local vlan
                 vlan=$(ovs-vsctl get port "$iface" tag 2>/dev/null || echo "trunk")
-                echo "      -> In OVS fortress bridge, VLAN=$vlan"
+                echo "      -> In OVS $OVS_BRIDGE bridge, VLAN=$vlan"
             fi
         fi
     done
