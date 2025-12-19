@@ -56,6 +56,9 @@ WORKDIR /app
 COPY web/ /app/web/
 COPY lib/ /app/lib/
 
+# Copy gunicorn configuration
+COPY web/gunicorn.conf.py /app/gunicorn.conf.py
+
 # Create necessary directories
 RUN mkdir -p /app/data /app/logs /app/certs && \
     chown -R fortress:fortress /app
