@@ -2563,7 +2563,7 @@ SYSCTL_EOF
     # Setup FORWARD rules for bridge traffic
     local bridge="$OVS_BRIDGE_NAME"
     if [ -z "$bridge" ]; then
-        bridge="fortress"
+        bridge="43ess"
     fi
 
     # Clear existing FORWARD rules for bridge
@@ -2614,7 +2614,7 @@ NATEOF
 
 set -e
 
-BRIDGE="fortress"
+BRIDGE="43ess"
 BRIDGE_IP="10.250.0.1"
 BRIDGE_SUBNET="24"
 # Network layout:
@@ -3229,8 +3229,8 @@ install_security_monitoring() {
         MONITOR_IFACE="eth0"
     elif [ -e /sys/class/net/br0 ]; then
         MONITOR_IFACE="br0"
-    elif [ -e /sys/class/net/fortress ]; then
-        MONITOR_IFACE="fortress"
+    elif [ -e /sys/class/net/43ess ]; then
+        MONITOR_IFACE="43ess"
     else
         MONITOR_IFACE="any"
     fi
