@@ -58,6 +58,7 @@ COPY --chown=fortress:nogroup core/qsecbit/ /opt/hookprobe/core/qsecbit/
 COPY --chown=fortress:nogroup core/__init__.py /opt/hookprobe/core/
 
 # Copy Fortress-specific agent
+COPY --chown=fortress:nogroup products/fortress/__init__.py /opt/hookprobe/fortress/
 COPY --chown=fortress:nogroup products/fortress/qsecbit/ /opt/hookprobe/fortress/qsecbit/
 COPY --chown=fortress:nogroup products/fortress/lib/ /opt/hookprobe/fortress/lib/
 
@@ -67,6 +68,7 @@ ENV PYTHONUNBUFFERED=1
 ENV QSECBIT_MODE=fortress
 ENV QSECBIT_DATA_DIR=/opt/hookprobe/fortress/data
 ENV QSECBIT_LOG_DIR=/var/log/hookprobe
+ENV OVS_BRIDGE=43ess
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
