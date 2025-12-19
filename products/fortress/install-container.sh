@@ -618,8 +618,9 @@ setup_network() {
         export OVS_BRIDGE="43ess"
         export LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
-        # Initialize OVS bridge with all tiers
-        "$ovs_script" init || {
+        # Initialize OVS bridge for podman mode (skips tier internal ports)
+        # Podman-compose creates its own networks with the tier IPs
+        "$ovs_script" init-podman || {
             log_error "Failed to initialize OVS network"
             return 1
         }
