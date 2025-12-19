@@ -69,7 +69,14 @@ log_substep() { echo -e "  ${BLUE}→${NC} $1"; }
 get_state() {
     local key="$1"
     if [ -f "$STATE_FILE" ]; then
-        python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('$key', ''))" 2>/dev/null || echo ""
+        STATE_FILE="$STATE_FILE" STATE_KEY="$key" python3 -c '
+import json
+import os
+state_file = os.environ["STATE_FILE"]
+key = os.environ["STATE_KEY"]
+d = json.load(open(state_file))
+print(d.get(key, ""))
+' 2>/dev/null || echo ""
     fi
 }
 
@@ -79,16 +86,24 @@ set_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
 
     if [ -f "$STATE_FILE" ]; then
-        python3 -c "
+        # Use environment variables to avoid shell escaping issues
+        STATE_FILE="$STATE_FILE" STATE_KEY="$key" STATE_VALUE="$value" python3 -c '
 import json
-with open('$STATE_FILE', 'r') as f:
+import os
+state_file = os.environ["STATE_FILE"]
+key = os.environ["STATE_KEY"]
+value = os.environ["STATE_VALUE"]
+with open(state_file, "r") as f:
     d = json.load(f)
-d['$key'] = '$value'
-with open('$STATE_FILE', 'w') as f:
+d[key] = value
+with open(state_file, "w") as f:
     json.dump(d, f, indent=2)
-"
+'
     else
-        echo "{\"$key\": \"$value\"}" > "$STATE_FILE"
+        # Escape special characters for JSON
+        local escaped_value
+        escaped_value=$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        echo "{\"$key\": \"$escaped_value\"}" > "$STATE_FILE"
     fi
 }
 
