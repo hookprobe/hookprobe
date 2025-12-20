@@ -159,15 +159,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    # Note: podman-compose can only set static IP for one network
+    # Web uses fortress-data as primary (for DB access), others get dynamic IPs
     networks:
       fortress-data:
         ipv4_address: 172.20.200.20
       fortress-services:
-        ipv4_address: 172.20.201.10
       fortress-ml:
-        ipv4_address: 172.20.202.20
       fortress-mgmt:
-        ipv4_address: 172.20.203.20
 
   # dnsXai Engine - DNS ML Protection
   dnsxai:
@@ -296,7 +295,7 @@ services:
 
   # Grafana - Visualization Dashboard
   grafana:
-    image: docker.io/grafana/grafana:10-alpine
+    image: docker.io/grafana/grafana:11.4.0
     container_name: fortress-grafana
     restart: unless-stopped
     environment:
@@ -325,7 +324,7 @@ services:
 
   # VictoriaMetrics - Time Series Database
   victoria:
-    image: docker.io/victoriametrics/victoria-metrics:stable
+    image: docker.io/victoriametrics/victoria-metrics:v1.106.1
     container_name: fortress-victoria
     restart: unless-stopped
     command:
