@@ -9,10 +9,10 @@
 #   - Per-tier internet isolation
 #
 # Network Tiers (43ess = leetspeak for "fortress"):
-#   - 43ess-data      (10.250.200.0/24)      - NO internet - postgres, redis
-#   - 43ess-services  (10.250.201.0/24)      - internet OK - web, dnsxai, dfs
-#   - 43ess-ml        (10.250.202.0/24)      - NO internet - lstm-trainer
-#   - 43ess-mgmt      (10.250.203.0/24)      - NO internet - grafana, victoria
+#   - 43ess-data      (172.20.200.0/24)      - NO internet - postgres, redis
+#   - 43ess-services  (172.20.201.0/24)      - internet OK - web, dnsxai, dfs
+#   - 43ess-ml        (172.20.202.0/24)      - NO internet - lstm-trainer
+#   - 43ess-mgmt      (172.20.203.0/24)      - NO internet - grafana, victoria
 #   - 43ess-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
 #
 # LAN subnet is configurable via LAN_SUBNET_MASK environment variable
@@ -58,27 +58,27 @@ get_lan_cidr() {
 # NOTE: Interface names must be <= 15 chars (Linux IFNAMSIZ limit)
 # With "43ess-" prefix (6 chars), tier names can be up to 9 chars
 declare -A TIER_CONFIG=(
-    ["data"]="10.250.200.1/24:false"      # gateway:internet_allowed
-    ["services"]="10.250.201.1/24:true"   # web, dnsxai, dfs
-    ["ml"]="10.250.202.1/24:false"
-    ["mgmt"]="10.250.203.1/24:false"
+    ["data"]="172.20.200.1/24:false"      # gateway:internet_allowed
+    ["services"]="172.20.201.1/24:true"   # web, dnsxai, dfs
+    ["ml"]="172.20.202.1/24:false"
+    ["mgmt"]="172.20.203.1/24:false"
     ["lan"]="${LAN_BASE_IP}/${LAN_SUBNET_MASK}:true"  # LAN clients need NAT
 )
 
 # Container IP assignments
 declare -A CONTAINER_IPS=(
     # Data tier
-    ["postgres"]="10.250.200.10"
-    ["redis"]="10.250.200.11"
+    ["postgres"]="172.20.200.10"
+    ["redis"]="172.20.200.11"
     # Services tier
-    ["web"]="10.250.201.10"
-    ["dnsxai"]="10.250.201.11"
-    ["dfs"]="10.250.201.12"
+    ["web"]="172.20.201.10"
+    ["dnsxai"]="172.20.201.11"
+    ["dfs"]="172.20.201.12"
     # ML tier
-    ["lstm-trainer"]="10.250.202.10"
+    ["lstm-trainer"]="172.20.202.10"
     # Mgmt tier
-    ["grafana"]="10.250.203.10"
-    ["victoria"]="10.250.203.11"
+    ["grafana"]="172.20.203.10"
+    ["victoria"]="172.20.203.11"
 )
 
 # VXLAN Configuration (VNI:UDP_PORT)
@@ -351,23 +351,23 @@ install_openflow_rules() {
 
     # Data tier - can only talk within tier and to web (for DB queries)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.250.200.0/24,nw_dst=10.250.200.0/24,actions=resubmit(,$OF_TABLE_OUTPUT)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.200.0/24,nw_dst=172.20.200.0/24,actions=resubmit(,$OF_TABLE_OUTPUT)"
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.250.200.0/24,nw_dst=${CONTAINER_IPS[web]},actions=resubmit(,$OF_TABLE_OUTPUT)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.200.0/24,nw_dst=${CONTAINER_IPS[web]},actions=resubmit(,$OF_TABLE_OUTPUT)"
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=${CONTAINER_IPS[web]},nw_dst=10.250.200.0/24,actions=resubmit(,$OF_TABLE_OUTPUT)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=${CONTAINER_IPS[web]},nw_dst=172.20.200.0/24,actions=resubmit(,$OF_TABLE_OUTPUT)"
 
     # Services tier - full access (internet handled in next table)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.250.201.0/24,actions=resubmit(,$OF_TABLE_INTERNET_CONTROL)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.201.0/24,actions=resubmit(,$OF_TABLE_INTERNET_CONTROL)"
 
     # ML tier - internal only
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.250.202.0/24,nw_dst=10.250.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.202.0/24,nw_dst=172.20.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
 
     # Mgmt tier - can query services (Victoria for Grafana dashboards)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=10.250.203.0/24,nw_dst=10.250.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.203.0/24,nw_dst=172.20.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
 
     # LAN tier - can reach services and internet (dynamic CIDR)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -386,7 +386,7 @@ install_openflow_rules() {
 
     # Services tier - allow internet
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=10.250.201.0/24,actions=resubmit(,$OF_TABLE_MIRROR)"
+        "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=172.20.201.0/24,actions=resubmit(,$OF_TABLE_MIRROR)"
 
     # LAN - allow internet (will be NATed) - dynamic CIDR
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -626,8 +626,8 @@ setup_nat() {
         iptables -t nat -A POSTROUTING -s "${lan_cidr}" -o "$wan_iface" -j MASQUERADE
 
     # NAT for services tier (dnsxai needs upstream DNS)
-    iptables -t nat -C POSTROUTING -s 10.250.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 10.250.201.0/24 -o "$wan_iface" -j MASQUERADE
+    iptables -t nat -C POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE
 
     # Allow forwarding
     iptables -C FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT 2>/dev/null || \
@@ -636,7 +636,7 @@ setup_nat() {
     iptables -C FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-    log_info "NAT configured for LAN (${lan_cidr}) and Services (10.250.201.0/24)"
+    log_info "NAT configured for LAN (${lan_cidr}) and Services (172.20.201.0/24)"
 }
 
 # ============================================================
@@ -792,7 +792,7 @@ init_ovs_network() {
 
 # Initialize OVS for podman-compose mode
 # Skips creating tier internal ports since podman-compose creates its own networks
-# with those IPs (10.250.200.0/24, etc). OVS is only used for traffic monitoring.
+# with those IPs (172.20.200.0/24, etc). OVS is only used for traffic monitoring.
 init_ovs_network_podman() {
     log_section "Initializing OVS for Podman Mode"
 
@@ -835,7 +835,7 @@ cleanup_ovs_network() {
     for mask in 23 24 25 26 27 28 29; do
         iptables -t nat -D POSTROUTING -s "10.200.0.0/${mask}" -j MASQUERADE 2>/dev/null || true
     done
-    iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 172.20.201.0/24 -j MASQUERADE 2>/dev/null || true
 
     # Remove DHCP config
     rm -f /etc/dnsmasq.d/fortress-ovs.conf
@@ -915,10 +915,10 @@ create_container_veths() {
 
         # Determine tier from IP
         case "$ip" in
-            10.250.200.*) tier="data" ;;
-            10.250.201.*) tier="services" ;;
-            10.250.202.*) tier="ml" ;;
-            10.250.203.*) tier="mgmt" ;;
+            172.20.200.*) tier="data" ;;
+            172.20.201.*) tier="services" ;;
+            172.20.202.*) tier="ml" ;;
+            172.20.203.*) tier="mgmt" ;;
             *) continue ;;
         esac
 
@@ -1043,16 +1043,16 @@ Examples:
   $0 nat eth0                       # Setup NAT
   $0 dhcp                           # Configure DHCP
   $0 podman-networks                # Create Podman CNI networks
-  $0 attach fortress-web 10.250.201.10 services
+  $0 attach fortress-web 172.20.201.10 services
   $0 connect-containers             # Connect all containers
   $0 block 10.200.0.50              # Block IP
   $0 vxlan-peer mssp 203.0.113.1 2000
 
 Container Network Tiers (43ess = leetspeak for "fortress"):
-  data      10.250.200.0/24      postgres, redis (NO internet)
-  services  10.250.201.0/24      web, dnsxai, dfs (internet OK)
-  ml        10.250.202.0/24      lstm-trainer (NO internet)
-  mgmt      10.250.203.0/24      grafana, victoria (NO internet)
+  data      172.20.200.0/24      postgres, redis (NO internet)
+  services  172.20.201.0/24      web, dnsxai, dfs (internet OK)
+  ml        172.20.202.0/24      lstm-trainer (NO internet)
+  mgmt      172.20.203.0/24      grafana, victoria (NO internet)
   lan       10.200.0.0/MASK      WiFi/LAN clients (NAT to internet)
 
 LAN Subnet Configuration:
