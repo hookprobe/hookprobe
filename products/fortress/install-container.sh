@@ -1091,9 +1091,7 @@ connect_containers_to_ovs() {
     "$ovs_script" attach fortress-redis 172.20.200.11 data 2>/dev/null || \
         log_warn "Could not attach redis to OVS (may not be running)"
 
-    # Services tier containers
-    "$ovs_script" attach fortress-web 172.20.201.10 services 2>/dev/null || \
-        log_warn "Could not attach web to OVS (may not be running)"
+    # Services tier containers (web uses host network, no OVS attachment needed)
     "$ovs_script" attach fortress-dnsxai 172.20.201.11 services 2>/dev/null || \
         log_warn "Could not attach dnsxai to OVS (may not be running)"
     "$ovs_script" attach fortress-dfs 172.20.201.12 services 2>/dev/null || \
@@ -1129,6 +1127,9 @@ create_systemd_service() {
     local compose_dir="${INSTALL_DIR}/containers"
     local ovs_script="${INSTALL_DIR}/devices/common/ovs-container-network.sh"
 
+    # Create bin directory for scripts
+    mkdir -p "${INSTALL_DIR}/bin"
+
     # Create OVS post-start hook script
     cat > "${INSTALL_DIR}/bin/fortress-ovs-connect.sh" << 'OVSEOF'
 #!/bin/bash
@@ -1145,8 +1146,7 @@ if [ -f "$OVS_SCRIPT" ]; then
     "$OVS_SCRIPT" attach fortress-postgres 172.20.200.10 data 2>/dev/null || true
     "$OVS_SCRIPT" attach fortress-redis 172.20.200.11 data 2>/dev/null || true
 
-    # Services tier
-    "$OVS_SCRIPT" attach fortress-web 172.20.201.10 services 2>/dev/null || true
+    # Services tier (note: web uses host network, no OVS attachment needed)
     "$OVS_SCRIPT" attach fortress-dnsxai 172.20.201.11 services 2>/dev/null || true
     "$OVS_SCRIPT" attach fortress-dfs 172.20.201.12 services 2>/dev/null || true
 
@@ -1157,7 +1157,6 @@ if [ -f "$OVS_SCRIPT" ]; then
 fi
 OVSEOF
 
-    mkdir -p "${INSTALL_DIR}/bin"
     chmod +x "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
 
     cat > /etc/systemd/system/fortress.service << EOF
