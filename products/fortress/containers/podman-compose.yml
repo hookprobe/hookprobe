@@ -74,6 +74,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    ports:
+      # Expose on localhost only for security (web uses host network)
+      - "127.0.0.1:5432:5432"
     networks:
       fortress-data:
         ipv4_address: 172.20.200.10
@@ -99,7 +102,8 @@ services:
       retries: 5
       start_period: 5s
     ports:
-      - "6379:6379"
+      # Expose on localhost only for security (web uses host network)
+      - "127.0.0.1:6379:6379"
     networks:
       fortress-data:
         ipv4_address: 172.20.200.11
@@ -122,14 +126,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database connection (via data network)
-      DATABASE_HOST: 172.20.200.10
+      # Database connection (web uses host network, reaches via localhost)
+      DATABASE_HOST: localhost
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      # Redis connection (via data network)
-      REDIS_HOST: 172.20.200.11
+      # Redis connection (web uses host network, reaches via localhost)
+      REDIS_HOST: localhost
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
@@ -138,12 +142,12 @@ services:
       # Gunicorn settings
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
-      # ML service endpoints (via services network)
+      # ML service endpoints (web uses host network, reaches all services via localhost)
       QSECBIT_API_URL: http://localhost:9090
-      DNSXAI_API_URL: http://172.20.201.11:5353
-      DFS_API_URL: http://172.20.201.12:8050
-      # Monitoring endpoints (via mgmt network)
-      VICTORIA_URL: http://172.20.203.11:8428
+      DNSXAI_API_URL: http://localhost:5353
+      DFS_API_URL: http://localhost:8050
+      # Monitoring endpoints
+      VICTORIA_URL: http://localhost:8428
     secrets:
       - postgres_password
       - flask_secret
@@ -151,22 +155,17 @@ services:
       - web_data:/app/data
       - web_logs:/app/logs
       - fortress_config:/etc/hookprobe:ro
-    ports:
-      - "8443:8443"
+    # Note: ports directive removed - network_mode: host exposes 8443 directly
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
-    # Note: podman-compose can only set static IP for one network
-    # Web uses fortress-data as primary (for DB access), others get dynamic IPs
-    networks:
-      fortress-data:
-        ipv4_address: 172.20.200.20
-      fortress-services:
-      fortress-ml:
-      fortress-mgmt:
+    # Use host network for web to access all services via localhost
+    # This is required because podman-compose 1.0.6 can't handle multi-network static IPs
+    # and internal networks can't reach host ports
+    network_mode: host
 
   # dnsXai Engine - DNS ML Protection
   dnsxai:
