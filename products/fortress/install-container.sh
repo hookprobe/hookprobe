@@ -679,6 +679,10 @@ setup_network() {
             # Create systemd services for WiFi
             create_wifi_services 2>/dev/null || true
 
+            # Create udev rules for persistent WiFi interface naming
+            # This prevents interfaces from changing names on reboot
+            create_wifi_udev_rules 2>/dev/null || log_warn "Could not create WiFi udev rules"
+
             # Save WiFi credentials
             echo "WIFI_SSID=$wifi_ssid" >> "$CONFIG_DIR/fortress.conf"
             echo "$wifi_pass" > "$CONFIG_DIR/secrets/wifi_password"
@@ -706,6 +710,158 @@ setup_network() {
     log_info "  Mirror:   Traffic mirroring to QSecBit enabled"
     log_info "  sFlow:    Flow export to 127.0.0.1:6343"
     log_info "  IPFIX:    Flow export to 127.0.0.1:4739"
+}
+
+# ============================================================
+# WIFI UDEV RULES FOR STABLE NAMING
+# ============================================================
+create_wifi_udev_rules() {
+    # Create udev rules for stable WiFi interface naming
+    # This prevents wlan0/wlan1 from swapping on reboot
+    #
+    # Uses MAC addresses to assign stable names:
+    #   - wlan_24ghz for 2.4GHz adapter
+    #   - wlan_5ghz for 5GHz adapter (or dual-band)
+
+    log_info "Creating udev rules for stable WiFi interface naming..."
+
+    local udev_rule_file="/etc/udev/rules.d/70-fortress-wifi.rules"
+
+    # Detect WiFi interfaces and their bands
+    local iface_24ghz=""
+    local iface_5ghz=""
+    local mac_24ghz=""
+    local mac_5ghz=""
+
+    # Use network-integration classification if available
+    if [ -n "$NET_WIFI_24GHZ_IFACE" ]; then
+        iface_24ghz="$NET_WIFI_24GHZ_IFACE"
+        mac_24ghz=$(cat /sys/class/net/$iface_24ghz/address 2>/dev/null)
+    fi
+    if [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
+        iface_5ghz="$NET_WIFI_5GHZ_IFACE"
+        mac_5ghz=$(cat /sys/class/net/$iface_5ghz/address 2>/dev/null)
+    fi
+
+    # Fallback: detect from iw dev
+    if [ -z "$mac_24ghz" ] && [ -z "$mac_5ghz" ]; then
+        log_info "  Detecting WiFi adapters from iw dev..."
+        for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+            local mac=$(cat /sys/class/net/$iface/address 2>/dev/null)
+            [ -z "$mac" ] && continue
+
+            # Check band support
+            local phy=$(iw dev $iface info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+            local has_5ghz=$(iw phy $phy info 2>/dev/null | grep -c "5[0-9][0-9][0-9] MHz")
+            local has_24ghz=$(iw phy $phy info 2>/dev/null | grep -c "24[0-9][0-9] MHz")
+
+            if [ "$has_5ghz" -gt 0 ] && [ -z "$mac_5ghz" ]; then
+                iface_5ghz="$iface"
+                mac_5ghz="$mac"
+                log_info "  5GHz adapter: $iface ($mac)"
+            elif [ "$has_24ghz" -gt 0 ] && [ -z "$mac_24ghz" ]; then
+                iface_24ghz="$iface"
+                mac_24ghz="$mac"
+                log_info "  2.4GHz adapter: $iface ($mac)"
+            fi
+        done
+    fi
+
+    # Generate udev rules
+    cat > "$udev_rule_file" << 'UDEV_HEADER'
+# HookProbe Fortress - WiFi Interface Stable Naming
+# Generated automatically - do not edit manually
+#
+# These rules ensure WiFi interfaces have stable names across reboots
+# by matching on MAC address instead of kernel enumeration order.
+#
+# To regenerate: re-run fortress install or remove this file
+
+UDEV_HEADER
+
+    if [ -n "$mac_24ghz" ]; then
+        echo "# 2.4GHz WiFi adapter (original: $iface_24ghz)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_24ghz\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
+        log_info "  Created rule: $mac_24ghz -> wlan_24ghz"
+    fi
+
+    if [ -n "$mac_5ghz" ]; then
+        echo "# 5GHz WiFi adapter (original: $iface_5ghz)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_5ghz\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
+        log_info "  Created rule: $mac_5ghz -> wlan_5ghz"
+    fi
+
+    if [ ! -s "$udev_rule_file" ] || [ -z "$mac_24ghz$mac_5ghz" ]; then
+        log_warn "  No WiFi adapters detected for udev rules"
+        rm -f "$udev_rule_file"
+        return 1
+    fi
+
+    log_info "Created $udev_rule_file"
+
+    # Trigger udev to apply interface naming rules
+    log_info "Triggering udev to apply interface naming rules..."
+    udevadm control --reload-rules
+    udevadm trigger --action=add --subsystem-match=net
+
+    # Wait for interfaces to be renamed (max 10 seconds)
+    local wait_count=0
+    local max_wait=10
+    while [ $wait_count -lt $max_wait ]; do
+        local renamed=true
+        [ -n "$mac_24ghz" ] && [ ! -d "/sys/class/net/wlan_24ghz" ] && renamed=false
+        [ -n "$mac_5ghz" ] && [ ! -d "/sys/class/net/wlan_5ghz" ] && renamed=false
+        if $renamed; then
+            log_info "  Interface renaming complete"
+            break
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    if [ $wait_count -ge $max_wait ]; then
+        log_warn "  Interface renaming may require reboot (driver limitation)"
+    fi
+
+    # Save current mapping for reference
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_DIR/wifi-interfaces.conf" << EOF
+# WiFi Interface Mapping
+# Generated: $(date -Iseconds)
+WIFI_24GHZ_MAC=$mac_24ghz
+WIFI_24GHZ_ORIGINAL=$iface_24ghz
+WIFI_24GHZ_STABLE=wlan_24ghz
+WIFI_5GHZ_MAC=$mac_5ghz
+WIFI_5GHZ_ORIGINAL=$iface_5ghz
+WIFI_5GHZ_STABLE=wlan_5ghz
+EOF
+
+    # Update hostapd configs to use stable interface names
+    log_info "Updating hostapd configs to use stable interface names..."
+
+    if [ -n "$mac_24ghz" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        log_info "  Updating 2.4GHz config: $iface_24ghz -> wlan_24ghz"
+        sed -i "s/^interface=.*/interface=wlan_24ghz/" /etc/hostapd/hostapd-24ghz.conf
+    fi
+
+    if [ -n "$mac_5ghz" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        log_info "  Updating 5GHz config: $iface_5ghz -> wlan_5ghz"
+        sed -i "s/^interface=.*/interface=wlan_5ghz/" /etc/hostapd/hostapd-5ghz.conf
+    fi
+
+    # Update systemd service files if they exist
+    if [ -n "$mac_24ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
+        sed -i "s/$iface_24ghz/wlan_24ghz/g" /etc/systemd/system/fortress-hostapd-24ghz.service
+    fi
+
+    if [ -n "$mac_5ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        sed -i "s/$iface_5ghz/wlan_5ghz/g" /etc/systemd/system/fortress-hostapd-5ghz.service
+    fi
+
+    # Reload systemd if services were updated
+    systemctl daemon-reload 2>/dev/null || true
+
+    return 0
 }
 
 setup_ovs_dhcp() {
