@@ -433,7 +433,7 @@ datasources:
   - name: VictoriaMetrics
     type: prometheus
     access: proxy
-    url: http://10.250.203.11:8428
+    url: http://172.20.203.11:8428
     isDefault: true
     editable: false
 EOF
@@ -745,7 +745,7 @@ log-queries
 cache-size=1000
 
 # Forward DNS to dnsXai container
-server=10.250.201.11#5353
+server=172.20.201.11#5353
 EOF
 
     chmod 644 "$config_file"
@@ -930,25 +930,25 @@ connect_containers_to_ovs() {
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
     # Data tier containers
-    "$ovs_script" attach fortress-postgres 10.250.200.10 data 2>/dev/null || \
+    "$ovs_script" attach fortress-postgres 172.20.200.10 data 2>/dev/null || \
         log_warn "Could not attach postgres to OVS (may not be running)"
-    "$ovs_script" attach fortress-redis 10.250.200.11 data 2>/dev/null || \
+    "$ovs_script" attach fortress-redis 172.20.200.11 data 2>/dev/null || \
         log_warn "Could not attach redis to OVS (may not be running)"
 
     # Services tier containers
-    "$ovs_script" attach fortress-web 10.250.201.10 services 2>/dev/null || \
+    "$ovs_script" attach fortress-web 172.20.201.10 services 2>/dev/null || \
         log_warn "Could not attach web to OVS (may not be running)"
-    "$ovs_script" attach fortress-dnsxai 10.250.201.11 services 2>/dev/null || \
+    "$ovs_script" attach fortress-dnsxai 172.20.201.11 services 2>/dev/null || \
         log_warn "Could not attach dnsxai to OVS (may not be running)"
-    "$ovs_script" attach fortress-dfs 10.250.201.12 services 2>/dev/null || \
+    "$ovs_script" attach fortress-dfs 172.20.201.12 services 2>/dev/null || \
         log_warn "Could not attach dfs to OVS (may not be running)"
 
     # ML tier (optional containers)
-    "$ovs_script" attach fortress-lstm-trainer 10.250.202.10 ml 2>/dev/null || true
+    "$ovs_script" attach fortress-lstm-trainer 172.20.202.10 ml 2>/dev/null || true
 
     # Mgmt tier (optional containers)
-    "$ovs_script" attach fortress-grafana 10.250.203.10 mgmt 2>/dev/null || true
-    "$ovs_script" attach fortress-victoria 10.250.203.11 mgmt 2>/dev/null || true
+    "$ovs_script" attach fortress-grafana 172.20.203.10 mgmt 2>/dev/null || true
+    "$ovs_script" attach fortress-victoria 172.20.203.11 mgmt 2>/dev/null || true
 
     log_info "Containers connected to OVS for OpenFlow monitoring"
     log_info "  Traffic mirroring: all container traffic → fortress-mirror"
@@ -986,18 +986,18 @@ sleep 5
 
 if [ -f "$OVS_SCRIPT" ]; then
     # Data tier
-    "$OVS_SCRIPT" attach fortress-postgres 10.250.200.10 data 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-redis 10.250.200.11 data 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-postgres 172.20.200.10 data 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-redis 172.20.200.11 data 2>/dev/null || true
 
     # Services tier
-    "$OVS_SCRIPT" attach fortress-web 10.250.201.10 services 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-dnsxai 10.250.201.11 services 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-dfs 10.250.201.12 services 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-web 172.20.201.10 services 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-dnsxai 172.20.201.11 services 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-dfs 172.20.201.12 services 2>/dev/null || true
 
     # Optional tiers
-    "$OVS_SCRIPT" attach fortress-lstm-trainer 10.250.202.10 ml 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-grafana 10.250.203.10 mgmt 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-victoria 10.250.203.11 mgmt 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-lstm-trainer 172.20.202.10 ml 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-grafana 172.20.203.10 mgmt 2>/dev/null || true
+    "$OVS_SCRIPT" attach fortress-victoria 172.20.203.11 mgmt 2>/dev/null || true
 fi
 OVSEOF
 
@@ -1227,7 +1227,7 @@ uninstall() {
     for mask in 23 24 25 26 27 28 29; do
         iptables -t nat -D POSTROUTING -s 10.200.0.0/$mask -j MASQUERADE 2>/dev/null || true
     done
-    iptables -t nat -D POSTROUTING -s 10.250.201.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 172.20.201.0/24 -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -i "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
     # Also clean up legacy 'fortress' bridge rules
@@ -1471,10 +1471,10 @@ main() {
     echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
     echo ""
     echo "Container Network Tiers (isolated via OpenFlow):"
-    echo "  Data Tier:     10.250.200.0/24 (postgres, redis) - NO internet"
-    echo "  Services Tier: 10.250.201.0/24 (web, dnsxai, dfs) - internet OK"
-    echo "  ML Tier:       10.250.202.0/24 (lstm-trainer) - NO internet"
-    echo "  Mgmt Tier:     10.250.203.0/24 (grafana, victoria) - NO internet"
+    echo "  Data Tier:     172.20.200.0/24 (postgres, redis) - NO internet"
+    echo "  Services Tier: 172.20.201.0/24 (web, dnsxai, dfs) - internet OK"
+    echo "  ML Tier:       172.20.202.0/24 (lstm-trainer) - NO internet"
+    echo "  Mgmt Tier:     172.20.203.0/24 (grafana, victoria) - NO internet"
     echo ""
     echo "Security Features:"
     echo "  - OpenFlow tier isolation (containers can't reach unauthorized tiers)"
