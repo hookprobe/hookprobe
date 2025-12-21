@@ -728,52 +728,97 @@ create_wifi_udev_rules() {
     log_info "Creating udev rules for stable WiFi interface naming..."
 
     local udev_rule_file="/etc/udev/rules.d/70-fortress-wifi.rules"
+
+    # Check if iw command exists
+    if ! command -v iw &>/dev/null; then
+        log_warn "  'iw' command not found - cannot detect WiFi adapters"
+        return 1
+    fi
+
+    # Detect WiFi interfaces - use simpler approach without arrays
+    local primary_iface="" primary_mac="" primary_band=""
+    local secondary_iface="" secondary_mac="" secondary_band=""
     local adapter_count=0
 
-    # Arrays to store detected adapters
-    declare -a adapters_iface=()
-    declare -a adapters_mac=()
-    declare -a adapters_bands=()  # "24ghz", "5ghz", or "dualband"
-
-    # Detect WiFi interfaces from iw dev
     log_info "  Detecting WiFi adapters..."
-    for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+
+    # Get list of wireless interfaces from /sys/class/net
+    for iface_path in /sys/class/net/*/wireless; do
+        [ -d "$iface_path" ] || continue
+        local iface
+        iface=$(basename "$(dirname "$iface_path")")
+
         local mac
         mac=$(cat "/sys/class/net/$iface/address" 2>/dev/null)
         [ -z "$mac" ] && continue
 
-        # Get phy for this interface
-        local phy
-        phy=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+        # Get phy name for this interface
+        local phy_path="/sys/class/net/$iface/phy80211"
+        local phy=""
+        if [ -L "$phy_path" ]; then
+            phy=$(basename "$(readlink -f "$phy_path")")
+        fi
+
+        # If phy not found via sysfs, try iw
+        if [ -z "$phy" ]; then
+            local wiphy_num
+            wiphy_num=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print $2}')
+            [ -n "$wiphy_num" ] && phy="phy${wiphy_num}"
+        fi
+
         [ -z "$phy" ] && continue
 
-        # Check band support by looking for frequencies in iw phy output
-        local phy_info
-        phy_info=$(iw phy "$phy" info 2>/dev/null)
+        # Get frequency info from /sys/class/ieee80211/phy*/
+        local has_5ghz=false has_24ghz=false
+        local phy_sys="/sys/class/ieee80211/$phy"
 
-        # Count frequencies in each band (more reliable than just checking existence)
-        local freq_5ghz freq_24ghz
-        freq_5ghz=$(echo "$phy_info" | grep -cE '\* 5[0-9]{3} MHz' || echo 0)
-        freq_24ghz=$(echo "$phy_info" | grep -cE '\* 2[34][0-9]{2} MHz' || echo 0)
-
-        local band_type=""
-        if [ "$freq_5ghz" -gt 0 ] && [ "$freq_24ghz" -gt 0 ]; then
-            band_type="dualband"
-            log_info "  Dual-band adapter: $iface ($mac) - 2.4GHz: $freq_24ghz ch, 5GHz: $freq_5ghz ch"
-        elif [ "$freq_5ghz" -gt 0 ]; then
-            band_type="5ghz"
-            log_info "  5GHz-only adapter: $iface ($mac) - $freq_5ghz channels"
-        elif [ "$freq_24ghz" -gt 0 ]; then
-            band_type="24ghz"
-            log_info "  2.4GHz-only adapter: $iface ($mac) - $freq_24ghz channels"
+        if [ -d "$phy_sys" ]; then
+            # Check for 5GHz support (channels > 14, frequencies > 5000 MHz)
+            if grep -qE '5[0-9]{3}' "$phy_sys"/device/net/*/uevent 2>/dev/null || \
+               iw phy "$phy" info 2>/dev/null | grep -qE '\* 5[0-9]{3} MHz'; then
+                has_5ghz=true
+            fi
+            # Check for 2.4GHz support (frequencies 2400-2500 MHz)
+            if grep -qE '24[0-9]{2}' "$phy_sys"/device/net/*/uevent 2>/dev/null || \
+               iw phy "$phy" info 2>/dev/null | grep -qE '\* 24[0-9]{2} MHz'; then
+                has_24ghz=true
+            fi
         else
-            log_warn "  Unknown band adapter: $iface ($mac) - skipping"
+            # Fallback: use iw phy directly
+            local phy_info
+            phy_info=$(iw phy "$phy" info 2>/dev/null)
+            if [ -n "$phy_info" ]; then
+                echo "$phy_info" | grep -qE '\* 5[0-9]{3} MHz' && has_5ghz=true
+                echo "$phy_info" | grep -qE '\* 24[0-9]{2} MHz' && has_24ghz=true
+            fi
+        fi
+
+        # Determine band type
+        local band_type=""
+        if $has_5ghz && $has_24ghz; then
+            band_type="dualband"
+            log_info "  Dual-band adapter: $iface ($mac)"
+        elif $has_5ghz; then
+            band_type="5ghz"
+            log_info "  5GHz-only adapter: $iface ($mac)"
+        elif $has_24ghz; then
+            band_type="24ghz"
+            log_info "  2.4GHz-only adapter: $iface ($mac)"
+        else
+            log_warn "  Unknown band for adapter: $iface ($mac) - skipping"
             continue
         fi
 
-        adapters_iface+=("$iface")
-        adapters_mac+=("$mac")
-        adapters_bands+=("$band_type")
+        # Store adapter info
+        if [ -z "$primary_mac" ]; then
+            primary_iface="$iface"
+            primary_mac="$mac"
+            primary_band="$band_type"
+        elif [ -z "$secondary_mac" ]; then
+            secondary_iface="$iface"
+            secondary_mac="$mac"
+            secondary_band="$band_type"
+        fi
         adapter_count=$((adapter_count + 1))
     done
 
@@ -783,7 +828,9 @@ create_wifi_udev_rules() {
         return 1
     fi
 
-    # Generate udev rules based on detected adapters
+    log_info "  Found $adapter_count WiFi adapter(s)"
+
+    # Generate udev rules
     cat > "$udev_rule_file" << 'UDEV_HEADER'
 # HookProbe Fortress - WiFi Interface Stable Naming
 # Generated automatically - do not edit manually
@@ -795,33 +842,12 @@ create_wifi_udev_rules() {
 
 UDEV_HEADER
 
-    # Assign stable names
-    local primary_iface="" primary_mac="" primary_band=""
-    local secondary_iface="" secondary_mac="" secondary_band=""
-
-    for i in "${!adapters_mac[@]}"; do
-        local iface="${adapters_iface[$i]}"
-        local mac="${adapters_mac[$i]}"
-        local band="${adapters_bands[$i]}"
-
-        if [ -z "$primary_mac" ]; then
-            primary_iface="$iface"
-            primary_mac="$mac"
-            primary_band="$band"
-        elif [ -z "$secondary_mac" ]; then
-            secondary_iface="$iface"
-            secondary_mac="$mac"
-            secondary_band="$band"
-        fi
-    done
-
     # Determine stable names based on band capabilities
     local name_24ghz="" name_5ghz=""
 
     if [ "$adapter_count" -eq 1 ]; then
         # Single adapter - use for both bands if dual-band
         if [ "$primary_band" = "dualband" ]; then
-            # Dual-band: both hostapd configs use same interface
             echo "# Dual-band WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
             echo "# Supports both 2.4GHz and 5GHz bands" >> "$udev_rule_file"
             echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_ap0\"" >> "$udev_rule_file"
@@ -841,7 +867,7 @@ UDEV_HEADER
         fi
     else
         # Two or more adapters - assign by capability
-        # Primary gets 5GHz preference, secondary gets 2.4GHz
+        # Prefer 5GHz capable adapter for 5GHz slot
         if [ "$primary_band" = "dualband" ] || [ "$primary_band" = "5ghz" ]; then
             echo "# 5GHz WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
             echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
@@ -869,12 +895,12 @@ UDEV_HEADER
         fi
     fi
 
-    log_info "Created $udev_rule_file"
+    log_info "  Created $udev_rule_file"
 
     # Trigger udev to apply interface naming rules
-    log_info "Triggering udev to apply interface naming rules..."
-    udevadm control --reload-rules
-    udevadm trigger --action=add --subsystem-match=net
+    log_info "  Triggering udev to apply rules..."
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --action=add --subsystem-match=net 2>/dev/null || true
 
     # Wait for interfaces to be renamed (max 10 seconds)
     local wait_count=0
@@ -917,15 +943,15 @@ WIFI_SECONDARY_BAND=${secondary_band:-}
 EOF
 
     # Update hostapd configs to use stable interface names
-    log_info "Updating hostapd configs to use stable interface names..."
+    log_info "  Updating hostapd configs..."
 
     if [ -n "$name_24ghz" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
-        log_info "  Updating 2.4GHz config -> $name_24ghz"
+        log_info "    2.4GHz config -> $name_24ghz"
         sed -i "s/^interface=.*/interface=$name_24ghz/" /etc/hostapd/hostapd-24ghz.conf
     fi
 
     if [ -n "$name_5ghz" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
-        log_info "  Updating 5GHz config -> $name_5ghz"
+        log_info "    5GHz config -> $name_5ghz"
         sed -i "s/^interface=.*/interface=$name_5ghz/" /etc/hostapd/hostapd-5ghz.conf
     fi
 
@@ -933,9 +959,9 @@ EOF
     for svc_file in /etc/systemd/system/fortress-hostapd-*.service; do
         [ -f "$svc_file" ] || continue
         if echo "$svc_file" | grep -q "24ghz" && [ -n "$name_24ghz" ]; then
-            sed -i "s/interface=[^ ]*/interface=$name_24ghz/g" "$svc_file" 2>/dev/null || true
+            sed -i "s|/sys/class/net/[^]]*\]|/sys/class/net/$name_24ghz]|g" "$svc_file" 2>/dev/null || true
         elif echo "$svc_file" | grep -q "5ghz" && [ -n "$name_5ghz" ]; then
-            sed -i "s/interface=[^ ]*/interface=$name_5ghz/g" "$svc_file" 2>/dev/null || true
+            sed -i "s|/sys/class/net/[^]]*\]|/sys/class/net/$name_5ghz]|g" "$svc_file" 2>/dev/null || true
         fi
     done
 
