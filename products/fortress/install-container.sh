@@ -77,6 +77,31 @@ check_prerequisites() {
         exit 1
     fi
 
+    # Network connectivity check - required for package installation
+    log_info "Checking network connectivity..."
+    if ! timeout 5 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null; then
+        # Try DNS resolution
+        if ! timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
+            log_error "No network connectivity detected!"
+            log_error "Cannot reach archive.ubuntu.com or 8.8.8.8"
+            log_error "Please ensure the WAN interface has internet access before running install"
+            log_error ""
+            log_error "Check your network with:"
+            log_error "  ip route show default"
+            log_error "  cat /etc/resolv.conf"
+            log_error "  ping -c1 8.8.8.8"
+            exit 1
+        else
+            # IP works but DNS doesn't - fix resolv.conf
+            log_warn "DNS resolution not working, adding fallback nameserver..."
+            if ! grep -q "nameserver" /etc/resolv.conf 2>/dev/null; then
+                echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+                echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+            fi
+        fi
+    fi
+    log_info "Network connectivity: OK"
+
     # Open vSwitch (required for secure container networking)
     if ! command -v ovs-vsctl &>/dev/null; then
         log_warn "Open vSwitch not found. Installing..."
