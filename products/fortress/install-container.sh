@@ -719,7 +719,26 @@ setup_network() {
             log_warn "Hostapd generator not found - WiFi not configured"
         fi
     else
-        log_info "No WiFi interfaces detected - skipping AP setup"
+        log_info "No WiFi interfaces detected by network-integration"
+        log_info "Trying direct WiFi detection..."
+
+        # Try to detect WiFi directly even if network-integration failed
+        # This is a fallback to ensure udev rules are created
+        if command -v iw &>/dev/null; then
+            local detected_wifi=false
+            for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+                detected_wifi=true
+                break
+            done
+
+            if $detected_wifi; then
+                log_info "Found WiFi interfaces via iw dev - creating udev rules"
+                create_wifi_udev_rules || log_warn "Could not create WiFi udev rules"
+            else
+                log_info "No WiFi adapters found"
+            fi
+        fi
+
         WIFI_SSID=""
         WIFI_PASSWORD=""
     fi
