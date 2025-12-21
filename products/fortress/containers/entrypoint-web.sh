@@ -149,38 +149,84 @@ fi
 
 # Wait for database to be ready (if using PostgreSQL)
 if [ -n "${DATABASE_HOST}" ]; then
-    log_info "Waiting for database..."
+    log_info "Waiting for database at ${DATABASE_HOST}:${DATABASE_PORT:-5432}..."
     max_attempts=30
     attempt=0
+    last_error=""
     while [ $attempt -lt $max_attempts ]; do
-        if python3 -c "import psycopg2; psycopg2.connect(host='${DATABASE_HOST}', port='${DATABASE_PORT:-5432}', user='${DATABASE_USER:-fortress}', password='${DATABASE_PASSWORD:-}', dbname='${DATABASE_NAME:-fortress}')" 2>/dev/null; then
-            log_info "Database is ready"
-            break
+        # Try connection and capture any error
+        if result=$(python3 -c "
+import psycopg2
+try:
+    conn = psycopg2.connect(
+        host='${DATABASE_HOST}',
+        port='${DATABASE_PORT:-5432}',
+        user='${DATABASE_USER:-fortress}',
+        password='${DATABASE_PASSWORD:-fortress_db_secret}',
+        dbname='${DATABASE_NAME:-fortress}',
+        connect_timeout=5
+    )
+    conn.close()
+    print('OK')
+except Exception as e:
+    print(f'ERROR: {e}')
+" 2>&1); then
+            if [ "$result" = "OK" ]; then
+                log_info "Database is ready"
+                break
+            else
+                last_error="$result"
+            fi
+        else
+            last_error="$result"
         fi
         attempt=$((attempt + 1))
-        log_info "Waiting for database... ($attempt/$max_attempts)"
+        if [ $((attempt % 5)) -eq 0 ]; then
+            log_warn "Still waiting for database... ($attempt/$max_attempts) - $last_error"
+        else
+            log_info "Waiting for database... ($attempt/$max_attempts)"
+        fi
         sleep 2
     done
 
     if [ $attempt -eq $max_attempts ]; then
         log_error "Database not available after ${max_attempts} attempts"
+        log_error "Last error: $last_error"
+        log_error "Check: DATABASE_HOST=${DATABASE_HOST}, DATABASE_PORT=${DATABASE_PORT:-5432}, DATABASE_USER=${DATABASE_USER:-fortress}"
         exit 1
     fi
 fi
 
 # Wait for Redis (if configured)
 if [ -n "${REDIS_HOST}" ]; then
-    log_info "Waiting for Redis..."
+    log_info "Waiting for Redis at ${REDIS_HOST}:${REDIS_PORT:-6379}..."
     max_attempts=15
     attempt=0
     while [ $attempt -lt $max_attempts ]; do
-        if python3 -c "import redis; r = redis.Redis(host='${REDIS_HOST}', port=${REDIS_PORT:-6379}); r.ping()" 2>/dev/null; then
+        if python3 -c "
+import redis
+r = redis.Redis(
+    host='${REDIS_HOST}',
+    port=${REDIS_PORT:-6379},
+    password='${REDIS_PASSWORD:-fortress_redis_secret}',
+    socket_connect_timeout=3
+)
+r.ping()
+print('OK')
+" 2>/dev/null; then
             log_info "Redis is ready"
             break
         fi
         attempt=$((attempt + 1))
+        if [ $((attempt % 5)) -eq 0 ]; then
+            log_warn "Still waiting for Redis... ($attempt/$max_attempts)"
+        fi
         sleep 1
     done
+
+    if [ $attempt -eq $max_attempts ]; then
+        log_warn "Redis not available after ${max_attempts} attempts - continuing anyway"
+    fi
 fi
 
 log_info "Initialization complete"
