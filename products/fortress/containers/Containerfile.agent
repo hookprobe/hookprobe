@@ -70,9 +70,9 @@ ENV QSECBIT_DATA_DIR=/opt/hookprobe/fortress/data
 ENV QSECBIT_LOG_DIR=/var/log/hookprobe
 ENV OVS_BRIDGE=43ess
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost', 9090)); s.close()" || exit 1
+# Health check - verify API server is responding
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9090/health', timeout=5)" || exit 1
 
 # Note: This container typically runs with --network=host for traffic analysis
 EXPOSE 9090
