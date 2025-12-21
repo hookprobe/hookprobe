@@ -1411,6 +1411,14 @@ def main():
         help='DNS listen port (default: 5353)'
     )
     parser.add_argument(
+        '--address', type=str, default='127.0.0.1',
+        help='DNS listen address (default: 127.0.0.1)'
+    )
+    parser.add_argument(
+        '--upstream', type=str, default='1.1.1.1',
+        help='Upstream DNS server (default: 1.1.1.1)'
+    )
+    parser.add_argument(
         '--stats', action='store_true',
         help='Show statistics'
     )
@@ -1430,6 +1438,8 @@ def main():
     # Create config
     config = AdBlockConfig()
     config.dns_listen_port = args.port
+    config.dns_listen_addr = args.address
+    config.upstream_dns = args.upstream
 
     # Create ad blocker
     blocker = AIAdBlocker(config)
