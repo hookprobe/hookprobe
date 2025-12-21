@@ -851,7 +851,7 @@ UDEV_HEADER
         return 1
     fi
 
-    log_success "Created $udev_rule_file"
+    log_info "Created $udev_rule_file"
 
     # =========================================
     # RENAME INTERFACES IMMEDIATELY
@@ -946,7 +946,7 @@ EOF
 
     systemctl daemon-reload 2>/dev/null || true
 
-    log_success "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
+    log_info "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
     log_info "  Note: Reboot required for interface renaming to take effect"
 
     return 0
@@ -1261,7 +1261,7 @@ StartLimitBurst=3
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
