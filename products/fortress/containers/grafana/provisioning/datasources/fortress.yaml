@@ -1,0 +1,31 @@
+# HookProbe Fortress - Grafana Datasource Configuration
+# Auto-provisioned at container startup
+
+apiVersion: 1
+
+datasources:
+  - name: VictoriaMetrics
+    type: prometheus
+    access: proxy
+    url: http://victoria:8428
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: "2.40.0"
+
+  - name: Fortress-Postgres
+    type: postgres
+    url: postgres:5432
+    database: fortress
+    user: fortress
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    jsonData:
+      sslmode: disable
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    editable: false
