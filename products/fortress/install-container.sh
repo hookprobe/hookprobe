@@ -717,34 +717,55 @@ setup_network() {
     fi
 
     # Setup WiFi AP (bridges to OVS)
-    if [ -n "$NET_WIFI_24GHZ_IFACE" ] || [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
-        log_info "Configuring WiFi access point..."
+    # =========================================
+    # WIFI SETUP - DETECT FIRST, THEN CONFIGURE
+    # =========================================
+    # Order: 1) Detect bands, 2) Create udev rules, 3) Generate configs, 4) Create services
 
-        # Use the configured WIFI_SSID and WIFI_PASSWORD from collect_configuration()
+    log_info "Configuring WiFi access point..."
+
+    # PHASE 1: DETECTION - Detect interfaces and bands, create udev rules
+    # This sets WIFI_24GHZ_STABLE, WIFI_5GHZ_STABLE, WIFI_24GHZ_DETECTED, WIFI_5GHZ_DETECTED
+    detect_wifi_and_create_udev_rules
+
+    # Check if we found any WiFi interfaces
+    if [ -z "$WIFI_24GHZ_DETECTED" ] && [ -z "$WIFI_5GHZ_DETECTED" ]; then
+        log_info "No WiFi adapters found"
+        WIFI_SSID=""
+        WIFI_PASSWORD=""
+    else
+        # Use the configured WIFI_SSID and WIFI_PASSWORD
         local wifi_ssid="${WIFI_SSID:-HookProbe-Fortress}"
         local wifi_pass="${WIFI_PASSWORD:-}"
 
         # Generate password if not set
         if [ -z "$wifi_pass" ]; then
             wifi_pass=$(openssl rand -base64 12 | tr -d '/+=' | head -c 12)
-            WIFI_PASSWORD="$wifi_pass"  # Update global for final message
+            WIFI_PASSWORD="$wifi_pass"
         fi
 
+        # PHASE 2: CONFIGURATION - Generate hostapd configs with stable names
         if [ -f "$hostapd_script" ]; then
-            # Prepare interfaces
             prepare_wifi_interfaces 2>/dev/null || true
 
-            # Generate hostapd config with OVS bridge (43ess, not legacy 'fortress')
-            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" || {
-                log_warn "Hostapd configuration had issues"
+            # Export stable names for hostapd-generator to use
+            export WIFI_24GHZ_IFACE="${WIFI_24GHZ_STABLE:-}"
+            export WIFI_5GHZ_IFACE="${WIFI_5GHZ_STABLE:-}"
+
+            # Generate hostapd configs - now uses stable interface names
+            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" \
+                --iface-24ghz "${WIFI_24GHZ_STABLE:-}" \
+                --iface-5ghz "${WIFI_5GHZ_STABLE:-}" 2>/dev/null || {
+                # Fallback: run without interface args, then update configs
+                "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" || {
+                    log_warn "Hostapd configuration had issues"
+                }
+                # Update configs to use stable names
+                update_hostapd_configs_stable_names
             }
 
-            # Create systemd services for WiFi
-            create_wifi_services 2>/dev/null || true
-
-            # Create udev rules for persistent WiFi interface naming
-            # This prevents interfaces from changing names on reboot
-            create_wifi_udev_rules 2>/dev/null || log_warn "Could not create WiFi udev rules"
+            # PHASE 3: Create services with stable names (once, not redundantly)
+            create_wifi_services_stable
 
             # Save WiFi credentials
             echo "WIFI_SSID=$wifi_ssid" >> "$CONFIG_DIR/fortress.conf"
@@ -753,34 +774,11 @@ setup_network() {
 
             log_info "WiFi AP configured (bridged to OVS):"
             log_info "  SSID: $wifi_ssid"
-            log_info "  2.4GHz: ${NET_WIFI_24GHZ_IFACE:-not configured}"
-            log_info "  5GHz:   ${NET_WIFI_5GHZ_IFACE:-not configured}"
+            log_info "  2.4GHz: ${WIFI_24GHZ_STABLE:-not detected}"
+            log_info "  5GHz:   ${WIFI_5GHZ_STABLE:-not detected}"
         else
             log_warn "Hostapd generator not found - WiFi not configured"
         fi
-    else
-        log_info "No WiFi interfaces detected by network-integration"
-        log_info "Trying direct WiFi detection..."
-
-        # Try to detect WiFi directly even if network-integration failed
-        # This is a fallback to ensure udev rules are created
-        if command -v iw &>/dev/null; then
-            local detected_wifi=false
-            for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
-                detected_wifi=true
-                break
-            done
-
-            if $detected_wifi; then
-                log_info "Found WiFi interfaces via iw dev - creating udev rules"
-                create_wifi_udev_rules || log_warn "Could not create WiFi udev rules"
-            else
-                log_info "No WiFi adapters found"
-            fi
-        fi
-
-        WIFI_SSID=""
-        WIFI_PASSWORD=""
     fi
 
     # Enable IP forwarding
@@ -799,19 +797,34 @@ setup_network() {
 }
 
 # ============================================================
-# WIFI UDEV RULES FOR STABLE NAMING
+# WIFI DETECTION AND UDEV RULES - PHASE 1
 # ============================================================
-create_wifi_udev_rules() {
-    # Create udev rules for stable WiFi interface naming
-    # This prevents wlan0/wlan1 from swapping on reboot
-    #
-    # Uses MAC addresses to assign stable names:
-    #   - wlan_24ghz for 2.4GHz adapter
-    #   - wlan_5ghz for 5GHz adapter (or dual-band)
-    #
-    # This is the proven working approach from setup.sh
 
-    log_info "Creating udev rules for stable WiFi interface naming..."
+# Global variables for WiFi detection results
+WIFI_24GHZ_DETECTED=""
+WIFI_5GHZ_DETECTED=""
+WIFI_24GHZ_STABLE="wlan_24ghz"
+WIFI_5GHZ_STABLE="wlan_5ghz"
+WIFI_24GHZ_ORIGINAL=""
+WIFI_5GHZ_ORIGINAL=""
+WIFI_24GHZ_MAC=""
+WIFI_5GHZ_MAC=""
+
+detect_wifi_and_create_udev_rules() {
+    # PHASE 1: Detect WiFi interfaces, determine bands, create udev rules
+    #
+    # This function:
+    #   1. Detects all WiFi interfaces
+    #   2. Determines which band each supports (2.4GHz vs 5GHz)
+    #   3. Creates udev rules for stable naming
+    #   4. Renames interfaces immediately
+    #   5. Sets global variables for use by later phases
+    #
+    # After this function, use:
+    #   - WIFI_24GHZ_STABLE (wlan_24ghz) and WIFI_5GHZ_STABLE (wlan_5ghz) for configs
+    #   - WIFI_24GHZ_DETECTED and WIFI_5GHZ_DETECTED to check if interfaces exist
+
+    log_info "Phase 1: Detecting WiFi interfaces and bands..."
 
     local udev_rule_file="/etc/udev/rules.d/70-fortress-wifi.rules"
 
@@ -821,14 +834,8 @@ create_wifi_udev_rules() {
         return 1
     fi
 
-    # Detect WiFi interfaces and their bands
-    local iface_24ghz=""
-    local iface_5ghz=""
-    local mac_24ghz=""
-    local mac_5ghz=""
-
     # Try iw dev first
-    log_info "  Detecting WiFi adapters from iw dev..."
+    log_info "  Scanning for WiFi adapters..."
     local wifi_ifaces
     wifi_ifaces=$(iw dev 2>/dev/null | awk '/Interface/{print $2}')
 
@@ -918,160 +925,211 @@ create_wifi_udev_rules() {
         log_info "    2.4GHz: $has_24ghz, 5GHz: $has_5ghz"
 
         # Assign to 5GHz slot first if capable (prioritize 5GHz/dual-band)
-        if [ "$has_5ghz" -gt 0 ] && [ -z "$mac_5ghz" ]; then
-            iface_5ghz="$iface"
-            mac_5ghz="$mac"
+        if [ "$has_5ghz" -gt 0 ] && [ -z "$WIFI_5GHZ_MAC" ]; then
+            WIFI_5GHZ_ORIGINAL="$iface"
+            WIFI_5GHZ_MAC="$mac"
+            WIFI_5GHZ_DETECTED="true"
             log_info "  5GHz adapter: $iface ($mac)"
-        elif [ "$has_24ghz" -gt 0 ] && [ -z "$mac_24ghz" ]; then
-            iface_24ghz="$iface"
-            mac_24ghz="$mac"
+        elif [ "$has_24ghz" -gt 0 ] && [ -z "$WIFI_24GHZ_MAC" ]; then
+            WIFI_24GHZ_ORIGINAL="$iface"
+            WIFI_24GHZ_MAC="$mac"
+            WIFI_24GHZ_DETECTED="true"
             log_info "  2.4GHz adapter: $iface ($mac)"
-        elif [ -z "$mac_24ghz" ]; then
+        elif [ -z "$WIFI_24GHZ_MAC" ]; then
             # If we can't determine band, default to 2.4GHz slot
-            iface_24ghz="$iface"
-            mac_24ghz="$mac"
+            WIFI_24GHZ_ORIGINAL="$iface"
+            WIFI_24GHZ_MAC="$mac"
+            WIFI_24GHZ_DETECTED="true"
             log_info "  Unknown band adapter (defaulting to 2.4GHz): $iface ($mac)"
-        elif [ -z "$mac_5ghz" ]; then
+        elif [ -z "$WIFI_5GHZ_MAC" ]; then
             # Second unknown goes to 5GHz
-            iface_5ghz="$iface"
-            mac_5ghz="$mac"
+            WIFI_5GHZ_ORIGINAL="$iface"
+            WIFI_5GHZ_MAC="$mac"
+            WIFI_5GHZ_DETECTED="true"
             log_info "  Unknown band adapter (defaulting to 5GHz): $iface ($mac)"
         fi
     done
 
+    # Check if any WiFi was found
+    if [ -z "$WIFI_24GHZ_MAC" ] && [ -z "$WIFI_5GHZ_MAC" ]; then
+        log_warn "  No WiFi adapters detected"
+        return 1
+    fi
+
     # Generate udev rules file
+    log_info "  Creating udev rules..."
     cat > "$udev_rule_file" << 'UDEV_HEADER'
 # HookProbe Fortress - WiFi Interface Stable Naming
 # Generated automatically - do not edit manually
 #
 # These rules ensure WiFi interfaces have stable names across reboots
 # by matching on MAC address instead of kernel enumeration order.
-#
-# To regenerate: re-run fortress install or remove this file
 
 UDEV_HEADER
 
-    if [ -n "$mac_24ghz" ]; then
-        echo "# 2.4GHz WiFi adapter (original: $iface_24ghz)" >> "$udev_rule_file"
-        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_24ghz\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
-        log_info "  Created rule: $mac_24ghz -> wlan_24ghz"
+    if [ -n "$WIFI_24GHZ_MAC" ]; then
+        echo "# 2.4GHz WiFi adapter (original: $WIFI_24GHZ_ORIGINAL)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$WIFI_24GHZ_MAC\", NAME=\"$WIFI_24GHZ_STABLE\"" >> "$udev_rule_file"
+        log_info "  Rule: $WIFI_24GHZ_MAC -> $WIFI_24GHZ_STABLE"
     fi
 
-    if [ -n "$mac_5ghz" ]; then
-        echo "# 5GHz WiFi adapter (original: $iface_5ghz)" >> "$udev_rule_file"
-        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_5ghz\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
-        log_info "  Created rule: $mac_5ghz -> wlan_5ghz"
+    if [ -n "$WIFI_5GHZ_MAC" ]; then
+        echo "# 5GHz WiFi adapter (original: $WIFI_5GHZ_ORIGINAL)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$WIFI_5GHZ_MAC\", NAME=\"$WIFI_5GHZ_STABLE\"" >> "$udev_rule_file"
+        log_info "  Rule: $WIFI_5GHZ_MAC -> $WIFI_5GHZ_STABLE"
     fi
 
-    if [ ! -s "$udev_rule_file" ] || [ -z "$mac_24ghz$mac_5ghz" ]; then
-        log_warn "  No WiFi adapters detected for udev rules"
-        rm -f "$udev_rule_file"
-        return 1
-    fi
+    log_info "  Created $udev_rule_file"
 
-    log_info "Created $udev_rule_file"
-
-    # =========================================
-    # RENAME INTERFACES IMMEDIATELY
-    # =========================================
-    # udev rules only apply at boot, so we rename now using ip link
-    log_info "Renaming WiFi interfaces..."
+    # Rename interfaces immediately (udev rules only apply at boot)
+    log_info "  Renaming interfaces now..."
     udevadm control --reload-rules
-
-    # Wait for udev to finish processing rules (reload is async)
-    # settle waits for udev event queue to drain
     udevadm settle --timeout=5 2>/dev/null || sleep 1
 
     local rename_failed=false
 
-    # Rename 2.4GHz interface
-    if [ -n "$mac_24ghz" ] && [ -n "$iface_24ghz" ]; then
-        if [ "$iface_24ghz" != "wlan_24ghz" ]; then
-            log_info "  Renaming $iface_24ghz -> wlan_24ghz"
-            # Must bring interface down to rename
-            ip link set "$iface_24ghz" down 2>/dev/null || true
-            if ip link set "$iface_24ghz" name wlan_24ghz 2>/dev/null; then
-                ip link set wlan_24ghz up 2>/dev/null || true
-                log_info "  Successfully renamed to wlan_24ghz"
+    if [ -n "$WIFI_24GHZ_MAC" ] && [ -n "$WIFI_24GHZ_ORIGINAL" ]; then
+        if [ "$WIFI_24GHZ_ORIGINAL" != "$WIFI_24GHZ_STABLE" ]; then
+            ip link set "$WIFI_24GHZ_ORIGINAL" down 2>/dev/null || true
+            if ip link set "$WIFI_24GHZ_ORIGINAL" name "$WIFI_24GHZ_STABLE" 2>/dev/null; then
+                ip link set "$WIFI_24GHZ_STABLE" up 2>/dev/null || true
+                log_info "  Renamed: $WIFI_24GHZ_ORIGINAL -> $WIFI_24GHZ_STABLE"
             else
-                log_warn "  Could not rename $iface_24ghz (may need reboot)"
+                log_warn "  Could not rename $WIFI_24GHZ_ORIGINAL (reboot required)"
                 rename_failed=true
             fi
         fi
     fi
 
-    # Rename 5GHz interface
-    if [ -n "$mac_5ghz" ] && [ -n "$iface_5ghz" ]; then
-        if [ "$iface_5ghz" != "wlan_5ghz" ]; then
-            log_info "  Renaming $iface_5ghz -> wlan_5ghz"
-            ip link set "$iface_5ghz" down 2>/dev/null || true
-            if ip link set "$iface_5ghz" name wlan_5ghz 2>/dev/null; then
-                ip link set wlan_5ghz up 2>/dev/null || true
-                log_info "  Successfully renamed to wlan_5ghz"
+    if [ -n "$WIFI_5GHZ_MAC" ] && [ -n "$WIFI_5GHZ_ORIGINAL" ]; then
+        if [ "$WIFI_5GHZ_ORIGINAL" != "$WIFI_5GHZ_STABLE" ]; then
+            ip link set "$WIFI_5GHZ_ORIGINAL" down 2>/dev/null || true
+            if ip link set "$WIFI_5GHZ_ORIGINAL" name "$WIFI_5GHZ_STABLE" 2>/dev/null; then
+                ip link set "$WIFI_5GHZ_STABLE" up 2>/dev/null || true
+                log_info "  Renamed: $WIFI_5GHZ_ORIGINAL -> $WIFI_5GHZ_STABLE"
             else
-                log_warn "  Could not rename $iface_5ghz (may need reboot)"
+                log_warn "  Could not rename $WIFI_5GHZ_ORIGINAL (reboot required)"
                 rename_failed=true
             fi
         fi
     fi
 
-    if $rename_failed; then
-        log_warn "Some interfaces could not be renamed - reboot required"
-        log_warn "After reboot, interfaces will be named wlan_24ghz/wlan_5ghz"
-    fi
-
-    # Save current mapping for reference
+    # Save interface mapping for reference
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/wifi-interfaces.conf" << EOF
-# WiFi Interface Mapping
-# Generated: $(date -Iseconds)
-WIFI_24GHZ_MAC=$mac_24ghz
-WIFI_24GHZ_ORIGINAL=$iface_24ghz
-WIFI_24GHZ_STABLE=wlan_24ghz
-WIFI_5GHZ_MAC=$mac_5ghz
-WIFI_5GHZ_ORIGINAL=$iface_5ghz
-WIFI_5GHZ_STABLE=wlan_5ghz
+# WiFi Interface Mapping - Generated $(date -Iseconds)
+WIFI_24GHZ_MAC=$WIFI_24GHZ_MAC
+WIFI_24GHZ_ORIGINAL=$WIFI_24GHZ_ORIGINAL
+WIFI_24GHZ_STABLE=$WIFI_24GHZ_STABLE
+WIFI_5GHZ_MAC=$WIFI_5GHZ_MAC
+WIFI_5GHZ_ORIGINAL=$WIFI_5GHZ_ORIGINAL
+WIFI_5GHZ_STABLE=$WIFI_5GHZ_STABLE
 EOF
 
-    # =========================================
-    # UPDATE HOSTAPD CONFIGS TO USE STABLE NAMES
-    # =========================================
-    log_info "Updating hostapd configs to use stable interface names..."
-
-    if [ -n "$mac_24ghz" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
-        log_info "  Updating 2.4GHz config: $iface_24ghz -> wlan_24ghz"
-        sed -i "s/^interface=.*/interface=wlan_24ghz/" /etc/hostapd/hostapd-24ghz.conf
+    if $rename_failed; then
+        log_warn "Some interfaces need reboot to rename"
     fi
 
-    if [ -n "$mac_5ghz" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
-        log_info "  Updating 5GHz config: $iface_5ghz -> wlan_5ghz"
-        sed -i "s/^interface=.*/interface=wlan_5ghz/" /etc/hostapd/hostapd-5ghz.conf
-    fi
-
-    # Update systemd service files to use stable names
-    if [ -n "$mac_24ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
-        log_info "  Updating 2.4GHz service: $iface_24ghz -> wlan_24ghz"
-        sed -i "s/$iface_24ghz/wlan_24ghz/g" /etc/systemd/system/fortress-hostapd-24ghz.service
-    fi
-
-    if [ -n "$mac_5ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
-        log_info "  Updating 5GHz service: $iface_5ghz -> wlan_5ghz"
-        sed -i "s/$iface_5ghz/wlan_5ghz/g" /etc/systemd/system/fortress-hostapd-5ghz.service
-    fi
-
-    # Update network state file if exists
-    if [ -f /var/lib/fortress/network-interfaces.conf ]; then
-        log_info "  Updating network state file..."
-        [ -n "$iface_24ghz" ] && sed -i "s/$iface_24ghz/wlan_24ghz/g" /var/lib/fortress/network-interfaces.conf
-        [ -n "$iface_5ghz" ] && sed -i "s/$iface_5ghz/wlan_5ghz/g" /var/lib/fortress/network-interfaces.conf
-    fi
-
-    systemctl daemon-reload 2>/dev/null || true
-
-    log_info "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
-    log_info "  Note: Reboot required for interface renaming to take effect"
-
+    log_info "Phase 1 complete: WiFi detected, udev rules created"
     return 0
+}
+
+# ============================================================
+# WIFI HOSTAPD CONFIG UPDATE - PHASE 2 HELPER
+# ============================================================
+update_hostapd_configs_stable_names() {
+    # Update hostapd configs to use stable interface names
+    # Called if hostapd-generator used original names
+
+    log_info "  Updating hostapd configs to stable names..."
+
+    if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        sed -i "s/^interface=.*/interface=$WIFI_24GHZ_STABLE/" /etc/hostapd/hostapd-24ghz.conf
+        log_info "    Updated: hostapd-24ghz.conf -> $WIFI_24GHZ_STABLE"
+    fi
+
+    if [ -n "$WIFI_5GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        sed -i "s/^interface=.*/interface=$WIFI_5GHZ_STABLE/" /etc/hostapd/hostapd-5ghz.conf
+        log_info "    Updated: hostapd-5ghz.conf -> $WIFI_5GHZ_STABLE"
+    fi
+}
+
+# ============================================================
+# WIFI SERVICES WITH STABLE NAMES - PHASE 3
+# ============================================================
+create_wifi_services_stable() {
+    # Create systemd services for WiFi APs using stable interface names
+    # This is called AFTER hostapd configs are generated
+
+    log_info "Phase 3: Creating WiFi services with stable names..."
+
+    local ovs_bridge="${OVS_BRIDGE:-43ess}"
+
+    # 2.4GHz service
+    if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        local dev_unit="sys-subsystem-net-devices-${WIFI_24GHZ_STABLE}.device"
+
+        cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
+[Unit]
+Description=HookProbe Fortress - 2.4GHz WiFi Access Point
+After=network.target openvswitch-switch.service ${dev_unit}
+Wants=network.target ${dev_unit}
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=forking
+PIDFile=/run/hostapd-24ghz.pid
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${WIFI_24GHZ_STABLE} ] && break; sleep 0.5; done; [ -e /sys/class/net/${WIFI_24GHZ_STABLE} ] || exit 1'
+ExecStartPre=-/sbin/ip link set ${WIFI_24GHZ_STABLE} down
+ExecStartPre=/bin/sleep 0.5
+ExecStartPre=/sbin/ip link set ${WIFI_24GHZ_STABLE} up
+ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
+ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${WIFI_24GHZ_STABLE}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable fortress-hostapd-24ghz 2>/dev/null || true
+        log_info "  Created: fortress-hostapd-24ghz.service (uses $WIFI_24GHZ_STABLE)"
+    fi
+
+    # 5GHz service
+    if [ -n "$WIFI_5GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        local dev_unit="sys-subsystem-net-devices-${WIFI_5GHZ_STABLE}.device"
+
+        cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
+[Unit]
+Description=HookProbe Fortress - 5GHz WiFi Access Point
+After=network.target openvswitch-switch.service ${dev_unit}
+Wants=network.target ${dev_unit}
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=forking
+PIDFile=/run/hostapd-5ghz.pid
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${WIFI_5GHZ_STABLE} ] && break; sleep 0.5; done; [ -e /sys/class/net/${WIFI_5GHZ_STABLE} ] || exit 1'
+ExecStartPre=-/sbin/ip link set ${WIFI_5GHZ_STABLE} down
+ExecStartPre=/bin/sleep 0.5
+ExecStartPre=/sbin/ip link set ${WIFI_5GHZ_STABLE} up
+ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
+ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${WIFI_5GHZ_STABLE}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable fortress-hostapd-5ghz 2>/dev/null || true
+        log_info "  Created: fortress-hostapd-5ghz.service (uses $WIFI_5GHZ_STABLE)"
+    fi
+
+    log_info "Phase 3 complete: Services created"
 }
 
 setup_ovs_dhcp() {
