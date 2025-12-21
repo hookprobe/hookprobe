@@ -3951,6 +3951,25 @@ WANCONFEOF
         systemctl enable fortress-lte-failover
         systemctl start fortress-wan-failover
 
+        # Verify LTE connection was created
+        log_lte "Verifying LTE connection..."
+        if nmcli con show fortress-lte &>/dev/null; then
+            log_lte "LTE connection 'fortress-lte' exists"
+            local lte_state
+            lte_state=$(nmcli -t -f GENERAL.STATE con show fortress-lte 2>/dev/null | cut -d: -f2)
+            log_lte "  State: ${lte_state:-unknown}"
+
+            # Show all GSM connections for reference
+            log_lte "All GSM connections:"
+            nmcli -t -f NAME,TYPE,DEVICE con show 2>/dev/null | grep ":gsm:" | while read -r line; do
+                log_lte "  $line"
+            done
+        else
+            log_warn "LTE connection 'fortress-lte' not found after setup!"
+            log_warn "  You can create it manually with:"
+            log_warn "  nmcli con add type gsm ifname <cdc-wdm-device> con-name fortress-lte apn <your-apn> connection.autoconnect yes"
+        fi
+
         log_lte "LTE failover setup complete"
     else
         log_warn "No LTE modem detected. LTE failover not configured."
