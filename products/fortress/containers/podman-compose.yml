@@ -125,15 +125,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database connection (web uses host network, reaches via localhost)
-      DATABASE_HOST: localhost
+      # Database connection via container network (postgres IP in fortress-data)
+      DATABASE_HOST: 172.20.200.10
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
-      # Use environment variable directly (podman secrets have permission issues with non-root users)
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
-      # Redis connection (web uses host network, reaches via localhost)
-      REDIS_HOST: localhost
+      # Redis connection via container network (redis IP in fortress-data)
+      REDIS_HOST: 172.20.200.11
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
@@ -142,18 +141,19 @@ services:
       # Gunicorn settings
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
-      # ML service endpoints (web uses host network, reaches all services via localhost)
-      QSECBIT_API_URL: http://localhost:9090
-      DNSXAI_API_URL: http://localhost:5353
-      DFS_API_URL: http://localhost:8050
+      # ML service endpoints via container network
+      QSECBIT_API_URL: http://172.20.201.10:9090
+      DNSXAI_API_URL: http://172.20.201.11:5353
+      DFS_API_URL: http://172.20.201.12:8050
       # Monitoring endpoints
-      VICTORIA_URL: http://localhost:8428
+      VICTORIA_URL: http://172.20.203.11:8428
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
-    # Note: ports directive removed - network_mode: host exposes 8443 directly
+    ports:
+      - "8443:8443"
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
@@ -161,10 +161,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
-    # Use host network for web to access all services via localhost
-    # This is required because podman-compose 1.0.6 can't handle multi-network static IPs
-    # and internal networks can't reach host ports
-    network_mode: host
+    # Use container networks instead of host network for proper isolation
+    networks:
+      fortress-data:
+        ipv4_address: 172.20.200.20
+      fortress-services:
+        ipv4_address: 172.20.201.20
+      fortress-mgmt:
+        ipv4_address: 172.20.203.20
 
   # dnsXai Engine - DNS ML Protection
   dnsxai:
