@@ -161,14 +161,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
-    # Use container networks instead of host network for proper isolation
+    # Use fortress-data network to access postgres and redis
+    # Note: podman-compose 1.x doesn't support static IPs on multiple networks
     networks:
-      fortress-data:
-        ipv4_address: 172.20.200.20
-      fortress-services:
-        ipv4_address: 172.20.201.20
-      fortress-mgmt:
-        ipv4_address: 172.20.203.20
+      - fortress-data
 
   # dnsXai Engine - DNS ML Protection
   dnsxai:
