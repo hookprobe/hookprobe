@@ -10,17 +10,24 @@ from pathlib import Path
 
 
 def load_config_file(filepath):
-    """Load a shell-style config file into a dict."""
+    """Load a shell-style config file into a dict.
+
+    Returns empty dict if file doesn't exist or is not accessible.
+    """
     config = {}
-    if filepath.exists():
-        with open(filepath) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    # Remove quotes
-                    value = value.strip().strip('"').strip("'")
-                    config[key.strip()] = value
+    try:
+        if filepath.exists():
+            with open(filepath) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        # Remove quotes
+                        value = value.strip().strip('"').strip("'")
+                        config[key.strip()] = value
+    except (PermissionError, OSError):
+        # File/directory not accessible - return empty config
+        pass
     return config
 
 
