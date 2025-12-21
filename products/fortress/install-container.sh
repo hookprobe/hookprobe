@@ -747,6 +747,10 @@ setup_network() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
 
+    # NOTE: WiFi udev rules creation is handled above in the conditional blocks
+    # (lines 707 and 736) - we don't need a redundant unconditional call here
+    # as it would overwrite any successful rules created earlier
+
     log_info "OVS network infrastructure configured"
     log_info "  OpenFlow: Tier isolation rules installed"
     log_info "  Mirror:   Traffic mirroring to QSecBit enabled"
@@ -841,7 +845,7 @@ UDEV_HEADER
         return 1
     fi
 
-    log_success "Created $udev_rule_file"
+    log_info "Created $udev_rule_file"
 
     # =========================================
     # RENAME INTERFACES IMMEDIATELY
@@ -849,6 +853,10 @@ UDEV_HEADER
     # udev rules only apply at boot, so we rename now using ip link
     log_info "Renaming WiFi interfaces..."
     udevadm control --reload-rules
+
+    # Wait for udev to finish processing rules (reload is async)
+    # settle waits for udev event queue to drain
+    udevadm settle --timeout=5 2>/dev/null || sleep 1
 
     local rename_failed=false
 
@@ -936,7 +944,7 @@ EOF
 
     systemctl daemon-reload 2>/dev/null || true
 
-    log_success "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
+    log_info "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
     log_info "  Note: Reboot required for interface renaming to take effect"
 
     return 0
@@ -1191,15 +1199,10 @@ connect_containers_to_ovs() {
 create_systemd_service() {
     log_step "Creating systemd service"
 
-    # Build profile flags for optional services only
-    # Security core (QSecBit, dnsXai, DFS) are always started - no profile needed
-    local profile_flags=""
-    # Monitoring profile (--profile monitoring) is optional and disabled by default
-    # Enable with INSTALL_MONITORING=true before running install
-    if [ "${INSTALL_MONITORING:-false}" = true ]; then
-        profile_flags="--profile monitoring"
-    fi
-    profile_flags=$(echo "$profile_flags" | xargs)  # trim whitespace
+    # NOTE: podman-compose 1.x does NOT support --profile flag (docker-compose feature)
+    # All containers are started/stopped together via podman-compose up/down
+    # Monitoring containers (grafana, victoria) are optional via podman-compose.yml profiles
+    # but we just start everything and let healthchecks handle it
 
     # Use the INSTALLED containers directory for systemd service
     local compose_dir="${INSTALL_DIR}/containers"
@@ -1256,22 +1259,22 @@ StartLimitBurst=3
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 
 # Start containers
-ExecStart=${podman_compose_bin} ${profile_flags} -f podman-compose.yml up -d
+ExecStart=${podman_compose_bin} -f podman-compose.yml up -d
 
 # Connect to OVS after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fortress-ovs-connect.sh
 
 # Stop containers gracefully
-ExecStop=${podman_compose_bin} ${profile_flags} -f podman-compose.yml down
+ExecStop=${podman_compose_bin} -f podman-compose.yml down
 
 # Reload containers
-ExecReload=${podman_compose_bin} ${profile_flags} -f podman-compose.yml restart
+ExecReload=${podman_compose_bin} -f podman-compose.yml restart
 
 TimeoutStartSec=300
 TimeoutStopSec=60
@@ -1280,8 +1283,8 @@ TimeoutStopSec=60
 WantedBy=multi-user.target
 EOF
 
-    # Also save profile config for reference
-    echo "FORTRESS_PROFILES=\"${profile_flags:-core}\"" >> /etc/hookprobe/fortress.conf
+    # Save config for reference
+    echo "FORTRESS_PROFILES=\"all\"" >> /etc/hookprobe/fortress.conf
 
     # Ensure required services are enabled for boot
     log_info "Enabling systemd services for boot..."

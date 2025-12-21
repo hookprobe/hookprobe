@@ -1582,6 +1582,12 @@ country_code=$effective_country
 ieee80211d=1
 ieee80211h=1
 
+# DFS Radar Detection (ETSI EN 301 893 compliance)
+# Enabled automatically when using DFS channels (52-64, 100-144)
+# CAC (Channel Availability Check) times:
+#   - UNII-2A (52-64): 60 seconds
+#   - UNII-2C (100-144): 600 seconds (weather radar)
+
 # Band: 5GHz (802.11a mode)
 hw_mode=a
 channel=$channel
