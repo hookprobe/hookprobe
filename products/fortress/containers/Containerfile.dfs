@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir \
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     libopenblas0 \
     libgomp1 \
     sqlite3 \

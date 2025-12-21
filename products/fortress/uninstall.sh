@@ -493,6 +493,22 @@ remove_containers() {
         fi
     done
 
+    # Remove Podman networks
+    log_info "Removing Podman networks..."
+    local networks=(
+        "fortress-data"
+        "fortress-services"
+        "fortress-ml"
+        "fortress-mgmt"
+    )
+
+    for network in "${networks[@]}"; do
+        if podman network exists "$network" 2>/dev/null; then
+            log_info "Removing network: $network"
+            podman network rm "$network" 2>/dev/null || true
+        fi
+    done
+
     log_info "Containers removed"
 }
 
@@ -650,11 +666,11 @@ remove_dfs_intelligence() {
     rm -f /usr/local/bin/dfs-channel-selector
 
     # Remove DFS database (keep by default - user may want history)
-    if [ "$REMOVE_DATA" = true ]; then
+    if [ "$KEEP_DATA" = false ]; then
         rm -f /var/lib/hookprobe/dfs_intelligence.db
     else
         log_info "DFS database preserved: /var/lib/hookprobe/dfs_intelligence.db"
-        log_info "  (Use --remove-data to delete)"
+        log_info "  (Omit --keep-data to delete)"
     fi
 
     # Remove DFS state files
@@ -1101,7 +1117,7 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Fortress Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                    Version 5.1.0                           ║${NC}"
+    echo -e "${BOLD}${RED}║                    Version 5.4.0                           ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
