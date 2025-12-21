@@ -1029,6 +1029,150 @@ detect_eht_channel_width() {
     fi
 }
 
+calculate_safe_eht_width() {
+    # Calculate safe EHT channel width considering DFS constraints
+    # Prioritizes high throughput but falls back if 160/320MHz would span DFS channels
+    #
+    # Args:
+    #   $1 - channel number
+    #   $2 - hardware max width (from detect_eht_channel_width)
+    #
+    # Returns: safe width (80, 160, or 320)
+
+    local channel="$1"
+    local hw_max_width="${2:-80}"
+
+    # UNII-1 channels (36-48): Non-DFS, but 160MHz spans into UNII-2A (DFS)
+    # UNII-2A channels (52-64): DFS, 160MHz spans UNII-1 + UNII-2A (mixed)
+    # UNII-2C channels (100-144): DFS, complex 160MHz requirements
+    # UNII-3 channels (149-165): Non-DFS in most countries
+
+    case "$channel" in
+        # UNII-1 (36-48): 80MHz safe, 160MHz spans into DFS (52-64)
+        36|40|44|48)
+            # 160MHz on ch36 would use center 50 (5250MHz) = channels 36-64
+            # This spans DFS channels 52-64, causing CAC/radar issues
+            # Limit to 80MHz for reliability
+            if [ "$hw_max_width" -ge 80 ]; then
+                echo "80"
+            else
+                echo "$hw_max_width"
+            fi
+            ;;
+
+        # UNII-2A (52-64): DFS channels, 160MHz spans non-DFS + DFS (problematic)
+        52|56|60|64)
+            # Same issue - 160MHz spans 36-64 mixing DFS and non-DFS
+            # Limit to 80MHz
+            if [ "$hw_max_width" -ge 80 ]; then
+                echo "80"
+            else
+                echo "$hw_max_width"
+            fi
+            ;;
+
+        # UNII-2C (100-144): All DFS, 160MHz possible within band
+        # 160MHz: 100-128 (center 114) or 116-144 (center 130) - both fully DFS
+        100|104|108|112|116|120|124|128)
+            # 160MHz is safe here (all channels are DFS anyway)
+            # But requires 10-minute CAC for weather radar band
+            if [ "$hw_max_width" -ge 160 ]; then
+                echo "160"
+            elif [ "$hw_max_width" -ge 80 ]; then
+                echo "80"
+            else
+                echo "$hw_max_width"
+            fi
+            ;;
+
+        132|136|140|144)
+            # Upper UNII-2C - 160MHz possible but edge of band
+            if [ "$hw_max_width" -ge 80 ]; then
+                echo "80"
+            else
+                echo "$hw_max_width"
+            fi
+            ;;
+
+        # UNII-3 (149-165): Non-DFS, 160MHz possible if hw supports
+        149|153|157|161|165)
+            # 160MHz on UNII-3 is possible in some regulatory domains
+            # but channel availability varies by country
+            if [ "$hw_max_width" -ge 160 ]; then
+                echo "160"
+            elif [ "$hw_max_width" -ge 80 ]; then
+                echo "80"
+            else
+                echo "$hw_max_width"
+            fi
+            ;;
+
+        # 6GHz channels (WiFi 6E/7) - 320MHz possible, no DFS
+        # Channels start at 1, 5, 9... up to 233
+        1|5|9|13|17|21|25|29|33|37|41|45|49|53|57|61|65|69|73|77|81|85|89|93)
+            # 6GHz band - full width supported, no DFS
+            echo "$hw_max_width"
+            ;;
+
+        *)
+            # Unknown channel - default to safe 80MHz
+            echo "80"
+            ;;
+    esac
+}
+
+calculate_eht_center_freq() {
+    # Calculate EHT center frequency segment 0 index
+    # Must match the VHT center freq for 80MHz, or be recalculated for wider
+    #
+    # Args:
+    #   $1 - channel number
+    #   $2 - bandwidth (80, 160, 320)
+    #
+    # Returns: center frequency index
+
+    local channel="$1"
+    local bandwidth="${2:-80}"
+
+    case "$bandwidth" in
+        80)
+            # Same as VHT 80MHz center frequencies
+            case "$channel" in
+                36|40|44|48)     echo "42" ;;
+                52|56|60|64)     echo "58" ;;
+                100|104|108|112) echo "106" ;;
+                116|120|124|128) echo "122" ;;
+                132|136|140|144) echo "138" ;;
+                149|153|157|161) echo "155" ;;
+                165)             echo "155" ;;  # Edge case
+                *)               echo "42" ;;   # Default
+            esac
+            ;;
+        160)
+            # 160MHz center frequencies (spanning two 80MHz blocks)
+            case "$channel" in
+                36|40|44|48|52|56|60|64)     echo "50" ;;   # 5250 MHz
+                100|104|108|112|116|120|124|128) echo "114" ;; # 5570 MHz
+                149|153|157|161|165)         echo "155" ;;  # Limited
+                *)                           echo "50" ;;
+            esac
+            ;;
+        320)
+            # 320MHz - primarily for 6GHz band
+            # Center frequencies for 6GHz 320MHz channels
+            case "$channel" in
+                1|5|9|13|17|21|25|29|33|37|41|45) echo "31" ;;
+                49|53|57|61|65|69|73|77|81|85|89|93) echo "63" ;;
+                *)  echo "31" ;;
+            esac
+            ;;
+        *)
+            # Fallback to 80MHz calculation
+            calculate_eht_center_freq "$channel" 80
+            ;;
+    esac
+}
+
 # ============================================================
 # HOSTAPD CONFIGURATION GENERATORS
 # ============================================================
@@ -1638,8 +1782,21 @@ EOF
     # Add 802.11be (WiFi 7) if supported
     # Note: WiFi 7 requires hostapd 2.11+ with EHT support
     if $supports_be; then
-        local eht_channel_width
-        eht_channel_width=$(detect_eht_channel_width "$iface")
+        local hw_eht_width safe_eht_width eht_center_freq eht_oper_chwidth_val
+
+        # Get hardware max width, then calculate safe width for this channel
+        hw_eht_width=$(detect_eht_channel_width "$iface")
+        safe_eht_width=$(calculate_safe_eht_width "$channel" "$hw_eht_width")
+        eht_center_freq=$(calculate_eht_center_freq "$channel" "$safe_eht_width")
+
+        # Convert MHz to hostapd eht_oper_chwidth value
+        case "$safe_eht_width" in
+            320) eht_oper_chwidth_val=4 ;;
+            160) eht_oper_chwidth_val=3 ;;
+            80)  eht_oper_chwidth_val=2 ;;
+            40)  eht_oper_chwidth_val=1 ;;
+            *)   eht_oper_chwidth_val=2 ;;  # Default 80MHz
+        esac
 
         cat >> "$HOSTAPD_5GHZ_CONF" << EOF
 # 802.11be (WiFi 7) - EHT (Extremely High Throughput)
@@ -1651,22 +1808,20 @@ eht_mu_beamformer=1
 
 # WiFi 7 channel width (up to 320 MHz supported)
 # eht_oper_chwidth: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz, 4=320MHz
-EOF
-        case "$eht_channel_width" in
-            320) echo "eht_oper_chwidth=4" >> "$HOSTAPD_5GHZ_CONF" ;;
-            160) echo "eht_oper_chwidth=3" >> "$HOSTAPD_5GHZ_CONF" ;;
-            80)  echo "eht_oper_chwidth=2" >> "$HOSTAPD_5GHZ_CONF" ;;
-            *)   echo "eht_oper_chwidth=2" >> "$HOSTAPD_5GHZ_CONF" ;;
-        esac
-
-        cat >> "$HOSTAPD_5GHZ_CONF" << EOF
+# Note: Width is optimized for channel $channel to avoid DFS issues
+eht_oper_chwidth=$eht_oper_chwidth_val
+eht_oper_centr_freq_seg0_idx=$eht_center_freq
 
 # Multi-Link Operation (MLO) - disabled by default
 # Enable for dual-band simultaneous operation (requires compatible clients)
 # mlo_enabled=0
 
 EOF
-        log_info "  WiFi 7 (802.11be): enabled (${eht_channel_width}MHz max width)"
+        if [ "$safe_eht_width" != "$hw_eht_width" ]; then
+            log_info "  WiFi 7 (802.11be): enabled (${safe_eht_width}MHz - reduced from ${hw_eht_width}MHz for channel $channel)"
+        else
+            log_info "  WiFi 7 (802.11be): enabled (${safe_eht_width}MHz)"
+        fi
     fi
 
     # WPA3/WPA2 Transition Mode (SAE + PSK)
@@ -1907,6 +2062,9 @@ generate_wifi_bridge_helper() {
     #
     # OVS bridges don't support nl80211 bridge mode, so we need to add the
     # WiFi interface to OVS manually after hostapd creates it.
+    #
+    # Note: This works fine with hostapd 2.10/2.11 on most drivers (ath12k, mt76, etc.)
+    # The "Interface X is in master ovs-system" log message is informational, not an error.
 
     local helper_script="/usr/local/bin/fortress-wifi-bridge-helper.sh"
 
