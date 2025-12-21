@@ -1375,12 +1375,18 @@ wpa_key_mgmt=WPA-PSK
 wpa_passphrase=test12345678
 EOF
 
-    # Add WiFi 7 if available
+    # Add WiFi 7 if available (requires WiFi 6)
     if check_hostapd_supports_wifi7 2>/dev/null; then
         cat >> "$test_conf" << EOF
+ieee80211ax=1
 ieee80211be=1
 eht_oper_chwidth=$eht_width
 eht_oper_centr_freq_seg0_idx=$eht_center
+EOF
+    elif check_hostapd_supports_wifi6 2>/dev/null; then
+        # WiFi 6 only
+        cat >> "$test_conf" << EOF
+ieee80211ax=1
 EOF
     fi
 
