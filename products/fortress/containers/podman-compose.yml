@@ -184,8 +184,8 @@ services:
     ports:
       - "5353:5353/udp"
     healthcheck:
-      # UDP check - verify DNS server is listening (no pgrep in slim images)
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2); s.sendto(b'test',('127.0.0.1',5353)); s.close()"]
+      # DNS query check - send query and verify response (no pgrep in slim images)
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); q=b'\\x00\\x01\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x09localhost\\x00\\x00\\x01\\x00\\x01'; s.sendto(q,('127.0.0.1',5353)); r=s.recv(512); s.close(); exit(0 if len(r)>12 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -263,9 +263,9 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    # Health check - verify API is responding on port 9090
+    # Health check - verify HTTP API is responding on port 9090
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 9090)); s.close()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

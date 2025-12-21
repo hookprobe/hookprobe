@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 QSecBit Fortress Agent - Full Implementation
-Version: 5.0.0
+Version: 5.1.0
 License: AGPL-3.0
 
 Fortress-enhanced QSecBit with:
@@ -9,6 +9,7 @@ Fortress-enhanced QSecBit with:
 - nftables policy scoring
 - MACsec status monitoring
 - OpenFlow flow analysis
+- HTTP API for healthcheck and status
 """
 
 import json
@@ -23,6 +24,8 @@ from pathlib import Path
 from threading import Thread, Event
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, List
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.parse
 
 # Logging setup
 LOG_DIR = Path(os.environ.get('QSECBIT_LOG_DIR', '/var/log/hookprobe'))
@@ -79,6 +82,108 @@ class QSecBitSample:
     policy_violations: int
     macsec_status: str
     openflow_flows: int
+
+
+# Global reference to agent for HTTP handler
+_agent_instance: Optional['QSecBitFortressAgent'] = None
+
+
+class QSecBitAPIHandler(BaseHTTPRequestHandler):
+    """HTTP API handler for QSecBit status and health"""
+
+    def log_message(self, format, *args):
+        """Suppress default logging, use our logger instead"""
+        logger.debug(f"HTTP: {args[0]}")
+
+    def _send_json(self, data: dict, status: int = 200):
+        """Send JSON response"""
+        body = json.dumps(data).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        """Handle GET requests"""
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path == '/health':
+            self._handle_health()
+        elif path == '/status':
+            self._handle_status()
+        elif path == '/score':
+            self._handle_score()
+        elif path == '/history':
+            self._handle_history()
+        else:
+            self._send_json({'error': 'not found', 'path': path}, 404)
+
+    def _handle_health(self):
+        """Health check endpoint"""
+        if _agent_instance and _agent_instance.running.is_set():
+            self._send_json({
+                'status': 'healthy',
+                'service': 'qsecbit-fortress',
+                'timestamp': datetime.now().isoformat(),
+                'uptime_seconds': int(time.time() - _agent_instance.start_time)
+            })
+        else:
+            self._send_json({'status': 'unhealthy', 'reason': 'agent not running'}, 503)
+
+    def _handle_status(self):
+        """Full status endpoint"""
+        if not _agent_instance:
+            self._send_json({'error': 'agent not initialized'}, 503)
+            return
+
+        sample = _agent_instance.last_sample
+        if sample:
+            self._send_json({
+                'status': 'operational',
+                'timestamp': sample.timestamp,
+                'score': sample.score,
+                'rag_status': sample.rag_status,
+                'components': sample.components,
+                'threats_detected': sample.threats_detected,
+                'suricata_alerts': sample.suricata_alerts,
+                'policy_violations': sample.policy_violations,
+                'macsec_status': sample.macsec_status,
+                'openflow_flows': sample.openflow_flows,
+                'uptime_seconds': int(time.time() - _agent_instance.start_time)
+            })
+        else:
+            self._send_json({
+                'status': 'initializing',
+                'uptime_seconds': int(time.time() - _agent_instance.start_time)
+            })
+
+    def _handle_score(self):
+        """Current score endpoint"""
+        if not _agent_instance or not _agent_instance.last_sample:
+            self._send_json({'error': 'no data available'}, 503)
+            return
+
+        sample = _agent_instance.last_sample
+        self._send_json({
+            'score': sample.score,
+            'rag_status': sample.rag_status,
+            'timestamp': sample.timestamp
+        })
+
+    def _handle_history(self):
+        """Recent history endpoint"""
+        if not _agent_instance:
+            self._send_json({'error': 'agent not initialized'}, 503)
+            return
+
+        # Return last 10 samples
+        history = _agent_instance.history[-10:]
+        self._send_json({
+            'count': len(history),
+            'samples': [asdict(s) for s in history]
+        })
 
 
 class QSecBitFortressAgent:
@@ -307,14 +412,34 @@ class QSecBitFortressAgent:
                 logger.error(f"Monitoring error: {e}")
                 time.sleep(interval)
 
+    def run_api_server(self, port: int = 9090):
+        """Run HTTP API server"""
+        try:
+            server = HTTPServer(('0.0.0.0', port), QSecBitAPIHandler)
+            logger.info(f"QSecBit API server listening on port {port}")
+            while self.running.is_set():
+                server.handle_request()
+        except Exception as e:
+            logger.error(f"API server error: {e}")
+
     def start(self):
         """Start the agent"""
-        logger.info("Starting QSecBit Fortress Agent v5.0.0...")
+        global _agent_instance
+        _agent_instance = self
+
+        logger.info("Starting QSecBit Fortress Agent v5.1.0...")
         self.running.set()
 
+        # Start monitoring loop
         monitor_thread = Thread(target=self.run_monitoring_loop, daemon=True)
         monitor_thread.start()
 
+        # Start HTTP API server
+        api_port = int(os.environ.get('QSECBIT_API_PORT', '9090'))
+        api_thread = Thread(target=self.run_api_server, args=(api_port,), daemon=True)
+        api_thread.start()
+
+        # Wait for shutdown signal
         self.running.wait()
 
     def stop(self):
