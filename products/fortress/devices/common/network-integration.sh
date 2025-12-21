@@ -236,9 +236,16 @@ create_wifi_services() {
     #   2. fortress-hostapd-24ghz.service - 2.4GHz AP (depends on allocator)
     #   3. fortress-hostapd-5ghz.service - 5GHz AP (depends on allocator)
     #   4. fortress-hostapd.service - Combined service for backward compatibility
+    #
+    # IMPORTANT: Uses stable interface names (wlan_24ghz, wlan_5ghz) assigned by udev rules,
+    # not the detected original names (wlan0, wlp6s0, etc.)
 
     local ovs_bridge="${OVS_BRIDGE_NAME:-43ess}"
     local allocator_script="/opt/hookprobe/fortress/devices/common/wifi-band-allocator.sh"
+
+    # Use stable interface names (assigned by udev rules)
+    local wifi_24ghz_iface="wlan_24ghz"
+    local wifi_5ghz_iface="wlan_5ghz"
 
     # Install the allocator script
     if [ -f "$SCRIPT_DIR/wifi-band-allocator.sh" ]; then
@@ -270,10 +277,10 @@ EOF
     systemctl enable fortress-wifi-allocator
     log_info "Created service: fortress-wifi-allocator (detects bands at boot)"
 
-    # 2.4GHz service - now depends on allocator
+    # 2.4GHz service - uses stable interface name from udev rules
     if [ -n "$NET_WIFI_24GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
-        # Systemd device unit - waits for interface to exist before starting
-        local dev_unit_24ghz="sys-subsystem-net-devices-${NET_WIFI_24GHZ_IFACE}.device"
+        # Systemd device unit - waits for stable interface name to exist before starting
+        local dev_unit_24ghz="sys-subsystem-net-devices-${wifi_24ghz_iface}.device"
 
         cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
 [Unit]
@@ -287,10 +294,10 @@ Type=forking
 PIDFile=/run/hostapd-24ghz.pid
 # Small delay after interface appears to ensure it's fully initialized
 ExecStartPre=/bin/sleep 1
-ExecStartPre=-/sbin/ip link set ${NET_WIFI_24GHZ_IFACE} up
+ExecStartPre=-/sbin/ip link set ${wifi_24ghz_iface} up
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
 ExecStartPost=/bin/sleep 1
-ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${NET_WIFI_24GHZ_IFACE}
+ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${wifi_24ghz_iface}
 Restart=on-failure
 RestartSec=5
 
@@ -299,15 +306,15 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable fortress-hostapd-24ghz
-        log_info "Created service: fortress-hostapd-24ghz (waits for ${NET_WIFI_24GHZ_IFACE})"
+        log_info "Created service: fortress-hostapd-24ghz (waits for ${wifi_24ghz_iface})"
     fi
 
-    # 5GHz service - now depends on allocator
+    # 5GHz service - uses stable interface name from udev rules
     if [ -n "$NET_WIFI_5GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
         # Only create separate service if different interface
         if [ "$NET_WIFI_5GHZ_IFACE" != "$NET_WIFI_24GHZ_IFACE" ]; then
-            # Systemd device unit - waits for interface to exist before starting
-            local dev_unit_5ghz="sys-subsystem-net-devices-${NET_WIFI_5GHZ_IFACE}.device"
+            # Systemd device unit - waits for stable interface name to exist before starting
+            local dev_unit_5ghz="sys-subsystem-net-devices-${wifi_5ghz_iface}.device"
 
             cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
 [Unit]
@@ -321,10 +328,10 @@ Type=forking
 PIDFile=/run/hostapd-5ghz.pid
 # Small delay after interface appears to ensure it's fully initialized
 ExecStartPre=/bin/sleep 1
-ExecStartPre=-/sbin/ip link set ${NET_WIFI_5GHZ_IFACE} up
+ExecStartPre=-/sbin/ip link set ${wifi_5ghz_iface} up
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
 ExecStartPost=/bin/sleep 1
-ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${NET_WIFI_5GHZ_IFACE}
+ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${wifi_5ghz_iface}
 Restart=on-failure
 RestartSec=5
 
@@ -333,7 +340,7 @@ WantedBy=multi-user.target
 EOF
             systemctl daemon-reload
             systemctl enable fortress-hostapd-5ghz
-            log_info "Created service: fortress-hostapd-5ghz (waits for ${NET_WIFI_5GHZ_IFACE})"
+            log_info "Created service: fortress-hostapd-5ghz (waits for ${wifi_5ghz_iface})"
         else
             log_info "Single dual-band radio - using 2.4GHz service for both bands"
         fi
