@@ -827,8 +827,33 @@ create_wifi_udev_rules() {
     local mac_24ghz=""
     local mac_5ghz=""
 
+    # Try iw dev first
     log_info "  Detecting WiFi adapters from iw dev..."
-    for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+    local wifi_ifaces
+    wifi_ifaces=$(iw dev 2>/dev/null | awk '/Interface/{print $2}')
+
+    # Fallback to sysfs if iw dev returns nothing
+    if [ -z "$wifi_ifaces" ]; then
+        log_info "  iw dev returned nothing, trying sysfs fallback..."
+        wifi_ifaces=""
+        for wireless_dir in /sys/class/net/*/wireless; do
+            if [ -d "$wireless_dir" ]; then
+                local iface_name
+                iface_name=$(basename "$(dirname "$wireless_dir")")
+                wifi_ifaces="$wifi_ifaces $iface_name"
+            fi
+        done
+        wifi_ifaces=$(echo "$wifi_ifaces" | xargs)  # trim whitespace
+    fi
+
+    if [ -z "$wifi_ifaces" ]; then
+        log_warn "  No WiFi interfaces found via iw dev or sysfs"
+        return 1
+    fi
+
+    log_info "  Found WiFi interfaces: $wifi_ifaces"
+
+    for iface in $wifi_ifaces; do
         local mac
         mac=$(cat /sys/class/net/$iface/address 2>/dev/null)
         [ -z "$mac" ] && continue
@@ -836,12 +861,18 @@ create_wifi_udev_rules() {
         # Check band support via iw phy
         local phy
         phy=$(iw dev $iface info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+        if [ -z "$phy" ]; then
+            # Fallback: try to get phy from sysfs
+            if [ -L "/sys/class/net/$iface/phy80211" ]; then
+                phy=$(basename "$(readlink -f /sys/class/net/$iface/phy80211)")
+            fi
+        fi
         [ -z "$phy" ] && continue
 
-        local has_5ghz
-        local has_24ghz
-        has_5ghz=$(iw phy $phy info 2>/dev/null | grep -c "5[0-9][0-9][0-9] MHz")
-        has_24ghz=$(iw phy $phy info 2>/dev/null | grep -c "24[0-9][0-9] MHz")
+        local has_5ghz=0
+        local has_24ghz=0
+        has_5ghz=$(iw phy $phy info 2>/dev/null | grep -c "5[0-9][0-9][0-9] MHz" || echo 0)
+        has_24ghz=$(iw phy $phy info 2>/dev/null | grep -c "24[0-9][0-9] MHz" || echo 0)
 
         # Assign to 5GHz slot first if capable (prioritize 5GHz/dual-band)
         if [ "$has_5ghz" -gt 0 ] && [ -z "$mac_5ghz" ]; then
@@ -852,6 +883,16 @@ create_wifi_udev_rules() {
             iface_24ghz="$iface"
             mac_24ghz="$mac"
             log_info "  2.4GHz adapter: $iface ($mac)"
+        elif [ -z "$mac_24ghz" ]; then
+            # If we can't determine band, default to 2.4GHz slot
+            iface_24ghz="$iface"
+            mac_24ghz="$mac"
+            log_info "  Unknown band adapter (defaulting to 2.4GHz): $iface ($mac)"
+        elif [ -z "$mac_5ghz" ]; then
+            # Second unknown goes to 5GHz
+            iface_5ghz="$iface"
+            mac_5ghz="$mac"
+            log_info "  Unknown band adapter (defaulting to 5GHz): $iface ($mac)"
         fi
     done
 
