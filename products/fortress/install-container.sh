@@ -747,15 +747,9 @@ setup_network() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
 
-    # ALWAYS create WiFi udev rules for stable interface naming
-    # This runs regardless of whether network-integration detected WiFi
-    # The function uses iw dev directly to detect adapters
-    log_info "Setting up WiFi interface naming..."
-    if command -v iw &>/dev/null; then
-        create_wifi_udev_rules || log_warn "WiFi udev rules creation had issues"
-    else
-        log_warn "iw command not available - skipping WiFi interface naming"
-    fi
+    # NOTE: WiFi udev rules creation is handled above in the conditional blocks
+    # (lines 707 and 736) - we don't need a redundant unconditional call here
+    # as it would overwrite any successful rules created earlier
 
     log_info "OVS network infrastructure configured"
     log_info "  OpenFlow: Tier isolation rules installed"
@@ -859,6 +853,10 @@ UDEV_HEADER
     # udev rules only apply at boot, so we rename now using ip link
     log_info "Renaming WiFi interfaces..."
     udevadm control --reload-rules
+
+    # Wait for udev to finish processing rules (reload is async)
+    # settle waits for udev event queue to drain
+    udevadm settle --timeout=5 2>/dev/null || sleep 1
 
     local rename_failed=false
 
