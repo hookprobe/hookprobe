@@ -791,8 +791,9 @@ init_ovs_network() {
 }
 
 # Initialize OVS for podman-compose mode
-# Skips creating tier internal ports since podman-compose creates its own networks
-# with those IPs (172.20.200.0/24, etc). OVS is only used for traffic monitoring.
+# Skips creating container tier internal ports since podman-compose creates its own networks
+# with those IPs (172.20.200.0/24, etc). However, we MUST create the LAN gateway IP
+# for WiFi/LAN clients to connect.
 init_ovs_network_podman() {
     log_section "Initializing OVS for Podman Mode"
 
@@ -801,8 +802,12 @@ init_ovs_network_podman() {
     check_ovs_installed || return 1
     create_ovs_bridge
 
-    # Skip create_tier_ports - podman-compose creates networks with these IPs
-    log_info "Skipping tier internal ports (podman-compose manages container networks)"
+    # Skip container tier ports (data, services, ml, mgmt) - podman-compose manages those
+    log_info "Skipping container tier ports (podman-compose manages container networks)"
+
+    # BUT we must create the LAN gateway IP for WiFi/LAN clients
+    # The OVS bridge itself acts as the gateway for the LAN subnet
+    setup_lan_gateway
 
     install_openflow_rules
     setup_traffic_mirror
@@ -811,12 +816,38 @@ init_ovs_network_podman() {
     setup_qos_meters
 
     log_info "OVS network initialized (podman mode)"
-    log_info "Container networks will be created by podman-compose"
-    log_info "Use 'connect-containers' after starting containers to attach them to OVS"
+    log_info "  LAN gateway: ${LAN_BASE_IP}/${LAN_SUBNET_MASK} on ${OVS_BRIDGE}"
+    log_info "  Container networks will be created by podman-compose"
 
     # Save state
     echo "INITIALIZED=$(date -Iseconds)" > "$STATE_DIR/state"
     echo "MODE=podman" >> "$STATE_DIR/state"
+}
+
+# Setup LAN gateway IP on OVS bridge
+# This allows WiFi/LAN clients to reach the gateway for DHCP and internet access
+setup_lan_gateway() {
+    log_section "Setting Up LAN Gateway"
+
+    local gateway_ip="${LAN_BASE_IP}/${LAN_SUBNET_MASK}"
+
+    # Check if IP already assigned
+    if ip addr show dev "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_BASE_IP}/"; then
+        log_info "LAN gateway already configured: $gateway_ip"
+        return 0
+    fi
+
+    # Assign gateway IP to the OVS bridge
+    log_info "Assigning LAN gateway IP: $gateway_ip to $OVS_BRIDGE"
+    ip addr add "$gateway_ip" dev "$OVS_BRIDGE" 2>/dev/null || {
+        log_error "Failed to assign IP $gateway_ip to $OVS_BRIDGE"
+        return 1
+    }
+
+    # Ensure bridge is up
+    ip link set "$OVS_BRIDGE" up
+
+    log_info "LAN gateway configured: $gateway_ip on $OVS_BRIDGE"
 }
 
 cleanup_ovs_network() {
