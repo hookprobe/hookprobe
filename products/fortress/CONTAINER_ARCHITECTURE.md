@@ -445,7 +445,7 @@ secrets:
 4. Create `Containerfile.lstm` for LSTM training
 5. Create `requirements-ml.txt` with pinned versions
 
-### Phase 2: Update setup.sh (Week 1-2)
+### Phase 2: Update install-container.sh (Week 1-2)
 
 1. Remove system-wide pip installs for ML packages
 2. Add container build steps during installation
@@ -646,7 +646,7 @@ TimeoutStartSec=3600
 1. [ ] Review and approve this architecture plan
 2. [ ] Create the 4 new Containerfiles
 3. [ ] Update podman-compose.yml
-4. [ ] Modify setup.sh to build containers instead of pip install
+4. [ ] Modify install-container.sh to build containers instead of pip install
 5. [ ] Test on clean Debian 12 installation
 6. [ ] Update documentation
 
