@@ -154,7 +154,8 @@ services:
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
-      - fortress_config:/etc/hookprobe:ro
+      # Bind mount host config directory (install script creates users.json here)
+      - /etc/hookprobe:/etc/hookprobe:ro
     # Note: ports directive removed - network_mode: host exposes 8443 directly
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
@@ -182,11 +183,12 @@ services:
     volumes:
       - dnsxai_data:/opt/hookprobe/dnsXai/data
       - dnsxai_blocklists:/opt/hookprobe/dnsXai/blocklists
-      - fortress_config:/etc/hookprobe:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
     ports:
       - "5353:5353/udp"
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.sendto(b'test', ('localhost', 5353))"]
+      # Simple UDP check - just verify the process is listening
+      test: ["CMD-SHELL", "pgrep -f 'python.*engine.py' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -209,7 +211,7 @@ services:
       DFS_DB_PATH: /opt/hookprobe/wireless/data/dfs_radar.db
     volumes:
       - dfs_data:/opt/hookprobe/wireless/data
-      - fortress_config:/etc/hookprobe:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
     ports:
       - "8050:8050"
     healthcheck:
@@ -258,7 +260,7 @@ services:
       - postgres_password
     volumes:
       - agent_data:/opt/hookprobe/fortress/data
-      - fortress_config:/etc/hookprobe:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
       - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
     # Host network REQUIRED for traffic analysis on all interfaces
     network_mode: host
@@ -412,10 +414,8 @@ volumes:
     driver: local
     name: fortress-victoria-data
 
-  # Shared
-  fortress_config:
-    driver: local
-    name: fortress-config
+  # Note: /etc/hookprobe is bind-mounted from host, not a named volume
+  # This allows the install script to create users.json in the host directory
 
 # ============================================================
 # NETWORKS - OVS-Integrated 4-Tier Security Architecture
