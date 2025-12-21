@@ -688,11 +688,24 @@ setup_network() {
             log_info "  WiFi AP will provide client connectivity"
         fi
 
-        # Setup NAT if we have a WAN interface
-        if [ -n "$NET_WAN_IFACE" ]; then
-            "$ovs_script" nat "$NET_WAN_IFACE" || {
+        # Setup NAT - detect WAN interface if not already set
+        local wan_iface="${NET_WAN_IFACE:-}"
+        if [ -z "$wan_iface" ]; then
+            # Fallback: detect WAN from default route
+            wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+            if [ -n "$wan_iface" ]; then
+                log_info "Detected WAN interface from default route: $wan_iface"
+                NET_WAN_IFACE="$wan_iface"
+            fi
+        fi
+
+        if [ -n "$wan_iface" ]; then
+            "$ovs_script" nat "$wan_iface" || {
                 log_warn "NAT setup had issues"
             }
+        else
+            log_warn "No WAN interface detected - NAT not configured"
+            log_warn "Clients may not have internet access"
         fi
 
         # Configure DHCP on OVS LAN port
@@ -978,9 +991,10 @@ EOF
 }
 
 setup_ovs_dhcp() {
-    log_info "Configuring DHCP on OVS LAN port..."
+    log_info "Configuring DHCP on OVS bridge..."
 
-    local lan_port="fortress-lan"
+    # Use the OVS bridge directly - dnsmasq binds to the bridge interface
+    local lan_port="${OVS_BRIDGE:-43ess}"
     local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
 
     mkdir -p "$(dirname "$config_file")"
@@ -989,7 +1003,7 @@ setup_ovs_dhcp() {
 # HookProbe Fortress DHCP Configuration (OVS)
 # Generated: $(date -Iseconds)
 
-# Bind to OVS LAN internal port
+# Bind to OVS bridge interface
 interface=${lan_port}
 bind-interfaces
 
