@@ -177,10 +177,12 @@ services:
     environment:
       DNSXAI_UPSTREAM: "1.1.1.1"
       DNSXAI_PROTECTION_LEVEL: 3
-      DNSXAI_DATA_DIR: /opt/hookprobe/dnsXai/data
+      # Path must match Containerfile: /opt/hookprobe/shared/dnsXai/data
+      DNSXAI_DATA_DIR: /opt/hookprobe/shared/dnsXai/data
     volumes:
-      - dnsxai_data:/opt/hookprobe/dnsXai/data
-      - dnsxai_blocklists:/opt/hookprobe/dnsXai/blocklists
+      # Mount over shared path to persist data while keeping bundled whitelist
+      - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
+      - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
       - /etc/hookprobe:/etc/hookprobe:ro
     ports:
       - "5353:5353/udp"
