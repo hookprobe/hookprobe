@@ -1609,6 +1609,38 @@ if [ ! -f "$OVS_SCRIPT" ]; then
     exit 0
 fi
 
+# CRITICAL: Ensure OVS bridge is UP and configured before connecting containers
+# After reboot, openvswitch-switch restores the bridge but may not bring it UP
+OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
+LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
+
+log_info "Ensuring OVS bridge $OVS_BRIDGE is ready..."
+
+# Check if bridge exists
+if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+    log_warn "OVS bridge $OVS_BRIDGE does not exist - running init"
+    export OVS_BRIDGE LAN_SUBNET_MASK
+    "$OVS_SCRIPT" init-podman || log_warn "Failed to initialize OVS"
+fi
+
+# Ensure bridge is UP
+if ! ip link show "$OVS_BRIDGE" 2>/dev/null | grep -q "state UP"; then
+    log_info "Bringing OVS bridge UP..."
+    ip link set "$OVS_BRIDGE" up || log_warn "Failed to bring bridge UP"
+fi
+
+# Ensure gateway IP is assigned
+if ! ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_BASE_IP}/"; then
+    log_info "Assigning gateway IP ${LAN_BASE_IP}/${LAN_SUBNET_MASK}..."
+    ip addr add "${LAN_BASE_IP}/${LAN_SUBNET_MASK}" dev "$OVS_BRIDGE" 2>/dev/null || log_warn "IP already assigned or failed"
+fi
+
+# Reinstall OpenFlow rules (they are not persisted across OVS restart)
+log_info "Installing OpenFlow rules..."
+export OVS_BRIDGE LAN_SUBNET_MASK
+"$OVS_SCRIPT" flows 2>/dev/null || log_warn "Failed to install OpenFlow rules"
+
 log_info "Waiting for containers..."
 
 # Wait for core containers first
