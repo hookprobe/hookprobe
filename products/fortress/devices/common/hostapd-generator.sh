@@ -2181,8 +2181,12 @@ configure_dual_band_wifi() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
-    # Load network state
-    if [ -f "$INTERFACE_STATE_FILE" ]; then
+    # Load network state - prefer environment variables if already set
+    # This allows install-container.sh to override with stable interface names
+    if [ -n "$NET_WIFI_24GHZ_IFACE" ] || [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
+        log_info "Using pre-configured interface names from environment"
+        # Don't source state file - environment variables take precedence
+    elif [ -f "$INTERFACE_STATE_FILE" ]; then
         source "$INTERFACE_STATE_FILE"
     else
         log_warn "No network state found, detecting interfaces..."
