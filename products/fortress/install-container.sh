@@ -861,18 +861,61 @@ create_wifi_udev_rules() {
         # Check band support via iw phy
         local phy
         phy=$(iw dev $iface info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+
+        # Fallback 1: try sysfs phy80211 symlink
         if [ -z "$phy" ]; then
-            # Fallback: try to get phy from sysfs
             if [ -L "/sys/class/net/$iface/phy80211" ]; then
                 phy=$(basename "$(readlink -f /sys/class/net/$iface/phy80211)")
             fi
         fi
-        [ -z "$phy" ] && continue
+
+        # Fallback 2: scan /sys/class/ieee80211/phy*/device/net/ for interface
+        if [ -z "$phy" ]; then
+            for phy_dir in /sys/class/ieee80211/phy*; do
+                if [ -d "$phy_dir/device/net/$iface" ]; then
+                    phy=$(basename "$phy_dir")
+                    break
+                fi
+            done
+        fi
+
+        if [ -z "$phy" ]; then
+            log_warn "  Could not determine phy for $iface - skipping"
+            continue
+        fi
 
         local has_5ghz=0
         local has_24ghz=0
-        has_5ghz=$(iw phy $phy info 2>/dev/null | grep -c "5[0-9][0-9][0-9] MHz" || echo 0)
-        has_24ghz=$(iw phy $phy info 2>/dev/null | grep -c "24[0-9][0-9] MHz" || echo 0)
+        local phy_info
+        phy_info=$(iw phy $phy info 2>/dev/null)
+
+        # Debug: log what we found
+        log_info "  Checking $iface on $phy..."
+
+        # Check for 2.4GHz band (Band 1, frequencies 2400-2500 MHz)
+        # Match patterns like "2412 MHz" or "2437 MHz"
+        if echo "$phy_info" | grep -qE "24[0-9]{2} MHz"; then
+            has_24ghz=1
+        fi
+
+        # Check for 5GHz band (Band 2, frequencies 5000-5900 MHz)
+        # Match patterns like "5180 MHz" or "5745 MHz"
+        if echo "$phy_info" | grep -qE "5[0-9]{3} MHz"; then
+            has_5ghz=1
+        fi
+
+        # Alternative: check by Band number in iw output
+        if [ "$has_24ghz" -eq 0 ] && [ "$has_5ghz" -eq 0 ]; then
+            # Try band-based detection
+            if echo "$phy_info" | grep -q "Band 1:"; then
+                has_24ghz=1
+            fi
+            if echo "$phy_info" | grep -q "Band 2:"; then
+                has_5ghz=1
+            fi
+        fi
+
+        log_info "    2.4GHz: $has_24ghz, 5GHz: $has_5ghz"
 
         # Assign to 5GHz slot first if capable (prioritize 5GHz/dual-band)
         if [ "$has_5ghz" -gt 0 ] && [ -z "$mac_5ghz" ]; then
