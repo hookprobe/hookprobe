@@ -84,7 +84,8 @@ ENV GUNICORN_THREADS=4
 ENV GUNICORN_BIND=0.0.0.0:8443
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# start-period allows 90s for entrypoint to wait for DB (up to 60s) and app startup
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -f -k https://localhost:8443/health || exit 1
 
 # Expose HTTPS port
