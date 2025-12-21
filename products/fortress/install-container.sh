@@ -196,6 +196,8 @@ check_prerequisites() {
             log_error "Failed to install WiFi packages: $wifi_packages_needed"
             exit 1
         }
+        # Unmask hostapd - Debian/Ubuntu ship it masked by default
+        systemctl unmask hostapd 2>/dev/null || true
     fi
     log_info "hostapd: $(hostapd -v 2>&1 | head -1 || echo 'available')"
     log_info "iw: $(iw --version 2>&1 | head -1 || echo 'available')"

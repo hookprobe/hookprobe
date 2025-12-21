@@ -184,18 +184,147 @@ else
     log_warn "hostapd-generator.sh not found - skipping config generation"
 fi
 
-# Step 7: Create WiFi services
-log_info "Step 7: Creating systemd services..."
-if [ -f "$INTEGRATION_SCRIPT" ]; then
-    # Re-source with detected interfaces
-    export NET_WIFI_24GHZ_IFACE="${iface_24ghz:-wlan_24ghz}"
-    export NET_WIFI_5GHZ_IFACE="${iface_5ghz:-wlan_5ghz}"
-    export OVS_BRIDGE_NAME="43ess"
-    create_wifi_services 2>/dev/null || log_warn "Service creation had issues"
+# Step 7: Unmask hostapd (Debian/Ubuntu ship it masked)
+log_info "Step 7: Unmasking hostapd..."
+systemctl unmask hostapd 2>/dev/null || true
+
+# Step 8: Create bridge helper script
+log_info "Step 8: Creating WiFi bridge helper script..."
+BRIDGE_HELPER="/usr/local/bin/fortress-wifi-bridge-helper.sh"
+
+cat > "$BRIDGE_HELPER" << 'HELPER_EOF'
+#!/bin/bash
+# Fortress WiFi Bridge Helper
+# Adds WiFi interface to OVS bridge after hostapd starts
+
+IFACE="$1"
+BRIDGE="${2:-43ess}"
+ACTION="${3:-add}"
+
+[ -z "$IFACE" ] && exit 1
+
+# Wait for interface to be ready
+for i in {1..10}; do
+    if ip link show "$IFACE" &>/dev/null; then
+        break
+    fi
+    sleep 0.5
+done
+
+if ! ip link show "$IFACE" &>/dev/null; then
+    echo "Interface $IFACE not found after waiting"
+    exit 1
 fi
 
-# Step 8: Update hostapd configs with stable names
-log_info "Step 8: Updating configs with stable interface names..."
+# Check if OVS is available and bridge exists
+if ! command -v ovs-vsctl &>/dev/null; then
+    echo "OVS not available, skipping bridge configuration"
+    exit 0
+fi
+
+if ! ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
+    echo "OVS bridge $BRIDGE does not exist, skipping"
+    exit 0
+fi
+
+if [ "$ACTION" = "add" ]; then
+    # Add interface to OVS bridge
+    if ! ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
+        echo "Adding $IFACE to OVS bridge $BRIDGE"
+        ovs-vsctl --may-exist add-port "$BRIDGE" "$IFACE" 2>/dev/null || {
+            echo "Failed to add $IFACE to $BRIDGE"
+            exit 1
+        }
+    fi
+    ip link set "$IFACE" up 2>/dev/null || true
+    echo "WiFi interface $IFACE added to OVS bridge $BRIDGE"
+elif [ "$ACTION" = "remove" ]; then
+    # Remove interface from OVS bridge
+    if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
+        echo "Removing $IFACE from OVS bridge $BRIDGE"
+        ovs-vsctl del-port "$BRIDGE" "$IFACE" 2>/dev/null || true
+    fi
+fi
+
+exit 0
+HELPER_EOF
+
+chmod +x "$BRIDGE_HELPER"
+log_info "  Created $BRIDGE_HELPER"
+
+# Step 9: Create systemd services
+log_info "Step 9: Creating systemd services..."
+
+# Use stable interface names
+IFACE_24GHZ="wlan_24ghz"
+IFACE_5GHZ="wlan_5ghz"
+
+if [ -n "$mac_24ghz" ]; then
+    cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
+[Unit]
+Description=HookProbe Fortress - 2.4GHz WiFi Access Point
+After=network.target openvswitch-switch.service sys-subsystem-net-devices-${IFACE_24GHZ}.device
+Wants=network.target sys-subsystem-net-devices-${IFACE_24GHZ}.device
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=forking
+PIDFile=/run/hostapd-24ghz.pid
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${IFACE_24GHZ} ] && break; sleep 0.5; done; [ -e /sys/class/net/${IFACE_24GHZ} ] || exit 1'
+ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${IFACE_24GHZ}" 2>/dev/null; rm -f /run/hostapd-24ghz.pid'
+ExecStartPre=-/sbin/ip link set ${IFACE_24GHZ} down
+ExecStartPre=/bin/sleep 0.5
+ExecStartPre=/sbin/ip link set ${IFACE_24GHZ} up
+ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
+ExecStartPost=${BRIDGE_HELPER} ${IFACE_24GHZ} ${OVS_BRIDGE} add
+ExecStop=-/bin/kill -TERM \$MAINPID
+ExecStopPost=-/sbin/ip link set ${IFACE_24GHZ} down
+ExecStopPost=-${BRIDGE_HELPER} ${IFACE_24GHZ} ${OVS_BRIDGE} remove
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    log_info "  Created fortress-hostapd-24ghz.service"
+fi
+
+if [ -n "$mac_5ghz" ]; then
+    cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
+[Unit]
+Description=HookProbe Fortress - 5GHz WiFi Access Point
+After=network.target openvswitch-switch.service sys-subsystem-net-devices-${IFACE_5GHZ}.device
+Wants=network.target sys-subsystem-net-devices-${IFACE_5GHZ}.device
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=forking
+PIDFile=/run/hostapd-5ghz.pid
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${IFACE_5GHZ} ] && break; sleep 0.5; done; [ -e /sys/class/net/${IFACE_5GHZ} ] || exit 1'
+ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${IFACE_5GHZ}" 2>/dev/null; rm -f /run/hostapd-5ghz.pid'
+ExecStartPre=-/sbin/ip link set ${IFACE_5GHZ} down
+ExecStartPre=/bin/sleep 0.5
+ExecStartPre=/sbin/ip link set ${IFACE_5GHZ} up
+ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
+ExecStartPost=${BRIDGE_HELPER} ${IFACE_5GHZ} ${OVS_BRIDGE} add
+ExecStop=-/bin/kill -TERM \$MAINPID
+ExecStopPost=-/sbin/ip link set ${IFACE_5GHZ} down
+ExecStopPost=-${BRIDGE_HELPER} ${IFACE_5GHZ} ${OVS_BRIDGE} remove
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    log_info "  Created fortress-hostapd-5ghz.service"
+fi
+
+# Step 10: Update hostapd configs with stable names
+log_info "Step 10: Updating configs with stable interface names..."
 
 if [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
     sed -i "s/^interface=.*/interface=wlan_24ghz/" /etc/hostapd/hostapd-24ghz.conf
@@ -207,7 +336,19 @@ if [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
     log_info "  Updated 5GHz config"
 fi
 
-systemctl daemon-reload 2>/dev/null || true
+# Step 11: Reload and enable services
+log_info "Step 11: Enabling services..."
+systemctl daemon-reload
+
+if [ -n "$mac_24ghz" ]; then
+    systemctl enable fortress-hostapd-24ghz 2>/dev/null || true
+    log_info "  Enabled fortress-hostapd-24ghz"
+fi
+
+if [ -n "$mac_5ghz" ]; then
+    systemctl enable fortress-hostapd-5ghz 2>/dev/null || true
+    log_info "  Enabled fortress-hostapd-5ghz"
+fi
 
 # Save interface mapping
 mkdir -p "$CONFIG_DIR"
@@ -232,12 +373,17 @@ echo ""
 echo "Files created:"
 echo "  /etc/udev/rules.d/70-fortress-wifi.rules"
 echo "  /etc/hookprobe/wifi-interfaces.conf"
+echo "  /usr/local/bin/fortress-wifi-bridge-helper.sh"
+echo "  /etc/systemd/system/fortress-hostapd-24ghz.service (if 2.4GHz)"
+echo "  /etc/systemd/system/fortress-hostapd-5ghz.service (if 5GHz)"
 echo "  /etc/hostapd/hostapd-24ghz.conf (if 2.4GHz available)"
 echo "  /etc/hostapd/hostapd-5ghz.conf (if 5GHz available)"
 echo ""
 echo "Next steps:"
 echo "  1. Verify interface names: ip link show"
 echo "  2. If interfaces not renamed, reboot: sudo reboot"
-echo "  3. Start WiFi AP: sudo systemctl start fortress-hostapd"
+echo "  3. Start WiFi AP:"
+[ -n "$mac_24ghz" ] && echo "     sudo systemctl start fortress-hostapd-24ghz"
+[ -n "$mac_5ghz" ] && echo "     sudo systemctl start fortress-hostapd-5ghz"
 echo "  4. Check status: sudo systemctl status fortress-hostapd-*"
 echo ""
