@@ -72,4 +72,4 @@ WORKDIR /opt/hookprobe/shared/dnsXai
 
 # Run engine.py directly since WORKDIR is already in the dnsXai directory
 ENTRYPOINT ["python", "engine.py"]
-CMD ["--listen", "0.0.0.0:5353", "--upstream", "1.1.1.1"]
+CMD ["--serve", "--address", "0.0.0.0", "--port", "5353", "--upstream", "1.1.1.1"]
