@@ -1,0 +1,113 @@
+# HookProbe dnsXai Default Whitelist
+# Common legitimate domains that should never be blocked
+# These protect against ML false positives when blocklists are empty
+
+# Search engines
+google.com
+bing.com
+duckduckgo.com
+yahoo.com
+baidu.com
+yandex.com
+
+# Major tech companies
+microsoft.com
+apple.com
+amazon.com
+cloudflare.com
+akamai.com
+fastly.com
+
+# Google services
+googleapis.com
+gstatic.com
+google-analytics.com
+googleusercontent.com
+googlevideo.com
+youtube.com
+ytimg.com
+ggpht.com
+gmail.com
+goog
+
+# Microsoft services
+windows.com
+live.com
+outlook.com
+office.com
+office365.com
+microsoftonline.com
+azure.com
+msn.com
+bing.net
+
+# Apple services
+icloud.com
+apple-dns.net
+mzstatic.com
+itunes.com
+
+# Amazon/AWS
+amazonaws.com
+amazontrust.com
+cloudfront.net
+
+# Cloudflare
+cloudflare-dns.com
+cloudflare.net
+one.one.one.one
+
+# CDNs (legitimate)
+akamaized.net
+edgekey.net
+edgesuite.net
+fastlylb.net
+bootstrapcdn.com
+cdnjs.cloudflare.com
+jsdelivr.net
+unpkg.com
+
+# Social/Communication (core functionality)
+facebook.com
+twitter.com
+linkedin.com
+whatsapp.com
+whatsapp.net
+telegram.org
+signal.org
+discord.com
+slack.com
+zoom.us
+
+# Development
+github.com
+githubusercontent.com
+gitlab.com
+bitbucket.org
+npmjs.com
+pypi.org
+docker.com
+docker.io
+
+# Security/Updates
+debian.org
+ubuntu.com
+archlinux.org
+fedoraproject.org
+centos.org
+kernel.org
+letsencrypt.org
+digicert.com
+verisign.com
+
+# Common legitimate services
+wikipedia.org
+wikimedia.org
+archive.org
+reddit.com
+stackoverflow.com
+medium.com
+wordpress.com
+blogger.com
+dropbox.com
+box.com
