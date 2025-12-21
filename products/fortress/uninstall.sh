@@ -4,7 +4,7 @@
 # Version: 5.4.0
 # License: AGPL-3.0 - see LICENSE file
 #
-# Removes all Fortress components installed by setup.sh:
+# Removes all Fortress components installed by install-container.sh:
 # - Systemd services (hookprobe-fortress, fortress-qsecbit, fortress-lte-failover)
 # - Podman containers (VictoriaMetrics, Grafana)
 # - OVS bridge, VLANs, VXLAN tunnels
@@ -256,7 +256,7 @@ cleanup_network_interfaces() {
     rm -rf /var/lib/fortress/network-interfaces.conf 2>/dev/null || true
 
     # Remove WiFi interface udev rules (stable naming)
-    # Note: setup.sh creates 70-fortress-wifi.rules, but check both for compatibility
+    # Note: install-container.sh creates 70-fortress-wifi.rules, but check both for compatibility
     local udev_removed=false
     for rule_file in /etc/udev/rules.d/70-fortress-wifi.rules /etc/udev/rules.d/80-fortress-wifi.rules; do
         if [ -f "$rule_file" ]; then

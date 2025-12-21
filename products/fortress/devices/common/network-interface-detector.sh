@@ -38,7 +38,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Quiet mode - set NET_QUIET_MODE=true to suppress verbose output
-# This is typically set by setup.sh when re-detecting after package install
+# This is typically set by install-container.sh when re-detecting after package install
 NET_QUIET_MODE="${NET_QUIET_MODE:-false}"
 
 # Logging (respects NET_QUIET_MODE)

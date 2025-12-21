@@ -402,12 +402,16 @@ upgrade_native_config() {
 upgrade_native_full() {
     log_step "Full native upgrade"
 
+    # Native mode is deprecated - redirect to container mode
+    log_warn "Native mode is deprecated. Migrating to container mode..."
+    log_info "Container mode now includes all network features (bridge, WiFi AP, DHCP, NAT)"
+
     echo ""
     log_warn "Full upgrade will:"
     echo "  1. Create full backup"
     echo "  2. Stop all services"
-    echo "  3. Update all components"
-    echo "  4. Restart services"
+    echo "  3. Migrate to container mode"
+    echo "  4. Start container services"
     echo ""
     echo "Data (database, configuration) will be preserved."
     echo ""
@@ -421,9 +425,9 @@ upgrade_native_full() {
     # Create backup
     do_backup --full
 
-    # Run setup.sh which handles everything
-    log_info "Running full installation (preserving data)..."
-    exec "${SCRIPT_DIR}/setup.sh" --non-interactive
+    # Run container installation
+    log_info "Running container installation (preserving data)..."
+    exec "${SCRIPT_DIR}/install-container.sh" --preserve-data
 }
 
 # ============================================================
