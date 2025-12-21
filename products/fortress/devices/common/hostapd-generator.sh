@@ -1533,9 +1533,17 @@ generate_hostapd_5ghz() {
                 channel=$(echo "$safe_channels" | awk '{print $1}')
                 log_info "  Selected safe channel: $channel (from: $safe_channels)"
             else
-                # Normal case: Use advanced channel scanning
-                log_info "  Scanning for optimal channel..."
-                channel=$(scan_for_best_channel "$iface" true "$effective_country") || channel=""
+                # Check if WiFi 7 (EHT) is supported - use non-DFS to avoid hostapd 2.11 DFS fallback bug
+                # The bug: when DFS fallback occurs with EHT enabled, hostapd recalculates to 160MHz
+                # even if config specifies 80MHz, causing CAC failures on extension channels
+                if $supports_be; then
+                    log_info "  WiFi 7 detected: Using non-DFS channels (hostapd 2.11 DFS fallback workaround)"
+                    channel=$(scan_for_best_channel "$iface" "quick" "$effective_country") || channel=""
+                else
+                    # Normal case: Use advanced channel scanning (DFS ok for WiFi 5/6)
+                    log_info "  Scanning for optimal channel..."
+                    channel=$(scan_for_best_channel "$iface" "standard" "$effective_country") || channel=""
+                fi
             fi
         fi
 
