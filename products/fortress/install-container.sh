@@ -1201,15 +1201,10 @@ connect_containers_to_ovs() {
 create_systemd_service() {
     log_step "Creating systemd service"
 
-    # Build profile flags for optional services only
-    # Security core (QSecBit, dnsXai, DFS) are always started - no profile needed
-    local profile_flags=""
-    # Monitoring profile (--profile monitoring) is optional and disabled by default
-    # Enable with INSTALL_MONITORING=true before running install
-    if [ "${INSTALL_MONITORING:-false}" = true ]; then
-        profile_flags="--profile monitoring"
-    fi
-    profile_flags=$(echo "$profile_flags" | xargs)  # trim whitespace
+    # NOTE: podman-compose 1.x does NOT support --profile flag (docker-compose feature)
+    # All containers are started/stopped together via podman-compose up/down
+    # Monitoring containers (grafana, victoria) are optional via podman-compose.yml profiles
+    # but we just start everything and let healthchecks handle it
 
     # Use the INSTALLED containers directory for systemd service
     local compose_dir="${INSTALL_DIR}/containers"
@@ -1272,16 +1267,16 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$H
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 
 # Start containers
-ExecStart=${podman_compose_bin} ${profile_flags} -f podman-compose.yml up -d
+ExecStart=${podman_compose_bin} -f podman-compose.yml up -d
 
 # Connect to OVS after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fortress-ovs-connect.sh
 
 # Stop containers gracefully
-ExecStop=${podman_compose_bin} ${profile_flags} -f podman-compose.yml down
+ExecStop=${podman_compose_bin} -f podman-compose.yml down
 
 # Reload containers
-ExecReload=${podman_compose_bin} ${profile_flags} -f podman-compose.yml restart
+ExecReload=${podman_compose_bin} -f podman-compose.yml restart
 
 TimeoutStartSec=300
 TimeoutStopSec=60
@@ -1290,8 +1285,8 @@ TimeoutStopSec=60
 WantedBy=multi-user.target
 EOF
 
-    # Also save profile config for reference
-    echo "FORTRESS_PROFILES=\"${profile_flags:-core}\"" >> /etc/hookprobe/fortress.conf
+    # Save config for reference
+    echo "FORTRESS_PROFILES=\"all\"" >> /etc/hookprobe/fortress.conf
 
     # Ensure required services are enabled for boot
     log_info "Enabling systemd services for boot..."
