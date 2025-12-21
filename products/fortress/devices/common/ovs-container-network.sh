@@ -673,17 +673,21 @@ setup_dhcp() {
 # Generated: $(date -Iseconds)
 # LAN Subnet: $(get_lan_cidr)
 
-# Bind to OVS LAN internal port
-interface=${lan_port}
+# Bind to OVS bridge (where the LAN IP is assigned)
+interface=${OVS_BRIDGE}
 bind-interfaces
+
+# Don't read /etc/resolv.conf - use our explicit servers
+no-resolv
+no-poll
 
 # LAN DHCP range (configured for /${LAN_SUBNET_MASK} subnet)
 dhcp-range=${dhcp_start},${dhcp_end},12h
 
-# Gateway (this device via OVS port)
+# Gateway (this device via OVS bridge)
 dhcp-option=3,10.200.0.1
 
-# DNS (dnsXai container)
+# DNS (clients query dnsmasq on gateway)
 dhcp-option=6,10.200.0.1
 
 # Domain
@@ -697,8 +701,12 @@ log-queries
 # Cache
 cache-size=1000
 
-# Forward DNS to dnsXai
-server=${CONTAINER_IPS[dnsxai]}#5353
+# Forward DNS to dnsXai container (published on host port 5353)
+server=127.0.0.1#5353
+
+# Fallback upstream DNS servers (used if dnsXai is unreachable)
+server=1.1.1.1
+server=8.8.8.8
 EOF
 
     chmod 644 "$config_file"
