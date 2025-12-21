@@ -825,29 +825,48 @@ UDEV_HEADER
     log_success "Created $udev_rule_file"
 
     # =========================================
-    # TRIGGER UDEV TO RENAME INTERFACES NOW
+    # RENAME INTERFACES IMMEDIATELY
     # =========================================
-    log_info "Triggering udev to apply interface naming rules..."
+    # udev rules only apply at boot, so we rename now using ip link
+    log_info "Renaming WiFi interfaces..."
     udevadm control --reload-rules
-    udevadm trigger --action=add --subsystem-match=net
 
-    # Wait for interfaces to be renamed (max 10 seconds)
-    local wait_count=0
-    local max_wait=10
-    while [ $wait_count -lt $max_wait ]; do
-        local renamed=true
-        [ -n "$mac_24ghz" ] && [ ! -d "/sys/class/net/wlan_24ghz" ] && renamed=false
-        [ -n "$mac_5ghz" ] && [ ! -d "/sys/class/net/wlan_5ghz" ] && renamed=false
-        if $renamed; then
-            log_info "  Interface renaming complete"
-            break
+    local rename_failed=false
+
+    # Rename 2.4GHz interface
+    if [ -n "$mac_24ghz" ] && [ -n "$iface_24ghz" ]; then
+        if [ "$iface_24ghz" != "wlan_24ghz" ]; then
+            log_info "  Renaming $iface_24ghz -> wlan_24ghz"
+            # Must bring interface down to rename
+            ip link set "$iface_24ghz" down 2>/dev/null || true
+            if ip link set "$iface_24ghz" name wlan_24ghz 2>/dev/null; then
+                ip link set wlan_24ghz up 2>/dev/null || true
+                log_info "  Successfully renamed to wlan_24ghz"
+            else
+                log_warn "  Could not rename $iface_24ghz (may need reboot)"
+                rename_failed=true
+            fi
         fi
-        sleep 1
-        wait_count=$((wait_count + 1))
-    done
+    fi
 
-    if [ $wait_count -ge $max_wait ]; then
-        log_warn "  Interface renaming may require reboot (driver limitation)"
+    # Rename 5GHz interface
+    if [ -n "$mac_5ghz" ] && [ -n "$iface_5ghz" ]; then
+        if [ "$iface_5ghz" != "wlan_5ghz" ]; then
+            log_info "  Renaming $iface_5ghz -> wlan_5ghz"
+            ip link set "$iface_5ghz" down 2>/dev/null || true
+            if ip link set "$iface_5ghz" name wlan_5ghz 2>/dev/null; then
+                ip link set wlan_5ghz up 2>/dev/null || true
+                log_info "  Successfully renamed to wlan_5ghz"
+            else
+                log_warn "  Could not rename $iface_5ghz (may need reboot)"
+                rename_failed=true
+            fi
+        fi
+    fi
+
+    if $rename_failed; then
+        log_warn "Some interfaces could not be renamed - reboot required"
+        log_warn "After reboot, interfaces will be named wlan_24ghz/wlan_5ghz"
     fi
 
     # Save current mapping for reference
@@ -856,10 +875,10 @@ UDEV_HEADER
 # WiFi Interface Mapping
 # Generated: $(date -Iseconds)
 WIFI_24GHZ_MAC=$mac_24ghz
-WIFI_24GHZ_CURRENT=$iface_24ghz
+WIFI_24GHZ_ORIGINAL=$iface_24ghz
 WIFI_24GHZ_STABLE=wlan_24ghz
 WIFI_5GHZ_MAC=$mac_5ghz
-WIFI_5GHZ_CURRENT=$iface_5ghz
+WIFI_5GHZ_ORIGINAL=$iface_5ghz
 WIFI_5GHZ_STABLE=wlan_5ghz
 EOF
 
