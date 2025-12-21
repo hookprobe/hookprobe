@@ -154,12 +154,13 @@ services:
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
     # Note: ports directive removed - network_mode: host exposes 8443 directly
+    # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 90s
     # Use host network for web to access all services via localhost
     # This is required because podman-compose 1.0.6 can't handle multi-network static IPs
     # and internal networks can't reach host ports
