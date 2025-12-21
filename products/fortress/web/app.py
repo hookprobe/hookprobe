@@ -18,7 +18,7 @@ from datetime import timedelta
 from flask import Flask, redirect, url_for
 from flask_login import LoginManager
 
-from config import Config
+from .config import Config
 
 
 def create_app(config_class=Config):
