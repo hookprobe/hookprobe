@@ -1194,13 +1194,17 @@ setup_ovs_dhcp() {
 interface=${lan_port}
 bind-interfaces
 
+# Don't read /etc/resolv.conf - use our explicit servers
+no-resolv
+no-poll
+
 # LAN DHCP range (configured subnet: /${LAN_SUBNET_MASK:-24})
 dhcp-range=${LAN_DHCP_START:-10.200.0.100},${LAN_DHCP_END:-10.200.0.200},12h
 
 # Gateway (fortress OVS LAN port)
 dhcp-option=3,10.200.0.1
 
-# DNS (dnsXai via OVS - clients query gateway, forwarded to dnsXai)
+# DNS (clients query dnsmasq on gateway, which forwards to dnsXai or upstream)
 dhcp-option=6,10.200.0.1
 
 # Domain
@@ -1214,8 +1218,13 @@ log-queries
 # Cache
 cache-size=1000
 
-# Forward DNS to dnsXai container
-server=172.20.201.11#5353
+# Forward DNS to dnsXai container (published on host port 5353)
+# Use 127.0.0.1 since dnsXai publishes port 5353 to host
+server=127.0.0.1#5353
+
+# Fallback upstream DNS servers (used if dnsXai is unreachable)
+server=1.1.1.1
+server=8.8.8.8
 EOF
 
     chmod 644 "$config_file"
