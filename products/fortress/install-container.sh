@@ -746,10 +746,8 @@ setup_network() {
 
         # PHASE 2: CONFIGURATION - Generate hostapd configs with stable names
         if [ -f "$hostapd_script" ]; then
-            prepare_wifi_interfaces 2>/dev/null || true
-
-            # Export interface names for hostapd-generator
-            # hostapd-generator.sh expects NET_WIFI_* variables
+            # Export interface names FIRST - before prepare_wifi_interfaces
+            # hostapd-generator.sh and prepare_wifi_interfaces expect NET_WIFI_* variables
             export NET_WIFI_24GHZ_IFACE="${WIFI_24GHZ_STABLE:-}"
             export NET_WIFI_5GHZ_IFACE="${WIFI_5GHZ_STABLE:-}"
 
@@ -763,6 +761,28 @@ setup_network() {
             fi
 
             log_info "  WiFi config mode: ${NET_WIFI_CONFIG_MODE:-none}"
+            log_info "  2.4GHz interface: ${NET_WIFI_24GHZ_IFACE:-none}"
+            log_info "  5GHz interface: ${NET_WIFI_5GHZ_IFACE:-none}"
+
+            # Update the state file with stable names so hostapd-generator sees them
+            # even if environment variable propagation fails for some reason
+            local state_file="/var/lib/fortress/network-interfaces.conf"
+            if [ -f "$state_file" ]; then
+                # Replace original interface names with stable names in state file
+                if [ -n "$NET_WIFI_24GHZ_IFACE" ]; then
+                    sed -i "s|^NET_WIFI_24GHZ_IFACE=.*|NET_WIFI_24GHZ_IFACE=\"${NET_WIFI_24GHZ_IFACE}\"|" "$state_file"
+                fi
+                if [ -n "$NET_WIFI_5GHZ_IFACE" ]; then
+                    sed -i "s|^NET_WIFI_5GHZ_IFACE=.*|NET_WIFI_5GHZ_IFACE=\"${NET_WIFI_5GHZ_IFACE}\"|" "$state_file"
+                fi
+                if [ -n "$NET_WIFI_CONFIG_MODE" ]; then
+                    sed -i "s|^NET_WIFI_CONFIG_MODE=.*|NET_WIFI_CONFIG_MODE=\"${NET_WIFI_CONFIG_MODE}\"|" "$state_file"
+                fi
+                log_info "  Updated state file with stable interface names"
+            fi
+
+            # Prepare interfaces for AP mode (uses exported variables)
+            prepare_wifi_interfaces 2>/dev/null || true
 
             # Generate hostapd configs - uses NET_WIFI_* variables
             if ! "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" 2>&1; then
