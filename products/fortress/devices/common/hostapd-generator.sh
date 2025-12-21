@@ -1174,6 +1174,345 @@ calculate_eht_center_freq() {
 }
 
 # ============================================================
+# INTELLIGENT CHANNEL SELECTION WITH VALIDATION
+# ============================================================
+
+# Channel+bandwidth combinations prioritized by throughput
+# Format: "channel:bandwidth:band"
+build_5ghz_priority_list() {
+    # Build priority list of channel+bandwidth combinations
+    # Sorted by throughput: 160MHz > 80MHz > 40MHz
+    #
+    # Args:
+    #   $1 - Interface name (for capability detection)
+    #   $2 - Country code
+    #   $3 - Hardware max width
+    #
+    # Output: List of "channel:bandwidth:band" entries
+
+    local iface="$1"
+    local country="${2:-US}"
+    local hw_max_width="${3:-80}"
+    local priority_list=""
+
+    # Tier 1: 160MHz on UNII-3 (non-DFS, highest throughput)
+    if [ "$hw_max_width" -ge 160 ]; then
+        priority_list="149:160:UNII-3 153:160:UNII-3 157:160:UNII-3 161:160:UNII-3"
+    fi
+
+    # Tier 2: 160MHz on UNII-2C (DFS but 160MHz possible)
+    if [ "$hw_max_width" -ge 160 ]; then
+        priority_list="$priority_list 100:160:UNII-2C 108:160:UNII-2C 116:160:UNII-2C 124:160:UNII-2C"
+    fi
+
+    # Tier 3: 80MHz on UNII-3 (non-DFS)
+    priority_list="$priority_list 149:80:UNII-3 153:80:UNII-3 157:80:UNII-3 161:80:UNII-3"
+
+    # Tier 4: 80MHz on UNII-1 (non-DFS, most compatible)
+    priority_list="$priority_list 36:80:UNII-1 40:80:UNII-1 44:80:UNII-1 48:80:UNII-1"
+
+    # Tier 5: 80MHz on UNII-2A (DFS, 60s CAC)
+    priority_list="$priority_list 52:80:UNII-2A 56:80:UNII-2A 60:80:UNII-2A 64:80:UNII-2A"
+
+    # Tier 6: 80MHz on UNII-2C (DFS, 600s CAC - weather radar)
+    priority_list="$priority_list 100:80:UNII-2C 104:80:UNII-2C 108:80:UNII-2C 112:80:UNII-2C"
+
+    # Tier 7: 40MHz fallback (if 80MHz doesn't work)
+    priority_list="$priority_list 36:40:UNII-1 44:40:UNII-1 149:40:UNII-3 157:40:UNII-3"
+
+    echo "$priority_list"
+}
+
+validate_hostapd_connection() {
+    # Validate that hostapd started successfully and interface is in AP mode
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - PID file path
+    #   $3 - Timeout in seconds (default 10)
+    #
+    # Returns: 0 if valid, 1 if failed
+
+    local iface="$1"
+    local pidfile="${2:-/run/hostapd-test.pid}"
+    local timeout="${3:-10}"
+    local elapsed=0
+
+    # Wait for hostapd to start
+    while [ $elapsed -lt $timeout ]; do
+        if [ -f "$pidfile" ]; then
+            local pid
+            pid=$(cat "$pidfile" 2>/dev/null)
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                # Check if interface is in AP mode
+                local mode
+                mode=$(iw dev "$iface" info 2>/dev/null | grep -oP 'type \K\w+')
+                if [ "$mode" = "AP" ]; then
+                    return 0
+                fi
+            fi
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    return 1
+}
+
+try_channel_bandwidth_combination() {
+    # Try a specific channel+bandwidth combination
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Channel
+    #   $3 - Bandwidth (40, 80, 160)
+    #   $4 - Country code
+    #
+    # Returns: 0 if success, 1 if failed
+    # Exports: WORKING_CHANNEL, WORKING_BANDWIDTH if successful
+
+    local iface="$1"
+    local channel="$2"
+    local bandwidth="$3"
+    local country="${4:-US}"
+    local test_conf="/tmp/hostapd-test-$$.conf"
+    local test_pid="/run/hostapd-test-$$.pid"
+
+    log_info "    Trying channel $channel @ ${bandwidth}MHz..."
+
+    # Calculate center frequency based on bandwidth
+    local vht_width vht_center eht_width eht_center
+    case "$bandwidth" in
+        160)
+            vht_width=2
+            eht_width=3
+            ;;
+        80)
+            vht_width=1
+            eht_width=2
+            ;;
+        40)
+            vht_width=0
+            eht_width=1
+            ;;
+        *)
+            vht_width=1
+            eht_width=2
+            bandwidth=80
+            ;;
+    esac
+
+    # Calculate center frequency for VHT
+    case "$channel" in
+        36|40|44|48)
+            if [ "$bandwidth" -eq 160 ]; then
+                vht_center=50
+                eht_center=50
+            else
+                vht_center=42
+                eht_center=42
+            fi
+            ;;
+        52|56|60|64)
+            vht_center=58
+            eht_center=58
+            ;;
+        100|104|108|112)
+            if [ "$bandwidth" -eq 160 ]; then
+                vht_center=114
+                eht_center=114
+            else
+                vht_center=106
+                eht_center=106
+            fi
+            ;;
+        116|120|124|128)
+            if [ "$bandwidth" -eq 160 ]; then
+                vht_center=130
+                eht_center=130
+            else
+                vht_center=122
+                eht_center=122
+            fi
+            ;;
+        149|153|157|161)
+            if [ "$bandwidth" -eq 160 ]; then
+                vht_center=163
+                eht_center=163
+            else
+                vht_center=155
+                eht_center=155
+            fi
+            ;;
+        *)
+            vht_center=42
+            eht_center=42
+            ;;
+    esac
+
+    # Stop any existing test hostapd
+    pkill -f "hostapd.*hostapd-test" 2>/dev/null || true
+    sleep 1
+
+    # Create minimal test config
+    cat > "$test_conf" << EOF
+interface=$iface
+driver=nl80211
+ctrl_interface=/var/run/hostapd-test
+ssid=test-channel-validation
+hw_mode=a
+channel=$channel
+country_code=$country
+ieee80211d=1
+ieee80211n=1
+ieee80211ac=1
+vht_oper_chwidth=$vht_width
+vht_oper_centr_freq_seg0_idx=$vht_center
+wmm_enabled=1
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+wpa_passphrase=test12345678
+EOF
+
+    # Add WiFi 7 if available
+    if check_hostapd_supports_wifi7 2>/dev/null; then
+        cat >> "$test_conf" << EOF
+ieee80211be=1
+eht_oper_chwidth=$eht_width
+eht_oper_centr_freq_seg0_idx=$eht_center
+EOF
+    fi
+
+    # Try to start hostapd
+    if hostapd -B -P "$test_pid" "$test_conf" 2>/dev/null; then
+        # Wait and validate
+        if validate_hostapd_connection "$iface" "$test_pid" 8; then
+            log_info "    ✓ Channel $channel @ ${bandwidth}MHz works!"
+
+            # Stop test hostapd
+            if [ -f "$test_pid" ]; then
+                kill $(cat "$test_pid") 2>/dev/null || true
+            fi
+            rm -f "$test_conf" "$test_pid"
+
+            # Export working combination
+            export WORKING_CHANNEL="$channel"
+            export WORKING_BANDWIDTH="$bandwidth"
+            export WORKING_VHT_WIDTH="$vht_width"
+            export WORKING_VHT_CENTER="$vht_center"
+            export WORKING_EHT_WIDTH="$eht_width"
+            export WORKING_EHT_CENTER="$eht_center"
+
+            return 0
+        fi
+    fi
+
+    # Cleanup on failure
+    pkill -f "hostapd.*hostapd-test" 2>/dev/null || true
+    rm -f "$test_conf" "$test_pid"
+
+    log_warn "    ✗ Channel $channel @ ${bandwidth}MHz failed"
+    return 1
+}
+
+find_best_working_channel() {
+    # Find the best working channel+bandwidth combination
+    #
+    # This function:
+    #   1. Builds priority list (highest throughput first)
+    #   2. Scans for congestion
+    #   3. Tries each combination with validation
+    #   4. Returns first working combination
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Country code
+    #   $3 - Hardware max width (optional)
+    #
+    # Exports: WORKING_CHANNEL, WORKING_BANDWIDTH, etc.
+
+    local iface="$1"
+    local country="${2:-US}"
+    local hw_max_width="${3:-80}"
+
+    log_info "  Finding best working channel+bandwidth combination..."
+
+    # Get hardware capabilities
+    local supports_be=false
+    if check_wifi_capability "$iface" "80211be" && check_hostapd_supports_wifi7 2>/dev/null; then
+        supports_be=true
+        hw_max_width=$(detect_eht_channel_width "$iface" 2>/dev/null) || hw_max_width=80
+        log_info "    Hardware: WiFi 7, max ${hw_max_width}MHz"
+    else
+        log_info "    Hardware: WiFi 5/6, max ${hw_max_width}MHz"
+    fi
+
+    # Build priority list
+    local priority_list
+    priority_list=$(build_5ghz_priority_list "$iface" "$country" "$hw_max_width")
+
+    # Scan for congestion (optional, improves selection)
+    local scan_results=""
+    if ip link set "$iface" up 2>/dev/null; then
+        sleep 1
+        scan_results=$(iw dev "$iface" scan 2>/dev/null) || true
+    fi
+
+    # Sort by congestion within same bandwidth tier
+    local sorted_list=""
+    for entry in $priority_list; do
+        local ch bw band
+        ch=$(echo "$entry" | cut -d: -f1)
+        bw=$(echo "$entry" | cut -d: -f2)
+        band=$(echo "$entry" | cut -d: -f3)
+
+        # Count APs on this channel
+        local freq ap_count
+        freq=$((5000 + ch * 5))
+        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null) || ap_count=0
+
+        sorted_list="$sorted_list $ap_count:$ch:$bw:$band"
+    done
+
+    # Sort by AP count (least congested first within same bandwidth)
+    sorted_list=$(echo "$sorted_list" | tr ' ' '\n' | sort -t: -k1 -n | tr '\n' ' ')
+
+    log_info "    Testing channel+bandwidth combinations (ordered by throughput)..."
+
+    # Try each combination
+    for entry in $sorted_list; do
+        [ -z "$entry" ] && continue
+        local ap_count ch bw band
+        ap_count=$(echo "$entry" | cut -d: -f1)
+        ch=$(echo "$entry" | cut -d: -f2)
+        bw=$(echo "$entry" | cut -d: -f3)
+        band=$(echo "$entry" | cut -d: -f4)
+
+        [ -z "$ch" ] || [ -z "$bw" ] && continue
+
+        if try_channel_bandwidth_combination "$iface" "$ch" "$bw" "$country"; then
+            log_info "  Selected: Channel $ch @ ${bw}MHz ($band)"
+            return 0
+        fi
+    done
+
+    # Fallback: Try channel 36 @ 80MHz (most compatible)
+    log_warn "  All combinations failed, trying safe fallback..."
+    if try_channel_bandwidth_combination "$iface" "36" "80" "$country"; then
+        return 0
+    fi
+
+    # Last resort: Channel 36 @ 40MHz
+    if try_channel_bandwidth_combination "$iface" "36" "40" "$country"; then
+        return 0
+    fi
+
+    log_error "  No working channel+bandwidth combination found!"
+    return 1
+}
+
+# ============================================================
 # HOSTAPD CONFIGURATION GENERATORS
 # ============================================================
 
@@ -1521,65 +1860,35 @@ generate_hostapd_5ghz() {
         fi
     fi
 
-    # Auto channel selection - EU/ETSI aware with DFS handling
+    # Auto channel selection with intelligent validation
+    # This approach:
+    #   1. Builds priority list (highest throughput first: 160MHz > 80MHz > 40MHz)
+    #   2. Scans for congestion
+    #   3. Tries each combination with validation
+    #   4. Uses first working combination
     if [ "$channel" = "auto" ]; then
-        if [ "$DFS_AVAILABLE" = "true" ]; then
-            if $self_managed_regdomain && [ "$effective_country" != "$country_code" ]; then
-                # DOMAIN MISMATCH: Use safe channels only
-                log_info "  Using safe channels due to regulatory mismatch..."
-                local safe_channels
-                safe_channels=$(get_safe_channels_for_regdomain "$iface" "quick")
-                # Pick first safe channel (36)
-                channel=$(echo "$safe_channels" | awk '{print $1}')
-                log_info "  Selected safe channel: $channel (from: $safe_channels)"
-            else
-                # Check if WiFi 7 (EHT) is supported - use non-DFS to avoid hostapd 2.11 DFS fallback bug
-                # The bug: when DFS fallback occurs with EHT enabled, hostapd recalculates to 160MHz
-                # even if config specifies 80MHz, causing CAC failures on extension channels
-                if $supports_be; then
-                    log_info "  WiFi 7 detected: Using non-DFS channels (hostapd 2.11 DFS fallback workaround)"
-                    channel=$(scan_for_best_channel "$iface" "quick" "$effective_country") || channel=""
-                else
-                    # Normal case: Use advanced channel scanning (DFS ok for WiFi 5/6)
-                    log_info "  Scanning for optimal channel..."
-                    channel=$(scan_for_best_channel "$iface" "standard" "$effective_country") || channel=""
-                fi
-            fi
-        fi
+        log_info "  Using intelligent channel+bandwidth selection..."
 
-        # Fallback to default safe channel
-        if [ -z "$channel" ]; then
-            channel=$(get_safe_5ghz_channel "$effective_country" "$iface")
-        fi
+        # Use intelligent channel selection with validation
+        if find_best_working_channel "$iface" "$effective_country"; then
+            channel="$WORKING_CHANNEL"
+            log_info "  Validated working combination: channel $channel @ ${WORKING_BANDWIDTH}MHz"
 
-        # Secondary fallback: Try network-interface-detector.sh
-        if [ -x "$SCRIPT_DIR/network-interface-detector.sh" ] && [ "$channel" = "36" ]; then
-            local scanned_channel
-            scanned_channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-5ghz "$iface" 2>/dev/null | tail -1) || true
-
-            # Only use scanned channel if it's safe for the effective regulatory domain
-            if [ -n "$scanned_channel" ]; then
-                # With self-managed domain mismatch, only allow UNII-1 (36-48)
-                if $self_managed_regdomain && [ "$effective_country" != "$country_code" ]; then
-                    if [ "$scanned_channel" -ge 36 ] && [ "$scanned_channel" -le 48 ] 2>/dev/null; then
-                        channel="$scanned_channel"
-                        log_info "  Using scanned UNII-1 channel $channel"
-                    else
-                        log_warn "  Scanned channel $scanned_channel unsafe with domain mismatch, keeping $channel"
-                    fi
-                elif is_eu_country "$effective_country"; then
-                    # EU: Only accept UNII-1 channels (36-48)
-                    if [ "$scanned_channel" -ge 36 ] && [ "$scanned_channel" -le 48 ] 2>/dev/null; then
-                        channel="$scanned_channel"
-                        log_info "  Using scanned channel $channel (UNII-1)"
-                    else
-                        log_warn "  Scanned channel $scanned_channel not allowed in EU, using $channel"
-                    fi
-                else
-                    # Non-EU: Accept any valid 5GHz channel
-                    channel="$scanned_channel"
-                fi
-            fi
+            # Store validated settings for use in config generation
+            VALIDATED_VHT_WIDTH="$WORKING_VHT_WIDTH"
+            VALIDATED_VHT_CENTER="$WORKING_VHT_CENTER"
+            VALIDATED_EHT_WIDTH="$WORKING_EHT_WIDTH"
+            VALIDATED_EHT_CENTER="$WORKING_EHT_CENTER"
+            VALIDATED_BANDWIDTH="$WORKING_BANDWIDTH"
+        else
+            # Fallback to safe channel if validation fails
+            log_warn "  Intelligent selection failed, using safe fallback..."
+            channel=36
+            VALIDATED_VHT_WIDTH=1
+            VALIDATED_VHT_CENTER=42
+            VALIDATED_EHT_WIDTH=2
+            VALIDATED_EHT_CENTER=42
+            VALIDATED_BANDWIDTH=80
         fi
     else
         # Manual channel specified - validate for regulatory domain
@@ -1686,17 +1995,26 @@ generate_hostapd_5ghz() {
         log_warn "  WiFi 7 (802.11be): hardware supported but hostapd too old (needs 2.11+)"
     fi
 
-    # Calculate VHT center frequency
-    local vht_oper_centr_freq_seg0_idx
-    case "$channel" in
-        36|40|44|48)   vht_oper_centr_freq_seg0_idx=42 ;;
-        52|56|60|64)   vht_oper_centr_freq_seg0_idx=58 ;;
-        100|104|108|112) vht_oper_centr_freq_seg0_idx=106 ;;
-        116|120|124|128) vht_oper_centr_freq_seg0_idx=122 ;;
-        132|136|140|144) vht_oper_centr_freq_seg0_idx=138 ;;
-        149|153|157|161) vht_oper_centr_freq_seg0_idx=155 ;;
-        *)              vht_oper_centr_freq_seg0_idx=42 ;;
-    esac
+    # Calculate VHT center frequency (use validated settings if available)
+    local vht_oper_centr_freq_seg0_idx vht_oper_chwidth_val
+    if [ -n "$VALIDATED_VHT_CENTER" ]; then
+        # Use validated settings from intelligent channel selection
+        vht_oper_centr_freq_seg0_idx="$VALIDATED_VHT_CENTER"
+        vht_oper_chwidth_val="${VALIDATED_VHT_WIDTH:-1}"
+        log_info "  Using validated VHT: width=$vht_oper_chwidth_val, center=$vht_oper_centr_freq_seg0_idx"
+    else
+        # Manual channel - calculate center frequency
+        vht_oper_chwidth_val=1  # Default 80MHz
+        case "$channel" in
+            36|40|44|48)   vht_oper_centr_freq_seg0_idx=42 ;;
+            52|56|60|64)   vht_oper_centr_freq_seg0_idx=58 ;;
+            100|104|108|112) vht_oper_centr_freq_seg0_idx=106 ;;
+            116|120|124|128) vht_oper_centr_freq_seg0_idx=122 ;;
+            132|136|140|144) vht_oper_centr_freq_seg0_idx=138 ;;
+            149|153|157|161) vht_oper_centr_freq_seg0_idx=155 ;;
+            *)              vht_oper_centr_freq_seg0_idx=42 ;;
+        esac
+    fi
 
     mkdir -p "$HOSTAPD_DIR"
 
@@ -1761,7 +2079,8 @@ EOF
 # 802.11ac (WiFi 5)
 ieee80211ac=1
 require_vht=1
-vht_oper_chwidth=1
+# VHT channel width: 0=40MHz, 1=80MHz, 2=160MHz, 3=80+80MHz
+vht_oper_chwidth=$vht_oper_chwidth_val
 vht_oper_centr_freq_seg0_idx=$vht_oper_centr_freq_seg0_idx
 vht_capab=$vht_capab
 
@@ -1790,21 +2109,37 @@ EOF
     # Add 802.11be (WiFi 7) if supported
     # Note: WiFi 7 requires hostapd 2.11+ with EHT support
     if $supports_be; then
-        local hw_eht_width safe_eht_width eht_center_freq eht_oper_chwidth_val
+        local hw_eht_width safe_eht_width eht_center_freq eht_oper_chwidth_val_be
 
-        # Get hardware max width, then calculate safe width for this channel
-        hw_eht_width=$(detect_eht_channel_width "$iface")
-        safe_eht_width=$(calculate_safe_eht_width "$channel" "$hw_eht_width")
-        eht_center_freq=$(calculate_eht_center_freq "$channel" "$safe_eht_width")
+        # Use validated settings if available (from intelligent channel selection)
+        if [ -n "$VALIDATED_EHT_WIDTH" ]; then
+            eht_oper_chwidth_val_be="$VALIDATED_EHT_WIDTH"
+            eht_center_freq="$VALIDATED_EHT_CENTER"
+            # Convert width value back to MHz for logging
+            case "$eht_oper_chwidth_val_be" in
+                4) safe_eht_width=320 ;;
+                3) safe_eht_width=160 ;;
+                2) safe_eht_width=80 ;;
+                1) safe_eht_width=40 ;;
+                *) safe_eht_width=80 ;;
+            esac
+            hw_eht_width=$(detect_eht_channel_width "$iface" 2>/dev/null) || hw_eht_width="$safe_eht_width"
+            log_info "  Using validated EHT: width=$eht_oper_chwidth_val_be (${safe_eht_width}MHz), center=$eht_center_freq"
+        else
+            # Manual channel - calculate safe width
+            hw_eht_width=$(detect_eht_channel_width "$iface")
+            safe_eht_width=$(calculate_safe_eht_width "$channel" "$hw_eht_width")
+            eht_center_freq=$(calculate_eht_center_freq "$channel" "$safe_eht_width")
 
-        # Convert MHz to hostapd eht_oper_chwidth value
-        case "$safe_eht_width" in
-            320) eht_oper_chwidth_val=4 ;;
-            160) eht_oper_chwidth_val=3 ;;
-            80)  eht_oper_chwidth_val=2 ;;
-            40)  eht_oper_chwidth_val=1 ;;
-            *)   eht_oper_chwidth_val=2 ;;  # Default 80MHz
-        esac
+            # Convert MHz to hostapd eht_oper_chwidth value
+            case "$safe_eht_width" in
+                320) eht_oper_chwidth_val_be=4 ;;
+                160) eht_oper_chwidth_val_be=3 ;;
+                80)  eht_oper_chwidth_val_be=2 ;;
+                40)  eht_oper_chwidth_val_be=1 ;;
+                *)   eht_oper_chwidth_val_be=2 ;;  # Default 80MHz
+            esac
+        fi
 
         cat >> "$HOSTAPD_5GHZ_CONF" << EOF
 # 802.11be (WiFi 7) - EHT (Extremely High Throughput)
@@ -1816,8 +2151,8 @@ eht_mu_beamformer=1
 
 # WiFi 7 channel width (up to 320 MHz supported)
 # eht_oper_chwidth: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz, 4=320MHz
-# Note: Width is optimized for channel $channel to avoid DFS issues
-eht_oper_chwidth=$eht_oper_chwidth_val
+# Configuration validated during channel selection
+eht_oper_chwidth=$eht_oper_chwidth_val_be
 eht_oper_centr_freq_seg0_idx=$eht_center_freq
 
 # Multi-Link Operation (MLO) - disabled by default
