@@ -1,0 +1,17 @@
+# HookProbe Fortress - Grafana Dashboard Provisioning
+# Dashboards are loaded from /var/lib/grafana/dashboards
+
+apiVersion: 1
+
+providers:
+  - name: 'Fortress Dashboards'
+    orgId: 1
+    folder: 'Fortress'
+    folderUid: 'fortress'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true
