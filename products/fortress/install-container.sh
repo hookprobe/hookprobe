@@ -747,6 +747,16 @@ setup_network() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
 
+    # ALWAYS create WiFi udev rules for stable interface naming
+    # This runs regardless of whether network-integration detected WiFi
+    # The function uses iw dev directly to detect adapters
+    log_info "Setting up WiFi interface naming..."
+    if command -v iw &>/dev/null; then
+        create_wifi_udev_rules || log_warn "WiFi udev rules creation had issues"
+    else
+        log_warn "iw command not available - skipping WiFi interface naming"
+    fi
+
     log_info "OVS network infrastructure configured"
     log_info "  OpenFlow: Tier isolation rules installed"
     log_info "  Mirror:   Traffic mirroring to QSecBit enabled"
