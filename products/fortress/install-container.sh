@@ -748,21 +748,29 @@ setup_network() {
         if [ -f "$hostapd_script" ]; then
             prepare_wifi_interfaces 2>/dev/null || true
 
-            # Export stable names for hostapd-generator to use
-            export WIFI_24GHZ_IFACE="${WIFI_24GHZ_STABLE:-}"
-            export WIFI_5GHZ_IFACE="${WIFI_5GHZ_STABLE:-}"
+            # Export interface names for hostapd-generator
+            # hostapd-generator.sh expects NET_WIFI_* variables
+            export NET_WIFI_24GHZ_IFACE="${WIFI_24GHZ_STABLE:-}"
+            export NET_WIFI_5GHZ_IFACE="${WIFI_5GHZ_STABLE:-}"
 
-            # Generate hostapd configs - now uses stable interface names
-            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" \
-                --iface-24ghz "${WIFI_24GHZ_STABLE:-}" \
-                --iface-5ghz "${WIFI_5GHZ_STABLE:-}" 2>/dev/null || {
-                # Fallback: run without interface args, then update configs
-                "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" || {
-                    log_warn "Hostapd configuration had issues"
-                }
-                # Update configs to use stable names
-                update_hostapd_configs_stable_names
-            }
+            # Set config mode based on detected interfaces
+            if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -n "$WIFI_5GHZ_DETECTED" ]; then
+                export NET_WIFI_CONFIG_MODE="separate-radios"
+            elif [ -n "$WIFI_24GHZ_DETECTED" ]; then
+                export NET_WIFI_CONFIG_MODE="24ghz-only"
+            elif [ -n "$WIFI_5GHZ_DETECTED" ]; then
+                export NET_WIFI_CONFIG_MODE="5ghz-only"
+            fi
+
+            log_info "  WiFi config mode: ${NET_WIFI_CONFIG_MODE:-none}"
+
+            # Generate hostapd configs - uses NET_WIFI_* variables
+            if ! "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" 2>&1; then
+                log_warn "Hostapd configuration had issues"
+            fi
+
+            # Ensure configs use stable interface names (in case generator used originals)
+            update_hostapd_configs_stable_names
 
             # PHASE 3: Create services with stable names (once, not redundantly)
             create_wifi_services_stable
@@ -1130,6 +1138,23 @@ EOF
     fi
 
     log_info "Phase 3 complete: Services created"
+
+    # Start hostapd services now (don't wait for reboot)
+    log_info "Starting WiFi access points..."
+    if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        if systemctl start fortress-hostapd-24ghz 2>/dev/null; then
+            log_info "  2.4GHz AP started"
+        else
+            log_warn "  2.4GHz AP failed to start - check: journalctl -u fortress-hostapd-24ghz"
+        fi
+    fi
+    if [ -n "$WIFI_5GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        if systemctl start fortress-hostapd-5ghz 2>/dev/null; then
+            log_info "  5GHz AP started"
+        else
+            log_warn "  5GHz AP failed to start - check: journalctl -u fortress-hostapd-5ghz"
+        fi
+    fi
 }
 
 setup_ovs_dhcp() {
