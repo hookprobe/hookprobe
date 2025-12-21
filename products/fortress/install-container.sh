@@ -152,6 +152,29 @@ check_prerequisites() {
     fi
     log_info "podman-compose: $(podman-compose --version 2>/dev/null || echo 'available')"
 
+    # WiFi AP dependencies (hostapd, iw, wireless-tools)
+    local wifi_packages_needed=""
+    if ! command -v hostapd &>/dev/null; then
+        wifi_packages_needed="hostapd"
+    fi
+    if ! command -v iw &>/dev/null; then
+        wifi_packages_needed="$wifi_packages_needed iw"
+    fi
+    if ! command -v iwconfig &>/dev/null; then
+        wifi_packages_needed="$wifi_packages_needed wireless-tools"
+    fi
+    if [ -n "$wifi_packages_needed" ]; then
+        log_warn "Installing WiFi packages: $wifi_packages_needed"
+        apt-get update
+        # shellcheck disable=SC2086
+        apt-get install -y $wifi_packages_needed || {
+            log_error "Failed to install WiFi packages: $wifi_packages_needed"
+            exit 1
+        }
+    fi
+    log_info "hostapd: $(hostapd -v 2>&1 | head -1 || echo 'available')"
+    log_info "iw: $(iw --version 2>&1 | head -1 || echo 'available')"
+
     # Check for nftables (optional, for additional filtering)
     if command -v nft &>/dev/null; then
         log_info "nftables: available"
@@ -719,11 +742,11 @@ create_wifi_udev_rules() {
     # Create udev rules for stable WiFi interface naming
     # This prevents wlan0/wlan1 from swapping on reboot
     #
-    # Strategy:
-    #   - Detect all WiFi adapters and their capabilities (2.4GHz, 5GHz, dual-band)
-    #   - For dual-band adapters: use a single stable name (wlan_ap0)
-    #   - For single-band adapters: assign based on capability
-    #   - Record capabilities separately for hostapd to use
+    # Uses MAC addresses to assign stable names:
+    #   - wlan_24ghz for 2.4GHz adapter
+    #   - wlan_5ghz for 5GHz adapter (or dual-band)
+    #
+    # This is the proven working approach from setup.sh
 
     log_info "Creating udev rules for stable WiFi interface naming..."
 
@@ -735,102 +758,41 @@ create_wifi_udev_rules() {
         return 1
     fi
 
-    # Detect WiFi interfaces - use simpler approach without arrays
-    local primary_iface="" primary_mac="" primary_band=""
-    local secondary_iface="" secondary_mac="" secondary_band=""
-    local adapter_count=0
+    # Detect WiFi interfaces and their bands
+    local iface_24ghz=""
+    local iface_5ghz=""
+    local mac_24ghz=""
+    local mac_5ghz=""
 
-    log_info "  Detecting WiFi adapters..."
-
-    # Get list of wireless interfaces from /sys/class/net
-    for iface_path in /sys/class/net/*/wireless; do
-        [ -d "$iface_path" ] || continue
-        local iface
-        iface=$(basename "$(dirname "$iface_path")")
-
+    log_info "  Detecting WiFi adapters from iw dev..."
+    for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
         local mac
-        mac=$(cat "/sys/class/net/$iface/address" 2>/dev/null)
+        mac=$(cat /sys/class/net/$iface/address 2>/dev/null)
         [ -z "$mac" ] && continue
 
-        # Get phy name for this interface
-        local phy_path="/sys/class/net/$iface/phy80211"
-        local phy=""
-        if [ -L "$phy_path" ]; then
-            phy=$(basename "$(readlink -f "$phy_path")")
-        fi
-
-        # If phy not found via sysfs, try iw
-        if [ -z "$phy" ]; then
-            local wiphy_num
-            wiphy_num=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print $2}')
-            [ -n "$wiphy_num" ] && phy="phy${wiphy_num}"
-        fi
-
+        # Check band support via iw phy
+        local phy
+        phy=$(iw dev $iface info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
         [ -z "$phy" ] && continue
 
-        # Get frequency info from /sys/class/ieee80211/phy*/
-        local has_5ghz=false has_24ghz=false
-        local phy_sys="/sys/class/ieee80211/$phy"
+        local has_5ghz
+        local has_24ghz
+        has_5ghz=$(iw phy $phy info 2>/dev/null | grep -c "5[0-9][0-9][0-9] MHz")
+        has_24ghz=$(iw phy $phy info 2>/dev/null | grep -c "24[0-9][0-9] MHz")
 
-        if [ -d "$phy_sys" ]; then
-            # Check for 5GHz support (channels > 14, frequencies > 5000 MHz)
-            if grep -qE '5[0-9]{3}' "$phy_sys"/device/net/*/uevent 2>/dev/null || \
-               iw phy "$phy" info 2>/dev/null | grep -qE '\* 5[0-9]{3} MHz'; then
-                has_5ghz=true
-            fi
-            # Check for 2.4GHz support (frequencies 2400-2500 MHz)
-            if grep -qE '24[0-9]{2}' "$phy_sys"/device/net/*/uevent 2>/dev/null || \
-               iw phy "$phy" info 2>/dev/null | grep -qE '\* 24[0-9]{2} MHz'; then
-                has_24ghz=true
-            fi
-        else
-            # Fallback: use iw phy directly
-            local phy_info
-            phy_info=$(iw phy "$phy" info 2>/dev/null)
-            if [ -n "$phy_info" ]; then
-                echo "$phy_info" | grep -qE '\* 5[0-9]{3} MHz' && has_5ghz=true
-                echo "$phy_info" | grep -qE '\* 24[0-9]{2} MHz' && has_24ghz=true
-            fi
+        # Assign to 5GHz slot first if capable (prioritize 5GHz/dual-band)
+        if [ "$has_5ghz" -gt 0 ] && [ -z "$mac_5ghz" ]; then
+            iface_5ghz="$iface"
+            mac_5ghz="$mac"
+            log_info "  5GHz adapter: $iface ($mac)"
+        elif [ "$has_24ghz" -gt 0 ] && [ -z "$mac_24ghz" ]; then
+            iface_24ghz="$iface"
+            mac_24ghz="$mac"
+            log_info "  2.4GHz adapter: $iface ($mac)"
         fi
-
-        # Determine band type
-        local band_type=""
-        if $has_5ghz && $has_24ghz; then
-            band_type="dualband"
-            log_info "  Dual-band adapter: $iface ($mac)"
-        elif $has_5ghz; then
-            band_type="5ghz"
-            log_info "  5GHz-only adapter: $iface ($mac)"
-        elif $has_24ghz; then
-            band_type="24ghz"
-            log_info "  2.4GHz-only adapter: $iface ($mac)"
-        else
-            log_warn "  Unknown band for adapter: $iface ($mac) - skipping"
-            continue
-        fi
-
-        # Store adapter info
-        if [ -z "$primary_mac" ]; then
-            primary_iface="$iface"
-            primary_mac="$mac"
-            primary_band="$band_type"
-        elif [ -z "$secondary_mac" ]; then
-            secondary_iface="$iface"
-            secondary_mac="$mac"
-            secondary_band="$band_type"
-        fi
-        adapter_count=$((adapter_count + 1))
     done
 
-    if [ "$adapter_count" -eq 0 ]; then
-        log_warn "  No WiFi adapters detected for udev rules"
-        rm -f "$udev_rule_file"
-        return 1
-    fi
-
-    log_info "  Found $adapter_count WiFi adapter(s)"
-
-    # Generate udev rules
+    # Generate udev rules file
     cat > "$udev_rule_file" << 'UDEV_HEADER'
 # HookProbe Fortress - WiFi Interface Stable Naming
 # Generated automatically - do not edit manually
@@ -842,74 +804,41 @@ create_wifi_udev_rules() {
 
 UDEV_HEADER
 
-    # Determine stable names based on band capabilities
-    local name_24ghz="" name_5ghz=""
-
-    if [ "$adapter_count" -eq 1 ]; then
-        # Single adapter - use for both bands if dual-band
-        if [ "$primary_band" = "dualband" ]; then
-            echo "# Dual-band WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
-            echo "# Supports both 2.4GHz and 5GHz bands" >> "$udev_rule_file"
-            echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_ap0\"" >> "$udev_rule_file"
-            name_24ghz="wlan_ap0"
-            name_5ghz="wlan_ap0"
-            log_info "  Created rule: $primary_mac -> wlan_ap0 (dual-band)"
-        elif [ "$primary_band" = "5ghz" ]; then
-            echo "# 5GHz WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
-            echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
-            name_5ghz="wlan_5ghz"
-            log_info "  Created rule: $primary_mac -> wlan_5ghz"
-        else
-            echo "# 2.4GHz WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
-            echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
-            name_24ghz="wlan_24ghz"
-            log_info "  Created rule: $primary_mac -> wlan_24ghz"
-        fi
-    else
-        # Two or more adapters - assign by capability
-        # Prefer 5GHz capable adapter for 5GHz slot
-        if [ "$primary_band" = "dualband" ] || [ "$primary_band" = "5ghz" ]; then
-            echo "# 5GHz WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
-            echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
-            name_5ghz="wlan_5ghz"
-            log_info "  Created rule: $primary_mac -> wlan_5ghz"
-        else
-            echo "# 2.4GHz WiFi adapter (original: $primary_iface)" >> "$udev_rule_file"
-            echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$primary_mac\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
-            name_24ghz="wlan_24ghz"
-            log_info "  Created rule: $primary_mac -> wlan_24ghz"
-        fi
-
-        if [ -n "$secondary_mac" ]; then
-            if [ -z "$name_24ghz" ]; then
-                echo "# 2.4GHz WiFi adapter (original: $secondary_iface)" >> "$udev_rule_file"
-                echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$secondary_mac\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
-                name_24ghz="wlan_24ghz"
-                log_info "  Created rule: $secondary_mac -> wlan_24ghz"
-            elif [ -z "$name_5ghz" ]; then
-                echo "# 5GHz WiFi adapter (original: $secondary_iface)" >> "$udev_rule_file"
-                echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$secondary_mac\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
-                name_5ghz="wlan_5ghz"
-                log_info "  Created rule: $secondary_mac -> wlan_5ghz"
-            fi
-        fi
+    if [ -n "$mac_24ghz" ]; then
+        echo "# 2.4GHz WiFi adapter (original: $iface_24ghz)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_24ghz\", NAME=\"wlan_24ghz\"" >> "$udev_rule_file"
+        log_info "  Created rule: $mac_24ghz -> wlan_24ghz"
     fi
 
-    log_info "  Created $udev_rule_file"
+    if [ -n "$mac_5ghz" ]; then
+        echo "# 5GHz WiFi adapter (original: $iface_5ghz)" >> "$udev_rule_file"
+        echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$mac_5ghz\", NAME=\"wlan_5ghz\"" >> "$udev_rule_file"
+        log_info "  Created rule: $mac_5ghz -> wlan_5ghz"
+    fi
 
-    # Trigger udev to apply interface naming rules
-    log_info "  Triggering udev to apply rules..."
-    udevadm control --reload-rules 2>/dev/null || true
-    udevadm trigger --action=add --subsystem-match=net 2>/dev/null || true
+    if [ ! -s "$udev_rule_file" ] || [ -z "$mac_24ghz$mac_5ghz" ]; then
+        log_warn "  No WiFi adapters detected for udev rules"
+        rm -f "$udev_rule_file"
+        return 1
+    fi
+
+    log_success "Created $udev_rule_file"
+
+    # =========================================
+    # TRIGGER UDEV TO RENAME INTERFACES NOW
+    # =========================================
+    log_info "Triggering udev to apply interface naming rules..."
+    udevadm control --reload-rules
+    udevadm trigger --action=add --subsystem-match=net
 
     # Wait for interfaces to be renamed (max 10 seconds)
     local wait_count=0
     local max_wait=10
     while [ $wait_count -lt $max_wait ]; do
-        local ready=true
-        [ -n "$name_24ghz" ] && [ ! -d "/sys/class/net/$name_24ghz" ] && ready=false
-        [ -n "$name_5ghz" ] && [ "$name_5ghz" != "$name_24ghz" ] && [ ! -d "/sys/class/net/$name_5ghz" ] && ready=false
-        if $ready; then
+        local renamed=true
+        [ -n "$mac_24ghz" ] && [ ! -d "/sys/class/net/wlan_24ghz" ] && renamed=false
+        [ -n "$mac_5ghz" ] && [ ! -d "/sys/class/net/wlan_5ghz" ] && renamed=false
+        if $renamed; then
             log_info "  Interface renaming complete"
             break
         fi
@@ -926,47 +855,51 @@ UDEV_HEADER
     cat > "$CONFIG_DIR/wifi-interfaces.conf" << EOF
 # WiFi Interface Mapping
 # Generated: $(date -Iseconds)
-# Adapter count: $adapter_count
-
-WIFI_24GHZ_IFACE=${name_24ghz:-none}
-WIFI_5GHZ_IFACE=${name_5ghz:-none}
-
-# Primary adapter
-WIFI_PRIMARY_MAC=$primary_mac
-WIFI_PRIMARY_ORIGINAL=$primary_iface
-WIFI_PRIMARY_BAND=$primary_band
-
-# Secondary adapter (if present)
-WIFI_SECONDARY_MAC=${secondary_mac:-}
-WIFI_SECONDARY_ORIGINAL=${secondary_iface:-}
-WIFI_SECONDARY_BAND=${secondary_band:-}
+WIFI_24GHZ_MAC=$mac_24ghz
+WIFI_24GHZ_CURRENT=$iface_24ghz
+WIFI_24GHZ_STABLE=wlan_24ghz
+WIFI_5GHZ_MAC=$mac_5ghz
+WIFI_5GHZ_CURRENT=$iface_5ghz
+WIFI_5GHZ_STABLE=wlan_5ghz
 EOF
 
-    # Update hostapd configs to use stable interface names
-    log_info "  Updating hostapd configs..."
+    # =========================================
+    # UPDATE HOSTAPD CONFIGS TO USE STABLE NAMES
+    # =========================================
+    log_info "Updating hostapd configs to use stable interface names..."
 
-    if [ -n "$name_24ghz" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
-        log_info "    2.4GHz config -> $name_24ghz"
-        sed -i "s/^interface=.*/interface=$name_24ghz/" /etc/hostapd/hostapd-24ghz.conf
+    if [ -n "$mac_24ghz" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        log_info "  Updating 2.4GHz config: $iface_24ghz -> wlan_24ghz"
+        sed -i "s/^interface=.*/interface=wlan_24ghz/" /etc/hostapd/hostapd-24ghz.conf
     fi
 
-    if [ -n "$name_5ghz" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
-        log_info "    5GHz config -> $name_5ghz"
-        sed -i "s/^interface=.*/interface=$name_5ghz/" /etc/hostapd/hostapd-5ghz.conf
+    if [ -n "$mac_5ghz" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        log_info "  Updating 5GHz config: $iface_5ghz -> wlan_5ghz"
+        sed -i "s/^interface=.*/interface=wlan_5ghz/" /etc/hostapd/hostapd-5ghz.conf
     fi
 
-    # Update systemd service files if they exist
-    for svc_file in /etc/systemd/system/fortress-hostapd-*.service; do
-        [ -f "$svc_file" ] || continue
-        if echo "$svc_file" | grep -q "24ghz" && [ -n "$name_24ghz" ]; then
-            sed -i "s|/sys/class/net/[^]]*\]|/sys/class/net/$name_24ghz]|g" "$svc_file" 2>/dev/null || true
-        elif echo "$svc_file" | grep -q "5ghz" && [ -n "$name_5ghz" ]; then
-            sed -i "s|/sys/class/net/[^]]*\]|/sys/class/net/$name_5ghz]|g" "$svc_file" 2>/dev/null || true
-        fi
-    done
+    # Update systemd service files to use stable names
+    if [ -n "$mac_24ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-24ghz.service ]; then
+        log_info "  Updating 2.4GHz service: $iface_24ghz -> wlan_24ghz"
+        sed -i "s/$iface_24ghz/wlan_24ghz/g" /etc/systemd/system/fortress-hostapd-24ghz.service
+    fi
 
-    # Reload systemd if services were updated
+    if [ -n "$mac_5ghz" ] && [ -f /etc/systemd/system/fortress-hostapd-5ghz.service ]; then
+        log_info "  Updating 5GHz service: $iface_5ghz -> wlan_5ghz"
+        sed -i "s/$iface_5ghz/wlan_5ghz/g" /etc/systemd/system/fortress-hostapd-5ghz.service
+    fi
+
+    # Update network state file if exists
+    if [ -f /var/lib/fortress/network-interfaces.conf ]; then
+        log_info "  Updating network state file..."
+        [ -n "$iface_24ghz" ] && sed -i "s/$iface_24ghz/wlan_24ghz/g" /var/lib/fortress/network-interfaces.conf
+        [ -n "$iface_5ghz" ] && sed -i "s/$iface_5ghz/wlan_5ghz/g" /var/lib/fortress/network-interfaces.conf
+    fi
+
     systemctl daemon-reload 2>/dev/null || true
+
+    log_success "Configs updated to use stable names (wlan_24ghz, wlan_5ghz)"
+    log_info "  Note: Reboot required for interface renaming to take effect"
 
     return 0
 }
@@ -1266,28 +1199,44 @@ OVSEOF
 
     chmod +x "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
 
+    # Find podman-compose path (may be in /usr/bin or ~/.local/bin)
+    local podman_compose_bin
+    podman_compose_bin=$(command -v podman-compose || echo "/usr/bin/podman-compose")
+
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]
 Description=HookProbe Fortress Security Gateway
-# Ensure all dependencies are ready before starting
+# Wait for network and container runtime
 After=network-online.target openvswitch-switch.service podman.socket podman.service
-Wants=network-online.target
-Requires=openvswitch-switch.service podman.socket
+Wants=network-online.target openvswitch-switch.service
+Requires=podman.socket
+# Prevent rapid restarts on repeated failures
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
-# Wait for podman socket to be ready
-ExecStartPre=/bin/sh -c 'until podman info >/dev/null 2>&1; do sleep 1; done'
-ExecStart=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml up -d
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin
+
+# Wait for podman to be fully ready (max 60 seconds)
+ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+
+# Start containers
+ExecStart=${podman_compose_bin} ${profile_flags} -f podman-compose.yml up -d
+
+# Connect to OVS after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fortress-ovs-connect.sh
-ExecStop=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml down
-ExecReload=/usr/bin/podman-compose ${profile_flags} -f podman-compose.yml restart
+
+# Stop containers gracefully
+ExecStop=${podman_compose_bin} ${profile_flags} -f podman-compose.yml down
+
+# Reload containers
+ExecReload=${podman_compose_bin} ${profile_flags} -f podman-compose.yml restart
+
 TimeoutStartSec=300
-# Restart containers if they die unexpectedly
-Restart=on-failure
-RestartSec=30
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target
@@ -1296,13 +1245,23 @@ EOF
     # Also save profile config for reference
     echo "FORTRESS_PROFILES=\"${profile_flags:-core}\"" >> /etc/hookprobe/fortress.conf
 
-    # Ensure podman.socket is enabled for boot
-    systemctl enable podman.socket 2>/dev/null || true
+    # Ensure required services are enabled for boot
+    log_info "Enabling systemd services for boot..."
 
+    # Enable podman socket (required for container startup)
+    systemctl enable podman.socket 2>/dev/null || true
+    systemctl start podman.socket 2>/dev/null || true
+
+    # Enable network-online.target (some distros don't enable this by default)
+    systemctl enable systemd-networkd-wait-online.service 2>/dev/null || \
+        systemctl enable NetworkManager-wait-online.service 2>/dev/null || true
+
+    # Reload and enable fortress service
     systemctl daemon-reload
     systemctl enable fortress
 
-    log_info "Systemd service created with OVS post-start hook"
+    log_info "Systemd service created and enabled"
+    log_info "  fortress.service will start containers on boot"
 }
 
 # ============================================================
