@@ -43,6 +43,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Create directory structure
 RUN mkdir -p /opt/hookprobe/shared/dnsXai/data \
+             /opt/hookprobe/shared/dnsXai/defaults \
              /opt/hookprobe/shared/dnsXai/blocklists \
              /var/log/hookprobe \
     && chown -R dnsxai:nogroup /opt/hookprobe /var/log/hookprobe
@@ -51,13 +52,23 @@ RUN mkdir -p /opt/hookprobe/shared/dnsXai/data \
 COPY --chown=dnsxai:nogroup shared/dnsXai/ /opt/hookprobe/shared/dnsXai/
 COPY --chown=dnsxai:nogroup shared/__init__.py /opt/hookprobe/shared/
 
+# Preserve default whitelist in a location that won't be overwritten by volume mounts
+# This allows the entrypoint to copy it to the data volume on first run
+RUN if [ -f /opt/hookprobe/shared/dnsXai/data/whitelist.txt ]; then \
+        cp /opt/hookprobe/shared/dnsXai/data/whitelist.txt /opt/hookprobe/shared/dnsXai/defaults/whitelist.txt; \
+    fi
+
+# Copy entrypoint script
+COPY --chown=dnsxai:nogroup products/fortress/containers/entrypoint-dnsxai.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Environment
 ENV PYTHONPATH="/opt/hookprobe"
 ENV PYTHONUNBUFFERED=1
 ENV DNSXAI_DATA_DIR=/opt/hookprobe/shared/dnsXai/data
 ENV DNSXAI_BLOCKLIST_DIR=/opt/hookprobe/shared/dnsXai/blocklists
 
-# Default blocklist fetch on startup
+# Verify setup
 RUN python -c "print('dnsXai container ready')"
 
 # Health check - verify DNS server responds to queries
@@ -71,6 +82,6 @@ USER dnsxai
 
 WORKDIR /opt/hookprobe/shared/dnsXai
 
-# Run engine.py directly since WORKDIR is already in the dnsXai directory
-ENTRYPOINT ["python", "engine.py"]
+# Use entrypoint script to copy defaults to data volume on first run
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["--serve", "--address", "0.0.0.0", "--port", "5353", "--upstream", "1.1.1.1"]
