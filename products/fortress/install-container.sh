@@ -748,21 +748,29 @@ setup_network() {
         if [ -f "$hostapd_script" ]; then
             prepare_wifi_interfaces 2>/dev/null || true
 
-            # Export stable names for hostapd-generator to use
-            export WIFI_24GHZ_IFACE="${WIFI_24GHZ_STABLE:-}"
-            export WIFI_5GHZ_IFACE="${WIFI_5GHZ_STABLE:-}"
+            # Export interface names for hostapd-generator
+            # hostapd-generator.sh expects NET_WIFI_* variables
+            export NET_WIFI_24GHZ_IFACE="${WIFI_24GHZ_STABLE:-}"
+            export NET_WIFI_5GHZ_IFACE="${WIFI_5GHZ_STABLE:-}"
 
-            # Generate hostapd configs - now uses stable interface names
-            "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" \
-                --iface-24ghz "${WIFI_24GHZ_STABLE:-}" \
-                --iface-5ghz "${WIFI_5GHZ_STABLE:-}" 2>/dev/null || {
-                # Fallback: run without interface args, then update configs
-                "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" || {
-                    log_warn "Hostapd configuration had issues"
-                }
-                # Update configs to use stable names
-                update_hostapd_configs_stable_names
-            }
+            # Set config mode based on detected interfaces
+            if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -n "$WIFI_5GHZ_DETECTED" ]; then
+                export NET_WIFI_CONFIG_MODE="separate-radios"
+            elif [ -n "$WIFI_24GHZ_DETECTED" ]; then
+                export NET_WIFI_CONFIG_MODE="24ghz-only"
+            elif [ -n "$WIFI_5GHZ_DETECTED" ]; then
+                export NET_WIFI_CONFIG_MODE="5ghz-only"
+            fi
+
+            log_info "  WiFi config mode: ${NET_WIFI_CONFIG_MODE:-none}"
+
+            # Generate hostapd configs - uses NET_WIFI_* variables
+            if ! "$hostapd_script" configure "$wifi_ssid" "$wifi_pass" "$OVS_BRIDGE" 2>&1; then
+                log_warn "Hostapd configuration had issues"
+            fi
+
+            # Ensure configs use stable interface names (in case generator used originals)
+            update_hostapd_configs_stable_names
 
             # PHASE 3: Create services with stable names (once, not redundantly)
             create_wifi_services_stable
@@ -1130,6 +1138,23 @@ EOF
     fi
 
     log_info "Phase 3 complete: Services created"
+
+    # Start hostapd services now (don't wait for reboot)
+    log_info "Starting WiFi access points..."
+    if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
+        if systemctl start fortress-hostapd-24ghz 2>/dev/null; then
+            log_info "  2.4GHz AP started"
+        else
+            log_warn "  2.4GHz AP failed to start - check: journalctl -u fortress-hostapd-24ghz"
+        fi
+    fi
+    if [ -n "$WIFI_5GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
+        if systemctl start fortress-hostapd-5ghz 2>/dev/null; then
+            log_info "  5GHz AP started"
+        else
+            log_warn "  5GHz AP failed to start - check: journalctl -u fortress-hostapd-5ghz"
+        fi
+    fi
 }
 
 setup_ovs_dhcp() {
@@ -1316,12 +1341,29 @@ start_containers() {
     log_info "Starting Fortress services..."
     podman-compose up -d
 
-    # Wait for services
+    # Wait for services in dependency order
     log_info "Waiting for services to be ready..."
-    local retries=30
+
+    # Phase 1: Wait for data tier (postgres, redis) - no dependencies
+    log_info "  Waiting for data tier (postgres, redis)..."
+    wait_for_container_healthy "fortress-postgres" 60 || log_warn "postgres may not be healthy"
+    wait_for_container_healthy "fortress-redis" 30 || log_warn "redis may not be healthy"
+
+    # Phase 2: Wait for independent services (dnsxai, dfs) - no dependencies
+    log_info "  Waiting for services tier (dnsxai, dfs)..."
+    wait_for_container_running "fortress-dnsxai" 30 || log_warn "dnsxai may not be running"
+    wait_for_container_running "fortress-dfs" 30 || log_warn "dfs may not be running"
+
+    # Phase 3: Wait for dependent services (web, qsecbit) - depend on postgres/redis
+    log_info "  Waiting for application tier (web, qsecbit)..."
+    wait_for_container_running "fortress-web" 30 || log_warn "web may not be running"
+    wait_for_container_running "fortress-qsecbit" 30 || log_warn "qsecbit may not be running"
+
+    # Final check: web health endpoint
+    local retries=15
     while [ $retries -gt 0 ]; do
         if curl -sf -k "https://localhost:${WEB_PORT}/health" &>/dev/null; then
-            log_info "Services are ready"
+            log_info "All services are ready"
             break
         fi
         sleep 2
@@ -1329,11 +1371,55 @@ start_containers() {
     done
 
     if [ $retries -eq 0 ]; then
-        log_warn "Services may not be fully ready - check logs"
+        log_warn "Web health check failed - check logs: podman logs fortress-web"
     fi
 
     # Connect containers to OVS for flow monitoring
     connect_containers_to_ovs
+}
+
+# Wait for container to be running
+wait_for_container_running() {
+    local container="$1"
+    local timeout="${2:-30}"
+    local elapsed=0
+
+    while [ $elapsed -lt $timeout ]; do
+        local state
+        state=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+        if [ "$state" = "running" ]; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
+}
+
+# Wait for container to be healthy (has healthcheck)
+wait_for_container_healthy() {
+    local container="$1"
+    local timeout="${2:-60}"
+    local elapsed=0
+
+    while [ $elapsed -lt $timeout ]; do
+        local health
+        health=$(podman inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null || echo "none")
+        if [ "$health" = "healthy" ]; then
+            return 0
+        fi
+        # Also accept running if no healthcheck defined
+        if [ "$health" = "none" ] || [ "$health" = "" ]; then
+            local state
+            state=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+            if [ "$state" = "running" ]; then
+                return 0
+            fi
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
 }
 
 connect_containers_to_ovs() {
@@ -1346,37 +1432,72 @@ connect_containers_to_ovs() {
         return 0
     fi
 
-    # Give containers a moment to fully initialize
-    sleep 3
-
     # Connect each container to its OVS tier via veth pair
     # This provides OpenFlow-controlled traffic monitoring alongside Podman networking
+    #
+    # NOTE: Containers using network_mode: host (web, qsecbit) cannot be attached to OVS
+    # They share the host network namespace and are already visible to OVS via host interfaces
 
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
-    # Data tier containers
-    "$ovs_script" attach fortress-postgres 172.20.200.10 data 2>/dev/null || \
-        log_warn "Could not attach postgres to OVS (may not be running)"
-    "$ovs_script" attach fortress-redis 172.20.200.11 data 2>/dev/null || \
-        log_warn "Could not attach redis to OVS (may not be running)"
+    # Data tier containers (always required)
+    attach_container_if_running "$ovs_script" fortress-postgres 172.20.200.10 data
+    attach_container_if_running "$ovs_script" fortress-redis 172.20.200.11 data
 
-    # Services tier containers (web uses host network, no OVS attachment needed)
-    "$ovs_script" attach fortress-dnsxai 172.20.201.11 services 2>/dev/null || \
-        log_warn "Could not attach dnsxai to OVS (may not be running)"
-    "$ovs_script" attach fortress-dfs 172.20.201.12 services 2>/dev/null || \
-        log_warn "Could not attach dfs to OVS (may not be running)"
+    # Services tier containers (dnsxai and dfs use bridge network)
+    # Note: web uses host network - already visible via host interfaces
+    attach_container_if_running "$ovs_script" fortress-dnsxai 172.20.201.11 services
+    attach_container_if_running "$ovs_script" fortress-dfs 172.20.201.12 services
 
-    # ML tier (optional containers)
-    "$ovs_script" attach fortress-lstm-trainer 172.20.202.10 ml 2>/dev/null || true
+    # Note: qsecbit uses host network - already visible via host interfaces
+    # It captures traffic on host interfaces directly
 
-    # Mgmt tier (optional containers)
-    "$ovs_script" attach fortress-grafana 172.20.203.10 mgmt 2>/dev/null || true
-    "$ovs_script" attach fortress-victoria 172.20.203.11 mgmt 2>/dev/null || true
+    # ML tier (optional - only with --profile training)
+    attach_container_if_running "$ovs_script" fortress-lstm-trainer 172.20.202.10 ml true
 
-    log_info "Containers connected to OVS for OpenFlow monitoring"
-    log_info "  Traffic mirroring: all container traffic → fortress-mirror"
+    # Mgmt tier (optional - only with --profile monitoring)
+    attach_container_if_running "$ovs_script" fortress-grafana 172.20.203.10 mgmt true
+    attach_container_if_running "$ovs_script" fortress-victoria 172.20.203.11 mgmt true
+
+    log_info "OVS container integration complete"
+    log_info "  Note: web and qsecbit use host network (no OVS attachment needed)"
+    log_info "  Traffic mirroring: all bridge container traffic → fortress-mirror"
     log_info "  sFlow export: 127.0.0.1:6343"
     log_info "  IPFIX export: 127.0.0.1:4739"
+}
+
+# Attach a container to OVS if it's running
+attach_container_if_running() {
+    local ovs_script="$1"
+    local container="$2"
+    local ip="$3"
+    local tier="$4"
+    local optional="${5:-false}"
+
+    # Check if container exists and is running
+    local state
+    state=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+
+    if [ "$state" = "running" ]; then
+        # Check if container uses host network (can't attach to OVS)
+        local network_mode
+        network_mode=$(podman inspect -f '{{.HostConfig.NetworkMode}}' "$container" 2>/dev/null || echo "")
+        if [ "$network_mode" = "host" ]; then
+            log_info "  $container: uses host network (skipping OVS attachment)"
+            return 0
+        fi
+
+        if "$ovs_script" attach "$container" "$ip" "$tier" 2>/dev/null; then
+            log_info "  $container: attached to OVS ($tier tier)"
+        else
+            log_warn "  $container: failed to attach to OVS"
+        fi
+    elif [ "$optional" = "true" ]; then
+        # Optional containers - silently skip if not running
+        :
+    else
+        log_warn "  $container: not running (state: $state)"
+    fi
 }
 
 create_systemd_service() {
@@ -1401,24 +1522,87 @@ create_systemd_service() {
 # Called by systemd ExecStartPost
 
 OVS_SCRIPT="/opt/hookprobe/fortress/devices/common/ovs-container-network.sh"
+LOG_TAG="fortress-ovs"
 
-# Wait for containers to be fully up
-sleep 5
+log_info() { logger -t "$LOG_TAG" "$1"; echo "[INFO] $1"; }
+log_warn() { logger -t "$LOG_TAG" -p warning "$1"; echo "[WARN] $1"; }
 
-if [ -f "$OVS_SCRIPT" ]; then
-    # Data tier
-    "$OVS_SCRIPT" attach fortress-postgres 172.20.200.10 data 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-redis 172.20.200.11 data 2>/dev/null || true
+# Wait for a container to be running (max 30 seconds)
+wait_for_container() {
+    local container="$1"
+    local timeout=30
+    local elapsed=0
+    while [ $elapsed -lt $timeout ]; do
+        local state
+        state=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+        if [ "$state" = "running" ]; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
+}
 
-    # Services tier (note: web uses host network, no OVS attachment needed)
-    "$OVS_SCRIPT" attach fortress-dnsxai 172.20.201.11 services 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-dfs 172.20.201.12 services 2>/dev/null || true
+# Attach container to OVS if running and not using host network
+attach_if_ready() {
+    local container="$1"
+    local ip="$2"
+    local tier="$3"
+    local optional="${4:-false}"
 
-    # Optional tiers
-    "$OVS_SCRIPT" attach fortress-lstm-trainer 172.20.202.10 ml 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-grafana 172.20.203.10 mgmt 2>/dev/null || true
-    "$OVS_SCRIPT" attach fortress-victoria 172.20.203.11 mgmt 2>/dev/null || true
+    # Check if container is running
+    local state
+    state=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+    if [ "$state" != "running" ]; then
+        [ "$optional" != "true" ] && log_warn "$container: not running"
+        return 1
+    fi
+
+    # Check if using host network (can't attach to OVS)
+    local network_mode
+    network_mode=$(podman inspect -f '{{.HostConfig.NetworkMode}}' "$container" 2>/dev/null || echo "")
+    if [ "$network_mode" = "host" ]; then
+        log_info "$container: uses host network (skipping)"
+        return 0
+    fi
+
+    # Attach to OVS
+    if "$OVS_SCRIPT" attach "$container" "$ip" "$tier" 2>/dev/null; then
+        log_info "$container: attached to OVS ($tier tier)"
+    else
+        log_warn "$container: failed to attach to OVS"
+    fi
+}
+
+if [ ! -f "$OVS_SCRIPT" ]; then
+    log_warn "OVS script not found: $OVS_SCRIPT"
+    exit 0
 fi
+
+log_info "Waiting for containers..."
+
+# Wait for core containers first
+wait_for_container fortress-postgres || log_warn "postgres not ready"
+wait_for_container fortress-redis || log_warn "redis not ready"
+
+# Now attach all containers
+log_info "Attaching containers to OVS..."
+
+# Data tier (required)
+attach_if_ready fortress-postgres 172.20.200.10 data
+attach_if_ready fortress-redis 172.20.200.11 data
+
+# Services tier (dnsxai and dfs use bridge network)
+attach_if_ready fortress-dnsxai 172.20.201.11 services
+attach_if_ready fortress-dfs 172.20.201.12 services
+
+# Optional tiers
+attach_if_ready fortress-lstm-trainer 172.20.202.10 ml true
+attach_if_ready fortress-grafana 172.20.203.10 mgmt true
+attach_if_ready fortress-victoria 172.20.203.11 mgmt true
+
+log_info "OVS container integration complete"
 OVSEOF
 
     chmod +x "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
