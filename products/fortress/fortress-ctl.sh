@@ -572,8 +572,7 @@ Usage: fortress-ctl <command> [options]
 
 Commands:
   install       Install Fortress
-    --container   Container-based deployment (recommended)
-    --native      Native installation with setup.sh
+    --container   Container-based deployment (default)
     --quick       Use defaults, minimal prompts
     --preserve-data  Reuse existing data volumes
 
@@ -640,28 +639,27 @@ main() {
 
     case "$command" in
         install)
-            local mode="container"
             local quick=false
             local preserve_data=false
+            local args=""
 
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --container) mode="container"; shift ;;
-                    --native) mode="native"; shift ;;
+                    --container) shift ;;  # Default, ignored
+                    --native)
+                        log_warn "Native mode is deprecated. Using container mode."
+                        shift
+                        ;;
                     --quick) quick=true; shift ;;
-                    --preserve-data) preserve_data=true; shift ;;
+                    --preserve-data) preserve_data=true; args="$args --preserve-data"; shift ;;
                     *) shift ;;
                 esac
             done
 
-            if [ "$mode" = "container" ]; then
-                if [ "$quick" = true ]; then
-                    exec "${SCRIPT_DIR}/install-container.sh" --quick
-                else
-                    exec "${SCRIPT_DIR}/install-container.sh"
-                fi
+            if [ "$quick" = true ]; then
+                exec "${SCRIPT_DIR}/install-container.sh" --quick $args
             else
-                exec "${SCRIPT_DIR}/setup.sh"
+                exec "${SCRIPT_DIR}/install-container.sh" $args
             fi
             ;;
 

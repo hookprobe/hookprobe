@@ -33,7 +33,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# LTE-specific logging (prefixed to avoid conflicts with main setup.sh)
+# LTE-specific logging (prefixed to avoid conflicts with main installer)
 lte_log() { echo -e "${CYAN}[LTE]${NC} $*"; }
 lte_success() { echo -e "${GREEN}[LTE]${NC} $*"; }
 lte_warn() { echo -e "${YELLOW}[LTE]${NC} $*"; }
@@ -332,9 +332,9 @@ get_modem_info() {
 }
 
 detect_lte_modem() {
-    # Detect LTE modem and export variables for setup.sh
+    # Detect LTE modem and export variables for install-container.sh
     #
-    # This function is called by setup.sh to detect modems and export:
+    # This function is called by install-container.sh to detect modems and export:
     #   LTE_VENDOR    - Modem vendor (Quectel, Sierra, etc.)
     #   LTE_MODEL     - Modem model (EM05, RM502Q, etc.)
     #   LTE_INTERFACE - Network interface (wwan0, wwp0s20f0u4)

@@ -4,7 +4,7 @@
 # Part of HookProbe Fortress - Small Business Security Gateway
 #
 # This module integrates the new network detection and configuration
-# components with the main setup.sh script.
+# components with the main install-container.sh script.
 #
 # Usage:
 #   source devices/common/network-integration.sh
@@ -50,7 +50,7 @@ network_integration_init() {
     #   1. Checks for required modules
     #   2. Sources network detector
     #   3. Runs interface detection
-    #   4. Exports results for setup.sh
+    #   4. Exports results for install-container.sh
     #
     # Set NET_QUIET_MODE=true before calling to suppress verbose output
     # Useful for re-detection after package installation
@@ -68,16 +68,16 @@ network_integration_init() {
     source "$NETWORK_DETECTOR"
     detect_all_interfaces
 
-    # Export results in format expected by setup.sh
+    # Export results in format expected by install-container.sh
     export_for_setup
 
     return 0
 }
 
 export_for_setup() {
-    # Export detected interfaces in format compatible with setup.sh
+    # Export detected interfaces in format compatible with install-container.sh
     #
-    # Maps new variable names to legacy setup.sh variable names
+    # Maps new variable names to legacy variable names
 
     # Ethernet interfaces
     export ETH_INTERFACES="$NET_ETH_INTERFACES"
@@ -124,7 +124,7 @@ export_for_setup() {
         export WIFI_VAP_SUPPORT
     fi
 
-    [ "$NET_QUIET_MODE" = "true" ] || log_info "Exported interface configuration for setup.sh"
+    [ "$NET_QUIET_MODE" = "true" ] || log_info "Exported interface configuration for install-container.sh"
 }
 
 # ============================================================
@@ -139,7 +139,7 @@ setup_dual_band_wifi() {
     #   $2 - Password
     #   $3 - Bridge name (optional)
     #
-    # This function replaces the single-band setup_wifi_ap in setup.sh
+    # This function replaces single-band WiFi AP setup with dual-band support
 
     local ssid="${1:-HookProbe-Fortress}"
     local password="$2"
