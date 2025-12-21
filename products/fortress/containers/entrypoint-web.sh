@@ -118,20 +118,33 @@ mkdir -p "${FORTRESS_DATA_DIR}"/{reports,cache,uploads} 2>/dev/null || true
 mkdir -p /app/logs 2>/dev/null || true
 
 # ============================================================
-# SECRET FILE EXPANSION
+# SECRET HANDLING
 # ============================================================
-# Docker/Podman secrets are mounted as files - expand them to env vars
-if [ -f "${DATABASE_PASSWORD_FILE:-}" ]; then
+# Support both direct environment variables and file-based secrets
+# Direct env vars take precedence over file-based ones
+
+# Database password
+if [ -z "${DATABASE_PASSWORD:-}" ] && [ -f "${DATABASE_PASSWORD_FILE:-}" ] && [ -r "${DATABASE_PASSWORD_FILE:-}" ]; then
     export DATABASE_PASSWORD=$(cat "${DATABASE_PASSWORD_FILE}")
     log_info "Loaded database password from secret file"
+elif [ -n "${DATABASE_PASSWORD:-}" ]; then
+    log_info "Using database password from environment"
 fi
-if [ -f "${REDIS_PASSWORD_FILE:-}" ]; then
+
+# Redis password
+if [ -z "${REDIS_PASSWORD:-}" ] && [ -f "${REDIS_PASSWORD_FILE:-}" ] && [ -r "${REDIS_PASSWORD_FILE:-}" ]; then
     export REDIS_PASSWORD=$(cat "${REDIS_PASSWORD_FILE}")
     log_info "Loaded Redis password from secret file"
+elif [ -n "${REDIS_PASSWORD:-}" ]; then
+    log_info "Using Redis password from environment"
 fi
-if [ -f "${FORTRESS_SECRET_KEY_FILE:-}" ]; then
-    export FORTRESS_SECRET_KEY=$(cat "${FORTRESS_SECRET_KEY_FILE}")
+
+# Flask secret key
+if [ -z "${FLASK_SECRET_KEY:-}" ] && [ -f "${FLASK_SECRET_KEY_FILE:-}" ] && [ -r "${FLASK_SECRET_KEY_FILE:-}" ]; then
+    export FLASK_SECRET_KEY=$(cat "${FLASK_SECRET_KEY_FILE}")
     log_info "Loaded Flask secret key from secret file"
+elif [ -n "${FLASK_SECRET_KEY:-}" ]; then
+    log_info "Using Flask secret key from environment"
 fi
 
 # Wait for database to be ready (if using PostgreSQL)
