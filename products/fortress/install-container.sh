@@ -978,9 +978,10 @@ EOF
 }
 
 setup_ovs_dhcp() {
-    log_info "Configuring DHCP on OVS LAN port..."
+    log_info "Configuring DHCP on OVS bridge..."
 
-    local lan_port="fortress-lan"
+    # Use the OVS bridge directly - dnsmasq binds to the bridge interface
+    local lan_port="${OVS_BRIDGE:-43ess}"
     local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
 
     mkdir -p "$(dirname "$config_file")"
@@ -989,7 +990,7 @@ setup_ovs_dhcp() {
 # HookProbe Fortress DHCP Configuration (OVS)
 # Generated: $(date -Iseconds)
 
-# Bind to OVS LAN internal port
+# Bind to OVS bridge interface
 interface=${lan_port}
 bind-interfaces
 
