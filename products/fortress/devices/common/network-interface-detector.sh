@@ -986,8 +986,8 @@ configure_wwan_nmcli() {
     # Delete existing connection
     nmcli con delete "$con_name" 2>/dev/null || true
 
-    # Build connection command
-    local nmcli_cmd="nmcli con add type gsm ifname \"$modem_device\" con-name \"$con_name\" apn \"$apn\" ipv4.method auto"
+    # Build connection command with auto-connect enabled
+    local nmcli_cmd="nmcli con add type gsm ifname \"$modem_device\" con-name \"$con_name\" apn \"$apn\" ipv4.method auto connection.autoconnect yes"
 
     if [ "$auth_type" != "none" ] && [ -n "$username" ]; then
         nmcli_cmd="$nmcli_cmd gsm.username \"$username\""
@@ -997,6 +997,16 @@ configure_wwan_nmcli() {
     if eval "$nmcli_cmd"; then
         log_success "WWAN connection '$con_name' created"
         export NET_WWAN_CONNECTION="$con_name"
+
+        # Try to bring up the connection immediately
+        log_info "Activating WWAN connection..."
+        if nmcli con up "$con_name" 2>&1; then
+            log_success "WWAN connection '$con_name' activated"
+        else
+            log_warn "Failed to activate immediately (modem may need init)"
+            log_info "  Connection will auto-connect when modem is ready"
+        fi
+
         return 0
     else
         log_error "Failed to create WWAN connection"
