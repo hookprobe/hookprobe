@@ -60,9 +60,9 @@ ENV DNSXAI_BLOCKLIST_DIR=/opt/hookprobe/shared/dnsXai/blocklists
 # Default blocklist fetch on startup
 RUN python -c "print('dnsXai container ready')"
 
-# Health check - DNS query test
+# Health check - verify DNS server process is running
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.sendto(b'test', ('localhost', 5353))" || exit 1
+    CMD pgrep -f "python.*engine.py" || exit 1
 
 EXPOSE 5353/udp
 

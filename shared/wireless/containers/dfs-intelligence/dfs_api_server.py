@@ -28,7 +28,8 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 
 # Import DFS intelligence module
-from dfs_intelligence import (
+# Module is at shared/wireless/dfs_intelligence.py, PYTHONPATH includes /opt/hookprobe
+from shared.wireless.dfs_intelligence import (
     DFSDatabase,
     ChannelScorer,
     DFSMLTrainer,
