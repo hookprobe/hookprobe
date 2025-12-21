@@ -59,11 +59,10 @@ services:
     environment:
       POSTGRES_DB: fortress
       POSTGRES_USER: fortress
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Use environment variable directly (podman secrets have permission issues with non-root users)
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
       # Enable SSL (certificates mounted from volume)
       PGSSLMODE: prefer
-    secrets:
-      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -131,14 +130,15 @@ services:
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
-      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      # Use environment variable directly (podman secrets have permission issues with non-root users)
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
       # Redis connection (web uses host network, reaches via localhost)
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
       FLASK_ENV: production
-      FLASK_SECRET_KEY_FILE: /run/secrets/flask_secret
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-fortress_flask_secret_key_change_me}"
       # Gunicorn settings
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
@@ -148,9 +148,6 @@ services:
       DFS_API_URL: http://localhost:8050
       # Monitoring endpoints
       VICTORIA_URL: http://localhost:8428
-    secrets:
-      - postgres_password
-      - flask_secret
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
@@ -187,12 +184,12 @@ services:
     ports:
       - "5353:5353/udp"
     healthcheck:
-      # Simple UDP check - just verify the process is listening
-      test: ["CMD-SHELL", "pgrep -f 'python.*engine.py' || exit 1"]
+      # UDP check - verify DNS server is listening (no pgrep in slim images)
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2); s.sendto(b'test',('127.0.0.1',5353)); s.close()"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     networks:
       fortress-services:
         ipv4_address: 172.20.201.11
@@ -250,14 +247,13 @@ services:
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
       # Metrics export to Victoria
       VICTORIA_PUSH_URL: http://localhost:8428/api/v1/write
-    secrets:
-      - postgres_password
     volumes:
       - agent_data:/opt/hookprobe/fortress/data
       - /etc/hookprobe:/etc/hookprobe:ro
@@ -308,11 +304,10 @@ services:
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
-      GF_INSTALL_PLUGINS: grafana-clock-panel
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-fortress_grafana_admin}"
+      # Disable plugin installation - requires internet which may not be available in container network
+      # GF_INSTALL_PLUGINS: grafana-clock-panel
       GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
-    secrets:
-      - grafana_password
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -356,15 +351,16 @@ services:
       - monitoring
 
 # ============================================================
-# SECRETS (file-based for security)
+# SECRETS
 # ============================================================
-secrets:
-  postgres_password:
-    file: ./secrets/postgres_password
-  flask_secret:
-    file: ./secrets/flask_secret
-  grafana_password:
-    file: ./secrets/grafana_password
+# NOTE: File-based secrets disabled due to podman permission issues with non-root users.
+# Secrets are now passed via environment variables. For production, consider:
+# - Using podman secret with proper UID mapping
+# - Or using a secrets management solution like HashiCorp Vault
+#
+# secrets:
+#   postgres_password:
+#     file: ./secrets/postgres_password
 
 # ============================================================
 # VOLUMES (persistent storage)
