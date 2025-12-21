@@ -109,8 +109,10 @@ class AdBlockConfig:
     qsecbit_weight: float = 0.10  # Weight in Qsecbit calculation
     privacy_threat_threshold: float = 0.50  # Ad ratio to trigger privacy alert
 
-    # Data paths
-    data_dir: str = "/opt/hookprobe/guardian/data/adblock"
+    # Data paths (use env vars with sensible defaults)
+    data_dir: str = field(default_factory=lambda: os.environ.get(
+        'DNSXAI_DATA_DIR', '/opt/hookprobe/shared/dnsXai/data'
+    ))
     blocklist_file: str = "blocklist.txt"
     whitelist_file: str = "whitelist.txt"
     model_file: str = "classifier_model.json"
