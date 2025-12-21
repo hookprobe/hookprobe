@@ -1280,6 +1280,17 @@ try_channel_bandwidth_combination() {
 
     log_info "    Trying channel $channel @ ${bandwidth}MHz..."
 
+    # IMPORTANT: 160MHz on UNII-1 (36-48) requires channels 36-64, but 52-64 are DFS.
+    # This causes "DFS chan_idx seems wrong" errors. Cap UNII-1 to 80MHz.
+    case "$channel" in
+        36|40|44|48)
+            if [ "$bandwidth" -eq 160 ]; then
+                log_warn "    160MHz not supported on UNII-1 (requires DFS channels 52-64), using 80MHz"
+                bandwidth=80
+            fi
+            ;;
+    esac
+
     # Calculate center frequency based on bandwidth
     local vht_width vht_center eht_width eht_center
     case "$bandwidth" in
@@ -1305,13 +1316,9 @@ try_channel_bandwidth_combination() {
     # Calculate center frequency for VHT
     case "$channel" in
         36|40|44|48)
-            if [ "$bandwidth" -eq 160 ]; then
-                vht_center=50
-                eht_center=50
-            else
-                vht_center=42
-                eht_center=42
-            fi
+            # UNII-1: Only 80MHz max (160MHz capped above)
+            vht_center=42
+            eht_center=42
             ;;
         52|56|60|64)
             vht_center=58
@@ -2223,6 +2230,17 @@ generate_hostapd_5ghz() {
         # Use validated settings from intelligent channel selection
         vht_oper_centr_freq_seg0_idx="$VALIDATED_VHT_CENTER"
         vht_oper_chwidth_val="${VALIDATED_VHT_WIDTH:-1}"
+
+        # Safety check: UNII-1 (36-48) cannot use 160MHz (requires DFS channels 52-64)
+        case "$channel" in
+            36|40|44|48)
+                if [ "$vht_oper_chwidth_val" -ge 2 ]; then
+                    log_warn "  Capping UNII-1 to 80MHz (160MHz requires DFS channels)"
+                    vht_oper_chwidth_val=1
+                    vht_oper_centr_freq_seg0_idx=42
+                fi
+                ;;
+        esac
         log_info "  Using validated VHT: width=$vht_oper_chwidth_val, center=$vht_oper_centr_freq_seg0_idx"
     else
         # Manual channel - calculate center frequency
@@ -2337,6 +2355,19 @@ EOF
         if [ -n "$VALIDATED_EHT_WIDTH" ]; then
             eht_oper_chwidth_val_be="$VALIDATED_EHT_WIDTH"
             eht_center_freq="$VALIDATED_EHT_CENTER"
+
+            # Safety check: UNII-1 (36-48) cannot use 160MHz+ (requires DFS channels 52-64)
+            case "$channel" in
+                36|40|44|48)
+                    # EHT: 2=80MHz, 3=160MHz, 4=320MHz - cap at 80MHz for UNII-1
+                    if [ "$eht_oper_chwidth_val_be" -ge 3 ]; then
+                        log_warn "  Capping EHT on UNII-1 to 80MHz (160MHz+ requires DFS channels)"
+                        eht_oper_chwidth_val_be=2  # 80MHz
+                        eht_center_freq=42
+                    fi
+                    ;;
+            esac
+
             # Convert width value back to MHz for logging
             case "$eht_oper_chwidth_val_be" in
                 4) safe_eht_width=320 ;;
