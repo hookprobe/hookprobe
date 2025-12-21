@@ -33,7 +33,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# LTE-specific logging (prefixed to avoid conflicts with main setup.sh)
+# LTE-specific logging (prefixed to avoid conflicts with main installer)
 lte_log() { echo -e "${CYAN}[LTE]${NC} $*"; }
 lte_success() { echo -e "${GREEN}[LTE]${NC} $*"; }
 lte_warn() { echo -e "${YELLOW}[LTE]${NC} $*"; }
@@ -331,6 +331,120 @@ get_modem_info() {
     [ -n "$MODEM_STATUS" ] && lte_log "  Status: $MODEM_STATUS"
 }
 
+detect_lte_modem() {
+    # Detect LTE modem and export variables for install-container.sh
+    #
+    # This function is called by install-container.sh to detect modems and export:
+    #   LTE_VENDOR    - Modem vendor (Quectel, Sierra, etc.)
+    #   LTE_MODEL     - Modem model (EM05, RM502Q, etc.)
+    #   LTE_INTERFACE - Network interface (wwan0, wwp0s20f0u4)
+    #   LTE_PROTOCOL  - Protocol type (qmi, mbim, at)
+    #   LTE_CTRL_DEV  - Control device (/dev/cdc-wdm0)
+    #
+    # Returns: 0 if modem found, 1 if not
+
+    export LTE_VENDOR=""
+    export LTE_MODEL=""
+    export LTE_INTERFACE=""
+    export LTE_PROTOCOL=""
+    export LTE_CTRL_DEV=""
+
+    lte_log "Detecting LTE modem..."
+
+    # Ensure ModemManager is running
+    if command -v mmcli &>/dev/null; then
+        if ! systemctl is-active ModemManager &>/dev/null; then
+            lte_log "Starting ModemManager..."
+            systemctl start ModemManager 2>/dev/null || true
+            sleep 3  # Give ModemManager time to detect modems
+        fi
+    fi
+
+    # Method 1: Use ModemManager (most reliable)
+    if command -v mmcli &>/dev/null && systemctl is-active ModemManager &>/dev/null 2>&1; then
+        local modem_count
+        modem_count=$(mmcli -L 2>/dev/null | grep -c "/Modem/" || echo "0")
+
+        if [ "$modem_count" -gt 0 ]; then
+            lte_log "ModemManager detected $modem_count modem(s)"
+
+            # Get first modem info
+            local mm_info
+            mm_info=$(mmcli -m 0 2>/dev/null)
+
+            if [ -n "$mm_info" ]; then
+                # Extract vendor
+                LTE_VENDOR=$(echo "$mm_info" | grep -E "manufacturer:" | sed 's/.*manufacturer:\s*//' | xargs)
+                # Extract model
+                LTE_MODEL=$(echo "$mm_info" | grep -E "^\s*model:" | sed 's/.*model:\s*//' | xargs)
+                # Extract primary port (control device)
+                local primary_port
+                primary_port=$(echo "$mm_info" | grep -E "primary port:" | awk '{print $NF}')
+                [ -n "$primary_port" ] && LTE_CTRL_DEV="/dev/$primary_port"
+                # Get state
+                local state
+                state=$(echo "$mm_info" | grep -E "^\s*state:" | awk '{print $NF}')
+
+                lte_log "  Vendor: $LTE_VENDOR"
+                lte_log "  Model: $LTE_MODEL"
+                lte_log "  Control: ${LTE_CTRL_DEV:-not found}"
+                lte_log "  State: ${state:-unknown}"
+            fi
+        fi
+    fi
+
+    # Method 2: Fallback to USB device detection
+    if [ -z "$LTE_VENDOR" ] && command -v lsusb &>/dev/null; then
+        while IFS= read -r line; do
+            local usb_id=$(echo "$line" | grep -oP '\b[0-9a-f]{4}:[0-9a-f]{4}\b')
+            local vendor_id=$(echo "$usb_id" | cut -d: -f1)
+
+            if [ -n "${LTE_MODEM_VENDORS[$vendor_id]:-}" ]; then
+                LTE_VENDOR="${LTE_MODEM_VENDORS[$vendor_id]}"
+                LTE_MODEL="${LTE_MODEM_MODELS[$usb_id]:-Unknown}"
+                lte_log "  USB detected: $LTE_VENDOR $LTE_MODEL"
+                break
+            fi
+        done < <(lsusb 2>/dev/null)
+    fi
+
+    # Find control device if not already found
+    if [ -z "$LTE_CTRL_DEV" ]; then
+        LTE_CTRL_DEV=$(get_modem_control_device 2>/dev/null) || true
+    fi
+
+    # Determine protocol from control device
+    if [ -n "$LTE_CTRL_DEV" ]; then
+        case "$LTE_CTRL_DEV" in
+            /dev/cdc-wdm*)
+                if command -v qmicli &>/dev/null && qmicli -d "$LTE_CTRL_DEV" --dms-get-manufacturer &>/dev/null 2>&1; then
+                    LTE_PROTOCOL="qmi"
+                elif command -v mbimcli &>/dev/null; then
+                    LTE_PROTOCOL="mbim"
+                else
+                    LTE_PROTOCOL="cdc"
+                fi
+                ;;
+            /dev/ttyUSB*)
+                LTE_PROTOCOL="at"
+                ;;
+        esac
+    fi
+
+    # Find network interface
+    LTE_INTERFACE=$(get_modem_interface 2>/dev/null) || true
+
+    # Check if we found a modem
+    if [ -n "$LTE_VENDOR" ] || [ -n "$LTE_CTRL_DEV" ] || [ -n "$LTE_INTERFACE" ]; then
+        lte_success "LTE modem detected"
+        export LTE_VENDOR LTE_MODEL LTE_INTERFACE LTE_PROTOCOL LTE_CTRL_DEV
+        return 0
+    fi
+
+    lte_warn "No LTE modem detected"
+    return 1
+}
+
 # ============================================================
 # APN CONFIGURATION WITH AUTHENTICATION
 # ============================================================
@@ -500,19 +614,49 @@ configure_apn_nmcli() {
         export LTE_MODEM_DEVICE="$modem_device"
         export LTE_NM_CONNECTION="$con_name"
 
-        # Try to bring up the connection immediately
+        # Try to bring up the connection with retry logic
         lte_log "Activating LTE connection..."
-        if nmcli con up "$con_name" 2>&1; then
-            lte_success "LTE connection '$con_name' activated"
-        else
-            lte_warn "Failed to activate connection immediately (may need modem init)"
-            lte_log "  Connection will auto-connect when modem is ready"
-        fi
+        local activation_success=false
+        local retry_count=0
+        local max_retries=3
+
+        while [ "$retry_count" -lt "$max_retries" ]; do
+            local activation_output
+            activation_output=$(nmcli con up "$con_name" 2>&1)
+            local activation_rc=$?
+
+            if [ "$activation_rc" -eq 0 ]; then
+                lte_success "LTE connection '$con_name' activated"
+                activation_success=true
+                break
+            else
+                retry_count=$((retry_count + 1))
+                if [ "$retry_count" -lt "$max_retries" ]; then
+                    lte_warn "Activation attempt $retry_count failed, retrying in 3s..."
+                    lte_log "  Error: $activation_output"
+                    sleep 3
+                else
+                    lte_warn "Failed to activate connection after $max_retries attempts"
+                    lte_log "  Last error: $activation_output"
+                    lte_log "  Connection will auto-connect when modem is ready"
+                fi
+            fi
+        done
 
         # Try to get the network interface that will be used
         local net_iface
+        if [ "$activation_success" = true ]; then
+            # Wait a moment for interface to appear
+            sleep 2
+        fi
         net_iface=$(get_modem_interface 2>/dev/null)
         [ -n "$net_iface" ] && export LTE_INTERFACE="$net_iface"
+
+        # Show connection status
+        lte_log "Connection status:"
+        nmcli con show "$con_name" 2>/dev/null | grep -E "^connection\.(id|type|interface-name|autoconnect)" | while read -r line; do
+            lte_log "  $line"
+        done
 
         return 0
     fi
