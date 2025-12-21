@@ -1519,6 +1519,210 @@ find_best_working_channel() {
 }
 
 # ============================================================
+# 2.4GHz INTELLIGENT CHANNEL SELECTION
+# ============================================================
+
+build_24ghz_priority_list() {
+    # Build priority list of 2.4GHz channel+bandwidth combinations
+    # Only 3 non-overlapping channels: 1, 6, 11
+    # Sorted by throughput: 40MHz > 20MHz
+    #
+    # Args:
+    #   $1 - Country code
+    #
+    # Output: List of "channel:bandwidth:ht_mode" entries
+
+    local country="${1:-US}"
+    local priority_list=""
+
+    # Tier 1: 40MHz on non-overlapping channels
+    # Channel 1 with HT40+ (uses 1-5)
+    # Channel 6 with HT40+ or HT40- (uses 6-10 or 2-6)
+    # Channel 11 with HT40- (uses 7-11)
+    priority_list="1:40:HT40+ 6:40:HT40- 11:40:HT40-"
+
+    # Tier 2: 20MHz fallback (always works)
+    priority_list="$priority_list 1:20:HT20 6:20:HT20 11:20:HT20"
+
+    echo "$priority_list"
+}
+
+try_24ghz_channel_combination() {
+    # Try a specific 2.4GHz channel+bandwidth combination
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Channel (1, 6, 11)
+    #   $3 - Bandwidth (20, 40)
+    #   $4 - HT mode (HT20, HT40+, HT40-)
+    #   $5 - Country code
+    #
+    # Returns: 0 if success, 1 if failed
+
+    local iface="$1"
+    local channel="$2"
+    local bandwidth="$3"
+    local ht_mode="$4"
+    local country="${5:-US}"
+    local test_conf="/tmp/hostapd-24ghz-test-$$.conf"
+    local test_pid="/run/hostapd-24ghz-test-$$.pid"
+
+    log_info "    Trying channel $channel @ ${bandwidth}MHz ($ht_mode)..."
+
+    # Build HT capabilities
+    local ht_capab=""
+    case "$ht_mode" in
+        HT40+) ht_capab="[HT40+][SHORT-GI-20][SHORT-GI-40]" ;;
+        HT40-) ht_capab="[HT40-][SHORT-GI-20][SHORT-GI-40]" ;;
+        HT20)  ht_capab="[SHORT-GI-20]" ;;
+        *)     ht_capab="[SHORT-GI-20]" ;;
+    esac
+
+    # Stop any existing test hostapd
+    pkill -f "hostapd.*hostapd-24ghz-test" 2>/dev/null || true
+    sleep 1
+
+    # Create minimal test config
+    cat > "$test_conf" << EOF
+interface=$iface
+driver=nl80211
+ctrl_interface=/var/run/hostapd-24ghz-test
+ssid=test-24ghz-validation
+hw_mode=g
+channel=$channel
+country_code=$country
+ieee80211d=1
+ieee80211n=1
+ht_capab=$ht_capab
+wmm_enabled=1
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+wpa_passphrase=test12345678
+EOF
+
+    # Add WiFi 6 on 2.4GHz if available
+    if check_hostapd_supports_wifi6 2>/dev/null; then
+        cat >> "$test_conf" << EOF
+ieee80211ax=1
+EOF
+    fi
+
+    # Try to start hostapd
+    if hostapd -B -P "$test_pid" "$test_conf" 2>/dev/null; then
+        # Wait and validate
+        if validate_hostapd_connection "$iface" "$test_pid" 8; then
+            log_info "    ✓ Channel $channel @ ${bandwidth}MHz ($ht_mode) works!"
+
+            # Stop test hostapd
+            if [ -f "$test_pid" ]; then
+                kill $(cat "$test_pid") 2>/dev/null || true
+            fi
+            rm -f "$test_conf" "$test_pid"
+
+            # Export working combination
+            export WORKING_24GHZ_CHANNEL="$channel"
+            export WORKING_24GHZ_BANDWIDTH="$bandwidth"
+            export WORKING_24GHZ_HT_MODE="$ht_mode"
+            export WORKING_24GHZ_HT_CAPAB="$ht_capab"
+
+            return 0
+        fi
+    fi
+
+    # Cleanup on failure
+    pkill -f "hostapd.*hostapd-24ghz-test" 2>/dev/null || true
+    rm -f "$test_conf" "$test_pid"
+
+    log_warn "    ✗ Channel $channel @ ${bandwidth}MHz ($ht_mode) failed"
+    return 1
+}
+
+find_best_working_24ghz_channel() {
+    # Find the best working 2.4GHz channel+bandwidth combination
+    #
+    # This function:
+    #   1. Builds priority list (40MHz > 20MHz)
+    #   2. Scans for congestion on channels 1, 6, 11
+    #   3. Tries each combination with validation
+    #   4. Returns first working combination
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Country code
+    #
+    # Exports: WORKING_24GHZ_CHANNEL, WORKING_24GHZ_BANDWIDTH, etc.
+
+    local iface="$1"
+    local country="${2:-US}"
+
+    log_info "  Finding best working 2.4GHz channel+bandwidth combination..."
+
+    # Build priority list
+    local priority_list
+    priority_list=$(build_24ghz_priority_list "$country")
+
+    # Scan for congestion
+    local scan_results=""
+    if ip link set "$iface" up 2>/dev/null; then
+        sleep 1
+        scan_results=$(iw dev "$iface" scan 2>/dev/null) || true
+    fi
+
+    # Sort by congestion within same bandwidth tier
+    local sorted_list=""
+    for entry in $priority_list; do
+        local ch bw ht_mode
+        ch=$(echo "$entry" | cut -d: -f1)
+        bw=$(echo "$entry" | cut -d: -f2)
+        ht_mode=$(echo "$entry" | cut -d: -f3)
+
+        # Count APs on this channel (2.4GHz freq = 2407 + ch*5)
+        local freq ap_count
+        freq=$((2407 + ch * 5))
+        ap_count=$(echo "$scan_results" | grep -c "freq: $freq" 2>/dev/null) || ap_count=0
+
+        sorted_list="$sorted_list $bw:$ap_count:$ch:$ht_mode"
+    done
+
+    # Sort by bandwidth (desc) then AP count (asc)
+    sorted_list=$(echo "$sorted_list" | tr ' ' '\n' | sort -t: -k1 -rn -k2 -n | tr '\n' ' ')
+
+    log_info "    Testing channel+bandwidth combinations..."
+
+    # Try each combination
+    for entry in $sorted_list; do
+        [ -z "$entry" ] && continue
+        local bw ap_count ch ht_mode
+        bw=$(echo "$entry" | cut -d: -f1)
+        ap_count=$(echo "$entry" | cut -d: -f2)
+        ch=$(echo "$entry" | cut -d: -f3)
+        ht_mode=$(echo "$entry" | cut -d: -f4)
+
+        [ -z "$ch" ] || [ -z "$bw" ] && continue
+
+        if try_24ghz_channel_combination "$iface" "$ch" "$bw" "$ht_mode" "$country"; then
+            log_info "  Selected: Channel $ch @ ${bw}MHz ($ht_mode)"
+            return 0
+        fi
+    done
+
+    # Fallback: Try channel 6 @ 20MHz (most compatible)
+    log_warn "  All combinations failed, trying safe fallback..."
+    if try_24ghz_channel_combination "$iface" "6" "20" "HT20" "$country"; then
+        return 0
+    fi
+
+    # Last resort: Channel 1 @ 20MHz
+    if try_24ghz_channel_combination "$iface" "1" "20" "HT20" "$country"; then
+        return 0
+    fi
+
+    log_error "  No working 2.4GHz channel+bandwidth combination found!"
+    return 1
+}
+
+# ============================================================
 # HOSTAPD CONFIGURATION GENERATORS
 # ============================================================
 
@@ -1584,17 +1788,29 @@ generate_hostapd_24ghz() {
     log_info "  Bridge: $bridge"
     log_info "  Country: $effective_country (effective)"
 
-    # Auto channel selection
+    # HT capabilities - will be set by validation or detection
+    local ht_capab=""
+    local used_validated_settings=false
+
+    # Auto channel selection with intelligent validation
     if [ "$channel" = "auto" ]; then
-        channel=6  # Default if scan not available
-        if [ -x "$SCRIPT_DIR/network-interface-detector.sh" ]; then
-            channel=$("$SCRIPT_DIR/network-interface-detector.sh" scan-24ghz "$iface" 2>/dev/null | tail -1) || channel=6
+        log_info "  Using intelligent 2.4GHz channel selection with validation..."
+
+        if find_best_working_24ghz_channel "$iface" "$effective_country"; then
+            channel="$WORKING_24GHZ_CHANNEL"
+            ht_capab="$WORKING_24GHZ_HT_CAPAB"
+            used_validated_settings=true
+            log_info "  ✓ Validated: Channel $channel @ ${WORKING_24GHZ_BANDWIDTH}MHz ($WORKING_24GHZ_HT_MODE)"
+        else
+            log_warn "  Intelligent selection failed, using safe defaults"
+            channel=6
         fi
     fi
 
-    # Detect capabilities (pass channel for HT40+/- selection)
-    local ht_capab
-    ht_capab=$(detect_ht_capabilities "$iface" "$channel")
+    # Detect capabilities if not already validated (pass channel for HT40+/- selection)
+    if [ "$used_validated_settings" = false ]; then
+        ht_capab=$(detect_ht_capabilities "$iface" "$channel")
+    fi
 
     # Detect driver for capability restrictions
     local wifi_driver
