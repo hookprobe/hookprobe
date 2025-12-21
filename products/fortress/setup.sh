@@ -3758,6 +3758,13 @@ setup_lte_failover() {
         fi
     fi
 
+    # Ensure ModemManager is started and enabled
+    log_lte "Enabling ModemManager service..."
+    systemctl enable ModemManager 2>/dev/null || true
+    systemctl start ModemManager 2>/dev/null || true
+    # Give ModemManager time to detect modem
+    sleep 2
+
     # Detect LTE modem
     log_lte "Detecting LTE modem..."
     if detect_lte_modem; then
