@@ -486,8 +486,8 @@ configure_apn_nmcli() {
             ;;
     esac
 
-    # Add IPv4 configuration
-    nmcli_cmd="$nmcli_cmd ipv4.method auto"
+    # Add IPv4 configuration and auto-connect
+    nmcli_cmd="$nmcli_cmd ipv4.method auto connection.autoconnect yes"
 
     # Execute
     lte_log "Creating connection: $con_name"
@@ -499,6 +499,15 @@ configure_apn_nmcli() {
         # Export connection details
         export LTE_MODEM_DEVICE="$modem_device"
         export LTE_NM_CONNECTION="$con_name"
+
+        # Try to bring up the connection immediately
+        lte_log "Activating LTE connection..."
+        if nmcli con up "$con_name" 2>&1; then
+            lte_success "LTE connection '$con_name' activated"
+        else
+            lte_warn "Failed to activate connection immediately (may need modem init)"
+            lte_log "  Connection will auto-connect when modem is ready"
+        fi
 
         # Try to get the network interface that will be used
         local net_iface
