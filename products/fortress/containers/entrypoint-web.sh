@@ -117,6 +117,23 @@ fi
 mkdir -p "${FORTRESS_DATA_DIR}"/{reports,cache,uploads} 2>/dev/null || true
 mkdir -p /app/logs 2>/dev/null || true
 
+# ============================================================
+# SECRET FILE EXPANSION
+# ============================================================
+# Docker/Podman secrets are mounted as files - expand them to env vars
+if [ -f "${DATABASE_PASSWORD_FILE:-}" ]; then
+    export DATABASE_PASSWORD=$(cat "${DATABASE_PASSWORD_FILE}")
+    log_info "Loaded database password from secret file"
+fi
+if [ -f "${REDIS_PASSWORD_FILE:-}" ]; then
+    export REDIS_PASSWORD=$(cat "${REDIS_PASSWORD_FILE}")
+    log_info "Loaded Redis password from secret file"
+fi
+if [ -f "${FORTRESS_SECRET_KEY_FILE:-}" ]; then
+    export FORTRESS_SECRET_KEY=$(cat "${FORTRESS_SECRET_KEY_FILE}")
+    log_info "Loaded Flask secret key from secret file"
+fi
+
 # Wait for database to be ready (if using PostgreSQL)
 if [ -n "${DATABASE_HOST}" ]; then
     log_info "Waiting for database..."
