@@ -2001,8 +2001,10 @@ generate_systemd_services() {
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
 After=network.target openvswitch-switch.service ${dev_unit_24ghz}
-Wants=network.target ${dev_unit_24ghz}
-Requires=openvswitch-switch.service
+Wants=network.target openvswitch-switch.service ${dev_unit_24ghz}
+# Rate limit restarts
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=forking
@@ -2022,8 +2024,6 @@ ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bri
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
@@ -2044,8 +2044,10 @@ EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
 After=network.target openvswitch-switch.service ${dev_unit_5ghz}
-Wants=network.target ${dev_unit_5ghz}
-Requires=openvswitch-switch.service
+Wants=network.target openvswitch-switch.service ${dev_unit_5ghz}
+# Rate limit restarts
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=forking
@@ -2065,8 +2067,6 @@ ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${brid
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
