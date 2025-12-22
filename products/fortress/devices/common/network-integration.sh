@@ -760,16 +760,19 @@ setup_lte_complete() {
 }
 
 setup_wan_failover() {
-    # Configure WAN failover from Ethernet to LTE with IP SLA health monitoring
+    # Configure WAN failover using Policy-Based Routing (PBR)
     #
-    # This function sets up:
-    #   1. Route metrics (Primary=100, LTE=200) for kernel-level fallback
-    #   2. IP SLA service for active health monitoring (ping-based)
+    # This function sets up intelligent failover using:
+    #   1. Multiple routing tables (one per WAN)
+    #   2. Firewall marks (fwmark) for traffic classification
+    #   3. IP rules to direct marked traffic
+    #   4. Hysteresis to prevent route flapping
+    #   5. Sticky sessions (connections survive failover)
     #
-    # IP SLA solves the problem where wired WAN has link but no traffic:
-    #   - Metric-based failover only works when interface goes DOWN
-    #   - IP SLA detects when primary has link but no actual connectivity
-    #   - IP SLA removes/downgrades primary route when health checks fail
+    # Unlike simple metric-based failover, PBR:
+    #   - Detects when wired WAN has link but no traffic
+    #   - Keeps existing connections alive during failover
+    #   - Allows seamless switchover without socket drops
     #
     # Args:
     #   $1 - Primary WAN interface
@@ -781,155 +784,157 @@ setup_wan_failover() {
     [ -z "$primary_wan" ] && { log_error "[WAN] Primary WAN interface required"; return 1; }
     [ -z "$lte_iface" ] && { log_warn "[WAN] No LTE interface for failover"; return 1; }
 
-    log_step "[WAN] Configuring WAN failover with IP SLA..."
-    log_info "[WAN]   Primary: $primary_wan (metric 100)"
-    log_info "[WAN]   Backup:  $lte_iface (metric 200)"
+    log_step "[WAN] Configuring Policy-Based Routing (PBR) failover..."
+    log_info "[WAN]   Primary: $primary_wan (table wan_primary)"
+    log_info "[WAN]   Backup:  $lte_iface (table wan_backup)"
 
-    # Step 1: Configure route metrics via NetworkManager
+    # Step 1: Get gateways
+    local primary_gw backup_gw
     if command -v nmcli &>/dev/null; then
-        log_info "[WAN] Setting route metrics..."
-
-        # Configure primary WAN metric
-        local primary_con
-        primary_con=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep ":${primary_wan}$" | cut -d: -f1 | head -1)
-        if [ -n "$primary_con" ]; then
-            nmcli con mod "$primary_con" ipv4.route-metric 100 2>/dev/null || true
-            log_info "[WAN]   Set $primary_con metric to 100"
-        fi
-
-        # Configure LTE metric (fix default 700 to 200)
-        local lte_con="fts-lte"
-        if nmcli con show "$lte_con" &>/dev/null; then
-            nmcli con mod "$lte_con" ipv4.route-metric 200 2>/dev/null || true
-            log_info "[WAN]   Set $lte_con metric to 200"
-        fi
-
-        # Reactivate BOTH connections to apply new metrics
-        log_info "[WAN] Reactivating connections to apply metrics..."
-        [ -n "$primary_con" ] && nmcli con up "$primary_con" 2>/dev/null || true
-        nmcli con show --active 2>/dev/null | grep -q "$lte_con" && nmcli con up "$lte_con" 2>/dev/null || true
+        primary_gw=$(nmcli -t -f IP4.GATEWAY device show "$primary_wan" 2>/dev/null | cut -d: -f2)
+        backup_gw=$(nmcli -t -f IP4.GATEWAY device show "$lte_iface" 2>/dev/null | cut -d: -f2)
     fi
 
-    # Step 2: Create IP SLA configuration
-    log_info "[WAN] Creating IP SLA configuration..."
+    # Step 2: Create PBR configuration
+    log_info "[WAN] Creating PBR configuration..."
     mkdir -p /etc/hookprobe
     cat > /etc/hookprobe/wan-failover.conf << EOF
-# Fortress WAN Failover Configuration with IP SLA
+# Fortress WAN Failover Configuration - Policy-Based Routing (PBR)
 # Generated: $(date -Iseconds)
 #
-# IP SLA (Service Level Agreement) monitors actual traffic, not just link state.
-# This detects when primary WAN has carrier but no actual connectivity.
+# PBR Architecture:
+#   - Table 100 (wan_primary): Routes via primary WAN
+#   - Table 200 (wan_backup):  Routes via backup WAN
+#   - nftables marks packets based on active WAN
+#   - Conntrack preserves marks for sticky sessions
+#
+# This allows seamless failover without breaking active connections.
 
 # Interface configuration
 PRIMARY_IFACE="$primary_wan"
 BACKUP_IFACE="$lte_iface"
 
-# Route metrics (lower = preferred)
-PRIMARY_METRIC=100
-BACKUP_METRIC=200
+# Gateway addresses (auto-discovered if empty)
+PRIMARY_GATEWAY="${primary_gw:-}"
+BACKUP_GATEWAY="${backup_gw:-}"
 
 # Health check targets (multiple for reliability)
-# Uses ping through specific interface, not just any route
-HEALTH_TARGETS="8.8.8.8 1.1.1.1 9.9.9.9"
+PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
 
 # Timing
 CHECK_INTERVAL=5        # Seconds between health checks
-PING_TIMEOUT=2          # Timeout for each ping
-PING_COUNT=1            # Pings per target
+PING_TIMEOUT=3          # Timeout for each ping
+PING_COUNT=2            # Pings per target
 
-# Failover thresholds (hysteresis to prevent flapping)
-FAIL_THRESHOLD=3        # Consecutive failures before failover
-RECOVER_THRESHOLD=5     # Consecutive successes before failback
+# Hysteresis thresholds (prevent flapping)
+UP_THRESHOLD=3          # Consecutive successes to mark UP
+DOWN_THRESHOLD=3        # Consecutive failures to mark DOWN
+
+# Debug mode (set to 1 for verbose logging)
+DEBUG=0
 EOF
 
-    log_success "[WAN] IP SLA configuration created at /etc/hookprobe/wan-failover.conf"
+    log_success "[WAN] PBR configuration created at /etc/hookprobe/wan-failover.conf"
 
-    # Step 3: Install and enable IP SLA systemd service
-    install_ip_sla_service
+    # Step 3: Install and enable PBR failover service
+    install_pbr_failover_service
 
-    log_info "[WAN] Failover configured with IP SLA health monitoring"
-    log_info "[WAN]   - Metric failover: automatic kernel routing"
-    log_info "[WAN]   - IP SLA: detects 'link up but no traffic' scenarios"
+    log_info "[WAN] Failover configured with Policy-Based Routing"
+    log_info "[WAN]   - Routing tables: wan_primary (100), wan_backup (200)"
+    log_info "[WAN]   - Sticky sessions: connections survive failover"
+    log_info "[WAN]   - Hysteresis: prevents route flapping"
     return 0
 }
 
-install_ip_sla_service() {
-    # Install systemd service for IP SLA-based WAN health monitoring
+install_pbr_failover_service() {
+    # Install systemd service for PBR-based WAN failover
     #
-    # This service continuously monitors WAN health by pinging through
-    # specific interfaces and handles failover when traffic fails.
+    # Uses Policy-Based Routing (PBR) with nftables marking for
+    # intelligent failover that preserves active connections.
     #
-    # REQUIRES: root privileges (writes to /etc/systemd/system/)
+    # REQUIRES: root privileges, nftables
 
     # Check for root
     if [ "$EUID" -ne 0 ] && [ "$(id -u)" -ne 0 ]; then
-        log_error "[IP-SLA] This function requires root privileges"
-        log_error "[IP-SLA] Run with: sudo install_ip_sla_service"
+        log_error "[PBR] This function requires root privileges"
+        return 1
+    fi
+
+    # Ensure nftables is available
+    if ! command -v nft &>/dev/null; then
+        log_error "[PBR] nftables (nft) required for PBR failover"
+        log_error "[PBR] Install with: apt install nftables"
         return 1
     fi
 
     # Use installed path, not source directory
     local installed_path="/opt/hookprobe/fortress/devices/common"
-    local wan_monitor="${installed_path}/wan-failover-monitor.sh"
+    local pbr_script="${installed_path}/wan-failover-pbr.sh"
 
     # Check if script exists in installed location OR source location
-    if [ ! -x "$wan_monitor" ]; then
+    if [ ! -x "$pbr_script" ]; then
         # Try source directory as fallback (during development)
-        if [ -x "$SCRIPT_DIR/wan-failover-monitor.sh" ]; then
-            # Copy to installed location
+        if [ -x "$SCRIPT_DIR/wan-failover-pbr.sh" ]; then
             mkdir -p "$installed_path"
-            cp "$SCRIPT_DIR/wan-failover-monitor.sh" "$wan_monitor"
-            chmod +x "$wan_monitor"
-            log_info "[IP-SLA] Copied wan-failover-monitor.sh to $installed_path"
+            cp "$SCRIPT_DIR/wan-failover-pbr.sh" "$pbr_script"
+            chmod +x "$pbr_script"
+            log_info "[PBR] Copied wan-failover-pbr.sh to $installed_path"
         else
-            log_warn "[IP-SLA] wan-failover-monitor.sh not found"
-            log_warn "[IP-SLA] Expected at: $wan_monitor"
+            log_warn "[PBR] wan-failover-pbr.sh not found"
+            log_warn "[PBR] Expected at: $pbr_script"
             return 1
         fi
     fi
 
-    log_info "[IP-SLA] Installing WAN health monitoring service..."
+    log_info "[PBR] Installing PBR WAN failover service..."
+
+    # Create runtime directory
+    mkdir -p /run/fortress
 
     cat > /etc/systemd/system/fts-wan-failover.service << EOF
 [Unit]
-Description=HookProbe Fortress WAN IP SLA Health Monitor
-Documentation=man:wan-failover-monitor(8)
-After=network-online.target NetworkManager.service
+Description=HookProbe Fortress PBR WAN Failover
+Documentation=https://hookprobe.com/docs/fortress/wan-failover
+After=network-online.target NetworkManager.service nftables.service
 Wants=network-online.target
+Requires=nftables.service
 ConditionPathExists=/etc/hookprobe/wan-failover.conf
 
 [Service]
 Type=simple
-ExecStart=$wan_monitor start
-Restart=always
+ExecStartPre=$pbr_script setup
+ExecStart=$pbr_script start
+ExecStop=$pbr_script stop
+ExecStopPost=$pbr_script cleanup
+Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
+# Runtime directory
+RuntimeDirectory=fortress
+RuntimeDirectoryMode=0755
+
 # Security hardening
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=/var/lib/fortress /var/log/hookprobe /proc/sys/net
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # Create required directories
-    mkdir -p /var/lib/fortress
-    mkdir -p /var/log/hookprobe
-
     # Enable and start service
     systemctl daemon-reload
     systemctl enable fts-wan-failover.service 2>/dev/null || true
 
-    # Start service if both interfaces are available
+    # Run setup and start if primary interface exists
     if [ -d "/sys/class/net/${PRIMARY_IFACE:-eth0}" ]; then
+        # Run initial setup
+        "$pbr_script" setup 2>/dev/null || true
         systemctl start fts-wan-failover.service 2>/dev/null || true
-        log_success "[IP-SLA] WAN health monitor service started"
+        log_success "[PBR] WAN failover service started"
     else
-        log_info "[IP-SLA] WAN health monitor will start when interfaces are ready"
+        log_info "[PBR] WAN failover will start when interfaces are ready"
     fi
 
     return 0
