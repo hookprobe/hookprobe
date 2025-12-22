@@ -1093,6 +1093,19 @@ create_wifi_services_stable() {
 
     local ovs_bridge="${OVS_BRIDGE:-43ess}"
 
+    # Find hostapd binary - check common locations
+    local hostapd_bin=""
+    for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
+        if [ -x "$path" ]; then
+            hostapd_bin="$path"
+            break
+        fi
+    done
+    if [ -z "$hostapd_bin" ]; then
+        hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+    fi
+    log_info "  Using hostapd: $hostapd_bin"
+
     # 2.4GHz service
     if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
         local dev_unit="sys-subsystem-net-devices-${WIFI_24GHZ_STABLE}.device"
@@ -1112,7 +1125,7 @@ ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${WIFI_24GHZ
 ExecStartPre=-/sbin/ip link set ${WIFI_24GHZ_STABLE} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${WIFI_24GHZ_STABLE} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
+ExecStart=${hostapd_bin} -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
 ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${WIFI_24GHZ_STABLE}
 Restart=on-failure
 RestartSec=10
@@ -1144,7 +1157,7 @@ ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -e /sys/class/net/${WIFI_5GHZ_
 ExecStartPre=-/sbin/ip link set ${WIFI_5GHZ_STABLE} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${WIFI_5GHZ_STABLE} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
+ExecStart=${hostapd_bin} -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
 ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${WIFI_5GHZ_STABLE}
 Restart=on-failure
 RestartSec=10
