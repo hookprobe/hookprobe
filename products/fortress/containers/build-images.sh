@@ -63,6 +63,13 @@ podman build $NO_CACHE \
     .
 
 echo ""
+echo "=== Building fts-lstm ==="
+podman build $NO_CACHE \
+    -f products/fortress/containers/Containerfile.lstm \
+    -t localhost/fts-lstm:latest \
+    .
+
+echo ""
 echo "========================================"
 echo "  All images built successfully!"
 echo "========================================"
