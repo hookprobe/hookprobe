@@ -43,6 +43,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "\n${CYAN}${BOLD}==> $1${NC}"; }
@@ -332,10 +333,35 @@ collect_configuration() {
     # Interactive mode - prompt for any missing configuration
     # ============================================================
 
-    # Network mode - nftables filter is the only implemented mode
-    # VLAN mode was planned but not implemented, so we default to filter
-    NETWORK_MODE="filter"
-    log_info "Network mode: nftables filter (per-device policies)"
+    # Network mode selection
+    echo ""
+    echo -e "${BOLD}NETWORK MODE CONFIGURATION${NC}"
+    echo ""
+    echo "Select network security architecture:"
+    echo ""
+    echo "  1) Filter Mode (default)"
+    echo "     - Simple nftables-based filtering"
+    echo "     - All clients on same 10.200.0.0/24 subnet"
+    echo "     - Admin portal accessible from WiFi clients"
+    echo ""
+    echo "  2) VLAN Mode (enterprise security)"
+    echo "     - OVS port-based VLAN segmentation"
+    echo "     - VLAN 100: LAN (10.200.0.0/24) - WiFi clients, general devices"
+    echo "     - VLAN 200: MGMT (10.200.100.0/24) - Admin access only"
+    echo "     - Admin portal isolated from WiFi clients"
+    echo "     - Requires dedicated management port or Cloudflare tunnel"
+    echo ""
+    read -p "Select network mode [1]: " net_mode_choice
+    case "${net_mode_choice:-1}" in
+        2|vlan|VLAN)
+            NETWORK_MODE="vlan"
+            log_info "Network mode: VLAN (enterprise security, LAN isolated from management)"
+            ;;
+        *)
+            NETWORK_MODE="filter"
+            log_info "Network mode: Filter (simple nftables policies)"
+            ;;
+    esac
 
     # LAN subnet (only if not set via FORTRESS_NETWORK_PREFIX)
     if [ -z "${LAN_SUBNET_MASK:-}" ]; then
@@ -781,8 +807,39 @@ setup_network() {
             log_warn "Clients may not have internet access"
         fi
 
-        # Configure DHCP on OVS LAN port
-        setup_ovs_dhcp
+        # Configure network mode (VLAN or filter-based)
+        local vlan_script="${DEVICES_DIR}/common/ovs-vlan-setup.sh"
+
+        if [ "$NETWORK_MODE" = "vlan" ] && [ -f "$vlan_script" ]; then
+            # VLAN mode: Use OVS port-based VLAN segmentation
+            # VLAN 100 = LAN (10.200.0.0/24) - WiFi clients, regular devices
+            # VLAN 200 = MGMT (10.200.100.0/24) - Management access, container network
+            log_info "Configuring VLAN-based network segmentation..."
+
+            chmod +x "$vlan_script"
+
+            # Export MGMT interface for VLAN script (detected by network-integration.sh)
+            export MGMT_INTERFACE="${MGMT_INTERFACE:-}"
+            export MGMT_ENABLED="${MGMT_ENABLED:-false}"
+            export OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+
+            if "$vlan_script" setup; then
+                log_success "VLAN network configured"
+                log_info "  VLAN 100 (LAN):  10.200.0.0/24 - WiFi clients, LAN devices"
+                log_info "  VLAN 200 (MGMT): 10.200.100.0/24 - Management access"
+                if [ -n "$MGMT_INTERFACE" ]; then
+                    log_info "  MGMT port: $MGMT_INTERFACE (trunk mode)"
+                fi
+            else
+                log_error "VLAN setup failed - falling back to filter mode"
+                NETWORK_MODE="filter"
+                setup_ovs_dhcp
+            fi
+        else
+            # Filter mode: Simple nftables-based filtering (default)
+            log_info "Using filter-based network mode..."
+            setup_ovs_dhcp
+        fi
 
     else
         log_error "OVS network manager not found: $ovs_script"
@@ -922,11 +979,119 @@ setup_network() {
         fi
     fi
 
+    # Validate network setup
+    validate_network_setup
+
     log_info "OVS network infrastructure configured"
     log_info "  OpenFlow: Tier isolation rules installed"
     log_info "  Mirror:   Traffic mirroring to QSecBit enabled"
     log_info "  sFlow:    Flow export to 127.0.0.1:6343"
     log_info "  IPFIX:    Flow export to 127.0.0.1:4739"
+}
+
+# Validate network setup and report issues
+validate_network_setup() {
+    log_step "Validating Network Configuration"
+    local errors=0
+    local warnings=0
+
+    # Check OVS bridge exists and is up
+    if ! ovs-vsctl br-exists "${OVS_BRIDGE:-FTS}" 2>/dev/null; then
+        log_error "OVS bridge ${OVS_BRIDGE:-FTS} does not exist"
+        errors=$((errors + 1))
+    elif ! ip link show "${OVS_BRIDGE:-FTS}" 2>/dev/null | grep -q "state UP"; then
+        log_warn "OVS bridge ${OVS_BRIDGE:-FTS} is not UP"
+        warnings=$((warnings + 1))
+    else
+        log_info "OVS bridge: ${OVS_BRIDGE:-FTS} (UP)"
+    fi
+
+    # Check gateway IP is configured
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        # VLAN mode: check both vlan100 and vlan200 interfaces
+        if ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1"; then
+            log_info "VLAN 100 (LAN): 10.200.0.1 configured"
+        else
+            log_warn "VLAN 100 gateway not configured"
+            warnings=$((warnings + 1))
+        fi
+        if ip addr show vlan200 2>/dev/null | grep -q "10.200.100.1"; then
+            log_info "VLAN 200 (MGMT): 10.200.100.1 configured"
+        else
+            log_warn "VLAN 200 gateway not configured"
+            warnings=$((warnings + 1))
+        fi
+    else
+        # Filter mode: check bridge has gateway IP
+        if ip addr show "${OVS_BRIDGE:-FTS}" 2>/dev/null | grep -q "10.200.0.1"; then
+            log_info "LAN gateway: 10.200.0.1"
+        else
+            log_warn "LAN gateway IP not configured on bridge"
+            warnings=$((warnings + 1))
+        fi
+    fi
+
+    # Check IP forwarding
+    if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ]; then
+        log_info "IP forwarding: enabled"
+    else
+        log_warn "IP forwarding: disabled (clients won't have internet)"
+        warnings=$((warnings + 1))
+    fi
+
+    # Check dnsmasq is running
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        log_info "DHCP server: dnsmasq (running)"
+    elif systemctl is-active --quiet fortress-dnsmasq 2>/dev/null; then
+        log_info "DHCP server: fortress-dnsmasq (running)"
+    else
+        log_warn "DHCP server: not running"
+        warnings=$((warnings + 1))
+    fi
+
+    # Check NAT is configured (if WAN interface detected)
+    if [ -n "$NET_WAN_IFACE" ]; then
+        if iptables -t nat -L POSTROUTING 2>/dev/null | grep -q "MASQUERADE"; then
+            log_info "NAT: configured (WAN: $NET_WAN_IFACE)"
+        elif nft list tables 2>/dev/null | grep -q "nat"; then
+            log_info "NAT: configured via nftables (WAN: $NET_WAN_IFACE)"
+        else
+            log_warn "NAT: not configured (clients may not have internet)"
+            warnings=$((warnings + 1))
+        fi
+    fi
+
+    # Check WiFi AP status
+    if [ -n "$WIFI_SSID" ]; then
+        local wifi_running=false
+        if systemctl is-active --quiet fts-hostapd-24 2>/dev/null; then
+            wifi_running=true
+        fi
+        if systemctl is-active --quiet fts-hostapd-5g 2>/dev/null; then
+            wifi_running=true
+        fi
+        if [ "$wifi_running" = true ]; then
+            log_info "WiFi AP: running (SSID: $WIFI_SSID)"
+        else
+            log_warn "WiFi AP: not running yet (will start after installation)"
+            # This is expected during install, services start after
+        fi
+    fi
+
+    # Summary
+    echo ""
+    if [ $errors -gt 0 ]; then
+        log_error "Network validation: $errors error(s), $warnings warning(s)"
+        log_error "Critical network issues detected - installation may fail"
+        return 1
+    elif [ $warnings -gt 0 ]; then
+        log_warn "Network validation: $warnings warning(s)"
+        log_info "Some features may not work until issues are resolved"
+        return 0
+    else
+        log_success "Network validation: passed"
+        return 0
+    fi
 }
 
 # ============================================================
@@ -2416,9 +2581,23 @@ main() {
     echo -e "${GREEN}  HookProbe Fortress Installation Complete!${NC}"
     echo "════════════════════════════════════════════════════════════════"
     echo ""
-    echo "Access the admin portal at:"
-    echo -e "  ${CYAN}https://localhost:${WEB_PORT}${NC}"
+
+    # Access information based on network mode
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        echo "Access the admin portal:"
+        echo -e "  ${CYAN}From MGMT VLAN:${NC} https://10.200.100.1:${WEB_PORT}"
+        if [ -n "$MGMT_INTERFACE" ]; then
+            echo -e "  ${CYAN}MGMT Port:${NC}      $MGMT_INTERFACE (connect admin workstation here)"
+        fi
+        echo -e "  ${CYAN}Via Cloudflare:${NC} Configure tunnel for remote access"
+        echo ""
+        echo -e "${YELLOW}NOTE: WiFi clients CANNOT access admin portal (LAN isolated from MGMT)${NC}"
+    else
+        echo "Access the admin portal at:"
+        echo -e "  ${CYAN}https://10.200.0.1:${WEB_PORT}${NC}"
+    fi
     echo ""
+
     echo "Login credentials:"
     echo -e "  Username: ${BOLD}${ADMIN_USER}${NC}"
     echo -e "  Password: ${BOLD}(saved to ${CONFIG_DIR}/secrets/admin_password)${NC}"
@@ -2426,36 +2605,54 @@ main() {
     echo "To retrieve your admin password:"
     echo "  sudo cat ${CONFIG_DIR}/secrets/admin_password"
     echo ""
+
     if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PASSWORD" ]; then
         echo "WiFi Access Point:"
         echo -e "  SSID:     ${BOLD}${WIFI_SSID}${NC}"
         echo -e "  Password: ${BOLD}${WIFI_PASSWORD}${NC}"
         echo ""
     fi
-    echo "OVS Network Configuration:"
+
+    echo "Network Configuration:"
+    echo -e "  Mode:       ${BOLD}${NETWORK_MODE:-filter}${NC}"
     echo -e "  Bridge:     $OVS_BRIDGE (OVS with OpenFlow 1.3+)"
-    echo -e "  LAN Tier:   10.200.0.0/${LAN_SUBNET_MASK:-24}"
-    echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
+
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        echo ""
+        echo "VLAN Segmentation:"
+        echo -e "  VLAN 100 (LAN):  10.200.0.0/24 - WiFi clients, regular devices"
+        echo -e "  VLAN 200 (MGMT): 10.200.100.0/24 - Admin access, container network"
+        if [ -n "$MGMT_INTERFACE" ]; then
+            echo -e "  MGMT Port:       $MGMT_INTERFACE (trunk: native LAN + tagged MGMT)"
+        fi
+    else
+        echo -e "  LAN Subnet: 10.200.0.0/${LAN_SUBNET_MASK:-24}"
+        echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
+    fi
     echo ""
-    echo "Container Network Tiers (isolated via OpenFlow):"
-    echo "  Data Tier:     172.20.200.0/24 (postgres, redis) - NO internet"
-    echo "  Services Tier: 172.20.201.0/24 (web, dnsxai, dfs) - internet OK"
-    echo "  ML Tier:       172.20.202.0/24 (lstm-trainer) - NO internet"
-    echo "  Mgmt Tier:     172.20.203.0/24 (grafana, victoria) - NO internet"
+
+    echo "Container Network: 172.20.200.0/24 (isolated)"
     echo ""
+
     echo "Security Features:"
-    echo "  - OpenFlow tier isolation (containers can't reach unauthorized tiers)"
+    echo "  - OpenFlow tier isolation (containers can't reach unauthorized networks)"
     echo "  - Traffic mirroring to QSecBit (all traffic analyzed)"
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        echo "  - VLAN-based segmentation (LAN isolated from management)"
+    fi
     echo "  - sFlow/IPFIX export for ML analysis"
-    echo "  - QoS meters for rate limiting threats"
     echo "  - VXLAN tunnels ready for mesh connectivity"
     echo ""
+
     echo "Useful commands:"
     echo "  systemctl status fortress             # Check container status"
-    echo "  systemctl status fts-hostapd-*   # Check WiFi AP status"
+    echo "  systemctl status fts-hostapd-*        # Check WiFi AP status"
     echo "  ovs-vsctl show                        # View OVS bridge"
-    echo "  ovs-ofctl dump-flows $OVS_BRIDGE         # View OpenFlow rules"
-    echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        echo "  ${DEVICES_DIR}/common/ovs-vlan-setup.sh status"
+    else
+        echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"
+    fi
     echo ""
 }
 
