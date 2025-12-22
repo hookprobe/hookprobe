@@ -12,7 +12,6 @@ Target: Small businesses (flower shops, bakeries, retail, etc.)
 """
 
 import os
-from pathlib import Path
 from datetime import timedelta
 
 from flask import Flask, redirect, url_for
@@ -29,18 +28,9 @@ def create_app(config_class=Config):
 
     app.config.from_object(config_class)
 
-    # Secret key for sessions
-    if app.config.get('SECRET_KEY') is None:
-        secret_file = Path('/etc/hookprobe/secrets/fortress_secret_key')
-        try:
-            if secret_file.exists():
-                app.config['SECRET_KEY'] = secret_file.read_text().strip()
-            else:
-                app.config['SECRET_KEY'] = os.urandom(32)
-        except PermissionError:
-            # Container may not have access to secrets directory
-            # Fall back to random key (session will reset on restart)
-            app.config['SECRET_KEY'] = os.urandom(32)
+    # Secret key for sessions - from environment or generate random
+    if not app.config.get('SECRET_KEY'):
+        app.config['SECRET_KEY'] = os.urandom(32)
 
     # Session configuration
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)
