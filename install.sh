@@ -1954,6 +1954,12 @@ show_uninstall_menu() {
     echo -e "  ${BOLD}8${NC}) ${RED}NUCLEAR: Complete System Wipe${NC}"
     echo -e "     ${RED}Remove ALL HookProbe components from ALL tiers!${NC}"
     echo ""
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    echo -e " ${BOLD}99${NC}) ${RED}${BOLD}⚠️  FULL SYSTEM PURGE + REBOOT${NC}"
+    echo -e "     ${RED}Complete removal of EVERYTHING and automatic reboot${NC}"
+    echo -e "     ${DIM}Returns system to clean state for fresh install${NC}"
+    echo ""
     show_nav_footer
 }
 
@@ -2783,6 +2789,128 @@ uninstall_cleanup_everything() {
     fi
 }
 
+# Full system purge with reboot (Option 99)
+uninstall_full_purge_reboot() {
+    safe_clear
+    show_banner
+    echo ""
+    echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║            ⚠️  FULL SYSTEM PURGE + REBOOT  ⚠️                  ║${NC}"
+    echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will COMPLETELY remove ALL HookProbe components and reboot:${NC}"
+    echo ""
+    echo "  • All containers, images, pods, volumes, networks (Podman)"
+    echo "  • All systemd services and timers"
+    echo "  • All OVS bridges, VLANs, network interfaces"
+    echo "  • All Linux bridges (fortress, br-lan, etc.)"
+    echo "  • All udev rules (WiFi, LTE)"
+    echo "  • All configuration files and secrets"
+    echo "  • All data directories and databases"
+    echo "  • All log files"
+    echo "  • All sysctl and iptables/nftables rules"
+    echo "  • All management scripts"
+    echo ""
+    echo -e "${RED}${BOLD}THE SYSTEM WILL AUTOMATICALLY REBOOT AFTER PURGE${NC}"
+    echo ""
+    echo -e "${CYAN}This returns the system to a clean state for fresh install.${NC}"
+    echo ""
+
+    read -p "Type 'PURGE AND REBOOT' to confirm: " confirm
+
+    if [ "$confirm" != "PURGE AND REBOOT" ]; then
+        echo -e "${YELLOW}Purge cancelled${NC}"
+        return 1
+    fi
+
+    echo ""
+    echo -e "${CYAN}Starting full system purge...${NC}"
+
+    # Stop all services first
+    uninstall_stop_services
+
+    # Remove containers
+    uninstall_containers
+
+    # Remove images
+    uninstall_images
+
+    # Remove volumes
+    uninstall_volumes
+
+    # Remove networks
+    uninstall_networks
+
+    # Remove OVS
+    uninstall_ovs
+
+    # Remove bridges
+    uninstall_bridges
+
+    # Remove WiFi configuration
+    uninstall_wifi
+
+    # Run tier-specific uninstallers if available
+    [ -f "$SCRIPT_DIR/products/fortress/uninstall.sh" ] && bash "$SCRIPT_DIR/products/fortress/uninstall.sh" --purge --force 2>/dev/null || true
+    [ -f "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" ] && bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" --force 2>/dev/null || true
+    [ -f "$SCRIPT_DIR/products/sentinel/uninstall.sh" ] && bash "$SCRIPT_DIR/products/sentinel/uninstall.sh" --force 2>/dev/null || true
+
+    # Final cleanup
+    echo -e "${CYAN}Final cleanup...${NC}"
+
+    # Prune all podman artifacts
+    if command -v podman &>/dev/null; then
+        podman system prune -af --volumes 2>/dev/null || true
+    fi
+
+    # Remove routing tables
+    if [ -f /etc/iproute2/rt_tables ]; then
+        sed -i '/wan_primary/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/wan_backup/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/primary_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/backup_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+    fi
+
+    # Flush nftables
+    nft flush ruleset 2>/dev/null || true
+
+    # Remove all hookprobe directories
+    rm -rf /opt/hookprobe 2>/dev/null || true
+    rm -rf /etc/hookprobe 2>/dev/null || true
+    rm -rf /etc/fortress 2>/dev/null || true
+    rm -rf /var/lib/hookprobe 2>/dev/null || true
+    rm -rf /var/lib/fortress 2>/dev/null || true
+    rm -rf /var/log/hookprobe 2>/dev/null || true
+    rm -rf /var/backups/fortress 2>/dev/null || true
+    rm -rf /var/backups/hookprobe 2>/dev/null || true
+
+    # Remove udev rules
+    rm -f /etc/udev/rules.d/*fts*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*hookprobe*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*fortress*.rules 2>/dev/null || true
+    udevadm control --reload-rules 2>/dev/null || true
+
+    # Remove sysctl configs
+    rm -f /etc/sysctl.d/*hookprobe*.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/*fortress*.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/*fts*.conf 2>/dev/null || true
+    sysctl --system &>/dev/null || true
+
+    # Reload systemd
+    systemctl daemon-reload 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║              Full System Purge Complete!                      ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}System will reboot in 5 seconds...${NC}"
+    echo ""
+
+    sleep 5
+    reboot
+}
+
 handle_uninstall() {
     while true; do
         show_uninstall_menu
@@ -2797,6 +2925,7 @@ handle_uninstall() {
             6) uninstall_stop_services ;;
             7) uninstall_cleanup_everything ;;
             8) uninstall_complete ;;
+            99) uninstall_full_purge_reboot ;;
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1; continue ;;
