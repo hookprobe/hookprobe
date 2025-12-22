@@ -5,10 +5,10 @@
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Fortress components installed by install-container.sh:
-# - Systemd services (hookprobe-fortress, fortress-qsecbit, fortress-lte-failover)
+# - Systemd services (hookprobe-fortress, fts-qsecbit, fts-lte-failover)
 # - Podman containers (VictoriaMetrics, Grafana)
 # - OVS bridge, VLANs, VXLAN tunnels
-# - Management scripts (hookprobe-macsec, hookprobe-openflow, fortress-lte-monitor)
+# - Management scripts (hookprobe-macsec, hookprobe-openflow, fts-lte-monitor)
 # - Configuration files and secrets
 # - Data and log directories
 #
@@ -142,25 +142,25 @@ stop_services() {
     local services=(
         "fortress"
         "hookprobe-fortress"
-        "fortress-qsecbit"
-        "fortress-lte-failover"
-        "fortress-wan-failover"
-        "fortress-tunnel"
-        "fortress-dnsmasq"
-        "fortress-wifi-allocator"
-        "fortress-hostapd"
-        "fortress-hostapd-24ghz"
-        "fortress-hostapd-5ghz"
-        "fortress-nat"
-        "fortress-web"
-        "fortress-channel-optimize"
-        "fortress-ml-aggregator"
-        "fortress-lstm-train"
+        "fts-qsecbit"
+        "fts-lte-failover"
+        "fts-wan-failover"
+        "fts-tunnel"
+        "fts-dnsmasq"
+        "fts-wifi-allocator"
+        "fts-hostapd"
+        "fts-hostapd-24ghz"
+        "fts-hostapd-5ghz"
+        "fts-nat"
+        "fts-web"
+        "fts-channel-optimize"
+        "fts-ml-aggregator"
+        "fts-lstm-train"
     )
 
     # Stop the channel optimization timer first
-    log_info "Stopping fortress-channel-optimize.timer..."
-    systemctl stop fortress-channel-optimize.timer 2>/dev/null || true
+    log_info "Stopping fts-channel-optimize.timer..."
+    systemctl stop fts-channel-optimize.timer 2>/dev/null || true
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -183,13 +183,13 @@ cleanup_network_interfaces() {
 
     # Stop hostapd services (dual-band)
     log_info "Stopping hostapd services..."
-    systemctl stop fortress-hostapd-24ghz 2>/dev/null || true
-    systemctl stop fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl stop fts-hostapd-24ghz 2>/dev/null || true
+    systemctl stop fts-hostapd-5ghz 2>/dev/null || true
     systemctl stop hostapd 2>/dev/null || true
     pkill -f hostapd 2>/dev/null || true
 
     # Stop dnsmasq
-    systemctl stop fortress-dnsmasq 2>/dev/null || true
+    systemctl stop fts-dnsmasq 2>/dev/null || true
 
     # Find and clean up WiFi interfaces
     log_info "Cleaning up WiFi interface state..."
@@ -256,9 +256,9 @@ cleanup_network_interfaces() {
     # Remove ALL dnsmasq fortress configuration files
     log_info "Removing dnsmasq configuration files..."
     rm -f /etc/dnsmasq.d/fortress*.conf 2>/dev/null || true
-    rm -f /etc/dnsmasq.d/fortress-ovs.conf 2>/dev/null || true
-    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
-    rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
 
     # Remove WiFi configuration state
     rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
@@ -268,10 +268,10 @@ cleanup_network_interfaces() {
     # Remove ALL fortress udev rules (WiFi and LTE)
     local udev_removed=false
     local udev_rules=(
-        "/etc/udev/rules.d/70-fortress-wifi.rules"
-        "/etc/udev/rules.d/80-fortress-wifi.rules"
-        "/etc/udev/rules.d/70-fortress-lte.rules"
-        "/etc/udev/rules.d/80-fortress-lte.rules"
+        "/etc/udev/rules.d/70-fts-wifi.rules"
+        "/etc/udev/rules.d/80-fts-wifi.rules"
+        "/etc/udev/rules.d/70-fts-lte.rules"
+        "/etc/udev/rules.d/80-fts-lte.rules"
         "/etc/udev/rules.d/99-fortress-modem.rules"
     )
     for rule_file in "${udev_rules[@]}"; do
@@ -312,12 +312,12 @@ cleanup_network_interfaces() {
     fi
 
     # Remove LAN bridge service and script
-    if [ -f /etc/systemd/system/fortress-lan-bridge.service ]; then
+    if [ -f /etc/systemd/system/fts-lan-bridge.service ]; then
         log_info "Removing LAN bridge service..."
-        systemctl stop fortress-lan-bridge.service 2>/dev/null || true
-        systemctl disable fortress-lan-bridge.service 2>/dev/null || true
-        rm -f /etc/systemd/system/fortress-lan-bridge.service
-        rm -f /usr/local/bin/fortress-lan-bridge.sh
+        systemctl stop fts-lan-bridge.service 2>/dev/null || true
+        systemctl disable fts-lan-bridge.service 2>/dev/null || true
+        rm -f /etc/systemd/system/fts-lan-bridge.service
+        rm -f /usr/local/bin/fts-lan-bridge.sh
         systemctl daemon-reload 2>/dev/null || true
     fi
 
@@ -342,33 +342,33 @@ remove_systemd_services() {
     local services=(
         "fortress"
         "hookprobe-fortress"
-        "fortress-qsecbit"
-        "fortress-lte-failover"
-        "fortress-wan-failover"
-        "fortress-tunnel"
-        "fortress-dnsmasq"
-        "fortress-wifi-allocator"
-        "fortress-hostapd"
-        "fortress-hostapd-24ghz"
-        "fortress-hostapd-5ghz"
-        "fortress-nat"
-        "fortress-web"
-        "fortress-channel-optimize"
-        "fortress-dfs-monitor"
-        "fortress-dfs-api"
-        "fortress-ml-aggregator"
-        "fortress-lstm-train"
+        "fts-qsecbit"
+        "fts-lte-failover"
+        "fts-wan-failover"
+        "fts-tunnel"
+        "fts-dnsmasq"
+        "fts-wifi-allocator"
+        "fts-hostapd"
+        "fts-hostapd-24ghz"
+        "fts-hostapd-5ghz"
+        "fts-nat"
+        "fts-web"
+        "fts-channel-optimize"
+        "fts-dfs-monitor"
+        "fts-dfs-api"
+        "fts-ml-aggregator"
+        "fts-lstm-train"
     )
 
     # Disable and remove channel optimization timer
-    log_info "Removing fortress-channel-optimize.timer..."
-    systemctl disable fortress-channel-optimize.timer 2>/dev/null || true
-    rm -f /etc/systemd/system/fortress-channel-optimize.timer
+    log_info "Removing fts-channel-optimize.timer..."
+    systemctl disable fts-channel-optimize.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-channel-optimize.timer
 
     # Disable and remove LSTM training timer
-    log_info "Removing fortress-lstm-train.timer..."
-    systemctl disable fortress-lstm-train.timer 2>/dev/null || true
-    rm -f /etc/systemd/system/fortress-lstm-train.timer
+    log_info "Removing fts-lstm-train.timer..."
+    systemctl disable fts-lstm-train.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-lstm-train.timer
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
@@ -401,15 +401,15 @@ remove_management_scripts() {
         "/usr/local/bin/hookprobe-openflow"
         "/usr/local/bin/hookprobe-fortress-start"
         "/usr/local/bin/hookprobe-fortress-stop"
-        "/usr/local/bin/fortress-lte-monitor"
-        "/usr/local/bin/fortress-wan-failover"
+        "/usr/local/bin/fts-lte-monitor"
+        "/usr/local/bin/fts-wan-failover"
         "/usr/local/bin/fortress-nat-setup"
-        "/usr/local/bin/fortress-channel-optimize.sh"
-        "/usr/local/bin/fortress-wifi-prepare.sh"
-        "/usr/local/bin/fortress-wifi-bridge.sh"
-        "/usr/local/bin/fortress-dnsxai-privacy"
+        "/usr/local/bin/fts-channel-optimize.sh"
+        "/usr/local/bin/fts-wifi-prepare.sh"
+        "/usr/local/bin/fts-wifi-bridge.sh"
+        "/usr/local/bin/fts-dnsxai-privacy"
         "/usr/local/bin/dfs-channel-selector"
-        "/usr/local/bin/fortress-lan-bridge.sh"
+        "/usr/local/bin/fts-lan-bridge.sh"
     )
 
     for script in "${scripts[@]}"; do
@@ -419,10 +419,10 @@ remove_management_scripts() {
         fi
     done
 
-    # Remove fortress-ovs-connect.sh from install directory
-    if [ -f "${INSTALL_DIR}/bin/fortress-ovs-connect.sh" ]; then
-        log_info "Removing fortress-ovs-connect.sh..."
-        rm -f "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
+    # Remove fts-ovs-connect.sh from install directory
+    if [ -f "${INSTALL_DIR}/bin/fts-ovs-connect.sh" ]; then
+        log_info "Removing fts-ovs-connect.sh..."
+        rm -f "${INSTALL_DIR}/bin/fts-ovs-connect.sh"
     fi
 
     # Remove entire bin directory if empty
@@ -629,7 +629,7 @@ remove_nftables_filtering() {
     fi
 
     # Remove nftables config file
-    rm -f /etc/nftables.d/fortress-filters.nft
+    rm -f /etc/nftables.d/fts-filters.nft
 
     # Remove OUI database and policy files
     rm -f /etc/hookprobe/oui_policies.conf
@@ -645,14 +645,14 @@ remove_dfs_intelligence() {
     log_step "Removing DFS intelligence..."
 
     # Stop DFS services
-    systemctl stop fortress-dfs-monitor 2>/dev/null || true
-    systemctl stop fortress-dfs-api 2>/dev/null || true
-    systemctl disable fortress-dfs-monitor 2>/dev/null || true
-    systemctl disable fortress-dfs-api 2>/dev/null || true
+    systemctl stop fts-dfs-monitor 2>/dev/null || true
+    systemctl stop fts-dfs-api 2>/dev/null || true
+    systemctl disable fts-dfs-monitor 2>/dev/null || true
+    systemctl disable fts-dfs-api 2>/dev/null || true
 
     # Remove service files
-    rm -f /etc/systemd/system/fortress-dfs-monitor.service
-    rm -f /etc/systemd/system/fortress-dfs-api.service
+    rm -f /etc/systemd/system/fts-dfs-monitor.service
+    rm -f /etc/systemd/system/fts-dfs-api.service
 
     # Remove DFS directory and scripts
     rm -rf /opt/hookprobe/fortress/dfs
@@ -726,8 +726,8 @@ remove_networkmanager_config() {
 
     # Remove all Fortress NetworkManager config files
     local nm_configs=(
-        "/etc/NetworkManager/conf.d/fortress-unmanaged.conf"
-        "/etc/NetworkManager/conf.d/fortress-wifi.conf"
+        "/etc/NetworkManager/conf.d/fts-unmanaged.conf"
+        "/etc/NetworkManager/conf.d/fts-wifi.conf"
     )
 
     for nm_conf in "${nm_configs[@]}"; do
@@ -743,11 +743,11 @@ remove_networkmanager_config() {
     fi
 
     # Remove LTE connection if it exists
-    nmcli con delete "fortress-lte" 2>/dev/null || true
+    nmcli con delete "fts-lte" 2>/dev/null || true
 
     # Remove WiFi helper scripts
-    rm -f /usr/local/bin/fortress-wifi-prepare.sh 2>/dev/null || true
-    rm -f /usr/local/bin/fortress-wifi-bridge.sh 2>/dev/null || true
+    rm -f /usr/local/bin/fts-wifi-prepare.sh 2>/dev/null || true
+    rm -f /usr/local/bin/fts-wifi-bridge.sh 2>/dev/null || true
 
     # Restore WiFi interface to managed mode
     local wifi_conf="/etc/hookprobe/wifi-ap.conf"
@@ -760,9 +760,9 @@ remove_networkmanager_config() {
     fi
 
     # Restore netplan backup if it exists
-    for backup in /etc/netplan/*.yaml.fortress-backup; do
+    for backup in /etc/netplan/*.yaml.fts-backup; do
         if [ -f "$backup" ]; then
-            original="${backup%.fortress-backup}"
+            original="${backup%.fts-backup}"
             log_info "Restoring netplan backup: $original"
             mv "$backup" "$original"
         fi
@@ -821,11 +821,11 @@ remove_configuration() {
     fi
 
     # Remove dnsmasq configuration (both old and new VLAN config)
-    if [ -f /etc/dnsmasq.d/fortress.conf ] || [ -f /etc/dnsmasq.d/fortress-vlans.conf ]; then
+    if [ -f /etc/dnsmasq.d/fortress.conf ] || [ -f /etc/dnsmasq.d/fts-vlans.conf ]; then
         log_info "Removing dnsmasq configuration..."
         rm -f /etc/dnsmasq.d/fortress.conf
-        rm -f /etc/dnsmasq.d/fortress-vlans.conf
-        rm -f /etc/dnsmasq.d/fortress-bridge.conf
+        rm -f /etc/dnsmasq.d/fts-vlans.conf
+        rm -f /etc/dnsmasq.d/fts-bridge.conf
     fi
 
     # Remove VXLAN secrets
@@ -881,7 +881,7 @@ remove_lte_config() {
     fi
 
     # Remove WAN failover lock file
-    rm -f /var/run/fortress-wan-failover.lock 2>/dev/null || true
+    rm -f /var/run/fts-wan-failover.lock 2>/dev/null || true
 
     # Remove LTE state directory
     if [ -d "$LTE_STATE_DIR" ]; then
@@ -969,7 +969,7 @@ remove_sysctl_settings() {
     local sysctl_files=(
         "/etc/sysctl.d/99-hookprobe.conf"
         "/etc/sysctl.d/99-fortress-routing.conf"
-        "/etc/sysctl.d/99-fortress-forward.conf"
+        "/etc/sysctl.d/99-fts-forward.conf"
         "/etc/sysctl.d/99-fortress.conf"
     )
 
@@ -1044,7 +1044,7 @@ verify_uninstall() {
     local issues=0
 
     # Check services
-    for svc in fortress hookprobe-fortress fortress-qsecbit fortress-lte-failover; do
+    for svc in fortress hookprobe-fortress fts-qsecbit fts-lte-failover; do
         if systemctl is-active "$svc" &>/dev/null; then
             log_warn "Service still running: $svc"
             issues=$((issues + 1))
@@ -1059,7 +1059,7 @@ verify_uninstall() {
 
     # Check containers (core + monitoring)
     if command -v podman &>/dev/null; then
-        for container in fortress-web fortress-postgres fortress-redis fortress-qsecbit fortress-dnsxai fortress-dfs fortress-victoria fortress-grafana fortress-suricata fortress-zeek; do
+        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-victoria fts-grafana fortress-suricata fortress-zeek; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "Container still exists: $container"
                 issues=$((issues + 1))
@@ -1157,7 +1157,7 @@ main() {
         echo -e "${YELLOW}This will remove the following components:${NC}"
         echo ""
         echo -e "  ${BOLD}Services:${NC}"
-        echo -e "    • Fortress systemd services (hookprobe-fortress, fortress-qsecbit)"
+        echo -e "    • Fortress systemd services (hookprobe-fortress, fts-qsecbit)"
         echo -e "    • WiFi AP (hostapd), DHCP (dnsmasq)"
         echo ""
         echo -e "  ${BOLD}Containers:${NC}"
@@ -1254,10 +1254,10 @@ main() {
     echo ""
     echo -e "  ${BOLD}Removed Components:${NC}"
     echo -e "  • hookprobe-fortress service"
-    echo -e "  • fortress-qsecbit service"
-    echo -e "  • fortress-lte-failover service"
-    echo -e "  • fortress-dnsmasq (DHCP server)"
-    echo -e "  • fortress-hostapd (WiFi AP)"
+    echo -e "  • fts-qsecbit service"
+    echo -e "  • fts-lte-failover service"
+    echo -e "  • fts-dnsmasq (DHCP server)"
+    echo -e "  • fts-hostapd (WiFi AP)"
     echo -e "  • Monitoring containers (VictoriaMetrics, Grafana)"
     echo -e "  • Security monitoring (Suricata, Zeek)"
     echo -e "  • ML/LSTM threat detection"

@@ -4,10 +4,10 @@
 # AI-powered DNS filtering with ML classification
 #
 # Build:
-#   podman build -f Containerfile.dnsxai -t fortress-dnsxai:latest ../..
+#   podman build -f Containerfile.dnsxai -t fts-dnsxai:latest ../..
 #
 # Run:
-#   podman run -p 5353:5353/udp fortress-dnsxai:latest
+#   podman run -p 5353:5353/udp fts-dnsxai:latest
 # ==============================================================================
 
 FROM python:3.11-slim-bookworm AS builder

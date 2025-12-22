@@ -308,7 +308,7 @@ setup_podman_ovs_network() {
         cat > "$config_file" << EOF
 {
   "cniVersion": "0.4.0",
-  "name": "fortress-${name}",
+  "name": "fts-${name}",
   "plugins": [
     {
       "type": "ovs",
@@ -365,7 +365,7 @@ disable_default_podman_network() {
 
 # HookProbe Fortress: Use OVS networks by default
 [network]
-default_network = "fortress-management"
+default_network = "fts-management"
 EOF
         fi
     else
@@ -374,7 +374,7 @@ EOF
 
 [network]
 # Use OVS networks by default instead of podman0
-default_network = "fortress-management"
+default_network = "fts-management"
 EOF
     fi
 
@@ -399,7 +399,7 @@ setup_dnsmasq_vlans() {
     mkdir -p /etc/dnsmasq.d
 
     # Create main Fortress dnsmasq config
-    cat > /etc/dnsmasq.d/fortress-vlans.conf << EOF
+    cat > /etc/dnsmasq.d/fts-vlans.conf << EOF
 # HookProbe Fortress VLAN DHCP Configuration
 # Generated: $(date -Iseconds)
 #
@@ -421,10 +421,10 @@ local=/fortress.local/
 
 # Logging
 log-dhcp
-log-facility=/var/log/fortress-dnsmasq.log
+log-facility=/var/log/fts-dnsmasq.log
 
 # Lease file
-dhcp-leasefile=/var/lib/misc/fortress-dnsmasq.leases
+dhcp-leasefile=/var/lib/misc/fts-dnsmasq.leases
 
 # VLAN 10 - Management (${SUBNET_PREFIX}.10.x)
 interface=vlan10
@@ -468,11 +468,11 @@ EOF
 
     # Create lease directory and file
     mkdir -p /var/lib/misc
-    touch /var/lib/misc/fortress-dnsmasq.leases
+    touch /var/lib/misc/fts-dnsmasq.leases
 
-    # Create systemd service for fortress-dnsmasq if not exists
-    if [ ! -f /etc/systemd/system/fortress-dnsmasq.service ]; then
-        cat > /etc/systemd/system/fortress-dnsmasq.service << 'SVCEOF'
+    # Create systemd service for fts-dnsmasq if not exists
+    if [ ! -f /etc/systemd/system/fts-dnsmasq.service ]; then
+        cat > /etc/systemd/system/fts-dnsmasq.service << 'SVCEOF'
 [Unit]
 Description=Fortress DHCP and DNS Server
 After=network.target
@@ -480,9 +480,9 @@ Wants=network.target
 
 [Service]
 Type=forking
-PIDFile=/run/fortress-dnsmasq.pid
-ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fortress-vlans.conf
-ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress-vlans.conf --pid-file=/run/fortress-dnsmasq.pid
+PIDFile=/run/fts-dnsmasq.pid
+ExecStartPre=/usr/sbin/dnsmasq --test -C /etc/dnsmasq.d/fts-vlans.conf
+ExecStart=/usr/sbin/dnsmasq -C /etc/dnsmasq.d/fts-vlans.conf --pid-file=/run/fts-dnsmasq.pid
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -496,24 +496,24 @@ SVCEOF
     # Stop conflicting dnsmasq instances
     systemctl stop dnsmasq 2>/dev/null || true
     systemctl disable dnsmasq 2>/dev/null || true
-    pkill -f "dnsmasq.*fortress-bridge" 2>/dev/null || true
+    pkill -f "dnsmasq.*fts-bridge" 2>/dev/null || true
 
-    # Enable and restart fortress-dnsmasq
-    systemctl enable fortress-dnsmasq 2>/dev/null || true
-    systemctl restart fortress-dnsmasq 2>/dev/null || {
-        log_warn "Failed to start fortress-dnsmasq via systemd"
+    # Enable and restart fts-dnsmasq
+    systemctl enable fts-dnsmasq 2>/dev/null || true
+    systemctl restart fts-dnsmasq 2>/dev/null || {
+        log_warn "Failed to start fts-dnsmasq via systemd"
         # Try starting directly
         pkill dnsmasq 2>/dev/null || true
         sleep 1
-        /usr/sbin/dnsmasq -C /etc/dnsmasq.d/fortress-vlans.conf --pid-file=/run/fortress-dnsmasq.pid &
+        /usr/sbin/dnsmasq -C /etc/dnsmasq.d/fts-vlans.conf --pid-file=/run/fts-dnsmasq.pid &
     }
 
     # Verify dnsmasq is running
     sleep 2
-    if pgrep -f "dnsmasq.*fortress-vlans" >/dev/null; then
+    if pgrep -f "dnsmasq.*fts-vlans" >/dev/null; then
         log_success "dnsmasq DHCP server running"
     else
-        log_error "dnsmasq failed to start - check /var/log/fortress-dnsmasq.log"
+        log_error "dnsmasq failed to start - check /var/log/fts-dnsmasq.log"
         return 1
     fi
 
@@ -590,14 +590,14 @@ show_network_status() {
     echo "DHCP Status:"
     if pgrep -f "dnsmasq" >/dev/null 2>&1; then
         echo "  dnsmasq: RUNNING (PID: $(pgrep -f dnsmasq | head -1))"
-        if [ -f /etc/dnsmasq.d/fortress-vlans.conf ]; then
-            echo "  Config: /etc/dnsmasq.d/fortress-vlans.conf"
+        if [ -f /etc/dnsmasq.d/fts-vlans.conf ]; then
+            echo "  Config: /etc/dnsmasq.d/fts-vlans.conf"
             echo "  Listening on interfaces:"
-            grep "^interface=" /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null | sed 's/interface=/    - /'
+            grep "^interface=" /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null | sed 's/interface=/    - /'
         fi
-        if [ -f /var/lib/misc/fortress-dnsmasq.leases ]; then
+        if [ -f /var/lib/misc/fts-dnsmasq.leases ]; then
             local lease_count
-            lease_count=$(wc -l < /var/lib/misc/fortress-dnsmasq.leases 2>/dev/null || echo "0")
+            lease_count=$(wc -l < /var/lib/misc/fts-dnsmasq.leases 2>/dev/null || echo "0")
             echo "  Active leases: $lease_count"
         fi
     else
