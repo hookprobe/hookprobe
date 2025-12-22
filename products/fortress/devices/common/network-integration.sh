@@ -854,11 +854,24 @@ install_ip_sla_service() {
     # This service continuously monitors WAN health by pinging through
     # specific interfaces and handles failover when traffic fails.
 
-    local wan_monitor="$SCRIPT_DIR/wan-failover-monitor.sh"
+    # Use installed path, not source directory
+    local installed_path="/opt/hookprobe/fortress/devices/common"
+    local wan_monitor="${installed_path}/wan-failover-monitor.sh"
 
+    # Check if script exists in installed location OR source location
     if [ ! -x "$wan_monitor" ]; then
-        log_warn "[IP-SLA] wan-failover-monitor.sh not found at $wan_monitor"
-        return 1
+        # Try source directory as fallback (during development)
+        if [ -x "$SCRIPT_DIR/wan-failover-monitor.sh" ]; then
+            # Copy to installed location
+            mkdir -p "$installed_path"
+            cp "$SCRIPT_DIR/wan-failover-monitor.sh" "$wan_monitor"
+            chmod +x "$wan_monitor"
+            log_info "[IP-SLA] Copied wan-failover-monitor.sh to $installed_path"
+        else
+            log_warn "[IP-SLA] wan-failover-monitor.sh not found"
+            log_warn "[IP-SLA] Expected at: $wan_monitor"
+            return 1
+        fi
     fi
 
     log_info "[IP-SLA] Installing WAN health monitoring service..."
