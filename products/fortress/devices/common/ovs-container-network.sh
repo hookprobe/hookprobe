@@ -344,7 +344,16 @@ install_openflow_rules() {
     ovs-ofctl add-flow "$OVS_BRIDGE" \
         "table=$OF_TABLE_INGRESS,priority=800,tcp,nw_src=${lan_cidr},tp_dst=53,actions=NORMAL"
 
-    # All other traffic - continue to tier isolation
+    # LAN traffic to external destinations - allow through (will be NAT'd by iptables/nftables)
+    # Use broader /16 to handle any LAN subnet configuration mismatch
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "table=$OF_TABLE_INGRESS,priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL"
+
+    # Also allow return traffic to LAN
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "table=$OF_TABLE_INGRESS,priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL"
+
+    # All other traffic - continue to tier isolation (for container network control)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
         "table=$OF_TABLE_INGRESS,priority=1,actions=resubmit(,$OF_TABLE_TIER_ISOLATION)"
 
