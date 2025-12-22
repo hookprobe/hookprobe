@@ -83,10 +83,15 @@ export_for_setup() {
     export ETH_INTERFACES="$NET_ETH_INTERFACES"
     export ETH_COUNT="$NET_ETH_COUNT"
 
-    # WAN/LAN assignment
+    # WAN/LAN/MGMT assignment
     export WAN_INTERFACE="$NET_WAN_IFACE"
     export WAN_PRESERVED="$NET_WAN_PRESERVED"  # Flag: WAN should not be modified
     export LAN_INTERFACES="$NET_LAN_IFACES"
+
+    # Management interface (for VLAN 200 trunk access)
+    export MGMT_INTERFACE="$NET_MGMT_IFACE"
+    export MGMT_ENABLED="$NET_MGMT_ENABLED"
+    export FORTRESS_MGMT_IFACE="$NET_MGMT_IFACE"
 
     # WiFi interfaces
     export WIFI_INTERFACES="$NET_WIFI_INTERFACES"
