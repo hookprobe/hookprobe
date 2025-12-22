@@ -73,12 +73,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    ports:
-      # Expose on localhost only for security (web uses host network)
-      - "127.0.0.1:5432:5432"
-    networks:
-      fortress-data:
-        ipv4_address: 172.20.200.10
+    # Use host network - podman port forwarding doesn't work reliably with
+    # other containers using host network mode (timeout issues)
+    network_mode: host
 
   # Redis Cache (Sessions + Rate Limiting)
   redis:
@@ -90,6 +87,7 @@ services:
       --appendonly yes
       --maxmemory 128mb
       --maxmemory-policy allkeys-lru
+      --bind 127.0.0.1
       --requirepass "${REDIS_PASSWORD:-fortress_redis_secret}"
     volumes:
       - redis_data:/data
@@ -100,12 +98,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    ports:
-      # Expose on localhost only for security (web uses host network)
-      - "127.0.0.1:6379:6379"
-    networks:
-      fortress-data:
-        ipv4_address: 172.20.200.11
+    # Use host network - podman port forwarding doesn't work reliably with
+    # other containers using host network mode (timeout issues)
+    network_mode: host
 
   # ============================================================
   # SERVICES TIER - Web and DNS (fortress-services)
