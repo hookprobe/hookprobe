@@ -1689,10 +1689,11 @@ OVSEOF
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]
 Description=HookProbe Fortress Security Gateway
-# Wait for network and container runtime
+# Wait for network, OVS, and container runtime
 After=network-online.target openvswitch-switch.service podman.socket podman.service
-Wants=network-online.target openvswitch-switch.service
-Requires=podman.socket
+Wants=network-online.target
+# Require both podman and OVS to be running
+Requires=podman.socket openvswitch-switch.service
 # Prevent rapid restarts on repeated failures
 StartLimitIntervalSec=300
 StartLimitBurst=3
@@ -1702,6 +1703,14 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin
+Environment=OVS_BRIDGE=43ess
+Environment=LAN_BASE_IP=10.200.0.1
+Environment=LAN_SUBNET_MASK=24
+
+# Wait for OVS to be fully ready and configure bridge IP BEFORE starting containers
+ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+ExecStartPre=/bin/bash -c 'ip link set 43ess up 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip addr show 43ess | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/24 dev 43ess 2>/dev/null || true'
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
@@ -1709,7 +1718,7 @@ ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1
 # Start containers
 ExecStart=${podman_compose_bin} -f podman-compose.yml up -d
 
-# Connect to OVS after containers are up
+# Connect containers to OVS and install OpenFlow rules after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fortress-ovs-connect.sh
 
 # Stop containers gracefully
