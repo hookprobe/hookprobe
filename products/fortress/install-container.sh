@@ -319,13 +319,50 @@ collect_configuration() {
             set_subnet_ranges "23"
         fi
 
-        # Show configuration summary
-        log_info "Configuration:"
-        log_info "  Network Mode:  $NETWORK_MODE"
-        log_info "  LAN Subnet:    10.200.0.0/$LAN_SUBNET_MASK"
-        log_info "  Admin User:    $ADMIN_USER"
-        log_info "  WiFi SSID:     $WIFI_SSID"
-        log_info "  Web Port:      $WEB_PORT"
+        # Build optional services list
+        local optional_services=""
+        [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
+        [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
+        [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
+        [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
+        [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
+        optional_services="${optional_services%%, }"  # Remove trailing comma
+        [ -z "$optional_services" ] && optional_services="Core only"
+
+        # Show complete configuration summary
+        echo ""
+        echo "════════════════════════════════════════════════════════════════"
+        echo -e "  ${CYAN}${BOLD}FORTRESS CONFIGURATION${NC}"
+        echo "════════════════════════════════════════════════════════════════"
+        echo ""
+        echo -e "  ${BOLD}Network:${NC}"
+        echo "    Mode:           $NETWORK_MODE"
+        echo "    LAN Subnet:     10.200.0.0/$LAN_SUBNET_MASK"
+        echo ""
+        echo -e "  ${BOLD}Access:${NC}"
+        echo "    Admin User:     $ADMIN_USER"
+        echo "    WiFi SSID:      $WIFI_SSID"
+        echo "    Web Port:       $WEB_PORT"
+        echo ""
+        echo -e "  ${BOLD}Security Core:${NC}"
+        echo "    ✓ QSecBit threat detection"
+        echo "    ✓ dnsXai DNS protection"
+        echo "    ✓ DFS WiFi intelligence"
+        echo ""
+        echo -e "  ${BOLD}Optional Services:${NC}"
+        [ "${INSTALL_MONITORING:-}" = true ] && echo "    ✓ Monitoring (Grafana + VictoriaMetrics)"
+        [ "${INSTALL_N8N:-}" = true ] && echo "    ✓ n8n Workflow Automation"
+        [ "${INSTALL_CLICKHOUSE:-}" = true ] && echo "    ✓ ClickHouse Analytics"
+        [ "${INSTALL_IDS:-}" = true ] && echo "    ✓ IDS/IPS (Suricata + Zeek)"
+        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && echo "    ✓ Cloudflare Tunnel"
+        [ "${INSTALL_LTE:-}" = true ] && echo "    ✓ LTE Failover (APN: ${LTE_APN:-auto})"
+        [ -z "$optional_services" ] || [ "$optional_services" = "Core only" ] && echo "    (none selected)"
+        echo ""
+        echo "════════════════════════════════════════════════════════════════"
+        echo ""
+        log_info "Starting fully automated installation..."
+        echo ""
         return 0
     fi
 
@@ -445,17 +482,163 @@ collect_configuration() {
         WEB_PORT="${port_input:-8443}"
     fi
 
+    # ============================================================
+    # LTE/WWAN MODEM CONFIGURATION
+    # ============================================================
+    # Check if modem is detected and prompt for APN configuration
+    local modem_detected=false
+    if ls /sys/class/net/wwan* &>/dev/null 2>&1 || ls /sys/class/net/wwp* &>/dev/null 2>&1; then
+        modem_detected=true
+    elif ls /dev/cdc-wdm* &>/dev/null 2>&1 || ls /dev/ttyUSB* &>/dev/null 2>&1; then
+        modem_detected=true
+    fi
+
+    if [ "$modem_detected" = true ] && [ -z "${LTE_APN:-}" ]; then
+        echo ""
+        echo -e "${BOLD}LTE MODEM DETECTED${NC}"
+        echo ""
+        echo "Configure LTE/WWAN modem for WAN failover:"
+        echo ""
+        echo "Common APNs by carrier:"
+        echo "  Vodafone:  internet.vodafone.ro, web.vodafone.de, internet"
+        echo "  Orange:    internet, orange.ro, orange"
+        echo "  T-Mobile:  internet.t-mobile, fast.t-mobile.com"
+        echo "  AT&T:      broadband, phone"
+        echo "  Verizon:   vzwinternet"
+        echo ""
+        read -p "Enter APN name (or press Enter to skip): " LTE_APN
+        export LTE_APN
+
+        if [ -n "$LTE_APN" ]; then
+            echo ""
+            echo "Authentication types:"
+            echo "  1. none     - No authentication (most carriers)"
+            echo "  2. pap      - PAP authentication"
+            echo "  3. chap     - CHAP authentication"
+            echo "  4. mschapv2 - MS-CHAPv2 (enterprise/private APNs)"
+            echo ""
+            read -p "Select authentication type [1-4] (default: 1): " auth_choice
+            case "${auth_choice:-1}" in
+                2) export LTE_AUTH="pap" ;;
+                3) export LTE_AUTH="chap" ;;
+                4) export LTE_AUTH="mschapv2" ;;
+                *) export LTE_AUTH="none" ;;
+            esac
+
+            if [ "$LTE_AUTH" != "none" ]; then
+                read -p "Enter username: " LTE_USER
+                export LTE_USER
+                read -sp "Enter password: " LTE_PASS
+                echo ""
+                export LTE_PASS
+            fi
+            export INSTALL_LTE=true
+            log_info "LTE configured: APN=$LTE_APN, Auth=$LTE_AUTH"
+        fi
+    fi
+
+    # ============================================================
+    # CLOUDFLARE TUNNEL (Remote Access)
+    # ============================================================
+    if [ -z "${CLOUDFLARE_TOKEN:-}" ]; then
+        echo ""
+        echo -e "${BOLD}REMOTE ACCESS CONFIGURATION${NC}"
+        echo ""
+        echo "Cloudflare Tunnel allows secure remote access to Fortress admin portal"
+        echo "without exposing ports to the internet."
+        echo ""
+        echo "To get a tunnel token:"
+        echo "  1. Go to https://one.dash.cloudflare.com/"
+        echo "  2. Navigate to Networks → Tunnels"
+        echo "  3. Create a tunnel and copy the token"
+        echo ""
+        read -p "Configure Cloudflare Tunnel? [y/N]: " cf_choice
+        if [[ "${cf_choice:-N}" =~ ^[Yy]$ ]]; then
+            read -p "Enter tunnel token: " CLOUDFLARE_TOKEN
+            export CLOUDFLARE_TOKEN
+            if [ -n "$CLOUDFLARE_TOKEN" ]; then
+                read -p "Enter hostname (e.g., fortress.mybusiness.com): " CLOUDFLARE_HOSTNAME
+                export CLOUDFLARE_HOSTNAME
+                export INSTALL_CLOUDFLARE_TUNNEL=true
+                log_info "Cloudflare Tunnel configured: $CLOUDFLARE_HOSTNAME"
+            fi
+        fi
+    fi
+
+    # ============================================================
+    # OPTIONAL SERVICES
+    # ============================================================
+    echo ""
+    echo -e "${BOLD}OPTIONAL SERVICES${NC}"
+    echo ""
+    echo "Select additional services to install:"
+    echo ""
+
+    # Monitoring (Grafana + VictoriaMetrics)
+    if [ -z "${INSTALL_MONITORING:-}" ]; then
+        read -p "Install monitoring dashboard (Grafana + VictoriaMetrics)? [Y/n]: " mon_choice
+        if [[ ! "${mon_choice:-Y}" =~ ^[Nn]$ ]]; then
+            export INSTALL_MONITORING=true
+            log_info "Monitoring: enabled"
+        fi
+    fi
+
+    # n8n Workflow Automation
+    if [ -z "${INSTALL_N8N:-}" ]; then
+        read -p "Install n8n workflow automation? [Y/n]: " n8n_choice
+        if [[ ! "${n8n_choice:-Y}" =~ ^[Nn]$ ]]; then
+            export INSTALL_N8N=true
+            log_info "n8n: enabled"
+        fi
+    fi
+
+    # ClickHouse Analytics
+    if [ -z "${INSTALL_CLICKHOUSE:-}" ]; then
+        read -p "Install ClickHouse analytics database? [Y/n]: " ch_choice
+        if [[ ! "${ch_choice:-Y}" =~ ^[Nn]$ ]]; then
+            export INSTALL_CLICKHOUSE=true
+            log_info "ClickHouse: enabled"
+        fi
+    fi
+
+    # IDS/IPS (Suricata + Zeek + XDP)
+    if [ -z "${INSTALL_IDS:-}" ]; then
+        read -p "Install IDS/IPS (Suricata + Zeek + XDP)? [Y/n]: " ids_choice
+        if [[ ! "${ids_choice:-Y}" =~ ^[Nn]$ ]]; then
+            export INSTALL_IDS=true
+            log_info "IDS/IPS: enabled"
+        fi
+    fi
+
+    # ============================================================
+    # INSTALLATION SUMMARY
+    # ============================================================
+
+    # Build optional services list
+    local optional_services=""
+    [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
+    [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
+    [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
+    [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+    [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
+    [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
+    optional_services="${optional_services%%, }"  # Remove trailing comma
+    [ -z "$optional_services" ] && optional_services="None"
+
     # Confirm installation
     echo ""
     echo "Installation Summary:"
     echo "====================="
-    echo "  Network Mode:  $NETWORK_MODE"
-    echo "  LAN Subnet:    10.200.0.0/$LAN_SUBNET_MASK (DHCP: $LAN_DHCP_START - $LAN_DHCP_END)"
-    echo "  Security Core: QSecBit + dnsXai + DFS Intelligence"
-    echo "  Admin User:    $ADMIN_USER"
-    echo "  WiFi SSID:     $WIFI_SSID"
-    echo "  Web Port:      $WEB_PORT"
-    echo "  Install Dir:   $INSTALL_DIR"
+    echo "  Network Mode:     $NETWORK_MODE"
+    echo "  LAN Subnet:       10.200.0.0/$LAN_SUBNET_MASK (DHCP: $LAN_DHCP_START - $LAN_DHCP_END)"
+    echo "  Security Core:    QSecBit + dnsXai + DFS Intelligence"
+    echo "  Admin User:       $ADMIN_USER"
+    echo "  WiFi SSID:        $WIFI_SSID"
+    echo "  Web Port:         $WEB_PORT"
+    echo "  Optional:         $optional_services"
+    [ -n "${LTE_APN:-}" ] && echo "  LTE APN:          $LTE_APN"
+    [ -n "${CLOUDFLARE_HOSTNAME:-}" ] && echo "  Remote Access:    $CLOUDFLARE_HOSTNAME"
+    echo "  Install Dir:      $INSTALL_DIR"
     echo ""
     read -p "Proceed with installation? [Y/n]: " confirm
     if [[ "${confirm:-Y}" =~ ^[Nn]$ ]]; then
@@ -1811,6 +1994,180 @@ start_containers() {
 
     # Setup traffic flow rules (NAT, PBR integration)
     setup_traffic_flow
+
+    # ========================================
+    # START OPTIONAL SERVICES
+    # ========================================
+    # Since podman-compose 1.x doesn't support --profile, we start
+    # optional services separately using direct podman commands
+
+    start_optional_services
+}
+
+start_optional_services() {
+    log_step "Starting optional services"
+
+    local compose_dir="${INSTALL_DIR}/containers"
+    cd "$compose_dir"
+
+    # Load environment for container configs
+    [ -f ".env" ] && source .env 2>/dev/null || true
+
+    # Monitoring (Grafana + VictoriaMetrics)
+    if [ "${INSTALL_MONITORING:-}" = true ]; then
+        log_info "Starting monitoring services (Grafana + VictoriaMetrics)..."
+
+        # VictoriaMetrics
+        podman run -d --name fts-victoria \
+            --restart unless-stopped \
+            --network fts-internal \
+            --ip 172.20.200.31 \
+            -p 0.0.0.0:8428:8428 \
+            -v fts-victoria-data:/storage \
+            docker.io/victoriametrics/victoria-metrics:v1.106.1 \
+            -storageDataPath=/storage -retentionPeriod=30d -httpListenAddr=:8428 \
+            2>/dev/null || log_warn "VictoriaMetrics may already be running"
+
+        # Grafana
+        podman run -d --name fts-grafana \
+            --restart unless-stopped \
+            --network fts-internal \
+            --ip 172.20.200.30 \
+            -p 0.0.0.0:3000:3000 \
+            -v fts-grafana-data:/var/lib/grafana \
+            -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
+            docker.io/grafana/grafana:11.4.0 \
+            2>/dev/null || log_warn "Grafana may already be running"
+
+        log_info "Monitoring services started (Grafana: http://localhost:3000)"
+    fi
+
+    # n8n Workflow Automation
+    if [ "${INSTALL_N8N:-}" = true ]; then
+        log_info "Starting n8n workflow automation..."
+
+        podman run -d --name fts-n8n \
+            --restart unless-stopped \
+            --network fts-internal \
+            --ip 172.20.200.50 \
+            -p 0.0.0.0:5678:5678 \
+            -v fts-n8n-data:/home/node/.n8n \
+            -v /etc/hookprobe:/etc/hookprobe:ro \
+            -e N8N_HOST=0.0.0.0 \
+            -e N8N_PORT=5678 \
+            -e N8N_PROTOCOL=http \
+            -e DB_TYPE=postgresdb \
+            -e DB_POSTGRESDB_HOST=172.20.200.10 \
+            -e DB_POSTGRESDB_PORT=5432 \
+            -e DB_POSTGRESDB_DATABASE=fortress \
+            -e DB_POSTGRESDB_USER=fortress \
+            -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD:-fortress_db_secret}" \
+            -e DB_POSTGRESDB_SCHEMA=n8n \
+            -e N8N_BASIC_AUTH_ACTIVE=true \
+            -e N8N_BASIC_AUTH_USER="${N8N_USER:-admin}" \
+            -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
+            docker.io/n8nio/n8n:latest \
+            2>/dev/null || log_warn "n8n may already be running"
+
+        log_info "n8n started (http://localhost:5678)"
+    fi
+
+    # ClickHouse Analytics
+    if [ "${INSTALL_CLICKHOUSE:-}" = true ]; then
+        log_info "Starting ClickHouse analytics database..."
+
+        podman run -d --name fts-clickhouse \
+            --restart unless-stopped \
+            --network fts-internal \
+            --ip 172.20.200.51 \
+            -p 0.0.0.0:8123:8123 \
+            -p 0.0.0.0:9000:9000 \
+            -v fts-clickhouse-data:/var/lib/clickhouse \
+            -v fts-clickhouse-logs:/var/log/clickhouse-server \
+            -e CLICKHOUSE_DB=fortress \
+            -e CLICKHOUSE_USER=fortress \
+            -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-fortress_clickhouse_secret}" \
+            docker.io/clickhouse/clickhouse-server:latest \
+            2>/dev/null || log_warn "ClickHouse may already be running"
+
+        log_info "ClickHouse started (HTTP: localhost:8123, Native: localhost:9000)"
+    fi
+
+    # IDS/IPS (Suricata + Zeek + XDP)
+    if [ "${INSTALL_IDS:-}" = true ]; then
+        log_info "Starting IDS/IPS services..."
+
+        # Suricata
+        podman run -d --name fts-suricata \
+            --restart unless-stopped \
+            --network host \
+            --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
+            -v fts-suricata-logs:/var/log/suricata \
+            -v fts-suricata-rules:/var/lib/suricata \
+            -v fts-suricata-config:/etc/suricata \
+            -e SURICATA_INTERFACE="${SURICATA_INTERFACE:-FTS}" \
+            docker.io/jasonish/suricata:latest \
+            2>/dev/null || log_warn "Suricata may already be running"
+
+        # Zeek
+        podman run -d --name fts-zeek \
+            --restart unless-stopped \
+            --network host \
+            --cap-add NET_ADMIN --cap-add NET_RAW \
+            -v fts-zeek-logs:/usr/local/zeek/logs \
+            -v fts-zeek-spool:/usr/local/zeek/spool \
+            docker.io/zeek/zeek:latest \
+            zeek -i "${ZEEK_INTERFACE:-FTS}" local LogAscii::use_json=T \
+            2>/dev/null || log_warn "Zeek may already be running"
+
+        log_info "IDS/IPS services started (Suricata + Zeek)"
+    fi
+
+    # Cloudflare Tunnel
+    if [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && [ -n "${CLOUDFLARE_TOKEN:-}" ]; then
+        log_info "Starting Cloudflare Tunnel..."
+
+        podman run -d --name fts-cloudflared \
+            --restart unless-stopped \
+            --network fts-internal \
+            --ip 172.20.200.60 \
+            docker.io/cloudflare/cloudflared:latest \
+            tunnel --no-autoupdate run --token "$CLOUDFLARE_TOKEN" \
+            2>/dev/null || log_warn "Cloudflared may already be running"
+
+        if [ -n "${CLOUDFLARE_HOSTNAME:-}" ]; then
+            log_info "Cloudflare Tunnel started (https://${CLOUDFLARE_HOSTNAME})"
+        else
+            log_info "Cloudflare Tunnel started"
+        fi
+    fi
+
+    # Save configuration for optional services
+    save_optional_services_config
+}
+
+save_optional_services_config() {
+    # Save which optional services were installed for future upgrades/uninstalls
+    local config_file="${CONFIG_DIR}/optional-services.conf"
+
+    cat > "$config_file" << EOF
+# Fortress Optional Services Configuration
+# Generated: $(date -Iseconds)
+# These services are started separately from core services
+
+INSTALL_MONITORING=${INSTALL_MONITORING:-false}
+INSTALL_N8N=${INSTALL_N8N:-false}
+INSTALL_CLICKHOUSE=${INSTALL_CLICKHOUSE:-false}
+INSTALL_IDS=${INSTALL_IDS:-false}
+INSTALL_CLOUDFLARE_TUNNEL=${INSTALL_CLOUDFLARE_TUNNEL:-false}
+CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
+CLOUDFLARE_HOSTNAME="${CLOUDFLARE_HOSTNAME:-}"
+LTE_APN="${LTE_APN:-}"
+LTE_AUTH="${LTE_AUTH:-none}"
+EOF
+
+    chmod 600 "$config_file"
+    log_info "Optional services config saved to $config_file"
 }
 
 setup_traffic_flow() {
@@ -2241,6 +2598,11 @@ uninstall() {
     echo "    - fts-lstm-trainer (ML training)"
     echo "    - fts-grafana (monitoring dashboard)"
     echo "    - fts-victoria (metrics database)"
+    echo "    - fts-n8n (workflow automation, if installed)"
+    echo "    - fts-clickhouse (analytics database, if installed)"
+    echo "    - fts-suricata (IDS, if installed)"
+    echo "    - fts-zeek (network analyzer, if installed)"
+    echo "    - fts-cloudflared (tunnel, if installed)"
     echo ""
     echo "  OVS Network:"
     echo "    - OVS bridge: $OVS_BRIDGE"
@@ -2282,6 +2644,9 @@ uninstall() {
     log_info "Stage 2: Removing application containers..."
     podman rm -f fts-web fts-qsecbit fts-dnsxai fts-dfs fts-lstm-trainer 2>/dev/null || true
     podman rm -f fts-grafana fts-victoria 2>/dev/null || true
+    # Optional services
+    podman rm -f fts-n8n fts-clickhouse fts-cloudflared 2>/dev/null || true
+    podman rm -f fts-suricata fts-zeek fts-xdp 2>/dev/null || true
 
     # Stage 2b: Remove container images
     log_info "Stage 2b: Removing container images..."
@@ -2309,6 +2674,16 @@ uninstall() {
             fts-ml-models \
             fts-grafana-data \
             fts-victoria-data \
+            fts-n8n-data \
+            fts-clickhouse-data \
+            fts-clickhouse-logs \
+            fts-suricata-logs \
+            fts-suricata-rules \
+            fts-suricata-config \
+            fts-zeek-logs \
+            fts-zeek-spool \
+            fts-zeek-config \
+            fts-xdp-data \
             fortress-config \
             2>/dev/null || true
     else
@@ -2332,7 +2707,8 @@ uninstall() {
     # Remove container veth interfaces from OVS
     for veth in veth-fts-postgres veth-fts-redis veth-fts-web \
                 veth-fts-dnsxai veth-fts-dfs veth-fts-lstm-trainer \
-                veth-fts-grafana veth-fts-victoria; do
+                veth-fts-grafana veth-fts-victoria \
+                veth-fts-n8n veth-fts-clickhouse veth-fts-cloudflared; do
         ovs-vsctl del-port "$OVS_BRIDGE" "$veth" 2>/dev/null || true
         ip link del "$veth" 2>/dev/null || true
     done
@@ -2485,20 +2861,43 @@ main() {
                 export INSTALL_MONITORING=true
                 ;;
             --enable-n8n)
-                # n8n addon - handled separately
+                export INSTALL_N8N=true
                 ;;
             --enable-clickhouse)
-                # ClickHouse addon - handled separately
+                export INSTALL_CLICKHOUSE=true
                 ;;
             --enable-remote-access)
-                # Cloudflare tunnel - config already saved by root installer
+                export INSTALL_CLOUDFLARE_TUNNEL=true
                 ;;
             --enable-lte)
-                # LTE failover - handled by network scripts
+                export INSTALL_LTE=true
                 ;;
-            --lte-apn|--lte-auth|--lte-user|--lte-pass)
-                # Skip LTE config args (followed by value)
+            --enable-ids)
+                export INSTALL_IDS=true
+                ;;
+            --lte-apn)
                 shift
+                export LTE_APN="$1"
+                ;;
+            --lte-auth)
+                shift
+                export LTE_AUTH="$1"
+                ;;
+            --lte-user)
+                shift
+                export LTE_USER="$1"
+                ;;
+            --lte-pass)
+                shift
+                export LTE_PASS="$1"
+                ;;
+            --cloudflare-token)
+                shift
+                export CLOUDFLARE_TOKEN="$1"
+                ;;
+            --cloudflare-hostname)
+                shift
+                export CLOUDFLARE_HOSTNAME="$1"
                 ;;
             --help|help|-h)
                 echo "Usage: $0 [options]"
@@ -2510,6 +2909,24 @@ main() {
                 echo "  --preserve-data     Reinstall using existing data volumes"
                 echo "  --force-rebuild     Force rebuild of all containers"
                 echo ""
+                echo "Optional Services:"
+                echo "  --enable-monitoring       Install Grafana + VictoriaMetrics"
+                echo "  --enable-n8n              Install n8n workflow automation"
+                echo "  --enable-clickhouse       Install ClickHouse analytics database"
+                echo "  --enable-ids              Install Suricata + Zeek + XDP IDS/IPS"
+                echo "  --enable-remote-access    Configure Cloudflare Tunnel"
+                echo "  --enable-lte              Enable LTE modem failover"
+                echo ""
+                echo "LTE Configuration (with --enable-lte or when modem detected):"
+                echo "  --lte-apn <apn>           APN name (e.g., internet.vodafone.ro)"
+                echo "  --lte-auth <type>         Auth type: none, pap, chap, mschapv2"
+                echo "  --lte-user <user>         Username for APN authentication"
+                echo "  --lte-pass <pass>         Password for APN authentication"
+                echo ""
+                echo "Cloudflare Tunnel (with --enable-remote-access):"
+                echo "  --cloudflare-token <token>     Tunnel token from Cloudflare dashboard"
+                echo "  --cloudflare-hostname <host>   Subdomain (e.g., fortress.mybakery.com)"
+                echo ""
                 echo "Environment Variables (for --non-interactive):"
                 echo "  WIFI_SSID           WiFi network name"
                 echo "  WIFI_PASSWORD       WiFi password"
@@ -2517,6 +2934,12 @@ main() {
                 echo "  ADMIN_USER          Admin username"
                 echo "  ADMIN_PASS          Admin password"
                 echo "  WEB_PORT            Web UI port"
+                echo "  LTE_APN             LTE APN name"
+                echo "  LTE_AUTH            LTE auth type (none/pap/chap/mschapv2)"
+                echo "  LTE_USER            LTE username"
+                echo "  LTE_PASS            LTE password"
+                echo "  CLOUDFLARE_TOKEN    Cloudflare tunnel token"
+                echo "  CLOUDFLARE_HOSTNAME Cloudflare tunnel hostname"
                 echo ""
                 echo "Uninstall Options:"
                 echo "  --uninstall              Remove Fortress"
