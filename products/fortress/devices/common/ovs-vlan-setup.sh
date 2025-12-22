@@ -266,6 +266,18 @@ configure_dhcp() {
 
     local dhcp_conf="/etc/dnsmasq.d/fortress-vlans.conf"
 
+    # Remove conflicting filter-mode config if it exists
+    # (fts-ovs.conf is for filter mode, not VLAN mode)
+    if [ -f "/etc/dnsmasq.d/fts-ovs.conf" ]; then
+        log_info "Removing conflicting filter-mode config (fts-ovs.conf)..."
+        rm -f /etc/dnsmasq.d/fts-ovs.conf
+    fi
+
+    # Also remove any other fortress configs that might conflict
+    if [ -f "/etc/dnsmasq.d/fortress-bridge.conf" ]; then
+        rm -f /etc/dnsmasq.d/fortress-bridge.conf
+    fi
+
     # Wait for VLAN interfaces to be up
     local wait_count=0
     while [ $wait_count -lt 10 ]; do
