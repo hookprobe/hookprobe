@@ -277,7 +277,7 @@ set_active_wan() {
             ;;
     esac
 
-    # Update nftables to mark new connections
+    # Update nftables to mark new connections (OUTPUT chain for host traffic)
     nft -f - << NFTEOF
 flush chain inet fts_wan_failover output
 table inet fts_wan_failover {
@@ -299,6 +299,33 @@ table inet fts_wan_failover {
     }
 }
 NFTEOF
+
+    # Update FORWARD chain for container traffic (if traffic-flow tables exist)
+    if nft list table inet fts_forward_mark &>/dev/null; then
+        nft -f - << NFTEOF
+flush chain inet fts_forward_mark forward
+table inet fts_forward_mark {
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+
+        # Skip if already marked
+        meta mark & 0xf00 != 0 return
+
+        # Skip local traffic
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+
+        # Mark container traffic from services tier (internet-allowed)
+        ip saddr 172.20.201.0/24 meta mark set $mark
+
+        # Mark LAN client traffic
+        ip saddr 10.200.0.0/23 meta mark set $mark
+    }
+}
+NFTEOF
+        log_debug "Forward chain updated with mark $mark"
+    fi
 
     log_info "Active WAN set to: $wan (mark $mark)"
 }
