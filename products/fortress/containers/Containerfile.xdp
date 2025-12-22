@@ -1,0 +1,95 @@
+# ==============================================================================
+# Fortress XDP/eBPF DDoS Protection Container
+# ==============================================================================
+# Kernel-level packet filtering for high-performance DDoS mitigation
+#
+# Build:
+#   podman build -f Containerfile.xdp -t fts-xdp:latest ../..
+#
+# Run:
+#   podman run --privileged --network=host -v /sys/fs/bpf:/sys/fs/bpf fts-xdp:latest
+#
+# IMPORTANT: Requires privileged mode and host network for BPF operations
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for BCC
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    libelf-dev \
+    libz-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    bcc==0.29.1 \
+    pyroute2==0.7.12 \
+    prometheus-client==0.19.0
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Runtime dependencies for eBPF
+# Note: BCC requires kernel headers matching the running kernel
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libelf1 \
+    zlib1g \
+    iproute2 \
+    bpftool \
+    ethtool \
+    linux-headers-generic || apt-get install -y --no-install-recommends linux-headers-amd64 || true \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/core/qsecbit \
+             /opt/hookprobe/xdp/data \
+             /var/log/hookprobe
+
+# Copy XDP manager from core
+COPY core/qsecbit/xdp_manager.py /opt/hookprobe/core/qsecbit/
+COPY core/qsecbit/nic_detector.py /opt/hookprobe/core/qsecbit/
+COPY core/qsecbit/__init__.py /opt/hookprobe/core/qsecbit/
+COPY core/__init__.py /opt/hookprobe/core/
+
+# Copy XDP daemon wrapper
+COPY products/fortress/containers/xdp_daemon.py /opt/hookprobe/xdp/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV XDP_DATA_DIR=/opt/hookprobe/xdp/data
+ENV XDP_LOG_DIR=/var/log/hookprobe
+
+# Configuration defaults (override via environment)
+ENV XDP_INTERFACE=FTS
+ENV XDP_SYN_LIMIT=1000
+ENV XDP_UDP_LIMIT=5000
+ENV XDP_ICMP_LIMIT=100
+ENV XDP_RATE_LIMIT_PPS=10000
+
+# Health check - verify BPF programs are loaded
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD bpftool prog list 2>/dev/null | grep -q xdp || exit 1
+
+# Expose metrics endpoint
+EXPOSE 9091
+
+# Must run as root for BPF operations
+# Container must also be run with --privileged
+
+ENTRYPOINT ["python", "-m", "xdp.xdp_daemon"]
+CMD ["--interface", "${XDP_INTERFACE:-FTS}"]
