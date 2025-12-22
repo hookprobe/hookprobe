@@ -510,8 +510,11 @@ connect_lte() {
     log_info "Creating LTE connection:"
     log_info "  Device: $modem_device"
     log_info "  APN: ${apn:-auto}"
+    log_info "  Route metric: 200 (backup to wired WAN)"
 
-    local nmcli_args="type gsm ifname \"$modem_device\" con-name \"$con_name\" ipv4.method auto connection.autoconnect yes"
+    # IMPORTANT: Set route-metric to 200 (backup WAN)
+    # Default GSM metric is 700, we want 200 so it's backup to wired WAN (metric 100)
+    local nmcli_args="type gsm ifname \"$modem_device\" con-name \"$con_name\" ipv4.method auto ipv4.route-metric 200 connection.autoconnect yes"
 
     # Add APN if provided
     if [ -n "$apn" ]; then
@@ -794,15 +797,17 @@ setup_wan_failover() {
             log_info "[WAN]   Set $primary_con metric to 100"
         fi
 
-        # Configure LTE metric
+        # Configure LTE metric (fix default 700 to 200)
         local lte_con="fts-lte"
         if nmcli con show "$lte_con" &>/dev/null; then
             nmcli con mod "$lte_con" ipv4.route-metric 200 2>/dev/null || true
             log_info "[WAN]   Set $lte_con metric to 200"
         fi
 
-        # Reactivate to apply
+        # Reactivate BOTH connections to apply new metrics
+        log_info "[WAN] Reactivating connections to apply metrics..."
         [ -n "$primary_con" ] && nmcli con up "$primary_con" 2>/dev/null || true
+        nmcli con show --active 2>/dev/null | grep -q "$lte_con" && nmcli con up "$lte_con" 2>/dev/null || true
     fi
 
     # Step 2: Create IP SLA configuration
@@ -853,6 +858,15 @@ install_ip_sla_service() {
     #
     # This service continuously monitors WAN health by pinging through
     # specific interfaces and handles failover when traffic fails.
+    #
+    # REQUIRES: root privileges (writes to /etc/systemd/system/)
+
+    # Check for root
+    if [ "$EUID" -ne 0 ] && [ "$(id -u)" -ne 0 ]; then
+        log_error "[IP-SLA] This function requires root privileges"
+        log_error "[IP-SLA] Run with: sudo install_ip_sla_service"
+        return 1
+    fi
 
     # Use installed path, not source directory
     local installed_path="/opt/hookprobe/fortress/devices/common"
