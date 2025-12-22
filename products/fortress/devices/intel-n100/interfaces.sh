@@ -254,7 +254,7 @@ configure_wan_interface() {
 
 configure_lan_bridge() {
     # Create LAN bridge combining all LAN interfaces
-    local bridge_name="${1:-43ess}"
+    local bridge_name="${1:-FTS}"
     local lan_ifaces="${2:-$FORTRESS_LAN_IFACES}"
 
     [ -z "$lan_ifaces" ] && { log_warn "No LAN interfaces specified"; return 1; }

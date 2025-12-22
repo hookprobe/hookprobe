@@ -54,7 +54,7 @@ LTE_STATE_DIR="/var/lib/fortress/lte"
 LOG_DIR="/var/log/hookprobe"
 BACKUP_DIR="/var/backups/fortress"
 STATE_FILE="${CONFIG_DIR}/fortress-state.json"
-OVS_BRIDGE="43ess"
+OVS_BRIDGE="FTS"
 
 # ============================================================
 # OPTIONS
@@ -586,7 +586,7 @@ remove_ovs_config() {
 remove_vlan_interfaces() {
     log_step "Removing network interfaces..."
 
-    # New tier-based interfaces (43ess-*)
+    # New tier-based interfaces (FTS-*)
     local tiers=(data services ml mgmt lan)
     for tier in "${tiers[@]}"; do
         local iface="${OVS_BRIDGE}-${tier}"
