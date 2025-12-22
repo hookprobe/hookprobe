@@ -440,6 +440,9 @@ services:
     networks:
       fts-mgmt:
         ipv4_address: 172.20.203.10
+      fts-data:
+        # Secondary interface for Postgres datasource access
+        ipv4_address: 172.20.200.30
     profiles:
       - monitoring
 
