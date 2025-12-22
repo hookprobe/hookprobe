@@ -384,122 +384,99 @@ EOF
 # ============================================================
 
 initialize_lte_modem() {
-    # Initialize LTE modem and bring it online
+    # Initialize LTE modem using simple nmcli approach
     #
-    # This function:
-    #   1. Ensures ModemManager is running
-    #   2. Waits for modem detection
-    #   3. Enables the modem if disabled
-    #   4. Verifies the modem is ready for connection
+    # SIMPLIFIED VERSION: Uses NetworkManager which handles:
+    #   - ModemManager integration automatically
+    #   - SIM detection
+    #   - Modem power state management
+    #   - Connection establishment and retry
     #
     # Returns: 0 on success, 1 on failure
 
-    log_step "Initializing LTE modem..."
+    log_step "Initializing LTE modem (nmcli)..."
 
-    # Check if ModemManager is available
-    if ! command -v mmcli &>/dev/null; then
-        log_warn "ModemManager (mmcli) not found"
-        log_warn "Install with: apt install modemmanager"
+    # Check for NetworkManager
+    if ! command -v nmcli &>/dev/null; then
+        log_error "NetworkManager (nmcli) not found"
+        log_warn "Install with: apt install network-manager"
         return 1
     fi
 
-    # Ensure ModemManager is running
-    if ! systemctl is-active ModemManager &>/dev/null; then
-        log_info "Starting ModemManager..."
-        systemctl start ModemManager || {
-            log_error "Failed to start ModemManager"
+    # Ensure NetworkManager is running
+    if ! systemctl is-active NetworkManager &>/dev/null; then
+        log_info "Starting NetworkManager..."
+        systemctl start NetworkManager || {
+            log_error "Failed to start NetworkManager"
             return 1
         }
         sleep 2
     fi
 
-    # Wait for modem to be detected (max 30 seconds)
-    log_info "Waiting for modem detection..."
+    # Find modem control device (cdc-wdm* for CDC-MBIM modems)
+    local modem_device=""
     local max_wait=30
     local waited=0
-    local modem_found=false
+
+    log_info "Waiting for modem device..."
 
     while [ $waited -lt $max_wait ]; do
-        if mmcli -L 2>/dev/null | grep -q "/Modem/"; then
-            modem_found=true
-            break
+        # Check for CDC-WDM devices (modern USB modems: Sierra, Quectel, Fibocom)
+        for dev in /dev/cdc-wdm*; do
+            if [ -c "$dev" ]; then
+                modem_device=$(basename "$dev")
+                break 2
+            fi
+        done 2>/dev/null
+
+        # Check for ttyUSB devices (legacy AT command modems)
+        if [ -z "$modem_device" ]; then
+            for dev in /dev/ttyUSB*; do
+                if [ -c "$dev" ]; then
+                    modem_device=$(basename "$dev")
+                    break 2
+                fi
+            done 2>/dev/null
         fi
+
         sleep 2
         waited=$((waited + 2))
-        [ $((waited % 10)) -eq 0 ] && log_info "  Still waiting... ($waited seconds)"
+        [ $((waited % 10)) -eq 0 ] && log_info "  Still waiting for modem device... ($waited seconds)"
     done
 
-    if [ "$modem_found" = "false" ]; then
-        log_warn "No LTE modem detected after ${max_wait}s"
-        log_warn "Check: lsusb | grep -i modem"
+    if [ -z "$modem_device" ]; then
+        log_warn "No modem device found after ${max_wait}s"
+        log_warn "Check: ls /dev/cdc-wdm* or lsusb"
         return 1
     fi
 
-    # Get modem index
-    local modem_idx
-    modem_idx=$(mmcli -L 2>/dev/null | grep -oP '/Modem/\K\d+' | head -1)
+    log_info "Found modem device: $modem_device"
+    export LTE_MODEM_DEVICE="$modem_device"
 
-    if [ -z "$modem_idx" ]; then
-        log_error "Could not get modem index"
-        return 1
-    fi
-
-    log_info "Found modem at index $modem_idx"
-
-    # Check modem state
-    local modem_state
-    modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "state:\s+'\K[^']+")
-    log_info "Modem state: $modem_state"
-
-    # Enable modem if disabled
-    if [ "$modem_state" = "disabled" ] || [ "$modem_state" = "locked" ]; then
-        log_info "Enabling modem..."
-        if ! mmcli -m "$modem_idx" --enable 2>/dev/null; then
-            log_error "Failed to enable modem"
-            return 1
-        fi
-        sleep 3
-        modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "state:\s+'\K[^']+")
-        log_info "Modem state after enable: $modem_state"
-    fi
-
-    # Check for SIM
-    local sim_path
-    sim_path=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "primary sim path:\s+'\K[^']+")
-
-    if [ -z "$sim_path" ] || [ "$sim_path" = "--" ]; then
-        log_warn "No SIM card detected"
-        return 1
-    fi
-
-    log_info "SIM detected: $sim_path"
-
-    # Get WWAN interface name
-    local wwan_iface
-    wwan_iface=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "primary port:\s+'\K[^']+")
-
-    # Also check for net interface
+    # Get WWAN network interface (will be created after connection)
     local net_iface
     net_iface=$(ls /sys/class/net/ 2>/dev/null | grep -E '^wwan|^wwp' | head -1)
-
     if [ -n "$net_iface" ]; then
-        log_info "Network interface: $net_iface"
         export NET_WWAN_IFACE="$net_iface"
         export LTE_INTERFACE="$net_iface"
+        log_info "Network interface: $net_iface"
     fi
 
-    export LTE_MODEM_IDX="$modem_idx"
-    export LTE_MODEM_STATE="$modem_state"
-
-    log_success "LTE modem initialized successfully"
+    log_success "LTE modem ready: $modem_device"
     return 0
 }
 
 connect_lte() {
-    # Connect LTE modem to network
+    # Connect LTE modem to network using simple nmcli approach
+    #
+    # SIMPLIFIED VERSION: Uses nmcli gsm connection type which handles:
+    #   - ModemManager integration automatically
+    #   - SIM PIN entry if needed
+    #   - Connection establishment with retry
+    #   - Auto-reconnect on failure
     #
     # Args:
-    #   $1 - APN name (optional, will try auto-detect if not provided)
+    #   $1 - APN name (required)
     #   $2 - Username (optional)
     #   $3 - Password (optional)
     #
@@ -508,59 +485,78 @@ connect_lte() {
     local apn="$1"
     local username="$2"
     local password="$3"
+    local con_name="fts-lte"
 
-    log_step "Connecting LTE..."
+    log_step "Connecting LTE via nmcli..."
 
-    # Ensure modem is initialized
-    if [ -z "$LTE_MODEM_IDX" ]; then
+    # Ensure modem device is detected
+    if [ -z "$LTE_MODEM_DEVICE" ]; then
         initialize_lte_modem || return 1
     fi
 
-    local modem_idx="$LTE_MODEM_IDX"
+    local modem_device="$LTE_MODEM_DEVICE"
 
-    # Check current state
-    local current_state
-    current_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "state:\s+'\K[^']+")
-
-    if [ "$current_state" = "connected" ]; then
-        log_info "Modem already connected"
+    # Check if connection already exists and is active
+    if nmcli con show --active 2>/dev/null | grep -q "$con_name"; then
+        log_info "LTE connection '$con_name' already active"
         verify_lte_connection
         return $?
     fi
 
-    # Build connection command
-    local connect_args=""
+    # Delete existing connection to recreate with new settings
+    nmcli con delete "$con_name" 2>/dev/null || true
+
+    # Build nmcli command - this is the simple approach the user requested
+    log_info "Creating LTE connection:"
+    log_info "  Device: $modem_device"
+    log_info "  APN: ${apn:-auto}"
+
+    local nmcli_args="type gsm ifname \"$modem_device\" con-name \"$con_name\" ipv4.method auto connection.autoconnect yes"
+
+    # Add APN if provided
     if [ -n "$apn" ]; then
-        connect_args="apn=$apn"
+        nmcli_args="$nmcli_args apn \"$apn\""
     fi
+
+    # Add credentials if provided
     if [ -n "$username" ]; then
-        connect_args="${connect_args}${connect_args:+,}user=$username"
+        nmcli_args="$nmcli_args gsm.username \"$username\""
     fi
     if [ -n "$password" ]; then
-        connect_args="${connect_args}${connect_args:+,}password=$password"
+        nmcli_args="$nmcli_args gsm.password \"$password\" gsm.password-flags 0"
     fi
 
-    # Try to connect
-    log_info "Connecting with${apn:+ APN: $apn}${apn:-auto-detect}..."
-
-    if [ -n "$connect_args" ]; then
-        mmcli -m "$modem_idx" --simple-connect="$connect_args" 2>/dev/null
-    else
-        # Try auto-connect without APN
-        mmcli -m "$modem_idx" --simple-connect="" 2>/dev/null
-    fi
-
-    local result=$?
-
-    if [ $result -eq 0 ]; then
-        log_success "LTE connected"
-        sleep 2
-        verify_lte_connection
-        return $?
-    else
-        log_error "Failed to connect LTE"
+    # Create the connection
+    if ! eval "nmcli con add $nmcli_args"; then
+        log_error "Failed to create LTE connection"
         return 1
     fi
+
+    log_success "LTE connection '$con_name' created"
+
+    # Bring up the connection (retry up to 3 times)
+    log_info "Activating LTE connection..."
+    local retry=0
+    local max_retries=3
+
+    while [ $retry -lt $max_retries ]; do
+        if nmcli con up "$con_name" 2>&1; then
+            log_success "LTE connection activated"
+            sleep 2
+            verify_lte_connection
+            return $?
+        fi
+
+        retry=$((retry + 1))
+        if [ $retry -lt $max_retries ]; then
+            log_warn "Activation attempt $retry failed, retrying in 3s..."
+            sleep 3
+        fi
+    done
+
+    log_warn "Failed to activate connection after $max_retries attempts"
+    log_info "Connection will auto-activate when modem is ready"
+    return 0  # Connection created, will auto-connect
 }
 
 verify_lte_connection() {
@@ -624,6 +620,9 @@ verify_lte_connection() {
 setup_lte_on_boot() {
     # Create systemd service to connect LTE on boot
     #
+    # SIMPLIFIED: Uses nmcli with autoconnect=yes, so NetworkManager handles
+    # reconnection automatically. This service just ensures initial connection.
+    #
     # Args:
     #   $1 - APN (optional)
 
@@ -631,18 +630,19 @@ setup_lte_on_boot() {
 
     log_info "Creating LTE boot service..."
 
+    # Use nmcli for stop as well (disconnect the fts-lte connection)
     cat > /etc/systemd/system/fts-lte.service << EOF
 [Unit]
 Description=HookProbe Fortress LTE Connection
-After=ModemManager.service network-online.target
-Wants=ModemManager.service
+After=NetworkManager.service network-online.target
+Wants=NetworkManager.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/bin/sleep 5
+ExecStartPre=/bin/sleep 3
 ExecStart=/bin/bash -c 'source /opt/hookprobe/fortress/devices/common/network-integration.sh && initialize_lte_modem && connect_lte ${apn}'
-ExecStop=/usr/bin/mmcli -m 0 --simple-disconnect
+ExecStop=/usr/bin/nmcli con down fts-lte
 
 [Install]
 WantedBy=multi-user.target
@@ -652,6 +652,7 @@ EOF
     systemctl enable fts-lte.service 2>/dev/null || true
 
     log_info "LTE boot service created (fts-lte.service)"
+    log_info "  Note: nmcli autoconnect=yes handles reconnection automatically"
 }
 
 setup_lte_connection() {
@@ -684,12 +685,88 @@ setup_lte_connection() {
     return $?
 }
 
-setup_wan_failover() {
-    # Configure WAN failover from Ethernet to LTE using route metrics
+setup_lte_complete() {
+    # End-to-end LTE setup: detect, connect, validate, configure failover
     #
-    # This function sets up automatic failover:
-    #   - Primary WAN (Ethernet): metric 100 (preferred)
-    #   - LTE backup: metric 200 (fallback)
+    # This is the simple one-call function that does everything:
+    #   1. Detects modem device (cdc-wdm*)
+    #   2. Creates nmcli GSM connection
+    #   3. Activates connection
+    #   4. Validates connectivity
+    #   5. Sets up WAN failover with IP SLA
+    #
+    # Usage:
+    #   setup_lte_complete "internet.vodafone.ro"
+    #   setup_lte_complete "private.apn" "myuser" "mypass"
+    #
+    # Args:
+    #   $1 - APN name (required)
+    #   $2 - Username (optional)
+    #   $3 - Password (optional)
+    #   $4 - Primary WAN interface (optional, auto-detected)
+
+    local apn="$1"
+    local username="$2"
+    local password="$3"
+    local primary_wan="${4:-$NET_WAN_IFACE}"
+
+    [ -z "$apn" ] && { log_error "APN required. Usage: setup_lte_complete <apn> [user] [pass]"; return 1; }
+
+    log_step "=== Complete LTE Setup ==="
+    log_info "APN: $apn"
+    [ -n "$username" ] && log_info "Username: $username"
+
+    # Step 1: Initialize modem
+    if ! initialize_lte_modem; then
+        log_error "Failed to detect modem"
+        return 1
+    fi
+
+    # Step 2: Connect to LTE network
+    if ! connect_lte "$apn" "$username" "$password"; then
+        log_error "Failed to create LTE connection"
+        return 1
+    fi
+
+    # Step 3: Verify connection
+    verify_lte_connection
+
+    # Step 4: Set up failover with IP SLA if we have a primary WAN
+    if [ -n "$primary_wan" ] && [ -n "$LTE_INTERFACE" ]; then
+        setup_wan_failover "$primary_wan" "$LTE_INTERFACE"
+    else
+        log_info "Skipping WAN failover (no primary WAN or LTE interface)"
+    fi
+
+    # Step 5: Create boot service
+    setup_lte_on_boot "$apn"
+
+    log_success "=== LTE Setup Complete ==="
+    log_info ""
+    log_info "Summary:"
+    log_info "  Modem: ${LTE_MODEM_DEVICE:-unknown}"
+    log_info "  Interface: ${LTE_INTERFACE:-pending}"
+    log_info "  Connection: fts-lte"
+    log_info "  IP SLA: $(systemctl is-active fts-wan-failover 2>/dev/null || echo 'not started')"
+    log_info ""
+    log_info "Commands:"
+    log_info "  Status:     nmcli con show fts-lte"
+    log_info "  Failover:   systemctl status fts-wan-failover"
+    log_info "  Logs:       journalctl -u fts-wan-failover -f"
+    return 0
+}
+
+setup_wan_failover() {
+    # Configure WAN failover from Ethernet to LTE with IP SLA health monitoring
+    #
+    # This function sets up:
+    #   1. Route metrics (Primary=100, LTE=200) for kernel-level fallback
+    #   2. IP SLA service for active health monitoring (ping-based)
+    #
+    # IP SLA solves the problem where wired WAN has link but no traffic:
+    #   - Metric-based failover only works when interface goes DOWN
+    #   - IP SLA detects when primary has link but no actual connectivity
+    #   - IP SLA removes/downgrades primary route when health checks fail
     #
     # Args:
     #   $1 - Primary WAN interface
@@ -701,19 +778,13 @@ setup_wan_failover() {
     [ -z "$primary_wan" ] && { log_error "[WAN] Primary WAN interface required"; return 1; }
     [ -z "$lte_iface" ] && { log_warn "[WAN] No LTE interface for failover"; return 1; }
 
-    log_step "[WAN] Configuring metric-based failover..."
+    log_step "[WAN] Configuring WAN failover with IP SLA..."
     log_info "[WAN]   Primary: $primary_wan (metric 100)"
     log_info "[WAN]   Backup:  $lte_iface (metric 200)"
 
-    # Method 1: Use LTE manager if available (call directly, not source)
-    if [ -x "$LTE_MANAGER" ]; then
-        "$LTE_MANAGER" setup-failover "$primary_wan" "$lte_iface"
-        return $?
-    fi
-
-    # Method 2: Configure directly via NetworkManager (fallback)
+    # Step 1: Configure route metrics via NetworkManager
     if command -v nmcli &>/dev/null; then
-        log_info "[WAN] Using NetworkManager for failover configuration"
+        log_info "[WAN] Setting route metrics..."
 
         # Configure primary WAN metric
         local primary_con
@@ -732,33 +803,108 @@ setup_wan_failover() {
 
         # Reactivate to apply
         [ -n "$primary_con" ] && nmcli con up "$primary_con" 2>/dev/null || true
-
-        log_info "[WAN] Metric-based failover configured"
-        return 0
     fi
 
-    # Method 3: Direct route manipulation (last resort)
-    log_info "[WAN] Using direct route manipulation"
+    # Step 2: Create IP SLA configuration
+    log_info "[WAN] Creating IP SLA configuration..."
+    mkdir -p /etc/hookprobe
+    cat > /etc/hookprobe/wan-failover.conf << EOF
+# Fortress WAN Failover Configuration with IP SLA
+# Generated: $(date -Iseconds)
+#
+# IP SLA (Service Level Agreement) monitors actual traffic, not just link state.
+# This detects when primary WAN has carrier but no actual connectivity.
 
-    local primary_gw
-    primary_gw=$(ip route show dev "$primary_wan" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
+# Interface configuration
+PRIMARY_IFACE="$primary_wan"
+BACKUP_IFACE="$lte_iface"
 
-    if [ -n "$primary_gw" ]; then
-        ip route del default via "$primary_gw" dev "$primary_wan" 2>/dev/null || true
-        ip route add default via "$primary_gw" dev "$primary_wan" metric 100 2>/dev/null || true
-        log_info "[WAN]   Primary route: metric 100"
+# Route metrics (lower = preferred)
+PRIMARY_METRIC=100
+BACKUP_METRIC=200
+
+# Health check targets (multiple for reliability)
+# Uses ping through specific interface, not just any route
+HEALTH_TARGETS="8.8.8.8 1.1.1.1 9.9.9.9"
+
+# Timing
+CHECK_INTERVAL=5        # Seconds between health checks
+PING_TIMEOUT=2          # Timeout for each ping
+PING_COUNT=1            # Pings per target
+
+# Failover thresholds (hysteresis to prevent flapping)
+FAIL_THRESHOLD=3        # Consecutive failures before failover
+RECOVER_THRESHOLD=5     # Consecutive successes before failback
+EOF
+
+    log_success "[WAN] IP SLA configuration created at /etc/hookprobe/wan-failover.conf"
+
+    # Step 3: Install and enable IP SLA systemd service
+    install_ip_sla_service
+
+    log_info "[WAN] Failover configured with IP SLA health monitoring"
+    log_info "[WAN]   - Metric failover: automatic kernel routing"
+    log_info "[WAN]   - IP SLA: detects 'link up but no traffic' scenarios"
+    return 0
+}
+
+install_ip_sla_service() {
+    # Install systemd service for IP SLA-based WAN health monitoring
+    #
+    # This service continuously monitors WAN health by pinging through
+    # specific interfaces and handles failover when traffic fails.
+
+    local wan_monitor="$SCRIPT_DIR/wan-failover-monitor.sh"
+
+    if [ ! -x "$wan_monitor" ]; then
+        log_warn "[IP-SLA] wan-failover-monitor.sh not found at $wan_monitor"
+        return 1
     fi
 
-    local lte_gw
-    lte_gw=$(ip route show dev "$lte_iface" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
+    log_info "[IP-SLA] Installing WAN health monitoring service..."
 
-    if [ -n "$lte_gw" ]; then
-        ip route del default via "$lte_gw" dev "$lte_iface" 2>/dev/null || true
-        ip route add default via "$lte_gw" dev "$lte_iface" metric 200 2>/dev/null || true
-        log_info "[WAN]   LTE route: metric 200"
+    cat > /etc/systemd/system/fts-wan-failover.service << EOF
+[Unit]
+Description=HookProbe Fortress WAN IP SLA Health Monitor
+Documentation=man:wan-failover-monitor(8)
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+ConditionPathExists=/etc/hookprobe/wan-failover.conf
+
+[Service]
+Type=simple
+ExecStart=$wan_monitor start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/fortress /var/log/hookprobe /proc/sys/net
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create required directories
+    mkdir -p /var/lib/fortress
+    mkdir -p /var/log/hookprobe
+
+    # Enable and start service
+    systemctl daemon-reload
+    systemctl enable fts-wan-failover.service 2>/dev/null || true
+
+    # Start service if both interfaces are available
+    if [ -d "/sys/class/net/${PRIMARY_IFACE:-eth0}" ]; then
+        systemctl start fts-wan-failover.service 2>/dev/null || true
+        log_success "[IP-SLA] WAN health monitor service started"
+    else
+        log_info "[IP-SLA] WAN health monitor will start when interfaces are ready"
     fi
 
-    log_info "[WAN] Failover configured"
     return 0
 }
 
@@ -873,9 +1019,14 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     echo "Available functions:"
     echo "  network_integration_init   - Initialize and detect interfaces"
     echo "  setup_dual_band_wifi       - Configure dual-band WiFi AP"
-    echo "  setup_lte_connection       - Configure LTE connection"
-    echo "  setup_wan_failover         - Configure WAN failover"
+    echo "  setup_lte_complete <apn>   - End-to-end LTE setup (recommended)"
+    echo "  setup_lte_connection       - Configure LTE connection only"
+    echo "  setup_wan_failover         - Configure WAN failover with IP SLA"
     echo "  setup_lan_bridge_auto      - Set up LAN bridge"
     echo "  validate_network_config    - Run validation tests"
     echo "  show_network_summary       - Show configuration summary"
+    echo ""
+    echo "Examples:"
+    echo "  source network-integration.sh && setup_lte_complete internet.vodafone.ro"
+    echo "  source network-integration.sh && setup_wan_failover eth0 wwan0"
 fi
