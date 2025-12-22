@@ -526,7 +526,7 @@ configure_apn_nmcli() {
     local auth_type="$2"
     local username="$3"
     local password="$4"
-    local con_name="fortress-lte"
+    local con_name="fts-lte"
 
     if ! command -v nmcli &>/dev/null; then
         lte_warn "NetworkManager not available"
@@ -941,23 +941,23 @@ quick_setup_lte() {
     lte_log "  Device: $modem_device"
 
     # Delete existing connection
-    nmcli con delete fortress-lte 2>/dev/null || true
+    nmcli con delete fts-lte 2>/dev/null || true
 
     # Create new connection
-    if nmcli con add type gsm ifname "$modem_device" con-name fortress-lte apn "$apn" ipv4.method auto; then
-        lte_success "LTE connection 'fortress-lte' created"
+    if nmcli con add type gsm ifname "$modem_device" con-name fts-lte apn "$apn" ipv4.method auto; then
+        lte_success "LTE connection 'fts-lte' created"
 
         # Try to bring it up
         lte_log "Activating connection..."
-        if nmcli con up fortress-lte 2>&1; then
+        if nmcli con up fts-lte 2>&1; then
             lte_success "LTE connected!"
 
             # Show connection info
             echo ""
-            nmcli con show fortress-lte | grep -E "GENERAL|IP4" | head -10
+            nmcli con show fts-lte | grep -E "GENERAL|IP4" | head -10
         else
             lte_warn "Connection created but failed to activate"
-            lte_warn "Try manually: nmcli con up fortress-lte"
+            lte_warn "Try manually: nmcli con up fts-lte"
         fi
         return 0
     else
@@ -1174,8 +1174,8 @@ configure_nm_metrics() {
     lte_con=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep ":${lte}$" | cut -d: -f1 | head -1)
 
     if [ -z "$lte_con" ]; then
-        # Try fortress-lte connection
-        lte_con="fortress-lte"
+        # Try fts-lte connection
+        lte_con="fts-lte"
     fi
 
     if nmcli con show "$lte_con" &>/dev/null; then
@@ -1440,7 +1440,7 @@ install_failover_service() {
 
     lte_log "Installing WAN failover systemd service..."
 
-    cat > /etc/systemd/system/fortress-wan-failover.service << 'EOF'
+    cat > /etc/systemd/system/fts-wan-failover.service << 'EOF'
 [Unit]
 Description=HookProbe Fortress WAN Failover Monitor
 After=network-online.target ModemManager.service
@@ -1459,7 +1459,7 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable fortress-wan-failover.service
+    systemctl enable fts-wan-failover.service
     lte_success "WAN failover service installed"
 }
 

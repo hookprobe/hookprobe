@@ -120,7 +120,7 @@ if [ -z "$iface_24ghz" ] && [ -z "$iface_5ghz" ]; then
 fi
 
 # Create udev rules
-udev_rule_file="/etc/udev/rules.d/70-fortress-wifi.rules"
+udev_rule_file="/etc/udev/rules.d/70-fts-wifi.rules"
 log_info "Creating $udev_rule_file..."
 
 cat > "$udev_rule_file" << EOF
@@ -169,7 +169,7 @@ fi
 # Step 6: Generate hostapd configuration
 log_info "Step 6: Generating hostapd configuration..."
 HOSTAPD_SCRIPT="${DEVICES_DIR}/common/hostapd-generator.sh"
-OVS_BRIDGE="43ess"
+OVS_BRIDGE="FTS"
 
 # Get WiFi credentials
 WIFI_SSID=$(grep "^WIFI_SSID=" "$CONFIG_DIR/fortress.conf" 2>/dev/null | cut -d= -f2 || echo "HookProbe-Fortress")
@@ -190,7 +190,7 @@ systemctl unmask hostapd 2>/dev/null || true
 
 # Step 8: Create bridge helper script
 log_info "Step 8: Creating WiFi bridge helper script..."
-BRIDGE_HELPER="/usr/local/bin/fortress-wifi-bridge-helper.sh"
+BRIDGE_HELPER="/usr/local/bin/fts-wifi-bridge-helper.sh"
 
 cat > "$BRIDGE_HELPER" << 'HELPER_EOF'
 #!/bin/bash
@@ -198,7 +198,7 @@ cat > "$BRIDGE_HELPER" << 'HELPER_EOF'
 # Adds WiFi interface to OVS bridge after hostapd starts
 
 IFACE="$1"
-BRIDGE="${2:-43ess}"
+BRIDGE="${2:-FTS}"
 ACTION="${3:-add}"
 
 [ -z "$IFACE" ] && exit 1
@@ -273,7 +273,7 @@ fi
 log_info "  Using hostapd: $HOSTAPD_BIN"
 
 if [ -n "$mac_24ghz" ]; then
-    cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
+    cat > /etc/systemd/system/fts-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
 After=network.target openvswitch-switch.service sys-subsystem-net-devices-${IFACE_24GHZ}.device
@@ -301,11 +301,11 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-    log_info "  Created fortress-hostapd-24ghz.service"
+    log_info "  Created fts-hostapd-24ghz.service"
 fi
 
 if [ -n "$mac_5ghz" ]; then
-    cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
+    cat > /etc/systemd/system/fts-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
 After=network.target openvswitch-switch.service sys-subsystem-net-devices-${IFACE_5GHZ}.device
@@ -333,7 +333,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-    log_info "  Created fortress-hostapd-5ghz.service"
+    log_info "  Created fts-hostapd-5ghz.service"
 fi
 
 # Step 10: Update hostapd configs with stable names
@@ -354,13 +354,13 @@ log_info "Step 11: Enabling services..."
 systemctl daemon-reload
 
 if [ -n "$mac_24ghz" ]; then
-    systemctl enable fortress-hostapd-24ghz 2>/dev/null || true
-    log_info "  Enabled fortress-hostapd-24ghz"
+    systemctl enable fts-hostapd-24ghz 2>/dev/null || true
+    log_info "  Enabled fts-hostapd-24ghz"
 fi
 
 if [ -n "$mac_5ghz" ]; then
-    systemctl enable fortress-hostapd-5ghz 2>/dev/null || true
-    log_info "  Enabled fortress-hostapd-5ghz"
+    systemctl enable fts-hostapd-5ghz 2>/dev/null || true
+    log_info "  Enabled fts-hostapd-5ghz"
 fi
 
 # Save interface mapping
@@ -384,11 +384,11 @@ echo "  2.4GHz: ${iface_24ghz:-none} ($mac_24ghz) -> wlan_24ghz"
 echo "  5GHz:   ${iface_5ghz:-none} ($mac_5ghz) -> wlan_5ghz"
 echo ""
 echo "Files created:"
-echo "  /etc/udev/rules.d/70-fortress-wifi.rules"
+echo "  /etc/udev/rules.d/70-fts-wifi.rules"
 echo "  /etc/hookprobe/wifi-interfaces.conf"
-echo "  /usr/local/bin/fortress-wifi-bridge-helper.sh"
-echo "  /etc/systemd/system/fortress-hostapd-24ghz.service (if 2.4GHz)"
-echo "  /etc/systemd/system/fortress-hostapd-5ghz.service (if 5GHz)"
+echo "  /usr/local/bin/fts-wifi-bridge-helper.sh"
+echo "  /etc/systemd/system/fts-hostapd-24ghz.service (if 2.4GHz)"
+echo "  /etc/systemd/system/fts-hostapd-5ghz.service (if 5GHz)"
 echo "  /etc/hostapd/hostapd-24ghz.conf (if 2.4GHz available)"
 echo "  /etc/hostapd/hostapd-5ghz.conf (if 5GHz available)"
 echo ""
@@ -396,7 +396,7 @@ echo "Next steps:"
 echo "  1. Verify interface names: ip link show"
 echo "  2. If interfaces not renamed, reboot: sudo reboot"
 echo "  3. Start WiFi AP:"
-[ -n "$mac_24ghz" ] && echo "     sudo systemctl start fortress-hostapd-24ghz"
-[ -n "$mac_5ghz" ] && echo "     sudo systemctl start fortress-hostapd-5ghz"
-echo "  4. Check status: sudo systemctl status fortress-hostapd-*"
+[ -n "$mac_24ghz" ] && echo "     sudo systemctl start fts-hostapd-24ghz"
+[ -n "$mac_5ghz" ] && echo "     sudo systemctl start fts-hostapd-5ghz"
+echo "  4. Check status: sudo systemctl status fts-hostapd-*"
 echo ""

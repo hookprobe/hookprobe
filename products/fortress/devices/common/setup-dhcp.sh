@@ -10,8 +10,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# OVS Bridge name (43ess = leetspeak for fortress)
-OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+# OVS Bridge name (FTS = abbreviation for fortress)
+OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 
 # Colors
 RED='\033[0;31m'

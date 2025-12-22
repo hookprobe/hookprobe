@@ -46,8 +46,8 @@ DATA_DIR = Path(os.environ.get('QSECBIT_DATA_DIR', '/opt/hookprobe/fortress/data
 STATS_FILE = DATA_DIR / "qsecbit_stats.json"
 CONFIG_DIR = Path("/etc/hookprobe")
 
-# OVS Bridge name (43ess = leetspeak for fortress)
-OVS_BRIDGE = os.environ.get('OVS_BRIDGE', '43ess')
+# OVS Bridge name (FTS = abbreviation for fortress)
+OVS_BRIDGE = os.environ.get('OVS_BRIDGE', 'FTS')
 
 
 @dataclass
