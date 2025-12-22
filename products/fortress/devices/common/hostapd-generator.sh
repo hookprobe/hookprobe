@@ -2054,6 +2054,15 @@ generate_hostapd_24ghz() {
         ht_capab=$(detect_ht_capabilities "$iface" "$channel")
     fi
 
+    # Determine secondary_channel based on HT40 mode
+    # Required for HT40 operation on ath12k and many other drivers
+    local secondary_channel=0
+    if echo "$ht_capab" | grep -q "HT40+"; then
+        secondary_channel=1   # Secondary channel above primary
+    elif echo "$ht_capab" | grep -q "HT40-"; then
+        secondary_channel=-1  # Secondary channel below primary
+    fi
+
     # Detect driver for capability restrictions
     local wifi_driver
     wifi_driver=$(get_wifi_driver "$iface")
@@ -2129,6 +2138,15 @@ channel=$channel
 ieee80211n=1
 require_ht=0
 ht_capab=$ht_capab
+EOF
+
+    # Add secondary_channel for HT40 operation (required on ath12k and many drivers)
+    if [ "$secondary_channel" -ne 0 ]; then
+        echo "secondary_channel=$secondary_channel" >> "$HOSTAPD_24GHZ_CONF"
+        log_info "  HT40 mode: secondary_channel=$secondary_channel"
+    fi
+
+    cat >> "$HOSTAPD_24GHZ_CONF" << EOF
 
 # Disable Overlapping BSS scan to prevent HT_SCAN hang
 # The scan can cause hostapd to get stuck on some drivers (e.g., ath12k)
