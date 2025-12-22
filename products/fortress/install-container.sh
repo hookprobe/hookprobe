@@ -1466,6 +1466,26 @@ start_containers() {
 
     # Connect containers to OVS for flow monitoring
     connect_containers_to_ovs
+
+    # Setup traffic flow rules (NAT, PBR integration)
+    setup_traffic_flow
+}
+
+setup_traffic_flow() {
+    log_step "Configuring traffic flow"
+
+    local traffic_script="${INSTALL_DIR}/devices/common/traffic-flow-setup.sh"
+
+    if [ -x "$traffic_script" ]; then
+        log_info "Setting up NAT and PBR for container traffic..."
+        "$traffic_script" setup || {
+            log_warn "Traffic flow setup had issues - containers may have limited internet access"
+            return 0
+        }
+        log_info "Traffic flow configured"
+    else
+        log_warn "Traffic flow script not found at: $traffic_script"
+    fi
 }
 
 # Wait for container to be running
