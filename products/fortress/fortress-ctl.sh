@@ -466,6 +466,22 @@ start_all_services() {
                 source .env
                 set +a
             fi
+
+            # Clean up any existing containers first to prevent name conflicts
+            log_substep "Cleaning up stale containers..."
+            podman-compose down --timeout 10 2>/dev/null || true
+
+            # Force-remove any remaining fts-* containers
+            for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+                podman rm -f "$container" 2>/dev/null || true
+            done
+
+            # Remove stale networks
+            for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
+                podman network rm -f "$network" 2>/dev/null || true
+            done
+
+            # Now start fresh
             podman-compose up -d --no-build
         }
     fi
