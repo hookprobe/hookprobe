@@ -12,47 +12,32 @@
 # IMPORTANT: Requires privileged mode and host network for BPF operations
 # ==============================================================================
 
-FROM python:3.11-slim-bookworm AS builder
+# Use Debian bookworm with Python and BCC pre-installed
+FROM debian:bookworm-slim
 
-# Build dependencies for BCC
+# Install BCC tools and Python bindings from system packages
+# Note: bcc Python bindings are NOT on PyPI - they come from libbpfcc-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    make \
-    cmake \
-    libelf-dev \
-    libz-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Install Python dependencies
-RUN pip install --no-cache-dir \
-    bcc==0.29.1 \
-    pyroute2==0.7.12 \
-    prometheus-client==0.19.0
-
-# ==============================================================================
-# Production image
-# ==============================================================================
-FROM python:3.11-slim-bookworm
-
-# Runtime dependencies for eBPF
-# Note: BCC requires kernel headers matching the running kernel
-RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-bcc \
+    bpfcc-tools \
+    bpftool \
+    iproute2 \
+    ethtool \
     libelf1 \
     zlib1g \
-    iproute2 \
-    bpftool \
-    ethtool \
-    linux-headers-generic || apt-get install -y --no-install-recommends linux-headers-amd64 || true \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
+# Create virtual environment and install additional Python deps
+RUN python3 -m venv /opt/venv --system-site-packages
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies (pyroute2 for network management)
+RUN pip install --no-cache-dir \
+    pyroute2==0.7.12 \
+    prometheus-client==0.19.0
 
 # Create directory structure
 RUN mkdir -p /opt/hookprobe/core/qsecbit \
@@ -81,9 +66,9 @@ ENV XDP_UDP_LIMIT=5000
 ENV XDP_ICMP_LIMIT=100
 ENV XDP_RATE_LIMIT_PPS=10000
 
-# Health check - verify BPF programs are loaded
+# Health check - verify BPF programs are loaded or daemon is running
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD bpftool prog list 2>/dev/null | grep -q xdp || exit 1
+    CMD pgrep -f xdp_daemon || bpftool prog list 2>/dev/null | grep -q xdp || exit 1
 
 # Expose metrics endpoint
 EXPOSE 9091
@@ -91,5 +76,7 @@ EXPOSE 9091
 # Must run as root for BPF operations
 # Container must also be run with --privileged
 
-ENTRYPOINT ["python", "-m", "xdp.xdp_daemon"]
-CMD ["--interface", "${XDP_INTERFACE:-FTS}"]
+WORKDIR /opt/hookprobe
+
+ENTRYPOINT ["python3", "-m", "xdp.xdp_daemon"]
+CMD ["--interface", "FTS"]
