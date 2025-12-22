@@ -1518,6 +1518,8 @@ country_code=$country
 ieee80211d=1
 ieee80211n=1
 ieee80211ac=1
+# FORCE BANDWIDTH: Ignore OBSS coexistence during test
+noscan=1
 vht_oper_chwidth=$vht_width
 vht_oper_centr_freq_seg0_idx=$vht_center
 wmm_enabled=1
@@ -1774,6 +1776,9 @@ country_code=$country
 ieee80211d=1
 ieee80211n=1
 ht_capab=$ht_capab
+# FORCE BANDWIDTH: Ignore OBSS coexistence during test
+noscan=1
+obss_interval=0
 wmm_enabled=1
 auth_algs=1
 wpa=2
@@ -1996,6 +2001,10 @@ generate_hostapd_24ghz() {
         else
             log_warn "  Intelligent selection failed, using safe defaults"
             channel=6
+            # Force HT40+ for channel 6 - noscan=1 will ensure bandwidth is maintained
+            ht_capab="[HT40+][SHORT-GI-20][SHORT-GI-40]"
+            used_validated_settings=true
+            log_info "  Fallback: Channel 6 @ 40MHz (HT40+) with noscan=1"
         fi
     fi
 
@@ -2085,6 +2094,11 @@ ht_capab=$ht_capab
 # The scan can cause hostapd to get stuck on some drivers (e.g., ath12k)
 # HT40 coexistence is handled by channel selection instead
 obss_interval=0
+
+# FORCE BANDWIDTH: Ignore 20/40 coexistence and neighboring BSSs
+# This forces the requested bandwidth (40MHz) even with overlapping networks
+# Critical for ath12k and similar drivers that are too conservative
+noscan=1
 
 # WMM (QoS) - Required for 802.11n
 wmm_enabled=1
@@ -2298,11 +2312,13 @@ generate_hostapd_5ghz() {
             # Fallback to safe channel if validation fails
             log_warn "  Intelligent selection failed, using safe fallback..."
             channel=36
+            # Force 80MHz on channel 36 - noscan=1 will ensure bandwidth is maintained
             VALIDATED_VHT_WIDTH=1
             VALIDATED_VHT_CENTER=42
             VALIDATED_EHT_WIDTH=2
             VALIDATED_EHT_CENTER=42
             VALIDATED_BANDWIDTH=80
+            log_info "  Fallback: Channel 36 @ 80MHz (center=42) with noscan=1"
         fi
     else
         # Manual channel specified - validate for regulatory domain
@@ -2491,6 +2507,11 @@ channel=$channel
 ieee80211n=1
 require_ht=1
 ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40][MAX-AMSDU-7935]
+
+# FORCE BANDWIDTH: Ignore 20/40 coexistence and neighboring BSSs
+# This forces the requested bandwidth (80/160MHz) even with overlapping networks
+# Critical for ath12k and similar drivers that are too conservative
+noscan=1
 
 # WMM (QoS) - Required
 wmm_enabled=1
