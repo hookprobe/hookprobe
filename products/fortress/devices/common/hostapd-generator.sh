@@ -403,6 +403,41 @@ get_phy_for_iface() {
     fi
 }
 
+get_phy_info() {
+    # Get iw phy info for a specific phy
+    # This handles multi-phy systems correctly by extracting only the relevant phy's section
+    #
+    # Args:
+    #   $1 - phy name (e.g., "phy0", "phy1")
+    #
+    # Returns: The iw phy output for just this phy
+    #
+    # Note: "iw phy <name> info" doesn't work on some drivers like ath12k,
+    #       so we parse "iw phy" output and extract the relevant section.
+
+    local phy="$1"
+    local phy_info=""
+
+    # Method 1: Use awk to extract this specific phy's section
+    # More reliable than sed for handling the last phy in the list
+    phy_info=$(iw phy 2>/dev/null | awk -v phy="$phy" '
+        /^Wiphy / { if (found) exit; if ($2 == phy) found=1 }
+        found { print }
+    ') || true
+
+    # Method 2: Fallback to whole iw phy output if extraction failed
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
+    # Method 3: Try iw list as last resort
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw list 2>/dev/null) || true
+    fi
+
+    echo "$phy_info"
+}
+
 get_wifi_driver() {
     # Get the WiFi driver name for an interface
     #
@@ -657,15 +692,7 @@ verify_band_support() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Use "iw phy" (no args) - "iw phy <name>" doesn't work on some drivers like ath12k
-    # Note: Use "|| true" to prevent script exit with set -e
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
-    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        phy_info=$(iw list 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # First try frequency-based detection
     if [ -n "$phy_info" ]; then
@@ -762,13 +789,9 @@ get_supported_channels_24ghz() {
     [ -z "$phy" ] && { echo "6"; return; }
 
     # Parse iw phy for 2.4GHz frequencies and convert to channels
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
     local channels=""
     local phy_info=""
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Look for 2.4GHz frequencies (2412-2484 MHz)
     while read -r line; do
@@ -795,23 +818,32 @@ get_supported_channels_5ghz() {
     #
     # Args:
     #   $1 - Interface name
+    #   $2 - Country code (optional, for regulatory domain setup)
     #
     # Returns: Space-separated list of channels (e.g., "36 40 44 48 149 153")
-    #          Only returns channels that are NOT disabled/no-IR/radar-blocked
+    #
+    # Note: We include "no IR" channels because they ARE valid for AP mode.
+    #       hostapd handles DFS/CAC for these channels. We only exclude
+    #       truly "disabled" or "radar detected" channels.
 
     local iface="$1"
+    local country="${2:-}"
     local phy
 
     phy=$(get_phy_for_iface "$iface")
-    [ -z "$phy" ] && { echo "36"; return; }
+    [ -z "$phy" ] && { echo "36 40 44 48"; return; }
+
+    # Ensure regulatory domain is set before querying
+    if [ -n "$country" ]; then
+        iw reg set "$country" 2>/dev/null || true
+        # Wait for regulatory domain to apply
+        sleep 1
+    fi
 
     # Parse iw phy for 5GHz frequencies and convert to channels
     local channels=""
     local phy_info=""
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Look for 5GHz frequencies (5170-5895 MHz)
     # Format: "* 5180 MHz [36] (20.0 dBm)" or "* 5180 MHz [36] (disabled)"
@@ -820,19 +852,22 @@ get_supported_channels_5ghz() {
         if echo "$line" | grep -qE "^\s*\* 5[0-9]{3} MHz \[([0-9]+)\]"; then
             local ch
             ch=$(echo "$line" | grep -oE '\[[0-9]+\]' | tr -d '[]')
-            # Skip if disabled, no-IR (no initiate radiation), or radar detected
-            if echo "$line" | grep -qiE "disabled|no.IR|radar.detected"; then
+
+            # ONLY skip if truly disabled or radar currently detected
+            # DO NOT skip "no IR" - those are valid for AP mode with DFS
+            if echo "$line" | grep -qiE "disabled|radar.detected"; then
                 continue
             fi
             channels="$channels $ch"
         fi
     done <<< "$phy_info"
 
-    # Return available channels or default to 36 (UNII-1 fallback)
+    # Return available channels or default to UNII-1 (always safe)
     if [ -n "$channels" ]; then
         echo "$channels" | xargs
     else
-        echo "36"
+        # Fallback: UNII-1 channels are always available
+        echo "36 40 44 48"
     fi
 }
 
@@ -903,10 +938,7 @@ check_wifi_capability() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     case "$capability" in
         80211n)
@@ -952,12 +984,7 @@ detect_ht_capabilities() {
 
     local caps=""
     local phy_info=""
-
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # HT40 channel selection based on 2.4GHz channel rules:
     # - Channels 1-7: Can use HT40+ (secondary channel above)
@@ -999,12 +1026,7 @@ detect_vht_capabilities() {
 
     local caps=""
     local phy_info=""
-
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     if echo "$phy_info" | grep -q "MAX-MPDU-11454"; then
         caps="[MAX-MPDU-11454]"
@@ -1034,11 +1056,7 @@ detect_he_capabilities() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Check if HE is supported
     if ! echo "$phy_info" | grep -qE "HE Capabilities|HE PHY"; then
@@ -1057,11 +1075,7 @@ detect_eht_capabilities() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Check if EHT (802.11be/WiFi 7) is supported
     if ! echo "$phy_info" | grep -qE "EHT Capabilities|EHT PHY|EHT MAC"; then
@@ -1081,11 +1095,7 @@ detect_eht_channel_width() {
     [ -z "$phy" ] && { echo "80"; return; }
 
     local phy_info=""
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # WiFi 7 can support up to 320 MHz channels
     if echo "$phy_info" | grep -qE "320 MHz|EHT.*320"; then
@@ -1267,10 +1277,19 @@ build_5ghz_priority_list() {
     local raw_list=""
     local priority_list=""
 
-    # Get hardware-supported channels first
+    # Set regulatory domain and get hardware-supported channels
+    # Pass country code to ensure channels are queried after regdomain is set
     local supported_channels
-    supported_channels=$(get_supported_channels_5ghz "$iface")
+    supported_channels=$(get_supported_channels_5ghz "$iface" "$country")
     log_info "    Hardware-supported 5GHz channels: $supported_channels"
+
+    # If only a few channels, something may be wrong - log warning
+    local channel_count
+    channel_count=$(echo "$supported_channels" | wc -w)
+    if [ "$channel_count" -lt 4 ]; then
+        log_warn "    Only $channel_count channels detected - regulatory domain may be restrictive"
+        log_warn "    Country: $country, consider checking 'iw reg get' output"
+    fi
 
     # Build raw priority list (before hardware filtering)
     # Tier 1: 160MHz on UNII-3 (non-DFS, highest throughput)
@@ -1651,7 +1670,7 @@ find_best_working_channel() {
     # Fallback: Try first hardware-supported channel
     log_warn "  All combinations failed, trying hardware-supported fallback..."
     local fallback_channels
-    fallback_channels=$(get_supported_channels_5ghz "$iface")
+    fallback_channels=$(get_supported_channels_5ghz "$iface" "$country")
     log_info "    Hardware-supported channels: $fallback_channels"
 
     for fb_ch in $fallback_channels; do
