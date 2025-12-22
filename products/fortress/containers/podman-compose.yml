@@ -465,6 +465,107 @@ services:
     profiles:
       - monitoring
 
+  # ============================================================
+  # AUTOMATION TIER - Workflow and Analytics (optional)
+  # ============================================================
+
+  # n8n - Workflow Automation
+  # Enables automated security response workflows, notifications, integrations
+  n8n:
+    image: docker.io/n8nio/n8n:latest
+    container_name: fts-n8n
+    restart: unless-stopped
+    hostname: fts-n8n
+    environment:
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: "http://fts-n8n:5678/"
+      # Database connection (use postgres for persistence)
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: fts-postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: fortress
+      DB_POSTGRESDB_USER: fortress
+      DB_POSTGRESDB_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      DB_POSTGRESDB_SCHEMA: n8n
+      # Timezone
+      GENERIC_TIMEZONE: UTC
+      TZ: UTC
+      # Basic auth for security
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: "${N8N_USER:-admin}"
+      N8N_BASIC_AUTH_PASSWORD: "${N8N_PASSWORD:-fortress_n8n_admin}"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - /etc/hookprobe:/etc/hookprobe:ro
+    ports:
+      - "0.0.0.0:5678:5678"  # n8n web UI
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.50
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - n8n
+      - automation
+
+  # ClickHouse - Analytics Database
+  # High-performance columnar database for security event analytics
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:latest
+    container_name: fts-clickhouse
+    restart: unless-stopped
+    hostname: fts-clickhouse
+    environment:
+      CLICKHOUSE_DB: fortress
+      CLICKHOUSE_USER: fortress
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_clickhouse_secret}"
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - /etc/hookprobe:/etc/hookprobe:ro
+    ports:
+      - "0.0.0.0:8123:8123"  # HTTP API
+      - "0.0.0.0:9000:9000"  # Native client
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.51
+    profiles:
+      - clickhouse
+      - analytics
+
+  # Cloudflare Tunnel - Remote Access
+  # Secure tunnel for remote admin access without exposing ports
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:latest
+    container_name: fts-cloudflared
+    restart: unless-stopped
+    hostname: fts-cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TOKEN:-}
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TOKEN:-}"
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.60
+    profiles:
+      - tunnel
+      - remote-access
+
 # ============================================================
 # SECRETS
 # ============================================================
@@ -547,6 +648,17 @@ volumes:
   xdp_data:
     driver: local
     name: fts-xdp-data
+
+  # Automation Tier
+  n8n_data:
+    driver: local
+    name: fts-n8n-data
+  clickhouse_data:
+    driver: local
+    name: fts-clickhouse-data
+  clickhouse_logs:
+    driver: local
+    name: fts-clickhouse-logs
 
   # Note: /etc/hookprobe is bind-mounted from host, not a named volume
   # This allows the install script to create users.json in the host directory
