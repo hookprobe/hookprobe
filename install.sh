@@ -1954,6 +1954,12 @@ show_uninstall_menu() {
     echo -e "  ${BOLD}8${NC}) ${RED}NUCLEAR: Complete System Wipe${NC}"
     echo -e "     ${RED}Remove ALL HookProbe components from ALL tiers!${NC}"
     echo ""
+    echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    echo -e " ${BOLD}99${NC}) ${RED}${BOLD}⚠️  FULL SYSTEM PURGE + REBOOT${NC}"
+    echo -e "     ${RED}Complete removal of EVERYTHING and automatic reboot${NC}"
+    echo -e "     ${DIM}Returns system to clean state for fresh install${NC}"
+    echo ""
     show_nav_footer
 }
 
@@ -1961,22 +1967,74 @@ uninstall_stop_services() {
     echo -e "${CYAN}Stopping all HookProbe services...${NC}"
     echo ""
 
-    for service in hookprobe-sentinel hookprobe-guardian hookprobe-fortress hookprobe-nexus hookprobe-edge hookprobe-neuro; do
+    # 1. Stop all HookProbe systemd services
+    echo -e "${CYAN}Stopping systemd services...${NC}"
+    for service in hookprobe-sentinel hookprobe-guardian hookprobe-fortress hookprobe-nexus hookprobe-edge hookprobe-neuro \
+                   fortress fortress-hostapd-2ghz fortress-hostapd-5ghz fortress-dnsmasq \
+                   fts-web fts-agent fts-qsecbit fts-suricata fts-zeek fts-xdp; do
         if systemctl is-active --quiet "$service" 2>/dev/null; then
-            echo "Stopping $service..."
+            echo "  Stopping $service..."
             systemctl stop "$service" 2>/dev/null || true
         fi
     done
 
+    # 2. Stop podman containers (both hookprobe-* and fts-* naming)
     if command -v podman &>/dev/null; then
+        echo -e "${CYAN}Stopping podman containers...${NC}"
+
+        # Stop hookprobe-* containers
         local containers=$(podman ps -q --filter "name=hookprobe" 2>/dev/null)
         [ -n "$containers" ] && podman stop $containers 2>/dev/null || true
 
+        # Stop fts-* containers (Fortress naming)
+        for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+            echo "  Stopping $container..."
+            podman stop -t 5 "$container" 2>/dev/null || true
+        done
+
+        # Force-kill any stubborn containers
+        for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-|^hookprobe" || true); do
+            podman kill "$container" 2>/dev/null || true
+        done
+
+        # Stop pods
         local pods=$(podman pod ps -q --filter "name=hookprobe" 2>/dev/null)
         [ -n "$pods" ] && podman pod stop $pods 2>/dev/null || true
     fi
 
-    echo -e "${GREEN}✓ Services stopped${NC}"
+    # 3. Stop podman-compose if running
+    if [ -f /opt/hookprobe/fortress/containers/podman-compose.yml ]; then
+        echo -e "${CYAN}Stopping podman-compose...${NC}"
+        cd /opt/hookprobe/fortress/containers 2>/dev/null && {
+            podman-compose down --timeout 30 2>/dev/null || true
+        }
+    fi
+
+    # 4. Stop hostapd and dnsmasq processes
+    echo -e "${CYAN}Stopping WiFi/DHCP processes...${NC}"
+    pkill -f "hostapd.*hookprobe\|hostapd.*fortress\|hostapd.*fts" 2>/dev/null || true
+    pkill -f "dnsmasq.*hookprobe\|dnsmasq.*fortress\|dnsmasq.*fts" 2>/dev/null || true
+
+    # 5. Clear OVS if present
+    if command -v ovs-vsctl &>/dev/null; then
+        echo -e "${CYAN}Clearing OVS bridges...${NC}"
+        ovs-ofctl del-flows FTS 2>/dev/null || true
+        ovs-vsctl del-br FTS 2>/dev/null || true
+    fi
+
+    # 6. Bring down fortress bridge interface
+    echo -e "${CYAN}Bringing down bridge interfaces...${NC}"
+    ip link set fortress down 2>/dev/null || true
+    ip link delete fortress 2>/dev/null || true
+
+    # 7. Release locked ports
+    echo -e "${CYAN}Releasing locked ports...${NC}"
+    fuser -k 8443/tcp 2>/dev/null || true
+    fuser -k 5353/udp 2>/dev/null || true
+    fuser -k 8050/tcp 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}✓ All services stopped${NC}"
 }
 
 uninstall_containers() {
@@ -2783,6 +2841,149 @@ uninstall_cleanup_everything() {
     fi
 }
 
+# Full system purge with reboot (Option 99)
+uninstall_full_purge_reboot() {
+    safe_clear
+    show_banner
+    echo ""
+    echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║            ⚠️  FULL SYSTEM PURGE + REBOOT  ⚠️                  ║${NC}"
+    echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will COMPLETELY remove ALL HookProbe components and reboot:${NC}"
+    echo ""
+    echo "  • All containers, images, pods, volumes, networks (Podman)"
+    echo "  • All systemd services and timers"
+    echo "  • All OVS bridges, VLANs, network interfaces"
+    echo "  • All Linux bridges (fortress, br-lan, etc.)"
+    echo "  • All udev rules (WiFi, LTE)"
+    echo "  • All configuration files and secrets"
+    echo "  • All data directories and databases"
+    echo "  • All log files"
+    echo "  • All sysctl and iptables/nftables rules"
+    echo "  • All management scripts"
+    echo ""
+    echo -e "${RED}${BOLD}THE SYSTEM WILL AUTOMATICALLY REBOOT AFTER PURGE${NC}"
+    echo ""
+    echo -e "${CYAN}This returns the system to a clean state for fresh install.${NC}"
+    echo ""
+
+    read -p "Type 'PURGE AND REBOOT' to confirm: " confirm
+
+    if [ "$confirm" != "PURGE AND REBOOT" ]; then
+        echo -e "${YELLOW}Purge cancelled${NC}"
+        return 1
+    fi
+
+    echo ""
+    echo -e "${CYAN}Starting full system purge...${NC}"
+
+    # Stop all services first
+    uninstall_stop_services
+
+    # Remove containers
+    uninstall_containers
+
+    # Remove images
+    uninstall_images
+
+    # Remove volumes
+    uninstall_volumes
+
+    # Remove networks
+    uninstall_networks
+
+    # Remove OVS
+    uninstall_ovs
+
+    # Remove bridges
+    uninstall_bridges
+
+    # Remove WiFi configuration
+    uninstall_wifi
+
+    # Run tier-specific uninstallers if available
+    [ -f "$SCRIPT_DIR/products/fortress/uninstall.sh" ] && bash "$SCRIPT_DIR/products/fortress/uninstall.sh" --purge --force 2>/dev/null || true
+    [ -f "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" ] && bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" --force 2>/dev/null || true
+    [ -f "$SCRIPT_DIR/products/sentinel/uninstall.sh" ] && bash "$SCRIPT_DIR/products/sentinel/uninstall.sh" --force 2>/dev/null || true
+
+    # Final cleanup
+    echo -e "${CYAN}Final cleanup...${NC}"
+
+    # Prune all podman artifacts
+    if command -v podman &>/dev/null; then
+        podman system prune -af --volumes 2>/dev/null || true
+    fi
+
+    # Remove routing tables
+    if [ -f /etc/iproute2/rt_tables ]; then
+        sed -i '/wan_primary/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/wan_backup/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/primary_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/backup_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+    fi
+
+    # Flush nftables
+    nft flush ruleset 2>/dev/null || true
+
+    # Remove all hookprobe directories
+    rm -rf /opt/hookprobe 2>/dev/null || true
+    rm -rf /etc/hookprobe 2>/dev/null || true
+    rm -rf /etc/fortress 2>/dev/null || true
+    rm -rf /var/lib/hookprobe 2>/dev/null || true
+    rm -rf /var/lib/fortress 2>/dev/null || true
+    rm -rf /var/log/hookprobe 2>/dev/null || true
+    rm -rf /var/backups/fortress 2>/dev/null || true
+    rm -rf /var/backups/hookprobe 2>/dev/null || true
+
+    # Remove udev rules
+    rm -f /etc/udev/rules.d/*fts*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*hookprobe*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*fortress*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*modem*.rules 2>/dev/null || true
+    udevadm control --reload-rules 2>/dev/null || true
+
+    # Remove LTE/Modem configuration
+    echo -e "${CYAN}Removing LTE/Modem configuration...${NC}"
+    if command -v nmcli &>/dev/null; then
+        # Remove all HookProbe/Fortress related NetworkManager connections
+        for conn in $(nmcli -t -f NAME con show 2>/dev/null | grep -iE "fts|hookprobe|fortress|lte|wwan|gsm" || true); do
+            echo "  Removing nmcli connection: $conn"
+            nmcli con delete "$conn" 2>/dev/null || true
+        done
+    fi
+    # Remove ModemManager config
+    rm -f /etc/ModemManager/fcc-unlock.d/* 2>/dev/null || true
+    rm -rf /var/lib/fortress/lte 2>/dev/null || true
+    rm -f /etc/hookprobe/lte*.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/wan-failover.conf 2>/dev/null || true
+    # Stop and reset WWAN interfaces
+    for iface in $(ip link show 2>/dev/null | grep -oE "wwan[0-9]+" || true); do
+        echo "  Resetting WWAN interface: $iface"
+        ip link set "$iface" down 2>/dev/null || true
+    done
+
+    # Remove sysctl configs
+    rm -f /etc/sysctl.d/*hookprobe*.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/*fortress*.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/*fts*.conf 2>/dev/null || true
+    sysctl --system &>/dev/null || true
+
+    # Reload systemd
+    systemctl daemon-reload 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║              Full System Purge Complete!                      ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}System will reboot in 5 seconds...${NC}"
+    echo ""
+
+    sleep 5
+    reboot
+}
+
 handle_uninstall() {
     while true; do
         show_uninstall_menu
@@ -2797,6 +2998,7 @@ handle_uninstall() {
             6) uninstall_stop_services ;;
             7) uninstall_cleanup_everything ;;
             8) uninstall_complete ;;
+            99) uninstall_full_purge_reboot ;;
             b|B|m|M) return ;;
             q|Q) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}"; sleep 1; continue ;;
