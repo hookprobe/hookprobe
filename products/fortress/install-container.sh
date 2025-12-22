@@ -1574,6 +1574,33 @@ start_containers() {
     # Export WEB_PORT for podman-compose (web container uses host network with GUNICORN_BIND)
     export WEB_PORT="${WEB_PORT:-8443}"
 
+    # ========================================
+    # CLEANUP: Remove existing containers before starting fresh
+    # This prevents "container name already in use" errors
+    # ========================================
+    log_info "Cleaning up any existing containers..."
+
+    # First try graceful podman-compose down
+    if [ -f "podman-compose.yml" ]; then
+        podman-compose down --timeout 10 2>/dev/null || true
+    fi
+
+    # Force-remove any remaining fts-* containers (in case compose didn't manage them)
+    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+        log_info "  Removing existing container: $container"
+        podman stop -t 5 "$container" 2>/dev/null || true
+        podman rm -f "$container" 2>/dev/null || true
+    done
+
+    # Remove stale networks (recreated fresh by compose)
+    for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
+        log_info "  Removing existing network: $network"
+        podman network rm -f "$network" 2>/dev/null || true
+    done
+
+    # ========================================
+    # START: Launch containers
+    # ========================================
     # Start all services (security core + data tier)
     # NOTE: --no-build is required because podman-compose 1.0.6 has broken
     # context path resolution. Images are already built in build_containers().
