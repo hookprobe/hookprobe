@@ -61,9 +61,11 @@ class Config:
     QSECBIT_STATS_FILE = DATA_DIR / 'qsecbit_stats.json'
     VLANS_CONFIG_FILE = CONFIG_DIR / 'vlans.conf'
 
-    # API URLs (internal services)
-    QSECBIT_API_URL = 'http://localhost:9090'
-    GUARDIAN_API_URL = 'http://localhost:8080'
+    # API URLs (from environment or defaults for local development)
+    QSECBIT_API_URL = os.environ.get('QSECBIT_API_URL', 'http://localhost:9090')
+    DNSXAI_API_URL = os.environ.get('DNSXAI_API_URL', 'http://localhost:5353')
+    DFS_API_URL = os.environ.get('DFS_API_URL', 'http://localhost:8050')
+    VICTORIA_URL = os.environ.get('VICTORIA_URL', 'http://localhost:8428')
 
     # AdminLTE settings
     ADMINLTE_SKIN = 'dark'  # dark, light

@@ -46,7 +46,7 @@ INTERFACE_STATE_FILE="/var/lib/fortress/network-interfaces.conf"
 # OVS Bridge Configuration
 # Fortress uses OVS for SDN-based network segmentation
 # WiFi interfaces are added to OVS bridge with VLAN tagging
-DEFAULT_BRIDGE="${FORTRESS_BRIDGE:-43ess}"
+DEFAULT_BRIDGE="${FORTRESS_BRIDGE:-FTS}"
 SUBNET_PREFIX="${FORTRESS_SUBNET:-10.250}"
 
 # Colors
@@ -633,7 +633,7 @@ create_networkmanager_unmanaged_rule() {
     #   $1 - Interface name
 
     local iface="$1"
-    local nm_conf="/etc/NetworkManager/conf.d/10-fortress-unmanaged.conf"
+    local nm_conf="/etc/NetworkManager/conf.d/10-fts-unmanaged.conf"
 
     # Only if NetworkManager is installed
     if ! command -v nmcli &>/dev/null; then
@@ -2973,7 +2973,7 @@ generate_wifi_bridge_helper() {
     # Note: This works fine with hostapd 2.10/2.11 on most drivers (ath12k, mt76, etc.)
     # The "Interface X is in master ovs-system" log message is informational, not an error.
 
-    local helper_script="/usr/local/bin/fortress-wifi-bridge-helper.sh"
+    local helper_script="/usr/local/bin/fts-wifi-bridge-helper.sh"
 
     log_info "Generating WiFi bridge helper script"
 
@@ -2983,7 +2983,7 @@ generate_wifi_bridge_helper() {
 # Adds WiFi interface to OVS bridge after hostapd starts
 
 IFACE="$1"
-BRIDGE="${2:-43ess}"
+BRIDGE="${2:-FTS}"
 ACTION="${3:-add}"
 
 [ -z "$IFACE" ] && exit 1
@@ -3081,7 +3081,7 @@ generate_systemd_services() {
         # Systemd device unit for the WiFi interface (waits for interface to exist)
         local dev_unit_24ghz="sys-subsystem-net-devices-${iface_24ghz}.device"
 
-        cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
+        cat > /etc/systemd/system/fts-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
 After=network.target openvswitch-switch.service ${dev_unit_24ghz}
@@ -3101,10 +3101,10 @@ ExecStartPre=-/sbin/ip link set ${iface_24ghz} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${iface_24ghz} up
 ExecStart=${hostapd_bin} -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
-ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} add
+ExecStartPost=/usr/local/bin/fts-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${iface_24ghz} down
-ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} remove
+ExecStopPost=-/usr/local/bin/fts-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10
@@ -3112,7 +3112,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-        log_success "Created: fortress-hostapd-24ghz.service (waits for ${iface_24ghz})"
+        log_success "Created: fts-hostapd-24ghz.service (waits for ${iface_24ghz})"
     fi
 
     if [ "$has_5ghz" = "true" ]; then
@@ -3124,7 +3124,7 @@ EOF
         # Systemd device unit for the WiFi interface (waits for interface to exist)
         local dev_unit_5ghz="sys-subsystem-net-devices-${iface_5ghz}.device"
 
-        cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
+        cat > /etc/systemd/system/fts-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
 After=network.target openvswitch-switch.service ${dev_unit_5ghz}
@@ -3144,10 +3144,10 @@ ExecStartPre=-/sbin/ip link set ${iface_5ghz} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${iface_5ghz} up
 ExecStart=${hostapd_bin} -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
-ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} add
+ExecStartPost=/usr/local/bin/fts-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${iface_5ghz} down
-ExecStopPost=-/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} remove
+ExecStopPost=-/usr/local/bin/fts-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10
@@ -3155,7 +3155,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-        log_success "Created: fortress-hostapd-5ghz.service (waits for ${iface_5ghz})"
+        log_success "Created: fts-hostapd-5ghz.service (waits for ${iface_5ghz})"
     fi
 
     systemctl daemon-reload
@@ -3215,7 +3215,7 @@ EOF
     done
 
     log_success "VLAN infrastructure ready"
-    log_info "  Restart hostapd services to apply: systemctl restart fortress-hostapd-*"
+    log_info "  Restart hostapd services to apply: systemctl restart fts-hostapd-*"
 }
 
 disable_vlan_infrastructure() {
@@ -3237,7 +3237,7 @@ disable_vlan_infrastructure() {
     done
 
     log_success "Dynamic VLANs disabled"
-    log_info "  Restart hostapd services to apply: systemctl restart fortress-hostapd-*"
+    log_info "  Restart hostapd services to apply: systemctl restart fts-hostapd-*"
 }
 
 # ============================================================
@@ -3395,8 +3395,8 @@ configure_dual_band_wifi() {
     echo "  VLANs:  $HOSTAPD_VLAN_FILE"
     echo ""
     echo "To start WiFi:"
-    [ "$has_24ghz" = "true" ] && echo "  systemctl start fortress-hostapd-24ghz"
-    [ "$has_5ghz" = "true" ] && echo "  systemctl start fortress-hostapd-5ghz"
+    [ "$has_24ghz" = "true" ] && echo "  systemctl start fts-hostapd-24ghz"
+    [ "$has_5ghz" = "true" ] && echo "  systemctl start fts-hostapd-5ghz"
     echo ""
 
     return 0
@@ -3459,13 +3459,13 @@ usage() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         configure)
-            configure_dual_band_wifi "$2" "$3" "${4:-43ess}"
+            configure_dual_band_wifi "$2" "$3" "${4:-FTS}"
             ;;
         24ghz)
-            generate_hostapd_24ghz "$2" "$3" "$4" "${5:-auto}" "${6:-43ess}"
+            generate_hostapd_24ghz "$2" "$3" "$4" "${5:-auto}" "${6:-FTS}"
             ;;
         5ghz)
-            generate_hostapd_5ghz "$2" "$3" "$4" "${5:-auto}" "${6:-43ess}"
+            generate_hostapd_5ghz "$2" "$3" "$4" "${5:-auto}" "${6:-FTS}"
             ;;
         vlan)
             generate_vlan_file

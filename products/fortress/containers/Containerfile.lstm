@@ -5,10 +5,10 @@
 # This is a scheduled job container, not an always-running service
 #
 # Build:
-#   podman build -f Containerfile.lstm -t fortress-lstm:latest ../..
+#   podman build -f Containerfile.lstm -t fts-lstm:latest ../..
 #
 # Run (one-shot training):
-#   podman run --rm fortress-lstm:latest --train --epochs 100
+#   podman run --rm fts-lstm:latest --train --epochs 100
 # ==============================================================================
 
 FROM python:3.11-slim-bookworm AS builder

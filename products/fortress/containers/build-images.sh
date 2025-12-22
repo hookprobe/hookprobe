@@ -28,31 +28,31 @@ echo ""
 
 cd "$ROOT_DIR"
 
-echo "=== Building fortress-web ==="
+echo "=== Building fts-web ==="
 podman build $NO_CACHE \
     -f products/fortress/containers/Containerfile.web \
-    -t localhost/fortress-web:latest \
+    -t localhost/fts-web:latest \
     products/fortress/
 
 echo ""
-echo "=== Building fortress-dnsxai ==="
+echo "=== Building fts-dnsxai ==="
 podman build $NO_CACHE \
     -f products/fortress/containers/Containerfile.dnsxai \
-    -t localhost/fortress-dnsxai:latest \
+    -t localhost/fts-dnsxai:latest \
     .
 
 echo ""
-echo "=== Building fortress-dfs ==="
+echo "=== Building fts-dfs ==="
 podman build $NO_CACHE \
     -f products/fortress/containers/Containerfile.dfs \
-    -t localhost/fortress-dfs:latest \
+    -t localhost/fts-dfs:latest \
     .
 
 echo ""
-echo "=== Building fortress-agent ==="
+echo "=== Building fts-agent ==="
 podman build $NO_CACHE \
     -f products/fortress/containers/Containerfile.agent \
-    -t localhost/fortress-agent:latest \
+    -t localhost/fts-agent:latest \
     .
 
 echo ""

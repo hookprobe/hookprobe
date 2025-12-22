@@ -250,7 +250,7 @@ def reload_hostapd_with_new_channel(interface: str, new_channel: int) -> bool:
     """Update hostapd config and reload (fallback method)."""
     try:
         config_files = [
-            f"/etc/hostapd/fortress-{interface}.conf",
+            f"/etc/hostapd/fts-{interface}.conf",
             f"/etc/hostapd/fortress.conf",
             "/etc/hostapd/hostapd.conf"
         ]
