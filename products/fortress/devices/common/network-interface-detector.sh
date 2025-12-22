@@ -305,6 +305,52 @@ classify_wan_lan_interfaces() {
         log_warn "WAN ($NET_WAN_IFACE) will be used for internet - NO LAN ports available"
         log_warn "Use WiFi AP for client connectivity, or add USB ethernet adapter for LAN"
     fi
+
+    # ============================================================
+    # MANAGEMENT INTERFACE DETECTION (VLAN 200)
+    # ============================================================
+    # If device has 2+ LAN ethernet interfaces (excluding WAN),
+    # designate the LAST one as management interface.
+    # Management port is configured as trunk: native LAN (100), tagged MGMT (200)
+    # This allows dual-use: regular LAN access OR management access with VLAN tag
+    #
+    # Examples:
+    #   eth0 (WAN) + WiFi only        → No MGMT port (use WiFi for LAN)
+    #   eth0 (WAN) + eth1             → No MGMT port (eth1 needed for LAN)
+    #   eth0 (WAN) + eth1 + eth2      → eth2 = MGMT (trunk), eth1 = LAN only
+    #   eth0 (WAN) + eth1 + eth2 + eth3 → eth3 = MGMT (trunk), eth1,eth2 = LAN
+
+    local mgmt_iface=""
+    local lan_iface_count
+    lan_iface_count=$(echo "$NET_LAN_IFACES" | wc -w)
+
+    if [ "$lan_iface_count" -ge 2 ]; then
+        # Get the last LAN interface (by PCI order, which is already sorted)
+        mgmt_iface=$(echo "$NET_LAN_IFACES" | awk '{print $NF}')
+
+        # Remove MGMT interface from LAN list
+        local new_lan_ifaces=""
+        for iface in $NET_LAN_IFACES; do
+            if [ "$iface" != "$mgmt_iface" ]; then
+                new_lan_ifaces="$new_lan_ifaces $iface"
+            fi
+        done
+        NET_LAN_IFACES=$(echo "$new_lan_ifaces" | xargs)
+
+        log_section "Management Interface (VLAN 200)"
+        log_success "MGMT: $mgmt_iface (trunk mode: native LAN + tagged MGMT)"
+        log_info "  This port provides:"
+        log_info "    - Untagged traffic → VLAN 100 (LAN, 10.200.0.0/24)"
+        log_info "    - Tagged VLAN 200 → Management (10.200.100.0/24)"
+        log_info "    - Direct access to container network (172.20.200.0/24)"
+        log_info "  Updated LAN Interfaces: ${NET_LAN_IFACES:-none}"
+    else
+        log_info "No dedicated management port (need 2+ LAN interfaces)"
+        log_info "  Management access via: Cloudflare Tunnel (remote) or WiFi admin SSID"
+    fi
+
+    export NET_MGMT_IFACE="$mgmt_iface"
+    export NET_MGMT_ENABLED=$([ -n "$mgmt_iface" ] && echo "true" || echo "false")
 }
 
 # ============================================================
