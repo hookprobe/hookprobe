@@ -461,23 +461,23 @@ remove_containers() {
         return 0
     fi
 
-    # Stop ALL fortress containers
+    # Stop ALL fortress containers (fts-* naming convention)
     log_info "Stopping all fortress containers..."
-    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fortress-" || true); do
+    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
         log_info "  Stopping: $container"
         podman stop "$container" 2>/dev/null || true
     done
 
     # Remove ALL fortress containers
     log_info "Removing all fortress containers..."
-    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fortress-" || true); do
+    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
         log_info "  Removing: $container"
         podman rm -f "$container" 2>/dev/null || true
     done
 
-    # Remove ALL fortress images (localhost/fortress-*)
+    # Remove ALL fortress images (localhost/fts-*)
     log_info "Removing all fortress images..."
-    for image in $(podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^localhost/fortress-" || true); do
+    for image in $(podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^localhost/fts-" || true); do
         log_info "  Removing image: $image"
         podman rmi -f "$image" 2>/dev/null || true
     done
@@ -498,16 +498,16 @@ remove_containers() {
         fi
     done
 
-    # Remove ALL fortress volumes
+    # Remove ALL fortress volumes (fts-* naming convention)
     log_info "Removing all fortress volumes..."
-    for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^fortress-" || true); do
+    for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
         log_info "  Removing volume: $volume"
         podman volume rm -f "$volume" 2>/dev/null || true
     done
 
-    # Remove ALL fortress networks
+    # Remove ALL fortress networks (fts-* naming convention)
     log_info "Removing all fortress networks..."
-    for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fortress-" || true); do
+    for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
         log_info "  Removing network: $network"
         podman network rm -f "$network" 2>/dev/null || true
     done
@@ -1076,9 +1076,9 @@ verify_uninstall() {
         issues=$((issues + 1))
     fi
 
-    # Check containers (core + monitoring)
+    # Check containers (core + monitoring + IDS)
     if command -v podman &>/dev/null; then
-        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-victoria fts-grafana fortress-suricata fortress-zeek; do
+        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-victoria fts-grafana fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "Container still exists: $container"
                 issues=$((issues + 1))
