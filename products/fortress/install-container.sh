@@ -1427,9 +1427,11 @@ start_containers() {
     export WEB_PORT="${WEB_PORT:-8443}"
 
     # Start all services (security core + data tier)
+    # NOTE: --no-build is required because podman-compose 1.0.6 has broken
+    # context path resolution. Images are already built in build_containers().
     log_info "Starting Fortress services..."
     log_info "Web UI will be available on port ${WEB_PORT}"
-    podman-compose up -d
+    podman-compose up -d --no-build
 
     # Wait for services in dependency order
     log_info "Waiting for services to be ready..."
