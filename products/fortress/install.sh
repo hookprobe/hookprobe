@@ -801,6 +801,34 @@ do_full_purge() {
     # Flush nftables
     nft flush ruleset 2>/dev/null || true
 
+    # Remove LTE/Modem configuration
+    log_info "Removing LTE/Modem configuration..."
+    if command -v nmcli &>/dev/null; then
+        # Remove all HookProbe/Fortress related NetworkManager connections
+        for conn in $(nmcli -t -f NAME con show 2>/dev/null | grep -iE "fts|hookprobe|fortress|lte|wwan|gsm" || true); do
+            log_info "  Removing nmcli connection: $conn"
+            nmcli con delete "$conn" 2>/dev/null || true
+        done
+    fi
+    # Remove ModemManager config
+    rm -f /etc/ModemManager/fcc-unlock.d/* 2>/dev/null || true
+    # Stop and reset WWAN interfaces
+    for iface in $(ip link show 2>/dev/null | grep -oE "wwan[0-9]+" || true); do
+        log_info "  Resetting WWAN interface: $iface"
+        ip link set "$iface" down 2>/dev/null || true
+    done
+
+    # Remove udev rules
+    rm -f /etc/udev/rules.d/*fts*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*fortress*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*modem*.rules 2>/dev/null || true
+    udevadm control --reload-rules 2>/dev/null || true
+
+    # Remove sysctl configs
+    rm -f /etc/sysctl.d/*fortress*.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/*fts*.conf 2>/dev/null || true
+    sysctl --system &>/dev/null || true
+
     # Remove all hookprobe directories
     rm -rf /opt/hookprobe 2>/dev/null || true
     rm -rf /etc/hookprobe 2>/dev/null || true
