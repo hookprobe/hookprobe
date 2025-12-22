@@ -2888,7 +2888,28 @@ uninstall_full_purge_reboot() {
     rm -f /etc/udev/rules.d/*fts*.rules 2>/dev/null || true
     rm -f /etc/udev/rules.d/*hookprobe*.rules 2>/dev/null || true
     rm -f /etc/udev/rules.d/*fortress*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*modem*.rules 2>/dev/null || true
     udevadm control --reload-rules 2>/dev/null || true
+
+    # Remove LTE/Modem configuration
+    echo -e "${CYAN}Removing LTE/Modem configuration...${NC}"
+    if command -v nmcli &>/dev/null; then
+        # Remove all HookProbe/Fortress related NetworkManager connections
+        for conn in $(nmcli -t -f NAME con show 2>/dev/null | grep -iE "fts|hookprobe|fortress|lte|wwan|gsm" || true); do
+            echo "  Removing nmcli connection: $conn"
+            nmcli con delete "$conn" 2>/dev/null || true
+        done
+    fi
+    # Remove ModemManager config
+    rm -f /etc/ModemManager/fcc-unlock.d/* 2>/dev/null || true
+    rm -rf /var/lib/fortress/lte 2>/dev/null || true
+    rm -f /etc/hookprobe/lte*.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/wan-failover.conf 2>/dev/null || true
+    # Stop and reset WWAN interfaces
+    for iface in $(ip link show 2>/dev/null | grep -oE "wwan[0-9]+" || true); do
+        echo "  Resetting WWAN interface: $iface"
+        ip link set "$iface" down 2>/dev/null || true
+    done
 
     # Remove sysctl configs
     rm -f /etc/sysctl.d/*hookprobe*.conf 2>/dev/null || true
