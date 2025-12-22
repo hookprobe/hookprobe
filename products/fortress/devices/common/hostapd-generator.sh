@@ -1516,6 +1516,9 @@ hw_mode=a
 channel=$channel
 country_code=$country
 ieee80211d=1
+# 802.11h: DFS + TPC - required for EU bandwidth
+ieee80211h=1
+spectrum_mgmt_required=1
 ieee80211n=1
 ieee80211ac=1
 # FORCE BANDWIDTH: Ignore OBSS coexistence during test
@@ -1774,6 +1777,8 @@ hw_mode=g
 channel=$channel
 country_code=$country
 ieee80211d=1
+ieee80211h=1
+spectrum_mgmt_required=1
 ieee80211n=1
 ht_capab=$ht_capab
 # FORCE BANDWIDTH: Ignore OBSS coexistence during test
@@ -2094,6 +2099,8 @@ utf8_ssid=1
 country_code=$effective_country
 ieee80211d=1
 ieee80211h=1
+# Spectrum management for regulatory compliance
+spectrum_mgmt_required=1
 
 # Band: 2.4GHz (802.11g mode)
 hw_mode=g
@@ -2518,7 +2525,12 @@ utf8_ssid=1
 # Use effective country code (from adapter firmware if self-managed)
 country_code=$effective_country
 ieee80211d=1
+# 802.11h: DFS (radar detection) + TPC (transmit power control)
+# MANDATORY for EU/ETSI countries to unlock >20MHz bandwidth
 ieee80211h=1
+# Spectrum management required for DFS/TPC compliance
+spectrum_mgmt_required=1
+local_pwr_constraint=3
 
 # DFS Radar Detection (ETSI EN 301 893 compliance)
 # Enabled automatically when using DFS channels (52-64, 100-144)
