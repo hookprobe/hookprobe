@@ -492,6 +492,9 @@ EOF
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
 
+    # Ensure all shell scripts are executable (git may not preserve executable bit)
+    find "${INSTALL_DIR}/devices" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+
     log_info "Application files copied to ${INSTALL_DIR}"
 }
 
