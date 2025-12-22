@@ -127,14 +127,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database connection via container DNS name (data tier)
-      DATABASE_HOST: fts-postgres
+      # Database connection via container IP (host network can't use DNS names)
+      DATABASE_HOST: 172.20.200.10
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
-      # Redis connection via container DNS name (data tier)
-      REDIS_HOST: fts-redis
+      # Redis connection via container IP (host network can't use DNS names)
+      REDIS_HOST: 172.20.200.11
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
@@ -144,23 +144,20 @@ services:
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
       GUNICORN_BIND: "0.0.0.0:${WEB_PORT:-8443}"
-      # ML service endpoints - QSecBit on host, others via container DNS
-      QSECBIT_API_URL: http://172.20.201.1:9090
-      DNSXAI_API_URL: http://fts-dnsxai:5353
-      DFS_API_URL: http://fts-dfs:8050
-      # Monitoring endpoints (mgmt tier via gateway)
-      VICTORIA_URL: http://172.20.203.11:8428
+      # ML service endpoints - all via container IPs (host network)
+      QSECBIT_API_URL: http://127.0.0.1:9090
+      DNSXAI_API_URL: http://172.20.200.21:5353
+      DFS_API_URL: http://172.20.200.22:8050
+      # Monitoring endpoints
+      VICTORIA_URL: http://172.20.200.31:8428
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
-    # Web exposed on services tier, but also connected to data tier for DB access
-    ports:
-      - "0.0.0.0:8443:8443"  # Bind to all interfaces for access from LAN
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.20
+    # Host network mode - binds directly to host interfaces (FTS bridge, etc.)
+    # Required for rootless podman to expose ports on LAN bridge
+    network_mode: host
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
