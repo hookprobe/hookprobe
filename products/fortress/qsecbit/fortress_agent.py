@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 QSecBit Fortress Agent - Full Implementation
-Version: 5.1.0
+Version: 5.2.0
 License: AGPL-3.0
 
 Fortress-enhanced QSecBit with:
+- L2-L7 Layer Threat Detection (Suricata/Zeek integration)
 - Extended telemetry from monitoring stack
+- XDP/eBPF DDoS protection integration
 - nftables policy scoring
 - MACsec status monitoring
 - OpenFlow flow analysis
@@ -23,9 +25,24 @@ from datetime import datetime
 from pathlib import Path
 from threading import Thread, Event
 from dataclasses import dataclass, asdict
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
+import urllib.request
+
+# Import L2-L7 Layer Detectors from core
+try:
+    from core.qsecbit.detectors import (
+        L2DataLinkDetector,
+        L3NetworkDetector,
+        L4TransportDetector,
+        L5SessionDetector,
+        L7ApplicationDetector,
+    )
+    from core.qsecbit.threat_types import ThreatEvent, ThreatSeverity
+    LAYER_DETECTORS_AVAILABLE = True
+except ImportError:
+    LAYER_DETECTORS_AVAILABLE = False
 
 # Logging setup
 LOG_DIR = Path(os.environ.get('QSECBIT_LOG_DIR', '/var/log/hookprobe'))
@@ -53,21 +70,29 @@ OVS_BRIDGE = os.environ.get('OVS_BRIDGE', 'FTS')
 @dataclass
 class QSecBitConfig:
     """QSecBit configuration for Fortress"""
-    # Component weights (must sum to 1.0)
-    alpha: float = 0.20   # System drift weight
-    beta: float = 0.25    # Network health weight
-    gamma: float = 0.25   # Threat detection weight
-    delta: float = 0.15   # Energy efficiency weight
-    epsilon: float = 0.15 # Infrastructure health weight
+    # Main component weights (must sum to 1.0)
+    alpha: float = 0.15   # System drift weight
+    beta: float = 0.10    # Network health weight
+    gamma: float = 0.35   # L2-L7 threat detection weight (primary)
+    delta: float = 0.10   # Energy efficiency weight
+    epsilon: float = 0.10 # Infrastructure health weight
 
-    # Thresholds
+    # Thresholds (higher = healthier, we want high scores)
     amber_threshold: float = 0.45
     red_threshold: float = 0.30
 
     # Fortress-specific weights
-    nftables_weight: float = 0.10
-    macsec_weight: float = 0.10
-    openflow_weight: float = 0.10
+    nftables_weight: float = 0.05
+    macsec_weight: float = 0.05
+    openflow_weight: float = 0.05
+    xdp_weight: float = 0.05
+
+    # Layer detection weights (within gamma)
+    l2_weight: float = 0.25  # Data Link (ARP, MAC, Evil Twin)
+    l3_weight: float = 0.15  # Network (IP spoofing, ICMP)
+    l4_weight: float = 0.20  # Transport (SYN flood, port scan)
+    l5_weight: float = 0.20  # Session (SSL strip, TLS downgrade)
+    l7_weight: float = 0.20  # Application (SQLi, XSS, C2)
 
 
 @dataclass
@@ -82,6 +107,20 @@ class QSecBitSample:
     policy_violations: int
     macsec_status: str
     openflow_flows: int
+    # Layer threat scores (0.0-1.0, higher = more threats)
+    layer_scores: Dict[str, float] = None
+    # Recent threat events
+    recent_threats: List[Dict] = None
+    # XDP stats
+    xdp_stats: Dict[str, int] = None
+
+    def __post_init__(self):
+        if self.layer_scores is None:
+            self.layer_scores = {}
+        if self.recent_threats is None:
+            self.recent_threats = []
+        if self.xdp_stats is None:
+            self.xdp_stats = {}
 
 
 # Global reference to agent for HTTP handler
@@ -133,7 +172,7 @@ class QSecBitAPIHandler(BaseHTTPRequestHandler):
             self._send_json({'status': 'unhealthy', 'reason': 'agent not running'}, 503)
 
     def _handle_status(self):
-        """Full status endpoint"""
+        """Full status endpoint with L2-L7 layer detection data"""
         if not _agent_instance:
             self._send_json({'error': 'agent not initialized'}, 503)
             return
@@ -151,6 +190,9 @@ class QSecBitAPIHandler(BaseHTTPRequestHandler):
                 'policy_violations': sample.policy_violations,
                 'macsec_status': sample.macsec_status,
                 'openflow_flows': sample.openflow_flows,
+                'layer_scores': sample.layer_scores,
+                'recent_threats': sample.recent_threats,
+                'xdp_stats': sample.xdp_stats,
                 'uptime_seconds': int(time.time() - _agent_instance.start_time)
             })
         else:
@@ -187,7 +229,7 @@ class QSecBitAPIHandler(BaseHTTPRequestHandler):
 
 
 class QSecBitFortressAgent:
-    """Full QSecBit agent for Fortress deployments"""
+    """Full QSecBit agent for Fortress deployments with L2-L7 threat detection"""
 
     def __init__(self, config: QSecBitConfig = None):
         self.config = config or QSecBitConfig()
@@ -195,13 +237,35 @@ class QSecBitFortressAgent:
         self.start_time = time.time()
         self.last_sample: Optional[QSecBitSample] = None
         self.history: List[QSecBitSample] = []
+        self.all_threats: List[Any] = []  # Accumulated threats
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Initialize L2-L7 Layer Detectors
+        self.layer_detectors = {}
+        if LAYER_DETECTORS_AVAILABLE:
+            data_dir = str(DATA_DIR / "layer_detectors")
+            try:
+                self.layer_detectors = {
+                    'L2': L2DataLinkDetector(data_dir=data_dir),
+                    'L3': L3NetworkDetector(data_dir=data_dir),
+                    'L4': L4TransportDetector(data_dir=data_dir),
+                    'L5': L5SessionDetector(data_dir=data_dir),
+                    'L7': L7ApplicationDetector(data_dir=data_dir),
+                }
+                logger.info(f"Initialized {len(self.layer_detectors)} L2-L7 layer detectors")
+            except Exception as e:
+                logger.warning(f"Failed to initialize layer detectors: {e}")
+        else:
+            logger.warning("Layer detectors not available - running in basic mode")
+
+        # XDP API endpoint
+        self.xdp_api_url = os.environ.get('XDP_API_URL', 'http://localhost:9091')
 
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
 
-        logger.info("QSecBit Fortress Agent initialized")
+        logger.info("QSecBit Fortress Agent v5.2.0 initialized")
 
     def _signal_handler(self, signum, frame):
         logger.info(f"Received signal {signum}, shutting down...")
@@ -268,17 +332,97 @@ class QSecBitFortressAgent:
         except Exception:
             return 0
 
-    def calculate_score(self) -> tuple:
-        """Calculate QSecBit score with Fortress enhancements"""
+    def get_xdp_stats(self) -> Dict[str, int]:
+        """Get XDP/eBPF stats from the XDP container"""
+        try:
+            req = urllib.request.Request(f"{self.xdp_api_url}/stats", method='GET')
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return json.loads(response.read().decode())
+        except Exception:
+            return {}
+
+    def run_layer_detection(self) -> tuple:
+        """
+        Run all L2-L7 layer detectors and return scores.
+
+        Returns:
+            (layer_scores dict, new_threats list, total_threat_count)
+        """
+        layer_scores = {
+            'L2': 0.0,
+            'L3': 0.0,
+            'L4': 0.0,
+            'L5': 0.0,
+            'L7': 0.0,
+        }
+        new_threats = []
+        total_count = 0
+
+        if not self.layer_detectors:
+            return layer_scores, new_threats, total_count
+
+        for layer_name, detector in self.layer_detectors.items():
+            try:
+                # Run detection
+                threats = detector.detect()
+
+                # Get layer score (0.0-1.0, higher = more threats)
+                layer_scores[layer_name] = detector.get_layer_score()
+
+                # Collect new threats
+                for threat in threats:
+                    total_count += 1
+                    new_threats.append({
+                        'id': threat.id,
+                        'timestamp': threat.timestamp.isoformat(),
+                        'attack_type': threat.attack_type.name,
+                        'layer': threat.layer.name,
+                        'severity': threat.severity.name,
+                        'source_ip': threat.source_ip,
+                        'description': threat.description,
+                        'confidence': threat.confidence,
+                        'blocked': threat.blocked,
+                    })
+                    self.all_threats.append(threat)
+
+            except Exception as e:
+                logger.warning(f"Error in {layer_name} detector: {e}")
+
+        # Keep threat history bounded
+        if len(self.all_threats) > 1000:
+            self.all_threats = self.all_threats[-500:]
+
+        return layer_scores, new_threats, total_count
+
+    def block_ip_via_xdp(self, ip: str) -> bool:
+        """Block an IP address via XDP at kernel level"""
+        try:
+            data = json.dumps({'ip': ip}).encode()
+            req = urllib.request.Request(
+                f"{self.xdp_api_url}/block",
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                result = json.loads(response.read().decode())
+                return result.get('status') == 'blocked'
+        except Exception as e:
+            logger.warning(f"Failed to block IP {ip} via XDP: {e}")
+            return False
+
+    def calculate_score(self, layer_scores: Dict[str, float] = None, xdp_stats: Dict = None) -> tuple:
+        """Calculate QSecBit score with Fortress enhancements and L2-L7 layer detection"""
         components = {
             'drift': 0.0,
             'network': 0.0,
-            'threats': 0.0,
+            'threats': 0.0,  # Now includes L2-L7 layer scores
             'energy': 0.0,
             'infrastructure': 0.0,
             'nftables': 0.0,
             'macsec': 0.0,
-            'openflow': 0.0
+            'openflow': 0.0,
+            'xdp': 0.0,
         }
 
         # System drift (CPU, memory usage)
@@ -298,9 +442,22 @@ class QSecBitFortressAgent:
         except Exception:
             components['network'] = 0.5
 
-        # Threat detection
-        alerts = self.get_suricata_alerts()
-        components['threats'] = max(0, 1.0 - (alerts / 50))
+        # L2-L7 Threat detection (primary threat scoring)
+        if layer_scores:
+            # Calculate weighted layer score (invert: higher threat = lower health)
+            layer_threat_score = (
+                self.config.l2_weight * layer_scores.get('L2', 0.0) +
+                self.config.l3_weight * layer_scores.get('L3', 0.0) +
+                self.config.l4_weight * layer_scores.get('L4', 0.0) +
+                self.config.l5_weight * layer_scores.get('L5', 0.0) +
+                self.config.l7_weight * layer_scores.get('L7', 0.0)
+            )
+            # Invert: 0.0 threats = 1.0 health
+            components['threats'] = max(0, 1.0 - layer_threat_score)
+        else:
+            # Fallback to Suricata alerts only
+            alerts = self.get_suricata_alerts()
+            components['threats'] = max(0, 1.0 - (alerts / 50))
 
         # Energy efficiency (simplified)
         components['energy'] = 0.8
@@ -326,6 +483,18 @@ class QSecBitFortressAgent:
         flows = self.get_openflow_stats()
         components['openflow'] = min(1.0, flows / 20) if flows > 0 else 0.5
 
+        # XDP protection health (based on drop rate)
+        if xdp_stats:
+            total = xdp_stats.get('total_packets', 0)
+            passed = xdp_stats.get('passed', 0)
+            if total > 0:
+                # Good if most packets pass (low attack rate)
+                components['xdp'] = min(1.0, passed / total)
+            else:
+                components['xdp'] = 1.0  # No traffic = healthy
+        else:
+            components['xdp'] = 0.5  # Unknown
+
         # Calculate weighted score
         score = (
             self.config.alpha * components['drift'] +
@@ -335,7 +504,8 @@ class QSecBitFortressAgent:
             self.config.epsilon * components['infrastructure'] +
             self.config.nftables_weight * components['nftables'] +
             self.config.macsec_weight * components['macsec'] +
-            self.config.openflow_weight * components['openflow']
+            self.config.openflow_weight * components['openflow'] +
+            self.config.xdp_weight * components['xdp']
         )
 
         # Determine RAG status
@@ -349,19 +519,29 @@ class QSecBitFortressAgent:
         return score, rag_status, components
 
     def collect_sample(self) -> QSecBitSample:
-        """Collect a complete QSecBit sample"""
-        score, rag_status, components = self.calculate_score()
+        """Collect a complete QSecBit sample with L2-L7 layer detection"""
+        # Run L2-L7 layer detection
+        layer_scores, new_threats, threat_count = self.run_layer_detection()
+
+        # Get XDP stats
+        xdp_stats = self.get_xdp_stats()
+
+        # Calculate score with layer data
+        score, rag_status, components = self.calculate_score(layer_scores, xdp_stats)
 
         sample = QSecBitSample(
             timestamp=datetime.now().isoformat(),
             score=score,
             rag_status=rag_status,
             components=components,
-            threats_detected=0,
+            threats_detected=threat_count,
             suricata_alerts=self.get_suricata_alerts(),
             policy_violations=self.get_policy_violations(),
             macsec_status=self.get_macsec_status(),
-            openflow_flows=self.get_openflow_stats()
+            openflow_flows=self.get_openflow_stats(),
+            layer_scores=layer_scores,
+            recent_threats=new_threats[-10:],  # Keep last 10
+            xdp_stats=xdp_stats,
         )
 
         self.last_sample = sample
@@ -384,6 +564,9 @@ class QSecBitFortressAgent:
                 'policy_violations': sample.policy_violations,
                 'macsec_status': sample.macsec_status,
                 'openflow_flows': sample.openflow_flows,
+                'layer_scores': sample.layer_scores,
+                'recent_threats': sample.recent_threats,
+                'xdp_stats': sample.xdp_stats,
                 'uptime_seconds': int(time.time() - self.start_time)
             }
             with open(STATS_FILE, 'w') as f:
@@ -392,8 +575,8 @@ class QSecBitFortressAgent:
             logger.error(f"Failed to save stats: {e}")
 
     def run_monitoring_loop(self):
-        """Main monitoring loop"""
-        logger.info("Starting QSecBit monitoring loop...")
+        """Main monitoring loop with L2-L7 threat detection"""
+        logger.info("Starting QSecBit monitoring loop with L2-L7 detection...")
         interval = 10
 
         while self.running.is_set():
@@ -401,11 +584,20 @@ class QSecBitFortressAgent:
                 sample = self.collect_sample()
                 self.save_stats(sample)
 
+                # Log detailed status
+                layer_summary = ' '.join([f"{k}={v:.2f}" for k, v in sample.layer_scores.items()])
                 logger.info(
                     f"QSecBit: {sample.rag_status} score={sample.score:.3f} "
-                    f"policy_violations={sample.policy_violations} "
+                    f"threats={sample.threats_detected} layers=[{layer_summary}] "
                     f"macsec={sample.macsec_status}"
                 )
+
+                # Auto-block high-severity threats via XDP
+                for threat in sample.recent_threats:
+                    if threat.get('severity') in ('CRITICAL', 'HIGH') and threat.get('source_ip'):
+                        if not threat.get('blocked'):
+                            if self.block_ip_via_xdp(threat['source_ip']):
+                                logger.info(f"Auto-blocked {threat['source_ip']} via XDP")
 
                 time.sleep(interval)
             except Exception as e:
@@ -427,7 +619,7 @@ class QSecBitFortressAgent:
         global _agent_instance
         _agent_instance = self
 
-        logger.info("Starting QSecBit Fortress Agent v5.1.0...")
+        logger.info("Starting QSecBit Fortress Agent v5.2.0...")
         self.running.set()
 
         # Start monitoring loop
