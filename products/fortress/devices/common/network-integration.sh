@@ -463,12 +463,27 @@ initialize_lte_modem() {
         log_info "Modem state after enable: $modem_state"
     fi
 
-    # Check for SIM
-    local sim_path
-    sim_path=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "primary sim path:\s+'\K[^']+")
+    # Wait for SIM detection (CDC-MBIM modems like Sierra EM9293 need time after enable)
+    log_info "Waiting for SIM detection..."
+    local sim_path=""
+    local sim_wait=0
+    local sim_max_wait=15  # Max 15 seconds for SIM detection
+
+    while [ $sim_wait -lt $sim_max_wait ]; do
+        sim_path=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "primary sim path:\s+'\K[^']+")
+
+        if [ -n "$sim_path" ] && [ "$sim_path" != "--" ]; then
+            break
+        fi
+
+        sleep 2
+        sim_wait=$((sim_wait + 2))
+        [ $((sim_wait % 6)) -eq 0 ] && log_info "  Waiting for SIM... ($sim_wait seconds)"
+    done
 
     if [ -z "$sim_path" ] || [ "$sim_path" = "--" ]; then
-        log_warn "No SIM card detected"
+        log_warn "No SIM card detected after ${sim_max_wait}s"
+        log_warn "Check: mmcli -m $modem_idx | grep sim"
         return 1
     fi
 

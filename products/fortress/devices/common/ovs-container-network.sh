@@ -619,24 +619,51 @@ setup_nat() {
     local lan_cidr
     lan_cidr=$(get_lan_cidr)
 
-    # Enable IP forwarding
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+    # Enable IP forwarding with verification
+    log_info "Enabling IP forwarding..."
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fts-forward.conf
+    sysctl -p /etc/sysctl.d/99-fts-forward.conf >/dev/null 2>&1 || true
 
-    # NAT for LAN clients (dynamic CIDR based on LAN_SUBNET_MASK)
+    # Verify IP forwarding is enabled
+    local forward_status
+    forward_status=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
+    if [ "$forward_status" != "1" ]; then
+        log_warn "IP forwarding not enabled, forcing..."
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+    fi
+    log_info "IP forwarding: enabled"
+
+    # NAT for LAN clients via specific WAN interface
     iptables -t nat -C POSTROUTING -s "${lan_cidr}" -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -s "${lan_cidr}" -o "$wan_iface" -j MASQUERADE
+
+    # Fallback NAT rule: NAT any LAN traffic going to non-LAN destinations
+    # This ensures NAT works even if routing changes (e.g., failover to WWAN)
+    iptables -t nat -C POSTROUTING -s "${lan_cidr}" ! -d "${lan_cidr}" ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s "${lan_cidr}" ! -d "${lan_cidr}" ! -o "$OVS_BRIDGE" -j MASQUERADE
 
     # NAT for services tier (dnsxai needs upstream DNS)
     iptables -t nat -C POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE
 
-    # Allow forwarding from LAN to WAN
+    # Fallback NAT for services tier
+    iptables -t nat -C POSTROUTING -s 172.20.201.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.201.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE
+
+    # Allow forwarding from LAN to WAN (specific interface)
     iptables -C FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT
 
     iptables -C FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    # Allow forwarding from LAN to any external interface (for failover/multi-WAN)
+    iptables -C FORWARD -i "$OVS_BRIDGE" ! -o "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$OVS_BRIDGE" ! -o "$OVS_BRIDGE" -j ACCEPT
+
+    iptables -C FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
     # DNAT rules for LAN access to container services
     # Web UI: LAN clients (10.200.0.0/24) -> web container (172.20.201.10:8443)
@@ -889,8 +916,11 @@ cleanup_ovs_network() {
     # Try to remove each possible CIDR to ensure cleanup works regardless of configuration
     for mask in 23 24 25 26 27 28 29; do
         iptables -t nat -D POSTROUTING -s "10.200.0.0/${mask}" -j MASQUERADE 2>/dev/null || true
+        # Also remove fallback NAT rules
+        iptables -t nat -D POSTROUTING -s "10.200.0.0/${mask}" ! -d "10.200.0.0/${mask}" ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || true
     done
     iptables -t nat -D POSTROUTING -s 172.20.201.0/24 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 172.20.201.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || true
 
     # Remove DNAT rules for web UI access
     iptables -t nat -D PREROUTING -i "$OVS_BRIDGE" -p tcp --dport 8443 -j DNAT --to-destination 172.20.201.10:8443 2>/dev/null || true
@@ -898,6 +928,10 @@ cleanup_ovs_network() {
     # Remove FORWARD rules for container networks
     iptables -D FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+
+    # Remove generic forwarding rules
+    iptables -D FORWARD -i "$OVS_BRIDGE" ! -o "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 
     # Remove DHCP config
     rm -f /etc/dnsmasq.d/fts-ovs.conf
