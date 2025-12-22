@@ -3,11 +3,19 @@
 
 apiVersion: 1
 
+# Delete existing datasources before re-provisioning to avoid conflicts
+deleteDatasources:
+  - name: VictoriaMetrics
+    orgId: 1
+  - name: Fortress-Postgres
+    orgId: 1
+
 datasources:
   - name: VictoriaMetrics
     type: prometheus
     access: proxy
-    url: http://victoria:8428
+    # Use container name (fts-victoria) for DNS resolution within fts-mgmt network
+    url: http://fts-victoria:8428
     isDefault: true
     editable: false
     jsonData:
@@ -18,7 +26,8 @@ datasources:
 
   - name: Fortress-Postgres
     type: postgres
-    url: postgres:5432
+    # Use container name for DNS resolution within network
+    url: fts-postgres:5432
     database: fortress
     user: fortress
     secureJsonData:
