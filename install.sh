@@ -1644,8 +1644,11 @@ install_fortress() {
     read -p "Enable Grafana dashboards? (yes/no) [yes]: " enable_grafana
     enable_grafana=${enable_grafana:-yes}
 
-    read -p "Enable ClickHouse analytics? (yes/no) [no]: " enable_clickhouse
-    enable_clickhouse=${enable_clickhouse:-no}
+    read -p "Enable ClickHouse analytics? (yes/no) [yes]: " enable_clickhouse
+    enable_clickhouse=${enable_clickhouse:-yes}
+
+    read -p "Enable IDS/IPS (Suricata + Zeek)? (yes/no) [yes]: " enable_ids
+    enable_ids=${enable_ids:-yes}
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
@@ -1673,6 +1676,7 @@ install_fortress() {
     [ "$enable_grafana" = "yes" ] && echo "  ✓ Monitoring (Grafana + Victoria Metrics)"
     [ "$enable_n8n" = "yes" ] && echo "  ✓ n8n Workflow Automation"
     [ "$enable_clickhouse" = "yes" ] && echo "  ✓ ClickHouse Analytics"
+    [ "$enable_ids" = "yes" ] && echo "  ✓ IDS/IPS (Suricata + Zeek)"
     echo ""
 
     # Default YES for confirmation
@@ -1706,6 +1710,7 @@ CFEOF
         [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
         [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
         [ "$enable_clickhouse" = "yes" ] && extra_args="$extra_args --enable-clickhouse"
+        [ "$enable_ids" = "yes" ] && extra_args="$extra_args --enable-ids"
         [ "$enable_remote" = "yes" ] && extra_args="$extra_args --enable-remote-access"
 
         if [ "$enable_lte" = "yes" ]; then
@@ -1723,7 +1728,20 @@ CFEOF
             export WIFI_PASSWORD="$wifi_password"
             export FORTRESS_NETWORK_PREFIX="$network_prefix"
             export NON_INTERACTIVE=true
+            # Export all optional service flags
             [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
+            [ "$enable_n8n" = "yes" ] && export INSTALL_N8N=true
+            [ "$enable_clickhouse" = "yes" ] && export INSTALL_CLICKHOUSE=true
+            [ "$enable_ids" = "yes" ] && export INSTALL_IDS=true
+            [ "$enable_remote" = "yes" ] && export INSTALL_CLOUDFLARE_TUNNEL=true
+            [ "$enable_lte" = "yes" ] && export INSTALL_LTE=true
+            # Export LTE configuration
+            [ -n "$lte_apn" ] && export LTE_APN="$lte_apn"
+            [ -n "$lte_auth" ] && export LTE_AUTH="$lte_auth"
+            [ -n "$lte_user" ] && export LTE_USER="$lte_user"
+            [ -n "$lte_pass" ] && export LTE_PASS="$lte_pass"
+            # Export Cloudflare token
+            [ -n "$cf_tunnel_token" ] && export CLOUDFLARE_TOKEN="$cf_tunnel_token"
 
             # Run the container installer with args (non-interactive uses env vars)
             bash "$SCRIPT_DIR/products/fortress/install.sh" $extra_args
@@ -1739,7 +1757,20 @@ CFEOF
             export WIFI_PASSWORD="$wifi_password"
             export FORTRESS_NETWORK_PREFIX="$network_prefix"
             export NON_INTERACTIVE=true
+            # Export all optional service flags
             [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
+            [ "$enable_n8n" = "yes" ] && export INSTALL_N8N=true
+            [ "$enable_clickhouse" = "yes" ] && export INSTALL_CLICKHOUSE=true
+            [ "$enable_ids" = "yes" ] && export INSTALL_IDS=true
+            [ "$enable_remote" = "yes" ] && export INSTALL_CLOUDFLARE_TUNNEL=true
+            [ "$enable_lte" = "yes" ] && export INSTALL_LTE=true
+            # Export LTE configuration
+            [ -n "$lte_apn" ] && export LTE_APN="$lte_apn"
+            [ -n "$lte_auth" ] && export LTE_AUTH="$lte_auth"
+            [ -n "$lte_user" ] && export LTE_USER="$lte_user"
+            [ -n "$lte_pass" ] && export LTE_PASS="$lte_pass"
+            # Export Cloudflare token
+            [ -n "$cf_tunnel_token" ] && export CLOUDFLARE_TOKEN="$cf_tunnel_token"
 
             bash "$SCRIPT_DIR/products/fortress/install-container.sh" $extra_args
         else

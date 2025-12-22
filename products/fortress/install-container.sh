@@ -319,13 +319,50 @@ collect_configuration() {
             set_subnet_ranges "23"
         fi
 
-        # Show configuration summary
-        log_info "Configuration:"
-        log_info "  Network Mode:  $NETWORK_MODE"
-        log_info "  LAN Subnet:    10.200.0.0/$LAN_SUBNET_MASK"
-        log_info "  Admin User:    $ADMIN_USER"
-        log_info "  WiFi SSID:     $WIFI_SSID"
-        log_info "  Web Port:      $WEB_PORT"
+        # Build optional services list
+        local optional_services=""
+        [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
+        [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
+        [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
+        [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
+        [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
+        optional_services="${optional_services%%, }"  # Remove trailing comma
+        [ -z "$optional_services" ] && optional_services="Core only"
+
+        # Show complete configuration summary
+        echo ""
+        echo "════════════════════════════════════════════════════════════════"
+        echo -e "  ${CYAN}${BOLD}FORTRESS CONFIGURATION${NC}"
+        echo "════════════════════════════════════════════════════════════════"
+        echo ""
+        echo -e "  ${BOLD}Network:${NC}"
+        echo "    Mode:           $NETWORK_MODE"
+        echo "    LAN Subnet:     10.200.0.0/$LAN_SUBNET_MASK"
+        echo ""
+        echo -e "  ${BOLD}Access:${NC}"
+        echo "    Admin User:     $ADMIN_USER"
+        echo "    WiFi SSID:      $WIFI_SSID"
+        echo "    Web Port:       $WEB_PORT"
+        echo ""
+        echo -e "  ${BOLD}Security Core:${NC}"
+        echo "    ✓ QSecBit threat detection"
+        echo "    ✓ dnsXai DNS protection"
+        echo "    ✓ DFS WiFi intelligence"
+        echo ""
+        echo -e "  ${BOLD}Optional Services:${NC}"
+        [ "${INSTALL_MONITORING:-}" = true ] && echo "    ✓ Monitoring (Grafana + VictoriaMetrics)"
+        [ "${INSTALL_N8N:-}" = true ] && echo "    ✓ n8n Workflow Automation"
+        [ "${INSTALL_CLICKHOUSE:-}" = true ] && echo "    ✓ ClickHouse Analytics"
+        [ "${INSTALL_IDS:-}" = true ] && echo "    ✓ IDS/IPS (Suricata + Zeek)"
+        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && echo "    ✓ Cloudflare Tunnel"
+        [ "${INSTALL_LTE:-}" = true ] && echo "    ✓ LTE Failover (APN: ${LTE_APN:-auto})"
+        [ -z "$optional_services" ] || [ "$optional_services" = "Core only" ] && echo "    (none selected)"
+        echo ""
+        echo "════════════════════════════════════════════════════════════════"
+        echo ""
+        log_info "Starting fully automated installation..."
+        echo ""
         return 0
     fi
 
@@ -539,8 +576,8 @@ collect_configuration() {
 
     # Monitoring (Grafana + VictoriaMetrics)
     if [ -z "${INSTALL_MONITORING:-}" ]; then
-        read -p "Install monitoring dashboard (Grafana + VictoriaMetrics)? [y/N]: " mon_choice
-        if [[ "${mon_choice:-N}" =~ ^[Yy]$ ]]; then
+        read -p "Install monitoring dashboard (Grafana + VictoriaMetrics)? [Y/n]: " mon_choice
+        if [[ ! "${mon_choice:-Y}" =~ ^[Nn]$ ]]; then
             export INSTALL_MONITORING=true
             log_info "Monitoring: enabled"
         fi
@@ -548,8 +585,8 @@ collect_configuration() {
 
     # n8n Workflow Automation
     if [ -z "${INSTALL_N8N:-}" ]; then
-        read -p "Install n8n workflow automation? [y/N]: " n8n_choice
-        if [[ "${n8n_choice:-N}" =~ ^[Yy]$ ]]; then
+        read -p "Install n8n workflow automation? [Y/n]: " n8n_choice
+        if [[ ! "${n8n_choice:-Y}" =~ ^[Nn]$ ]]; then
             export INSTALL_N8N=true
             log_info "n8n: enabled"
         fi
@@ -557,8 +594,8 @@ collect_configuration() {
 
     # ClickHouse Analytics
     if [ -z "${INSTALL_CLICKHOUSE:-}" ]; then
-        read -p "Install ClickHouse analytics database? [y/N]: " ch_choice
-        if [[ "${ch_choice:-N}" =~ ^[Yy]$ ]]; then
+        read -p "Install ClickHouse analytics database? [Y/n]: " ch_choice
+        if [[ ! "${ch_choice:-Y}" =~ ^[Nn]$ ]]; then
             export INSTALL_CLICKHOUSE=true
             log_info "ClickHouse: enabled"
         fi
@@ -566,8 +603,8 @@ collect_configuration() {
 
     # IDS/IPS (Suricata + Zeek + XDP)
     if [ -z "${INSTALL_IDS:-}" ]; then
-        read -p "Install IDS/IPS (Suricata + Zeek + XDP)? [y/N]: " ids_choice
-        if [[ "${ids_choice:-N}" =~ ^[Yy]$ ]]; then
+        read -p "Install IDS/IPS (Suricata + Zeek + XDP)? [Y/n]: " ids_choice
+        if [[ ! "${ids_choice:-Y}" =~ ^[Nn]$ ]]; then
             export INSTALL_IDS=true
             log_info "IDS/IPS: enabled"
         fi
