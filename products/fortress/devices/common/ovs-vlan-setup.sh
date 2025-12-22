@@ -522,7 +522,7 @@ table inet fortress_vlan {
         # DNAT FORWARDING - Allow forwarded (DNAT'd) traffic to containers
         # ============================================================
         # Allow DNAT'd traffic to web container
-        ct state dnat ip daddr ${WEB_CONTAINER_IP} tcp dport ${WEB_PORT} accept
+        ct status dnat ip daddr ${WEB_CONTAINER_IP} tcp dport ${WEB_PORT} accept
     }
 
     # ============================================================
@@ -533,12 +533,13 @@ table inet fortress_vlan {
 
         # Forward web UI requests from MGMT VLAN to web container
         # Clients accessing the gateway IP on port 8443 get redirected to the container
-        iifname "vlan${VLAN_MGMT}" tcp dport ${WEB_PORT} dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
+        # Note: 'dnat ip to' required in inet table to disambiguate IPv4 vs IPv6
+        iifname "vlan${VLAN_MGMT}" tcp dport ${WEB_PORT} dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
 
         # Also handle requests directly to the management gateway IP
-        ip daddr ${GATEWAY_MGMT} tcp dport ${WEB_PORT} dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
-        ip daddr ${GATEWAY_MGMT} tcp dport 443 dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
-        ip daddr ${GATEWAY_MGMT} tcp dport 80 dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
+        ip daddr ${GATEWAY_MGMT} tcp dport ${WEB_PORT} dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
+        ip daddr ${GATEWAY_MGMT} tcp dport 443 dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
+        ip daddr ${GATEWAY_MGMT} tcp dport 80 dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
     }
 
     # NAT - masquerade all internal traffic going out
