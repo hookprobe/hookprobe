@@ -29,16 +29,65 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VLAN_LAN=100
 VLAN_MGMT=200
 
-# Subnets
-SUBNET_LAN="10.200.0.0/24"
-GATEWAY_LAN="10.200.0.1"
-DHCP_START_LAN="10.200.0.100"
-DHCP_END_LAN="10.200.0.200"
+# LAN Subnet - use configured mask from environment or default to /24
+# LAN_SUBNET_MASK is set by install-container.sh based on user input
+LAN_MASK="${LAN_SUBNET_MASK:-24}"
 
-SUBNET_MGMT="10.200.100.0/24"
+# Calculate LAN DHCP ranges based on subnet mask
+GATEWAY_LAN="10.200.0.1"
+case "$LAN_MASK" in
+    29) # /29 = 6 usable hosts
+        SUBNET_LAN="10.200.0.0/29"
+        NETMASK_LAN="255.255.255.248"
+        DHCP_START_LAN="10.200.0.2"
+        DHCP_END_LAN="10.200.0.6"
+        ;;
+    28) # /28 = 14 usable hosts
+        SUBNET_LAN="10.200.0.0/28"
+        NETMASK_LAN="255.255.255.240"
+        DHCP_START_LAN="10.200.0.2"
+        DHCP_END_LAN="10.200.0.14"
+        ;;
+    27) # /27 = 30 usable hosts
+        SUBNET_LAN="10.200.0.0/27"
+        NETMASK_LAN="255.255.255.224"
+        DHCP_START_LAN="10.200.0.10"
+        DHCP_END_LAN="10.200.0.30"
+        ;;
+    26) # /26 = 62 usable hosts
+        SUBNET_LAN="10.200.0.0/26"
+        NETMASK_LAN="255.255.255.192"
+        DHCP_START_LAN="10.200.0.10"
+        DHCP_END_LAN="10.200.0.62"
+        ;;
+    25) # /25 = 126 usable hosts
+        SUBNET_LAN="10.200.0.0/25"
+        NETMASK_LAN="255.255.255.128"
+        DHCP_START_LAN="10.200.0.10"
+        DHCP_END_LAN="10.200.0.126"
+        ;;
+    23) # /23 = 510 usable hosts
+        SUBNET_LAN="10.200.0.0/23"
+        NETMASK_LAN="255.255.254.0"
+        DHCP_START_LAN="10.200.0.100"
+        DHCP_END_LAN="10.200.1.200"
+        ;;
+    *) # Default /24 = 254 usable hosts
+        SUBNET_LAN="10.200.0.0/24"
+        NETMASK_LAN="255.255.255.0"
+        DHCP_START_LAN="10.200.0.100"
+        DHCP_END_LAN="10.200.0.200"
+        LAN_MASK=24
+        ;;
+esac
+
+# Management VLAN - /30 by default (gateway + 1 admin device)
+# This is intentionally small - management should be restricted
+SUBNET_MGMT="10.200.100.0/30"
+NETMASK_MGMT="255.255.255.252"
 GATEWAY_MGMT="10.200.100.1"
-DHCP_START_MGMT="10.200.100.100"
-DHCP_END_MGMT="10.200.100.200"
+DHCP_START_MGMT="10.200.100.2"
+DHCP_END_MGMT="10.200.100.2"  # Only 1 DHCP address (admin workstation)
 
 # Container network (podman)
 CONTAINER_SUBNET="172.20.200.0/24"
