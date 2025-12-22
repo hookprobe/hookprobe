@@ -1967,22 +1967,74 @@ uninstall_stop_services() {
     echo -e "${CYAN}Stopping all HookProbe services...${NC}"
     echo ""
 
-    for service in hookprobe-sentinel hookprobe-guardian hookprobe-fortress hookprobe-nexus hookprobe-edge hookprobe-neuro; do
+    # 1. Stop all HookProbe systemd services
+    echo -e "${CYAN}Stopping systemd services...${NC}"
+    for service in hookprobe-sentinel hookprobe-guardian hookprobe-fortress hookprobe-nexus hookprobe-edge hookprobe-neuro \
+                   fortress fortress-hostapd-2ghz fortress-hostapd-5ghz fortress-dnsmasq \
+                   fts-web fts-agent fts-qsecbit fts-suricata fts-zeek fts-xdp; do
         if systemctl is-active --quiet "$service" 2>/dev/null; then
-            echo "Stopping $service..."
+            echo "  Stopping $service..."
             systemctl stop "$service" 2>/dev/null || true
         fi
     done
 
+    # 2. Stop podman containers (both hookprobe-* and fts-* naming)
     if command -v podman &>/dev/null; then
+        echo -e "${CYAN}Stopping podman containers...${NC}"
+
+        # Stop hookprobe-* containers
         local containers=$(podman ps -q --filter "name=hookprobe" 2>/dev/null)
         [ -n "$containers" ] && podman stop $containers 2>/dev/null || true
 
+        # Stop fts-* containers (Fortress naming)
+        for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+            echo "  Stopping $container..."
+            podman stop -t 5 "$container" 2>/dev/null || true
+        done
+
+        # Force-kill any stubborn containers
+        for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-|^hookprobe" || true); do
+            podman kill "$container" 2>/dev/null || true
+        done
+
+        # Stop pods
         local pods=$(podman pod ps -q --filter "name=hookprobe" 2>/dev/null)
         [ -n "$pods" ] && podman pod stop $pods 2>/dev/null || true
     fi
 
-    echo -e "${GREEN}✓ Services stopped${NC}"
+    # 3. Stop podman-compose if running
+    if [ -f /opt/hookprobe/fortress/containers/podman-compose.yml ]; then
+        echo -e "${CYAN}Stopping podman-compose...${NC}"
+        cd /opt/hookprobe/fortress/containers 2>/dev/null && {
+            podman-compose down --timeout 30 2>/dev/null || true
+        }
+    fi
+
+    # 4. Stop hostapd and dnsmasq processes
+    echo -e "${CYAN}Stopping WiFi/DHCP processes...${NC}"
+    pkill -f "hostapd.*hookprobe\|hostapd.*fortress\|hostapd.*fts" 2>/dev/null || true
+    pkill -f "dnsmasq.*hookprobe\|dnsmasq.*fortress\|dnsmasq.*fts" 2>/dev/null || true
+
+    # 5. Clear OVS if present
+    if command -v ovs-vsctl &>/dev/null; then
+        echo -e "${CYAN}Clearing OVS bridges...${NC}"
+        ovs-ofctl del-flows FTS 2>/dev/null || true
+        ovs-vsctl del-br FTS 2>/dev/null || true
+    fi
+
+    # 6. Bring down fortress bridge interface
+    echo -e "${CYAN}Bringing down bridge interfaces...${NC}"
+    ip link set fortress down 2>/dev/null || true
+    ip link delete fortress 2>/dev/null || true
+
+    # 7. Release locked ports
+    echo -e "${CYAN}Releasing locked ports...${NC}"
+    fuser -k 8443/tcp 2>/dev/null || true
+    fuser -k 5353/udp 2>/dev/null || true
+    fuser -k 8050/tcp 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}✓ All services stopped${NC}"
 }
 
 uninstall_containers() {
