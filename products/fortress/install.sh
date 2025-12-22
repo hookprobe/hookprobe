@@ -743,18 +743,284 @@ EOF
 }
 
 # ============================================================
+# FULL SYSTEM PURGE (Option 9)
+# ============================================================
+do_full_purge() {
+    echo ""
+    echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║            ⚠️  FULL SYSTEM PURGE + REBOOT  ⚠️                  ║${NC}"
+    echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}This will COMPLETELY remove HookProbe and reboot the system:${NC}"
+    echo ""
+    echo "  • All containers, images, pods, volumes, networks"
+    echo "  • All systemd services and timers"
+    echo "  • All OVS bridges, VLANs, network interfaces"
+    echo "  • All udev rules (WiFi, LTE)"
+    echo "  • All configuration files and secrets"
+    echo "  • All data directories and logs"
+    echo "  • All sysctl and iptables rules"
+    echo "  • All management scripts"
+    echo ""
+    echo -e "${RED}${BOLD}THE SYSTEM WILL AUTOMATICALLY REBOOT AFTER PURGE${NC}"
+    echo ""
+    echo -e "${CYAN}This returns the system to a clean state for fresh install.${NC}"
+    echo ""
+
+    read -p "Type 'PURGE' to confirm complete removal and reboot: " confirm
+
+    if [ "$confirm" != "PURGE" ]; then
+        log_info "Purge cancelled"
+        return 1
+    fi
+
+    echo ""
+    log_step "Starting full system purge..."
+
+    # Run uninstall with purge flag
+    if [ -x "${SCRIPT_DIR}/uninstall.sh" ]; then
+        "${SCRIPT_DIR}/uninstall.sh" --purge --force || true
+    fi
+
+    # Extra cleanup for any remaining bits
+    log_info "Final cleanup..."
+
+    # Remove any remaining podman artifacts
+    if command -v podman &>/dev/null; then
+        podman system prune -af --volumes 2>/dev/null || true
+    fi
+
+    # Remove routing tables
+    if [ -f /etc/iproute2/rt_tables ]; then
+        sed -i '/wan_primary/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/wan_backup/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/primary_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/backup_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+    fi
+
+    # Flush nftables
+    nft flush ruleset 2>/dev/null || true
+
+    # Remove LTE/Modem configuration
+    log_info "Removing LTE/Modem configuration..."
+    if command -v nmcli &>/dev/null; then
+        # Remove all HookProbe/Fortress related NetworkManager connections
+        for conn in $(nmcli -t -f NAME con show 2>/dev/null | grep -iE "fts|hookprobe|fortress|lte|wwan|gsm" || true); do
+            log_info "  Removing nmcli connection: $conn"
+            nmcli con delete "$conn" 2>/dev/null || true
+        done
+    fi
+    # Remove ModemManager config
+    rm -f /etc/ModemManager/fcc-unlock.d/* 2>/dev/null || true
+    # Stop and reset WWAN interfaces
+    for iface in $(ip link show 2>/dev/null | grep -oE "wwan[0-9]+" || true); do
+        log_info "  Resetting WWAN interface: $iface"
+        ip link set "$iface" down 2>/dev/null || true
+    done
+
+    # Remove udev rules
+    rm -f /etc/udev/rules.d/*fts*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*fortress*.rules 2>/dev/null || true
+    rm -f /etc/udev/rules.d/*modem*.rules 2>/dev/null || true
+    udevadm control --reload-rules 2>/dev/null || true
+
+    # Remove sysctl configs
+    rm -f /etc/sysctl.d/*fortress*.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/*fts*.conf 2>/dev/null || true
+    sysctl --system &>/dev/null || true
+
+    # Remove all hookprobe directories
+    rm -rf /opt/hookprobe 2>/dev/null || true
+    rm -rf /etc/hookprobe 2>/dev/null || true
+    rm -rf /etc/fortress 2>/dev/null || true
+    rm -rf /var/lib/hookprobe 2>/dev/null || true
+    rm -rf /var/lib/fortress 2>/dev/null || true
+    rm -rf /var/log/hookprobe 2>/dev/null || true
+    rm -rf /var/backups/fortress 2>/dev/null || true
+
+    # Reload systemd
+    systemctl daemon-reload 2>/dev/null || true
+
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║              Full System Purge Complete!                      ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}System will reboot in 5 seconds...${NC}"
+    echo ""
+
+    sleep 5
+    reboot
+}
+
+# ============================================================
+# INTERACTIVE MENU
+# ============================================================
+show_interactive_menu() {
+    detect_installation
+
+    while true; do
+        echo ""
+        echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}${BOLD}║              HookProbe Unified Installer v${VERSION}              ║${NC}"
+        echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+
+        if [ "$INSTALLED" = true ]; then
+            echo -e "  ${GREEN}●${NC} Currently installed: ${BOLD}${DEPLOYMENT_MODE}${NC} mode, v${INSTALLED_VERSION}"
+        else
+            echo -e "  ${DIM}○ No installation detected${NC}"
+        fi
+        echo ""
+
+        echo -e "${BOLD}  INSTALL${NC}"
+        echo "    1) Sentinel   - IoT Validator (256MB RAM)"
+        echo "    2) Guardian   - Travel Companion (1.5GB RAM)"
+        echo "    3) Fortress   - Small Business Gateway (4GB RAM)"
+        echo "    4) Nexus      - ML/AI Compute Node (16GB+ RAM)"
+        echo "    5) MSSP       - Cloud Platform (16GB+ RAM)"
+        echo ""
+        echo -e "${BOLD}  MANAGE${NC}"
+        echo "    6) Upgrade    - Upgrade existing installation"
+        echo "    7) Status     - Show installation status"
+        echo "    8) Backup     - Create backup"
+        echo ""
+        echo -e "${BOLD}  UNINSTALL${NC}"
+        echo "   10) Uninstall (keep data)     - Remove but preserve database volumes"
+        echo "   11) Uninstall (remove data)   - Remove everything except config"
+        echo "   12) Uninstall (purge)         - Remove absolutely everything"
+        echo ""
+        echo -e "${RED}${BOLD}   99) FULL SYSTEM PURGE + REBOOT${NC}"
+        echo -e "${DIM}       Complete removal and reboot for clean slate${NC}"
+        echo ""
+        echo "    0) Exit"
+        echo ""
+
+        read -p "Select option [0-99]: " choice
+
+        case "$choice" in
+            1)
+                log_info "Sentinel installation not yet available in this installer"
+                log_info "Use: cd ../sentinel && ./install.sh"
+                ;;
+            2)
+                log_info "Guardian installation not yet available in this installer"
+                log_info "Use: cd ../guardian && ./scripts/setup.sh"
+                ;;
+            3)
+                do_install "container"
+                ;;
+            4)
+                log_info "Nexus installation not yet available in this installer"
+                log_info "Use: cd ../nexus && ./install.sh"
+                ;;
+            5)
+                log_info "MSSP installation not yet available in this installer"
+                log_info "Use: cd ../mssp && ./setup.sh"
+                ;;
+            6)
+                if [ "$INSTALLED" = true ]; then
+                    do_upgrade
+                else
+                    log_warn "No installation to upgrade"
+                fi
+                ;;
+            7)
+                do_status
+                ;;
+            8)
+                if [ "$INSTALLED" = true ]; then
+                    do_backup --full
+                else
+                    log_warn "No installation to backup"
+                fi
+                ;;
+            10)
+                if [ "$INSTALLED" = true ]; then
+                    echo ""
+                    echo -e "${YELLOW}Uninstall (keep data):${NC}"
+                    echo "  Removes: containers, images, networks, services, scripts"
+                    echo "  Keeps:   Podman volumes (database, redis, grafana data)"
+                    echo ""
+                    read -p "Continue? [y/N]: " confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        exec "${SCRIPT_DIR}/uninstall.sh" --keep-data --force
+                    fi
+                else
+                    log_warn "No installation to remove"
+                fi
+                ;;
+            11)
+                if [ "$INSTALLED" = true ]; then
+                    echo ""
+                    echo -e "${YELLOW}Uninstall (remove data):${NC}"
+                    echo "  Removes: containers, images, networks, volumes, services, scripts"
+                    echo "  Keeps:   Configuration files (for quick reinstall)"
+                    echo ""
+                    read -p "Continue? [y/N]: " confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        exec "${SCRIPT_DIR}/uninstall.sh" --keep-config --force
+                    fi
+                else
+                    log_warn "No installation to remove"
+                fi
+                ;;
+            12)
+                if [ "$INSTALLED" = true ]; then
+                    echo ""
+                    echo -e "${RED}Uninstall (purge):${NC}"
+                    echo "  Removes: EVERYTHING - containers, images, volumes, networks,"
+                    echo "           configs, data, logs, services, scripts"
+                    echo ""
+                    read -p "Continue? [y/N]: " confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        exec "${SCRIPT_DIR}/uninstall.sh" --purge
+                    fi
+                else
+                    log_warn "No installation to remove"
+                fi
+                ;;
+            99)
+                do_full_purge
+                ;;
+            0|q|Q|exit)
+                echo ""
+                log_info "Goodbye!"
+                exit 0
+                ;;
+            *)
+                log_warn "Invalid option: $choice"
+                ;;
+        esac
+
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# ============================================================
 # MAIN
 # ============================================================
 main() {
     local command=""
     local install_args=""
     local mode="container"
+    local interactive=false
+
+    # If no arguments, show interactive menu
+    if [ $# -eq 0 ]; then
+        check_root
+        show_banner
+        check_system
+        show_interactive_menu
+        exit 0
+    fi
 
     # Parse arguments - separate command from flags
     while [ $# -gt 0 ]; do
         case "$1" in
             # Commands
-            install|upgrade|uninstall|remove|backup|restore|status)
+            install|upgrade|uninstall|remove|backup|restore|status|menu)
                 command="$1"
                 shift
                 break  # Remaining args go to the command handler
@@ -803,6 +1069,14 @@ main() {
     # Handle status without banner
     if [ "$command" = "status" ]; then
         do_status
+        exit 0
+    fi
+
+    # Handle menu command
+    if [ "$command" = "menu" ]; then
+        show_banner
+        check_system
+        show_interactive_menu
         exit 0
     fi
 

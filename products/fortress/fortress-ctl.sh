@@ -249,6 +249,64 @@ list_backups() {
 }
 
 # ============================================================
+# STOP ALL SERVICES (comprehensive)
+# ============================================================
+stop_all_services() {
+    log_step "Stopping all Fortress services"
+
+    # 1. Stop systemd services first (graceful)
+    log_substep "Stopping systemd services..."
+    systemctl stop fortress 2>/dev/null || true
+    systemctl stop fortress-hostapd-2ghz fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl stop fortress-dnsmasq 2>/dev/null || true
+    systemctl stop fts-web fts-agent fts-qsecbit 2>/dev/null || true
+    systemctl stop fts-suricata fts-zeek fts-xdp 2>/dev/null || true
+
+    # 2. Stop podman-compose (graceful)
+    log_substep "Stopping podman containers..."
+    if [ -f "$CONTAINERS_DIR/podman-compose.yml" ]; then
+        cd "$CONTAINERS_DIR" 2>/dev/null && {
+            podman-compose down --timeout 30 2>/dev/null || true
+        }
+    fi
+
+    # 3. Force-stop any remaining fts-* containers
+    log_substep "Force-stopping remaining containers..."
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+        podman stop -t 5 "$container" 2>/dev/null || true
+    done
+
+    # 4. Kill unresponsive containers
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+        podman kill "$container" 2>/dev/null || true
+    done
+
+    # 5. Stop hostapd & dnsmasq processes
+    log_substep "Stopping WiFi/DHCP processes..."
+    pkill -f "hostapd.*fortress\|hostapd.*fts" 2>/dev/null || true
+    pkill -f "dnsmasq.*fortress\|dnsmasq.*fts" 2>/dev/null || true
+
+    # 6. Clear OVS
+    log_substep "Clearing OVS..."
+    ovs-ofctl del-flows FTS 2>/dev/null || true
+    ovs-vsctl del-br FTS 2>/dev/null || true
+
+    # 7. Bring down bridge interface
+    ip link set fortress down 2>/dev/null || true
+    ip link delete fortress 2>/dev/null || true
+
+    # 8. Clear firewall rules
+    log_substep "Clearing firewall rules..."
+    iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
+    nft delete table inet fortress_filter 2>/dev/null || true
+
+    # 9. Release locked ports
+    fuser -k 8443/tcp 5353/udp 8050/tcp 2>/dev/null || true
+
+    log_info "All services stopped"
+}
+
+# ============================================================
 # UPGRADE FUNCTIONS
 # ============================================================
 upgrade_app() {
@@ -340,9 +398,13 @@ upgrade_full() {
     # Full upgrade - all tiers
     log_step "Performing full upgrade"
 
-    # Pre-upgrade backup
+    # Pre-upgrade backup (before stopping anything)
     local backup_file=$(create_backup "full")
     set_state "last_full_backup" "$backup_file"
+
+    # CRITICAL: Stop all services before upgrade
+    # This ensures clean state for rebuilding containers
+    stop_all_services
 
     # Check for database migrations
     log_substep "Checking database schema..."
@@ -371,8 +433,12 @@ upgrade_full() {
         systemctl daemon-reload
     fi
 
-    # Upgrade application (Tier 3)
+    # Upgrade application (Tier 3) - this rebuilds and restarts containers
     upgrade_app
+
+    # Restart all services that were stopped
+    log_substep "Restarting all services..."
+    start_all_services
 
     # Note: Tier 4 (core) upgrades are not automatic
     local core_version=$(cat "${SCRIPT_DIR}/../../core/VERSION" 2>/dev/null || echo "unknown")
@@ -382,6 +448,57 @@ upgrade_full() {
     fi
 
     log_info "Full upgrade complete"
+}
+
+# ============================================================
+# START ALL SERVICES
+# ============================================================
+start_all_services() {
+    log_step "Starting all Fortress services"
+
+    # Start containers via podman-compose
+    log_substep "Starting containers..."
+    if [ -f "$CONTAINERS_DIR/podman-compose.yml" ]; then
+        cd "$CONTAINERS_DIR" 2>/dev/null && {
+            # Load environment from .env file
+            if [ -f ".env" ]; then
+                set -a
+                source .env
+                set +a
+            fi
+            podman-compose up -d --no-build
+        }
+    fi
+
+    # Wait for essential containers
+    log_substep "Waiting for containers to be ready..."
+    local retries=30
+    while [ $retries -gt 0 ]; do
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
+            break
+        fi
+        sleep 2
+        ((retries--))
+    done
+
+    # Start systemd services
+    log_substep "Starting systemd services..."
+    systemctl start fortress 2>/dev/null || true
+    systemctl start fortress-hostapd-2ghz fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl start fortress-dnsmasq 2>/dev/null || true
+
+    # Verify web is accessible
+    retries=30
+    while [ $retries -gt 0 ]; do
+        if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
+            log_info "All services started successfully"
+            return 0
+        fi
+        sleep 2
+        ((retries--))
+    done
+
+    log_warn "Services started but web health check failed"
 }
 
 rollback_app() {
@@ -598,6 +715,10 @@ Commands:
 
   rollback      Rollback last application upgrade
 
+  stop          Stop all Fortress services (containers, hostapd, dnsmasq)
+  start         Start all Fortress services
+  restart       Restart all services (stop + start)
+
   status        Show installation status
 
   list-backups  List available backups
@@ -728,6 +849,20 @@ main() {
 
         rollback)
             rollback_app
+            ;;
+
+        stop)
+            stop_all_services
+            ;;
+
+        start)
+            start_all_services
+            ;;
+
+        restart)
+            stop_all_services
+            sleep 2
+            start_all_services
             ;;
 
         status)
