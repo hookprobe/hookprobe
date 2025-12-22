@@ -259,6 +259,19 @@ log_info "Step 9: Creating systemd services..."
 IFACE_24GHZ="wlan_24ghz"
 IFACE_5GHZ="wlan_5ghz"
 
+# Find hostapd binary - check common locations
+HOSTAPD_BIN=""
+for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
+    if [ -x "$path" ]; then
+        HOSTAPD_BIN="$path"
+        break
+    fi
+done
+if [ -z "$HOSTAPD_BIN" ]; then
+    HOSTAPD_BIN=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+fi
+log_info "  Using hostapd: $HOSTAPD_BIN"
+
 if [ -n "$mac_24ghz" ]; then
     cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
 [Unit]
@@ -276,7 +289,7 @@ ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${IFACE_24GHZ}" 2>/dev/null; rm -
 ExecStartPre=-/sbin/ip link set ${IFACE_24GHZ} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${IFACE_24GHZ} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
+ExecStart=${HOSTAPD_BIN} -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
 ExecStartPost=${BRIDGE_HELPER} ${IFACE_24GHZ} ${OVS_BRIDGE} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${IFACE_24GHZ} down
@@ -308,7 +321,7 @@ ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${IFACE_5GHZ}" 2>/dev/null; rm -f
 ExecStartPre=-/sbin/ip link set ${IFACE_5GHZ} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${IFACE_5GHZ} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
+ExecStart=${HOSTAPD_BIN} -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
 ExecStartPost=${BRIDGE_HELPER} ${IFACE_5GHZ} ${OVS_BRIDGE} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${IFACE_5GHZ} down
