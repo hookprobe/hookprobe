@@ -489,58 +489,44 @@ table inet fortress_vlan {
         ct state established,related accept
 
         # ============================================================
-        # VLAN 100 (LAN) Rules - Match by source IP for reliability
+        # ISOLATION RULES - Block internal network cross-traffic
+        # These MUST come first before accept rules
         # ============================================================
 
-        # LAN → Internet (via WAN): ALLOW
-        # Match by source IP since OVS bridging may not show iifname=vlan100
-        ip saddr ${SUBNET_LAN} oifname "${wan_iface}" accept
-
-        # LAN → Management VLAN: DENY (isolation)
+        # LAN → Management VLAN: DENY (clients can't access admin network)
         ip saddr ${SUBNET_LAN} ip daddr ${SUBNET_MGMT} drop
 
-        # LAN → Container network: DENY (isolation)
+        # LAN → Container network: DENY (clients can't access containers directly)
         ip saddr ${SUBNET_LAN} ip daddr ${CONTAINER_SUBNET} drop
 
-        # ============================================================
-        # VLAN 200 (Management) Rules
-        # ============================================================
-
-        # Management → Internet: ALLOW
-        ip saddr ${SUBNET_MGMT} oifname "${wan_iface}" accept
-
-        # Management → Container network: ALLOW
-        ip saddr ${SUBNET_MGMT} ip daddr ${CONTAINER_SUBNET} accept
-
-        # Management → LAN: ALLOW (admin can access LAN devices)
-        ip saddr ${SUBNET_MGMT} ip daddr ${SUBNET_LAN} accept
-
-        # ============================================================
-        # Container Network Rules
-        # ============================================================
-
-        # Containers → Internet: ALLOW
-        ip saddr ${CONTAINER_SUBNET} oifname "${wan_iface}" accept
-
-        # Containers → Management VLAN: ALLOW (for responses)
-        ip saddr ${CONTAINER_SUBNET} ip daddr ${SUBNET_MGMT} accept
-
-        # Containers → LAN: DENY (isolation)
+        # Containers → LAN: DENY (containers can't initiate to clients)
         ip saddr ${CONTAINER_SUBNET} ip daddr ${SUBNET_LAN} drop
+
+        # ============================================================
+        # ALLOW RULES - Everything not blocked above is allowed
+        # Routing table determines where traffic goes
+        # ============================================================
+
+        # LAN → Internet: ALLOW (anything not going to internal networks)
+        ip saddr ${SUBNET_LAN} accept
+
+        # Management → anywhere: ALLOW (admin has full access)
+        ip saddr ${SUBNET_MGMT} accept
+
+        # Containers → Internet + Management: ALLOW
+        ip saddr ${CONTAINER_SUBNET} accept
     }
 
-    # NAT for both VLANs - match by source IP
+    # NAT - masquerade all internal traffic going out
+    # Don't restrict to specific WAN interface - let routing decide
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
 
-        # Masquerade LAN traffic to internet
-        ip saddr ${SUBNET_LAN} oifname "${wan_iface}" masquerade
-
-        # Masquerade Management traffic to internet
-        ip saddr ${SUBNET_MGMT} oifname "${wan_iface}" masquerade
-
-        # Masquerade Container traffic to internet
-        ip saddr ${CONTAINER_SUBNET} oifname "${wan_iface}" masquerade
+        # Masquerade all internal traffic (except to other internal networks)
+        # This allows NAT to work regardless of WAN interface name
+        ip saddr ${SUBNET_LAN} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
+        ip saddr ${SUBNET_MGMT} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
+        ip saddr ${CONTAINER_SUBNET} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
     }
 }
 EOF
