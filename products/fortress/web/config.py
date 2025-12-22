@@ -34,9 +34,8 @@ def load_config_file(filepath):
 class Config:
     """Base configuration for Fortress admin portal."""
 
-    # Flask
-    # Note: FLASK_SECRET_KEY is set in podman-compose.yml
-    SECRET_KEY = os.environ.get('FLASK_SECRET_KEY') or os.environ.get('FORTRESS_SECRET_KEY')
+    # Flask - SECRET_KEY from environment (set in podman-compose.yml)
+    SECRET_KEY = os.environ.get('FLASK_SECRET_KEY')
     DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
 
     # Paths
