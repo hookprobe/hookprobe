@@ -1330,12 +1330,15 @@ validate_hostapd_connection() {
     #   $1 - Interface name
     #   $2 - PID file path
     #   $3 - Timeout in seconds (default 10)
+    #   $4 - Expected bandwidth in MHz (optional, for bandwidth verification)
     #
     # Returns: 0 if valid, 1 if failed
+    # Exports: ACTUAL_BANDWIDTH (the bandwidth hostapd actually achieved)
 
     local iface="$1"
     local pidfile="${2:-/run/hostapd-test.pid}"
     local timeout="${3:-10}"
+    local expected_bw="${4:-0}"
     local elapsed=0
 
     # Wait for hostapd to start
@@ -1345,9 +1348,26 @@ validate_hostapd_connection() {
             pid=$(cat "$pidfile" 2>/dev/null)
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                 # Check if interface is in AP mode
+                local iw_info
+                iw_info=$(iw dev "$iface" info 2>/dev/null) || true
                 local mode
-                mode=$(iw dev "$iface" info 2>/dev/null | grep -oP 'type \K\w+')
+                mode=$(echo "$iw_info" | grep -oP 'type \K\w+')
                 if [ "$mode" = "AP" ]; then
+                    # Extract actual bandwidth from iw output
+                    local actual_bw
+                    actual_bw=$(echo "$iw_info" | grep -oP 'width: \K[0-9]+')
+                    export ACTUAL_BANDWIDTH="${actual_bw:-20}"
+
+                    # If expected bandwidth specified, verify it matches
+                    if [ "$expected_bw" -gt 0 ] 2>/dev/null; then
+                        if [ "${actual_bw:-20}" -ge "$expected_bw" ]; then
+                            return 0
+                        else
+                            # Bandwidth mismatch - hostapd fell back to lower bandwidth
+                            log_warn "      Bandwidth mismatch: requested ${expected_bw}MHz, got ${actual_bw:-20}MHz"
+                            return 1
+                        fi
+                    fi
                     return 0
                 fi
             fi
@@ -1503,17 +1523,18 @@ ieee80211ax=1
 EOF
     fi
 
-    # Try to start hostapd
-    if hostapd -B -P "$test_pid" "$test_conf" 2>/dev/null; then
-        # Wait and validate
-        if validate_hostapd_connection "$iface" "$test_pid" 8; then
+    # Try to start hostapd (capture any error output)
+    local hostapd_error=""
+    if hostapd -B -P "$test_pid" "$test_conf" 2>&1 | head -5 > /tmp/hostapd-5ghz-error-$$.log; then
+        # Wait and validate with bandwidth check
+        if validate_hostapd_connection "$iface" "$test_pid" 8 "$bandwidth"; then
             log_info "    ✓ Channel $channel @ ${bandwidth}MHz works!"
 
             # Stop test hostapd
             if [ -f "$test_pid" ]; then
                 kill $(cat "$test_pid") 2>/dev/null || true
             fi
-            rm -f "$test_conf" "$test_pid"
+            rm -f "$test_conf" "$test_pid" /tmp/hostapd-5ghz-error-$$.log
 
             # Export working combination
             export WORKING_CHANNEL="$channel"
@@ -1524,12 +1545,23 @@ EOF
             export WORKING_EHT_CENTER="$eht_center"
 
             return 0
+        else
+            # Validation failed - check if it's a bandwidth issue
+            if [ -n "$ACTUAL_BANDWIDTH" ] && [ "$ACTUAL_BANDWIDTH" -lt "$bandwidth" ] 2>/dev/null; then
+                log_warn "    ✗ Channel $channel: hostapd achieved only ${ACTUAL_BANDWIDTH}MHz (DFS/regulatory?)"
+            fi
+        fi
+    else
+        # hostapd failed to start - capture error
+        hostapd_error=$(cat /tmp/hostapd-5ghz-error-$$.log 2>/dev/null | head -2 | tr '\n' ' ')
+        if [ -n "$hostapd_error" ]; then
+            log_warn "    ✗ hostapd error: $hostapd_error"
         fi
     fi
 
     # Cleanup on failure
     pkill -f "hostapd.*hostapd-test" 2>/dev/null || true
-    rm -f "$test_conf" "$test_pid"
+    rm -f "$test_conf" "$test_pid" /tmp/hostapd-5ghz-error-$$.log
 
     log_warn "    ✗ Channel $channel @ ${bandwidth}MHz failed"
     return 1
@@ -1652,17 +1684,25 @@ build_24ghz_priority_list() {
     #   $1 - Country code
     #
     # Output: List of "channel:bandwidth:ht_mode" entries
+    #
+    # 2.4GHz HT40 channel rules:
+    # - Channel 1 with HT40+ → secondary channel 5 (uses 1-5)
+    # - Channel 6 with HT40+ → secondary channel 10 (uses 6-10)
+    # - Channel 6 with HT40- → secondary channel 2 (uses 2-6)
+    # - Channel 11 with HT40- → secondary channel 7 (uses 7-11)
+    #
+    # We try both HT40+ and HT40- for channel 6 since congestion varies
 
     local country="${1:-US}"
     local priority_list=""
 
     # Tier 1: 40MHz on non-overlapping channels
-    # Channel 1 with HT40+ (uses 1-5)
-    # Channel 6 with HT40+ or HT40- (uses 6-10 or 2-6)
-    # Channel 11 with HT40- (uses 7-11)
-    priority_list="1:40:HT40+ 6:40:HT40- 11:40:HT40-"
+    # Try channel 1 first (usually least congested)
+    # Then channel 6 with both HT40 modes (try both directions)
+    # Then channel 11
+    priority_list="1:40:HT40+ 6:40:HT40+ 6:40:HT40- 11:40:HT40-"
 
-    # Tier 2: 20MHz fallback (always works)
+    # Tier 2: 20MHz fallback (always works if band is supported)
     priority_list="$priority_list 1:20:HT20 6:20:HT20 11:20:HT20"
 
     echo "$priority_list"
@@ -1729,17 +1769,18 @@ ieee80211ax=1
 EOF
     fi
 
-    # Try to start hostapd
-    if hostapd -B -P "$test_pid" "$test_conf" 2>/dev/null; then
-        # Wait and validate
-        if validate_hostapd_connection "$iface" "$test_pid" 8; then
+    # Try to start hostapd (capture any error output)
+    local hostapd_error=""
+    if hostapd -B -P "$test_pid" "$test_conf" 2>&1 | head -5 > /tmp/hostapd-24ghz-error-$$.log; then
+        # Wait and validate with bandwidth check
+        if validate_hostapd_connection "$iface" "$test_pid" 8 "$bandwidth"; then
             log_info "    ✓ Channel $channel @ ${bandwidth}MHz ($ht_mode) works!"
 
             # Stop test hostapd
             if [ -f "$test_pid" ]; then
                 kill $(cat "$test_pid") 2>/dev/null || true
             fi
-            rm -f "$test_conf" "$test_pid"
+            rm -f "$test_conf" "$test_pid" /tmp/hostapd-24ghz-error-$$.log
 
             # Export working combination
             export WORKING_24GHZ_CHANNEL="$channel"
@@ -1748,12 +1789,23 @@ EOF
             export WORKING_24GHZ_HT_CAPAB="$ht_capab"
 
             return 0
+        else
+            # Validation failed - check if it's a bandwidth issue
+            if [ -n "$ACTUAL_BANDWIDTH" ] && [ "$ACTUAL_BANDWIDTH" -lt "$bandwidth" ] 2>/dev/null; then
+                log_warn "    ✗ Channel $channel: hostapd started but achieved only ${ACTUAL_BANDWIDTH}MHz (overlapping BSSs?)"
+            fi
+        fi
+    else
+        # hostapd failed to start - capture error
+        hostapd_error=$(cat /tmp/hostapd-24ghz-error-$$.log 2>/dev/null | head -2 | tr '\n' ' ')
+        if [ -n "$hostapd_error" ]; then
+            log_warn "    ✗ hostapd error: $hostapd_error"
         fi
     fi
 
     # Cleanup on failure
     pkill -f "hostapd.*hostapd-24ghz-test" 2>/dev/null || true
-    rm -f "$test_conf" "$test_pid"
+    rm -f "$test_conf" "$test_pid" /tmp/hostapd-24ghz-error-$$.log
 
     log_warn "    ✗ Channel $channel @ ${bandwidth}MHz ($ht_mode) failed"
     return 1
