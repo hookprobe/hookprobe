@@ -1516,6 +1516,9 @@ hw_mode=a
 channel=$channel
 country_code=$country
 ieee80211d=1
+# 802.11h: DFS + TPC - required for EU bandwidth
+ieee80211h=1
+spectrum_mgmt_required=1
 ieee80211n=1
 ieee80211ac=1
 # FORCE BANDWIDTH: Ignore OBSS coexistence during test
@@ -1774,6 +1777,8 @@ hw_mode=g
 channel=$channel
 country_code=$country
 ieee80211d=1
+ieee80211h=1
+spectrum_mgmt_required=1
 ieee80211n=1
 ht_capab=$ht_capab
 # FORCE BANDWIDTH: Ignore OBSS coexistence during test
@@ -1989,22 +1994,36 @@ generate_hostapd_24ghz() {
     local ht_capab=""
     local used_validated_settings=false
 
-    # Auto channel selection with intelligent validation
-    if [ "$channel" = "auto" ]; then
-        log_info "  Using intelligent 2.4GHz channel selection with validation..."
+    # Check if this is ath12k - skip validation (known to be problematic with test hostapd)
+    local skip_validation=false
+    if is_ath12k_driver "$iface"; then
+        skip_validation=true
+    fi
 
-        if find_best_working_24ghz_channel "$iface" "$effective_country"; then
-            channel="$WORKING_24GHZ_CHANNEL"
-            ht_capab="$WORKING_24GHZ_HT_CAPAB"
-            used_validated_settings=true
-            log_info "  ✓ Validated: Channel $channel @ ${WORKING_24GHZ_BANDWIDTH}MHz ($WORKING_24GHZ_HT_MODE)"
-        else
-            log_warn "  Intelligent selection failed, using safe defaults"
+    # Auto channel selection
+    if [ "$channel" = "auto" ]; then
+        if [ "$skip_validation" = true ]; then
+            # KISS: Skip validation for ath12k, use known-good defaults directly
+            # The ath12k driver has issues with rapid hostapd start/stop during testing
             channel=6
-            # Force HT40+ for channel 6 - noscan=1 will ensure bandwidth is maintained
             ht_capab="[HT40+][SHORT-GI-20][SHORT-GI-40]"
             used_validated_settings=true
-            log_info "  Fallback: Channel 6 @ 40MHz (HT40+) with noscan=1"
+            log_info "  ath12k: Using direct config - Channel 6 @ 40MHz (HT40+)"
+        else
+            log_info "  Using intelligent 2.4GHz channel selection with validation..."
+
+            if find_best_working_24ghz_channel "$iface" "$effective_country"; then
+                channel="$WORKING_24GHZ_CHANNEL"
+                ht_capab="$WORKING_24GHZ_HT_CAPAB"
+                used_validated_settings=true
+                log_info "  ✓ Validated: Channel $channel @ ${WORKING_24GHZ_BANDWIDTH}MHz ($WORKING_24GHZ_HT_MODE)"
+            else
+                log_warn "  Intelligent selection failed, using safe defaults"
+                channel=6
+                ht_capab="[HT40+][SHORT-GI-20][SHORT-GI-40]"
+                used_validated_settings=true
+                log_info "  Fallback: Channel 6 @ 40MHz (HT40+) with noscan=1"
+            fi
         fi
     fi
 
@@ -2080,6 +2099,8 @@ utf8_ssid=1
 country_code=$effective_country
 ieee80211d=1
 ieee80211h=1
+# Spectrum management for regulatory compliance
+spectrum_mgmt_required=1
 
 # Band: 2.4GHz (802.11g mode)
 hw_mode=g
@@ -2288,37 +2309,49 @@ generate_hostapd_5ghz() {
         fi
     fi
 
-    # Auto channel selection with intelligent validation
-    # This approach:
-    #   1. Builds priority list (highest throughput first: 160MHz > 80MHz > 40MHz)
-    #   2. Scans for congestion
-    #   3. Tries each combination with validation
-    #   4. Uses first working combination
+    # Check if this is ath12k - skip validation (known to be problematic with test hostapd)
+    local skip_validation=false
+    if is_ath12k_driver "$iface"; then
+        skip_validation=true
+    fi
+
+    # Auto channel selection
     if [ "$channel" = "auto" ]; then
-        log_info "  Using intelligent channel+bandwidth selection..."
-
-        # Use intelligent channel selection with validation
-        if find_best_working_channel "$iface" "$effective_country"; then
-            channel="$WORKING_CHANNEL"
-            log_info "  Validated working combination: channel $channel @ ${WORKING_BANDWIDTH}MHz"
-
-            # Store validated settings for use in config generation
-            VALIDATED_VHT_WIDTH="$WORKING_VHT_WIDTH"
-            VALIDATED_VHT_CENTER="$WORKING_VHT_CENTER"
-            VALIDATED_EHT_WIDTH="$WORKING_EHT_WIDTH"
-            VALIDATED_EHT_CENTER="$WORKING_EHT_CENTER"
-            VALIDATED_BANDWIDTH="$WORKING_BANDWIDTH"
-        else
-            # Fallback to safe channel if validation fails
-            log_warn "  Intelligent selection failed, using safe fallback..."
+        if [ "$skip_validation" = true ]; then
+            # KISS: Skip validation for ath12k, use known-good defaults directly
+            # The ath12k driver has issues with rapid hostapd start/stop during testing
             channel=36
-            # Force 80MHz on channel 36 - noscan=1 will ensure bandwidth is maintained
             VALIDATED_VHT_WIDTH=1
             VALIDATED_VHT_CENTER=42
             VALIDATED_EHT_WIDTH=2
             VALIDATED_EHT_CENTER=42
             VALIDATED_BANDWIDTH=80
-            log_info "  Fallback: Channel 36 @ 80MHz (center=42) with noscan=1"
+            log_info "  ath12k: Using direct config - Channel 36 @ 80MHz (center=42)"
+        else
+            log_info "  Using intelligent channel+bandwidth selection..."
+
+            # Use intelligent channel selection with validation
+            if find_best_working_channel "$iface" "$effective_country"; then
+                channel="$WORKING_CHANNEL"
+                log_info "  Validated working combination: channel $channel @ ${WORKING_BANDWIDTH}MHz"
+
+                # Store validated settings for use in config generation
+                VALIDATED_VHT_WIDTH="$WORKING_VHT_WIDTH"
+                VALIDATED_VHT_CENTER="$WORKING_VHT_CENTER"
+                VALIDATED_EHT_WIDTH="$WORKING_EHT_WIDTH"
+                VALIDATED_EHT_CENTER="$WORKING_EHT_CENTER"
+                VALIDATED_BANDWIDTH="$WORKING_BANDWIDTH"
+            else
+                # Fallback to safe channel if validation fails
+                log_warn "  Intelligent selection failed, using safe fallback..."
+                channel=36
+                VALIDATED_VHT_WIDTH=1
+                VALIDATED_VHT_CENTER=42
+                VALIDATED_EHT_WIDTH=2
+                VALIDATED_EHT_CENTER=42
+                VALIDATED_BANDWIDTH=80
+                log_info "  Fallback: Channel 36 @ 80MHz (center=42) with noscan=1"
+            fi
         fi
     else
         # Manual channel specified - validate for regulatory domain
@@ -2337,7 +2370,8 @@ generate_hostapd_5ghz() {
     fi
 
     # Test channel before configuration if DFS script available
-    if [ "$DFS_AVAILABLE" = "true" ]; then
+    # Skip for ath12k - the test hostapd causes issues with this driver
+    if [ "$DFS_AVAILABLE" = "true" ] && [ "$skip_validation" != true ]; then
         log_info "  Testing channel $channel..."
         if ! test_channel "$iface" "$channel" 3 2>/dev/null; then
             log_warn "  Channel $channel test failed, falling back to channel 36"
@@ -2491,7 +2525,12 @@ utf8_ssid=1
 # Use effective country code (from adapter firmware if self-managed)
 country_code=$effective_country
 ieee80211d=1
+# 802.11h: DFS (radar detection) + TPC (transmit power control)
+# MANDATORY for EU/ETSI countries to unlock >20MHz bandwidth
 ieee80211h=1
+# Spectrum management required for DFS/TPC compliance
+spectrum_mgmt_required=1
+local_pwr_constraint=3
 
 # DFS Radar Detection (ETSI EN 301 893 compliance)
 # Enabled automatically when using DFS channels (52-64, 100-144)
