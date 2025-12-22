@@ -1376,11 +1376,12 @@ start_containers() {
     local compose_dir="${INSTALL_DIR}/containers"
     cd "$compose_dir"
 
-    # Update compose file with configured port
-    sed -i "s/8443:8443/${WEB_PORT}:8443/" podman-compose.yml 2>/dev/null || true
+    # Export WEB_PORT for podman-compose (web container uses host network with GUNICORN_BIND)
+    export WEB_PORT="${WEB_PORT:-8443}"
 
     # Start all services (security core + data tier)
     log_info "Starting Fortress services..."
+    log_info "Web UI will be available on port ${WEB_PORT}"
     podman-compose up -d
 
     # Wait for services in dependency order
