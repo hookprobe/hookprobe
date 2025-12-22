@@ -2320,13 +2320,70 @@ generate_hostapd_5ghz() {
         if [ "$skip_validation" = true ]; then
             # KISS: Skip validation for ath12k, use known-good defaults directly
             # The ath12k driver has issues with rapid hostapd start/stop during testing
-            channel=36
+            #
+            # Fallback priority for EU/ETSI (RO):
+            #   1. Channel 36 @ 80MHz (UNII-1, non-DFS, indoor)
+            #   2. Channel 44 @ 80MHz (UNII-1, non-DFS, different primary)
+            #   3. Channel 52 @ 80MHz (UNII-2A, DFS, 60s CAC)
+            #   4. Channel 100 @ 80MHz (UNII-2C, DFS, 600s CAC)
+            #
+            # Channel -> Center frequency mapping for 80MHz:
+            #   36-48  -> center=42
+            #   52-64  -> center=58
+            #   100-112 -> center=106
+            #   116-128 -> center=122
+            #   149-161 -> center=155
+
+            local ath12k_channel_list="36:42 44:42 52:58 100:106"
+            local selected_channel=""
+            local selected_center=""
+
+            log_info "  ath12k: Trying channel fallback chain..."
+            for entry in $ath12k_channel_list; do
+                local try_ch="${entry%%:*}"
+                local try_center="${entry##*:}"
+
+                # Check if channel is in supported list
+                local supported_channels
+                supported_channels=$(get_supported_channels_5ghz "$iface" "$effective_country" 2>/dev/null)
+
+                if echo " $supported_channels " | grep -q " $try_ch "; then
+                    selected_channel="$try_ch"
+                    selected_center="$try_center"
+
+                    # Check if this is a DFS channel
+                    if [ "$try_ch" -ge 52 ]; then
+                        log_info "  ath12k: Selected DFS channel $try_ch @ 80MHz (center=$try_center)"
+                        log_warn "    Note: DFS channel requires CAC (Channel Availability Check)"
+                        if [ "$try_ch" -ge 100 ]; then
+                            log_warn "    CAC time: 600 seconds (weather radar band)"
+                        else
+                            log_warn "    CAC time: 60 seconds"
+                        fi
+                    else
+                        log_info "  ath12k: Selected channel $try_ch @ 80MHz (center=$try_center)"
+                    fi
+                    break
+                else
+                    log_info "    Channel $try_ch not available, trying next..."
+                fi
+            done
+
+            # Use selected channel or fallback to 36
+            if [ -n "$selected_channel" ]; then
+                channel="$selected_channel"
+                VALIDATED_VHT_CENTER="$selected_center"
+                VALIDATED_EHT_CENTER="$selected_center"
+            else
+                log_warn "  ath12k: No channels available from fallback list, using channel 36"
+                channel=36
+                VALIDATED_VHT_CENTER=42
+                VALIDATED_EHT_CENTER=42
+            fi
+
             VALIDATED_VHT_WIDTH=1
-            VALIDATED_VHT_CENTER=42
             VALIDATED_EHT_WIDTH=2
-            VALIDATED_EHT_CENTER=42
             VALIDATED_BANDWIDTH=80
-            log_info "  ath12k: Using direct config - Channel 36 @ 80MHz (center=42)"
         else
             log_info "  Using intelligent channel+bandwidth selection..."
 
