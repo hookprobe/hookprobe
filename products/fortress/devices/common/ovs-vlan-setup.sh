@@ -173,12 +173,12 @@ setup_vlan_interfaces() {
         ovs-vsctl set port "vlan${VLAN_LAN}" tag="$VLAN_LAN"
     fi
 
-    # Configure IP
+    # Configure IP with correct subnet mask
     ip link set "vlan${VLAN_LAN}" up
     if ! ip addr show "vlan${VLAN_LAN}" | grep -q "$GATEWAY_LAN"; then
-        ip addr add "$GATEWAY_LAN/24" dev "vlan${VLAN_LAN}"
+        ip addr add "$GATEWAY_LAN/${LAN_MASK}" dev "vlan${VLAN_LAN}"
     fi
-    log_success "  vlan${VLAN_LAN}: $GATEWAY_LAN (LAN gateway)"
+    log_success "  vlan${VLAN_LAN}: $GATEWAY_LAN/${LAN_MASK} (LAN gateway)"
 
     # VLAN 200 - Management
     log_info "Creating VLAN $VLAN_MGMT (MGMT) interface..."
@@ -190,12 +190,12 @@ setup_vlan_interfaces() {
         ovs-vsctl set port "vlan${VLAN_MGMT}" tag="$VLAN_MGMT"
     fi
 
-    # Configure IP
+    # Configure IP with /30 mask (gateway + 1 admin device)
     ip link set "vlan${VLAN_MGMT}" up
     if ! ip addr show "vlan${VLAN_MGMT}" | grep -q "$GATEWAY_MGMT"; then
-        ip addr add "$GATEWAY_MGMT/24" dev "vlan${VLAN_MGMT}"
+        ip addr add "$GATEWAY_MGMT/30" dev "vlan${VLAN_MGMT}"
     fi
-    log_success "  vlan${VLAN_MGMT}: $GATEWAY_MGMT (Management gateway)"
+    log_success "  vlan${VLAN_MGMT}: $GATEWAY_MGMT/30 (Management gateway)"
 }
 
 # ============================================================

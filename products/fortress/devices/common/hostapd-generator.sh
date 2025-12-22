@@ -3013,16 +3013,24 @@ if ! ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
 fi
 
 if [ "$ACTION" = "add" ]; then
-    # Add interface to OVS bridge
+    # Add interface to OVS bridge with VLAN 100 (LAN) tag
+    # WiFi clients should be on VLAN 100 for internet access
+    VLAN_TAG="${WIFI_VLAN_TAG:-100}"
+
     if ! ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
-        echo "Adding $IFACE to OVS bridge $BRIDGE"
-        ovs-vsctl --may-exist add-port "$BRIDGE" "$IFACE" 2>/dev/null || {
+        echo "Adding $IFACE to OVS bridge $BRIDGE (VLAN $VLAN_TAG)"
+        ovs-vsctl --may-exist add-port "$BRIDGE" "$IFACE" \
+            tag="$VLAN_TAG" vlan_mode=access 2>/dev/null || {
             echo "Failed to add $IFACE to $BRIDGE"
             exit 1
         }
+    else
+        # Interface already in bridge, ensure VLAN tag is set
+        echo "Setting VLAN $VLAN_TAG on existing port $IFACE"
+        ovs-vsctl set port "$IFACE" tag="$VLAN_TAG" vlan_mode=access 2>/dev/null || true
     fi
     ip link set "$IFACE" up 2>/dev/null || true
-    echo "WiFi interface $IFACE added to OVS bridge $BRIDGE"
+    echo "WiFi interface $IFACE added to OVS bridge $BRIDGE (VLAN $VLAN_TAG)"
 elif [ "$ACTION" = "remove" ]; then
     # Remove interface from OVS bridge
     if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
