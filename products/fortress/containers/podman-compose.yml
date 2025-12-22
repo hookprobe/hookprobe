@@ -157,7 +157,7 @@ services:
       - /etc/hookprobe:/etc/hookprobe:ro
     # Web exposed on services tier, but also connected to data tier for DB access
     ports:
-      - "8443:8443"
+      - "0.0.0.0:8443:8443"  # Bind to all interfaces for access from LAN
     networks:
       fts-internal:
         ipv4_address: 172.20.200.20
@@ -189,7 +189,7 @@ services:
       - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
       - /etc/hookprobe:/etc/hookprobe:ro
     ports:
-      - "5353:5353/udp"
+      - "0.0.0.0:5353:5353/udp"  # DNS accessible from LAN
     healthcheck:
       # DNS query check - send query and verify response (no pgrep in slim images)
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); q=b'\\x00\\x01\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x09localhost\\x00\\x00\\x01\\x00\\x01'; s.sendto(q,('127.0.0.1',5353)); r=s.recv(512); s.close(); exit(0 if len(r)>12 else 1)"]
@@ -218,7 +218,7 @@ services:
       - dfs_data:/opt/hookprobe/wireless/data
       - /etc/hookprobe:/etc/hookprobe:ro
     ports:
-      - "8050:8050"
+      - "0.0.0.0:8050:8050"  # DFS API accessible from LAN
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
       interval: 30s
@@ -428,7 +428,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3000:3000"
+      - "0.0.0.0:3000:3000"  # Grafana accessible from LAN
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
@@ -453,7 +453,7 @@ services:
     volumes:
       - victoria_data:/storage
     ports:
-      - "8428:8428"
+      - "0.0.0.0:8428:8428"  # VictoriaMetrics accessible from LAN
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8428/health"]
       interval: 30s
