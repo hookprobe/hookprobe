@@ -136,8 +136,8 @@ create_backup() {
         full|db)
             # Database backup
             log_substep "Backing up PostgreSQL database..."
-            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-postgres"; then
-                podman exec fortress-postgres pg_dump -U fortress fortress > "${backup_path}/database.sql" 2>/dev/null || {
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
+                podman exec fts-postgres pg_dump -U fortress fortress > "${backup_path}/database.sql" 2>/dev/null || {
                     log_warn "Database backup failed (container may not be running)"
                 }
             elif [ -f /var/lib/postgresql/data/PG_VERSION ]; then
@@ -171,7 +171,7 @@ create_backup() {
             fi
 
             # Container image tag
-            if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -q "fortress-web"; then
+            if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -q "fts-web"; then
                 podman images --format "{{.Repository}}:{{.Tag}}:{{.ID}}" | grep fortress > "${backup_path}/images.txt" 2>/dev/null || true
             fi
             ;;
@@ -184,7 +184,7 @@ create_backup() {
     "timestamp": "${timestamp}",
     "version": "$(get_installed_version)",
     "deployment_mode": "$(get_deployment_mode)",
-    "created_by": "fortress-ctl ${VERSION}"
+    "created_by": "fts-ctl ${VERSION}"
 }
 EOF
 
@@ -218,8 +218,8 @@ restore_backup() {
     # Restore database
     if [ -f "${restore_path}/database.sql" ]; then
         log_substep "Restoring database..."
-        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress-postgres"; then
-            podman exec -i fortress-postgres psql -U fortress fortress < "${restore_path}/database.sql"
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
+            podman exec -i fts-postgres psql -U fortress fortress < "${restore_path}/database.sql"
         fi
     fi
 
@@ -266,7 +266,7 @@ upgrade_app() {
         log_substep "Rebuilding web container..."
 
         # Build new image with different tag
-        local new_tag="fortress-web:$(date +%Y%m%d%H%M%S)"
+        local new_tag="fts-web:$(date +%Y%m%d%H%M%S)"
         podman build -f "${CONTAINERS_DIR}/Containerfile.web" -t "localhost/${new_tag}" "$SCRIPT_DIR" || {
             log_error "Build failed, aborting upgrade"
             exit 1
@@ -274,20 +274,20 @@ upgrade_app() {
 
         # Health check new image
         log_substep "Testing new image..."
-        podman run --rm -d --name fortress-web-test "localhost/${new_tag}" &>/dev/null || {
+        podman run --rm -d --name fts-web-test "localhost/${new_tag}" &>/dev/null || {
             log_error "New image failed to start"
             podman rmi "localhost/${new_tag}" 2>/dev/null
             exit 1
         }
         sleep 5
-        podman stop fortress-web-test 2>/dev/null || true
+        podman stop fts-web-test 2>/dev/null || true
 
         # Rolling update
         log_substep "Performing rolling update..."
         cd "$CONTAINERS_DIR"
 
         # Update compose file to use new image
-        sed -i "s|image: localhost/fortress-web:.*|image: localhost/${new_tag}|" podman-compose.yml
+        sed -i "s|image: localhost/fts-web:.*|image: localhost/${new_tag}|" podman-compose.yml
 
         # Recreate web container only
         podman-compose up -d --no-deps web
@@ -310,22 +310,22 @@ upgrade_app() {
         fi
 
         # Clean old image
-        podman rmi localhost/fortress-web:latest 2>/dev/null || true
-        podman tag "localhost/${new_tag}" localhost/fortress-web:latest
+        podman rmi localhost/fts-web:latest 2>/dev/null || true
+        podman tag "localhost/${new_tag}" localhost/fts-web:latest
 
     else
         # Native deployment - update files in place
         log_substep "Updating application files..."
 
         # Stop web service briefly
-        systemctl stop fortress-web 2>/dev/null || true
+        systemctl stop fts-web 2>/dev/null || true
 
         # Copy new files
         cp -r "${SCRIPT_DIR}/web/"* "${INSTALL_DIR}/web/"
         cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
 
         # Restart
-        systemctl start fortress-web 2>/dev/null || true
+        systemctl start fts-web 2>/dev/null || true
     fi
 
     # Update version
@@ -401,7 +401,7 @@ rollback_app() {
         cd "$CONTAINERS_DIR"
         podman-compose restart web
     else
-        systemctl restart fortress-web 2>/dev/null || true
+        systemctl restart fts-web 2>/dev/null || true
     fi
 
     log_info "Rollback complete"
@@ -437,15 +437,15 @@ uninstall_staged() {
         podman-compose down 2>/dev/null || true
     fi
 
-    systemctl stop fortress-web fortress-agent fortress 2>/dev/null || true
+    systemctl stop fts-web fts-agent fortress 2>/dev/null || true
 
     # Stage 2: Remove application (Tier 3)
     log_substep "Stage 2: Removing application..."
 
     if [ "$mode" = "container" ]; then
         # Remove containers but not volumes
-        podman rm -f fortress-web fortress-agent 2>/dev/null || true
-        podman rmi localhost/fortress-web:latest localhost/fortress-agent:latest 2>/dev/null || true
+        podman rm -f fts-web fts-agent 2>/dev/null || true
+        podman rmi localhost/fts-web:latest localhost/fts-agent:latest 2>/dev/null || true
     fi
 
     rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" 2>/dev/null || true
@@ -454,7 +454,7 @@ uninstall_staged() {
     log_substep "Stage 3: Removing infrastructure..."
 
     # Remove systemd services
-    systemctl disable fortress fortress-web fortress-agent 2>/dev/null || true
+    systemctl disable fortress fts-web fts-agent 2>/dev/null || true
     rm -f /etc/systemd/system/fortress*.service /etc/systemd/system/fortress*.timer 2>/dev/null || true
     systemctl daemon-reload
 
@@ -463,8 +463,8 @@ uninstall_staged() {
 
     # Remove redis container/data if not keeping data
     if [ "$keep_data" = "false" ]; then
-        podman rm -f fortress-redis 2>/dev/null || true
-        podman volume rm fortress-redis-data 2>/dev/null || true
+        podman rm -f fts-redis 2>/dev/null || true
+        podman volume rm fts-redis-data 2>/dev/null || true
     fi
 
     # Stage 4: Handle data (Tier 1)
@@ -477,8 +477,8 @@ uninstall_staged() {
             create_backup "db" >/dev/null 2>&1 || true
         fi
 
-        podman rm -f fortress-postgres 2>/dev/null || true
-        podman volume rm fortress-postgres-data fortress-web-data fortress-web-logs fortress-config 2>/dev/null || true
+        podman rm -f fts-postgres 2>/dev/null || true
+        podman volume rm fts-postgres-data fts-web-data fts-web-logs fortress-config 2>/dev/null || true
 
         rm -rf "$DATA_DIR" "$LOG_DIR/fortress"* 2>/dev/null || true
     else
@@ -537,7 +537,7 @@ show_status() {
     if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress"; then
         podman ps --filter "name=fortress" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
     else
-        systemctl is-active fortress fortress-web fortress-agent 2>/dev/null || echo "  No services running"
+        systemctl is-active fortress fts-web fts-agent 2>/dev/null || echo "  No services running"
     fi
     echo ""
 

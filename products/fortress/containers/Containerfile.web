@@ -1,8 +1,8 @@
 # HookProbe Fortress - Flask Web Application Container
 # Self-contained with all dependencies - no system-wide pip
 #
-# Build: podman build -f Containerfile.web -t fortress-web .
-# Run:   podman run -d -p 8443:8443 -v /etc/hookprobe:/etc/hookprobe:ro fortress-web
+# Build: podman build -f Containerfile.web -t fts-web .
+# Run:   podman run -d -p 8443:8443 -v /etc/hookprobe:/etc/hookprobe:ro fts-web
 #
 # Version: 5.4.0
 # License: AGPL-3.0

@@ -25,7 +25,7 @@
 
 set -e
 
-LOG_TAG="fortress-wifi"
+LOG_TAG="fts-wifi"
 
 log_info() {
     logger -t "$LOG_TAG" -p user.info "$1" 2>/dev/null || true
@@ -266,7 +266,7 @@ set_nm_managed() {
 # Generate NetworkManager config to unmanage AP interfaces
 generate_nm_config() {
     local ap_ifaces="$1"  # Space-separated list of AP interfaces
-    local output_file="${2:-/etc/NetworkManager/conf.d/fortress-unmanaged.conf}"
+    local output_file="${2:-/etc/NetworkManager/conf.d/fts-unmanaged.conf}"
 
     mkdir -p "$(dirname "$output_file")"
 
@@ -351,7 +351,7 @@ prepare_ap_interface() {
 
 add_wifi_to_bridge() {
     local iface="$1"
-    local bridge="${2:-43ess}"
+    local bridge="${2:-FTS}"
 
     # Ensure bridge exists
     if [ ! -d "/sys/class/net/$bridge" ]; then

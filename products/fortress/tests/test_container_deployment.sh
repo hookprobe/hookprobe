@@ -81,7 +81,7 @@ test_runtime() {
 test_container_status() {
     log_test "Container Status"
 
-    local containers=("fortress-postgres" "fortress-redis" "fortress-web")
+    local containers=("fts-postgres" "fts-redis" "fts-web")
 
     for container in "${containers[@]}"; do
         if $CONTAINER_CMD ps --format "{{.Names}}" | grep -q "^${container}$"; then
@@ -105,14 +105,14 @@ test_health_checks() {
     log_test "Container Health Checks"
 
     # PostgreSQL health
-    if $CONTAINER_CMD exec fortress-postgres pg_isready -U fortress &>/dev/null; then
+    if $CONTAINER_CMD exec fts-postgres pg_isready -U fortress &>/dev/null; then
         log_pass "PostgreSQL is healthy"
     else
         log_fail "PostgreSQL health check failed"
     fi
 
     # Redis health
-    if $CONTAINER_CMD exec fortress-redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
+    if $CONTAINER_CMD exec fts-redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
         log_pass "Redis is healthy"
     else
         log_fail "Redis health check failed"
@@ -133,7 +133,7 @@ test_database() {
     log_test "Database Connectivity"
 
     # Test database exists
-    if $CONTAINER_CMD exec fortress-postgres psql -U fortress -d fortress -c "SELECT 1" &>/dev/null; then
+    if $CONTAINER_CMD exec fts-postgres psql -U fortress -d fortress -c "SELECT 1" &>/dev/null; then
         log_pass "Database 'fortress' exists and is accessible"
     else
         log_fail "Cannot connect to database"
@@ -143,7 +143,7 @@ test_database() {
     # Test tables exist
     local tables=("devices" "vlans" "threats" "network_policies" "oui_classifications")
     for table in "${tables[@]}"; do
-        if $CONTAINER_CMD exec fortress-postgres psql -U fortress -d fortress -c "SELECT 1 FROM $table LIMIT 1" &>/dev/null; then
+        if $CONTAINER_CMD exec fts-postgres psql -U fortress -d fortress -c "SELECT 1 FROM $table LIMIT 1" &>/dev/null; then
             log_pass "Table '$table' exists"
         else
             log_warn "Table '$table' not found"
@@ -161,7 +161,7 @@ test_redis() {
     local test_key="fortress_test_$(date +%s)"
     local test_value="test_value_$$"
 
-    if $CONTAINER_CMD exec fortress-redis redis-cli SET "$test_key" "$test_value" &>/dev/null; then
+    if $CONTAINER_CMD exec fts-redis redis-cli SET "$test_key" "$test_value" &>/dev/null; then
         log_pass "Redis SET operation works"
     else
         log_fail "Redis SET operation failed"
@@ -169,7 +169,7 @@ test_redis() {
     fi
 
     local retrieved
-    retrieved=$($CONTAINER_CMD exec fortress-redis redis-cli GET "$test_key" 2>/dev/null)
+    retrieved=$($CONTAINER_CMD exec fts-redis redis-cli GET "$test_key" 2>/dev/null)
     if [ "$retrieved" = "$test_value" ]; then
         log_pass "Redis GET operation works"
     else
@@ -177,7 +177,7 @@ test_redis() {
     fi
 
     # Cleanup
-    $CONTAINER_CMD exec fortress-redis redis-cli DEL "$test_key" &>/dev/null
+    $CONTAINER_CMD exec fts-redis redis-cli DEL "$test_key" &>/dev/null
 }
 
 # ============================================================
@@ -232,7 +232,7 @@ test_api_endpoints() {
 test_volumes() {
     log_test "Volume Persistence"
 
-    local volumes=("fortress-postgres-data" "fortress-redis-data" "fortress-web-data")
+    local volumes=("fts-postgres-data" "fts-redis-data" "fts-web-data")
 
     for volume in "${volumes[@]}"; do
         if $CONTAINER_CMD volume exists "$volume" 2>/dev/null || $CONTAINER_CMD volume ls | grep -q "$volume"; then
@@ -250,14 +250,14 @@ test_network() {
     log_test "Container Network"
 
     # Check containers can communicate
-    if $CONTAINER_CMD exec fortress-web ping -c 1 postgres &>/dev/null 2>&1; then
+    if $CONTAINER_CMD exec fts-web ping -c 1 postgres &>/dev/null 2>&1; then
         log_pass "Web can reach PostgreSQL"
     else
         log_warn "Web cannot ping PostgreSQL (may be expected)"
     fi
 
     # Check web can connect to database
-    if $CONTAINER_CMD exec fortress-web python3 -c "
+    if $CONTAINER_CMD exec fts-web python3 -c "
 import os
 try:
     import psycopg2
@@ -284,7 +284,7 @@ except Exception as e:
 test_logs() {
     log_test "Container Logs"
 
-    for container in fortress-postgres fortress-redis fortress-web; do
+    for container in fts-postgres fts-redis fts-web; do
         if $CONTAINER_CMD logs --tail 1 "$container" &>/dev/null; then
             log_pass "Logs accessible for $container"
         else

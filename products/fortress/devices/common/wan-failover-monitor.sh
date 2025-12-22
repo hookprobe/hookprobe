@@ -32,7 +32,7 @@ set -u
 CONFIG_FILE="/etc/hookprobe/wan-failover.conf"
 STATE_FILE="/var/lib/fortress/wan-failover-state.json"
 LOG_FILE="/var/log/hookprobe/wan-failover.log"
-LOCK_FILE="/var/run/fortress-wan-failover.lock"
+LOCK_FILE="/var/run/fts-wan-failover.lock"
 
 # Default configuration (can be overridden by config file)
 PRIMARY_IFACE=""          # Auto-detected from default route

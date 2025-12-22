@@ -2,7 +2,7 @@
 HookProbe Fortress - Small Business Security Gateway
 
 Fortress provides enterprise-grade security for small businesses:
-- OVS-based network segmentation (43ess bridge)
+- OVS-based network segmentation (FTS bridge)
 - QSecBit threat detection and RAG scoring
 - dnsXai ML-powered DNS protection
 - DFS WiFi channel intelligence

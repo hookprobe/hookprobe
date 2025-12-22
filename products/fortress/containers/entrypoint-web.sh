@@ -61,7 +61,7 @@ forwarded_allow_ips = '*'
 proxy_protocol = False
 
 # Process naming
-proc_name = 'fortress-web'
+proc_name = 'fts-web'
 
 # Limits
 limit_request_line = 4094

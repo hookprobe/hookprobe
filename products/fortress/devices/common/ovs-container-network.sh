@@ -8,12 +8,12 @@
 #   - Traffic mirroring to QSecBit for analysis
 #   - Per-tier internet isolation
 #
-# Network Tiers (43ess = leetspeak for "fortress"):
-#   - 43ess-data      (172.20.200.0/24)      - NO internet - postgres, redis
-#   - 43ess-services  (172.20.201.0/24)      - internet OK - web, dnsxai, dfs
-#   - 43ess-ml        (172.20.202.0/24)      - NO internet - lstm-trainer
-#   - 43ess-mgmt      (172.20.203.0/24)      - NO internet - grafana, victoria
-#   - 43ess-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
+# Network Tiers (FTS = abbreviation for "fortress"):
+#   - FTS-data      (172.20.200.0/24)      - NO internet - postgres, redis
+#   - FTS-services  (172.20.201.0/24)      - internet OK - web, dnsxai, dfs
+#   - FTS-ml        (172.20.202.0/24)      - NO internet - lstm-trainer
+#   - FTS-mgmt      (172.20.203.0/24)      - NO internet - grafana, victoria
+#   - FTS-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
 #
 # LAN subnet is configurable via LAN_SUBNET_MASK environment variable
 # Supports /23 (510 devices) to /29 (6 devices), default is /23
@@ -31,9 +31,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ============================================================
 
 # OVS Bridge
-# Using "43ess" (leetspeak for "fortress") to keep interface names short
-# Linux IFNAMSIZ limit is 15 chars, so "43ess-" (6 chars) leaves 9 for tier names
-OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+# Using "FTS" (abbreviation for Fortress) to keep interface names short
+# Linux IFNAMSIZ limit is 15 chars, so "FTS-" (6 chars) leaves 9 for tier names
+OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 
 # LAN subnet configuration (can be overridden by environment)
 # Supports /23 to /29 - defaults to /23 for maximum flexibility
@@ -56,7 +56,7 @@ get_lan_cidr() {
 
 # Container network tiers (OVS internal ports)
 # NOTE: Interface names must be <= 15 chars (Linux IFNAMSIZ limit)
-# With "43ess-" prefix (6 chars), tier names can be up to 9 chars
+# With "FTS-" prefix (6 chars), tier names can be up to 9 chars
 declare -A TIER_CONFIG=(
     ["data"]="172.20.200.1/24:false"      # gateway:internet_allowed
     ["services"]="172.20.201.1/24:true"   # web, dnsxai, dfs
@@ -621,7 +621,7 @@ setup_nat() {
 
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null
-    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fts-forward.conf
 
     # NAT for LAN clients (dynamic CIDR based on LAN_SUBNET_MASK)
     iptables -t nat -C POSTROUTING -s "${lan_cidr}" -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
@@ -631,14 +631,28 @@ setup_nat() {
     iptables -t nat -C POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE
 
-    # Allow forwarding
+    # Allow forwarding from LAN to WAN
     iptables -C FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT
 
     iptables -C FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
+    # DNAT rules for LAN access to container services
+    # Web UI: LAN clients (10.200.0.0/24) -> web container (172.20.201.10:8443)
+    local web_port="${WEB_PORT:-8443}"
+    iptables -t nat -C PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination 172.20.201.10:"$web_port" 2>/dev/null || \
+        iptables -t nat -A PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination 172.20.201.10:"$web_port"
+
+    # Allow forwarding to container networks for DNAT'd traffic
+    iptables -C FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT
+
+    iptables -C FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+
     log_info "NAT configured for LAN (${lan_cidr}) and Services (172.20.201.0/24)"
+    log_info "DNAT configured for web UI access on port $web_port"
 }
 
 # ============================================================
@@ -649,7 +663,7 @@ setup_dhcp() {
     log_section "Setting Up DHCP"
 
     local lan_port="${OVS_BRIDGE}-lan"
-    local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
+    local config_file="/etc/dnsmasq.d/fts-ovs.conf"
 
     # Use environment variables if set, otherwise use defaults based on subnet
     local dhcp_start="${LAN_DHCP_START:-10.200.0.100}"
@@ -878,8 +892,15 @@ cleanup_ovs_network() {
     done
     iptables -t nat -D POSTROUTING -s 172.20.201.0/24 -j MASQUERADE 2>/dev/null || true
 
+    # Remove DNAT rules for web UI access
+    iptables -t nat -D PREROUTING -i "$OVS_BRIDGE" -p tcp --dport 8443 -j DNAT --to-destination 172.20.201.10:8443 2>/dev/null || true
+
+    # Remove FORWARD rules for container networks
+    iptables -D FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+
     # Remove DHCP config
-    rm -f /etc/dnsmasq.d/fortress-ovs.conf
+    rm -f /etc/dnsmasq.d/fts-ovs.conf
     systemctl restart dnsmasq 2>/dev/null || true
 
     log_info "OVS network cleaned up"
@@ -902,7 +923,7 @@ create_podman_networks() {
         local gateway="${config%%:*}"
         local subnet_ip="${gateway%/*}"
         local subnet_base="${subnet_ip%.*}.0"
-        local network_name="fortress-${tier}"
+        local network_name="fts-${tier}"
 
         # Ensure OVS port is up
         ip link set "$port_name" up 2>/dev/null || true
@@ -938,7 +959,7 @@ EOF
     done
 
     # Special handling for LAN tier (client network, not for containers)
-    log_info "LAN tier (fortress-lan) is for client devices, not containers"
+    log_info "LAN tier (fts-lan) is for client devices, not containers"
 
     log_info "Podman CNI networks created"
     log_info "Note: Containers should use --network=fortress-<tier> --ip=<static_ip>"
@@ -968,7 +989,7 @@ create_container_veths() {
         local port_name="${OVS_BRIDGE}-${tier}"
 
         # Skip if container not running
-        if ! podman inspect "fortress-${container}" &>/dev/null; then
+        if ! podman inspect "fts-${container}" &>/dev/null; then
             continue
         fi
 
@@ -976,7 +997,7 @@ create_container_veths() {
 
         # Get container PID
         local pid
-        pid=$(podman inspect -f '{{.State.Pid}}' "fortress-${container}" 2>/dev/null) || continue
+        pid=$(podman inspect -f '{{.State.Pid}}' "fts-${container}" 2>/dev/null) || continue
 
         # Create veth pair
         ip link add "$veth_host" type veth peer name "$veth_cont" 2>/dev/null || true
@@ -1084,12 +1105,12 @@ Examples:
   $0 nat eth0                       # Setup NAT
   $0 dhcp                           # Configure DHCP
   $0 podman-networks                # Create Podman CNI networks
-  $0 attach fortress-web 172.20.201.10 services
+  $0 attach fts-web 172.20.201.10 services
   $0 connect-containers             # Connect all containers
   $0 block 10.200.0.50              # Block IP
   $0 vxlan-peer mssp 203.0.113.1 2000
 
-Container Network Tiers (43ess = leetspeak for "fortress"):
+Container Network Tiers (FTS = abbreviation for "fortress"):
   data      172.20.200.0/24      postgres, redis (NO internet)
   services  172.20.201.0/24      web, dnsxai, dfs (internet OK)
   ml        172.20.202.0/24      lstm-trainer (NO internet)

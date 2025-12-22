@@ -210,7 +210,7 @@ get_dfs_status() {
     fi
 
     # Check hostapd integration
-    if systemctl is-active --quiet fortress-hostapd 2>/dev/null; then
+    if systemctl is-active --quiet fts-hostapd 2>/dev/null; then
         echo -e "Hostapd:        ${GREEN}Running${NC}"
 
         # Get current channel
@@ -313,7 +313,7 @@ start_dfs_container() {
     log_info "Starting DFS Intelligence container..."
 
     # Check if already running
-    if podman ps --filter name=fortress-dfs-intelligence --format "{{.Names}}" 2>/dev/null | grep -q fortress-dfs-intelligence; then
+    if podman ps --filter name=fts-dfs-intelligence --format "{{.Names}}" 2>/dev/null | grep -q fts-dfs-intelligence; then
         log_info "DFS container already running"
         return 0
     fi
@@ -335,7 +335,7 @@ start_dfs_container() {
 
     # Start container
     podman run -d \
-        --name fortress-dfs-intelligence \
+        --name fts-dfs-intelligence \
         --restart unless-stopped \
         -p 8767:8767 \
         -v /var/lib/hookprobe:/var/lib/hookprobe:Z \
@@ -365,8 +365,8 @@ start_dfs_container() {
 # ============================================================
 stop_dfs_container() {
     log_info "Stopping DFS Intelligence container..."
-    podman stop fortress-dfs-intelligence 2>/dev/null || true
-    podman rm fortress-dfs-intelligence 2>/dev/null || true
+    podman stop fts-dfs-intelligence 2>/dev/null || true
+    podman rm fts-dfs-intelligence 2>/dev/null || true
     log_info "DFS container stopped"
 }
 
