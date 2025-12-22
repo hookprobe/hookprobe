@@ -46,7 +46,7 @@ INTERFACE_STATE_FILE="/var/lib/fortress/network-interfaces.conf"
 # OVS Bridge Configuration
 # Fortress uses OVS for SDN-based network segmentation
 # WiFi interfaces are added to OVS bridge with VLAN tagging
-DEFAULT_BRIDGE="${FORTRESS_BRIDGE:-43ess}"
+DEFAULT_BRIDGE="${FORTRESS_BRIDGE:-FTS}"
 SUBNET_PREFIX="${FORTRESS_SUBNET:-10.250}"
 
 # Colors
@@ -2983,7 +2983,7 @@ generate_wifi_bridge_helper() {
 # Adds WiFi interface to OVS bridge after hostapd starts
 
 IFACE="$1"
-BRIDGE="${2:-43ess}"
+BRIDGE="${2:-FTS}"
 ACTION="${3:-add}"
 
 [ -z "$IFACE" ] && exit 1
@@ -3459,13 +3459,13 @@ usage() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         configure)
-            configure_dual_band_wifi "$2" "$3" "${4:-43ess}"
+            configure_dual_band_wifi "$2" "$3" "${4:-FTS}"
             ;;
         24ghz)
-            generate_hostapd_24ghz "$2" "$3" "$4" "${5:-auto}" "${6:-43ess}"
+            generate_hostapd_24ghz "$2" "$3" "$4" "${5:-auto}" "${6:-FTS}"
             ;;
         5ghz)
-            generate_hostapd_5ghz "$2" "$3" "$4" "${5:-auto}" "${6:-43ess}"
+            generate_hostapd_5ghz "$2" "$3" "$4" "${5:-auto}" "${6:-FTS}"
             ;;
         vlan)
             generate_vlan_file

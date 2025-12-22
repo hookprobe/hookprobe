@@ -8,12 +8,12 @@
 #   - Traffic mirroring to QSecBit for analysis
 #   - Per-tier internet isolation
 #
-# Network Tiers (43ess = leetspeak for "fortress"):
-#   - 43ess-data      (172.20.200.0/24)      - NO internet - postgres, redis
-#   - 43ess-services  (172.20.201.0/24)      - internet OK - web, dnsxai, dfs
-#   - 43ess-ml        (172.20.202.0/24)      - NO internet - lstm-trainer
-#   - 43ess-mgmt      (172.20.203.0/24)      - NO internet - grafana, victoria
-#   - 43ess-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
+# Network Tiers (FTS = abbreviation for "fortress"):
+#   - FTS-data      (172.20.200.0/24)      - NO internet - postgres, redis
+#   - FTS-services  (172.20.201.0/24)      - internet OK - web, dnsxai, dfs
+#   - FTS-ml        (172.20.202.0/24)      - NO internet - lstm-trainer
+#   - FTS-mgmt      (172.20.203.0/24)      - NO internet - grafana, victoria
+#   - FTS-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
 #
 # LAN subnet is configurable via LAN_SUBNET_MASK environment variable
 # Supports /23 (510 devices) to /29 (6 devices), default is /23
@@ -31,9 +31,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ============================================================
 
 # OVS Bridge
-# Using "43ess" (leetspeak for "fortress") to keep interface names short
-# Linux IFNAMSIZ limit is 15 chars, so "43ess-" (6 chars) leaves 9 for tier names
-OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+# Using "FTS" (abbreviation for Fortress) to keep interface names short
+# Linux IFNAMSIZ limit is 15 chars, so "FTS-" (6 chars) leaves 9 for tier names
+OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 
 # LAN subnet configuration (can be overridden by environment)
 # Supports /23 to /29 - defaults to /23 for maximum flexibility
@@ -56,7 +56,7 @@ get_lan_cidr() {
 
 # Container network tiers (OVS internal ports)
 # NOTE: Interface names must be <= 15 chars (Linux IFNAMSIZ limit)
-# With "43ess-" prefix (6 chars), tier names can be up to 9 chars
+# With "FTS-" prefix (6 chars), tier names can be up to 9 chars
 declare -A TIER_CONFIG=(
     ["data"]="172.20.200.1/24:false"      # gateway:internet_allowed
     ["services"]="172.20.201.1/24:true"   # web, dnsxai, dfs
@@ -1110,7 +1110,7 @@ Examples:
   $0 block 10.200.0.50              # Block IP
   $0 vxlan-peer mssp 203.0.113.1 2000
 
-Container Network Tiers (43ess = leetspeak for "fortress"):
+Container Network Tiers (FTS = abbreviation for "fortress"):
   data      172.20.200.0/24      postgres, redis (NO internet)
   services  172.20.201.0/24      web, dnsxai, dfs (internet OK)
   ml        172.20.202.0/24      lstm-trainer (NO internet)
