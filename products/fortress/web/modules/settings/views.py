@@ -196,7 +196,7 @@ def api_system_info():
 def api_restart_service():
     """Restart a system service."""
     service = request.json.get('service')
-    allowed_services = ['dnsmasq', 'hostapd', 'fortress-web', 'fortress-agent']
+    allowed_services = ['dnsmasq', 'hostapd', 'fts-web', 'fts-agent']
 
     if service not in allowed_services:
         return jsonify({'success': False, 'error': 'Invalid service'}), 400
@@ -215,7 +215,7 @@ def api_restart_service():
 @admin_required
 def api_get_logs(service):
     """Get recent logs for a service."""
-    allowed_services = ['dnsmasq', 'hostapd', 'fortress-web', 'fortress-agent']
+    allowed_services = ['dnsmasq', 'hostapd', 'fts-web', 'fts-agent']
 
     if service not in allowed_services:
         return jsonify({'success': False, 'error': 'Invalid service'}), 400

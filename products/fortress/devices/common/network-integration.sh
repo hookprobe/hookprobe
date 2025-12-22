@@ -217,7 +217,7 @@ prepare_wifi_interfaces() {
         done
 
         if [ -n "$unmanaged_list" ]; then
-            cat > /etc/NetworkManager/conf.d/fortress-wifi.conf << EOF
+            cat > /etc/NetworkManager/conf.d/fts-wifi.conf << EOF
 # HookProbe Fortress: Let hostapd manage WiFi AP
 [keyfile]
 unmanaged-devices=${unmanaged_list}br*;ovs-*;
@@ -232,10 +232,10 @@ create_wifi_services() {
     # Create systemd services for WiFi APs
     #
     # Creates:
-    #   1. fortress-wifi-allocator.service - Detects bands and updates configs at boot
-    #   2. fortress-hostapd-24ghz.service - 2.4GHz AP (depends on allocator)
-    #   3. fortress-hostapd-5ghz.service - 5GHz AP (depends on allocator)
-    #   4. fortress-hostapd.service - Combined service for backward compatibility
+    #   1. fts-wifi-allocator.service - Detects bands and updates configs at boot
+    #   2. fts-hostapd-24ghz.service - 2.4GHz AP (depends on allocator)
+    #   3. fts-hostapd-5ghz.service - 5GHz AP (depends on allocator)
+    #   4. fts-hostapd.service - Combined service for backward compatibility
     #
     # IMPORTANT: Uses stable interface names (wlan_24ghz, wlan_5ghz) assigned by udev rules,
     # not the detected original names (wlan0, wlp6s0, etc.)
@@ -268,12 +268,12 @@ create_wifi_services() {
     fi
 
     # Create WiFi band allocator service (runs before hostapd to detect bands)
-    cat > /etc/systemd/system/fortress-wifi-allocator.service << EOF
+    cat > /etc/systemd/system/fts-wifi-allocator.service << EOF
 [Unit]
 Description=HookProbe Fortress - WiFi Band Allocator
 # Run after network but before hostapd
 After=network.target
-Before=fortress-hostapd-24ghz.service fortress-hostapd-5ghz.service fortress-hostapd.service
+Before=fts-hostapd-24ghz.service fts-hostapd-5ghz.service fts-hostapd.service
 DefaultDependencies=no
 
 [Service]
@@ -287,20 +287,20 @@ TimeoutStartSec=60
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable fortress-wifi-allocator
-    log_info "Created service: fortress-wifi-allocator (detects bands at boot)"
+    systemctl enable fts-wifi-allocator
+    log_info "Created service: fts-wifi-allocator (detects bands at boot)"
 
     # 2.4GHz service - uses stable interface name from udev rules
     if [ -n "$NET_WIFI_24GHZ_IFACE" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
         # Systemd device unit - waits for stable interface name to exist before starting
         local dev_unit_24ghz="sys-subsystem-net-devices-${wifi_24ghz_iface}.device"
 
-        cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
+        cat > /etc/systemd/system/fts-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
-After=network.target fortress-wifi-allocator.service ${dev_unit_24ghz}
+After=network.target fts-wifi-allocator.service ${dev_unit_24ghz}
 Wants=network.target ${dev_unit_24ghz}
-Requires=fortress-wifi-allocator.service
+Requires=fts-wifi-allocator.service
 
 [Service]
 Type=forking
@@ -318,8 +318,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable fortress-hostapd-24ghz
-        log_info "Created service: fortress-hostapd-24ghz (waits for ${wifi_24ghz_iface})"
+        systemctl enable fts-hostapd-24ghz
+        log_info "Created service: fts-hostapd-24ghz (waits for ${wifi_24ghz_iface})"
     fi
 
     # 5GHz service - uses stable interface name from udev rules
@@ -329,12 +329,12 @@ EOF
             # Systemd device unit - waits for stable interface name to exist before starting
             local dev_unit_5ghz="sys-subsystem-net-devices-${wifi_5ghz_iface}.device"
 
-            cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
+            cat > /etc/systemd/system/fts-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
-After=network.target fortress-wifi-allocator.service ${dev_unit_5ghz}
+After=network.target fts-wifi-allocator.service ${dev_unit_5ghz}
 Wants=network.target ${dev_unit_5ghz}
-Requires=fortress-wifi-allocator.service
+Requires=fts-wifi-allocator.service
 
 [Service]
 Type=forking
@@ -352,20 +352,20 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
             systemctl daemon-reload
-            systemctl enable fortress-hostapd-5ghz
-            log_info "Created service: fortress-hostapd-5ghz (waits for ${wifi_5ghz_iface})"
+            systemctl enable fts-hostapd-5ghz
+            log_info "Created service: fts-hostapd-5ghz (waits for ${wifi_5ghz_iface})"
         else
             log_info "Single dual-band radio - using 2.4GHz service for both bands"
         fi
     fi
 
     # Create combined service for backward compatibility
-    cat > /etc/systemd/system/fortress-hostapd.service << EOF
+    cat > /etc/systemd/system/fts-hostapd.service << EOF
 [Unit]
 Description=HookProbe Fortress - WiFi Access Points (All Bands)
-After=network.target fortress-wifi-allocator.service
-Wants=fortress-hostapd-24ghz.service fortress-hostapd-5ghz.service
-Requires=fortress-wifi-allocator.service
+After=network.target fts-wifi-allocator.service
+Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Requires=fts-wifi-allocator.service
 
 [Service]
 Type=oneshot
@@ -376,7 +376,7 @@ ExecStart=/bin/true
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable fortress-hostapd
+    systemctl enable fts-hostapd
 }
 
 # ============================================================
@@ -631,7 +631,7 @@ setup_lte_on_boot() {
 
     log_info "Creating LTE boot service..."
 
-    cat > /etc/systemd/system/fortress-lte.service << EOF
+    cat > /etc/systemd/system/fts-lte.service << EOF
 [Unit]
 Description=HookProbe Fortress LTE Connection
 After=ModemManager.service network-online.target
@@ -649,9 +649,9 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable fortress-lte.service 2>/dev/null || true
+    systemctl enable fts-lte.service 2>/dev/null || true
 
-    log_info "LTE boot service created (fortress-lte.service)"
+    log_info "LTE boot service created (fts-lte.service)"
 }
 
 setup_lte_connection() {
@@ -724,7 +724,7 @@ setup_wan_failover() {
         fi
 
         # Configure LTE metric
-        local lte_con="fortress-lte"
+        local lte_con="fts-lte"
         if nmcli con show "$lte_con" &>/dev/null; then
             nmcli con mod "$lte_con" ipv4.route-metric 200 2>/dev/null || true
             log_info "[WAN]   Set $lte_con metric to 200"

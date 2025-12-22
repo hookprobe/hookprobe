@@ -334,7 +334,7 @@ upgrade_native_webapp() {
     fi
 
     # Stop web service
-    systemctl stop fortress-web 2>/dev/null || true
+    systemctl stop fts-web 2>/dev/null || true
 
     # Copy new files
     if [ -d "${SCRIPT_DIR}/web" ]; then
@@ -348,7 +348,7 @@ upgrade_native_webapp() {
     fi
 
     # Restart
-    systemctl start fortress-web 2>/dev/null || true
+    systemctl start fts-web 2>/dev/null || true
 
     update_state "last_upgrade" "$(date -Iseconds)"
     update_state "last_upgrade_type" "webapp"
@@ -361,7 +361,7 @@ upgrade_native_qsecbit() {
     log_step "Upgrading QSecBit agent"
 
     # Stop agent
-    systemctl stop fortress-qsecbit 2>/dev/null || true
+    systemctl stop fts-qsecbit 2>/dev/null || true
 
     # Copy new QSecBit files
     local qsecbit_src="${SCRIPT_DIR}/qsecbit"
@@ -374,7 +374,7 @@ upgrade_native_qsecbit() {
     fi
 
     # Restart
-    systemctl start fortress-qsecbit 2>/dev/null || true
+    systemctl start fts-qsecbit 2>/dev/null || true
 
     update_state "last_upgrade_type" "qsecbit"
     log_info "QSecBit agent upgrade complete"
@@ -396,7 +396,7 @@ upgrade_native_config() {
     # Regenerate configs (user will need to restart services)
     log_warn "Configuration files backed up. Manual review required before applying changes."
     log_info "Review backup at: $backup_dir"
-    log_info "After review, restart services: systemctl restart fortress-dnsmasq fortress-hostapd"
+    log_info "After review, restart services: systemctl restart fts-dnsmasq fts-hostapd"
 }
 
 upgrade_native_full() {
@@ -643,7 +643,7 @@ do_status() {
             podman ps --filter "name=fortress" --format "  {{.Names}}: {{.Status}}" 2>/dev/null || echo "  No containers running"
         fi
     else
-        for svc in hookprobe-fortress fortress-qsecbit fortress-web fortress-dnsmasq fortress-hostapd; do
+        for svc in hookprobe-fortress fts-qsecbit fts-web fts-dnsmasq fts-hostapd; do
             if systemctl is-active "$svc" &>/dev/null; then
                 echo -e "  ${svc}: ${GREEN}active${NC}"
             elif systemctl is-enabled "$svc" &>/dev/null; then

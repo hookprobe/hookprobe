@@ -19,7 +19,7 @@
 
 set -e
 
-LOG_TAG="fortress-bridge"
+LOG_TAG="fts-bridge"
 
 log_info() {
     logger -t "$LOG_TAG" -p user.info "$1" 2>/dev/null || true
@@ -350,7 +350,7 @@ generate_netplan_bridge() {
     # Args:
     #   $1 - Output file path
 
-    local output_file="${1:-/etc/netplan/60-fortress-bridge.yaml}"
+    local output_file="${1:-/etc/netplan/60-fts-bridge.yaml}"
     local wan_iface="${FORTRESS_WAN_IFACE:-eth0}"
     local lan_ifaces="${FORTRESS_LAN_IFACES:-eth1}"
 
@@ -426,7 +426,7 @@ BRIDGECFGEOF
 configure_dnsmasq_bridge() {
     # Configure dnsmasq for DHCP on the bridge
 
-    local config_file="/etc/dnsmasq.d/fortress-bridge.conf"
+    local config_file="/etc/dnsmasq.d/fts-bridge.conf"
     local dhcp_start="${FORTRESS_DHCP_START:-10.200.0.100}"
     local dhcp_end="${FORTRESS_DHCP_END:-10.200.0.200}"
     local dhcp_lease="${FORTRESS_DHCP_LEASE:-12h}"
@@ -488,7 +488,7 @@ configure_dnsmasq_bridge_custom() {
     local dhcp_start="${3:-10.200.0.100}"
     local dhcp_end="${4:-10.200.0.200}"
     local dhcp_lease="${5:-12h}"
-    local config_file="/etc/dnsmasq.d/fortress-bridge.conf"
+    local config_file="/etc/dnsmasq.d/fts-bridge.conf"
 
     log_info "Configuring dnsmasq for bridge DHCP..."
     log_info "  Bridge:     $bridge"
