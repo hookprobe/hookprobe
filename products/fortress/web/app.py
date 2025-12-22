@@ -32,9 +32,14 @@ def create_app(config_class=Config):
     # Secret key for sessions
     if app.config.get('SECRET_KEY') is None:
         secret_file = Path('/etc/hookprobe/secrets/fortress_secret_key')
-        if secret_file.exists():
-            app.config['SECRET_KEY'] = secret_file.read_text().strip()
-        else:
+        try:
+            if secret_file.exists():
+                app.config['SECRET_KEY'] = secret_file.read_text().strip()
+            else:
+                app.config['SECRET_KEY'] = os.urandom(32)
+        except PermissionError:
+            # Container may not have access to secrets directory
+            # Fall back to random key (session will reset on restart)
             app.config['SECRET_KEY'] = os.urandom(32)
 
     # Session configuration
