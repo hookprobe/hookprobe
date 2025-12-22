@@ -143,6 +143,7 @@ stop_services() {
         "fortress"
         "hookprobe-fortress"
         "fts-qsecbit"
+        "fts-lte"
         "fts-lte-failover"
         "fts-wan-failover"
         "fts-tunnel"
@@ -151,16 +152,24 @@ stop_services() {
         "fts-hostapd"
         "fts-hostapd-24ghz"
         "fts-hostapd-5ghz"
+        "fts-adaptive-txpower"
         "fts-nat"
         "fts-web"
         "fts-channel-optimize"
+        "fts-channel-calibrate"
+        "fts-channel-quickstart"
+        "fts-channel-standard"
+        "fts-dfs-monitor"
+        "fts-dfs-api"
         "fts-ml-aggregator"
         "fts-lstm-train"
     )
 
-    # Stop the channel optimization timer first
-    log_info "Stopping fts-channel-optimize.timer..."
+    # Stop timers first
+    log_info "Stopping timers..."
     systemctl stop fts-channel-optimize.timer 2>/dev/null || true
+    systemctl stop fts-channel-calibrate.timer 2>/dev/null || true
+    systemctl stop fts-lstm-train.timer 2>/dev/null || true
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -343,6 +352,7 @@ remove_systemd_services() {
         "fortress"
         "hookprobe-fortress"
         "fts-qsecbit"
+        "fts-lte"
         "fts-lte-failover"
         "fts-wan-failover"
         "fts-tunnel"
@@ -351,9 +361,13 @@ remove_systemd_services() {
         "fts-hostapd"
         "fts-hostapd-24ghz"
         "fts-hostapd-5ghz"
+        "fts-adaptive-txpower"
         "fts-nat"
         "fts-web"
         "fts-channel-optimize"
+        "fts-channel-calibrate"
+        "fts-channel-quickstart"
+        "fts-channel-standard"
         "fts-dfs-monitor"
         "fts-dfs-api"
         "fts-ml-aggregator"
@@ -364,6 +378,11 @@ remove_systemd_services() {
     log_info "Removing fts-channel-optimize.timer..."
     systemctl disable fts-channel-optimize.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fts-channel-optimize.timer
+
+    # Disable and remove channel calibrate timer
+    log_info "Removing fts-channel-calibrate.timer..."
+    systemctl disable fts-channel-calibrate.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-channel-calibrate.timer
 
     # Disable and remove LSTM training timer
     log_info "Removing fts-lstm-train.timer..."
