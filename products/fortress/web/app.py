@@ -47,11 +47,11 @@ def create_app(config_class=Config):
 
     @login_manager.user_loader
     def load_user(user_id):
-        from modules.auth.models import User
+        from .modules.auth.models import User
         return User.get(user_id)
 
     # Register blueprints
-    from modules import register_blueprints
+    from .modules import register_blueprints
     register_blueprints(app)
 
     # Root redirect
