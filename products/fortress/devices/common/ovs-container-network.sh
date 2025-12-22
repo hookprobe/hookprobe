@@ -337,10 +337,12 @@ install_openflow_rules() {
     ovs-ofctl add-flow "$OVS_BRIDGE" \
         "table=$OF_TABLE_INGRESS,priority=900,udp,tp_dst=68,actions=NORMAL"
 
-    # DNS to dnsXai (redirect LAN DNS queries)
-    local dnsxai_ip="${CONTAINER_IPS[dnsxai]}"
+    # DNS - allow to gateway (dnsmasq handles DNS and forwards to dnsXai or fallback)
+    # Don't redirect directly to dnsXai - let dnsmasq handle with fallback capability
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_INGRESS,priority=800,udp,nw_src=${lan_cidr},tp_dst=53,actions=mod_nw_dst:$dnsxai_ip,resubmit(,$OF_TABLE_TIER_ISOLATION)"
+        "table=$OF_TABLE_INGRESS,priority=800,udp,nw_src=${lan_cidr},tp_dst=53,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "table=$OF_TABLE_INGRESS,priority=800,tcp,nw_src=${lan_cidr},tp_dst=53,actions=NORMAL"
 
     # All other traffic - continue to tier isolation
     ovs-ofctl add-flow "$OVS_BRIDGE" \
