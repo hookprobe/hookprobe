@@ -77,9 +77,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # Expose to localhost for web container (host network) access
-    ports:
-      - "127.0.0.1:5432:5432"
     networks:
       fts-internal:
         ipv4_address: 172.20.200.10
@@ -106,9 +103,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    # Expose to localhost for web container (host network) access
-    ports:
-      - "127.0.0.1:6379:6379"
     networks:
       fts-internal:
         ipv4_address: 172.20.200.11
@@ -133,14 +127,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database connection via localhost (web uses host network, postgres exposes port)
-      DATABASE_HOST: 127.0.0.1
+      # Database connection via container network
+      DATABASE_HOST: fts-postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
-      # Redis connection via localhost (web uses host network, redis exposes port)
-      REDIS_HOST: 127.0.0.1
+      # Redis connection via container network
+      REDIS_HOST: fts-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
@@ -150,20 +144,22 @@ services:
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
       GUNICORN_BIND: "0.0.0.0:${WEB_PORT:-8443}"
-      # ML service endpoints - all via container IPs (host network)
-      QSECBIT_API_URL: http://127.0.0.1:9090
-      DNSXAI_API_URL: http://172.20.200.21:5353
-      DFS_API_URL: http://172.20.200.22:8050
+      # ML service endpoints via container network
+      QSECBIT_API_URL: http://localhost:9090
+      DNSXAI_API_URL: http://fts-dnsxai:5353
+      DFS_API_URL: http://fts-dfs:8050
       # Monitoring endpoints
-      VICTORIA_URL: http://172.20.200.31:8428
+      VICTORIA_URL: http://fts-victoria:8428
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
-    # Host network mode - binds directly to host interfaces (FTS bridge, etc.)
-    # Required for rootless podman to expose ports on LAN bridge
-    network_mode: host
+    # Container network - accessible via VLAN 200 routing from management network
+    # Access: MGMT VLAN (10.200.100.x) → veth bridge → Container (172.20.200.20:8443)
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.20
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
