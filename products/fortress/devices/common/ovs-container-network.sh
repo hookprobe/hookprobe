@@ -631,14 +631,28 @@ setup_nat() {
     iptables -t nat -C POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE
 
-    # Allow forwarding
+    # Allow forwarding from LAN to WAN
     iptables -C FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT
 
     iptables -C FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$wan_iface" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
+    # DNAT rules for LAN access to container services
+    # Web UI: LAN clients (10.200.0.0/24) -> web container (172.20.201.10:8443)
+    local web_port="${WEB_PORT:-8443}"
+    iptables -t nat -C PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination 172.20.201.10:"$web_port" 2>/dev/null || \
+        iptables -t nat -A PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination 172.20.201.10:"$web_port"
+
+    # Allow forwarding to container networks for DNAT'd traffic
+    iptables -C FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT
+
+    iptables -C FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+
     log_info "NAT configured for LAN (${lan_cidr}) and Services (172.20.201.0/24)"
+    log_info "DNAT configured for web UI access on port $web_port"
 }
 
 # ============================================================
@@ -877,6 +891,13 @@ cleanup_ovs_network() {
         iptables -t nat -D POSTROUTING -s "10.200.0.0/${mask}" -j MASQUERADE 2>/dev/null || true
     done
     iptables -t nat -D POSTROUTING -s 172.20.201.0/24 -j MASQUERADE 2>/dev/null || true
+
+    # Remove DNAT rules for web UI access
+    iptables -t nat -D PREROUTING -i "$OVS_BRIDGE" -p tcp --dport 8443 -j DNAT --to-destination 172.20.201.10:8443 2>/dev/null || true
+
+    # Remove FORWARD rules for container networks
+    iptables -D FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 
     # Remove DHCP config
     rm -f /etc/dnsmasq.d/fortress-ovs.conf

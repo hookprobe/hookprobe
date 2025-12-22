@@ -51,11 +51,12 @@ services:
   # DATA TIER - Isolated Database Layer (fortress-data)
   # ============================================================
 
-  # PostgreSQL Database - Most sensitive, fully isolated
+  # PostgreSQL Database - Most sensitive, fully isolated in data tier
   postgres:
     image: docker.io/library/postgres:15-alpine
     container_name: fortress-postgres
     restart: unless-stopped
+    hostname: fortress-postgres
     environment:
       POSTGRES_DB: fortress
       POSTGRES_USER: fortress
@@ -73,21 +74,23 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # Use host network - podman port forwarding doesn't work reliably with
-    # other containers using host network mode (timeout issues)
-    network_mode: host
+    # Data tier - fully isolated, no internet access
+    networks:
+      fortress-data:
+        ipv4_address: 172.20.200.10
 
   # Redis Cache (Sessions + Rate Limiting)
   redis:
     image: docker.io/library/redis:7-alpine
     container_name: fortress-redis
     restart: unless-stopped
+    hostname: fortress-redis
     command: >
       redis-server
       --appendonly yes
       --maxmemory 128mb
       --maxmemory-policy allkeys-lru
-      --bind 127.0.0.1
+      --bind 0.0.0.0
       --requirepass "${REDIS_PASSWORD:-fortress_redis_secret}"
     volumes:
       - redis_data:/data
@@ -98,16 +101,17 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    # Use host network - podman port forwarding doesn't work reliably with
-    # other containers using host network mode (timeout issues)
-    network_mode: host
+    # Data tier - fully isolated, no internet access
+    networks:
+      fortress-data:
+        ipv4_address: 172.20.200.11
 
   # ============================================================
   # SERVICES TIER - Web and DNS (fortress-services)
   # ============================================================
 
   # Fortress Web Application (Flask + Gunicorn)
-  # Uses host network for direct access from LAN bridge (10.200.0.1)
+  # Services tier with access to data tier for database connectivity
   web:
     build:
       context: ..
@@ -115,20 +119,21 @@ services:
     image: localhost/fortress-web:latest
     container_name: fortress-web
     restart: unless-stopped
+    hostname: fortress-web
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      # Database connection via localhost (postgres exposed on host via port forward)
-      DATABASE_HOST: 127.0.0.1
+      # Database connection via container DNS name (data tier)
+      DATABASE_HOST: fortress-postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
-      # Redis connection via localhost (redis exposed on host via port forward)
-      REDIS_HOST: 127.0.0.1
+      # Redis connection via container DNS name (data tier)
+      REDIS_HOST: fortress-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
@@ -138,19 +143,26 @@ services:
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
       GUNICORN_BIND: "0.0.0.0:${WEB_PORT:-8443}"
-      # ML service endpoints (localhost since using host network)
-      QSECBIT_API_URL: http://localhost:9090
-      DNSXAI_API_URL: http://localhost:5353
-      DFS_API_URL: http://localhost:8050
-      # Monitoring endpoints
-      VICTORIA_URL: http://localhost:8428
+      # ML service endpoints - QSecBit on host, others via container DNS
+      QSECBIT_API_URL: http://172.20.201.1:9090
+      DNSXAI_API_URL: http://fortress-dnsxai:5353
+      DFS_API_URL: http://fortress-dfs:8050
+      # Monitoring endpoints (mgmt tier via gateway)
+      VICTORIA_URL: http://172.20.203.11:8428
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
-    # Host network for direct access from all interfaces (including LAN bridge 10.200.0.1)
-    network_mode: host
+    # Web exposed on services tier, but also connected to data tier for DB access
+    ports:
+      - "8443:8443"
+    networks:
+      fortress-services:
+        ipv4_address: 172.20.201.10
+      fortress-data:
+        # Secondary interface for database access
+        ipv4_address: 172.20.200.20
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
@@ -167,6 +179,7 @@ services:
     image: localhost/fortress-dnsxai:latest
     container_name: fortress-dnsxai
     restart: unless-stopped
+    hostname: fortress-dnsxai
     environment:
       DNSXAI_UPSTREAM: "1.1.1.1"
       DNSXAI_PROTECTION_LEVEL: 3
@@ -199,6 +212,7 @@ services:
     image: localhost/fortress-dfs:latest
     container_name: fortress-dfs
     restart: unless-stopped
+    hostname: fortress-dfs
     environment:
       DFS_DATA_DIR: /opt/hookprobe/wireless/data
       DFS_DB_PATH: /opt/hookprobe/wireless/data/dfs_radar.db
@@ -223,7 +237,7 @@ services:
   # ============================================================
 
   # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
-  # Uses host network for traffic capture
+  # Uses host network for traffic capture on all interfaces
   qsecbit-agent:
     build:
       context: ../..
@@ -238,18 +252,18 @@ services:
         condition: service_healthy
     environment:
       QSECBIT_MODE: fortress
-      # Database via host network (postgres exposed via port forward)
-      DATABASE_HOST: localhost
+      # Database via container network gateway (host can reach container IPs)
+      DATABASE_HOST: 172.20.200.10
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
-      REDIS_HOST: localhost
+      REDIS_HOST: 172.20.200.11
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
-      # Metrics export to Victoria
-      VICTORIA_PUSH_URL: http://localhost:8428/api/v1/write
+      # Metrics export to Victoria (mgmt tier)
+      VICTORIA_PUSH_URL: http://172.20.203.11:8428/api/v1/write
     volumes:
       - agent_data:/opt/hookprobe/fortress/data
       - /etc/hookprobe:/etc/hookprobe:ro
