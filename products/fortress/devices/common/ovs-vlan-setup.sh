@@ -439,30 +439,31 @@ table inet fortress_vlan {
         ct state established,related accept
 
         # ============================================================
-        # VLAN 100 (LAN) Rules
+        # VLAN 100 (LAN) Rules - Match by source IP for reliability
         # ============================================================
 
         # LAN → Internet (via WAN): ALLOW
-        iifname "vlan100" oifname "${wan_iface}" accept
+        # Match by source IP since OVS bridging may not show iifname=vlan100
+        ip saddr 10.200.0.0/24 oifname "${wan_iface}" accept
 
         # LAN → Management VLAN: DENY (isolation)
-        iifname "vlan100" oifname "vlan200" drop
+        ip saddr 10.200.0.0/24 ip daddr 10.200.100.0/24 drop
 
         # LAN → Container network: DENY (isolation)
-        iifname "vlan100" ip daddr 172.20.200.0/24 drop
+        ip saddr 10.200.0.0/24 ip daddr 172.20.200.0/24 drop
 
         # ============================================================
         # VLAN 200 (Management) Rules
         # ============================================================
 
         # Management → Internet: ALLOW
-        iifname "vlan200" oifname "${wan_iface}" accept
+        ip saddr 10.200.100.0/24 oifname "${wan_iface}" accept
 
         # Management → Container network: ALLOW
-        iifname "vlan200" ip daddr 172.20.200.0/24 accept
+        ip saddr 10.200.100.0/24 ip daddr 172.20.200.0/24 accept
 
         # Management → LAN: ALLOW (admin can access LAN devices)
-        iifname "vlan200" oifname "vlan100" accept
+        ip saddr 10.200.100.0/24 ip daddr 10.200.0.0/24 accept
 
         # ============================================================
         # Container Network Rules
@@ -472,21 +473,21 @@ table inet fortress_vlan {
         ip saddr 172.20.200.0/24 oifname "${wan_iface}" accept
 
         # Containers → Management VLAN: ALLOW (for responses)
-        ip saddr 172.20.200.0/24 oifname "vlan200" accept
+        ip saddr 172.20.200.0/24 ip daddr 10.200.100.0/24 accept
 
         # Containers → LAN: DENY (isolation)
-        ip saddr 172.20.200.0/24 oifname "vlan100" drop
+        ip saddr 172.20.200.0/24 ip daddr 10.200.0.0/24 drop
     }
 
-    # NAT for both VLANs
+    # NAT for both VLANs - match by source IP
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
 
         # Masquerade LAN traffic to internet
-        iifname "vlan100" oifname "${wan_iface}" masquerade
+        ip saddr 10.200.0.0/24 oifname "${wan_iface}" masquerade
 
         # Masquerade Management traffic to internet
-        iifname "vlan200" oifname "${wan_iface}" masquerade
+        ip saddr 10.200.100.0/24 oifname "${wan_iface}" masquerade
 
         # Masquerade Container traffic to internet
         ip saddr 172.20.200.0/24 oifname "${wan_iface}" masquerade
