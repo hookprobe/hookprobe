@@ -137,7 +137,10 @@ services:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
       FLASK_ENV: production
+      # SECRET_KEY for Flask sessions - both vars for backwards compatibility
+      # (old config.py used FORTRESS_SECRET_KEY, new uses FLASK_SECRET_KEY)
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-fortress_flask_secret_key_change_me}"
+      FORTRESS_SECRET_KEY: "${FLASK_SECRET_KEY:-fortress_flask_secret_key_change_me}"
       # Gunicorn settings
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
