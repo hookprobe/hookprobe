@@ -790,6 +790,76 @@ get_supported_channels_24ghz() {
     fi
 }
 
+get_supported_channels_5ghz() {
+    # Get list of available 5GHz channels for interface
+    #
+    # Args:
+    #   $1 - Interface name
+    #
+    # Returns: Space-separated list of channels (e.g., "36 40 44 48 149 153")
+    #          Only returns channels that are NOT disabled/no-IR/radar-blocked
+
+    local iface="$1"
+    local phy
+
+    phy=$(get_phy_for_iface "$iface")
+    [ -z "$phy" ] && { echo "36"; return; }
+
+    # Parse iw phy for 5GHz frequencies and convert to channels
+    local channels=""
+    local phy_info=""
+    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
+    if [ -z "$phy_info" ]; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
+    # Look for 5GHz frequencies (5170-5895 MHz)
+    # Format: "* 5180 MHz [36] (20.0 dBm)" or "* 5180 MHz [36] (disabled)"
+    while read -r line; do
+        # Match 5GHz frequencies (5xxx MHz)
+        if echo "$line" | grep -qE "^\s*\* 5[0-9]{3} MHz \[([0-9]+)\]"; then
+            local ch
+            ch=$(echo "$line" | grep -oE '\[[0-9]+\]' | tr -d '[]')
+            # Skip if disabled, no-IR (no initiate radiation), or radar detected
+            if echo "$line" | grep -qiE "disabled|no.IR|radar.detected"; then
+                continue
+            fi
+            channels="$channels $ch"
+        fi
+    done <<< "$phy_info"
+
+    # Return available channels or default to 36 (UNII-1 fallback)
+    if [ -n "$channels" ]; then
+        echo "$channels" | xargs
+    else
+        echo "36"
+    fi
+}
+
+is_channel_supported() {
+    # Check if a specific channel is supported by the hardware
+    #
+    # Args:
+    #   $1 - Interface name
+    #   $2 - Channel number
+    #
+    # Returns: 0 if supported, 1 if not
+
+    local iface="$1"
+    local channel="$2"
+    local supported_channels
+
+    # Get supported channels based on band
+    if [ "$channel" -le 14 ]; then
+        supported_channels=$(get_supported_channels_24ghz "$iface")
+    else
+        supported_channels=$(get_supported_channels_5ghz "$iface")
+    fi
+
+    # Check if channel is in the list
+    echo " $supported_channels " | grep -q " $channel "
+}
+
 check_wifi_capability() {
     local iface="$1"
     local capability="$2"  # 80211n, 80211ac, 80211ax, 80211be, WPA3
@@ -1182,45 +1252,75 @@ calculate_eht_center_freq() {
 build_5ghz_priority_list() {
     # Build priority list of channel+bandwidth combinations
     # Sorted by throughput: 160MHz > 80MHz > 40MHz
+    # IMPORTANT: Only includes channels that hardware actually supports
     #
     # Args:
     #   $1 - Interface name (for capability detection)
     #   $2 - Country code
     #   $3 - Hardware max width
     #
-    # Output: List of "channel:bandwidth:band" entries
+    # Output: List of "channel:bandwidth:band" entries (filtered by hardware)
 
     local iface="$1"
     local country="${2:-US}"
     local hw_max_width="${3:-80}"
+    local raw_list=""
     local priority_list=""
 
+    # Get hardware-supported channels first
+    local supported_channels
+    supported_channels=$(get_supported_channels_5ghz "$iface")
+    log_info "    Hardware-supported 5GHz channels: $supported_channels"
+
+    # Build raw priority list (before hardware filtering)
     # Tier 1: 160MHz on UNII-3 (non-DFS, highest throughput)
     if [ "$hw_max_width" -ge 160 ]; then
-        priority_list="149:160:UNII-3 153:160:UNII-3 157:160:UNII-3 161:160:UNII-3"
+        raw_list="149:160:UNII-3 153:160:UNII-3 157:160:UNII-3 161:160:UNII-3"
     fi
 
     # Tier 2: 160MHz on UNII-2C (DFS but 160MHz possible)
     if [ "$hw_max_width" -ge 160 ]; then
-        priority_list="$priority_list 100:160:UNII-2C 108:160:UNII-2C 116:160:UNII-2C 124:160:UNII-2C"
+        raw_list="$raw_list 100:160:UNII-2C 108:160:UNII-2C 116:160:UNII-2C 124:160:UNII-2C"
     fi
 
     # Tier 3: 80MHz on UNII-3 (non-DFS)
-    priority_list="$priority_list 149:80:UNII-3 153:80:UNII-3 157:80:UNII-3 161:80:UNII-3"
+    raw_list="$raw_list 149:80:UNII-3 153:80:UNII-3 157:80:UNII-3 161:80:UNII-3"
 
     # Tier 4: 80MHz on UNII-1 (non-DFS, most compatible)
-    priority_list="$priority_list 36:80:UNII-1 40:80:UNII-1 44:80:UNII-1 48:80:UNII-1"
+    raw_list="$raw_list 36:80:UNII-1 40:80:UNII-1 44:80:UNII-1 48:80:UNII-1"
 
     # Tier 5: 80MHz on UNII-2A (DFS, 60s CAC)
-    priority_list="$priority_list 52:80:UNII-2A 56:80:UNII-2A 60:80:UNII-2A 64:80:UNII-2A"
+    raw_list="$raw_list 52:80:UNII-2A 56:80:UNII-2A 60:80:UNII-2A 64:80:UNII-2A"
 
     # Tier 6: 80MHz on UNII-2C (DFS, 600s CAC - weather radar)
-    priority_list="$priority_list 100:80:UNII-2C 104:80:UNII-2C 108:80:UNII-2C 112:80:UNII-2C"
+    raw_list="$raw_list 100:80:UNII-2C 104:80:UNII-2C 108:80:UNII-2C 112:80:UNII-2C"
 
     # Tier 7: 40MHz fallback (if 80MHz doesn't work)
-    priority_list="$priority_list 36:40:UNII-1 44:40:UNII-1 149:40:UNII-3 157:40:UNII-3"
+    raw_list="$raw_list 36:40:UNII-1 44:40:UNII-1 149:40:UNII-3 157:40:UNII-3"
 
-    echo "$priority_list"
+    # Filter by hardware-supported channels
+    for entry in $raw_list; do
+        local ch
+        ch=$(echo "$entry" | cut -d: -f1)
+        # Check if this channel is in the supported list
+        if echo " $supported_channels " | grep -q " $ch "; then
+            priority_list="$priority_list $entry"
+        fi
+    done
+
+    # If no channels match, fall back to whatever hardware supports
+    if [ -z "$priority_list" ]; then
+        log_warn "    No priority channels supported, using first available"
+        local first_ch
+        first_ch=$(echo "$supported_channels" | awk '{print $1}')
+        if [ -n "$first_ch" ]; then
+            priority_list="$first_ch:80:FALLBACK $first_ch:40:FALLBACK"
+        else
+            priority_list="36:80:UNII-1"  # Last resort
+        fi
+    fi
+
+    echo "$priority_list" | xargs
 }
 
 validate_hostapd_connection() {
@@ -1279,6 +1379,12 @@ try_channel_bandwidth_combination() {
     local test_pid="/run/hostapd-test-$$.pid"
 
     log_info "    Trying channel $channel @ ${bandwidth}MHz..."
+
+    # Safety check: Verify hardware supports this channel
+    if ! is_channel_supported "$iface" "$channel"; then
+        log_warn "    Channel $channel not supported by hardware - skipping"
+        return 1
+    fi
 
     # IMPORTANT: 160MHz on UNII-1 (36-48) requires channels 36-64, but 52-64 are DFS.
     # This causes "DFS chan_idx seems wrong" errors. Cap UNII-1 to 80MHz.
@@ -1510,18 +1616,26 @@ find_best_working_channel() {
         fi
     done
 
-    # Fallback: Try channel 36 @ 80MHz (most compatible)
-    log_warn "  All combinations failed, trying safe fallback..."
-    if try_channel_bandwidth_combination "$iface" "36" "80" "$country"; then
-        return 0
-    fi
+    # Fallback: Try first hardware-supported channel
+    log_warn "  All combinations failed, trying hardware-supported fallback..."
+    local fallback_channels
+    fallback_channels=$(get_supported_channels_5ghz "$iface")
+    log_info "    Hardware-supported channels: $fallback_channels"
 
-    # Last resort: Channel 36 @ 40MHz
-    if try_channel_bandwidth_combination "$iface" "36" "40" "$country"; then
-        return 0
-    fi
+    for fb_ch in $fallback_channels; do
+        # Try 80MHz first, then 40MHz
+        if try_channel_bandwidth_combination "$iface" "$fb_ch" "80" "$country"; then
+            log_info "  Fallback success: Channel $fb_ch @ 80MHz"
+            return 0
+        fi
+        if try_channel_bandwidth_combination "$iface" "$fb_ch" "40" "$country"; then
+            log_info "  Fallback success: Channel $fb_ch @ 40MHz"
+            return 0
+        fi
+    done
 
     log_error "  No working channel+bandwidth combination found!"
+    log_error "  Hardware-supported channels: $fallback_channels"
     return 1
 }
 
