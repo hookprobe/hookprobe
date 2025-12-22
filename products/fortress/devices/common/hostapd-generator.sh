@@ -3029,6 +3029,19 @@ generate_systemd_services() {
 
     log_info "Generating systemd service files"
 
+    # Find hostapd binary - check common locations
+    local hostapd_bin=""
+    for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
+        if [ -x "$path" ]; then
+            hostapd_bin="$path"
+            break
+        fi
+    done
+    if [ -z "$hostapd_bin" ]; then
+        hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+    fi
+    log_info "  Using hostapd: $hostapd_bin"
+
     # Generate helper script for OVS bridge integration
     generate_wifi_bridge_helper
 
@@ -3060,7 +3073,7 @@ ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${iface_24ghz}" 2>/dev/null; rm -
 ExecStartPre=-/sbin/ip link set ${iface_24ghz} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${iface_24ghz} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
+ExecStart=${hostapd_bin} -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_24ghz} ${bridge} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${iface_24ghz} down
@@ -3103,7 +3116,7 @@ ExecStartPre=-/bin/bash -c 'pkill -f "hostapd.*${iface_5ghz}" 2>/dev/null; rm -f
 ExecStartPre=-/sbin/ip link set ${iface_5ghz} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${iface_5ghz} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
+ExecStart=${hostapd_bin} -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
 ExecStartPost=/usr/local/bin/fortress-wifi-bridge-helper.sh ${iface_5ghz} ${bridge} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${iface_5ghz} down
