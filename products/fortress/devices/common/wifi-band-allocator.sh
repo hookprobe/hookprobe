@@ -388,7 +388,7 @@ update_systemd_dependencies() {
     local need_reload=false
 
     # Update 2.4GHz service
-    local service_24ghz="/etc/systemd/system/fortress-hostapd-24ghz.service"
+    local service_24ghz="/etc/systemd/system/fts-hostapd-24ghz.service"
     if [ -f "$service_24ghz" ] && [ -n "$WIFI_24GHZ_IFACE" ]; then
         local dev_unit="sys-subsystem-net-devices-${WIFI_24GHZ_IFACE}.device"
 
@@ -402,7 +402,7 @@ update_systemd_dependencies() {
     fi
 
     # Update 5GHz service
-    local service_5ghz="/etc/systemd/system/fortress-hostapd-5ghz.service"
+    local service_5ghz="/etc/systemd/system/fts-hostapd-5ghz.service"
     if [ -f "$service_5ghz" ] && [ -n "$WIFI_5GHZ_IFACE" ]; then
         local dev_unit="sys-subsystem-net-devices-${WIFI_5GHZ_IFACE}.device"
 

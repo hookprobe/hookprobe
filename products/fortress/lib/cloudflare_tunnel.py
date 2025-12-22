@@ -138,7 +138,7 @@ class CloudflareTunnelManager:
 
     CONFIG_DIR = "/opt/hookprobe/fortress/tunnel"
     CONFIG_FILE = "/opt/hookprobe/fortress/tunnel/config.json"
-    SYSTEMD_SERVICE = "fortress-tunnel.service"
+    SYSTEMD_SERVICE = "fts-tunnel.service"
     CLOUDFLARED_PATHS = [
         "/usr/local/bin/cloudflared",
         "/usr/bin/cloudflared",
@@ -494,10 +494,10 @@ WantedBy=multi-user.target
             service_path = f"/etc/systemd/system/{self.SYSTEMD_SERVICE}"
 
             # Write service file
-            with open("/tmp/fortress-tunnel.service", 'w') as f:
+            with open("/tmp/fts-tunnel.service", 'w') as f:
                 f.write(service_content)
 
-            subprocess.run(["sudo", "mv", "/tmp/fortress-tunnel.service", service_path], check=True)
+            subprocess.run(["sudo", "mv", "/tmp/fts-tunnel.service", service_path], check=True)
             subprocess.run(["sudo", "chmod", "644", service_path], check=True)
             subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
             subprocess.run(["sudo", "systemctl", "enable", self.SYSTEMD_SERVICE], check=True)

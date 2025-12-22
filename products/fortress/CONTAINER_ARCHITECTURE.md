@@ -93,7 +93,7 @@ Fortress needs clean containerization to:
 │  ┌──────────────────────────────────────────────────────────────────┐   │
 │  │                    CONTAINER GROUP: WEB                           │   │
 │  │  ┌─────────────────────────────────────────────────────────────┐ │   │
-│  │  │  fortress-web (Flask + Gunicorn)                            │ │   │
+│  │  │  fts-web (Flask + Gunicorn)                            │ │   │
 │  │  │  Port: 8443 (HTTPS)                                         │ │   │
 │  │  │  Dependencies: flask, gunicorn, bcrypt, requests            │ │   │
 │  │  │  NO ML LIBRARIES                                            │ │   │
@@ -251,7 +251,7 @@ services:
   # ============================================
   postgres:
     image: postgres:15-alpine
-    container_name: fortress-postgres
+    container_name: fts-postgres
     environment:
       POSTGRES_DB: fortress
       POSTGRES_USER: fortress
@@ -261,7 +261,7 @@ services:
     secrets:
       - postgres_password
     networks:
-      - fortress-data
+      - fts-data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fortress"]
       interval: 10s
@@ -270,12 +270,12 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: fortress-redis
+    container_name: fts-redis
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
     networks:
-      - fortress-data
+      - fts-data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -286,11 +286,11 @@ services:
   # WEB GROUP
   # ============================================
   web:
-    image: localhost/fortress-web:latest
+    image: localhost/fts-web:latest
     build:
       context: ..
       dockerfile: containers/Containerfile.web
-    container_name: fortress-web
+    container_name: fts-web
     ports:
       - "8443:8443"
     environment:
@@ -310,8 +310,8 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - fortress-data
-      - fortress-external
+      - fts-data
+      - fts-external
     healthcheck:
       test: ["CMD", "curl", "-fk", "https://localhost:8443/health"]
       interval: 30s
@@ -322,11 +322,11 @@ services:
   # ML/AI GROUP
   # ============================================
   qsecbit-agent:
-    image: localhost/fortress-agent:latest
+    image: localhost/fts-agent:latest
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.agent
-    container_name: fortress-qsecbit
+    container_name: fts-qsecbit
     network_mode: host  # Required for traffic analysis
     cap_add:
       - NET_ADMIN
@@ -346,51 +346,51 @@ services:
     restart: unless-stopped
 
   dnsxai-engine:
-    image: localhost/fortress-dnsxai:latest
+    image: localhost/fts-dnsxai:latest
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.dnsxai
-    container_name: fortress-dnsxai
+    container_name: fts-dnsxai
     ports:
       - "5353:5353/udp"
     volumes:
       - dnsxai_data:/opt/hookprobe/dnsXai/data
       - /etc/hookprobe/dnsxai:/etc/hookprobe/dnsxai:ro
     networks:
-      - fortress-data
+      - fts-data
     profiles:
       - full
     restart: unless-stopped
 
   dfs-intelligence:
-    image: localhost/fortress-dfs:latest
+    image: localhost/fts-dfs:latest
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.dfs
-    container_name: fortress-dfs
+    container_name: fts-dfs
     ports:
       - "8050:8050"
     volumes:
       - dfs_data:/opt/hookprobe/wireless/data
       - /etc/hookprobe/wireless:/etc/hookprobe/wireless:ro
     networks:
-      - fortress-data
+      - fts-data
     profiles:
       - full
     restart: unless-stopped
 
   # LSTM trainer runs as scheduled job (not always-on)
   lstm-trainer:
-    image: localhost/fortress-lstm:latest
+    image: localhost/fts-lstm:latest
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.lstm
-    container_name: fortress-lstm-trainer
+    container_name: fts-lstm-trainer
     volumes:
       - ml_models:/opt/hookprobe/fortress/data/ml-models
       - agent_data:/opt/hookprobe/fortress/data:ro
     networks:
-      - fortress-data
+      - fts-data
     profiles:
       - training  # Only run with: podman-compose --profile training up lstm-trainer
     restart: "no"
@@ -399,12 +399,12 @@ services:
 # NETWORKS
 # ============================================
 networks:
-  fortress-data:
+  fts-data:
     driver: bridge
     ipam:
       config:
         - subnet: 10.250.100.0/24
-  fortress-external:
+  fts-external:
     driver: bridge
     ipam:
       config:
@@ -450,7 +450,7 @@ secrets:
 1. Remove system-wide pip installs for ML packages
 2. Add container build steps during installation
 3. Create systemd units to manage podman containers
-4. Add `fortress-containers.service` to start all containers
+4. Add `fts-containers.service` to start all containers
 
 ### Phase 3: Integration Testing (Week 2)
 
@@ -489,8 +489,8 @@ secrets:
 │  │   (cache)   │         │   :5353     │         │   :8050     │       │
 │  └─────────────┘         └─────────────┘         └─────────────┘       │
 │                                                                          │
-│  All containers on fortress-data network (10.250.100.0/24)              │
-│  Web additionally on fortress-external for HTTPS access                  │
+│  All containers on fts-data network (10.250.100.0/24)              │
+│  Web additionally on fts-external for HTTPS access                  │
 │  qsecbit-agent uses host network for traffic capture                    │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -562,7 +562,7 @@ python3-torch      # → lstm container
 
 ## Systemd Integration
 
-### fortress-pod.service
+### fts-pod.service
 ```ini
 [Unit]
 Description=Fortress Container Pod
@@ -581,12 +581,12 @@ TimeoutStartSec=300
 WantedBy=multi-user.target
 ```
 
-### fortress-pod-full.service (with ML)
+### fts-pod-full.service (with ML)
 ```ini
 [Unit]
 Description=Fortress Container Pod (Full ML)
-After=fortress-pod.service
-Requires=fortress-pod.service
+After=fts-pod.service
+Requires=fts-pod.service
 
 [Service]
 Type=oneshot
@@ -599,7 +599,7 @@ ExecStop=/usr/bin/podman-compose --profile full down
 WantedBy=multi-user.target
 ```
 
-### fortress-lstm-train.timer (Daily Training)
+### fts-lstm-train.timer (Daily Training)
 ```ini
 [Unit]
 Description=Daily LSTM Model Training
@@ -613,7 +613,7 @@ RandomizedDelaySec=1800
 WantedBy=timers.target
 ```
 
-### fortress-lstm-train.service
+### fts-lstm-train.service
 ```ini
 [Unit]
 Description=LSTM Model Training Job

@@ -976,7 +976,7 @@ configure_wwan_nmcli() {
         return 1
     fi
 
-    local con_name="fortress-lte"
+    local con_name="fts-lte"
 
     log_info "Configuring WWAN via nmcli"
     log_info "  Device: $modem_device"
