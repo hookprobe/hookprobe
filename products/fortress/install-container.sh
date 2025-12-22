@@ -665,7 +665,7 @@ setup_network() {
     log_info "Initializing OVS network fabric..."
     if [ -f "$ovs_script" ]; then
         # Export configuration for OVS script
-        export OVS_BRIDGE="43ess"
+        export OVS_BRIDGE="FTS"
         export LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
         # Initialize OVS bridge for podman mode (skips tier internal ports)
@@ -1123,7 +1123,7 @@ create_wifi_services_stable() {
 
     log_info "Phase 3: Creating WiFi services with stable names..."
 
-    local ovs_bridge="${OVS_BRIDGE:-43ess}"
+    local ovs_bridge="${OVS_BRIDGE:-FTS}"
 
     # Find hostapd binary - check common locations
     local hostapd_bin=""
@@ -1226,7 +1226,7 @@ setup_ovs_dhcp() {
     log_info "Configuring DHCP on OVS bridge..."
 
     # Use the OVS bridge directly - dnsmasq binds to the bridge interface
-    local lan_port="${OVS_BRIDGE:-43ess}"
+    local lan_port="${OVS_BRIDGE:-FTS}"
     local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
 
     mkdir -p "$(dirname "$config_file")"
@@ -1657,7 +1657,7 @@ fi
 
 # CRITICAL: Ensure OVS bridge is UP and configured before connecting containers
 # After reboot, openvswitch-switch restores the bridge but may not bring it UP
-OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
@@ -1735,14 +1735,14 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin
-Environment=OVS_BRIDGE=43ess
+Environment=OVS_BRIDGE=FTS
 Environment=LAN_BASE_IP=10.200.0.1
 Environment=LAN_SUBNET_MASK=24
 
 # Wait for OVS to be fully ready and configure bridge IP BEFORE starting containers
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-ExecStartPre=/bin/bash -c 'ip link set 43ess up 2>/dev/null || true'
-ExecStartPre=/bin/bash -c 'ip addr show 43ess | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/24 dev 43ess 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip link set FTS up 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip addr show FTS | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/24 dev FTS 2>/dev/null || true'
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'

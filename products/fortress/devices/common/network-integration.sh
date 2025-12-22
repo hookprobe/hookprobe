@@ -143,7 +143,7 @@ setup_dual_band_wifi() {
 
     local ssid="${1:-HookProbe-Fortress}"
     local password="$2"
-    local bridge="${3:-43ess}"
+    local bridge="${3:-FTS}"
 
     [ -z "$password" ] && { log_error "WiFi password required"; return 1; }
 
@@ -240,7 +240,7 @@ create_wifi_services() {
     # IMPORTANT: Uses stable interface names (wlan_24ghz, wlan_5ghz) assigned by udev rules,
     # not the detected original names (wlan0, wlp6s0, etc.)
 
-    local ovs_bridge="${OVS_BRIDGE_NAME:-43ess}"
+    local ovs_bridge="${OVS_BRIDGE_NAME:-FTS}"
     local allocator_script="/opt/hookprobe/fortress/devices/common/wifi-band-allocator.sh"
 
     # Use stable interface names (assigned by udev rules)
@@ -790,7 +790,7 @@ setup_lan_bridge_auto() {
         setup_lan_bridge "$NET_WAN_IFACE" "$NET_WWAN_IFACE"
     else
         # Manual bridge creation
-        local bridge_name="${OVS_BRIDGE_NAME:-43ess}"
+        local bridge_name="${OVS_BRIDGE_NAME:-FTS}"
 
         ip link add name "$bridge_name" type bridge 2>/dev/null || true
         ip link set "$bridge_name" up
