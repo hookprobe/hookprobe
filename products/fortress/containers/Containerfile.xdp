@@ -16,12 +16,13 @@
 FROM debian:bookworm-slim
 
 # Install BCC tools and Python bindings from system packages
-# Note: bcc Python bindings are NOT on PyPI - they come from libbpfcc-dev
+# Note: bcc Python bindings are NOT on PyPI - they come from python3-bpfcc
+# See: https://packages.debian.org/stable/source/bpfcc
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
-    python3-bcc \
+    python3-bpfcc \
     bpfcc-tools \
     bpftool \
     iproute2 \
