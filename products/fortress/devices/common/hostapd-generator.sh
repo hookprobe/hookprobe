@@ -795,15 +795,27 @@ get_supported_channels_5ghz() {
     #
     # Args:
     #   $1 - Interface name
+    #   $2 - Country code (optional, for regulatory domain setup)
     #
     # Returns: Space-separated list of channels (e.g., "36 40 44 48 149 153")
-    #          Only returns channels that are NOT disabled/no-IR/radar-blocked
+    #
+    # Note: We include "no IR" channels because they ARE valid for AP mode.
+    #       hostapd handles DFS/CAC for these channels. We only exclude
+    #       truly "disabled" or "radar detected" channels.
 
     local iface="$1"
+    local country="${2:-}"
     local phy
 
     phy=$(get_phy_for_iface "$iface")
-    [ -z "$phy" ] && { echo "36"; return; }
+    [ -z "$phy" ] && { echo "36 40 44 48"; return; }
+
+    # Ensure regulatory domain is set before querying
+    if [ -n "$country" ]; then
+        iw reg set "$country" 2>/dev/null || true
+        # Wait for regulatory domain to apply
+        sleep 1
+    fi
 
     # Parse iw phy for 5GHz frequencies and convert to channels
     local channels=""
@@ -820,19 +832,22 @@ get_supported_channels_5ghz() {
         if echo "$line" | grep -qE "^\s*\* 5[0-9]{3} MHz \[([0-9]+)\]"; then
             local ch
             ch=$(echo "$line" | grep -oE '\[[0-9]+\]' | tr -d '[]')
-            # Skip if disabled, no-IR (no initiate radiation), or radar detected
-            if echo "$line" | grep -qiE "disabled|no.IR|radar.detected"; then
+
+            # ONLY skip if truly disabled or radar currently detected
+            # DO NOT skip "no IR" - those are valid for AP mode with DFS
+            if echo "$line" | grep -qiE "disabled|radar.detected"; then
                 continue
             fi
             channels="$channels $ch"
         fi
     done <<< "$phy_info"
 
-    # Return available channels or default to 36 (UNII-1 fallback)
+    # Return available channels or default to UNII-1 (always safe)
     if [ -n "$channels" ]; then
         echo "$channels" | xargs
     else
-        echo "36"
+        # Fallback: UNII-1 channels are always available
+        echo "36 40 44 48"
     fi
 }
 
@@ -1267,10 +1282,19 @@ build_5ghz_priority_list() {
     local raw_list=""
     local priority_list=""
 
-    # Get hardware-supported channels first
+    # Set regulatory domain and get hardware-supported channels
+    # Pass country code to ensure channels are queried after regdomain is set
     local supported_channels
-    supported_channels=$(get_supported_channels_5ghz "$iface")
+    supported_channels=$(get_supported_channels_5ghz "$iface" "$country")
     log_info "    Hardware-supported 5GHz channels: $supported_channels"
+
+    # If only a few channels, something may be wrong - log warning
+    local channel_count
+    channel_count=$(echo "$supported_channels" | wc -w)
+    if [ "$channel_count" -lt 4 ]; then
+        log_warn "    Only $channel_count channels detected - regulatory domain may be restrictive"
+        log_warn "    Country: $country, consider checking 'iw reg get' output"
+    fi
 
     # Build raw priority list (before hardware filtering)
     # Tier 1: 160MHz on UNII-3 (non-DFS, highest throughput)
@@ -1651,7 +1675,7 @@ find_best_working_channel() {
     # Fallback: Try first hardware-supported channel
     log_warn "  All combinations failed, trying hardware-supported fallback..."
     local fallback_channels
-    fallback_channels=$(get_supported_channels_5ghz "$iface")
+    fallback_channels=$(get_supported_channels_5ghz "$iface" "$country")
     log_info "    Hardware-supported channels: $fallback_channels"
 
     for fb_ch in $fallback_channels; do
