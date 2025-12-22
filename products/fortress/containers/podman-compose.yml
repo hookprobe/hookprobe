@@ -77,6 +77,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    # Expose to localhost for web container (host network) access
+    ports:
+      - "127.0.0.1:5432:5432"
     networks:
       fts-internal:
         ipv4_address: 172.20.200.10
@@ -103,6 +106,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    # Expose to localhost for web container (host network) access
+    ports:
+      - "127.0.0.1:6379:6379"
     networks:
       fts-internal:
         ipv4_address: 172.20.200.11
@@ -127,14 +133,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database connection via container IP (host network can't use DNS names)
-      DATABASE_HOST: 172.20.200.10
+      # Database connection via localhost (web uses host network, postgres exposes port)
+      DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
-      # Redis connection via container IP (host network can't use DNS names)
-      REDIS_HOST: 172.20.200.11
+      # Redis connection via localhost (web uses host network, redis exposes port)
+      REDIS_HOST: 127.0.0.1
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
