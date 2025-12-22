@@ -102,29 +102,32 @@ parse_args() {
                 echo "  --purge         COMPLETE removal - containers, images, volumes,"
                 echo "                  networks, configs, data, logs, udev rules, everything"
                 echo "  --keep-logs     Preserve log files"
-                echo "  --keep-data     Preserve data directories and database"
+                echo "  --keep-data     Preserve Podman volumes (database, redis, etc.) and data dirs"
                 echo "  --keep-config   Preserve configuration files (for reinstall)"
                 echo "  --help, -h      Show this help message"
                 echo ""
-                echo "Stages performed:"
-                echo "  1. Stop services"
-                echo "  2. Clean network interfaces"
-                echo "  3. Remove containers, images, volumes, networks"
-                echo "  4. Remove OVS bridge and VLANs"
-                echo "  5. Remove systemd services and timers"
-                echo "  6. Remove management scripts"
-                echo "  7. Remove configuration files"
-                echo "  8. Remove data directories"
-                echo "  9. Remove log files"
-                echo "  10. Remove udev rules"
-                echo "  11. Remove sysctl settings"
-                echo "  12. Verify complete removal"
+                echo "Common usage patterns:"
                 echo ""
-                echo "Examples:"
-                echo "  $0                    # Interactive uninstall"
-                echo "  $0 --force            # Non-interactive, remove all"
-                echo "  $0 --purge            # COMPLETE purge, removes everything"
-                echo "  $0 --keep-data        # Keep database for reinstall"
+                echo "  FULL PURGE (remove absolutely everything):"
+                echo "    $0 --purge"
+                echo "    Removes: containers, images, volumes, networks, configs, data, logs"
+                echo ""
+                echo "  REINSTALL-FRIENDLY (keep database volumes):"
+                echo "    $0 --keep-data"
+                echo "    Removes: containers, images, networks, configs"
+                echo "    Keeps:   Podman volumes (fts-postgres-data, fts-redis-data, etc.)"
+                echo ""
+                echo "  UPGRADE (keep everything for quick reinstall):"
+                echo "    $0 --keep-data --keep-config"
+                echo "    Removes: containers, images, networks"
+                echo "    Keeps:   Volumes, configs, data directories"
+                echo ""
+                echo "Preserved volumes (with --keep-data):"
+                echo "  • fts-postgres-data    - PostgreSQL database"
+                echo "  • fts-redis-data       - Redis cache/sessions"
+                echo "  • fts-grafana-data     - Grafana dashboards"
+                echo "  • fts-victoria-data    - Metrics history"
+                echo "  • fts-*-data           - All other data volumes"
                 echo ""
                 exit 0
                 ;;
@@ -454,7 +457,7 @@ remove_management_scripts() {
 # REMOVE PODMAN CONTAINERS - COMPLETE PURGE
 # ============================================================
 remove_containers() {
-    log_step "Removing ALL Podman containers, images, volumes, networks..."
+    log_step "Removing Podman containers, images, networks..."
 
     if ! command -v podman &>/dev/null; then
         log_info "Podman not installed, skipping container removal"
@@ -489,7 +492,11 @@ remove_containers() {
         "docker.io/library/redis:7-alpine"
         "docker.io/grafana/grafana:11.4.0"
         "docker.io/victoriametrics/victoria-metrics:latest"
+        "docker.io/victoriametrics/victoria-metrics:v1.106.1"
         "docker.io/library/python:3.11-slim-bookworm"
+        "docker.io/library/debian:bookworm-slim"
+        "docker.io/jasonish/suricata:latest"
+        "docker.io/zeek/zeek:latest"
     )
     for image in "${base_images[@]}"; do
         if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -qF "$image"; then
@@ -498,12 +505,21 @@ remove_containers() {
         fi
     done
 
-    # Remove ALL fortress volumes (fts-* naming convention)
-    log_info "Removing all fortress volumes..."
-    for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
-        log_info "  Removing volume: $volume"
-        podman volume rm -f "$volume" 2>/dev/null || true
-    done
+    # Handle volumes based on --keep-data flag
+    if [ "$KEEP_DATA" = true ]; then
+        log_info "Preserving Podman volumes (--keep-data specified)"
+        log_info "  Database volumes preserved for reinstallation:"
+        for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
+            log_info "    • $volume"
+        done
+    else
+        # Remove ALL fortress volumes (fts-* naming convention)
+        log_info "Removing all fortress volumes..."
+        for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
+            log_info "  Removing volume: $volume"
+            podman volume rm -f "$volume" 2>/dev/null || true
+        done
+    fi
 
     # Remove ALL fortress networks (fts-* naming convention)
     log_info "Removing all fortress networks..."
@@ -517,11 +533,13 @@ remove_containers() {
     podman image prune -f 2>/dev/null || true
     podman builder prune -f 2>/dev/null || true
 
-    # Prune unused volumes (only fortress-related that might have been missed)
-    log_info "Pruning unused volumes..."
-    podman volume prune -f 2>/dev/null || true
+    # Only prune volumes if not keeping data
+    if [ "$KEEP_DATA" = false ]; then
+        log_info "Pruning unused volumes..."
+        podman volume prune -f 2>/dev/null || true
+    fi
 
-    log_info "All containers, images, volumes, networks removed"
+    log_info "Container cleanup complete"
 }
 
 # ============================================================
