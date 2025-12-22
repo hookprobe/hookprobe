@@ -283,11 +283,11 @@ show_status() {
 
 # Create systemd service
 install_service() {
-    cat > /etc/systemd/system/fortress-adaptive-txpower.service << 'EOF'
+    cat > /etc/systemd/system/fts-adaptive-txpower.service << 'EOF'
 [Unit]
 Description=HookProbe Fortress - Adaptive WiFi TX Power
-After=network.target fortress-hostapd-24ghz.service fortress-hostapd-5ghz.service
-Wants=fortress-hostapd-24ghz.service fortress-hostapd-5ghz.service
+After=network.target fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
 
 [Service]
 Type=simple
@@ -300,8 +300,8 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    log_success "Installed fortress-adaptive-txpower.service"
-    echo "To enable: systemctl enable --now fortress-adaptive-txpower"
+    log_success "Installed fts-adaptive-txpower.service"
+    echo "To enable: systemctl enable --now fts-adaptive-txpower"
 }
 
 # Create default config

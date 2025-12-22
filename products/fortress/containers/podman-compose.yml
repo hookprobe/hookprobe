@@ -27,15 +27,15 @@
 #   - Jobs: lstm-trainer (--profile training, one-shot)
 #
 # Network Security Tiers (via OVS OpenFlow):
-#   - fortress-data:     172.20.200.0/24 (postgres, redis) - NO internet
-#   - fortress-services: 172.20.201.0/24 (web, dnsxai, dfs) - internet OK
-#   - fortress-ml:       172.20.202.0/24 (lstm-trainer) - NO internet
-#   - fortress-mgmt:     172.20.203.0/24 (grafana, victoria) - NO internet
-#   - fortress-lan:      10.200.0.0/23-29 (WiFi/LAN clients, configurable) - NAT to internet
+#   - fts-data:     172.20.200.0/24 (postgres, redis) - NO internet
+#   - fts-services: 172.20.201.0/24 (web, dnsxai, dfs) - internet OK
+#   - fts-ml:       172.20.202.0/24 (lstm-trainer) - NO internet
+#   - fts-mgmt:     172.20.203.0/24 (grafana, victoria) - NO internet
+#   - fts-lan:      10.200.0.0/23-29 (WiFi/LAN clients, configurable) - NAT to internet
 #
 # OVS Security Features:
 #   - OpenFlow 1.3+ tier isolation rules
-#   - Traffic mirroring to fortress-mirror port
+#   - Traffic mirroring to fts-mirror port
 #   - sFlow export to 127.0.0.1:6343
 #   - IPFIX export to 127.0.0.1:4739
 #   - QoS meters for rate limiting
@@ -48,15 +48,15 @@ version: '3.8'
 
 services:
   # ============================================================
-  # DATA TIER - Isolated Database Layer (fortress-data)
+  # DATA TIER - Isolated Database Layer (fts-data)
   # ============================================================
 
   # PostgreSQL Database - Most sensitive, fully isolated in data tier
   postgres:
     image: docker.io/library/postgres:15-alpine
-    container_name: fortress-postgres
+    container_name: fts-postgres
     restart: unless-stopped
-    hostname: fortress-postgres
+    hostname: fts-postgres
     environment:
       POSTGRES_DB: fortress
       POSTGRES_USER: fortress
@@ -76,15 +76,15 @@ services:
       start_period: 10s
     # Data tier - fully isolated, no internet access
     networks:
-      fortress-data:
+      fts-data:
         ipv4_address: 172.20.200.10
 
   # Redis Cache (Sessions + Rate Limiting)
   redis:
     image: docker.io/library/redis:7-alpine
-    container_name: fortress-redis
+    container_name: fts-redis
     restart: unless-stopped
-    hostname: fortress-redis
+    hostname: fts-redis
     command: >
       redis-server
       --appendonly yes
@@ -103,11 +103,11 @@ services:
       start_period: 5s
     # Data tier - fully isolated, no internet access
     networks:
-      fortress-data:
+      fts-data:
         ipv4_address: 172.20.200.11
 
   # ============================================================
-  # SERVICES TIER - Web and DNS (fortress-services)
+  # SERVICES TIER - Web and DNS (fts-services)
   # ============================================================
 
   # Fortress Web Application (Flask + Gunicorn)
@@ -116,10 +116,10 @@ services:
     build:
       context: ..
       dockerfile: containers/Containerfile.web
-    image: localhost/fortress-web:latest
-    container_name: fortress-web
+    image: localhost/fts-web:latest
+    container_name: fts-web
     restart: unless-stopped
-    hostname: fortress-web
+    hostname: fts-web
     depends_on:
       postgres:
         condition: service_healthy
@@ -127,13 +127,13 @@ services:
         condition: service_healthy
     environment:
       # Database connection via container DNS name (data tier)
-      DATABASE_HOST: fortress-postgres
+      DATABASE_HOST: fts-postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: fortress
       DATABASE_USER: fortress
       DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
       # Redis connection via container DNS name (data tier)
-      REDIS_HOST: fortress-redis
+      REDIS_HOST: fts-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Flask settings
@@ -145,8 +145,8 @@ services:
       GUNICORN_BIND: "0.0.0.0:${WEB_PORT:-8443}"
       # ML service endpoints - QSecBit on host, others via container DNS
       QSECBIT_API_URL: http://172.20.201.1:9090
-      DNSXAI_API_URL: http://fortress-dnsxai:5353
-      DFS_API_URL: http://fortress-dfs:8050
+      DNSXAI_API_URL: http://fts-dnsxai:5353
+      DFS_API_URL: http://fts-dfs:8050
       # Monitoring endpoints (mgmt tier via gateway)
       VICTORIA_URL: http://172.20.203.11:8428
     volumes:
@@ -158,9 +158,9 @@ services:
     ports:
       - "8443:8443"
     networks:
-      fortress-services:
+      fts-services:
         ipv4_address: 172.20.201.10
-      fortress-data:
+      fts-data:
         # Secondary interface for database access
         ipv4_address: 172.20.200.20
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
@@ -176,10 +176,10 @@ services:
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.dnsxai
-    image: localhost/fortress-dnsxai:latest
-    container_name: fortress-dnsxai
+    image: localhost/fts-dnsxai:latest
+    container_name: fts-dnsxai
     restart: unless-stopped
-    hostname: fortress-dnsxai
+    hostname: fts-dnsxai
     environment:
       DNSXAI_UPSTREAM: "1.1.1.1"
       DNSXAI_PROTECTION_LEVEL: 3
@@ -200,7 +200,7 @@ services:
       retries: 3
       start_period: 15s
     networks:
-      fortress-services:
+      fts-services:
         ipv4_address: 172.20.201.11
     # Core service - always started (provides mesh DNS protection)
 
@@ -209,10 +209,10 @@ services:
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.dfs
-    image: localhost/fortress-dfs:latest
-    container_name: fortress-dfs
+    image: localhost/fts-dfs:latest
+    container_name: fts-dfs
     restart: unless-stopped
-    hostname: fortress-dfs
+    hostname: fts-dfs
     environment:
       DFS_DATA_DIR: /opt/hookprobe/wireless/data
       DFS_DB_PATH: /opt/hookprobe/wireless/data/dfs_radar.db
@@ -228,12 +228,12 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      fortress-services:
+      fts-services:
         ipv4_address: 172.20.201.12
     # Core service - always started (provides WiFi DFS intelligence)
 
   # ============================================================
-  # SECURITY TIER - Threat Detection (fortress-ml)
+  # SECURITY TIER - Threat Detection (fts-ml)
   # ============================================================
 
   # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
@@ -242,8 +242,8 @@ services:
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.agent
-    image: localhost/fortress-agent:latest
-    container_name: fortress-qsecbit
+    image: localhost/fts-agent:latest
+    container_name: fts-qsecbit
     restart: unless-stopped
     depends_on:
       postgres:
@@ -287,8 +287,8 @@ services:
     build:
       context: ../..
       dockerfile: products/fortress/containers/Containerfile.lstm
-    image: localhost/fortress-lstm:latest
-    container_name: fortress-lstm-trainer
+    image: localhost/fts-lstm:latest
+    container_name: fts-lstm-trainer
     environment:
       LSTM_MODEL_DIR: /opt/hookprobe/fortress/data/ml-models/trained
       LSTM_CHECKPOINT_DIR: /opt/hookprobe/fortress/data/ml-models/checkpoints
@@ -296,7 +296,7 @@ services:
       - ml_models:/opt/hookprobe/fortress/data/ml-models
       - agent_data:/opt/hookprobe/fortress/data:ro  # Read threat data
     networks:
-      fortress-ml:
+      fts-ml:
         ipv4_address: 172.20.202.10
     profiles:
       - training
@@ -304,13 +304,13 @@ services:
     restart: "no"
 
   # ============================================================
-  # MANAGEMENT TIER - Monitoring (fortress-mgmt)
+  # MANAGEMENT TIER - Monitoring (fts-mgmt)
   # ============================================================
 
   # Grafana - Visualization Dashboard
   grafana:
     image: docker.io/grafana/grafana:11.4.0
-    container_name: fortress-grafana
+    container_name: fts-grafana
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
@@ -330,7 +330,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      fortress-mgmt:
+      fts-mgmt:
         ipv4_address: 172.20.203.10
     profiles:
       - monitoring
@@ -338,7 +338,7 @@ services:
   # VictoriaMetrics - Time Series Database
   victoria:
     image: docker.io/victoriametrics/victoria-metrics:v1.106.1
-    container_name: fortress-victoria
+    container_name: fts-victoria
     restart: unless-stopped
     command:
       - "-storageDataPath=/storage"
@@ -355,7 +355,7 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      fortress-mgmt:
+      fts-mgmt:
         ipv4_address: 172.20.203.11
     profiles:
       - monitoring
@@ -379,46 +379,46 @@ volumes:
   # Data Tier
   postgres_data:
     driver: local
-    name: fortress-postgres-data
+    name: fts-postgres-data
   postgres_certs:
     driver: local
-    name: fortress-postgres-certs
+    name: fts-postgres-certs
   redis_data:
     driver: local
-    name: fortress-redis-data
+    name: fts-redis-data
 
   # Services Tier
   web_data:
     driver: local
-    name: fortress-web-data
+    name: fts-web-data
   web_logs:
     driver: local
-    name: fortress-web-logs
+    name: fts-web-logs
   dnsxai_data:
     driver: local
-    name: fortress-dnsxai-data
+    name: fts-dnsxai-data
   dnsxai_blocklists:
     driver: local
-    name: fortress-dnsxai-blocklists
+    name: fts-dnsxai-blocklists
   dfs_data:
     driver: local
-    name: fortress-dfs-data
+    name: fts-dfs-data
 
   # ML Tier
   agent_data:
     driver: local
-    name: fortress-agent-data
+    name: fts-agent-data
   ml_models:
     driver: local
-    name: fortress-ml-models
+    name: fts-ml-models
 
   # Management Tier
   grafana_data:
     driver: local
-    name: fortress-grafana-data
+    name: fts-grafana-data
   victoria_data:
     driver: local
-    name: fortress-victoria-data
+    name: fts-victoria-data
 
   # Note: /etc/hookprobe is bind-mounted from host, not a named volume
   # This allows the install script to create users.json in the host directory
@@ -443,7 +443,7 @@ volumes:
 #   │    └─────────┘   │dfs      │  └─────────┘ └──────────┘ │
 #   │                  └─────────┘                           │
 #   │  ┌───────────────────────────────────────────────────┐ │
-#   │  │ fortress-lan (10.200.0.0/23-29) - WiFi/LAN clients │ │
+#   │  │ fts-lan (10.200.0.0/23-29) - WiFi/LAN clients │ │
 #   │  └───────────────────────────────────────────────────┘ │
 #   │                                                        │
 #   │  OpenFlow Rules:                                       │
@@ -456,9 +456,9 @@ volumes:
 #
 networks:
   # Tier 1: DATA - Most sensitive (database, cache)
-  # OVS port: fortress-data (172.20.200.1/24)
+  # OVS port: fts-data (172.20.200.1/24)
   # OpenFlow: NO internet, only web can reach this tier
-  fortress-data:
+  fts-data:
     driver: bridge
     internal: true  # NO internet access
     ipam:
@@ -470,9 +470,9 @@ networks:
       # Note: Docker's enable_icc is not needed - Podman enables ICC by default
 
   # Tier 2: SERVICES - Web, DNS, APIs
-  # OVS port: fortress-services (172.20.201.1/24)
+  # OVS port: fts-services (172.20.201.1/24)
   # OpenFlow: Internet OK (dnsXai needs upstream DNS)
-  fortress-services:
+  fts-services:
     driver: bridge
     ipam:
       config:
@@ -482,9 +482,9 @@ networks:
       mtu: "1500"
 
   # Tier 3: ML - Threat detection, inference
-  # OVS port: fortress-ml (172.20.202.1/24)
+  # OVS port: fts-ml (172.20.202.1/24)
   # OpenFlow: NO internet, QSecBit uses host network
-  fortress-ml:
+  fts-ml:
     driver: bridge
     internal: true  # NO internet access
     ipam:
@@ -493,9 +493,9 @@ networks:
           gateway: 172.20.202.1
 
   # Tier 4: MANAGEMENT - Monitoring, metrics
-  # OVS port: fortress-mgmt (172.20.203.1/24)
+  # OVS port: fts-mgmt (172.20.203.1/24)
   # OpenFlow: NO internet, web can query metrics
-  fortress-mgmt:
+  fts-mgmt:
     driver: bridge
     internal: true  # NO internet access
     ipam:

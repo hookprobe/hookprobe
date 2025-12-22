@@ -4,10 +4,10 @@
 # ML-powered threat detection agent with numpy/scipy/sklearn
 #
 # Build:
-#   podman build -f Containerfile.agent -t fortress-agent:latest ../..
+#   podman build -f Containerfile.agent -t fts-agent:latest ../..
 #
 # Run:
-#   podman run --network=host --cap-add=NET_ADMIN,NET_RAW fortress-agent:latest
+#   podman run --network=host --cap-add=NET_ADMIN,NET_RAW fts-agent:latest
 # ==============================================================================
 
 FROM python:3.11-slim-bookworm AS builder

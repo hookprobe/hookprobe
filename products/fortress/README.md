@@ -384,13 +384,13 @@ sudo ./install.sh --tier fortress
 
 ```bash
 # Check if service is running
-sudo systemctl status hookprobe-fortress-web
+sudo systemctl status hookprobe-fts-web
 
 # Check firewall
 sudo iptables -L -n | grep 8443
 
 # View logs
-sudo journalctl -u hookprobe-fortress-web -f
+sudo journalctl -u hookprobe-fts-web -f
 ```
 
 ### High Memory Usage

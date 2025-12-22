@@ -110,7 +110,7 @@ class FortressConfig:
 
         if not self.vxlan_tunnels:
             self.vxlan_tunnels = {
-                "core": VXLANConfig("fortress-core", 1000, 4800, f"{self.secrets_dir}/vxlan/core.psk"),
+                "core": VXLANConfig("fts-core", 1000, 4800, f"{self.secrets_dir}/vxlan/core.psk"),
                 "mssp": VXLANConfig("mssp-uplink", 2000, 4900, f"{self.secrets_dir}/vxlan/mssp.psk"),
             }
 

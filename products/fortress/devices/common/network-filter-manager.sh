@@ -32,7 +32,7 @@ STATE_DIR="/var/lib/fortress/filters"
 LOG_FILE="/var/log/fortress/filter-manager.log"
 OUI_DB_FILE="${CONFIG_DIR}/oui_policies.conf"
 MAC_POLICIES_FILE="${STATE_DIR}/mac_policies.conf"
-NFTABLES_CONFIG="/etc/nftables.d/fortress-filters.nft"
+NFTABLES_CONFIG="/etc/nftables.d/fts-filters.nft"
 
 # Network settings
 LAN_INTERFACE="${FORTRESS_LAN_INTERFACE:-eth0}"

@@ -869,7 +869,7 @@ start_radar_monitor() {
         # Run in background
         _radar_monitor_loop "$iface" &
         local pid=$!
-        echo "$pid" > /var/run/fortress-radar-monitor.pid
+        echo "$pid" > /var/run/fts-radar-monitor.pid
         log_success "Radar monitor started (PID: $pid)"
     fi
 }
@@ -999,14 +999,14 @@ stop_radar_monitor() {
     # Stop the radar monitor daemon
     #
 
-    if [ -f /var/run/fortress-radar-monitor.pid ]; then
+    if [ -f /var/run/fts-radar-monitor.pid ]; then
         local pid
-        pid=$(cat /var/run/fortress-radar-monitor.pid)
+        pid=$(cat /var/run/fts-radar-monitor.pid)
         if kill -0 "$pid" 2>/dev/null; then
             kill "$pid"
             log_info "Radar monitor stopped (PID: $pid)"
         fi
-        rm -f /var/run/fortress-radar-monitor.pid
+        rm -f /var/run/fts-radar-monitor.pid
     fi
 }
 
@@ -3299,7 +3299,7 @@ install_calibration_timer() {
     [ "$calibrate_mode" = "extended" ] && timeout=900
 
     # Create calibration service - uses FULL or EXTENDED mode at 4AM
-    cat > /etc/systemd/system/fortress-channel-calibrate.service << EOF
+    cat > /etc/systemd/system/fts-channel-calibrate.service << EOF
 [Unit]
 Description=HookProbe Fortress WiFi Channel Calibration (4AM $calibrate_mode mode)
 After=network.target hostapd.service
@@ -3320,7 +3320,7 @@ WantedBy=multi-user.target
 EOF
 
     # Create timer for 4AM daily
-    cat > /etc/systemd/system/fortress-channel-calibrate.timer << EOF
+    cat > /etc/systemd/system/fts-channel-calibrate.timer << EOF
 [Unit]
 Description=Daily WiFi Channel Calibration at 4AM ($calibrate_mode mode with DFS)
 
@@ -3336,7 +3336,7 @@ WantedBy=timers.target
 EOF
 
     # Create quick-start service for boot/reboot (non-DFS only)
-    cat > /etc/systemd/system/fortress-channel-quickstart.service << EOF
+    cat > /etc/systemd/system/fts-channel-quickstart.service << EOF
 [Unit]
 Description=HookProbe Fortress WiFi Quick Start (Non-DFS only)
 After=network.target
@@ -3355,7 +3355,7 @@ WantedBy=multi-user.target
 EOF
 
     # Create standard-start service for boot with UNII-2A validation
-    cat > /etc/systemd/system/fortress-channel-standard.service << EOF
+    cat > /etc/systemd/system/fts-channel-standard.service << EOF
 [Unit]
 Description=HookProbe Fortress WiFi Standard Start (with UNII-2A validation)
 After=network.target
@@ -3377,16 +3377,16 @@ EOF
 
     # Enable timer
     systemctl daemon-reload
-    systemctl enable fortress-channel-calibrate.timer
-    systemctl start fortress-channel-calibrate.timer
+    systemctl enable fts-channel-calibrate.timer
+    systemctl start fts-channel-calibrate.timer
 
     log_success "Channel calibration services installed"
     log_info ""
     log_info "Services installed:"
-    log_info "  fortress-channel-calibrate.service - 4AM $calibrate_mode mode"
-    log_info "  fortress-channel-calibrate.timer   - Daily 4AM trigger"
-    log_info "  fortress-channel-quickstart.service - Boot (non-DFS only)"
-    log_info "  fortress-channel-standard.service  - Boot with UNII-2A validation"
+    log_info "  fts-channel-calibrate.service - 4AM $calibrate_mode mode"
+    log_info "  fts-channel-calibrate.timer   - Daily 4AM trigger"
+    log_info "  fts-channel-quickstart.service - Boot (non-DFS only)"
+    log_info "  fts-channel-standard.service  - Boot with UNII-2A validation"
     log_info ""
     log_info "Calibration Modes:"
     log_info "  quick:    UNII-1 only (36-48) - No CAC"
@@ -3395,8 +3395,8 @@ EOF
     log_info "  extended: + UNII-2C (100-144) - Up to 600s CAC"
     log_info ""
     log_info "To enable on boot (choose one):"
-    log_info "  systemctl enable fortress-channel-quickstart.service  # Fastest"
-    log_info "  systemctl enable fortress-channel-standard.service    # With DFS validation"
+    log_info "  systemctl enable fts-channel-quickstart.service  # Fastest"
+    log_info "  systemctl enable fts-channel-standard.service    # With DFS validation"
 }
 
 # ============================================================
