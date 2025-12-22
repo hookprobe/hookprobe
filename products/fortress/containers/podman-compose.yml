@@ -26,12 +26,15 @@
 #   - Monitoring: grafana, victoria (--profile monitoring)
 #   - Jobs: lstm-trainer (--profile training, one-shot)
 #
-# Network Security Tiers (via OVS OpenFlow):
-#   - fts-data:     172.20.200.0/24 (postgres, redis) - NO internet
-#   - fts-services: 172.20.201.0/24 (web, dnsxai, dfs) - internet OK
-#   - fts-ml:       172.20.202.0/24 (lstm-trainer) - NO internet
-#   - fts-mgmt:     172.20.203.0/24 (grafana, victoria) - NO internet
-#   - fts-lan:      10.200.0.0/23-29 (WiFi/LAN clients, configurable) - NAT to internet
+# Network (simplified for podman-compose 1.0.6 compatibility):
+#   - fts-internal: 172.20.200.0/24 (all app containers share this network)
+#   - IDS containers (suricata, zeek, xdp, qsecbit) use host network
+#   - fts-lan: 10.200.0.0/23-29 (WiFi/LAN clients) - NAT to internet
+#
+# Network isolation is achieved via nftables rules on the host.
+# Container IP assignments:
+#   .10 postgres, .11 redis, .20 web, .21 dnsxai, .22 dfs
+#   .30 grafana, .31 victoria, .40 lstm-trainer
 #
 # OVS Security Features:
 #   - OpenFlow 1.3+ tier isolation rules
@@ -74,9 +77,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # Data tier - fully isolated, no internet access
     networks:
-      fts-data:
+      fts-internal:
         ipv4_address: 172.20.200.10
 
   # Redis Cache (Sessions + Rate Limiting)
@@ -101,9 +103,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    # Data tier - fully isolated, no internet access
     networks:
-      fts-data:
+      fts-internal:
         ipv4_address: 172.20.200.11
 
   # ============================================================
@@ -158,10 +159,7 @@ services:
     ports:
       - "8443:8443"
     networks:
-      fts-services:
-        ipv4_address: 172.20.201.10
-      fts-data:
-        # Secondary interface for database access
+      fts-internal:
         ipv4_address: 172.20.200.20
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
     healthcheck:
@@ -200,8 +198,8 @@ services:
       retries: 3
       start_period: 15s
     networks:
-      fts-services:
-        ipv4_address: 172.20.201.11
+      fts-internal:
+        ipv4_address: 172.20.200.21
     # Core service - always started (provides mesh DNS protection)
 
   # DFS Intelligence - WiFi Channel ML
@@ -228,8 +226,8 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      fts-services:
-        ipv4_address: 172.20.201.12
+      fts-internal:
+        ipv4_address: 172.20.200.22
     # Core service - always started (provides WiFi DFS intelligence)
 
   # ============================================================
@@ -296,8 +294,8 @@ services:
       - ml_models:/opt/hookprobe/fortress/data/ml-models
       - agent_data:/opt/hookprobe/fortress/data:ro  # Read threat data
     networks:
-      fts-ml:
-        ipv4_address: 172.20.202.10
+      fts-internal:
+        ipv4_address: 172.20.200.40
     profiles:
       - training
     # One-shot job - doesn't restart
@@ -438,10 +436,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      fts-mgmt:
-        ipv4_address: 172.20.203.10
-      fts-data:
-        # Secondary interface for Postgres datasource access
+      fts-internal:
         ipv4_address: 172.20.200.30
     profiles:
       - monitoring
@@ -466,8 +461,8 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      fts-mgmt:
-        ipv4_address: 172.20.203.11
+      fts-internal:
+        ipv4_address: 172.20.200.31
     profiles:
       - monitoring
 
@@ -589,50 +584,24 @@ volumes:
 #   └─────────────────────────────────────────────────────────┘
 #
 networks:
-  # Tier 1: DATA - Most sensitive (database, cache)
-  # OVS port: fts-data (172.20.200.1/24)
-  # OpenFlow: NO internet, only web can reach this tier
-  fts-data:
+  # SIMPLIFIED NETWORK - Single internal network for podman-compose 1.0.6 compatibility
+  # podman-compose 1.0.6 cannot handle --ip with multiple networks, so we use ONE network.
+  #
+  # Network isolation is achieved via:
+  # - nftables rules on the host (setup by install script)
+  # - OVS OpenFlow rules (if using OVS mode)
+  #
+  # All application containers share this network and can reach each other via DNS names.
+  # IDS containers (suricata, zeek, xdp, qsecbit) use host network for traffic capture.
+  fts-internal:
     driver: bridge
-    internal: true  # NO internet access
     ipam:
       config:
         - subnet: 172.20.200.0/24
           gateway: 172.20.200.1
     driver_opts:
-      mtu: "9000"  # Jumbo frames for DB traffic
-      # Note: Docker's enable_icc is not needed - Podman enables ICC by default
-
-  # Tier 2: SERVICES - Web, DNS, APIs
-  # OVS port: fts-services (172.20.201.1/24)
-  # OpenFlow: Internet OK (dnsXai needs upstream DNS)
-  fts-services:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.201.0/24
-          gateway: 172.20.201.1
-    driver_opts:
       mtu: "1500"
 
-  # Tier 3: ML - Threat detection, inference
-  # OVS port: fts-ml (172.20.202.1/24)
-  # OpenFlow: NO internet, QSecBit uses host network
-  fts-ml:
-    driver: bridge
-    internal: true  # NO internet access
-    ipam:
-      config:
-        - subnet: 172.20.202.0/24
-          gateway: 172.20.202.1
-
-  # Tier 4: MANAGEMENT - Monitoring, metrics
-  # OVS port: fts-mgmt (172.20.203.1/24)
-  # OpenFlow: NO internet, web can query metrics
-  fts-mgmt:
-    driver: bridge
-    internal: true  # NO internet access
-    ipam:
-      config:
-        - subnet: 172.20.203.0/24
-          gateway: 172.20.203.1
+  # Legacy network names kept for potential manual multi-network setup
+  # These are NOT used by default due to podman-compose 1.0.6 limitations
+  # fts-data, fts-services, fts-ml, fts-mgmt - see comments above
