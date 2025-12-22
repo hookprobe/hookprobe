@@ -403,6 +403,41 @@ get_phy_for_iface() {
     fi
 }
 
+get_phy_info() {
+    # Get iw phy info for a specific phy
+    # This handles multi-phy systems correctly by extracting only the relevant phy's section
+    #
+    # Args:
+    #   $1 - phy name (e.g., "phy0", "phy1")
+    #
+    # Returns: The iw phy output for just this phy
+    #
+    # Note: "iw phy <name> info" doesn't work on some drivers like ath12k,
+    #       so we parse "iw phy" output and extract the relevant section.
+
+    local phy="$1"
+    local phy_info=""
+
+    # Method 1: Use awk to extract this specific phy's section
+    # More reliable than sed for handling the last phy in the list
+    phy_info=$(iw phy 2>/dev/null | awk -v phy="$phy" '
+        /^Wiphy / { if (found) exit; if ($2 == phy) found=1 }
+        found { print }
+    ') || true
+
+    # Method 2: Fallback to whole iw phy output if extraction failed
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw phy 2>/dev/null) || true
+    fi
+
+    # Method 3: Try iw list as last resort
+    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
+        phy_info=$(iw list 2>/dev/null) || true
+    fi
+
+    echo "$phy_info"
+}
+
 get_wifi_driver() {
     # Get the WiFi driver name for an interface
     #
@@ -657,15 +692,7 @@ verify_band_support() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Use "iw phy" (no args) - "iw phy <name>" doesn't work on some drivers like ath12k
-    # Note: Use "|| true" to prevent script exit with set -e
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
-    if [ -z "$phy_info" ] || ! echo "$phy_info" | grep -qE "[0-9]+ MHz"; then
-        phy_info=$(iw list 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # First try frequency-based detection
     if [ -n "$phy_info" ]; then
@@ -762,13 +789,9 @@ get_supported_channels_24ghz() {
     [ -z "$phy" ] && { echo "6"; return; }
 
     # Parse iw phy for 2.4GHz frequencies and convert to channels
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
     local channels=""
     local phy_info=""
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Look for 2.4GHz frequencies (2412-2484 MHz)
     while read -r line; do
@@ -820,10 +843,7 @@ get_supported_channels_5ghz() {
     # Parse iw phy for 5GHz frequencies and convert to channels
     local channels=""
     local phy_info=""
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Look for 5GHz frequencies (5170-5895 MHz)
     # Format: "* 5180 MHz [36] (20.0 dBm)" or "* 5180 MHz [36] (disabled)"
@@ -918,10 +938,7 @@ check_wifi_capability() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     case "$capability" in
         80211n)
@@ -967,12 +984,7 @@ detect_ht_capabilities() {
 
     local caps=""
     local phy_info=""
-
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # HT40 channel selection based on 2.4GHz channel rules:
     # - Channels 1-7: Can use HT40+ (secondary channel above)
@@ -1014,12 +1026,7 @@ detect_vht_capabilities() {
 
     local caps=""
     local phy_info=""
-
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     if echo "$phy_info" | grep -q "MAX-MPDU-11454"; then
         caps="[MAX-MPDU-11454]"
@@ -1049,11 +1056,7 @@ detect_he_capabilities() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Check if HE is supported
     if ! echo "$phy_info" | grep -qE "HE Capabilities|HE PHY"; then
@@ -1072,11 +1075,7 @@ detect_eht_capabilities() {
     [ -z "$phy" ] && return 1
 
     local phy_info=""
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # Check if EHT (802.11be/WiFi 7) is supported
     if ! echo "$phy_info" | grep -qE "EHT Capabilities|EHT PHY|EHT MAC"; then
@@ -1096,11 +1095,7 @@ detect_eht_channel_width() {
     [ -z "$phy" ] && { echo "80"; return; }
 
     local phy_info=""
-    # Use "iw phy" without args - "iw phy <name>" doesn't work on ath12k
-    phy_info=$(iw phy 2>/dev/null | sed -n "/Wiphy $phy/,/^Wiphy /p" | head -n -1) || true
-    if [ -z "$phy_info" ]; then
-        phy_info=$(iw phy 2>/dev/null) || true
-    fi
+    phy_info=$(get_phy_info "$phy")
 
     # WiFi 7 can support up to 320 MHz channels
     if echo "$phy_info" | grep -qE "320 MHz|EHT.*320"; then
