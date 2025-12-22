@@ -1437,23 +1437,24 @@ try_channel_bandwidth_combination() {
     esac
 
     # Calculate center frequency based on bandwidth
+    # EHT uses SAME encoding as VHT: 0=20/40, 1=80, 2=160
     local vht_width vht_center eht_width eht_center
     case "$bandwidth" in
         160)
             vht_width=2
-            eht_width=3
+            eht_width=2
             ;;
         80)
             vht_width=1
-            eht_width=2
+            eht_width=1
             ;;
         40)
             vht_width=0
-            eht_width=1
+            eht_width=0
             ;;
         *)
             vht_width=1
-            eht_width=2
+            eht_width=1
             bandwidth=80
             ;;
     esac
@@ -2000,10 +2001,36 @@ generate_hostapd_24ghz() {
         if [ "$skip_validation" = true ]; then
             # KISS: Skip validation for ath12k, use known-good defaults directly
             # The ath12k driver has issues with rapid hostapd start/stop during testing
-            channel=6
-            ht_capab="[HT40+][SHORT-GI-20][SHORT-GI-40]"
-            used_validated_settings=true
-            log_info "  ath12k: Using direct config - Channel 6 @ 40MHz (HT40+)"
+            # Fallback chain: 6 (center of band) -> 1 (low) -> 11 (high)
+            local supported_channels
+            supported_channels=$(get_supported_channels "$iface" 2>/dev/null || echo "1 6 11")
+
+            local ath12k_24ghz_channels="6:HT40+ 1:HT40+ 11:HT40-"
+            local selected_channel=""
+            local selected_ht_mode=""
+
+            for entry in $ath12k_24ghz_channels; do
+                local try_ch="${entry%%:*}"
+                local try_ht="${entry##*:}"
+                if echo " $supported_channels " | grep -q " $try_ch "; then
+                    selected_channel="$try_ch"
+                    selected_ht_mode="$try_ht"
+                    break
+                fi
+            done
+
+            if [ -n "$selected_channel" ]; then
+                channel="$selected_channel"
+                ht_capab="[${selected_ht_mode}][SHORT-GI-20][SHORT-GI-40]"
+                used_validated_settings=true
+                log_info "  ath12k: Using direct config - Channel $channel @ 40MHz ($selected_ht_mode)"
+            else
+                # Ultimate fallback
+                channel=6
+                ht_capab="[HT40+][SHORT-GI-20][SHORT-GI-40]"
+                used_validated_settings=true
+                log_warn "  ath12k: No channels from fallback list, using Channel 6 @ 40MHz (HT40+)"
+            fi
         else
             log_info "  Using intelligent 2.4GHz channel selection with validation..."
 
@@ -2369,7 +2396,7 @@ generate_hostapd_5ghz() {
             fi
 
             VALIDATED_VHT_WIDTH=1
-            VALIDATED_EHT_WIDTH=2
+            VALIDATED_EHT_WIDTH=1  # EHT uses same encoding as VHT: 1=80MHz
             VALIDATED_BANDWIDTH=80
         else
             log_info "  Using intelligent channel+bandwidth selection..."
@@ -2391,7 +2418,7 @@ generate_hostapd_5ghz() {
                 channel=36
                 VALIDATED_VHT_WIDTH=1
                 VALIDATED_VHT_CENTER=42
-                VALIDATED_EHT_WIDTH=2
+                VALIDATED_EHT_WIDTH=1  # EHT uses same encoding as VHT: 1=80MHz
                 VALIDATED_EHT_CENTER=42
                 VALIDATED_BANDWIDTH=80
                 log_info "  Fallback: Channel 36 @ 80MHz (center=42)"
@@ -2641,24 +2668,23 @@ EOF
             eht_center_freq="$VALIDATED_EHT_CENTER"
 
             # Safety check: UNII-1 (36-48) cannot use 160MHz+ (requires DFS channels 52-64)
+            # EHT uses same encoding as VHT: 0=20/40, 1=80, 2=160
             case "$channel" in
                 36|40|44|48)
-                    # EHT: 2=80MHz, 3=160MHz, 4=320MHz - cap at 80MHz for UNII-1
-                    if [ "$eht_oper_chwidth_val_be" -ge 3 ]; then
+                    if [ "$eht_oper_chwidth_val_be" -ge 2 ]; then
                         log_warn "  Capping EHT on UNII-1 to 80MHz (160MHz+ requires DFS channels)"
-                        eht_oper_chwidth_val_be=2  # 80MHz
+                        eht_oper_chwidth_val_be=1  # 80MHz
                         eht_center_freq=42
                     fi
                     ;;
             esac
 
             # Convert width value back to MHz for logging
+            # EHT: 0=20/40, 1=80, 2=160 (same as VHT)
             case "$eht_oper_chwidth_val_be" in
-                4) safe_eht_width=320 ;;
-                3) safe_eht_width=160 ;;
-                2) safe_eht_width=80 ;;
-                1) safe_eht_width=40 ;;
-                *) safe_eht_width=80 ;;
+                2) safe_eht_width=160 ;;
+                1) safe_eht_width=80 ;;
+                *) safe_eht_width=40 ;;
             esac
             hw_eht_width=$(detect_eht_channel_width "$iface" 2>/dev/null) || hw_eht_width="$safe_eht_width"
             log_info "  Using validated EHT: width=$eht_oper_chwidth_val_be (${safe_eht_width}MHz), center=$eht_center_freq"
@@ -2669,12 +2695,12 @@ EOF
             eht_center_freq=$(calculate_eht_center_freq "$channel" "$safe_eht_width")
 
             # Convert MHz to hostapd eht_oper_chwidth value
+            # EHT uses SAME encoding as VHT: 0=20/40, 1=80, 2=160, 3=80+80
             case "$safe_eht_width" in
-                320) eht_oper_chwidth_val_be=4 ;;
-                160) eht_oper_chwidth_val_be=3 ;;
-                80)  eht_oper_chwidth_val_be=2 ;;
-                40)  eht_oper_chwidth_val_be=1 ;;
-                *)   eht_oper_chwidth_val_be=2 ;;  # Default 80MHz
+                320) eht_oper_chwidth_val_be=2 ;;  # 320MHz uses chwidth=2 with extended center freq
+                160) eht_oper_chwidth_val_be=2 ;;
+                80)  eht_oper_chwidth_val_be=1 ;;
+                40|20|*)  eht_oper_chwidth_val_be=0 ;;  # 20/40 uses HT capability
             esac
         fi
 
@@ -2686,8 +2712,9 @@ eht_su_beamformer=1
 eht_su_beamformee=1
 eht_mu_beamformer=1
 
-# WiFi 7 channel width (up to 320 MHz supported)
-# eht_oper_chwidth: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz, 4=320MHz
+# WiFi 7 channel width
+# eht_oper_chwidth uses SAME encoding as VHT: 0=20/40MHz, 1=80MHz, 2=160MHz
+# Note: 320MHz uses chwidth=2 with extended center frequency
 # Configuration validated during channel selection
 eht_oper_chwidth=$eht_oper_chwidth_val_be
 eht_oper_centr_freq_seg0_idx=$eht_center_freq
