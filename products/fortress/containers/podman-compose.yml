@@ -304,6 +304,114 @@ services:
     restart: "no"
 
   # ============================================================
+  # IDS/IPS TIER - Network Security Monitoring (host network)
+  # ============================================================
+
+  # Suricata IDS/IPS - Deep Packet Inspection and Threat Detection
+  # Uses host network for direct packet capture on all interfaces
+  suricata:
+    image: docker.io/jasonish/suricata:latest
+    container_name: fts-suricata
+    restart: unless-stopped
+    hostname: fts-suricata
+    environment:
+      # Interface to monitor (set during install based on detection)
+      SURICATA_INTERFACE: "${SURICATA_INTERFACE:-FTS}"
+      # Enable inline IPS mode (blocks threats vs just detecting)
+      SURICATA_OPTIONS: "-i ${SURICATA_INTERFACE:-FTS} --set outputs.eve-log.enabled=yes"
+    volumes:
+      - suricata_logs:/var/log/suricata
+      - suricata_rules:/var/lib/suricata
+      - suricata_config:/etc/suricata
+      - /etc/hookprobe:/etc/hookprobe:ro
+    # Host network REQUIRED for packet capture on bridge/physical interfaces
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    # Core IDS service - always started
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/run/suricata.pid"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - ids
+
+  # Zeek Network Security Monitor - Protocol Analysis and Threat Detection
+  # Analyzes HTTP, DNS, SSL/TLS, SSH, and other protocols
+  zeek:
+    image: docker.io/zeek/zeek:latest
+    container_name: fts-zeek
+    restart: unless-stopped
+    hostname: fts-zeek
+    environment:
+      # Interface to monitor
+      ZEEK_INTERFACE: "${ZEEK_INTERFACE:-FTS}"
+    command: >
+      zeek -i ${ZEEK_INTERFACE:-FTS}
+      local
+      LogAscii::use_json=T
+      Site::local_nets=10.200.0.0/16,172.20.0.0/16,192.168.0.0/16
+    volumes:
+      - zeek_logs:/usr/local/zeek/logs
+      - zeek_spool:/usr/local/zeek/spool
+      - zeek_config:/usr/local/zeek/share/zeek/site
+      - /etc/hookprobe:/etc/hookprobe:ro
+    # Host network REQUIRED for packet capture
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Core network analysis - always started
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "zeek"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - ids
+
+  # XDP/eBPF DDoS Protection - Kernel-level packet filtering
+  # Provides high-performance DDoS mitigation at line rate
+  xdp-protection:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.xdp
+    image: localhost/fts-xdp:latest
+    container_name: fts-xdp
+    restart: unless-stopped
+    hostname: fts-xdp
+    environment:
+      XDP_INTERFACE: "${XDP_INTERFACE:-FTS}"
+      # Rate limits (packets per second)
+      XDP_SYN_LIMIT: 1000
+      XDP_UDP_LIMIT: 5000
+      XDP_ICMP_LIMIT: 100
+    volumes:
+      - xdp_data:/opt/hookprobe/xdp/data
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /etc/hookprobe:/etc/hookprobe:ro
+    # Host network and privileged for eBPF
+    network_mode: host
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - BPF
+    healthcheck:
+      test: ["CMD", "bpftool", "prog", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - ids
+
+  # ============================================================
   # MANAGEMENT TIER - Monitoring (fts-mgmt)
   # ============================================================
 
@@ -419,6 +527,29 @@ volumes:
   victoria_data:
     driver: local
     name: fts-victoria-data
+
+  # IDS/IPS Tier
+  suricata_logs:
+    driver: local
+    name: fts-suricata-logs
+  suricata_rules:
+    driver: local
+    name: fts-suricata-rules
+  suricata_config:
+    driver: local
+    name: fts-suricata-config
+  zeek_logs:
+    driver: local
+    name: fts-zeek-logs
+  zeek_spool:
+    driver: local
+    name: fts-zeek-spool
+  zeek_config:
+    driver: local
+    name: fts-zeek-config
+  xdp_data:
+    driver: local
+    name: fts-xdp-data
 
   # Note: /etc/hookprobe is bind-mounted from host, not a named volume
   # This allows the install script to create users.json in the host directory
