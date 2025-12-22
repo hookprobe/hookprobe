@@ -65,20 +65,25 @@ declare -A TIER_CONFIG=(
     ["lan"]="${LAN_BASE_IP}/${LAN_SUBNET_MASK}:true"  # LAN clients need NAT
 )
 
-# Container IP assignments
+# Container IP assignments (must match podman-compose.yml)
+# All containers on single 172.20.200.0/24 network managed by podman-compose
 declare -A CONTAINER_IPS=(
     # Data tier
     ["postgres"]="172.20.200.10"
     ["redis"]="172.20.200.11"
-    # Services tier
-    ["web"]="172.20.201.10"
-    ["dnsxai"]="172.20.201.11"
-    ["dfs"]="172.20.201.12"
+    # Services tier (web, dns, wifi intelligence)
+    ["web"]="172.20.200.20"
+    ["dnsxai"]="172.20.200.21"
+    ["dfs"]="172.20.200.22"
+    # Monitoring tier
+    ["grafana"]="172.20.200.30"
+    ["victoria"]="172.20.200.31"
     # ML tier
-    ["lstm-trainer"]="172.20.202.10"
-    # Mgmt tier
-    ["grafana"]="172.20.203.10"
-    ["victoria"]="172.20.203.11"
+    ["lstm-trainer"]="172.20.200.40"
+    # Optional services
+    ["n8n"]="172.20.200.50"
+    ["clickhouse"]="172.20.200.51"
+    ["cloudflared"]="172.20.200.60"
 )
 
 # VXLAN Configuration (VNI:UDP_PORT)
@@ -675,20 +680,22 @@ setup_nat() {
         iptables -A FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
     # DNAT rules for LAN access to container services
-    # Web UI: LAN clients (10.200.0.0/24) -> web container (172.20.201.10:8443)
+    # Web UI: LAN clients (10.200.0.0/xx) -> web container (172.20.200.20:8443)
     local web_port="${WEB_PORT:-8443}"
-    iptables -t nat -C PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination 172.20.201.10:"$web_port" 2>/dev/null || \
-        iptables -t nat -A PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination 172.20.201.10:"$web_port"
+    local web_ip="${CONTAINER_IPS[web]}"
+    iptables -t nat -C PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}" 2>/dev/null || \
+        iptables -t nat -A PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}"
 
-    # Allow forwarding to container networks for DNAT'd traffic
-    iptables -C FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || \
-        iptables -A FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT
+    # Allow forwarding to container network for DNAT'd traffic
+    # All containers are on 172.20.200.0/24 as defined in podman-compose.yml
+    iptables -C FORWARD -i "$OVS_BRIDGE" -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$OVS_BRIDGE" -d 172.20.200.0/24 -j ACCEPT
 
-    iptables -C FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
-        iptables -A FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -C FORWARD -s 172.20.200.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -s 172.20.200.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-    log_info "NAT configured for LAN (${lan_cidr}) and Services (172.20.201.0/24)"
-    log_info "DNAT configured for web UI access on port $web_port"
+    log_info "NAT configured for LAN (${lan_cidr}) and Containers (172.20.200.0/24)"
+    log_info "DNAT configured for web UI access on port $web_port → ${web_ip}"
 }
 
 # ============================================================
@@ -928,15 +935,21 @@ cleanup_ovs_network() {
         # Also remove fallback NAT rules
         iptables -t nat -D POSTROUTING -s "10.200.0.0/${mask}" ! -d "10.200.0.0/${mask}" ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || true
     done
-    iptables -t nat -D POSTROUTING -s 172.20.201.0/24 -j MASQUERADE 2>/dev/null || true
-    iptables -t nat -D POSTROUTING -s 172.20.201.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || true
+    # Remove container network NAT rules (both old 201.x and new 200.x subnets)
+    for subnet in 172.20.200.0/24 172.20.201.0/24; do
+        iptables -t nat -D POSTROUTING -s "$subnet" -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s "$subnet" ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || true
+    done
 
-    # Remove DNAT rules for web UI access
+    # Remove DNAT rules for web UI access (both old and new container IPs)
+    iptables -t nat -D PREROUTING -i "$OVS_BRIDGE" -p tcp --dport 8443 -j DNAT --to-destination 172.20.200.20:8443 2>/dev/null || true
     iptables -t nat -D PREROUTING -i "$OVS_BRIDGE" -p tcp --dport 8443 -j DNAT --to-destination 172.20.201.10:8443 2>/dev/null || true
 
-    # Remove FORWARD rules for container networks
-    iptables -D FORWARD -i "$OVS_BRIDGE" -d 172.20.201.0/24 -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -s 172.20.201.0/24 -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    # Remove FORWARD rules for container networks (both old and new subnets)
+    for subnet in 172.20.200.0/24 172.20.201.0/24; do
+        iptables -D FORWARD -i "$OVS_BRIDGE" -d "$subnet" -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -s "$subnet" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    done
 
     # Remove generic forwarding rules
     iptables -D FORWARD -i "$OVS_BRIDGE" ! -o "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || true

@@ -93,6 +93,10 @@ DHCP_END_MGMT="10.200.100.2"  # Only 1 DHCP address (admin workstation)
 CONTAINER_SUBNET="172.20.200.0/24"
 CONTAINER_GATEWAY="172.20.200.1"
 
+# Web container address (from podman-compose.yml)
+WEB_CONTAINER_IP="172.20.200.20"
+WEB_PORT="${WEB_PORT:-8443}"
+
 # OVS Bridge name
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 
@@ -286,18 +290,16 @@ setup_container_veth() {
     ip link set "$veth_host" up
     ip link set "$veth_ovs" up
 
-    # The host side needs to be connected to podman's network
-    # This is done by adding an IP in the management subnet that can route to containers
+    # The host side provides a secondary path between management VLAN and containers
     # Using /24 netmask on veth for routing even though MGMT VLAN uses /30 for actual clients
     if ! ip addr show "$veth_host" | grep -q "10.200.100.254"; then
         ip addr add "10.200.100.254/24" dev "$veth_host"
     fi
 
-    # Add route to container network via management gateway
-    # This allows VLAN 200 clients to reach containers
-    if ! ip route show | grep -q "$CONTAINER_SUBNET"; then
-        ip route add "$CONTAINER_SUBNET" via "$GATEWAY_MGMT" dev "vlan${VLAN_MGMT}" 2>/dev/null || true
-    fi
+    # NOTE: Route to container network is NOT added here
+    # The container network (172.20.200.0/24) is managed by podman and the
+    # route is automatically created when podman-compose starts containers.
+    # DNAT rules in nftables handle forwarding from MGMT VLAN to containers.
 
     log_success "Container veth bridge configured"
     log_info "  $veth_ovs → OVS ($OVS_BRIDGE) VLAN $VLAN_MGMT"
@@ -515,6 +517,28 @@ table inet fortress_vlan {
 
         # Containers → Internet + Management: ALLOW
         ip saddr ${CONTAINER_SUBNET} accept
+
+        # ============================================================
+        # DNAT FORWARDING - Allow forwarded (DNAT'd) traffic to containers
+        # ============================================================
+        # Allow DNAT'd traffic to web container
+        ct state dnat ip daddr ${WEB_CONTAINER_IP} tcp dport ${WEB_PORT} accept
+    }
+
+    # ============================================================
+    # DNAT - Port forwarding to containers
+    # ============================================================
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+
+        # Forward web UI requests from MGMT VLAN to web container
+        # Clients accessing the gateway IP on port 8443 get redirected to the container
+        iifname "vlan${VLAN_MGMT}" tcp dport ${WEB_PORT} dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
+
+        # Also handle requests directly to the management gateway IP
+        ip daddr ${GATEWAY_MGMT} tcp dport ${WEB_PORT} dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
+        ip daddr ${GATEWAY_MGMT} tcp dport 443 dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
+        ip daddr ${GATEWAY_MGMT} tcp dport 80 dnat to ${WEB_CONTAINER_IP}:${WEB_PORT}
     }
 
     # NAT - masquerade all internal traffic going out
@@ -527,6 +551,9 @@ table inet fortress_vlan {
         ip saddr ${SUBNET_LAN} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
         ip saddr ${SUBNET_MGMT} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
         ip saddr ${CONTAINER_SUBNET} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
+
+        # Masquerade traffic from MGMT VLAN to container network (for DNAT'd return traffic)
+        ip saddr ${SUBNET_MGMT} ip daddr ${CONTAINER_SUBNET} masquerade
     }
 }
 EOF
