@@ -56,6 +56,13 @@ podman build $NO_CACHE \
     .
 
 echo ""
+echo "=== Building fts-xdp ==="
+podman build $NO_CACHE \
+    -f products/fortress/containers/Containerfile.xdp \
+    -t localhost/fts-xdp:latest \
+    .
+
+echo ""
 echo "========================================"
 echo "  All images built successfully!"
 echo "========================================"

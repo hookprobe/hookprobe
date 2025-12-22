@@ -1394,6 +1394,18 @@ build_containers() {
         skipped_count=$((skipped_count + 1))
     fi
 
+    # XDP/eBPF protection is optional (for IDS profile)
+    if needs_rebuild "localhost/fts-xdp:latest" "Containerfile.xdp" "$repo_root"; then
+        log_info "  - Building xdp-protection (IDS tier)..."
+        podman build -f Containerfile.xdp -t localhost/fts-xdp:latest "$repo_root" || {
+            log_warn "Failed to build xdp container (IDS tier will be unavailable)"
+        }
+        built_count=$((built_count + 1))
+    else
+        log_info "  - Skipping xdp-protection (already built)"
+        skipped_count=$((skipped_count + 1))
+    fi
+
     if [ "$built_count" -gt 0 ]; then
         log_info "Built $built_count container(s), skipped $skipped_count"
     else
