@@ -63,6 +63,7 @@ FORCE_MODE=false
 KEEP_LOGS=false
 KEEP_DATA=false
 KEEP_CONFIG=false
+PURGE_MODE=false
 
 # ============================================================
 # LOGGING
@@ -87,16 +88,19 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --force|-f) FORCE_MODE=true; shift ;;
+            --purge) PURGE_MODE=true; FORCE_MODE=true; shift ;;
             --keep-logs) KEEP_LOGS=true; shift ;;
             --keep-data) KEEP_DATA=true; shift ;;
             --keep-config) KEEP_CONFIG=true; shift ;;
             --help|-h)
-                echo "HookProbe Fortress Uninstaller v5.2.0"
+                echo "HookProbe Fortress Uninstaller v5.5.0"
                 echo ""
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
                 echo "Options:"
                 echo "  --force, -f     Skip confirmation prompts"
+                echo "  --purge         COMPLETE removal - containers, images, volumes,"
+                echo "                  networks, configs, data, logs, udev rules, everything"
                 echo "  --keep-logs     Preserve log files"
                 echo "  --keep-data     Preserve data directories and database"
                 echo "  --keep-config   Preserve configuration files (for reinstall)"
@@ -105,20 +109,22 @@ parse_args() {
                 echo "Stages performed:"
                 echo "  1. Stop services"
                 echo "  2. Clean network interfaces"
-                echo "  3. Remove containers (monitoring, etc)"
-                echo "  4. Remove OVS/VLAN configuration"
-                echo "  5. Remove systemd services"
+                echo "  3. Remove containers, images, volumes, networks"
+                echo "  4. Remove OVS bridge and VLANs"
+                echo "  5. Remove systemd services and timers"
                 echo "  6. Remove management scripts"
-                echo "  7. Handle configuration"
-                echo "  8. Handle data directories"
-                echo "  9. Handle log files"
-                echo "  10. Verify uninstall"
+                echo "  7. Remove configuration files"
+                echo "  8. Remove data directories"
+                echo "  9. Remove log files"
+                echo "  10. Remove udev rules"
+                echo "  11. Remove sysctl settings"
+                echo "  12. Verify complete removal"
                 echo ""
                 echo "Examples:"
                 echo "  $0                    # Interactive uninstall"
                 echo "  $0 --force            # Non-interactive, remove all"
+                echo "  $0 --purge            # COMPLETE purge, removes everything"
                 echo "  $0 --keep-data        # Keep database for reinstall"
-                echo "  $0 --keep-config      # Keep config for reinstall"
                 echo ""
                 exit 0
                 ;;
@@ -247,20 +253,30 @@ cleanup_network_interfaces() {
     rm -f /etc/hostapd/hostapd.vlan 2>/dev/null || true
     rm -f /etc/hostapd/fortress.conf 2>/dev/null || true
 
-    # Remove dnsmasq configuration
+    # Remove ALL dnsmasq fortress configuration files
+    log_info "Removing dnsmasq configuration files..."
     rm -f /etc/dnsmasq.d/fortress*.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
 
     # Remove WiFi configuration state
     rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
     rm -f /etc/hookprobe/wifi-ap.conf 2>/dev/null || true
     rm -rf /var/lib/fortress/network-interfaces.conf 2>/dev/null || true
 
-    # Remove WiFi interface udev rules (stable naming)
-    # Note: install-container.sh creates 70-fortress-wifi.rules, but check both for compatibility
+    # Remove ALL fortress udev rules (WiFi and LTE)
     local udev_removed=false
-    for rule_file in /etc/udev/rules.d/70-fortress-wifi.rules /etc/udev/rules.d/80-fortress-wifi.rules; do
+    local udev_rules=(
+        "/etc/udev/rules.d/70-fortress-wifi.rules"
+        "/etc/udev/rules.d/80-fortress-wifi.rules"
+        "/etc/udev/rules.d/70-fortress-lte.rules"
+        "/etc/udev/rules.d/80-fortress-lte.rules"
+        "/etc/udev/rules.d/99-fortress-modem.rules"
+    )
+    for rule_file in "${udev_rules[@]}"; do
         if [ -f "$rule_file" ]; then
-            log_info "Removing WiFi interface udev rules: $rule_file"
+            log_info "Removing udev rules: $rule_file"
             rm -f "$rule_file"
             udev_removed=true
         fi
@@ -393,6 +409,7 @@ remove_management_scripts() {
         "/usr/local/bin/fortress-wifi-bridge.sh"
         "/usr/local/bin/fortress-dnsxai-privacy"
         "/usr/local/bin/dfs-channel-selector"
+        "/usr/local/bin/fortress-lan-bridge.sh"
     )
 
     for script in "${scripts[@]}"; do
@@ -402,114 +419,90 @@ remove_management_scripts() {
         fi
     done
 
+    # Remove fortress-ovs-connect.sh from install directory
+    if [ -f "${INSTALL_DIR}/bin/fortress-ovs-connect.sh" ]; then
+        log_info "Removing fortress-ovs-connect.sh..."
+        rm -f "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
+    fi
+
+    # Remove entire bin directory if empty
+    rmdir "${INSTALL_DIR}/bin" 2>/dev/null || true
+
     log_info "Management scripts removed"
 }
 
 # ============================================================
-# REMOVE PODMAN CONTAINERS
+# REMOVE PODMAN CONTAINERS - COMPLETE PURGE
 # ============================================================
 remove_containers() {
-    log_step "Removing Podman containers..."
+    log_step "Removing ALL Podman containers, images, volumes, networks..."
 
     if ! command -v podman &>/dev/null; then
         log_info "Podman not installed, skipping container removal"
         return 0
     fi
 
-    # Container names - includes monitoring, ML, and data containers
-    local containers=(
-        # Core containers (container mode)
-        "fortress-web"
-        "fortress-postgres"
-        "fortress-redis"
-        # ML/AI containers
-        "fortress-qsecbit"
-        "fortress-agent"
-        "fortress-dnsxai"
-        "fortress-dfs"
-        "fortress-lstm-trainer"
-        # Monitoring containers (native mode)
-        "fortress-victoria"
-        "fortress-grafana"
-        "fortress-victoriametrics"
-        "fortress-n8n"
-        "fortress-clickhouse"
-        "fortress-suricata"
-        "fortress-zeek"
-    )
-
-    for container in "${containers[@]}"; do
-        if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
-            log_info "Removing container: $container"
-            podman stop "$container" 2>/dev/null || true
-            podman rm -f "$container" 2>/dev/null || true
-        fi
+    # Stop ALL fortress containers
+    log_info "Stopping all fortress containers..."
+    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fortress-" || true); do
+        log_info "  Stopping: $container"
+        podman stop "$container" 2>/dev/null || true
     done
 
-    # Remove container images
-    log_info "Removing container images..."
-    local images=(
-        "localhost/fortress-web:latest"
-        "localhost/fortress-agent:latest"
-        "localhost/fortress-dnsxai:latest"
-        "localhost/fortress-dfs:latest"
-        "localhost/fortress-lstm:latest"
-    )
+    # Remove ALL fortress containers
+    log_info "Removing all fortress containers..."
+    for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fortress-" || true); do
+        log_info "  Removing: $container"
+        podman rm -f "$container" 2>/dev/null || true
+    done
 
-    for image in "${images[@]}"; do
-        if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -q "^${image}$"; then
-            log_info "Removing image: $image"
+    # Remove ALL fortress images (localhost/fortress-*)
+    log_info "Removing all fortress images..."
+    for image in $(podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^localhost/fortress-" || true); do
+        log_info "  Removing image: $image"
+        podman rmi -f "$image" 2>/dev/null || true
+    done
+
+    # Remove base images used by fortress (postgres, redis, grafana, etc.)
+    log_info "Removing base images used by fortress..."
+    local base_images=(
+        "docker.io/library/postgres:15-alpine"
+        "docker.io/library/redis:7-alpine"
+        "docker.io/grafana/grafana:11.4.0"
+        "docker.io/victoriametrics/victoria-metrics:latest"
+        "docker.io/library/python:3.11-slim-bookworm"
+    )
+    for image in "${base_images[@]}"; do
+        if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -qF "$image"; then
+            log_info "  Removing: $image"
             podman rmi -f "$image" 2>/dev/null || true
         fi
     done
 
-    # Remove volumes
-    log_info "Removing Podman volumes..."
-    local volumes=(
-        # Core volumes
-        "fortress-postgres-data"
-        "fortress-redis-data"
-        "fortress-web-data"
-        "fortress-web-logs"
-        "fortress-config"
-        # ML volumes
-        "fortress-agent-data"
-        "fortress-dnsxai-data"
-        "fortress-dnsxai-blocklists"
-        "fortress-dfs-data"
-        "fortress-ml-models"
-        # Monitoring volumes
-        "fortress-victoriametrics-data"
-        "fortress-victoria-data"
-        "fortress-grafana-data"
-        "fortress-n8n-data"
-        "fortress-clickhouse-data"
-    )
-
-    for volume in "${volumes[@]}"; do
-        if podman volume exists "$volume" 2>/dev/null; then
-            log_info "Removing volume: $volume"
-            podman volume rm "$volume" 2>/dev/null || true
-        fi
+    # Remove ALL fortress volumes
+    log_info "Removing all fortress volumes..."
+    for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^fortress-" || true); do
+        log_info "  Removing volume: $volume"
+        podman volume rm -f "$volume" 2>/dev/null || true
     done
 
-    # Remove Podman networks
-    log_info "Removing Podman networks..."
-    local networks=(
-        "fortress-data"
-        "fortress-services"
-        "fortress-ml"
-        "fortress-mgmt"
-    )
-
-    for network in "${networks[@]}"; do
-        if podman network exists "$network" 2>/dev/null; then
-            log_info "Removing network: $network"
-            podman network rm "$network" 2>/dev/null || true
-        fi
+    # Remove ALL fortress networks
+    log_info "Removing all fortress networks..."
+    for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fortress-" || true); do
+        log_info "  Removing network: $network"
+        podman network rm -f "$network" 2>/dev/null || true
     done
 
-    log_info "Containers removed"
+    # Prune dangling images and build cache
+    log_info "Pruning dangling images and build cache..."
+    podman image prune -f 2>/dev/null || true
+    podman builder prune -f 2>/dev/null || true
+
+    # Prune unused volumes (only fortress-related that might have been missed)
+    log_info "Pruning unused volumes..."
+    podman volume prune -f 2>/dev/null || true
+
+    log_info "All containers, images, volumes, networks removed"
 }
 
 # ============================================================
@@ -972,27 +965,34 @@ remove_routing_tables() {
 remove_sysctl_settings() {
     log_step "Removing sysctl settings..."
 
-    if [ -f /etc/sysctl.d/99-hookprobe.conf ]; then
-        log_info "Removing /etc/sysctl.d/99-hookprobe.conf..."
-        rm -f /etc/sysctl.d/99-hookprobe.conf
-    fi
+    # Remove all fortress-related sysctl configs
+    local sysctl_files=(
+        "/etc/sysctl.d/99-hookprobe.conf"
+        "/etc/sysctl.d/99-fortress-routing.conf"
+        "/etc/sysctl.d/99-fortress-forward.conf"
+        "/etc/sysctl.d/99-fortress.conf"
+    )
 
-    if [ -f /etc/sysctl.d/99-fortress-routing.conf ]; then
-        log_info "Removing /etc/sysctl.d/99-fortress-routing.conf..."
-        rm -f /etc/sysctl.d/99-fortress-routing.conf
-    fi
+    for sysctl_file in "${sysctl_files[@]}"; do
+        if [ -f "$sysctl_file" ]; then
+            log_info "Removing $sysctl_file..."
+            rm -f "$sysctl_file"
+        fi
+    done
 
     sysctl --system &>/dev/null || true
 
-    # Clean up iptables NAT rules
+    # Clean up iptables NAT rules - check all possible WAN interfaces
     log_info "Cleaning up iptables NAT rules..."
-    for WAN in eth0 eth1 wlan0 wlan1 enp0s* wwan0 wwp0s*; do
+    for WAN in eth0 eth1 wlan0 wlan1 enp0s* eno* ens* wwan0 wwp0s*; do
         iptables -t nat -D POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null || true
     done
 
-    # Clean up FORWARD rules for fortress bridge
+    # Clean up FORWARD rules for fortress bridge and OVS bridge
     iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o fortress -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -i "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -o "$OVS_BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
     log_info "Sysctl settings removed"
 }
@@ -1128,6 +1128,28 @@ main() {
         local mode=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('deployment_mode', 'native'))" 2>/dev/null || echo "native")
         local version=$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null || echo "unknown")
         log_info "Detected installation: ${mode} mode, version ${version}"
+    fi
+
+    # Purge mode overrides keep flags
+    if [ "$PURGE_MODE" = true ]; then
+        KEEP_LOGS=false
+        KEEP_DATA=false
+        KEEP_CONFIG=false
+        echo ""
+        echo -e "${RED}${BOLD}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${RED}${BOLD}                    COMPLETE PURGE MODE                        ${NC}"
+        echo -e "${RED}${BOLD}══════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "${YELLOW}This will remove EVERYTHING:${NC}"
+        echo -e "  • All containers, images, volumes, networks"
+        echo -e "  • OVS bridge, VLANs, WiFi AP, DHCP"
+        echo -e "  • All configuration files and secrets"
+        echo -e "  • All data and databases"
+        echo -e "  • All log files"
+        echo -e "  • All udev rules"
+        echo -e "  • All sysctl settings"
+        echo -e "  • All systemd services"
+        echo ""
     fi
 
     if [ "$FORCE_MODE" = false ]; then
