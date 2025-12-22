@@ -2130,11 +2130,9 @@ ieee80211n=1
 require_ht=0
 ht_capab=$ht_capab
 
-# Force HT40 bandwidth - disable 20/40 MHz coexistence
-# ht_coex=0 disables the 20/40 MHz BSS coexistence scan
-# obss_interval=0 disables the Overlapping BSS scan timer
-# Both are needed to prevent ath12k and similar drivers from falling back to 20MHz
-ht_coex=0
+# Disable Overlapping BSS scan to prevent 20MHz fallback
+# obss_interval=0 disables the periodic OBSS scan
+# Note: ath12k may still use 20MHz if it detects coexistence issues at startup
 obss_interval=0
 
 # WMM (QoS) - Required for 802.11n
