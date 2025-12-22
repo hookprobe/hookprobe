@@ -439,8 +439,9 @@ class QSecBitFortressAgent:
         api_thread = Thread(target=self.run_api_server, args=(api_port,), daemon=True)
         api_thread.start()
 
-        # Wait for shutdown signal
-        self.running.wait()
+        # Wait for shutdown signal (block while running is set)
+        while self.running.is_set():
+            time.sleep(1)
 
     def stop(self):
         """Stop the agent"""
