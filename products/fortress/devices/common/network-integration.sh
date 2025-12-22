@@ -247,6 +247,19 @@ create_wifi_services() {
     local wifi_24ghz_iface="wlan_24ghz"
     local wifi_5ghz_iface="wlan_5ghz"
 
+    # Find hostapd binary - check common locations
+    local hostapd_bin=""
+    for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
+        if [ -x "$path" ]; then
+            hostapd_bin="$path"
+            break
+        fi
+    done
+    if [ -z "$hostapd_bin" ]; then
+        hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+    fi
+    log_info "Using hostapd: $hostapd_bin"
+
     # Install the allocator script
     if [ -f "$SCRIPT_DIR/wifi-band-allocator.sh" ]; then
         mkdir -p "$(dirname "$allocator_script")"
@@ -295,7 +308,7 @@ PIDFile=/run/hostapd-24ghz.pid
 # Small delay after interface appears to ensure it's fully initialized
 ExecStartPre=/bin/sleep 1
 ExecStartPre=-/sbin/ip link set ${wifi_24ghz_iface} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
+ExecStart=${hostapd_bin} -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
 ExecStartPost=/bin/sleep 1
 ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${wifi_24ghz_iface}
 Restart=on-failure
@@ -329,7 +342,7 @@ PIDFile=/run/hostapd-5ghz.pid
 # Small delay after interface appears to ensure it's fully initialized
 ExecStartPre=/bin/sleep 1
 ExecStartPre=-/sbin/ip link set ${wifi_5ghz_iface} up
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
+ExecStart=${hostapd_bin} -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
 ExecStartPost=/bin/sleep 1
 ExecStartPost=-/usr/bin/ovs-vsctl --may-exist add-port ${ovs_bridge} ${wifi_5ghz_iface}
 Restart=on-failure
