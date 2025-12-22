@@ -169,7 +169,7 @@ fi
 # Step 6: Generate hostapd configuration
 log_info "Step 6: Generating hostapd configuration..."
 HOSTAPD_SCRIPT="${DEVICES_DIR}/common/hostapd-generator.sh"
-OVS_BRIDGE="43ess"
+OVS_BRIDGE="FTS"
 
 # Get WiFi credentials
 WIFI_SSID=$(grep "^WIFI_SSID=" "$CONFIG_DIR/fortress.conf" 2>/dev/null | cut -d= -f2 || echo "HookProbe-Fortress")
@@ -198,7 +198,7 @@ cat > "$BRIDGE_HELPER" << 'HELPER_EOF'
 # Adds WiFi interface to OVS bridge after hostapd starts
 
 IFACE="$1"
-BRIDGE="${2:-43ess}"
+BRIDGE="${2:-FTS}"
 ACTION="${3:-add}"
 
 [ -z "$IFACE" ] && exit 1
