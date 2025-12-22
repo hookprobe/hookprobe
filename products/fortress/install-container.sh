@@ -817,6 +817,38 @@ setup_network() {
     # (lines 707 and 736) - we don't need a redundant unconditional call here
     # as it would overwrite any successful rules created earlier
 
+    # Initialize LTE/WWAN modem if detected
+    if [ -n "$NET_WWAN_IFACE" ] || [ -n "$NET_WWAN_INTERFACES" ]; then
+        log_info "LTE modem detected - initializing..."
+        if type initialize_lte_modem &>/dev/null; then
+            if initialize_lte_modem; then
+                # Try to connect (will use auto-APN or configured APN)
+                local lte_apn="${LTE_APN:-}"
+                if connect_lte "$lte_apn"; then
+                    log_info "LTE connected successfully"
+                    # Setup WAN failover if we have both Ethernet WAN and LTE
+                    if [ -n "$NET_WAN_IFACE" ]; then
+                        setup_wan_failover "$NET_WAN_IFACE" "$NET_WWAN_IFACE" 2>/dev/null || true
+                    fi
+                else
+                    log_warn "LTE connection failed - will retry on boot"
+                fi
+                # Create systemd service for LTE on boot
+                setup_lte_on_boot "$lte_apn"
+            else
+                log_warn "LTE modem initialization failed"
+            fi
+        else
+            log_warn "LTE functions not available"
+        fi
+    elif ls /sys/class/net/wwan* &>/dev/null 2>&1 || ls /sys/class/net/wwp* &>/dev/null 2>&1; then
+        # WWAN interface exists but wasn't detected in initial scan
+        log_info "WWAN interface found - attempting late initialization..."
+        if type initialize_lte_modem &>/dev/null; then
+            initialize_lte_modem && connect_lte && setup_lte_on_boot
+        fi
+    fi
+
     log_info "OVS network infrastructure configured"
     log_info "  OpenFlow: Tier isolation rules installed"
     log_info "  Mirror:   Traffic mirroring to QSecBit enabled"

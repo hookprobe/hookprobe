@@ -383,6 +383,277 @@ EOF
 # LTE/WWAN SETUP
 # ============================================================
 
+initialize_lte_modem() {
+    # Initialize LTE modem and bring it online
+    #
+    # This function:
+    #   1. Ensures ModemManager is running
+    #   2. Waits for modem detection
+    #   3. Enables the modem if disabled
+    #   4. Verifies the modem is ready for connection
+    #
+    # Returns: 0 on success, 1 on failure
+
+    log_step "Initializing LTE modem..."
+
+    # Check if ModemManager is available
+    if ! command -v mmcli &>/dev/null; then
+        log_warn "ModemManager (mmcli) not found"
+        log_warn "Install with: apt install modemmanager"
+        return 1
+    fi
+
+    # Ensure ModemManager is running
+    if ! systemctl is-active ModemManager &>/dev/null; then
+        log_info "Starting ModemManager..."
+        systemctl start ModemManager || {
+            log_error "Failed to start ModemManager"
+            return 1
+        }
+        sleep 2
+    fi
+
+    # Wait for modem to be detected (max 30 seconds)
+    log_info "Waiting for modem detection..."
+    local max_wait=30
+    local waited=0
+    local modem_found=false
+
+    while [ $waited -lt $max_wait ]; do
+        if mmcli -L 2>/dev/null | grep -q "/Modem/"; then
+            modem_found=true
+            break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+        [ $((waited % 10)) -eq 0 ] && log_info "  Still waiting... ($waited seconds)"
+    done
+
+    if [ "$modem_found" = "false" ]; then
+        log_warn "No LTE modem detected after ${max_wait}s"
+        log_warn "Check: lsusb | grep -i modem"
+        return 1
+    fi
+
+    # Get modem index
+    local modem_idx
+    modem_idx=$(mmcli -L 2>/dev/null | grep -oP '/Modem/\K\d+' | head -1)
+
+    if [ -z "$modem_idx" ]; then
+        log_error "Could not get modem index"
+        return 1
+    fi
+
+    log_info "Found modem at index $modem_idx"
+
+    # Check modem state
+    local modem_state
+    modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "state:\s+'\K[^']+")
+    log_info "Modem state: $modem_state"
+
+    # Enable modem if disabled
+    if [ "$modem_state" = "disabled" ] || [ "$modem_state" = "locked" ]; then
+        log_info "Enabling modem..."
+        if ! mmcli -m "$modem_idx" --enable 2>/dev/null; then
+            log_error "Failed to enable modem"
+            return 1
+        fi
+        sleep 3
+        modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "state:\s+'\K[^']+")
+        log_info "Modem state after enable: $modem_state"
+    fi
+
+    # Check for SIM
+    local sim_path
+    sim_path=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "primary sim path:\s+'\K[^']+")
+
+    if [ -z "$sim_path" ] || [ "$sim_path" = "--" ]; then
+        log_warn "No SIM card detected"
+        return 1
+    fi
+
+    log_info "SIM detected: $sim_path"
+
+    # Get WWAN interface name
+    local wwan_iface
+    wwan_iface=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "primary port:\s+'\K[^']+")
+
+    # Also check for net interface
+    local net_iface
+    net_iface=$(ls /sys/class/net/ 2>/dev/null | grep -E '^wwan|^wwp' | head -1)
+
+    if [ -n "$net_iface" ]; then
+        log_info "Network interface: $net_iface"
+        export NET_WWAN_IFACE="$net_iface"
+        export LTE_INTERFACE="$net_iface"
+    fi
+
+    export LTE_MODEM_IDX="$modem_idx"
+    export LTE_MODEM_STATE="$modem_state"
+
+    log_success "LTE modem initialized successfully"
+    return 0
+}
+
+connect_lte() {
+    # Connect LTE modem to network
+    #
+    # Args:
+    #   $1 - APN name (optional, will try auto-detect if not provided)
+    #   $2 - Username (optional)
+    #   $3 - Password (optional)
+    #
+    # Returns: 0 on success, 1 on failure
+
+    local apn="$1"
+    local username="$2"
+    local password="$3"
+
+    log_step "Connecting LTE..."
+
+    # Ensure modem is initialized
+    if [ -z "$LTE_MODEM_IDX" ]; then
+        initialize_lte_modem || return 1
+    fi
+
+    local modem_idx="$LTE_MODEM_IDX"
+
+    # Check current state
+    local current_state
+    current_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP "state:\s+'\K[^']+")
+
+    if [ "$current_state" = "connected" ]; then
+        log_info "Modem already connected"
+        verify_lte_connection
+        return $?
+    fi
+
+    # Build connection command
+    local connect_args=""
+    if [ -n "$apn" ]; then
+        connect_args="apn=$apn"
+    fi
+    if [ -n "$username" ]; then
+        connect_args="${connect_args}${connect_args:+,}user=$username"
+    fi
+    if [ -n "$password" ]; then
+        connect_args="${connect_args}${connect_args:+,}password=$password"
+    fi
+
+    # Try to connect
+    log_info "Connecting with${apn:+ APN: $apn}${apn:-auto-detect}..."
+
+    if [ -n "$connect_args" ]; then
+        mmcli -m "$modem_idx" --simple-connect="$connect_args" 2>/dev/null
+    else
+        # Try auto-connect without APN
+        mmcli -m "$modem_idx" --simple-connect="" 2>/dev/null
+    fi
+
+    local result=$?
+
+    if [ $result -eq 0 ]; then
+        log_success "LTE connected"
+        sleep 2
+        verify_lte_connection
+        return $?
+    else
+        log_error "Failed to connect LTE"
+        return 1
+    fi
+}
+
+verify_lte_connection() {
+    # Verify LTE connection is working
+    #
+    # Checks:
+    #   1. Interface is UP
+    #   2. Has IP address
+    #   3. Has default route
+    #   4. Can reach internet
+
+    log_info "Verifying LTE connection..."
+
+    local iface="${NET_WWAN_IFACE:-wwan0}"
+
+    # Check interface exists and is UP
+    if ! ip link show "$iface" 2>/dev/null | grep -q "UP"; then
+        # Try to bring it up
+        ip link set "$iface" up 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Check for IP address
+    local ip_addr
+    ip_addr=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+')
+
+    if [ -z "$ip_addr" ]; then
+        log_warn "No IP address on $iface"
+        # Try DHCP
+        dhclient "$iface" 2>/dev/null &
+        sleep 3
+        ip_addr=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+')
+    fi
+
+    if [ -z "$ip_addr" ]; then
+        log_error "Failed to get IP address on $iface"
+        return 1
+    fi
+
+    log_info "  IP: $ip_addr"
+
+    # Check default route
+    if ip route show dev "$iface" 2>/dev/null | grep -q "^default"; then
+        log_info "  Route: default route present"
+    else
+        log_warn "  Route: no default route (will be added by failover)"
+    fi
+
+    # Test connectivity (using a lightweight endpoint)
+    if ping -c 1 -W 3 -I "$iface" 8.8.8.8 &>/dev/null; then
+        log_success "  Connectivity: OK"
+        export LTE_CONNECTED=true
+        return 0
+    else
+        log_warn "  Connectivity: no response (may be blocked or slow)"
+        export LTE_CONNECTED=partial
+        return 0
+    fi
+}
+
+setup_lte_on_boot() {
+    # Create systemd service to connect LTE on boot
+    #
+    # Args:
+    #   $1 - APN (optional)
+
+    local apn="${1:-}"
+
+    log_info "Creating LTE boot service..."
+
+    cat > /etc/systemd/system/fortress-lte.service << EOF
+[Unit]
+Description=HookProbe Fortress LTE Connection
+After=ModemManager.service network-online.target
+Wants=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 5
+ExecStart=/bin/bash -c 'source /opt/hookprobe/fortress/devices/common/network-integration.sh && initialize_lte_modem && connect_lte ${apn}'
+ExecStop=/usr/bin/mmcli -m 0 --simple-disconnect
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fortress-lte.service 2>/dev/null || true
+
+    log_info "LTE boot service created (fortress-lte.service)"
+}
+
 setup_lte_connection() {
     # Set up LTE/WWAN connection using nmcli
     #
