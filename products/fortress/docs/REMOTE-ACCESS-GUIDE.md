@@ -168,7 +168,7 @@ python3 /opt/hookprobe/fortress/lib/cloudflare_tunnel.py status
 **Fix**:
 1. Check internet connection at your business
 2. Verify the token was copied correctly
-3. Check tunnel logs: `journalctl -u fortress-tunnel -f`
+3. Check tunnel logs: `journalctl -u fts-tunnel -f`
 
 ### Can't Login Remotely
 
@@ -223,10 +223,10 @@ cloudflared update
 | Task | Command/Location |
 |------|-----------------|
 | Check tunnel status | `cloudflared tunnel info` |
-| View tunnel logs | `journalctl -u fortress-tunnel -f` |
-| Restart tunnel | `systemctl restart fortress-tunnel` |
-| Stop tunnel | `systemctl stop fortress-tunnel` |
-| Start tunnel | `systemctl start fortress-tunnel` |
+| View tunnel logs | `journalctl -u fts-tunnel -f` |
+| Restart tunnel | `systemctl restart fts-tunnel` |
+| Stop tunnel | `systemctl stop fts-tunnel` |
+| Start tunnel | `systemctl start fts-tunnel` |
 | Web UI tunnel config | Fortress > Remote Access |
 | Cloudflare dashboard | https://one.dash.cloudflare.com |
 

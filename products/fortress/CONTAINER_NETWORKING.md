@@ -53,10 +53,10 @@ ISSUES:
 
 | Network | Subnet | Purpose | Internet | Encryption |
 |---------|--------|---------|----------|------------|
-| **fortress-data** | 10.250.200.0/24 | PostgreSQL, Redis (sensitive) | NO | TLS (PostgreSQL SSL, Redis AUTH) |
-| **fortress-services** | 10.250.201.0/24 | Web, dnsXai, DFS (services) | Limited | TLS + HTP for mesh participation |
-| **fortress-ml** | 10.250.202.0/24 | QSecBit, ML inference | NO | Internal isolation |
-| **fortress-mgmt** | 10.250.203.0/24 | Monitoring (Grafana, Victoria) | NO | Internal isolation |
+| **fts-data** | 10.250.200.0/24 | PostgreSQL, Redis (sensitive) | NO | TLS (PostgreSQL SSL, Redis AUTH) |
+| **fts-services** | 10.250.201.0/24 | Web, dnsXai, DFS (services) | Limited | TLS + HTP for mesh participation |
+| **fts-ml** | 10.250.202.0/24 | QSecBit, ML inference | NO | Internal isolation |
+| **fts-mgmt** | 10.250.203.0/24 | Monitoring (Grafana, Victoria) | NO | Internal isolation |
 
 ### Security Model
 
@@ -229,7 +229,7 @@ posf_signature = neuro_engine.sign(message, fingerprint)
 ```yaml
 networks:
   # Tier 1: Data (most sensitive - database, cache)
-  fortress-data:
+  fts-data:
     driver: bridge
     internal: true  # NO internet access
     ipam:
@@ -242,7 +242,7 @@ networks:
       com.docker.network.bridge.enable_icc: "true"
 
   # Tier 2: Services (web, DNS, APIs)
-  fortress-services:
+  fts-services:
     driver: bridge
     ipam:
       config:
@@ -252,7 +252,7 @@ networks:
       mtu: 1500
 
   # Tier 3: ML (threat detection, inference)
-  fortress-ml:
+  fts-ml:
     driver: bridge
     internal: true  # NO internet access
     ipam:
@@ -261,7 +261,7 @@ networks:
           gateway: 10.250.202.1
 
   # Tier 4: Management (monitoring)
-  fortress-mgmt:
+  fts-mgmt:
     driver: bridge
     internal: true  # NO internet access
     ipam:
@@ -278,38 +278,38 @@ networks:
 services:
   postgres:
     networks:
-      fortress-data:
+      fts-data:
         ipv4_address: 10.250.200.10
     # NO other networks - most isolated
 
   redis:
     networks:
-      fortress-data:
+      fts-data:
         ipv4_address: 10.250.200.11
 
   web:
     networks:
-      fortress-data:        # Read/write to DB
+      fts-data:        # Read/write to DB
         ipv4_address: 10.250.200.20
-      fortress-services:    # Serve HTTPS
+      fts-services:    # Serve HTTPS
         ipv4_address: 10.250.201.10
-      fortress-ml:          # Query QSecBit
+      fts-ml:          # Query QSecBit
         ipv4_address: 10.250.202.20
-      fortress-mgmt:        # Query metrics
+      fts-mgmt:        # Query metrics
         ipv4_address: 10.250.203.20
     ports:
       - "8443:8443"  # Only service exposed to host
 
   dnsxai:
     networks:
-      fortress-services:
+      fts-services:
         ipv4_address: 10.250.201.11
     ports:
       - "5353:5353/udp"  # DNS service
 
   dfs-intelligence:
     networks:
-      fortress-services:
+      fts-services:
         ipv4_address: 10.250.201.12
     ports:
       - "8050:8050"
@@ -322,14 +322,14 @@ services:
 
   grafana:
     networks:
-      fortress-mgmt:
+      fts-mgmt:
         ipv4_address: 10.250.203.10
     ports:
       - "3000:3000"
 
   victoria:
     networks:
-      fortress-mgmt:
+      fts-mgmt:
         ipv4_address: 10.250.203.11
     ports:
       - "8428:8428"
@@ -357,9 +357,9 @@ server=10.250.201.11#5353
 ```yaml
 volumes:
   # Shared CA for all containers
-  fortress-ca:
+  fts-ca:
     driver: local
-    name: fortress-ca
+    name: fts-ca
 
   # Per-service certificates
   postgres-certs:
@@ -372,7 +372,7 @@ volumes:
 services:
   postgres:
     volumes:
-      - fortress-ca:/ca:ro
+      - fts-ca:/ca:ro
       - postgres-certs:/certs:ro
     environment:
       POSTGRES_SSL: "on"
@@ -391,34 +391,34 @@ table inet fortress_containers {
         ct state established,related accept
 
         # Data network - only postgres/redis ports
-        iifname "br-fortress-data" tcp dport { 5432, 6379 } accept
-        iifname "br-fortress-data" drop
+        iifname "br-fts-data" tcp dport { 5432, 6379 } accept
+        iifname "br-fts-data" drop
 
         # Services network - HTTP/HTTPS/DNS
-        iifname "br-fortress-services" tcp dport { 8443, 8050 } accept
-        iifname "br-fortress-services" udp dport 5353 accept
+        iifname "br-fts-services" tcp dport { 8443, 8050 } accept
+        iifname "br-fts-services" udp dport 5353 accept
 
         # Management network - Grafana/Victoria
-        iifname "br-fortress-mgmt" tcp dport { 3000, 8428 } accept
+        iifname "br-fts-mgmt" tcp dport { 3000, 8428 } accept
 
         # ML network - internal only
-        iifname "br-fortress-ml" drop
+        iifname "br-fts-ml" drop
     }
 
     chain forward {
         type filter hook forward priority filter;
 
         # Allow data <-> services (web needs DB)
-        iifname "br-fortress-data" oifname "br-fortress-services" accept
-        iifname "br-fortress-services" oifname "br-fortress-data" accept
+        iifname "br-fts-data" oifname "br-fts-services" accept
+        iifname "br-fts-services" oifname "br-fts-data" accept
 
         # Allow services <-> ml (web queries qsecbit)
-        iifname "br-fortress-services" oifname "br-fortress-ml" accept
-        iifname "br-fortress-ml" oifname "br-fortress-services" accept
+        iifname "br-fts-services" oifname "br-fts-ml" accept
+        iifname "br-fts-ml" oifname "br-fts-services" accept
 
         # Allow services <-> mgmt (web queries metrics)
-        iifname "br-fortress-services" oifname "br-fortress-mgmt" accept
-        iifname "br-fortress-mgmt" oifname "br-fortress-services" accept
+        iifname "br-fts-services" oifname "br-fts-mgmt" accept
+        iifname "br-fts-mgmt" oifname "br-fts-services" accept
 
         # Block everything else
         drop

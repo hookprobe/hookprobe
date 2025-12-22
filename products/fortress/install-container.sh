@@ -593,13 +593,13 @@ FORTRESS_VERSION=5.4.0
 NETWORK_MODE=${NETWORK_MODE}
 
 # Database (handled by container)
-DATABASE_HOST=fortress-postgres
+DATABASE_HOST=fts-postgres
 DATABASE_PORT=5432
 DATABASE_NAME=fortress
 DATABASE_USER=fortress
 
 # Redis (handled by container)
-REDIS_HOST=fortress-redis
+REDIS_HOST=fts-redis
 REDIS_PORT=6379
 
 # Web UI
@@ -665,7 +665,7 @@ setup_network() {
     log_info "Initializing OVS network fabric..."
     if [ -f "$ovs_script" ]; then
         # Export configuration for OVS script
-        export OVS_BRIDGE="43ess"
+        export OVS_BRIDGE="FTS"
         export LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
         # Initialize OVS bridge for podman mode (skips tier internal ports)
@@ -811,11 +811,43 @@ setup_network() {
 
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fortress-forward.conf
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-fts-forward.conf
 
     # NOTE: WiFi udev rules creation is handled above in the conditional blocks
     # (lines 707 and 736) - we don't need a redundant unconditional call here
     # as it would overwrite any successful rules created earlier
+
+    # Initialize LTE/WWAN modem if detected
+    if [ -n "$NET_WWAN_IFACE" ] || [ -n "$NET_WWAN_INTERFACES" ]; then
+        log_info "LTE modem detected - initializing..."
+        if type initialize_lte_modem &>/dev/null; then
+            if initialize_lte_modem; then
+                # Try to connect (will use auto-APN or configured APN)
+                local lte_apn="${LTE_APN:-}"
+                if connect_lte "$lte_apn"; then
+                    log_info "LTE connected successfully"
+                    # Setup WAN failover if we have both Ethernet WAN and LTE
+                    if [ -n "$NET_WAN_IFACE" ]; then
+                        setup_wan_failover "$NET_WAN_IFACE" "$NET_WWAN_IFACE" 2>/dev/null || true
+                    fi
+                else
+                    log_warn "LTE connection failed - will retry on boot"
+                fi
+                # Create systemd service for LTE on boot
+                setup_lte_on_boot "$lte_apn"
+            else
+                log_warn "LTE modem initialization failed"
+            fi
+        else
+            log_warn "LTE functions not available"
+        fi
+    elif ls /sys/class/net/wwan* &>/dev/null 2>&1 || ls /sys/class/net/wwp* &>/dev/null 2>&1; then
+        # WWAN interface exists but wasn't detected in initial scan
+        log_info "WWAN interface found - attempting late initialization..."
+        if type initialize_lte_modem &>/dev/null; then
+            initialize_lte_modem && connect_lte && setup_lte_on_boot
+        fi
+    fi
 
     log_info "OVS network infrastructure configured"
     log_info "  OpenFlow: Tier isolation rules installed"
@@ -854,7 +886,7 @@ detect_wifi_and_create_udev_rules() {
 
     log_info "Phase 1: Detecting WiFi interfaces and bands..."
 
-    local udev_rule_file="/etc/udev/rules.d/70-fortress-wifi.rules"
+    local udev_rule_file="/etc/udev/rules.d/70-fts-wifi.rules"
 
     # Check if iw command exists
     if ! command -v iw &>/dev/null; then
@@ -1091,7 +1123,7 @@ create_wifi_services_stable() {
 
     log_info "Phase 3: Creating WiFi services with stable names..."
 
-    local ovs_bridge="${OVS_BRIDGE:-43ess}"
+    local ovs_bridge="${OVS_BRIDGE:-FTS}"
 
     # Find hostapd binary - check common locations
     local hostapd_bin=""
@@ -1110,7 +1142,7 @@ create_wifi_services_stable() {
     if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
         local dev_unit="sys-subsystem-net-devices-${WIFI_24GHZ_STABLE}.device"
 
-        cat > /etc/systemd/system/fortress-hostapd-24ghz.service << EOF
+        cat > /etc/systemd/system/fts-hostapd-24ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 2.4GHz WiFi Access Point
 After=network.target openvswitch-switch.service ${dev_unit}
@@ -1134,15 +1166,15 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable fortress-hostapd-24ghz 2>/dev/null || true
-        log_info "  Created: fortress-hostapd-24ghz.service (uses $WIFI_24GHZ_STABLE)"
+        systemctl enable fts-hostapd-24ghz 2>/dev/null || true
+        log_info "  Created: fts-hostapd-24ghz.service (uses $WIFI_24GHZ_STABLE)"
     fi
 
     # 5GHz service
     if [ -n "$WIFI_5GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
         local dev_unit="sys-subsystem-net-devices-${WIFI_5GHZ_STABLE}.device"
 
-        cat > /etc/systemd/system/fortress-hostapd-5ghz.service << EOF
+        cat > /etc/systemd/system/fts-hostapd-5ghz.service << EOF
 [Unit]
 Description=HookProbe Fortress - 5GHz WiFi Access Point
 After=network.target openvswitch-switch.service ${dev_unit}
@@ -1166,8 +1198,8 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable fortress-hostapd-5ghz 2>/dev/null || true
-        log_info "  Created: fortress-hostapd-5ghz.service (uses $WIFI_5GHZ_STABLE)"
+        systemctl enable fts-hostapd-5ghz 2>/dev/null || true
+        log_info "  Created: fts-hostapd-5ghz.service (uses $WIFI_5GHZ_STABLE)"
     fi
 
     log_info "Phase 3 complete: Services created"
@@ -1175,17 +1207,17 @@ EOF
     # Start hostapd services now (don't wait for reboot)
     log_info "Starting WiFi access points..."
     if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
-        if systemctl start fortress-hostapd-24ghz 2>/dev/null; then
+        if systemctl start fts-hostapd-24ghz 2>/dev/null; then
             log_info "  2.4GHz AP started"
         else
-            log_warn "  2.4GHz AP failed to start - check: journalctl -u fortress-hostapd-24ghz"
+            log_warn "  2.4GHz AP failed to start - check: journalctl -u fts-hostapd-24ghz"
         fi
     fi
     if [ -n "$WIFI_5GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-5ghz.conf ]; then
-        if systemctl start fortress-hostapd-5ghz 2>/dev/null; then
+        if systemctl start fts-hostapd-5ghz 2>/dev/null; then
             log_info "  5GHz AP started"
         else
-            log_warn "  5GHz AP failed to start - check: journalctl -u fortress-hostapd-5ghz"
+            log_warn "  5GHz AP failed to start - check: journalctl -u fts-hostapd-5ghz"
         fi
     fi
 }
@@ -1194,8 +1226,8 @@ setup_ovs_dhcp() {
     log_info "Configuring DHCP on OVS bridge..."
 
     # Use the OVS bridge directly - dnsmasq binds to the bridge interface
-    local lan_port="${OVS_BRIDGE:-43ess}"
-    local config_file="/etc/dnsmasq.d/fortress-ovs.conf"
+    local lan_port="${OVS_BRIDGE:-FTS}"
+    local config_file="/etc/dnsmasq.d/fts-ovs.conf"
 
     mkdir -p "$(dirname "$config_file")"
 
@@ -1299,9 +1331,9 @@ build_containers() {
     local skipped_count=0
 
     # Web container - needs fortress root dir as context (contains web/ directory)
-    if needs_rebuild "localhost/fortress-web:latest" "Containerfile.web" "$FORTRESS_ROOT"; then
+    if needs_rebuild "localhost/fts-web:latest" "Containerfile.web" "$FORTRESS_ROOT"; then
         log_info "Building web container..."
-        podman build -f Containerfile.web -t localhost/fortress-web:latest "$FORTRESS_ROOT" || {
+        podman build -f Containerfile.web -t localhost/fts-web:latest "$FORTRESS_ROOT" || {
             log_error "Failed to build web container"
             exit 1
         }
@@ -1314,9 +1346,9 @@ build_containers() {
     # Security Core - QSecBit, dnsXai, DFS (backbone of HookProbe mesh)
     log_info "Checking security core containers..."
 
-    if needs_rebuild "localhost/fortress-agent:latest" "Containerfile.agent" "$repo_root"; then
+    if needs_rebuild "localhost/fts-agent:latest" "Containerfile.agent" "$repo_root"; then
         log_info "  - Building qsecbit-agent (threat detection)..."
-        podman build -f Containerfile.agent -t localhost/fortress-agent:latest "$repo_root" || {
+        podman build -f Containerfile.agent -t localhost/fts-agent:latest "$repo_root" || {
             log_error "Failed to build qsecbit-agent container"
             exit 1
         }
@@ -1326,9 +1358,9 @@ build_containers() {
         skipped_count=$((skipped_count + 1))
     fi
 
-    if needs_rebuild "localhost/fortress-dnsxai:latest" "Containerfile.dnsxai" "$repo_root"; then
+    if needs_rebuild "localhost/fts-dnsxai:latest" "Containerfile.dnsxai" "$repo_root"; then
         log_info "  - Building dnsxai (DNS ML protection)..."
-        podman build -f Containerfile.dnsxai -t localhost/fortress-dnsxai:latest "$repo_root" || {
+        podman build -f Containerfile.dnsxai -t localhost/fts-dnsxai:latest "$repo_root" || {
             log_error "Failed to build dnsxai container"
             exit 1
         }
@@ -1338,9 +1370,9 @@ build_containers() {
         skipped_count=$((skipped_count + 1))
     fi
 
-    if needs_rebuild "localhost/fortress-dfs:latest" "Containerfile.dfs" "$repo_root"; then
+    if needs_rebuild "localhost/fts-dfs:latest" "Containerfile.dfs" "$repo_root"; then
         log_info "  - Building dfs-intelligence (WiFi intelligence)..."
-        podman build -f Containerfile.dfs -t localhost/fortress-dfs:latest "$repo_root" || {
+        podman build -f Containerfile.dfs -t localhost/fts-dfs:latest "$repo_root" || {
             log_error "Failed to build dfs-intelligence container"
             exit 1
         }
@@ -1351,9 +1383,9 @@ build_containers() {
     fi
 
     # LSTM trainer is optional (used for retraining models)
-    if needs_rebuild "localhost/fortress-lstm:latest" "Containerfile.lstm" "$repo_root"; then
+    if needs_rebuild "localhost/fts-lstm:latest" "Containerfile.lstm" "$repo_root"; then
         log_info "  - Building lstm-trainer (optional training)..."
-        podman build -f Containerfile.lstm -t localhost/fortress-lstm:latest "$repo_root" || {
+        podman build -f Containerfile.lstm -t localhost/fts-lstm:latest "$repo_root" || {
             log_warn "Failed to build lstm container (training will be unavailable)"
         }
         built_count=$((built_count + 1))
@@ -1389,18 +1421,18 @@ start_containers() {
 
     # Phase 1: Wait for data tier (postgres, redis) - no dependencies
     log_info "  Waiting for data tier (postgres, redis)..."
-    wait_for_container_healthy "fortress-postgres" 60 || log_warn "postgres may not be healthy"
-    wait_for_container_healthy "fortress-redis" 30 || log_warn "redis may not be healthy"
+    wait_for_container_healthy "fts-postgres" 60 || log_warn "postgres may not be healthy"
+    wait_for_container_healthy "fts-redis" 30 || log_warn "redis may not be healthy"
 
     # Phase 2: Wait for independent services (dnsxai, dfs) - no dependencies
     log_info "  Waiting for services tier (dnsxai, dfs)..."
-    wait_for_container_running "fortress-dnsxai" 30 || log_warn "dnsxai may not be running"
-    wait_for_container_running "fortress-dfs" 30 || log_warn "dfs may not be running"
+    wait_for_container_running "fts-dnsxai" 30 || log_warn "dnsxai may not be running"
+    wait_for_container_running "fts-dfs" 30 || log_warn "dfs may not be running"
 
     # Phase 3: Wait for dependent services (web, qsecbit) - depend on postgres/redis
     log_info "  Waiting for application tier (web, qsecbit)..."
-    wait_for_container_running "fortress-web" 30 || log_warn "web may not be running"
-    wait_for_container_running "fortress-qsecbit" 30 || log_warn "qsecbit may not be running"
+    wait_for_container_running "fts-web" 30 || log_warn "web may not be running"
+    wait_for_container_running "fts-qsecbit" 30 || log_warn "qsecbit may not be running"
 
     # Final check: web health endpoint
     local retries=15
@@ -1414,7 +1446,7 @@ start_containers() {
     done
 
     if [ $retries -eq 0 ]; then
-        log_warn "Web health check failed - check logs: podman logs fortress-web"
+        log_warn "Web health check failed - check logs: podman logs fts-web"
     fi
 
     # Connect containers to OVS for flow monitoring
@@ -1484,27 +1516,27 @@ connect_containers_to_ovs() {
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
     # Data tier containers (always required)
-    attach_container_if_running "$ovs_script" fortress-postgres 172.20.200.10 data
-    attach_container_if_running "$ovs_script" fortress-redis 172.20.200.11 data
+    attach_container_if_running "$ovs_script" fts-postgres 172.20.200.10 data
+    attach_container_if_running "$ovs_script" fts-redis 172.20.200.11 data
 
     # Services tier containers (dnsxai and dfs use bridge network)
     # Note: web uses host network - already visible via host interfaces
-    attach_container_if_running "$ovs_script" fortress-dnsxai 172.20.201.11 services
-    attach_container_if_running "$ovs_script" fortress-dfs 172.20.201.12 services
+    attach_container_if_running "$ovs_script" fts-dnsxai 172.20.201.11 services
+    attach_container_if_running "$ovs_script" fts-dfs 172.20.201.12 services
 
     # Note: qsecbit uses host network - already visible via host interfaces
     # It captures traffic on host interfaces directly
 
     # ML tier (optional - only with --profile training)
-    attach_container_if_running "$ovs_script" fortress-lstm-trainer 172.20.202.10 ml true
+    attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.202.10 ml true
 
     # Mgmt tier (optional - only with --profile monitoring)
-    attach_container_if_running "$ovs_script" fortress-grafana 172.20.203.10 mgmt true
-    attach_container_if_running "$ovs_script" fortress-victoria 172.20.203.11 mgmt true
+    attach_container_if_running "$ovs_script" fts-grafana 172.20.203.10 mgmt true
+    attach_container_if_running "$ovs_script" fts-victoria 172.20.203.11 mgmt true
 
     log_info "OVS container integration complete"
     log_info "  Note: web and qsecbit use host network (no OVS attachment needed)"
-    log_info "  Traffic mirroring: all bridge container traffic → fortress-mirror"
+    log_info "  Traffic mirroring: all bridge container traffic → fts-mirror"
     log_info "  sFlow export: 127.0.0.1:6343"
     log_info "  IPFIX export: 127.0.0.1:4739"
 }
@@ -1559,13 +1591,13 @@ create_systemd_service() {
     mkdir -p "${INSTALL_DIR}/bin"
 
     # Create OVS post-start hook script
-    cat > "${INSTALL_DIR}/bin/fortress-ovs-connect.sh" << 'OVSEOF'
+    cat > "${INSTALL_DIR}/bin/fts-ovs-connect.sh" << 'OVSEOF'
 #!/bin/bash
 # Connect fortress containers to OVS after startup
 # Called by systemd ExecStartPost
 
 OVS_SCRIPT="/opt/hookprobe/fortress/devices/common/ovs-container-network.sh"
-LOG_TAG="fortress-ovs"
+LOG_TAG="fts-ovs"
 
 log_info() { logger -t "$LOG_TAG" "$1"; echo "[INFO] $1"; }
 log_warn() { logger -t "$LOG_TAG" -p warning "$1"; echo "[WARN] $1"; }
@@ -1625,7 +1657,7 @@ fi
 
 # CRITICAL: Ensure OVS bridge is UP and configured before connecting containers
 # After reboot, openvswitch-switch restores the bridge but may not bring it UP
-OVS_BRIDGE="${OVS_BRIDGE:-43ess}"
+OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
@@ -1658,29 +1690,29 @@ export OVS_BRIDGE LAN_SUBNET_MASK
 log_info "Waiting for containers..."
 
 # Wait for core containers first
-wait_for_container fortress-postgres || log_warn "postgres not ready"
-wait_for_container fortress-redis || log_warn "redis not ready"
+wait_for_container fts-postgres || log_warn "postgres not ready"
+wait_for_container fts-redis || log_warn "redis not ready"
 
 # Now attach all containers
 log_info "Attaching containers to OVS..."
 
 # Data tier (required)
-attach_if_ready fortress-postgres 172.20.200.10 data
-attach_if_ready fortress-redis 172.20.200.11 data
+attach_if_ready fts-postgres 172.20.200.10 data
+attach_if_ready fts-redis 172.20.200.11 data
 
 # Services tier (dnsxai and dfs use bridge network)
-attach_if_ready fortress-dnsxai 172.20.201.11 services
-attach_if_ready fortress-dfs 172.20.201.12 services
+attach_if_ready fts-dnsxai 172.20.201.11 services
+attach_if_ready fts-dfs 172.20.201.12 services
 
 # Optional tiers
-attach_if_ready fortress-lstm-trainer 172.20.202.10 ml true
-attach_if_ready fortress-grafana 172.20.203.10 mgmt true
-attach_if_ready fortress-victoria 172.20.203.11 mgmt true
+attach_if_ready fts-lstm-trainer 172.20.202.10 ml true
+attach_if_ready fts-grafana 172.20.203.10 mgmt true
+attach_if_ready fts-victoria 172.20.203.11 mgmt true
 
 log_info "OVS container integration complete"
 OVSEOF
 
-    chmod +x "${INSTALL_DIR}/bin/fortress-ovs-connect.sh"
+    chmod +x "${INSTALL_DIR}/bin/fts-ovs-connect.sh"
 
     # Find podman-compose path (may be in /usr/bin or ~/.local/bin)
     local podman_compose_bin
@@ -1703,14 +1735,14 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${compose_dir}
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin
-Environment=OVS_BRIDGE=43ess
+Environment=OVS_BRIDGE=FTS
 Environment=LAN_BASE_IP=10.200.0.1
 Environment=LAN_SUBNET_MASK=24
 
 # Wait for OVS to be fully ready and configure bridge IP BEFORE starting containers
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-ExecStartPre=/bin/bash -c 'ip link set 43ess up 2>/dev/null || true'
-ExecStartPre=/bin/bash -c 'ip addr show 43ess | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/24 dev 43ess 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip link set FTS up 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip addr show FTS | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/24 dev FTS 2>/dev/null || true'
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
@@ -1719,7 +1751,7 @@ ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1
 ExecStart=${podman_compose_bin} -f podman-compose.yml up -d
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
-ExecStartPost=${INSTALL_DIR}/bin/fortress-ovs-connect.sh
+ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
 
 # Stop containers gracefully
 ExecStop=${podman_compose_bin} -f podman-compose.yml down
@@ -1767,8 +1799,8 @@ save_installation_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
 
     # All security core containers are always installed
-    local containers='["fortress-web", "fortress-postgres", "fortress-redis", "fortress-qsecbit", "fortress-dnsxai", "fortress-dfs"]'
-    local volumes='["fortress-postgres-data", "fortress-redis-data", "fortress-web-data", "fortress-web-logs", "fortress-config", "fortress-agent-data", "fortress-dnsxai-data", "fortress-dnsxai-blocklists", "fortress-dfs-data", "fortress-ml-models"]'
+    local containers='["fts-web", "fts-postgres", "fts-redis", "fts-qsecbit", "fts-dnsxai", "fts-dfs"]'
+    local volumes='["fts-postgres-data", "fts-redis-data", "fts-web-data", "fts-web-logs", "fts-config", "fts-agent-data", "fts-dnsxai-data", "fts-dnsxai-blocklists", "fts-dfs-data", "fts-ml-models"]'
 
     cat > "$STATE_FILE" << EOF
 {
@@ -1820,18 +1852,18 @@ uninstall() {
     echo ""
     echo "  Services:"
     echo "    - fortress (main systemd service)"
-    echo "    - fortress-hostapd-* (WiFi AP services)"
+    echo "    - fts-hostapd-* (WiFi AP services)"
     echo ""
     echo "  Containers:"
-    echo "    - fortress-web (Flask admin portal)"
-    echo "    - fortress-postgres (database)"
-    echo "    - fortress-redis (cache/sessions)"
-    echo "    - fortress-qsecbit (threat detection)"
-    echo "    - fortress-dnsxai (DNS ML protection)"
-    echo "    - fortress-dfs (WiFi DFS intelligence)"
-    echo "    - fortress-lstm-trainer (ML training)"
-    echo "    - fortress-grafana (monitoring dashboard)"
-    echo "    - fortress-victoria (metrics database)"
+    echo "    - fts-web (Flask admin portal)"
+    echo "    - fts-postgres (database)"
+    echo "    - fts-redis (cache/sessions)"
+    echo "    - fts-qsecbit (threat detection)"
+    echo "    - fts-dnsxai (DNS ML protection)"
+    echo "    - fts-dfs (WiFi DFS intelligence)"
+    echo "    - fts-lstm-trainer (ML training)"
+    echo "    - fts-grafana (monitoring dashboard)"
+    echo "    - fts-victoria (metrics database)"
     echo ""
     echo "  OVS Network:"
     echo "    - OVS bridge: $OVS_BRIDGE"
@@ -1846,8 +1878,8 @@ uninstall() {
     [ "$keep_config" = false ] && echo "  Configuration: /etc/hookprobe"
     [ "$keep_config" = false ] && echo "  Secrets: VXLAN PSK, admin credentials, WiFi passwords"
     echo "  Installation: /opt/hookprobe/fortress"
-    echo "  DHCP config: /etc/dnsmasq.d/fortress-ovs.conf"
-    echo "  WiFi config: /etc/hostapd/fortress-*.conf"
+    echo "  DHCP config: /etc/dnsmasq.d/fts-ovs.conf"
+    echo "  WiFi config: /etc/hostapd/fts-*.conf"
     echo ""
 
     if [ "$keep_data" = true ]; then
@@ -1864,66 +1896,66 @@ uninstall() {
     # Stage 1: Stop services
     log_info "Stage 1: Stopping services..."
     systemctl stop fortress 2>/dev/null || true
-    systemctl stop fortress-hostapd-2g 2>/dev/null || true
-    systemctl stop fortress-hostapd-5g 2>/dev/null || true
+    systemctl stop fts-hostapd-2g 2>/dev/null || true
+    systemctl stop fts-hostapd-5g 2>/dev/null || true
     cd "${INSTALL_DIR}/containers" 2>/dev/null && \
         podman-compose --profile monitoring --profile training down 2>/dev/null || true
 
     # Stage 2: Remove application containers
     log_info "Stage 2: Removing application containers..."
-    podman rm -f fortress-web fortress-qsecbit fortress-dnsxai fortress-dfs fortress-lstm-trainer 2>/dev/null || true
-    podman rm -f fortress-grafana fortress-victoria 2>/dev/null || true
+    podman rm -f fts-web fts-qsecbit fts-dnsxai fts-dfs fts-lstm-trainer 2>/dev/null || true
+    podman rm -f fts-grafana fts-victoria 2>/dev/null || true
 
     # Stage 2b: Remove container images
     log_info "Stage 2b: Removing container images..."
-    podman rmi -f localhost/fortress-web:latest 2>/dev/null || true
-    podman rmi -f localhost/fortress-agent:latest 2>/dev/null || true
-    podman rmi -f localhost/fortress-dnsxai:latest 2>/dev/null || true
-    podman rmi -f localhost/fortress-dfs:latest 2>/dev/null || true
-    podman rmi -f localhost/fortress-lstm:latest 2>/dev/null || true
+    podman rmi -f localhost/fts-web:latest 2>/dev/null || true
+    podman rmi -f localhost/fts-agent:latest 2>/dev/null || true
+    podman rmi -f localhost/fts-dnsxai:latest 2>/dev/null || true
+    podman rmi -f localhost/fts-dfs:latest 2>/dev/null || true
+    podman rmi -f localhost/fts-lstm:latest 2>/dev/null || true
 
     # Stage 3: Handle data containers/volumes
     if [ "$keep_data" = false ]; then
         log_info "Stage 3: Removing data containers and volumes..."
-        podman rm -f fortress-postgres fortress-redis 2>/dev/null || true
+        podman rm -f fts-postgres fts-redis 2>/dev/null || true
         # Remove all Fortress volumes
         podman volume rm -f \
-            fortress-postgres-data \
-            fortress-postgres-certs \
-            fortress-redis-data \
-            fortress-web-data \
-            fortress-web-logs \
-            fortress-agent-data \
-            fortress-dnsxai-data \
-            fortress-dnsxai-blocklists \
-            fortress-dfs-data \
-            fortress-ml-models \
-            fortress-grafana-data \
-            fortress-victoria-data \
+            fts-postgres-data \
+            fts-postgres-certs \
+            fts-redis-data \
+            fts-web-data \
+            fts-web-logs \
+            fts-agent-data \
+            fts-dnsxai-data \
+            fts-dnsxai-blocklists \
+            fts-dfs-data \
+            fts-ml-models \
+            fts-grafana-data \
+            fts-victoria-data \
             fortress-config \
             2>/dev/null || true
     else
         log_info "Stage 3: Preserving data containers and volumes..."
         # Only stop data containers, don't remove
-        podman stop fortress-postgres fortress-redis 2>/dev/null || true
+        podman stop fts-postgres fts-redis 2>/dev/null || true
     fi
 
     # Stage 4: Remove systemd services
     log_info "Stage 4: Removing systemd services..."
     systemctl disable fortress 2>/dev/null || true
-    systemctl disable fortress-hostapd-2g 2>/dev/null || true
-    systemctl disable fortress-hostapd-5g 2>/dev/null || true
+    systemctl disable fts-hostapd-2g 2>/dev/null || true
+    systemctl disable fts-hostapd-5g 2>/dev/null || true
     rm -f /etc/systemd/system/fortress.service
-    rm -f /etc/systemd/system/fortress-hostapd-*.service
+    rm -f /etc/systemd/system/fts-hostapd-*.service
     systemctl daemon-reload
 
     # Stage 5: Remove OVS network configuration
     log_info "Stage 5: Removing OVS network..."
 
     # Remove container veth interfaces from OVS
-    for veth in veth-fortress-postgres veth-fortress-redis veth-fortress-web \
-                veth-fortress-dnsxai veth-fortress-dfs veth-fortress-lstm-trainer \
-                veth-fortress-grafana veth-fortress-victoria; do
+    for veth in veth-fts-postgres veth-fts-redis veth-fts-web \
+                veth-fts-dnsxai veth-fts-dfs veth-fts-lstm-trainer \
+                veth-fts-grafana veth-fts-victoria; do
         ovs-vsctl del-port "$OVS_BRIDGE" "$veth" 2>/dev/null || true
         ip link del "$veth" 2>/dev/null || true
     done
@@ -1961,9 +1993,9 @@ uninstall() {
 
     # Stage 6: Remove DHCP and WiFi configuration
     log_info "Stage 6: Removing DHCP and WiFi config..."
-    rm -f /etc/dnsmasq.d/fortress-ovs.conf 2>/dev/null || true
-    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
-    rm -f /etc/hostapd/fortress-*.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
+    rm -f /etc/hostapd/fts-*.conf 2>/dev/null || true
     systemctl restart dnsmasq 2>/dev/null || true
 
     # Stage 7: Handle configuration
@@ -1986,7 +2018,7 @@ uninstall() {
     [ "$keep_data" = false ] && rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
 
     # Remove sysctl config
-    rm -f /etc/sysctl.d/99-fortress-forward.conf 2>/dev/null || true
+    rm -f /etc/sysctl.d/99-fts-forward.conf 2>/dev/null || true
 
     # Clean empty directories
     rmdir "$INSTALL_DIR" 2>/dev/null || true
@@ -2004,7 +2036,7 @@ uninstall() {
         echo "    ./install-container.sh --preserve-data"
         echo ""
         echo "  To completely remove data later:"
-        echo "    podman volume rm fortress-postgres-data fortress-redis-data"
+        echo "    podman volume rm fts-postgres-data fts-redis-data"
         echo ""
     fi
 
@@ -2208,7 +2240,7 @@ main() {
     echo ""
     echo "Useful commands:"
     echo "  systemctl status fortress             # Check container status"
-    echo "  systemctl status fortress-hostapd-*   # Check WiFi AP status"
+    echo "  systemctl status fts-hostapd-*   # Check WiFi AP status"
     echo "  ovs-vsctl show                        # View OVS bridge"
     echo "  ovs-ofctl dump-flows $OVS_BRIDGE         # View OpenFlow rules"
     echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"

@@ -4,10 +4,10 @@
 # ML-powered threat detection agent with numpy/scipy/sklearn
 #
 # Build:
-#   podman build -f Containerfile.agent -t fortress-agent:latest ../..
+#   podman build -f Containerfile.agent -t fts-agent:latest ../..
 #
 # Run:
-#   podman run --network=host --cap-add=NET_ADMIN,NET_RAW fortress-agent:latest
+#   podman run --network=host --cap-add=NET_ADMIN,NET_RAW fts-agent:latest
 # ==============================================================================
 
 FROM python:3.11-slim-bookworm AS builder
@@ -68,7 +68,7 @@ ENV PYTHONUNBUFFERED=1
 ENV QSECBIT_MODE=fortress
 ENV QSECBIT_DATA_DIR=/opt/hookprobe/fortress/data
 ENV QSECBIT_LOG_DIR=/var/log/hookprobe
-ENV OVS_BRIDGE=43ess
+ENV OVS_BRIDGE=FTS
 
 # Health check - verify API server is responding
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \

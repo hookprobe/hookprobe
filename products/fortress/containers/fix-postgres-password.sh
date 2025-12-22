@@ -40,9 +40,9 @@ log_info "============================================"
 echo ""
 
 # Check if postgres container is running
-if ! podman ps --format "{{.Names}}" | grep -q "fortress-postgres"; then
-    log_error "fortress-postgres container is not running"
-    log_info "Start it with: podman start fortress-postgres"
+if ! podman ps --format "{{.Names}}" | grep -q "fts-postgres"; then
+    log_error "fts-postgres container is not running"
+    log_info "Start it with: podman start fts-postgres"
     exit 1
 fi
 
@@ -50,12 +50,12 @@ log_info "Found running postgres container"
 log_info "Resetting password to match environment variable..."
 
 # Reset the password in PostgreSQL
-if podman exec -i fortress-postgres psql -U postgres -c "ALTER USER fortress WITH PASSWORD '${POSTGRES_PASSWORD}';" 2>/dev/null; then
+if podman exec -i fts-postgres psql -U postgres -c "ALTER USER fortress WITH PASSWORD '${POSTGRES_PASSWORD}';" 2>/dev/null; then
     log_info "Password updated successfully"
 else
     log_error "Failed to update password"
     log_warn "You may need to manually run:"
-    log_warn "  podman exec -it fortress-postgres psql -U postgres"
+    log_warn "  podman exec -it fts-postgres psql -U postgres"
     log_warn "  ALTER USER fortress WITH PASSWORD 'fortress_db_secret';"
     exit 1
 fi
@@ -63,7 +63,7 @@ fi
 # Restart web and qsecbit containers to pick up the connection
 log_info "Restarting dependent containers..."
 
-for container in fortress-web fortress-qsecbit; do
+for container in fts-web fts-qsecbit; do
     if podman ps --format "{{.Names}}" | grep -q "$container"; then
         log_info "Restarting $container..."
         podman restart "$container" || log_warn "Failed to restart $container"
@@ -85,4 +85,4 @@ echo ""
 log_info "Password fix complete!"
 log_info ""
 log_info "If web container is still unhealthy, check logs with:"
-log_info "  podman logs fortress-web"
+log_info "  podman logs fts-web"
