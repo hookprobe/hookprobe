@@ -535,6 +535,76 @@ generate_secrets() {
     chmod 600 "${CONFIG_DIR}/secrets/admin_password"
 
     log_info "Secrets generated in $secrets_dir"
+
+    # Generate Redis password if not exists
+    if [ ! -f "$secrets_dir/redis_password" ]; then
+        openssl rand -base64 24 | tr -d '/+=' | head -c 24 > "$secrets_dir/redis_password"
+        chmod 600 "$secrets_dir/redis_password"
+        log_info "Generated Redis password"
+    fi
+
+    # Create .env file for podman-compose to auto-read secrets
+    # This ensures database volumes can be reused after reinstall!
+    create_compose_env_file
+}
+
+# Create .env file in containers directory for podman-compose
+# This is CRITICAL for data volume reuse - same credentials must be used!
+create_compose_env_file() {
+    local secrets_dir="${INSTALL_DIR}/containers/secrets"
+    local env_file="${INSTALL_DIR}/containers/.env"
+
+    log_info "Creating .env file for podman-compose"
+
+    # Read secrets from files (or use defaults if files don't exist)
+    local pg_pass="${POSTGRES_PASSWORD:-}"
+    local redis_pass="${REDIS_PASSWORD:-}"
+    local flask_key="${FLASK_SECRET_KEY:-}"
+    local grafana_pass="${GRAFANA_PASSWORD:-}"
+
+    # Load from files if not set via environment
+    [ -z "$pg_pass" ] && [ -f "$secrets_dir/postgres_password" ] && pg_pass=$(cat "$secrets_dir/postgres_password")
+    [ -z "$redis_pass" ] && [ -f "$secrets_dir/redis_password" ] && redis_pass=$(cat "$secrets_dir/redis_password")
+    [ -z "$flask_key" ] && [ -f "$secrets_dir/flask_secret" ] && flask_key=$(cat "$secrets_dir/flask_secret")
+    [ -z "$grafana_pass" ] && [ -f "$secrets_dir/grafana_password" ] && grafana_pass=$(cat "$secrets_dir/grafana_password")
+
+    # Use safe defaults if still empty (first install)
+    [ -z "$pg_pass" ] && pg_pass="fortress_db_secret"
+    [ -z "$redis_pass" ] && redis_pass="fortress_redis_secret"
+    [ -z "$flask_key" ] && flask_key="fortress_flask_secret_key_change_me"
+    [ -z "$grafana_pass" ] && grafana_pass="fortress_grafana_admin"
+
+    # Write .env file
+    cat > "$env_file" << EOF
+# HookProbe Fortress Container Environment
+# Generated: $(date -Iseconds)
+# WARNING: Do not modify - these credentials match your data volumes!
+#
+# If you change these passwords after initial install, you must either:
+#   1. Remove the data volumes (podman volume rm fts-postgres-data fts-redis-data)
+#   2. Or manually update the passwords inside the databases
+#
+# For reinstall with existing volumes: keep this file!
+
+# Database credentials (CRITICAL for volume reuse)
+POSTGRES_PASSWORD=${pg_pass}
+REDIS_PASSWORD=${redis_pass}
+
+# Application secrets
+FLASK_SECRET_KEY=${flask_key}
+GRAFANA_PASSWORD=${grafana_pass}
+
+# Web port (can be changed freely)
+WEB_PORT=${WEB_PORT:-8443}
+
+# Network interfaces (set during install)
+SURICATA_INTERFACE=${SURICATA_INTERFACE:-FTS}
+ZEEK_INTERFACE=${ZEEK_INTERFACE:-FTS}
+XDP_INTERFACE=${XDP_INTERFACE:-FTS}
+EOF
+
+    chmod 600 "$env_file"
+    log_info ".env file created at $env_file"
 }
 
 create_admin_user() {
@@ -1414,6 +1484,84 @@ build_containers() {
     else
         log_info "All containers already built (use --force-rebuild to rebuild)"
     fi
+}
+
+# ============================================================
+# STOP ALL SERVICES (for upgrade/uninstall)
+# ============================================================
+# Comprehensive stop function that halts everything safely
+stop_all_services() {
+    log_step "Stopping all Fortress services"
+
+    local compose_dir="${INSTALL_DIR}/containers"
+
+    # 1. Stop systemd services first (graceful)
+    log_info "Stopping systemd services..."
+    systemctl stop fortress 2>/dev/null || true
+    systemctl stop fortress-hostapd-2ghz 2>/dev/null || true
+    systemctl stop fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl stop fortress-dnsmasq 2>/dev/null || true
+    systemctl stop fts-web 2>/dev/null || true
+    systemctl stop fts-agent 2>/dev/null || true
+    systemctl stop fts-qsecbit 2>/dev/null || true
+    systemctl stop fts-suricata 2>/dev/null || true
+    systemctl stop fts-zeek 2>/dev/null || true
+    systemctl stop fts-xdp 2>/dev/null || true
+
+    # 2. Stop podman-compose (graceful container shutdown)
+    log_info "Stopping podman containers (graceful)..."
+    if [ -f "$compose_dir/podman-compose.yml" ]; then
+        cd "$compose_dir" 2>/dev/null && {
+            podman-compose down --timeout 30 2>/dev/null || true
+        }
+    fi
+
+    # 3. Force-stop any remaining containers (brute force)
+    log_info "Force-stopping remaining containers..."
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+        log_info "  Force stopping: $container"
+        podman stop -t 5 "$container" 2>/dev/null || true
+    done
+
+    # 4. Kill any containers that didn't respond to stop
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+        log_warn "  Killing unresponsive: $container"
+        podman kill "$container" 2>/dev/null || true
+    done
+
+    # 5. Stop hostapd processes (in case systemd didn't catch them)
+    log_info "Stopping hostapd processes..."
+    pkill -f "hostapd.*fortress" 2>/dev/null || true
+    pkill -f "hostapd.*fts" 2>/dev/null || true
+
+    # 6. Stop dnsmasq fortress instances
+    log_info "Stopping dnsmasq instances..."
+    pkill -f "dnsmasq.*fortress" 2>/dev/null || true
+    pkill -f "dnsmasq.*fts" 2>/dev/null || true
+
+    # 7. Stop OVS flows if present
+    log_info "Clearing OVS configuration..."
+    ovs-ofctl del-flows FTS 2>/dev/null || true
+    ovs-vsctl del-br FTS 2>/dev/null || true
+
+    # 8. Bring down fortress bridge interface
+    log_info "Bringing down network interfaces..."
+    ip link set fortress down 2>/dev/null || true
+    ip link delete fortress 2>/dev/null || true
+
+    # 9. Clear any iptables rules we added
+    log_info "Clearing firewall rules..."
+    iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
+    nft delete table inet fortress_filter 2>/dev/null || true
+
+    # 10. Release any locked resources
+    log_info "Releasing resources..."
+    fuser -k 8443/tcp 2>/dev/null || true  # Web port
+    fuser -k 5353/udp 2>/dev/null || true  # DNS port
+    fuser -k 8050/tcp 2>/dev/null || true  # DFS port
+
+    log_info "All services stopped"
 }
 
 start_containers() {
