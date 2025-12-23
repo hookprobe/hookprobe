@@ -22,79 +22,107 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ============================================================
-# CONFIGURATION
+# STATE DIRECTORY AND PERSISTENCE
 # ============================================================
 
-# VLAN IDs
-VLAN_LAN=100
-VLAN_MGMT=200
+STATE_DIR="/var/lib/fortress"
+VLAN_STATE_FILE="$STATE_DIR/vlan-config.conf"
 
-# LAN Subnet - use configured mask from environment or default to /24
+# Load saved state FIRST if exists (for persistence after reboot)
+# This ensures user's network size choice is preserved
+if [ -f "$VLAN_STATE_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$VLAN_STATE_FILE"
+fi
+
+# ============================================================
+# CONFIGURATION (uses saved values or calculates from environment/defaults)
+# ============================================================
+
+# VLAN IDs (usually not changed)
+VLAN_LAN="${VLAN_LAN:-100}"
+VLAN_MGMT="${VLAN_MGMT:-200}"
+
+# LAN Subnet - priority: saved state > environment > default /24
 # LAN_SUBNET_MASK is set by install-container.sh based on user input
-LAN_MASK="${LAN_SUBNET_MASK:-24}"
+if [ -z "${LAN_MASK:-}" ]; then
+    LAN_MASK="${LAN_SUBNET_MASK:-24}"
+fi
 
-# Calculate LAN DHCP ranges based on subnet mask
-GATEWAY_LAN="10.200.0.1"
-case "$LAN_MASK" in
-    29) # /29 = 6 usable hosts
-        SUBNET_LAN="10.200.0.0/29"
-        NETMASK_LAN="255.255.255.248"
-        DHCP_START_LAN="10.200.0.2"
-        DHCP_END_LAN="10.200.0.6"
-        ;;
-    28) # /28 = 14 usable hosts
-        SUBNET_LAN="10.200.0.0/28"
-        NETMASK_LAN="255.255.255.240"
-        DHCP_START_LAN="10.200.0.2"
-        DHCP_END_LAN="10.200.0.14"
-        ;;
-    27) # /27 = 30 usable hosts
-        SUBNET_LAN="10.200.0.0/27"
-        NETMASK_LAN="255.255.255.224"
-        DHCP_START_LAN="10.200.0.10"
-        DHCP_END_LAN="10.200.0.30"
-        ;;
-    26) # /26 = 62 usable hosts
-        SUBNET_LAN="10.200.0.0/26"
-        NETMASK_LAN="255.255.255.192"
-        DHCP_START_LAN="10.200.0.10"
-        DHCP_END_LAN="10.200.0.62"
-        ;;
-    25) # /25 = 126 usable hosts
-        SUBNET_LAN="10.200.0.0/25"
-        NETMASK_LAN="255.255.255.128"
-        DHCP_START_LAN="10.200.0.10"
-        DHCP_END_LAN="10.200.0.126"
-        ;;
-    23) # /23 = 510 usable hosts
-        SUBNET_LAN="10.200.0.0/23"
-        NETMASK_LAN="255.255.254.0"
-        DHCP_START_LAN="10.200.0.100"
-        DHCP_END_LAN="10.200.1.200"
-        ;;
-    *) # Default /24 = 254 usable hosts
-        SUBNET_LAN="10.200.0.0/24"
-        NETMASK_LAN="255.255.255.0"
-        DHCP_START_LAN="10.200.0.100"
-        DHCP_END_LAN="10.200.0.200"
-        LAN_MASK=24
-        ;;
-esac
+# Only calculate subnet values if not already loaded from state file
+if [ -z "${SUBNET_LAN:-}" ]; then
+    # Calculate LAN DHCP ranges based on subnet mask
+    GATEWAY_LAN="10.200.0.1"
+    case "$LAN_MASK" in
+        29) # /29 = 6 usable hosts
+            SUBNET_LAN="10.200.0.0/29"
+            NETMASK_LAN="255.255.255.248"
+            DHCP_START_LAN="10.200.0.2"
+            DHCP_END_LAN="10.200.0.6"
+            ;;
+        28) # /28 = 14 usable hosts
+            SUBNET_LAN="10.200.0.0/28"
+            NETMASK_LAN="255.255.255.240"
+            DHCP_START_LAN="10.200.0.2"
+            DHCP_END_LAN="10.200.0.14"
+            ;;
+        27) # /27 = 30 usable hosts
+            SUBNET_LAN="10.200.0.0/27"
+            NETMASK_LAN="255.255.255.224"
+            DHCP_START_LAN="10.200.0.10"
+            DHCP_END_LAN="10.200.0.30"
+            ;;
+        26) # /26 = 62 usable hosts
+            SUBNET_LAN="10.200.0.0/26"
+            NETMASK_LAN="255.255.255.192"
+            DHCP_START_LAN="10.200.0.10"
+            DHCP_END_LAN="10.200.0.62"
+            ;;
+        25) # /25 = 126 usable hosts
+            SUBNET_LAN="10.200.0.0/25"
+            NETMASK_LAN="255.255.255.128"
+            DHCP_START_LAN="10.200.0.10"
+            DHCP_END_LAN="10.200.0.126"
+            ;;
+        23) # /23 = 510 usable hosts
+            SUBNET_LAN="10.200.0.0/23"
+            NETMASK_LAN="255.255.254.0"
+            DHCP_START_LAN="10.200.0.100"
+            DHCP_END_LAN="10.200.1.200"
+            ;;
+        22) # /22 = 1022 usable hosts
+            SUBNET_LAN="10.200.0.0/22"
+            NETMASK_LAN="255.255.252.0"
+            DHCP_START_LAN="10.200.0.100"
+            DHCP_END_LAN="10.200.3.200"
+            ;;
+        *) # Default /24 = 254 usable hosts
+            SUBNET_LAN="10.200.0.0/24"
+            NETMASK_LAN="255.255.255.0"
+            DHCP_START_LAN="10.200.0.100"
+            DHCP_END_LAN="10.200.0.200"
+            LAN_MASK=24
+            ;;
+    esac
+else
+    # State file was loaded - ensure GATEWAY_LAN is set
+    GATEWAY_LAN="${GATEWAY_LAN:-10.200.0.1}"
+fi
 
 # Management VLAN - /30 by default (gateway + 1 admin device)
 # This is intentionally small - management should be restricted
-SUBNET_MGMT="10.200.100.0/30"
-NETMASK_MGMT="255.255.255.252"
-GATEWAY_MGMT="10.200.100.1"
-DHCP_START_MGMT="10.200.100.2"
-DHCP_END_MGMT="10.200.100.2"  # Only 1 DHCP address (admin workstation)
+SUBNET_MGMT="${SUBNET_MGMT:-10.200.100.0/30}"
+NETMASK_MGMT="${NETMASK_MGMT:-255.255.255.252}"
+GATEWAY_MGMT="${GATEWAY_MGMT:-10.200.100.1}"
+DHCP_START_MGMT="${DHCP_START_MGMT:-10.200.100.2}"
+DHCP_END_MGMT="${DHCP_END_MGMT:-10.200.100.2}"  # Only 1 DHCP address (admin workstation)
 
 # Container network (podman)
-CONTAINER_SUBNET="172.20.200.0/24"
-CONTAINER_GATEWAY="172.20.200.1"
+CONTAINER_SUBNET="${CONTAINER_SUBNET:-172.20.200.0/24}"
+CONTAINER_GATEWAY="${CONTAINER_GATEWAY:-172.20.200.1}"
 
 # Web container address (from podman-compose.yml)
-WEB_CONTAINER_IP="172.20.200.20"
+WEB_CONTAINER_IP="${WEB_CONTAINER_IP:-172.20.200.20}"
 WEB_PORT="${WEB_PORT:-8443}"
 
 # OVS Bridge name
@@ -104,16 +132,6 @@ OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 WAN_INTERFACE="${WAN_INTERFACE:-${NET_WAN_IFACE:-}}"
 if [ -z "$WAN_INTERFACE" ]; then
     WAN_INTERFACE=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
-fi
-
-# State directory
-STATE_DIR="/var/lib/fortress"
-VLAN_STATE_FILE="$STATE_DIR/vlan-config.conf"
-
-# Load saved state if exists (for persistence after reboot)
-if [ -f "$VLAN_STATE_FILE" ]; then
-    # shellcheck source=/dev/null
-    source "$VLAN_STATE_FILE"
 fi
 
 # Colors
@@ -662,26 +680,43 @@ save_state() {
 # Fortress VLAN Configuration State
 # Generated: $(date)
 
+# LAN subnet mask (user-configured: /29 to /22)
+LAN_SUBNET_MASK=$LAN_MASK
+LAN_MASK=$LAN_MASK
+
+# VLAN IDs
 VLAN_LAN=$VLAN_LAN
 VLAN_MGMT=$VLAN_MGMT
 
+# LAN Network (VLAN 100)
 SUBNET_LAN=$SUBNET_LAN
+NETMASK_LAN=$NETMASK_LAN
 GATEWAY_LAN=$GATEWAY_LAN
+DHCP_START_LAN=$DHCP_START_LAN
+DHCP_END_LAN=$DHCP_END_LAN
 
+# Management Network (VLAN 200)
 SUBNET_MGMT=$SUBNET_MGMT
+NETMASK_MGMT=$NETMASK_MGMT
 GATEWAY_MGMT=$GATEWAY_MGMT
+DHCP_START_MGMT=$DHCP_START_MGMT
+DHCP_END_MGMT=$DHCP_END_MGMT
 
+# Container Network
 CONTAINER_SUBNET=$CONTAINER_SUBNET
+CONTAINER_GATEWAY=$CONTAINER_GATEWAY
 
+# Interfaces
 MGMT_INTERFACE=${MGMT_INTERFACE:-}
 MGMT_ENABLED=${MGMT_ENABLED:-false}
-
 WAN_INTERFACE=${WAN_INTERFACE:-}
 
+# OVS Bridge
 OVS_BRIDGE=$OVS_BRIDGE
 EOF
 
     log_success "Configuration saved to $VLAN_STATE_FILE"
+    log_info "  LAN: $SUBNET_LAN (DHCP: $DHCP_START_LAN - $DHCP_END_LAN)"
 }
 
 # ============================================================
