@@ -354,12 +354,12 @@ services:
     restart: unless-stopped
     hostname: fts-zeek
     environment:
-      # Interface to monitor - use bridge name (fortress) or WAN interface
-      ZEEK_INTERFACE: "${ZEEK_INTERFACE:-fortress}"
+      # Interface to monitor - OVS bridge (FTS) or WAN interface
+      ZEEK_INTERFACE: "${ZEEK_INTERFACE:-FTS}"
     command:
       - zeek
       - -i
-      - ${ZEEK_INTERFACE:-fortress}
+      - ${ZEEK_INTERFACE:-FTS}
       - local
       - LogAscii::use_json=T
       - "Site::local_nets={10.200.0.0/16, 172.20.0.0/16, 192.168.0.0/16}"
