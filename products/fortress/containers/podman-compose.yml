@@ -121,6 +121,10 @@ services:
     container_name: fts-web
     restart: unless-stopped
     hostname: fts-web
+    # Publish web port to host - required for rootless podman
+    # VLAN clients access via host IP, not container IP
+    ports:
+      - "${WEB_PORT:-8443}:${WEB_PORT:-8443}"
     depends_on:
       postgres:
         condition: service_healthy
