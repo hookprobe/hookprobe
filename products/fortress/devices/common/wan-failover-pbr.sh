@@ -364,22 +364,26 @@ cleanup_stray_routes() {
 
     local dominated_by_stray=false
     local route_info
+    local stray_routes=""
+
+    route_info=$(ip route show default 2>/dev/null)
 
     # Check for routes without metrics (highest priority, often added by NM)
-    if ip route show default 2>/dev/null | grep "^default" | grep -qv "metric"; then
+    if echo "$route_info" | grep "^default" | grep -qv "metric"; then
         dominated_by_stray=true
         log_info "Found default route without metric (likely NetworkManager)"
     fi
 
     # Check for routes with proto static (carrier DHCP/ModemManager)
-    if ip route show default 2>/dev/null | grep -q "proto static"; then
+    # These are specifically pushed by the LTE carrier and must be removed
+    if echo "$route_info" | grep -q "proto static"; then
         dominated_by_stray=true
-        log_info "Found default route with proto static (likely carrier DHCP)"
+        stray_routes=$(echo "$route_info" | grep "proto static")
+        log_info "Found carrier DHCP route: $stray_routes"
     fi
 
     # Check for routes with metrics other than 10 or 100 (our only valid metrics)
     # This catches carrier-pushed routes with metric 200, 300, etc.
-    route_info=$(ip route show default 2>/dev/null)
     if echo "$route_info" | grep -E "metric [0-9]+" | grep -vE "metric (10|100)( |$)" | grep -q .; then
         dominated_by_stray=true
         log_info "Found default route with unexpected metric (not 10 or 100)"
@@ -388,10 +392,24 @@ cleanup_stray_routes() {
     if [ "$dominated_by_stray" = "true" ]; then
         log_info "Cleaning up stray default routes..."
 
-        # Remove ALL default routes and let update_main_table_route re-add correct ones
+        # First, specifically remove proto static routes (carrier DHCP)
+        while ip route show default 2>/dev/null | grep -q "proto static"; do
+            local proto_route
+            proto_route=$(ip route show default 2>/dev/null | grep "proto static" | head -1)
+            log_info "Removing carrier route: $proto_route"
+            ip route del $proto_route 2>/dev/null || break
+        done
+
+        # Then remove any other stray routes (no metric, wrong metric)
         local tries=10
-        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-            ip route del default 2>/dev/null || break
+        while [ $tries -gt 0 ]; do
+            # Check if there are any routes that aren't our metrics 10 or 100
+            local bad_route
+            bad_route=$(ip route show default 2>/dev/null | grep -vE "metric (10|100)( |$)" | head -1)
+            [ -z "$bad_route" ] && break
+
+            log_info "Removing stray route: $bad_route"
+            ip route del $bad_route 2>/dev/null || break
             tries=$((tries - 1))
         done
 
@@ -795,6 +813,9 @@ LAN_SUBNETS="${LAN_SUBNETS:-10.200.0.0/24 172.20.200.0/24 172.20.201.0/24}"
 setup_nat_rules() {
     log_info "Setting up NAT rules..."
 
+    # Delete existing table if any (clean slate)
+    nft delete table inet fts_wan_nat 2>/dev/null || true
+
     # Use nftables for NAT (consistent with our other rules)
     nft -f - << 'NFTEOF'
 # Fortress WAN Failover - NAT/Masquerade Rules
@@ -805,6 +826,13 @@ table inet fts_wan_nat {
     }
 }
 NFTEOF
+
+    if ! nft list table inet fts_wan_nat &>/dev/null; then
+        log_error "Failed to create nftables NAT table!"
+        return 1
+    fi
+
+    log_info "nftables NAT table created successfully"
 
     # Set initial NAT based on active WAN
     update_nat_for_wan "${ACTIVE_WAN:-primary}"
@@ -824,23 +852,42 @@ update_nat_for_wan() {
 
     log_info "Updating NAT rules for $active_wan WAN ($wan_iface)..."
 
+    # Ensure nftables NAT table exists (create if missing)
+    if ! nft list table inet fts_wan_nat &>/dev/null; then
+        log_warn "NAT table missing, recreating..."
+        nft -f - << 'NFTEOF'
+table inet fts_wan_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+    }
+}
+NFTEOF
+    fi
+
     # Rebuild NAT chain with correct output interface
     nft flush chain inet fts_wan_nat postrouting 2>/dev/null || true
 
     # Add masquerade rules for all LAN subnets
     for subnet in $LAN_SUBNETS; do
-        nft add rule inet fts_wan_nat postrouting ip saddr "$subnet" oifname "$wan_iface" masquerade 2>/dev/null || true
-        log_debug "NAT: $subnet -> $wan_iface (masquerade)"
+        if nft add rule inet fts_wan_nat postrouting ip saddr "$subnet" oifname "$wan_iface" masquerade 2>/dev/null; then
+            log_debug "NAT: $subnet -> $wan_iface (masquerade)"
+        else
+            log_warn "Failed to add nftables NAT rule for $subnet"
+        fi
     done
 
-    # Also add iptables rules as fallback (some systems need both)
+    # Always add iptables rules as primary fallback (more reliable on some systems)
     for subnet in $LAN_SUBNETS; do
         # Remove old rules for this subnet (both interfaces)
         iptables -t nat -D POSTROUTING -s "$subnet" -o "${PRIMARY_IFACE:-eth0}" -j MASQUERADE 2>/dev/null || true
         iptables -t nat -D POSTROUTING -s "$subnet" -o "${BACKUP_IFACE:-wwan0}" -j MASQUERADE 2>/dev/null || true
 
         # Add rule for active interface
-        iptables -t nat -A POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null || true
+        if iptables -t nat -A POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            log_debug "iptables NAT: $subnet -> $wan_iface (masquerade)"
+        else
+            log_warn "Failed to add iptables NAT rule for $subnet"
+        fi
     done
 
     log_info "NAT rules updated for $wan_iface"
@@ -1123,11 +1170,43 @@ attempt_interface_recovery() {
     discover_gateways
 }
 
+verify_nat_rules() {
+    # Verify NAT rules exist and are correct
+    # Called during health check to ensure NAT persists
+    local active="${ACTIVE_WAN:-primary}"
+    local wan_iface
+
+    if [ "$active" = "primary" ]; then
+        wan_iface="${PRIMARY_IFACE:-}"
+    else
+        wan_iface="${BACKUP_IFACE:-}"
+    fi
+
+    [ -z "$wan_iface" ] && return 0
+
+    # Check if iptables NAT rules exist for the active interface
+    local nat_ok=false
+    for subnet in $LAN_SUBNETS; do
+        if iptables -t nat -C POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            nat_ok=true
+            break
+        fi
+    done
+
+    if [ "$nat_ok" = "false" ]; then
+        log_warn "NAT rules missing for $wan_iface - recreating..."
+        update_nat_for_wan "$active"
+    fi
+}
+
 do_health_check() {
     load_state
 
-    # Clean up any stray routes added by NetworkManager
+    # Clean up any stray routes added by NetworkManager/carrier
     cleanup_stray_routes
+
+    # Verify NAT rules are in place
+    verify_nat_rules
 
     local primary_now backup_now
     local old_active="$ACTIVE_WAN"
