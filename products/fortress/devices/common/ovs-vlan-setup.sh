@@ -608,6 +608,50 @@ EOF
 }
 
 # ============================================================
+# OPENFLOW RULES FOR TRAFFIC FLOW
+# ============================================================
+
+configure_openflow_rules() {
+    log_section "Configuring OpenFlow Rules"
+
+    # Set OVS to standalone mode (normal L2 switching without controller)
+    ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
+
+    # Clear existing flows and set up permissive rules
+    # This ensures traffic flows properly between VLANs via the vlan interfaces
+    ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
+
+    # Priority 1000: Allow ARP (essential for connectivity)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,arp,actions=NORMAL"
+
+    # Priority 900: Allow DHCP (essential for client IP assignment)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=67,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=68,actions=NORMAL"
+
+    # Priority 800: Allow DNS to gateway
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=53,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,tcp,tp_dst=53,actions=NORMAL"
+
+    # Priority 500: Permissive rules for LAN traffic (10.200.0.0/16)
+    # This is broader than the specific LAN CIDR to handle any subnet configuration
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL"
+
+    # Priority 500: Allow container network traffic (172.20.0.0/16)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=172.20.0.0/16,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=172.20.0.0/16,actions=NORMAL"
+
+    # Priority 0: Default action - normal L2 switching
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL"
+
+    log_success "OpenFlow rules configured for permissive traffic flow"
+    log_info "  ARP, DHCP, DNS: priority 800-1000"
+    log_info "  LAN (10.200.0.0/16): priority 500"
+    log_info "  Containers (172.20.0.0/16): priority 500"
+    log_info "  Default: NORMAL (L2 switching)"
+}
+
+# ============================================================
 # SAVE STATE
 # ============================================================
 
@@ -719,6 +763,7 @@ main() {
             setup_container_veth
             configure_dhcp
             configure_firewall
+            configure_openflow_rules
             save_state
 
             log_section "VLAN Setup Complete"
