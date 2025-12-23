@@ -247,6 +247,94 @@ setup_rt_tables() {
     fi
 }
 
+# Prevent NetworkManager from adding default routes on WAN interfaces
+# This is critical - NM adds routes without metrics which override our PBR routes
+configure_networkmanager_no_default_route() {
+    log_info "Configuring NetworkManager to not add default routes on WAN interfaces..."
+
+    local nm_conf_dir="/etc/NetworkManager/conf.d"
+    local nm_conf_file="${nm_conf_dir}/99-fortress-no-default-route.conf"
+
+    # Skip if NetworkManager is not installed
+    if ! command -v nmcli &>/dev/null; then
+        log_debug "NetworkManager not installed, skipping"
+        return 0
+    fi
+
+    mkdir -p "$nm_conf_dir"
+
+    # Create config to prevent NM from adding default routes on WAN interfaces
+    cat > "$nm_conf_file" << EOF
+# HookProbe Fortress - Prevent NetworkManager from adding default routes
+# PBR WAN failover manages all default routes
+# Generated: $(date -Iseconds)
+
+[connection-primary-wan]
+match-device=interface-name:${PRIMARY_IFACE}
+ipv4.never-default=true
+ipv6.never-default=true
+
+[connection-backup-wan]
+match-device=interface-name:${BACKUP_IFACE}
+ipv4.never-default=true
+ipv6.never-default=true
+EOF
+
+    chmod 644 "$nm_conf_file"
+
+    # Also configure via nmcli for active connections
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        local conn_name
+        conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1)
+        if [ -n "$conn_name" ]; then
+            nmcli connection modify "$conn_name" ipv4.never-default yes 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.never-default yes 2>/dev/null || true
+            log_debug "Configured $conn_name (${iface}) to never add default route"
+        fi
+    done
+
+    # Reload NetworkManager config (non-disruptive)
+    nmcli general reload conf 2>/dev/null || true
+
+    log_info "NetworkManager configured to not add default routes"
+}
+
+# Remove any stray default routes not managed by us
+# Called before updating routes to ensure clean state
+cleanup_stray_routes() {
+    # Remove default routes that don't have our expected metrics
+    # Our routes always have metric 10 (active) or 100 (standby)
+
+    local dominated_by_stray=false
+
+    # Check for routes without metrics (highest priority, added by NM)
+    if ip route show default 2>/dev/null | grep -qv "metric"; then
+        dominated_by_stray=true
+        log_debug "Found default route without metric (likely NetworkManager)"
+    fi
+
+    # Check for routes with unexpected metrics
+    local our_metrics="metric 10|metric 100|metric 200"
+    if ip route show default 2>/dev/null | grep -vE "$our_metrics" | grep -q "metric"; then
+        dominated_by_stray=true
+        log_debug "Found default route with unexpected metric"
+    fi
+
+    if [ "$dominated_by_stray" = "true" ]; then
+        log_info "Cleaning up stray default routes..."
+
+        # Remove ALL default routes and let update_main_table_route re-add correct ones
+        local tries=10
+        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
+            ip route del default 2>/dev/null || break
+            tries=$((tries - 1))
+        done
+
+        # Re-add our routes
+        update_main_table_route
+    fi
+}
+
 setup_routing_tables() {
     log_info "Configuring routing tables..."
 
@@ -868,6 +956,9 @@ attempt_interface_recovery() {
 do_health_check() {
     load_state
 
+    # Clean up any stray routes added by NetworkManager
+    cleanup_stray_routes
+
     local primary_now backup_now
     local old_active="$ACTIVE_WAN"
     local now
@@ -1013,6 +1104,9 @@ cmd_setup() {
     log_info "Setting up PBR WAN failover..."
 
     load_config || exit 1
+
+    # Prevent NetworkManager from interfering with our routes
+    configure_networkmanager_no_default_route
 
     setup_rt_tables
     setup_routing_tables
