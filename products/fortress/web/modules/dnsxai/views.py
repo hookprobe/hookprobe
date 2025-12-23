@@ -260,10 +260,22 @@ def api_pause():
         if error:
             return jsonify({'status': 'unknown', 'error': error})
 
+        # Calculate remaining seconds from pause_until
+        remaining_seconds = 0
+        pause_until = data.get('pause_until')
+        if data.get('paused') and pause_until:
+            try:
+                from datetime import datetime
+                pause_end = datetime.fromisoformat(pause_until)
+                remaining = (pause_end - datetime.now()).total_seconds()
+                remaining_seconds = max(0, int(remaining))
+            except (ValueError, TypeError):
+                pass
+
         return jsonify({
             'status': 'paused' if data.get('paused') else 'active',
-            'pause_until': data.get('pause_until'),
-            'remaining_seconds': 0  # Calculated on frontend
+            'pause_until': pause_until,
+            'remaining_seconds': remaining_seconds
         })
 
     # POST - toggle pause
