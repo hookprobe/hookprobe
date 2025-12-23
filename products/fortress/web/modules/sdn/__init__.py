@@ -17,3 +17,6 @@ Features:
 from flask import Blueprint
 
 sdn_bp = Blueprint('sdn', __name__)
+
+# Import views to register routes
+from . import views  # noqa: E402, F401
