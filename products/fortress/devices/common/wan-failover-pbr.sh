@@ -276,8 +276,52 @@ setup_routing_tables() {
         log_info "Backup table configured: default via $BACKUP_GATEWAY dev $BACKUP_IFACE"
     fi
 
-    # Remove default route from main table (policy routing handles it)
-    ip route del default 2>/dev/null || true
+    # IMPORTANT: Keep a default route in main table as fallback
+    # This ensures connectivity even if PBR marking fails
+    update_main_table_route
+}
+
+update_main_table_route() {
+    # Update the default route in main table to match active WAN
+    # This is critical for:
+    # 1. Health check pings that might not get marked
+    # 2. System services that bypass nftables
+    # 3. Fallback when PBR isn't working
+
+    local active="${ACTIVE_WAN:-primary}"
+    local gateway iface metric_active=10 metric_standby=100
+
+    # Remove existing default routes from main table
+    local tries=5
+    while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
+        ip route del default 2>/dev/null || break
+        tries=$((tries - 1))
+    done
+
+    # Add routes based on active WAN (lower metric = preferred)
+    if [ "$active" = "primary" ]; then
+        # Primary is active
+        if [ -n "$PRIMARY_GATEWAY" ]; then
+            ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $metric_active 2>/dev/null || true
+            log_debug "Main table: default via $PRIMARY_GATEWAY (active, metric $metric_active)"
+        fi
+        if [ -n "$BACKUP_GATEWAY" ]; then
+            ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $metric_standby 2>/dev/null || true
+            log_debug "Main table: default via $BACKUP_GATEWAY (standby, metric $metric_standby)"
+        fi
+    else
+        # Backup is active
+        if [ -n "$BACKUP_GATEWAY" ]; then
+            ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $metric_active 2>/dev/null || true
+            log_debug "Main table: default via $BACKUP_GATEWAY (active, metric $metric_active)"
+        fi
+        if [ -n "$PRIMARY_GATEWAY" ]; then
+            ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $metric_standby 2>/dev/null || true
+            log_debug "Main table: default via $PRIMARY_GATEWAY (standby, metric $metric_standby)"
+        fi
+    fi
+
+    log_info "Main table default route updated: active=$active"
 }
 
 setup_ip_rules() {
@@ -478,6 +522,11 @@ table inet fts_forward_mark {
 NFTEOF
         log_debug "Legacy forward chain (fts_forward_mark) updated with mark $mark"
     fi
+
+    # Update the main table default route to reflect the active WAN
+    # This ensures traffic flows correctly even if PBR marking fails
+    ACTIVE_WAN="$wan"
+    update_main_table_route
 
     log_info "Active WAN set to: $wan (mark $mark)"
 }
@@ -1057,8 +1106,13 @@ cmd_status() {
     fi
     echo ""
 
+    # Main table default routes (critical for failover)
+    echo "Main Table (fallback routes):"
+    ip route show default 2>/dev/null | sed 's/^/    /' || echo "    (none - PROBLEM!)"
+    echo ""
+
     # Routing tables
-    echo "Routing Tables:"
+    echo "PBR Routing Tables:"
     echo "  Table $TABLE_PRIMARY ($TABLE_NAME_PRIMARY):"
     ip route show table $TABLE_PRIMARY 2>/dev/null | sed 's/^/    /' || echo "    (empty)"
     echo ""
