@@ -192,8 +192,8 @@ services:
       # Mount over shared path to persist data while keeping bundled whitelist
       - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
       - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
-      # Persistent logs for ML training data (survives reinstalls)
-      - dnsxai_logs:/var/log/hookprobe
+      # Bind mount logs to host for ML training data visibility
+      - /var/log/hookprobe:/var/log/hookprobe
       - /etc/hookprobe:/etc/hookprobe:ro
     ports:
       - "0.0.0.0:5353:5353/udp"  # DNS accessible from LAN
