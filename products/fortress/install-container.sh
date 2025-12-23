@@ -1806,11 +1806,33 @@ setup_ovs_dhcp() {
     local lan_port="${OVS_BRIDGE:-FTS}"
     local config_file="/etc/dnsmasq.d/fts-ovs.conf"
 
+    # Calculate DHCP range based on subnet mask
+    # CRITICAL: Default range (.100-.200) is only valid for /24 or larger!
+    # For smaller subnets, we MUST calculate correct ranges.
+    local dhcp_start="${LAN_DHCP_START:-}"
+    local dhcp_end="${LAN_DHCP_END:-}"
+    local subnet_mask="${LAN_SUBNET_MASK:-24}"
+
+    # If DHCP range not explicitly set, calculate based on subnet size
+    if [ -z "$dhcp_start" ] || [ -z "$dhcp_end" ]; then
+        case "$subnet_mask" in
+            29) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.6" ;;      # 6 usable, reserve .1 for gateway
+            28) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.14" ;;     # 14 usable, reserve .1 for gateway
+            27) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.30" ;;    # 30 usable, reserve .1-.9 for infra
+            26) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.62" ;;    # 62 usable
+            25) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.126" ;;   # 126 usable
+            24) dhcp_start="10.200.0.100"; dhcp_end="10.200.0.200" ;;  # 254 usable
+            *)  dhcp_start="10.200.0.100"; dhcp_end="10.200.1.200" ;;  # /23 or larger
+        esac
+        log_info "DHCP range calculated for /${subnet_mask}: ${dhcp_start} - ${dhcp_end}"
+    fi
+
     mkdir -p "$(dirname "$config_file")"
 
     cat > "$config_file" << EOF
 # HookProbe Fortress DHCP Configuration (OVS)
 # Generated: $(date -Iseconds)
+# LAN Subnet: 10.200.0.0/${subnet_mask}
 
 # Bind to OVS bridge interface
 interface=${lan_port}
@@ -1823,8 +1845,8 @@ bind-dynamic
 no-resolv
 no-poll
 
-# LAN DHCP range (configured subnet: /${LAN_SUBNET_MASK:-24})
-dhcp-range=${LAN_DHCP_START:-10.200.0.100},${LAN_DHCP_END:-10.200.0.200},12h
+# LAN DHCP range (configured subnet: /${subnet_mask})
+dhcp-range=${dhcp_start},${dhcp_end},12h
 
 # Gateway (fortress OVS LAN port)
 dhcp-option=3,10.200.0.1
