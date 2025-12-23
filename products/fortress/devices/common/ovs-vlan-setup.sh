@@ -517,30 +517,16 @@ table inet fortress_vlan {
 
         # Containers → Internet + Management: ALLOW
         ip saddr ${CONTAINER_SUBNET} accept
-
-        # ============================================================
-        # DNAT FORWARDING - Allow forwarded (DNAT'd) traffic to containers
-        # ============================================================
-        # Allow DNAT'd traffic to web container
-        ct status dnat ip daddr ${WEB_CONTAINER_IP} tcp dport ${WEB_PORT} accept
     }
 
     # ============================================================
-    # DNAT - Port forwarding to containers
+    # NOTE: No DNAT needed for web access with rootless podman
     # ============================================================
-    chain prerouting {
-        type nat hook prerouting priority dstnat; policy accept;
-
-        # Forward web UI requests from MGMT VLAN to web container
-        # Clients accessing the gateway IP on port 8443 get redirected to the container
-        # Note: 'dnat ip to' required in inet table to disambiguate IPv4 vs IPv6
-        iifname "vlan${VLAN_MGMT}" tcp dport ${WEB_PORT} dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
-
-        # Also handle requests directly to the management gateway IP
-        ip daddr ${GATEWAY_MGMT} tcp dport ${WEB_PORT} dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
-        ip daddr ${GATEWAY_MGMT} tcp dport 443 dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
-        ip daddr ${GATEWAY_MGMT} tcp dport 80 dnat ip to ${WEB_CONTAINER_IP}:${WEB_PORT}
-    }
+    # With rootless podman + port publishing (-p 8443:8443), the web container
+    # is accessible directly on the host's IP addresses. VLAN 200 clients
+    # connect to 10.200.100.1:8443 which is handled by podman's port forward.
+    #
+    # The input chain above already allows tcp dport { 8443, 443, 80 } on vlan200.
 
     # NAT - masquerade all internal traffic going out
     # Don't restrict to specific WAN interface - let routing decide
@@ -552,9 +538,6 @@ table inet fortress_vlan {
         ip saddr ${SUBNET_LAN} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
         ip saddr ${SUBNET_MGMT} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
         ip saddr ${CONTAINER_SUBNET} ip daddr != { ${SUBNET_LAN}, ${SUBNET_MGMT}, ${CONTAINER_SUBNET} } masquerade
-
-        # Masquerade traffic from MGMT VLAN to container network (for DNAT'd return traffic)
-        ip saddr ${SUBNET_MGMT} ip daddr ${CONTAINER_SUBNET} masquerade
     }
 }
 EOF
