@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.5
-**Last Updated**: 2025-12-18
+**Version**: 5.6
+**Last Updated**: 2025-12-23
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -53,6 +53,12 @@
 | **WiFi channel scanning** | Congestion analysis | `shared/wireless/channel_scanner.py` |
 | **Fortress LAN bridging** | OVS bridge + DHCP | `products/fortress/setup.sh` (search `setup_lan_bridge`) |
 | **Fortress device scripts** | Hardware profiles | `products/fortress/devices/common/` |
+| **SLA AI / Business Continuity** | Intelligent failover | `shared/slaai/` |
+| **WAN failover prediction** | LSTM predictor | `shared/slaai/predictor.py` |
+| **Cost-aware failback** | Metered LTE tracking | `shared/slaai/cost_tracker.py` |
+| **Adaptive DNS failover** | Multi-provider DNS | `shared/slaai/dns_intelligence.py` |
+| **PBR integration** | Route switching | `shared/slaai/integrations/pbr.py` |
+| **Fortress dual-WAN** | PBR failover | `products/fortress/devices/common/wan-failover-pbr.sh` |
 
 ---
 
@@ -162,6 +168,7 @@ These directories contain proprietary innovations. Commercial license required f
 | **Neural Resonance Protocol** | `core/neuro/` | Proprietary |
 | **dnsXai ML Classifier** | `shared/dnsXai/` | Proprietary |
 | **DSM Consensus** | `shared/dsm/` | Proprietary |
+| **SLA AI Business Continuity** | `shared/slaai/` | Proprietary |
 | **MSSP Cloud Platform** | `products/mssp/` | Proprietary |
 
 ### Usage Guidelines
@@ -307,32 +314,49 @@ hookprobe/
 │   │       └── dfs-intelligence/
 │   │           └── dfs_api_server.py
 │   │
-│   └── cortex/                       # HOOKPROBE CORTEX - Neural Command Center
-│       ├── README.md                # Documentation
-│       ├── ARCHITECTURE.md          # HTP integration analysis
-│       ├── backend/
-│       │   ├── server.py            # WebSocket server with demo/live toggle
-│       │   ├── node_registry.py     # NodeTwin state management
-│       │   ├── htp_bridge.py        # HTP mesh participant
-│       │   ├── demo_data.py         # Demo event generator
-│       │   ├── geo_resolver.py      # IP geolocation
-│       │   └── connectors/          # Product tier connectors
-│       │       ├── base.py          # ProductConnector base class
-│       │       ├── manager.py       # ConnectorManager aggregator
-│       │       ├── guardian.py      # Guardian Flask integration
-│       │       ├── fortress.py      # Fortress DSM integration
-│       │       ├── nexus.py         # Nexus ML/AI integration
-│       │       └── mssp.py          # MSSP Django integration
-│       ├── frontend/
-│       │   ├── index.html           # Cortex main page
-│       │   ├── css/globe.css        # Premium styling
-│       │   └── js/
-│       │       ├── globe.js         # Globe.gl visualization
-│       │       ├── data-stream.js   # WebSocket client
-│       │       ├── animations.js    # Premium effects engine
-│       │       └── fallback-2d.js   # Mobile 2D fallback
+│   ├── cortex/                       # HOOKPROBE CORTEX - Neural Command Center
+│   │   ├── README.md                # Documentation
+│   │   ├── ARCHITECTURE.md          # HTP integration analysis
+│   │   ├── backend/
+│   │   │   ├── server.py            # WebSocket server with demo/live toggle
+│   │   │   ├── node_registry.py     # NodeTwin state management
+│   │   │   ├── htp_bridge.py        # HTP mesh participant
+│   │   │   ├── demo_data.py         # Demo event generator
+│   │   │   ├── geo_resolver.py      # IP geolocation
+│   │   │   └── connectors/          # Product tier connectors
+│   │   │       ├── base.py          # ProductConnector base class
+│   │   │       ├── manager.py       # ConnectorManager aggregator
+│   │   │       ├── guardian.py      # Guardian Flask integration
+│   │   │       ├── fortress.py      # Fortress DSM integration
+│   │   │       ├── nexus.py         # Nexus ML/AI integration
+│   │   │       └── mssp.py          # MSSP Django integration
+│   │   ├── frontend/
+│   │   │   ├── index.html           # Cortex main page
+│   │   │   ├── css/globe.css        # Premium styling
+│   │   │   └── js/
+│   │   │       ├── globe.js         # Globe.gl visualization
+│   │   │       ├── data-stream.js   # WebSocket client
+│   │   │       ├── animations.js    # Premium effects engine
+│   │   │       └── fallback-2d.js   # Mobile 2D fallback
+│   │   └── tests/
+│   │       └── test_globe_backend.py
+│   │
+│   └── slaai/                        # SLA AI - BUSINESS CONTINUITY ENGINE
+│       ├── ARCHITECTURE.md          # Comprehensive architecture doc
+│       ├── __init__.py              # Module exports
+│       ├── config.py                # YAML configuration loader
+│       ├── database.py              # SQLite time-series storage
+│       ├── engine.py                # Central SLA engine coordinator
+│       ├── metrics_collector.py     # RTT, jitter, signal collection
+│       ├── predictor.py             # LSTM failure prediction
+│       ├── failback.py              # Cost-aware failback intelligence
+│       ├── cost_tracker.py          # Metered usage tracking
+│       ├── dns_intelligence.py      # Adaptive multi-provider DNS
+│       ├── integrations/
+│       │   ├── __init__.py
+│       │   └── pbr.py               # Fortress PBR integration
 │       └── tests/
-│           └── test_globe_backend.py
+│           └── test_slaai.py        # Comprehensive test suite
 │
 ├── products/                         # PRODUCT TIERS
 │   ├── README.md                    # Product tier overview
@@ -877,6 +901,110 @@ from shared.wireless import (
     ChannelScorer,       # ML-powered scoring
     RadarMonitor,        # Real-time monitoring
     DFSMLTrainer,        # Model training
+)
+```
+
+### SLA AI - Business Continuity Engine
+
+**Location**: `shared/slaai/`
+
+HookProbe's proprietary **SLA AI** (Service Level Agreement Artificial Intelligence) is an intelligent network continuity system that ensures **Business Continuity Objectives (BCO)** and **Business Process Objectives (BPO)** are met through predictive failover and cost-aware failback.
+
+**Core Philosophy**: *Feel, Sense, Adapt, Learn, Optimize*
+
+| File | Purpose |
+|------|---------|
+| `ARCHITECTURE.md` | Comprehensive architecture documentation |
+| `engine.py` | Central SLA engine coordinator |
+| `metrics_collector.py` | RTT, jitter, packet loss, LTE signal collection |
+| `predictor.py` | LSTM neural network for failure prediction |
+| `failback.py` | Cost-aware failback with hysteresis |
+| `cost_tracker.py` | Metered connection usage and budget tracking |
+| `dns_intelligence.py` | Multi-provider adaptive DNS failover |
+| `database.py` | SQLite time-series storage |
+| `integrations/pbr.py` | Fortress PBR route switching integration |
+
+**Business Continuity Metrics**:
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| **BCO Uptime** | 99.9% | Total connectivity uptime |
+| **RTO** (Recovery Time Objective) | < 5s | Time to failover |
+| **RPO** (Recovery Point Objective) | 0 bytes | No data loss during switch |
+| **MTTR** | < 5s | Mean Time to Recovery |
+| **MTTD** | < 30s | Mean Time to Detection (predictive) |
+| **False Positive Rate** | < 5% | Unnecessary failovers |
+| **Cost Efficiency** | 80%+ | Primary usage vs metered backup |
+
+**LSTM Predictor Features** (24 input features):
+- RTT statistics (current, mean, std, trend)
+- Jitter statistics (current, mean, std, trend)
+- Packet loss (current, mean, trend)
+- LTE signal (RSSI, RSRP, RSRQ normalized)
+- DNS response times
+- Time encoding (hour/day cyclical)
+- Interface error rate
+- Historical failure count (24h)
+
+**Failback Intelligence**:
+```python
+# Cost-aware failback policy
+FailbackPolicy(
+    min_backup_duration_s=120,      # 2 min on backup before considering
+    primary_stable_duration_s=60,   # Primary must be stable 1 min
+    health_checks_required=5,       # 5 successful checks needed
+    metered_failback_urgency=1.5,   # 1.5x faster on metered
+    business_hours_multiplier=1.2,  # Prioritize during 9-6
+    max_switches_per_hour=4,        # Flap prevention
+)
+```
+
+**State Machine**:
+```
+PRIMARY_ACTIVE ──[failure/predicted]──> FAILOVER_IN_PROGRESS ──> BACKUP_ACTIVE
+       ▲                                                              │
+       │                                                              │
+       └──────────── FAILBACK_IN_PROGRESS <──[primary recovered]──────┘
+```
+
+**PBR Integration** (writes to `/run/fortress/slaai-recommendation.json`):
+```json
+{
+    "timestamp": "2024-01-15T10:30:00Z",
+    "recommendation": "failback",
+    "confidence": 0.85,
+    "reason": "Primary healthy (92%); High backup cost (78%)",
+    "active_interface": "wwan0",
+    "cost_status": {
+        "daily_usage_mb": 145,
+        "daily_budget_mb": 500,
+        "urgency_score": 0.78
+    }
+}
+```
+
+**CLI Usage**:
+```bash
+# Start SLA engine (standalone)
+python -m shared.slaai.engine --config /etc/hookprobe/slaai.conf --debug
+
+# Run tests
+pytest shared/slaai/tests/ -v
+```
+
+**Key Classes**:
+```python
+from shared.slaai import (
+    SLAEngine,             # Central coordinator
+    SLAState,              # State machine enum
+    MetricsCollector,      # Metrics gathering
+    WANMetrics,            # Metrics dataclass
+    LSTMPredictor,         # Failure prediction
+    Prediction,            # Prediction result
+    FailbackIntelligence,  # Failback decisions
+    FailbackPolicy,        # Policy configuration
+    CostTracker,           # Metered usage tracking
+    DNSIntelligence,       # Adaptive DNS
 )
 ```
 
