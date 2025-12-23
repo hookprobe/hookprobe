@@ -353,7 +353,7 @@ def api_get_whitelist():
 @dnsxai_bp.route('/api/whitelist', methods=['POST'])
 @login_required
 def api_add_whitelist():
-    """Add domain to whitelist."""
+    """Add domain to whitelist with validation."""
     data = request.get_json()
     domain = data.get('domain', '').strip().lower()
 
@@ -363,6 +363,10 @@ def api_add_whitelist():
     result, error = _api_call('POST', '/api/whitelist', {'domain': domain})
 
     if error:
+        # If we got a result with error details, return it (validation error)
+        if result and 'error' in result:
+            return jsonify(result), 400
+        # Otherwise it's a service error
         return jsonify({'success': False, 'error': error}), 503
 
     return jsonify(result)
