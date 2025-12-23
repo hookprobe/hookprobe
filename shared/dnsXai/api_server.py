@@ -153,16 +153,19 @@ class StatsTracker:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get current statistics."""
+        # Check pause expiry first (this auto-resumes if time expired)
+        currently_paused = self.is_paused()
+
         with self._lock:
             block_rate = 0.0
             if self._stats['total_queries'] > 0:
                 block_rate = (self._stats['blocked_queries'] / self._stats['total_queries']) * 100
 
             return {
-                'protection_enabled': not self._paused,
+                'protection_enabled': not currently_paused,
                 'protection_level': self._protection_level,
-                'paused': self._paused,
-                'pause_until': self._pause_until,
+                'paused': currently_paused,
+                'pause_until': self._pause_until if currently_paused else None,
                 'total_queries': self._stats['total_queries'],
                 'blocked_queries': self._stats['blocked_queries'],
                 'allowed_queries': self._stats['allowed_queries'],
