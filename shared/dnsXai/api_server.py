@@ -33,7 +33,7 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from collections import deque
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -154,36 +154,86 @@ class StatsTracker:
             self._stats['cache_misses'] += 1
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get current statistics."""
+        """Get current statistics from log files written by DNS resolver."""
         # Check pause expiry first (this auto-resumes if time expired)
         currently_paused = self.is_paused()
 
-        with self._lock:
-            block_rate = 0.0
-            if self._stats['total_queries'] > 0:
-                block_rate = (self._stats['blocked_queries'] / self._stats['total_queries']) * 100
+        # Read actual stats from log files (written by engine.py resolver)
+        total_queries = 0
+        blocked_queries = 0
+        allowed_queries = 0
+        ml_blocks = 0
 
+        try:
+            if QUERIES_LOG.exists():
+                with open(QUERIES_LOG, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split('\t')
+                        if len(parts) >= 2:
+                            total_queries += 1
+                            if parts[1] == 'BLOCKED':
+                                blocked_queries += 1
+                                # Check if ML classified (method contains 'ml')
+                                if len(parts) >= 5 and 'ml' in parts[4].lower():
+                                    ml_blocks += 1
+                            else:
+                                allowed_queries += 1
+        except Exception as e:
+            logger.warning(f"Could not read queries log for stats: {e}")
+
+        # Calculate block rate
+        block_rate = 0.0
+        if total_queries > 0:
+            block_rate = (blocked_queries / total_queries) * 100
+
+        # Get blocklist size
+        blocklist_size = 0
+        blocklist_file = DATA_DIR / 'blocklist.txt'
+        try:
+            if blocklist_file.exists():
+                with open(blocklist_file, 'r') as f:
+                    blocklist_size = sum(1 for line in f if line.strip() and not line.startswith('#'))
+        except Exception:
+            pass
+
+        with self._lock:
             return {
                 'protection_enabled': not currently_paused,
                 'protection_level': self._protection_level,
                 'paused': currently_paused,
                 'pause_until': self._pause_until if currently_paused else None,
-                'total_queries': self._stats['total_queries'],
-                'blocked_queries': self._stats['blocked_queries'],
-                'allowed_queries': self._stats['allowed_queries'],
+                'total_queries': total_queries,
+                'blocked_queries': blocked_queries,
+                'allowed_queries': allowed_queries,
                 'block_rate': round(block_rate, 2),
+                'blocklist_size': blocklist_size,
                 'cache_hits': self._stats['cache_hits'],
                 'cache_misses': self._stats['cache_misses'],
                 'ml_classifications': self._stats['ml_classifications'],
-                'ml_blocks': self._stats['ml_blocks'],
+                'ml_blocks': ml_blocks,
                 'uptime_start': self._stats['uptime_start'],
-                'last_updated': self._stats['last_updated'],
+                'last_updated': datetime.now().isoformat(),
             }
 
     def get_blocked_domains(self, limit: int = 100) -> list:
-        """Get recently blocked domains."""
-        with self._lock:
-            return list(self._blocked_domains)[-limit:]
+        """Get recently blocked domains from log file."""
+        blocked = []
+        try:
+            if BLOCKED_LOG.exists():
+                with open(BLOCKED_LOG, 'r') as f:
+                    lines = f.readlines()
+                    for line in lines[-limit:]:
+                        parts = line.strip().split('\t')
+                        if len(parts) >= 4:
+                            blocked.append({
+                                'domain': parts[1],
+                                'reason': parts[2],
+                                'timestamp': parts[0],
+                                'ml_classified': 'ml' in parts[2].lower()
+                            })
+        except Exception as e:
+            logger.warning(f"Could not read blocked log: {e}")
+        return blocked
 
     def set_protection_level(self, level: int) -> bool:
         """Set protection level (0-5)."""
@@ -270,15 +320,64 @@ class WhitelistManager:
         """Get all whitelist entries."""
         return sorted(self._whitelist)
 
-    def add(self, domain: str) -> bool:
-        """Add domain to whitelist."""
+    def validate_domain(self, domain: str) -> Tuple[bool, str]:
+        """Validate domain format. Returns (is_valid, error_message)."""
+        import re
+
+        if not domain:
+            return False, "Domain cannot be empty"
+
         domain = domain.strip().lower()
-        if domain and domain not in self._whitelist:
-            self._whitelist.add(domain)
-            self._save()
-            logger.info(f"Added to whitelist: {domain}")
-            return True
-        return False
+
+        # Check length
+        if len(domain) > 253:
+            return False, "Domain too long (max 253 characters)"
+
+        if len(domain) < 2:
+            return False, "Domain too short"
+
+        # Check for invalid characters
+        # Valid: a-z, 0-9, hyphen, dot
+        if not re.match(r'^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$', domain):
+            return False, "Invalid characters (only a-z, 0-9, hyphen, dot allowed)"
+
+        # Check for consecutive dots
+        if '..' in domain:
+            return False, "Invalid format: consecutive dots"
+
+        # Check for leading/trailing hyphens in labels
+        labels = domain.split('.')
+        for label in labels:
+            if not label:
+                return False, "Invalid format: empty label"
+            if len(label) > 63:
+                return False, f"Label '{label}' too long (max 63 characters)"
+            if label.startswith('-') or label.endswith('-'):
+                return False, f"Label '{label}' cannot start or end with hyphen"
+
+        # Must have at least one dot for a proper domain (or be a TLD which is ok)
+        # Single-label domains are allowed for flexibility
+
+        return True, ""
+
+    def add(self, domain: str) -> Tuple[bool, str]:
+        """Add domain to whitelist. Returns (success, message)."""
+        domain = domain.strip().lower()
+
+        # Validate domain format
+        is_valid, error = self.validate_domain(domain)
+        if not is_valid:
+            return False, error
+
+        # Check if already exists
+        if domain in self._whitelist:
+            return False, f"Domain '{domain}' is already whitelisted"
+
+        # Add to whitelist
+        self._whitelist.add(domain)
+        self._save()
+        logger.info(f"Added to whitelist: {domain}")
+        return True, f"Domain '{domain}' added to whitelist"
 
     def remove(self, domain: str) -> bool:
         """Remove domain from whitelist."""
@@ -595,18 +694,19 @@ class APIHandler(BaseHTTPRequestHandler):
         })
 
     def _add_whitelist(self):
-        """Add domain to whitelist."""
+        """Add domain to whitelist with validation."""
         data = self._parse_body()
         domain = data.get('domain', '').strip()
 
         if not domain:
-            self._send_error('Missing domain parameter')
+            self._send_json({'success': False, 'error': 'Missing domain parameter'}, 400)
             return
 
-        if whitelist_manager.add(domain):
-            self._send_json({'success': True, 'domain': domain})
+        success, message = whitelist_manager.add(domain)
+        if success:
+            self._send_json({'success': True, 'domain': domain.lower(), 'message': message})
         else:
-            self._send_json({'success': False, 'message': 'Domain already in whitelist or invalid'})
+            self._send_json({'success': False, 'error': message}, 400)
 
     def _remove_whitelist(self):
         """Remove domain from whitelist."""

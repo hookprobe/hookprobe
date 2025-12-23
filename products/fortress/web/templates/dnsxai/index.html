@@ -528,16 +528,18 @@ async function loadWhitelist() {
         if (whitelist.length === 0) {
             tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">No whitelisted domains</td></tr>';
         } else {
-            tbody.innerHTML = whitelist.map(d => `
+            tbody.innerHTML = whitelist.map(d => {
+                const escaped = d.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                return `
                 <tr>
                     <td class="text-monospace">${d}</td>
                     <td class="text-right">
-                        <button class="btn btn-xs btn-danger" onclick="removeWhitelist('${d}')">
+                        <button class="btn btn-xs btn-danger" onclick="removeWhitelist('${escaped}')">
                             <i class="fas fa-times"></i>
                         </button>
                     </td>
                 </tr>
-            `).join('');
+            `}).join('');
         }
     } catch(e) {
         console.error('Failed to load whitelist:', e);
