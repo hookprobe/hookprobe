@@ -276,6 +276,10 @@ cleanup_network_interfaces() {
     rm -f /etc/dnsmasq.d/fts-wan-failover-dns.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
 
+    # Remove dnsmasq systemd drop-in for OVS dependency
+    rm -rf /etc/systemd/system/dnsmasq.service.d 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+
     # Remove WiFi configuration state
     rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
     rm -f /etc/hookprobe/wifi-ap.conf 2>/dev/null || true
