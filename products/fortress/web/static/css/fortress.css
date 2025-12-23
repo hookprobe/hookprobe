@@ -1,116 +1,714 @@
 /**
- * HookProbe Fortress - Custom Styles
- * Extends AdminLTE with HookProbe branding
+ * HookProbe Fortress - Premium Dark Theme
+ * Inspired by Guardian's elegant color palette
+ * Extends AdminLTE with refined styling
  */
 
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+
 :root {
-    --hp-prussian: #002742;
+    /* Core HookProbe Palette */
+    --hp-prussian: #0b132b;
+    --hp-prussian-light: #1c2541;
+    --hp-prussian-mid: #141e30;
+    --hp-black-pearl: #050a18;
+
+    /* Guardian Premium Accents */
+    --hp-pacific: #58a4b0;
+    --hp-pacific-light: #7ab8c2;
+    --hp-pacific-dark: #3d8a96;
+    --hp-watermelon: #ee4266;
+    --hp-watermelon-light: #f16b88;
+
+    /* Legacy (keep for compatibility) */
     --hp-siren: #850033;
     --hp-tangerine: #e69500;
-    --hp-ebb: #e6dbdb;
-    --hp-black-pearl: #02040d;
+    --hp-tangerine-light: #ffab1a;
+    --hp-ebb: #d8dbe2;
+    --hp-alabaster: #e9ecef;
+
+    /* Status Colors */
+    --hp-green: #10b981;
+    --hp-green-light: #34d399;
+    --hp-amber: #f59e0b;
+    --hp-red: #ef4444;
+    --hp-blue: #3b82f6;
+
+    /* Dark Mode Backgrounds */
+    --bg-body: #0f1419;
+    --bg-content: #151b23;
+    --bg-card: #1a222d;
+    --bg-card-hover: #1f2937;
+    --bg-input: #0d1117;
+
+    /* Text */
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+
+    /* Borders */
+    --border-default: rgba(255, 255, 255, 0.08);
+    --border-light: rgba(255, 255, 255, 0.12);
+    --border-accent: rgba(88, 164, 176, 0.3);
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+    --shadow-glow: 0 0 20px rgba(88, 164, 176, 0.15);
+
+    /* Transitions */
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.25s ease;
+    --transition-smooth: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Font */
+    --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
-/* Dark mode overrides */
+/* ============================================
+   Base & Typography
+   ============================================ */
+body {
+    font-family: var(--font-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.text-monospace {
+    font-family: var(--font-mono);
+}
+
+/* ============================================
+   Dark Mode - Content Wrapper (Premium Light BG)
+   ============================================ */
+.dark-mode .content-wrapper {
+    background: linear-gradient(180deg, var(--bg-content) 0%, var(--bg-body) 100%);
+}
+
+.dark-mode .content-header {
+    background: transparent;
+}
+
+.dark-mode .content-header h1 {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* ============================================
+   Sidebar - Refined Dark
+   ============================================ */
 .dark-mode .main-sidebar {
-    background-color: var(--hp-prussian);
+    background: linear-gradient(180deg, var(--hp-prussian) 0%, var(--hp-black-pearl) 100%);
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
 }
 
 .dark-mode .brand-link {
     background-color: var(--hp-black-pearl);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--border-default);
+    padding: 1rem;
+}
+
+.dark-mode .brand-link .brand-text {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.dark-mode .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link {
+    color: var(--text-secondary);
+    border-radius: 8px;
+    margin: 2px 8px;
+    transition: var(--transition-normal);
+}
+
+.dark-mode .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link:hover {
+    background-color: rgba(88, 164, 176, 0.1);
+    color: var(--hp-pacific-light);
 }
 
 .dark-mode .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active {
-    background-color: var(--hp-tangerine);
-    color: var(--hp-black-pearl);
+    background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%);
+    color: white;
+    box-shadow: var(--shadow-md);
 }
 
 .dark-mode .sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active i {
-    color: var(--hp-black-pearl);
+    color: white;
 }
 
-/* Info boxes */
-.info-box-icon.bg-success {
-    background-color: #28a745 !important;
-}
-
-.info-box-icon.bg-warning {
-    background-color: var(--hp-tangerine) !important;
-}
-
-.info-box-icon.bg-danger {
-    background-color: var(--hp-siren) !important;
-}
-
-/* Cards */
+/* ============================================
+   Cards - Premium Glass Effect
+   ============================================ */
 .dark-mode .card {
-    background-color: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition-normal);
+}
+
+.dark-mode .card:hover {
+    border-color: var(--border-light);
+    box-shadow: var(--shadow-md);
 }
 
 .dark-mode .card-header {
-    background-color: transparent;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: transparent;
+    border-bottom: 1px solid var(--border-default);
+    padding: 1rem 1.25rem;
 }
 
-/* Tables */
+.dark-mode .card-header .card-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.dark-mode .card-header .card-title i {
+    color: var(--hp-pacific);
+    margin-right: 0.5rem;
+}
+
+.dark-mode .card-body {
+    color: var(--text-secondary);
+}
+
+.dark-mode .card-footer {
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid var(--border-default);
+}
+
+/* Card Outlines - Premium Colors */
+.dark-mode .card-success.card-outline {
+    border-top: 3px solid var(--hp-green);
+}
+
+.dark-mode .card-info.card-outline {
+    border-top: 3px solid var(--hp-pacific);
+}
+
+.dark-mode .card-warning.card-outline {
+    border-top: 3px solid var(--hp-amber);
+}
+
+.dark-mode .card-danger.card-outline {
+    border-top: 3px solid var(--hp-watermelon);
+}
+
+.dark-mode .card-primary.card-outline {
+    border-top: 3px solid var(--hp-blue);
+}
+
+/* ============================================
+   Info Boxes - Gradient Icons
+   ============================================ */
+.dark-mode .info-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    box-shadow: var(--shadow-sm);
+}
+
+.info-box-icon {
+    border-radius: 8px;
+}
+
+.info-box-icon.bg-success {
+    background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%) !important;
+}
+
+.info-box-icon.bg-info {
+    background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%) !important;
+}
+
+.info-box-icon.bg-warning {
+    background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%) !important;
+}
+
+.info-box-icon.bg-danger {
+    background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%) !important;
+}
+
+.info-box-icon.bg-primary {
+    background: linear-gradient(135deg, var(--hp-blue) 0%, #2563eb 100%) !important;
+}
+
+/* ============================================
+   Tables - Refined Styling
+   ============================================ */
+.dark-mode .table {
+    color: var(--text-secondary);
+}
+
+.dark-mode .table th {
+    color: var(--text-primary);
+    font-weight: 600;
+    border-color: var(--border-default);
+}
+
+.dark-mode .table td {
+    border-color: var(--border-default);
+}
+
 .dark-mode .table-hover tbody tr:hover {
-    background-color: rgba(230, 149, 0, 0.1);
+    background-color: rgba(88, 164, 176, 0.08);
 }
 
-/* Badges */
-.badge-success {
-    background-color: #28a745;
+.dark-mode .table-striped tbody tr:nth-of-type(odd) {
+    background-color: rgba(255, 255, 255, 0.02);
 }
 
-.badge-warning {
-    background-color: var(--hp-tangerine);
-    color: var(--hp-black-pearl);
+.dark-mode .thead-light th {
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--border-default);
 }
 
-.badge-danger {
-    background-color: var(--hp-siren);
+/* ============================================
+   Buttons - Premium Styling
+   ============================================ */
+.dark-mode .btn {
+    border-radius: 8px;
+    font-weight: 500;
+    transition: var(--transition-fast);
 }
 
-/* Buttons */
 .btn-primary {
-    background-color: var(--hp-tangerine);
-    border-color: var(--hp-tangerine);
-    color: var(--hp-black-pearl);
+    background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%);
+    border: none;
+    color: white;
+    box-shadow: var(--shadow-sm);
 }
 
 .btn-primary:hover {
-    background-color: #cc8400;
-    border-color: #cc8400;
-    color: var(--hp-black-pearl);
+    background: linear-gradient(135deg, var(--hp-pacific-light) 0%, var(--hp-pacific) 100%);
+    color: white;
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
 }
 
-/* Footer */
+.btn-success {
+    background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%);
+    border: none;
+}
+
+.btn-success:hover {
+    background: linear-gradient(135deg, var(--hp-green-light) 0%, var(--hp-green) 100%);
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%);
+    border: none;
+}
+
+.btn-danger:hover {
+    background: linear-gradient(135deg, var(--hp-watermelon-light) 0%, var(--hp-watermelon) 100%);
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%);
+    border: none;
+    color: white;
+}
+
+.btn-warning:hover {
+    background: linear-gradient(135deg, #fbbf24 0%, var(--hp-amber) 100%);
+    color: white;
+}
+
+.dark-mode .btn-secondary {
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border-light);
+    color: var(--text-secondary);
+}
+
+.dark-mode .btn-secondary:hover {
+    background: var(--bg-card);
+    border-color: var(--hp-pacific);
+    color: var(--text-primary);
+}
+
+.dark-mode .btn-outline-secondary {
+    border-color: var(--border-light);
+    color: var(--text-secondary);
+}
+
+.dark-mode .btn-outline-secondary:hover {
+    background: var(--bg-card);
+    border-color: var(--hp-pacific);
+    color: var(--hp-pacific);
+}
+
+/* Small buttons */
+.btn-xs {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.75rem;
+    border-radius: 4px;
+}
+
+/* ============================================
+   Badges - Premium Look
+   ============================================ */
+.badge {
+    font-weight: 500;
+    padding: 0.35em 0.65em;
+    border-radius: 6px;
+}
+
+.badge-success {
+    background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%);
+}
+
+.badge-info {
+    background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%);
+}
+
+.badge-warning {
+    background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%);
+    color: white;
+}
+
+.badge-danger {
+    background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%);
+}
+
+.badge-primary {
+    background: linear-gradient(135deg, var(--hp-blue) 0%, #2563eb 100%);
+}
+
+.badge-secondary {
+    background: var(--bg-card-hover);
+    color: var(--text-secondary);
+}
+
+/* ============================================
+   Forms - Refined Inputs
+   ============================================ */
+.dark-mode .form-control {
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    border-radius: 8px;
+    transition: var(--transition-fast);
+}
+
+.dark-mode .form-control:focus {
+    background: var(--bg-input);
+    border-color: var(--hp-pacific);
+    box-shadow: 0 0 0 3px rgba(88, 164, 176, 0.15);
+    color: var(--text-primary);
+}
+
+.dark-mode .form-control::placeholder {
+    color: var(--text-muted);
+}
+
+.dark-mode .input-group-text {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+}
+
+.dark-mode .custom-range::-webkit-slider-thumb {
+    background: var(--hp-pacific);
+}
+
+.dark-mode .custom-range::-webkit-slider-runnable-track {
+    background: var(--border-default);
+}
+
+/* Custom switches */
+.dark-mode .custom-control-input:checked ~ .custom-control-label::before {
+    background-color: var(--hp-pacific);
+    border-color: var(--hp-pacific);
+}
+
+/* ============================================
+   Modals - Premium Glass Effect
+   ============================================ */
+.dark-mode .modal-content {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+}
+
+.dark-mode .modal-header {
+    border-bottom: 1px solid var(--border-default);
+    padding: 1.25rem 1.5rem;
+}
+
+.dark-mode .modal-header .modal-title {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.dark-mode .modal-header .close {
+    color: var(--text-secondary);
+    text-shadow: none;
+    opacity: 0.7;
+}
+
+.dark-mode .modal-header .close:hover {
+    color: var(--text-primary);
+    opacity: 1;
+}
+
+.dark-mode .modal-body {
+    color: var(--text-secondary);
+}
+
+.dark-mode .modal-footer {
+    border-top: 1px solid var(--border-default);
+}
+
+/* Modal header colors */
+.dark-mode .modal-header.bg-danger {
+    background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%) !important;
+    border-bottom: none;
+}
+
+.dark-mode .modal-header.bg-success {
+    background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%) !important;
+    border-bottom: none;
+}
+
+.dark-mode .modal-header.bg-info {
+    background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%) !important;
+    border-bottom: none;
+}
+
+/* ============================================
+   Footer - Clean Dark
+   ============================================ */
 .dark-mode .main-footer {
-    background-color: var(--hp-black-pearl);
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--hp-black-pearl);
+    border-top: 1px solid var(--border-default);
+    color: var(--text-muted);
 }
 
 .dark-mode .main-footer a {
-    color: var(--hp-tangerine);
+    color: var(--hp-pacific);
+    transition: var(--transition-fast);
 }
 
-/* Scrollbar */
+.dark-mode .main-footer a:hover {
+    color: var(--hp-pacific-light);
+}
+
+/* ============================================
+   Navbar - Refined
+   ============================================ */
+.dark-mode .main-header.navbar {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-default);
+}
+
+.dark-mode .navbar-nav .nav-link {
+    color: var(--text-secondary);
+}
+
+.dark-mode .navbar-nav .nav-link:hover {
+    color: var(--hp-pacific);
+}
+
+/* ============================================
+   Breadcrumb
+   ============================================ */
+.dark-mode .breadcrumb {
+    background: transparent;
+}
+
+.dark-mode .breadcrumb-item a {
+    color: var(--hp-pacific);
+}
+
+.dark-mode .breadcrumb-item.active {
+    color: var(--text-muted);
+}
+
+/* ============================================
+   Alerts
+   ============================================ */
+.dark-mode .alert {
+    border-radius: 10px;
+    border: none;
+}
+
+.dark-mode .alert-success {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--hp-green-light);
+    border-left: 4px solid var(--hp-green);
+}
+
+.dark-mode .alert-danger {
+    background: rgba(238, 66, 102, 0.15);
+    color: var(--hp-watermelon-light);
+    border-left: 4px solid var(--hp-watermelon);
+}
+
+.dark-mode .alert-warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border-left: 4px solid var(--hp-amber);
+}
+
+.dark-mode .alert-info {
+    background: rgba(88, 164, 176, 0.15);
+    color: var(--hp-pacific-light);
+    border-left: 4px solid var(--hp-pacific);
+}
+
+/* ============================================
+   Progress Bars
+   ============================================ */
+.dark-mode .progress {
+    background: var(--bg-input);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.dark-mode .progress-bar {
+    background: linear-gradient(90deg, var(--hp-pacific) 0%, var(--hp-pacific-light) 100%);
+}
+
+/* ============================================
+   Scrollbar - Premium
+   ============================================ */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-    background: var(--hp-black-pearl);
+    background: var(--bg-body);
 }
 
 ::-webkit-scrollbar-thumb {
-    background: var(--hp-prussian);
+    background: var(--bg-card-hover);
     border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--hp-tangerine);
+    background: var(--hp-pacific);
+}
+
+/* ============================================
+   Status Indicators
+   ============================================ */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+}
+
+.status-dot.online {
+    background: var(--hp-green);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+}
+
+.status-dot.offline {
+    background: var(--text-muted);
+}
+
+.status-dot.warning {
+    background: var(--hp-amber);
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+.status-dot.danger {
+    background: var(--hp-watermelon);
+    box-shadow: 0 0 8px rgba(238, 66, 102, 0.5);
+}
+
+/* ============================================
+   Toastr Overrides
+   ============================================ */
+.dark-mode .toast {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-lg);
+}
+
+.dark-mode .toast-success {
+    background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%);
+}
+
+.dark-mode .toast-error {
+    background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%);
+}
+
+.dark-mode .toast-info {
+    background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%);
+}
+
+.dark-mode .toast-warning {
+    background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%);
+}
+
+/* ============================================
+   Custom Utilities
+   ============================================ */
+.text-pacific {
+    color: var(--hp-pacific) !important;
+}
+
+.text-watermelon {
+    color: var(--hp-watermelon) !important;
+}
+
+.bg-pacific {
+    background-color: var(--hp-pacific) !important;
+}
+
+.border-pacific {
+    border-color: var(--hp-pacific) !important;
+}
+
+/* Glow effects */
+.glow-pacific {
+    box-shadow: 0 0 20px rgba(88, 164, 176, 0.3);
+}
+
+.glow-green {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+}
+
+.glow-amber {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
+}
+
+.glow-watermelon {
+    box-shadow: 0 0 20px rgba(238, 66, 102, 0.3);
+}
+
+/* Sticky table header */
+.sticky-top {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+/* ============================================
+   Animations
+   ============================================ */
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 5px rgba(88, 164, 176, 0.3); }
+    50% { box-shadow: 0 0 20px rgba(88, 164, 176, 0.5); }
+}
+
+.pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+    animation: fade-in 0.3s ease-out;
 }
