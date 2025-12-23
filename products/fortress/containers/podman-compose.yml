@@ -354,7 +354,7 @@ services:
     restart: unless-stopped
     hostname: fts-zeek
     environment:
-      # Interface to monitor
+      # Interface to monitor - OVS bridge (FTS) or WAN interface
       ZEEK_INTERFACE: "${ZEEK_INTERFACE:-FTS}"
     command:
       - zeek
@@ -370,6 +370,8 @@ services:
       - /etc/hookprobe:/etc/hookprobe:ro
     # Host network REQUIRED for packet capture
     network_mode: host
+    # Privileged required for rootless podman packet capture
+    privileged: true
     cap_add:
       - NET_ADMIN
       - NET_RAW
