@@ -78,36 +78,102 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Network connectivity check - required for package installation
-    log_info "Checking network connectivity..."
-    if ! timeout 5 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null; then
-        # Try DNS resolution
-        if ! timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
-            log_error "No network connectivity detected!"
-            log_error "Cannot reach archive.ubuntu.com or 8.8.8.8"
-            log_error "Please ensure the WAN interface has internet access before running install"
-            log_error ""
-            log_error "Check your network with:"
-            log_error "  ip route show default"
-            log_error "  cat /etc/resolv.conf"
-            log_error "  ping -c1 8.8.8.8"
-            exit 1
+    # ============================================================
+    # EARLY NETWORK RESILIENCE - Dual-WAN failover during installation
+    # ============================================================
+    # This ensures installation can continue even if primary WAN fails
+    # by detecting and activating LTE/backup WAN automatically
+    log_info "Checking network connectivity (with dual-WAN failover)..."
+
+    local enr_script="${DEVICES_DIR}/common/early-network-resilience.sh"
+    if [ -f "$enr_script" ]; then
+        chmod +x "$enr_script"
+        # shellcheck source=devices/common/early-network-resilience.sh
+        source "$enr_script"
+
+        # Try to ensure network connectivity with automatic LTE failover
+        if ensure_network_connectivity; then
+            log_info "Network connectivity: OK (active WAN: ${ENR_ACTIVE_WAN:-auto})"
+
+            # Show dual-WAN status if both are available
+            if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+                log_info "Dual-WAN resilience active: $ENR_PRIMARY_IFACE + $ENR_BACKUP_IFACE"
+            fi
         else
-            # IP works but DNS doesn't - fix resolv.conf
-            log_warn "DNS resolution not working, adding fallback nameserver..."
-            if ! grep -q "nameserver" /etc/resolv.conf 2>/dev/null; then
-                echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-                echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+            # Network resilience failed - try basic fallback
+            log_warn "Automatic network setup failed, trying basic connectivity..."
+
+            if ! timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
+                log_error "No network connectivity detected!"
+                log_error "Cannot reach internet on any WAN interface"
+                log_error ""
+                log_error "Troubleshooting:"
+                log_error "  1. Check Ethernet WAN: ip addr show eth0"
+                log_error "  2. Check LTE modem: mmcli -L"
+                log_error "  3. Check routes: ip route show default"
+                log_error "  4. Try manual connect: nmcli con up <connection-name>"
+                exit 1
+            fi
+            log_info "Network connectivity: OK (basic check passed)"
+        fi
+    else
+        # Fallback: Original simple connectivity check
+        log_warn "Early network resilience script not found, using basic check"
+
+        if ! timeout 5 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null; then
+            if ! timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
+                log_error "No network connectivity detected!"
+                log_error "Cannot reach archive.ubuntu.com or 8.8.8.8"
+                log_error "Please ensure the WAN interface has internet access"
+                exit 1
             fi
         fi
+        log_info "Network connectivity: OK"
     fi
-    log_info "Network connectivity: OK"
+
+    # Ensure DNS resolution works
+    if ! timeout 5 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null; then
+        log_warn "DNS resolution not working, adding fallback nameserver..."
+        if ! grep -q "nameserver" /etc/resolv.conf 2>/dev/null; then
+            echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+            echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+        fi
+    fi
+
+    # ============================================================
+    # Helper: Network-resilient apt-get with automatic failover
+    # ============================================================
+    _apt_install_resilient() {
+        local packages="$*"
+        local max_retries=3
+        local retry=0
+
+        while [ $retry -lt $max_retries ]; do
+            # Verify network before apt operation
+            if type ensure_network_connectivity &>/dev/null; then
+                ensure_network_connectivity || true
+            fi
+
+            # Try apt-get update + install
+            if apt-get update && apt-get install -y $packages; then
+                return 0
+            fi
+
+            retry=$((retry + 1))
+            if [ $retry -lt $max_retries ]; then
+                log_warn "Package installation failed, checking network failover (attempt $((retry + 1))/$max_retries)..."
+                sleep 3
+            fi
+        done
+
+        log_error "Failed to install packages after $max_retries attempts: $packages"
+        return 1
+    }
 
     # Open vSwitch (required for secure container networking)
     if ! command -v ovs-vsctl &>/dev/null; then
         log_warn "Open vSwitch not found. Installing..."
-        apt-get update
-        apt-get install -y openvswitch-switch || {
+        _apt_install_resilient openvswitch-switch || {
             log_error "Failed to install openvswitch-switch"
             exit 1
         }
@@ -122,8 +188,7 @@ check_prerequisites() {
     # dnsmasq (required for DHCP)
     if ! command -v dnsmasq &>/dev/null; then
         log_warn "dnsmasq not found. Installing..."
-        apt-get update
-        apt-get install -y dnsmasq || {
+        _apt_install_resilient dnsmasq || {
             log_error "Failed to install dnsmasq"
             exit 1
         }
@@ -135,8 +200,7 @@ check_prerequisites() {
     # Podman check
     if ! command -v podman &>/dev/null; then
         log_warn "Podman not found. Installing..."
-        apt-get update
-        apt-get install -y podman podman-compose || {
+        _apt_install_resilient podman podman-compose || {
             log_error "Failed to install podman"
             exit 1
         }
@@ -191,9 +255,8 @@ check_prerequisites() {
     fi
     if [ -n "$wifi_packages_needed" ]; then
         log_warn "Installing WiFi packages: $wifi_packages_needed"
-        apt-get update
         # shellcheck disable=SC2086
-        apt-get install -y $wifi_packages_needed || {
+        _apt_install_resilient $wifi_packages_needed || {
             log_error "Failed to install WiFi packages: $wifi_packages_needed"
             exit 1
         }
@@ -1200,6 +1263,11 @@ setup_network() {
                     log_info "LTE connected successfully"
                     # Setup WAN failover if we have both Ethernet WAN and LTE
                     if [ -n "$NET_WAN_IFACE" ]; then
+                        # Clean up minimal PBR from early network resilience
+                        # before installing full PBR with monitoring
+                        if type enr_cleanup &>/dev/null; then
+                            enr_cleanup
+                        fi
                         setup_wan_failover "$NET_WAN_IFACE" "$NET_WWAN_IFACE" 2>/dev/null || true
                     fi
                 else
@@ -1217,6 +1285,9 @@ setup_network() {
         # WWAN interface exists but wasn't detected in initial scan
         log_info "WWAN interface found - attempting late initialization..."
         if type initialize_lte_modem &>/dev/null; then
+            if type enr_cleanup &>/dev/null; then
+                enr_cleanup
+            fi
             initialize_lte_modem && connect_lte && setup_lte_on_boot
         fi
     fi
@@ -1810,10 +1881,38 @@ build_containers() {
     local built_count=0
     local skipped_count=0
 
+    # Helper: Network-resilient podman build with automatic failover
+    _podman_build_resilient() {
+        local containerfile="$1"
+        local tag="$2"
+        local context="$3"
+        local max_retries=3
+        local retry=0
+
+        while [ $retry -lt $max_retries ]; do
+            # Verify network before podman build (pulls base image)
+            if type ensure_network_connectivity &>/dev/null; then
+                ensure_network_connectivity || true
+            fi
+
+            if podman build -f "$containerfile" -t "$tag" "$context"; then
+                return 0
+            fi
+
+            retry=$((retry + 1))
+            if [ $retry -lt $max_retries ]; then
+                log_warn "Container build failed, checking network failover (attempt $((retry + 1))/$max_retries)..."
+                sleep 3
+            fi
+        done
+
+        return 1
+    }
+
     # Web container - needs fortress root dir as context (contains web/ directory)
     if needs_rebuild "localhost/fts-web:latest" "Containerfile.web" "$FORTRESS_ROOT"; then
         log_info "Building web container..."
-        podman build -f Containerfile.web -t localhost/fts-web:latest "$FORTRESS_ROOT" || {
+        _podman_build_resilient Containerfile.web localhost/fts-web:latest "$FORTRESS_ROOT" || {
             log_error "Failed to build web container"
             exit 1
         }
@@ -1828,7 +1927,7 @@ build_containers() {
 
     if needs_rebuild "localhost/fts-agent:latest" "Containerfile.agent" "$repo_root"; then
         log_info "  - Building qsecbit-agent (threat detection)..."
-        podman build -f Containerfile.agent -t localhost/fts-agent:latest "$repo_root" || {
+        _podman_build_resilient Containerfile.agent localhost/fts-agent:latest "$repo_root" || {
             log_error "Failed to build qsecbit-agent container"
             exit 1
         }
@@ -1840,7 +1939,7 @@ build_containers() {
 
     if needs_rebuild "localhost/fts-dnsxai:latest" "Containerfile.dnsxai" "$repo_root"; then
         log_info "  - Building dnsxai (DNS ML protection)..."
-        podman build -f Containerfile.dnsxai -t localhost/fts-dnsxai:latest "$repo_root" || {
+        _podman_build_resilient Containerfile.dnsxai localhost/fts-dnsxai:latest "$repo_root" || {
             log_error "Failed to build dnsxai container"
             exit 1
         }
@@ -1852,7 +1951,7 @@ build_containers() {
 
     if needs_rebuild "localhost/fts-dfs:latest" "Containerfile.dfs" "$repo_root"; then
         log_info "  - Building dfs-intelligence (WiFi intelligence)..."
-        podman build -f Containerfile.dfs -t localhost/fts-dfs:latest "$repo_root" || {
+        _podman_build_resilient Containerfile.dfs localhost/fts-dfs:latest "$repo_root" || {
             log_error "Failed to build dfs-intelligence container"
             exit 1
         }
@@ -1865,7 +1964,7 @@ build_containers() {
     # LSTM trainer is optional (used for retraining models)
     if needs_rebuild "localhost/fts-lstm:latest" "Containerfile.lstm" "$repo_root"; then
         log_info "  - Building lstm-trainer (optional training)..."
-        podman build -f Containerfile.lstm -t localhost/fts-lstm:latest "$repo_root" || {
+        _podman_build_resilient Containerfile.lstm localhost/fts-lstm:latest "$repo_root" || {
             log_warn "Failed to build lstm container (training will be unavailable)"
         }
         built_count=$((built_count + 1))
@@ -1877,7 +1976,7 @@ build_containers() {
     # XDP/eBPF protection is optional (for IDS profile)
     if needs_rebuild "localhost/fts-xdp:latest" "Containerfile.xdp" "$repo_root"; then
         log_info "  - Building xdp-protection (IDS tier)..."
-        podman build -f Containerfile.xdp -t localhost/fts-xdp:latest "$repo_root" || {
+        _podman_build_resilient Containerfile.xdp localhost/fts-xdp:latest "$repo_root" || {
             log_warn "Failed to build xdp container (IDS tier will be unavailable)"
         }
         built_count=$((built_count + 1))
