@@ -1346,10 +1346,45 @@ if DNSLIB_AVAILABLE:
         while dnsmasq handles DHCP and basic DNS.
         """
 
+        # Training data log paths
+        TRAINING_LOG_DIR = Path(os.environ.get('LOG_DIR', '/var/log/hookprobe'))
+        BLOCKED_LOG = TRAINING_LOG_DIR / 'dnsxai-blocked.log'
+        QUERIES_LOG = TRAINING_LOG_DIR / 'dnsxai-queries.log'
+
         def __init__(self, ad_blocker: AIAdBlocker, config: AdBlockConfig):
             self.ad_blocker = ad_blocker
             self.config = config
             self.logger = logging.getLogger("AIAdBlockResolver")
+            # Ensure log directory exists
+            self.TRAINING_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            # Query stats for api_server integration
+            self._stats_lock = threading.Lock()
+            self._query_stats = {
+                'total': 0,
+                'blocked': 0,
+                'allowed': 0,
+            }
+
+        def _log_training_data(self, domain: str, blocked: bool, method: str,
+                               category: str, confidence: float, qtype: str):
+            """Log DNS query for ML training data."""
+            try:
+                timestamp = datetime.now().isoformat()
+                # Log blocked domains for retraining
+                if blocked:
+                    with open(self.BLOCKED_LOG, 'a') as f:
+                        f.write(f"{timestamp}\t{domain}\t{method}\t{category}\t{confidence:.4f}\n")
+                # Log all queries for comprehensive training
+                with open(self.QUERIES_LOG, 'a') as f:
+                    action = 'BLOCKED' if blocked else 'ALLOWED'
+                    f.write(f"{timestamp}\t{action}\t{domain}\t{qtype}\t{method}\t{category}\t{confidence:.4f}\n")
+            except Exception as e:
+                self.logger.warning(f"Failed to write training log: {e}")
+
+        def get_stats(self) -> dict:
+            """Get query statistics for API integration."""
+            with self._stats_lock:
+                return self._query_stats.copy()
 
         def resolve(self, request, handler):
             """Resolve DNS request with ad blocking."""
@@ -1361,15 +1396,35 @@ if DNSLIB_AVAILABLE:
             # Classify domain
             result = self.ad_blocker.classify_domain(qname)
 
+            # Update stats
+            with self._stats_lock:
+                self._query_stats['total'] += 1
+                if result.blocked:
+                    self._query_stats['blocked'] += 1
+                else:
+                    self._query_stats['allowed'] += 1
+
             if result.blocked:
                 self.logger.info(
                     f"BLOCKED [{result.method}]: {qname} "
                     f"({result.category.name}, {result.confidence:.2f})"
                 )
+                # Log for training
+                self._log_training_data(
+                    qname, True, result.method,
+                    result.category.name, result.confidence, qtype
+                )
 
                 # Return NXDOMAIN or 0.0.0.0
                 reply.header.rcode = RCODE.NXDOMAIN
                 return reply
+            else:
+                # Log allowed domains too (useful for false positive detection)
+                self._log_training_data(
+                    qname, False, result.method,
+                    result.category.name if result.category else 'NONE',
+                    result.confidence, qtype
+                )
 
             # Forward to upstream
             try:
