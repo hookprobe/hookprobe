@@ -70,7 +70,9 @@ _enr_detect_lte_interface() {
 
     # Method 1: Check existing WWAN interfaces
     for pattern in wwan0 wwan1 wwp0s* wwx*; do
-        for iface in /sys/class/net/$pattern 2>/dev/null; do
+        # shellcheck disable=SC2044
+        for iface in /sys/class/net/$pattern; do
+            [ -e "$iface" ] || continue  # Skip if glob didn't match
             iface=$(basename "$iface" 2>/dev/null)
             if [ -d "/sys/class/net/$iface" ] && [ "$iface" != "$ENR_PRIMARY_IFACE" ]; then
                 ENR_BACKUP_IFACE="$iface"
@@ -80,7 +82,8 @@ _enr_detect_lte_interface() {
     done
 
     # Method 2: Check for USB modems via cdc_ether
-    for iface in /sys/class/net/usb* /sys/class/net/eth* 2>/dev/null; do
+    for iface in /sys/class/net/usb* /sys/class/net/eth*; do
+        [ -e "$iface" ] || continue  # Skip if glob didn't match
         iface=$(basename "$iface" 2>/dev/null)
         if [ -d "/sys/class/net/$iface" ] && [ "$iface" != "$ENR_PRIMARY_IFACE" ]; then
             # Check if this is a USB modem
