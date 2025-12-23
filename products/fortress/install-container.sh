@@ -715,50 +715,31 @@ collect_configuration() {
 # ============================================================
 
 # Create fortress system user and group for container file access
-# The web container runs as uid/gid 1000, so we create matching host user/group
-# This ensures mounted config files are readable by the container
+# Uses system UID/GID range (typically 100-999) reserved for services
+# Podman rootless mode handles UID mapping between container and host
 create_fortress_user() {
     log_step "Creating fortress system user"
 
-    # First, ensure the fortress group exists
+    # Create fortress group as a system group
     if ! getent group fortress &>/dev/null; then
-        # Check if gid 1000 is taken
-        local existing_group
-        existing_group=$(getent group 1000 | cut -d: -f1 || true)
-        if [ -n "$existing_group" ] && [ "$existing_group" != "fortress" ]; then
-            log_warn "GID 1000 is taken by group '$existing_group'"
-            groupadd --system fortress
-        else
-            groupadd --system --gid 1000 fortress
-        fi
+        groupadd --system fortress
         log_info "Created fortress group (gid=$(getent group fortress | cut -d: -f3))"
+    else
+        log_info "Fortress group exists (gid=$(getent group fortress | cut -d: -f3))"
     fi
 
     # Check if fortress user already exists
     if id "fortress" &>/dev/null; then
-        log_info "Fortress user already exists (uid=$(id -u fortress))"
-        # Ensure user is in the fortress group
+        log_info "Fortress user exists (uid=$(id -u fortress))"
         usermod -g fortress fortress 2>/dev/null || true
         return 0
     fi
 
-    # Check if uid 1000 is already taken by another user
-    local existing_user
-    existing_user=$(getent passwd 1000 | cut -d: -f1 || true)
-    if [ -n "$existing_user" ] && [ "$existing_user" != "fortress" ]; then
-        log_warn "UID 1000 is taken by user '$existing_user'"
-        log_info "Creating fortress user with next available UID"
-        log_info "Note: Container will use UID mapping to access files"
-        # Create without specifying UID - let system assign
-        useradd --system --no-create-home --shell /usr/sbin/nologin \
-            --gid fortress --comment "HookProbe Fortress Service Account" fortress
-    else
-        # Create fortress user with uid 1000 to match container
-        useradd --system --no-create-home --shell /usr/sbin/nologin \
-            --uid 1000 --gid fortress --comment "HookProbe Fortress Service Account" fortress
-    fi
+    # Create fortress user as system user (automatic UID in system range)
+    useradd --system --no-create-home --shell /usr/sbin/nologin \
+        --gid fortress --comment "HookProbe Fortress Service Account" fortress
 
-    log_info "Created fortress system user (uid=$(id -u fortress))"
+    log_info "Created fortress user (uid=$(id -u fortress))"
 }
 
 create_directories() {
