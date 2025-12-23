@@ -145,6 +145,7 @@ stop_services() {
 
     local services=(
         "fortress"
+        "fortress-vlan"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -361,6 +362,7 @@ remove_systemd_services() {
 
     local services=(
         "fortress"
+        "fortress-vlan"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -687,6 +689,16 @@ remove_nftables_filtering() {
     rm -f /etc/nftables.d/fts-filters.nft
     rm -f /etc/nftables.d/fts-traffic.nft
     rm -f /etc/nftables.d/fts-mgmt-vlan.nft
+    rm -f /etc/nftables.d/fortress-vlans.nft
+
+    # Remove VLAN mode nftables table
+    if nft list table inet fortress_vlan &>/dev/null; then
+        log_info "Removing fortress_vlan nftables table..."
+        nft delete table inet fortress_vlan 2>/dev/null || true
+    fi
+
+    # Remove VLAN mode dnsmasq config
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf
 
     # Remove OUI database and policy files
     rm -f /etc/hookprobe/oui_policies.conf
@@ -957,6 +969,12 @@ remove_lte_config() {
     if [ -d "$LTE_STATE_DIR" ]; then
         log_info "Removing $LTE_STATE_DIR..."
         rm -rf "$LTE_STATE_DIR"
+    fi
+
+    # Remove VLAN state files
+    if [ -f "/var/lib/fortress/vlan-config.conf" ]; then
+        log_info "Removing VLAN configuration state..."
+        rm -f /var/lib/fortress/vlan-config.conf
     fi
 
     # Clean up parent directory if empty

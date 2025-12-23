@@ -1127,6 +1127,9 @@ setup_network() {
                 if [ -n "$MGMT_INTERFACE" ]; then
                     log_info "  MGMT port: $MGMT_INTERFACE (trunk mode)"
                 fi
+
+                # Install VLAN service for boot persistence
+                install_vlan_service
             else
                 log_error "VLAN setup failed - falling back to filter mode"
                 NETWORK_MODE="filter"
@@ -1992,6 +1995,56 @@ EOF
     log_info "  Gateway: $GATEWAY_MGMT/30"
     log_info "  Access: Connect admin workstation to $mgmt_iface with VLAN 200 tag"
     log_info "  Admin UI: https://${GATEWAY_MGMT}:${WEB_PORT:-8443}"
+}
+
+# Install VLAN service for boot persistence
+# This ensures VLAN configuration (vlan100, vlan200, port tags) is restored after reboot
+install_vlan_service() {
+    log_info "Installing VLAN service for boot persistence..."
+
+    local script_src="${DEVICES_DIR}/common/ovs-vlan-setup.sh"
+    local script_dst="/opt/hookprobe/products/fortress/devices/common/ovs-vlan-setup.sh"
+    local service_src="${FORTRESS_ROOT}/systemd/fortress-vlan.service"
+    local service_dst="/etc/systemd/system/fortress-vlan.service"
+
+    # Copy the VLAN setup script
+    if [ -f "$script_src" ]; then
+        mkdir -p "$(dirname "$script_dst")"
+        cp "$script_src" "$script_dst"
+        chmod +x "$script_dst"
+        log_info "  Installed: $script_dst"
+    else
+        log_warn "  ovs-vlan-setup.sh not found at $script_src"
+        return 1
+    fi
+
+    # Copy and enable systemd service
+    if [ -f "$service_src" ]; then
+        cp "$service_src" "$service_dst"
+    else
+        # Create service inline if file not found
+        cat > "$service_dst" << 'EOF'
+[Unit]
+Description=HookProbe Fortress VLAN Configuration
+Documentation=https://hookprobe.com/docs/fortress
+After=network-online.target openvswitch-switch.service
+Wants=network-online.target
+Requires=openvswitch-switch.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 2
+ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-vlan-setup.sh setup
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+
+    systemctl daemon-reload
+    systemctl enable fortress-vlan.service 2>/dev/null || true
+    log_success "VLAN service installed and enabled for boot persistence"
 }
 
 # Check if container image needs rebuilding
