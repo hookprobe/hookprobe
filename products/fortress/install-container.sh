@@ -1043,6 +1043,7 @@ setup_network() {
     log_info "Detected interfaces:"
     log_info "  WAN:  ${NET_WAN_IFACE:-auto-detect}"
     log_info "  LAN:  ${NET_LAN_IFACES:-none}"
+    log_info "  MGMT: ${MGMT_INTERFACE:-none}${MGMT_INTERFACE:+ (VLAN 200 trunk)}"
     log_info "  WiFi: ${NET_WIFI_24GHZ_IFACE:-none} (2.4G) / ${NET_WIFI_5GHZ_IFACE:-none} (5G)"
     log_info "  LTE:  ${NET_WWAN_IFACE:-none}"
 
@@ -1071,6 +1072,16 @@ setup_network() {
         else
             log_warn "No LAN interfaces detected to add to bridge"
             log_info "  WiFi AP will provide client connectivity"
+        fi
+
+        # Add MGMT interface to OVS bridge if detected
+        # MGMT interface is designated as the last LAN ethernet port (by PCI order)
+        # It provides trunk access: native LAN + tagged VLAN 200 (management)
+        if [ -n "$MGMT_INTERFACE" ]; then
+            log_info "  Adding MGMT interface $MGMT_INTERFACE to OVS bridge..."
+            "$ovs_script" add-lan "$MGMT_INTERFACE" || {
+                log_warn "Failed to add MGMT interface $MGMT_INTERFACE to OVS bridge"
+            }
         fi
 
         # Setup NAT - detect WAN interface if not already set
@@ -1125,6 +1136,13 @@ setup_network() {
             # Filter mode: Simple nftables-based filtering (default)
             log_info "Using filter-based network mode..."
             setup_ovs_dhcp
+
+            # In filter mode, if MGMT interface is detected, set up VLAN 200 for management access
+            # This provides a dedicated management network even without full VLAN segmentation
+            if [ -n "$MGMT_INTERFACE" ]; then
+                log_info "Configuring VLAN 200 management access on $MGMT_INTERFACE..."
+                setup_mgmt_vlan_filter_mode "$MGMT_INTERFACE"
+            fi
         fi
 
     else
@@ -1812,6 +1830,134 @@ EOF
     }
 
     log_info "DHCP configured on $lan_port"
+}
+
+# Setup VLAN 200 management access in filter mode
+# This creates a management network on the designated MGMT interface
+# even when running in filter mode (not full VLAN mode)
+setup_mgmt_vlan_filter_mode() {
+    local mgmt_iface="$1"
+    local bridge="${OVS_BRIDGE:-FTS}"
+
+    if [ -z "$mgmt_iface" ]; then
+        log_warn "No MGMT interface specified"
+        return 1
+    fi
+
+    log_info "Setting up VLAN 200 management network on $mgmt_iface..."
+
+    # VLAN 200 configuration
+    local VLAN_MGMT=200
+    local GATEWAY_MGMT="10.200.100.1"
+    local DHCP_START_MGMT="10.200.100.2"
+    local DHCP_END_MGMT="10.200.100.2"  # Only 1 client (admin workstation)
+
+    # 1. Configure MGMT port as trunk (native LAN + tagged VLAN 200)
+    log_info "  Configuring $mgmt_iface as trunk port..."
+    ovs-vsctl set port "$mgmt_iface" \
+        trunks=100,$VLAN_MGMT \
+        vlan_mode=native-untagged \
+        tag=100 2>/dev/null || {
+        log_warn "  Failed to set trunk mode on $mgmt_iface"
+    }
+
+    # 2. Create VLAN 200 internal interface
+    log_info "  Creating VLAN $VLAN_MGMT internal interface..."
+    if ! ovs-vsctl list-ports "$bridge" 2>/dev/null | grep -q "^vlan${VLAN_MGMT}$"; then
+        ovs-vsctl add-port "$bridge" "vlan${VLAN_MGMT}" \
+            tag="$VLAN_MGMT" \
+            -- set interface "vlan${VLAN_MGMT}" type=internal
+    else
+        ovs-vsctl set port "vlan${VLAN_MGMT}" tag="$VLAN_MGMT"
+    fi
+
+    # 3. Configure IP on VLAN 200 interface
+    ip link set "vlan${VLAN_MGMT}" up 2>/dev/null || true
+    if ! ip addr show "vlan${VLAN_MGMT}" 2>/dev/null | grep -q "$GATEWAY_MGMT"; then
+        ip addr add "${GATEWAY_MGMT}/30" dev "vlan${VLAN_MGMT}" 2>/dev/null || true
+    fi
+
+    # 4. Add DHCP for VLAN 200 to dnsmasq config
+    local dhcp_mgmt_conf="/etc/dnsmasq.d/fts-mgmt-vlan.conf"
+    cat > "$dhcp_mgmt_conf" << EOF
+# HookProbe Fortress - Management VLAN 200 DHCP
+# Generated: $(date -Iseconds)
+
+# VLAN 200 Management Network
+interface=vlan${VLAN_MGMT}
+dhcp-range=vlan${VLAN_MGMT},${DHCP_START_MGMT},${DHCP_END_MGMT},255.255.255.252,12h
+dhcp-option=vlan${VLAN_MGMT},3,${GATEWAY_MGMT}
+dhcp-option=vlan${VLAN_MGMT},6,${GATEWAY_MGMT}
+
+# Management hostname
+address=/admin.fortress.local/${GATEWAY_MGMT}
+EOF
+
+    # Restart dnsmasq to pick up VLAN 200 config
+    systemctl restart dnsmasq 2>/dev/null || true
+
+    # 5. Add nftables rules for management access
+    local nft_mgmt_conf="/etc/nftables.d/fts-mgmt-vlan.nft"
+    mkdir -p /etc/nftables.d
+    cat > "$nft_mgmt_conf" << EOF
+#!/usr/sbin/nft -f
+#
+# HookProbe Fortress - Management VLAN 200 Firewall Rules
+# Generated: $(date -Iseconds)
+#
+
+# Delete table if exists
+table inet fts_mgmt_vlan
+delete table inet fts_mgmt_vlan
+
+table inet fts_mgmt_vlan {
+    chain input {
+        type filter hook input priority 0; policy accept;
+
+        # Allow DHCP on VLAN 200
+        iifname "vlan${VLAN_MGMT}" udp dport 67 accept
+
+        # Allow DNS on VLAN 200
+        iifname "vlan${VLAN_MGMT}" udp dport 53 accept
+        iifname "vlan${VLAN_MGMT}" tcp dport 53 accept
+
+        # Allow SSH from VLAN 200
+        iifname "vlan${VLAN_MGMT}" tcp dport 22 accept
+
+        # Allow web admin from VLAN 200
+        iifname "vlan${VLAN_MGMT}" tcp dport { 80, 443, 8443 } accept
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+
+        # Allow management VLAN to access containers
+        ip saddr 10.200.100.0/30 ip daddr 172.20.200.0/24 accept
+        ip saddr 172.20.200.0/24 ip daddr 10.200.100.0/30 accept
+
+        # Block LAN from accessing management VLAN
+        ip saddr 10.200.0.0/24 ip daddr 10.200.100.0/30 drop
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+
+        # Masquerade MGMT traffic going to internet
+        ip saddr 10.200.100.0/30 masquerade
+    }
+}
+EOF
+
+    # Apply nftables rules
+    nft -f "$nft_mgmt_conf" 2>/dev/null || {
+        log_warn "  Failed to apply MGMT VLAN firewall rules"
+    }
+
+    log_success "VLAN 200 management network configured:"
+    log_info "  MGMT Port: $mgmt_iface (trunk: native LAN + tagged VLAN 200)"
+    log_info "  Gateway: $GATEWAY_MGMT/30"
+    log_info "  Access: Connect admin workstation to $mgmt_iface with VLAN 200 tag"
+    log_info "  Admin UI: https://${GATEWAY_MGMT}:${WEB_PORT:-8443}"
 }
 
 # Check if container image needs rebuilding
@@ -3232,6 +3378,14 @@ main() {
     else
         echo -e "  LAN Subnet: 10.200.0.0/${LAN_SUBNET_MASK:-24}"
         echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
+        # Show MGMT VLAN info if configured in filter mode
+        if [ -n "$MGMT_INTERFACE" ]; then
+            echo ""
+            echo "Management Network (VLAN 200):"
+            echo -e "  MGMT Port:    $MGMT_INTERFACE (trunk: native LAN + tagged VLAN 200)"
+            echo -e "  MGMT Subnet:  10.200.100.0/30"
+            echo -e "  Admin Access: https://10.200.100.1:${WEB_PORT:-8443}"
+        fi
     fi
     echo ""
 
