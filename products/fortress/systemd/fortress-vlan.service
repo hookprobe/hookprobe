@@ -1,0 +1,38 @@
+#!/usr/bin/env systemd
+#
+# fortress-vlan.service - Fortress VLAN Configuration Service
+#
+# Restores VLAN configuration after reboot:
+# - OVS VLAN interfaces (vlan100, vlan200)
+# - Port VLAN assignments (trunk port auto-detection)
+# - DHCP configuration
+# - nftables firewall rules
+#
+# Install:
+#   sudo cp fortress-vlan.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable fortress-vlan.service
+#
+
+[Unit]
+Description=HookProbe Fortress VLAN Configuration
+Documentation=https://hookprobe.com/docs/fortress
+After=network-online.target openvswitch-switch.service
+Wants=network-online.target
+Requires=openvswitch-switch.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Wait for OVS to be fully ready
+ExecStartPre=/bin/sleep 2
+
+# Run VLAN setup
+ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-vlan-setup.sh setup
+
+# On stop, don't cleanup (keep config for debugging)
+# Use 'systemctl restart fortress-vlan' to reapply
+
+[Install]
+WantedBy=multi-user.target

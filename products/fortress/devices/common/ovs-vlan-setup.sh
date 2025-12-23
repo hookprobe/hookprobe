@@ -110,6 +110,12 @@ fi
 STATE_DIR="/var/lib/fortress"
 VLAN_STATE_FILE="$STATE_DIR/vlan-config.conf"
 
+# Load saved state if exists (for persistence after reboot)
+if [ -f "$VLAN_STATE_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$VLAN_STATE_FILE"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -206,10 +212,50 @@ setup_vlan_interfaces() {
 # PORT VLAN ASSIGNMENT
 # ============================================================
 
+detect_trunk_port() {
+    # Auto-detect which physical ethernet port should be the trunk port
+    # Logic: The last physical ethernet port on the bridge is used for management
+    # This allows admin to plug into the last port for VLAN 200 access
+
+    local ports
+    local ethernet_ports=()
+
+    ports=$(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null)
+
+    for port in $ports; do
+        # Skip internal VLAN interfaces
+        [[ "$port" =~ ^vlan[0-9]+$ ]] && continue
+        # Skip veth pairs
+        [[ "$port" =~ ^veth ]] && continue
+        # Skip WiFi interfaces
+        [[ "$port" =~ ^wlan|^wlp|^wlx ]] && continue
+
+        # This is a physical ethernet port
+        ethernet_ports+=("$port")
+    done
+
+    # Sort ports by name (enp1s0, enp2s0, enp3s0, enp4s0 -> last is enp4s0)
+    # The last one becomes the trunk port for management access
+    if [ ${#ethernet_ports[@]} -gt 0 ]; then
+        # Sort and get the last one
+        local sorted
+        sorted=$(printf '%s\n' "${ethernet_ports[@]}" | sort -V | tail -1)
+        echo "$sorted"
+    fi
+}
+
 configure_port_vlans() {
     # Assign VLAN tags to physical ports
 
     log_section "Configuring Port VLANs"
+
+    # Auto-detect trunk port if not explicitly set
+    if [ -z "$MGMT_INTERFACE" ]; then
+        MGMT_INTERFACE=$(detect_trunk_port)
+        if [ -n "$MGMT_INTERFACE" ]; then
+            log_info "Auto-detected trunk port: $MGMT_INTERFACE"
+        fi
+    fi
 
     # Get current ports on bridge
     local ports
@@ -234,17 +280,17 @@ configure_port_vlans() {
                 ovs-vsctl set port "$port" tag="$VLAN_LAN" vlan_mode=access
                 ;;
 
-            # Check if this is the management port
+            # Check if this is the management/trunk port
             *)
                 if [ "$port" = "$MGMT_INTERFACE" ] && [ -n "$MGMT_INTERFACE" ]; then
-                    # Management port - trunk mode
-                    log_info "MGMT port $port → Trunk (native $VLAN_LAN, tagged $VLAN_MGMT)"
+                    # Management port - trunk mode (carries both VLANs)
+                    log_info "TRUNK port $port → Native VLAN $VLAN_LAN + Tagged VLAN $VLAN_MGMT"
                     ovs-vsctl set port "$port" \
                         trunks="$VLAN_LAN,$VLAN_MGMT" \
                         vlan_mode=native-untagged \
                         tag="$VLAN_LAN"
                 else
-                    # Regular LAN port - VLAN 100
+                    # Regular LAN port - VLAN 100 access
                     log_info "LAN port $port → VLAN $VLAN_LAN (access)"
                     ovs-vsctl set port "$port" tag="$VLAN_LAN" vlan_mode=access
                 fi
@@ -695,13 +741,38 @@ main() {
             cleanup_vlans
             ;;
 
+        install-service)
+            # Install systemd service for boot persistence
+            log_section "Installing Systemd Service"
+
+            local service_src
+            service_src="$(dirname "${BASH_SOURCE[0]}")/../../systemd/fortress-vlan.service"
+
+            if [ ! -f "$service_src" ]; then
+                # Try installed location
+                service_src="/opt/hookprobe/products/fortress/systemd/fortress-vlan.service"
+            fi
+
+            if [ ! -f "$service_src" ]; then
+                log_error "Service file not found"
+                exit 1
+            fi
+
+            cp "$service_src" /etc/systemd/system/fortress-vlan.service
+            systemctl daemon-reload
+            systemctl enable fortress-vlan.service
+            log_success "Service installed and enabled for boot"
+            log_info "VLAN configuration will persist after reboot"
+            ;;
+
         *)
-            echo "Usage: $0 {setup|status|cleanup}"
+            echo "Usage: $0 {setup|status|cleanup|install-service}"
             echo ""
             echo "Commands:"
-            echo "  setup   - Configure OVS VLANs (VLAN 100 LAN, VLAN 200 MGMT)"
-            echo "  status  - Show current VLAN configuration"
-            echo "  cleanup - Remove VLAN configuration"
+            echo "  setup           - Configure OVS VLANs (VLAN 100 LAN, VLAN 200 MGMT)"
+            echo "  status          - Show current VLAN configuration"
+            echo "  cleanup         - Remove VLAN configuration"
+            echo "  install-service - Install systemd service for boot persistence"
             exit 1
             ;;
     esac
