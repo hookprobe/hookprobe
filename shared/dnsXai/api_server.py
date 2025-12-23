@@ -6,17 +6,18 @@ Exposes REST endpoints for the Fortress web UI to communicate with the dnsXai en
 Runs alongside the DNS server on port 8080.
 
 Endpoints:
-    GET  /health         - Health check
-    GET  /api/stats      - Get protection statistics
-    GET  /api/status     - Get protection status
-    POST /api/level      - Set protection level (0-5)
-    POST /api/pause      - Pause/resume protection
-    GET  /api/whitelist  - Get whitelist entries
-    POST /api/whitelist  - Add to whitelist
-    DELETE /api/whitelist - Remove from whitelist
-    GET  /api/blocked    - Get recently blocked domains
-    GET  /api/ml/status  - Get ML model status
-    POST /api/ml/train   - Trigger ML training
+    GET  /health              - Health check
+    GET  /api/stats           - Get protection statistics
+    GET  /api/status          - Get protection status
+    POST /api/level           - Set protection level (0-5)
+    POST /api/pause           - Pause/resume protection
+    GET  /api/whitelist       - Get whitelist entries
+    POST /api/whitelist       - Add to whitelist
+    DELETE /api/whitelist     - Remove from whitelist
+    GET  /api/blocked         - Get recently blocked domains
+    GET  /api/ml/status       - Get ML model status
+    POST /api/ml/train        - Trigger ML training
+    GET  /api/ml/training-data - Get training data samples (queries log)
 
 Author: HookProbe Security
 License: AGPL-3.0
@@ -50,6 +51,7 @@ CONFIG_FILE = DATA_DIR / 'config.json'
 STATS_FILE = DATA_DIR / 'stats.json'
 WHITELIST_FILE = DATA_DIR / 'whitelist.txt'
 BLOCKED_LOG = LOG_DIR / 'dnsxai-blocked.log'
+QUERIES_LOG = LOG_DIR / 'dnsxai-queries.log'
 TRAINING_LOG = LOG_DIR / 'dnsxai-training.log'
 
 # Ensure directories exist
@@ -488,6 +490,7 @@ class APIHandler(BaseHTTPRequestHandler):
             '/api/whitelist': self._get_whitelist,
             '/api/blocked': self._get_blocked,
             '/api/ml/status': self._get_ml_status,
+            '/api/ml/training-data': self._get_training_data,
         }
 
         handler = routes.get(path)
@@ -633,6 +636,67 @@ class APIHandler(BaseHTTPRequestHandler):
     def _get_ml_status(self):
         """Get ML training status."""
         self._send_json(ml_manager.get_status())
+
+    def _get_training_data(self):
+        """Get training data samples from logs."""
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        limit = int(params.get('limit', ['100'])[0])
+        log_type = params.get('type', ['all'])[0]  # 'blocked', 'queries', 'all'
+
+        result = {
+            'blocked': [],
+            'queries': [],
+            'blocked_count': 0,
+            'queries_count': 0,
+            'log_files': {
+                'blocked': str(BLOCKED_LOG),
+                'queries': str(QUERIES_LOG)
+            }
+        }
+
+        # Read blocked domains log
+        if log_type in ('blocked', 'all'):
+            try:
+                if BLOCKED_LOG.exists():
+                    with open(BLOCKED_LOG, 'r') as f:
+                        lines = f.readlines()
+                        result['blocked_count'] = len(lines)
+                        for line in lines[-limit:]:
+                            parts = line.strip().split('\t')
+                            if len(parts) >= 4:
+                                result['blocked'].append({
+                                    'timestamp': parts[0],
+                                    'domain': parts[1],
+                                    'reason': parts[2],
+                                    'ml_classified': parts[3] == 'True'
+                                })
+            except Exception as e:
+                logger.warning(f"Could not read blocked log: {e}")
+
+        # Read queries log
+        if log_type in ('queries', 'all'):
+            try:
+                if QUERIES_LOG.exists():
+                    with open(QUERIES_LOG, 'r') as f:
+                        lines = f.readlines()
+                        result['queries_count'] = len(lines)
+                        for line in lines[-limit:]:
+                            parts = line.strip().split('\t')
+                            if len(parts) >= 7:
+                                result['queries'].append({
+                                    'timestamp': parts[0],
+                                    'action': parts[1],
+                                    'domain': parts[2],
+                                    'qtype': parts[3],
+                                    'method': parts[4],
+                                    'category': parts[5],
+                                    'confidence': float(parts[6]) if parts[6] else 0.0
+                                })
+            except Exception as e:
+                logger.warning(f"Could not read queries log: {e}")
+
+        self._send_json(result)
 
     def _start_training(self):
         """Start ML training."""
