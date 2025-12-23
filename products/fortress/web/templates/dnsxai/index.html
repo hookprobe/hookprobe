@@ -73,10 +73,14 @@
                     <span id="ml-trained" class="badge badge-secondary">--</span>
                 </div>
                 <div class="d-flex justify-content-between mb-2">
-                    <span>Threat Sequences:</span>
+                    <span>Training Samples:</span>
                     <span id="ml-threats">0</span>
+                    <small class="text-muted">/ 100 needed</small>
                 </div>
-                <small class="text-muted">Daily training at 3:00 AM</small>
+                <div class="progress mb-2" style="height: 6px;">
+                    <div class="progress-bar bg-info" id="ml-progress" role="progressbar" style="width: 0%"></div>
+                </div>
+                <small class="text-muted" id="ml-hint">Collect blocked domains to train the model</small>
             </div>
             <div class="card-footer">
                 <button class="btn btn-sm btn-primary" onclick="trainML()">
@@ -760,15 +764,50 @@ async function loadMLStatus() {
         const resp = await fetch('/dnsxai/api/ml/status');
         const data = await resp.json();
 
-        document.getElementById('ml-status').textContent = data.available ? 'Active' : 'Initializing';
-        document.getElementById('ml-status').className = 'badge badge-' + (data.available ? 'success' : 'warning');
+        // Determine status based on API response
+        let statusText = 'Initializing';
+        let statusClass = 'warning';
 
-        document.getElementById('ml-trained').textContent = data.lstm_model_exists ? 'Yes' : 'No';
-        document.getElementById('ml-trained').className = 'badge badge-' + (data.lstm_model_exists ? 'success' : 'secondary');
+        if (data.training_in_progress) {
+            statusText = 'Training...';
+            statusClass = 'info';
+        } else if (data.model_trained) {
+            statusText = 'Active';
+            statusClass = 'success';
+        } else if (data.ready_for_training) {
+            statusText = 'Ready to Train';
+            statusClass = 'primary';
+        } else {
+            statusText = `Need ${100 - (data.training_samples || 0)} more samples`;
+            statusClass = 'secondary';
+        }
 
-        document.getElementById('ml-threats').textContent = (data.stats?.attack_sequences || 0).toLocaleString();
+        document.getElementById('ml-status').textContent = statusText;
+        document.getElementById('ml-status').className = 'badge badge-' + statusClass;
+
+        document.getElementById('ml-trained').textContent = data.model_trained ? 'Yes' : 'No';
+        document.getElementById('ml-trained').className = 'badge badge-' + (data.model_trained ? 'success' : 'secondary');
+
+        const samples = data.training_samples || 0;
+        document.getElementById('ml-threats').textContent = samples.toLocaleString();
+
+        // Update progress bar
+        const progress = Math.min(100, (samples / 100) * 100);
+        document.getElementById('ml-progress').style.width = progress + '%';
+
+        // Update hint text
+        const hint = document.getElementById('ml-hint');
+        if (data.model_trained) {
+            hint.textContent = 'Model is trained and active';
+        } else if (data.ready_for_training) {
+            hint.textContent = 'Ready! Click "Train Now" to start';
+        } else {
+            hint.textContent = `Need ${100 - samples} more blocked domains`;
+        }
     } catch(e) {
         console.error('Failed to load ML status:', e);
+        document.getElementById('ml-status').textContent = 'Error';
+        document.getElementById('ml-status').className = 'badge badge-danger';
     }
 }
 
