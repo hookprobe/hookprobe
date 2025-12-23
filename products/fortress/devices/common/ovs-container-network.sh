@@ -734,7 +734,10 @@ setup_dhcp() {
 
 # Bind to OVS bridge (where the LAN IP is assigned)
 interface=${OVS_BRIDGE}
-bind-interfaces
+
+# Use bind-dynamic instead of bind-interfaces
+# This allows dnsmasq to wait for interface to appear (critical for boot order)
+bind-dynamic
 
 # Don't read /etc/resolv.conf - use our explicit servers
 no-resolv
@@ -755,7 +758,6 @@ local=/fortress.local/
 
 # Logging
 log-dhcp
-log-queries
 
 # Cache
 cache-size=1000
