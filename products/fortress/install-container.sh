@@ -650,6 +650,54 @@ collect_configuration() {
 # ============================================================
 # INSTALLATION
 # ============================================================
+
+# Create fortress system user and group for container file access
+# The web container runs as uid/gid 1000, so we create matching host user/group
+# This ensures mounted config files are readable by the container
+create_fortress_user() {
+    log_step "Creating fortress system user"
+
+    # First, ensure the fortress group exists
+    if ! getent group fortress &>/dev/null; then
+        # Check if gid 1000 is taken
+        local existing_group
+        existing_group=$(getent group 1000 | cut -d: -f1 || true)
+        if [ -n "$existing_group" ] && [ "$existing_group" != "fortress" ]; then
+            log_warn "GID 1000 is taken by group '$existing_group'"
+            groupadd --system fortress
+        else
+            groupadd --system --gid 1000 fortress
+        fi
+        log_info "Created fortress group (gid=$(getent group fortress | cut -d: -f3))"
+    fi
+
+    # Check if fortress user already exists
+    if id "fortress" &>/dev/null; then
+        log_info "Fortress user already exists (uid=$(id -u fortress))"
+        # Ensure user is in the fortress group
+        usermod -g fortress fortress 2>/dev/null || true
+        return 0
+    fi
+
+    # Check if uid 1000 is already taken by another user
+    local existing_user
+    existing_user=$(getent passwd 1000 | cut -d: -f1 || true)
+    if [ -n "$existing_user" ] && [ "$existing_user" != "fortress" ]; then
+        log_warn "UID 1000 is taken by user '$existing_user'"
+        log_info "Creating fortress user with next available UID"
+        log_info "Note: Container will use UID mapping to access files"
+        # Create without specifying UID - let system assign
+        useradd --system --no-create-home --shell /usr/sbin/nologin \
+            --gid fortress --comment "HookProbe Fortress Service Account" fortress
+    else
+        # Create fortress user with uid 1000 to match container
+        useradd --system --no-create-home --shell /usr/sbin/nologin \
+            --uid 1000 --gid fortress --comment "HookProbe Fortress Service Account" fortress
+    fi
+
+    log_info "Created fortress system user (uid=$(id -u fortress))"
+}
+
 create_directories() {
     log_step "Creating directories"
 
@@ -659,8 +707,11 @@ create_directories() {
 
     chmod 755 "$INSTALL_DIR" "$CONFIG_DIR"
     chmod 700 "$INSTALL_DIR/containers/secrets"
-    chmod 700 "$CONFIG_DIR/secrets"
+    chmod 750 "$CONFIG_DIR/secrets"  # Group-readable for fortress user
     chmod 755 "$LOG_DIR"
+
+    # Set group ownership so container (fortress user) can read config files
+    chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
 
     log_info "Directories created"
 }
@@ -739,9 +790,13 @@ generate_secrets() {
     # Copy to config dir for web app access
     cp "$secrets_dir/flask_secret" "${CONFIG_DIR}/secrets/fortress_secret_key" 2>/dev/null || true
 
-    # Save admin password for display
+    # Save admin password for display (root-only, not needed by container)
     echo "${ADMIN_PASS}" > "${CONFIG_DIR}/secrets/admin_password"
     chmod 600 "${CONFIG_DIR}/secrets/admin_password"
+
+    # Set ownership on config secrets so container (fortress user) can read
+    chown root:fortress "${CONFIG_DIR}/secrets/fortress_secret_key" 2>/dev/null || true
+    chmod 640 "${CONFIG_DIR}/secrets/fortress_secret_key" 2>/dev/null || true
 
     log_info "Secrets generated in $secrets_dir"
 
@@ -856,7 +911,9 @@ print(hash.decode('utf-8'))
   "version": "1.0"
 }
 EOF
-    chmod 600 "$CONFIG_DIR/users.json"
+    # Set ownership so container (fortress user) can read, but only root can write
+    chown root:fortress "$CONFIG_DIR/users.json"
+    chmod 640 "$CONFIG_DIR/users.json"
     log_info "Admin user created"
 }
 
@@ -893,7 +950,9 @@ LOG_LEVEL=info
 LOG_DIR=${LOG_DIR}
 EOF
 
-    chmod 644 "$CONFIG_DIR/fortress.conf"
+    # Set ownership so container (fortress user) can read
+    chown root:fortress "$CONFIG_DIR/fortress.conf"
+    chmod 640 "$CONFIG_DIR/fortress.conf"
     log_info "Configuration created"
 }
 
@@ -2527,6 +2586,46 @@ EOF
 # ============================================================
 STATE_FILE="${CONFIG_DIR}/fortress-state.json"
 
+# Fix config file permissions for container access
+# Called after all config files are created to ensure proper ownership
+fix_config_permissions() {
+    log_step "Setting config file permissions"
+
+    # Ensure fortress group ownership on config directory
+    chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
+
+    # Config files that container needs to read (640 = rw-r-----)
+    for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
+                "$CONFIG_DIR/wifi-interfaces.conf"; do
+        if [ -f "$file" ]; then
+            chown root:fortress "$file"
+            chmod 640 "$file"
+        fi
+    done
+
+    # Secrets that container needs (640)
+    for file in "$CONFIG_DIR/secrets/fortress_secret_key"; do
+        if [ -f "$file" ]; then
+            chown root:fortress "$file"
+            chmod 640 "$file"
+        fi
+    done
+
+    # Secrets that only root needs (600) - keep restrictive
+    for file in "$CONFIG_DIR/secrets/admin_password" \
+                "$CONFIG_DIR/optional-services.conf" \
+                "$STATE_FILE"; do
+        if [ -f "$file" ]; then
+            chmod 600 "$file"
+        fi
+    done
+
+    # Secrets directory should be accessible by group but files are restrictive
+    chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
+
+    log_info "Config permissions set for container access"
+}
+
 save_installation_state() {
     log_step "Saving installation state"
 
@@ -2986,6 +3085,7 @@ main() {
     fi
 
     # Run installation
+    create_fortress_user  # Create system user before directories (for proper ownership)
     create_directories
     copy_application_files
     generate_secrets
@@ -2996,6 +3096,7 @@ main() {
     build_containers
     start_containers
     create_systemd_service
+    fix_config_permissions  # Ensure container can read config files
     save_installation_state
 
     # Final message
