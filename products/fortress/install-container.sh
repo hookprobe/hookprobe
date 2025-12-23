@@ -1143,6 +1143,9 @@ setup_network() {
                 log_info "Configuring VLAN 200 management access on $MGMT_INTERFACE..."
                 setup_mgmt_vlan_filter_mode "$MGMT_INTERFACE"
             fi
+
+            # Install filter-mode network service for boot persistence
+            install_filter_mode_network_service
         fi
 
     else
@@ -1886,14 +1889,16 @@ setup_mgmt_vlan_filter_mode() {
     local DHCP_START_MGMT="10.200.100.2"
     local DHCP_END_MGMT="10.200.100.2"  # Only 1 client (admin workstation)
 
-    # 1. Configure MGMT port as trunk (native LAN + tagged VLAN 200)
-    log_info "  Configuring $mgmt_iface as trunk port..."
-    ovs-vsctl set port "$mgmt_iface" \
-        trunks=100,$VLAN_MGMT \
-        vlan_mode=native-untagged \
-        tag=100 2>/dev/null || {
+    # 1. Configure MGMT port as trunk for VLAN 200 only
+    # Untagged traffic flows normally (no native VLAN tagging)
+    # Tagged VLAN 200 traffic goes to vlan200 interface for admin access
+    log_info "  Configuring $mgmt_iface as VLAN 200 trunk port..."
+    ovs-vsctl set port "$mgmt_iface" trunks=$VLAN_MGMT 2>/dev/null || {
         log_warn "  Failed to set trunk mode on $mgmt_iface"
     }
+    # Remove any existing tag setting (we want untagged traffic to flow normally)
+    ovs-vsctl remove port "$mgmt_iface" tag 2>/dev/null || true
+    ovs-vsctl remove port "$mgmt_iface" vlan_mode 2>/dev/null || true
 
     # 2. Create VLAN 200 internal interface
     log_info "  Creating VLAN $VLAN_MGMT internal interface..."
@@ -1992,6 +1997,62 @@ EOF
     log_info "  Gateway: $GATEWAY_MGMT/30"
     log_info "  Access: Connect admin workstation to $mgmt_iface with VLAN 200 tag"
     log_info "  Admin UI: https://${GATEWAY_MGMT}:${WEB_PORT:-8443}"
+}
+
+# Install filter mode network service for boot persistence
+# This ensures VLAN IPs, WiFi VLAN tags, and OVS flows are restored after reboot
+install_filter_mode_network_service() {
+    log_info "Installing filter mode network service..."
+
+    local script_src="${DEVICES_DIR}/common/filter-mode-network.sh"
+    local script_dst="/opt/hookprobe/products/fortress/devices/common/filter-mode-network.sh"
+    local service_src="${FORTRESS_ROOT}/systemd/fortress-network.service"
+    local service_dst="/etc/systemd/system/fortress-network.service"
+
+    # Copy the network setup script
+    if [ -f "$script_src" ]; then
+        mkdir -p "$(dirname "$script_dst")"
+        cp "$script_src" "$script_dst"
+        chmod +x "$script_dst"
+        log_info "  Installed: $script_dst"
+    else
+        log_warn "  filter-mode-network.sh not found at $script_src"
+        return 1
+    fi
+
+    # Copy and enable systemd service
+    if [ -f "$service_src" ]; then
+        cp "$service_src" "$service_dst"
+        systemctl daemon-reload
+        systemctl enable fortress-network.service 2>/dev/null || true
+        log_info "  Enabled: fortress-network.service"
+    else
+        # Create service inline if file not found
+        cat > "$service_dst" << 'EOF'
+[Unit]
+Description=HookProbe Fortress Network Configuration (Filter Mode)
+Documentation=https://hookprobe.com/docs/fortress
+After=network-online.target openvswitch-switch.service
+Wants=network-online.target
+Requires=openvswitch-switch.service
+After=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 3
+ExecStart=/opt/hookprobe/products/fortress/devices/common/filter-mode-network.sh setup
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable fortress-network.service 2>/dev/null || true
+        log_info "  Created and enabled: fortress-network.service"
+    fi
+
+    log_success "Filter mode network service installed"
 }
 
 # Check if container image needs rebuilding
