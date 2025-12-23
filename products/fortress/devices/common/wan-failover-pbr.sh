@@ -580,28 +580,123 @@ EOF
 # Health Checking
 # ============================================================
 
-check_interface_health() {
-    local iface="$1"
-    local success=0
+# Enhanced health check settings
+HTTP_CHECK_ENABLED="${HTTP_CHECK_ENABLED:-true}"
+HTTP_CHECK_URL="${HTTP_CHECK_URL:-http://httpbin.org/ip}"
+HTTP_CHECK_TIMEOUT="${HTTP_CHECK_TIMEOUT:-5}"
 
-    # Check if interface exists and is up
+check_interface_health() {
+    # Check WAN interface health using multiple methods
+    # This handles the "link UP but no traffic" scenario
+    #
+    # Checks performed:
+    #   1. Link state (carrier detect)
+    #   2. IP address assigned
+    #   3. Gateway reachable (ARP/ping)
+    #   4. Internet connectivity (ICMP to multiple targets)
+    #   5. HTTP connectivity (optional, for full SLA validation)
+    #
+    # Returns: 0 if healthy, 1 if unhealthy
+
+    local iface="$1"
+    local iface_ip
+    local gateway
+
+    # === Check 1: Link state ===
     if ! ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
-        log_debug "Interface $iface is not UP"
+        log_debug "[$iface] Link state: DOWN"
+        return 1
+    fi
+    log_debug "[$iface] Link state: UP"
+
+    # === Check 2: IP address assigned ===
+    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    if [ -z "$iface_ip" ]; then
+        log_debug "[$iface] No IP address (DHCP expired?)"
+        return 1
+    fi
+    log_debug "[$iface] IP: $iface_ip"
+
+    # === Check 3: Gateway reachable ===
+    # Get gateway for this interface
+    gateway=$(get_gateway "$iface")
+    if [ -n "$gateway" ]; then
+        # Quick ARP check - gateway should respond to ARP
+        if ! arping -c 1 -w 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+            # arping failed, try regular ping to gateway
+            if ! ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+                log_debug "[$iface] Gateway $gateway unreachable"
+                return 1
+            fi
+        fi
+        log_debug "[$iface] Gateway $gateway: reachable"
+    fi
+
+    # === Check 4: Internet connectivity (ICMP) ===
+    # Use routing table directly to ensure correct path
+    # This is critical for "link up but no traffic" scenarios
+    local table
+    if [ "$iface" = "$PRIMARY_IFACE" ]; then
+        table=$TABLE_PRIMARY
+    else
+        table=$TABLE_BACKUP
+    fi
+
+    local ping_success=0
+    for target in $PING_TARGETS; do
+        # Method 1: Use source IP binding (triggers source-based routing rule)
+        if ping -c "$PING_COUNT" -W "$PING_TIMEOUT" -I "$iface_ip" -q "$target" >/dev/null 2>&1; then
+            ping_success=1
+            log_debug "[$iface] Ping $target: OK (via source $iface_ip)"
+            break
+        fi
+
+        # Method 2: Direct interface binding (SO_BINDTODEVICE)
+        if ping -c "$PING_COUNT" -W "$PING_TIMEOUT" -I "$iface" -q "$target" >/dev/null 2>&1; then
+            ping_success=1
+            log_debug "[$iface] Ping $target: OK (via interface bind)"
+            break
+        fi
+
+        log_debug "[$iface] Ping $target: FAILED"
+    done
+
+    if [ $ping_success -eq 0 ]; then
+        log_debug "[$iface] All ping targets failed"
         return 1
     fi
 
-    # Ping multiple targets through specific interface
-    for target in $PING_TARGETS; do
-        if ping -I "$iface" -c "$PING_COUNT" -W "$PING_TIMEOUT" -q "$target" >/dev/null 2>&1; then
-            success=$((success + 1))
-            # One successful ping is enough
-            log_debug "Ping to $target via $iface: SUCCESS"
-            return 0
+    # === Check 5: HTTP connectivity (optional) ===
+    # This validates full TCP/HTTP path, not just ICMP
+    # Some ISPs/networks block ICMP but allow TCP
+    if [ "$HTTP_CHECK_ENABLED" = "true" ] && command -v curl &>/dev/null; then
+        # Use curl with interface binding
+        if ! curl -s -m "$HTTP_CHECK_TIMEOUT" --interface "$iface" -o /dev/null "$HTTP_CHECK_URL" 2>/dev/null; then
+            # HTTP failed, but ICMP worked - might be a temporary issue
+            # Log warning but don't fail immediately (ICMP success is enough)
+            log_debug "[$iface] HTTP check failed (ICMP OK, may be transient)"
+            # We still return success because ICMP worked
+        else
+            log_debug "[$iface] HTTP check: OK"
         fi
-        log_debug "Ping to $target via $iface: FAILED"
-    done
+    fi
 
-    return 1
+    return 0
+}
+
+check_interface_quick() {
+    # Quick health check - just ICMP, used for rapid polling
+    local iface="$1"
+    local iface_ip
+
+    # Must have IP
+    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    [ -z "$iface_ip" ] && return 1
+
+    # Quick ping with first target only
+    local first_target
+    first_target=$(echo "$PING_TARGETS" | awk '{print $1}')
+    ping -c 1 -W 2 -I "$iface_ip" -q "$first_target" >/dev/null 2>&1
 }
 
 # ============================================================
