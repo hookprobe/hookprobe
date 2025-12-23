@@ -299,23 +299,24 @@ update_main_table_route() {
     done
 
     # Add routes based on active WAN (lower metric = preferred)
+    # Use ${VAR:-} to handle unbound variables with set -u
     if [ "$active" = "primary" ]; then
         # Primary is active
-        if [ -n "$PRIMARY_GATEWAY" ]; then
+        if [ -n "${PRIMARY_GATEWAY:-}" ]; then
             ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $metric_active 2>/dev/null || true
             log_debug "Main table: default via $PRIMARY_GATEWAY (active, metric $metric_active)"
         fi
-        if [ -n "$BACKUP_GATEWAY" ]; then
+        if [ -n "${BACKUP_GATEWAY:-}" ]; then
             ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $metric_standby 2>/dev/null || true
             log_debug "Main table: default via $BACKUP_GATEWAY (standby, metric $metric_standby)"
         fi
     else
         # Backup is active
-        if [ -n "$BACKUP_GATEWAY" ]; then
+        if [ -n "${BACKUP_GATEWAY:-}" ]; then
             ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $metric_active 2>/dev/null || true
             log_debug "Main table: default via $BACKUP_GATEWAY (active, metric $metric_active)"
         fi
-        if [ -n "$PRIMARY_GATEWAY" ]; then
+        if [ -n "${PRIMARY_GATEWAY:-}" ]; then
             ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $metric_standby 2>/dev/null || true
             log_debug "Main table: default via $PRIMARY_GATEWAY (standby, metric $metric_standby)"
         fi
@@ -670,9 +671,17 @@ check_interface_health() {
     # Get gateway for this interface
     gateway=$(get_gateway "$iface")
     if [ -n "$gateway" ]; then
-        # Quick ARP check - gateway should respond to ARP
-        if ! arping -c 1 -w 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-            # arping failed, try regular ping to gateway
+        # Try ARP check first (if arping is available), then fall back to ping
+        if command -v arping &>/dev/null; then
+            if ! arping -c 1 -w 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+                # arping failed, try regular ping to gateway
+                if ! ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+                    log_debug "[$iface] Gateway $gateway unreachable"
+                    return 1
+                fi
+            fi
+        else
+            # arping not installed, use ping only
             if ! ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
                 log_debug "[$iface] Gateway $gateway unreachable"
                 return 1
