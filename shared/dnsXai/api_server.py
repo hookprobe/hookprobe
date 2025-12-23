@@ -235,6 +235,37 @@ class StatsTracker:
             logger.warning(f"Could not read blocked log: {e}")
         return blocked
 
+    def remove_from_blocked_log(self, domain: str) -> bool:
+        """Remove all entries for a domain from the blocked log."""
+        if not BLOCKED_LOG.exists():
+            return False
+
+        try:
+            with self._lock:
+                with open(BLOCKED_LOG, 'r') as f:
+                    lines = f.readlines()
+
+                # Filter out lines matching the domain
+                original_count = len(lines)
+                filtered_lines = [
+                    line for line in lines
+                    if len(line.strip().split('\t')) < 2 or
+                       line.strip().split('\t')[1].lower() != domain.lower()
+                ]
+
+                if len(filtered_lines) == original_count:
+                    return False  # Domain not found
+
+                # Write back filtered lines
+                with open(BLOCKED_LOG, 'w') as f:
+                    f.writelines(filtered_lines)
+
+                logger.info(f"Removed {original_count - len(filtered_lines)} entries for {domain} from blocked log")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to remove from blocked log: {e}")
+            return False
+
     def set_protection_level(self, level: int) -> bool:
         """Set protection level (0-5)."""
         if not 0 <= level <= 5:
@@ -624,6 +655,8 @@ class APIHandler(BaseHTTPRequestHandler):
 
         if path == '/api/whitelist':
             self._remove_whitelist()
+        elif path == '/api/blocked':
+            self._remove_blocked()
         else:
             self._send_error('Not found', 404)
 
@@ -732,6 +765,20 @@ class APIHandler(BaseHTTPRequestHandler):
             'blocked': stats_tracker.get_blocked_domains(limit),
             'count': len(stats_tracker.get_blocked_domains(limit))
         })
+
+    def _remove_blocked(self):
+        """Remove domain entries from blocked log."""
+        data = self._parse_body()
+        domain = data.get('domain', '').strip().lower()
+
+        if not domain:
+            self._send_error('Missing domain parameter')
+            return
+
+        if stats_tracker.remove_from_blocked_log(domain):
+            self._send_json({'success': True, 'domain': domain})
+        else:
+            self._send_json({'success': False, 'error': 'Domain not found in blocked log'})
 
     def _get_ml_status(self):
         """Get ML training status."""
