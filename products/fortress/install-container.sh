@@ -1787,7 +1787,10 @@ setup_ovs_dhcp() {
 
 # Bind to OVS bridge interface
 interface=${lan_port}
-bind-interfaces
+
+# Use bind-dynamic instead of bind-interfaces
+# This allows dnsmasq to wait for interface to appear (critical for boot order)
+bind-dynamic
 
 # Don't read /etc/resolv.conf - use our explicit servers
 no-resolv
@@ -1824,12 +1827,43 @@ EOF
 
     chmod 644 "$config_file"
 
+    # Create systemd drop-in to make dnsmasq wait for OVS
+    setup_dnsmasq_ovs_dependency
+
     # Restart dnsmasq
     systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null || {
         log_warn "dnsmasq service not available"
     }
 
     log_info "DHCP configured on $lan_port"
+}
+
+# Create systemd drop-in to make dnsmasq wait for OVS bridge
+setup_dnsmasq_ovs_dependency() {
+    local dropin_dir="/etc/systemd/system/dnsmasq.service.d"
+    mkdir -p "$dropin_dir"
+
+    cat > "${dropin_dir}/fortress-ovs.conf" << 'EOF'
+# HookProbe Fortress - Make dnsmasq wait for OVS bridge
+[Unit]
+# Wait for OVS to be ready before starting dnsmasq
+After=openvswitch-switch.service
+Wants=openvswitch-switch.service
+
+# Also wait for network to be online
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Give OVS time to create bridge interfaces
+ExecStartPre=/bin/sleep 3
+# Restart on failure (interface not ready yet)
+Restart=on-failure
+RestartSec=5
+EOF
+
+    systemctl daemon-reload 2>/dev/null || true
+    log_info "dnsmasq configured to wait for OVS"
 }
 
 # Setup VLAN 200 management access in filter mode
