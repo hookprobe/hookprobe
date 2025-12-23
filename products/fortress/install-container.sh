@@ -1105,33 +1105,57 @@ setup_network() {
         fi
 
         # Configure network mode (VLAN or filter-based)
-        local vlan_script="${DEVICES_DIR}/common/ovs-vlan-setup.sh"
+        local netplan_gen="${DEVICES_DIR}/common/netplan-ovs-generator.sh"
+        local ovs_post="${DEVICES_DIR}/common/ovs-post-setup.sh"
 
-        if [ "$NETWORK_MODE" = "vlan" ] && [ -f "$vlan_script" ]; then
-            # VLAN mode: Use OVS port-based VLAN segmentation
-            # VLAN 100 = LAN (10.200.0.0/24) - WiFi clients, regular devices
-            # VLAN 200 = MGMT (10.200.100.0/24) - Management access, container network
-            log_info "Configuring VLAN-based network segmentation..."
+        if [ "$NETWORK_MODE" = "vlan" ] && [ -f "$netplan_gen" ]; then
+            # VLAN mode: Use Netplan + OVS for fast, reliable network setup
+            # VLAN 100 = LAN (10.200.0.0/xx) - WiFi clients, regular devices
+            # VLAN 200 = MGMT (10.200.100.0/30) - Management access, container network
+            log_info "Configuring VLAN-based network segmentation (netplan + OVS)..."
 
-            chmod +x "$vlan_script"
+            chmod +x "$netplan_gen"
+            [ -f "$ovs_post" ] && chmod +x "$ovs_post"
 
-            # Export MGMT interface for VLAN script (detected by network-integration.sh)
-            export MGMT_INTERFACE="${MGMT_INTERFACE:-}"
-            export MGMT_ENABLED="${MGMT_ENABLED:-false}"
+            # Export configuration for netplan generator
             export OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+            export LAN_MASK="${LAN_SUBNET_MASK:-24}"
+            export LAN_INTERFACES="${NET_LAN_IFACES:-}"
 
-            if "$vlan_script" setup; then
-                log_success "VLAN network configured"
-                log_info "  VLAN 100 (LAN):  10.200.0.0/24 - WiFi clients, LAN devices"
-                log_info "  VLAN 200 (MGMT): 10.200.100.0/24 - Management access"
-                if [ -n "$MGMT_INTERFACE" ]; then
-                    log_info "  MGMT port: $MGMT_INTERFACE (trunk mode)"
+            # Step 1: Generate netplan config for OVS bridge + VLANs
+            log_info "Generating netplan configuration..."
+            if "$netplan_gen" generate --mask "$LAN_MASK" --lan-ifaces "$LAN_INTERFACES"; then
+                log_success "Netplan config generated"
+
+                # Step 2: Apply netplan (creates bridge, VLANs, assigns IPs)
+                log_info "Applying netplan configuration..."
+                if "$netplan_gen" apply; then
+                    log_success "Netplan applied - bridge and VLANs created"
+
+                    # Step 3: Run OVS post-setup (OpenFlow rules, port tagging)
+                    if [ -f "$ovs_post" ]; then
+                        log_info "Configuring OpenFlow rules and port VLAN tags..."
+                        if "$ovs_post" setup; then
+                            log_success "OVS post-setup complete"
+                        else
+                            log_warn "OVS post-setup had issues - may need manual config"
+                        fi
+                    fi
+
+                    log_success "VLAN network configured via netplan"
+                    log_info "  VLAN 100 (LAN):  10.200.0.0/$LAN_MASK - WiFi clients, LAN devices"
+                    log_info "  VLAN 200 (MGMT): 10.200.100.0/30 - Management access"
+
+                    # Install services for boot persistence
+                    install_vlan_service
+                else
+                    log_error "Netplan apply failed - falling back to filter mode"
+                    NETWORK_MODE="filter"
+                    "$netplan_gen" remove 2>/dev/null || true
+                    setup_ovs_dhcp
                 fi
-
-                # Install VLAN service for boot persistence
-                install_vlan_service
             else
-                log_error "VLAN setup failed - falling back to filter mode"
+                log_error "Netplan generation failed - falling back to filter mode"
                 NETWORK_MODE="filter"
                 setup_ovs_dhcp
             fi
@@ -1998,44 +2022,57 @@ EOF
 }
 
 # Install VLAN service for boot persistence
-# This ensures VLAN configuration (vlan100, vlan200, port tags) is restored after reboot
+# Netplan handles bridge/VLAN creation at boot
+# The service only runs OVS post-setup (OpenFlow rules, port tagging)
 install_vlan_service() {
-    log_info "Installing VLAN service for boot persistence..."
+    log_info "Installing VLAN boot persistence..."
 
-    local script_src="${DEVICES_DIR}/common/ovs-vlan-setup.sh"
-    local script_dst="/opt/hookprobe/products/fortress/devices/common/ovs-vlan-setup.sh"
-    local service_src="${FORTRESS_ROOT}/systemd/fortress-vlan.service"
-    local service_dst="/etc/systemd/system/fortress-vlan.service"
+    local install_base="/opt/hookprobe/products/fortress/devices/common"
+    mkdir -p "$install_base"
 
-    # Copy the VLAN setup script
-    if [ -f "$script_src" ]; then
-        mkdir -p "$(dirname "$script_dst")"
-        cp "$script_src" "$script_dst"
-        chmod +x "$script_dst"
-        log_info "  Installed: $script_dst"
+    # Install netplan generator
+    local netplan_src="${DEVICES_DIR}/common/netplan-ovs-generator.sh"
+    local netplan_dst="$install_base/netplan-ovs-generator.sh"
+    if [ -f "$netplan_src" ]; then
+        cp "$netplan_src" "$netplan_dst"
+        chmod +x "$netplan_dst"
+        log_info "  Installed: netplan-ovs-generator.sh"
+    fi
+
+    # Install OVS post-setup script
+    local ovs_post_src="${DEVICES_DIR}/common/ovs-post-setup.sh"
+    local ovs_post_dst="$install_base/ovs-post-setup.sh"
+    if [ -f "$ovs_post_src" ]; then
+        cp "$ovs_post_src" "$ovs_post_dst"
+        chmod +x "$ovs_post_dst"
+        log_info "  Installed: ovs-post-setup.sh"
     else
-        log_warn "  ovs-vlan-setup.sh not found at $script_src"
+        log_warn "  ovs-post-setup.sh not found at $ovs_post_src"
         return 1
     fi
 
     # Copy and enable systemd service
+    local service_src="${FORTRESS_ROOT}/systemd/fortress-vlan.service"
+    local service_dst="/etc/systemd/system/fortress-vlan.service"
+
     if [ -f "$service_src" ]; then
         cp "$service_src" "$service_dst"
     else
         # Create service inline if file not found
         cat > "$service_dst" << 'EOF'
 [Unit]
-Description=HookProbe Fortress VLAN Configuration
+Description=HookProbe Fortress OVS Post-Setup
 Documentation=https://hookprobe.com/docs/fortress
-After=network-online.target openvswitch-switch.service
+After=network-online.target systemd-networkd.service openvswitch-switch.service
 Wants=network-online.target
 Requires=openvswitch-switch.service
+After=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/bin/sleep 2
-ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-vlan-setup.sh setup
+ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-post-setup.sh setup
 
 [Install]
 WantedBy=multi-user.target
@@ -2044,7 +2081,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable fortress-vlan.service 2>/dev/null || true
-    log_success "VLAN service installed and enabled for boot persistence"
+    log_success "VLAN service installed - netplan creates bridge, service configures OVS"
 }
 
 # Check if container image needs rebuilding
@@ -3494,7 +3531,8 @@ main() {
     echo "  systemctl status fts-hostapd-*        # Check WiFi AP status"
     echo "  ovs-vsctl show                        # View OVS bridge"
     if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "  ${DEVICES_DIR}/common/ovs-vlan-setup.sh status"
+        echo "  cat /etc/netplan/60-fortress-ovs.yaml  # View netplan config"
+        echo "  ${DEVICES_DIR}/common/ovs-post-setup.sh status"
     else
         echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"
     fi
