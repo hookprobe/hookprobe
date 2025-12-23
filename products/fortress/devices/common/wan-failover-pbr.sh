@@ -64,8 +64,14 @@ PING_TIMEOUT=3
 CHECK_INTERVAL=5
 
 # Hysteresis settings (prevent flapping)
+# Note: Config file may use FAIL_THRESHOLD/RECOVER_THRESHOLD - we map them below
 UP_THRESHOLD=3      # Require X consecutive successes to mark UP
 DOWN_THRESHOLD=3    # Require X consecutive failures to mark DOWN
+
+# DNS failover settings
+DNS_FAILOVER_ENABLED="${DNS_FAILOVER_ENABLED:-true}"
+PRIMARY_DNS="${PRIMARY_DNS:-}"
+BACKUP_DNS="${BACKUP_DNS:-}"
 
 # ============================================================
 # Logging
@@ -98,10 +104,18 @@ load_config() {
     # Set defaults
     PRIMARY_GATEWAY="${PRIMARY_GATEWAY:-}"
     BACKUP_GATEWAY="${BACKUP_GATEWAY:-}"
-    PING_TARGETS="${PING_TARGETS:-1.1.1.1 8.8.8.8 9.9.9.9}"
+    PING_TARGETS="${PING_TARGETS:-${HEALTH_TARGETS:-1.1.1.1 8.8.8.8 9.9.9.9}}"
     CHECK_INTERVAL="${CHECK_INTERVAL:-5}"
-    UP_THRESHOLD="${UP_THRESHOLD:-3}"
-    DOWN_THRESHOLD="${DOWN_THRESHOLD:-3}"
+
+    # Map config file variable names (FAIL_THRESHOLD/RECOVER_THRESHOLD) to script names
+    # This maintains backward compatibility with existing config files
+    UP_THRESHOLD="${UP_THRESHOLD:-${RECOVER_THRESHOLD:-3}}"
+    DOWN_THRESHOLD="${DOWN_THRESHOLD:-${FAIL_THRESHOLD:-3}}"
+
+    # DNS failover settings
+    DNS_FAILOVER_ENABLED="${DNS_FAILOVER_ENABLED:-true}"
+    PRIMARY_DNS="${PRIMARY_DNS:-}"
+    BACKUP_DNS="${BACKUP_DNS:-}"
 
     return 0
 }
@@ -111,39 +125,106 @@ load_config() {
 # ============================================================
 
 get_gateway() {
+    # Discover gateway for an interface using multiple methods
+    # Priority: nmcli > ip route > DHCP lease > ARP scan
     local iface="$1"
     local gw
 
-    # Try to get gateway from DHCP lease
+    # Method 1: NetworkManager (most reliable when available)
+    if command -v nmcli &>/dev/null; then
+        gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2 | grep -v '^$' | head -1)
+        if [ -n "$gw" ] && [ "$gw" != "--" ]; then
+            echo "$gw"
+            return 0
+        fi
+    fi
+
+    # Method 2: ip route (works for static routes and some DHCP setups)
+    gw=$(ip route show dev "$iface" 2>/dev/null | grep -E '^default|^0\.0\.0\.0' | awk '{print $3}' | head -1)
+    if [ -n "$gw" ]; then
+        echo "$gw"
+        return 0
+    fi
+
+    # Method 3: Check routing table for the interface's network
+    local iface_ip
+    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    if [ -n "$iface_ip" ]; then
+        # Get the network and find a gateway
+        local network
+        network=$(ip route show dev "$iface" 2>/dev/null | grep "$iface_ip" | head -1 | awk '{print $1}')
+        if [ -n "$network" ]; then
+            # Look for a gateway in this network (usually .1 or .254)
+            local base
+            base=$(echo "$iface_ip" | cut -d. -f1-3)
+            for gw_candidate in "${base}.1" "${base}.254"; do
+                if ping -c 1 -W 1 -I "$iface" "$gw_candidate" &>/dev/null; then
+                    echo "$gw_candidate"
+                    return 0
+                fi
+            done
+        fi
+    fi
+
+    # Method 4: DHCP lease file (NetworkManager)
     if [ -f "/var/lib/NetworkManager/dhclient-$iface.lease" ]; then
         gw=$(grep 'option routers' "/var/lib/NetworkManager/dhclient-$iface.lease" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';')
         [ -n "$gw" ] && echo "$gw" && return 0
     fi
 
-    # Try nmcli
-    gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2)
-    [ -n "$gw" ] && echo "$gw" && return 0
+    # Method 5: DHCP lease file (dhclient)
+    if [ -f "/var/lib/dhcp/dhclient.$iface.leases" ]; then
+        gw=$(grep 'option routers' "/var/lib/dhcp/dhclient.$iface.leases" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';')
+        [ -n "$gw" ] && echo "$gw" && return 0
+    fi
 
-    # Try ip route
-    gw=$(ip route show dev "$iface" 2>/dev/null | grep default | awk '{print $3}' | head -1)
-    [ -n "$gw" ] && echo "$gw" && return 0
+    # Method 6: For WWAN/LTE interfaces, check ModemManager
+    if [[ "$iface" =~ ^wwan|^wwp ]]; then
+        if command -v mmcli &>/dev/null; then
+            local modem_idx
+            modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+            if [ -n "$modem_idx" ]; then
+                local bearer_idx
+                bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
+                if [ -n "$bearer_idx" ]; then
+                    gw=$(mmcli -b "$bearer_idx" 2>/dev/null | grep -oP 'gateway:\s*\K[\d.]+')
+                    [ -n "$gw" ] && echo "$gw" && return 0
+                fi
+            fi
+        fi
+    fi
 
     return 1
 }
 
 discover_gateways() {
-    if [ -z "$PRIMARY_GATEWAY" ]; then
-        PRIMARY_GATEWAY=$(get_gateway "$PRIMARY_IFACE")
-        if [ -z "$PRIMARY_GATEWAY" ]; then
-            log_warn "Could not discover gateway for $PRIMARY_IFACE"
+    # Discover gateways for both interfaces
+    # Forces rediscovery even if values are set (they may have changed)
+
+    local old_primary="${PRIMARY_GATEWAY:-}"
+    local old_backup="${BACKUP_GATEWAY:-}"
+
+    # Always try to discover current gateway (DHCP may have renewed)
+    local new_primary
+    new_primary=$(get_gateway "$PRIMARY_IFACE")
+    if [ -n "$new_primary" ]; then
+        PRIMARY_GATEWAY="$new_primary"
+        if [ "$new_primary" != "$old_primary" ] && [ -n "$old_primary" ]; then
+            log_info "Primary gateway changed: $old_primary -> $new_primary"
         fi
+    elif [ -z "$PRIMARY_GATEWAY" ]; then
+        log_warn "Could not discover gateway for $PRIMARY_IFACE"
     fi
 
-    if [ -z "$BACKUP_GATEWAY" ]; then
-        BACKUP_GATEWAY=$(get_gateway "$BACKUP_IFACE")
-        if [ -z "$BACKUP_GATEWAY" ]; then
-            log_warn "Could not discover gateway for $BACKUP_IFACE"
+    local new_backup
+    new_backup=$(get_gateway "$BACKUP_IFACE")
+    if [ -n "$new_backup" ]; then
+        BACKUP_GATEWAY="$new_backup"
+        if [ "$new_backup" != "$old_backup" ] && [ -n "$old_backup" ]; then
+            log_info "Backup gateway changed: $old_backup -> $new_backup"
         fi
+    elif [ -z "$BACKUP_GATEWAY" ]; then
+        log_debug "Could not discover gateway for $BACKUP_IFACE (may not be connected)"
     fi
 }
 
@@ -202,11 +283,31 @@ setup_routing_tables() {
 setup_ip_rules() {
     log_info "Setting up IP rules..."
 
-    # Remove old rules
+    # Get interface IP addresses for source-based routing
+    local primary_ip backup_ip
+    primary_ip=$(ip -4 addr show "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    backup_ip=$(ip -4 addr show "$BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+
+    # Remove old rules (clean slate)
     ip rule del fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY 2>/dev/null || true
     ip rule del fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP 2>/dev/null || true
+    ip rule del table $TABLE_PRIMARY priority 1000 2>/dev/null || true
+    [ -n "$primary_ip" ] && ip rule del from "$primary_ip" table $TABLE_PRIMARY 2>/dev/null || true
+    [ -n "$backup_ip" ] && ip rule del from "$backup_ip" table $TABLE_BACKUP 2>/dev/null || true
 
-    # Add rules: packets marked with fwmark go to corresponding table
+    # Source-based routing rules (priority 50-60) - IMPORTANT for asymmetric routing prevention
+    # Traffic originating FROM an interface's IP must route back via that interface
+    if [ -n "$primary_ip" ]; then
+        ip rule add from "$primary_ip" table $TABLE_PRIMARY priority 50
+        log_info "Source rule: from $primary_ip → table wan_primary (priority 50)"
+    fi
+
+    if [ -n "$backup_ip" ]; then
+        ip rule add from "$backup_ip" table $TABLE_BACKUP priority 60
+        log_info "Source rule: from $backup_ip → table wan_backup (priority 60)"
+    fi
+
+    # Fwmark-based routing rules (priority 100-200) - for PBR packet marking
     ip rule add fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY priority 100
     ip rule add fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP priority 200
 
@@ -224,27 +325,53 @@ setup_nftables() {
     log_info "Setting up nftables packet marking..."
 
     # Create nftables rules for WAN failover
+    # Architecture:
+    #   1. prerouting: Restore marks from conntrack (for incoming return traffic)
+    #   2. forward: Mark and restore for forwarded traffic (LAN/containers)
+    #   3. output: Mark host-originated traffic
+    #   4. postrouting: Save marks to conntrack
     nft -f - << 'NFTEOF'
 # Fortress WAN Failover - Packet Marking
+# Ensures sticky sessions: connections stay on their original WAN during failover
+
 table inet fts_wan_failover {
-    # Track connection state for sticky sessions
+    # Prerouting: Restore marks for incoming traffic (return packets)
     chain prerouting {
         type filter hook prerouting priority mangle - 1; policy accept;
 
-        # Restore mark from conntrack (sticky sessions)
+        # Restore mark from conntrack (sticky sessions for return traffic)
         ct mark != 0 meta mark set ct mark
     }
 
+    # Forward: Handle forwarded traffic (LAN clients, containers)
+    # This runs AFTER prerouting, so conntrack marks are already restored
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+
+        # Skip if already marked (from conntrack or previous rules)
+        meta mark & 0xf00 != 0 return
+
+        # Skip local/private destination traffic
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+
+        # New forwarded connections will be marked in the dynamic section
+        # This chain is updated by set_active_wan()
+    }
+
+    # Output: Mark host-originated traffic
     chain output {
         type route hook output priority mangle; policy accept;
 
-        # Skip if already marked
+        # Skip if already marked (from conntrack)
         meta mark & 0xf00 != 0 return
 
         # Mark new connections based on active WAN
         # This chain is updated dynamically by the monitor
     }
 
+    # Postrouting: Save marks to conntrack (for return traffic matching)
     chain postrouting {
         type filter hook postrouting priority mangle; policy accept;
 
@@ -277,8 +404,10 @@ set_active_wan() {
             ;;
     esac
 
-    # Update nftables to mark new connections (OUTPUT chain for host traffic)
+    # Update nftables to mark new connections
+    # We update BOTH the output chain (host traffic) and forward chain (LAN/container traffic)
     nft -f - << NFTEOF
+# Update OUTPUT chain for host-originated traffic
 flush chain inet fts_wan_failover output
 table inet fts_wan_failover {
     chain output {
@@ -298,9 +427,32 @@ table inet fts_wan_failover {
         meta mark set $mark
     }
 }
+
+# Update FORWARD chain for forwarded traffic (LAN clients, containers)
+flush chain inet fts_wan_failover forward
+table inet fts_wan_failover {
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+
+        # Skip if already marked (from conntrack or previous rules)
+        meta mark & 0xf00 != 0 return
+
+        # Skip local/private destination traffic
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+
+        # Mark all forwarded internet-bound traffic
+        # LAN clients (10.200.0.0/23)
+        ip saddr 10.200.0.0/23 meta mark set $mark
+
+        # Container services tier (172.20.201.0/24) - internet-allowed containers
+        ip saddr 172.20.201.0/24 meta mark set $mark
+    }
+}
 NFTEOF
 
-    # Update FORWARD chain for container traffic (if traffic-flow tables exist)
+    # Also update legacy fts_forward_mark table if it exists (backward compatibility)
     if nft list table inet fts_forward_mark &>/dev/null; then
         nft -f - << NFTEOF
 flush chain inet fts_forward_mark forward
@@ -324,7 +476,7 @@ table inet fts_forward_mark {
     }
 }
 NFTEOF
-        log_debug "Forward chain updated with mark $mark"
+        log_debug "Legacy forward chain (fts_forward_mark) updated with mark $mark"
     fi
 
     log_info "Active WAN set to: $wan (mark $mark)"
@@ -332,6 +484,96 @@ NFTEOF
 
 cleanup_nftables() {
     nft delete table inet fts_wan_failover 2>/dev/null || true
+}
+
+# ============================================================
+# DNS Failover
+# ============================================================
+
+get_dns_for_interface() {
+    # Get DNS servers for an interface from various sources
+    local iface="$1"
+    local dns=""
+
+    # Try NetworkManager
+    if command -v nmcli &>/dev/null; then
+        dns=$(nmcli -t -f IP4.DNS device show "$iface" 2>/dev/null | cut -d: -f2 | head -1)
+        [ -n "$dns" ] && echo "$dns" && return 0
+    fi
+
+    # Try systemd-resolved
+    if [ -f "/run/systemd/resolve/resolv.conf" ]; then
+        dns=$(grep "^nameserver" /run/systemd/resolve/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+        [ -n "$dns" ] && echo "$dns" && return 0
+    fi
+
+    # Try DHCP lease
+    if [ -f "/var/lib/NetworkManager/dhclient-$iface.lease" ]; then
+        dns=$(grep 'option domain-name-servers' "/var/lib/NetworkManager/dhclient-$iface.lease" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';,' | head -1)
+        [ -n "$dns" ] && echo "$dns" && return 0
+    fi
+
+    # Fallback to public DNS
+    echo "1.1.1.1"
+}
+
+update_dns_for_wan() {
+    # Update DNS configuration when WAN changes
+    # This ensures DNS queries use the active WAN's DNS servers
+    local active_wan="$1"
+    local dns_server
+
+    [ "$DNS_FAILOVER_ENABLED" != "true" ] && return 0
+
+    if [ "$active_wan" = "primary" ]; then
+        dns_server="${PRIMARY_DNS:-$(get_dns_for_interface "$PRIMARY_IFACE")}"
+    else
+        dns_server="${BACKUP_DNS:-$(get_dns_for_interface "$BACKUP_IFACE")}"
+    fi
+
+    [ -z "$dns_server" ] && return 0
+
+    log_info "Updating DNS to $dns_server for $active_wan WAN"
+
+    # Update dnsmasq if it's the DNS server
+    if [ -d "/etc/dnsmasq.d" ]; then
+        # Check if dnsXai is running (it handles its own upstream DNS)
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-dnsxai"; then
+            # dnsXai handles upstream DNS, just update its config
+            log_debug "dnsXai running, skipping dnsmasq DNS update"
+        else
+            # Update dnsmasq upstream server
+            cat > /etc/dnsmasq.d/fts-wan-failover-dns.conf << EOF
+# HookProbe Fortress - DNS Failover
+# Auto-generated by wan-failover-pbr.sh
+# Active WAN: $active_wan
+
+server=$dns_server
+server=1.1.1.1
+server=8.8.8.8
+EOF
+            # Reload dnsmasq
+            if systemctl is-active dnsmasq &>/dev/null; then
+                systemctl reload dnsmasq 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # Update resolv.conf if it's not managed by systemd-resolved
+    if [ ! -L /etc/resolv.conf ] || [ "$(readlink /etc/resolv.conf)" != "/run/systemd/resolve/stub-resolv.conf" ]; then
+        # Only update if it looks like a static file
+        if grep -q "# HookProbe Fortress" /etc/resolv.conf 2>/dev/null; then
+            cat > /etc/resolv.conf << EOF
+# HookProbe Fortress - DNS Failover
+# Auto-generated by wan-failover-pbr.sh
+# Active WAN: $active_wan
+
+nameserver $dns_server
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+        fi
+    fi
 }
 
 # ============================================================
@@ -462,11 +704,22 @@ do_health_check() {
     if [ "$ACTIVE_WAN" != "$old_active" ]; then
         FAILOVER_COUNT=$((FAILOVER_COUNT + 1))
         log_info "WAN failover: $old_active -> $ACTIVE_WAN (event #$FAILOVER_COUNT)"
+
+        # Update packet marking
         set_active_wan "$ACTIVE_WAN"
 
         # Refresh routing tables (gateway may have changed)
         discover_gateways
         setup_routing_tables
+
+        # Update IP rules if interface IPs changed (DHCP renewal)
+        setup_ip_rules
+
+        # Update DNS configuration for new WAN
+        update_dns_for_wan "$ACTIVE_WAN"
+
+        # Log the failover event for monitoring
+        logger -t "$LOG_TAG" -p notice "WAN failover completed: $old_active -> $ACTIVE_WAN"
     fi
 
     save_state
