@@ -293,21 +293,65 @@ _enr_setup_minimal_pbr() {
         fi
     fi
 
-    # Ensure both routes are in main table with proper metrics
-    # Primary with lower metric (preferred)
-    if [ -n "$primary_gw" ]; then
-        ip route del default via "$primary_gw" 2>/dev/null || true
-        ip route add default via "$primary_gw" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
-    fi
+    # Store gateway info for later use
+    ENR_PRIMARY_GATEWAY="$primary_gw"
+    ENR_BACKUP_GATEWAY="$backup_gw"
 
-    # Backup with higher metric (failover)
-    if [ -n "$backup_gw" ]; then
-        ip route del default via "$backup_gw" 2>/dev/null || true
-        ip route add default via "$backup_gw" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null || true
-    fi
+    # Set ACTIVE route based on current connectivity (SINGLE default route strategy)
+    # This ensures traffic uses the WORKING interface, not just lowest metric
+    _enr_set_active_route
 
     ENR_PBR_ACTIVE=true
-    _enr_log_info "Minimal PBR active: $ENR_PRIMARY_IFACE (metric 100) + $ENR_BACKUP_IFACE (metric 200)"
+    _enr_log_info "Minimal PBR active with health-based routing"
+
+    return 0
+}
+
+# Set active route - only ONE default route for the healthy interface
+# This is critical: metrics don't work when link is UP but traffic isn't flowing
+_enr_set_active_route() {
+    # Remove ALL existing default routes first
+    local max_tries=5
+    while ip route show default 2>/dev/null | grep -q "^default" && [ $max_tries -gt 0 ]; do
+        ip route del default 2>/dev/null || break
+        max_tries=$((max_tries - 1))
+    done
+
+    # Determine which interface has connectivity
+    local use_primary=false
+    local use_backup=false
+
+    if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
+        if _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
+            use_primary=true
+        fi
+    fi
+
+    if [ -n "$ENR_BACKUP_IFACE" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
+        if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
+            use_backup=true
+        fi
+    fi
+
+    # Add routes based on connectivity (active interface gets lower metric)
+    if [ "$use_primary" = "true" ]; then
+        ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
+        ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
+        _enr_log_info "Active route: PRIMARY ($ENR_PRIMARY_IFACE via $ENR_PRIMARY_GATEWAY)"
+
+        # Add backup as fallback (higher metric)
+        if [ "$use_backup" = "true" ]; then
+            ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null || true
+        fi
+    elif [ "$use_backup" = "true" ]; then
+        # Primary unhealthy, use backup only
+        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
+        ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+        _enr_log_warn "Active route: BACKUP ($ENR_BACKUP_IFACE via $ENR_BACKUP_GATEWAY) - Primary unhealthy!"
+    else
+        _enr_log_error "No healthy WAN interface!"
+        return 1
+    fi
 
     return 0
 }
@@ -330,9 +374,11 @@ ensure_network_connectivity() {
         ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
         _enr_log_info "Primary WAN ($ENR_PRIMARY_IFACE) has connectivity"
 
-        # If we have LTE too, set up PBR for redundancy
+        # If we have LTE too, set up PBR for redundancy and start monitoring
         if [ -n "$ENR_BACKUP_IFACE" ]; then
             _enr_setup_minimal_pbr
+            # Start background monitor for continuous failover during installation
+            enr_start_monitor
         fi
 
         return 0
@@ -349,6 +395,7 @@ ensure_network_connectivity() {
             ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
             _enr_log_info "LTE ($ENR_BACKUP_IFACE) already has connectivity"
             _enr_setup_minimal_pbr
+            enr_start_monitor  # Monitor for primary recovery
             return 0
         fi
 
@@ -357,6 +404,7 @@ ensure_network_connectivity() {
             ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
             _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
             _enr_setup_minimal_pbr
+            enr_start_monitor  # Monitor for primary recovery
             return 0
         fi
     fi
@@ -375,6 +423,7 @@ ensure_network_connectivity() {
                 ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
                 _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
                 _enr_setup_minimal_pbr
+                enr_start_monitor  # Monitor for primary recovery
                 return 0
             fi
         fi
@@ -420,6 +469,93 @@ with_network_resilience() {
 }
 
 # ============================================================
+# BACKGROUND HEALTH MONITOR FOR INSTALLATION
+# ============================================================
+
+# PID file for background monitor
+ENR_MONITOR_PID=""
+ENR_MONITOR_PIDFILE="/run/enr-health-monitor.pid"
+
+# Start background health monitor during installation
+# This ensures failover happens even during long-running operations
+enr_start_monitor() {
+    if [ -n "$ENR_MONITOR_PID" ] && kill -0 "$ENR_MONITOR_PID" 2>/dev/null; then
+        _enr_log_info "Health monitor already running (PID $ENR_MONITOR_PID)"
+        return 0
+    fi
+
+    # Need both interfaces for monitoring to make sense
+    if [ -z "$ENR_PRIMARY_IFACE" ] || [ -z "$ENR_BACKUP_IFACE" ]; then
+        _enr_log_info "Single WAN mode - no monitor needed"
+        return 0
+    fi
+
+    _enr_log_info "Starting background health monitor..."
+
+    # Run monitor in background
+    (
+        local check_interval=10
+        local fail_count=0
+        local fail_threshold=2
+        local last_active="$ENR_ACTIVE_WAN"
+
+        while true; do
+            sleep "$check_interval"
+
+            # Check if primary is healthy
+            if _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
+                fail_count=0
+
+                # If we were on backup and primary recovered, switch back
+                if [ "$last_active" = "$ENR_BACKUP_IFACE" ]; then
+                    _enr_log_info "Primary WAN recovered - switching back"
+                    _enr_set_active_route
+                    last_active="$ENR_ACTIVE_WAN"
+                fi
+            else
+                fail_count=$((fail_count + 1))
+                _enr_log_warn "Primary connectivity check failed ($fail_count/$fail_threshold)"
+
+                # If failed enough times and backup is healthy, switch
+                if [ "$fail_count" -ge "$fail_threshold" ]; then
+                    if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
+                        _enr_log_warn "Primary WAN unhealthy - switching to backup"
+                        _enr_set_active_route
+                        last_active="$ENR_ACTIVE_WAN"
+                        fail_count=0
+                    else
+                        _enr_log_error "Both WANs unhealthy!"
+                    fi
+                fi
+            fi
+        done
+    ) &
+    ENR_MONITOR_PID=$!
+    echo "$ENR_MONITOR_PID" > "$ENR_MONITOR_PIDFILE"
+    _enr_log_info "Health monitor started (PID $ENR_MONITOR_PID)"
+}
+
+# Stop background health monitor
+enr_stop_monitor() {
+    # Kill by PID variable
+    if [ -n "$ENR_MONITOR_PID" ] && kill -0 "$ENR_MONITOR_PID" 2>/dev/null; then
+        kill "$ENR_MONITOR_PID" 2>/dev/null || true
+        _enr_log_info "Health monitor stopped (PID $ENR_MONITOR_PID)"
+        ENR_MONITOR_PID=""
+    fi
+
+    # Also try PID file
+    if [ -f "$ENR_MONITOR_PIDFILE" ]; then
+        local pid
+        pid=$(cat "$ENR_MONITOR_PIDFILE" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$ENR_MONITOR_PIDFILE"
+    fi
+}
+
+# ============================================================
 # STATUS AND CLEANUP
 # ============================================================
 
@@ -450,6 +586,9 @@ enr_status() {
 
 # Clean up minimal PBR (called when full PBR takes over)
 enr_cleanup() {
+    # Stop background health monitor
+    enr_stop_monitor
+
     if [ "$ENR_PBR_ACTIVE" != "true" ]; then
         return 0
     fi
@@ -472,3 +611,5 @@ export -f ensure_network_connectivity
 export -f with_network_resilience
 export -f enr_status
 export -f enr_cleanup
+export -f enr_start_monitor
+export -f enr_stop_monitor
