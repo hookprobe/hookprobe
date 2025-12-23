@@ -33,7 +33,7 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from collections import deque
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -320,15 +320,64 @@ class WhitelistManager:
         """Get all whitelist entries."""
         return sorted(self._whitelist)
 
-    def add(self, domain: str) -> bool:
-        """Add domain to whitelist."""
+    def validate_domain(self, domain: str) -> Tuple[bool, str]:
+        """Validate domain format. Returns (is_valid, error_message)."""
+        import re
+
+        if not domain:
+            return False, "Domain cannot be empty"
+
         domain = domain.strip().lower()
-        if domain and domain not in self._whitelist:
-            self._whitelist.add(domain)
-            self._save()
-            logger.info(f"Added to whitelist: {domain}")
-            return True
-        return False
+
+        # Check length
+        if len(domain) > 253:
+            return False, "Domain too long (max 253 characters)"
+
+        if len(domain) < 2:
+            return False, "Domain too short"
+
+        # Check for invalid characters
+        # Valid: a-z, 0-9, hyphen, dot
+        if not re.match(r'^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$', domain):
+            return False, "Invalid characters (only a-z, 0-9, hyphen, dot allowed)"
+
+        # Check for consecutive dots
+        if '..' in domain:
+            return False, "Invalid format: consecutive dots"
+
+        # Check for leading/trailing hyphens in labels
+        labels = domain.split('.')
+        for label in labels:
+            if not label:
+                return False, "Invalid format: empty label"
+            if len(label) > 63:
+                return False, f"Label '{label}' too long (max 63 characters)"
+            if label.startswith('-') or label.endswith('-'):
+                return False, f"Label '{label}' cannot start or end with hyphen"
+
+        # Must have at least one dot for a proper domain (or be a TLD which is ok)
+        # Single-label domains are allowed for flexibility
+
+        return True, ""
+
+    def add(self, domain: str) -> Tuple[bool, str]:
+        """Add domain to whitelist. Returns (success, message)."""
+        domain = domain.strip().lower()
+
+        # Validate domain format
+        is_valid, error = self.validate_domain(domain)
+        if not is_valid:
+            return False, error
+
+        # Check if already exists
+        if domain in self._whitelist:
+            return False, f"Domain '{domain}' is already whitelisted"
+
+        # Add to whitelist
+        self._whitelist.add(domain)
+        self._save()
+        logger.info(f"Added to whitelist: {domain}")
+        return True, f"Domain '{domain}' added to whitelist"
 
     def remove(self, domain: str) -> bool:
         """Remove domain from whitelist."""
@@ -645,18 +694,19 @@ class APIHandler(BaseHTTPRequestHandler):
         })
 
     def _add_whitelist(self):
-        """Add domain to whitelist."""
+        """Add domain to whitelist with validation."""
         data = self._parse_body()
         domain = data.get('domain', '').strip()
 
         if not domain:
-            self._send_error('Missing domain parameter')
+            self._send_json({'success': False, 'error': 'Missing domain parameter'}, 400)
             return
 
-        if whitelist_manager.add(domain):
-            self._send_json({'success': True, 'domain': domain})
+        success, message = whitelist_manager.add(domain)
+        if success:
+            self._send_json({'success': True, 'domain': domain.lower(), 'message': message})
         else:
-            self._send_json({'success': False, 'message': 'Domain already in whitelist or invalid'})
+            self._send_json({'success': False, 'error': message}, 400)
 
     def _remove_whitelist(self):
         """Remove domain from whitelist."""
