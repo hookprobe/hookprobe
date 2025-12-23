@@ -145,8 +145,6 @@ stop_services() {
 
     local services=(
         "fortress"
-        "fortress-network"
-        "fortress-vlan"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -363,8 +361,6 @@ remove_systemd_services() {
 
     local services=(
         "fortress"
-        "fortress-network"
-        "fortress-vlan"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -961,16 +957,6 @@ remove_lte_config() {
     if [ -d "$LTE_STATE_DIR" ]; then
         log_info "Removing $LTE_STATE_DIR..."
         rm -rf "$LTE_STATE_DIR"
-    fi
-
-    # Remove network state files (filter mode)
-    if [ -f "/var/lib/fortress/network-state.conf" ]; then
-        log_info "Removing network state file..."
-        rm -f /var/lib/fortress/network-state.conf
-    fi
-    if [ -f "/var/lib/fortress/vlan-config.conf" ]; then
-        log_info "Removing VLAN config state..."
-        rm -f /var/lib/fortress/vlan-config.conf
     fi
 
     # Clean up parent directory if empty
