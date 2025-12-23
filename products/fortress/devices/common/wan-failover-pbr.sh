@@ -1165,25 +1165,42 @@ check_interface_health() {
 
     # === Check 3: Gateway reachable ===
     # Get gateway for this interface
+    # NOTE: For LTE/cellular, carrier gateways often don't respond to ICMP
+    # We log this as info but continue to the internet connectivity check
     gateway=$(get_gateway "$iface")
+    local gateway_reachable=false
     if [ -n "$gateway" ]; then
         # Try ARP check first (if arping is available), then fall back to ping
         if command -v arping &>/dev/null; then
-            if ! arping -c 1 -w 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-                # arping failed, try regular ping to gateway
-                if ! ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-                    log_debug "[$iface] Gateway $gateway unreachable"
-                    return 1
-                fi
+            if arping -c 1 -w 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+                gateway_reachable=true
+            elif ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+                gateway_reachable=true
             fi
         else
             # arping not installed, use ping only
-            if ! ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-                log_debug "[$iface] Gateway $gateway unreachable"
-                return 1
+            if ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
+                gateway_reachable=true
             fi
         fi
-        log_debug "[$iface] Gateway $gateway: reachable"
+
+        if [ "$gateway_reachable" = "true" ]; then
+            log_debug "[$iface] Gateway $gateway: reachable"
+        else
+            # For LTE/cellular (wwan*, usb*, etc.), gateway not responding is normal
+            # Continue to internet connectivity check instead of failing here
+            case "$iface" in
+                wwan*|usb*|wwp*|cdc*|mbim*|qmi*)
+                    log_debug "[$iface] Gateway $gateway: not responding (normal for LTE)"
+                    # Don't return failure - continue to internet check
+                    ;;
+                *)
+                    # For wired interfaces, gateway should respond
+                    log_debug "[$iface] Gateway $gateway unreachable"
+                    return 1
+                    ;;
+            esac
+        fi
     fi
 
     # === Check 4: Internet connectivity (ICMP) ===
