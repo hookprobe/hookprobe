@@ -150,7 +150,7 @@ services:
       GUNICORN_BIND: "0.0.0.0:${WEB_PORT:-8443}"
       # ML service endpoints via container network
       QSECBIT_API_URL: http://localhost:9090
-      DNSXAI_API_URL: http://fts-dnsxai:5353
+      DNSXAI_API_URL: http://fts-dnsxai:8080
       DFS_API_URL: http://fts-dfs:8050
       # Monitoring endpoints
       VICTORIA_URL: http://fts-victoria:8428
@@ -173,6 +173,7 @@ services:
       start_period: 90s
 
   # dnsXai Engine - DNS ML Protection
+  # Provides both DNS filtering (5353/udp) and HTTP API (8080/tcp)
   dnsxai:
     build:
       context: ../..
@@ -186,13 +187,17 @@ services:
       DNSXAI_PROTECTION_LEVEL: 3
       # Path must match Containerfile: /opt/hookprobe/shared/dnsXai/data
       DNSXAI_DATA_DIR: /opt/hookprobe/shared/dnsXai/data
+      LOG_DIR: /var/log/hookprobe
     volumes:
       # Mount over shared path to persist data while keeping bundled whitelist
       - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
       - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
+      # Persistent logs for ML training data (survives reinstalls)
+      - dnsxai_logs:/var/log/hookprobe
       - /etc/hookprobe:/etc/hookprobe:ro
     ports:
       - "0.0.0.0:5353:5353/udp"  # DNS accessible from LAN
+      - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
     healthcheck:
       # DNS query check - send query and verify response (no pgrep in slim images)
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); q=b'\\x00\\x01\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x09localhost\\x00\\x00\\x01\\x00\\x01'; s.sendto(q,('127.0.0.1',5353)); r=s.recv(512); s.close(); exit(0 if len(r)>12 else 1)"]
@@ -610,6 +615,9 @@ volumes:
   dnsxai_blocklists:
     driver: local
     name: fts-dnsxai-blocklists
+  dnsxai_logs:
+    driver: local
+    name: fts-dnsxai-logs
   dfs_data:
     driver: local
     name: fts-dfs-data
