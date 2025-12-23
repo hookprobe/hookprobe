@@ -247,14 +247,11 @@ setup_rt_tables() {
     fi
 }
 
-# Prevent NetworkManager from interfering with WAN interfaces
-# This is critical - NM adds routes without metrics which override our PBR routes
-# We set WAN interfaces as UNMANAGED so NM doesn't touch them at all
+# Prevent NetworkManager from adding routes on WAN interfaces
+# This is critical - NM adds routes that override our PBR routes
+# We configure connections to never add default routes or auto-routes
 configure_networkmanager_no_default_route() {
-    log_info "Configuring NetworkManager to not manage WAN interfaces..."
-
-    local nm_conf_dir="/etc/NetworkManager/conf.d"
-    local nm_conf_file="${nm_conf_dir}/99-fortress-unmanaged-wan.conf"
+    log_info "Configuring NetworkManager to not add routes on WAN interfaces..."
 
     # Skip if NetworkManager is not installed
     if ! command -v nmcli &>/dev/null; then
@@ -262,47 +259,118 @@ configure_networkmanager_no_default_route() {
         return 0
     fi
 
-    mkdir -p "$nm_conf_dir"
-
-    # Method 1: Set interfaces as unmanaged via nmcli device
-    # This is the most reliable method - NM won't touch these interfaces at all
+    # For each WAN interface, find its connection and configure it
     for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
-        if nmcli device status 2>/dev/null | grep -q "^${iface}"; then
-            log_info "Setting $iface as unmanaged by NetworkManager"
-            nmcli device set "$iface" managed no 2>/dev/null || true
+        # Find the connection name for this interface
+        local conn_name
+        conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+
+        if [ -z "$conn_name" ]; then
+            # Try inactive connections too
+            conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+        fi
+
+        if [ -n "$conn_name" ]; then
+            log_info "Configuring connection '$conn_name' ($iface) to not add routes..."
+
+            # Prevent this connection from becoming the default gateway
+            nmcli connection modify "$conn_name" ipv4.never-default yes 2>/dev/null || true
+
+            # Prevent DHCP-provided routes (classless static routes) from being added
+            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes yes 2>/dev/null || true
+
+            # Same for IPv6
+            nmcli connection modify "$conn_name" ipv6.never-default yes 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes yes 2>/dev/null || true
+
+            # Reapply the connection to take effect immediately
+            nmcli connection up "$conn_name" 2>/dev/null || true
+
+            log_info "$iface ($conn_name): never-default=yes, ignore-auto-routes=yes"
+        else
+            log_warn "No NetworkManager connection found for $iface"
         fi
     done
 
-    # Method 2: Create keyfile config to persist unmanaged state across reboots
-    # This uses the [keyfile] section which is the correct way to set unmanaged devices
-    cat > "$nm_conf_file" << EOF
-# HookProbe Fortress - WAN interfaces managed by PBR failover, not NetworkManager
-# PBR WAN failover (wan-failover-pbr.sh) manages all routing for these interfaces
-# Generated: $(date -Iseconds)
+    log_info "NetworkManager configured to not add routes on WAN interfaces"
+}
 
-[keyfile]
-# Set WAN interfaces as unmanaged - NM won't add routes, IPs, or touch them
-unmanaged-devices=interface-name:${PRIMARY_IFACE};interface-name:${BACKUP_IFACE}
+# Configure netplan to not add routes on WAN interfaces (Ubuntu/Debian with netplan)
+# NOTE: This only works for DHCP-based configs. For static routes defined in netplan,
+# we must either modify the existing config or rely on cleanup_stray_routes()
+configure_netplan_no_routes() {
+    log_info "Checking for netplan configuration..."
+
+    # Skip if netplan is not installed
+    if ! command -v netplan &>/dev/null; then
+        log_debug "Netplan not installed, skipping"
+        return 0
+    fi
+
+    # Check existing netplan files for static routes on our WAN interfaces
+    # If static routes exist, warn and skip - we can't override those with dhcp4-overrides
+    local has_static_routes=false
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if grep -r "routes:" /etc/netplan/*.yaml 2>/dev/null | grep -q "$iface" || \
+           grep -rA5 "$iface:" /etc/netplan/*.yaml 2>/dev/null | grep -q "to:.*default"; then
+            log_warn "Found static route for $iface in netplan - cannot override with dhcp4-overrides"
+            log_warn "To prevent automatic routes, remove the 'routes:' section from your netplan config"
+            log_warn "PBR failover will manage routes via cleanup_stray_routes() instead"
+            has_static_routes=true
+        fi
+    done
+
+    if [ "$has_static_routes" = "true" ]; then
+        log_info "Skipping netplan dhcp4-overrides (static routes detected)"
+        return 0
+    fi
+
+    # Check if interfaces use DHCP in netplan
+    local uses_dhcp=false
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if grep -rA5 "$iface:" /etc/netplan/*.yaml 2>/dev/null | grep -q "dhcp4: true"; then
+            uses_dhcp=true
+            break
+        fi
+    done
+
+    if [ "$uses_dhcp" = "false" ]; then
+        log_debug "No DHCP-based WAN interfaces in netplan, skipping dhcp4-overrides"
+        return 0
+    fi
+
+    local netplan_dir="/etc/netplan"
+    local netplan_file="${netplan_dir}/99-fortress-wan-no-routes.yaml"
+
+    # Create netplan override to prevent DHCP WAN interfaces from adding routes
+    mkdir -p "$netplan_dir"
+
+    cat > "$netplan_file" << EOF
+# HookProbe Fortress - WAN interfaces managed by PBR failover
+# Generated: $(date -Iseconds)
+# This prevents DHCP WAN interfaces from adding default routes
+# NOTE: Only applies to DHCP configs, not static routes
+network:
+  version: 2
+  ethernets:
+    ${PRIMARY_IFACE}:
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
+    ${BACKUP_IFACE}:
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
 EOF
 
-    chmod 644 "$nm_conf_file"
+    chmod 600 "$netplan_file"
 
-    # Reload NetworkManager config to pick up the new unmanaged-devices setting
-    nmcli general reload conf 2>/dev/null || true
-
-    # Verify interfaces are now unmanaged
-    sleep 1
-    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
-        local state
-        state=$(nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep "^${iface}:" | cut -d: -f2)
-        if [ "$state" = "unmanaged" ]; then
-            log_info "$iface is now unmanaged by NetworkManager"
-        else
-            log_warn "$iface state: $state (expected: unmanaged) - may need reboot"
-        fi
-    done
-
-    log_info "NetworkManager configured to not manage WAN interfaces"
+    # Apply netplan changes
+    if netplan apply 2>/dev/null; then
+        log_info "Netplan configured to not add routes on DHCP WAN interfaces"
+    else
+        log_warn "Failed to apply netplan configuration"
+    fi
 }
 
 # Configure ModemManager to not add default routes from carrier DHCP
@@ -364,22 +432,26 @@ cleanup_stray_routes() {
 
     local dominated_by_stray=false
     local route_info
+    local stray_routes=""
+
+    route_info=$(ip route show default 2>/dev/null)
 
     # Check for routes without metrics (highest priority, often added by NM)
-    if ip route show default 2>/dev/null | grep "^default" | grep -qv "metric"; then
+    if echo "$route_info" | grep "^default" | grep -qv "metric"; then
         dominated_by_stray=true
         log_info "Found default route without metric (likely NetworkManager)"
     fi
 
     # Check for routes with proto static (carrier DHCP/ModemManager)
-    if ip route show default 2>/dev/null | grep -q "proto static"; then
+    # These are specifically pushed by the LTE carrier and must be removed
+    if echo "$route_info" | grep -q "proto static"; then
         dominated_by_stray=true
-        log_info "Found default route with proto static (likely carrier DHCP)"
+        stray_routes=$(echo "$route_info" | grep "proto static")
+        log_info "Found carrier DHCP route: $stray_routes"
     fi
 
     # Check for routes with metrics other than 10 or 100 (our only valid metrics)
     # This catches carrier-pushed routes with metric 200, 300, etc.
-    route_info=$(ip route show default 2>/dev/null)
     if echo "$route_info" | grep -E "metric [0-9]+" | grep -vE "metric (10|100)( |$)" | grep -q .; then
         dominated_by_stray=true
         log_info "Found default route with unexpected metric (not 10 or 100)"
@@ -388,10 +460,24 @@ cleanup_stray_routes() {
     if [ "$dominated_by_stray" = "true" ]; then
         log_info "Cleaning up stray default routes..."
 
-        # Remove ALL default routes and let update_main_table_route re-add correct ones
+        # First, specifically remove proto static routes (carrier DHCP)
+        while ip route show default 2>/dev/null | grep -q "proto static"; do
+            local proto_route
+            proto_route=$(ip route show default 2>/dev/null | grep "proto static" | head -1)
+            log_info "Removing carrier route: $proto_route"
+            ip route del $proto_route 2>/dev/null || break
+        done
+
+        # Then remove any other stray routes (no metric, wrong metric)
         local tries=10
-        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-            ip route del default 2>/dev/null || break
+        while [ $tries -gt 0 ]; do
+            # Check if there are any routes that aren't our metrics 10 or 100
+            local bad_route
+            bad_route=$(ip route show default 2>/dev/null | grep -vE "metric (10|100)( |$)" | head -1)
+            [ -z "$bad_route" ] && break
+
+            log_info "Removing stray route: $bad_route"
+            ip route del $bad_route 2>/dev/null || break
             tries=$((tries - 1))
         done
 
@@ -795,6 +881,9 @@ LAN_SUBNETS="${LAN_SUBNETS:-10.200.0.0/24 172.20.200.0/24 172.20.201.0/24}"
 setup_nat_rules() {
     log_info "Setting up NAT rules..."
 
+    # Delete existing table if any (clean slate)
+    nft delete table inet fts_wan_nat 2>/dev/null || true
+
     # Use nftables for NAT (consistent with our other rules)
     nft -f - << 'NFTEOF'
 # Fortress WAN Failover - NAT/Masquerade Rules
@@ -805,6 +894,13 @@ table inet fts_wan_nat {
     }
 }
 NFTEOF
+
+    if ! nft list table inet fts_wan_nat &>/dev/null; then
+        log_error "Failed to create nftables NAT table!"
+        return 1
+    fi
+
+    log_info "nftables NAT table created successfully"
 
     # Set initial NAT based on active WAN
     update_nat_for_wan "${ACTIVE_WAN:-primary}"
@@ -824,23 +920,42 @@ update_nat_for_wan() {
 
     log_info "Updating NAT rules for $active_wan WAN ($wan_iface)..."
 
+    # Ensure nftables NAT table exists (create if missing)
+    if ! nft list table inet fts_wan_nat &>/dev/null; then
+        log_warn "NAT table missing, recreating..."
+        nft -f - << 'NFTEOF'
+table inet fts_wan_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+    }
+}
+NFTEOF
+    fi
+
     # Rebuild NAT chain with correct output interface
     nft flush chain inet fts_wan_nat postrouting 2>/dev/null || true
 
     # Add masquerade rules for all LAN subnets
     for subnet in $LAN_SUBNETS; do
-        nft add rule inet fts_wan_nat postrouting ip saddr "$subnet" oifname "$wan_iface" masquerade 2>/dev/null || true
-        log_debug "NAT: $subnet -> $wan_iface (masquerade)"
+        if nft add rule inet fts_wan_nat postrouting ip saddr "$subnet" oifname "$wan_iface" masquerade 2>/dev/null; then
+            log_debug "NAT: $subnet -> $wan_iface (masquerade)"
+        else
+            log_warn "Failed to add nftables NAT rule for $subnet"
+        fi
     done
 
-    # Also add iptables rules as fallback (some systems need both)
+    # Always add iptables rules as primary fallback (more reliable on some systems)
     for subnet in $LAN_SUBNETS; do
         # Remove old rules for this subnet (both interfaces)
         iptables -t nat -D POSTROUTING -s "$subnet" -o "${PRIMARY_IFACE:-eth0}" -j MASQUERADE 2>/dev/null || true
         iptables -t nat -D POSTROUTING -s "$subnet" -o "${BACKUP_IFACE:-wwan0}" -j MASQUERADE 2>/dev/null || true
 
         # Add rule for active interface
-        iptables -t nat -A POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null || true
+        if iptables -t nat -A POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            log_debug "iptables NAT: $subnet -> $wan_iface (masquerade)"
+        else
+            log_warn "Failed to add iptables NAT rule for $subnet"
+        fi
     done
 
     log_info "NAT rules updated for $wan_iface"
@@ -859,26 +974,40 @@ cleanup_nat_rules() {
     done
 }
 
-# Restore NetworkManager management of WAN interfaces (called during cleanup)
+# Restore NetworkManager default route settings (called during cleanup)
 restore_networkmanager_management() {
-    log_info "Restoring NetworkManager management of WAN interfaces..."
+    log_info "Restoring NetworkManager route settings for WAN interfaces..."
 
     if ! command -v nmcli &>/dev/null; then
         return 0
     fi
 
-    # Remove the unmanaged config files
-    rm -f /etc/NetworkManager/conf.d/99-fortress-unmanaged-wan.conf
-    rm -f /etc/NetworkManager/conf.d/99-fortress-no-default-route.conf
-
-    # Set interfaces back to managed
+    # For each WAN interface, restore default route settings
     for iface in "${PRIMARY_IFACE:-}" "${BACKUP_IFACE:-}"; do
         [ -z "$iface" ] && continue
-        if nmcli device status 2>/dev/null | grep -q "^${iface}"; then
-            nmcli device set "$iface" managed yes 2>/dev/null || true
-            log_info "Restored NetworkManager management of $iface"
+
+        # Find the connection name for this interface
+        local conn_name
+        conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+
+        if [ -n "$conn_name" ]; then
+            log_info "Restoring route settings for '$conn_name' ($iface)..."
+
+            # Re-enable default gateway and auto-routes
+            nmcli connection modify "$conn_name" ipv4.never-default no 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes no 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.never-default no 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes no 2>/dev/null || true
+
+            log_info "$iface ($conn_name): default route settings restored"
         fi
     done
+
+    # Remove netplan override file if it exists
+    rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
+    if command -v netplan &>/dev/null; then
+        netplan apply 2>/dev/null || true
+    fi
 
     # Reload NM config
     nmcli general reload conf 2>/dev/null || true
@@ -1123,11 +1252,43 @@ attempt_interface_recovery() {
     discover_gateways
 }
 
+verify_nat_rules() {
+    # Verify NAT rules exist and are correct
+    # Called during health check to ensure NAT persists
+    local active="${ACTIVE_WAN:-primary}"
+    local wan_iface
+
+    if [ "$active" = "primary" ]; then
+        wan_iface="${PRIMARY_IFACE:-}"
+    else
+        wan_iface="${BACKUP_IFACE:-}"
+    fi
+
+    [ -z "$wan_iface" ] && return 0
+
+    # Check if iptables NAT rules exist for the active interface
+    local nat_ok=false
+    for subnet in $LAN_SUBNETS; do
+        if iptables -t nat -C POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            nat_ok=true
+            break
+        fi
+    done
+
+    if [ "$nat_ok" = "false" ]; then
+        log_warn "NAT rules missing for $wan_iface - recreating..."
+        update_nat_for_wan "$active"
+    fi
+}
+
 do_health_check() {
     load_state
 
-    # Clean up any stray routes added by NetworkManager
+    # Clean up any stray routes added by NetworkManager/carrier
     cleanup_stray_routes
+
+    # Verify NAT rules are in place
+    verify_nat_rules
 
     local primary_now backup_now
     local old_active="$ACTIVE_WAN"
@@ -1275,8 +1436,11 @@ cmd_setup() {
 
     load_config || exit 1
 
-    # Prevent NetworkManager from interfering with our routes
+    # Prevent NetworkManager from adding routes
     configure_networkmanager_no_default_route
+
+    # Prevent netplan/systemd-networkd from adding routes
+    configure_netplan_no_routes
 
     # Prevent ModemManager/carrier from pushing routes
     configure_modemmanager_no_routes
