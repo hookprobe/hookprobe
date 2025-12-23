@@ -1,12 +1,19 @@
 #!/usr/bin/env systemd
 #
-# fortress-vlan.service - Fortress VLAN Configuration Service
+# fortress-vlan.service - Fortress OVS Post-Netplan Configuration
 #
-# Restores VLAN configuration after reboot:
-# - OVS VLAN interfaces (vlan100, vlan200)
-# - Port VLAN assignments (trunk port auto-detection)
-# - DHCP configuration
-# - nftables firewall rules
+# This service runs AFTER netplan/systemd-networkd has created:
+#   - OVS bridge (FTS)
+#   - VLAN interfaces (vlan100, vlan200)
+#   - IP addressing
+#
+# This service only configures what netplan cannot:
+#   - OpenFlow rules for traffic flow
+#   - Port VLAN tagging (access/trunk modes)
+#   - Container network bridge (veth to VLAN 200)
+#
+# The bridge and VLAN interfaces are created by netplan, which is
+# faster and more reliable than bash scripts.
 #
 # Install:
 #   sudo cp fortress-vlan.service /etc/systemd/system/
@@ -15,9 +22,11 @@
 #
 
 [Unit]
-Description=HookProbe Fortress VLAN Configuration
+Description=HookProbe Fortress OVS Post-Setup
 Documentation=https://hookprobe.com/docs/fortress
-After=network-online.target openvswitch-switch.service
+
+# Run after network is configured by netplan/networkd
+After=network-online.target systemd-networkd.service openvswitch-switch.service
 Wants=network-online.target
 Requires=openvswitch-switch.service
 
@@ -29,11 +38,11 @@ Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
 Type=oneshot
 RemainAfterExit=yes
 
-# Wait for OVS and WiFi interfaces to be ready
-ExecStartPre=/bin/sleep 3
+# No sleep needed - systemd-networkd handles timing via netlink events
+# The script waits for bridge to exist (max 15s) if needed
 
-# Run VLAN setup
-ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-vlan-setup.sh setup
+# Run OVS post-setup (OpenFlow rules, port VLANs, container veth)
+ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-post-setup.sh setup
 
 # On stop, don't cleanup (keep config for debugging)
 # Use 'systemctl restart fortress-vlan' to reapply
