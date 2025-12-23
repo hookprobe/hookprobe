@@ -976,6 +976,19 @@ remove_lte_config() {
         log_info "Removing VLAN configuration state..."
         rm -f /var/lib/fortress/vlan-config.conf
     fi
+    if [ -f "/var/lib/fortress/netplan-config.conf" ]; then
+        log_info "Removing netplan configuration state..."
+        rm -f /var/lib/fortress/netplan-config.conf
+    fi
+
+    # Remove Fortress netplan configuration
+    if [ -f "/etc/netplan/60-fortress-ovs.yaml" ]; then
+        log_info "Removing Fortress netplan configuration..."
+        rm -f /etc/netplan/60-fortress-ovs.yaml
+        rm -f /etc/netplan/60-fortress-ovs.yaml.backup
+        # Apply netplan to remove OVS bridge and VLANs
+        netplan apply 2>/dev/null || true
+    fi
 
     # Clean up parent directory if empty
     if [ -d "/var/lib/fortress" ] && [ -z "$(ls -A /var/lib/fortress 2>/dev/null)" ]; then
