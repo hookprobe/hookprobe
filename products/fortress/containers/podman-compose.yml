@@ -356,11 +356,13 @@ services:
     environment:
       # Interface to monitor
       ZEEK_INTERFACE: "${ZEEK_INTERFACE:-FTS}"
-    command: >
-      zeek -i ${ZEEK_INTERFACE:-FTS}
-      local
-      LogAscii::use_json=T
-      Site::local_nets=10.200.0.0/16,172.20.0.0/16,192.168.0.0/16
+    command:
+      - zeek
+      - -i
+      - ${ZEEK_INTERFACE:-FTS}
+      - local
+      - LogAscii::use_json=T
+      - "Site::local_nets={10.200.0.0/16, 172.20.0.0/16, 192.168.0.0/16}"
     volumes:
       - zeek_logs:/usr/local/zeek/logs
       - zeek_spool:/usr/local/zeek/spool
