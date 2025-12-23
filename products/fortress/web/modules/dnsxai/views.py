@@ -1,34 +1,61 @@
 """
 Fortress dnsXai Views - DNS Protection with Privacy Controls
 
+Communicates with the dnsXai container API for real-time statistics
+and control. Privacy settings are stored locally for web container access.
+
 Features:
 - Protection level slider (0-5)
 - Kill switch / pause protection
 - Privacy settings (enable/disable tracking)
 - ML/LSTM threat detection status
-- Per-VLAN DNS policies
 - Whitelist/blocklist management
 """
 import os
 import json
 import time
 import logging
+import requests
 from pathlib import Path
-from flask import render_template, jsonify, request
+from flask import render_template, jsonify, request, current_app
 from flask_login import login_required
 from . import dnsxai_bp
 
-# Configuration paths
-PRIVACY_CONFIG = Path('/etc/hookprobe/dnsxai/privacy.json')
-DNS_SHIELD_DIR = Path('/opt/hookprobe/fortress/dns-shield')
-DNS_SHIELD_CONFIG = DNS_SHIELD_DIR / 'shield.conf'
-DNS_SHIELD_WHITELIST = DNS_SHIELD_DIR / 'whitelist.txt'
-DNS_SHIELD_BLOCKLIST = DNS_SHIELD_DIR / 'blocked-hosts'
-DNS_SHIELD_SOURCES = DNS_SHIELD_DIR / 'sources.json'
-DNS_SHIELD_PAUSE = DNS_SHIELD_DIR / 'pause_state.json'
-DNSMASQ_QUERY_LOG = Path('/var/log/hookprobe/dnsmasq-queries.log')
-DNSMASQ_SHIELD_CONF = Path('/etc/dnsmasq.d/fortress-shield.conf')
-ML_STATS_FILE = Path('/opt/hookprobe/fortress/data/threat-intel/aggregated.json')
+logger = logging.getLogger(__name__)
+
+# Configuration paths (local to web container)
+CONFIG_DIR = Path('/etc/hookprobe')
+PRIVACY_CONFIG = CONFIG_DIR / 'dnsxai' / 'privacy.json'
+
+# dnsXai API endpoint (container network)
+DNSXAI_API_URL = os.environ.get('DNSXAI_API_URL', 'http://fts-dnsxai:8080')
+API_TIMEOUT = 5  # seconds
+
+
+def _api_call(method: str, endpoint: str, data: dict = None, timeout: int = API_TIMEOUT):
+    """Make API call to dnsXai container."""
+    url = f"{DNSXAI_API_URL}{endpoint}"
+    try:
+        if method.upper() == 'GET':
+            resp = requests.get(url, timeout=timeout)
+        elif method.upper() == 'POST':
+            resp = requests.post(url, json=data, timeout=timeout)
+        elif method.upper() == 'DELETE':
+            resp = requests.delete(url, json=data, timeout=timeout)
+        else:
+            return None, f"Unknown method: {method}"
+
+        if resp.status_code == 200:
+            return resp.json(), None
+        else:
+            return None, f"API error: {resp.status_code}"
+    except requests.exceptions.ConnectionError:
+        return None, "dnsXai service unavailable"
+    except requests.exceptions.Timeout:
+        return None, "dnsXai service timeout"
+    except Exception as e:
+        logger.warning(f"API call failed: {e}")
+        return None, str(e)
 
 
 def load_json_file(path: Path, default=None):
@@ -38,7 +65,7 @@ def load_json_file(path: Path, default=None):
             with open(path, 'r') as f:
                 return json.load(f)
     except Exception as e:
-        logging.warning(f"Failed to load {path}: {e}")
+        logger.warning(f"Failed to load {path}: {e}")
     return default if default is not None else {}
 
 
@@ -50,29 +77,7 @@ def save_json_file(path: Path, data: dict) -> bool:
             json.dump(data, f, indent=2)
         return True
     except Exception as e:
-        logging.error(f"Failed to save {path}: {e}")
-        return False
-
-
-def load_text_file(path: Path, default=None):
-    """Load text file as list of lines."""
-    try:
-        if path.exists():
-            with open(path, 'r') as f:
-                return [line.strip() for line in f if line.strip()]
-    except Exception:
-        pass
-    return default if default is not None else []
-
-
-def save_text_file(path: Path, lines: list) -> bool:
-    """Save text file from list."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w') as f:
-            f.write('\n'.join(lines) + '\n')
-        return True
-    except Exception:
+        logger.error(f"Failed to save {path}: {e}")
         return False
 
 
@@ -84,7 +89,7 @@ def index():
 
 
 # =============================================================================
-# PRIVACY SETTINGS API
+# PRIVACY SETTINGS API (stored locally)
 # =============================================================================
 
 @dnsxai_bp.route('/api/privacy', methods=['GET'])
@@ -183,82 +188,49 @@ def api_privacy_preset():
 
 
 # =============================================================================
-# PROTECTION STATUS API
+# PROTECTION STATUS API (from dnsXai container)
 # =============================================================================
 
 @dnsxai_bp.route('/api/stats')
 @login_required
 def api_stats():
-    """Get dnsXai statistics."""
-    stats = {
-        'total_queries': 0,
-        'blocked': 0,
-        'allowed': 0,
-        'block_rate': 0.0,
-        'blocklist_domains': 0,
-        'level': 3,
-        'status': 'active',
-        'ml_available': False,
-        'ml_threats': 0
-    }
+    """Get dnsXai statistics from container."""
+    # Call dnsXai API
+    data, error = _api_call('GET', '/api/stats')
 
-    # Get query stats from dnsmasq log
-    try:
-        if DNSMASQ_QUERY_LOG.exists():
-            file_size = DNSMASQ_QUERY_LOG.stat().st_size
-            read_size = min(file_size, 1024 * 1024)
+    if error:
+        # Return default stats with error indicator
+        return jsonify({
+            'total_queries': 0,
+            'blocked': 0,
+            'allowed': 0,
+            'block_rate': 0.0,
+            'blocklist_domains': 0,
+            'level': 3,
+            'status': 'offline',
+            'ml_available': False,
+            'ml_threats': 0,
+            'error': error
+        })
 
-            with open(DNSMASQ_QUERY_LOG, 'r') as f:
-                if file_size > read_size:
-                    f.seek(file_size - read_size)
-                    f.readline()
-
-                for line in f:
-                    if ' query[' in line:
-                        stats['total_queries'] += 1
-                    if ' is 0.0.0.0' in line or '/0.0.0.0' in line:
-                        stats['blocked'] += 1
-
-        stats['allowed'] = max(0, stats['total_queries'] - stats['blocked'])
-        if stats['total_queries'] > 0:
-            stats['block_rate'] = (stats['blocked'] / stats['total_queries']) * 100
-    except Exception as e:
-        logging.warning(f"Failed to read query log: {e}")
-
-    # Get blocklist count
-    try:
-        if DNS_SHIELD_BLOCKLIST.exists():
-            with open(DNS_SHIELD_BLOCKLIST, 'r') as f:
-                stats['blocklist_domains'] = sum(1 for line in f if line.strip() and not line.startswith('#'))
-    except Exception:
-        pass
-
-    # Get protection level
-    try:
-        if DNS_SHIELD_CONFIG.exists():
-            with open(DNS_SHIELD_CONFIG, 'r') as f:
-                for line in f:
-                    if line.strip().startswith('SHIELD_LEVEL='):
-                        stats['level'] = int(line.strip().split('=')[1])
-                        break
-    except Exception:
-        pass
-
-    # Get pause state
-    pause_state = load_json_file(DNS_SHIELD_PAUSE, {'status': 'active'})
-    stats['status'] = pause_state.get('status', 'active')
-
-    # Check if protection is active
-    if not DNSMASQ_SHIELD_CONF.exists():
-        stats['status'] = 'disabled'
-
-    # Get ML stats
-    ml_stats = load_json_file(ML_STATS_FILE, {})
-    if ml_stats:
-        stats['ml_available'] = True
-        stats['ml_threats'] = ml_stats.get('stats', {}).get('attack_sequences', 0)
-
-    return jsonify(stats)
+    # Map API response to expected format
+    return jsonify({
+        'total_queries': data.get('total_queries', 0),
+        'blocked': data.get('blocked_queries', 0),
+        'allowed': data.get('allowed_queries', 0),
+        'block_rate': data.get('block_rate', 0.0),
+        'blocklist_domains': data.get('blocklist_domains', 0),
+        'level': data.get('protection_level', 3),
+        'status': 'active' if data.get('protection_enabled', True) else 'paused',
+        'paused': data.get('paused', False),
+        'pause_until': data.get('pause_until'),
+        'ml_available': data.get('ml_classifications', 0) > 0,
+        'ml_threats': data.get('ml_blocks', 0),
+        'cache_hits': data.get('cache_hits', 0),
+        'cache_misses': data.get('cache_misses', 0),
+        'uptime_start': data.get('uptime_start'),
+        'last_updated': data.get('last_updated')
+    })
 
 
 @dnsxai_bp.route('/api/level', methods=['POST'])
@@ -271,276 +243,290 @@ def api_set_level():
     if not isinstance(level, int) or level < 0 or level > 5:
         return jsonify({'success': False, 'error': 'Invalid level (0-5)'}), 400
 
-    try:
-        DNS_SHIELD_DIR.mkdir(parents=True, exist_ok=True)
-        config_content = f"SHIELD_LEVEL={level}\n"
-        with open(DNS_SHIELD_CONFIG, 'w') as f:
-            f.write(config_content)
-        return jsonify({'success': True, 'level': level})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    result, error = _api_call('POST', '/api/level', {'level': level})
+
+    if error:
+        return jsonify({'success': False, 'error': error}), 503
+
+    return jsonify({'success': True, 'level': level})
 
 
 @dnsxai_bp.route('/api/pause', methods=['GET', 'POST'])
 @login_required
 def api_pause():
     """Pause/resume protection."""
-    disabled_conf = DNSMASQ_SHIELD_CONF.with_suffix('.conf.disabled')
-
     if request.method == 'GET':
-        state = load_json_file(DNS_SHIELD_PAUSE, {'status': 'active', 'pause_until': 0})
-        now = time.time()
+        data, error = _api_call('GET', '/api/stats')
+        if error:
+            return jsonify({'status': 'unknown', 'error': error})
 
-        if state['status'] == 'paused':
-            remaining = state.get('pause_until', 0) - now
-            if remaining <= 0:
-                state = {'status': 'active', 'pause_until': 0}
-                save_json_file(DNS_SHIELD_PAUSE, state)
-                return jsonify({'status': 'active', 'remaining_seconds': 0})
-            return jsonify({'status': 'paused', 'remaining_seconds': int(remaining)})
-        elif state['status'] == 'disabled' or not DNSMASQ_SHIELD_CONF.exists():
-            return jsonify({'status': 'disabled', 'remaining_seconds': 0})
-        return jsonify({'status': 'active', 'remaining_seconds': 0})
+        return jsonify({
+            'status': 'paused' if data.get('paused') else 'active',
+            'pause_until': data.get('pause_until'),
+            'remaining_seconds': 0  # Calculated on frontend
+        })
 
-    data = request.get_json()
-    action = data.get('action', '')
-    now = time.time()
+    # POST - toggle pause
+    data = request.get_json() or {}
+    action = data.get('action', 'toggle')
+    minutes = data.get('minutes', 0)
 
     if action == 'pause':
-        minutes = data.get('minutes', 5)
-        state = {'status': 'paused', 'pause_until': now + (minutes * 60)}
-        save_json_file(DNS_SHIELD_PAUSE, state)
-        return jsonify({'success': True, 'status': 'paused', 'minutes': minutes})
-
+        result, error = _api_call('POST', '/api/pause', {'minutes': minutes})
     elif action == 'resume':
-        state = {'status': 'active', 'pause_until': 0}
-        save_json_file(DNS_SHIELD_PAUSE, state)
-        return jsonify({'success': True, 'status': 'active'})
+        result, error = _api_call('POST', '/api/resume', {})
+    else:
+        # Toggle
+        stats, _ = _api_call('GET', '/api/stats')
+        if stats and stats.get('paused'):
+            result, error = _api_call('POST', '/api/resume', {})
+        else:
+            result, error = _api_call('POST', '/api/pause', {'minutes': minutes})
 
-    elif action == 'disable':
-        state = {'status': 'disabled', 'pause_until': 0}
-        save_json_file(DNS_SHIELD_PAUSE, state)
-        return jsonify({'success': True, 'status': 'disabled'})
+    if error:
+        return jsonify({'success': False, 'error': error}), 503
 
-    elif action == 'enable':
-        state = {'status': 'active', 'pause_until': 0}
-        save_json_file(DNS_SHIELD_PAUSE, state)
-        return jsonify({'success': True, 'status': 'active'})
-
-    return jsonify({'success': False, 'error': 'Invalid action'}), 400
+    return jsonify({'success': True, **result})
 
 
-# =============================================================================
-# WHITELIST API
-# =============================================================================
-
-@dnsxai_bp.route('/api/whitelist', methods=['GET', 'POST', 'DELETE'])
+@dnsxai_bp.route('/api/kill', methods=['POST'])
 @login_required
-def api_whitelist():
-    """Manage whitelisted domains."""
-    if request.method == 'GET':
-        whitelist = load_text_file(DNS_SHIELD_WHITELIST, [])
-        whitelist = [d for d in whitelist if not d.startswith('#')]
-        return jsonify({'whitelist': whitelist})
+def api_kill_switch():
+    """Kill switch - disable protection immediately."""
+    data = request.get_json() or {}
+    action = data.get('action', 'toggle')
 
+    # Kill = pause indefinitely (0 minutes)
+    if action == 'kill':
+        result, error = _api_call('POST', '/api/pause', {'minutes': 0})
+    else:
+        result, error = _api_call('POST', '/api/resume', {})
+
+    if error:
+        return jsonify({'success': False, 'error': error}), 503
+
+    return jsonify({'success': True, **result})
+
+
+# =============================================================================
+# WHITELIST API (from dnsXai container)
+# =============================================================================
+
+@dnsxai_bp.route('/api/whitelist', methods=['GET'])
+@login_required
+def api_get_whitelist():
+    """Get whitelist entries."""
+    data, error = _api_call('GET', '/api/whitelist')
+
+    if error:
+        return jsonify({'whitelist': [], 'error': error})
+
+    return jsonify({
+        'whitelist': data.get('whitelist', []),
+        'count': data.get('count', 0)
+    })
+
+
+@dnsxai_bp.route('/api/whitelist', methods=['POST'])
+@login_required
+def api_add_whitelist():
+    """Add domain to whitelist."""
     data = request.get_json()
     domain = data.get('domain', '').strip().lower()
 
     if not domain:
         return jsonify({'success': False, 'error': 'Domain required'}), 400
 
-    whitelist = load_text_file(DNS_SHIELD_WHITELIST, [])
-    working = [d.lower() for d in whitelist if not d.startswith('#')]
+    result, error = _api_call('POST', '/api/whitelist', {'domain': domain})
 
-    if request.method == 'POST':
-        if domain not in working:
-            whitelist.append(domain)
-            if save_text_file(DNS_SHIELD_WHITELIST, whitelist):
-                return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Already whitelisted'}), 400
+    if error:
+        return jsonify({'success': False, 'error': error}), 503
 
-    if request.method == 'DELETE':
-        if domain in working:
-            whitelist = [d for d in whitelist if d.lower() != domain]
-            if save_text_file(DNS_SHIELD_WHITELIST, whitelist):
-                return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Not found'}), 404
-
-    return jsonify({'success': False}), 405
+    return jsonify(result)
 
 
-# =============================================================================
-# BLOCKLIST SOURCES API
-# =============================================================================
-
-@dnsxai_bp.route('/api/sources', methods=['GET', 'POST', 'DELETE'])
+@dnsxai_bp.route('/api/whitelist', methods=['DELETE'])
 @login_required
-def api_sources():
-    """Manage blocklist sources."""
-    default_sources = [
-        {
-            'name': 'StevenBlack Unified Hosts',
-            'url': 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts',
-            'builtin': True,
-            'enabled': True
-        }
-    ]
-
-    sources = load_json_file(DNS_SHIELD_SOURCES, {'sources': default_sources})
-
-    if request.method == 'GET':
-        return jsonify({'sources': sources.get('sources', default_sources)})
-
+def api_remove_whitelist():
+    """Remove domain from whitelist."""
     data = request.get_json()
+    domain = data.get('domain', '').strip().lower()
 
-    if request.method == 'POST':
-        url = data.get('url', '').strip()
-        name = data.get('name', 'Custom Source').strip()
+    if not domain:
+        return jsonify({'success': False, 'error': 'Domain required'}), 400
 
-        if not url:
-            return jsonify({'success': False, 'error': 'URL required'}), 400
+    result, error = _api_call('DELETE', '/api/whitelist', {'domain': domain})
 
-        source_list = sources.get('sources', default_sources.copy())
-        if any(s['url'] == url for s in source_list):
-            return jsonify({'success': False, 'error': 'Source exists'}), 400
+    if error:
+        return jsonify({'success': False, 'error': error}), 503
 
-        source_list.append({'name': name, 'url': url, 'builtin': False, 'enabled': True})
-        sources['sources'] = source_list
-
-        if save_json_file(DNS_SHIELD_SOURCES, sources):
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Failed to save'}), 500
-
-    if request.method == 'DELETE':
-        url = data.get('url', '').strip()
-        source_list = sources.get('sources', [])
-        source_list = [s for s in source_list if s['url'] != url or s.get('builtin', False)]
-        sources['sources'] = source_list
-
-        if save_json_file(DNS_SHIELD_SOURCES, sources):
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Failed to save'}), 500
+    return jsonify(result)
 
 
 # =============================================================================
-# ML/LSTM STATUS API
+# BLOCKLIST SOURCES API (stored locally for now)
+# =============================================================================
+
+@dnsxai_bp.route('/api/sources', methods=['GET'])
+@login_required
+def api_get_sources():
+    """Get blocklist sources."""
+    sources_file = CONFIG_DIR / 'dnsxai' / 'sources.json'
+    sources = load_json_file(sources_file, {
+        'sources': [
+            {
+                'id': 'stevenblack',
+                'name': 'Steven Black Unified',
+                'url': 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts',
+                'enabled': True,
+                'category': 'ads_malware'
+            },
+            {
+                'id': 'adaway',
+                'name': 'AdAway Default',
+                'url': 'https://adaway.org/hosts.txt',
+                'enabled': True,
+                'category': 'ads'
+            },
+            {
+                'id': 'malwaredomains',
+                'name': 'Malware Domains',
+                'url': 'https://mirror1.malwaredomains.com/files/justdomains',
+                'enabled': True,
+                'category': 'malware'
+            }
+        ]
+    })
+    return jsonify(sources)
+
+
+@dnsxai_bp.route('/api/sources', methods=['POST'])
+@login_required
+def api_add_source():
+    """Add blocklist source."""
+    data = request.get_json()
+    url = data.get('url', '').strip()
+    name = data.get('name', url)
+    category = data.get('category', 'custom')
+
+    if not url:
+        return jsonify({'success': False, 'error': 'URL required'}), 400
+
+    sources_file = CONFIG_DIR / 'dnsxai' / 'sources.json'
+    sources = load_json_file(sources_file, {'sources': []})
+
+    # Generate ID from name
+    source_id = name.lower().replace(' ', '_')[:20]
+
+    new_source = {
+        'id': source_id,
+        'name': name,
+        'url': url,
+        'enabled': True,
+        'category': category
+    }
+
+    sources['sources'].append(new_source)
+
+    if save_json_file(sources_file, sources):
+        return jsonify({'success': True, 'source': new_source})
+    return jsonify({'success': False, 'error': 'Failed to save'}), 500
+
+
+@dnsxai_bp.route('/api/sources', methods=['DELETE'])
+@login_required
+def api_remove_source():
+    """Remove blocklist source."""
+    data = request.get_json()
+    source_id = data.get('id', '').strip()
+
+    if not source_id:
+        return jsonify({'success': False, 'error': 'Source ID required'}), 400
+
+    sources_file = CONFIG_DIR / 'dnsxai' / 'sources.json'
+    sources = load_json_file(sources_file, {'sources': []})
+
+    sources['sources'] = [s for s in sources['sources'] if s.get('id') != source_id]
+
+    if save_json_file(sources_file, sources):
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Failed to save'}), 500
+
+
+# =============================================================================
+# ML/LSTM API (from dnsXai container)
 # =============================================================================
 
 @dnsxai_bp.route('/api/ml/status')
 @login_required
 def api_ml_status():
-    """Get ML/LSTM threat detection status."""
-    ml_stats = load_json_file(ML_STATS_FILE, {})
+    """Get ML training status."""
+    data, error = _api_call('GET', '/api/ml/status')
 
-    result = {
-        'available': bool(ml_stats),
-        'timestamp': ml_stats.get('timestamp', ''),
-        'stats': ml_stats.get('stats', {}),
-        'pattern_distribution': ml_stats.get('pattern_distribution', {}),
-        'training_ready': ml_stats.get('training_ready', False)
-    }
+    if error:
+        return jsonify({
+            'model_trained': False,
+            'training_samples': 0,
+            'training_in_progress': False,
+            'ready_for_training': False,
+            'error': error
+        })
 
-    # Check LSTM model status
-    model_path = Path('/opt/hookprobe/fortress/data/ml-models/trained/threat_lstm.pt')
-    result['lstm_model_exists'] = model_path.exists()
-
-    # Get training history
-    history_path = Path('/opt/hookprobe/fortress/data/ml-models/trained/training_history.json')
-    if history_path.exists():
-        history = load_json_file(history_path, [])
-        if history:
-            result['last_training'] = history[-1] if isinstance(history, list) else history
-
-    return jsonify(result)
+    return jsonify(data)
 
 
 @dnsxai_bp.route('/api/ml/train', methods=['POST'])
 @login_required
 def api_ml_train():
-    """Trigger ML/LSTM training."""
-    import subprocess
+    """Trigger ML training."""
+    result, error = _api_call('POST', '/api/ml/train', {}, timeout=10)
 
-    try:
-        # Run LSTM training script
-        result = subprocess.run(
-            ['python3', '/opt/hookprobe/fortress/lib/lstm_threat_detector.py', '--train', '--epochs', '50'],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
+    if error:
+        return jsonify({'success': False, 'error': error}), 503
 
-        if result.returncode == 0:
-            return jsonify({'success': True, 'output': result.stdout})
-        else:
-            return jsonify({'success': False, 'error': result.stderr}), 500
-
-    except subprocess.TimeoutExpired:
-        return jsonify({'success': False, 'error': 'Training timeout'}), 500
-    except FileNotFoundError:
-        return jsonify({'success': False, 'error': 'LSTM trainer not found'}), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify(result)
 
 
 # =============================================================================
-# BLOCKED DOMAINS API
+# BLOCKED DOMAINS API (from dnsXai container)
 # =============================================================================
 
 @dnsxai_bp.route('/api/blocked')
 @login_required
-def api_blocked_domains():
+def api_blocked():
     """Get recently blocked domains."""
-    from collections import OrderedDict
+    limit = request.args.get('limit', 100, type=int)
 
-    limit = request.args.get('limit', 50, type=int)
-    blocked_domains = OrderedDict()
-    total_blocks = 0
+    data, error = _api_call('GET', f'/api/blocked?limit={limit}')
 
-    try:
-        if not DNSMASQ_QUERY_LOG.exists():
-            return jsonify({'success': True, 'domains': [], 'total_blocks': 0})
+    if error:
+        return jsonify({'blocked': [], 'error': error})
 
-        file_size = DNSMASQ_QUERY_LOG.stat().st_size
-        read_size = min(file_size, 2 * 1024 * 1024)
+    return jsonify({
+        'blocked': data.get('blocked', []),
+        'count': data.get('count', 0)
+    })
 
-        with open(DNSMASQ_QUERY_LOG, 'r') as f:
-            if file_size > read_size:
-                f.seek(file_size - read_size)
-                f.readline()
 
-            for line in f:
-                if ' is 0.0.0.0' in line or '/0.0.0.0' in line:
-                    domain = None
+# =============================================================================
+# HEALTH CHECK
+# =============================================================================
 
-                    if ' config ' in line:
-                        parts = line.split(' config ')[1].split(' is ')[0]
-                        domain = parts.strip()
-                    elif '/0.0.0.0 ' in line:
-                        parts = line.split('/0.0.0.0 ')[1].split(' is ')[0]
-                        domain = parts.strip()
-                    elif ' reply ' in line:
-                        parts = line.split(' reply ')[1].split(' is ')[0]
-                        domain = parts.strip()
+@dnsxai_bp.route('/api/health')
+@login_required
+def api_health():
+    """Check dnsXai service health."""
+    data, error = _api_call('GET', '/health', timeout=2)
 
-                    if domain:
-                        total_blocks += 1
-                        if domain in blocked_domains:
-                            blocked_domains[domain]['block_count'] += 1
-                        else:
-                            blocked_domains[domain] = {
-                                'domain': domain,
-                                'block_count': 1,
-                                'time': int(time.time())
-                            }
-
-        domains_list = list(blocked_domains.values())
-        domains_list.sort(key=lambda x: x.get('block_count', 1), reverse=True)
-
+    if error:
         return jsonify({
-            'success': True,
-            'domains': domains_list[:limit],
-            'total_blocks': total_blocks
-        })
+            'healthy': False,
+            'service': 'dnsxai',
+            'error': error
+        }), 503
 
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e), 'domains': []}), 500
+    return jsonify({
+        'healthy': True,
+        'service': 'dnsxai',
+        **data
+    })
