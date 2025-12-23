@@ -13,7 +13,13 @@
 # Architecture:
 #   Table 100 (wan_primary):   Default route via primary WAN (wired)
 #   Table 200 (wan_backup):    Default route via backup WAN (LTE/modem)
-#   Main table:                No default route (all traffic uses rules)
+#   Main table:                Fallback routes with metrics (10=active, 100=standby)
+#
+# Multi-WAN Expansion (Future):
+#   Table 300 (wan_tertiary):  Third WAN (e.g., secondary LTE)
+#   Table 400 (wan_quaternary): Fourth WAN (e.g., satellite)
+#   Priority order: primary > backup > tertiary > quaternary
+#   Each WAN gets: routing table, fwmark, health check, failover logic
 #
 # Traffic Flow:
 #   1. New connection → Mark based on active WAN → Route via marked table
@@ -57,6 +63,12 @@ FWMARK_PRIMARY=0x100
 FWMARK_BACKUP=0x200
 FWMARK_MASK=0xf00
 
+# Reserved for multi-WAN expansion (3-4 WANs)
+# TABLE_TERTIARY=300       # Third WAN table
+# TABLE_QUATERNARY=400     # Fourth WAN table
+# FWMARK_TERTIARY=0x300    # Third WAN mark
+# FWMARK_QUATERNARY=0x400  # Fourth WAN mark
+
 # Default health check settings
 PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
 PING_COUNT=2
@@ -72,6 +84,12 @@ DOWN_THRESHOLD=3    # Require X consecutive failures to mark DOWN
 DNS_FAILOVER_ENABLED="${DNS_FAILOVER_ENABLED:-true}"
 PRIMARY_DNS="${PRIMARY_DNS:-}"
 BACKUP_DNS="${BACKUP_DNS:-}"
+
+# SLA AI Integration
+# shared/slaai writes recommendations to this file for predictive failover
+SLAAI_RECOMMENDATION_FILE="/run/fortress/slaai-recommendation.json"
+SLAAI_ENABLED="${SLAAI_ENABLED:-true}"
+SLAAI_MIN_CONFIDENCE="${SLAAI_MIN_CONFIDENCE:-0.7}"  # Minimum confidence to act on prediction
 
 # ============================================================
 # Logging
@@ -1285,6 +1303,99 @@ EOF
 }
 
 # ============================================================
+# SLA AI Integration
+# ============================================================
+
+# Read SLA AI recommendation for predictive failover
+# SLA AI (shared/slaai) uses LSTM to predict failures before they happen
+read_slaai_recommendation() {
+    # Returns: failover, failback, hold, or empty if not available
+    local rec_file="$SLAAI_RECOMMENDATION_FILE"
+
+    if [ "$SLAAI_ENABLED" != "true" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [ ! -f "$rec_file" ]; then
+        log_debug "SLA AI recommendation file not found"
+        echo ""
+        return 0
+    fi
+
+    # Check if file is recent (less than 30 seconds old)
+    local file_age
+    file_age=$(( $(date +%s) - $(stat -c %Y "$rec_file" 2>/dev/null || echo 0) ))
+    if [ "$file_age" -gt 30 ]; then
+        log_debug "SLA AI recommendation stale (${file_age}s old)"
+        echo ""
+        return 0
+    fi
+
+    # Parse JSON recommendation
+    # Expected format: {"recommendation": "failover|failback|hold", "confidence": 0.85, ...}
+    local recommendation confidence
+    recommendation=$(grep -oP '"recommendation"\s*:\s*"\K[^"]+' "$rec_file" 2>/dev/null || echo "")
+    confidence=$(grep -oP '"confidence"\s*:\s*\K[0-9.]+' "$rec_file" 2>/dev/null || echo "0")
+
+    if [ -z "$recommendation" ]; then
+        echo ""
+        return 0
+    fi
+
+    # Check confidence threshold
+    # Use awk for float comparison
+    local meets_threshold
+    meets_threshold=$(awk -v conf="$confidence" -v thresh="$SLAAI_MIN_CONFIDENCE" \
+        'BEGIN { print (conf >= thresh) ? "yes" : "no" }')
+
+    if [ "$meets_threshold" = "no" ]; then
+        log_debug "SLA AI confidence $confidence below threshold $SLAAI_MIN_CONFIDENCE"
+        echo ""
+        return 0
+    fi
+
+    log_debug "SLA AI recommends: $recommendation (confidence: $confidence)"
+    echo "$recommendation"
+}
+
+# Apply SLA AI recommendation if applicable
+# Returns 0 if action was taken, 1 if no action needed
+apply_slaai_recommendation() {
+    local recommendation
+    recommendation=$(read_slaai_recommendation)
+
+    if [ -z "$recommendation" ]; then
+        return 1
+    fi
+
+    case "$recommendation" in
+        failover)
+            # SLA AI predicts primary failure - preemptive failover
+            if [ "$ACTIVE_WAN" = "primary" ] && [ "$BACKUP_STATUS" = "up" ]; then
+                log_info "SLA AI: Predictive failover to backup (primary failure predicted)"
+                do_failover backup
+                return 0
+            fi
+            ;;
+        failback)
+            # SLA AI says primary is stable - can safely failback
+            if [ "$ACTIVE_WAN" = "backup" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+                log_info "SLA AI: Predictive failback to primary (primary stable)"
+                do_failover primary
+                return 0
+            fi
+            ;;
+        hold)
+            # SLA AI says maintain current state
+            log_debug "SLA AI: Hold current state"
+            ;;
+    esac
+
+    return 1
+}
+
+# ============================================================
 # Failover Logic
 # ============================================================
 
@@ -1429,7 +1540,16 @@ do_health_check() {
         BACKUP_STATUS="down"
     fi
 
-    # Determine active WAN
+    # Check SLA AI recommendations FIRST (predictive failover)
+    # This allows switching before actual failure occurs
+    if apply_slaai_recommendation; then
+        # SLA AI took action - skip reactive failover logic
+        save_state
+        log_debug "Health: primary=$PRIMARY_STATUS($PRIMARY_COUNT) backup=$BACKUP_STATUS($BACKUP_COUNT) active=$ACTIVE_WAN (SLA AI)"
+        return 0
+    fi
+
+    # Determine active WAN (reactive failover)
     if [ "$PRIMARY_STATUS" = "up" ]; then
         ACTIVE_WAN="primary"
         BOTH_DOWN_SINCE=0  # Reset both-down timer
@@ -1632,6 +1752,20 @@ cmd_status() {
 
     echo "Active WAN:     ${ACTIVE_WAN:-unknown}"
     echo "Failover Count: ${FAILOVER_COUNT:-0}"
+    echo ""
+
+    # SLA AI Status
+    echo "SLA AI:         ${SLAAI_ENABLED:-true}"
+    if [ "$SLAAI_ENABLED" = "true" ] && [ -f "$SLAAI_RECOMMENDATION_FILE" ]; then
+        local slaai_rec slaai_conf slaai_reason
+        slaai_rec=$(grep -oP '"recommendation"\s*:\s*"\K[^"]+' "$SLAAI_RECOMMENDATION_FILE" 2>/dev/null || echo "none")
+        slaai_conf=$(grep -oP '"confidence"\s*:\s*\K[0-9.]+' "$SLAAI_RECOMMENDATION_FILE" 2>/dev/null || echo "0")
+        slaai_reason=$(grep -oP '"reason"\s*:\s*"\K[^"]+' "$SLAAI_RECOMMENDATION_FILE" 2>/dev/null || echo "-")
+        echo "  Recommendation: $slaai_rec (confidence: $slaai_conf)"
+        echo "  Reason:         $slaai_reason"
+    else
+        echo "  Recommendation: (not available)"
+    fi
 
     # Show both-down recovery status if applicable
     if [ "${BOTH_DOWN_SINCE:-0}" -gt 0 ]; then
