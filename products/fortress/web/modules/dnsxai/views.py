@@ -518,10 +518,26 @@ def api_ml_train():
 # BLOCKED DOMAINS API (from dnsXai container)
 # =============================================================================
 
-@dnsxai_bp.route('/api/blocked')
+@dnsxai_bp.route('/api/blocked', methods=['GET', 'DELETE'])
 @login_required
 def api_blocked():
-    """Get recently blocked domains."""
+    """Get or delete blocked domains."""
+    if request.method == 'DELETE':
+        # Remove domain from blocked log
+        data = request.get_json() or {}
+        domain = data.get('domain', '').strip()
+
+        if not domain:
+            return jsonify({'success': False, 'error': 'Domain is required'}), 400
+
+        result, error = _api_call('DELETE', '/api/blocked', {'domain': domain})
+
+        if error:
+            return jsonify({'success': False, 'error': error}), 503
+
+        return jsonify(result)
+
+    # GET: list blocked domains
     limit = request.args.get('limit', 100, type=int)
 
     data, error = _api_call('GET', f'/api/blocked?limit={limit}')
