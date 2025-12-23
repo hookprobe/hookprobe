@@ -247,14 +247,11 @@ setup_rt_tables() {
     fi
 }
 
-# Prevent NetworkManager from interfering with WAN interfaces
-# This is critical - NM adds routes without metrics which override our PBR routes
-# We set WAN interfaces as UNMANAGED so NM doesn't touch them at all
+# Prevent NetworkManager from adding routes on WAN interfaces
+# This is critical - NM adds routes that override our PBR routes
+# We configure connections to never add default routes or auto-routes
 configure_networkmanager_no_default_route() {
-    log_info "Configuring NetworkManager to not manage WAN interfaces..."
-
-    local nm_conf_dir="/etc/NetworkManager/conf.d"
-    local nm_conf_file="${nm_conf_dir}/99-fortress-unmanaged-wan.conf"
+    log_info "Configuring NetworkManager to not add routes on WAN interfaces..."
 
     # Skip if NetworkManager is not installed
     if ! command -v nmcli &>/dev/null; then
@@ -262,47 +259,83 @@ configure_networkmanager_no_default_route() {
         return 0
     fi
 
-    mkdir -p "$nm_conf_dir"
-
-    # Method 1: Set interfaces as unmanaged via nmcli device
-    # This is the most reliable method - NM won't touch these interfaces at all
+    # For each WAN interface, find its connection and configure it
     for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
-        if nmcli device status 2>/dev/null | grep -q "^${iface}"; then
-            log_info "Setting $iface as unmanaged by NetworkManager"
-            nmcli device set "$iface" managed no 2>/dev/null || true
+        # Find the connection name for this interface
+        local conn_name
+        conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+
+        if [ -z "$conn_name" ]; then
+            # Try inactive connections too
+            conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+        fi
+
+        if [ -n "$conn_name" ]; then
+            log_info "Configuring connection '$conn_name' ($iface) to not add routes..."
+
+            # Prevent this connection from becoming the default gateway
+            nmcli connection modify "$conn_name" ipv4.never-default yes 2>/dev/null || true
+
+            # Prevent DHCP-provided routes (classless static routes) from being added
+            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes yes 2>/dev/null || true
+
+            # Same for IPv6
+            nmcli connection modify "$conn_name" ipv6.never-default yes 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes yes 2>/dev/null || true
+
+            # Reapply the connection to take effect immediately
+            nmcli connection up "$conn_name" 2>/dev/null || true
+
+            log_info "$iface ($conn_name): never-default=yes, ignore-auto-routes=yes"
+        else
+            log_warn "No NetworkManager connection found for $iface"
         fi
     done
 
-    # Method 2: Create keyfile config to persist unmanaged state across reboots
-    # This uses the [keyfile] section which is the correct way to set unmanaged devices
-    cat > "$nm_conf_file" << EOF
-# HookProbe Fortress - WAN interfaces managed by PBR failover, not NetworkManager
-# PBR WAN failover (wan-failover-pbr.sh) manages all routing for these interfaces
-# Generated: $(date -Iseconds)
+    log_info "NetworkManager configured to not add routes on WAN interfaces"
+}
 
-[keyfile]
-# Set WAN interfaces as unmanaged - NM won't add routes, IPs, or touch them
-unmanaged-devices=interface-name:${PRIMARY_IFACE};interface-name:${BACKUP_IFACE}
+# Configure netplan to not add routes on WAN interfaces (Ubuntu/Debian with netplan)
+configure_netplan_no_routes() {
+    log_info "Checking for netplan configuration..."
+
+    # Skip if netplan is not installed
+    if ! command -v netplan &>/dev/null; then
+        log_debug "Netplan not installed, skipping"
+        return 0
+    fi
+
+    local netplan_dir="/etc/netplan"
+    local netplan_file="${netplan_dir}/99-fortress-wan-no-routes.yaml"
+
+    # Create netplan override to prevent WAN interfaces from adding routes
+    mkdir -p "$netplan_dir"
+
+    cat > "$netplan_file" << EOF
+# HookProbe Fortress - WAN interfaces managed by PBR failover
+# Generated: $(date -Iseconds)
+# This prevents WAN interfaces from adding default routes
+network:
+  version: 2
+  ethernets:
+    ${PRIMARY_IFACE}:
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
+    ${BACKUP_IFACE}:
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
 EOF
 
-    chmod 644 "$nm_conf_file"
+    chmod 600 "$netplan_file"
 
-    # Reload NetworkManager config to pick up the new unmanaged-devices setting
-    nmcli general reload conf 2>/dev/null || true
-
-    # Verify interfaces are now unmanaged
-    sleep 1
-    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
-        local state
-        state=$(nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep "^${iface}:" | cut -d: -f2)
-        if [ "$state" = "unmanaged" ]; then
-            log_info "$iface is now unmanaged by NetworkManager"
-        else
-            log_warn "$iface state: $state (expected: unmanaged) - may need reboot"
-        fi
-    done
-
-    log_info "NetworkManager configured to not manage WAN interfaces"
+    # Apply netplan changes
+    if netplan apply 2>/dev/null; then
+        log_info "Netplan configured to not add routes on WAN interfaces"
+    else
+        log_warn "Failed to apply netplan configuration"
+    fi
 }
 
 # Configure ModemManager to not add default routes from carrier DHCP
@@ -906,26 +939,40 @@ cleanup_nat_rules() {
     done
 }
 
-# Restore NetworkManager management of WAN interfaces (called during cleanup)
+# Restore NetworkManager default route settings (called during cleanup)
 restore_networkmanager_management() {
-    log_info "Restoring NetworkManager management of WAN interfaces..."
+    log_info "Restoring NetworkManager route settings for WAN interfaces..."
 
     if ! command -v nmcli &>/dev/null; then
         return 0
     fi
 
-    # Remove the unmanaged config files
-    rm -f /etc/NetworkManager/conf.d/99-fortress-unmanaged-wan.conf
-    rm -f /etc/NetworkManager/conf.d/99-fortress-no-default-route.conf
-
-    # Set interfaces back to managed
+    # For each WAN interface, restore default route settings
     for iface in "${PRIMARY_IFACE:-}" "${BACKUP_IFACE:-}"; do
         [ -z "$iface" ] && continue
-        if nmcli device status 2>/dev/null | grep -q "^${iface}"; then
-            nmcli device set "$iface" managed yes 2>/dev/null || true
-            log_info "Restored NetworkManager management of $iface"
+
+        # Find the connection name for this interface
+        local conn_name
+        conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+
+        if [ -n "$conn_name" ]; then
+            log_info "Restoring route settings for '$conn_name' ($iface)..."
+
+            # Re-enable default gateway and auto-routes
+            nmcli connection modify "$conn_name" ipv4.never-default no 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes no 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.never-default no 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes no 2>/dev/null || true
+
+            log_info "$iface ($conn_name): default route settings restored"
         fi
     done
+
+    # Remove netplan override file if it exists
+    rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
+    if command -v netplan &>/dev/null; then
+        netplan apply 2>/dev/null || true
+    fi
 
     # Reload NM config
     nmcli general reload conf 2>/dev/null || true
@@ -1354,8 +1401,11 @@ cmd_setup() {
 
     load_config || exit 1
 
-    # Prevent NetworkManager from interfering with our routes
+    # Prevent NetworkManager from adding routes
     configure_networkmanager_no_default_route
+
+    # Prevent netplan/systemd-networkd from adding routes
+    configure_netplan_no_routes
 
     # Prevent ModemManager/carrier from pushing routes
     configure_modemmanager_no_routes
