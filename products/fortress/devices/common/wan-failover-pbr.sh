@@ -305,25 +305,84 @@ EOF
     log_info "NetworkManager configured to not manage WAN interfaces"
 }
 
-# Remove any stray default routes not managed by us
-# Called before updating routes to ensure clean state
-cleanup_stray_routes() {
-    # Remove default routes that don't have our expected metrics
-    # Our routes always have metric 10 (active) or 100 (standby)
+# Configure ModemManager to not add default routes from carrier DHCP
+# This prevents the LTE carrier from pushing routes that interfere with PBR
+configure_modemmanager_no_routes() {
+    log_info "Configuring ModemManager to not add carrier routes..."
 
-    local dominated_by_stray=false
-
-    # Check for routes without metrics (highest priority, added by NM)
-    if ip route show default 2>/dev/null | grep -qv "metric"; then
-        dominated_by_stray=true
-        log_debug "Found default route without metric (likely NetworkManager)"
+    # Skip if ModemManager is not installed
+    if ! command -v mmcli &>/dev/null; then
+        log_debug "ModemManager not installed, skipping"
+        return 0
     fi
 
-    # Check for routes with unexpected metrics
-    local our_metrics="metric 10|metric 100|metric 200"
-    if ip route show default 2>/dev/null | grep -vE "$our_metrics" | grep -q "metric"; then
+    # Find the modem
+    local modem_idx
+    modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+
+    if [ -z "$modem_idx" ]; then
+        log_debug "No modem found"
+        return 0
+    fi
+
+    # Check if there's an active bearer
+    local bearer_idx
+    bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
+
+    if [ -n "$bearer_idx" ]; then
+        log_debug "Found bearer $bearer_idx on modem $modem_idx"
+        # Note: ModemManager doesn't directly support disabling routes,
+        # but we handle this by cleaning up routes in cleanup_stray_routes()
+    fi
+
+    # For NetworkManager-managed modems, configure the connection to not add routes
+    # This catches cases where NM is managing the cellular connection
+    local wwan_conn
+    for iface in "${BACKUP_IFACE:-wwan0}"; do
+        # Find NM connection for this interface (if any)
+        wwan_conn=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+        if [ -n "$wwan_conn" ]; then
+            log_info "Configuring NM connection '$wwan_conn' to not add default route"
+            nmcli connection modify "$wwan_conn" ipv4.never-default yes 2>/dev/null || true
+            nmcli connection modify "$wwan_conn" ipv6.never-default yes 2>/dev/null || true
+            nmcli connection modify "$wwan_conn" ipv4.route-metric 9999 2>/dev/null || true
+        fi
+    done
+
+    log_info "ModemManager/NM route suppression configured"
+}
+
+# Remove any stray default routes not managed by us
+# Called before updating routes to ensure clean state
+# This handles routes added by:
+#   - NetworkManager (no metric, or unexpected metrics)
+#   - ModemManager/carrier DHCP (proto static, often metric 200)
+#   - dhclient or other DHCP clients
+cleanup_stray_routes() {
+    # Our routes use exactly metric 10 (active) and metric 100 (standby)
+    # Any other default route is not ours and should be removed
+
+    local dominated_by_stray=false
+    local route_info
+
+    # Check for routes without metrics (highest priority, often added by NM)
+    if ip route show default 2>/dev/null | grep "^default" | grep -qv "metric"; then
         dominated_by_stray=true
-        log_debug "Found default route with unexpected metric"
+        log_info "Found default route without metric (likely NetworkManager)"
+    fi
+
+    # Check for routes with proto static (carrier DHCP/ModemManager)
+    if ip route show default 2>/dev/null | grep -q "proto static"; then
+        dominated_by_stray=true
+        log_info "Found default route with proto static (likely carrier DHCP)"
+    fi
+
+    # Check for routes with metrics other than 10 or 100 (our only valid metrics)
+    # This catches carrier-pushed routes with metric 200, 300, etc.
+    route_info=$(ip route show default 2>/dev/null)
+    if echo "$route_info" | grep -E "metric [0-9]+" | grep -vE "metric (10|100)( |$)" | grep -q .; then
+        dominated_by_stray=true
+        log_info "Found default route with unexpected metric (not 10 or 100)"
     fi
 
     if [ "$dominated_by_stray" = "true" ]; then
@@ -336,8 +395,11 @@ cleanup_stray_routes() {
             tries=$((tries - 1))
         done
 
-        # Re-add our routes
+        # Re-add our routes with correct metrics
         update_main_table_route
+
+        # Log the new state
+        log_debug "Routes after cleanup: $(ip route show default 2>/dev/null | tr '\n' ' ')"
     fi
 }
 
@@ -1215,6 +1277,9 @@ cmd_setup() {
 
     # Prevent NetworkManager from interfering with our routes
     configure_networkmanager_no_default_route
+
+    # Prevent ModemManager/carrier from pushing routes
+    configure_modemmanager_no_routes
 
     setup_rt_tables
     setup_routing_tables
