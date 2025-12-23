@@ -310,28 +310,31 @@ _enr_setup_minimal_pbr() {
 # Set active route - only ONE default route for the healthy interface
 # This is critical: metrics don't work when link is UP but traffic isn't flowing
 _enr_set_active_route() {
-    # Remove ALL existing default routes first
+    # IMPORTANT: Check connectivity BEFORE removing routes!
+    # Otherwise the connectivity check itself will fail (no route to 8.8.8.8)
+    local use_primary=false
+    local use_backup=false
+
+    # Check primary connectivity (using gateway ping - doesn't need default route)
+    if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
+        if _enr_check_interface_health "$ENR_PRIMARY_IFACE" "$ENR_PRIMARY_GATEWAY"; then
+            use_primary=true
+        fi
+    fi
+
+    # Check backup connectivity
+    if [ -n "$ENR_BACKUP_IFACE" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
+        if _enr_check_interface_health "$ENR_BACKUP_IFACE" "$ENR_BACKUP_GATEWAY"; then
+            use_backup=true
+        fi
+    fi
+
+    # Now remove ALL existing default routes
     local max_tries=5
     while ip route show default 2>/dev/null | grep -q "^default" && [ $max_tries -gt 0 ]; do
         ip route del default 2>/dev/null || break
         max_tries=$((max_tries - 1))
     done
-
-    # Determine which interface has connectivity
-    local use_primary=false
-    local use_backup=false
-
-    if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
-        if _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
-            use_primary=true
-        fi
-    fi
-
-    if [ -n "$ENR_BACKUP_IFACE" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
-        if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-            use_backup=true
-        fi
-    fi
 
     # Add routes based on connectivity (active interface gets lower metric)
     if [ "$use_primary" = "true" ]; then
@@ -349,11 +352,84 @@ _enr_set_active_route() {
         ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
         _enr_log_warn "Active route: BACKUP ($ENR_BACKUP_IFACE via $ENR_BACKUP_GATEWAY) - Primary unhealthy!"
     else
-        _enr_log_error "No healthy WAN interface!"
+        # CRITICAL: Both failed - restore at least one route so traffic can flow
+        _enr_log_error "No healthy WAN detected - restoring backup route anyway"
+        if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+            ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
+            ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+        elif [ -n "$ENR_PRIMARY_GATEWAY" ] && [ -n "$ENR_PRIMARY_IFACE" ]; then
+            ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
+            ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
+        fi
         return 1
     fi
 
     return 0
+}
+
+# Check interface health without requiring default route
+# Uses gateway ping (direct route exists) and link state
+_enr_check_interface_health() {
+    local iface="$1"
+    local gateway="$2"
+
+    # Check 1: Interface exists
+    if [ ! -d "/sys/class/net/$iface" ]; then
+        return 1
+    fi
+
+    # Check 2: Link state (carrier)
+    local carrier
+    carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo "0")
+    if [ "$carrier" != "1" ]; then
+        _enr_log_debug "[$iface] No carrier (link down)"
+        return 1
+    fi
+
+    # Check 3: Has IP address
+    local iface_ip
+    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+    if [ -z "$iface_ip" ]; then
+        _enr_log_debug "[$iface] No IP address"
+        return 1
+    fi
+
+    # Check 4: Can reach gateway (direct route, doesn't need default)
+    if [ -n "$gateway" ]; then
+        if ! ping -c1 -W2 -I "$iface" "$gateway" &>/dev/null; then
+            _enr_log_debug "[$iface] Gateway $gateway unreachable"
+            return 1
+        fi
+    fi
+
+    # Check 5: Can reach internet via this interface
+    # Add temporary route, check, remove
+    local temp_route_added=false
+    if ! ip route show default dev "$iface" 2>/dev/null | grep -q "default"; then
+        ip route add default via "$gateway" dev "$iface" metric 999 2>/dev/null && temp_route_added=true
+    fi
+
+    local internet_ok=false
+    if ping -c1 -W2 -I "$iface_ip" 8.8.8.8 &>/dev/null || \
+       ping -c1 -W2 -I "$iface_ip" 1.1.1.1 &>/dev/null; then
+        internet_ok=true
+    fi
+
+    # Remove temporary route if we added it
+    if [ "$temp_route_added" = "true" ]; then
+        ip route del default via "$gateway" dev "$iface" metric 999 2>/dev/null || true
+    fi
+
+    if [ "$internet_ok" = "true" ]; then
+        return 0
+    fi
+
+    _enr_log_debug "[$iface] Internet unreachable"
+    return 1
+}
+
+_enr_log_debug() {
+    [ "${DEBUG:-0}" = "1" ] && echo -e "${CYAN}[NET-RESIL-DBG]${NC} $1"
 }
 
 # ============================================================
@@ -502,8 +578,8 @@ enr_start_monitor() {
         while true; do
             sleep "$check_interval"
 
-            # Check if primary is healthy
-            if _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
+            # Check if primary is healthy using the new function that doesn't need default route
+            if _enr_check_interface_health "$ENR_PRIMARY_IFACE" "$ENR_PRIMARY_GATEWAY"; then
                 fail_count=0
 
                 # If we were on backup and primary recovered, switch back
@@ -516,15 +592,30 @@ enr_start_monitor() {
                 fail_count=$((fail_count + 1))
                 _enr_log_warn "Primary connectivity check failed ($fail_count/$fail_threshold)"
 
-                # If failed enough times and backup is healthy, switch
+                # If failed enough times, switch to backup
                 if [ "$fail_count" -ge "$fail_threshold" ]; then
-                    if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
+                    # Check if backup is healthy
+                    if _enr_check_interface_health "$ENR_BACKUP_IFACE" "$ENR_BACKUP_GATEWAY"; then
                         _enr_log_warn "Primary WAN unhealthy - switching to backup"
                         _enr_set_active_route
                         last_active="$ENR_ACTIVE_WAN"
                         fail_count=0
                     else
-                        _enr_log_error "Both WANs unhealthy!"
+                        # Both checks failed, but backup might still work for existing connections
+                        # Force switch to backup anyway - better than no connectivity
+                        _enr_log_error "Both WANs appear unhealthy - forcing backup route"
+
+                        # Remove all routes and add backup
+                        local tries=5
+                        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
+                            ip route del default 2>/dev/null || break
+                            tries=$((tries - 1))
+                        done
+
+                        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
+                        ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+                        last_active="$ENR_BACKUP_IFACE"
+                        fail_count=0
                     fi
                 fi
             fi
