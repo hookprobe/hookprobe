@@ -145,6 +145,7 @@ stop_services() {
 
     local services=(
         "fortress"
+        "fortress-vlan"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -276,6 +277,10 @@ cleanup_network_interfaces() {
     rm -f /etc/dnsmasq.d/fts-wan-failover-dns.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
 
+    # Remove dnsmasq systemd drop-in for OVS dependency
+    rm -rf /etc/systemd/system/dnsmasq.service.d 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+
     # Remove WiFi configuration state
     rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
     rm -f /etc/hookprobe/wifi-ap.conf 2>/dev/null || true
@@ -357,6 +362,7 @@ remove_systemd_services() {
 
     local services=(
         "fortress"
+        "fortress-vlan"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -683,6 +689,16 @@ remove_nftables_filtering() {
     rm -f /etc/nftables.d/fts-filters.nft
     rm -f /etc/nftables.d/fts-traffic.nft
     rm -f /etc/nftables.d/fts-mgmt-vlan.nft
+    rm -f /etc/nftables.d/fortress-vlans.nft
+
+    # Remove VLAN mode nftables table
+    if nft list table inet fortress_vlan &>/dev/null; then
+        log_info "Removing fortress_vlan nftables table..."
+        nft delete table inet fortress_vlan 2>/dev/null || true
+    fi
+
+    # Remove VLAN mode dnsmasq config
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf
 
     # Remove OUI database and policy files
     rm -f /etc/hookprobe/oui_policies.conf
@@ -953,6 +969,25 @@ remove_lte_config() {
     if [ -d "$LTE_STATE_DIR" ]; then
         log_info "Removing $LTE_STATE_DIR..."
         rm -rf "$LTE_STATE_DIR"
+    fi
+
+    # Remove VLAN state files
+    if [ -f "/var/lib/fortress/vlan-config.conf" ]; then
+        log_info "Removing VLAN configuration state..."
+        rm -f /var/lib/fortress/vlan-config.conf
+    fi
+    if [ -f "/var/lib/fortress/netplan-config.conf" ]; then
+        log_info "Removing netplan configuration state..."
+        rm -f /var/lib/fortress/netplan-config.conf
+    fi
+
+    # Remove Fortress netplan configuration
+    if [ -f "/etc/netplan/60-fortress-ovs.yaml" ]; then
+        log_info "Removing Fortress netplan configuration..."
+        rm -f /etc/netplan/60-fortress-ovs.yaml
+        rm -f /etc/netplan/60-fortress-ovs.yaml.backup
+        # Apply netplan to remove OVS bridge and VLANs
+        netplan apply 2>/dev/null || true
     fi
 
     # Clean up parent directory if empty
