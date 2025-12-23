@@ -427,65 +427,85 @@ configure_modemmanager_no_routes() {
 #   - ModemManager/carrier DHCP (proto static, often metric 200)
 #   - dhclient or other DHCP clients
 cleanup_stray_routes() {
-    # Our routes use exactly metric 10 (active) and metric 100 (standby)
-    # Any other default route is not ours and should be removed
+    # Clean up routes not managed by us - but ONLY if they would cause routing issues
+    #
+    # We use metrics 10 (active) and 100 (standby) exclusively.
+    # Stray routes are those that:
+    #   1. Have no metric (highest priority, overrides ours)
+    #   2. Have proto static (carrier-pushed via DHCP)
+    #   3. Have metric < 10 (would take precedence over active)
+    #
+    # IMPORTANT: Routes with metric > 100 are IGNORED - they don't affect us
+    # This prevents constant fighting with NetworkManager/ModemManager.
 
     local dominated_by_stray=false
     local route_info
-    local stray_routes=""
+    local needs_cleanup=false
 
     route_info=$(ip route show default 2>/dev/null)
 
-    # Check for routes without metrics (highest priority, often added by NM)
-    if echo "$route_info" | grep "^default" | grep -qv "metric"; then
-        dominated_by_stray=true
-        log_info "Found default route without metric (likely NetworkManager)"
+    # Only care about routes that would DOMINATE our routing:
+    # 1. Routes without metric (implicit metric 0, highest priority)
+    if echo "$route_info" | grep "^default" | grep -v "metric" | grep -qv "proto static"; then
+        # Has default route without metric AND without proto static
+        # This is typically a manually added route or broken NM config
+        needs_cleanup=true
+        log_debug "Found default route without metric"
     fi
 
-    # Check for routes with proto static (carrier DHCP/ModemManager)
-    # These are specifically pushed by the LTE carrier and must be removed
-    if echo "$route_info" | grep -q "proto static"; then
-        dominated_by_stray=true
-        stray_routes=$(echo "$route_info" | grep "proto static")
-        log_info "Found carrier DHCP route: $stray_routes"
+    # 2. Routes with proto static AND no metric (carrier DHCP - highest priority)
+    if echo "$route_info" | grep "proto static" | grep -qv "metric"; then
+        needs_cleanup=true
+        log_debug "Found carrier route without metric"
     fi
 
-    # Check for routes with metrics other than 10 or 100 (our only valid metrics)
-    # This catches carrier-pushed routes with metric 200, 300, etc.
-    if echo "$route_info" | grep -E "metric [0-9]+" | grep -vE "metric (10|100)( |$)" | grep -q .; then
-        dominated_by_stray=true
-        log_info "Found default route with unexpected metric (not 10 or 100)"
+    # 3. Routes with metric LESS than 10 (would override our active route)
+    if echo "$route_info" | grep -E "metric [0-9]( |$)" | grep -q .; then
+        needs_cleanup=true
+        log_debug "Found route with metric < 10"
     fi
 
-    if [ "$dominated_by_stray" = "true" ]; then
-        log_info "Cleaning up stray default routes..."
+    # Do NOT cleanup routes with metric >= 100 - they don't affect active routing
+    # This is the key fix: stop fighting with NM/MM over standby routes
 
-        # First, specifically remove proto static routes (carrier DHCP)
-        while ip route show default 2>/dev/null | grep -q "proto static"; do
+    if [ "$needs_cleanup" = "true" ]; then
+        # Rate limit: only cleanup once per 30 seconds
+        local now cleanup_file="/run/fortress/last_route_cleanup"
+        now=$(date +%s)
+        if [ -f "$cleanup_file" ]; then
+            local last_cleanup
+            last_cleanup=$(cat "$cleanup_file" 2>/dev/null || echo 0)
+            if [ $((now - last_cleanup)) -lt 30 ]; then
+                log_debug "Route cleanup rate-limited (last: ${last_cleanup})"
+                return 0
+            fi
+        fi
+        echo "$now" > "$cleanup_file"
+
+        log_info "Cleaning up dominating stray routes..."
+
+        # Remove proto static routes (carrier DHCP) - these are problematic
+        while ip route show default 2>/dev/null | grep "proto static" | grep -qv "metric"; do
             local proto_route
-            proto_route=$(ip route show default 2>/dev/null | grep "proto static" | head -1)
+            proto_route=$(ip route show default 2>/dev/null | grep "proto static" | grep -v "metric" | head -1)
+            [ -z "$proto_route" ] && break
             log_info "Removing carrier route: $proto_route"
             ip route del $proto_route 2>/dev/null || break
         done
 
-        # Then remove any other stray routes (no metric, wrong metric)
-        local tries=10
+        # Remove routes without metric (excluding proto static which we handled)
+        local tries=5
         while [ $tries -gt 0 ]; do
-            # Check if there are any routes that aren't our metrics 10 or 100
             local bad_route
-            bad_route=$(ip route show default 2>/dev/null | grep -vE "metric (10|100)( |$)" | head -1)
+            bad_route=$(ip route show default 2>/dev/null | grep "^default" | grep -v "metric" | grep -v "proto static" | head -1)
             [ -z "$bad_route" ] && break
-
-            log_info "Removing stray route: $bad_route"
+            log_info "Removing stray route without metric: $bad_route"
             ip route del $bad_route 2>/dev/null || break
             tries=$((tries - 1))
         done
 
-        # Re-add our routes with correct metrics
-        update_main_table_route
-
-        # Log the new state
-        log_debug "Routes after cleanup: $(ip route show default 2>/dev/null | tr '\n' ' ')"
+        # Ensure our routes exist with correct metrics
+        ensure_main_table_routes
     fi
 }
 
@@ -523,48 +543,119 @@ setup_routing_tables() {
     update_main_table_route
 }
 
-update_main_table_route() {
-    # Update the default route in main table to match active WAN
-    # This is critical for:
-    # 1. Health check pings that might not get marked
-    # 2. System services that bypass nftables
-    # 3. Fallback when PBR isn't working
+ensure_main_table_routes() {
+    # INCREMENTAL route management - only add/modify what's needed
+    # This prevents route flapping by NOT removing routes unnecessarily
+    #
+    # Expected state:
+    #   - Active WAN:  metric 10 (preferred)
+    #   - Standby WAN: metric 100 (fallback)
+    #
+    # We check if routes exist with correct metrics before modifying
 
     local active="${ACTIVE_WAN:-primary}"
-    local gateway iface metric_active=10 metric_standby=100
+    local metric_active=10
+    local metric_standby=100
+    local route_info
+    local changes_made=false
 
-    # Remove existing default routes from main table
-    local tries=5
-    while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-        ip route del default 2>/dev/null || break
-        tries=$((tries - 1))
-    done
+    route_info=$(ip route show default 2>/dev/null)
 
-    # Add routes based on active WAN (lower metric = preferred)
-    # Use ${VAR:-} to handle unbound variables with set -u
+    # Determine which gateway should be active/standby
+    local active_gw active_iface standby_gw standby_iface
     if [ "$active" = "primary" ]; then
-        # Primary is active
-        if [ -n "${PRIMARY_GATEWAY:-}" ]; then
-            ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $metric_active 2>/dev/null || true
-            log_debug "Main table: default via $PRIMARY_GATEWAY (active, metric $metric_active)"
-        fi
-        if [ -n "${BACKUP_GATEWAY:-}" ]; then
-            ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $metric_standby 2>/dev/null || true
-            log_debug "Main table: default via $BACKUP_GATEWAY (standby, metric $metric_standby)"
-        fi
+        active_gw="${PRIMARY_GATEWAY:-}"
+        active_iface="${PRIMARY_IFACE:-}"
+        standby_gw="${BACKUP_GATEWAY:-}"
+        standby_iface="${BACKUP_IFACE:-}"
     else
-        # Backup is active
-        if [ -n "${BACKUP_GATEWAY:-}" ]; then
-            ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $metric_active 2>/dev/null || true
-            log_debug "Main table: default via $BACKUP_GATEWAY (active, metric $metric_active)"
-        fi
-        if [ -n "${PRIMARY_GATEWAY:-}" ]; then
-            ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $metric_standby 2>/dev/null || true
-            log_debug "Main table: default via $PRIMARY_GATEWAY (standby, metric $metric_standby)"
+        active_gw="${BACKUP_GATEWAY:-}"
+        active_iface="${BACKUP_IFACE:-}"
+        standby_gw="${PRIMARY_GATEWAY:-}"
+        standby_iface="${PRIMARY_IFACE:-}"
+    fi
+
+    # Check if active route exists with correct metric
+    if [ -n "$active_gw" ] && [ -n "$active_iface" ]; then
+        if ! echo "$route_info" | grep -q "via $active_gw dev $active_iface.*metric $metric_active"; then
+            # Active route missing or wrong metric - fix it
+            # First remove any existing route for this gateway (any metric)
+            ip route del default via "$active_gw" dev "$active_iface" 2>/dev/null || true
+            # Add with correct metric
+            if ip route add default via "$active_gw" dev "$active_iface" metric $metric_active 2>/dev/null; then
+                log_info "Added active route: via $active_gw metric $metric_active"
+                changes_made=true
+            fi
         fi
     fi
 
-    log_info "Main table default route updated: active=$active"
+    # Check if standby route exists with correct metric
+    if [ -n "$standby_gw" ] && [ -n "$standby_iface" ]; then
+        if ! echo "$route_info" | grep -q "via $standby_gw dev $standby_iface.*metric $metric_standby"; then
+            # Standby route missing or wrong metric - fix it
+            ip route del default via "$standby_gw" dev "$standby_iface" 2>/dev/null || true
+            if ip route add default via "$standby_gw" dev "$standby_iface" metric $metric_standby 2>/dev/null; then
+                log_info "Added standby route: via $standby_gw metric $metric_standby"
+                changes_made=true
+            fi
+        fi
+    fi
+
+    if [ "$changes_made" = "true" ]; then
+        log_debug "Routes after ensure: $(ip route show default 2>/dev/null | tr '\n' ' ')"
+    fi
+}
+
+update_main_table_route() {
+    # Full route update - used during failover when active WAN changes
+    # This is more aggressive than ensure_main_table_routes() and swaps metrics
+    #
+    # Called when:
+    #   - ACTIVE_WAN changes (failover/failback)
+    #   - Manual failover command
+    #   - Initial setup
+
+    local active="${ACTIVE_WAN:-primary}"
+    local metric_active=10
+    local metric_standby=100
+
+    log_info "Updating main table routes for active=$active..."
+
+    # Determine which gateway should be active/standby
+    local active_gw active_iface standby_gw standby_iface
+    if [ "$active" = "primary" ]; then
+        active_gw="${PRIMARY_GATEWAY:-}"
+        active_iface="${PRIMARY_IFACE:-}"
+        standby_gw="${BACKUP_GATEWAY:-}"
+        standby_iface="${BACKUP_IFACE:-}"
+    else
+        active_gw="${BACKUP_GATEWAY:-}"
+        active_iface="${BACKUP_IFACE:-}"
+        standby_gw="${PRIMARY_GATEWAY:-}"
+        standby_iface="${PRIMARY_IFACE:-}"
+    fi
+
+    # Remove ONLY the routes we're about to change (not all routes!)
+    # This preserves any other default routes (unlikely but possible)
+    if [ -n "$active_gw" ]; then
+        ip route del default via "$active_gw" 2>/dev/null || true
+    fi
+    if [ -n "$standby_gw" ]; then
+        ip route del default via "$standby_gw" 2>/dev/null || true
+    fi
+
+    # Add routes with correct metrics
+    if [ -n "$active_gw" ] && [ -n "$active_iface" ]; then
+        ip route add default via "$active_gw" dev "$active_iface" metric $metric_active 2>/dev/null || true
+        log_debug "Active route: via $active_gw dev $active_iface metric $metric_active"
+    fi
+
+    if [ -n "$standby_gw" ] && [ -n "$standby_iface" ]; then
+        ip route add default via "$standby_gw" dev "$standby_iface" metric $metric_standby 2>/dev/null || true
+        log_debug "Standby route: via $standby_gw dev $standby_iface metric $metric_standby"
+    fi
+
+    log_info "Main table routes updated: active=$active"
 }
 
 setup_ip_rules() {
@@ -1188,6 +1279,8 @@ FAILOVER_COUNT=$FAILOVER_COUNT
 BOTH_DOWN_SINCE=${BOTH_DOWN_SINCE:-0}
 LAST_ALTERNATE_TIME=${LAST_ALTERNATE_TIME:-0}
 LAST_RECOVERY_TIME=${LAST_RECOVERY_TIME:-0}
+LAST_ROUTE_CHECK=${LAST_ROUTE_CHECK:-0}
+LAST_ROUTE_CLEANUP=${LAST_ROUTE_CLEANUP:-0}
 EOF
 }
 
@@ -1284,16 +1377,22 @@ verify_nat_rules() {
 do_health_check() {
     load_state
 
-    # Clean up any stray routes added by NetworkManager/carrier
-    cleanup_stray_routes
+    local now
+    now=$(date +%s)
 
-    # Verify NAT rules are in place
+    # Route maintenance - run periodically, not every check
+    # Only cleanup stray routes every 60 seconds (rate-limited inside function too)
+    local last_route_check="${LAST_ROUTE_CHECK:-0}"
+    if [ $((now - last_route_check)) -ge 60 ]; then
+        cleanup_stray_routes
+        LAST_ROUTE_CHECK=$now
+    fi
+
+    # Verify NAT rules are in place (lightweight check)
     verify_nat_rules
 
     local primary_now backup_now
     local old_active="$ACTIVE_WAN"
-    local now
-    now=$(date +%s)
 
     # Check primary (wired)
     if check_interface_health "$PRIMARY_IFACE"; then
