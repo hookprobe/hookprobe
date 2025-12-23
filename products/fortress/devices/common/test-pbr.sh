@@ -707,6 +707,173 @@ test_config_consistency() {
 # Summary
 # ============================================================
 
+# ============================================================
+# Installation Flow Resilience Tests
+# ============================================================
+
+test_early_network_resilience() {
+    print_section "Early Network Resilience"
+
+    local enr_script="${SCRIPT_DIR}/early-network-resilience.sh"
+
+    # Check script exists
+    if [ -f "$enr_script" ]; then
+        pass "Early network resilience script exists"
+    else
+        fail "Early network resilience script missing: $enr_script"
+        return 1
+    fi
+
+    # Check script is executable
+    if [ -x "$enr_script" ]; then
+        pass "Early network resilience script is executable"
+    else
+        warn "Early network resilience script not executable"
+        if [ "$FIX" = "true" ]; then
+            chmod +x "$enr_script"
+            pass "Fixed: Made script executable"
+        fi
+    fi
+
+    # Source the script and test functions
+    # shellcheck source=/dev/null
+    source "$enr_script" 2>/dev/null || {
+        fail "Failed to source early-network-resilience.sh"
+        return 1
+    }
+
+    # Test that key functions are available
+    if type ensure_network_connectivity &>/dev/null; then
+        pass "ensure_network_connectivity function available"
+    else
+        fail "ensure_network_connectivity function not found"
+    fi
+
+    if type with_network_resilience &>/dev/null; then
+        pass "with_network_resilience function available"
+    else
+        fail "with_network_resilience function not found"
+    fi
+
+    if type enr_status &>/dev/null; then
+        pass "enr_status function available"
+    else
+        warn "enr_status function not found"
+    fi
+
+    # Test interface detection
+    _enr_detect_primary_wan
+    if [ -n "$ENR_PRIMARY_IFACE" ]; then
+        pass "Primary WAN detected: $ENR_PRIMARY_IFACE"
+    else
+        warn "No primary WAN detected (may be expected in some environments)"
+    fi
+
+    _enr_detect_lte_interface
+    if [ -n "$ENR_BACKUP_IFACE" ]; then
+        pass "Backup WAN (LTE) detected: $ENR_BACKUP_IFACE"
+    else
+        info "No backup WAN detected (LTE modem may not be present)"
+    fi
+
+    # Test connectivity function
+    if [ -n "$ENR_PRIMARY_IFACE" ]; then
+        if _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
+            pass "Connectivity check works on $ENR_PRIMARY_IFACE"
+        else
+            warn "Connectivity check failed on $ENR_PRIMARY_IFACE"
+        fi
+    fi
+}
+
+test_installation_integration() {
+    print_section "Installation Integration"
+
+    local install_script="$(dirname "$SCRIPT_DIR")/../../install-container.sh"
+
+    # Check if install script exists
+    if [ -f "$install_script" ]; then
+        pass "Install script exists"
+    else
+        warn "Install script not found at expected location"
+        install_script="$(find /home -name 'install-container.sh' -path '*fortress*' 2>/dev/null | head -1)"
+        if [ -n "$install_script" ]; then
+            pass "Found install script at: $install_script"
+        else
+            fail "Cannot locate install-container.sh"
+            return 1
+        fi
+    fi
+
+    # Check that install script sources early-network-resilience.sh
+    if grep -q "early-network-resilience.sh" "$install_script"; then
+        pass "Install script references early-network-resilience.sh"
+    else
+        fail "Install script does not integrate early-network-resilience.sh"
+    fi
+
+    # Check for network-resilient apt wrapper
+    if grep -q "_apt_install_resilient" "$install_script"; then
+        pass "Install script has network-resilient apt wrapper"
+    else
+        warn "Install script may not have network-resilient apt wrapper"
+    fi
+
+    # Check for network-resilient podman wrapper
+    if grep -q "_podman_build_resilient" "$install_script"; then
+        pass "Install script has network-resilient podman wrapper"
+    else
+        warn "Install script may not have network-resilient podman wrapper"
+    fi
+
+    # Check for ensure_network_connectivity usage
+    if grep -q "ensure_network_connectivity" "$install_script"; then
+        pass "Install script uses ensure_network_connectivity"
+    else
+        fail "Install script does not call ensure_network_connectivity"
+    fi
+}
+
+test_pbr_transition() {
+    print_section "PBR Transition (Minimal → Full)"
+
+    # Check if both scripts exist
+    local enr_script="${SCRIPT_DIR}/early-network-resilience.sh"
+    local pbr_script="${SCRIPT_DIR}/wan-failover-pbr.sh"
+
+    if [ ! -f "$enr_script" ] || [ ! -f "$pbr_script" ]; then
+        warn "Cannot test PBR transition - missing scripts"
+        return 0
+    fi
+
+    # Source early network resilience
+    # shellcheck source=/dev/null
+    source "$enr_script" 2>/dev/null || return 1
+
+    # Check that enr_cleanup function exists
+    if type enr_cleanup &>/dev/null; then
+        pass "enr_cleanup function available for transition"
+    else
+        fail "enr_cleanup function missing - PBR transition may fail"
+    fi
+
+    # Check for enr_cleanup call in install script
+    local install_script="$(find /home -name 'install-container.sh' -path '*fortress*' 2>/dev/null | head -1)"
+    if [ -n "$install_script" ] && grep -q "enr_cleanup" "$install_script"; then
+        pass "Install script calls enr_cleanup before full PBR"
+    else
+        warn "Install script may not transition from minimal to full PBR properly"
+    fi
+
+    # Check that routing tables don't conflict
+    if ip rule show 2>/dev/null | grep -q "from.*table 100"; then
+        info "Source-based routing rules present (table 100)"
+    fi
+    if ip rule show 2>/dev/null | grep -q "from.*table 200"; then
+        info "Source-based routing rules present (table 200)"
+    fi
+}
+
 print_summary() {
     print_header "Test Summary"
 
@@ -783,6 +950,13 @@ main() {
     test_connectivity
     test_failover_simulation
     test_config_consistency
+
+    # Installation flow resilience tests (new)
+    if [ "$QUICK" != "true" ]; then
+        test_early_network_resilience
+        test_installation_integration
+        test_pbr_transition
+    fi
 
     # Summary
     print_summary
