@@ -1,13 +1,14 @@
 #!/bin/bash
 #
 # HookProbe Fortress Uninstall Script
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Fortress components installed by install-container.sh:
-# - Systemd services (hookprobe-fortress, fts-qsecbit, fts-lte-failover)
+# - Systemd services (hookprobe-fortress, fts-qsecbit, fts-lte-failover, fts-wan-failover)
 # - Podman containers (VictoriaMetrics, Grafana)
 # - OVS bridge, VLANs, VXLAN tunnels
+# - PBR (Policy-Based Routing) for dual-WAN failover
 # - Management scripts (hookprobe-macsec, hookprobe-openflow, fts-lte-monitor)
 # - Configuration files and secrets
 # - Data and log directories
@@ -271,6 +272,8 @@ cleanup_network_interfaces() {
     rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-wan-failover-dns.conf 2>/dev/null || true
 
     # Remove WiFi configuration state
     rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
@@ -663,10 +666,17 @@ remove_nftables_filtering() {
     if command -v nft &>/dev/null; then
         log_info "Removing nftables fortress_filter table..."
         nft delete table inet fortress_filter 2>/dev/null || true
+
+        # Remove PBR/WAN failover nftables tables
+        log_info "Removing PBR/WAN failover nftables tables..."
+        nft delete table inet fts_wan_failover 2>/dev/null || true
+        nft delete table inet fts_forward_mark 2>/dev/null || true
+        nft delete table inet fts_nat 2>/dev/null || true
     fi
 
-    # Remove nftables config file
+    # Remove nftables config files
     rm -f /etc/nftables.d/fts-filters.nft
+    rm -f /etc/nftables.d/fts-traffic.nft
 
     # Remove OUI database and policy files
     rm -f /etc/hookprobe/oui_policies.conf
@@ -911,6 +921,13 @@ remove_configuration() {
 remove_lte_config() {
     log_step "Removing LTE and WAN failover configuration..."
 
+    # Call PBR cleanup script if available (cleans up routing tables, IP rules, nftables)
+    local pbr_script="${INSTALL_DIR}/devices/common/wan-failover-pbr.sh"
+    if [ -x "$pbr_script" ]; then
+        log_info "Running PBR cleanup..."
+        "$pbr_script" cleanup 2>/dev/null || true
+    fi
+
     # Remove WAN failover state file
     if [ -f "/var/lib/fortress/wan-failover-state.json" ]; then
         log_info "Removing WAN failover state..."
@@ -919,6 +936,12 @@ remove_lte_config() {
 
     # Remove WAN failover lock file
     rm -f /var/run/fts-wan-failover.lock 2>/dev/null || true
+
+    # Remove PBR runtime state directory
+    if [ -d "/run/fortress" ]; then
+        log_info "Removing PBR runtime state..."
+        rm -rf /run/fortress
+    fi
 
     # Remove LTE state directory
     if [ -d "$LTE_STATE_DIR" ]; then
@@ -987,11 +1010,26 @@ remove_installation() {
 remove_routing_tables() {
     log_step "Removing routing table entries..."
 
-    # Remove Fortress-specific routing tables
+    # Remove Fortress-specific routing tables from /etc/iproute2/rt_tables
+    # Covers both naming conventions used in different versions
     if [ -f /etc/iproute2/rt_tables ]; then
+        # Legacy naming (primary_wan, backup_wan)
         sed -i '/primary_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
         sed -i '/backup_wan/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        # Current PBR naming (wan_primary, wan_backup)
+        sed -i '/wan_primary/d' /etc/iproute2/rt_tables 2>/dev/null || true
+        sed -i '/wan_backup/d' /etc/iproute2/rt_tables 2>/dev/null || true
     fi
+
+    # Flush PBR routing tables (100=wan_primary, 200=wan_backup)
+    ip route flush table 100 2>/dev/null || true
+    ip route flush table 200 2>/dev/null || true
+
+    # Remove PBR IP rules
+    ip rule del table 100 2>/dev/null || true
+    ip rule del table 200 2>/dev/null || true
+    ip rule del fwmark 0x100/0xf00 table 100 2>/dev/null || true
+    ip rule del fwmark 0x200/0xf00 table 200 2>/dev/null || true
 
     log_info "Routing tables cleaned"
 }
@@ -1154,7 +1192,7 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Fortress Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                    Version 5.4.0                           ║${NC}"
+    echo -e "${BOLD}${RED}║                    Version 5.5.0                           ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
