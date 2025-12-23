@@ -24,8 +24,11 @@ from . import dnsxai_bp
 logger = logging.getLogger(__name__)
 
 # Configuration paths (local to web container)
+# Use writable data directory for settings that need to be saved
 CONFIG_DIR = Path('/etc/hookprobe')
-PRIVACY_CONFIG = CONFIG_DIR / 'dnsxai' / 'privacy.json'
+DATA_DIR = Path(os.environ.get('FORTRESS_DATA_DIR', '/app/data'))
+PRIVACY_CONFIG = DATA_DIR / 'dnsxai' / 'privacy.json'
+SOURCES_CONFIG = DATA_DIR / 'dnsxai' / 'sources.json'
 
 # dnsXai API endpoint (container network)
 DNSXAI_API_URL = os.environ.get('DNSXAI_API_URL', 'http://fts-dnsxai:8080')
@@ -45,10 +48,18 @@ def _api_call(method: str, endpoint: str, data: dict = None, timeout: int = API_
         else:
             return None, f"Unknown method: {method}"
 
+        # Try to parse JSON response
+        try:
+            result = resp.json()
+        except Exception:
+            result = None
+
         if resp.status_code == 200:
-            return resp.json(), None
+            return result, None
         else:
-            return None, f"API error: {resp.status_code}"
+            # Return the error message from the API if available
+            error_msg = result.get('error') if result else f"API error: {resp.status_code}"
+            return result, error_msg
     except requests.exceptions.ConnectionError:
         return None, "dnsXai service unavailable"
     except requests.exceptions.Timeout:
@@ -260,10 +271,22 @@ def api_pause():
         if error:
             return jsonify({'status': 'unknown', 'error': error})
 
+        # Calculate remaining seconds from pause_until
+        remaining_seconds = 0
+        pause_until = data.get('pause_until')
+        if data.get('paused') and pause_until:
+            try:
+                from datetime import datetime
+                pause_end = datetime.fromisoformat(pause_until)
+                remaining = (pause_end - datetime.now()).total_seconds()
+                remaining_seconds = max(0, int(remaining))
+            except (ValueError, TypeError):
+                pass
+
         return jsonify({
             'status': 'paused' if data.get('paused') else 'active',
-            'pause_until': data.get('pause_until'),
-            'remaining_seconds': 0  # Calculated on frontend
+            'pause_until': pause_until,
+            'remaining_seconds': remaining_seconds
         })
 
     # POST - toggle pause
@@ -371,8 +394,7 @@ def api_remove_whitelist():
 @login_required
 def api_get_sources():
     """Get blocklist sources."""
-    sources_file = CONFIG_DIR / 'dnsxai' / 'sources.json'
-    sources = load_json_file(sources_file, {
+    sources = load_json_file(SOURCES_CONFIG, {
         'sources': [
             {
                 'id': 'stevenblack',
@@ -412,8 +434,7 @@ def api_add_source():
     if not url:
         return jsonify({'success': False, 'error': 'URL required'}), 400
 
-    sources_file = CONFIG_DIR / 'dnsxai' / 'sources.json'
-    sources = load_json_file(sources_file, {'sources': []})
+    sources = load_json_file(SOURCES_CONFIG, {'sources': []})
 
     # Generate ID from name
     source_id = name.lower().replace(' ', '_')[:20]
@@ -428,7 +449,7 @@ def api_add_source():
 
     sources['sources'].append(new_source)
 
-    if save_json_file(sources_file, sources):
+    if save_json_file(SOURCES_CONFIG, sources):
         return jsonify({'success': True, 'source': new_source})
     return jsonify({'success': False, 'error': 'Failed to save'}), 500
 
@@ -443,12 +464,11 @@ def api_remove_source():
     if not source_id:
         return jsonify({'success': False, 'error': 'Source ID required'}), 400
 
-    sources_file = CONFIG_DIR / 'dnsxai' / 'sources.json'
-    sources = load_json_file(sources_file, {'sources': []})
+    sources = load_json_file(SOURCES_CONFIG, {'sources': []})
 
     sources['sources'] = [s for s in sources['sources'] if s.get('id') != source_id]
 
-    if save_json_file(sources_file, sources):
+    if save_json_file(SOURCES_CONFIG, sources):
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Failed to save'}), 500
 
@@ -479,9 +499,12 @@ def api_ml_status():
 @login_required
 def api_ml_train():
     """Trigger ML training."""
-    result, error = _api_call('POST', '/api/ml/train', {}, timeout=10)
+    result, error = _api_call('POST', '/api/ml/train', {}, timeout=30)
 
     if error:
+        # If we got a result with success=False, return that (not 503)
+        if result and 'success' in result:
+            return jsonify(result), 400
         return jsonify({'success': False, 'error': error}), 503
 
     return jsonify(result)
