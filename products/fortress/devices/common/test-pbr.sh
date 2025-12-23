@@ -467,23 +467,56 @@ test_health_monitoring() {
 test_connectivity() {
     print_section "Connectivity Tests"
 
-    # Test via primary
+    # Test via primary using enhanced checks
     if [ -n "${PRIMARY_IFACE:-}" ] && ip link show "$PRIMARY_IFACE" &>/dev/null; then
-        echo -e "  ${CYAN}Testing via $PRIMARY_IFACE:${NC}"
-        local success=0
-        for target in $PING_TARGETS; do
-            if ping -I "$PRIMARY_IFACE" -c 1 -W 2 -q "$target" &>/dev/null; then
-                success=1
-                info "Ping $target: OK"
-                break
-            fi
-            info "Ping $target: FAILED"
-        done
+        echo -e "  ${CYAN}Testing via $PRIMARY_IFACE (enhanced checks):${NC}"
 
-        if [ $success -eq 1 ]; then
-            pass "Primary WAN connectivity OK"
+        # Check 1: Link state
+        local link_state
+        link_state=$(ip link show "$PRIMARY_IFACE" | grep -oP 'state \K\w+')
+        if [ "$link_state" = "UP" ]; then
+            pass "Link state: UP"
         else
-            fail "Primary WAN has no internet connectivity"
+            fail "Link state: $link_state"
+        fi
+
+        # Check 2: IP address
+        local primary_ip
+        primary_ip=$(ip -4 addr show "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+        if [ -n "$primary_ip" ]; then
+            pass "IP address: $primary_ip"
+        else
+            fail "No IP address (DHCP expired?)"
+        fi
+
+        # Check 3: Gateway reachable
+        if [ -n "$primary_ip" ]; then
+            local gateway
+            gateway=$(ip route show dev "$PRIMARY_IFACE" 2>/dev/null | grep default | awk '{print $3}' | head -1)
+            if [ -n "$gateway" ]; then
+                if ping -c 1 -W 1 -I "$PRIMARY_IFACE" "$gateway" &>/dev/null; then
+                    pass "Gateway $gateway: reachable"
+                else
+                    fail "Gateway $gateway: unreachable (link up but no traffic?)"
+                fi
+            else
+                warn "No gateway found"
+            fi
+        fi
+
+        # Check 4: Internet via source IP (PBR path)
+        if [ -n "$primary_ip" ]; then
+            local success=0
+            for target in $PING_TARGETS; do
+                if ping -I "$primary_ip" -c 1 -W 2 -q "$target" &>/dev/null; then
+                    success=1
+                    pass "Internet via source $primary_ip: OK"
+                    break
+                fi
+            done
+            if [ $success -eq 0 ]; then
+                fail "Internet via source $primary_ip: FAILED"
+            fi
         fi
     fi
 
@@ -494,19 +527,28 @@ test_connectivity() {
 
         if [ -n "$backup_ip" ]; then
             echo -e "  ${CYAN}Testing via $BACKUP_IFACE:${NC}"
+
+            # Gateway check
+            local gateway
+            gateway=$(ip route show dev "$BACKUP_IFACE" 2>/dev/null | grep default | awk '{print $3}' | head -1)
+            if [ -n "$gateway" ]; then
+                if ping -c 1 -W 1 -I "$BACKUP_IFACE" "$gateway" &>/dev/null; then
+                    pass "Gateway $gateway: reachable"
+                else
+                    warn "Gateway $gateway: unreachable"
+                fi
+            fi
+
+            # Internet check
             local success=0
             for target in $PING_TARGETS; do
-                if ping -I "$BACKUP_IFACE" -c 1 -W 2 -q "$target" &>/dev/null; then
+                if ping -I "$backup_ip" -c 1 -W 2 -q "$target" &>/dev/null; then
                     success=1
-                    info "Ping $target: OK"
+                    pass "Internet via source $backup_ip: OK"
                     break
                 fi
-                info "Ping $target: FAILED"
             done
-
-            if [ $success -eq 1 ]; then
-                pass "Backup WAN connectivity OK"
-            else
+            if [ $success -eq 0 ]; then
                 warn "Backup WAN has no internet connectivity"
             fi
         else
@@ -522,18 +564,38 @@ test_connectivity() {
         warn "DNS resolution failed (check dnsmasq/dnsXai)"
     fi
 
-    # Test HTTP (verifies NAT + routing)
+    # Test HTTP (verifies NAT + routing + TCP)
     if [ "$QUICK" = "false" ]; then
-        echo -e "  ${CYAN}Testing HTTP (verifies full path):${NC}"
-        local http_result
-        http_result=$(curl -s -m 5 "$HTTP_TEST_URL" 2>/dev/null)
-        if [ -n "$http_result" ]; then
-            pass "HTTP connectivity OK"
-            local exit_ip
-            exit_ip=$(echo "$http_result" | grep -oP '"origin":\s*"\K[^"]+' | head -1)
-            [ -n "$exit_ip" ] && info "Exit IP: $exit_ip"
-        else
-            fail "HTTP connectivity failed"
+        echo -e "  ${CYAN}Testing HTTP (full TCP path):${NC}"
+
+        # Test via primary
+        if [ -n "${PRIMARY_IFACE:-}" ]; then
+            local http_result
+            http_result=$(curl -s -m 5 --interface "$PRIMARY_IFACE" "$HTTP_TEST_URL" 2>/dev/null)
+            if [ -n "$http_result" ]; then
+                local exit_ip
+                exit_ip=$(echo "$http_result" | grep -oP '"origin":\s*"\K[^"]+' | head -1)
+                pass "HTTP via $PRIMARY_IFACE: OK (exit IP: ${exit_ip:-unknown})"
+            else
+                warn "HTTP via $PRIMARY_IFACE: FAILED (ICMP may work, TCP blocked?)"
+            fi
+        fi
+
+        # Test via backup
+        if [ -n "${BACKUP_IFACE:-}" ]; then
+            local backup_ip
+            backup_ip=$(ip -4 addr show "$BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+            if [ -n "$backup_ip" ]; then
+                local http_result
+                http_result=$(curl -s -m 5 --interface "$BACKUP_IFACE" "$HTTP_TEST_URL" 2>/dev/null)
+                if [ -n "$http_result" ]; then
+                    local exit_ip
+                    exit_ip=$(echo "$http_result" | grep -oP '"origin":\s*"\K[^"]+' | head -1)
+                    pass "HTTP via $BACKUP_IFACE: OK (exit IP: ${exit_ip:-unknown})"
+                else
+                    warn "HTTP via $BACKUP_IFACE: FAILED"
+                fi
+            fi
         fi
     fi
 }
