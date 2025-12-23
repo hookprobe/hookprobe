@@ -714,6 +714,9 @@ BACKUP_COUNT=0
 ACTIVE_WAN=primary
 LAST_CHECK=$(date +%s)
 FAILOVER_COUNT=0
+BOTH_DOWN_SINCE=0
+LAST_ALTERNATE_TIME=0
+LAST_RECOVERY_TIME=0
 EOF
 }
 
@@ -737,6 +740,9 @@ BACKUP_COUNT=$BACKUP_COUNT
 ACTIVE_WAN=$ACTIVE_WAN
 LAST_CHECK=$(date +%s)
 FAILOVER_COUNT=$FAILOVER_COUNT
+BOTH_DOWN_SINCE=${BOTH_DOWN_SINCE:-0}
+LAST_ALTERNATE_TIME=${LAST_ALTERNATE_TIME:-0}
+LAST_RECOVERY_TIME=${LAST_RECOVERY_TIME:-0}
 EOF
 }
 
@@ -744,11 +750,70 @@ EOF
 # Failover Logic
 # ============================================================
 
+# Both-down recovery settings
+BOTH_DOWN_ALTERNATE_INTERVAL="${BOTH_DOWN_ALTERNATE_INTERVAL:-30}"  # Try other WAN every 30s
+BOTH_DOWN_RECOVERY_INTERVAL="${BOTH_DOWN_RECOVERY_INTERVAL:-60}"    # Attempt recovery every 60s
+
+attempt_interface_recovery() {
+    # Attempt to recover a failed interface
+    # This is called when both WANs are down to try to restore connectivity
+    local iface="$1"
+    local iface_type="$2"  # primary or backup
+
+    log_info "Attempting recovery for $iface ($iface_type)..."
+
+    # Check if interface has link but no IP (DHCP expired)
+    if ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
+        local iface_ip
+        iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+
+        if [ -z "$iface_ip" ]; then
+            log_info "[$iface] Link UP but no IP - attempting DHCP renewal"
+
+            # Try dhclient
+            if command -v dhclient &>/dev/null; then
+                dhclient -1 -timeout 10 "$iface" 2>/dev/null &
+                sleep 2
+            fi
+
+            # Try NetworkManager
+            if command -v nmcli &>/dev/null; then
+                nmcli device reapply "$iface" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # For LTE/WWAN interfaces, try to reconnect the modem
+    if [[ "$iface" =~ ^wwan|^wwp ]] && command -v mmcli &>/dev/null; then
+        log_info "[$iface] Attempting LTE modem reconnection..."
+
+        local modem_idx
+        modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+
+        if [ -n "$modem_idx" ]; then
+            # Check if modem is connected
+            local modem_state
+            modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'state:\s+\K\w+' | head -1)
+
+            if [ "$modem_state" != "connected" ]; then
+                log_info "[$iface] Modem state: $modem_state - attempting simple connect"
+                mmcli -m "$modem_idx" --simple-connect="apn=internet" 2>/dev/null &
+                sleep 3
+            fi
+        fi
+    fi
+
+    # Rediscover gateway after recovery attempt
+    discover_gateways
+}
+
 do_health_check() {
     load_state
 
     local primary_now backup_now
     local old_active="$ACTIVE_WAN"
+    local now
+    now=$(date +%s)
 
     # Check primary (wired)
     if check_interface_health "$PRIMARY_IFACE"; then
@@ -788,11 +853,71 @@ do_health_check() {
     # Determine active WAN
     if [ "$PRIMARY_STATUS" = "up" ]; then
         ACTIVE_WAN="primary"
+        BOTH_DOWN_SINCE=0  # Reset both-down timer
     elif [ "$BACKUP_STATUS" = "up" ]; then
         ACTIVE_WAN="backup"
+        BOTH_DOWN_SINCE=0  # Reset both-down timer
     else
-        # Both down - keep current (avoid thrashing)
-        log_warn "Both WANs appear down, keeping $ACTIVE_WAN"
+        # ============================================================
+        # BOTH WANS DOWN - Enhanced Recovery Logic
+        # ============================================================
+
+        # Track how long both have been down
+        if [ "${BOTH_DOWN_SINCE:-0}" -eq 0 ]; then
+            BOTH_DOWN_SINCE=$now
+            log_warn "ALERT: Both WANs are DOWN - starting recovery mode"
+            logger -t "$LOG_TAG" -p crit "Both WAN connections lost - entering recovery mode"
+        fi
+
+        local down_duration=$((now - BOTH_DOWN_SINCE))
+
+        # Strategy 1: If one interface shows ANY sign of life, prefer it
+        # (even if below threshold - faster recovery)
+        if [ "$primary_now" = "up" ] && [ "$backup_now" = "down" ]; then
+            log_info "Primary showing signs of recovery - switching immediately"
+            ACTIVE_WAN="primary"
+            PRIMARY_COUNT=$UP_THRESHOLD  # Boost to prevent immediate re-failover
+        elif [ "$backup_now" = "up" ] && [ "$primary_now" = "down" ]; then
+            log_info "Backup showing signs of recovery - switching immediately"
+            ACTIVE_WAN="backup"
+            BACKUP_COUNT=$UP_THRESHOLD  # Boost to prevent immediate re-failover
+        else
+            # Both still down - try alternating and recovery
+
+            # Strategy 2: Alternate between WANs periodically
+            # This gives each WAN a chance to be tested as active
+            local last_alternate="${LAST_ALTERNATE_TIME:-0}"
+            if [ $((now - last_alternate)) -ge "$BOTH_DOWN_ALTERNATE_INTERVAL" ]; then
+                if [ "$ACTIVE_WAN" = "primary" ]; then
+                    log_info "Both down for ${down_duration}s - trying backup WAN"
+                    ACTIVE_WAN="backup"
+                else
+                    log_info "Both down for ${down_duration}s - trying primary WAN"
+                    ACTIVE_WAN="primary"
+                fi
+                LAST_ALTERNATE_TIME=$now
+
+                # Update routing to use the new active WAN
+                set_active_wan "$ACTIVE_WAN"
+            fi
+
+            # Strategy 3: Attempt interface recovery periodically
+            local last_recovery="${LAST_RECOVERY_TIME:-0}"
+            if [ $((now - last_recovery)) -ge "$BOTH_DOWN_RECOVERY_INTERVAL" ]; then
+                log_info "Attempting interface recovery (both down for ${down_duration}s)..."
+
+                # Try to recover the non-active interface first
+                if [ "$ACTIVE_WAN" = "primary" ]; then
+                    attempt_interface_recovery "$BACKUP_IFACE" "backup"
+                else
+                    attempt_interface_recovery "$PRIMARY_IFACE" "primary"
+                fi
+
+                LAST_RECOVERY_TIME=$now
+            fi
+
+            log_warn "Both WANs DOWN for ${down_duration}s - active=$ACTIVE_WAN (alternating)"
+        fi
     fi
 
     # Apply change if needed
@@ -918,6 +1043,18 @@ cmd_status() {
 
     echo "Active WAN:     ${ACTIVE_WAN:-unknown}"
     echo "Failover Count: ${FAILOVER_COUNT:-0}"
+
+    # Show both-down recovery status if applicable
+    if [ "${BOTH_DOWN_SINCE:-0}" -gt 0 ]; then
+        local now down_duration
+        now=$(date +%s)
+        down_duration=$((now - BOTH_DOWN_SINCE))
+        echo ""
+        echo "⚠️  RECOVERY MODE:"
+        echo "  Both WANs down for: ${down_duration}s"
+        echo "  Last alternate:     ${LAST_ALTERNATE_TIME:-0}"
+        echo "  Last recovery try:  ${LAST_RECOVERY_TIME:-0}"
+    fi
     echo ""
 
     # Routing tables
