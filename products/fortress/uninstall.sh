@@ -274,6 +274,7 @@ cleanup_network_interfaces() {
     rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-wan-failover-dns.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
 
     # Remove WiFi configuration state
     rm -f /etc/hookprobe/wifi.conf 2>/dev/null || true
@@ -672,11 +673,16 @@ remove_nftables_filtering() {
         nft delete table inet fts_wan_failover 2>/dev/null || true
         nft delete table inet fts_forward_mark 2>/dev/null || true
         nft delete table inet fts_nat 2>/dev/null || true
+
+        # Remove MGMT VLAN nftables table (filter mode VLAN 200)
+        log_info "Removing MGMT VLAN nftables table..."
+        nft delete table inet fts_mgmt_vlan 2>/dev/null || true
     fi
 
     # Remove nftables config files
     rm -f /etc/nftables.d/fts-filters.nft
     rm -f /etc/nftables.d/fts-traffic.nft
+    rm -f /etc/nftables.d/fts-mgmt-vlan.nft
 
     # Remove OUI database and policy files
     rm -f /etc/hookprobe/oui_policies.conf
