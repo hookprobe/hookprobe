@@ -247,13 +247,14 @@ setup_rt_tables() {
     fi
 }
 
-# Prevent NetworkManager from adding default routes on WAN interfaces
+# Prevent NetworkManager from interfering with WAN interfaces
 # This is critical - NM adds routes without metrics which override our PBR routes
+# We set WAN interfaces as UNMANAGED so NM doesn't touch them at all
 configure_networkmanager_no_default_route() {
-    log_info "Configuring NetworkManager to not add default routes on WAN interfaces..."
+    log_info "Configuring NetworkManager to not manage WAN interfaces..."
 
     local nm_conf_dir="/etc/NetworkManager/conf.d"
-    local nm_conf_file="${nm_conf_dir}/99-fortress-no-default-route.conf"
+    local nm_conf_file="${nm_conf_dir}/99-fortress-unmanaged-wan.conf"
 
     # Skip if NetworkManager is not installed
     if ! command -v nmcli &>/dev/null; then
@@ -263,40 +264,45 @@ configure_networkmanager_no_default_route() {
 
     mkdir -p "$nm_conf_dir"
 
-    # Create config to prevent NM from adding default routes on WAN interfaces
+    # Method 1: Set interfaces as unmanaged via nmcli device
+    # This is the most reliable method - NM won't touch these interfaces at all
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if nmcli device status 2>/dev/null | grep -q "^${iface}"; then
+            log_info "Setting $iface as unmanaged by NetworkManager"
+            nmcli device set "$iface" managed no 2>/dev/null || true
+        fi
+    done
+
+    # Method 2: Create keyfile config to persist unmanaged state across reboots
+    # This uses the [keyfile] section which is the correct way to set unmanaged devices
     cat > "$nm_conf_file" << EOF
-# HookProbe Fortress - Prevent NetworkManager from adding default routes
-# PBR WAN failover manages all default routes
+# HookProbe Fortress - WAN interfaces managed by PBR failover, not NetworkManager
+# PBR WAN failover (wan-failover-pbr.sh) manages all routing for these interfaces
 # Generated: $(date -Iseconds)
 
-[connection-primary-wan]
-match-device=interface-name:${PRIMARY_IFACE}
-ipv4.never-default=true
-ipv6.never-default=true
-
-[connection-backup-wan]
-match-device=interface-name:${BACKUP_IFACE}
-ipv4.never-default=true
-ipv6.never-default=true
+[keyfile]
+# Set WAN interfaces as unmanaged - NM won't add routes, IPs, or touch them
+unmanaged-devices=interface-name:${PRIMARY_IFACE};interface-name:${BACKUP_IFACE}
 EOF
 
     chmod 644 "$nm_conf_file"
 
-    # Also configure via nmcli for active connections
+    # Reload NetworkManager config to pick up the new unmanaged-devices setting
+    nmcli general reload conf 2>/dev/null || true
+
+    # Verify interfaces are now unmanaged
+    sleep 1
     for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
-        local conn_name
-        conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1)
-        if [ -n "$conn_name" ]; then
-            nmcli connection modify "$conn_name" ipv4.never-default yes 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv6.never-default yes 2>/dev/null || true
-            log_debug "Configured $conn_name (${iface}) to never add default route"
+        local state
+        state=$(nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep "^${iface}:" | cut -d: -f2)
+        if [ "$state" = "unmanaged" ]; then
+            log_info "$iface is now unmanaged by NetworkManager"
+        else
+            log_warn "$iface state: $state (expected: unmanaged) - may need reboot"
         fi
     done
 
-    # Reload NetworkManager config (non-disruptive)
-    nmcli general reload conf 2>/dev/null || true
-
-    log_info "NetworkManager configured to not add default routes"
+    log_info "NetworkManager configured to not manage WAN interfaces"
 }
 
 # Remove any stray default routes not managed by us
@@ -617,6 +623,9 @@ NFTEOF
     ACTIVE_WAN="$wan"
     update_main_table_route
 
+    # Update NAT rules to masquerade via active WAN
+    update_nat_for_wan "$wan"
+
     log_info "Active WAN set to: $wan (mark $mark)"
 }
 
@@ -712,6 +721,105 @@ nameserver 8.8.8.8
 EOF
         fi
     fi
+}
+
+# ============================================================
+# NAT/MASQUERADE Management
+# ============================================================
+
+# LAN subnets that need NAT (space-separated)
+LAN_SUBNETS="${LAN_SUBNETS:-10.200.0.0/24 172.20.200.0/24 172.20.201.0/24}"
+
+setup_nat_rules() {
+    log_info "Setting up NAT rules..."
+
+    # Use nftables for NAT (consistent with our other rules)
+    nft -f - << 'NFTEOF'
+# Fortress WAN Failover - NAT/Masquerade Rules
+table inet fts_wan_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        # Rules are added dynamically by update_nat_for_wan()
+    }
+}
+NFTEOF
+
+    # Set initial NAT based on active WAN
+    update_nat_for_wan "${ACTIVE_WAN:-primary}"
+}
+
+update_nat_for_wan() {
+    local active_wan="$1"
+    local wan_iface
+
+    if [ "$active_wan" = "primary" ]; then
+        wan_iface="${PRIMARY_IFACE:-}"
+    else
+        wan_iface="${BACKUP_IFACE:-}"
+    fi
+
+    [ -z "$wan_iface" ] && return 0
+
+    log_info "Updating NAT rules for $active_wan WAN ($wan_iface)..."
+
+    # Rebuild NAT chain with correct output interface
+    nft flush chain inet fts_wan_nat postrouting 2>/dev/null || true
+
+    # Add masquerade rules for all LAN subnets
+    for subnet in $LAN_SUBNETS; do
+        nft add rule inet fts_wan_nat postrouting ip saddr "$subnet" oifname "$wan_iface" masquerade 2>/dev/null || true
+        log_debug "NAT: $subnet -> $wan_iface (masquerade)"
+    done
+
+    # Also add iptables rules as fallback (some systems need both)
+    for subnet in $LAN_SUBNETS; do
+        # Remove old rules for this subnet (both interfaces)
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${PRIMARY_IFACE:-eth0}" -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${BACKUP_IFACE:-wwan0}" -j MASQUERADE 2>/dev/null || true
+
+        # Add rule for active interface
+        iptables -t nat -A POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null || true
+    done
+
+    log_info "NAT rules updated for $wan_iface"
+}
+
+cleanup_nat_rules() {
+    log_info "Cleaning up NAT rules..."
+
+    # Remove nftables NAT table
+    nft delete table inet fts_wan_nat 2>/dev/null || true
+
+    # Remove iptables NAT rules
+    for subnet in $LAN_SUBNETS; do
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${PRIMARY_IFACE:-eth0}" -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${BACKUP_IFACE:-wwan0}" -j MASQUERADE 2>/dev/null || true
+    done
+}
+
+# Restore NetworkManager management of WAN interfaces (called during cleanup)
+restore_networkmanager_management() {
+    log_info "Restoring NetworkManager management of WAN interfaces..."
+
+    if ! command -v nmcli &>/dev/null; then
+        return 0
+    fi
+
+    # Remove the unmanaged config files
+    rm -f /etc/NetworkManager/conf.d/99-fortress-unmanaged-wan.conf
+    rm -f /etc/NetworkManager/conf.d/99-fortress-no-default-route.conf
+
+    # Set interfaces back to managed
+    for iface in "${PRIMARY_IFACE:-}" "${BACKUP_IFACE:-}"; do
+        [ -z "$iface" ] && continue
+        if nmcli device status 2>/dev/null | grep -q "^${iface}"; then
+            nmcli device set "$iface" managed yes 2>/dev/null || true
+            log_info "Restored NetworkManager management of $iface"
+        fi
+    done
+
+    # Reload NM config
+    nmcli general reload conf 2>/dev/null || true
 }
 
 # ============================================================
@@ -1112,6 +1220,7 @@ cmd_setup() {
     setup_routing_tables
     setup_ip_rules
     setup_nftables
+    setup_nat_rules
     init_state
 
     log_info "PBR WAN failover setup complete"
@@ -1264,11 +1373,20 @@ cmd_check() {
 cmd_cleanup() {
     log_info "Cleaning up PBR configuration..."
 
+    # Load config for interface names (needed for route restoration)
+    load_config 2>/dev/null || true
+
     # Stop monitor
     cmd_stop 2>/dev/null || true
 
+    # Restore NetworkManager management of WAN interfaces
+    restore_networkmanager_management
+
     # Remove nftables rules
     cleanup_nftables
+
+    # Remove NAT rules
+    cleanup_nat_rules
 
     # Remove IP rules
     ip rule del fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY 2>/dev/null || true
@@ -1279,10 +1397,14 @@ cmd_cleanup() {
     ip route flush table $TABLE_PRIMARY 2>/dev/null || true
     ip route flush table $TABLE_BACKUP 2>/dev/null || true
 
-    # Restore default route (use primary gateway)
-    discover_gateways
-    if [ -n "$PRIMARY_GATEWAY" ]; then
-        ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null || true
+    # Restore default route (use primary gateway if available)
+    if [ -n "${PRIMARY_IFACE:-}" ]; then
+        discover_gateways
+        if [ -n "${PRIMARY_GATEWAY:-}" ]; then
+            ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null || true
+        elif [ -n "${BACKUP_GATEWAY:-}" ]; then
+            ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null || true
+        fi
     fi
 
     # Remove state
