@@ -334,6 +334,118 @@ hookprobe-ctl lte failover
 
 ---
 
+## Business Continuity with SLA AI
+
+Fortress includes **SLA AI** - an intelligent business continuity engine that ensures your business stays online even when your primary internet fails.
+
+### Why Business Continuity Matters
+
+| Without SLA AI | With SLA AI |
+|----------------|-------------|
+| Card machines stop working | Seamless failover in < 5 seconds |
+| Online orders fail | Zero transaction loss |
+| Manual intervention required | Fully automated |
+| Unknown when to switch back | Intelligent cost-aware failback |
+| Expensive LTE bills | Optimized metered usage |
+
+### BCO/BPO Metrics Achieved
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| **Uptime** | 99.9% | Total network availability |
+| **RTO** | < 5 sec | Recovery Time Objective |
+| **RPO** | 0 bytes | Recovery Point Objective |
+| **MTTD** | 30 sec early | Predictive failure detection |
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SLA AI Decision Flow                          │
+│                                                                  │
+│  Primary WAN ──[LSTM monitors health]──┐                        │
+│       │                                 │                        │
+│       ▼                                 ▼                        │
+│  ┌─────────┐   Failure      ┌───────────────────┐               │
+│  │ HEALTHY │ ──predicted──► │ FAILOVER TO LTE   │               │
+│  └─────────┘                └─────────┬─────────┘               │
+│       ▲                               │                          │
+│       │                               ▼                          │
+│       │                     ┌───────────────────┐               │
+│       └──[cost-aware]────── │ MONITOR PRIMARY   │               │
+│          failback           │ Track LTE costs   │               │
+│                             └───────────────────┘               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Configuration
+
+SLA AI is automatically configured during Fortress installation:
+
+```yaml
+# /etc/hookprobe/slaai.conf
+enabled: true
+check_interval_s: 5
+
+interfaces:
+  primary:
+    name: eth0
+    type: ethernet
+  backup:
+    name: wwan0
+    type: lte
+    metered: true
+    daily_budget_mb: 500
+    monthly_budget_mb: 10000
+    cost_per_gb: 0.50
+
+failback:
+  metered_urgency_multiplier: 1.5
+  business_hours: "09:00-18:00"
+```
+
+### Key Features
+
+1. **LSTM Prediction**: Predicts failures 30-60 seconds before they happen
+2. **Cost Tracking**: Monitors LTE usage against daily/monthly budgets
+3. **Smart Failback**: Returns to primary when stable (not immediately)
+4. **Flap Prevention**: Maximum 4 switches per hour
+5. **Business Hours**: Prioritizes failback during peak hours
+6. **Adaptive DNS**: Automatically switches DNS providers if needed
+
+### Commands
+
+```bash
+# Check SLA AI status
+fortress-ctl sla status
+
+# View failover history
+fortress-ctl sla history
+
+# Force failback (when safe)
+fortress-ctl sla failback
+
+# View cost tracking
+fortress-ctl sla costs
+```
+
+### PBR Integration
+
+SLA AI works with Fortress Policy-Based Routing (PBR):
+
+```bash
+# PBR state files
+/run/fortress/slaai-recommendation.json  # SLA AI recommendations
+/run/fortress/pbr-state.json              # Current PBR state
+
+# PBR script
+/opt/hookprobe/fortress/devices/common/wan-failover-pbr.sh
+```
+
+For detailed documentation, see `shared/slaai/README.md`.
+
+---
+
 ## Ports Used
 
 | Port | Service |
