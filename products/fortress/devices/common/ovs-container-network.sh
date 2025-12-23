@@ -708,21 +708,24 @@ setup_dhcp() {
     local lan_port="${OVS_BRIDGE}-lan"
     local config_file="/etc/dnsmasq.d/fts-ovs.conf"
 
-    # Use environment variables if set, otherwise use defaults based on subnet
-    local dhcp_start="${LAN_DHCP_START:-10.200.0.100}"
-    local dhcp_end="${LAN_DHCP_END:-10.200.1.200}"
+    # Calculate DHCP range based on subnet mask
+    # CRITICAL: Must calculate before using defaults - wrong defaults cause DHCP failures!
+    local dhcp_start="${LAN_DHCP_START:-}"
+    local dhcp_end="${LAN_DHCP_END:-}"
+    local subnet_mask="${LAN_SUBNET_MASK:-24}"
 
     # Calculate sensible defaults based on subnet mask if not explicitly set
-    if [ -z "${LAN_DHCP_START:-}" ]; then
-        case "$LAN_SUBNET_MASK" in
-            29) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.6" ;;
-            28) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.14" ;;
-            27) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.30" ;;
-            26) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.62" ;;
-            25) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.126" ;;
-            24) dhcp_start="10.200.0.100"; dhcp_end="10.200.0.200" ;;
-            23) dhcp_start="10.200.0.100"; dhcp_end="10.200.1.200" ;;
+    if [ -z "$dhcp_start" ] || [ -z "$dhcp_end" ]; then
+        case "$subnet_mask" in
+            29) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.6" ;;      # 6 usable IPs
+            28) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.14" ;;     # 14 usable IPs
+            27) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.30" ;;    # 30 usable IPs
+            26) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.62" ;;    # 62 usable IPs
+            25) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.126" ;;   # 126 usable IPs
+            24) dhcp_start="10.200.0.100"; dhcp_end="10.200.0.200" ;;  # 254 usable IPs
+            *)  dhcp_start="10.200.0.100"; dhcp_end="10.200.1.200" ;;  # /23 or larger
         esac
+        log_info "DHCP range calculated for /${subnet_mask}: ${dhcp_start} - ${dhcp_end}"
     fi
 
     mkdir -p "$(dirname "$config_file")"
@@ -743,7 +746,7 @@ bind-dynamic
 no-resolv
 no-poll
 
-# LAN DHCP range (configured for /${LAN_SUBNET_MASK} subnet)
+# LAN DHCP range (configured for /${subnet_mask} subnet)
 dhcp-range=${dhcp_start},${dhcp_end},12h
 
 # Gateway (this device via OVS bridge)

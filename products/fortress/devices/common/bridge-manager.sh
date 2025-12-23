@@ -427,11 +427,27 @@ configure_dnsmasq_bridge() {
     # Configure dnsmasq for DHCP on the bridge
 
     local config_file="/etc/dnsmasq.d/fts-bridge.conf"
-    local dhcp_start="${FORTRESS_DHCP_START:-10.200.0.100}"
-    local dhcp_end="${FORTRESS_DHCP_END:-10.200.0.200}"
+    local dhcp_start="${FORTRESS_DHCP_START:-}"
+    local dhcp_end="${FORTRESS_DHCP_END:-}"
     local dhcp_lease="${FORTRESS_DHCP_LEASE:-12h}"
+    local subnet_mask="${BRIDGE_NETMASK:-24}"
+
+    # Calculate DHCP range based on subnet mask if not explicitly set
+    # CRITICAL: Wrong defaults cause DHCP failures on small subnets!
+    if [ -z "$dhcp_start" ] || [ -z "$dhcp_end" ]; then
+        case "$subnet_mask" in
+            29) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.6" ;;
+            28) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.14" ;;
+            27) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.30" ;;
+            26) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.62" ;;
+            25) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.126" ;;
+            24) dhcp_start="10.200.0.100"; dhcp_end="10.200.0.200" ;;
+            *)  dhcp_start="10.200.0.100"; dhcp_end="10.200.1.200" ;;
+        esac
+    fi
 
     log_info "Configuring dnsmasq for bridge DHCP..."
+    log_info "  Subnet: /${subnet_mask}, DHCP range: ${dhcp_start} - ${dhcp_end}"
 
     mkdir -p "$(dirname "$config_file")"
 
