@@ -296,6 +296,8 @@ configure_networkmanager_no_default_route() {
 }
 
 # Configure netplan to not add routes on WAN interfaces (Ubuntu/Debian with netplan)
+# NOTE: This only works for DHCP-based configs. For static routes defined in netplan,
+# we must either modify the existing config or rely on cleanup_stray_routes()
 configure_netplan_no_routes() {
     log_info "Checking for netplan configuration..."
 
@@ -305,16 +307,49 @@ configure_netplan_no_routes() {
         return 0
     fi
 
+    # Check existing netplan files for static routes on our WAN interfaces
+    # If static routes exist, warn and skip - we can't override those with dhcp4-overrides
+    local has_static_routes=false
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if grep -r "routes:" /etc/netplan/*.yaml 2>/dev/null | grep -q "$iface" || \
+           grep -rA5 "$iface:" /etc/netplan/*.yaml 2>/dev/null | grep -q "to:.*default"; then
+            log_warn "Found static route for $iface in netplan - cannot override with dhcp4-overrides"
+            log_warn "To prevent automatic routes, remove the 'routes:' section from your netplan config"
+            log_warn "PBR failover will manage routes via cleanup_stray_routes() instead"
+            has_static_routes=true
+        fi
+    done
+
+    if [ "$has_static_routes" = "true" ]; then
+        log_info "Skipping netplan dhcp4-overrides (static routes detected)"
+        return 0
+    fi
+
+    # Check if interfaces use DHCP in netplan
+    local uses_dhcp=false
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if grep -rA5 "$iface:" /etc/netplan/*.yaml 2>/dev/null | grep -q "dhcp4: true"; then
+            uses_dhcp=true
+            break
+        fi
+    done
+
+    if [ "$uses_dhcp" = "false" ]; then
+        log_debug "No DHCP-based WAN interfaces in netplan, skipping dhcp4-overrides"
+        return 0
+    fi
+
     local netplan_dir="/etc/netplan"
     local netplan_file="${netplan_dir}/99-fortress-wan-no-routes.yaml"
 
-    # Create netplan override to prevent WAN interfaces from adding routes
+    # Create netplan override to prevent DHCP WAN interfaces from adding routes
     mkdir -p "$netplan_dir"
 
     cat > "$netplan_file" << EOF
 # HookProbe Fortress - WAN interfaces managed by PBR failover
 # Generated: $(date -Iseconds)
-# This prevents WAN interfaces from adding default routes
+# This prevents DHCP WAN interfaces from adding default routes
+# NOTE: Only applies to DHCP configs, not static routes
 network:
   version: 2
   ethernets:
@@ -332,7 +367,7 @@ EOF
 
     # Apply netplan changes
     if netplan apply 2>/dev/null; then
-        log_info "Netplan configured to not add routes on WAN interfaces"
+        log_info "Netplan configured to not add routes on DHCP WAN interfaces"
     else
         log_warn "Failed to apply netplan configuration"
     fi
