@@ -268,6 +268,7 @@ setup_rt_tables() {
 # Prevent NetworkManager from adding routes on WAN interfaces
 # This is critical - NM adds routes that override our PBR routes
 # We configure connections to never add default routes or auto-routes
+# NOTE: LTE/cellular interfaces are typically managed by ModemManager, not NM
 configure_networkmanager_no_default_route() {
     log_info "Configuring NetworkManager to not add routes on WAN interfaces..."
 
@@ -279,6 +280,14 @@ configure_networkmanager_no_default_route() {
 
     # For each WAN interface, find its connection and configure it
     for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        # Check if this is a cellular/LTE interface (managed by ModemManager)
+        local is_cellular=false
+        case "$iface" in
+            wwan*|usb*|wwp*|cdc*|mbim*|qmi*)
+                is_cellular=true
+                ;;
+        esac
+
         # Find the connection name for this interface
         local conn_name
         conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
@@ -306,11 +315,16 @@ configure_networkmanager_no_default_route() {
 
             log_info "$iface ($conn_name): never-default=yes, ignore-auto-routes=yes"
         else
-            log_warn "No NetworkManager connection found for $iface"
+            # For cellular interfaces, no NM connection is expected (ModemManager handles it)
+            if [ "$is_cellular" = "true" ]; then
+                log_debug "$iface: No NM connection (expected - managed by ModemManager)"
+            else
+                log_warn "No NetworkManager connection found for $iface"
+            fi
         fi
     done
 
-    log_info "NetworkManager configured to not add routes on WAN interfaces"
+    log_info "NetworkManager route suppression configured"
 }
 
 # Configure netplan to not add routes on WAN interfaces (Ubuntu/Debian with netplan)
@@ -1544,6 +1558,10 @@ do_health_check() {
         [ $BACKUP_COUNT -lt 0 ] && BACKUP_COUNT=0
     fi
 
+    # Track previous status for change detection
+    local old_primary_status="${PRIMARY_STATUS:-down}"
+    local old_backup_status="${BACKUP_STATUS:-down}"
+
     # Apply hysteresis: only change status when threshold reached
     if [ $PRIMARY_COUNT -ge $UP_THRESHOLD ]; then
         PRIMARY_STATUS="up"
@@ -1555,6 +1573,39 @@ do_health_check() {
         BACKUP_STATUS="up"
     elif [ $BACKUP_COUNT -eq 0 ]; then
         BACKUP_STATUS="down"
+    fi
+
+    # Detect interface recovery (down -> up transition)
+    # When an interface comes back up, we need to:
+    # 1. Re-discover its gateway (DHCP may have assigned new one)
+    # 2. Update routing tables
+    # 3. Clean up any stray routes added by DHCP/NM
+    local needs_reconfigure=false
+
+    if [ "$old_primary_status" = "down" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+        log_info "Primary WAN ($PRIMARY_IFACE) recovered - reconfiguring..."
+        needs_reconfigure=true
+    fi
+
+    if [ "$old_backup_status" = "down" ] && [ "$BACKUP_STATUS" = "up" ]; then
+        log_info "Backup WAN ($BACKUP_IFACE) recovered - reconfiguring..."
+        needs_reconfigure=true
+    fi
+
+    if [ "$needs_reconfigure" = "true" ]; then
+        # Force route cleanup to remove any auto-added routes
+        cleanup_stray_routes
+
+        # Re-discover gateways (IP may have changed)
+        discover_gateways
+
+        # Update routing tables with new gateways
+        setup_routing_tables
+
+        # Update IP rules (source IPs may have changed)
+        setup_ip_rules
+
+        log_info "Interface recovery reconfiguration complete"
     fi
 
     # Check SLA AI recommendations FIRST (predictive failover)
