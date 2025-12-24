@@ -22,6 +22,15 @@ WIFI_5GHZ_VLAN="${WIFI_5GHZ_VLAN:-30}"    # Staff by default
 MANAGEMENT_VLAN="${MANAGEMENT_VLAN:-10}"
 SUBNET_PREFIX="${FORTRESS_SUBNET:-10.250}"
 
+# Load NETWORK_MODE from fortress.conf if available
+# This determines if we're in VLAN mode (IPs on vlan100/vlan200) or filter mode (IP on FTS)
+FORTRESS_CONF="/etc/hookprobe/fortress.conf"
+if [ -f "$FORTRESS_CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$FORTRESS_CONF" 2>/dev/null || true
+fi
+NETWORK_MODE="${NETWORK_MODE:-filter}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -166,9 +175,18 @@ ensure_ovs_bridge() {
         ovs-vsctl add-br "$OVS_BRIDGE"
     fi
 
-    # Set up bridge IP on management VLAN
+    # Bring bridge up
     ip link set "$OVS_BRIDGE" up
 
+    # In VLAN mode, skip IP assignment to FTS bridge
+    # IPs are on vlan100 (LAN) and vlan200 (MGMT), not FTS
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        log_info "  VLAN mode: Skipping FTS bridge IP (IPs are on vlan100/vlan200)"
+        log_success "OVS bridge ready: $OVS_BRIDGE (VLAN mode, no IP)"
+        return 0
+    fi
+
+    # Filter mode: Set up bridge IP
     # Remove old IP if exists
     ip addr flush dev "$OVS_BRIDGE" 2>/dev/null || true
 
