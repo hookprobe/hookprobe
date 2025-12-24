@@ -230,7 +230,7 @@ def api_stats():
         'blocked': data.get('blocked_queries', 0),
         'allowed': data.get('allowed_queries', 0),
         'block_rate': data.get('block_rate', 0.0),
-        'blocklist_domains': data.get('blocklist_domains', 0),
+        'blocklist_domains': data.get('blocklist_size', data.get('blocklist_domains', 0)),
         'level': data.get('protection_level', 3),
         'status': 'active' if data.get('protection_enabled', True) else 'paused',
         'paused': data.get('paused', False),
