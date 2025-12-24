@@ -63,11 +63,30 @@ FWMARK_PRIMARY=0x100
 FWMARK_BACKUP=0x200
 FWMARK_MASK=0xf00
 
+# Route metrics - normally fixed, but SLA AI can demote
+# Kernel uses lowest metric that exists in routing table
+#
+# Route States:
+#   HEALTHY: Normal metric (10, 20, 30, 40) - route added
+#   DEGRADED: Demoted metric (110, 120, 130, 140) - SLA AI predicted issues
+#   FAILED: Route removed entirely - ping check failed
+#
+METRIC_PRIMARY=10    # WAN1 - normal metric
+METRIC_BACKUP=20     # WAN2 - normal metric
+METRIC_TERTIARY=30   # WAN3 - normal metric (future)
+METRIC_QUATERNARY=40 # WAN4 - normal metric (future)
+
+# Demoted metrics - used when SLA AI predicts degradation
+# Route stays but at higher metric so healthy WANs are preferred
+METRIC_DEMOTED_OFFSET=100  # Add to normal metric when demoted
+METRIC_PRIMARY_DEMOTED=110
+METRIC_BACKUP_DEMOTED=120
+
 # Reserved for multi-WAN expansion (3-4 WANs)
-# TABLE_TERTIARY=300       # Third WAN table
-# TABLE_QUATERNARY=400     # Fourth WAN table
-# FWMARK_TERTIARY=0x300    # Third WAN mark
-# FWMARK_QUATERNARY=0x400  # Fourth WAN mark
+# TABLE_TERTIARY=300
+# TABLE_QUATERNARY=400
+# FWMARK_TERTIARY=0x300
+# FWMARK_QUATERNARY=0x400
 
 # Default health check settings
 PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
@@ -268,6 +287,7 @@ setup_rt_tables() {
 # Prevent NetworkManager from adding routes on WAN interfaces
 # This is critical - NM adds routes that override our PBR routes
 # We configure connections to never add default routes or auto-routes
+# NOTE: LTE/cellular interfaces are typically managed by ModemManager, not NM
 configure_networkmanager_no_default_route() {
     log_info "Configuring NetworkManager to not add routes on WAN interfaces..."
 
@@ -279,6 +299,14 @@ configure_networkmanager_no_default_route() {
 
     # For each WAN interface, find its connection and configure it
     for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        # Check if this is a cellular/LTE interface (managed by ModemManager)
+        local is_cellular=false
+        case "$iface" in
+            wwan*|usb*|wwp*|cdc*|mbim*|qmi*)
+                is_cellular=true
+                ;;
+        esac
+
         # Find the connection name for this interface
         local conn_name
         conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
@@ -306,11 +334,16 @@ configure_networkmanager_no_default_route() {
 
             log_info "$iface ($conn_name): never-default=yes, ignore-auto-routes=yes"
         else
-            log_warn "No NetworkManager connection found for $iface"
+            # For cellular interfaces, no NM connection is expected (ModemManager handles it)
+            if [ "$is_cellular" = "true" ]; then
+                log_debug "$iface: No NM connection (expected - managed by ModemManager)"
+            else
+                log_warn "No NetworkManager connection found for $iface"
+            fi
         fi
     done
 
-    log_info "NetworkManager configured to not add routes on WAN interfaces"
+    log_info "NetworkManager route suppression configured"
 }
 
 # Configure netplan to not add routes on WAN interfaces (Ubuntu/Debian with netplan)
@@ -562,118 +595,158 @@ setup_routing_tables() {
 }
 
 ensure_main_table_routes() {
-    # INCREMENTAL route management - only add/modify what's needed
-    # This prevents route flapping by NOT removing routes unnecessarily
+    # FIXED METRIC route check - ensure routes exist for healthy interfaces
+    # Each WAN has a FIXED metric:
+    #   - Primary: METRIC_PRIMARY (10) or METRIC_PRIMARY_DEMOTED (110) if SLA AI demoted
+    #   - Backup:  METRIC_BACKUP (20) or METRIC_BACKUP_DEMOTED (120) if SLA AI demoted
     #
-    # Expected state:
-    #   - Active WAN:  metric 10 (preferred)
-    #   - Standby WAN: metric 100 (fallback)
+    # Only ADD routes for healthy interfaces, only REMOVE for unhealthy.
+    # Let the kernel's metric-based routing do the failover automatically.
     #
-    # We check if routes exist with correct metrics before modifying
+    # SLA AI demotion: When degradation is predicted, metric increases to allow
+    # other healthy WANs to take priority without removing the route entirely.
 
-    local active="${ACTIVE_WAN:-primary}"
-    local metric_active=10
-    local metric_standby=100
     local route_info
-    local changes_made=false
-
     route_info=$(ip route show default 2>/dev/null)
 
-    # Determine which gateway should be active/standby
-    local active_gw active_iface standby_gw standby_iface
-    if [ "$active" = "primary" ]; then
-        active_gw="${PRIMARY_GATEWAY:-}"
-        active_iface="${PRIMARY_IFACE:-}"
-        standby_gw="${BACKUP_GATEWAY:-}"
-        standby_iface="${BACKUP_IFACE:-}"
-    else
-        active_gw="${BACKUP_GATEWAY:-}"
-        active_iface="${BACKUP_IFACE:-}"
-        standby_gw="${PRIMARY_GATEWAY:-}"
-        standby_iface="${PRIMARY_IFACE:-}"
-    fi
+    # Primary WAN - check if route exists with correct metric
+    if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
+        # Determine target metric based on demoted state
+        local primary_target_metric=$METRIC_PRIMARY
+        local primary_wrong_metric=$METRIC_PRIMARY_DEMOTED
+        if [ "${PRIMARY_DEMOTED:-false}" = "true" ]; then
+            primary_target_metric=$METRIC_PRIMARY_DEMOTED
+            primary_wrong_metric=$METRIC_PRIMARY
+        fi
 
-    # Check if active route exists with correct metric
-    if [ -n "$active_gw" ] && [ -n "$active_iface" ]; then
-        if ! echo "$route_info" | grep -q "via $active_gw dev $active_iface.*metric $metric_active"; then
-            # Active route missing or wrong metric - fix it
-            # First remove any existing route for this gateway (any metric)
-            ip route del default via "$active_gw" dev "$active_iface" 2>/dev/null || true
-            # Add with correct metric
-            if ip route add default via "$active_gw" dev "$active_iface" metric $metric_active 2>/dev/null; then
-                log_info "Added active route: via $active_gw metric $metric_active"
-                changes_made=true
+        local primary_route_ok=false
+        if echo "$route_info" | grep -q "via $PRIMARY_GATEWAY dev $PRIMARY_IFACE.*metric $primary_target_metric"; then
+            primary_route_ok=true
+        fi
+
+        if [ "${PRIMARY_STATUS:-unknown}" = "up" ]; then
+            # Should have route - add if missing or wrong metric
+            if [ "$primary_route_ok" = "false" ]; then
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_target_metric 2>/dev/null || true
+                # Remove route with wrong metric if it exists
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_wrong_metric 2>/dev/null || true
+                log_info "Added primary route: via $PRIMARY_GATEWAY metric $primary_target_metric"
             fi
+        else
+            # Should NOT have route - remove both normal and demoted metrics
+            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+            log_debug "Removed primary routes (interface down)"
         fi
     fi
 
-    # Check if standby route exists with correct metric
-    if [ -n "$standby_gw" ] && [ -n "$standby_iface" ]; then
-        if ! echo "$route_info" | grep -q "via $standby_gw dev $standby_iface.*metric $metric_standby"; then
-            # Standby route missing or wrong metric - fix it
-            ip route del default via "$standby_gw" dev "$standby_iface" 2>/dev/null || true
-            if ip route add default via "$standby_gw" dev "$standby_iface" metric $metric_standby 2>/dev/null; then
-                log_info "Added standby route: via $standby_gw metric $metric_standby"
-                changes_made=true
-            fi
+    # Backup WAN - check if route exists with correct metric
+    if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
+        # Determine target metric based on demoted state
+        local backup_target_metric=$METRIC_BACKUP
+        local backup_wrong_metric=$METRIC_BACKUP_DEMOTED
+        if [ "${BACKUP_DEMOTED:-false}" = "true" ]; then
+            backup_target_metric=$METRIC_BACKUP_DEMOTED
+            backup_wrong_metric=$METRIC_BACKUP
         fi
-    fi
 
-    if [ "$changes_made" = "true" ]; then
-        log_debug "Routes after ensure: $(ip route show default 2>/dev/null | tr '\n' ' ')"
+        local backup_route_ok=false
+        if echo "$route_info" | grep -q "via $BACKUP_GATEWAY dev $BACKUP_IFACE.*metric $backup_target_metric"; then
+            backup_route_ok=true
+        fi
+
+        if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+            # Should have route - add if missing or wrong metric
+            if [ "$backup_route_ok" = "false" ]; then
+                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_target_metric 2>/dev/null || true
+                # Remove route with wrong metric if it exists
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_wrong_metric 2>/dev/null || true
+                log_info "Added backup route: via $BACKUP_GATEWAY metric $backup_target_metric"
+            fi
+        else
+            # Should NOT have route - remove both normal and demoted metrics
+            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
+            log_debug "Removed backup routes (interface down)"
+        fi
     fi
 }
 
 update_main_table_route() {
-    # Full route update - used during failover when active WAN changes
-    # This is more aggressive than ensure_main_table_routes() and swaps metrics
+    # FIXED METRIC route management
+    # Each WAN has a FIXED metric that NEVER changes:
+    #   - Primary (WAN1): metric 10 (or 110 if demoted by SLA AI)
+    #   - Backup (WAN2):  metric 20 (or 120 if demoted by SLA AI)
+    #   - Tertiary:       metric 30 (future)
+    #   - Quaternary:     metric 40 (future)
     #
-    # Called when:
-    #   - ACTIVE_WAN changes (failover/failback)
-    #   - Manual failover command
-    #   - Initial setup
+    # Routes are ADDED when interface is healthy, REMOVED when unhealthy.
+    # Kernel automatically uses the lowest-metric route that exists.
+    # NO metric swapping, NO "active/standby" logic here.
+    #
+    # SLA AI demotion: Metric temporarily increased when degradation is predicted,
+    # allowing other healthy WANs to take priority without losing connectivity.
 
-    local active="${ACTIVE_WAN:-primary}"
-    local metric_active=10
-    local metric_standby=100
+    log_info "Updating main table routes (fixed metrics)..."
 
-    log_info "Updating main table routes for active=$active..."
+    # Primary WAN - use demoted metric if SLA AI says degraded
+    if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
+        local primary_metric=$METRIC_PRIMARY
+        if [ "${PRIMARY_DEMOTED:-false}" = "true" ]; then
+            primary_metric=$METRIC_PRIMARY_DEMOTED
+        fi
 
-    # Determine which gateway should be active/standby
-    local active_gw active_iface standby_gw standby_iface
-    if [ "$active" = "primary" ]; then
-        active_gw="${PRIMARY_GATEWAY:-}"
-        active_iface="${PRIMARY_IFACE:-}"
-        standby_gw="${BACKUP_GATEWAY:-}"
-        standby_iface="${BACKUP_IFACE:-}"
-    else
-        active_gw="${BACKUP_GATEWAY:-}"
-        active_iface="${BACKUP_IFACE:-}"
-        standby_gw="${PRIMARY_GATEWAY:-}"
-        standby_iface="${PRIMARY_IFACE:-}"
+        if [ "${PRIMARY_STATUS:-unknown}" = "up" ]; then
+            # Interface healthy - ensure route exists with correct metric
+            ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_metric 2>/dev/null || \
+                ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_metric 2>/dev/null || true
+            # Remove route with wrong metric if it exists
+            if [ "$primary_metric" = "$METRIC_PRIMARY" ]; then
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+            else
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+            fi
+            log_debug "Primary route: via $PRIMARY_GATEWAY dev $PRIMARY_IFACE metric $primary_metric"
+        else
+            # Interface down - remove route (both metrics)
+            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+            log_debug "Primary route removed (interface down)"
+        fi
     fi
 
-    # Remove ONLY the routes we're about to change (not all routes!)
-    # This preserves any other default routes (unlikely but possible)
-    if [ -n "$active_gw" ]; then
-        ip route del default via "$active_gw" 2>/dev/null || true
-    fi
-    if [ -n "$standby_gw" ]; then
-        ip route del default via "$standby_gw" 2>/dev/null || true
+    # Backup WAN - use demoted metric if SLA AI says degraded
+    if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
+        local backup_metric=$METRIC_BACKUP
+        if [ "${BACKUP_DEMOTED:-false}" = "true" ]; then
+            backup_metric=$METRIC_BACKUP_DEMOTED
+        fi
+
+        if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+            # Interface healthy - ensure route exists with correct metric
+            ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_metric 2>/dev/null || \
+                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_metric 2>/dev/null || true
+            # Remove route with wrong metric if it exists
+            if [ "$backup_metric" = "$METRIC_BACKUP" ]; then
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
+            else
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+            fi
+            log_debug "Backup route: via $BACKUP_GATEWAY dev $BACKUP_IFACE metric $backup_metric"
+        else
+            # Interface down - remove route (both metrics)
+            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
+            log_debug "Backup route removed (interface down)"
+        fi
     fi
 
-    # Add routes with correct metrics
-    if [ -n "$active_gw" ] && [ -n "$active_iface" ]; then
-        ip route add default via "$active_gw" dev "$active_iface" metric $metric_active 2>/dev/null || true
-        log_debug "Active route: via $active_gw dev $active_iface metric $metric_active"
-    fi
-
-    if [ -n "$standby_gw" ] && [ -n "$standby_iface" ]; then
-        ip route add default via "$standby_gw" dev "$standby_iface" metric $metric_standby 2>/dev/null || true
-        log_debug "Standby route: via $standby_gw dev $standby_iface metric $metric_standby"
-    fi
-
-    log_info "Main table routes updated: active=$active"
+    # Log current effective metrics
+    local eff_primary="${METRIC_PRIMARY}"
+    local eff_backup="${METRIC_BACKUP}"
+    [ "${PRIMARY_DEMOTED:-false}" = "true" ] && eff_primary="${METRIC_PRIMARY_DEMOTED}"
+    [ "${BACKUP_DEMOTED:-false}" = "true" ] && eff_backup="${METRIC_BACKUP_DEMOTED}"
+    log_info "Main table routes updated (effective metrics: primary=$eff_primary, backup=$eff_backup)"
 }
 
 setup_ip_rules() {
@@ -1277,12 +1350,38 @@ check_interface_quick() {
 init_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
 
+    # Determine initial ACTIVE_WAN based on actual interface state
+    # This prevents unnecessary failover on first health check
+    local initial_active="primary"
+    local primary_has_route=false
+    local backup_has_route=false
+
+    # Check if interfaces have usable gateways
+    if [ -n "${PRIMARY_GATEWAY:-}" ] || get_gateway "${PRIMARY_IFACE:-}" >/dev/null 2>&1; then
+        primary_has_route=true
+    fi
+    if [ -n "${BACKUP_GATEWAY:-}" ] || get_gateway "${BACKUP_IFACE:-}" >/dev/null 2>&1; then
+        backup_has_route=true
+    fi
+
+    # Set initial active based on which interface actually works
+    if [ "$primary_has_route" = "true" ]; then
+        initial_active="primary"
+        log_info "Initial state: primary WAN has gateway"
+    elif [ "$backup_has_route" = "true" ]; then
+        initial_active="backup"
+        log_info "Initial state: primary down, using backup WAN"
+    else
+        initial_active="primary"  # Default, will be corrected by health check
+        log_warn "Initial state: no WAN gateway detected"
+    fi
+
     cat > "$STATE_FILE" << EOF
 PRIMARY_STATUS=unknown
 BACKUP_STATUS=unknown
 PRIMARY_COUNT=0
 BACKUP_COUNT=0
-ACTIVE_WAN=primary
+ACTIVE_WAN=$initial_active
 LAST_CHECK=$(date +%s)
 FAILOVER_COUNT=0
 BOTH_DOWN_SINCE=0
@@ -1316,6 +1415,8 @@ LAST_ALTERNATE_TIME=${LAST_ALTERNATE_TIME:-0}
 LAST_RECOVERY_TIME=${LAST_RECOVERY_TIME:-0}
 LAST_ROUTE_CHECK=${LAST_ROUTE_CHECK:-0}
 LAST_ROUTE_CLEANUP=${LAST_ROUTE_CLEANUP:-0}
+PRIMARY_DEMOTED=${PRIMARY_DEMOTED:-false}
+BACKUP_DEMOTED=${BACKUP_DEMOTED:-false}
 EOF
 }
 
@@ -1383,28 +1484,55 @@ apply_slaai_recommendation() {
     recommendation=$(read_slaai_recommendation)
 
     if [ -z "$recommendation" ]; then
+        # No recommendation - clear any demoted state
+        PRIMARY_DEMOTED="false"
+        BACKUP_DEMOTED="false"
         return 1
     fi
 
     case "$recommendation" in
-        failover)
-            # SLA AI predicts primary failure - preemptive failover
-            if [ "$ACTIVE_WAN" = "primary" ] && [ "$BACKUP_STATUS" = "up" ]; then
-                log_info "SLA AI: Predictive failover to backup (primary failure predicted)"
-                do_failover backup
+        demote_primary)
+            # SLA AI predicts primary degradation - demote metric but keep route
+            if [ "${PRIMARY_DEMOTED:-false}" != "true" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+                log_info "SLA AI: Demoting primary (degradation predicted)"
+                PRIMARY_DEMOTED="true"
+                # Replace route with demoted metric
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
                 return 0
             fi
             ;;
-        failback)
-            # SLA AI says primary is stable - can safely failback
-            if [ "$ACTIVE_WAN" = "backup" ] && [ "$PRIMARY_STATUS" = "up" ]; then
-                log_info "SLA AI: Predictive failback to primary (primary stable)"
-                do_failover primary
+        demote_backup)
+            # SLA AI predicts backup degradation - demote metric but keep route
+            if [ "${BACKUP_DEMOTED:-false}" != "true" ] && [ "$BACKUP_STATUS" = "up" ]; then
+                log_info "SLA AI: Demoting backup (degradation predicted)"
+                BACKUP_DEMOTED="true"
+                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        promote_primary)
+            # SLA AI says primary is healthy again - restore normal metric
+            if [ "${PRIMARY_DEMOTED:-false}" = "true" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+                log_info "SLA AI: Promoting primary (healthy again)"
+                PRIMARY_DEMOTED="false"
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        promote_backup)
+            # SLA AI says backup is healthy again
+            if [ "${BACKUP_DEMOTED:-false}" = "true" ] && [ "$BACKUP_STATUS" = "up" ]; then
+                log_info "SLA AI: Promoting backup (healthy again)"
+                BACKUP_DEMOTED="false"
+                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
                 return 0
             fi
             ;;
         hold)
-            # SLA AI says maintain current state
             log_debug "SLA AI: Hold current state"
             ;;
     esac
@@ -1544,6 +1672,10 @@ do_health_check() {
         [ $BACKUP_COUNT -lt 0 ] && BACKUP_COUNT=0
     fi
 
+    # Track previous status for change detection
+    local old_primary_status="${PRIMARY_STATUS:-down}"
+    local old_backup_status="${BACKUP_STATUS:-down}"
+
     # Apply hysteresis: only change status when threshold reached
     if [ $PRIMARY_COUNT -ge $UP_THRESHOLD ]; then
         PRIMARY_STATUS="up"
@@ -1555,6 +1687,39 @@ do_health_check() {
         BACKUP_STATUS="up"
     elif [ $BACKUP_COUNT -eq 0 ]; then
         BACKUP_STATUS="down"
+    fi
+
+    # Detect interface recovery (down -> up transition)
+    # When an interface comes back up, we need to:
+    # 1. Re-discover its gateway (DHCP may have assigned new one)
+    # 2. Update routing tables
+    # 3. Clean up any stray routes added by DHCP/NM
+    local needs_reconfigure=false
+
+    if [ "$old_primary_status" = "down" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+        log_info "Primary WAN ($PRIMARY_IFACE) recovered - reconfiguring..."
+        needs_reconfigure=true
+    fi
+
+    if [ "$old_backup_status" = "down" ] && [ "$BACKUP_STATUS" = "up" ]; then
+        log_info "Backup WAN ($BACKUP_IFACE) recovered - reconfiguring..."
+        needs_reconfigure=true
+    fi
+
+    if [ "$needs_reconfigure" = "true" ]; then
+        # Force route cleanup to remove any auto-added routes
+        cleanup_stray_routes
+
+        # Re-discover gateways (IP may have changed)
+        discover_gateways
+
+        # Update routing tables with new gateways
+        setup_routing_tables
+
+        # Update IP rules (source IPs may have changed)
+        setup_ip_rules
+
+        log_info "Interface recovery reconfiguration complete"
     fi
 
     # Check SLA AI recommendations FIRST (predictive failover)
@@ -1636,25 +1801,33 @@ do_health_check() {
         fi
     fi
 
-    # Apply change if needed
+    # FIXED METRIC APPROACH: Just update routes based on interface status
+    # Routes are ADDED when healthy, REMOVED when unhealthy
+    # Kernel uses lowest-metric available route automatically
+    ensure_main_table_routes
+
+    # Update ACTIVE_WAN for NAT and logging (based on which interface is UP)
+    if [ "$PRIMARY_STATUS" = "up" ]; then
+        ACTIVE_WAN="primary"
+    elif [ "$BACKUP_STATUS" = "up" ]; then
+        ACTIVE_WAN="backup"
+    fi
+    # If both down, keep current ACTIVE_WAN for NAT (best effort)
+
+    # Only do full reconfiguration on actual ACTIVE_WAN change
     if [ "$ACTIVE_WAN" != "$old_active" ]; then
         FAILOVER_COUNT=$((FAILOVER_COUNT + 1))
         log_info "WAN failover: $old_active -> $ACTIVE_WAN (event #$FAILOVER_COUNT)"
 
-        # Update packet marking
+        # Update packet marking for new connections
         set_active_wan "$ACTIVE_WAN"
 
-        # Refresh routing tables (gateway may have changed)
-        discover_gateways
-        setup_routing_tables
+        # Update NAT rules
+        update_nat_for_wan "$ACTIVE_WAN"
 
-        # Update IP rules if interface IPs changed (DHCP renewal)
-        setup_ip_rules
-
-        # Update DNS configuration for new WAN
+        # Update DNS
         update_dns_for_wan "$ACTIVE_WAN"
 
-        # Log the failover event for monitoring
         logger -t "$LOG_TAG" -p notice "WAN failover completed: $old_active -> $ACTIVE_WAN"
     fi
 
@@ -1757,14 +1930,29 @@ cmd_status() {
     echo ""
 
     # Interface status
+    local primary_demote_indicator=""
+    local backup_demote_indicator=""
+    [ "${PRIMARY_DEMOTED:-false}" = "true" ] && primary_demote_indicator=" [DEMOTED by SLA AI]"
+    [ "${BACKUP_DEMOTED:-false}" = "true" ] && backup_demote_indicator=" [DEMOTED by SLA AI]"
+
     echo "Primary WAN:    ${PRIMARY_IFACE:-unknown}"
     echo "  Gateway:      ${PRIMARY_GATEWAY:-unknown}"
-    echo "  Status:       ${PRIMARY_STATUS:-unknown} (score: ${PRIMARY_COUNT:-0}/$UP_THRESHOLD)"
+    echo "  Status:       ${PRIMARY_STATUS:-unknown} (score: ${PRIMARY_COUNT:-0}/$UP_THRESHOLD)${primary_demote_indicator}"
+    if [ "${PRIMARY_DEMOTED:-false}" = "true" ]; then
+        echo "  Metric:       $METRIC_PRIMARY_DEMOTED (demoted)"
+    else
+        echo "  Metric:       $METRIC_PRIMARY (normal)"
+    fi
     echo ""
 
     echo "Backup WAN:     ${BACKUP_IFACE:-unknown}"
     echo "  Gateway:      ${BACKUP_GATEWAY:-unknown}"
-    echo "  Status:       ${BACKUP_STATUS:-unknown} (score: ${BACKUP_COUNT:-0}/$UP_THRESHOLD)"
+    echo "  Status:       ${BACKUP_STATUS:-unknown} (score: ${BACKUP_COUNT:-0}/$UP_THRESHOLD)${backup_demote_indicator}"
+    if [ "${BACKUP_DEMOTED:-false}" = "true" ]; then
+        echo "  Metric:       $METRIC_BACKUP_DEMOTED (demoted)"
+    else
+        echo "  Metric:       $METRIC_BACKUP (normal)"
+    fi
     echo ""
 
     echo "Active WAN:     ${ACTIVE_WAN:-unknown}"
