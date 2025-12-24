@@ -14,6 +14,17 @@
     border-color: #ffc107;
     color: #212529;
 }
+/* Blocked button - tangerine with black pearl hover */
+.blocked-btn {
+    background-color: #f39c12;
+    border-color: #f39c12;
+    color: #fff;
+}
+.blocked-btn:hover {
+    background-color: #02040d;
+    border-color: #02040d;
+    color: #fff;
+}
 </style>
 {% endblock %}
 
@@ -59,7 +70,7 @@
                     <tr>
                         <td>Blocked</td>
                         <td class="text-right">
-                            <button class="btn btn-danger btn-sm px-3 font-weight-bold"
+                            <button class="btn btn-sm px-3 font-weight-bold blocked-btn"
                                     onclick="showBlockedModal()"
                                     id="stat-blocked-btn"
                                     title="Click to view blocked domains"
