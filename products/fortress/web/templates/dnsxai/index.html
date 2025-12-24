@@ -2,10 +2,25 @@
 {% block title %}dnsXai - HookProbe Fortress{% endblock %}
 {% block page_title %}DNS Protection{% endblock %}
 {% block breadcrumb %}<li class="breadcrumb-item active">dnsXai</li>{% endblock %}
+{% block extra_css %}
+<style>
+/* Pause buttons - distinct from danger/disable */
+.pause-btn {
+    border-color: #6c757d;
+    color: #6c757d;
+}
+.pause-btn:hover {
+    background-color: #ffc107;
+    border-color: #ffc107;
+    color: #212529;
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="row">
+<div class="row mb-4">
     <!-- Protection Status Card -->
-    <div class="col-lg-4 col-md-6">
+    <div class="col-lg-4 col-md-6 mb-3">
         <div class="card card-success card-outline h-100">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-shield-alt"></i> Protection Status</h3>
@@ -21,9 +36,9 @@
             </div>
             <div class="card-footer">
                 <div class="btn-group w-100" role="group">
-                    <button class="btn btn-warning" onclick="pauseProtection(5)" title="Pause 5 min">5m</button>
-                    <button class="btn btn-warning" onclick="pauseProtection(15)" title="Pause 15 min">15m</button>
-                    <button class="btn btn-warning" onclick="pauseProtection(30)" title="Pause 30 min">30m</button>
+                    <button class="btn btn-outline-secondary pause-btn" onclick="pauseProtection(5)" title="Pause 5 min">5m</button>
+                    <button class="btn btn-outline-secondary pause-btn" onclick="pauseProtection(15)" title="Pause 15 min">15m</button>
+                    <button class="btn btn-outline-secondary pause-btn" onclick="pauseProtection(30)" title="Pause 30 min">30m</button>
                     <button class="btn btn-danger" id="killswitch-btn" onclick="toggleProtection()">DISABLE</button>
                 </div>
             </div>
@@ -31,7 +46,7 @@
     </div>
 
     <!-- Statistics Card -->
-    <div class="col-lg-4 col-md-6">
+    <div class="col-lg-4 col-md-6 mb-3">
         <div class="card card-info card-outline h-100">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-chart-bar"></i> Statistics</h3>
@@ -41,7 +56,6 @@
             </div>
             <div class="card-body p-0">
                 <table class="table table-sm mb-0">
-                    <tr><td>Total Queries</td><td class="text-right font-weight-bold" id="stat-queries">0</td></tr>
                     <tr>
                         <td>Blocked</td>
                         <td class="text-right">
@@ -54,6 +68,7 @@
                             </button>
                         </td>
                     </tr>
+                    <tr><td>Total Queries</td><td class="text-right font-weight-bold" id="stat-queries">0</td></tr>
                     <tr><td>Allowed</td><td class="text-right font-weight-bold text-success" id="stat-allowed">0</td></tr>
                     <tr><td>Block Rate</td><td class="text-right" id="stat-rate">0%</td></tr>
                     <tr><td>Blocklist Size</td><td class="text-right" id="stat-blocklist">0</td></tr>
@@ -63,8 +78,8 @@
     </div>
 
     <!-- ML/LSTM Status Card -->
-    <div class="col-lg-4 col-md-6">
-        <div class="card card-primary card-outline">
+    <div class="col-lg-4 col-md-6 mb-3">
+        <div class="card card-primary card-outline h-100">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-brain"></i> ML/LSTM Threat Detection</h3>
             </div>
