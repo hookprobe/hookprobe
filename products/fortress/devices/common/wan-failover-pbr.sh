@@ -1283,148 +1283,67 @@ restore_networkmanager_management() {
 # Health Checking
 # ============================================================
 
-# Enhanced health check settings
-HTTP_CHECK_ENABLED="${HTTP_CHECK_ENABLED:-true}"
-HTTP_CHECK_URL="${HTTP_CHECK_URL:-http://httpbin.org/ip}"
-HTTP_CHECK_TIMEOUT="${HTTP_CHECK_TIMEOUT:-5}"
+# IP SLA target - if ping to this responds, WAN is UP
+HEALTH_CHECK_TARGET="${HEALTH_CHECK_TARGET:-1.1.1.1}"
 
 check_interface_health() {
-    # Check WAN interface health using multiple methods
-    # This handles the "link UP but no traffic" scenario
+    # Simple IP SLA health check
+    # WAN is UP if and only if: ping to 1.1.1.1 responds
+    # That's it. No other checks needed.
     #
-    # Checks performed:
-    #   1. Link state (carrier detect)
-    #   2. IP address assigned
-    #   3. Gateway reachable (ARP/ping)
-    #   4. Internet connectivity (ICMP to multiple targets)
-    #   5. HTTP connectivity (optional, for full SLA validation)
-    #
-    # Returns: 0 if healthy, 1 if unhealthy
+    # Returns: 0 if healthy (ping responds), 1 if unhealthy (ping fails)
 
     local iface="$1"
     local iface_ip
     local gateway
+    local temp_route_added=false
 
-    # === Check 1: Link state ===
-    if ! ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
-        log_debug "[$iface] Link state: DOWN"
-        return 1
-    fi
-    log_debug "[$iface] Link state: UP"
-
-    # === Check 2: IP address assigned ===
+    # Get interface IP (needed to bind ping to specific interface)
     iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
     if [ -z "$iface_ip" ]; then
-        log_debug "[$iface] No IP address (DHCP expired?)"
+        log_debug "[$iface] No IP address"
         return 1
     fi
-    log_debug "[$iface] IP: $iface_ip"
 
-    # === Check 3: Gateway reachable ===
     # Get gateway for this interface
-    # NOTE: For LTE/cellular, carrier gateways often don't respond to ICMP
-    # We log this as info but continue to the internet connectivity check
     gateway=$(get_gateway "$iface")
-    local gateway_reachable=false
-    if [ -n "$gateway" ]; then
-        # Try ARP check first (if arping is available), then fall back to ping
-        if command -v arping &>/dev/null; then
-            if arping -c 1 -w 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-                gateway_reachable=true
-            elif ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-                gateway_reachable=true
-            fi
-        else
-            # arping not installed, use ping only
-            if ping -c 1 -W 1 -I "$iface" "$gateway" >/dev/null 2>&1; then
-                gateway_reachable=true
-            fi
-        fi
-
-        if [ "$gateway_reachable" = "true" ]; then
-            log_debug "[$iface] Gateway $gateway: reachable"
-        else
-            # For LTE/cellular (wwan*, usb*, etc.), gateway not responding is normal
-            # Continue to internet connectivity check instead of failing here
-            case "$iface" in
-                wwan*|usb*|wwp*|cdc*|mbim*|qmi*)
-                    log_debug "[$iface] Gateway $gateway: not responding (normal for LTE)"
-                    # Don't return failure - continue to internet check
-                    ;;
-                *)
-                    # For wired interfaces, gateway should respond
-                    log_debug "[$iface] Gateway $gateway unreachable"
-                    return 1
-                    ;;
-            esac
-        fi
-    fi
-
-    # === Check 4: Internet connectivity (ICMP) ===
-    # Use routing table directly to ensure correct path
-    # This is critical for "link up but no traffic" scenarios
-    local table
-    if [ "$iface" = "$PRIMARY_IFACE" ]; then
-        table=$TABLE_PRIMARY
-    else
-        table=$TABLE_BACKUP
-    fi
-
-    local ping_success=0
-    for target in $PING_TARGETS; do
-        # Method 1: Use source IP binding (triggers source-based routing rule)
-        if ping -c "$PING_COUNT" -W "$PING_TIMEOUT" -I "$iface_ip" -q "$target" >/dev/null 2>&1; then
-            ping_success=1
-            log_debug "[$iface] Ping $target: OK (via source $iface_ip)"
-            break
-        fi
-
-        # Method 2: Direct interface binding (SO_BINDTODEVICE)
-        if ping -c "$PING_COUNT" -W "$PING_TIMEOUT" -I "$iface" -q "$target" >/dev/null 2>&1; then
-            ping_success=1
-            log_debug "[$iface] Ping $target: OK (via interface bind)"
-            break
-        fi
-
-        log_debug "[$iface] Ping $target: FAILED"
-    done
-
-    if [ $ping_success -eq 0 ]; then
-        log_debug "[$iface] All ping targets failed"
+    if [ -z "$gateway" ]; then
+        log_debug "[$iface] No gateway discovered"
         return 1
     fi
 
-    # === Check 5: HTTP connectivity (optional) ===
-    # This validates full TCP/HTTP path, not just ICMP
-    # Some ISPs/networks block ICMP but allow TCP
-    if [ "$HTTP_CHECK_ENABLED" = "true" ] && command -v curl &>/dev/null; then
-        # Use curl with interface binding
-        if ! curl -s -m "$HTTP_CHECK_TIMEOUT" --interface "$iface" -o /dev/null "$HTTP_CHECK_URL" 2>/dev/null; then
-            # HTTP failed, but ICMP worked - might be a temporary issue
-            # Log warning but don't fail immediately (ICMP success is enough)
-            log_debug "[$iface] HTTP check failed (ICMP OK, may be transient)"
-            # We still return success because ICMP worked
-        else
-            log_debug "[$iface] HTTP check: OK"
-        fi
+    # Ensure a route exists for testing (ping needs a route to work)
+    # Check if any default route exists via this interface
+    if ! ip route show default 2>/dev/null | grep -q "dev $iface"; then
+        # No default route via this interface - add temporary one for testing
+        log_debug "[$iface] Adding temporary route via $gateway for health check"
+        ip route add default via "$gateway" dev "$iface" metric 9999 2>/dev/null || true
+        temp_route_added=true
     fi
 
-    return 0
+    # IP SLA check: ping 1.1.1.1 via this interface
+    local ping_result=1
+    if ping -c 2 -W 3 -I "$iface" "$HEALTH_CHECK_TARGET" >/dev/null 2>&1; then
+        log_debug "[$iface] UP - ping $HEALTH_CHECK_TARGET OK"
+        ping_result=0
+    elif ping -c 2 -W 3 -I "$iface_ip" "$HEALTH_CHECK_TARGET" >/dev/null 2>&1; then
+        log_debug "[$iface] UP - ping $HEALTH_CHECK_TARGET OK (via source IP)"
+        ping_result=0
+    else
+        log_debug "[$iface] DOWN - ping $HEALTH_CHECK_TARGET FAILED"
+    fi
+
+    # Remove temporary route if we added one
+    if [ "$temp_route_added" = "true" ]; then
+        ip route del default via "$gateway" dev "$iface" metric 9999 2>/dev/null || true
+    fi
+
+    return $ping_result
 }
 
 check_interface_quick() {
-    # Quick health check - just ICMP, used for rapid polling
-    local iface="$1"
-    local iface_ip
-
-    # Must have IP
-    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
-    [ -z "$iface_ip" ] && return 1
-
-    # Quick ping with first target only
-    local first_target
-    first_target=$(echo "$PING_TARGETS" | awk '{print $1}')
-    ping -c 1 -W 2 -I "$iface_ip" -q "$first_target" >/dev/null 2>&1
+    # Same as check_interface_health - just ping 1.1.1.1
+    check_interface_health "$1"
 }
 
 # ============================================================
