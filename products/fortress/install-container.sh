@@ -2094,7 +2094,8 @@ Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-post-setup.sh setup
+# Run OVS post-setup (brings up VLANs, OpenFlow rules, port VLANs, container veth)
+ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
 
 [Install]
 WantedBy=multi-user.target
@@ -2883,14 +2884,31 @@ OVSEOF
     local podman_compose_bin
     podman_compose_bin=$(command -v podman-compose || echo "/usr/bin/podman-compose")
 
+    # Determine if VLAN mode is enabled
+    local is_vlan_mode="false"
+    if [ "${NETWORK_MODE:-}" = "vlan" ] || [ -f "/etc/systemd/system/fortress-vlan.service" ]; then
+        is_vlan_mode="true"
+    fi
+
+    # Build After/Requires lines based on network mode
+    local after_deps="network-online.target openvswitch-switch.service podman.socket podman.service"
+    local requires_deps="podman.socket openvswitch-switch.service"
+    local wants_deps="network-online.target"
+
+    if [ "$is_vlan_mode" = "true" ]; then
+        # VLAN mode: Wait for fortress-vlan.service which sets up VLAN interfaces
+        after_deps="$after_deps fortress-vlan.service"
+        wants_deps="$wants_deps fortress-vlan.service"
+    fi
+
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]
 Description=HookProbe Fortress Security Gateway
-# Wait for network, OVS, and container runtime
-After=network-online.target openvswitch-switch.service podman.socket podman.service
-Wants=network-online.target
+# Wait for network, OVS, VLAN setup (if enabled), and container runtime
+After=${after_deps}
+Wants=${wants_deps}
 # Require both podman and OVS to be running
-Requires=podman.socket openvswitch-switch.service
+Requires=${requires_deps}
 # Prevent rapid restarts on repeated failures
 StartLimitIntervalSec=300
 StartLimitBurst=3
@@ -2903,11 +2921,27 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/r
 Environment=OVS_BRIDGE=FTS
 Environment=LAN_BASE_IP=10.200.0.1
 Environment=LAN_SUBNET_MASK=${LAN_SUBNET_MASK:-24}
+# Load persisted config for NETWORK_MODE (sourced from fortress.conf)
+EnvironmentFile=-/etc/hookprobe/fortress.conf
 
-# Wait for OVS to be fully ready and configure bridge IP BEFORE starting containers
+# Wait for OVS to be fully ready
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+
+# Ensure bridge is UP
 ExecStartPre=/bin/bash -c 'ip link set FTS up 2>/dev/null || true'
-ExecStartPre=/bin/bash -c 'ip addr show FTS | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/${LAN_SUBNET_MASK:-24} dev FTS 2>/dev/null || true'
+
+# CRITICAL: Ensure VLAN interfaces are UP with IPs (handles both filter and VLAN modes)
+# In filter mode: IP is on FTS bridge directly
+# In VLAN mode: IPs are on vlan100 (LAN) and vlan200 (MGMT)
+ExecStartPre=/bin/bash -c '\\
+  if [ "\${NETWORK_MODE}" = "vlan" ]; then \\
+    # VLAN mode - ensure vlan200 has IP for dashboard access \\
+    /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || \\
+      (ip link set vlan200 up 2>/dev/null; ip addr add 10.200.100.1/30 dev vlan200 2>/dev/null || true); \\
+  else \\
+    # Filter mode - IP on bridge directly \\
+    ip addr show FTS | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/\${LAN_SUBNET_MASK:-24} dev FTS 2>/dev/null || true; \\
+  fi'
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
