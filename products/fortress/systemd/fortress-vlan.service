@@ -41,8 +41,8 @@ RemainAfterExit=yes
 # No sleep needed - systemd-networkd handles timing via netlink events
 # The script waits for bridge to exist (max 15s) if needed
 
-# Run OVS post-setup (OpenFlow rules, port VLANs, container veth)
-ExecStart=/opt/hookprobe/products/fortress/devices/common/ovs-post-setup.sh setup
+# Run OVS post-setup (brings up VLANs, OpenFlow rules, port VLANs, container veth)
+ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
 
 # On stop, don't cleanup (keep config for debugging)
 # Use 'systemctl restart fortress-vlan' to reapply
