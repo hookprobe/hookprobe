@@ -163,11 +163,19 @@ load_config() {
 
 get_gateway() {
     # Discover gateway for an interface using multiple methods
-    # Priority: nmcli > ip route > DHCP lease > ARP scan
+    # Priority: existing routes > nmcli > ModemManager > DHCP lease > probe
     local iface="$1"
     local gw
 
-    # Method 1: NetworkManager (most reliable when available)
+    # Method 1: Check existing default routes for this interface (MOST RELIABLE)
+    # This catches routes added by DHCP, ModemManager, or other tools
+    gw=$(ip route show default 2>/dev/null | grep "dev $iface" | awk '{print $3}' | head -1)
+    if [ -n "$gw" ] && [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$gw"
+        return 0
+    fi
+
+    # Method 2: NetworkManager
     if command -v nmcli &>/dev/null; then
         gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2 | grep -v '^$' | head -1)
         if [ -n "$gw" ] && [ "$gw" != "--" ]; then
@@ -176,14 +184,35 @@ get_gateway() {
         fi
     fi
 
-    # Method 2: ip route (works for static routes and some DHCP setups)
+    # Method 3: ip route show dev (for directly attached routes)
     gw=$(ip route show dev "$iface" 2>/dev/null | grep -E '^default|^0\.0\.0\.0' | awk '{print $3}' | head -1)
     if [ -n "$gw" ]; then
         echo "$gw"
         return 0
     fi
 
-    # Method 3: Check routing table for the interface's network
+    # Method 4: For LTE/WWAN interfaces, check ModemManager FIRST (works even without routes)
+    case "$iface" in
+        wwan*|usb*|wwp*|cdc*|mbim*|qmi*|ww*|enp*s*u*)
+            if command -v mmcli &>/dev/null; then
+                local modem_idx
+                modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+                if [ -n "$modem_idx" ]; then
+                    local bearer_idx
+                    bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
+                    if [ -n "$bearer_idx" ]; then
+                        gw=$(mmcli -b "$bearer_idx" 2>/dev/null | grep -oP 'gateway:\s*\K[\d.]+')
+                        if [ -n "$gw" ]; then
+                            echo "$gw"
+                            return 0
+                        fi
+                    fi
+                fi
+            fi
+            ;;
+    esac
+
+    # Method 5: Check routing table for the interface's network
     local iface_ip
     iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
     if [ -n "$iface_ip" ]; then
@@ -203,32 +232,16 @@ get_gateway() {
         fi
     fi
 
-    # Method 4: DHCP lease file (NetworkManager)
+    # Method 6: DHCP lease file (NetworkManager)
     if [ -f "/var/lib/NetworkManager/dhclient-$iface.lease" ]; then
         gw=$(grep 'option routers' "/var/lib/NetworkManager/dhclient-$iface.lease" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';')
         [ -n "$gw" ] && echo "$gw" && return 0
     fi
 
-    # Method 5: DHCP lease file (dhclient)
+    # Method 7: DHCP lease file (dhclient)
     if [ -f "/var/lib/dhcp/dhclient.$iface.leases" ]; then
         gw=$(grep 'option routers' "/var/lib/dhcp/dhclient.$iface.leases" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';')
         [ -n "$gw" ] && echo "$gw" && return 0
-    fi
-
-    # Method 6: For WWAN/LTE interfaces, check ModemManager
-    if [[ "$iface" =~ ^wwan|^wwp ]]; then
-        if command -v mmcli &>/dev/null; then
-            local modem_idx
-            modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
-            if [ -n "$modem_idx" ]; then
-                local bearer_idx
-                bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
-                if [ -n "$bearer_idx" ]; then
-                    gw=$(mmcli -b "$bearer_idx" 2>/dev/null | grep -oP 'gateway:\s*\K[\d.]+')
-                    [ -n "$gw" ] && echo "$gw" && return 0
-                fi
-            fi
-        fi
     fi
 
     return 1
@@ -872,6 +885,30 @@ set_active_wan() {
             return 1
             ;;
     esac
+
+    # Ensure nftables table exists before trying to update chains
+    # This handles the case where setup_nftables hasn't run or failed
+    if ! nft list table inet fts_wan_failover &>/dev/null; then
+        log_warn "nftables table fts_wan_failover missing, creating..."
+        nft -f - << 'NFTCREATE'
+table inet fts_wan_failover {
+    chain prerouting {
+        type filter hook prerouting priority mangle - 1; policy accept;
+        ct mark != 0 meta mark set ct mark
+    }
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+    }
+    chain output {
+        type route hook output priority mangle; policy accept;
+    }
+    chain postrouting {
+        type filter hook postrouting priority mangle; policy accept;
+        meta mark != 0 ct mark set meta mark
+    }
+}
+NFTCREATE
+    fi
 
     # Update nftables to mark new connections
     # We update BOTH the output chain (host traffic) and forward chain (LAN/container traffic)
@@ -1842,6 +1879,10 @@ do_health_check() {
 
 cmd_setup() {
     log_info "Setting up PBR WAN failover..."
+
+    # Create runtime directory first (needed for state and PID files)
+    mkdir -p /run/fortress
+    chmod 755 /run/fortress
 
     load_config || exit 1
 
