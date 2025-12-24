@@ -27,10 +27,18 @@ set -e
 # ============================================================
 
 STATE_DIR="/var/lib/fortress"
+CONFIG_DIR="/etc/hookprobe"
 NETPLAN_STATE="$STATE_DIR/netplan-config.conf"
 VLAN_STATE="$STATE_DIR/vlan-config.conf"
+FORTRESS_CONF="$CONFIG_DIR/fortress.conf"
 
-# Load configuration from netplan state or defaults
+# Load configuration from fortress.conf (primary source after install)
+if [ -f "$FORTRESS_CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$FORTRESS_CONF"
+fi
+
+# Load configuration from netplan state (may have additional details)
 if [ -f "$NETPLAN_STATE" ]; then
     # shellcheck source=/dev/null
     source "$NETPLAN_STATE"
@@ -42,11 +50,19 @@ if [ -f "$VLAN_STATE" ] && [ -z "${LAN_MASK:-}" ]; then
     source "$VLAN_STATE"
 fi
 
+# Map LAN_SUBNET_MASK to LAN_MASK for compatibility
+# (fortress.conf uses LAN_SUBNET_MASK, netplan-config.conf uses LAN_MASK)
+if [ -n "${LAN_SUBNET_MASK:-}" ] && [ -z "${LAN_MASK:-}" ]; then
+    LAN_MASK="$LAN_SUBNET_MASK"
+fi
+
 # Defaults
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 VLAN_LAN="${VLAN_LAN:-100}"
 VLAN_MGMT="${VLAN_MGMT:-200}"
+GATEWAY_LAN="${GATEWAY_LAN:-10.200.0.1}"
 GATEWAY_MGMT="${GATEWAY_MGMT:-10.200.100.1}"
+LAN_MASK="${LAN_MASK:-24}"
 
 # Container network
 CONTAINER_SUBNET="${CONTAINER_SUBNET:-172.20.200.0/24}"
