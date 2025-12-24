@@ -130,6 +130,11 @@ parse_args() {
                 echo "  • fts-victoria-data    - Metrics history"
                 echo "  • fts-*-data           - All other data volumes"
                 echo ""
+                echo "Always preserved (unless --purge):"
+                echo "  • /var/lib/hookprobe/userdata/dnsxai/"
+                echo "    - whitelist.txt      - User's DNS whitelist"
+                echo "    - config.json        - dnsXai configuration"
+                echo ""
                 exit 0
                 ;;
             *) shift ;;
@@ -880,6 +885,12 @@ remove_configuration() {
         rm -rf "$CONFIG_DIR/dnsxai"
     fi
 
+    # Remove dnsXai logrotate configuration
+    if [ -f /etc/logrotate.d/hookprobe-dnsxai ]; then
+        log_info "Removing dnsXai log rotation configuration..."
+        rm -f /etc/logrotate.d/hookprobe-dnsxai
+    fi
+
     # Remove users.json
     rm -f "$CONFIG_DIR/users.json" 2>/dev/null || true
 
@@ -1031,6 +1042,21 @@ remove_installation() {
         # Remove ML training logs
         rm -f /var/log/hookprobe/ml-aggregator.log 2>/dev/null || true
         rm -f /var/log/hookprobe/lstm-training.log 2>/dev/null || true
+    fi
+
+    # User data directory (whitelist, configs) - ONLY removed with --purge
+    # This allows reinstallation to preserve user's whitelist and blocked traffic logs
+    if [ "$PURGE_MODE" = true ]; then
+        if [ -d "/var/lib/hookprobe/userdata" ]; then
+            log_info "Removing user data (--purge mode)..."
+            rm -rf /var/lib/hookprobe/userdata
+        fi
+    else
+        if [ -d "/var/lib/hookprobe/userdata" ]; then
+            log_info "Preserving user data: /var/lib/hookprobe/userdata/"
+            log_info "  (contains dnsXai whitelist, blocked traffic logs)"
+            log_info "  Use --purge to remove this data"
+        fi
     fi
 
     # Clean up parent directories if empty
@@ -1265,6 +1291,7 @@ main() {
         echo -e "  • All udev rules"
         echo -e "  • All sysctl settings"
         echo -e "  • All systemd services"
+        echo -e "  ${RED}• User data (dnsXai whitelist, blocked traffic logs)${NC}"
         echo ""
     fi
 

@@ -187,11 +187,16 @@ services:
       DNSXAI_PROTECTION_LEVEL: 3
       # Path must match Containerfile: /opt/hookprobe/shared/dnsXai/data
       DNSXAI_DATA_DIR: /opt/hookprobe/shared/dnsXai/data
+      # User data directory for persistent whitelist (survives reinstall)
+      DNSXAI_USERDATA_DIR: /opt/hookprobe/shared/dnsXai/userdata
       LOG_DIR: /var/log/hookprobe
     volumes:
       # Mount over shared path to persist data while keeping bundled whitelist
       - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
       - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
+      # PERSISTENT USER DATA - survives uninstall/reinstall (whitelist, config)
+      # This bind-mount takes precedence over container defaults
+      - /var/lib/hookprobe/userdata/dnsxai:/opt/hookprobe/shared/dnsXai/userdata
       # Bind mount logs to host for ML training data visibility
       - /var/log/hookprobe:/var/log/hookprobe
       - /etc/hookprobe:/etc/hookprobe:ro

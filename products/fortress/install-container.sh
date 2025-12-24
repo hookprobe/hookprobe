@@ -749,15 +749,23 @@ create_directories() {
     mkdir -p "$CONFIG_DIR/secrets"
     mkdir -p "$LOG_DIR"
 
+    # Persistent user data directory (survives reinstalls)
+    # Stores: dnsXai whitelist, user configs, blocked traffic logs
+    mkdir -p /var/lib/hookprobe/userdata/dnsxai
+
     chmod 755 "$INSTALL_DIR" "$CONFIG_DIR"
     chmod 700 "$INSTALL_DIR/containers/secrets"
     chmod 750 "$CONFIG_DIR/secrets"  # Group-readable for fortress user
     chmod 755 "$LOG_DIR"
+    chmod 755 /var/lib/hookprobe/userdata
+    chmod 755 /var/lib/hookprobe/userdata/dnsxai
 
     # Set group ownership so container (fortress user) can read config files
     chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
+    chgrp -R fortress /var/lib/hookprobe/userdata 2>/dev/null || true
 
     log_info "Directories created"
+    log_info "  User data: /var/lib/hookprobe/userdata/ (persistent across reinstalls)"
 }
 
 copy_application_files() {
@@ -798,6 +806,13 @@ EOF
 
     # Ensure all shell scripts are executable (git may not preserve executable bit)
     find "${INSTALL_DIR}/devices" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+
+    # Install log rotation configuration (30-day retention for dnsXai logs)
+    if [ -f "${CONTAINERS_DIR}/logrotate-dnsxai.conf" ]; then
+        cp "${CONTAINERS_DIR}/logrotate-dnsxai.conf" /etc/logrotate.d/hookprobe-dnsxai
+        chmod 644 /etc/logrotate.d/hookprobe-dnsxai
+        log_info "Log rotation configured (30-day retention for dnsXai logs)"
+    fi
 
     log_info "Application files copied to ${INSTALL_DIR}"
 }
