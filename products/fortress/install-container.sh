@@ -975,6 +975,13 @@ FORTRESS_VERSION=5.4.0
 # Network mode (vlan or filter)
 NETWORK_MODE=${NETWORK_MODE}
 
+# LAN Network Configuration
+LAN_SUBNET_MASK=${LAN_SUBNET_MASK:-24}
+LAN_DHCP_START=${LAN_DHCP_START:-10.200.0.100}
+LAN_DHCP_END=${LAN_DHCP_END:-10.200.0.200}
+GATEWAY_LAN=10.200.0.1
+GATEWAY_MGMT=10.200.100.1
+
 # Database (handled by container)
 DATABASE_HOST=fts-postgres
 DATABASE_PORT=5432
@@ -1145,6 +1152,9 @@ setup_network() {
                     log_success "VLAN network configured via netplan"
                     log_info "  VLAN 100 (LAN):  10.200.0.0/$LAN_MASK - WiFi clients, LAN devices"
                     log_info "  VLAN 200 (MGMT): 10.200.100.0/30 - Management access"
+
+                    # Configure DHCP on VLAN interfaces (NOT the FTS bridge)
+                    setup_vlan_dhcp
 
                     # Install services for boot persistence
                     install_vlan_service
@@ -1885,6 +1895,122 @@ EOF
     }
 
     log_info "DHCP configured on $lan_port"
+}
+
+# Setup DHCP for VLAN mode - listens on vlan100, NOT FTS bridge
+# This is critical: in VLAN mode, FTS bridge should NOT have an IP
+setup_vlan_dhcp() {
+    log_info "Configuring DHCP for VLAN mode..."
+
+    # In VLAN mode, dnsmasq listens on vlan100 (LAN VLAN), NOT the FTS bridge
+    local lan_interface="vlan100"
+    local config_file="/etc/dnsmasq.d/fts-vlan.conf"
+
+    # Use saved configuration values
+    local dhcp_start="${LAN_DHCP_START:-10.200.0.100}"
+    local dhcp_end="${LAN_DHCP_END:-10.200.0.200}"
+    local subnet_mask="${LAN_SUBNET_MASK:-24}"
+    local gateway_lan="${GATEWAY_LAN:-10.200.0.1}"
+
+    # Recalculate DHCP range if using defaults and subnet is not /24
+    if [ "$subnet_mask" != "24" ] && [ "$dhcp_start" = "10.200.0.100" ]; then
+        case "$subnet_mask" in
+            29) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.6" ;;
+            28) dhcp_start="10.200.0.2"; dhcp_end="10.200.0.14" ;;
+            27) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.30" ;;
+            26) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.62" ;;
+            25) dhcp_start="10.200.0.10"; dhcp_end="10.200.0.126" ;;
+            *)  dhcp_start="10.200.0.100"; dhcp_end="10.200.1.200" ;;
+        esac
+        log_info "DHCP range recalculated for /${subnet_mask}: ${dhcp_start} - ${dhcp_end}"
+    fi
+
+    mkdir -p "$(dirname "$config_file")"
+
+    # Remove old FTS-based config if exists (from previous filter mode install)
+    rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
+
+    cat > "$config_file" << EOF
+# HookProbe Fortress DHCP Configuration (VLAN Mode)
+# Generated: $(date -Iseconds)
+# LAN Subnet: 10.200.0.0/${subnet_mask}
+#
+# IMPORTANT: In VLAN mode, dnsmasq listens on vlan100, NOT the FTS bridge
+# FTS bridge is a Layer 2 switch only - no IP address
+
+# Bind to VLAN 100 (LAN) interface
+interface=${lan_interface}
+
+# Use bind-dynamic to wait for interface to appear (critical for boot order)
+bind-dynamic
+
+# Don't read /etc/resolv.conf - use our explicit servers
+no-resolv
+no-poll
+
+# LAN DHCP range on VLAN 100 (configured subnet: /${subnet_mask})
+dhcp-range=${dhcp_start},${dhcp_end},12h
+
+# Gateway (VLAN 100 interface IP)
+dhcp-option=3,${gateway_lan}
+
+# DNS (clients query dnsmasq on gateway, which forwards to dnsXai or upstream)
+dhcp-option=6,${gateway_lan}
+
+# Domain
+domain=fortress.local
+local=/fortress.local/
+
+# Logging
+log-dhcp
+log-queries
+
+# Cache
+cache-size=1000
+
+# Forward DNS to dnsXai container (published on host port 5353)
+server=127.0.0.1#5353
+
+# Fallback upstream DNS servers (used if dnsXai is unreachable)
+server=1.1.1.1
+server=8.8.8.8
+EOF
+
+    chmod 644 "$config_file"
+
+    # Create systemd drop-in to make dnsmasq wait for OVS and VLANs
+    setup_dnsmasq_vlan_dependency
+
+    # Restart dnsmasq
+    systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null || {
+        log_warn "dnsmasq service not available"
+    }
+
+    log_info "DHCP configured on ${lan_interface} (VLAN mode)"
+}
+
+# Create systemd drop-in for VLAN mode dnsmasq
+setup_dnsmasq_vlan_dependency() {
+    local dropin_dir="/etc/systemd/system/dnsmasq.service.d"
+    mkdir -p "$dropin_dir"
+
+    cat > "${dropin_dir}/fortress-vlan.conf" << 'EOF'
+# HookProbe Fortress - Make dnsmasq wait for VLAN interfaces
+[Unit]
+# Wait for OVS and VLAN setup to be ready before starting dnsmasq
+After=openvswitch-switch.service fortress-vlan.service
+Wants=openvswitch-switch.service fortress-vlan.service
+
+# Also wait for network to be online
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Wait a bit for VLAN interfaces to get IP addresses
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1" && exit 0; sleep 1; done; echo "Warning: vlan100 not ready"'
+EOF
+
+    systemctl daemon-reload
 }
 
 # Create systemd drop-in to make dnsmasq wait for OVS bridge
@@ -2826,8 +2952,10 @@ fi
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
+# NETWORK_MODE is loaded from EnvironmentFile=/etc/hookprobe/fortress.conf
+NETWORK_MODE="${NETWORK_MODE:-filter}"
 
-log_info "Ensuring OVS bridge $OVS_BRIDGE is ready..."
+log_info "Ensuring OVS bridge $OVS_BRIDGE is ready (mode: $NETWORK_MODE)..."
 
 # Check if bridge exists
 if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
@@ -2842,10 +2970,24 @@ if ! ip link show "$OVS_BRIDGE" 2>/dev/null | grep -q "state UP"; then
     ip link set "$OVS_BRIDGE" up || log_warn "Failed to bring bridge UP"
 fi
 
-# Ensure gateway IP is assigned
-if ! ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_BASE_IP}/"; then
-    log_info "Assigning gateway IP ${LAN_BASE_IP}/${LAN_SUBNET_MASK}..."
-    ip addr add "${LAN_BASE_IP}/${LAN_SUBNET_MASK}" dev "$OVS_BRIDGE" 2>/dev/null || log_warn "IP already assigned or failed"
+# IP assignment depends on network mode:
+# - Filter mode: IP on FTS bridge directly
+# - VLAN mode: IP on vlan100/vlan200 (handled by ovs-post-setup.sh)
+if [ "$NETWORK_MODE" = "vlan" ]; then
+    log_info "VLAN mode: IPs are on vlan100/vlan200, not FTS bridge"
+    # Ensure VLAN interfaces are ready (fortress-vlan.service should have done this)
+    if ! ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1/"; then
+        log_warn "vlan100 not ready - running ovs-post-setup bring-up-vlans"
+        /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || {
+            log_warn "Failed to bring up VLAN interfaces"
+        }
+    fi
+else
+    # Filter mode: Ensure gateway IP is assigned to FTS bridge
+    if ! ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_BASE_IP}/"; then
+        log_info "Assigning gateway IP ${LAN_BASE_IP}/${LAN_SUBNET_MASK} to $OVS_BRIDGE..."
+        ip addr add "${LAN_BASE_IP}/${LAN_SUBNET_MASK}" dev "$OVS_BRIDGE" 2>/dev/null || log_warn "IP already assigned or failed"
+    fi
 fi
 
 # Reinstall OpenFlow rules (they are not persisted across OVS restart)
