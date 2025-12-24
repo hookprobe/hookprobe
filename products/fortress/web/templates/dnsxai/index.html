@@ -6,25 +6,25 @@
 <div class="row">
     <!-- Protection Status Card -->
     <div class="col-lg-4 col-md-6">
-        <div class="card card-success card-outline">
+        <div class="card card-success card-outline h-100">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-shield-alt"></i> Protection Status</h3>
             </div>
-            <div class="card-body text-center">
+            <div class="card-body text-center d-flex flex-column justify-content-center">
                 <div id="protection-status-icon" class="mb-3">
-                    <i class="fas fa-shield-alt fa-4x text-success"></i>
+                    <i class="fas fa-shield-alt fa-5x text-success"></i>
                 </div>
-                <h4 id="protection-status-text" class="text-success">Active</h4>
+                <h3 id="protection-status-text" class="text-success mb-0">Active</h3>
                 <p class="text-muted" id="pause-timer" style="display: none;">
                     Resuming in: <span id="pause-countdown">--:--</span>
                 </p>
             </div>
             <div class="card-footer">
                 <div class="btn-group w-100" role="group">
-                    <button class="btn btn-sm btn-warning" onclick="pauseProtection(5)" title="Pause 5 min">5m</button>
-                    <button class="btn btn-sm btn-warning" onclick="pauseProtection(15)" title="Pause 15 min">15m</button>
-                    <button class="btn btn-sm btn-warning" onclick="pauseProtection(30)" title="Pause 30 min">30m</button>
-                    <button class="btn btn-sm btn-danger" id="killswitch-btn" onclick="toggleProtection()">DISABLE</button>
+                    <button class="btn btn-warning" onclick="pauseProtection(5)" title="Pause 5 min">5m</button>
+                    <button class="btn btn-warning" onclick="pauseProtection(15)" title="Pause 15 min">15m</button>
+                    <button class="btn btn-warning" onclick="pauseProtection(30)" title="Pause 30 min">30m</button>
+                    <button class="btn btn-danger" id="killswitch-btn" onclick="toggleProtection()">DISABLE</button>
                 </div>
             </div>
         </div>
@@ -32,7 +32,7 @@
 
     <!-- Statistics Card -->
     <div class="col-lg-4 col-md-6">
-        <div class="card card-info card-outline">
+        <div class="card card-info card-outline h-100">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-chart-bar"></i> Statistics</h3>
                 <div class="card-tools">
@@ -40,16 +40,21 @@
                 </div>
             </div>
             <div class="card-body p-0">
-                <table class="table table-sm">
-                    <tr><td>Total Queries</td><td class="text-right" id="stat-queries">0</td></tr>
+                <table class="table table-sm mb-0">
+                    <tr><td>Total Queries</td><td class="text-right font-weight-bold" id="stat-queries">0</td></tr>
                     <tr>
                         <td>Blocked</td>
                         <td class="text-right">
-                            <a href="#" class="text-danger font-weight-bold" onclick="showBlockedModal(); return false;"
-                               id="stat-blocked" title="Click to view blocked domains">0</a>
+                            <button class="btn btn-danger btn-sm px-3 font-weight-bold"
+                                    onclick="showBlockedModal()"
+                                    id="stat-blocked-btn"
+                                    title="Click to view blocked domains"
+                                    style="min-width: 80px;">
+                                <span id="stat-blocked">0</span>
+                            </button>
                         </td>
                     </tr>
-                    <tr><td>Allowed</td><td class="text-right text-success" id="stat-allowed">0</td></tr>
+                    <tr><td>Allowed</td><td class="text-right font-weight-bold text-success" id="stat-allowed">0</td></tr>
                     <tr><td>Block Rate</td><td class="text-right" id="stat-rate">0%</td></tr>
                     <tr><td>Blocklist Size</td><td class="text-right" id="stat-blocklist">0</td></tr>
                 </table>
@@ -414,25 +419,25 @@ function updateProtectionStatus(status) {
     const timer = document.getElementById('pause-timer');
 
     if (status === 'active') {
-        icon.innerHTML = '<i class="fas fa-shield-alt fa-4x text-success"></i>';
+        icon.innerHTML = '<i class="fas fa-shield-alt fa-5x text-success"></i>';
         text.textContent = 'Active';
-        text.className = 'text-success';
+        text.className = 'h3 text-success mb-0';
         btn.textContent = 'DISABLE';
-        btn.className = 'btn btn-sm btn-danger';
+        btn.className = 'btn btn-danger';
         timer.style.display = 'none';
     } else if (status === 'paused') {
-        icon.innerHTML = '<i class="fas fa-pause-circle fa-4x text-warning"></i>';
+        icon.innerHTML = '<i class="fas fa-pause-circle fa-5x text-warning"></i>';
         text.textContent = 'Paused';
-        text.className = 'text-warning';
+        text.className = 'h3 text-warning mb-0';
         btn.textContent = 'RESUME';
-        btn.className = 'btn btn-sm btn-success';
+        btn.className = 'btn btn-success';
         timer.style.display = 'block';
     } else {
-        icon.innerHTML = '<i class="fas fa-times-circle fa-4x text-danger"></i>';
+        icon.innerHTML = '<i class="fas fa-times-circle fa-5x text-danger"></i>';
         text.textContent = 'Disabled';
-        text.className = 'text-danger';
+        text.className = 'h3 text-danger mb-0';
         btn.textContent = 'ENABLE';
-        btn.className = 'btn btn-sm btn-success';
+        btn.className = 'btn btn-success';
         timer.style.display = 'none';
     }
 }
