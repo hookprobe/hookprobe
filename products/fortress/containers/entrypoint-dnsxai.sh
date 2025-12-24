@@ -63,6 +63,22 @@ fi
 # Export userdata dir for API server to use when saving whitelist changes
 export DNSXAI_USERDATA_DIR="$USERDATA_DIR"
 
+# ============================================================
+# BLOCKLIST INITIALIZATION
+# ============================================================
+# Download blocklists on first run if they don't exist
+BLOCKLIST_FILE="$DATA_DIR/blocklist.txt"
+if [ ! -f "$BLOCKLIST_FILE" ] || [ ! -s "$BLOCKLIST_FILE" ]; then
+    echo "[dnsXai] Blocklist not found, downloading on first run..."
+    # Run engine with --update-blocklist flag to download blocklists
+    timeout 120 python engine.py --update-blocklist --data-dir "$DATA_DIR" 2>&1 || {
+        echo "[dnsXai] Warning: Blocklist download timed out or failed, will retry on next startup"
+    }
+    if [ -s "$BLOCKLIST_FILE" ]; then
+        echo "[dnsXai] Blocklist downloaded: $(wc -l < "$BLOCKLIST_FILE") domains"
+    fi
+fi
+
 echo "[dnsXai] Starting services..."
 echo "[dnsXai] - DNS server on port 5353/udp"
 echo "[dnsXai] - HTTP API on port 8080/tcp"
