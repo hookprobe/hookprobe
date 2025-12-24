@@ -102,6 +102,15 @@ OF_TABLE_OUTPUT=40
 
 # State directory
 STATE_DIR="/var/lib/fortress/ovs"
+
+# Load NETWORK_MODE from fortress.conf if available
+# This determines if we're in VLAN mode (IPs on vlan100/vlan200) or filter mode (IP on FTS)
+FORTRESS_CONF="/etc/hookprobe/fortress.conf"
+if [ -f "$FORTRESS_CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$FORTRESS_CONF" 2>/dev/null || true
+fi
+NETWORK_MODE="${NETWORK_MODE:-filter}"
 VXLAN_PSK_FILE="/etc/hookprobe/secrets/vxlan_psk"
 
 # Colors
@@ -896,11 +905,22 @@ init_ovs_network_podman() {
     echo "MODE=podman" >> "$STATE_DIR/state"
 }
 
-# Setup LAN gateway IP on OVS bridge
-# This allows WiFi/LAN clients to reach the gateway for DHCP and internet access
+# Setup LAN gateway IP on OVS bridge (FILTER MODE ONLY)
+# In VLAN mode, IPs are assigned to vlan100/vlan200 by ovs-post-setup.sh
+# In filter mode, IP is assigned directly to the FTS bridge
 setup_lan_gateway() {
     log_section "Setting Up LAN Gateway"
 
+    # In VLAN mode, skip IP assignment to FTS bridge
+    # IPs are on vlan100 (LAN) and vlan200 (MGMT), not FTS
+    if [ "$NETWORK_MODE" = "vlan" ]; then
+        log_info "VLAN mode: Skipping FTS bridge IP (IPs are on vlan100/vlan200)"
+        # Just ensure bridge is up
+        ip link set "$OVS_BRIDGE" up 2>/dev/null || true
+        return 0
+    fi
+
+    # Filter mode: Assign gateway IP to OVS bridge
     local gateway_ip="${LAN_BASE_IP}/${LAN_SUBNET_MASK}"
 
     # Check if IP already assigned
