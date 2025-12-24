@@ -209,6 +209,53 @@ get_gateway() {
                     fi
                 fi
             fi
+
+            # Fallback for LTE: Calculate gateway from point-to-point /30 or /31 network
+            # LTE carriers often use /30 subnets where the other IP is the gateway
+            local lte_info
+            lte_info=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d./]+')
+            if [ -n "$lte_info" ]; then
+                local lte_ip lte_mask
+                lte_ip=$(echo "$lte_info" | cut -d/ -f1)
+                lte_mask=$(echo "$lte_info" | cut -d/ -f2)
+
+                # For /30 subnet: calculate the other usable IP
+                if [ "$lte_mask" = "30" ]; then
+                    local last_octet base_ip other_ip
+                    last_octet=$(echo "$lte_ip" | awk -F. '{print $4}')
+                    base_ip=$(echo "$lte_ip" | awk -F. '{print $1"."$2"."$3"."}')
+
+                    # In a /30, usable IPs are .1/.2 or .5/.6 etc (offset 1 and 2 in each block of 4)
+                    local block_start=$((last_octet / 4 * 4))
+                    local offset=$((last_octet - block_start))
+
+                    # The other usable IP
+                    if [ $offset -eq 1 ]; then
+                        other_ip="${base_ip}$((block_start + 2))"
+                    elif [ $offset -eq 2 ]; then
+                        other_ip="${base_ip}$((block_start + 1))"
+                    fi
+
+                    if [ -n "$other_ip" ]; then
+                        echo "$other_ip"
+                        return 0
+                    fi
+                fi
+
+                # For /31 point-to-point (RFC 3021): the other IP is gateway
+                if [ "$lte_mask" = "31" ]; then
+                    local last_octet base_ip
+                    last_octet=$(echo "$lte_ip" | awk -F. '{print $4}')
+                    base_ip=$(echo "$lte_ip" | awk -F. '{print $1"."$2"."$3"."}')
+
+                    if [ $((last_octet % 2)) -eq 0 ]; then
+                        echo "${base_ip}$((last_octet + 1))"
+                    else
+                        echo "${base_ip}$((last_octet - 1))"
+                    fi
+                    return 0
+                fi
+            fi
             ;;
     esac
 
