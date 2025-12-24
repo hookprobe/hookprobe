@@ -63,11 +63,19 @@ FWMARK_PRIMARY=0x100
 FWMARK_BACKUP=0x200
 FWMARK_MASK=0xf00
 
+# FIXED route metrics - these NEVER change
+# Kernel uses lowest metric that exists in routing table
+# When interface fails, we REMOVE route; when it recovers, we ADD route back
+METRIC_PRIMARY=10    # WAN1 - always metric 10
+METRIC_BACKUP=20     # WAN2 - always metric 20
+METRIC_TERTIARY=30   # WAN3 - always metric 30 (future)
+METRIC_QUATERNARY=40 # WAN4 - always metric 40 (future)
+
 # Reserved for multi-WAN expansion (3-4 WANs)
-# TABLE_TERTIARY=300       # Third WAN table
-# TABLE_QUATERNARY=400     # Fourth WAN table
-# FWMARK_TERTIARY=0x300    # Third WAN mark
-# FWMARK_QUATERNARY=0x400  # Fourth WAN mark
+# TABLE_TERTIARY=300
+# TABLE_QUATERNARY=400
+# FWMARK_TERTIARY=0x300
+# FWMARK_QUATERNARY=0x400
 
 # Default health check settings
 PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
@@ -576,118 +584,105 @@ setup_routing_tables() {
 }
 
 ensure_main_table_routes() {
-    # INCREMENTAL route management - only add/modify what's needed
-    # This prevents route flapping by NOT removing routes unnecessarily
+    # FIXED METRIC route check - ensure routes exist for healthy interfaces
+    # Each WAN has a FIXED metric:
+    #   - Primary: METRIC_PRIMARY (10)
+    #   - Backup:  METRIC_BACKUP (20)
     #
-    # Expected state:
-    #   - Active WAN:  metric 10 (preferred)
-    #   - Standby WAN: metric 100 (fallback)
-    #
-    # We check if routes exist with correct metrics before modifying
+    # Only ADD routes for healthy interfaces, only REMOVE for unhealthy.
+    # Let the kernel's metric-based routing do the failover automatically.
 
-    local active="${ACTIVE_WAN:-primary}"
-    local metric_active=10
-    local metric_standby=100
     local route_info
-    local changes_made=false
-
     route_info=$(ip route show default 2>/dev/null)
 
-    # Determine which gateway should be active/standby
-    local active_gw active_iface standby_gw standby_iface
-    if [ "$active" = "primary" ]; then
-        active_gw="${PRIMARY_GATEWAY:-}"
-        active_iface="${PRIMARY_IFACE:-}"
-        standby_gw="${BACKUP_GATEWAY:-}"
-        standby_iface="${BACKUP_IFACE:-}"
-    else
-        active_gw="${BACKUP_GATEWAY:-}"
-        active_iface="${BACKUP_IFACE:-}"
-        standby_gw="${PRIMARY_GATEWAY:-}"
-        standby_iface="${PRIMARY_IFACE:-}"
-    fi
+    # Primary WAN - check if route exists with correct metric
+    if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
+        local primary_route_ok=false
+        if echo "$route_info" | grep -q "via $PRIMARY_GATEWAY dev $PRIMARY_IFACE.*metric $METRIC_PRIMARY"; then
+            primary_route_ok=true
+        fi
 
-    # Check if active route exists with correct metric
-    if [ -n "$active_gw" ] && [ -n "$active_iface" ]; then
-        if ! echo "$route_info" | grep -q "via $active_gw dev $active_iface.*metric $metric_active"; then
-            # Active route missing or wrong metric - fix it
-            # First remove any existing route for this gateway (any metric)
-            ip route del default via "$active_gw" dev "$active_iface" 2>/dev/null || true
-            # Add with correct metric
-            if ip route add default via "$active_gw" dev "$active_iface" metric $metric_active 2>/dev/null; then
-                log_info "Added active route: via $active_gw metric $metric_active"
-                changes_made=true
+        if [ "${PRIMARY_STATUS:-unknown}" = "up" ]; then
+            # Should have route - add if missing
+            if [ "$primary_route_ok" = "false" ]; then
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                log_info "Added primary route: via $PRIMARY_GATEWAY metric $METRIC_PRIMARY"
+            fi
+        else
+            # Should NOT have route - remove if exists
+            if [ "$primary_route_ok" = "true" ]; then
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                log_info "Removed primary route (interface down)"
             fi
         fi
     fi
 
-    # Check if standby route exists with correct metric
-    if [ -n "$standby_gw" ] && [ -n "$standby_iface" ]; then
-        if ! echo "$route_info" | grep -q "via $standby_gw dev $standby_iface.*metric $metric_standby"; then
-            # Standby route missing or wrong metric - fix it
-            ip route del default via "$standby_gw" dev "$standby_iface" 2>/dev/null || true
-            if ip route add default via "$standby_gw" dev "$standby_iface" metric $metric_standby 2>/dev/null; then
-                log_info "Added standby route: via $standby_gw metric $metric_standby"
-                changes_made=true
+    # Backup WAN - check if route exists with correct metric
+    if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
+        local backup_route_ok=false
+        if echo "$route_info" | grep -q "via $BACKUP_GATEWAY dev $BACKUP_IFACE.*metric $METRIC_BACKUP"; then
+            backup_route_ok=true
+        fi
+
+        if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+            # Should have route - add if missing
+            if [ "$backup_route_ok" = "false" ]; then
+                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                log_info "Added backup route: via $BACKUP_GATEWAY metric $METRIC_BACKUP"
+            fi
+        else
+            # Should NOT have route - remove if exists
+            if [ "$backup_route_ok" = "true" ]; then
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                log_info "Removed backup route (interface down)"
             fi
         fi
-    fi
-
-    if [ "$changes_made" = "true" ]; then
-        log_debug "Routes after ensure: $(ip route show default 2>/dev/null | tr '\n' ' ')"
     fi
 }
 
 update_main_table_route() {
-    # Full route update - used during failover when active WAN changes
-    # This is more aggressive than ensure_main_table_routes() and swaps metrics
+    # FIXED METRIC route management
+    # Each WAN has a FIXED metric that NEVER changes:
+    #   - Primary (WAN1): metric 10
+    #   - Backup (WAN2):  metric 20
+    #   - Tertiary:       metric 30 (future)
+    #   - Quaternary:     metric 40 (future)
     #
-    # Called when:
-    #   - ACTIVE_WAN changes (failover/failback)
-    #   - Manual failover command
-    #   - Initial setup
+    # Routes are ADDED when interface is healthy, REMOVED when unhealthy.
+    # Kernel automatically uses the lowest-metric route that exists.
+    # NO metric swapping, NO "active/standby" logic here.
 
-    local active="${ACTIVE_WAN:-primary}"
-    local metric_active=10
-    local metric_standby=100
+    log_info "Updating main table routes (fixed metrics)..."
 
-    log_info "Updating main table routes for active=$active..."
-
-    # Determine which gateway should be active/standby
-    local active_gw active_iface standby_gw standby_iface
-    if [ "$active" = "primary" ]; then
-        active_gw="${PRIMARY_GATEWAY:-}"
-        active_iface="${PRIMARY_IFACE:-}"
-        standby_gw="${BACKUP_GATEWAY:-}"
-        standby_iface="${BACKUP_IFACE:-}"
-    else
-        active_gw="${BACKUP_GATEWAY:-}"
-        active_iface="${BACKUP_IFACE:-}"
-        standby_gw="${PRIMARY_GATEWAY:-}"
-        standby_iface="${PRIMARY_IFACE:-}"
+    # Primary WAN - fixed metric METRIC_PRIMARY (10)
+    if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
+        if [ "${PRIMARY_STATUS:-unknown}" = "up" ]; then
+            # Interface healthy - ensure route exists
+            ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || \
+                ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+            log_debug "Primary route: via $PRIMARY_GATEWAY dev $PRIMARY_IFACE metric $METRIC_PRIMARY"
+        else
+            # Interface down - remove route (let backup take over via lower metric)
+            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+            log_debug "Primary route removed (interface down)"
+        fi
     fi
 
-    # Remove ONLY the routes we're about to change (not all routes!)
-    # This preserves any other default routes (unlikely but possible)
-    if [ -n "$active_gw" ]; then
-        ip route del default via "$active_gw" 2>/dev/null || true
-    fi
-    if [ -n "$standby_gw" ]; then
-        ip route del default via "$standby_gw" 2>/dev/null || true
-    fi
-
-    # Add routes with correct metrics
-    if [ -n "$active_gw" ] && [ -n "$active_iface" ]; then
-        ip route add default via "$active_gw" dev "$active_iface" metric $metric_active 2>/dev/null || true
-        log_debug "Active route: via $active_gw dev $active_iface metric $metric_active"
-    fi
-
-    if [ -n "$standby_gw" ] && [ -n "$standby_iface" ]; then
-        ip route add default via "$standby_gw" dev "$standby_iface" metric $metric_standby 2>/dev/null || true
-        log_debug "Standby route: via $standby_gw dev $standby_iface metric $metric_standby"
+    # Backup WAN - fixed metric METRIC_BACKUP (20)
+    if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
+        if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+            # Interface healthy - ensure route exists
+            ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || \
+                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+            log_debug "Backup route: via $BACKUP_GATEWAY dev $BACKUP_IFACE metric $METRIC_BACKUP"
+        else
+            # Interface down - remove route
+            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+            log_debug "Backup route removed (interface down)"
+        fi
     fi
 
-    log_info "Main table routes updated: active=$active"
+    log_info "Main table routes updated (fixed metrics: primary=$METRIC_PRIMARY, backup=$METRIC_BACKUP)"
 }
 
 setup_ip_rules() {
@@ -1291,12 +1286,38 @@ check_interface_quick() {
 init_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
 
+    # Determine initial ACTIVE_WAN based on actual interface state
+    # This prevents unnecessary failover on first health check
+    local initial_active="primary"
+    local primary_has_route=false
+    local backup_has_route=false
+
+    # Check if interfaces have usable gateways
+    if [ -n "${PRIMARY_GATEWAY:-}" ] || get_gateway "${PRIMARY_IFACE:-}" >/dev/null 2>&1; then
+        primary_has_route=true
+    fi
+    if [ -n "${BACKUP_GATEWAY:-}" ] || get_gateway "${BACKUP_IFACE:-}" >/dev/null 2>&1; then
+        backup_has_route=true
+    fi
+
+    # Set initial active based on which interface actually works
+    if [ "$primary_has_route" = "true" ]; then
+        initial_active="primary"
+        log_info "Initial state: primary WAN has gateway"
+    elif [ "$backup_has_route" = "true" ]; then
+        initial_active="backup"
+        log_info "Initial state: primary down, using backup WAN"
+    else
+        initial_active="primary"  # Default, will be corrected by health check
+        log_warn "Initial state: no WAN gateway detected"
+    fi
+
     cat > "$STATE_FILE" << EOF
 PRIMARY_STATUS=unknown
 BACKUP_STATUS=unknown
 PRIMARY_COUNT=0
 BACKUP_COUNT=0
-ACTIVE_WAN=primary
+ACTIVE_WAN=$initial_active
 LAST_CHECK=$(date +%s)
 FAILOVER_COUNT=0
 BOTH_DOWN_SINCE=0
@@ -1687,25 +1708,33 @@ do_health_check() {
         fi
     fi
 
-    # Apply change if needed
+    # FIXED METRIC APPROACH: Just update routes based on interface status
+    # Routes are ADDED when healthy, REMOVED when unhealthy
+    # Kernel uses lowest-metric available route automatically
+    ensure_main_table_routes
+
+    # Update ACTIVE_WAN for NAT and logging (based on which interface is UP)
+    if [ "$PRIMARY_STATUS" = "up" ]; then
+        ACTIVE_WAN="primary"
+    elif [ "$BACKUP_STATUS" = "up" ]; then
+        ACTIVE_WAN="backup"
+    fi
+    # If both down, keep current ACTIVE_WAN for NAT (best effort)
+
+    # Only do full reconfiguration on actual ACTIVE_WAN change
     if [ "$ACTIVE_WAN" != "$old_active" ]; then
         FAILOVER_COUNT=$((FAILOVER_COUNT + 1))
         log_info "WAN failover: $old_active -> $ACTIVE_WAN (event #$FAILOVER_COUNT)"
 
-        # Update packet marking
+        # Update packet marking for new connections
         set_active_wan "$ACTIVE_WAN"
 
-        # Refresh routing tables (gateway may have changed)
-        discover_gateways
-        setup_routing_tables
+        # Update NAT rules
+        update_nat_for_wan "$ACTIVE_WAN"
 
-        # Update IP rules if interface IPs changed (DHCP renewal)
-        setup_ip_rules
-
-        # Update DNS configuration for new WAN
+        # Update DNS
         update_dns_for_wan "$ACTIVE_WAN"
 
-        # Log the failover event for monitoring
         logger -t "$LOG_TAG" -p notice "WAN failover completed: $old_active -> $ACTIVE_WAN"
     fi
 
