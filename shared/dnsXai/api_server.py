@@ -46,16 +46,20 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================
 DATA_DIR = Path(os.environ.get('DNSXAI_DATA_DIR', '/opt/hookprobe/shared/dnsXai/data'))
+# USERDATA_DIR is bind-mounted from host and persists across reinstalls
+USERDATA_DIR = Path(os.environ.get('DNSXAI_USERDATA_DIR', '/opt/hookprobe/shared/dnsXai/userdata'))
 LOG_DIR = Path(os.environ.get('LOG_DIR', '/var/log/hookprobe'))
 CONFIG_FILE = DATA_DIR / 'config.json'
 STATS_FILE = DATA_DIR / 'stats.json'
 WHITELIST_FILE = DATA_DIR / 'whitelist.txt'
+USERDATA_WHITELIST_FILE = USERDATA_DIR / 'whitelist.txt'
 BLOCKED_LOG = LOG_DIR / 'dnsxai-blocked.log'
 QUERIES_LOG = LOG_DIR / 'dnsxai-queries.log'
 TRAINING_LOG = LOG_DIR / 'dnsxai-training.log'
 
 # Ensure directories exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+USERDATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -314,18 +318,31 @@ stats_tracker = StatsTracker()
 # WHITELIST MANAGER
 # ============================================================
 class WhitelistManager:
-    """Manage dnsXai whitelist."""
+    """Manage dnsXai whitelist with persistent storage.
 
-    def __init__(self, whitelist_file: Path = WHITELIST_FILE):
+    Whitelist is saved to both:
+    - DATA_DIR (container volume, fast access)
+    - USERDATA_DIR (host bind-mount, survives reinstalls)
+    """
+
+    def __init__(self, whitelist_file: Path = WHITELIST_FILE,
+                 userdata_whitelist_file: Path = USERDATA_WHITELIST_FILE):
         self.whitelist_file = whitelist_file
+        self.userdata_whitelist_file = userdata_whitelist_file
         self._whitelist = set()
         self._load()
 
     def _load(self):
-        """Load whitelist from file."""
+        """Load whitelist from file (prefer userdata if exists)."""
         try:
-            if self.whitelist_file.exists():
-                with open(self.whitelist_file, 'r') as f:
+            # Prefer userdata whitelist (persistent across reinstalls)
+            load_from = self.whitelist_file
+            if self.userdata_whitelist_file.exists():
+                load_from = self.userdata_whitelist_file
+                logger.info("Loading whitelist from persistent userdata")
+
+            if load_from.exists():
+                with open(load_from, 'r') as f:
                     self._whitelist = {
                         line.strip().lower()
                         for line in f
@@ -336,16 +353,37 @@ class WhitelistManager:
             logger.warning(f"Could not load whitelist: {e}")
 
     def _save(self):
-        """Save whitelist to file."""
+        """Save whitelist to both data and userdata directories."""
+        content = self._generate_whitelist_content()
+
+        # Save to data directory (container volume)
         try:
             with open(self.whitelist_file, 'w') as f:
-                f.write("# dnsXai Whitelist\n")
-                f.write(f"# Updated: {datetime.now().isoformat()}\n")
-                f.write("# One domain per line\n\n")
-                for domain in sorted(self._whitelist):
-                    f.write(f"{domain}\n")
+                f.write(content)
         except Exception as e:
-            logger.error(f"Could not save whitelist: {e}")
+            logger.error(f"Could not save whitelist to data dir: {e}")
+
+        # Save to userdata directory (persistent across reinstalls)
+        try:
+            self.userdata_whitelist_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.userdata_whitelist_file, 'w') as f:
+                f.write(content)
+            logger.info(f"Whitelist saved to persistent storage ({len(self._whitelist)} entries)")
+        except Exception as e:
+            logger.error(f"Could not save whitelist to userdata dir: {e}")
+
+    def _generate_whitelist_content(self) -> str:
+        """Generate whitelist file content."""
+        lines = [
+            "# dnsXai Whitelist",
+            f"# Updated: {datetime.now().isoformat()}",
+            "# One domain per line",
+            "# This file persists across Fortress reinstalls",
+            ""
+        ]
+        lines.extend(sorted(self._whitelist))
+        lines.append("")  # Trailing newline
+        return "\n".join(lines)
 
     def get_all(self) -> list:
         """Get all whitelist entries."""

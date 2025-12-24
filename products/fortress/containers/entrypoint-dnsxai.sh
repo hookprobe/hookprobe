@@ -5,21 +5,46 @@
 set -e
 
 DATA_DIR="${DNSXAI_DATA_DIR:-/opt/hookprobe/shared/dnsXai/data}"
+USERDATA_DIR="${DNSXAI_USERDATA_DIR:-/opt/hookprobe/shared/dnsXai/userdata}"
 DEFAULTS_DIR="/opt/hookprobe/shared/dnsXai/defaults"
 LOG_DIR="${LOG_DIR:-/var/log/hookprobe}"
 
 # Ensure directories exist
-mkdir -p "$DATA_DIR" "$LOG_DIR"
+mkdir -p "$DATA_DIR" "$USERDATA_DIR" "$LOG_DIR"
 
-# Copy default whitelist if not present in data volume
-if [ ! -f "$DATA_DIR/whitelist.txt" ] && [ -f "$DEFAULTS_DIR/whitelist.txt" ]; then
-    echo "[dnsXai] Copying default whitelist to data directory..."
+# ============================================================
+# USER DATA PERSISTENCE
+# ============================================================
+# User whitelist and config are stored in USERDATA_DIR which is
+# bind-mounted from the host (/var/lib/hookprobe/userdata/dnsxai).
+# This data survives container rebuilds and reinstallation.
+#
+# Priority order for whitelist:
+# 1. USERDATA_DIR/whitelist.txt (user's persistent whitelist)
+# 2. DATA_DIR/whitelist.txt (container volume, regenerated on reinstall)
+# 3. DEFAULTS_DIR/whitelist.txt (bundled defaults)
+# ============================================================
+
+# Symlink whitelist from userdata to data directory if user whitelist exists
+# This allows the engine to always read from DATA_DIR while persisting in USERDATA_DIR
+if [ -f "$USERDATA_DIR/whitelist.txt" ]; then
+    echo "[dnsXai] Using persistent user whitelist from $USERDATA_DIR"
+    # Copy to data dir (engine reads from there)
+    cp "$USERDATA_DIR/whitelist.txt" "$DATA_DIR/whitelist.txt"
+    echo "[dnsXai] User whitelist: $(wc -l < "$USERDATA_DIR/whitelist.txt") entries"
+elif [ ! -f "$DATA_DIR/whitelist.txt" ] && [ -f "$DEFAULTS_DIR/whitelist.txt" ]; then
+    # No user whitelist and no data whitelist - copy defaults to both locations
+    echo "[dnsXai] Initializing whitelist from defaults..."
     cp "$DEFAULTS_DIR/whitelist.txt" "$DATA_DIR/whitelist.txt"
+    cp "$DEFAULTS_DIR/whitelist.txt" "$USERDATA_DIR/whitelist.txt"
     echo "[dnsXai] Default whitelist installed ($(wc -l < "$DATA_DIR/whitelist.txt") entries)"
 fi
 
-# Create initial config if not exists
-if [ ! -f "$DATA_DIR/config.json" ]; then
+# Create initial config if not exists (check userdata first)
+if [ -f "$USERDATA_DIR/config.json" ]; then
+    echo "[dnsXai] Using persistent config from $USERDATA_DIR"
+    cp "$USERDATA_DIR/config.json" "$DATA_DIR/config.json"
+elif [ ! -f "$DATA_DIR/config.json" ]; then
     echo "[dnsXai] Creating default configuration..."
     cat > "$DATA_DIR/config.json" << EOF
 {
@@ -31,7 +56,12 @@ if [ ! -f "$DATA_DIR/config.json" ]; then
     "created_at": "$(date -Iseconds)"
 }
 EOF
+    # Also save to userdata for persistence
+    cp "$DATA_DIR/config.json" "$USERDATA_DIR/config.json"
 fi
+
+# Export userdata dir for API server to use when saving whitelist changes
+export DNSXAI_USERDATA_DIR="$USERDATA_DIR"
 
 echo "[dnsXai] Starting services..."
 echo "[dnsXai] - DNS server on port 5353/udp"
