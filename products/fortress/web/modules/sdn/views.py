@@ -53,6 +53,14 @@ except ImportError:
             'manufacturer': 'Unknown'
         }
 
+# SDN Auto-Pilot for segment management
+SDN_AUTOPILOT_AVAILABLE = False
+try:
+    from sdn_autopilot import get_sdn_autopilot, NetworkSegment, DeviceCategory as SegmentCategory
+    SDN_AUTOPILOT_AVAILABLE = True
+except ImportError:
+    pass
+
 
 # ============================================================
 # DEMO DATA
@@ -1146,3 +1154,294 @@ def export_devices():
             'Content-Type': 'application/json',
             'Content-Disposition': 'attachment; filename=sdn_devices.json'
         }
+
+
+# ============================================================
+# SEGMENT DASHBOARD - Per-Category Traffic Visualization
+# ============================================================
+
+def get_demo_segment_data():
+    """Return demo segment data for development."""
+    import random
+    import time
+
+    base_time = time.time()
+    segments = {
+        'SECMON': {
+            'vlan_id': 10,
+            'name': 'Security Monitoring',
+            'icon': 'fa-shield-alt',
+            'color': '#17a2b8',
+            'device_count': 3,
+            'active_count': 2,
+            'bytes_in': 524288000,
+            'bytes_out': 1048576000,
+            'bandwidth_mbps': 12.5,
+            'top_devices': [
+                {'mac': '00:0D:7C:12:34:56', 'hostname': 'Synology NVR', 'bytes': 800000000},
+                {'mac': '00:0C:F6:AA:BB:CC', 'hostname': 'Axis Camera Hub', 'bytes': 200000000},
+            ],
+            'traffic_history': [
+                {'ts': base_time - i*10, 'in': random.randint(50000, 150000), 'out': random.randint(100000, 300000)}
+                for i in range(60, 0, -1)
+            ]
+        },
+        'CLIENTS': {
+            'vlan_id': 30,
+            'name': 'Staff Devices',
+            'icon': 'fa-laptop',
+            'color': '#28a745',
+            'device_count': 8,
+            'active_count': 5,
+            'bytes_in': 2147483648,
+            'bytes_out': 536870912,
+            'bandwidth_mbps': 45.2,
+            'top_devices': [
+                {'mac': '3C:06:30:DE:AD:BE', 'hostname': 'MacBook Sarah', 'bytes': 500000000},
+                {'mac': 'A4:5E:60:11:22:33', 'hostname': 'iPhone Mike', 'bytes': 300000000},
+                {'mac': '00:21:6A:44:55:66', 'hostname': 'Lenovo ThinkPad', 'bytes': 250000000},
+            ],
+            'traffic_history': [
+                {'ts': base_time - i*10, 'in': random.randint(200000, 600000), 'out': random.randint(50000, 150000)}
+                for i in range(60, 0, -1)
+            ]
+        },
+        'POS': {
+            'vlan_id': 20,
+            'name': 'Point of Sale',
+            'icon': 'fa-credit-card',
+            'color': '#ffc107',
+            'device_count': 2,
+            'active_count': 2,
+            'bytes_in': 104857600,
+            'bytes_out': 52428800,
+            'bandwidth_mbps': 2.1,
+            'top_devices': [
+                {'mac': '58:E6:BA:11:22:33', 'hostname': 'Square POS-1', 'bytes': 80000000},
+                {'mac': '00:0B:CD:AA:BB:CC', 'hostname': 'Ingenico Terminal', 'bytes': 30000000},
+            ],
+            'traffic_history': [
+                {'ts': base_time - i*10, 'in': random.randint(5000, 20000), 'out': random.randint(2000, 10000)}
+                for i in range(60, 0, -1)
+            ]
+        },
+        'CAMERAS': {
+            'vlan_id': 50,
+            'name': 'Security Cameras',
+            'icon': 'fa-video',
+            'color': '#6f42c1',
+            'device_count': 6,
+            'active_count': 6,
+            'bytes_in': 10737418240,
+            'bytes_out': 53687091,
+            'bandwidth_mbps': 85.3,
+            'top_devices': [
+                {'mac': '28:57:BE:11:22:33', 'hostname': 'Hikvision Front', 'bytes': 3000000000},
+                {'mac': '28:57:BE:44:55:66', 'hostname': 'Hikvision Back', 'bytes': 2500000000},
+                {'mac': '3C:EF:8C:77:88:99', 'hostname': 'Dahua Parking', 'bytes': 2000000000},
+            ],
+            'traffic_history': [
+                {'ts': base_time - i*10, 'in': random.randint(800000, 1200000), 'out': random.randint(5000, 15000)}
+                for i in range(60, 0, -1)
+            ]
+        },
+        'IIOT': {
+            'vlan_id': 60,
+            'name': 'IoT / Smart Devices',
+            'icon': 'fa-thermometer-half',
+            'color': '#fd7e14',
+            'device_count': 12,
+            'active_count': 10,
+            'bytes_in': 52428800,
+            'bytes_out': 26214400,
+            'bandwidth_mbps': 0.8,
+            'top_devices': [
+                {'mac': '18:B4:30:AA:BB:CC', 'hostname': 'Nest Thermostat', 'bytes': 15000000},
+                {'mac': '00:17:88:DD:EE:FF', 'hostname': 'Philips Hue Bridge', 'bytes': 10000000},
+                {'mac': 'D4:F5:47:11:22:33', 'hostname': 'Google Nest Hub', 'bytes': 8000000},
+            ],
+            'traffic_history': [
+                {'ts': base_time - i*10, 'in': random.randint(2000, 8000), 'out': random.randint(1000, 4000)}
+                for i in range(60, 0, -1)
+            ]
+        },
+    }
+    return segments
+
+
+@sdn_bp.route('/segments')
+@login_required
+def segments():
+    """Network Segments Dashboard - Per-category traffic visualization."""
+    segment_data = {}
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            segment_data = autopilot.get_segment_summary()
+        except Exception as e:
+            flash(f'Error loading segments: {e}', 'warning')
+            segment_data = get_demo_segment_data()
+    else:
+        segment_data = get_demo_segment_data()
+
+    return render_template(
+        'sdn/segments.html',
+        segments=segment_data,
+        autopilot_available=SDN_AUTOPILOT_AVAILABLE
+    )
+
+
+@sdn_bp.route('/api/segments')
+@login_required
+def api_segments():
+    """Get all segment statistics (JSON)."""
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            return jsonify({
+                'success': True,
+                'segments': autopilot.get_segment_summary()
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'segments': get_demo_segment_data()
+        })
+
+
+@sdn_bp.route('/api/segments/<segment_name>')
+@login_required
+def api_segment_detail(segment_name):
+    """Get detailed statistics for a specific segment."""
+    segment_name = segment_name.upper()
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            segment = NetworkSegment[segment_name]
+            return jsonify({
+                'success': True,
+                'segment': autopilot.get_segment_stats(segment)
+            })
+        except KeyError:
+            return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        demo = get_demo_segment_data()
+        if segment_name in demo:
+            return jsonify({
+                'success': True,
+                'segment': demo[segment_name]
+            })
+        return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+
+
+@sdn_bp.route('/api/segments/<segment_name>/devices')
+@login_required
+def api_segment_devices(segment_name):
+    """Get devices in a specific segment."""
+    segment_name = segment_name.upper()
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            segment = NetworkSegment[segment_name]
+            devices = autopilot.get_devices_by_segment(segment)
+            return jsonify({
+                'success': True,
+                'segment': segment_name,
+                'count': len(devices),
+                'devices': [d.to_dict() for d in devices]
+            })
+        except KeyError:
+            return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        # Return demo devices for the segment
+        demo = get_demo_segment_data()
+        if segment_name in demo:
+            return jsonify({
+                'success': True,
+                'segment': segment_name,
+                'count': len(demo[segment_name].get('top_devices', [])),
+                'devices': demo[segment_name].get('top_devices', [])
+            })
+        return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+
+
+@sdn_bp.route('/api/segments/<segment_name>/traffic')
+@login_required
+def api_segment_traffic(segment_name):
+    """Get traffic history for a segment (for live chart updates)."""
+    segment_name = segment_name.upper()
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            segment = NetworkSegment[segment_name]
+            stats = autopilot.get_segment_stats(segment)
+            return jsonify({
+                'success': True,
+                'segment': segment_name,
+                'traffic_history': stats.get('traffic_history', [])
+            })
+        except KeyError:
+            return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        demo = get_demo_segment_data()
+        if segment_name in demo:
+            return jsonify({
+                'success': True,
+                'segment': segment_name,
+                'traffic_history': demo[segment_name].get('traffic_history', [])
+            })
+        return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+
+
+@sdn_bp.route('/assign-segment', methods=['POST'])
+@login_required
+@operator_required
+def assign_segment():
+    """Assign a device to a network segment."""
+    mac_address = request.form.get('mac')
+    segment_id = request.form.get('segment')
+
+    if not mac_address or not segment_id:
+        return jsonify({'success': False, 'error': 'MAC address and segment required'}), 400
+
+    try:
+        segment_id = int(segment_id)
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid segment ID'}), 400
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            segment = NetworkSegment(segment_id)
+            success = autopilot.assign_device_segment(mac_address, segment, persist=True)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Device assigned to {segment.name} (VLAN {segment_id})'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Assignment failed'}), 500
+
+        except ValueError:
+            return jsonify({'success': False, 'error': f'Invalid segment: {segment_id}'}), 400
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        # Demo mode - just return success
+        return jsonify({
+            'success': True,
+            'message': f'Device assigned to VLAN {segment_id} (demo mode)'
+        })
