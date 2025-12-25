@@ -1,0 +1,127 @@
+# ==============================================================================
+# Fortress Mesh Orchestrator Container
+# ==============================================================================
+# HTP/Neuro/DSM Communication Hub for inter-product mesh networking
+# Enables secure communication with Guardian, Sentinel, Nexus, MSSP
+#
+# Port Selection (from shared/mesh/ARCHITECTURE.md):
+#   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
+#   FALLBACK:  8443/UDP + 8443/TCP (TLS-wrapped)
+#   STEALTH:   853/UDP + 853/TCP (DoT/DoQ cover)
+#   RELAY:     3478/UDP (STUN/TURN NAT traversal)
+#   CORTEX:    8766/TCP (WebSocket for visualization)
+#
+# Build:
+#   podman build -f Containerfile.mesh -t fts-mesh:latest ../..
+#
+# Run:
+#   podman run -p 8144:8144/udp -p 8144:8144/tcp \
+#              -p 853:853/udp -p 853:853/tcp \
+#              -p 3478:3478/udp -p 8766:8766 \
+#              fts-mesh:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install mesh dependencies
+COPY products/fortress/containers/requirements-mesh.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-mesh.txt
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libffi8 \
+    libssl3 \
+    iproute2 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/core/htp \
+             /opt/hookprobe/core/neuro \
+             /opt/hookprobe/shared/mesh \
+             /opt/hookprobe/shared/dsm \
+             /opt/hookprobe/shared/cortex \
+             /opt/hookprobe/mesh/data \
+             /opt/hookprobe/mesh/neuro \
+             /var/log/hookprobe \
+    && chown -R fortress:nogroup /opt/hookprobe /var/log/hookprobe
+
+# Copy core modules
+COPY --chown=fortress:nogroup core/__init__.py /opt/hookprobe/core/
+COPY --chown=fortress:nogroup core/htp/ /opt/hookprobe/core/htp/
+COPY --chown=fortress:nogroup core/neuro/ /opt/hookprobe/core/neuro/
+
+# Copy shared modules
+COPY --chown=fortress:nogroup shared/__init__.py /opt/hookprobe/shared/
+COPY --chown=fortress:nogroup shared/mesh/ /opt/hookprobe/shared/mesh/
+COPY --chown=fortress:nogroup shared/dsm/ /opt/hookprobe/shared/dsm/
+COPY --chown=fortress:nogroup shared/cortex/backend/ /opt/hookprobe/shared/cortex/backend/
+
+# Copy entrypoint script
+COPY --chown=fortress:nogroup products/fortress/containers/entrypoint-mesh.sh /opt/hookprobe/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV MESH_NODE_TYPE=fortress
+ENV MESH_DATA_DIR=/opt/hookprobe/mesh/data
+ENV NEURO_WEIGHT_DIR=/opt/hookprobe/mesh/neuro
+ENV LOG_DIR=/var/log/hookprobe
+
+# HTP Ports
+ENV HTP_PRIMARY_PORT=8144
+ENV HTP_FALLBACK_PORT=8443
+ENV HTP_STEALTH_PORT=853
+ENV HTP_RELAY_PORT=3478
+
+# Cortex WebSocket
+ENV CORTEX_ENABLED=true
+ENV CORTEX_WS_PORT=8766
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8766/health', timeout=5)" || exit 1
+
+# Expose ports
+# HTP Primary
+EXPOSE 8144/udp
+EXPOSE 8144/tcp
+# HTP Fallback
+EXPOSE 8443/udp
+EXPOSE 8443/tcp
+# HTP Stealth (DoT/DoQ cover)
+EXPOSE 853/udp
+EXPOSE 853/tcp
+# STUN/TURN relay
+EXPOSE 3478/udp
+# Cortex WebSocket
+EXPOSE 8766
+
+# Run as non-root
+USER fortress
+
+WORKDIR /opt/hookprobe
+
+ENTRYPOINT ["/bin/bash", "/opt/hookprobe/entrypoint-mesh.sh"]
