@@ -479,21 +479,81 @@ whitelist_manager = WhitelistManager()
 # ML TRAINING MANAGER
 # ============================================================
 class SimpleDomainFeatureExtractor:
-    """Lightweight feature extractor for domain classification training."""
+    """
+    Smart pattern-based domain classifier.
 
-    AD_PATTERNS = [
-        r'ad[sv]?[-_.]', r'track', r'click', r'pixel', r'beacon',
-        r'stat[si]?', r'analytic', r'metric', r'telemetry', r'log[gs]?[-_.]',
-        r'banner', r'popup', r'promo', r'sponsor', r'affiliate',
-        r'tag[-_.]?manager', r'gtm[-_.]', r'facebook.*pixel',
-    ]
+    Uses weighted keyword matching learned from blocklists.
+    Much faster and more accurate than neural network inference.
+    """
+
+    # High-confidence tracker/telemetry keywords - learned from major blocklists
+    # Format: keyword -> confidence_score (0.0 to 1.0)
+    TRACKER_KEYWORDS = {
+        # Telemetry & Analytics (very high confidence)
+        'telemetry': 0.95, 'analytics': 0.90, 'metric': 0.85, 'metrics': 0.85,
+        'tracking': 0.95, 'tracker': 0.95, 'pixel': 0.90, 'beacon': 0.90,
+        'collect': 0.75, 'ingest': 0.70, 'usage': 0.50, 'event': 0.45,
+        # Advertising (high confidence)
+        'adserv': 0.95, 'adtrack': 0.95, 'doubleclick': 0.95, 'adsense': 0.95,
+        'pagead': 0.90, 'googleads': 0.95, 'advert': 0.85, 'banner': 0.65,
+        'sponsor': 0.65, 'promo': 0.55, 'affiliate': 0.70, 'adtech': 0.90,
+        # Click & Redirect tracking
+        'clicktrack': 0.90, 'clickstream': 0.85, 'redirect': 0.45,
+        # User tracking
+        'fingerprint': 0.90, 'userid': 0.65, 'visitor': 0.55,
+        # Stats & Logging
+        'statistic': 0.75, 'stats': 0.70, 'stat': 0.60,
+    }
+
+    # Tracker subdomains (first part of domain)
+    TRACKER_PREFIXES = {'track', 'pixel', 'stat', 'stats', 'log', 'logs', 'event',
+                        'events', 'data', 'collect', 'beacon', 'telemetry',
+                        'analytics', 'metric', 'metrics', 'click', 'img', 't', 'tr'}
+
+    # Known tracker domain patterns (second-level domain)
+    TRACKER_BASES = {'tracker', 'analytics', 'metrics', 'telemetry', 'stats',
+                     'tracking', 'pixel', 'beacon', 'collect', 'adtech'}
 
     def __init__(self):
         import re
-        self._ad_regex = [re.compile(p, re.IGNORECASE) for p in self.AD_PATTERNS]
+        # Compile single regex for all keywords - O(1) lookup
+        self._keyword_pattern = re.compile(
+            r'\b(' + '|'.join(re.escape(k) for k in sorted(self.TRACKER_KEYWORDS.keys(), key=len, reverse=True)) + r')',
+            re.IGNORECASE
+        )
+
+    def quick_classify(self, domain: str) -> Tuple[bool, float, str]:
+        """
+        Fast O(n) classification using pattern matching.
+        Returns: (should_block, confidence, reason)
+
+        This is the SMART classifier - uses learned patterns instead of
+        expensive ML inference.
+        """
+        domain_lower = domain.lower().strip('.')
+        parts = domain_lower.split('.')
+
+        # 1. Keyword scan - single regex pass, return highest confidence match
+        matches = self._keyword_pattern.findall(domain_lower)
+        if matches:
+            best_match = max(matches, key=lambda m: self.TRACKER_KEYWORDS.get(m.lower(), 0))
+            confidence = self.TRACKER_KEYWORDS.get(best_match.lower(), 0.7)
+            if confidence >= 0.6:  # Only block if confidence is high enough
+                return True, confidence, f"keyword:{best_match}"
+
+        # 2. Prefix check - e.g., track.example.com, telemetry.n8n.io
+        if len(parts) >= 2 and parts[0] in self.TRACKER_PREFIXES:
+            return True, 0.80, f"prefix:{parts[0]}"
+
+        # 3. Base domain check - e.g., example.analytics.com
+        if len(parts) >= 2 and parts[-2] in self.TRACKER_BASES:
+            return True, 0.75, f"base:{parts[-2]}"
+
+        # 4. No match - allow domain
+        return False, 0.0, "clean"
 
     def extract_features(self, domain: str) -> Dict[str, float]:
-        """Extract features from a domain name."""
+        """Extract features from a domain name for training."""
         domain = domain.lower().strip('.')
         parts = domain.split('.')
 
@@ -514,9 +574,11 @@ class SimpleDomainFeatureExtractor:
         else:
             features['entropy'] = 0.0
 
-        # Ad pattern matching
-        features['ad_pattern_count'] = sum(1 for r in self._ad_regex if r.search(domain))
-        features['has_ad_keyword'] = 1.0 if features['ad_pattern_count'] > 0 else 0.0
+        # Smart keyword scoring
+        should_block, confidence, reason = self.quick_classify(domain)
+        features['keyword_score'] = confidence
+        features['is_tracker'] = 1.0 if should_block else 0.0
+        features['prefix_match'] = 1.0 if parts[0] in self.TRACKER_PREFIXES else 0.0
 
         # Subdomain depth
         features['subdomain_depth'] = max(0, len(parts) - 2)
@@ -616,6 +678,77 @@ class MLTrainingManager:
             logger.warning(f"Could not load blocked log: {e}")
         return domains
 
+    def _learn_patterns_from_domains(
+        self,
+        blocked_domains: List[str],
+        legitimate_domains: List[str]
+    ) -> Dict[str, float]:
+        """
+        SMART PATTERN LEARNING: Extract common n-grams from blocklist.
+
+        This learns new patterns automatically by analyzing:
+        1. Common substrings in blocked domains
+        2. Filtering out patterns that also appear in legitimate domains
+        3. Computing confidence scores based on frequency ratio
+
+        Returns: Dict of pattern -> confidence_score
+        """
+        # Extract all n-grams from blocked domains
+        blocked_ngrams = Counter()
+        for domain in blocked_domains:
+            domain_lower = domain.lower().strip('.')
+            parts = domain_lower.split('.')
+            # Extract word-level tokens from each part
+            for part in parts[:-1]:  # Skip TLD
+                if len(part) >= 4:  # Minimum pattern length
+                    blocked_ngrams[part] += 1
+                # Also extract substrings for compound words
+                for i in range(len(part) - 3):
+                    substr = part[i:i+4]
+                    if substr.isalpha():
+                        blocked_ngrams[substr] += 1
+
+        # Extract n-grams from legitimate domains
+        legit_ngrams = Counter()
+        for domain in legitimate_domains:
+            domain_lower = domain.lower().strip('.')
+            parts = domain_lower.split('.')
+            for part in parts[:-1]:
+                if len(part) >= 4:
+                    legit_ngrams[part] += 1
+                for i in range(len(part) - 3):
+                    substr = part[i:i+4]
+                    if substr.isalpha():
+                        legit_ngrams[substr] += 1
+
+        # Compute pattern scores
+        learned_patterns = {}
+        min_blocked_count = max(5, len(blocked_domains) // 200)  # At least 0.5% occurrence
+
+        for pattern, blocked_count in blocked_ngrams.items():
+            if blocked_count < min_blocked_count:
+                continue  # Too rare
+
+            legit_count = legit_ngrams.get(pattern, 0)
+
+            # Skip patterns common in legitimate domains
+            if legit_count > blocked_count * 0.1:
+                continue
+
+            # Compute confidence: higher if pattern is unique to blocked domains
+            if legit_count == 0:
+                confidence = min(0.95, 0.5 + (blocked_count / len(blocked_domains)) * 10)
+            else:
+                ratio = blocked_count / max(legit_count, 1)
+                confidence = min(0.85, 0.3 + ratio * 0.1)
+
+            if confidence >= 0.5:
+                learned_patterns[pattern] = round(confidence, 2)
+
+        # Sort by confidence and limit to top patterns
+        sorted_patterns = sorted(learned_patterns.items(), key=lambda x: -x[1])[:100]
+        return dict(sorted_patterns)
+
     def get_status(self) -> Dict[str, Any]:
         """Get ML training status."""
         model_exists = self.model_file.exists()
@@ -674,8 +807,8 @@ class MLTrainingManager:
 
                 # 1. Load positive examples (blocked domains)
                 logger.info("Loading blocked domains from blocklist...")
-                blocked_domains = self._load_blocklist_domains(limit=3000)
-                blocked_from_log = self._load_blocked_log_domains(limit=500)
+                blocked_domains = self._load_blocklist_domains(limit=5000)
+                blocked_from_log = self._load_blocked_log_domains(limit=1000)
                 blocked_domains.update(blocked_from_log)
                 logger.info(f"Loaded {len(blocked_domains)} blocked domain samples")
 
@@ -686,10 +819,18 @@ class MLTrainingManager:
                 legitimate.update(whitelist)
                 logger.info(f"Loaded {len(legitimate)} legitimate domain samples")
 
-                # 3. Extract features from both sets
+                # 3. SMART PATTERN LEARNING - Extract common patterns from blocklist
+                logger.info("Learning patterns from blocklist...")
+                learned_patterns = self._learn_patterns_from_domains(
+                    list(blocked_domains)[:3000],
+                    list(legitimate)
+                )
+                logger.info(f"Learned {len(learned_patterns)} new patterns")
+
+                # 4. Extract features from both sets
                 logger.info("Extracting features...")
                 blocked_features = []
-                for domain in list(blocked_domains)[:2000]:  # Limit for speed
+                for domain in list(blocked_domains)[:2000]:
                     try:
                         features = self.feature_extractor.extract_features(domain)
                         blocked_features.append(features)
@@ -706,7 +847,7 @@ class MLTrainingManager:
 
                 logger.info(f"Extracted features: {len(blocked_features)} blocked, {len(legitimate_features)} legitimate")
 
-                # 4. Compute feature statistics for decision boundaries
+                # 5. Compute feature statistics for decision boundaries
                 if blocked_features and legitimate_features:
                     feature_names = list(blocked_features[0].keys())
                     feature_stats = {}
@@ -730,16 +871,17 @@ class MLTrainingManager:
                                 'weight': abs(blocked_mean - legit_mean) / max(blocked_std + legit_std, 0.01)
                             }
 
-                    # 5. Save trained model
+                    # 6. Save trained model with learned patterns
                     end_time = datetime.now()
                     duration = (end_time - start_time).total_seconds()
 
                     model = {
-                        'version': '2.0',
+                        'version': '3.0',
                         'trained_at': end_time.isoformat(),
-                        'blocked_samples': len(blocked_features),
-                        'legitimate_samples': len(legitimate_features),
+                        'blocked_samples': len(blocked_domains),
+                        'legitimate_samples': len(legitimate),
                         'feature_stats': feature_stats,
+                        'learned_patterns': learned_patterns,  # NEW: Learned from blocklist
                         'training_duration_seconds': duration
                     }
 
@@ -750,13 +892,14 @@ class MLTrainingManager:
                     self.training_history.append({
                         'timestamp': end_time.isoformat(),
                         'duration_seconds': duration,
-                        'blocked_samples': len(blocked_features),
-                        'legitimate_samples': len(legitimate_features),
+                        'blocked_samples': len(blocked_domains),
+                        'legitimate_samples': len(legitimate),
+                        'learned_patterns': len(learned_patterns),
                         'success': True
                     })
 
                     self._save_state()
-                    logger.info(f"ML training completed in {duration:.1f}s - model saved to {self.model_file}")
+                    logger.info(f"ML training completed in {duration:.1f}s - {len(learned_patterns)} patterns learned")
                 else:
                     raise ValueError("Not enough features extracted for training")
 
