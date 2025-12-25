@@ -37,6 +37,34 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Device Trust Integration
+# =============================================================================
+
+# Try to import Device Trust Framework
+TRUST_FRAMEWORK_AVAILABLE = False
+try:
+    from .device_trust_framework import (
+        DeviceTrustFramework,
+        TrustLevel,
+        TrustAssessment,
+        DeviceFingerprint as TrustFingerprint,
+        get_trust_framework,
+    )
+    TRUST_FRAMEWORK_AVAILABLE = True
+except ImportError:
+    # Stub classes for when trust framework not available
+    class TrustLevel(IntEnum):
+        UNTRUSTED = 0
+        MINIMAL = 1
+        STANDARD = 2
+        HIGH = 3
+        ENTERPRISE = 4
+
+    def get_trust_framework():
+        return None
+
+
+# =============================================================================
 # Network Segment Definitions
 # =============================================================================
 
@@ -254,6 +282,13 @@ class DeviceFingerprint:
     dhcp_fingerprint: Optional[str] = None
     user_assigned: bool = False
 
+    # Trust Framework Integration (CIA Triad)
+    trust_level: int = 0                  # TrustLevel enum value
+    trust_verified: bool = False          # Trust assessment completed
+    certificate_issued: bool = False      # Device has certificate
+    attestation_verified: bool = False    # TPM/Neuro attestation verified
+    fingerprint_hash: Optional[str] = None  # Device fingerprint binding
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -272,6 +307,12 @@ class DeviceFingerprint:
             'bytes_out': self.bytes_out,
             'packets_in': self.packets_in,
             'packets_out': self.packets_out,
+            # Trust information
+            'trust_level': self.trust_level,
+            'trust_level_name': TrustLevel(self.trust_level).name if self.trust_level >= 0 else 'UNKNOWN',
+            'trust_verified': self.trust_verified,
+            'certificate_issued': self.certificate_issued,
+            'attestation_verified': self.attestation_verified,
         }
 
 
@@ -318,9 +359,11 @@ class SDNAutoPilot:
     - Per-segment traffic monitoring
     """
 
-    def __init__(self, ovs_bridge: str = 'FTS', config_path: str = '/etc/hookprobe'):
+    def __init__(self, ovs_bridge: str = 'FTS', config_path: str = '/etc/hookprobe',
+                 trust_enabled: bool = True):
         self.ovs_bridge = ovs_bridge
         self.config_path = Path(config_path)
+        self.trust_enabled = trust_enabled and TRUST_FRAMEWORK_AVAILABLE
 
         # Device registry
         self.devices: Dict[str, DeviceFingerprint] = {}
@@ -336,10 +379,21 @@ class SDNAutoPilot:
         # OpenFlow flow cache
         self._flow_cache: Set[str] = set()
 
+        # Device Trust Framework
+        self._trust_framework = None
+        if self.trust_enabled:
+            try:
+                self._trust_framework = get_trust_framework()
+                logger.info("Device Trust Framework integrated (CIA triad enabled)")
+            except Exception as e:
+                logger.warning(f"Trust Framework unavailable: {e}")
+                self.trust_enabled = False
+
         # Load persistent config
         self._load_config()
 
-        logger.info(f"SDN Auto-Pilot initialized for bridge {ovs_bridge}")
+        logger.info(f"SDN Auto-Pilot initialized for bridge {ovs_bridge} "
+                   f"(trust: {'enabled' if self.trust_enabled else 'disabled'})")
 
     def _load_config(self):
         """Load persistent configuration."""
@@ -379,17 +433,19 @@ class SDNAutoPilot:
         self,
         mac_address: str,
         ip_address: Optional[str] = None,
-        hostname: Optional[str] = None
+        hostname: Optional[str] = None,
+        dhcp_vendor_class: Optional[str] = None,
+        dhcp_options: Optional[List[int]] = None,
     ) -> DeviceFingerprint:
         """
         Classify a device and determine its network segment.
 
         Classification priority:
         1. User manual assignment
-        2. OUI database match
-        3. Hostname pattern match
-        4. DHCP fingerprint
-        5. Default to quarantine
+        2. Trust Framework verification (CIA triad)
+        3. OUI database match
+        4. Hostname pattern match
+        5. Default to quarantine (untrusted)
 
         Returns:
             DeviceFingerprint with classification results
@@ -405,6 +461,11 @@ class SDNAutoPilot:
                 fp.ip_address = ip_address
             if hostname:
                 fp.hostname = hostname
+
+            # Re-verify trust if enabled (periodic re-authentication)
+            if self.trust_enabled and self._trust_framework:
+                self._update_trust_status(fp, hostname, dhcp_vendor_class, dhcp_options)
+
             return fp
 
         # Initialize fingerprint
@@ -420,9 +481,35 @@ class SDNAutoPilot:
             fp.category = self._segment_to_category(fp.segment)
             fp.confidence = 1.0
             fp.user_assigned = True
+            fp.trust_level = TrustLevel.ENTERPRISE  # User-assigned gets highest trust
+            fp.trust_verified = True
             logger.info(f"Device {mac} -> VLAN {fp.segment.value} (user assigned)")
 
-        # 2. OUI database lookup
+        # 2. Trust Framework verification (CIA Triad)
+        elif self.trust_enabled and self._trust_framework:
+            trust_result = self._verify_device_trust(
+                mac, hostname, dhcp_vendor_class, dhcp_options
+            )
+            fp.trust_level = trust_result['trust_level']
+            fp.trust_verified = True
+            fp.certificate_issued = trust_result.get('certificate_verified', False)
+            fp.attestation_verified = trust_result.get('attestation_verified', False)
+            fp.fingerprint_hash = trust_result.get('fingerprint_hash')
+
+            # Apply trust-based VLAN override
+            if trust_result['trust_level'] == TrustLevel.UNTRUSTED:
+                fp.segment = NetworkSegment.QUARANTINE
+                fp.confidence = 0.2
+                logger.warning(f"Device {mac} -> QUARANTINE (untrusted)")
+            elif trust_result['trust_level'] == TrustLevel.MINIMAL:
+                fp.segment = NetworkSegment.GUEST
+                fp.confidence = 0.5
+                logger.info(f"Device {mac} -> GUEST (minimal trust)")
+            else:
+                # Standard+ trust: use OUI classification
+                self._classify_by_oui_and_hostname(fp, oui, hostname)
+
+        # 3. No trust framework: OUI database lookup
         elif oui in OUI_DATABASE:
             vendor, category, segment = OUI_DATABASE[oui]
             fp.vendor = vendor
@@ -430,9 +517,10 @@ class SDNAutoPilot:
             fp.segment = segment
             fp.oui_match = True
             fp.confidence = 0.9
+            fp.trust_level = TrustLevel.MINIMAL  # OUI-only is minimal trust
             logger.info(f"Device {mac} -> VLAN {segment.value} ({vendor}, OUI match)")
 
-        # 3. Hostname pattern match
+        # 4. Hostname pattern match
         elif hostname:
             for pattern, (category, segment) in HOSTNAME_PATTERNS.items():
                 if re.search(pattern, hostname):
@@ -440,12 +528,14 @@ class SDNAutoPilot:
                     fp.segment = segment
                     fp.hostname_match = True
                     fp.confidence = 0.7
+                    fp.trust_level = TrustLevel.MINIMAL
                     logger.info(f"Device {mac} -> VLAN {segment.value} (hostname: {hostname})")
                     break
 
-        # 4. Default to quarantine for unknown devices
+        # 5. Default to quarantine for unknown devices
         if fp.segment == NetworkSegment.QUARANTINE and not fp.user_assigned:
             fp.confidence = 0.3
+            fp.trust_level = TrustLevel.UNTRUSTED
             logger.warning(f"Unknown device {mac} -> VLAN 99 (quarantine)")
 
         # Store device
@@ -454,7 +544,116 @@ class SDNAutoPilot:
         # Update segment stats
         self.segment_stats[fp.segment].device_count += 1
 
+        # Apply OVS flow rules
+        self._apply_vlan_flow(mac, fp.segment)
+
         return fp
+
+    def _classify_by_oui_and_hostname(self, fp: DeviceFingerprint,
+                                       oui: str, hostname: Optional[str]):
+        """Apply OUI and hostname classification to fingerprint."""
+        if oui in OUI_DATABASE:
+            vendor, category, segment = OUI_DATABASE[oui]
+            fp.vendor = vendor
+            fp.category = category
+            fp.segment = segment
+            fp.oui_match = True
+            fp.confidence = 0.9
+            logger.info(f"Device {fp.mac_address} -> VLAN {segment.value} ({vendor})")
+
+        elif hostname:
+            for pattern, (category, segment) in HOSTNAME_PATTERNS.items():
+                if re.search(pattern, hostname):
+                    fp.category = category
+                    fp.segment = segment
+                    fp.hostname_match = True
+                    fp.confidence = 0.7
+                    break
+
+    def _verify_device_trust(
+        self,
+        mac_address: str,
+        hostname: Optional[str],
+        dhcp_vendor_class: Optional[str],
+        dhcp_options: Optional[List[int]]
+    ) -> Dict[str, Any]:
+        """
+        Verify device trust using CIA triad.
+
+        Returns:
+            Trust assessment result
+        """
+        if not self._trust_framework:
+            return {'trust_level': TrustLevel.MINIMAL}
+
+        try:
+            # Create fingerprint for trust framework
+            trust_fp = self._trust_framework.create_fingerprint(
+                mac_address=mac_address,
+                dhcp_hostname=hostname,
+                dhcp_vendor_class=dhcp_vendor_class,
+                dhcp_options=dhcp_options or []
+            )
+
+            # Assess trust
+            assessment = self._trust_framework.assess_trust(
+                mac_address=mac_address,
+                current_fingerprint=trust_fp,
+                segment_hint=None  # Let trust framework decide
+            )
+
+            return {
+                'trust_level': assessment.trust_level,
+                'assigned_vlan': assessment.assigned_vlan,
+                'oui_verified': assessment.oui_verified,
+                'fingerprint_verified': assessment.fingerprint_verified,
+                'certificate_verified': assessment.certificate_verified,
+                'attestation_verified': assessment.attestation_verified,
+                'confidence': assessment.confidence,
+                'fingerprint_hash': trust_fp.compute_fingerprint_hash() if trust_fp else None,
+            }
+
+        except Exception as e:
+            logger.error(f"Trust verification failed for {mac_address}: {e}")
+            return {'trust_level': TrustLevel.UNTRUSTED}
+
+    def _update_trust_status(
+        self,
+        fp: DeviceFingerprint,
+        hostname: Optional[str],
+        dhcp_vendor_class: Optional[str],
+        dhcp_options: Optional[List[int]]
+    ):
+        """Update trust status for existing device (re-verification)."""
+        if not self._trust_framework:
+            return
+
+        try:
+            trust_result = self._verify_device_trust(
+                fp.mac_address, hostname, dhcp_vendor_class, dhcp_options
+            )
+
+            old_trust = fp.trust_level
+            new_trust = trust_result['trust_level']
+
+            # Update trust info
+            fp.trust_level = new_trust
+            fp.trust_verified = True
+            fp.certificate_issued = trust_result.get('certificate_verified', False)
+            fp.attestation_verified = trust_result.get('attestation_verified', False)
+
+            # If trust degraded, move to appropriate segment
+            if new_trust < old_trust:
+                logger.warning(f"Device {fp.mac_address} trust degraded: L{old_trust} -> L{new_trust}")
+                if new_trust == TrustLevel.UNTRUSTED:
+                    old_segment = fp.segment
+                    fp.segment = NetworkSegment.QUARANTINE
+                    self.segment_stats[old_segment].device_count -= 1
+                    self.segment_stats[fp.segment].device_count += 1
+                    self._apply_vlan_flow(fp.mac_address, fp.segment)
+
+        except Exception as e:
+            logger.error(f"Trust update failed for {fp.mac_address}: {e}")
 
     def _segment_to_category(self, segment: NetworkSegment) -> DeviceCategory:
         """Map segment to default category."""
@@ -720,6 +919,13 @@ class SDNAutoPilot:
                     bytes_delta = sum(s['in'] + s['out'] for s in recent)
                     stats.bandwidth_mbps = (bytes_delta * 8) / (time_delta * 1_000_000)
 
+            # Calculate trust distribution for segment
+            trust_counts = {level.name: 0 for level in TrustLevel}
+            for fp in devices:
+                level_name = TrustLevel(fp.trust_level).name if fp.trust_level >= 0 else 'UNKNOWN'
+                if level_name in trust_counts:
+                    trust_counts[level_name] += 1
+
             summary[seg.name] = {
                 'vlan_id': seg.value,
                 'name': self._segment_display_name(seg),
@@ -730,17 +936,67 @@ class SDNAutoPilot:
                 'bytes_in': stats.bytes_in,
                 'bytes_out': stats.bytes_out,
                 'bandwidth_mbps': round(stats.bandwidth_mbps, 2),
+                'traffic_history': stats.traffic_history[-60:],
+                # Trust distribution
+                'trust_counts': trust_counts,
+                'trust_verified_count': sum(1 for fp in devices if fp.trust_verified),
+                'certificate_count': sum(1 for fp in devices if fp.certificate_issued),
                 'top_devices': [
                     {
                         'mac': fp.mac_address,
                         'hostname': fp.hostname or fp.vendor or 'Unknown',
-                        'bytes': fp.bytes_in + fp.bytes_out
+                        'bytes': fp.bytes_in + fp.bytes_out,
+                        'trust_level': TrustLevel(fp.trust_level).name if fp.trust_level >= 0 else 'UNKNOWN',
+                        'trust_verified': fp.trust_verified,
+                        'certificate_issued': fp.certificate_issued,
                     }
                     for fp in sorted(devices, key=lambda x: x.bytes_in + x.bytes_out, reverse=True)[:5]
                 ]
             }
 
         return summary
+
+    def get_trust_summary(self) -> Dict[str, Any]:
+        """Get overall trust statistics across all devices."""
+        total_devices = len(self.devices)
+        if total_devices == 0:
+            return {
+                'total_devices': 0,
+                'trust_framework_enabled': self.trust_enabled,
+                'by_trust_level': {},
+                'verified_count': 0,
+                'certificate_count': 0,
+                'attestation_count': 0,
+            }
+
+        # Count by trust level
+        trust_counts = {level.name: 0 for level in TrustLevel}
+        verified_count = 0
+        certificate_count = 0
+        attestation_count = 0
+
+        for fp in self.devices.values():
+            level_name = TrustLevel(fp.trust_level).name if fp.trust_level >= 0 else 'UNKNOWN'
+            if level_name in trust_counts:
+                trust_counts[level_name] += 1
+            if fp.trust_verified:
+                verified_count += 1
+            if fp.certificate_issued:
+                certificate_count += 1
+            if fp.attestation_verified:
+                attestation_count += 1
+
+        return {
+            'total_devices': total_devices,
+            'trust_framework_enabled': self.trust_enabled,
+            'by_trust_level': trust_counts,
+            'verified_count': verified_count,
+            'verified_percent': round(verified_count / total_devices * 100, 1),
+            'certificate_count': certificate_count,
+            'certificate_percent': round(certificate_count / total_devices * 100, 1),
+            'attestation_count': attestation_count,
+            'attestation_percent': round(attestation_count / total_devices * 100, 1),
+        }
 
     def _segment_display_name(self, seg: NetworkSegment) -> str:
         """Get display name for segment."""
