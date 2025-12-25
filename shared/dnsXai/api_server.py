@@ -25,15 +25,17 @@ License: AGPL-3.0
 
 import json
 import logging
+import math
 import os
+import random
 import threading
 import time
+from collections import Counter, deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
-from collections import deque
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List, Set
 
 # Configure logging
 logging.basicConfig(
@@ -476,14 +478,71 @@ whitelist_manager = WhitelistManager()
 # ============================================================
 # ML TRAINING MANAGER
 # ============================================================
+class SimpleDomainFeatureExtractor:
+    """Lightweight feature extractor for domain classification training."""
+
+    AD_PATTERNS = [
+        r'ad[sv]?[-_.]', r'track', r'click', r'pixel', r'beacon',
+        r'stat[si]?', r'analytic', r'metric', r'telemetry', r'log[gs]?[-_.]',
+        r'banner', r'popup', r'promo', r'sponsor', r'affiliate',
+        r'tag[-_.]?manager', r'gtm[-_.]', r'facebook.*pixel',
+    ]
+
+    def __init__(self):
+        import re
+        self._ad_regex = [re.compile(p, re.IGNORECASE) for p in self.AD_PATTERNS]
+
+    def extract_features(self, domain: str) -> Dict[str, float]:
+        """Extract features from a domain name."""
+        domain = domain.lower().strip('.')
+        parts = domain.split('.')
+
+        features = {}
+        features['length'] = len(domain)
+        features['num_parts'] = len(parts)
+        features['avg_part_length'] = sum(len(p) for p in parts) / max(len(parts), 1)
+        features['max_part_length'] = max((len(p) for p in parts), default=0)
+        features['digit_ratio'] = sum(c.isdigit() for c in domain) / max(len(domain), 1)
+        features['hyphen_ratio'] = domain.count('-') / max(len(domain), 1)
+        features['vowel_ratio'] = sum(c in 'aeiou' for c in domain) / max(len(domain), 1)
+
+        # Entropy
+        if domain:
+            freq = Counter(domain)
+            features['entropy'] = -sum((c/len(domain)) * math.log2(c/len(domain))
+                                       for c in freq.values())
+        else:
+            features['entropy'] = 0.0
+
+        # Ad pattern matching
+        features['ad_pattern_count'] = sum(1 for r in self._ad_regex if r.search(domain))
+        features['has_ad_keyword'] = 1.0 if features['ad_pattern_count'] > 0 else 0.0
+
+        # Subdomain depth
+        features['subdomain_depth'] = max(0, len(parts) - 2)
+
+        return features
+
+
 class MLTrainingManager:
-    """Manage ML model training."""
+    """Manage ML model training with real blocklist-based learning."""
+
+    # Legitimate infrastructure domains to use as negative examples
+    LEGITIMATE_DOMAINS = [
+        'google.com', 'apple.com', 'microsoft.com', 'amazon.com', 'facebook.com',
+        'github.com', 'stackoverflow.com', 'wikipedia.org', 'reddit.com', 'twitter.com',
+        'youtube.com', 'linkedin.com', 'netflix.com', 'spotify.com', 'cloudflare.com',
+        'akamai.com', 'fastly.com', 'aws.amazon.com', 'azure.microsoft.com',
+        'mail.google.com', 'drive.google.com', 'docs.google.com', 'icloud.com',
+        'dropbox.com', 'slack.com', 'zoom.us', 'teams.microsoft.com', 'outlook.com',
+    ]
 
     def __init__(self):
         self.model_file = DATA_DIR / 'ml_model.json'
         self.training_in_progress = False
         self.last_training = None
         self.training_history = []
+        self.feature_extractor = SimpleDomainFeatureExtractor()
         self._load_state()
 
     def _load_state(self):
@@ -494,7 +553,7 @@ class MLTrainingManager:
                 with open(state_file, 'r') as f:
                     state = json.load(f)
                     self.last_training = state.get('last_training')
-                    self.training_history = state.get('history', [])[-10:]  # Keep last 10
+                    self.training_history = state.get('history', [])[-10:]
         except Exception as e:
             logger.warning(f"Could not load ML state: {e}")
 
@@ -510,34 +569,95 @@ class MLTrainingManager:
         except Exception as e:
             logger.warning(f"Could not save ML state: {e}")
 
+    def _load_blocklist_domains(self, limit: int = 5000) -> Set[str]:
+        """Load domains from blocklist file."""
+        domains = set()
+        blocklist_file = DATA_DIR / 'blocklist.txt'
+        try:
+            if blocklist_file.exists():
+                with open(blocklist_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            domains.add(line.lower())
+                            if len(domains) >= limit:
+                                break
+        except Exception as e:
+            logger.warning(f"Could not load blocklist: {e}")
+        return domains
+
+    def _load_whitelist_domains(self) -> Set[str]:
+        """Load domains from whitelist."""
+        domains = set()
+        try:
+            if WHITELIST_FILE.exists():
+                with open(WHITELIST_FILE, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            domains.add(line.lower())
+        except Exception as e:
+            logger.warning(f"Could not load whitelist: {e}")
+        return domains
+
+    def _load_blocked_log_domains(self, limit: int = 1000) -> Set[str]:
+        """Load recently blocked domains from log."""
+        domains = set()
+        try:
+            if BLOCKED_LOG.exists():
+                with open(BLOCKED_LOG, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split('\t')
+                        if len(parts) >= 2:
+                            domains.add(parts[1].lower())
+                            if len(domains) >= limit:
+                                break
+        except Exception as e:
+            logger.warning(f"Could not load blocked log: {e}")
+        return domains
+
     def get_status(self) -> Dict[str, Any]:
         """Get ML training status."""
         model_exists = self.model_file.exists()
-        blocked_samples = 0
+
+        # Count samples from various sources
+        blocklist_count = 0
+        blocked_log_count = 0
+
+        try:
+            blocklist_file = DATA_DIR / 'blocklist.txt'
+            if blocklist_file.exists():
+                with open(blocklist_file, 'r') as f:
+                    blocklist_count = sum(1 for line in f if line.strip() and not line.startswith('#'))
+        except:
+            pass
 
         try:
             if BLOCKED_LOG.exists():
                 with open(BLOCKED_LOG, 'r') as f:
-                    blocked_samples = sum(1 for _ in f)
+                    blocked_log_count = sum(1 for _ in f)
         except:
             pass
+
+        total_samples = blocklist_count + blocked_log_count
 
         return {
             'model_trained': model_exists,
             'model_file': str(self.model_file) if model_exists else None,
             'training_in_progress': self.training_in_progress,
             'last_training': self.last_training,
-            'training_samples': blocked_samples,
+            'training_samples': total_samples,
+            'blocklist_samples': blocklist_count,
+            'blocked_log_samples': blocked_log_count,
             'training_history': self.training_history[-5:],
-            'ready_for_training': blocked_samples >= 100,  # Need at least 100 samples
+            'ready_for_training': total_samples >= 100,
         }
 
     def start_training(self) -> Dict[str, Any]:
-        """Start ML training in background."""
+        """Start real ML training in background."""
         if self.training_in_progress:
             return {'success': False, 'error': 'Training already in progress'}
 
-        # Check if we have enough data
         status = self.get_status()
         if not status['ready_for_training']:
             return {
@@ -547,42 +667,98 @@ class MLTrainingManager:
 
         self.training_in_progress = True
 
-        # Run training in background thread
         def train():
             try:
-                logger.info("Starting ML training...")
+                logger.info("Starting ML training from blocklists...")
                 start_time = datetime.now()
 
-                # Simulate training (replace with actual ML training)
-                # In a real implementation, this would:
-                # 1. Load blocked domains from log
-                # 2. Extract features
-                # 3. Train classifier
-                # 4. Save model
-                time.sleep(5)  # Simulate training time
+                # 1. Load positive examples (blocked domains)
+                logger.info("Loading blocked domains from blocklist...")
+                blocked_domains = self._load_blocklist_domains(limit=3000)
+                blocked_from_log = self._load_blocked_log_domains(limit=500)
+                blocked_domains.update(blocked_from_log)
+                logger.info(f"Loaded {len(blocked_domains)} blocked domain samples")
 
-                # Record training completion
-                end_time = datetime.now()
-                duration = (end_time - start_time).total_seconds()
+                # 2. Load negative examples (whitelisted + legitimate)
+                logger.info("Loading legitimate domains...")
+                whitelist = self._load_whitelist_domains()
+                legitimate = set(self.LEGITIMATE_DOMAINS)
+                legitimate.update(whitelist)
+                logger.info(f"Loaded {len(legitimate)} legitimate domain samples")
 
-                self.last_training = end_time.isoformat()
-                self.training_history.append({
-                    'timestamp': end_time.isoformat(),
-                    'duration_seconds': duration,
-                    'samples': status['training_samples'],
-                    'success': True
-                })
+                # 3. Extract features from both sets
+                logger.info("Extracting features...")
+                blocked_features = []
+                for domain in list(blocked_domains)[:2000]:  # Limit for speed
+                    try:
+                        features = self.feature_extractor.extract_features(domain)
+                        blocked_features.append(features)
+                    except:
+                        pass
 
-                # Save dummy model for now
-                with open(self.model_file, 'w') as f:
-                    json.dump({
-                        'version': '1.0',
-                        'trained_at': self.last_training,
-                        'samples': status['training_samples']
-                    }, f)
+                legitimate_features = []
+                for domain in legitimate:
+                    try:
+                        features = self.feature_extractor.extract_features(domain)
+                        legitimate_features.append(features)
+                    except:
+                        pass
 
-                self._save_state()
-                logger.info(f"ML training completed in {duration:.1f}s")
+                logger.info(f"Extracted features: {len(blocked_features)} blocked, {len(legitimate_features)} legitimate")
+
+                # 4. Compute feature statistics for decision boundaries
+                if blocked_features and legitimate_features:
+                    feature_names = list(blocked_features[0].keys())
+                    feature_stats = {}
+
+                    for name in feature_names:
+                        blocked_vals = [f[name] for f in blocked_features if name in f]
+                        legit_vals = [f[name] for f in legitimate_features if name in f]
+
+                        if blocked_vals and legit_vals:
+                            blocked_mean = sum(blocked_vals) / len(blocked_vals)
+                            legit_mean = sum(legit_vals) / len(legit_vals)
+                            blocked_std = math.sqrt(sum((x - blocked_mean)**2 for x in blocked_vals) / max(len(blocked_vals), 1))
+                            legit_std = math.sqrt(sum((x - legit_mean)**2 for x in legit_vals) / max(len(legit_vals), 1))
+
+                            feature_stats[name] = {
+                                'blocked_mean': blocked_mean,
+                                'blocked_std': blocked_std,
+                                'legitimate_mean': legit_mean,
+                                'legitimate_std': legit_std,
+                                'threshold': (blocked_mean + legit_mean) / 2,
+                                'weight': abs(blocked_mean - legit_mean) / max(blocked_std + legit_std, 0.01)
+                            }
+
+                    # 5. Save trained model
+                    end_time = datetime.now()
+                    duration = (end_time - start_time).total_seconds()
+
+                    model = {
+                        'version': '2.0',
+                        'trained_at': end_time.isoformat(),
+                        'blocked_samples': len(blocked_features),
+                        'legitimate_samples': len(legitimate_features),
+                        'feature_stats': feature_stats,
+                        'training_duration_seconds': duration
+                    }
+
+                    with open(self.model_file, 'w') as f:
+                        json.dump(model, f, indent=2)
+
+                    self.last_training = end_time.isoformat()
+                    self.training_history.append({
+                        'timestamp': end_time.isoformat(),
+                        'duration_seconds': duration,
+                        'blocked_samples': len(blocked_features),
+                        'legitimate_samples': len(legitimate_features),
+                        'success': True
+                    })
+
+                    self._save_state()
+                    logger.info(f"ML training completed in {duration:.1f}s - model saved to {self.model_file}")
+                else:
+                    raise ValueError("Not enough features extracted for training")
 
             except Exception as e:
                 logger.error(f"ML training failed: {e}")
@@ -598,7 +774,7 @@ class MLTrainingManager:
         thread = threading.Thread(target=train, daemon=True)
         thread.start()
 
-        return {'success': True, 'message': 'Training started in background'}
+        return {'success': True, 'message': 'Training started - learning from blocklists'}
 
 
 # Global ML manager
