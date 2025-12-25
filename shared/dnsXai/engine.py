@@ -547,6 +547,34 @@ class CNAMEUncloaker:
         'd1af033869koo7.cloudfront.net',  # Example tracking CDN
     }
 
+    # Legitimate CDN/infrastructure domains - NEVER block these
+    # These are used by major services for content delivery
+    LEGITIMATE_INFRASTRUCTURE = {
+        # Apple CDN infrastructure
+        'aaplimg.com', 'apple-dns.net', 'apple.com', 'icloud.com',
+        'mzstatic.com', 'apple-cloudkit.com', 'cdn-apple.com',
+        # Akamai (used by many legitimate services)
+        'akadns.net', 'akamaiedge.net', 'akamai.net', 'akamaihd.net',
+        'edgekey.net', 'edgesuite.net', 'akamaitechnologies.com',
+        # Fastly (used by many legitimate services)
+        'fastly.net', 'fastlylb.net', 'freetls.fastly.net',
+        # Cloudflare
+        'cloudflare.com', 'cloudflare-dns.com', 'cloudflare.net',
+        # Google infrastructure
+        'google.com', 'googleapis.com', 'gstatic.com', 'googlevideo.com',
+        'googleusercontent.com', 'ggpht.com', '1e100.net',
+        # Microsoft/Azure
+        'microsoft.com', 'microsoftonline.com', 'azure.com',
+        'azureedge.net', 'windows.net', 'office.com', 'office365.com',
+        # Amazon (infrastructure, not tracking)
+        'amazonaws.com', 'amazon.com', 'cloudfront.net',
+        # Other major CDNs
+        'edgecastcdn.net', 'stackpathdns.com', 'kxcdn.com',
+        'cdn77.org', 'cdninstagram.com', 'fbcdn.net',
+        # DNS providers
+        'quad9.net', 'opendns.com', 'cleanbrowsing.org',
+    }
+
     def __init__(self, config: AdBlockConfig):
         self.config = config
         self.cache: Dict[str, Tuple[List[str], datetime]] = {}
@@ -620,10 +648,37 @@ class CNAMEUncloaker:
 
         return None
 
+    def _is_legitimate_infrastructure(self, domain: str) -> bool:
+        """Check if domain belongs to legitimate CDN/infrastructure."""
+        domain_lower = domain.lower()
+        # Check exact match
+        if domain_lower in self.LEGITIMATE_INFRASTRUCTURE:
+            return True
+        # Check parent domains (e.g., subdomain.aaplimg.com -> aaplimg.com)
+        parts = domain_lower.split('.')
+        for i in range(len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in self.LEGITIMATE_INFRASTRUCTURE:
+                return True
+        return False
+
+    def _is_whitelisted(self, domain: str, whitelist: Set[str]) -> bool:
+        """Check if domain or parent is in whitelist."""
+        domain_lower = domain.lower()
+        if domain_lower in whitelist:
+            return True
+        parts = domain_lower.split('.')
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in whitelist:
+                return True
+        return False
+
     def check_chain_for_trackers(
         self,
         chain: List[str],
-        blocklist: Set[str]
+        blocklist: Set[str],
+        whitelist: Set[str] = None
     ) -> Tuple[bool, Optional[str], str]:
         """
         Check CNAME chain for known trackers.
@@ -631,7 +686,19 @@ class CNAMEUncloaker:
         Returns:
             (is_tracker, tracker_domain, detection_method)
         """
+        whitelist = whitelist or set()
+
         for domain in chain[1:]:  # Skip original domain
+            # CRITICAL: Skip legitimate infrastructure domains
+            if self._is_legitimate_infrastructure(domain):
+                self.logger.debug(f"Skipping legitimate infrastructure: {domain}")
+                continue
+
+            # Skip whitelisted domains
+            if self._is_whitelisted(domain, whitelist):
+                self.logger.debug(f"Skipping whitelisted CNAME target: {domain}")
+                continue
+
             # Check against known CNAME trackers
             for tracker in self.KNOWN_CNAME_TRACKERS:
                 if domain.endswith(tracker):
@@ -654,7 +721,8 @@ class CNAMEUncloaker:
         self,
         domain: str,
         blocklist: Set[str],
-        classifier: DomainClassifier
+        classifier: DomainClassifier,
+        whitelist: Set[str] = None
     ) -> Tuple[bool, List[str], str, float]:
         """
         Full CNAME analysis with ML classification.
@@ -662,16 +730,29 @@ class CNAMEUncloaker:
         Returns:
             (should_block, cname_chain, detection_method, confidence)
         """
+        whitelist = whitelist or set()
         chain = self.resolve_cname_chain(domain)
 
-        # Quick check for known trackers
-        is_tracker, tracker_domain, method = self.check_chain_for_trackers(chain, blocklist)
+        # Quick check for known trackers (respects whitelist and legitimate infra)
+        is_tracker, tracker_domain, method = self.check_chain_for_trackers(
+            chain, blocklist, whitelist
+        )
         if is_tracker:
             return True, chain, f"cname:{method}", 0.95
 
         # ML classification of CNAME destinations
         if len(chain) > 1 and self.config.ml_enabled:
             for cname_domain in chain[1:]:
+                # CRITICAL: Skip legitimate infrastructure from ML classification
+                if self._is_legitimate_infrastructure(cname_domain):
+                    self.logger.debug(f"Skipping ML for legitimate infra: {cname_domain}")
+                    continue
+
+                # Skip whitelisted domains from ML classification
+                if self._is_whitelisted(cname_domain, whitelist):
+                    self.logger.debug(f"Skipping ML for whitelisted: {cname_domain}")
+                    continue
+
                 category, confidence, _ = classifier.classify(cname_domain)
 
                 if category in (DomainCategory.ADVERTISING, DomainCategory.TRACKING):
@@ -1077,10 +1158,10 @@ class AIAdBlocker:
             self._record_classification(result)
             return result
 
-        # 3. CNAME uncloaking
+        # 3. CNAME uncloaking (now respects whitelist and legitimate infrastructure)
         if self.config.cname_check_enabled:
             should_block, chain, method, confidence = self.cname_uncloaker.analyze(
-                domain, self.blocklist, self.classifier
+                domain, self.blocklist, self.classifier, self.whitelist
             )
 
             if should_block:
