@@ -70,10 +70,15 @@ class FortressConfig:
     config_dir: str = "/etc/hookprobe"
     secrets_dir: str = "/etc/hookprobe/secrets"
 
-    # Network
-    ovs_bridge: str = "fortress"
+    # Network - FTS is the standard OVS bridge name used by install scripts
+    ovs_bridge: str = "FTS"
     wan_interface: str = ""
     lan_interfaces: List[str] = field(default_factory=list)
+    lan_subnet: str = "10.200.0.0/24"  # User-configurable during install (/29 to /23)
+    lan_gateway: str = "10.200.0.1"
+    mgmt_subnet: str = "10.200.100.0/30"  # Fixed management subnet
+    mgmt_gateway: str = "10.200.100.1"
+    network_mode: str = "filter"  # "filter" or "vlan"
 
     # Database
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -101,36 +106,64 @@ class FortressConfig:
 
     def __post_init__(self):
         """Initialize default VLANs and VXLAN tunnels if empty."""
+        # Load network configuration from install state if available
+        self._load_network_state()
+
         if not self.vlans:
             # Physical VLANs (infrastructure layer)
-            # VLAN 100 = LAN - All WiFi clients, LAN devices (10.200.0.0/24)
-            # VLAN 200 = MGMT - Admin access, container network (10.200.100.0/30)
+            # VLAN 100 = LAN - All WiFi clients, LAN devices (user-selected subnet)
+            # VLAN 200 = MGMT - Admin access, container network (fixed /30)
             #
             # Segment VLANs (logical layer via OpenFlow rules within VLAN 100)
-            # These are NOT separate subnets - they share 10.200.0.0/24 with isolation via OVS flows
+            # These are NOT separate subnets - they share LAN subnet with isolation via OVS flows
             self.vlans = {
                 # Physical VLANs (actual tagged traffic)
-                "lan": VLANConfig(100, "LAN", "10.200.0.0/24", "10.200.0.1",
+                "lan": VLANConfig(100, "LAN", self.lan_subnet, self.lan_gateway,
                                   dhcp_enabled=True, is_logical=False, trust_floor=0),
-                "mgmt": VLANConfig(200, "MGMT", "10.200.100.0/30", "10.200.100.1",
+                "mgmt": VLANConfig(200, "MGMT", self.mgmt_subnet, self.mgmt_gateway,
                                    dhcp_enabled=True, is_logical=False, trust_floor=4, is_isolated=False),
                 # Segment VLANs (logical tags within VLAN 100 for device classification)
-                "secmon": VLANConfig(10, "Security Monitor", "10.200.0.0/24", "10.200.0.1",
+                # These share the LAN subnet - segmentation is via OpenFlow, not IP
+                "secmon": VLANConfig(10, "Security Monitor", self.lan_subnet, self.lan_gateway,
                                      dhcp_enabled=False, is_logical=True, trust_floor=3, is_isolated=False),
-                "pos": VLANConfig(20, "POS", "10.200.0.0/24", "10.200.0.1",
+                "pos": VLANConfig(20, "POS", self.lan_subnet, self.lan_gateway,
                                   dhcp_enabled=False, is_logical=True, trust_floor=3, is_isolated=True),
-                "staff": VLANConfig(30, "Staff", "10.200.0.0/24", "10.200.0.1",
+                "staff": VLANConfig(30, "Staff", self.lan_subnet, self.lan_gateway,
                                     dhcp_enabled=False, is_logical=True, trust_floor=2, is_isolated=False),
-                "guest": VLANConfig(40, "Guest", "10.200.0.0/24", "10.200.0.1",
+                "guest": VLANConfig(40, "Guest", self.lan_subnet, self.lan_gateway,
                                     dhcp_enabled=False, is_logical=True, trust_floor=1, is_isolated=True),
-                "cameras": VLANConfig(50, "Cameras", "10.200.0.0/24", "10.200.0.1",
+                "cameras": VLANConfig(50, "Cameras", self.lan_subnet, self.lan_gateway,
                                       dhcp_enabled=False, is_logical=True, trust_floor=2, is_isolated=True),
-                "iiot": VLANConfig(60, "Industrial IoT", "10.200.0.0/24", "10.200.0.1",
+                "iiot": VLANConfig(60, "Industrial IoT", self.lan_subnet, self.lan_gateway,
                                    dhcp_enabled=False, is_logical=True, trust_floor=2, is_isolated=True),
-                "quarantine": VLANConfig(99, "Quarantine", "10.200.0.0/24", "10.200.0.1",
+                "quarantine": VLANConfig(99, "Quarantine", self.lan_subnet, self.lan_gateway,
                                          dhcp_enabled=False, is_logical=True, trust_floor=0, is_isolated=True),
             }
 
+        # Initialize VXLAN tunnels
+        self._init_vxlan_tunnels()
+
+    def _load_network_state(self):
+        """Load network configuration from install state file."""
+        import json
+        state_file = Path(self.config_dir) / "fortress-state.json"
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text())
+                # Load subnet configuration from install
+                if 'lan_subnet' in state:
+                    self.lan_subnet = state['lan_subnet']
+                if 'lan_gateway' in state:
+                    self.lan_gateway = state['lan_gateway']
+                if 'network_mode' in state:
+                    self.network_mode = state['network_mode']
+                if 'ovs_bridge' in state:
+                    self.ovs_bridge = state['ovs_bridge']
+            except (json.JSONDecodeError, IOError):
+                pass  # Use defaults if state file is invalid
+
+    def _init_vxlan_tunnels(self):
+        """Initialize VXLAN tunnels if empty."""
         if not self.vxlan_tunnels:
             self.vxlan_tunnels = {
                 "core": VXLANConfig("fts-core", 1000, 4800, f"{self.secrets_dir}/vxlan/core.psk"),

@@ -1469,6 +1469,15 @@ def get_demo_trust_data():
     return {
         'total_devices': 15,
         'trust_framework_enabled': True,
+        # Dashboard expects lowercase keys for trust_distribution
+        'trust_distribution': {
+            'untrusted': 2,
+            'minimal': 5,
+            'standard': 4,
+            'high': 3,
+            'enterprise': 1,
+        },
+        # Keep uppercase version for backwards compatibility
         'by_trust_level': {
             'UNTRUSTED': 2,
             'MINIMAL': 5,
