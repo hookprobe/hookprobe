@@ -120,6 +120,114 @@ get_deployment_mode() {
 }
 
 # ============================================================
+# NETWORK STATE DETECTION (for upgrades)
+# ============================================================
+# Detects actual network configuration from running system and updates
+# fortress-state.json. This ensures Python config.py loads correct values
+# even when upgrading from older versions that didn't save network config.
+detect_and_update_network_state() {
+    log_substep "Detecting existing network configuration..."
+
+    # Check if network config already exists in state file
+    local current_subnet=$(get_state "lan_subnet")
+    local current_gateway=$(get_state "lan_gateway")
+    local current_bridge=$(get_state "ovs_bridge")
+
+    # If already configured and valid, skip detection
+    if [ -n "$current_subnet" ] && [ -n "$current_gateway" ] && [ -n "$current_bridge" ]; then
+        log_info "Network config already in state: subnet=$current_subnet, gateway=$current_gateway, bridge=$current_bridge"
+        return 0
+    fi
+
+    log_info "Network config missing from state file, detecting from running system..."
+
+    # Detect bridge name
+    local detected_bridge=""
+    for bridge in FTS fortress br-fortress; do
+        if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            detected_bridge="$bridge"
+            break
+        fi
+    done
+    [ -z "$detected_bridge" ] && detected_bridge="FTS"
+
+    # Detect gateway and subnet from running interfaces
+    local detected_gateway=""
+    local detected_subnet=""
+    local network_mode="filter"
+
+    # Try vlan100 first (VLAN mode)
+    if ip addr show vlan100 2>/dev/null | grep -q "inet "; then
+        detected_gateway=$(ip addr show vlan100 | grep -oP 'inet \K[\d.]+' | head -1)
+        detected_subnet=$(ip addr show vlan100 | grep -oP 'inet \K[\d./]+' | head -1)
+        network_mode="vlan"
+        log_info "VLAN mode detected: vlan100 = $detected_subnet"
+    fi
+
+    # Try FTS bridge (filter mode)
+    if [ -z "$detected_gateway" ]; then
+        if ip addr show "$detected_bridge" 2>/dev/null | grep -q "inet "; then
+            detected_gateway=$(ip addr show "$detected_bridge" | grep -oP 'inet \K[\d.]+' | head -1)
+            detected_subnet=$(ip addr show "$detected_bridge" | grep -oP 'inet \K[\d./]+' | head -1)
+            network_mode="filter"
+            log_info "Filter mode detected: $detected_bridge = $detected_subnet"
+        fi
+    fi
+
+    # Try fortress bridge (alternate name)
+    if [ -z "$detected_gateway" ]; then
+        if ip addr show fortress 2>/dev/null | grep -q "inet "; then
+            detected_gateway=$(ip addr show fortress | grep -oP 'inet \K[\d.]+' | head -1)
+            detected_subnet=$(ip addr show fortress | grep -oP 'inet \K[\d./]+' | head -1)
+            log_info "Detected from fortress bridge: $detected_subnet"
+        fi
+    fi
+
+    # Use defaults if nothing detected
+    if [ -z "$detected_gateway" ]; then
+        log_warn "Could not detect network config, using defaults"
+        detected_gateway="10.200.0.1"
+        detected_subnet="10.200.0.1/24"
+    fi
+
+    # Extract network address from CIDR
+    local lan_subnet=""
+    if [[ "$detected_subnet" == *"/"* ]]; then
+        local gateway_ip="${detected_subnet%/*}"
+        local subnet_mask="${detected_subnet#*/}"
+        local network_addr="${gateway_ip%.*}.0"
+        lan_subnet="${network_addr}/${subnet_mask}"
+    else
+        lan_subnet="10.200.0.0/24"
+    fi
+
+    # Detect DHCP range from dnsmasq config
+    local dhcp_start="10.200.0.100"
+    local dhcp_end="10.200.0.200"
+    for conf in /etc/dnsmasq.d/fortress*.conf /etc/dnsmasq.d/fts*.conf; do
+        if [ -f "$conf" ]; then
+            local dhcp_range=$(grep -oP 'dhcp-range=\K[^,]+,[^,]+' "$conf" 2>/dev/null | head -1)
+            if [ -n "$dhcp_range" ]; then
+                dhcp_start="${dhcp_range%,*}"
+                dhcp_end="${dhcp_range#*,}"
+                break
+            fi
+        fi
+    done
+
+    # Update state file with detected values
+    log_info "Updating state: subnet=$lan_subnet, gateway=$detected_gateway, bridge=$detected_bridge"
+    set_state "lan_subnet" "$lan_subnet"
+    set_state "lan_gateway" "$detected_gateway"
+    set_state "ovs_bridge" "$detected_bridge"
+    set_state "network_mode" "$network_mode"
+    set_state "lan_dhcp_start" "$dhcp_start"
+    set_state "lan_dhcp_end" "$dhcp_end"
+
+    log_info "Network state updated for Python config.py to load"
+}
+
+# ============================================================
 # BACKUP FUNCTIONS
 # ============================================================
 create_backup() {
@@ -313,6 +421,10 @@ upgrade_app() {
     # Tier 3 upgrade - Application only (hot upgrade)
     log_step "Upgrading application (Tier 3)"
 
+    # CRITICAL: Detect existing network config before upgrade
+    # This ensures Python config.py loads correct subnet (e.g., /28 vs /23)
+    detect_and_update_network_state
+
     # Pre-upgrade backup
     local backup_file=$(create_backup "app")
     set_state "last_app_backup" "$backup_file"
@@ -397,6 +509,10 @@ upgrade_app() {
 upgrade_full() {
     # Full upgrade - all tiers
     log_step "Performing full upgrade"
+
+    # CRITICAL: Detect existing network config BEFORE stopping services
+    # This ensures Python config.py loads correct subnet (e.g., /28 vs /23)
+    detect_and_update_network_state
 
     # Pre-upgrade backup (before stopping anything)
     local backup_file=$(create_backup "full")
