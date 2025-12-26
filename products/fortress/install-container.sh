@@ -2283,6 +2283,17 @@ needs_rebuild() {
         return 0  # Containerfile changed, rebuild
     fi
 
+    # Check if any source file in context is newer than image
+    # This catches Python code changes that the Containerfile check misses
+    if [ -d "$context_dir" ]; then
+        local newest_source
+        newest_source=$(find "$context_dir" -type f \( -name "*.py" -o -name "*.html" -o -name "*.js" -o -name "*.css" \) -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1)
+        if [ -n "$newest_source" ] && [ "$newest_source" -gt "$image_epoch" ]; then
+            log_info "Source files in $context_dir are newer than image, rebuilding..."
+            return 0  # Source files changed, rebuild
+        fi
+    fi
+
     # Image exists and is current
     return 1
 }
