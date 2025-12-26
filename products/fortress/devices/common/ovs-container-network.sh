@@ -18,7 +18,7 @@
 # LAN subnet is configurable via LAN_SUBNET_MASK environment variable
 # Supports /23 (510 devices) to /29 (6 devices), default is /23
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 #
 

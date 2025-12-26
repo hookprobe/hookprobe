@@ -19,7 +19,7 @@ Single SSID Architecture:
 - OVS dynamically assigns VLAN based on verified trust level
 - Re-verification every 5 minutes for L2+, every 30s for L3+
 
-Version: 5.4.0
+Version: 5.5.0
 License: AGPL-3.0
 """
 
