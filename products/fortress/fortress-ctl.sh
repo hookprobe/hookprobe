@@ -357,10 +357,10 @@ list_backups() {
 }
 
 # ============================================================
-# STOP ALL SERVICES (comprehensive)
+# STOP ALL SERVICES (comprehensive - for UNINSTALL only)
 # ============================================================
 stop_all_services() {
-    log_step "Stopping all Fortress services"
+    log_step "Stopping all Fortress services (full teardown)"
 
     # 1. Stop systemd services first (graceful)
     log_substep "Stopping systemd services..."
@@ -394,7 +394,7 @@ stop_all_services() {
     pkill -f "hostapd.*fortress\|hostapd.*fts" 2>/dev/null || true
     pkill -f "dnsmasq.*fortress\|dnsmasq.*fts" 2>/dev/null || true
 
-    # 6. Clear OVS
+    # 6. Clear OVS (ONLY for uninstall - NOT for upgrade)
     log_substep "Clearing OVS..."
     ovs-ofctl del-flows FTS 2>/dev/null || true
     ovs-vsctl del-br FTS 2>/dev/null || true
@@ -412,6 +412,43 @@ stop_all_services() {
     fuser -k 8443/tcp 5353/udp 8050/tcp 2>/dev/null || true
 
     log_info "All services stopped"
+}
+
+# ============================================================
+# STOP SERVICES FOR UPGRADE (preserves network infrastructure)
+# ============================================================
+stop_services_for_upgrade() {
+    log_step "Stopping services for upgrade (preserving network)"
+
+    # 1. Stop systemd services (graceful)
+    log_substep "Stopping systemd services..."
+    systemctl stop fortress 2>/dev/null || true
+    systemctl stop fortress-hostapd-2ghz fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl stop fortress-dnsmasq 2>/dev/null || true
+
+    # 2. Stop containers only (do NOT remove volumes or networks)
+    log_substep "Stopping containers..."
+    if [ -f "$CONTAINERS_DIR/podman-compose.yml" ]; then
+        cd "$CONTAINERS_DIR" 2>/dev/null && {
+            # Use 'stop' not 'down' to preserve state
+            podman-compose stop --timeout 30 2>/dev/null || true
+        }
+    fi
+
+    # 3. Force-stop any remaining fts-* containers
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+        podman stop -t 5 "$container" 2>/dev/null || true
+    done
+
+    # 4. Stop hostapd & dnsmasq processes
+    log_substep "Stopping WiFi/DHCP..."
+    pkill -f "hostapd.*fortress\|hostapd.*fts" 2>/dev/null || true
+    pkill -f "dnsmasq.*fortress\|dnsmasq.*fts" 2>/dev/null || true
+
+    # NOTE: DO NOT touch OVS bridge, firewall rules, or network interfaces
+    # These are preserved during upgrade
+
+    log_info "Services stopped (network preserved)"
 }
 
 # ============================================================
@@ -514,13 +551,15 @@ upgrade_full() {
     # This ensures Python config.py loads correct subnet (e.g., /28 vs /23)
     detect_and_update_network_state
 
+    # Show detected network state
+    log_info "Network state: bridge=$(get_state 'ovs_bridge'), subnet=$(get_state 'lan_subnet')"
+
     # Pre-upgrade backup (before stopping anything)
     local backup_file=$(create_backup "full")
     set_state "last_full_backup" "$backup_file"
 
-    # CRITICAL: Stop all services before upgrade
-    # This ensures clean state for rebuilding containers
-    stop_all_services
+    # Stop services but PRESERVE network infrastructure (OVS, bridge, firewall)
+    stop_services_for_upgrade
 
     # Check for database migrations
     log_substep "Checking database schema..."
@@ -552,9 +591,11 @@ upgrade_full() {
     log_step "Rebuilding all containers"
     cd "$CONTAINERS_DIR"
 
-    # Remove old containers
+    # Remove old containers (but NOT networks or volumes)
     log_substep "Removing old containers..."
-    podman-compose down --timeout 30 2>/dev/null || true
+    for container in fts-web fts-dnsxai fts-dfs fts-qsecbit; do
+        podman rm -f "$container" 2>/dev/null || true
+    done
 
     # Rebuild web (SDN dashboard, device management)
     log_substep "Building web container (SDN dashboard)..."
@@ -581,9 +622,9 @@ upgrade_full() {
         log_warn "QSecBit container build failed (optional)"
     }
 
-    # Start all containers
+    # Start all containers (preserves existing postgres/redis)
     log_substep "Starting all containers..."
-    podman-compose up -d
+    podman-compose up -d --no-recreate
 
     # Wait for services to be ready
     log_substep "Waiting for services..."
