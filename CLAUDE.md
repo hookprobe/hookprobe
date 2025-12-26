@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.6
-**Last Updated**: 2025-12-23
+**Version**: 5.7
+**Last Updated**: 2025-12-26
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -59,6 +59,9 @@
 | **Adaptive DNS failover** | Multi-provider DNS | `shared/slaai/dns_intelligence.py` |
 | **PBR integration** | Route switching | `shared/slaai/integrations/pbr.py` |
 | **Fortress dual-WAN** | PBR failover | `products/fortress/devices/common/wan-failover-pbr.sh` |
+| **Community guidelines** | Code of Conduct | `CODE_OF_CONDUCT.md` |
+| **Contributing** | Contribution guide | `docs/CONTRIBUTING.md` |
+| **Security reporting** | Vulnerability disclosure | `docs/SECURITY.md` |
 
 ---
 
@@ -2190,5 +2193,5 @@ cd shared/cortex/backend && python server.py --demo
 
 ---
 
-**HookProbe v5.0** - Federated Cybersecurity Mesh
+**HookProbe v5.1 "Neural"** - Federated Cybersecurity Mesh
 *One node's detection -> Everyone's protection*
