@@ -92,7 +92,7 @@ def create_app(config_class=Config):
         return {
             'now': datetime.now(),
             'app_name': 'HookProbe Fortress',
-            'app_version': '5.4.0'
+            'app_version': '5.5.0'
         }
 
     # Template filters
