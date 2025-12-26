@@ -52,7 +52,7 @@ def health():
     return jsonify({
         'status': 'healthy',
         'tier': 'fortress',
-        'version': '5.4.0',
+        'version': '5.5.0',
         'timestamp': datetime.now().isoformat()
     })
 
@@ -60,7 +60,7 @@ def health():
 @api_bp.route('/version')
 def version():
     """Version info."""
-    return jsonify({'version': '5.4.0', 'product': 'Fortress'})
+    return jsonify({'version': '5.5.0', 'product': 'Fortress'})
 
 
 @api_bp.route('/status')
@@ -69,7 +69,7 @@ def status():
     """System status overview."""
     data = {
         'tier': 'fortress',
-        'version': '5.4.0',
+        'version': '5.5.0',
         'database': DB_AVAILABLE,
         'timestamp': datetime.now().isoformat()
     }

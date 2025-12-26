@@ -7,7 +7,7 @@ Exposes metrics via Prometheus and HTTP API for IP blocking.
 
 Author: Andrei Toma
 License: AGPL-3.0
-Version: 5.4.0
+Version: 5.5.0
 """
 
 import os
