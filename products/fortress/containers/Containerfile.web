@@ -4,7 +4,7 @@
 # Build: podman build -f Containerfile.web -t fts-web .
 # Run:   podman run -d -p 8443:8443 -v /etc/hookprobe:/etc/hookprobe:ro fts-web
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 
 FROM python:3.11-slim-bookworm AS builder
@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 FROM python:3.11-slim-bookworm
 
 LABEL maintainer="HookProbe Security <qsecbit@hookprobe.com>"
-LABEL version="5.4.0"
+LABEL version="5.5.0"
 LABEL description="HookProbe Fortress Admin Portal - Self-contained Flask application"
 
 # Install runtime dependencies only
