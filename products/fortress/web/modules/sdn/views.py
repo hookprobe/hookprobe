@@ -2260,7 +2260,7 @@ def api_sdn_segments():
 
 @sdn_bp.route('/api/sdn/wifi')
 @login_required
-def api_wifi_intelligence():
+def api_sdn_wifi_status():
     """Get WiFi intelligence data including DFS/channel info."""
     import subprocess
     import os
