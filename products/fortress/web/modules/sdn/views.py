@@ -61,9 +61,321 @@ try:
 except ImportError:
     pass
 
+# DFS Intelligence for WiFi channel data
+DFS_AVAILABLE = False
+try:
+    dfs_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'shared' / 'wireless'
+    sys.path.insert(0, str(dfs_path))
+    from dfs_intelligence import DFSDatabase, ChannelScorer
+    DFS_AVAILABLE = True
+except ImportError:
+    pass
+
+import subprocess
+import re
+import sqlite3
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # ============================================================
-# DEMO DATA
+# REAL DATA COLLECTION - Live system data
+# ============================================================
+
+def get_real_devices():
+    """
+    Collect real device data from system sources:
+    - ARP table (ip neigh show)
+    - DHCP leases (dnsmasq)
+    - OUI classification for manufacturer/category
+
+    Returns list of devices with real data.
+    """
+    devices = []
+    arp_devices = {}
+    dhcp_leases = {}
+    blocked_macs = set()
+
+    # 1. Get ARP table for live devices
+    try:
+        result = subprocess.run(
+            ['ip', 'neigh', 'show'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if not line or 'FAILED' in line:
+                    continue
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+
+                ip_address = parts[0]
+                mac_address = None
+                state = 'STALE'
+
+                # Find MAC address
+                for i, part in enumerate(parts):
+                    if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', part):
+                        mac_address = part.upper()
+                        break
+
+                if 'REACHABLE' in line:
+                    state = 'REACHABLE'
+                elif 'STALE' in line:
+                    state = 'STALE'
+                elif 'DELAY' in line:
+                    state = 'DELAY'
+
+                if mac_address:
+                    arp_devices[mac_address] = {
+                        'ip_address': ip_address,
+                        'state': state,
+                        'is_online': state in ('REACHABLE', 'DELAY'),
+                    }
+    except Exception as e:
+        logger.warning(f"Failed to read ARP table: {e}")
+
+    # 2. Get DHCP leases for hostnames
+    dhcp_files = [
+        '/var/lib/misc/dnsmasq.leases',
+        '/var/lib/dnsmasq/dnsmasq.leases',
+        '/var/lib/dhcp/dhcpd.leases',
+    ]
+    for dhcp_file in dhcp_files:
+        try:
+            with open(dhcp_file, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 4:
+                        # Format: timestamp MAC IP hostname client-id
+                        mac = parts[1].upper()
+                        ip = parts[2]
+                        hostname = parts[3] if parts[3] != '*' else None
+                        dhcp_leases[mac] = {
+                            'ip_address': ip,
+                            'hostname': hostname,
+                            'lease_time': parts[0],
+                        }
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            logger.warning(f"Failed to read DHCP leases from {dhcp_file}: {e}")
+
+    # 3. Get blocked MACs from OVS flows
+    try:
+        result = subprocess.run(
+            ['ovs-ofctl', 'dump-flows', 'FTS'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if 'actions=drop' in line and 'dl_src=' in line:
+                    match = re.search(r'dl_src=([0-9A-Fa-f:]+)', line)
+                    if match:
+                        blocked_macs.add(match.group(1).upper())
+    except Exception as e:
+        logger.debug(f"Failed to read OVS flows: {e}")
+
+    # 4. Merge data sources
+    all_macs = set(arp_devices.keys()) | set(dhcp_leases.keys())
+
+    for mac in all_macs:
+        arp_info = arp_devices.get(mac, {})
+        dhcp_info = dhcp_leases.get(mac, {})
+
+        # Get IP from ARP first, fallback to DHCP
+        ip_address = arp_info.get('ip_address') or dhcp_info.get('ip_address', '')
+
+        # Online if in ARP table with REACHABLE/DELAY state
+        is_online = arp_info.get('is_online', False)
+
+        # Blocked if MAC is in OVS drop flows
+        is_blocked = mac in blocked_macs
+
+        # Hostname from DHCP
+        hostname = dhcp_info.get('hostname', '')
+
+        # OUI classification
+        classification = classify_device(mac)
+        manufacturer = classification.get('manufacturer', 'Unknown')
+        category = classification.get('category', 'unknown')
+        recommended_policy = classification.get('recommended_policy', 'default')
+
+        # Determine network policy based on category
+        policy_map = {
+            'iot': 'lan_only',
+            'camera': 'lan_only',
+            'pos': 'internet_only',
+            'voice_assistant': 'internet_only',
+            'printer': 'lan_only',
+            'workstation': 'full_access',
+            'phone': 'full_access',
+            'tablet': 'full_access',
+            'unknown': 'default',
+        }
+        network_policy = policy_map.get(category, recommended_policy)
+
+        devices.append({
+            'mac_address': mac,
+            'ip_address': ip_address,
+            'hostname': hostname or f'device-{mac[-5:].replace(":", "")}',
+            'device_type': category,
+            'manufacturer': manufacturer,
+            'network_policy': network_policy,
+            'vlan_id': 100,  # Default LAN VLAN
+            'internet_access': network_policy in ('full_access', 'internet_only'),
+            'lan_access': network_policy in ('full_access', 'lan_only'),
+            'is_blocked': is_blocked,
+            'is_online': is_online,
+            'oui_category': category,
+            'auto_policy': recommended_policy,
+            'first_seen': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'last_seen': datetime.now().strftime('%Y-%m-%d %H:%M:%S') if is_online else '',
+            'bytes_sent': 0,
+            'bytes_received': 0,
+        })
+
+    return devices
+
+
+def get_dfs_intelligence():
+    """
+    Get real DFS/WiFi intelligence data from the database.
+
+    Returns dict with:
+    - ml_channel_score: Current ML-based channel safety score
+    - radar_events: Count of radar events in last 30 days
+    - channel_switches: Count of channel switches in last 30 days
+    - current_channel: Current WiFi channel
+    - next_optimization: Next scheduled optimization time
+    - last_optimization: Last optimization timestamp
+    """
+    data = {
+        'ml_channel_score': None,
+        'radar_events': 0,
+        'channel_switches': 0,
+        'current_channel': None,
+        'next_optimization': None,
+        'last_optimization': None,
+        'scan_mode': 'basic',
+    }
+
+    # Try to get data from DFS database
+    db_path = '/var/lib/hookprobe/dfs_intelligence.db'
+    try:
+        if Path(db_path).exists():
+            conn = sqlite3.connect(db_path, timeout=5)
+            cursor = conn.cursor()
+
+            # Get radar events count (last 30 days)
+            cursor.execute("""
+                SELECT COUNT(*) FROM radar_events
+                WHERE timestamp > datetime('now', '-30 days')
+            """)
+            row = cursor.fetchone()
+            if row:
+                data['radar_events'] = row[0]
+
+            # Get channel switches count (last 30 days)
+            cursor.execute("""
+                SELECT COUNT(*) FROM channel_switches
+                WHERE timestamp > datetime('now', '-30 days')
+            """)
+            row = cursor.fetchone()
+            if row:
+                data['channel_switches'] = row[0]
+
+            # Get last channel switch for current channel
+            cursor.execute("""
+                SELECT to_channel, timestamp FROM channel_switches
+                ORDER BY timestamp DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+            if row:
+                data['current_channel'] = row[0]
+                data['last_optimization'] = row[1]
+
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Failed to read DFS database: {e}")
+
+    # Get current channel from hostapd
+    try:
+        result = subprocess.run(
+            ['hostapd_cli', '-i', 'wlan0', 'status'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.startswith('channel='):
+                    data['current_channel'] = int(line.split('=')[1])
+                    break
+    except Exception as e:
+        logger.debug(f"Failed to get hostapd status: {e}")
+
+    # Get ML channel score if DFS available
+    if DFS_AVAILABLE and data['current_channel']:
+        try:
+            db = DFSDatabase(db_path)
+            scorer = ChannelScorer(db)
+            score = scorer.score_channel(data['current_channel'])
+            if score:
+                data['ml_channel_score'] = round(score.total_score * 100)
+        except Exception as e:
+            logger.debug(f"Failed to get ML channel score: {e}")
+
+    # Get next optimization time from systemd timer
+    try:
+        result = subprocess.run(
+            ['systemctl', 'show', 'fts-channel-optimize.timer', '--property=NextElapseUSecRealtime'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and '=' in result.stdout:
+            timestamp = result.stdout.strip().split('=')[1]
+            if timestamp and timestamp != 'n/a':
+                # Convert to readable format
+                data['next_optimization'] = timestamp
+    except Exception as e:
+        logger.debug(f"Failed to get optimization timer: {e}")
+
+    return data
+
+
+def get_real_network_stats(devices):
+    """
+    Calculate real network statistics from device list.
+    """
+    stats = {
+        'total_devices': len(devices),
+        'online_devices': 0,
+        'offline_devices': 0,
+        'blocked_devices': 0,
+        'policy_counts': {},
+        'category_counts': {},
+    }
+
+    for device in devices:
+        if device.get('is_online'):
+            stats['online_devices'] += 1
+        else:
+            stats['offline_devices'] += 1
+
+        if device.get('is_blocked'):
+            stats['blocked_devices'] += 1
+
+        policy = device.get('network_policy', 'default')
+        stats['policy_counts'][policy] = stats['policy_counts'].get(policy, 0) + 1
+
+        category = device.get('oui_category', 'unknown')
+        stats['category_counts'][category] = stats['category_counts'].get(category, 0) + 1
+
+    return stats
+
+
+# ============================================================
+# DEMO DATA (fallback only)
 # ============================================================
 
 def get_demo_devices():
@@ -397,10 +709,22 @@ def index():
     policies = []
     vlans = []
     stats = {}
+    dfs_data = {}
     network_mode = 'filter'  # or 'vlan'
+    using_real_data = False
 
-    # Try to load from database
-    if DB_AVAILABLE:
+    # Priority 1: Try to get real data from system (ARP, DHCP, OVS)
+    try:
+        real_devices = get_real_devices()
+        if real_devices:
+            devices = real_devices
+            using_real_data = True
+            logger.info(f"Loaded {len(devices)} devices from real system data")
+    except Exception as e:
+        logger.warning(f"Failed to get real device data: {e}")
+
+    # Priority 2: Try database if real scan found nothing
+    if not devices and DB_AVAILABLE:
         try:
             device_mgr = get_device_manager()
             devices = device_mgr.get_all_devices()
@@ -419,26 +743,51 @@ def index():
                         device[key] = str(device[key])
 
                 # Determine online status (last seen within 5 minutes)
-                last_seen = device.get('last_seen', '')
-                device['is_online'] = False  # Default
+                device['is_online'] = False  # Will be updated by ARP scan
+
+            if devices:
+                using_real_data = True
 
             vlan_mgr = get_vlan_manager()
             vlans = vlan_mgr.get_vlans()
 
-            # Load network mode from config
-            # TODO: Load from fortress.conf
-
         except Exception as e:
+            logger.warning(f"Database error: {e}")
             flash(f'Error loading devices: {e}', 'warning')
-            devices = get_demo_devices()
-            vlans = get_demo_vlans()
-    else:
+
+    # Priority 3: Fall back to demo data only if no real data found
+    if not devices:
         devices = get_demo_devices()
         vlans = get_demo_vlans()
+        logger.info("Using demo data (no real devices found)")
+
+    # Get real DFS/WiFi intelligence data
+    try:
+        dfs_data = get_dfs_intelligence()
+    except Exception as e:
+        logger.debug(f"Failed to get DFS data: {e}")
+        dfs_data = {
+            'ml_channel_score': None,
+            'radar_events': 0,
+            'channel_switches': 0,
+            'current_channel': None,
+            'next_optimization': None,
+            'last_optimization': None,
+            'scan_mode': 'basic',
+        }
+
+    # Load network mode from state file
+    try:
+        state_file = Path('/etc/hookprobe/fortress-state.json')
+        if state_file.exists():
+            state = json.loads(state_file.read_text())
+            network_mode = state.get('network_mode', 'filter')
+    except Exception:
+        pass
 
     # Always use standard policies
     policies = get_demo_policies()
-    stats = calculate_stats(devices) if devices else get_demo_stats()
+    stats = get_real_network_stats(devices) if devices else get_demo_stats()
 
     return render_template(
         'sdn/index.html',
@@ -446,9 +795,11 @@ def index():
         policies=policies,
         vlans=vlans,
         stats=stats,
+        dfs_data=dfs_data,
         network_mode=network_mode,
         db_available=DB_AVAILABLE,
-        policy_manager_available=POLICY_MANAGER_AVAILABLE
+        policy_manager_available=POLICY_MANAGER_AVAILABLE,
+        using_real_data=using_real_data
     )
 
 
@@ -867,8 +1218,19 @@ def discover_devices():
 def api_devices():
     """Get all devices with SDN info (JSON)."""
     devices = []
+    using_real_data = False
 
-    if DB_AVAILABLE:
+    # Priority 1: Try to get real data from system (ARP, DHCP, OVS)
+    try:
+        real_devices = get_real_devices()
+        if real_devices:
+            devices = real_devices
+            using_real_data = True
+    except Exception as e:
+        logger.warning(f"Failed to get real device data: {e}")
+
+    # Priority 2: Try database if real scan found nothing
+    if not devices and DB_AVAILABLE:
         try:
             device_mgr = get_device_manager()
             devices = device_mgr.get_all_devices()
@@ -882,9 +1244,13 @@ def api_devices():
                 for key in ['first_seen', 'last_seen']:
                     if device.get(key) and not isinstance(device[key], str):
                         device[key] = str(device[key])
+            if devices:
+                using_real_data = True
         except Exception:
-            devices = get_demo_devices()
-    else:
+            pass
+
+    # Priority 3: Fall back to demo data only if no real data found
+    if not devices:
         devices = get_demo_devices()
 
     # Apply filters
@@ -903,7 +1269,8 @@ def api_devices():
     return jsonify({
         'success': True,
         'count': len(devices),
-        'devices': devices
+        'devices': devices,
+        'using_real_data': using_real_data
     })
 
 
@@ -912,22 +1279,43 @@ def api_devices():
 def api_stats():
     """Get SDN statistics."""
     devices = []
+    using_real_data = False
 
-    if DB_AVAILABLE:
+    # Priority 1: Try to get real data from system
+    try:
+        real_devices = get_real_devices()
+        if real_devices:
+            devices = real_devices
+            using_real_data = True
+    except Exception:
+        pass
+
+    # Priority 2: Try database if no real data
+    if not devices and DB_AVAILABLE:
         try:
             device_mgr = get_device_manager()
             devices = device_mgr.get_all_devices()
             for device in devices:
                 classification = classify_device(device.get('mac_address', ''))
                 device['oui_category'] = classification.get('category', 'unknown')
+            if devices:
+                using_real_data = True
         except Exception:
             pass
 
     if not devices:
-        return jsonify({'success': True, 'stats': get_demo_stats()})
+        return jsonify({'success': True, 'stats': get_demo_stats(), 'using_real_data': False})
 
-    stats = calculate_stats(devices)
-    return jsonify({'success': True, 'stats': stats})
+    stats = get_real_network_stats(devices)
+
+    # Add DFS intelligence data
+    try:
+        dfs_data = get_dfs_intelligence()
+        stats['dfs'] = dfs_data
+    except Exception:
+        stats['dfs'] = {}
+
+    return jsonify({'success': True, 'stats': stats, 'using_real_data': using_real_data})
 
 
 @sdn_bp.route('/api/classify/<mac_address>')
@@ -955,24 +1343,26 @@ def api_policies():
 @login_required
 def api_wifi_intelligence():
     """Get WiFi channel optimization and DFS intelligence data."""
-    import subprocess
     import os
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
+    # Start with data from get_dfs_intelligence()
+    dfs_data = get_dfs_intelligence()
 
     data = {
-        'current_channel': None,
-        'band': '2.4GHz',
-        'hw_mode': 'g',
-        'last_optimization': None,
+        'current_channel': dfs_data.get('current_channel'),
+        'band': '5GHz' if dfs_data.get('current_channel') and dfs_data.get('current_channel') > 14 else '2.4GHz',
+        'hw_mode': 'a' if dfs_data.get('current_channel') and dfs_data.get('current_channel') > 14 else 'g',
+        'last_optimization': dfs_data.get('last_optimization'),
         'previous_channel': None,
-        'next_optimization': None,
+        'next_optimization': dfs_data.get('next_optimization'),
         'time_to_next': None,
-        'ml_score': None,
+        'ml_score': dfs_data.get('ml_channel_score'),
         'radar_events': [],
-        'radar_count_30d': 0,
-        'channel_switches_30d': 0,
-        'dfs_available': False,
-        'optimization_method': 'basic_scan',
+        'radar_count_30d': dfs_data.get('radar_events', 0),
+        'channel_switches_30d': dfs_data.get('channel_switches', 0),
+        'dfs_available': DFS_AVAILABLE or Path('/usr/local/bin/dfs-channel-selector').exists(),
+        'optimization_method': dfs_data.get('scan_mode', 'basic_scan'),
         'wifi_interface': None,
         'ssid': None,
     }
@@ -1114,7 +1504,16 @@ def export_devices():
     format_type = request.args.get('format', 'json')
     devices = []
 
-    if DB_AVAILABLE:
+    # Priority 1: Try to get real data from system
+    try:
+        real_devices = get_real_devices()
+        if real_devices:
+            devices = real_devices
+    except Exception:
+        pass
+
+    # Priority 2: Try database if no real data
+    if not devices and DB_AVAILABLE:
         try:
             device_mgr = get_device_manager()
             devices = device_mgr.get_all_devices()
@@ -1127,8 +1526,10 @@ def export_devices():
                     if device.get(key) and not isinstance(device[key], str):
                         device[key] = str(device[key])
         except Exception:
-            devices = get_demo_devices()
-    else:
+            pass
+
+    # Priority 3: Fall back to demo data
+    if not devices:
         devices = get_demo_devices()
 
     if format_type == 'csv':
