@@ -1,7 +1,7 @@
 # HookProbe Fortress - Gunicorn Configuration
 # Production WSGI server settings for Flask application
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 
 import os

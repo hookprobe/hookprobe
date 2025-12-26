@@ -17,7 +17,7 @@
 #   ./install-container.sh --quick      # Quick install with defaults
 #   ./install-container.sh --uninstall  # Complete removal
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 
 set -e
@@ -60,7 +60,7 @@ show_banner() {
  |  _  | (_) | (_) |   <|  __/| | | (_) | |_) |  __/
  |_| |_|\___/ \___/|_|\_\_|   |_|  \___/|_.__/ \___|
 
-           F O R T R E S S   v5.4.0
+           F O R T R E S S   v5.5.0
        Container-based Security Gateway
 EOF
     echo -e "${NC}"
@@ -985,7 +985,7 @@ create_configuration() {
 
 # Deployment mode
 FORTRESS_MODE=container
-FORTRESS_VERSION=5.4.0
+FORTRESS_VERSION=5.5.0
 
 # Network mode (vlan or filter)
 NETWORK_MODE=${NETWORK_MODE}
@@ -3206,7 +3206,7 @@ save_installation_state() {
     cat > "$STATE_FILE" << EOF
 {
     "deployment_mode": "container",
-    "version": "5.4.0",
+    "version": "5.5.0",
     "installed_at": "$(date -Iseconds)",
     "network_mode": "${NETWORK_MODE}",
     "security_core": true,
@@ -3225,7 +3225,7 @@ EOF
     chmod 600 "$STATE_FILE"
 
     # Create VERSION file
-    echo "5.4.0" > "${INSTALL_DIR}/VERSION"
+    echo "5.5.0" > "${INSTALL_DIR}/VERSION"
 
     log_info "Installation state saved"
 }
@@ -3252,7 +3252,12 @@ uninstall() {
     echo -e "${YELLOW}Uninstall Options:${NC}"
     echo "  --keep-data   : Preserve database and user data"
     echo "  --keep-config : Preserve configuration files"
-    echo "  --purge       : Remove everything"
+    echo "  --purge       : Remove everything including user data"
+    echo ""
+    echo -e "${GREEN}Always preserved (unless --purge):${NC}"
+    echo "  /var/lib/hookprobe/userdata/dnsxai/"
+    echo "    - whitelist.txt      User's DNS whitelist"
+    echo "    - config.json        dnsXai configuration"
     echo ""
     echo -e "${RED}Components to be removed:${NC}"
     echo ""
@@ -3442,6 +3447,26 @@ uninstall() {
     rm -rf "$INSTALL_DIR/devices" "$INSTALL_DIR/containers" 2>/dev/null || true
     [ "$keep_data" = false ] && rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
 
+    # Stage 9: Handle persistent user data
+    # /var/lib/hookprobe/userdata/dnsxai contains whitelist.txt and config.json
+    # This data should ALWAYS be preserved unless --purge is specified
+    local purge_mode=false
+    for arg in "$@"; do
+        [ "$arg" = "--purge" ] && purge_mode=true
+    done
+
+    if [ "$purge_mode" = true ]; then
+        log_info "Stage 9: Removing user data (--purge mode)..."
+        rm -rf /var/lib/hookprobe/userdata 2>/dev/null || true
+    else
+        if [ -d "/var/lib/hookprobe/userdata" ]; then
+            log_info "Stage 9: Preserving user data..."
+            log_info "  Location: /var/lib/hookprobe/userdata/"
+            log_info "  Contains: dnsXai whitelist, blocked traffic logs, user configs"
+            log_info "  Use --purge to remove this data"
+        fi
+    fi
+
     # Remove sysctl config
     rm -f /etc/sysctl.d/99-fts-forward.conf 2>/dev/null || true
 
@@ -3467,6 +3492,18 @@ uninstall() {
 
     if [ "$keep_config" = true ]; then
         echo "Configuration preserved in: $CONFIG_DIR"
+        echo ""
+    fi
+
+    # Always show user data preservation message unless --purge was used
+    if [ "$purge_mode" != true ] && [ -d "/var/lib/hookprobe/userdata" ]; then
+        echo -e "${GREEN}User data preserved!${NC}"
+        echo "  Location: /var/lib/hookprobe/userdata/"
+        echo "  Contains: dnsXai whitelist, blocked traffic logs"
+        echo "  This data will be automatically used on reinstall."
+        echo ""
+        echo "  To completely remove user data:"
+        echo "    rm -rf /var/lib/hookprobe/userdata"
         echo ""
     fi
 

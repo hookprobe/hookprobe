@@ -1,32 +1,25 @@
 #!/bin/bash
 #
 # HookProbe Fortress Control Script (fortress-ctl)
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 #
-# Unified installation, upgrade, backup, and uninstall management.
-# Supports staged operations with data preservation.
+# Installation, backup, and uninstall management.
+# For upgrades, use: uninstall --keep-data && ./install.sh
 #
 # Usage:
-#   fortress-ctl install [--container|--native] [--quick]
-#   fortress-ctl upgrade [--app|--full] [--backup]
+#   fortress-ctl install [--container] [--quick]
 #   fortress-ctl uninstall [--keep-data|--keep-config|--purge]
 #   fortress-ctl backup [--full|--db|--config]
 #   fortress-ctl restore <backup-file>
 #   fortress-ctl status
-#   fortress-ctl rollback
-#
-# Component Tiers:
-#   Tier 1 (Data):     PostgreSQL, users.json, SSL certs, audit logs
-#   Tier 2 (Infra):    Redis, nftables, systemd services, secrets
-#   Tier 3 (App):      Flask web app, templates, static assets
-#   Tier 4 (Core):     QSecBit, dnsXai models, device profiles
+#   fortress-ctl stop|start|restart
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="5.4.0"
+VERSION="5.5.0"
 
 # ============================================================
 # PATHS
@@ -119,113 +112,6 @@ get_deployment_mode() {
     get_state "deployment_mode" || echo "unknown"
 }
 
-# ============================================================
-# NETWORK STATE DETECTION (for upgrades)
-# ============================================================
-# Detects actual network configuration from running system and updates
-# fortress-state.json. This ensures Python config.py loads correct values
-# even when upgrading from older versions that didn't save network config.
-detect_and_update_network_state() {
-    log_substep "Detecting existing network configuration..."
-
-    # Check if network config already exists in state file
-    local current_subnet=$(get_state "lan_subnet")
-    local current_gateway=$(get_state "lan_gateway")
-    local current_bridge=$(get_state "ovs_bridge")
-
-    # If already configured and valid, skip detection
-    if [ -n "$current_subnet" ] && [ -n "$current_gateway" ] && [ -n "$current_bridge" ]; then
-        log_info "Network config already in state: subnet=$current_subnet, gateway=$current_gateway, bridge=$current_bridge"
-        return 0
-    fi
-
-    log_info "Network config missing from state file, detecting from running system..."
-
-    # Detect bridge name
-    local detected_bridge=""
-    for bridge in FTS fortress br-fortress; do
-        if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
-            detected_bridge="$bridge"
-            break
-        fi
-    done
-    [ -z "$detected_bridge" ] && detected_bridge="FTS"
-
-    # Detect gateway and subnet from running interfaces
-    local detected_gateway=""
-    local detected_subnet=""
-    local network_mode="filter"
-
-    # Try vlan100 first (VLAN mode)
-    if ip addr show vlan100 2>/dev/null | grep -q "inet "; then
-        detected_gateway=$(ip addr show vlan100 | grep -oP 'inet \K[\d.]+' | head -1)
-        detected_subnet=$(ip addr show vlan100 | grep -oP 'inet \K[\d./]+' | head -1)
-        network_mode="vlan"
-        log_info "VLAN mode detected: vlan100 = $detected_subnet"
-    fi
-
-    # Try FTS bridge (filter mode)
-    if [ -z "$detected_gateway" ]; then
-        if ip addr show "$detected_bridge" 2>/dev/null | grep -q "inet "; then
-            detected_gateway=$(ip addr show "$detected_bridge" | grep -oP 'inet \K[\d.]+' | head -1)
-            detected_subnet=$(ip addr show "$detected_bridge" | grep -oP 'inet \K[\d./]+' | head -1)
-            network_mode="filter"
-            log_info "Filter mode detected: $detected_bridge = $detected_subnet"
-        fi
-    fi
-
-    # Try fortress bridge (alternate name)
-    if [ -z "$detected_gateway" ]; then
-        if ip addr show fortress 2>/dev/null | grep -q "inet "; then
-            detected_gateway=$(ip addr show fortress | grep -oP 'inet \K[\d.]+' | head -1)
-            detected_subnet=$(ip addr show fortress | grep -oP 'inet \K[\d./]+' | head -1)
-            log_info "Detected from fortress bridge: $detected_subnet"
-        fi
-    fi
-
-    # Use defaults if nothing detected
-    if [ -z "$detected_gateway" ]; then
-        log_warn "Could not detect network config, using defaults"
-        detected_gateway="10.200.0.1"
-        detected_subnet="10.200.0.1/24"
-    fi
-
-    # Extract network address from CIDR
-    local lan_subnet=""
-    if [[ "$detected_subnet" == *"/"* ]]; then
-        local gateway_ip="${detected_subnet%/*}"
-        local subnet_mask="${detected_subnet#*/}"
-        local network_addr="${gateway_ip%.*}.0"
-        lan_subnet="${network_addr}/${subnet_mask}"
-    else
-        lan_subnet="10.200.0.0/24"
-    fi
-
-    # Detect DHCP range from dnsmasq config
-    local dhcp_start="10.200.0.100"
-    local dhcp_end="10.200.0.200"
-    for conf in /etc/dnsmasq.d/fortress*.conf /etc/dnsmasq.d/fts*.conf; do
-        if [ -f "$conf" ]; then
-            local dhcp_range=$(grep -oP 'dhcp-range=\K[^,]+,[^,]+' "$conf" 2>/dev/null | head -1)
-            if [ -n "$dhcp_range" ]; then
-                dhcp_start="${dhcp_range%,*}"
-                dhcp_end="${dhcp_range#*,}"
-                break
-            fi
-        fi
-    done
-
-    # Update state file with detected values
-    log_info "Updating state: subnet=$lan_subnet, gateway=$detected_gateway, bridge=$detected_bridge"
-    set_state "lan_subnet" "$lan_subnet"
-    set_state "lan_gateway" "$detected_gateway"
-    set_state "ovs_bridge" "$detected_bridge"
-    set_state "network_mode" "$network_mode"
-    set_state "lan_dhcp_start" "$dhcp_start"
-    set_state "lan_dhcp_end" "$dhcp_end"
-
-    log_info "Network state updated for Python config.py to load"
-}
 
 # ============================================================
 # BACKUP FUNCTIONS
@@ -357,10 +243,10 @@ list_backups() {
 }
 
 # ============================================================
-# STOP ALL SERVICES (comprehensive)
+# STOP ALL SERVICES (comprehensive - for UNINSTALL only)
 # ============================================================
 stop_all_services() {
-    log_step "Stopping all Fortress services"
+    log_step "Stopping all Fortress services (full teardown)"
 
     # 1. Stop systemd services first (graceful)
     log_substep "Stopping systemd services..."
@@ -394,7 +280,7 @@ stop_all_services() {
     pkill -f "hostapd.*fortress\|hostapd.*fts" 2>/dev/null || true
     pkill -f "dnsmasq.*fortress\|dnsmasq.*fts" 2>/dev/null || true
 
-    # 6. Clear OVS
+    # 6. Clear OVS (ONLY for uninstall - NOT for upgrade)
     log_substep "Clearing OVS..."
     ovs-ofctl del-flows FTS 2>/dev/null || true
     ovs-vsctl del-br FTS 2>/dev/null || true
@@ -414,210 +300,7 @@ stop_all_services() {
     log_info "All services stopped"
 }
 
-# ============================================================
-# UPGRADE FUNCTIONS
-# ============================================================
-upgrade_app() {
-    # Tier 3 upgrade - Application only (hot upgrade)
-    log_step "Upgrading application (Tier 3)"
 
-    # CRITICAL: Detect existing network config before upgrade
-    # This ensures Python config.py loads correct subnet (e.g., /28 vs /23)
-    detect_and_update_network_state
-
-    # Pre-upgrade backup
-    local backup_file=$(create_backup "app")
-    set_state "last_app_backup" "$backup_file"
-
-    # Deployment mode check
-    local mode=$(get_deployment_mode)
-
-    if [ "$mode" = "container" ]; then
-        log_substep "Rebuilding web container..."
-
-        # Build new image with different tag
-        local new_tag="fts-web:$(date +%Y%m%d%H%M%S)"
-        podman build -f "${CONTAINERS_DIR}/Containerfile.web" -t "localhost/${new_tag}" "$SCRIPT_DIR" || {
-            log_error "Build failed, aborting upgrade"
-            exit 1
-        }
-
-        # Health check new image
-        log_substep "Testing new image..."
-        podman run --rm -d --name fts-web-test "localhost/${new_tag}" &>/dev/null || {
-            log_error "New image failed to start"
-            podman rmi "localhost/${new_tag}" 2>/dev/null
-            exit 1
-        }
-        sleep 5
-        podman stop fts-web-test 2>/dev/null || true
-
-        # Rolling update
-        log_substep "Performing rolling update..."
-        cd "$CONTAINERS_DIR"
-
-        # Update compose file to use new image
-        sed -i "s|image: localhost/fts-web:.*|image: localhost/${new_tag}|" podman-compose.yml
-
-        # Recreate web container only
-        podman-compose up -d --no-deps web
-
-        # Wait for health check
-        local retries=30
-        while [ $retries -gt 0 ]; do
-            if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
-                log_info "New container is healthy"
-                break
-            fi
-            sleep 2
-            ((retries--))
-        done
-
-        if [ $retries -eq 0 ]; then
-            log_error "Health check failed, rolling back..."
-            rollback_app
-            exit 1
-        fi
-
-        # Clean old image
-        podman rmi localhost/fts-web:latest 2>/dev/null || true
-        podman tag "localhost/${new_tag}" localhost/fts-web:latest
-
-    else
-        # Native deployment - update files in place
-        log_substep "Updating application files..."
-
-        # Stop web service briefly
-        systemctl stop fts-web 2>/dev/null || true
-
-        # Copy new files
-        cp -r "${SCRIPT_DIR}/web/"* "${INSTALL_DIR}/web/"
-        cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
-
-        # Restart
-        systemctl start fts-web 2>/dev/null || true
-    fi
-
-    # Update version
-    echo "$VERSION" > "$VERSION_FILE"
-    set_state "last_upgrade" "$(date -Iseconds)"
-    set_state "last_upgrade_type" "app"
-
-    log_info "Application upgrade complete"
-}
-
-upgrade_full() {
-    # Full upgrade - all tiers including all data-displaying containers
-    log_step "Performing full upgrade (network + all containers)"
-
-    # CRITICAL: Detect existing network config BEFORE stopping services
-    # This ensures Python config.py loads correct subnet (e.g., /28 vs /23)
-    detect_and_update_network_state
-
-    # Pre-upgrade backup (before stopping anything)
-    local backup_file=$(create_backup "full")
-    set_state "last_full_backup" "$backup_file"
-
-    # CRITICAL: Stop all services before upgrade
-    # This ensures clean state for rebuilding containers
-    stop_all_services
-
-    # Check for database migrations
-    log_substep "Checking database schema..."
-    # TODO: Run alembic migrations if needed
-
-    # Upgrade infrastructure (Tier 2)
-    log_substep "Upgrading infrastructure..."
-
-    # Regenerate secrets if needed (rotate)
-    if [ "$(get_state 'secrets_rotated')" != "$(date +%Y%m)" ]; then
-        log_substep "Rotating secrets (monthly)..."
-        # Ensure secrets directory exists
-        mkdir -p "${CONTAINERS_DIR}/secrets"
-        # Generate new Flask secret
-        openssl rand -base64 48 | tr -d '/+=' | head -c 48 > "${CONTAINERS_DIR}/secrets/flask_secret.new"
-        # Note: Don't rotate during upgrade, just flag for next maintenance window
-        set_state "secrets_pending_rotation" "true"
-    fi
-
-    # Update systemd services
-    log_substep "Updating systemd services..."
-    if [ -d "${SCRIPT_DIR}/systemd" ]; then
-        cp "${SCRIPT_DIR}/systemd/"*.service /etc/systemd/system/ 2>/dev/null || true
-        cp "${SCRIPT_DIR}/systemd/"*.timer /etc/systemd/system/ 2>/dev/null || true
-        systemctl daemon-reload
-    fi
-
-    # Rebuild ALL data-displaying containers (Tier 3 + 4)
-    log_step "Rebuilding all containers"
-    cd "$CONTAINERS_DIR"
-
-    # Remove old containers
-    log_substep "Removing old containers..."
-    podman-compose down --timeout 30 2>/dev/null || true
-
-    # Rebuild web (SDN dashboard, device management)
-    log_substep "Building web container (SDN dashboard)..."
-    podman-compose build --no-cache web || {
-        log_error "Web container build failed"
-        exit 1
-    }
-
-    # Rebuild dnsXai (DNS protection)
-    log_substep "Building dnsXai container (DNS protection)..."
-    podman-compose build --no-cache dnsxai || {
-        log_warn "dnsXai container build failed (optional)"
-    }
-
-    # Rebuild DFS intelligence (WiFi channel management)
-    log_substep "Building DFS container (WiFi intelligence)..."
-    podman-compose build --no-cache dfs-intelligence || {
-        log_warn "DFS container build failed (optional)"
-    }
-
-    # Rebuild QSecBit (security scoring)
-    log_substep "Building QSecBit container (security engine)..."
-    podman-compose build --no-cache qsecbit-agent || {
-        log_warn "QSecBit container build failed (optional)"
-    }
-
-    # Start all containers
-    log_substep "Starting all containers..."
-    podman-compose up -d
-
-    # Wait for services to be ready
-    log_substep "Waiting for services..."
-    local retries=30
-    while [ $retries -gt 0 ]; do
-        if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
-            log_info "Web UI is healthy"
-            break
-        fi
-        sleep 2
-        ((retries--))
-    done
-
-    # Restart WiFi and DHCP services
-    log_substep "Restarting network services..."
-    systemctl restart fortress-hostapd-2ghz fortress-hostapd-5ghz 2>/dev/null || true
-    systemctl restart fortress-dnsmasq 2>/dev/null || true
-
-    # Update state
-    echo "$VERSION" > "$VERSION_FILE"
-    set_state "last_upgrade" "$(date -Iseconds)"
-    set_state "last_upgrade_type" "full"
-
-    # Note: Core version check
-    local core_version=$(cat "${SCRIPT_DIR}/../../core/VERSION" 2>/dev/null || echo "unknown")
-    if [ "$core_version" != "$(get_state 'core_version')" ]; then
-        set_state "core_version" "$core_version"
-    fi
-
-    log_info "Full upgrade complete"
-    echo ""
-    echo "Upgraded containers:"
-    podman ps --filter "name=fts-" --format "  {{.Names}}: {{.Status}}"
-}
 
 # ============================================================
 # START ALL SERVICES
@@ -686,28 +369,6 @@ start_all_services() {
     log_warn "Services started but web health check failed"
 }
 
-rollback_app() {
-    log_step "Rolling back application"
-
-    local backup_file=$(get_state "last_app_backup")
-    if [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; then
-        log_error "No backup available for rollback"
-        exit 1
-    fi
-
-    restore_backup "$backup_file"
-
-    # Restart services
-    local mode=$(get_deployment_mode)
-    if [ "$mode" = "container" ]; then
-        cd "$CONTAINERS_DIR"
-        podman-compose restart web
-    else
-        systemctl restart fts-web 2>/dev/null || true
-    fi
-
-    log_info "Rollback complete"
-}
 
 # ============================================================
 # UNINSTALL FUNCTIONS
@@ -878,27 +539,18 @@ Commands:
     --quick       Use defaults, minimal prompts
     --preserve-data  Reuse existing data volumes
 
-  upgrade       Upgrade Fortress installation
-    --app         Application only (Tier 3, hot upgrade)
-    --full        Full upgrade (Tiers 2-3)
-    --backup      Create backup before upgrade (default: yes)
-    --no-backup   Skip pre-upgrade backup
-
   uninstall     Remove Fortress installation
-    --keep-data   Preserve database and user data (Tier 1)
+    --keep-data   Preserve database and user data
     --keep-config Preserve configuration files
     --purge       Remove everything including backups
 
   backup        Create backup
-    --full        Full backup (all tiers)
+    --full        Full backup (all data)
     --db          Database only
     --config      Configuration only
-    --app         Application only
 
   restore       Restore from backup
     <file>        Path to backup file
-
-  rollback      Rollback last application upgrade
 
   stop          Stop all Fortress services (containers, hostapd, dnsmasq)
   start         Start all Fortress services
@@ -908,15 +560,14 @@ Commands:
 
   list-backups  List available backups
 
-Component Tiers:
-  Tier 1 (Data):   PostgreSQL, user data, SSL certs - preserved by default
-  Tier 2 (Infra):  Redis, nftables, systemd services - upgraded cautiously
-  Tier 3 (App):    Flask web app, templates, static - hot upgradeable
-  Tier 4 (Core):   QSecBit, dnsXai, HTP - requires full reinstall
+Upgrading:
+  To upgrade Fortress, use uninstall with --keep-data then reinstall:
+    fortress-ctl backup --full
+    fortress-ctl uninstall --keep-data
+    ./install.sh
 
 Examples:
   fortress-ctl install --container
-  fortress-ctl upgrade --app
   fortress-ctl backup --full
   fortress-ctl uninstall --keep-data
   fortress-ctl restore /var/backups/fortress/fortress_full_20250101.tar.gz
@@ -969,26 +620,6 @@ main() {
             fi
             ;;
 
-        upgrade)
-            local upgrade_type="app"
-            local do_backup=true
-
-            while [[ $# -gt 0 ]]; do
-                case "$1" in
-                    --app) upgrade_type="app"; shift ;;
-                    --full) upgrade_type="full"; shift ;;
-                    --backup) do_backup=true; shift ;;
-                    --no-backup) do_backup=false; shift ;;
-                    *) shift ;;
-                esac
-            done
-
-            case "$upgrade_type" in
-                app) upgrade_app ;;
-                full) upgrade_full ;;
-            esac
-            ;;
-
         uninstall)
             local keep_data=false
             local keep_config=false
@@ -1030,10 +661,6 @@ main() {
                 exit 1
             fi
             restore_backup "$backup_file"
-            ;;
-
-        rollback)
-            rollback_app
             ;;
 
         stop)
