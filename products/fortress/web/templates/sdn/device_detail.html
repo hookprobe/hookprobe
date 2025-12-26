@@ -324,6 +324,68 @@
             </div>
         </div>
 
+        <!-- Segment Assignment -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-project-diagram mr-2"></i>Network Segment</h3>
+            </div>
+            <div class="card-body">
+                <form id="segment-form" action="{{ url_for('sdn.assign_segment') }}" method="POST">
+                    <input type="hidden" name="mac" value="{{ device.mac }}">
+                    <div class="form-group">
+                        <label for="segment">Move to Segment</label>
+                        <select name="segment" id="segment" class="form-control bg-dark text-white">
+                            <option value="10" {% if device.vlan_id == 10 %}selected{% endif %}>🛡️ SECMON (VLAN 10)</option>
+                            <option value="20" {% if device.vlan_id == 20 %}selected{% endif %}>💳 POS (VLAN 20)</option>
+                            <option value="30" {% if device.vlan_id == 30 %}selected{% endif %}>💻 CLIENTS (VLAN 30)</option>
+                            <option value="40" {% if device.vlan_id == 40 %}selected{% endif %}>🌐 GUEST (VLAN 40)</option>
+                            <option value="50" {% if device.vlan_id == 50 %}selected{% endif %}>📹 CAMERAS (VLAN 50)</option>
+                            <option value="60" {% if device.vlan_id == 60 %}selected{% endif %}>🔌 IIOT (VLAN 60)</option>
+                            <option value="99" {% if device.vlan_id == 99 %}selected{% endif %}>⚠️ QUARANTINE (VLAN 99)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-outline-info btn-block">
+                        <i class="fas fa-exchange-alt mr-1"></i> Move to Segment
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- DNS Protection (dnsXai) -->
+        <div class="card card-dark">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shield-virus mr-2"></i>DNS Protection</h3>
+            </div>
+            <div class="card-body">
+                <div id="dns-status" class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>DNS Filtering</span>
+                        <span id="dns-filter-status" class="badge badge-secondary">Loading...</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>Blocked Queries</span>
+                        <span id="dns-blocked-count" class="badge badge-warning">0</span>
+                    </div>
+                </div>
+                <hr class="bg-secondary">
+                <div class="form-group">
+                    <label>Quick DNS Block</label>
+                    <div class="input-group">
+                        <input type="text" id="dns-block-domain" class="form-control bg-dark text-white" placeholder="domain.com">
+                        <div class="input-group-append">
+                            <button type="button" class="btn btn-danger" onclick="blockDomain()">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <small class="text-muted">Block specific domains for this device</small>
+                </div>
+                <a href="{{ url_for('dnsxai.index') }}" class="btn btn-outline-primary btn-block">
+                    <i class="fas fa-cog mr-1"></i> Advanced DNS Settings
+                </a>
+            </div>
+        </div>
+
         <!-- OUI Classification -->
         <div class="card card-dark">
             <div class="card-header">
@@ -505,6 +567,78 @@ $('#policy-form').on('submit', function(e) {
         .fail(function() {
             toastr.error('Network error');
         });
+});
+
+// Handle segment form submission via AJAX
+$('#segment-form').on('submit', function(e) {
+    e.preventDefault();
+    var form = $(this);
+
+    $.post(form.attr('action'), form.serialize())
+        .done(function(response) {
+            if (response.success) {
+                toastr.success(response.message || 'Segment updated successfully');
+                setTimeout(function() { location.reload(); }, 1500);
+            } else {
+                toastr.error(response.error || 'Failed to update segment');
+            }
+        })
+        .fail(function() {
+            toastr.error('Network error');
+        });
+});
+
+// Block a domain via dnsXai
+function blockDomain() {
+    var domain = $('#dns-block-domain').val().trim();
+    if (!domain) {
+        toastr.warning('Please enter a domain to block');
+        return;
+    }
+
+    $.ajax({
+        url: '{{ url_for("dnsxai.api_add_whitelist") }}',  // Actually using blocklist endpoint
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ domain: domain, block: true }),
+        success: function(response) {
+            if (response.success) {
+                toastr.success('Domain blocked: ' + domain);
+                $('#dns-block-domain').val('');
+            } else {
+                toastr.error(response.error || 'Failed to block domain');
+            }
+        },
+        error: function() {
+            // Fallback: show manual instructions
+            toastr.info('Add "' + domain + '" to your dnsXai blocklist manually');
+        }
+    });
+}
+
+// Load DNS status
+function loadDnsStatus() {
+    $.get('{{ url_for("dnsxai.api_stats") }}')
+        .done(function(data) {
+            if (data.status === 'active') {
+                $('#dns-filter-status').removeClass('badge-secondary badge-warning')
+                    .addClass('badge-success').text('Active');
+            } else if (data.status === 'paused') {
+                $('#dns-filter-status').removeClass('badge-secondary badge-success')
+                    .addClass('badge-warning').text('Paused');
+            } else {
+                $('#dns-filter-status').text('Offline');
+            }
+            $('#dns-blocked-count').text(data.blocked || 0);
+        })
+        .fail(function() {
+            $('#dns-filter-status').text('Unavailable');
+        });
+}
+
+// Load DNS status on page load
+$(document).ready(function() {
+    loadDnsStatus();
 });
 </script>
 {% endblock %}
