@@ -46,7 +46,7 @@
 #   - QoS meters for rate limiting
 #   - VXLAN tunnels for mesh connectivity
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 
 version: '3.8'
