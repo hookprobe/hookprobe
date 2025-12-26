@@ -3252,7 +3252,12 @@ uninstall() {
     echo -e "${YELLOW}Uninstall Options:${NC}"
     echo "  --keep-data   : Preserve database and user data"
     echo "  --keep-config : Preserve configuration files"
-    echo "  --purge       : Remove everything"
+    echo "  --purge       : Remove everything including user data"
+    echo ""
+    echo -e "${GREEN}Always preserved (unless --purge):${NC}"
+    echo "  /var/lib/hookprobe/userdata/dnsxai/"
+    echo "    - whitelist.txt      User's DNS whitelist"
+    echo "    - config.json        dnsXai configuration"
     echo ""
     echo -e "${RED}Components to be removed:${NC}"
     echo ""
@@ -3442,6 +3447,26 @@ uninstall() {
     rm -rf "$INSTALL_DIR/devices" "$INSTALL_DIR/containers" 2>/dev/null || true
     [ "$keep_data" = false ] && rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
 
+    # Stage 9: Handle persistent user data
+    # /var/lib/hookprobe/userdata/dnsxai contains whitelist.txt and config.json
+    # This data should ALWAYS be preserved unless --purge is specified
+    local purge_mode=false
+    for arg in "$@"; do
+        [ "$arg" = "--purge" ] && purge_mode=true
+    done
+
+    if [ "$purge_mode" = true ]; then
+        log_info "Stage 9: Removing user data (--purge mode)..."
+        rm -rf /var/lib/hookprobe/userdata 2>/dev/null || true
+    else
+        if [ -d "/var/lib/hookprobe/userdata" ]; then
+            log_info "Stage 9: Preserving user data..."
+            log_info "  Location: /var/lib/hookprobe/userdata/"
+            log_info "  Contains: dnsXai whitelist, blocked traffic logs, user configs"
+            log_info "  Use --purge to remove this data"
+        fi
+    fi
+
     # Remove sysctl config
     rm -f /etc/sysctl.d/99-fts-forward.conf 2>/dev/null || true
 
@@ -3467,6 +3492,18 @@ uninstall() {
 
     if [ "$keep_config" = true ]; then
         echo "Configuration preserved in: $CONFIG_DIR"
+        echo ""
+    fi
+
+    # Always show user data preservation message unless --purge was used
+    if [ "$purge_mode" != true ] && [ -d "/var/lib/hookprobe/userdata" ]; then
+        echo -e "${GREEN}User data preserved!${NC}"
+        echo "  Location: /var/lib/hookprobe/userdata/"
+        echo "  Contains: dnsXai whitelist, blocked traffic logs"
+        echo "  This data will be automatically used on reinstall."
+        echo ""
+        echo "  To completely remove user data:"
+        echo "    rm -rf /var/lib/hookprobe/userdata"
         echo ""
     fi
 
