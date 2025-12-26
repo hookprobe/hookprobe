@@ -1,0 +1,472 @@
+{% extends "base.html" %}
+
+{% block title %}Network Segments - Fortress{% endblock %}
+
+{% block extra_css %}
+<style>
+/* Segment Dashboard Styling */
+.segment-card {
+    border-radius: 8px;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+    height: 100%;
+}
+
+.segment-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+
+.segment-header {
+    padding: 15px 20px;
+    border-radius: 8px 8px 0 0;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.segment-header .icon {
+    font-size: 2rem;
+    opacity: 0.9;
+}
+
+.segment-header .title {
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.segment-header .vlan-badge {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.2);
+}
+
+.segment-body {
+    padding: 20px;
+}
+
+/* Traffic Stats */
+.traffic-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.traffic-stat {
+    text-align: center;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+
+.traffic-stat .value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #333;
+}
+
+.traffic-stat .label {
+    font-size: 0.75rem;
+    color: #666;
+    text-transform: uppercase;
+}
+
+.traffic-stat.in .value { color: #28a745; }
+.traffic-stat.out .value { color: #dc3545; }
+
+/* Traffic Pips Chart - Financial Style */
+.traffic-chart {
+    height: 80px;
+    position: relative;
+    background: linear-gradient(to bottom, rgba(40,167,69,0.05) 0%, transparent 50%, rgba(220,53,69,0.05) 100%);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 15px 0;
+}
+
+.traffic-chart .zero-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    background: #dee2e6;
+}
+
+.traffic-chart .pip-container {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    gap: 1px;
+}
+
+.traffic-chart .pip {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    position: relative;
+}
+
+.traffic-chart .pip .bar-in {
+    position: absolute;
+    bottom: 50%;
+    width: 80%;
+    background: linear-gradient(to top, #28a745, #20c997);
+    border-radius: 1px 1px 0 0;
+    min-height: 1px;
+}
+
+.traffic-chart .pip .bar-out {
+    position: absolute;
+    top: 50%;
+    width: 80%;
+    background: linear-gradient(to bottom, #dc3545, #fd7e14);
+    border-radius: 0 0 1px 1px;
+    min-height: 1px;
+}
+
+/* Device List in Segment */
+.device-list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.device-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    margin-bottom: 5px;
+    font-size: 0.85rem;
+}
+
+.device-item .name {
+    font-weight: 500;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+}
+
+.device-item .traffic {
+    color: #666;
+    font-size: 0.75rem;
+}
+
+/* Bandwidth Indicator */
+.bandwidth-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+.bandwidth-indicator .label {
+    font-size: 0.75rem;
+    color: #666;
+    text-transform: uppercase;
+}
+
+.bandwidth-indicator .value {
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+/* Summary Cards */
+.summary-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.summary-card {
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.summary-card .icon {
+    font-size: 2.5rem;
+    opacity: 0.8;
+}
+
+.summary-card .content .value {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.summary-card .content .label {
+    font-size: 0.85rem;
+    opacity: 0.9;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .traffic-stats {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="content-header">
+    <div class="container-fluid">
+        <div class="row mb-2">
+            <div class="col-sm-6">
+                <h1 class="m-0">
+                    <i class="fas fa-network-wired mr-2"></i>
+                    Network Segments
+                </h1>
+            </div>
+            <div class="col-sm-6">
+                <ol class="breadcrumb float-sm-right">
+                    <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('sdn.index') }}">SDN</a></li>
+                    <li class="breadcrumb-item active">Segments</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="content">
+    <div class="container-fluid">
+        <!-- Summary Row -->
+        <div class="summary-row mb-4">
+            <div class="summary-card" style="background: linear-gradient(135deg, #17a2b8, #138496);">
+                <div class="icon"><i class="fas fa-network-wired"></i></div>
+                <div class="content">
+                    <div class="value" id="total-devices">{{ segments.values()|sum(attribute='device_count') if segments else 0 }}</div>
+                    <div class="label">Total Devices</div>
+                </div>
+            </div>
+            <div class="summary-card" style="background: linear-gradient(135deg, #28a745, #1e7e34);">
+                <div class="icon"><i class="fas fa-circle"></i></div>
+                <div class="content">
+                    <div class="value" id="active-devices">{{ segments.values()|sum(attribute='active_count') if segments else 0 }}</div>
+                    <div class="label">Active Now</div>
+                </div>
+            </div>
+            <div class="summary-card" style="background: linear-gradient(135deg, #6f42c1, #5a32a3);">
+                <div class="icon"><i class="fas fa-tachometer-alt"></i></div>
+                <div class="content">
+                    <div class="value" id="total-bandwidth">{{ "%.1f"|format(segments.values()|sum(attribute='bandwidth_mbps')) if segments else 0 }} Mbps</div>
+                    <div class="label">Total Bandwidth</div>
+                </div>
+            </div>
+            <div class="summary-card" style="background: linear-gradient(135deg, #fd7e14, #dc6d0e);">
+                <div class="icon"><i class="fas fa-project-diagram"></i></div>
+                <div class="content">
+                    <div class="value">{{ segments|length if segments else 0 }}</div>
+                    <div class="label">Active Segments</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Segment Cards -->
+        <div class="row">
+            {% for seg_key, seg in segments.items() %}
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="segment-card card">
+                    <div class="segment-header" style="background: {{ seg.color }};">
+                        <div>
+                            <i class="fas {{ seg.icon }} icon"></i>
+                            <div class="title">{{ seg.name }}</div>
+                        </div>
+                        <span class="vlan-badge">VLAN {{ seg.vlan_id }}</span>
+                    </div>
+                    <div class="segment-body">
+                        <!-- Traffic Stats -->
+                        <div class="traffic-stats">
+                            <div class="traffic-stat in">
+                                <div class="value" data-bytes="{{ seg.bytes_in }}">{{ format_bytes(seg.bytes_in) }}</div>
+                                <div class="label"><i class="fas fa-arrow-down mr-1"></i>Downloaded</div>
+                            </div>
+                            <div class="traffic-stat out">
+                                <div class="value" data-bytes="{{ seg.bytes_out }}">{{ format_bytes(seg.bytes_out) }}</div>
+                                <div class="label"><i class="fas fa-arrow-up mr-1"></i>Uploaded</div>
+                            </div>
+                        </div>
+
+                        <!-- Traffic Pips Chart -->
+                        <div class="traffic-chart" id="chart-{{ seg_key }}" data-segment="{{ seg_key }}">
+                            <div class="zero-line"></div>
+                            <div class="pip-container">
+                                {% for sample in seg.traffic_history[-30:] %}
+                                <div class="pip">
+                                    <div class="bar-in" style="height: {{ [sample.in / 10000, 40]|min }}%;"></div>
+                                    <div class="bar-out" style="height: {{ [sample.out / 10000, 40]|min }}%;"></div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+
+                        <!-- Device Count -->
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <span>
+                                <i class="fas fa-laptop mr-1"></i>
+                                <strong>{{ seg.device_count }}</strong> devices
+                            </span>
+                            <span class="text-success">
+                                <i class="fas fa-circle mr-1" style="font-size: 0.5rem;"></i>
+                                {{ seg.active_count }} active
+                            </span>
+                        </div>
+
+                        <!-- Top Devices -->
+                        <div class="device-list">
+                            {% for device in seg.top_devices[:3] %}
+                            <div class="device-item">
+                                <span class="name" title="{{ device.hostname or device.mac }}">
+                                    {{ device.hostname or device.mac[:17] }}
+                                </span>
+                                <span class="traffic">{{ format_bytes(device.bytes) }}</span>
+                            </div>
+                            {% else %}
+                            <div class="text-muted text-center py-3">
+                                <i class="fas fa-inbox mr-1"></i> No devices
+                            </div>
+                            {% endfor %}
+                        </div>
+
+                        <!-- Bandwidth Indicator -->
+                        <div class="bandwidth-indicator">
+                            <span class="label">Current Bandwidth</span>
+                            <span class="value" style="color: {{ seg.color }};">
+                                {{ "%.1f"|format(seg.bandwidth_mbps) }} Mbps
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body text-center py-5">
+                        <i class="fas fa-network-wired fa-3x text-muted mb-3"></i>
+                        <h4>No Segments Configured</h4>
+                        <p class="text-muted">SDN Auto-Pilot will automatically classify devices as they connect.</p>
+                        {% if not autopilot_available %}
+                        <p class="text-warning">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            SDN Auto-Pilot module not available
+                        </p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Legend -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>Traffic Chart Legend</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p class="mb-1">
+                            <span class="badge" style="background: linear-gradient(to top, #28a745, #20c997); width: 20px; height: 10px; display: inline-block; border-radius: 2px;"></span>
+                            <strong>Bars Above Line</strong> - Download traffic (bits in)
+                        </p>
+                        <p class="mb-1">
+                            <span class="badge" style="background: linear-gradient(to bottom, #dc3545, #fd7e14); width: 20px; height: 10px; display: inline-block; border-radius: 2px;"></span>
+                            <strong>Bars Below Line</strong> - Upload traffic (bits out)
+                        </p>
+                    </div>
+                    <div class="col-md-6">
+                        <p class="mb-0 text-muted">
+                            Each bar represents 10 seconds of traffic. Taller bars indicate higher volume.
+                            Charts update automatically every 10 seconds.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Format bytes for display
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Update traffic charts via AJAX
+function updateTrafficCharts() {
+    fetch('{{ url_for("sdn.api_segments") }}')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.segments) {
+                Object.keys(data.segments).forEach(segKey => {
+                    const seg = data.segments[segKey];
+                    const chart = document.getElementById('chart-' + segKey);
+                    if (chart && seg.traffic_history) {
+                        updatePipChart(chart, seg.traffic_history.slice(-30));
+                    }
+                });
+            }
+        })
+        .catch(err => console.error('Failed to update charts:', err));
+}
+
+// Update individual pip chart
+function updatePipChart(container, history) {
+    const pipContainer = container.querySelector('.pip-container');
+    if (!pipContainer) return;
+
+    // Clear existing pips
+    pipContainer.innerHTML = '';
+
+    // Create new pips
+    history.forEach(sample => {
+        const pip = document.createElement('div');
+        pip.className = 'pip';
+
+        const barIn = document.createElement('div');
+        barIn.className = 'bar-in';
+        barIn.style.height = Math.min(sample.in / 10000, 40) + '%';
+
+        const barOut = document.createElement('div');
+        barOut.className = 'bar-out';
+        barOut.style.height = Math.min(sample.out / 10000, 40) + '%';
+
+        pip.appendChild(barIn);
+        pip.appendChild(barOut);
+        pipContainer.appendChild(pip);
+    });
+}
+
+// Auto-refresh every 10 seconds
+setInterval(updateTrafficCharts, 10000);
+
+// Initial load
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Segment dashboard loaded');
+});
+</script>
+{% endblock %}
