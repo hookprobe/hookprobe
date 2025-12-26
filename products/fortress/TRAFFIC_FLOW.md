@@ -280,5 +280,5 @@ nft list chain inet fts_wan_failover forward
 
 ## Version
 - Document: 1.0.0
-- Fortress: 5.4.0
-- Date: 2024-12-22
+- Fortress: 5.5.0
+- Date: 2024-12-26
