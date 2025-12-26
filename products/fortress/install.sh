@@ -1,22 +1,21 @@
 #!/bin/bash
 #
 # HookProbe Fortress - Unified Installer
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 #
 # Single entry point for all Fortress operations:
-#   - Install (native or container mode)
-#   - Upgrade (application, full, or specific components)
+#   - Install (container mode with VLAN segmentation)
 #   - Uninstall (staged with data preservation options)
 #   - Backup/Restore
 #   - Status and diagnostics
 #
+# For upgrades, use: backup + uninstall --keep-data + install
+#
 # Usage:
-#   ./install.sh                      # Interactive install (choose mode)
-#   ./install.sh --native             # Full native installation
+#   ./install.sh                      # Interactive install
 #   ./install.sh --container          # Container-based installation
-#   ./install.sh upgrade              # Upgrade existing installation
-#   ./install.sh uninstall            # Uninstall with options
+#   ./install.sh uninstall --keep-data  # Uninstall but keep data
 #   ./install.sh status               # Show installation status
 #
 # For detailed help: ./install.sh --help
@@ -25,7 +24,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="5.4.0"
+VERSION="5.5.0"
 
 # ============================================================
 # PATHS
@@ -217,7 +216,7 @@ do_install() {
 
         case "$choice" in
             1)
-                do_upgrade
+                show_upgrade_guidance
                 return
                 ;;
             2)
@@ -257,177 +256,47 @@ do_install() {
 }
 
 # ============================================================
-# UPGRADE FUNCTIONS
+# UPGRADE GUIDANCE
 # ============================================================
-do_upgrade() {
-    local upgrade_type="${1:-}"
-
+show_upgrade_guidance() {
     if [ "$INSTALLED" != true ]; then
         log_error "No existing installation found"
         echo "Run: $0 install"
         exit 1
     fi
 
-    log_step "Upgrade (${DEPLOYMENT_MODE} mode, ${INSTALLED_VERSION} -> ${VERSION})"
-
-    # Use fortress-ctl for container mode
-    if [ "$DEPLOYMENT_MODE" = "container" ]; then
-        if [ -x "${SCRIPT_DIR}/fortress-ctl.sh" ]; then
-            case "$upgrade_type" in
-                --app|app)
-                    exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --app
-                    ;;
-                --full|full)
-                    exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --full
-                    ;;
-                *)
-                    echo ""
-                    echo "Upgrade options:"
-                    echo "  1) Application only (hot upgrade, no downtime)"
-                    echo "  2) Full upgrade (includes infrastructure)"
-                    echo ""
-                    read -p "Select [1/2]: " choice
-                    case "$choice" in
-                        2) exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --full ;;
-                        *) exec "${SCRIPT_DIR}/fortress-ctl.sh" upgrade --app ;;
-                    esac
-                    ;;
-            esac
-        fi
-    fi
-
-    # Native mode upgrade
-    if [ "$DEPLOYMENT_MODE" = "native" ]; then
-        echo ""
-        echo "Native mode upgrade options:"
-        echo ""
-        echo "  1) Web application only (Flask app, templates, static files)"
-        echo "  2) QSecBit agent only"
-        echo "  3) Configuration only (dnsmasq, hostapd)"
-        echo "  4) Full upgrade (backup + reinstall preserving data)"
-        echo ""
-        read -p "Select [1-4]: " choice
-
-        case "$choice" in
-            1) upgrade_native_webapp ;;
-            2) upgrade_native_qsecbit ;;
-            3) upgrade_native_config ;;
-            4) upgrade_native_full ;;
-            *)
-                log_info "Upgrade cancelled"
-                exit 0
-                ;;
-        esac
-    fi
-}
-
-upgrade_native_webapp() {
-    log_step "Upgrading web application"
-
-    # Backup current
-    local backup_dir="${BACKUP_DIR}/webapp_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-
-    if [ -d "${INSTALL_DIR}/web" ]; then
-        cp -r "${INSTALL_DIR}/web" "$backup_dir/"
-        log_info "Backed up to: $backup_dir"
-    fi
-
-    # Stop web service
-    systemctl stop fts-web 2>/dev/null || true
-
-    # Copy new files
-    if [ -d "${SCRIPT_DIR}/web" ]; then
-        cp -r "${SCRIPT_DIR}/web/"* "${INSTALL_DIR}/web/"
-        log_info "Web application files updated"
-    fi
-
-    if [ -d "${SCRIPT_DIR}/lib" ]; then
-        cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
-        log_info "Library files updated"
-    fi
-
-    # Restart
-    systemctl start fts-web 2>/dev/null || true
-
-    update_state "last_upgrade" "$(date -Iseconds)"
-    update_state "last_upgrade_type" "webapp"
-    echo "$VERSION" > "$VERSION_FILE"
-
-    log_info "Web application upgrade complete"
-}
-
-upgrade_native_qsecbit() {
-    log_step "Upgrading QSecBit agent"
-
-    # Stop agent
-    systemctl stop fts-qsecbit 2>/dev/null || true
-
-    # Copy new QSecBit files
-    local qsecbit_src="${SCRIPT_DIR}/qsecbit"
-    local qsecbit_dst="${INSTALL_DIR}/qsecbit"
-
-    if [ -d "$qsecbit_src" ]; then
-        mkdir -p "$qsecbit_dst"
-        cp -r "${qsecbit_src}/"* "$qsecbit_dst/"
-        log_info "QSecBit files updated"
-    fi
-
-    # Restart
-    systemctl start fts-qsecbit 2>/dev/null || true
-
-    update_state "last_upgrade_type" "qsecbit"
-    log_info "QSecBit agent upgrade complete"
-}
-
-upgrade_native_config() {
-    log_step "Upgrading configuration"
-
-    # Backup configs
-    local backup_dir="${BACKUP_DIR}/config_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-
-    cp /etc/dnsmasq.d/fortress*.conf "$backup_dir/" 2>/dev/null || true
-    cp /etc/hostapd/fortress*.conf "$backup_dir/" 2>/dev/null || true
-    cp "${CONFIG_DIR}/fortress.conf" "$backup_dir/" 2>/dev/null || true
-
-    log_info "Configuration backed up to: $backup_dir"
-
-    # Regenerate configs (user will need to restart services)
-    log_warn "Configuration files backed up. Manual review required before applying changes."
-    log_info "Review backup at: $backup_dir"
-    log_info "After review, restart services: systemctl restart fts-dnsmasq fts-hostapd"
-}
-
-upgrade_native_full() {
-    log_step "Full native upgrade"
-
-    # Native mode is deprecated - redirect to container mode
-    log_warn "Native mode is deprecated. Migrating to container mode..."
-    log_info "Container mode now includes all network features (bridge, WiFi AP, DHCP, NAT)"
+    log_step "Upgrade Fortress (${DEPLOYMENT_MODE} mode, v${INSTALLED_VERSION})"
 
     echo ""
-    log_warn "Full upgrade will:"
-    echo "  1. Create full backup"
-    echo "  2. Stop all services"
-    echo "  3. Migrate to container mode"
-    echo "  4. Start container services"
+    echo "To upgrade Fortress, follow these steps:"
     echo ""
-    echo "Data (database, configuration) will be preserved."
+    echo "  1. Create a backup:"
+    echo "     fortress-ctl backup --full"
     echo ""
-    read -p "Continue? [y/N]: " confirm
+    echo "  2. Uninstall while keeping data:"
+    echo "     fortress-ctl uninstall --keep-data"
+    echo ""
+    echo "  3. Run fresh install (will use preserved data):"
+    echo "     ./install.sh"
+    echo ""
+    echo "This ensures a clean installation without network issues."
+    echo ""
 
-    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
-        log_info "Upgrade cancelled"
+    read -p "Would you like to start this process now? [y/N]: " confirm
+
+    if [[ "${confirm}" =~ ^[Yy]$ ]]; then
+        log_step "Step 1: Creating backup..."
+        "${SCRIPT_DIR}/fortress-ctl.sh" backup --full || true
+
+        log_step "Step 2: Uninstalling (keeping data)..."
+        "${SCRIPT_DIR}/fortress-ctl.sh" uninstall --keep-data
+
+        log_step "Step 3: Running fresh install..."
+        exec "${SCRIPT_DIR}/install-container.sh"
+    else
+        log_info "Upgrade cancelled. Run the commands above when ready."
         exit 0
     fi
-
-    # Create backup
-    do_backup --full
-
-    # Run container installation
-    log_info "Running container installation (preserving data)..."
-    exec "${SCRIPT_DIR}/install-container.sh" --preserve-data
 }
 
 # ============================================================
@@ -687,8 +556,8 @@ USAGE:
     $0 [COMMAND] [OPTIONS]
 
 COMMANDS:
-    install              Install Fortress (interactive mode selection)
-    upgrade              Upgrade existing installation
+    install              Install Fortress (container mode)
+    upgrade              Show upgrade guidance (backup + reinstall)
     uninstall            Remove Fortress installation
     backup               Create backup
     restore [FILE]       Restore from backup
@@ -697,11 +566,6 @@ COMMANDS:
 INSTALL OPTIONS:
     --container          Container-based installation (default)
     --quick              Quick install with defaults
-    --native             (Deprecated - redirects to container mode)
-
-UPGRADE OPTIONS:
-    --app                Application only (hot upgrade)
-    --full               Full upgrade (all components)
 
 UNINSTALL OPTIONS:
     --keep-data          Preserve database and user data
@@ -714,11 +578,18 @@ BACKUP OPTIONS:
     --db                 Database only
     --config             Configuration only
 
+UPGRADING:
+    To upgrade an existing installation:
+      1. fortress-ctl backup --full
+      2. fortress-ctl uninstall --keep-data
+      3. ./install.sh
+
+    This ensures a clean installation without network issues.
+
 EXAMPLES:
     $0                           # Interactive install
     $0 install --container       # Container mode install
-    $0 install --native          # Native mode install
-    $0 upgrade --app             # Hot upgrade application
+    $0 upgrade                   # Show upgrade steps
     $0 uninstall --keep-data     # Uninstall but keep data
     $0 backup --full             # Create full backup
     $0 status                    # Show installation status
@@ -728,12 +599,11 @@ DEPLOYMENT MODE:
     Container Mode (Default):
       - Self-contained Podman deployment
       - PostgreSQL + Redis + Flask web UI
-      - Linux bridge with LAN interface bridging
+      - OVS bridge with VLAN segmentation
       - WiFi AP with dual-band support (hostapd)
       - DHCP server (dnsmasq)
       - NAT for internet access
       - ML/AI services (QSecBit, dnsXai, DFS)
-      - Easy upgrades, backup, and rollback
       - Requirements: 2GB+ RAM, Podman
 
 For more information, see:
@@ -920,7 +790,7 @@ show_interactive_menu() {
                 ;;
             6)
                 if [ "$INSTALLED" = true ]; then
-                    do_upgrade
+                    show_upgrade_guidance
                 else
                     log_warn "No installation to upgrade"
                 fi
@@ -1093,7 +963,7 @@ main() {
             do_install "$mode" $install_args "$@"
             ;;
         upgrade)
-            do_upgrade "$@"
+            show_upgrade_guidance
             ;;
         uninstall|remove)
             do_uninstall $install_args "$@"
