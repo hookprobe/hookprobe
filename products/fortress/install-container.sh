@@ -3198,6 +3198,11 @@ save_installation_state() {
     local containers='["fts-web", "fts-postgres", "fts-redis", "fts-qsecbit", "fts-dnsxai", "fts-dfs"]'
     local volumes='["fts-postgres-data", "fts-redis-data", "fts-web-data", "fts-web-logs", "fts-config", "fts-agent-data", "fts-dnsxai-data", "fts-dnsxai-blocklists", "fts-dfs-data", "fts-ml-models"]'
 
+    # Network configuration for Python config.py to load
+    local lan_subnet="10.200.0.0/${LAN_SUBNET_MASK:-24}"
+    local lan_gateway="${GATEWAY_LAN:-10.200.0.1}"
+    local ovs_bridge="${OVS_BRIDGE:-FTS}"
+
     cat > "$STATE_FILE" << EOF
 {
     "deployment_mode": "container",
@@ -3207,6 +3212,11 @@ save_installation_state() {
     "security_core": true,
     "web_port": "${WEB_PORT}",
     "admin_user": "${ADMIN_USER}",
+    "lan_subnet": "${lan_subnet}",
+    "lan_gateway": "${lan_gateway}",
+    "lan_dhcp_start": "${LAN_DHCP_START:-10.200.0.100}",
+    "lan_dhcp_end": "${LAN_DHCP_END:-10.200.0.200}",
+    "ovs_bridge": "${ovs_bridge}",
     "containers": ${containers},
     "volumes": ${volumes}
 }
@@ -3215,7 +3225,7 @@ EOF
     chmod 600 "$STATE_FILE"
 
     # Create VERSION file
-    echo "5.2.0" > "${INSTALL_DIR}/VERSION"
+    echo "5.4.0" > "${INSTALL_DIR}/VERSION"
 
     log_info "Installation state saved"
 }
