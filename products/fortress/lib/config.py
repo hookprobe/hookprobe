@@ -65,7 +65,7 @@ class FortressConfig:
     # General
     node_id: str = ""
     tier: str = "fortress"
-    version: str = "5.4.0"
+    version: str = "5.5.0"
     data_dir: str = "/opt/hookprobe/fortress/data"
     config_dir: str = "/etc/hookprobe"
     secrets_dir: str = "/etc/hookprobe/secrets"

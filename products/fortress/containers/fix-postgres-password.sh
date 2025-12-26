@@ -11,7 +11,7 @@
 # 2. Reset the fortress user password to match the environment variable
 # 3. Restart affected containers
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 
 set -e

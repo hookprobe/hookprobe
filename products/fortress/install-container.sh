@@ -17,7 +17,7 @@
 #   ./install-container.sh --quick      # Quick install with defaults
 #   ./install-container.sh --uninstall  # Complete removal
 #
-# Version: 5.4.0
+# Version: 5.5.0
 # License: AGPL-3.0
 
 set -e
@@ -60,7 +60,7 @@ show_banner() {
  |  _  | (_) | (_) |   <|  __/| | | (_) | |_) |  __/
  |_| |_|\___/ \___/|_|\_\_|   |_|  \___/|_.__/ \___|
 
-           F O R T R E S S   v5.4.0
+           F O R T R E S S   v5.5.0
        Container-based Security Gateway
 EOF
     echo -e "${NC}"
@@ -985,7 +985,7 @@ create_configuration() {
 
 # Deployment mode
 FORTRESS_MODE=container
-FORTRESS_VERSION=5.4.0
+FORTRESS_VERSION=5.5.0
 
 # Network mode (vlan or filter)
 NETWORK_MODE=${NETWORK_MODE}
@@ -3206,7 +3206,7 @@ save_installation_state() {
     cat > "$STATE_FILE" << EOF
 {
     "deployment_mode": "container",
-    "version": "5.4.0",
+    "version": "5.5.0",
     "installed_at": "$(date -Iseconds)",
     "network_mode": "${NETWORK_MODE}",
     "security_core": true,
@@ -3225,7 +3225,7 @@ EOF
     chmod 600 "$STATE_FILE"
 
     # Create VERSION file
-    echo "5.4.0" > "${INSTALL_DIR}/VERSION"
+    echo "5.5.0" > "${INSTALL_DIR}/VERSION"
 
     log_info "Installation state saved"
 }

@@ -1,7 +1,7 @@
 -- HookProbe Fortress Database Initialization
 -- This file is mounted into postgres and runs on first startup
 --
--- Version: 5.1.0
+-- Version: 5.5.0
 -- Schema Version: 1
 -- License: AGPL-3.0
 
