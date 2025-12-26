@@ -1,0 +1,545 @@
+{% extends "base.html" %}
+
+{% block title %}Device Trust - Fortress{% endblock %}
+
+{% block extra_css %}
+<style>
+/* Trust Dashboard Styling */
+.trust-card {
+    border-radius: 8px;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+
+.trust-header {
+    padding: 15px 20px;
+    border-radius: 8px 8px 0 0;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* Trust Level Colors */
+.trust-level-UNTRUSTED { background: linear-gradient(135deg, #dc3545, #c82333); }
+.trust-level-MINIMAL { background: linear-gradient(135deg, #fd7e14, #dc6d0e); }
+.trust-level-STANDARD { background: linear-gradient(135deg, #ffc107, #d39e00); }
+.trust-level-HIGH { background: linear-gradient(135deg, #28a745, #218838); }
+.trust-level-ENTERPRISE { background: linear-gradient(135deg, #17a2b8, #138496); }
+
+/* Trust Badge */
+.trust-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.trust-badge.L0 { background: #dc3545; color: white; }
+.trust-badge.L1 { background: #fd7e14; color: white; }
+.trust-badge.L2 { background: #ffc107; color: #333; }
+.trust-badge.L3 { background: #28a745; color: white; }
+.trust-badge.L4 { background: #17a2b8; color: white; }
+
+/* Trust Progress */
+.trust-progress {
+    height: 8px;
+    border-radius: 4px;
+    margin-bottom: 5px;
+    background: #e9ecef;
+}
+
+.trust-progress-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+/* Trust Summary Cards */
+.trust-summary-card {
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.trust-summary-card .icon {
+    font-size: 2.5rem;
+    opacity: 0.8;
+}
+
+.trust-summary-card .value {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.trust-summary-card .label {
+    font-size: 0.85rem;
+    opacity: 0.9;
+}
+
+/* CIA Triad Indicator */
+.cia-indicator {
+    display: flex;
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.cia-item {
+    flex: 1;
+    text-align: center;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.cia-item.verified {
+    background: linear-gradient(135deg, rgba(40,167,69,0.1), rgba(40,167,69,0.2));
+    border: 1px solid #28a745;
+}
+
+.cia-item .icon {
+    font-size: 2rem;
+    margin-bottom: 10px;
+}
+
+.cia-item.verified .icon { color: #28a745; }
+.cia-item:not(.verified) .icon { color: #dc3545; }
+
+.cia-item .label {
+    font-weight: 600;
+    color: #333;
+}
+
+.cia-item .status {
+    font-size: 0.85rem;
+    color: #666;
+}
+
+/* Device Trust Table */
+.device-trust-table {
+    width: 100%;
+}
+
+.device-trust-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    padding: 12px;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.device-trust-table td {
+    padding: 12px;
+    border-bottom: 1px solid #dee2e6;
+    vertical-align: middle;
+}
+
+.device-trust-table tr:hover {
+    background: rgba(0,0,0,0.02);
+}
+
+/* Trust Level Distribution Chart */
+.trust-distribution {
+    display: flex;
+    height: 30px;
+    border-radius: 15px;
+    overflow: hidden;
+    margin: 10px 0;
+}
+
+.trust-distribution .segment {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 600;
+    transition: width 0.3s ease;
+}
+
+/* Verification Status Icons */
+.verify-icon {
+    font-size: 1rem;
+}
+.verify-icon.verified { color: #28a745; }
+.verify-icon.unverified { color: #dc3545; }
+.verify-icon.pending { color: #ffc107; }
+
+/* Action Buttons */
+.trust-action-btn {
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.trust-action-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.btn-enroll { background: #17a2b8; color: white; }
+.btn-revoke { background: #dc3545; color: white; }
+.btn-quarantine { background: #fd7e14; color: white; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="content-header">
+    <div class="container-fluid">
+        <div class="row mb-2">
+            <div class="col-sm-6">
+                <h1 class="m-0">
+                    <i class="fas fa-shield-alt mr-2"></i>
+                    Device Trust Framework
+                </h1>
+            </div>
+            <div class="col-sm-6">
+                <ol class="breadcrumb float-sm-right">
+                    <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('sdn.index') }}">SDN</a></li>
+                    <li class="breadcrumb-item active">Device Trust</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="content">
+    <div class="container-fluid">
+        <!-- Trust Framework Status -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card trust-card">
+                    <div class="card-header {{ 'bg-success' if trust_summary.trust_framework_enabled else 'bg-warning' }}">
+                        <h3 class="card-title">
+                            <i class="fas fa-{{ 'check-circle' if trust_summary.trust_framework_enabled else 'exclamation-triangle' }} mr-2"></i>
+                            CIA Triad Device Authentication
+                        </h3>
+                        <div class="card-tools">
+                            {% if trust_summary.trust_framework_enabled %}
+                            <span class="badge badge-light">Active</span>
+                            {% else %}
+                            <span class="badge badge-dark">Disabled</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="cia-item {{ 'verified' if trust_summary.verified_percent > 50 else '' }}">
+                                    <div class="icon"><i class="fas fa-lock"></i></div>
+                                    <div class="label">Confidentiality</div>
+                                    <div class="status">{{ trust_summary.certificate_count }} devices with certificates</div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="cia-item {{ 'verified' if trust_summary.verified_percent > 50 else '' }}">
+                                    <div class="icon"><i class="fas fa-fingerprint"></i></div>
+                                    <div class="label">Integrity</div>
+                                    <div class="status">{{ trust_summary.verified_count }} fingerprints verified</div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="cia-item {{ 'verified' if trust_summary.attestation_count > 0 else '' }}">
+                                    <div class="icon"><i class="fas fa-user-check"></i></div>
+                                    <div class="label">Authentication</div>
+                                    <div class="status">{{ trust_summary.attestation_count }} attestations verified</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trust Level Summary -->
+        <div class="row mb-4">
+            <div class="col-lg-3 col-md-6">
+                <div class="trust-summary-card trust-level-ENTERPRISE">
+                    <div class="icon"><i class="fas fa-crown"></i></div>
+                    <div class="content">
+                        <div class="value">{{ trust_summary.by_trust_level.ENTERPRISE or 0 }}</div>
+                        <div class="label">Enterprise (L4)</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+                <div class="trust-summary-card trust-level-HIGH">
+                    <div class="icon"><i class="fas fa-shield-alt"></i></div>
+                    <div class="content">
+                        <div class="value">{{ trust_summary.by_trust_level.HIGH or 0 }}</div>
+                        <div class="label">High (L3)</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+                <div class="trust-summary-card trust-level-STANDARD">
+                    <div class="icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="content">
+                        <div class="value">{{ trust_summary.by_trust_level.STANDARD or 0 }}</div>
+                        <div class="label">Standard (L2)</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+                <div class="trust-summary-card trust-level-MINIMAL">
+                    <div class="icon"><i class="fas fa-exclamation-circle"></i></div>
+                    <div class="content">
+                        <div class="value">{{ (trust_summary.by_trust_level.MINIMAL or 0) + (trust_summary.by_trust_level.UNTRUSTED or 0) }}</div>
+                        <div class="label">Minimal/Untrusted</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trust Distribution -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card trust-card">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="fas fa-chart-bar mr-2"></i>Trust Level Distribution</h3>
+                    </div>
+                    <div class="card-body">
+                        {% set total = trust_summary.total_devices or 1 %}
+                        <div class="trust-distribution">
+                            {% set levels = ['ENTERPRISE', 'HIGH', 'STANDARD', 'MINIMAL', 'UNTRUSTED'] %}
+                            {% set colors = {'ENTERPRISE': '#17a2b8', 'HIGH': '#28a745', 'STANDARD': '#ffc107', 'MINIMAL': '#fd7e14', 'UNTRUSTED': '#dc3545'} %}
+                            {% for level in levels %}
+                            {% set count = trust_summary.by_trust_level.get(level, 0) %}
+                            {% set pct = (count / total * 100)|round(1) %}
+                            {% if pct > 0 %}
+                            <div class="segment" style="width: {{ pct }}%; background: {{ colors[level] }};" title="{{ level }}: {{ count }} devices ({{ pct }}%)">
+                                {% if pct > 8 %}{{ count }}{% endif %}
+                            </div>
+                            {% endif %}
+                            {% endfor %}
+                        </div>
+                        <div class="row mt-3">
+                            {% for level in levels %}
+                            <div class="col">
+                                <div class="d-flex align-items-center">
+                                    <span class="badge mr-2" style="background: {{ colors[level] }}; width: 12px; height: 12px;"></span>
+                                    <span class="small">{{ level }} ({{ trust_summary.by_trust_level.get(level, 0) }})</span>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Trust Table -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card trust-card">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="fas fa-laptop mr-2"></i>Device Trust Status</h3>
+                        <div class="card-tools">
+                            <button type="button" class="btn btn-tool" data-toggle="collapse" data-target="#deviceTable">
+                                <i class="fas fa-minus"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body table-responsive p-0 collapse show" id="deviceTable">
+                        <table class="device-trust-table">
+                            <thead>
+                                <tr>
+                                    <th>Device</th>
+                                    <th>MAC Address</th>
+                                    <th>Vendor</th>
+                                    <th>Segment</th>
+                                    <th>Trust Level</th>
+                                    <th>Verified</th>
+                                    <th>Certificate</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for device in devices %}
+                                <tr>
+                                    <td>
+                                        <strong>{{ device.hostname or 'Unknown' }}</strong>
+                                        {% if device.ip_address %}
+                                        <br><small class="text-muted">{{ device.ip_address }}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td><code>{{ device.mac_address }}</code></td>
+                                    <td>{{ device.vendor or 'Unknown' }}</td>
+                                    <td>
+                                        <span class="badge" style="background: {{ segment_colors.get(device.segment_name, '#6c757d') }};">
+                                            {{ device.segment_name }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="trust-badge L{{ device.trust_level }}">
+                                            <i class="fas fa-shield-alt"></i>
+                                            {{ device.trust_level_name }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {% if device.trust_verified %}
+                                        <i class="fas fa-check-circle verify-icon verified" title="Fingerprint verified"></i>
+                                        {% else %}
+                                        <i class="fas fa-times-circle verify-icon unverified" title="Not verified"></i>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if device.certificate_issued %}
+                                        <i class="fas fa-certificate verify-icon verified" title="Certificate issued"></i>
+                                        {% else %}
+                                        <i class="fas fa-minus-circle verify-icon pending" title="No certificate"></i>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if not device.certificate_issued %}
+                                        <button class="trust-action-btn btn-enroll"
+                                                onclick="enrollDevice('{{ device.mac_address }}')"
+                                                title="Enroll device">
+                                            <i class="fas fa-plus-circle"></i> Enroll
+                                        </button>
+                                        {% else %}
+                                        <button class="trust-action-btn btn-revoke"
+                                                onclick="revokeDevice('{{ device.mac_address }}')"
+                                                title="Revoke certificate">
+                                            <i class="fas fa-ban"></i> Revoke
+                                        </button>
+                                        {% endif %}
+                                        {% if device.trust_level > 0 %}
+                                        <button class="trust-action-btn btn-quarantine"
+                                                onclick="quarantineDevice('{{ device.mac_address }}')"
+                                                title="Move to quarantine">
+                                            <i class="fas fa-exclamation-triangle"></i>
+                                        </button>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="8" class="text-center py-4 text-muted">
+                                        <i class="fas fa-inbox fa-3x mb-3"></i>
+                                        <p>No devices detected yet</p>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trust Level Legend -->
+        <div class="row mt-3">
+            <div class="col-12">
+                <div class="card trust-card">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>Trust Level Guide</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6><span class="trust-badge L4"><i class="fas fa-crown"></i> ENTERPRISE (L4)</span></h6>
+                                <p class="small text-muted mb-3">TPM attestation + Neuro resonance verified. Full management access.</p>
+
+                                <h6><span class="trust-badge L3"><i class="fas fa-shield-alt"></i> HIGH (L3)</span></h6>
+                                <p class="small text-muted mb-3">Device certificate issued + fingerprint verified. Full segment access.</p>
+
+                                <h6><span class="trust-badge L2"><i class="fas fa-check-circle"></i> STANDARD (L2)</span></h6>
+                                <p class="small text-muted mb-3">MAC + OUI verified + behavioral baseline established. Normal segment access.</p>
+                            </div>
+                            <div class="col-md-6">
+                                <h6><span class="trust-badge L1"><i class="fas fa-exclamation-circle"></i> MINIMAL (L1)</span></h6>
+                                <p class="small text-muted mb-3">MAC only, OUI unverified. Guest network access only.</p>
+
+                                <h6><span class="trust-badge L0"><i class="fas fa-times-circle"></i> UNTRUSTED (L0)</span></h6>
+                                <p class="small text-muted mb-3">Unknown device or verification failed. Quarantine VLAN, no network access.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Enroll device for certificate
+function enrollDevice(mac) {
+    if (!confirm(`Enroll device ${mac} for certificate-based authentication?`)) return;
+
+    fetch('{{ url_for("sdn.api_enroll_device") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mac_address: mac})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Enrollment failed: ' + data.error);
+        }
+    })
+    .catch(err => alert('Error: ' + err));
+}
+
+// Revoke device certificate
+function revokeDevice(mac) {
+    if (!confirm(`Revoke certificate for ${mac}? Device will need re-enrollment.`)) return;
+
+    fetch('{{ url_for("sdn.api_revoke_device") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mac_address: mac})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Revocation failed: ' + data.error);
+        }
+    })
+    .catch(err => alert('Error: ' + err));
+}
+
+// Quarantine device
+function quarantineDevice(mac) {
+    if (!confirm(`Quarantine device ${mac}? It will be moved to VLAN 99 with no network access.`)) return;
+
+    fetch('{{ url_for("sdn.api_quarantine_device") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mac_address: mac})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Quarantine failed: ' + data.error);
+        }
+    })
+    .catch(err => alert('Error: ' + err));
+}
+
+// Auto-refresh every 30 seconds
+setInterval(() => {
+    location.reload();
+}, 30000);
+</script>
+{% endblock %}

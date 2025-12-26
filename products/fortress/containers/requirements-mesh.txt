@@ -1,0 +1,40 @@
+# ==============================================================================
+# Fortress Mesh Orchestrator Container Dependencies
+# ==============================================================================
+# HTP/Neuro/DSM communication hub for inter-product mesh networking
+# Compatible with Python 3.11 on ARM64 and x86_64
+# ==============================================================================
+
+# Core networking and async
+asyncio-dgram>=2.1.0,<3.0.0       # Async UDP sockets
+aiohttp>=3.9.0,<4.0.0             # Async HTTP client/server
+websockets>=12.0,<13.0            # WebSocket support for Cortex
+
+# Cryptography (HTP post-quantum, Neuro signatures)
+cryptography>=41.0.0,<43.0.0      # RSA, ChaCha20-Poly1305
+pynacl>=1.5.0,<2.0.0              # Ed25519, X25519 for HTP
+# pqcrypto>=0.1.0                 # Kyber KEM (optional, uncomment if available)
+
+# System monitoring
+psutil>=5.9.0,<6.0.0              # System metrics for TER generation
+
+# Network utilities
+netifaces>=0.11.0,<1.0.0          # Network interface detection
+dnspython>=2.4.0,<3.0.0           # DNS resolution for mesh peers
+
+# STUN/TURN NAT traversal
+# aiortc>=1.5.0                   # WebRTC/ICE (optional, heavy dependency)
+
+# Data serialization
+msgpack>=1.0.0,<2.0.0             # Efficient binary serialization
+
+# Optional: Database (uncomment if needed)
+# redis>=5.0.0,<6.0.0             # Redis for shared state
+# sqlalchemy>=2.0.0,<3.0.0        # SQL database ORM
+
+# Optional: Advanced DSM
+# plyvel>=1.5.0                   # LevelDB for microblock storage
+# py-ecc>=6.0.0                   # BLS signatures
+
+# Geolocation for Cortex visualization
+geoip2>=4.7.0,<5.0.0              # MaxMind GeoIP2 (optional)

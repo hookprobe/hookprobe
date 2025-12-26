@@ -25,6 +25,7 @@
 #   - Security: qsecbit-agent, dnsxai, dfs-intelligence (always running)
 #   - Monitoring: grafana, victoria (--profile monitoring)
 #   - Jobs: lstm-trainer (--profile training, one-shot)
+#   - Mesh: mesh-orchestrator (--profile mesh) - HTP/Neuro/DSM communication
 #
 # Network (simplified for podman-compose 1.0.6 compatibility):
 #   - fts-internal: 172.20.200.0/24 (all app containers share this network)
@@ -35,6 +36,7 @@
 # Container IP assignments:
 #   .10 postgres, .11 redis, .20 web, .21 dnsxai, .22 dfs
 #   .30 grafana, .31 victoria, .40 lstm-trainer
+#   .50 n8n, .51 clickhouse, .60 cloudflared, .70 mesh-orchestrator
 #
 # OVS Security Features:
 #   - OpenFlow 1.3+ tier isolation rules
@@ -584,6 +586,89 @@ services:
       - tunnel
       - remote-access
 
+  # ============================================================
+  # MESH TIER - Inter-Product Communication (HTP/Neuro/DSM)
+  # ============================================================
+
+  # Mesh Orchestrator - HTP/Neuro/DSM Communication Hub
+  # Enables secure mesh communication with Guardian, Sentinel, Nexus, MSSP
+  # Port Selection (from shared/mesh/ARCHITECTURE.md):
+  #   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
+  #   FALLBACK:  8443/UDP + 8443/TCP (TLS-wrapped, avoids 443 conflict)
+  #   STEALTH:   853/UDP + 853/TCP (DoT/DoQ cover)
+  #   RELAY:     3478/UDP (STUN/TURN for NAT traversal)
+  mesh-orchestrator:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.mesh
+    image: localhost/fts-mesh:latest
+    container_name: fts-mesh
+    restart: unless-stopped
+    hostname: fts-mesh
+    environment:
+      # Mesh identity
+      MESH_NODE_ID: "${MESH_NODE_ID:-fortress-${HOSTNAME:-node}}"
+      MESH_NODE_TYPE: fortress
+      MESH_DATA_DIR: /opt/hookprobe/mesh/data
+      # HTP configuration
+      HTP_PRIMARY_PORT: 8144
+      HTP_FALLBACK_PORT: 8443
+      HTP_STEALTH_PORT: 853
+      HTP_RELAY_PORT: 3478
+      # Neuro configuration
+      NEURO_WEIGHT_DIR: /opt/hookprobe/mesh/neuro
+      NEURO_DRIFT_THRESHOLD: 0.05
+      # DSM configuration
+      DSM_ENABLED: "true"
+      DSM_CONSENSUS_QUORUM: 0.67
+      DSM_CHECKPOINT_INTERVAL: 300
+      # Peer discovery (comma-separated list of known peers)
+      MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-}"
+      # MSSP uplink (optional)
+      MSSP_ENDPOINT: "${MSSP_ENDPOINT:-}"
+      MSSP_API_KEY: "${MSSP_API_KEY:-}"
+      # Integration with local services
+      QSECBIT_API_URL: http://localhost:9090
+      DNSXAI_API_URL: http://fts-dnsxai:8080
+      # Cortex visualization bridge
+      CORTEX_ENABLED: "true"
+      CORTEX_WS_PORT: 8766
+    volumes:
+      - mesh_data:/opt/hookprobe/mesh/data
+      - mesh_neuro:/opt/hookprobe/mesh/neuro
+      - /etc/hookprobe:/etc/hookprobe:ro
+    ports:
+      # HTP Primary (UDP-first design for low-latency mesh)
+      - "0.0.0.0:8144:8144/udp"
+      - "0.0.0.0:8144:8144/tcp"
+      # HTP Fallback (TLS-wrapped, alternative to 443 to avoid conflicts)
+      - "0.0.0.0:8443:8443/udp"
+      - "0.0.0.0:8443:8443/tcp"
+      # HTP Stealth (DoT/DoQ cover traffic)
+      - "0.0.0.0:853:853/udp"
+      - "0.0.0.0:853:853/tcp"
+      # STUN/TURN Relay for NAT traversal
+      - "0.0.0.0:3478:3478/udp"
+      # Cortex WebSocket (local only)
+      - "127.0.0.1:8766:8766"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.70
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - mesh
+      - federation
+
 # ============================================================
 # SECRETS
 # ============================================================
@@ -680,6 +765,14 @@ volumes:
   clickhouse_logs:
     driver: local
     name: fts-clickhouse-logs
+
+  # Mesh Tier (HTP/Neuro/DSM)
+  mesh_data:
+    driver: local
+    name: fts-mesh-data
+  mesh_neuro:
+    driver: local
+    name: fts-mesh-neuro
 
   # Note: /etc/hookprobe is bind-mounted from host, not a named volume
   # This allows the install script to create users.json in the host directory
