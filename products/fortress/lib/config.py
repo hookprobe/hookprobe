@@ -44,6 +44,8 @@ class VLANConfig:
     dhcp_enabled: bool = True
     dns_policy: str = "standard"
     is_isolated: bool = False
+    is_logical: bool = False  # True for segment VLANs (OpenFlow tags within VLAN 100)
+    trust_floor: int = 1  # Minimum trust level required (0-4)
 
 
 @dataclass
@@ -100,12 +102,33 @@ class FortressConfig:
     def __post_init__(self):
         """Initialize default VLANs and VXLAN tunnels if empty."""
         if not self.vlans:
+            # Physical VLANs (infrastructure layer)
+            # VLAN 100 = LAN - All WiFi clients, LAN devices (10.200.0.0/24)
+            # VLAN 200 = MGMT - Admin access, container network (10.200.100.0/30)
+            #
+            # Segment VLANs (logical layer via OpenFlow rules within VLAN 100)
+            # These are NOT separate subnets - they share 10.200.0.0/24 with isolation via OVS flows
             self.vlans = {
-                "management": VLANConfig(10, "Management", "10.250.10.0/24", "10.250.10.1", is_isolated=False),
-                "pos": VLANConfig(20, "POS", "10.250.20.0/24", "10.250.20.1", is_isolated=True),
-                "staff": VLANConfig(30, "Staff", "10.250.30.0/24", "10.250.30.1", is_isolated=False),
-                "guest": VLANConfig(40, "Guest", "10.250.40.0/24", "10.250.40.1", is_isolated=True),
-                "iot": VLANConfig(99, "IoT", "10.250.99.0/24", "10.250.99.1", is_isolated=True),
+                # Physical VLANs (actual tagged traffic)
+                "lan": VLANConfig(100, "LAN", "10.200.0.0/24", "10.200.0.1",
+                                  dhcp_enabled=True, is_logical=False, trust_floor=0),
+                "mgmt": VLANConfig(200, "MGMT", "10.200.100.0/30", "10.200.100.1",
+                                   dhcp_enabled=True, is_logical=False, trust_floor=4, is_isolated=False),
+                # Segment VLANs (logical tags within VLAN 100 for device classification)
+                "secmon": VLANConfig(10, "Security Monitor", "10.200.0.0/24", "10.200.0.1",
+                                     dhcp_enabled=False, is_logical=True, trust_floor=3, is_isolated=False),
+                "pos": VLANConfig(20, "POS", "10.200.0.0/24", "10.200.0.1",
+                                  dhcp_enabled=False, is_logical=True, trust_floor=3, is_isolated=True),
+                "staff": VLANConfig(30, "Staff", "10.200.0.0/24", "10.200.0.1",
+                                    dhcp_enabled=False, is_logical=True, trust_floor=2, is_isolated=False),
+                "guest": VLANConfig(40, "Guest", "10.200.0.0/24", "10.200.0.1",
+                                    dhcp_enabled=False, is_logical=True, trust_floor=1, is_isolated=True),
+                "cameras": VLANConfig(50, "Cameras", "10.200.0.0/24", "10.200.0.1",
+                                      dhcp_enabled=False, is_logical=True, trust_floor=2, is_isolated=True),
+                "iiot": VLANConfig(60, "Industrial IoT", "10.200.0.0/24", "10.200.0.1",
+                                   dhcp_enabled=False, is_logical=True, trust_floor=2, is_isolated=True),
+                "quarantine": VLANConfig(99, "Quarantine", "10.200.0.0/24", "10.200.0.1",
+                                         dhcp_enabled=False, is_logical=True, trust_floor=0, is_isolated=True),
             }
 
         if not self.vxlan_tunnels:
