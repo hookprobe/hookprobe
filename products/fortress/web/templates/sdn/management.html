@@ -1,0 +1,1072 @@
+{% extends "base.html" %}
+
+{% block title %}SDN Management - Fortress{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* SDN Management Dashboard Styles */
+    .sdn-header-cards {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .sdn-header-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 12px;
+        padding: 1.25rem;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .sdn-header-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+
+    .sdn-header-card .card-icon {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+        opacity: 0.9;
+    }
+
+    .sdn-header-card .card-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #888;
+        margin-bottom: 0.25rem;
+    }
+
+    .sdn-header-card .card-value {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .sdn-header-card .card-subtitle {
+        font-size: 0.7rem;
+        color: #666;
+        margin-top: 0.25rem;
+    }
+
+    .sdn-header-card.lan-network .card-icon { color: #4fc3f7; }
+    .sdn-header-card.wifi-network .card-icon { color: #81c784; }
+    .sdn-header-card.channel-score .card-icon { color: #ffb74d; }
+    .sdn-header-card.radar-events .card-icon { color: #e57373; }
+    .sdn-header-card.ch-switches .card-icon { color: #ba68c8; }
+
+    /* Channel Score Gauge */
+    .score-gauge {
+        width: 60px;
+        height: 60px;
+        margin: 0 auto 0.5rem;
+        position: relative;
+    }
+
+    .score-gauge svg {
+        transform: rotate(-90deg);
+    }
+
+    .score-gauge .gauge-bg {
+        fill: none;
+        stroke: #2a2a3a;
+        stroke-width: 6;
+    }
+
+    .score-gauge .gauge-fill {
+        fill: none;
+        stroke-width: 6;
+        stroke-linecap: round;
+        transition: stroke-dashoffset 0.5s ease;
+    }
+
+    .score-gauge .score-value {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    /* Device Table */
+    .devices-table-container {
+        background: #1a1a2e;
+        border-radius: 12px;
+        padding: 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .devices-table-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .devices-table-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .devices-table-header .device-count {
+        background: rgba(79, 195, 247, 0.2);
+        color: #4fc3f7;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .devices-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .devices-table th {
+        text-align: left;
+        padding: 0.75rem;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #888;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .devices-table td {
+        padding: 0.75rem;
+        font-size: 0.9rem;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        vertical-align: middle;
+    }
+
+    .devices-table tr:hover {
+        background: rgba(255,255,255,0.03);
+    }
+
+    .device-name {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .device-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.9rem;
+    }
+
+    .device-icon.wifi { color: #81c784; }
+    .device-icon.lan { color: #4fc3f7; }
+
+    .device-hostname {
+        font-weight: 500;
+    }
+
+    .device-mac {
+        font-size: 0.75rem;
+        color: #666;
+        font-family: monospace;
+    }
+
+    /* Segment Badge */
+    .segment-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .segment-badge.secmon { background: rgba(156, 39, 176, 0.2); color: #ce93d8; }
+    .segment-badge.pos { background: rgba(33, 150, 243, 0.2); color: #64b5f6; }
+    .segment-badge.staff { background: rgba(76, 175, 80, 0.2); color: #81c784; }
+    .segment-badge.guest { background: rgba(255, 152, 0, 0.2); color: #ffb74d; }
+    .segment-badge.cameras { background: rgba(0, 188, 212, 0.2); color: #4dd0e1; }
+    .segment-badge.iiot { background: rgba(121, 85, 72, 0.2); color: #a1887f; }
+    .segment-badge.quarantine { background: rgba(244, 67, 54, 0.2); color: #e57373; }
+
+    /* Trust Badge */
+    .trust-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+    }
+
+    .trust-badge.enterprise { background: rgba(156, 39, 176, 0.3); color: #ce93d8; }
+    .trust-badge.high { background: rgba(76, 175, 80, 0.3); color: #81c784; }
+    .trust-badge.standard { background: rgba(33, 150, 243, 0.3); color: #64b5f6; }
+    .trust-badge.minimal { background: rgba(255, 152, 0, 0.3); color: #ffb74d; }
+    .trust-badge.untrusted { background: rgba(244, 67, 54, 0.3); color: #e57373; }
+
+    /* Action Buttons */
+    .action-btns {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .action-btn {
+        padding: 0.3rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: none;
+        cursor: pointer;
+        transition: opacity 0.2s;
+    }
+
+    .action-btn:hover {
+        opacity: 0.8;
+    }
+
+    .action-btn.enroll {
+        background: rgba(76, 175, 80, 0.2);
+        color: #81c784;
+    }
+
+    .action-btn.move {
+        background: rgba(33, 150, 243, 0.2);
+        color: #64b5f6;
+    }
+
+    .action-btn.quarantine {
+        background: rgba(244, 67, 54, 0.2);
+        color: #e57373;
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .stats-card {
+        background: #1a1a2e;
+        border-radius: 12px;
+        padding: 1.25rem;
+    }
+
+    .stats-card h4 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        color: #fff;
+    }
+
+    /* Segment Distribution */
+    .segment-bar {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.75rem;
+    }
+
+    .segment-bar-label {
+        width: 80px;
+        font-size: 0.8rem;
+        color: #888;
+    }
+
+    .segment-bar-track {
+        flex: 1;
+        height: 8px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 0 0.75rem;
+    }
+
+    .segment-bar-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.3s ease;
+    }
+
+    .segment-bar-value {
+        width: 30px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-align: right;
+    }
+
+    /* Trust Distribution */
+    .trust-bar {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.6rem;
+    }
+
+    .trust-bar-label {
+        width: 100px;
+        font-size: 0.75rem;
+        color: #888;
+    }
+
+    .trust-bar-track {
+        flex: 1;
+        height: 6px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 3px;
+        overflow: hidden;
+        margin: 0 0.5rem;
+    }
+
+    .trust-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+    }
+
+    .trust-bar-value {
+        width: 25px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-align: right;
+    }
+
+    /* WiFi Intelligence Panel */
+    .wifi-panel {
+        background: #1a1a2e;
+        border-radius: 12px;
+        padding: 1.25rem;
+    }
+
+    .wifi-panel h4 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+    }
+
+    .wifi-info-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .wifi-info-item {
+        text-align: center;
+    }
+
+    .wifi-info-label {
+        font-size: 0.7rem;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .wifi-info-value {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #fff;
+    }
+
+    .channel-score-bar {
+        height: 8px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 1rem;
+    }
+
+    .channel-score-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.5s ease;
+    }
+
+    .wifi-events {
+        max-height: 150px;
+        overflow-y: auto;
+    }
+
+    .wifi-event {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        font-size: 0.8rem;
+    }
+
+    .wifi-event:last-child {
+        border-bottom: none;
+    }
+
+    .wifi-event-time {
+        color: #666;
+        font-size: 0.75rem;
+        min-width: 50px;
+    }
+
+    .wifi-event-icon {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+    }
+
+    .wifi-event-icon.radar {
+        background: rgba(244, 67, 54, 0.2);
+        color: #e57373;
+    }
+
+    .wifi-event-icon.switch {
+        background: rgba(33, 150, 243, 0.2);
+        color: #64b5f6;
+    }
+
+    .wifi-event-icon.cac {
+        background: rgba(76, 175, 80, 0.2);
+        color: #81c784;
+    }
+
+    /* Responsive */
+    @media (max-width: 1200px) {
+        .sdn-header-cards {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+
+    @media (max-width: 768px) {
+        .sdn-header-cards {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .wifi-info-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    /* Status indicators */
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 0.5rem;
+    }
+
+    .status-dot.online { background: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.5); }
+    .status-dot.offline { background: #666; }
+    .status-dot.warning { background: #ff9800; box-shadow: 0 0 8px rgba(255, 152, 0, 0.5); }
+
+    /* DFS Status */
+    .dfs-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+    }
+
+    .dfs-status.clear { background: rgba(76, 175, 80, 0.2); color: #81c784; }
+    .dfs-status.cac { background: rgba(255, 152, 0, 0.2); color: #ffb74d; }
+    .dfs-status.nop { background: rgba(244, 67, 54, 0.2); color: #e57373; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="content-header">
+    <div class="container-fluid">
+        <div class="row mb-2">
+            <div class="col-sm-6">
+                <h1 class="m-0">SDN Management</h1>
+            </div>
+            <div class="col-sm-6">
+                <ol class="breadcrumb float-sm-right">
+                    <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
+                    <li class="breadcrumb-item active">SDN Management</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="content">
+    <div class="container-fluid">
+        <!-- Header Cards -->
+        <div class="sdn-header-cards">
+            <div class="sdn-header-card lan-network">
+                <div class="card-icon"><i class="fas fa-network-wired"></i></div>
+                <div class="card-title">LAN Network</div>
+                <div class="card-value" id="lan-device-count">--</div>
+                <div class="card-subtitle">devices on bridge</div>
+            </div>
+
+            <div class="sdn-header-card wifi-network">
+                <div class="card-icon"><i class="fas fa-wifi"></i></div>
+                <div class="card-title">WiFi Network</div>
+                <div class="card-value" id="wifi-device-count">--</div>
+                <div class="card-subtitle">
+                    <span id="wifi-24-count">--</span> 2.4GHz · <span id="wifi-5-count">--</span> 5GHz
+                </div>
+            </div>
+
+            <div class="sdn-header-card channel-score">
+                <div class="card-icon"><i class="fas fa-chart-line"></i></div>
+                <div class="card-title">Channel Score</div>
+                <div class="score-gauge">
+                    <svg width="60" height="60" viewBox="0 0 60 60">
+                        <circle class="gauge-bg" cx="30" cy="30" r="24"></circle>
+                        <circle class="gauge-fill" cx="30" cy="30" r="24"
+                                stroke-dasharray="150.8"
+                                stroke-dashoffset="150.8"
+                                id="score-gauge-fill"></circle>
+                    </svg>
+                    <span class="score-value" id="channel-score">--</span>
+                </div>
+            </div>
+
+            <div class="sdn-header-card radar-events">
+                <div class="card-icon"><i class="fas fa-satellite-dish"></i></div>
+                <div class="card-title">Radar Events</div>
+                <div class="card-value" id="radar-event-count">--</div>
+                <div class="card-subtitle">last 24h</div>
+            </div>
+
+            <div class="sdn-header-card ch-switches">
+                <div class="card-icon"><i class="fas fa-random"></i></div>
+                <div class="card-title">CH Switches</div>
+                <div class="card-value" id="ch-switch-count">--</div>
+                <div class="card-subtitle">last 24h</div>
+            </div>
+        </div>
+
+        <!-- Network Devices Table -->
+        <div class="devices-table-container">
+            <div class="devices-table-header">
+                <h3><i class="fas fa-laptop me-2"></i>Network Devices</h3>
+                <span class="device-count" id="total-device-count">-- devices</span>
+            </div>
+            <table class="devices-table">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>Vendor</th>
+                        <th>Segment</th>
+                        <th>Trust</th>
+                        <th>IP Address</th>
+                        <th>Connection</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table-body">
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-4">
+                            <i class="fas fa-spinner fa-spin me-2"></i>Loading devices...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <!-- Segment Distribution -->
+            <div class="stats-card">
+                <h4><i class="fas fa-layer-group me-2"></i>Segment Distribution</h4>
+                <div id="segment-distribution">
+                    <div class="segment-bar">
+                        <span class="segment-bar-label">STAFF</span>
+                        <div class="segment-bar-track">
+                            <div class="segment-bar-fill" style="width: 0%; background: #81c784;"></div>
+                        </div>
+                        <span class="segment-bar-value">--</span>
+                    </div>
+                    <div class="segment-bar">
+                        <span class="segment-bar-label">GUEST</span>
+                        <div class="segment-bar-track">
+                            <div class="segment-bar-fill" style="width: 0%; background: #ffb74d;"></div>
+                        </div>
+                        <span class="segment-bar-value">--</span>
+                    </div>
+                    <div class="segment-bar">
+                        <span class="segment-bar-label">CAMERAS</span>
+                        <div class="segment-bar-track">
+                            <div class="segment-bar-fill" style="width: 0%; background: #4dd0e1;"></div>
+                        </div>
+                        <span class="segment-bar-value">--</span>
+                    </div>
+                    <div class="segment-bar">
+                        <span class="segment-bar-label">POS</span>
+                        <div class="segment-bar-track">
+                            <div class="segment-bar-fill" style="width: 0%; background: #64b5f6;"></div>
+                        </div>
+                        <span class="segment-bar-value">--</span>
+                    </div>
+                    <div class="segment-bar">
+                        <span class="segment-bar-label">SECMON</span>
+                        <div class="segment-bar-track">
+                            <div class="segment-bar-fill" style="width: 0%; background: #ce93d8;"></div>
+                        </div>
+                        <span class="segment-bar-value">--</span>
+                    </div>
+                    <div class="segment-bar">
+                        <span class="segment-bar-label">QUARANTINE</span>
+                        <div class="segment-bar-track">
+                            <div class="segment-bar-fill" style="width: 0%; background: #e57373;"></div>
+                        </div>
+                        <span class="segment-bar-value">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trust Level Summary -->
+            <div class="stats-card">
+                <h4><i class="fas fa-shield-alt me-2"></i>Trust Level Summary</h4>
+                <div id="trust-distribution">
+                    <div class="trust-bar">
+                        <span class="trust-bar-label">L4 ENTERPRISE</span>
+                        <div class="trust-bar-track">
+                            <div class="trust-bar-fill" style="width: 0%; background: #ce93d8;"></div>
+                        </div>
+                        <span class="trust-bar-value">--</span>
+                    </div>
+                    <div class="trust-bar">
+                        <span class="trust-bar-label">L3 HIGH</span>
+                        <div class="trust-bar-track">
+                            <div class="trust-bar-fill" style="width: 0%; background: #81c784;"></div>
+                        </div>
+                        <span class="trust-bar-value">--</span>
+                    </div>
+                    <div class="trust-bar">
+                        <span class="trust-bar-label">L2 STANDARD</span>
+                        <div class="trust-bar-track">
+                            <div class="trust-bar-fill" style="width: 0%; background: #64b5f6;"></div>
+                        </div>
+                        <span class="trust-bar-value">--</span>
+                    </div>
+                    <div class="trust-bar">
+                        <span class="trust-bar-label">L1 MINIMAL</span>
+                        <div class="trust-bar-track">
+                            <div class="trust-bar-fill" style="width: 0%; background: #ffb74d;"></div>
+                        </div>
+                        <span class="trust-bar-value">--</span>
+                    </div>
+                    <div class="trust-bar">
+                        <span class="trust-bar-label">L0 UNTRUSTED</span>
+                        <div class="trust-bar-track">
+                            <div class="trust-bar-fill" style="width: 0%; background: #e57373;"></div>
+                        </div>
+                        <span class="trust-bar-value">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- WiFi Intelligence Panel -->
+        <div class="wifi-panel">
+            <h4><i class="fas fa-broadcast-tower me-2"></i>WiFi Intelligence</h4>
+            <div class="wifi-info-grid">
+                <div class="wifi-info-item">
+                    <div class="wifi-info-label">Channel</div>
+                    <div class="wifi-info-value" id="wifi-channel">--</div>
+                </div>
+                <div class="wifi-info-item">
+                    <div class="wifi-info-label">Width</div>
+                    <div class="wifi-info-value" id="wifi-width">--</div>
+                </div>
+                <div class="wifi-info-item">
+                    <div class="wifi-info-label">Power</div>
+                    <div class="wifi-info-value" id="wifi-power">--</div>
+                </div>
+                <div class="wifi-info-item">
+                    <div class="wifi-info-label">DFS Status</div>
+                    <div class="wifi-info-value">
+                        <span class="dfs-status clear" id="dfs-status">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-2 d-flex justify-content-between align-items-center">
+                <span class="text-muted" style="font-size: 0.8rem;">Channel Score</span>
+                <span id="channel-score-text" style="font-size: 0.85rem; font-weight: 600;">--/100</span>
+            </div>
+            <div class="channel-score-bar">
+                <div class="channel-score-fill" id="channel-score-bar" style="width: 0%; background: #4caf50;"></div>
+            </div>
+
+            <h5 style="font-size: 0.85rem; margin-bottom: 0.75rem; color: #888;">Recent Events</h5>
+            <div class="wifi-events" id="wifi-events">
+                <div class="wifi-event">
+                    <span class="wifi-event-time">--:--</span>
+                    <span class="wifi-event-icon cac"><i class="fas fa-check"></i></span>
+                    <span>Loading events...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Load SDN data
+    loadSDNData();
+    loadWiFiIntelligence();
+
+    // Refresh every 10 seconds
+    setInterval(loadSDNData, 10000);
+    setInterval(loadWiFiIntelligence, 30000);
+});
+
+async function loadSDNData() {
+    try {
+        // Fetch devices
+        const devicesRes = await fetch('/api/sdn/devices');
+        const devicesData = await devicesRes.json();
+
+        // Fetch segments
+        const segmentsRes = await fetch('/api/sdn/segments');
+        const segmentsData = await segmentsRes.json();
+
+        // Fetch trust summary
+        const trustRes = await fetch('/api/trust');
+        const trustData = await trustRes.json();
+
+        updateDeviceTable(devicesData.devices || []);
+        updateSegmentDistribution(segmentsData.segments || {});
+        updateTrustDistribution(trustData);
+        updateHeaderCards(devicesData, segmentsData);
+
+    } catch (error) {
+        console.error('Error loading SDN data:', error);
+    }
+}
+
+async function loadWiFiIntelligence() {
+    try {
+        const res = await fetch('/api/sdn/wifi');
+        const data = await res.json();
+
+        updateWiFiPanel(data);
+        updateChannelScore(data.channel_score || 0);
+        updateRadarStats(data);
+
+    } catch (error) {
+        console.error('Error loading WiFi data:', error);
+    }
+}
+
+function updateDeviceTable(devices) {
+    const tbody = document.getElementById('devices-table-body');
+    document.getElementById('total-device-count').textContent = `${devices.length} devices`;
+
+    if (devices.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center text-muted py-4">
+                    <i class="fas fa-info-circle me-2"></i>No devices connected
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = devices.map(device => {
+        const isWifi = device.connection_type === 'wifi';
+        const connectionIcon = isWifi ? 'wifi' : 'lan';
+        const connectionText = isWifi
+            ? `WiFi ${device.band || '5GHz'}`
+            : 'Ethernet';
+
+        return `
+            <tr>
+                <td>
+                    <div class="device-name">
+                        <div class="device-icon ${connectionIcon}">
+                            <i class="fas fa-${isWifi ? 'wifi' : 'ethernet'}"></i>
+                        </div>
+                        <div>
+                            <div class="device-hostname">${device.hostname || 'Unknown'}</div>
+                            <div class="device-mac">${device.mac}</div>
+                        </div>
+                    </div>
+                </td>
+                <td>${device.vendor || 'Unknown'}</td>
+                <td>
+                    <span class="segment-badge ${device.segment?.toLowerCase() || 'guest'}">
+                        ${device.segment || 'GUEST'}(${device.vlan_id || 40})
+                    </span>
+                </td>
+                <td>
+                    <span class="trust-badge ${getTrustClass(device.trust_level)}">
+                        ${getTrustLabel(device.trust_level)}
+                    </span>
+                </td>
+                <td>${device.ip_address || '--'}</td>
+                <td>
+                    <span class="status-dot ${device.online ? 'online' : 'offline'}"></span>
+                    ${connectionText}
+                </td>
+                <td>
+                    <div class="action-btns">
+                        <button class="action-btn enroll" onclick="enrollDevice('${device.mac}')"
+                                title="Enroll device certificate">
+                            <i class="fas fa-certificate"></i>
+                        </button>
+                        <button class="action-btn move" onclick="moveDevice('${device.mac}')"
+                                title="Move to different segment">
+                            <i class="fas fa-arrows-alt"></i>
+                        </button>
+                        <button class="action-btn quarantine" onclick="quarantineDevice('${device.mac}')"
+                                title="Quarantine device">
+                            <i class="fas fa-ban"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function updateSegmentDistribution(segments) {
+    const container = document.getElementById('segment-distribution');
+    const total = Object.values(segments).reduce((a, b) => a + b, 0) || 1;
+
+    const segmentConfig = {
+        'STAFF': { color: '#81c784', vlan: 30 },
+        'GUEST': { color: '#ffb74d', vlan: 40 },
+        'CAMERAS': { color: '#4dd0e1', vlan: 50 },
+        'POS': { color: '#64b5f6', vlan: 20 },
+        'SECMON': { color: '#ce93d8', vlan: 10 },
+        'QUARANTINE': { color: '#e57373', vlan: 99 }
+    };
+
+    container.innerHTML = Object.entries(segmentConfig).map(([name, config]) => {
+        const count = segments[name] || segments[name.toLowerCase()] || 0;
+        const percent = (count / total) * 100;
+
+        return `
+            <div class="segment-bar">
+                <span class="segment-bar-label">${name}</span>
+                <div class="segment-bar-track">
+                    <div class="segment-bar-fill" style="width: ${percent}%; background: ${config.color};"></div>
+                </div>
+                <span class="segment-bar-value">${count}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateTrustDistribution(trustData) {
+    const container = document.getElementById('trust-distribution');
+    const levels = trustData.trust_distribution || {};
+    const total = Object.values(levels).reduce((a, b) => a + b, 0) || 1;
+
+    const trustConfig = [
+        { key: 'enterprise', label: 'L4 ENTERPRISE', color: '#ce93d8' },
+        { key: 'high', label: 'L3 HIGH', color: '#81c784' },
+        { key: 'standard', label: 'L2 STANDARD', color: '#64b5f6' },
+        { key: 'minimal', label: 'L1 MINIMAL', color: '#ffb74d' },
+        { key: 'untrusted', label: 'L0 UNTRUSTED', color: '#e57373' }
+    ];
+
+    container.innerHTML = trustConfig.map(config => {
+        const count = levels[config.key] || 0;
+        const percent = (count / total) * 100;
+
+        return `
+            <div class="trust-bar">
+                <span class="trust-bar-label">${config.label}</span>
+                <div class="trust-bar-track">
+                    <div class="trust-bar-fill" style="width: ${percent}%; background: ${config.color};"></div>
+                </div>
+                <span class="trust-bar-value">${count}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateHeaderCards(devicesData, segmentsData) {
+    const devices = devicesData.devices || [];
+
+    // LAN count (wired devices)
+    const lanCount = devices.filter(d => d.connection_type !== 'wifi').length;
+    document.getElementById('lan-device-count').textContent = lanCount;
+
+    // WiFi counts
+    const wifiDevices = devices.filter(d => d.connection_type === 'wifi');
+    document.getElementById('wifi-device-count').textContent = wifiDevices.length;
+
+    const wifi24 = wifiDevices.filter(d => d.band === '2.4GHz').length;
+    const wifi5 = wifiDevices.filter(d => d.band === '5GHz').length;
+    document.getElementById('wifi-24-count').textContent = wifi24;
+    document.getElementById('wifi-5-count').textContent = wifi5;
+}
+
+function updateWiFiPanel(data) {
+    document.getElementById('wifi-channel').textContent = data.channel || '--';
+    document.getElementById('wifi-width').textContent = data.width ? `${data.width}MHz` : '--';
+    document.getElementById('wifi-power').textContent = data.power ? `${data.power}dBm` : '--';
+
+    // DFS status
+    const dfsStatus = document.getElementById('dfs-status');
+    const status = (data.dfs_status || 'clear').toLowerCase();
+    dfsStatus.className = `dfs-status ${status}`;
+    dfsStatus.textContent = status.toUpperCase();
+
+    // Events
+    const eventsContainer = document.getElementById('wifi-events');
+    const events = data.events || [];
+
+    if (events.length === 0) {
+        eventsContainer.innerHTML = `
+            <div class="wifi-event text-muted">
+                <span class="wifi-event-time">--:--</span>
+                <span class="wifi-event-icon cac"><i class="fas fa-check"></i></span>
+                <span>No recent events</span>
+            </div>
+        `;
+    } else {
+        eventsContainer.innerHTML = events.slice(0, 5).map(event => {
+            const time = new Date(event.timestamp).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            const iconClass = event.type === 'radar' ? 'radar' :
+                             event.type === 'switch' ? 'switch' : 'cac';
+            const icon = event.type === 'radar' ? 'satellite-dish' :
+                        event.type === 'switch' ? 'random' : 'check';
+
+            return `
+                <div class="wifi-event">
+                    <span class="wifi-event-time">${time}</span>
+                    <span class="wifi-event-icon ${iconClass}"><i class="fas fa-${icon}"></i></span>
+                    <span>${event.message}</span>
+                </div>
+            `;
+        }).join('');
+    }
+}
+
+function updateChannelScore(score) {
+    // Header gauge
+    const gauge = document.getElementById('score-gauge-fill');
+    const scoreVal = document.getElementById('channel-score');
+    const circumference = 2 * Math.PI * 24;
+    const offset = circumference - (score / 100) * circumference;
+
+    gauge.style.strokeDasharray = circumference;
+    gauge.style.strokeDashoffset = offset;
+    gauge.style.stroke = score >= 70 ? '#4caf50' : score >= 40 ? '#ff9800' : '#f44336';
+    scoreVal.textContent = score;
+
+    // WiFi panel bar
+    const bar = document.getElementById('channel-score-bar');
+    const text = document.getElementById('channel-score-text');
+    bar.style.width = `${score}%`;
+    bar.style.background = score >= 70 ? '#4caf50' : score >= 40 ? '#ff9800' : '#f44336';
+    text.textContent = `${score}/100`;
+}
+
+function updateRadarStats(data) {
+    document.getElementById('radar-event-count').textContent = data.radar_events_24h || 0;
+    document.getElementById('ch-switch-count').textContent = data.channel_switches_24h || 0;
+}
+
+function getTrustClass(level) {
+    const classes = ['untrusted', 'minimal', 'standard', 'high', 'enterprise'];
+    return classes[level] || 'minimal';
+}
+
+function getTrustLabel(level) {
+    const labels = ['L0', 'L1', 'L2', 'L3', 'L4'];
+    return labels[level] || 'L1';
+}
+
+// Action functions
+async function enrollDevice(mac) {
+    if (!confirm(`Enroll device ${mac} with a certificate?`)) return;
+
+    try {
+        const res = await fetch('/api/trust/enroll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac_address: mac })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            alert('Device enrolled successfully');
+            loadSDNData();
+        } else {
+            alert(`Failed to enroll: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+
+async function moveDevice(mac) {
+    const segment = prompt('Enter segment (STAFF, GUEST, POS, CAMERAS, IIOT, QUARANTINE):');
+    if (!segment) return;
+
+    try {
+        const res = await fetch('/api/sdn/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac_address: mac, segment: segment.toUpperCase() })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            alert(`Device moved to ${segment.toUpperCase()}`);
+            loadSDNData();
+        } else {
+            alert(`Failed to move: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+
+async function quarantineDevice(mac) {
+    if (!confirm(`Quarantine device ${mac}?`)) return;
+
+    try {
+        const res = await fetch('/api/trust/quarantine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac_address: mac })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            alert('Device quarantined');
+            loadSDNData();
+        } else {
+            alert(`Failed to quarantine: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+</script>
+{% endblock %}
