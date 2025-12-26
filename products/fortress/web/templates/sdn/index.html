@@ -449,6 +449,36 @@
                                                     <i class="fas fa-ban mr-2"></i> Block
                                                 </a>
                                                 {% endif %}
+                                                <div class="dropdown-divider"></div>
+                                                <h6 class="dropdown-header">Move to Segment</h6>
+                                                <a class="dropdown-item btn-move-segment" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="10">
+                                                    <i class="fas fa-shield-alt mr-2 text-info"></i> SECMON
+                                                </a>
+                                                <a class="dropdown-item btn-move-segment" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="20">
+                                                    <i class="fas fa-credit-card mr-2 text-warning"></i> POS
+                                                </a>
+                                                <a class="dropdown-item btn-move-segment" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="30">
+                                                    <i class="fas fa-laptop mr-2 text-success"></i> CLIENTS
+                                                </a>
+                                                <a class="dropdown-item btn-move-segment" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="40">
+                                                    <i class="fas fa-wifi mr-2 text-primary"></i> GUEST
+                                                </a>
+                                                <a class="dropdown-item btn-move-segment" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="50">
+                                                    <i class="fas fa-video mr-2 text-purple"></i> CAMERAS
+                                                </a>
+                                                <a class="dropdown-item btn-move-segment" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="60">
+                                                    <i class="fas fa-microchip mr-2 text-orange"></i> IIOT
+                                                </a>
+                                                <a class="dropdown-item btn-move-segment text-danger" href="#"
+                                                   data-mac="{{ device.mac_address }}" data-segment="99">
+                                                    <i class="fas fa-exclamation-triangle mr-2"></i> QUARANTINE
+                                                </a>
                                             </div>
                                         </div>
                                     </td>
@@ -954,6 +984,64 @@ $(document).ready(function() {
                 }
             });
         }
+    });
+
+    // Move to segment
+    $(document).on('click', '.btn-move-segment', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+        var segment = $(this).data('segment');
+        var segmentNames = {
+            10: 'SECMON', 20: 'POS', 30: 'CLIENTS',
+            40: 'GUEST', 50: 'CAMERAS', 60: 'IIOT', 99: 'QUARANTINE'
+        };
+
+        $.post('{{ url_for("sdn.assign_segment") }}', {
+            mac: mac,
+            segment: segment
+        }, function(data) {
+            if (data.success) {
+                toastr.success('Moved to ' + segmentNames[segment]);
+                setTimeout(function() { location.reload(); }, 1000);
+            } else {
+                toastr.error(data.error || 'Failed to move device');
+            }
+        }).fail(function() {
+            toastr.error('Network error');
+        });
+    });
+
+    // Auto-refresh device statistics every 30 seconds
+    var autoRefreshInterval = setInterval(function() {
+        $.get('{{ url_for("sdn.api_stats") }}')
+            .done(function(data) {
+                if (data.success && data.stats) {
+                    // Update statistics cards
+                    $('.small-box.bg-info .inner h3').text(data.stats.total_devices);
+                    $('.small-box.bg-success .inner h3').text(data.stats.online_devices);
+                    $('.small-box.bg-warning .inner h3').text(data.stats.offline_devices);
+                    $('.small-box.bg-danger .inner h3').text(data.stats.blocked_devices);
+                }
+            });
+    }, 30000);  // 30 second refresh
+
+    // Show last refresh time
+    function updateRefreshIndicator() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString();
+        if ($('#last-refresh').length === 0) {
+            $('.card-header:contains("Network Devices") .card-title').append(
+                ' <small id="last-refresh" class="text-muted ml-2">(Updated: ' + timeStr + ')</small>'
+            );
+        } else {
+            $('#last-refresh').text('(Updated: ' + timeStr + ')');
+        }
+    }
+
+    // Manual refresh updates the indicator
+    $('#btn-refresh').on('click', function() {
+        updateRefreshIndicator();
+        location.reload();
     });
 });
 </script>
