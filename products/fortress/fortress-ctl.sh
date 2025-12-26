@@ -507,8 +507,8 @@ upgrade_app() {
 }
 
 upgrade_full() {
-    # Full upgrade - all tiers
-    log_step "Performing full upgrade"
+    # Full upgrade - all tiers including all data-displaying containers
+    log_step "Performing full upgrade (network + all containers)"
 
     # CRITICAL: Detect existing network config BEFORE stopping services
     # This ensures Python config.py loads correct subnet (e.g., /28 vs /23)
@@ -542,28 +542,81 @@ upgrade_full() {
 
     # Update systemd services
     log_substep "Updating systemd services..."
-    # Copy updated service files if they exist
     if [ -d "${SCRIPT_DIR}/systemd" ]; then
         cp "${SCRIPT_DIR}/systemd/"*.service /etc/systemd/system/ 2>/dev/null || true
         cp "${SCRIPT_DIR}/systemd/"*.timer /etc/systemd/system/ 2>/dev/null || true
         systemctl daemon-reload
     fi
 
-    # Upgrade application (Tier 3) - this rebuilds and restarts containers
-    upgrade_app
+    # Rebuild ALL data-displaying containers (Tier 3 + 4)
+    log_step "Rebuilding all containers"
+    cd "$CONTAINERS_DIR"
 
-    # Restart all services that were stopped
-    log_substep "Restarting all services..."
-    start_all_services
+    # Remove old containers
+    log_substep "Removing old containers..."
+    podman-compose down --timeout 30 2>/dev/null || true
 
-    # Note: Tier 4 (core) upgrades are not automatic
+    # Rebuild web (SDN dashboard, device management)
+    log_substep "Building web container (SDN dashboard)..."
+    podman-compose build --no-cache web || {
+        log_error "Web container build failed"
+        exit 1
+    }
+
+    # Rebuild dnsXai (DNS protection)
+    log_substep "Building dnsXai container (DNS protection)..."
+    podman-compose build --no-cache dnsxai || {
+        log_warn "dnsXai container build failed (optional)"
+    }
+
+    # Rebuild DFS intelligence (WiFi channel management)
+    log_substep "Building DFS container (WiFi intelligence)..."
+    podman-compose build --no-cache dfs-intelligence || {
+        log_warn "DFS container build failed (optional)"
+    }
+
+    # Rebuild QSecBit (security scoring)
+    log_substep "Building QSecBit container (security engine)..."
+    podman-compose build --no-cache qsecbit-agent || {
+        log_warn "QSecBit container build failed (optional)"
+    }
+
+    # Start all containers
+    log_substep "Starting all containers..."
+    podman-compose up -d
+
+    # Wait for services to be ready
+    log_substep "Waiting for services..."
+    local retries=30
+    while [ $retries -gt 0 ]; do
+        if curl -sf -k "https://localhost:8443/health" &>/dev/null; then
+            log_info "Web UI is healthy"
+            break
+        fi
+        sleep 2
+        ((retries--))
+    done
+
+    # Restart WiFi and DHCP services
+    log_substep "Restarting network services..."
+    systemctl restart fortress-hostapd-2ghz fortress-hostapd-5ghz 2>/dev/null || true
+    systemctl restart fortress-dnsmasq 2>/dev/null || true
+
+    # Update state
+    echo "$VERSION" > "$VERSION_FILE"
+    set_state "last_upgrade" "$(date -Iseconds)"
+    set_state "last_upgrade_type" "full"
+
+    # Note: Core version check
     local core_version=$(cat "${SCRIPT_DIR}/../../core/VERSION" 2>/dev/null || echo "unknown")
     if [ "$core_version" != "$(get_state 'core_version')" ]; then
-        log_warn "Core components have changed. Full reinstall may be required."
-        log_warn "Current core: $(get_state 'core_version'), Available: $core_version"
+        set_state "core_version" "$core_version"
     fi
 
     log_info "Full upgrade complete"
+    echo ""
+    echo "Upgraded containers:"
+    podman ps --filter "name=fts-" --format "  {{.Names}}: {{.Status}}"
 }
 
 # ============================================================
