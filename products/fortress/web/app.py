@@ -95,6 +95,22 @@ def create_app(config_class=Config):
             'app_version': '5.4.0'
         }
 
+    # Template filters
+    @app.template_filter('format_bytes')
+    def format_bytes_filter(bytes_value):
+        """Format bytes for human-readable display."""
+        if not bytes_value or bytes_value == 0:
+            return '0 B'
+        try:
+            bytes_value = int(bytes_value)
+        except (ValueError, TypeError):
+            return '0 B'
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if bytes_value < 1024:
+                return f'{bytes_value:.1f} {unit}'
+            bytes_value /= 1024
+        return f'{bytes_value:.1f} PB'
+
     return app
 
 
