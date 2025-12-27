@@ -47,3 +47,7 @@ def register_blueprints(app: Flask):
     # SDN module - Unified Software-Defined Network management
     from .sdn import sdn_bp
     app.register_blueprint(sdn_bp, url_prefix='/sdn')
+
+    # SLA AI module - Business Continuity Dashboard
+    from .slaai import slaai_bp
+    app.register_blueprint(slaai_bp)
