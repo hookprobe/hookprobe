@@ -748,7 +748,7 @@ def index():
     vlans = []
     stats = {}
     dfs_data = {}
-    network_mode = 'filter'  # or 'vlan'
+    network_mode = 'vlan'  # Always VLAN mode
     using_real_data = False
 
     # Priority 1: Try to get real data from system (ARP, DHCP, OVS)
@@ -819,7 +819,7 @@ def index():
         state_file = Path('/etc/hookprobe/fortress-state.json')
         if state_file.exists():
             state = json.loads(state_file.read_text())
-            network_mode = state.get('network_mode', 'filter')
+            network_mode = state.get('network_mode', 'vlan')
     except Exception:
         pass
 

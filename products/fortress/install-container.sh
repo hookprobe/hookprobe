@@ -308,7 +308,7 @@ check_prerequisites() {
 #   ADMIN_USER                         - Admin username (default: admin)
 #   ADMIN_PASS                         - Admin password (auto-generated if not set)
 #   WEB_PORT                           - Web UI port (default: 8443)
-#   NETWORK_MODE                       - filter or vlan (default: filter)
+#   NETWORK_MODE                       - vlan (VLAN-based network segmentation)
 #   NON_INTERACTIVE                    - Set to skip all prompts
 #
 # ============================================================
@@ -358,7 +358,7 @@ collect_configuration() {
     fi
 
     # Other defaults from environment
-    NETWORK_MODE="${NETWORK_MODE:-filter}"
+    NETWORK_MODE="vlan"  # Always use VLAN mode (filter mode removed)
     ADMIN_USER="${ADMIN_USER:-admin}"
     WEB_PORT="${WEB_PORT:-8443}"
 
@@ -435,33 +435,13 @@ collect_configuration() {
 
     # Network mode selection
     echo ""
-    echo -e "${BOLD}NETWORK MODE CONFIGURATION${NC}"
-    echo ""
-    echo "Select network security architecture:"
-    echo ""
-    echo "  1) Filter Mode (default)"
-    echo "     - Simple nftables-based filtering"
-    echo "     - All clients on same 10.200.0.0/24 subnet"
-    echo "     - Admin portal accessible from WiFi clients"
-    echo ""
-    echo "  2) VLAN Mode (enterprise security)"
-    echo "     - OVS port-based VLAN segmentation"
-    echo "     - VLAN 100: LAN (10.200.0.0/24) - WiFi clients, general devices"
-    echo "     - VLAN 200: MGMT (10.200.100.0/24) - Admin access only"
-    echo "     - Admin portal isolated from WiFi clients"
-    echo "     - Requires dedicated management port or Cloudflare tunnel"
-    echo ""
-    read -p "Select network mode [1]: " net_mode_choice
-    case "${net_mode_choice:-1}" in
-        2|vlan|VLAN)
-            NETWORK_MODE="vlan"
-            log_info "Network mode: VLAN (enterprise security, LAN isolated from management)"
-            ;;
-        *)
-            NETWORK_MODE="filter"
-            log_info "Network mode: Filter (simple nftables policies)"
-            ;;
-    esac
+    # VLAN mode is always used (filter mode removed)
+    # Network architecture:
+    #   - FTS Bridge: Layer 2 OVS switch (no IP)
+    #   - VLAN 100: LAN (10.200.0.0/24) - WiFi clients, general devices
+    #   - VLAN 200: MGMT (10.200.100.0/30) - Admin access
+    NETWORK_MODE="vlan"
+    log_info "Network mode: VLAN (OVS-based segmentation)"
 
     # LAN subnet (only if not set via FORTRESS_NETWORK_PREFIX)
     if [ -z "${LAN_SUBNET_MASK:-}" ]; then
@@ -1174,26 +1154,13 @@ setup_network() {
                     # Install services for boot persistence
                     install_vlan_service
                 else
-                    log_error "Netplan apply failed - falling back to filter mode"
-                    NETWORK_MODE="filter"
+                    log_error "Netplan apply failed"
                     "$netplan_gen" remove 2>/dev/null || true
-                    setup_ovs_dhcp
+                    return 1
                 fi
             else
-                log_error "Netplan generation failed - falling back to filter mode"
-                NETWORK_MODE="filter"
-                setup_ovs_dhcp
-            fi
-        else
-            # Filter mode: Simple nftables-based filtering (default)
-            log_info "Using filter-based network mode..."
-            setup_ovs_dhcp
-
-            # In filter mode, if MGMT interface is detected, set up VLAN 200 for management access
-            # This provides a dedicated management network even without full VLAN segmentation
-            if [ -n "$MGMT_INTERFACE" ]; then
-                log_info "Configuring VLAN 200 management access on $MGMT_INTERFACE..."
-                setup_mgmt_vlan_filter_mode "$MGMT_INTERFACE"
+                log_error "Netplan generation failed"
+                return 1
             fi
         fi
 
@@ -2056,133 +2023,7 @@ EOF
     log_info "dnsmasq configured to wait for OVS"
 }
 
-# Setup VLAN 200 management access in filter mode
-# This creates a management network on the designated MGMT interface
-# even when running in filter mode (not full VLAN mode)
-setup_mgmt_vlan_filter_mode() {
-    local mgmt_iface="$1"
-    local bridge="${OVS_BRIDGE:-FTS}"
-
-    if [ -z "$mgmt_iface" ]; then
-        log_warn "No MGMT interface specified"
-        return 1
-    fi
-
-    log_info "Setting up VLAN 200 management network on $mgmt_iface..."
-
-    # VLAN 200 configuration
-    local VLAN_MGMT=200
-    local GATEWAY_MGMT="10.200.100.1"
-    local DHCP_START_MGMT="10.200.100.2"
-    local DHCP_END_MGMT="10.200.100.2"  # Only 1 client (admin workstation)
-
-    # 1. Configure MGMT port as trunk (native LAN + tagged VLAN 200)
-    log_info "  Configuring $mgmt_iface as trunk port..."
-    ovs-vsctl set port "$mgmt_iface" \
-        trunks=100,$VLAN_MGMT \
-        vlan_mode=native-untagged \
-        tag=100 2>/dev/null || {
-        log_warn "  Failed to set trunk mode on $mgmt_iface"
-    }
-
-    # 2. Create VLAN 200 internal interface
-    log_info "  Creating VLAN $VLAN_MGMT internal interface..."
-    if ! ovs-vsctl list-ports "$bridge" 2>/dev/null | grep -q "^vlan${VLAN_MGMT}$"; then
-        ovs-vsctl add-port "$bridge" "vlan${VLAN_MGMT}" \
-            tag="$VLAN_MGMT" \
-            -- set interface "vlan${VLAN_MGMT}" type=internal
-    else
-        ovs-vsctl set port "vlan${VLAN_MGMT}" tag="$VLAN_MGMT"
-    fi
-
-    # 3. Configure IP on VLAN 200 interface
-    ip link set "vlan${VLAN_MGMT}" up 2>/dev/null || true
-    if ! ip addr show "vlan${VLAN_MGMT}" 2>/dev/null | grep -q "$GATEWAY_MGMT"; then
-        ip addr add "${GATEWAY_MGMT}/30" dev "vlan${VLAN_MGMT}" 2>/dev/null || true
-    fi
-
-    # 4. Add DHCP for VLAN 200 to dnsmasq config
-    local dhcp_mgmt_conf="/etc/dnsmasq.d/fts-mgmt-vlan.conf"
-    cat > "$dhcp_mgmt_conf" << EOF
-# HookProbe Fortress - Management VLAN 200 DHCP
-# Generated: $(date -Iseconds)
-
-# VLAN 200 Management Network
-interface=vlan${VLAN_MGMT}
-dhcp-range=vlan${VLAN_MGMT},${DHCP_START_MGMT},${DHCP_END_MGMT},255.255.255.252,12h
-dhcp-option=vlan${VLAN_MGMT},3,${GATEWAY_MGMT}
-dhcp-option=vlan${VLAN_MGMT},6,${GATEWAY_MGMT}
-
-# Management hostname
-address=/admin.fortress.local/${GATEWAY_MGMT}
-EOF
-
-    # Restart dnsmasq to pick up VLAN 200 config
-    systemctl restart dnsmasq 2>/dev/null || true
-
-    # 5. Add nftables rules for management access
-    local nft_mgmt_conf="/etc/nftables.d/fts-mgmt-vlan.nft"
-    mkdir -p /etc/nftables.d
-    cat > "$nft_mgmt_conf" << EOF
-#!/usr/sbin/nft -f
-#
-# HookProbe Fortress - Management VLAN 200 Firewall Rules
-# Generated: $(date -Iseconds)
-#
-
-# Delete table if exists
-table inet fts_mgmt_vlan
-delete table inet fts_mgmt_vlan
-
-table inet fts_mgmt_vlan {
-    chain input {
-        type filter hook input priority 0; policy accept;
-
-        # Allow DHCP on VLAN 200
-        iifname "vlan${VLAN_MGMT}" udp dport 67 accept
-
-        # Allow DNS on VLAN 200
-        iifname "vlan${VLAN_MGMT}" udp dport 53 accept
-        iifname "vlan${VLAN_MGMT}" tcp dport 53 accept
-
-        # Allow SSH from VLAN 200
-        iifname "vlan${VLAN_MGMT}" tcp dport 22 accept
-
-        # Allow web admin from VLAN 200
-        iifname "vlan${VLAN_MGMT}" tcp dport { 80, 443, 8443 } accept
-    }
-
-    chain forward {
-        type filter hook forward priority 0; policy accept;
-
-        # Allow management VLAN to access containers
-        ip saddr 10.200.100.0/30 ip daddr 172.20.200.0/24 accept
-        ip saddr 172.20.200.0/24 ip daddr 10.200.100.0/30 accept
-
-        # Block LAN from accessing management VLAN
-        ip saddr 10.200.0.0/24 ip daddr 10.200.100.0/30 drop
-    }
-
-    chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-
-        # Masquerade MGMT traffic going to internet
-        ip saddr 10.200.100.0/30 masquerade
-    }
-}
-EOF
-
-    # Apply nftables rules
-    nft -f "$nft_mgmt_conf" 2>/dev/null || {
-        log_warn "  Failed to apply MGMT VLAN firewall rules"
-    }
-
-    log_success "VLAN 200 management network configured:"
-    log_info "  MGMT Port: $mgmt_iface (trunk: native LAN + tagged VLAN 200)"
-    log_info "  Gateway: $GATEWAY_MGMT/30"
-    log_info "  Access: Connect admin workstation to $mgmt_iface with VLAN 200 tag"
-    log_info "  Admin UI: https://${GATEWAY_MGMT}:${WEB_PORT:-8443}"
-}
+# NOTE: setup_mgmt_vlan_filter_mode() removed - VLAN mode handles management network via netplan
 
 # Install VLAN service for boot persistence
 # Netplan handles bridge/VLAN creation at boot
@@ -2978,10 +2819,10 @@ fi
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
-# NETWORK_MODE is loaded from EnvironmentFile=/etc/hookprobe/fortress.conf
-NETWORK_MODE="${NETWORK_MODE:-filter}"
+# Always use VLAN mode (filter mode removed)
+NETWORK_MODE="vlan"
 
-log_info "Ensuring OVS bridge $OVS_BRIDGE is ready (mode: $NETWORK_MODE)..."
+log_info "Ensuring OVS bridge $OVS_BRIDGE is ready..."
 
 # Check if bridge exists
 if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
@@ -2996,24 +2837,14 @@ if ! ip link show "$OVS_BRIDGE" 2>/dev/null | grep -q "state UP"; then
     ip link set "$OVS_BRIDGE" up || log_warn "Failed to bring bridge UP"
 fi
 
-# IP assignment depends on network mode:
-# - Filter mode: IP on FTS bridge directly
-# - VLAN mode: IP on vlan100/vlan200 (handled by ovs-post-setup.sh)
-if [ "$NETWORK_MODE" = "vlan" ]; then
-    log_info "VLAN mode: IPs are on vlan100/vlan200, not FTS bridge"
-    # Ensure VLAN interfaces are ready (fortress-vlan.service should have done this)
-    if ! ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1/"; then
-        log_warn "vlan100 not ready - running ovs-post-setup bring-up-vlans"
-        /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || {
-            log_warn "Failed to bring up VLAN interfaces"
-        }
-    fi
-else
-    # Filter mode: Ensure gateway IP is assigned to FTS bridge
-    if ! ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_BASE_IP}/"; then
-        log_info "Assigning gateway IP ${LAN_BASE_IP}/${LAN_SUBNET_MASK} to $OVS_BRIDGE..."
-        ip addr add "${LAN_BASE_IP}/${LAN_SUBNET_MASK}" dev "$OVS_BRIDGE" 2>/dev/null || log_warn "IP already assigned or failed"
-    fi
+# VLAN mode: IPs are on vlan100/vlan200, not FTS bridge (Layer 2 only)
+log_info "VLAN mode: IPs are on vlan100/vlan200, not FTS bridge"
+# Ensure VLAN interfaces are ready (fortress-vlan.service should have done this)
+if ! ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1/"; then
+    log_warn "vlan100 not ready - running ovs-post-setup bring-up-vlans"
+    /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || {
+        log_warn "Failed to bring up VLAN interfaces"
+    }
 fi
 
 # Reinstall OpenFlow rules (they are not persisted across OVS restart)
@@ -3098,18 +2929,11 @@ ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2
 # Ensure bridge is UP
 ExecStartPre=/bin/bash -c 'ip link set FTS up 2>/dev/null || true'
 
-# CRITICAL: Ensure VLAN interfaces are UP with IPs (handles both filter and VLAN modes)
-# In filter mode: IP is on FTS bridge directly
-# In VLAN mode: IPs are on vlan100 (LAN) and vlan200 (MGMT)
-ExecStartPre=/bin/bash -c '\\
-  if [ "\${NETWORK_MODE}" = "vlan" ]; then \\
-    # VLAN mode - ensure vlan200 has IP for dashboard access \\
-    /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || \\
-      (ip link set vlan200 up 2>/dev/null; ip addr add 10.200.100.1/30 dev vlan200 2>/dev/null || true); \\
-  else \\
-    # Filter mode - IP on bridge directly \\
-    ip addr show FTS | grep -q "10.200.0.1/" || ip addr add 10.200.0.1/\${LAN_SUBNET_MASK:-24} dev FTS 2>/dev/null || true; \\
-  fi'
+# CRITICAL: Ensure VLAN interfaces are UP with IPs
+# VLAN mode: IPs are on vlan100 (LAN) and vlan200 (MGMT), not FTS bridge
+ExecStartPre=/bin/bash -c '/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || \\
+  (ip link set vlan100 up 2>/dev/null; ip addr add 10.200.0.1/\${LAN_SUBNET_MASK:-24} dev vlan100 2>/dev/null || true; \\
+   ip link set vlan200 up 2>/dev/null; ip addr add 10.200.100.1/30 dev vlan200 2>/dev/null || true)'
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
@@ -3527,7 +3351,7 @@ uninstall() {
 # QUICK INSTALL
 # ============================================================
 quick_install() {
-    NETWORK_MODE="filter"
+    NETWORK_MODE="vlan"  # Always VLAN mode
     ADMIN_USER="admin"
     ADMIN_PASS="hookprobe"
     WEB_PORT="8443"
@@ -3759,28 +3583,14 @@ main() {
     fi
 
     echo "Network Configuration:"
-    echo -e "  Mode:       ${BOLD}${NETWORK_MODE:-filter}${NC}"
+    echo -e "  Mode:       ${BOLD}VLAN${NC} (OVS-based segmentation)"
     echo -e "  Bridge:     $OVS_BRIDGE (OVS with OpenFlow 1.3+)"
-
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo ""
-        echo "VLAN Segmentation:"
-        echo -e "  VLAN 100 (LAN):  10.200.0.0/24 - WiFi clients, regular devices"
-        echo -e "  VLAN 200 (MGMT): 10.200.100.0/24 - Admin access, container network"
-        if [ -n "$MGMT_INTERFACE" ]; then
-            echo -e "  MGMT Port:       $MGMT_INTERFACE (trunk: native LAN + tagged MGMT)"
-        fi
-    else
-        echo -e "  LAN Subnet: 10.200.0.0/${LAN_SUBNET_MASK:-24}"
-        echo -e "  DHCP:       ${LAN_DHCP_START:-10.200.0.100} - ${LAN_DHCP_END:-10.200.0.200}"
-        # Show MGMT VLAN info if configured in filter mode
-        if [ -n "$MGMT_INTERFACE" ]; then
-            echo ""
-            echo "Management Network (VLAN 200):"
-            echo -e "  MGMT Port:    $MGMT_INTERFACE (trunk: native LAN + tagged VLAN 200)"
-            echo -e "  MGMT Subnet:  10.200.100.0/30"
-            echo -e "  Admin Access: https://10.200.100.1:${WEB_PORT:-8443}"
-        fi
+    echo ""
+    echo "VLAN Segmentation:"
+    echo -e "  VLAN 100 (LAN):  10.200.0.0/${LAN_SUBNET_MASK:-24} - WiFi clients, regular devices"
+    echo -e "  VLAN 200 (MGMT): 10.200.100.0/30 - Admin access"
+    if [ -n "$MGMT_INTERFACE" ]; then
+        echo -e "  MGMT Port:       $MGMT_INTERFACE (trunk: native LAN + tagged MGMT)"
     fi
     echo ""
 
@@ -3790,9 +3600,7 @@ main() {
     echo "Security Features:"
     echo "  - OpenFlow tier isolation (containers can't reach unauthorized networks)"
     echo "  - Traffic mirroring to QSecBit (all traffic analyzed)"
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "  - VLAN-based segmentation (LAN isolated from management)"
-    fi
+    echo "  - VLAN-based segmentation (LAN isolated from management)"
     echo "  - sFlow/IPFIX export for ML analysis"
     echo "  - VXLAN tunnels ready for mesh connectivity"
     echo ""
@@ -3801,12 +3609,8 @@ main() {
     echo "  systemctl status fortress             # Check container status"
     echo "  systemctl status fts-hostapd-*        # Check WiFi AP status"
     echo "  ovs-vsctl show                        # View OVS bridge"
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "  cat /etc/netplan/60-fortress-ovs.yaml  # View netplan config"
-        echo "  ${DEVICES_DIR}/common/ovs-post-setup.sh status"
-    else
-        echo "  ${DEVICES_DIR}/common/ovs-container-network.sh status"
-    fi
+    echo "  cat /etc/netplan/60-fortress-ovs.yaml # View netplan config"
+    echo "  ${DEVICES_DIR}/common/ovs-post-setup.sh status"
     echo ""
 }
 
