@@ -20,12 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Configuration (from environment or defaults)
 # ============================================
 
-# Network mode: "vlan" or "filter"
-# vlan: IP on vlan100/vlan200, FTS bridge has no IP
-# filter: IP on FTS bridge directly (simpler but less isolation)
-NETWORK_MODE="${NETWORK_MODE:-vlan}"
-
-# OVS Bridge name
+# OVS Bridge name (Layer 2 switch - NO IP)
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 
 # LAN configuration
@@ -99,13 +94,9 @@ calculate_dhcp_range() {
     esac
 }
 
-# Get DHCP interface based on network mode
+# Get DHCP interface (always vlan100 - FTS bridge has no IP)
 get_dhcp_interface() {
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "$VLAN_LAN"
-    else
-        echo "$OVS_BRIDGE"
-    fi
+    echo "$VLAN_LAN"
 }
 
 # ============================================
@@ -120,15 +111,12 @@ diagnose() {
 
     # Show configuration
     echo "1. CONFIGURATION:"
-    echo "   Network Mode:    $NETWORK_MODE"
-    echo "   OVS Bridge:      $OVS_BRIDGE"
+    echo "   OVS Bridge:      $OVS_BRIDGE (Layer 2 - no IP)"
     echo "   DHCP Interface:  $(get_dhcp_interface)"
     echo "   LAN Gateway:     $LAN_GATEWAY/$LAN_SUBNET_MASK"
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "   VLAN LAN:        $VLAN_LAN"
-        echo "   VLAN MGMT:       $VLAN_MGMT"
-        echo "   MGMT Gateway:    $MGMT_GATEWAY/$MGMT_SUBNET_MASK"
-    fi
+    echo "   VLAN LAN:        $VLAN_LAN"
+    echo "   VLAN MGMT:       $VLAN_MGMT"
+    echo "   MGMT Gateway:    $MGMT_GATEWAY/$MGMT_SUBNET_MASK"
     echo ""
 
     # Check dnsmasq status
@@ -167,7 +155,7 @@ diagnose() {
     fi
     echo ""
 
-    # Check FTS bridge
+    # Check FTS bridge (should have NO IP - Layer 2 only)
     echo "5. FTS BRIDGE STATUS:"
     if ip link show "$OVS_BRIDGE" &>/dev/null; then
         local bridge_ip
@@ -175,41 +163,34 @@ diagnose() {
         local bridge_state
         bridge_state=$(ip link show "$OVS_BRIDGE" | grep -oP 'state \K\S+')
         if [ -n "$bridge_ip" ]; then
-            echo "   $OVS_BRIDGE: $bridge_ip ($bridge_state)"
-            if [ "$NETWORK_MODE" = "vlan" ]; then
-                echo "   [WARN] In VLAN mode, FTS should have NO IP"
-            fi
+            echo "   [WARN] $OVS_BRIDGE: $bridge_ip ($bridge_state)"
+            echo "   [WARN] FTS bridge should have NO IP - IPs belong on vlan100/vlan200"
         else
-            echo "   $OVS_BRIDGE: NO IP ($bridge_state)"
-            if [ "$NETWORK_MODE" = "vlan" ]; then
-                echo "   [OK] Correct - FTS has no IP in VLAN mode"
-            fi
+            echo "   [OK] $OVS_BRIDGE: NO IP ($bridge_state) - correct for Layer 2 bridge"
         fi
     else
         echo "   [MISSING] $OVS_BRIDGE bridge does not exist"
     fi
     echo ""
 
-    # Check VLAN interfaces (if in VLAN mode)
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "6. VLAN INTERFACE STATUS:"
-        for iface in "$VLAN_LAN" "$VLAN_MGMT"; do
-            if ip link show "$iface" &>/dev/null; then
-                local ip
-                ip=$(ip -4 addr show "$iface" 2>/dev/null | grep "inet " | awk '{print $2}')
-                local state
-                state=$(ip link show "$iface" | grep -oP 'state \K\S+')
-                if [ -n "$ip" ]; then
-                    echo "   [OK] $iface: $ip ($state)"
-                else
-                    echo "   [WARN] $iface: NO IP ($state)"
-                fi
+    # Check VLAN interfaces
+    echo "6. VLAN INTERFACE STATUS:"
+    for iface in "$VLAN_LAN" "$VLAN_MGMT"; do
+        if ip link show "$iface" &>/dev/null; then
+            local ip
+            ip=$(ip -4 addr show "$iface" 2>/dev/null | grep "inet " | awk '{print $2}')
+            local state
+            state=$(ip link show "$iface" | grep -oP 'state \K\S+')
+            if [ -n "$ip" ]; then
+                echo "   [OK] $iface: $ip ($state)"
             else
-                echo "   [MISSING] $iface does not exist"
+                echo "   [WARN] $iface: NO IP ($state)"
             fi
-        done
-        echo ""
-    fi
+        else
+            echo "   [MISSING] $iface does not exist"
+        fi
+    done
+    echo ""
 
     # Check dnsmasq config
     echo "7. DNSMASQ CONFIGURATION:"
@@ -261,8 +242,8 @@ install_dnsmasq() {
 
 configure() {
     log_info "Configuring DHCP for Fortress..."
-    log_info "  Network Mode:   $NETWORK_MODE"
     log_info "  Subnet:         /$LAN_SUBNET_MASK"
+    log_info "  DHCP Interface: $VLAN_LAN"
 
     # Ensure dnsmasq is installed
     if ! command -v dnsmasq &>/dev/null; then
@@ -346,13 +327,12 @@ generate_dhcp_config() {
 # HookProbe Fortress DHCP Configuration
 # Generated: $(date -Iseconds)
 #
-# Network Mode: $NETWORK_MODE
 # LAN Subnet: 10.200.0.0/$LAN_SUBNET_MASK
 #
 # Network Architecture:
 #   FTS Bridge: Layer 2 OVS switch (NO IP)
-#   vlan100: LAN clients + WiFi
-#   vlan200: Management network
+#   vlan100: LAN clients + WiFi (10.200.0.1/$LAN_SUBNET_MASK)
+#   vlan200: Management network (10.200.100.1/30)
 #
 
 # ============================================
@@ -388,8 +368,7 @@ min-cache-ttl=300
 # ============================================
 # Interface binding
 # ============================================
-# Mode: $NETWORK_MODE
-# Interface: $dhcp_iface
+# DHCP listens on vlan100 (FTS bridge has no IP)
 interface=$dhcp_iface
 bind-dynamic
 
@@ -502,12 +481,16 @@ usage() {
     echo "  firewall   - Open firewall for DHCP/DNS"
     echo ""
     echo "Environment Variables:"
-    echo "  NETWORK_MODE     - 'vlan' (default) or 'filter'"
     echo "  LAN_SUBNET_MASK  - Subnet size: 29, 28, 27, 26, 25, 24, 23 (default: 24)"
     echo "  LAN_GATEWAY      - Gateway IP (default: 10.200.0.1)"
     echo "  OVS_BRIDGE       - OVS bridge name (default: FTS)"
     echo "  VLAN_LAN         - LAN VLAN interface (default: vlan100)"
     echo "  VLAN_MGMT        - Management VLAN interface (default: vlan200)"
+    echo ""
+    echo "Network Architecture:"
+    echo "  FTS Bridge: Layer 2 OVS switch (NO IP)"
+    echo "  vlan100:    LAN clients + WiFi (10.200.0.1/XX)"
+    echo "  vlan200:    Management network (10.200.100.1/30)"
     echo ""
     echo "DHCP Range by Subnet:"
     echo "  /29  →  10.200.0.2 - 10.200.0.6      (6 devices)"
@@ -519,14 +502,11 @@ usage() {
     echo "  /23  →  10.200.0.100 - 10.200.1.200  (510 devices)"
     echo ""
     echo "Quick Start:"
-    echo "  # Default /24 subnet, VLAN mode"
+    echo "  # Default /24 subnet"
     echo "  $0 configure"
     echo ""
     echo "  # Small business with /27 subnet"
     echo "  LAN_SUBNET_MASK=27 $0 configure"
-    echo ""
-    echo "  # Filter mode (simpler, less isolation)"
-    echo "  NETWORK_MODE=filter $0 configure"
     echo ""
 }
 
@@ -537,17 +517,13 @@ usage() {
 load_state() {
     local state_file="/etc/hookprobe/fortress-state.json"
     if [ -f "$state_file" ]; then
-        # Load values from state file if not already set via environment
-        if [ -z "${NETWORK_MODE:-}" ] || [ "$NETWORK_MODE" = "vlan" ]; then
-            local mode
-            mode=$(python3 -c "import json; print(json.load(open('$state_file')).get('network_mode', 'vlan'))" 2>/dev/null || echo "vlan")
-            NETWORK_MODE="${NETWORK_MODE:-$mode}"
-        fi
+        # Load subnet mask from state file if not already set via environment
         if [ -z "${LAN_SUBNET_MASK:-}" ] || [ "$LAN_SUBNET_MASK" = "24" ]; then
             local mask
             mask=$(python3 -c "import json; s=json.load(open('$state_file')).get('lan_subnet', '10.200.0.0/24'); print(s.split('/')[1])" 2>/dev/null || echo "24")
             LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-$mask}"
         fi
+        # Load gateway from state file if not already set via environment
         if [ -z "${LAN_GATEWAY:-}" ] || [ "$LAN_GATEWAY" = "10.200.0.1" ]; then
             local gw
             gw=$(python3 -c "import json; print(json.load(open('$state_file')).get('lan_gateway', '10.200.0.1'))" 2>/dev/null || echo "10.200.0.1")

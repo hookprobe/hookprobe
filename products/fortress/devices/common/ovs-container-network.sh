@@ -103,14 +103,7 @@ OF_TABLE_OUTPUT=40
 # State directory
 STATE_DIR="/var/lib/fortress/ovs"
 
-# Load NETWORK_MODE from fortress.conf if available
-# This determines if we're in VLAN mode (IPs on vlan100/vlan200) or filter mode (IP on FTS)
-FORTRESS_CONF="/etc/hookprobe/fortress.conf"
-if [ -f "$FORTRESS_CONF" ]; then
-    # shellcheck source=/dev/null
-    source "$FORTRESS_CONF" 2>/dev/null || true
-fi
-NETWORK_MODE="${NETWORK_MODE:-filter}"
+# VXLAN PSK file location
 VXLAN_PSK_FILE="/etc/hookprobe/secrets/vxlan_psk"
 
 # Colors
@@ -905,41 +898,20 @@ init_ovs_network_podman() {
     echo "MODE=podman" >> "$STATE_DIR/state"
 }
 
-# Setup LAN gateway IP on OVS bridge (FILTER MODE ONLY)
-# In VLAN mode, IPs are assigned to vlan100/vlan200 by ovs-post-setup.sh
-# In filter mode, IP is assigned directly to the FTS bridge
+# Ensure FTS bridge is up (NO IP - Layer 2 only)
+# IPs are assigned to vlan100/vlan200, not FTS bridge
 setup_lan_gateway() {
-    log_section "Setting Up LAN Gateway"
+    log_section "Setting Up FTS Bridge"
 
-    # In VLAN mode, skip IP assignment to FTS bridge
-    # IPs are on vlan100 (LAN) and vlan200 (MGMT), not FTS
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        log_info "VLAN mode: Skipping FTS bridge IP (IPs are on vlan100/vlan200)"
-        # Just ensure bridge is up
-        ip link set "$OVS_BRIDGE" up 2>/dev/null || true
-        return 0
-    fi
-
-    # Filter mode: Assign gateway IP to OVS bridge
-    local gateway_ip="${LAN_BASE_IP}/${LAN_SUBNET_MASK}"
-
-    # Check if IP already assigned
-    if ip addr show dev "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_BASE_IP}/"; then
-        log_info "LAN gateway already configured: $gateway_ip"
-        return 0
-    fi
-
-    # Assign gateway IP to the OVS bridge
-    log_info "Assigning LAN gateway IP: $gateway_ip to $OVS_BRIDGE"
-    ip addr add "$gateway_ip" dev "$OVS_BRIDGE" 2>/dev/null || {
-        log_error "Failed to assign IP $gateway_ip to $OVS_BRIDGE"
-        return 1
-    }
+    # FTS bridge is Layer 2 only - NO IP
+    # IPs are on vlan100 (LAN) and vlan200 (MGMT)
+    log_info "FTS bridge is Layer 2 only (no IP)"
+    log_info "IPs will be assigned to vlan100 and vlan200"
 
     # Ensure bridge is up
-    ip link set "$OVS_BRIDGE" up
+    ip link set "$OVS_BRIDGE" up 2>/dev/null || true
 
-    log_info "LAN gateway configured: $gateway_ip on $OVS_BRIDGE"
+    log_info "FTS bridge is up"
 }
 
 cleanup_ovs_network() {
