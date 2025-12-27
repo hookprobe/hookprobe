@@ -685,7 +685,7 @@ remove_nftables_filtering() {
         nft delete table inet fts_forward_mark 2>/dev/null || true
         nft delete table inet fts_nat 2>/dev/null || true
 
-        # Remove MGMT VLAN nftables table (filter mode VLAN 200)
+        # Remove MGMT VLAN nftables table
         log_info "Removing MGMT VLAN nftables table..."
         nft delete table inet fts_mgmt_vlan 2>/dev/null || true
     fi
