@@ -3114,8 +3114,8 @@ ExecStartPre=/bin/bash -c '\\
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 
-# Start containers
-ExecStart=${podman_compose_bin} -f podman-compose.yml up -d
+# Start containers (--no-build prevents rebuild attempts - images built during install)
+ExecStart=${podman_compose_bin} -f podman-compose.yml up -d --no-build
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
