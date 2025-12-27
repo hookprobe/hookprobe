@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS devices (
     hostname VARCHAR(255),
     device_type VARCHAR(50),
     manufacturer VARCHAR(255),
-    vlan_id INTEGER DEFAULT 40,
+    vlan_id INTEGER DEFAULT 100,  -- Default to LAN VLAN (physical)
     first_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     is_blocked BOOLEAN DEFAULT FALSE,
@@ -70,18 +70,30 @@ CREATE TABLE IF NOT EXISTS vlans (
     dns_policy VARCHAR(20) DEFAULT 'standard',
     bandwidth_limit_mbps INTEGER,
     is_isolated BOOLEAN DEFAULT FALSE,
+    is_logical BOOLEAN DEFAULT FALSE,  -- True for segment VLANs (OpenFlow tags within physical VLAN)
+    trust_floor INTEGER DEFAULT 0,     -- Minimum trust level required (0-4)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Default VLANs (optional - may not be used if using filter mode)
-INSERT INTO vlans (vlan_id, name, description, subnet, gateway, is_isolated)
+-- Physical VLANs: 100 (LAN) and 200 (MGMT) have their own subnets
+-- Segment VLANs: 10-99 are logical tags within VLAN 100 (share LAN subnet, isolated via OpenFlow)
+-- Note: Subnet values for segment VLANs match LAN since they share the same IP space
+-- Trust levels: 0=UNTRUSTED, 1=MINIMAL, 2=STANDARD, 3=HIGH, 4=ENTERPRISE
+INSERT INTO vlans (vlan_id, name, description, subnet, gateway, is_isolated, is_logical, trust_floor)
 VALUES
-    (10, 'Management', 'Admin and management devices', '10.250.10.0/24', '10.250.10.1', false),
-    (20, 'POS', 'Point of Sale terminals', '10.250.20.0/24', '10.250.20.1', true),
-    (30, 'Staff', 'Staff devices', '10.250.30.0/24', '10.250.30.1', false),
-    (40, 'Guest', 'Guest WiFi network', '10.250.40.0/24', '10.250.40.1', true),
-    (99, 'IoT', 'IoT devices and sensors', '10.250.99.0/24', '10.250.99.1', true)
+    -- Physical VLANs (actual tagged traffic)
+    (100, 'LAN', 'LAN clients and WiFi (physical)', '10.200.0.0/23', '10.200.0.1', false, false, 0),
+    (200, 'MGMT', 'Management network (container access)', '10.200.100.0/30', '10.200.100.1', false, false, 4),
+    -- Segment VLANs (logical tags within VLAN 100 for device classification via OpenFlow)
+    (10, 'SecMON', 'Security monitoring devices (NVR, SIEM)', '10.200.0.0/23', '10.200.0.1', false, true, 3),
+    (20, 'POS', 'Point of Sale terminals (isolated)', '10.200.0.0/23', '10.200.0.1', true, true, 3),
+    (30, 'Staff', 'Staff devices (laptops, phones)', '10.200.0.0/23', '10.200.0.1', false, true, 2),
+    (40, 'Guest', 'Guest WiFi network (isolated)', '10.200.0.0/23', '10.200.0.1', true, true, 1),
+    (50, 'Cameras', 'IP cameras and CCTV (isolated)', '10.200.0.0/23', '10.200.0.1', true, true, 2),
+    (60, 'IIoT', 'Industrial IoT / Smart devices (isolated)', '10.200.0.0/23', '10.200.0.1', true, true, 2),
+    (99, 'Quarantine', 'Unknown/suspicious devices (isolated)', '10.200.0.0/23', '10.200.0.1', true, true, 0)
 ON CONFLICT (vlan_id) DO NOTHING;
 
 -- ============================================================
