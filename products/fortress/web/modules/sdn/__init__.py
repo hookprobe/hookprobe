@@ -7,7 +7,7 @@ into a single dashboard for complete network visibility and control.
 Features:
 - Unified device grid with IP, MAC, vendor, policy, status
 - OUI-based automatic device classification
-- Network policy management (VLAN or nftables filter mode)
+- Network policy management (VLAN-based)
 - Real-time status updates
 - Device disconnect/block/unblock controls
 - Bulk operations
