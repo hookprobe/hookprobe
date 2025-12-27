@@ -21,10 +21,10 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install dependencies
+# All dependencies including psycopg2-binary and redis are in requirements.txt
 COPY web/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /tmp/requirements.txt && \
-    pip install --no-cache-dir psycopg2-binary redis
+    pip install --no-cache-dir -r /tmp/requirements.txt
 
 # ============================================================
 # Production Stage
@@ -85,8 +85,9 @@ ENV GUNICORN_BIND=0.0.0.0:8443
 
 # Health check
 # start-period allows 90s for entrypoint to wait for DB (up to 60s) and app startup
+# Note: Uses shell form to support dynamic WEB_PORT via GUNICORN_BIND env var
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -f -k https://localhost:8443/health || exit 1
+    CMD ["sh", "-c", "PORT=${GUNICORN_BIND##*:}; curl -f -k https://localhost:${PORT:-8443}/health || exit 1"]
 
 # Expose HTTPS port
 EXPOSE 8443
