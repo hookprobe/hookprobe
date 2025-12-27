@@ -1,17 +1,22 @@
 #!/bin/bash
 #
-# setup-dhcp.sh - Configure DHCP for Fortress OVS VLAN network
+# setup-dhcp.sh - Configure DHCP for Fortress OVS network
 # Part of HookProbe Fortress - Small Business Security Gateway
 #
-# Sets up dnsmasq to provide DHCP on all VLAN interfaces
+# Sets up dnsmasq to provide DHCP on the FTS bridge interface
+# Segment VLANs (10-99) share the LAN subnet - segmentation via OpenFlow
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# OVS Bridge name (FTS = abbreviation for fortress)
+# OVS Bridge name (FTS = abbreviation for Fortress)
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+
+# Network configuration (matches config.py defaults)
+LAN_GATEWAY="${LAN_GATEWAY:-10.200.0.1}"
+LAN_SUBNET="${LAN_SUBNET:-10.200.0.0/24}"
 
 # Colors
 RED='\033[0;31m'
@@ -54,27 +59,35 @@ diagnose() {
     fi
     echo ""
 
-    # Check interface IPs
-    echo "3. VLAN INTERFACE IPs:"
-    for iface in fortress vlan10 vlan20 vlan30 vlan40 vlan99; do
-        if ip link show "$iface" &>/dev/null; then
-            local ip
-            ip=$(ip -4 addr show "$iface" 2>/dev/null | grep "inet " | awk '{print $2}')
-            local state
-            state=$(ip link show "$iface" | grep -oP 'state \K\S+')
-            if [ -n "$ip" ]; then
-                echo "   [OK] $iface: $ip ($state)"
-            else
-                echo "   [WARN] $iface: NO IP ($state)"
-            fi
+    # Check FTS bridge interface
+    echo "3. FTS BRIDGE STATUS:"
+    if ip link show "$OVS_BRIDGE" &>/dev/null; then
+        local ip
+        ip=$(ip -4 addr show "$OVS_BRIDGE" 2>/dev/null | grep "inet " | awk '{print $2}')
+        local state
+        state=$(ip link show "$OVS_BRIDGE" | grep -oP 'state \K\S+')
+        if [ -n "$ip" ]; then
+            echo "   [OK] $OVS_BRIDGE: $ip ($state)"
         else
-            echo "   [MISSING] $iface does not exist"
+            echo "   [WARN] $OVS_BRIDGE: NO IP ($state)"
         fi
-    done
+    else
+        echo "   [MISSING] $OVS_BRIDGE bridge does not exist"
+    fi
+    echo ""
+
+    # Check OVS status
+    echo "4. OVS BRIDGE PORTS:"
+    if command -v ovs-vsctl &>/dev/null; then
+        echo "   Bridge: $OVS_BRIDGE"
+        ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | sed 's/^/      /' || echo "      No ports configured"
+    else
+        echo "   [WARN] ovs-vsctl not available"
+    fi
     echo ""
 
     # Check WiFi bridge membership
-    echo "4. WIFI INTERFACES:"
+    echo "5. WIFI INTERFACES:"
     for iface in wlan0 wlp6s0; do
         if ip link show "$iface" &>/dev/null; then
             local master
@@ -94,7 +107,7 @@ diagnose() {
     echo ""
 
     # Check dnsmasq config
-    echo "5. DNSMASQ CONFIGURATION:"
+    echo "6. DNSMASQ CONFIGURATION:"
     if [ -f /etc/dnsmasq.d/fortress.conf ]; then
         echo "   [OK] /etc/dnsmasq.d/fortress.conf exists"
         echo "   Interfaces configured:"
@@ -110,7 +123,7 @@ diagnose() {
     echo ""
 
     # Check firewall
-    echo "6. FIREWALL (DHCP UDP 67/68):"
+    echo "7. FIREWALL (DHCP UDP 67/68):"
     if command -v iptables &>/dev/null; then
         local dhcp_rules
         dhcp_rules=$(iptables -L INPUT -n 2>/dev/null | grep -E "(67|68|dhcp)" | wc -l)
@@ -124,7 +137,7 @@ diagnose() {
     echo ""
 
     # Recent DHCP logs
-    echo "7. RECENT DHCP LOG ENTRIES:"
+    echo "8. RECENT DHCP LOG ENTRIES:"
     if [ -f /var/log/dnsmasq.log ]; then
         tail -10 /var/log/dnsmasq.log | sed 's/^/   /'
     else
@@ -194,8 +207,12 @@ configure() {
     touch /var/log/dnsmasq.log
     chown dnsmasq:dnsmasq /var/log/dnsmasq.log 2>/dev/null || true
 
-    # Ensure VLAN interfaces have IPs
-    ensure_vlan_ips
+    # Create lease directory
+    mkdir -p /var/lib/dnsmasq
+    chown dnsmasq:dnsmasq /var/lib/dnsmasq 2>/dev/null || true
+
+    # Ensure FTS bridge has IP
+    ensure_bridge_ip
 
     # Test config
     log_info "Testing dnsmasq configuration..."
@@ -227,40 +244,27 @@ configure() {
     log_success "DHCP configuration complete!"
 }
 
-ensure_vlan_ips() {
-    log_info "Ensuring VLAN interfaces have IPs..."
+ensure_bridge_ip() {
+    log_info "Ensuring FTS bridge has IP..."
 
-    local vlans=(
-        "fortress:10.250.0.1/16"
-        "vlan10:10.250.10.1/24"
-        "vlan20:10.250.20.1/24"
-        "vlan30:10.250.30.1/24"
-        "vlan40:10.250.40.1/24"
-        "vlan99:10.250.99.1/24"
-    )
-
-    for vlan_info in "${vlans[@]}"; do
-        local iface="${vlan_info%%:*}"
-        local ip="${vlan_info#*:}"
-
-        if ip link show "$iface" &>/dev/null; then
-            # Check if IP is set
-            if ! ip addr show "$iface" 2>/dev/null | grep -q "${ip%/*}"; then
-                log_info "  Adding $ip to $iface"
-                ip addr add "$ip" dev "$iface" 2>/dev/null || true
-            fi
-            ip link set "$iface" up 2>/dev/null || true
-        else
-            log_warn "  Interface $iface does not exist"
+    if ip link show "$OVS_BRIDGE" &>/dev/null; then
+        # Check if IP is set
+        if ! ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${LAN_GATEWAY%/*}"; then
+            log_info "  Adding $LAN_GATEWAY/24 to $OVS_BRIDGE"
+            ip addr add "${LAN_GATEWAY}/24" dev "$OVS_BRIDGE" 2>/dev/null || true
         fi
-    done
+        ip link set "$OVS_BRIDGE" up 2>/dev/null || true
+        log_success "  FTS bridge is configured with $LAN_GATEWAY"
+    else
+        log_warn "  FTS bridge does not exist yet - will be created during install"
+    fi
 }
 
 open_firewall() {
     log_info "Opening firewall for DHCP..."
 
-    # Accept DHCP on all VLAN interfaces
-    for iface in fortress vlan10 vlan20 vlan30 vlan40 vlan99 wlan0 wlp6s0; do
+    # Accept DHCP on FTS bridge and WiFi interfaces
+    for iface in "$OVS_BRIDGE" wlan0 wlp6s0; do
         if ip link show "$iface" &>/dev/null; then
             # Allow DHCP (UDP 67/68)
             iptables -I INPUT -i "$iface" -p udp --dport 67 -j ACCEPT 2>/dev/null || true
@@ -287,8 +291,8 @@ quickfix() {
         return
     fi
 
-    # 2. Ensure IPs on interfaces
-    ensure_vlan_ips
+    # 2. Ensure FTS bridge has IP
+    ensure_bridge_ip
 
     # 3. Restart dnsmasq
     systemctl restart dnsmasq
@@ -312,6 +316,11 @@ usage() {
     echo "  configure  - Install and configure dnsmasq for Fortress"
     echo "  quickfix   - Quick fix common DHCP issues"
     echo "  firewall   - Open firewall for DHCP/DNS"
+    echo ""
+    echo "Environment Variables:"
+    echo "  OVS_BRIDGE   - OVS bridge name (default: FTS)"
+    echo "  LAN_GATEWAY  - Gateway IP (default: 10.200.0.1)"
+    echo "  LAN_SUBNET   - LAN subnet (default: 10.200.0.0/24)"
     echo ""
     echo "Quick Start:"
     echo "  $0 configure    # First time setup"
