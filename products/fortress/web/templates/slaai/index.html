@@ -317,6 +317,60 @@
     color: #888;
 }
 
+/* Section Headers */
+.traffic-section-header {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem 0;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.traffic-section-header:first-of-type {
+    border-top: none;
+    margin-top: 0;
+}
+
+/* Filter Bar */
+.traffic-filter-bar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.filter-btn {
+    padding: 0.4rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: transparent;
+    color: #888;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.filter-btn:hover {
+    border-color: rgba(255,255,255,0.4);
+    color: #fff;
+}
+
+.filter-btn.active {
+    background: rgba(79, 195, 247, 0.2);
+    border-color: #4fc3f7;
+    color: #4fc3f7;
+}
+
+.filter-btn i {
+    margin-right: 0.35rem;
+}
+
 /* Cost Tracking */
 .cost-panel {
     background: #1a1a2e;
@@ -725,57 +779,167 @@
             </div>
         </div>
 
-        <!-- Traffic Pips -->
+        <!-- Interface Traffic Pips -->
         <div class="traffic-pips-container">
             <div class="traffic-pips-header">
-                <h4><i class="fas fa-chart-bar mr-2"></i>VLAN Traffic (Real-time)</h4>
+                <h4><i class="fas fa-chart-bar mr-2"></i>Interface Traffic (Real-time)</h4>
                 <div class="traffic-pips-legend">
                     <span class="pip-sample"><span class="pip active"></span> Active (5 Mbps/pip)</span>
                     <span class="pip-sample"><span class="pip inactive"></span> Inactive</span>
                 </div>
             </div>
 
+            <!-- Filter Bar -->
+            <div class="traffic-filter-bar">
+                <button class="filter-btn active" data-filter="all">
+                    <i class="fas fa-th"></i>All
+                </button>
+                <button class="filter-btn" data-filter="wan">
+                    <i class="fas fa-globe"></i>WAN
+                </button>
+                <button class="filter-btn" data-filter="bridge">
+                    <i class="fas fa-project-diagram"></i>Bridge/WiFi
+                </button>
+                <button class="filter-btn" data-filter="vlan">
+                    <i class="fas fa-layer-group"></i>VLANs
+                </button>
+                <button class="filter-btn" data-filter="container">
+                    <i class="fas fa-cube"></i>Containers
+                </button>
+            </div>
+
+            <!-- WAN Interfaces Section -->
+            <div class="traffic-section-header">
+                <i class="fas fa-globe mr-2"></i>WAN Interfaces
+            </div>
+            <div id="wan-traffic-pips">
+                <div class="vlan-traffic-row" data-iface="eth0" style="--pip-color: #4fc3f7;">
+                    <span class="vlan-name"><i class="fas fa-ethernet mr-1"></i>eth0 (WAN)</span>
+                    <div class="vlan-pips" id="pips-wan"></div>
+                    <span class="vlan-traffic-value" id="traffic-wan">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-iface="wwan0" style="--pip-color: #ffb74d;">
+                    <span class="vlan-name"><i class="fas fa-signal mr-1"></i>wwan0 (LTE)</span>
+                    <div class="vlan-pips" id="pips-lte"></div>
+                    <span class="vlan-traffic-value" id="traffic-lte">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+            </div>
+
+            <!-- Bridge & WiFi Section -->
+            <div class="traffic-section-header">
+                <i class="fas fa-project-diagram mr-2"></i>Bridge & WiFi
+            </div>
+            <div id="bridge-traffic-pips">
+                <div class="vlan-traffic-row" data-iface="FTS" style="--pip-color: #ce93d8;">
+                    <span class="vlan-name"><i class="fas fa-network-wired mr-1"></i>FTS (Bridge)</span>
+                    <div class="vlan-pips" id="pips-fts"></div>
+                    <span class="vlan-traffic-value" id="traffic-fts">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-iface="wlan0" style="--pip-color: #81c784;">
+                    <span class="vlan-name"><i class="fas fa-wifi mr-1"></i>wlan0 (2.4GHz)</span>
+                    <div class="vlan-pips" id="pips-wifi24"></div>
+                    <span class="vlan-traffic-value" id="traffic-wifi24">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-iface="wlan1" style="--pip-color: #00d9ff;">
+                    <span class="vlan-name"><i class="fas fa-wifi mr-1"></i>wlan1 (5GHz)</span>
+                    <div class="vlan-pips" id="pips-wifi5"></div>
+                    <span class="vlan-traffic-value" id="traffic-wifi5">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+            </div>
+
+            <!-- VLAN Traffic Section -->
+            <div class="traffic-section-header">
+                <i class="fas fa-layer-group mr-2"></i>VLAN Traffic
+            </div>
             <div id="vlan-traffic-pips">
                 <div class="vlan-traffic-row" data-vlan="100" style="--pip-color: #4fc3f7;">
-                    <span class="vlan-name">VLAN 100 (LAN)</span>
+                    <span class="vlan-name">vlan100 (LAN)</span>
                     <div class="vlan-pips" id="pips-100"></div>
                     <span class="vlan-traffic-value" id="traffic-100">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
                 <div class="vlan-traffic-row" data-vlan="200" style="--pip-color: #ce93d8;">
-                    <span class="vlan-name">VLAN 200 (MGMT)</span>
+                    <span class="vlan-name">vlan200 (MGMT)</span>
                     <div class="vlan-pips" id="pips-200"></div>
                     <span class="vlan-traffic-value" id="traffic-200">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
                 <div class="vlan-traffic-row" data-vlan="30" style="--pip-color: #81c784;">
-                    <span class="vlan-name">VLAN 30 (STAFF)</span>
+                    <span class="vlan-name">vlan30 (STAFF)</span>
                     <div class="vlan-pips" id="pips-30"></div>
                     <span class="vlan-traffic-value" id="traffic-30">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
                 <div class="vlan-traffic-row" data-vlan="40" style="--pip-color: #ffb74d;">
-                    <span class="vlan-name">VLAN 40 (GUEST)</span>
+                    <span class="vlan-name">vlan40 (GUEST)</span>
                     <div class="vlan-pips" id="pips-40"></div>
                     <span class="vlan-traffic-value" id="traffic-40">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
                 <div class="vlan-traffic-row" data-vlan="20" style="--pip-color: #64b5f6;">
-                    <span class="vlan-name">VLAN 20 (POS)</span>
+                    <span class="vlan-name">vlan20 (POS)</span>
                     <div class="vlan-pips" id="pips-20"></div>
                     <span class="vlan-traffic-value" id="traffic-20">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
                 <div class="vlan-traffic-row" data-vlan="50" style="--pip-color: #4dd0e1;">
-                    <span class="vlan-name">VLAN 50 (CAMERAS)</span>
+                    <span class="vlan-name">vlan50 (CAMERAS)</span>
                     <div class="vlan-pips" id="pips-50"></div>
                     <span class="vlan-traffic-value" id="traffic-50">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
                 <div class="vlan-traffic-row" data-vlan="99" style="--pip-color: #e57373;">
-                    <span class="vlan-name">VLAN 99 (QUARANTINE)</span>
+                    <span class="vlan-name">vlan99 (QUARANTINE)</span>
                     <div class="vlan-pips" id="pips-99"></div>
                     <span class="vlan-traffic-value" id="traffic-99">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+            </div>
+
+            <!-- Container Network Section -->
+            <div class="traffic-section-header">
+                <i class="fas fa-docker mr-2"></i>Container Network (172.20.200.0/24)
+            </div>
+            <div id="container-traffic-pips">
+                <div class="vlan-traffic-row" data-container="web" style="--pip-color: #64b5f6;">
+                    <span class="vlan-name"><i class="fas fa-globe mr-1"></i>fortress-web</span>
+                    <div class="vlan-pips" id="pips-web"></div>
+                    <span class="vlan-traffic-value" id="traffic-web">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-container="postgres" style="--pip-color: #336791;">
+                    <span class="vlan-name"><i class="fas fa-database mr-1"></i>fortress-postgres</span>
+                    <div class="vlan-pips" id="pips-postgres"></div>
+                    <span class="vlan-traffic-value" id="traffic-postgres">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-container="redis" style="--pip-color: #d82c20;">
+                    <span class="vlan-name"><i class="fas fa-memory mr-1"></i>fortress-redis</span>
+                    <div class="vlan-pips" id="pips-redis"></div>
+                    <span class="vlan-traffic-value" id="traffic-redis">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-container="qsecbit" style="--pip-color: #81c784;">
+                    <span class="vlan-name"><i class="fas fa-shield-alt mr-1"></i>fortress-qsecbit</span>
+                    <div class="vlan-pips" id="pips-qsecbit"></div>
+                    <span class="vlan-traffic-value" id="traffic-qsecbit">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-container="dnsxai" style="--pip-color: #ff9800;">
+                    <span class="vlan-name"><i class="fas fa-brain mr-1"></i>fortress-dnsxai</span>
+                    <div class="vlan-pips" id="pips-dnsxai"></div>
+                    <span class="vlan-traffic-value" id="traffic-dnsxai">-- Mbps</span>
+                    <span class="vlan-traffic-direction">↑↓</span>
+                </div>
+                <div class="vlan-traffic-row" data-container="dfs" style="--pip-color: #9c27b0;">
+                    <span class="vlan-name"><i class="fas fa-broadcast-tower mr-1"></i>fortress-dfs</span>
+                    <div class="vlan-pips" id="pips-dfs"></div>
+                    <span class="vlan-traffic-value" id="traffic-dfs">-- Mbps</span>
                     <span class="vlan-traffic-direction">↑↓</span>
                 </div>
             </div>
@@ -1010,8 +1174,22 @@ function updateTimeline(events) {
     }).join('');
 }
 
-// Simulate traffic for demo
+// Simulate traffic for demo - all interfaces
 function simulateTraffic() {
+    // WAN interfaces
+    const wanInterfaces = {
+        'wan': { min: 150, max: 250 },
+        'lte': { min: 5, max: 25 }
+    };
+
+    // Bridge/WiFi interfaces
+    const bridgeInterfaces = {
+        'fts': { min: 180, max: 300 },
+        'wifi24': { min: 30, max: 50 },
+        'wifi5': { min: 70, max: 120 }
+    };
+
+    // VLAN interfaces
     const vlans = {
         100: { min: 40, max: 60 },
         200: { min: 2, max: 8 },
@@ -1022,10 +1200,93 @@ function simulateTraffic() {
         99: { min: 0, max: 2 }
     };
 
+    // Container interfaces
+    const containers = {
+        'web': { min: 5, max: 20 },
+        'postgres': { min: 2, max: 10 },
+        'redis': { min: 1, max: 5 },
+        'qsecbit': { min: 3, max: 12 },
+        'dnsxai': { min: 8, max: 25 },
+        'dfs': { min: 1, max: 4 }
+    };
+
+    // Update all interfaces
+    Object.entries(wanInterfaces).forEach(([iface, range]) => {
+        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
+        updateTrafficPipsGeneric(iface, traffic);
+    });
+
+    Object.entries(bridgeInterfaces).forEach(([iface, range]) => {
+        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
+        updateTrafficPipsGeneric(iface, traffic);
+    });
+
     Object.entries(vlans).forEach(([vlan, range]) => {
         const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
         updateTrafficPips(vlan, traffic);
     });
+
+    Object.entries(containers).forEach(([container, range]) => {
+        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
+        updateTrafficPipsGeneric(container, traffic);
+    });
+}
+
+// Generic traffic pips update
+function updateTrafficPipsGeneric(id, mbps) {
+    const container = document.getElementById(`pips-${id}`);
+    const valueEl = document.getElementById(`traffic-${id}`);
+
+    if (!container) return;
+
+    const activePips = Math.min(PIPS_PER_ROW, Math.ceil(mbps / MBPS_PER_PIP));
+    const pips = container.querySelectorAll('.pip');
+
+    pips.forEach((pip, i) => {
+        if (i < activePips) {
+            pip.classList.add('active');
+        } else {
+            pip.classList.remove('active');
+        }
+    });
+
+    if (valueEl) {
+        valueEl.textContent = `${mbps} Mbps`;
+    }
+}
+
+// Filter traffic sections
+function filterTrafficSections(filter) {
+    const sections = {
+        wan: document.getElementById('wan-traffic-pips'),
+        bridge: document.getElementById('bridge-traffic-pips'),
+        vlan: document.getElementById('vlan-traffic-pips'),
+        container: document.getElementById('container-traffic-pips')
+    };
+
+    const headers = document.querySelectorAll('.traffic-section-header');
+
+    if (filter === 'all') {
+        // Show all
+        Object.values(sections).forEach(section => {
+            if (section) section.style.display = 'block';
+        });
+        headers.forEach(h => h.style.display = 'flex');
+    } else {
+        // Hide all first
+        Object.values(sections).forEach(section => {
+            if (section) section.style.display = 'none';
+        });
+        headers.forEach(h => h.style.display = 'none');
+
+        // Show selected
+        if (sections[filter]) {
+            sections[filter].style.display = 'block';
+            // Find and show corresponding header
+            const headerIndex = Object.keys(sections).indexOf(filter);
+            if (headers[headerIndex]) headers[headerIndex].style.display = 'flex';
+        }
+    }
 }
 
 // Initialize
@@ -1033,6 +1294,19 @@ document.addEventListener('DOMContentLoaded', function() {
     initPips();
     loadSLAStatus();
     simulateTraffic();
+
+    // Filter button handlers
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            // Update active state
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+
+            // Apply filter
+            const filter = this.getAttribute('data-filter');
+            filterTrafficSections(filter);
+        });
+    });
 
     // Refresh every 5 seconds
     setInterval(loadSLAStatus, 5000);
