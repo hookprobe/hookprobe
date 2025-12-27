@@ -17,34 +17,67 @@ import json
 from . import sdn_bp
 from ..auth.decorators import operator_required
 
-# Import lib modules (with fallback for development)
+# Import lib modules with robust fallback mechanism
+# Priority 1: Import from lib package (container environment)
+# Priority 2: Import via path manipulation (development)
+import sys
+from pathlib import Path
+
 DB_AVAILABLE = False
 POLICY_MANAGER_AVAILABLE = False
+SDN_AUTOPILOT_AVAILABLE = False
+DFS_AVAILABLE = False
 
-try:
-    import sys
-    from pathlib import Path
-    lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+# Add lib path for development
+lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+if lib_path.exists() and str(lib_path) not in sys.path:
     sys.path.insert(0, str(lib_path))
-    from database import get_db
-    from device_manager import get_device_manager
-    from vlan_manager import get_vlan_manager
+
+# Try to import database and device management
+try:
+    # Try as package first (container)
+    from lib import get_db, get_device_manager, get_vlan_manager
     DB_AVAILABLE = True
 except ImportError:
-    pass
+    try:
+        # Fallback to direct import (development)
+        from database import get_db
+        from device_manager import get_device_manager
+        from vlan_manager import get_vlan_manager
+        DB_AVAILABLE = True
+    except ImportError:
+        pass
 
+# Try to import network policy manager
 try:
-    from network_policy_manager import (
+    from lib.network_policy_manager import (
         OUIClassifier,
         NetworkPolicyManager,
         NetworkPolicy,
         DeviceCategory,
-        classify_device
     )
     POLICY_MANAGER_AVAILABLE = True
 except ImportError:
-    # Fallback classification function
+    try:
+        from network_policy_manager import (
+            OUIClassifier,
+            NetworkPolicyManager,
+            NetworkPolicy,
+            DeviceCategory,
+        )
+        POLICY_MANAGER_AVAILABLE = True
+    except ImportError:
+        pass
+
+# Fallback classification function if policy manager unavailable
+if POLICY_MANAGER_AVAILABLE:
     def classify_device(mac_address):
+        """Classify device using OUI database."""
+        classifier = OUIClassifier()
+        return classifier.classify(mac_address)
+else:
+    def classify_device(mac_address):
+        """Fallback classification when policy manager unavailable."""
         return {
             'mac_address': mac_address.upper(),
             'oui': mac_address.upper()[:8],
@@ -54,18 +87,23 @@ except ImportError:
         }
 
 # SDN Auto-Pilot for segment management
-SDN_AUTOPILOT_AVAILABLE = False
 try:
-    from sdn_autopilot import get_sdn_autopilot, NetworkSegment, DeviceCategory as SegmentCategory
+    from lib import get_sdn_autopilot
+    from lib.sdn_autopilot import NetworkSegment, DeviceCategory as SegmentCategory
     SDN_AUTOPILOT_AVAILABLE = True
 except ImportError:
-    pass
+    try:
+        from sdn_autopilot import get_sdn_autopilot, NetworkSegment, DeviceCategory as SegmentCategory
+        SDN_AUTOPILOT_AVAILABLE = True
+    except ImportError:
+        pass
 
 # DFS Intelligence for WiFi channel data
-DFS_AVAILABLE = False
 try:
+    # Try shared module path
     dfs_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'shared' / 'wireless'
-    sys.path.insert(0, str(dfs_path))
+    if dfs_path.exists() and str(dfs_path) not in sys.path:
+        sys.path.insert(0, str(dfs_path))
     from dfs_intelligence import DFSDatabase, ChannelScorer
     DFS_AVAILABLE = True
 except ImportError:
