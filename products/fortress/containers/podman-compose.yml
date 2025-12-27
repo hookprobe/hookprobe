@@ -167,8 +167,9 @@ services:
       fts-internal:
         ipv4_address: 172.20.200.20
     # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
+    # Note: Uses WEB_PORT environment variable for dynamic port support
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health"]
+      test: ["CMD-SHELL", "curl -f -k https://localhost:${WEB_PORT:-8443}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

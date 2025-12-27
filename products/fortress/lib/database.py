@@ -196,7 +196,10 @@ class Database:
 
     def update_vlan(self, vlan_id: int, **kwargs) -> bool:
         """Update VLAN settings."""
-        allowed_fields = {'name', 'description', 'dns_policy', 'bandwidth_limit_mbps', 'is_isolated', 'dhcp_enabled'}
+        allowed_fields = {
+            'name', 'description', 'dns_policy', 'bandwidth_limit_mbps',
+            'is_isolated', 'dhcp_enabled', 'is_logical', 'trust_floor'
+        }
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
         if not updates:
