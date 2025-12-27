@@ -78,7 +78,7 @@ class FortressConfig:
     lan_gateway: str = "10.200.0.1"
     mgmt_subnet: str = "10.200.100.0/30"  # Fixed management subnet
     mgmt_gateway: str = "10.200.100.1"
-    network_mode: str = "filter"  # "filter" or "vlan"
+    network_mode: str = "vlan"  # Always VLAN mode
 
     # Database
     database: DatabaseConfig = field(default_factory=DatabaseConfig)

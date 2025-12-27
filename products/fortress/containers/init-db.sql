@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS vlans (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Default VLANs (optional - may not be used if using filter mode)
+-- Default VLANs for VLAN mode network segmentation
 -- Physical VLANs: 100 (LAN) and 200 (MGMT) have their own subnets
 -- Segment VLANs: 10-99 are logical tags within VLAN 100 (share LAN subnet, isolated via OpenFlow)
 -- Note: Subnet values for segment VLANs match LAN since they share the same IP space
