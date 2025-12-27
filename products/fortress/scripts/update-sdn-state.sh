@@ -96,20 +96,11 @@ fi
 DETECTED_GATEWAY=""
 DETECTED_SUBNET=""
 
-# Try vlan100 first (VLAN mode)
+# VLAN mode: Get IP from vlan100 interface
 if ip addr show vlan100 2>/dev/null | grep -q "inet "; then
     DETECTED_GATEWAY=$(ip addr show vlan100 | grep -oP 'inet \K[\d.]+' | head -1)
     DETECTED_SUBNET=$(ip addr show vlan100 | grep -oP 'inet \K[\d./]+' | head -1)
-    log_success "VLAN mode detected: vlan100 = $DETECTED_SUBNET"
-fi
-
-# Try FTS bridge (filter mode)
-if [ -z "$DETECTED_GATEWAY" ]; then
-    if ip addr show "$DETECTED_BRIDGE" 2>/dev/null | grep -q "inet "; then
-        DETECTED_GATEWAY=$(ip addr show "$DETECTED_BRIDGE" | grep -oP 'inet \K[\d.]+' | head -1)
-        DETECTED_SUBNET=$(ip addr show "$DETECTED_BRIDGE" | grep -oP 'inet \K[\d./]+' | head -1)
-        log_success "Filter mode detected: $DETECTED_BRIDGE = $DETECTED_SUBNET"
-    fi
+    log_success "VLAN mode: vlan100 = $DETECTED_SUBNET"
 fi
 
 if [ -z "$DETECTED_GATEWAY" ]; then
@@ -133,12 +124,9 @@ fi
 log_info "LAN subnet: $LAN_SUBNET"
 log_info "LAN gateway: $DETECTED_GATEWAY"
 
-# Detect network mode
-NETWORK_MODE="filter"
-if ip link show vlan100 &>/dev/null && ip link show vlan200 &>/dev/null; then
-    NETWORK_MODE="vlan"
-fi
-log_info "Network mode: $NETWORK_MODE"
+# Always VLAN mode (filter mode removed)
+NETWORK_MODE="vlan"
+log_info "Network mode: VLAN"
 
 # Detect DHCP range from dnsmasq config
 DHCP_START="10.200.0.100"

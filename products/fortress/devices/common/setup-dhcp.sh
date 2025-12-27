@@ -8,7 +8,7 @@
 #   vlan100: LAN clients + WiFi (IP: 10.200.0.1/XX)
 #   vlan200: Management (IP: 10.200.100.1/30)
 #
-# DHCP listens on vlan100 (VLAN mode) or FTS (filter mode)
+# DHCP listens on vlan100 (VLAN mode)
 # DHCP range is calculated based on user's subnet size
 #
 
