@@ -12,6 +12,10 @@ bcrypt>=4.0.0
 # Production server
 gunicorn>=21.0.0
 
+# Database
+psycopg2-binary>=2.9.0
+redis>=4.5.0
+
 # Utilities
 requests>=2.31.0
 psutil>=5.9.0
