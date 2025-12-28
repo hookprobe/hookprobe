@@ -1926,8 +1926,18 @@ setup_vlan_dhcp() {
 
     mkdir -p "$(dirname "$config_file")"
 
-    # Remove old FTS-based config if exists (from previous filter mode install)
+    # Remove ALL old FTS/Fortress dnsmasq configs to avoid duplicate options
+    # This is critical: duplicate cache-size, interface, etc. cause dnsmasq to fail
+    log_info "Cleaning up old dnsmasq configs..."
     rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
 
     cat > "$config_file" << EOF
 # HookProbe Fortress DHCP Configuration (VLAN Mode)
