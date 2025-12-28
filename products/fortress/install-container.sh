@@ -2148,6 +2148,43 @@ build_containers() {
     local built_count=0
     local skipped_count=0
 
+    # ============================================================
+    # CRITICAL: Stabilize network BEFORE any container builds
+    # ============================================================
+    # Container builds pull base images and dependencies. If network flaps
+    # during a build, it corrupts the container layer cache and fails.
+    # We MUST have stable routing before starting.
+    log_info "Stabilizing network before container builds..."
+
+    if type ensure_network_connectivity &>/dev/null; then
+        # This sets up dual routes and removes dead ones
+        ensure_network_connectivity || true
+
+        # Show current routing state for debugging
+        log_info "Current default routes:"
+        ip route show default 2>/dev/null | while read -r line; do
+            log_info "  $line"
+        done
+
+        # Verify we have at least one working route
+        if ! ping -c1 -W3 8.8.8.8 &>/dev/null; then
+            log_warn "Primary connectivity check failed, checking backup..."
+            if [ -n "$ENR_BACKUP_IFACE" ]; then
+                local backup_ip
+                backup_ip=$(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+                if [ -n "$backup_ip" ] && ping -c1 -W3 -I "$backup_ip" 8.8.8.8 &>/dev/null; then
+                    log_info "Backup interface ($ENR_BACKUP_IFACE) working - proceeding"
+                else
+                    log_error "No working network interface detected!"
+                    log_error "Cannot build containers without network connectivity"
+                    return 1
+                fi
+            fi
+        else
+            log_info "Network stable - ready for container builds"
+        fi
+    fi
+
     # Helper: Network-resilient podman build with automatic failover
     _podman_build_resilient() {
         local containerfile="$1"
