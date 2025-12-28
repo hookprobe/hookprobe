@@ -215,7 +215,7 @@ def api_history():
         return jsonify({
             'success': True,
             'history': history,
-            'demo_mode': not SLAAI_AVAILABLE
+            'demo_mode': not SLAAI_ENGINE_AVAILABLE
         })
 
     except Exception as e:
@@ -232,7 +232,7 @@ def api_force_failover():
         return jsonify({
             'success': True,
             'message': 'Manual failover initiated',
-            'demo_mode': not SLAAI_AVAILABLE
+            'demo_mode': not SLAAI_ENGINE_AVAILABLE
         })
 
     except Exception as e:
