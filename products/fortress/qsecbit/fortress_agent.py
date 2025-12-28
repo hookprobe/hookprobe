@@ -574,15 +574,189 @@ class QSecBitFortressAgent:
         except Exception as e:
             logger.error(f"Failed to save stats: {e}")
 
+    def collect_wan_health(self) -> Dict:
+        """Collect WAN health data for SLAAI dashboard.
+
+        This runs with host network access, so we can ping through real interfaces.
+        Data is written to wan_health.json for the web container to read.
+        """
+        import re
+
+        def test_connectivity(interface: str, target: str = '1.1.1.1') -> Dict:
+            """Test connectivity through a specific interface."""
+            result = {
+                'rtt_ms': None,
+                'jitter_ms': None,
+                'packet_loss': 100.0,
+                'is_connected': False,
+            }
+            try:
+                proc = subprocess.run(
+                    ['ping', '-c', '3', '-W', '2', '-I', interface, target],
+                    capture_output=True, text=True, timeout=10
+                )
+                if proc.returncode == 0:
+                    # Parse RTT
+                    rtt_match = re.search(
+                        r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
+                        proc.stdout
+                    )
+                    if rtt_match:
+                        result['rtt_ms'] = float(rtt_match.group(2))
+                        result['jitter_ms'] = float(rtt_match.group(4))
+                        result['is_connected'] = True
+
+                    # Parse packet loss
+                    loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
+                    if loss_match:
+                        result['packet_loss'] = float(loss_match.group(1))
+            except Exception as e:
+                logger.debug(f"Ping failed on {interface}: {e}")
+
+            return result
+
+        def calculate_health_score(conn: Dict, signal_dbm: int = None) -> float:
+            """Calculate health score 0-1 based on connectivity metrics."""
+            if not conn['is_connected']:
+                return 0.0
+            score = 1.0
+            if conn['rtt_ms']:
+                if conn['rtt_ms'] > 200:
+                    score -= 0.3
+                elif conn['rtt_ms'] > 100:
+                    score -= 0.2
+                elif conn['rtt_ms'] > 50:
+                    score -= 0.1
+            if conn['jitter_ms']:
+                if conn['jitter_ms'] > 50:
+                    score -= 0.2
+                elif conn['jitter_ms'] > 20:
+                    score -= 0.1
+            if conn['packet_loss'] > 0:
+                score -= min(0.4, conn['packet_loss'] / 100 * 0.4)
+            if signal_dbm is not None:
+                if signal_dbm < -100:
+                    score -= 0.2
+                elif signal_dbm < -85:
+                    score -= 0.1
+            return max(0.0, min(1.0, score))
+
+        health = {
+            'primary': None,
+            'backup': None,
+            'active': None,
+            'active_is_primary': False,
+            'uptime_pct': 99.9,
+            'state': 'disconnected',
+            'timestamp': datetime.now().isoformat(),
+        }
+
+        # Get interfaces
+        try:
+            proc = subprocess.run(
+                ['ip', '-j', 'addr', 'show'],
+                capture_output=True, text=True, timeout=5
+            )
+            if proc.returncode == 0:
+                interfaces = json.loads(proc.stdout)
+            else:
+                interfaces = []
+        except Exception:
+            interfaces = []
+
+        primary_iface = None
+        backup_iface = None
+
+        for iface in interfaces:
+            name = iface.get('ifname', '')
+            state = iface.get('operstate', 'UNKNOWN')
+            if state != 'UP':
+                continue
+
+            # Get IP address
+            ip_addr = None
+            for addr_info in iface.get('addr_info', []):
+                if addr_info.get('family') == 'inet':
+                    ip_addr = f"{addr_info.get('local')}/{addr_info.get('prefixlen')}"
+                    break
+
+            # Detect interface type
+            if name.startswith('eth') or name.startswith('en'):
+                if not primary_iface:
+                    primary_iface = {'name': name, 'ip': ip_addr, 'state': 'UP'}
+            elif name.startswith('wwan') or name.startswith('usb'):
+                if not backup_iface:
+                    backup_iface = {'name': name, 'ip': ip_addr, 'state': 'UP'}
+
+        # Test primary WAN
+        if primary_iface:
+            conn = test_connectivity(primary_iface['name'])
+            health['primary'] = {
+                'interface': primary_iface['name'],
+                'ip': primary_iface['ip'],
+                'state': 'UP',
+                'rtt_ms': conn['rtt_ms'],
+                'jitter_ms': conn['jitter_ms'],
+                'packet_loss': conn['packet_loss'],
+                'is_connected': conn['is_connected'],
+                'health_score': calculate_health_score(conn),
+                'status': 'ACTIVE' if conn['is_connected'] else 'FAILED',
+            }
+            if conn['is_connected']:
+                health['active'] = primary_iface['name']
+                health['active_is_primary'] = True
+                health['state'] = 'primary_active'
+
+        # Test backup WAN (LTE)
+        if backup_iface:
+            conn = test_connectivity(backup_iface['name'])
+            health['backup'] = {
+                'interface': backup_iface['name'],
+                'ip': backup_iface['ip'],
+                'state': 'UP',
+                'rtt_ms': conn['rtt_ms'],
+                'jitter_ms': conn['jitter_ms'],
+                'packet_loss': conn['packet_loss'],
+                'is_connected': conn['is_connected'],
+                'health_score': calculate_health_score(conn),
+                'signal_dbm': None,  # Could add mmcli parsing here
+                'status': 'STANDBY' if health['active'] else ('ACTIVE' if conn['is_connected'] else 'FAILED'),
+            }
+            if not health['active'] and conn['is_connected']:
+                health['active'] = backup_iface['name']
+                health['active_is_primary'] = False
+                health['state'] = 'backup_active'
+                health['backup']['status'] = 'ACTIVE'
+
+        return health
+
+    def save_wan_health(self):
+        """Collect and save WAN health data for SLAAI dashboard."""
+        try:
+            health = self.collect_wan_health()
+            wan_file = DATA_DIR / "wan_health.json"
+            with open(wan_file, 'w') as f:
+                json.dump(health, f, indent=2)
+            logger.debug(f"WAN health saved: state={health['state']}")
+        except Exception as e:
+            logger.warning(f"Failed to save WAN health: {e}")
+
     def run_monitoring_loop(self):
         """Main monitoring loop with L2-L7 threat detection"""
         logger.info("Starting QSecBit monitoring loop with L2-L7 detection...")
         interval = 10
+        wan_health_counter = 0
 
         while self.running.is_set():
             try:
                 sample = self.collect_sample()
                 self.save_stats(sample)
+
+                # Collect WAN health every 3 cycles (30 seconds)
+                wan_health_counter += 1
+                if wan_health_counter >= 3:
+                    self.save_wan_health()
+                    wan_health_counter = 0
 
                 # Log detailed status
                 layer_summary = ' '.join([f"{k}={v:.2f}" for k, v in sample.layer_scores.items()])
