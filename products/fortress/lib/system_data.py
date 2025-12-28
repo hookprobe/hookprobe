@@ -571,11 +571,34 @@ def _test_connectivity(interface: str, target: str = '1.1.1.1') -> Dict:
 
 
 def get_wan_health() -> Dict:
-    """Get WAN health metrics with real connectivity tests."""
+    """Get WAN health metrics with real connectivity tests.
+
+    First checks for pre-written data from fts-qsecbit agent (required when
+    running in container without host network access). Falls back to live
+    ping tests if no recent data file exists.
+    """
     cached = _get_cached('wan_health', ttl=5)
     if cached is not None:
         return cached
 
+    # First, try to read pre-collected data from the agent
+    # (fts-qsecbit runs with host network and can ping through real interfaces)
+    wan_health_file = Path('/opt/hookprobe/fortress/data/wan_health.json')
+    if wan_health_file.exists():
+        try:
+            data = json.loads(wan_health_file.read_text())
+            # Check if data is recent (< 60 seconds old)
+            file_ts = data.get('timestamp', '')
+            if file_ts:
+                file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
+                age = (datetime.now() - file_time.replace(tzinfo=None)).total_seconds()
+                if age < 60:
+                    _set_cached('wan_health', data)
+                    return data
+        except Exception as e:
+            logger.debug(f"Could not read wan_health.json: {e}")
+
+    # Fallback: collect live data (only works with host network access)
     health = {
         'primary': None,
         'backup': None,
