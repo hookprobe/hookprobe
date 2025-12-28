@@ -204,15 +204,28 @@ _enr_activate_lte() {
         if [ -n "$gsm_conn" ]; then
             _enr_log_info "Activating existing connection: $gsm_conn"
             if nmcli con up "$gsm_conn" 2>/dev/null; then
-                sleep 2
-                return 0
+                # Wait for IP assignment and route installation (NM needs time)
+                _enr_log_info "Waiting for LTE IP and route assignment..."
+                local wait_count=0
+                while [ $wait_count -lt 10 ]; do
+                    sleep 1
+                    # Check if we have an IP and default route
+                    if _enr_update_backup_gateway_from_nm; then
+                        _enr_log_info "LTE gateway detected: $ENR_BACKUP_GATEWAY via $ENR_BACKUP_IFACE"
+                        return 0
+                    fi
+                    wait_count=$((wait_count + 1))
+                done
+                _enr_log_warn "LTE connected but no gateway detected after 10s"
+                return 0  # Still return success - connection is up
             fi
         fi
 
         # Try auto-connect on the interface
         if nmcli dev connect "$iface" 2>/dev/null; then
             _enr_log_info "LTE connected via nmcli"
-            sleep 2
+            sleep 3
+            _enr_update_backup_gateway_from_nm
             return 0
         fi
     fi
@@ -231,6 +244,80 @@ _enr_activate_lte() {
     fi
 
     _enr_log_warn "LTE activation may have partially succeeded"
+    return 1
+}
+
+# ============================================================
+# GATEWAY DETECTION HELPERS
+# ============================================================
+
+# Detect backup gateway from NetworkManager routes (called after LTE activation)
+_enr_update_backup_gateway_from_nm() {
+    # Method 1: Check NetworkManager's active connection for the gateway
+    if command -v nmcli &>/dev/null; then
+        # Get the active GSM/LTE connection device and gateway
+        local nm_info
+        nm_info=$(nmcli -t -f DEVICE,TYPE,IP4.GATEWAY dev show 2>/dev/null | grep -A2 "gsm\|cdma" || true)
+
+        if [ -n "$nm_info" ]; then
+            local nm_device nm_gateway
+            nm_device=$(echo "$nm_info" | grep "^DEVICE:" | cut -d: -f2 | head -1)
+            nm_gateway=$(echo "$nm_info" | grep "IP4.GATEWAY" | cut -d: -f2 | head -1)
+
+            if [ -n "$nm_device" ] && [ -n "$nm_gateway" ] && [ "$nm_gateway" != "--" ]; then
+                ENR_BACKUP_IFACE="$nm_device"
+                ENR_BACKUP_GATEWAY="$nm_gateway"
+                return 0
+            fi
+        fi
+    fi
+
+    # Method 2: Look for any default route NOT via primary interface
+    local route_line
+    route_line=$(ip route show default 2>/dev/null | grep -v "dev $ENR_PRIMARY_IFACE" | head -1)
+
+    if [ -n "$route_line" ]; then
+        local gw dev
+        gw=$(echo "$route_line" | awk '/via/ {print $3}')
+        dev=$(echo "$route_line" | awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+
+        if [ -n "$gw" ] && [ -n "$dev" ]; then
+            ENR_BACKUP_IFACE="$dev"
+            ENR_BACKUP_GATEWAY="$gw"
+            return 0
+        fi
+    fi
+
+    # Method 3: Check WWAN/LTE interfaces directly for gateway
+    for pattern in wwan0 wwan1 wwp* usb0; do
+        local iface
+        for iface_path in /sys/class/net/$pattern; do
+            [ -e "$iface_path" ] || continue
+            iface=$(basename "$iface_path")
+            [ "$iface" = "$ENR_PRIMARY_IFACE" ] && continue
+
+            # Check if it has an IP
+            local iface_ip
+            iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+            [ -z "$iface_ip" ] && continue
+
+            # Try to find gateway from route table
+            local gw
+            gw=$(ip route show dev "$iface" 2>/dev/null | awk '/default|via/ {print $3}' | head -1)
+
+            # If no explicit gateway, try the first hop (common for PPP/LTE)
+            if [ -z "$gw" ]; then
+                gw=$(ip route show dev "$iface" 2>/dev/null | grep -E "^[0-9]" | awk '{print $1}' | head -1)
+            fi
+
+            if [ -n "$gw" ]; then
+                ENR_BACKUP_IFACE="$iface"
+                ENR_BACKUP_GATEWAY="$gw"
+                return 0
+            fi
+        done
+    done
+
     return 1
 }
 
@@ -261,13 +348,33 @@ _enr_setup_minimal_pbr() {
         echo "200 wan_backup" >> /etc/iproute2/rt_tables
     fi
 
-    # Get gateways
+    # Get gateways - use stored values if available, otherwise detect
     local primary_gw backup_gw primary_ip backup_ip
-    primary_gw=$(ip route show dev "$ENR_PRIMARY_IFACE" 2>/dev/null | grep "default\|via" | awk '/via/ {print $3}' | head -1)
-    backup_gw=$(ip route show dev "$ENR_BACKUP_IFACE" 2>/dev/null | grep "default\|via" | awk '/via/ {print $3}' | head -1)
+
+    # Primary gateway: try stored value first, then detect
+    if [ -n "$ENR_PRIMARY_GATEWAY" ]; then
+        primary_gw="$ENR_PRIMARY_GATEWAY"
+    else
+        # Method 1: From default route
+        primary_gw=$(ip route show default dev "$ENR_PRIMARY_IFACE" 2>/dev/null | awk '{print $3}' | head -1)
+        # Method 2: From any route with "via" on the interface
+        [ -z "$primary_gw" ] && primary_gw=$(ip route show dev "$ENR_PRIMARY_IFACE" 2>/dev/null | awk '/via/ {print $3}' | head -1)
+    fi
+
+    # Backup gateway: use stored value if available (set by _enr_update_backup_gateway_from_nm)
+    if [ -n "$ENR_BACKUP_GATEWAY" ]; then
+        backup_gw="$ENR_BACKUP_GATEWAY"
+    else
+        # Try to detect backup gateway
+        _enr_update_backup_gateway_from_nm
+        backup_gw="$ENR_BACKUP_GATEWAY"
+    fi
 
     primary_ip=$(ip -4 addr show "$ENR_PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
     backup_ip=$(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+
+    _enr_log_info "  Primary: $ENR_PRIMARY_IFACE (gw: ${primary_gw:-none}, ip: ${primary_ip:-none})"
+    _enr_log_info "  Backup:  $ENR_BACKUP_IFACE (gw: ${backup_gw:-none}, ip: ${backup_ip:-none})"
 
     # Setup primary table
     if [ -n "$primary_gw" ]; then
@@ -476,12 +583,35 @@ ensure_network_connectivity() {
         fi
 
         # Try to activate LTE
-        if _enr_activate_lte && _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-            ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-            _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
-            _enr_setup_minimal_pbr
-            enr_start_monitor  # Monitor for primary recovery
-            return 0
+        if _enr_activate_lte; then
+            # CRITICAL: LTE is now active but default route may still point to dead primary!
+            # Force traffic through LTE by setting it as the default route
+            _enr_log_info "LTE activated - configuring route to use backup..."
+
+            # If we have backup gateway now, force it as default route
+            if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+                # Remove all default routes (including dead primary)
+                local tries=5
+                while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
+                    ip route del default 2>/dev/null || break
+                    tries=$((tries - 1))
+                done
+
+                # Add LTE as default route
+                ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
+                _enr_log_info "Default route set via LTE: $ENR_BACKUP_GATEWAY dev $ENR_BACKUP_IFACE"
+            fi
+
+            # Now check connectivity (should work since traffic goes through LTE)
+            if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
+                ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+                _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
+                _enr_setup_minimal_pbr
+                enr_start_monitor  # Monitor for primary recovery
+                return 0
+            else
+                _enr_log_warn "LTE connectivity check failed even with direct route"
+            fi
         fi
     fi
 
@@ -495,12 +625,24 @@ ensure_network_connectivity() {
         if _enr_detect_lte_interface; then
             _enr_log_info "Found LTE interface: $ENR_BACKUP_IFACE"
 
-            if _enr_activate_lte && _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-                ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-                _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
-                _enr_setup_minimal_pbr
-                enr_start_monitor  # Monitor for primary recovery
-                return 0
+            if _enr_activate_lte; then
+                # Same fix as Step 3: force route through LTE before checking
+                if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+                    local tries=5
+                    while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
+                        ip route del default 2>/dev/null || break
+                        tries=$((tries - 1))
+                    done
+                    ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
+                fi
+
+                if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
+                    ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+                    _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
+                    _enr_setup_minimal_pbr
+                    enr_start_monitor  # Monitor for primary recovery
+                    return 0
+                fi
             fi
         fi
     fi
@@ -510,6 +652,31 @@ ensure_network_connectivity() {
         ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
         _enr_log_info "Primary WAN ($ENR_PRIMARY_IFACE) recovered"
         return 0
+    fi
+
+    # Step 6: If we have LTE gateway but connectivity check failed, try one more time
+    # This handles the case where NM route conflicted with our check
+    if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+        _enr_log_warn "Last attempt: forcing all traffic through LTE..."
+
+        # Aggressively remove ALL default routes
+        local tries=10
+        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
+            ip route del default 2>/dev/null || break
+            tries=$((tries - 1))
+        done
+
+        # Add LTE as ONLY default route
+        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
+
+        # Give kernel a moment to update routing cache
+        sleep 1
+
+        if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
+            ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+            _enr_log_info "LTE failover successful (forced route)"
+            return 0
+        fi
     fi
 
     _enr_log_error "No network connectivity available"
