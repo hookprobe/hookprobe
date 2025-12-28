@@ -829,6 +829,8 @@
 
     // ============================================================
     // TOAST NOTIFICATION SYSTEM
+    // Uses toastr library for notifications (consistent styling)
+    // Falls back to custom fts-toast if toastr not available
     // ============================================================
     const Toast = {
         container: null,
@@ -836,19 +838,26 @@
         init() {
             if (this.container) return;
             this.container = document.createElement('div');
-            this.container.className = 'toast-container';
+            this.container.className = 'fts-toast-container';
             document.body.appendChild(this.container);
         },
 
         show(message, type = 'info', duration = 3000) {
+            // Prefer toastr for consistent styling
+            if (typeof toastr !== 'undefined' && toastr[type]) {
+                toastr[type](message);
+                return null;
+            }
+
+            // Fallback to custom toast (uses fts-toast class to avoid conflicts)
             this.init();
 
             const toast = document.createElement('div');
-            toast.className = `toast toast-${type}`;
+            toast.className = `fts-toast fts-toast-${type}`;
             toast.innerHTML = `
-                <i class="toast-icon fas ${this.getIcon(type)}"></i>
-                <span class="toast-message">${message}</span>
-                <button class="toast-close"><i class="fas fa-times"></i></button>
+                <i class="fts-toast-icon fas ${this.getIcon(type)}"></i>
+                <span class="fts-toast-message">${message}</span>
+                <button class="fts-toast-close"><i class="fas fa-times"></i></button>
             `;
 
             this.container.appendChild(toast);
@@ -857,7 +866,7 @@
             requestAnimationFrame(() => toast.classList.add('show'));
 
             // Close button
-            toast.querySelector('.toast-close').addEventListener('click', () => this.dismiss(toast));
+            toast.querySelector('.fts-toast-close').addEventListener('click', () => this.dismiss(toast));
 
             // Auto dismiss
             if (duration > 0) {
@@ -868,6 +877,7 @@
         },
 
         dismiss(toast) {
+            if (!toast) return;
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);
         },
