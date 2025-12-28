@@ -740,6 +740,17 @@ create_directories() {
     chmod 755 /var/lib/hookprobe/userdata
     chmod 755 /var/lib/hookprobe/userdata/dnsxai
 
+    # Bootstrap dnsXai defaults to userdata if not present
+    # This ensures defaults are available even before container first starts
+    # Container entrypoint will sync these properly on startup
+    local default_whitelist="${FORTRESS_ROOT}/../../shared/dnsXai/data/whitelist.txt"
+    local userdata_whitelist="/var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
+    if [ ! -f "$userdata_whitelist" ] && [ -f "$default_whitelist" ]; then
+        log_info "Bootstrapping default dnsXai whitelist to userdata..."
+        cp "$default_whitelist" "$userdata_whitelist"
+        chmod 644 "$userdata_whitelist"
+    fi
+
     # Set group ownership so container (fortress user) can read config files
     chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
     chgrp -R fortress /var/lib/hookprobe/userdata 2>/dev/null || true
