@@ -3,8 +3,59 @@
 {% block title %}Dashboard - HookProbe Fortress{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 
+{% block extra_css %}
+<style>
+    .topology-mini {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 10px;
+        padding: 20px;
+        min-height: 300px;
+    }
+    .topology-node {
+        display: inline-block;
+        text-align: center;
+        padding: 10px;
+        margin: 5px;
+        border-radius: 8px;
+        color: white;
+        font-size: 12px;
+        transition: transform 0.2s;
+        cursor: pointer;
+    }
+    .topology-node:hover {
+        transform: scale(1.1);
+    }
+    .topology-node i {
+        font-size: 24px;
+        display: block;
+        margin-bottom: 5px;
+    }
+    .node-wan { background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%); }
+    .node-bridge { background: linear-gradient(135deg, #e69500 0%, #c77800 100%); }
+    .node-vlan { background: linear-gradient(135deg, #17a2b8 0%, #117a8b 100%); }
+    .node-wifi { background: linear-gradient(135deg, #6f42c1 0%, #563d7c 100%); }
+    .node-device { background: linear-gradient(135deg, #6c757d 0%, #495057 100%); }
+    .node-lte { background: linear-gradient(135deg, #fd7e14 0%, #d56b0a 100%); }
+    .connection-line {
+        border-left: 2px dashed rgba(255,255,255,0.3);
+        height: 20px;
+        margin-left: 50%;
+    }
+    .wan-status-card {
+        border-left: 4px solid;
+    }
+    .wan-primary { border-color: #28a745; }
+    .wan-backup { border-color: #ffc107; }
+    .wan-down { border-color: #dc3545; }
+    .rtt-badge {
+        font-size: 0.8rem;
+        padding: 2px 6px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<!-- Info boxes -->
+<!-- Top Metrics Row -->
 <div class="row">
     <div class="col-12 col-sm-6 col-md-3">
         <div class="info-box">
@@ -12,7 +63,7 @@
                 <i class="fas fa-shield-halved"></i>
             </span>
             <div class="info-box-content">
-                <span class="info-box-text">QSecBit</span>
+                <span class="info-box-text">Security Score</span>
                 <span class="info-box-number">{{ "%.0f"|format(qsecbit_score * 100) }}%</span>
                 <span class="badge badge-{{ 'success' if qsecbit_status == 'GREEN' else 'warning' if qsecbit_status == 'AMBER' else 'danger' }}">{{ qsecbit_status }}</span>
             </div>
@@ -25,7 +76,7 @@
             </span>
             <div class="info-box-content">
                 <span class="info-box-text">Connected Devices</span>
-                <span class="info-box-number">{{ device_count }}</span>
+                <span class="info-box-number" id="device-count">{{ device_count }}</span>
             </div>
         </div>
     </div>
@@ -37,17 +88,224 @@
             <div class="info-box-content">
                 <span class="info-box-text">Threats Blocked</span>
                 <span class="info-box-number">{{ threats_blocked }}</span>
+                <small class="text-muted">L2-L7</small>
             </div>
         </div>
     </div>
     <div class="col-12 col-sm-6 col-md-3">
-        <div class="info-box">
+        <div class="info-box" style="cursor: pointer;" onclick="window.location.href='{{ url_for('dnsxai.index') }}'">
             <span class="info-box-icon bg-warning elevation-1">
                 <i class="fas fa-brain"></i>
             </span>
             <div class="info-box-content">
                 <span class="info-box-text">DNS Blocked</span>
                 <span class="info-box-number">{{ "{:,}".format(dns_blocked) }}</span>
+                <small class="text-muted">Click to manage</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- WAN Health Section -->
+<div class="row">
+    <div class="col-12">
+        <div class="card card-outline card-primary">
+            <div class="card-header py-2">
+                <h3 class="card-title">
+                    <i class="fas fa-network-wired mr-2"></i>WAN Health
+                </h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('slaai.index') }}" class="btn btn-tool">
+                        SLA AI <i class="fas fa-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body py-2">
+                <div class="row">
+                    {% if wan_health and wan_health.primary %}
+                    <div class="col-md-4">
+                        <div class="card mb-0 wan-status-card {{ 'wan-primary' if wan_health.primary.is_healthy else 'wan-down' }}">
+                            <div class="card-body py-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>{{ wan_health.primary.interface }}</strong>
+                                        <span class="badge badge-{{ 'success' if wan_health.primary.is_healthy else 'danger' }} ml-1">
+                                            {{ 'PRIMARY' if wan_health.active == wan_health.primary.interface else 'STANDBY' }}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        {% if wan_health.primary.rtt_ms %}
+                                        <span class="badge rtt-badge badge-{{ 'success' if wan_health.primary.rtt_ms < 50 else 'warning' if wan_health.primary.rtt_ms < 100 else 'danger' }}">
+                                            {{ "%.1f"|format(wan_health.primary.rtt_ms) }}ms
+                                        </span>
+                                        {% else %}
+                                        <span class="badge rtt-badge badge-secondary">--</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <small class="text-muted">{{ wan_health.primary.ip or 'No IP' }}</small>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if wan_health and wan_health.backup %}
+                    <div class="col-md-4">
+                        <div class="card mb-0 wan-status-card {{ 'wan-backup' if wan_health.backup.is_healthy else 'wan-down' }}">
+                            <div class="card-body py-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>{{ wan_health.backup.interface }}</strong>
+                                        <span class="badge badge-{{ 'warning' if wan_health.active == wan_health.backup.interface else 'secondary' }} ml-1">
+                                            {{ 'ACTIVE' if wan_health.active == wan_health.backup.interface else 'BACKUP' }}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        {% if wan_health.backup.rtt_ms %}
+                                        <span class="badge rtt-badge badge-{{ 'success' if wan_health.backup.rtt_ms < 100 else 'warning' if wan_health.backup.rtt_ms < 200 else 'danger' }}">
+                                            {{ "%.1f"|format(wan_health.backup.rtt_ms) }}ms
+                                        </span>
+                                        {% else %}
+                                        <span class="badge rtt-badge badge-secondary">--</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <small class="text-muted">{{ wan_health.backup.ip or 'No IP' }}</small>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="col-md-4">
+                        <div class="card mb-0">
+                            <div class="card-body py-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>Uptime</strong>
+                                    </div>
+                                    <div>
+                                        <span class="badge badge-success">{{ "%.1f"|format(wan_health.uptime_pct|default(99.9)) }}%</span>
+                                    </div>
+                                </div>
+                                <small class="text-muted">Active: {{ wan_health.active or 'Unknown' }}</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Network Topology -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-sitemap mr-1"></i>
+                    Network Topology
+                </h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('networks.topology') }}" class="btn btn-tool">
+                        Full View <i class="fas fa-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-2">
+                <div class="topology-mini" id="topology-container">
+                    <!-- WAN Layer -->
+                    <div class="text-center mb-2">
+                        <span class="text-white-50 small">INTERNET</span>
+                    </div>
+                    <div class="text-center">
+                        {% if wan_health and wan_health.primary %}
+                        <div class="topology-node node-wan">
+                            <i class="fas fa-globe"></i>
+                            {{ wan_health.primary.interface }}
+                        </div>
+                        {% endif %}
+                        {% if wan_health and wan_health.backup %}
+                        <div class="topology-node node-lte">
+                            <i class="fas fa-signal"></i>
+                            {{ wan_health.backup.interface }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="connection-line"></div>
+
+                    <!-- Bridge Layer -->
+                    <div class="text-center">
+                        <div class="topology-node node-bridge" style="width: 100px;">
+                            <i class="fas fa-network-wired"></i>
+                            FTS Bridge
+                        </div>
+                    </div>
+                    <div class="connection-line"></div>
+
+                    <!-- VLAN Layer -->
+                    <div class="text-center">
+                        {% for vlan in vlans %}
+                        <div class="topology-node node-vlan">
+                            <i class="fas fa-layer-group"></i>
+                            {{ vlan.name }}
+                            <small class="d-block">{{ vlan.device_count }} dev</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <div class="connection-line"></div>
+
+                    <!-- Device Layer -->
+                    <div class="text-center">
+                        <span class="text-white-50 small">{{ device_count }} Connected Devices</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recently Connected Devices -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-laptop mr-1"></i>
+                    Connected Devices
+                </h3>
+                <div class="card-tools">
+                    <a href="{{ url_for('clients.index') }}" class="btn btn-tool">
+                        View All <i class="fas fa-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <ul class="list-group list-group-flush">
+                    {% for device in recent_devices %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="fas fa-{{ device.icon }} mr-2 text-{{ 'info' if device.is_wifi else 'secondary' }}"></i>
+                            <strong>{{ device.name }}</strong>
+                            {% if device.manufacturer %}
+                            <small class="text-muted ml-1">({{ device.manufacturer }})</small>
+                            {% endif %}
+                            <small class="text-muted d-block ml-4">
+                                {{ device.ip }} - {{ device.vlan }}
+                                {% if device.is_wifi %}<i class="fas fa-wifi text-info ml-1"></i>{% endif %}
+                            </small>
+                        </div>
+                        <div class="text-right">
+                            <span class="badge badge-{{ 'success' if device.state == 'REACHABLE' else 'warning' if device.state == 'STALE' else 'secondary' }}">
+                                {{ device.state }}
+                            </span>
+                            <small class="text-muted d-block">{{ device.time }}</small>
+                        </div>
+                    </li>
+                    {% else %}
+                    <li class="list-group-item text-center text-muted">
+                        <i class="fas fa-search"></i> No devices detected yet
+                    </li>
+                    {% endfor %}
+                </ul>
             </div>
         </div>
     </div>
@@ -110,145 +368,45 @@
     </div>
 </div>
 
-<div class="row">
-    <!-- Recent Threats -->
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-exclamation-triangle mr-1"></i>
-                    Recent Threats
-                </h3>
-                <div class="card-tools">
-                    <a href="{{ url_for('security.index') }}" class="btn btn-tool">
-                        View All <i class="fas fa-arrow-right"></i>
-                    </a>
-                </div>
-            </div>
-            <div class="card-body p-0">
-                <ul class="list-group list-group-flush">
-                    {% for threat in recent_threats %}
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <div>
-                            <span class="badge badge-{{ 'danger' if threat.severity == 'high' else 'warning' if threat.severity == 'medium' else 'secondary' }} mr-2">
-                                {{ threat.severity|upper }}
-                            </span>
-                            <strong>{{ threat.type }}</strong>
-                            <small class="text-muted d-block">{{ threat.source }}</small>
-                        </div>
-                        <small class="text-muted">{{ threat.time }}</small>
-                    </li>
-                    {% else %}
-                    <li class="list-group-item text-center text-success">
-                        <i class="fas fa-check-circle"></i> No recent threats
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
-        </div>
-    </div>
-
-    <!-- Recent Devices -->
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-laptop mr-1"></i>
-                    Recently Connected
-                </h3>
-                <div class="card-tools">
-                    <a href="{{ url_for('clients.index') }}" class="btn btn-tool">
-                        View All <i class="fas fa-arrow-right"></i>
-                    </a>
-                </div>
-            </div>
-            <div class="card-body p-0">
-                <ul class="list-group list-group-flush">
-                    {% for device in recent_devices %}
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <div>
-                            <i class="fas fa-{{ 'mobile-alt' if 'iPhone' in device.name or 'Phone' in device.name else 'laptop' }} mr-2 text-info"></i>
-                            <strong>{{ device.name }}</strong>
-                            <small class="text-muted d-block">{{ device.ip }} - {{ device.vlan }}</small>
-                        </div>
-                        <small class="text-muted">{{ device.time }}</small>
-                    </li>
-                    {% else %}
-                    <li class="list-group-item text-center text-muted">
-                        No devices connected
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Network Overview -->
+<!-- Active VLANs -->
 <div class="row">
     <div class="col-12">
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-network-wired mr-1"></i>
+                    <i class="fas fa-layer-group mr-1"></i>
                     Network Segments
                 </h3>
             </div>
             <div class="card-body">
                 <div class="row">
-                    <div class="col-md-2 col-sm-4 col-6 text-center">
-                        <div class="info-box bg-info mb-0">
+                    {% for vlan in vlans %}
+                    <div class="col-md-3 col-sm-6 col-12 text-center mb-2">
+                        <div class="info-box bg-{{ 'info' if vlan.vlan_id == 100 else 'secondary' if vlan.vlan_id == 200 else 'primary' }} mb-0">
                             <div class="info-box-content">
-                                <span class="info-box-text">Management</span>
-                                <span class="info-box-number">VLAN 10</span>
+                                <span class="info-box-text">{{ vlan.name }}</span>
+                                <span class="info-box-number">VLAN {{ vlan.vlan_id }}</span>
+                                <small>{{ vlan.device_count }} devices</small>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-2 col-sm-4 col-6 text-center">
-                        <div class="info-box bg-success mb-0">
-                            <div class="info-box-content">
-                                <span class="info-box-text">POS</span>
-                                <span class="info-box-number">VLAN 20</span>
-                            </div>
-                        </div>
+                    {% else %}
+                    <div class="col-12 text-center text-muted">
+                        <p>No VLANs configured</p>
                     </div>
-                    <div class="col-md-2 col-sm-4 col-6 text-center">
-                        <div class="info-box bg-primary mb-0">
-                            <div class="info-box-content">
-                                <span class="info-box-text">Staff</span>
-                                <span class="info-box-number">VLAN 30</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-2 col-sm-4 col-6 text-center">
-                        <div class="info-box bg-warning mb-0">
-                            <div class="info-box-content">
-                                <span class="info-box-text">Guest</span>
-                                <span class="info-box-number">VLAN 40</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-2 col-sm-4 col-6 text-center">
-                        <div class="info-box bg-secondary mb-0">
-                            <div class="info-box-content">
-                                <span class="info-box-text">IoT</span>
-                                <span class="info-box-number">VLAN 99</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-2 col-sm-4 col-6 text-center">
-                        <div class="info-box bg-danger mb-0">
-                            <div class="info-box-content">
-                                <span class="info-box-text">Quarantine</span>
-                                <span class="info-box-number">VLAN 99</span>
-                            </div>
-                        </div>
-                    </div>
+                    {% endfor %}
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+{% if not system_data_available %}
+<div class="alert alert-warning">
+    <i class="fas fa-exclamation-triangle"></i>
+    <strong>Limited Data:</strong> System data module not available. Some metrics may not display correctly.
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -258,13 +416,12 @@ setInterval(function() {
     fetch('/api/dashboard/stats')
         .then(response => response.json())
         .then(data => {
-            // Update QSecBit badge
-            const badge = document.getElementById('qsecbit-badge');
-            if (badge && data.qsecbit) {
-                badge.textContent = data.qsecbit.status;
-                badge.style.backgroundColor =
-                    data.qsecbit.status === 'GREEN' ? '#28a745' :
-                    data.qsecbit.status === 'AMBER' ? '#ffc107' : '#dc3545';
+            if (data.success) {
+                // Update device count
+                const deviceCount = document.getElementById('device-count');
+                if (deviceCount && data.devices !== undefined) {
+                    deviceCount.textContent = data.devices;
+                }
             }
         })
         .catch(err => console.log('Stats refresh error:', err));
