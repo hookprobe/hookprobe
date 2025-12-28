@@ -162,6 +162,8 @@ services:
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
+      # Share data from qsecbit agent (WAN health, QSecBit stats, SLAAI data)
+      - agent_data:/opt/hookprobe/fortress/data:ro
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
     # Container network - accessible via VLAN 200 routing from management network
