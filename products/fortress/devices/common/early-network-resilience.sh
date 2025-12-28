@@ -46,6 +46,7 @@ ENR_PRIMARY_GATEWAY=""
 ENR_BACKUP_GATEWAY=""
 ENR_ACTIVE_WAN=""
 ENR_PBR_ACTIVE=false
+ENR_NETWORK_LOCKED=false  # When true, routes are locked and won't be modified
 
 # ============================================================
 # QUICK INTERFACE DETECTION
@@ -611,6 +612,15 @@ _enr_log_debug() {
 ensure_network_connectivity() {
     local retry_lte="${1:-true}"  # Whether to try LTE if primary fails
 
+    # If network is locked, just do a quick check without modifying routes
+    if [ "$ENR_NETWORK_LOCKED" = "true" ]; then
+        if enr_check_connectivity_fast; then
+            return 0
+        fi
+        _enr_log_warn "Network check failed but routes are locked - not modifying"
+        return 1
+    fi
+
     _enr_log_info "Checking network connectivity..."
 
     # Step 1: Detect interfaces
@@ -886,6 +896,54 @@ enr_cleanup() {
     ENR_PBR_ACTIVE=false
 }
 
+# ============================================================
+# NETWORK LOCKING (for stable installation)
+# ============================================================
+
+# Lock the network configuration - routes won't be modified anymore
+# Call this after initial setup before container builds start
+enr_lock_network() {
+    ENR_NETWORK_LOCKED=true
+    _enr_log_info "Network routes locked - will not be modified during installation"
+    _enr_log_info "  Active WAN: ${ENR_ACTIVE_WAN:-unknown}"
+
+    # Show current routes for reference
+    ip route show default 2>/dev/null | while read -r line; do
+        _enr_log_info "  Route: $line"
+    done
+}
+
+# Unlock network (for cleanup or manual intervention)
+enr_unlock_network() {
+    ENR_NETWORK_LOCKED=false
+    _enr_log_info "Network routes unlocked"
+}
+
+# Check if network is locked
+enr_is_locked() {
+    [ "$ENR_NETWORK_LOCKED" = "true" ]
+}
+
+# ============================================================
+# FAST CONNECTIVITY CHECK (no route modification)
+# ============================================================
+
+# Quick ping-only check - does NOT modify routes
+# Use this during container builds instead of ensure_network_connectivity
+enr_check_connectivity_fast() {
+    # If network is locked, just do a simple ping check
+    if ping -c1 -W3 8.8.8.8 &>/dev/null; then
+        return 0
+    fi
+
+    if ping -c1 -W3 1.1.1.1 &>/dev/null; then
+        return 0
+    fi
+
+    _enr_log_warn "Quick connectivity check failed"
+    return 1
+}
+
 # Export functions for use by other scripts
 export -f ensure_network_connectivity
 export -f with_network_resilience
@@ -893,3 +951,7 @@ export -f enr_status
 export -f enr_cleanup
 export -f enr_start_monitor
 export -f enr_stop_monitor
+export -f enr_lock_network
+export -f enr_unlock_network
+export -f enr_is_locked
+export -f enr_check_connectivity_fast
