@@ -784,11 +784,113 @@ class QSecBitFortressAgent:
         except Exception as e:
             logger.warning(f"Failed to save WAN health: {e}")
 
+    def collect_interface_traffic(self) -> List[Dict]:
+        """Collect interface traffic statistics for all relevant interfaces.
+
+        This runs with host network access, so we can read /sys/class/net stats.
+        Data is written to interface_traffic.json for the web container to read.
+        """
+        # Get interfaces
+        try:
+            proc = subprocess.run(
+                ['ip', '-j', 'addr', 'show'],
+                capture_output=True, text=True, timeout=5
+            )
+            if proc.returncode == 0:
+                interfaces = json.loads(proc.stdout)
+            else:
+                interfaces = []
+        except Exception:
+            interfaces = []
+
+        traffic = []
+        now = time.time()
+
+        # Only include relevant interface types
+        for iface in interfaces:
+            name = iface.get('ifname', '')
+            state = iface.get('operstate', 'UNKNOWN')
+
+            # Determine interface type
+            iface_type = None
+            if name.startswith('eth') or name.startswith('en') or name.startswith('eno'):
+                iface_type = 'wan'
+            elif name.startswith('wwan') or name.startswith('usb') or name.startswith('wwp'):
+                iface_type = 'lte'
+            elif name in ['FTS', 'br0', 'br-lan']:
+                iface_type = 'bridge'
+            elif name.startswith('wlan') or name.startswith('wl'):
+                iface_type = 'wifi'
+            elif name.startswith('vlan'):
+                iface_type = 'vlan'
+
+            if not iface_type:
+                continue
+
+            # Read stats from /sys/class/net
+            stats_path = Path(f'/sys/class/net/{name}/statistics')
+            if not stats_path.exists():
+                continue
+
+            try:
+                rx_bytes = int((stats_path / 'rx_bytes').read_text().strip())
+                tx_bytes = int((stats_path / 'tx_bytes').read_text().strip())
+            except Exception:
+                continue
+
+            # Calculate rate using stored previous values
+            cache_key = f'traffic_{name}'
+            prev = getattr(self, '_traffic_cache', {}).get(cache_key)
+            rx_bps = 0
+            tx_bps = 0
+
+            if prev:
+                prev_rx, prev_tx, prev_time = prev
+                elapsed = now - prev_time
+                if elapsed > 0:
+                    rx_bps = max(0, int((rx_bytes - prev_rx) / elapsed))
+                    tx_bps = max(0, int((tx_bytes - prev_tx) / elapsed))
+
+            # Store current values for next calculation
+            if not hasattr(self, '_traffic_cache'):
+                self._traffic_cache = {}
+            self._traffic_cache[cache_key] = (rx_bytes, tx_bytes, now)
+
+            traffic.append({
+                'interface': name,
+                'type': iface_type,
+                'state': state,
+                'rx_bytes': rx_bytes,
+                'tx_bytes': tx_bytes,
+                'rx_bps': rx_bps,
+                'tx_bps': tx_bps,
+                'rx_mbps': round(rx_bps * 8 / 1_000_000, 2),
+                'tx_mbps': round(tx_bps * 8 / 1_000_000, 2),
+                'total_mbps': round((rx_bps + tx_bps) * 8 / 1_000_000, 2),
+            })
+
+        return traffic
+
+    def save_interface_traffic(self):
+        """Collect and save interface traffic data for SLAAI dashboard."""
+        try:
+            traffic = self.collect_interface_traffic()
+            traffic_file = DATA_DIR / "interface_traffic.json"
+            with open(traffic_file, 'w') as f:
+                json.dump({
+                    'timestamp': datetime.now().isoformat(),
+                    'interfaces': traffic
+                }, f, indent=2)
+            logger.debug(f"Interface traffic saved: {len(traffic)} interfaces")
+        except Exception as e:
+            logger.warning(f"Failed to save interface traffic: {e}")
+
     def run_monitoring_loop(self):
         """Main monitoring loop with L2-L7 threat detection"""
         logger.info("Starting QSecBit monitoring loop with L2-L7 detection...")
         interval = 10
         wan_health_counter = 0
+        traffic_counter = 0
 
         while self.running.is_set():
             try:
@@ -800,6 +902,12 @@ class QSecBitFortressAgent:
                 if wan_health_counter >= 3:
                     self.save_wan_health()
                     wan_health_counter = 0
+
+                # Collect interface traffic every cycle (for real-time charts)
+                traffic_counter += 1
+                if traffic_counter >= 1:  # Every 10 seconds
+                    self.save_interface_traffic()
+                    traffic_counter = 0
 
                 # Log detailed status
                 layer_summary = ' '.join([f"{k}={v:.2f}" for k, v in sample.layer_scores.items()])
