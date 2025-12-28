@@ -222,17 +222,30 @@ class StatsTracker:
             }
 
     def get_blocked_domains(self, limit: int = 100) -> list:
-        """Get recently blocked domains from log file."""
+        """Get recently blocked domains from log file (deduplicated, whitelist filtered)."""
         blocked = []
+        seen_domains = set()
+
         try:
             if BLOCKED_LOG.exists():
                 with open(BLOCKED_LOG, 'r') as f:
                     lines = f.readlines()
-                    for line in lines[-limit:]:
+                    # Process from newest to oldest (reversed) to get most recent entries
+                    for line in reversed(lines):
+                        if len(blocked) >= limit:
+                            break
                         parts = line.strip().split('\t')
                         if len(parts) >= 4:
+                            domain = parts[1].lower()
+                            # Skip duplicates
+                            if domain in seen_domains:
+                                continue
+                            # Skip whitelisted domains
+                            if whitelist_manager.contains(domain):
+                                continue
+                            seen_domains.add(domain)
                             blocked.append({
-                                'domain': parts[1],
+                                'domain': domain,
                                 'reason': parts[2],
                                 'timestamp': parts[0],
                                 'ml_classified': 'ml' in parts[2].lower()
