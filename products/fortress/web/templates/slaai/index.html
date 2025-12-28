@@ -4,7 +4,7 @@
 
 {% block extra_css %}
 <style>
-/* SLA AI Dashboard Styles */
+/* SLA AI Dashboard - Premium Financial Style */
 .slaai-container {
     padding: 0;
 }
@@ -109,12 +109,22 @@
     background: #1a1a2e;
     border-radius: 12px;
     padding: 1.5rem;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 2px solid rgba(255,255,255,0.1);
+    transition: all 0.3s ease;
 }
 
 .wan-card.active {
-    border-color: rgba(76, 175, 80, 0.5);
-    box-shadow: 0 0 20px rgba(76, 175, 80, 0.1);
+    border-color: rgba(76, 175, 80, 0.6);
+    box-shadow: 0 0 25px rgba(76, 175, 80, 0.15);
+}
+
+.wan-card.failed {
+    border-color: rgba(244, 67, 54, 0.6);
+    box-shadow: 0 0 25px rgba(244, 67, 54, 0.15);
+}
+
+.wan-card.standby {
+    border-color: rgba(255, 152, 0, 0.3);
 }
 
 .wan-card-header {
@@ -131,13 +141,13 @@
 }
 
 .wan-card-title .icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.2rem;
+    font-size: 1.3rem;
 }
 
 .wan-card-title .icon.primary { background: rgba(79, 195, 247, 0.2); color: #4fc3f7; }
@@ -145,26 +155,28 @@
 
 .wan-card-title h4 {
     margin: 0;
-    font-size: 1rem;
+    font-size: 1.1rem;
     font-weight: 600;
 }
 
 .wan-card-title .interface {
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     color: #888;
+    font-family: 'JetBrains Mono', monospace;
 }
 
 .wan-status-badge {
-    padding: 0.35rem 0.75rem;
+    padding: 0.4rem 0.85rem;
     border-radius: 20px;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-.wan-status-badge.active { background: rgba(76, 175, 80, 0.2); color: #81c784; }
-.wan-status-badge.standby { background: rgba(255, 255, 255, 0.1); color: #888; }
-.wan-status-badge.failed { background: rgba(244, 67, 54, 0.2); color: #e57373; }
+.wan-status-badge.active { background: rgba(76, 175, 80, 0.25); color: #81c784; border: 1px solid rgba(76, 175, 80, 0.4); }
+.wan-status-badge.standby { background: rgba(255, 152, 0, 0.15); color: #ffb74d; border: 1px solid rgba(255, 152, 0, 0.3); }
+.wan-status-badge.failed { background: rgba(244, 67, 54, 0.25); color: #e57373; border: 1px solid rgba(244, 67, 54, 0.4); }
 
 /* Health Bar */
 .health-bar-container {
@@ -182,17 +194,21 @@
 .health-bar-label span:last-child { color: #fff; font-weight: 600; }
 
 .health-bar {
-    height: 8px;
+    height: 10px;
     background: rgba(255,255,255,0.1);
-    border-radius: 4px;
+    border-radius: 5px;
     overflow: hidden;
 }
 
 .health-bar-fill {
     height: 100%;
-    border-radius: 4px;
+    border-radius: 5px;
     transition: width 0.5s ease, background 0.3s ease;
 }
+
+.health-bar-fill.good { background: linear-gradient(90deg, #4caf50, #81c784); }
+.health-bar-fill.warning { background: linear-gradient(90deg, #ff9800, #ffb74d); }
+.health-bar-fill.critical { background: linear-gradient(90deg, #f44336, #e57373); }
 
 /* Metrics Grid */
 .wan-metrics {
@@ -203,132 +219,186 @@
 
 .wan-metric {
     text-align: center;
-    padding: 0.5rem;
-    background: rgba(255,255,255,0.03);
-    border-radius: 6px;
+    padding: 0.65rem;
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
 }
 
 .wan-metric-value {
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     font-weight: 600;
     color: #fff;
+    font-family: 'JetBrains Mono', monospace;
 }
 
 .wan-metric-label {
     font-size: 0.65rem;
     color: #666;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-/* Traffic Pips */
-.traffic-pips-container {
+/* Financial Traffic Charts */
+.traffic-chart-container {
     background: #1a1a2e;
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
 }
 
-.traffic-pips-header {
+.traffic-chart-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 1rem;
 }
 
-.traffic-pips-header h4 {
+.traffic-chart-header h4 {
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-.traffic-pips-legend {
+.traffic-chart-legend {
     display: flex;
-    gap: 1rem;
+    gap: 1.5rem;
     font-size: 0.75rem;
     color: #888;
 }
 
-.traffic-pips-legend .pip-sample {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-}
-
-.traffic-pips-legend .pip {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-}
-
-.traffic-pips-legend .pip.active { background: #4fc3f7; box-shadow: 0 0 6px rgba(79, 195, 247, 0.5); }
-.traffic-pips-legend .pip.inactive { background: rgba(255,255,255,0.2); }
-
-.vlan-traffic-row {
+.traffic-chart-legend .legend-item {
     display: flex;
     align-items: center;
-    padding: 0.75rem 0;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    gap: 0.4rem;
 }
 
-.vlan-traffic-row:last-child { border-bottom: none; }
+.traffic-chart-legend .legend-bar {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
 
-.vlan-name {
-    width: 120px;
-    font-size: 0.85rem;
+.traffic-chart-legend .legend-bar.download { background: #4fc3f7; }
+.traffic-chart-legend .legend-bar.upload { background: #ff6b6b; }
+
+/* Interface Traffic Row */
+.interface-traffic-row {
+    display: flex;
+    align-items: center;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.interface-traffic-row:last-child { border-bottom: none; }
+
+.interface-info {
+    width: 140px;
+    flex-shrink: 0;
+}
+
+.interface-name {
+    font-size: 0.9rem;
     font-weight: 500;
-}
-
-.vlan-pips {
-    flex: 1;
+    color: #fff;
     display: flex;
-    gap: 3px;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-.vlan-pips .pip {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.15);
-    transition: all 0.3s ease;
-}
-
-.vlan-pips .pip.active {
-    background: var(--pip-color, #4fc3f7);
-    box-shadow: 0 0 6px var(--pip-color, rgba(79, 195, 247, 0.5));
-    animation: pip-pulse 1s ease-in-out infinite;
-}
-
-@keyframes pip-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
-}
-
-.vlan-traffic-value {
-    width: 100px;
-    text-align: right;
-    font-size: 0.85rem;
-    font-weight: 600;
-}
-
-.vlan-traffic-direction {
-    width: 40px;
+.interface-name i {
+    width: 18px;
     text-align: center;
-    font-size: 0.8rem;
-    color: #888;
+    opacity: 0.7;
+}
+
+.interface-type {
+    font-size: 0.7rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Candlestick-style Traffic Chart */
+.candlestick-chart {
+    flex: 1;
+    height: 40px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    padding: 0 10px;
+    position: relative;
+}
+
+.candlestick {
+    flex: 1;
+    max-width: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+}
+
+.candlestick-body {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    border-radius: 1px;
+}
+
+.candlestick-download {
+    background: linear-gradient(180deg, #4fc3f7, #29b6f6);
+    border-radius: 1px 1px 0 0;
+}
+
+.candlestick-upload {
+    background: linear-gradient(180deg, #ff6b6b, #ee5a5a);
+    border-radius: 0 0 1px 1px;
+}
+
+/* Traffic Values */
+.traffic-values {
+    width: 180px;
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    flex-shrink: 0;
+}
+
+.traffic-value {
+    text-align: right;
+}
+
+.traffic-value-number {
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.traffic-value-number.download { color: #4fc3f7; }
+.traffic-value-number.upload { color: #ff6b6b; }
+
+.traffic-value-label {
+    font-size: 0.65rem;
+    color: #666;
+    text-transform: uppercase;
 }
 
 /* Section Headers */
 .traffic-section-header {
     display: flex;
     align-items: center;
-    padding: 0.75rem 0;
-    margin-top: 0.5rem;
-    font-size: 0.8rem;
+    padding: 0.6rem 0;
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
     font-weight: 600;
-    color: #888;
+    color: #666;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    border-top: 1px solid rgba(255,255,255,0.1);
+    border-top: 1px solid rgba(255,255,255,0.08);
 }
 
 .traffic-section-header:first-of-type {
@@ -336,39 +406,22 @@
     margin-top: 0;
 }
 
-/* Filter Bar */
-.traffic-filter-bar {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
+.traffic-section-header i {
+    margin-right: 0.5rem;
+    opacity: 0.7;
 }
 
-.filter-btn {
-    padding: 0.4rem 0.8rem;
-    border-radius: 20px;
-    font-size: 0.75rem;
-    font-weight: 500;
-    border: 1px solid rgba(255,255,255,0.2);
-    background: transparent;
-    color: #888;
-    cursor: pointer;
-    transition: all 0.2s ease;
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: #666;
 }
 
-.filter-btn:hover {
-    border-color: rgba(255,255,255,0.4);
-    color: #fff;
-}
-
-.filter-btn.active {
-    background: rgba(79, 195, 247, 0.2);
-    border-color: #4fc3f7;
-    color: #4fc3f7;
-}
-
-.filter-btn i {
-    margin-right: 0.35rem;
+.empty-state i {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    opacity: 0.5;
 }
 
 /* Cost Tracking */
@@ -377,6 +430,7 @@
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
 }
 
 .cost-panel h4 {
@@ -414,6 +468,7 @@
     font-size: 1.25rem;
     font-weight: 700;
     color: #fff;
+    font-family: 'JetBrains Mono', monospace;
 }
 
 .cost-bar {
@@ -435,6 +490,7 @@
     background: #1a1a2e;
     border-radius: 12px;
     padding: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
 }
 
 .failover-timeline h4 {
@@ -541,6 +597,29 @@
     color: #4fc3f7;
 }
 
+/* Loading Spinner */
+.loading-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    color: #888;
+}
+
+.loading-overlay .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255,255,255,0.1);
+    border-top-color: #4fc3f7;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-right: 0.75rem;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
     .slaai-status-grid {
@@ -564,6 +643,20 @@
     .cost-grid {
         grid-template-columns: 1fr;
     }
+
+    .interface-traffic-row {
+        flex-wrap: wrap;
+    }
+
+    .candlestick-chart {
+        width: 100%;
+        margin: 0.5rem 0;
+    }
+
+    .traffic-values {
+        width: 100%;
+        justify-content: flex-start;
+    }
 }
 </style>
 {% endblock %}
@@ -578,7 +671,6 @@
             <div class="col-sm-6">
                 <ol class="breadcrumb float-sm-right">
                     <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
-                    <li class="breadcrumb-item"><a href="{{ url_for('sdn.index') }}">SDN</a></li>
                     <li class="breadcrumb-item active">SLA AI</li>
                 </ol>
             </div>
@@ -593,7 +685,7 @@
         <div class="alert alert-warning alert-dismissible">
             <button type="button" class="close" data-dismiss="alert">&times;</button>
             <i class="fas fa-info-circle mr-2"></i>
-            <strong>Demo Mode:</strong> SLA AI engine not connected. Showing sample data.
+            <strong>Demo Mode:</strong> System data module not available. Showing sample data.
         </div>
         {% endif %}
 
@@ -613,7 +705,7 @@
                                     style="stroke: #81c784;"/>
                         </svg>
                         <div class="gauge-value">
-                            <span class="gauge-number" id="rto-value">2.3</span>
+                            <span class="gauge-number" id="rto-value">--</span>
                             <span class="gauge-unit">seconds</span>
                         </div>
                     </div>
@@ -657,7 +749,7 @@
                                     style="stroke: #81c784;"/>
                         </svg>
                         <div class="gauge-value">
-                            <span class="gauge-number" id="uptime-value">99.87</span>
+                            <span class="gauge-number" id="uptime-value">--</span>
                             <span class="gauge-unit">%</span>
                         </div>
                     </div>
@@ -674,17 +766,17 @@
                             <circle class="gauge-bg" cx="50" cy="50" r="40"/>
                             <circle class="gauge-fill" cx="50" cy="50" r="40"
                                     stroke-dasharray="251.2"
-                                    stroke-dashoffset="188.4"
+                                    stroke-dashoffset="251.2"
                                     id="failover-gauge"
-                                    style="stroke: #ffb74d;"/>
+                                    style="stroke: #81c784;"/>
                         </svg>
                         <div class="gauge-value">
-                            <span class="gauge-number" id="failover-count">1</span>
+                            <span class="gauge-number" id="failover-count">0</span>
                             <span class="gauge-unit">switches</span>
                         </div>
                     </div>
-                    <div class="gauge-status warning" id="failover-status">
-                        <i class="fas fa-exchange-alt mr-1"></i>Max: 4/day
+                    <div class="gauge-status ok" id="failover-status">
+                        <i class="fas fa-check mr-1"></i>Max: 4/day
                     </div>
                 </div>
             </div>
@@ -693,44 +785,44 @@
         <!-- WAN Interface Cards -->
         <div class="wan-cards">
             <!-- Primary WAN -->
-            <div class="wan-card active" id="primary-wan-card">
+            <div class="wan-card" id="primary-wan-card">
                 <div class="wan-card-header">
                     <div class="wan-card-title">
                         <div class="icon primary"><i class="fas fa-ethernet"></i></div>
                         <div>
                             <h4>Primary WAN</h4>
-                            <span class="interface" id="primary-interface">eth0</span>
+                            <span class="interface" id="primary-interface">--</span>
                         </div>
                     </div>
-                    <span class="wan-status-badge active" id="primary-status">● ACTIVE</span>
+                    <span class="wan-status-badge" id="primary-status-badge">--</span>
                 </div>
 
                 <div class="health-bar-container">
                     <div class="health-bar-label">
                         <span>Health Score</span>
-                        <span id="primary-health-value">92%</span>
+                        <span id="primary-health-value">--%</span>
                     </div>
                     <div class="health-bar">
-                        <div class="health-bar-fill" id="primary-health-bar" style="width: 92%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
+                        <div class="health-bar-fill good" id="primary-health-bar" style="width: 0%;"></div>
                     </div>
                 </div>
 
                 <div class="wan-metrics">
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="primary-rtt">12ms</div>
+                        <div class="wan-metric-value" id="primary-rtt">--</div>
                         <div class="wan-metric-label">RTT</div>
                     </div>
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="primary-jitter">1.2ms</div>
+                        <div class="wan-metric-value" id="primary-jitter">--</div>
                         <div class="wan-metric-label">Jitter</div>
                     </div>
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="primary-loss">0%</div>
+                        <div class="wan-metric-value" id="primary-loss">--</div>
                         <div class="wan-metric-label">Loss</div>
                     </div>
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="primary-speed">1Gbps</div>
-                        <div class="wan-metric-label">Speed</div>
+                        <div class="wan-metric-value" id="primary-ip">--</div>
+                        <div class="wan-metric-label">IP</div>
                     </div>
                 </div>
             </div>
@@ -742,205 +834,63 @@
                         <div class="icon backup"><i class="fas fa-signal"></i></div>
                         <div>
                             <h4>Backup WAN (LTE)</h4>
-                            <span class="interface" id="backup-interface">wwan0</span>
+                            <span class="interface" id="backup-interface">--</span>
                         </div>
                     </div>
-                    <span class="wan-status-badge standby" id="backup-status">○ STANDBY</span>
+                    <span class="wan-status-badge standby" id="backup-status-badge">--</span>
                 </div>
 
                 <div class="health-bar-container">
                     <div class="health-bar-label">
                         <span>Health Score</span>
-                        <span id="backup-health-value">65%</span>
+                        <span id="backup-health-value">--%</span>
                     </div>
                     <div class="health-bar">
-                        <div class="health-bar-fill" id="backup-health-bar" style="width: 65%; background: linear-gradient(90deg, #ff9800, #ffb74d);"></div>
+                        <div class="health-bar-fill warning" id="backup-health-bar" style="width: 0%;"></div>
                     </div>
                 </div>
 
                 <div class="wan-metrics">
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="backup-rtt">45ms</div>
+                        <div class="wan-metric-value" id="backup-rtt">--</div>
                         <div class="wan-metric-label">RTT</div>
                     </div>
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="backup-signal">-75dBm</div>
+                        <div class="wan-metric-value" id="backup-signal">--</div>
                         <div class="wan-metric-label">Signal</div>
                     </div>
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="backup-loss">0.1%</div>
+                        <div class="wan-metric-value" id="backup-loss">--</div>
                         <div class="wan-metric-label">Loss</div>
                     </div>
                     <div class="wan-metric">
-                        <div class="wan-metric-value" id="backup-speed">50Mbps</div>
-                        <div class="wan-metric-label">Speed</div>
+                        <div class="wan-metric-value" id="backup-ip">--</div>
+                        <div class="wan-metric-label">IP</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Interface Traffic Pips -->
-        <div class="traffic-pips-container">
-            <div class="traffic-pips-header">
-                <h4><i class="fas fa-chart-bar mr-2"></i>Interface Traffic (Real-time)</h4>
-                <div class="traffic-pips-legend">
-                    <span class="pip-sample"><span class="pip active"></span> Active (5 Mbps/pip)</span>
-                    <span class="pip-sample"><span class="pip inactive"></span> Inactive</span>
+        <!-- Interface Traffic (Financial Style) -->
+        <div class="traffic-chart-container">
+            <div class="traffic-chart-header">
+                <h4><i class="fas fa-chart-bar"></i>Interface Traffic (Real-time)</h4>
+                <div class="traffic-chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-bar download"></span>
+                        <span>Download</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-bar upload"></span>
+                        <span>Upload</span>
+                    </div>
                 </div>
             </div>
 
-            <!-- Filter Bar -->
-            <div class="traffic-filter-bar">
-                <button class="filter-btn active" data-filter="all">
-                    <i class="fas fa-th"></i>All
-                </button>
-                <button class="filter-btn" data-filter="wan">
-                    <i class="fas fa-globe"></i>WAN
-                </button>
-                <button class="filter-btn" data-filter="bridge">
-                    <i class="fas fa-project-diagram"></i>Bridge/WiFi
-                </button>
-                <button class="filter-btn" data-filter="vlan">
-                    <i class="fas fa-layer-group"></i>VLANs
-                </button>
-                <button class="filter-btn" data-filter="container">
-                    <i class="fas fa-cube"></i>Containers
-                </button>
-            </div>
-
-            <!-- WAN Interfaces Section -->
-            <div class="traffic-section-header">
-                <i class="fas fa-globe mr-2"></i>WAN Interfaces
-            </div>
-            <div id="wan-traffic-pips">
-                <div class="vlan-traffic-row" data-iface="eth0" style="--pip-color: #4fc3f7;">
-                    <span class="vlan-name"><i class="fas fa-ethernet mr-1"></i>eth0 (WAN)</span>
-                    <div class="vlan-pips" id="pips-wan"></div>
-                    <span class="vlan-traffic-value" id="traffic-wan">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-iface="wwan0" style="--pip-color: #ffb74d;">
-                    <span class="vlan-name"><i class="fas fa-signal mr-1"></i>wwan0 (LTE)</span>
-                    <div class="vlan-pips" id="pips-lte"></div>
-                    <span class="vlan-traffic-value" id="traffic-lte">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-            </div>
-
-            <!-- Bridge & WiFi Section -->
-            <div class="traffic-section-header">
-                <i class="fas fa-project-diagram mr-2"></i>Bridge & WiFi
-            </div>
-            <div id="bridge-traffic-pips">
-                <div class="vlan-traffic-row" data-iface="FTS" style="--pip-color: #ce93d8;">
-                    <span class="vlan-name"><i class="fas fa-network-wired mr-1"></i>FTS (Bridge)</span>
-                    <div class="vlan-pips" id="pips-fts"></div>
-                    <span class="vlan-traffic-value" id="traffic-fts">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-iface="wlan0" style="--pip-color: #81c784;">
-                    <span class="vlan-name"><i class="fas fa-wifi mr-1"></i>wlan0 (2.4GHz)</span>
-                    <div class="vlan-pips" id="pips-wifi24"></div>
-                    <span class="vlan-traffic-value" id="traffic-wifi24">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-iface="wlan1" style="--pip-color: #00d9ff;">
-                    <span class="vlan-name"><i class="fas fa-wifi mr-1"></i>wlan1 (5GHz)</span>
-                    <div class="vlan-pips" id="pips-wifi5"></div>
-                    <span class="vlan-traffic-value" id="traffic-wifi5">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-            </div>
-
-            <!-- VLAN Traffic Section -->
-            <div class="traffic-section-header">
-                <i class="fas fa-layer-group mr-2"></i>VLAN Traffic
-            </div>
-            <div id="vlan-traffic-pips">
-                <div class="vlan-traffic-row" data-vlan="100" style="--pip-color: #4fc3f7;">
-                    <span class="vlan-name">vlan100 (LAN)</span>
-                    <div class="vlan-pips" id="pips-100"></div>
-                    <span class="vlan-traffic-value" id="traffic-100">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-vlan="200" style="--pip-color: #ce93d8;">
-                    <span class="vlan-name">vlan200 (MGMT)</span>
-                    <div class="vlan-pips" id="pips-200"></div>
-                    <span class="vlan-traffic-value" id="traffic-200">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-vlan="30" style="--pip-color: #81c784;">
-                    <span class="vlan-name">vlan30 (STAFF)</span>
-                    <div class="vlan-pips" id="pips-30"></div>
-                    <span class="vlan-traffic-value" id="traffic-30">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-vlan="40" style="--pip-color: #ffb74d;">
-                    <span class="vlan-name">vlan40 (GUEST)</span>
-                    <div class="vlan-pips" id="pips-40"></div>
-                    <span class="vlan-traffic-value" id="traffic-40">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-vlan="20" style="--pip-color: #64b5f6;">
-                    <span class="vlan-name">vlan20 (POS)</span>
-                    <div class="vlan-pips" id="pips-20"></div>
-                    <span class="vlan-traffic-value" id="traffic-20">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-vlan="50" style="--pip-color: #4dd0e1;">
-                    <span class="vlan-name">vlan50 (CAMERAS)</span>
-                    <div class="vlan-pips" id="pips-50"></div>
-                    <span class="vlan-traffic-value" id="traffic-50">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-vlan="99" style="--pip-color: #e57373;">
-                    <span class="vlan-name">vlan99 (QUARANTINE)</span>
-                    <div class="vlan-pips" id="pips-99"></div>
-                    <span class="vlan-traffic-value" id="traffic-99">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-            </div>
-
-            <!-- Container Network Section -->
-            <div class="traffic-section-header">
-                <i class="fas fa-docker mr-2"></i>Container Network (172.20.200.0/24)
-            </div>
-            <div id="container-traffic-pips">
-                <div class="vlan-traffic-row" data-container="web" style="--pip-color: #64b5f6;">
-                    <span class="vlan-name"><i class="fas fa-globe mr-1"></i>fortress-web</span>
-                    <div class="vlan-pips" id="pips-web"></div>
-                    <span class="vlan-traffic-value" id="traffic-web">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-container="postgres" style="--pip-color: #336791;">
-                    <span class="vlan-name"><i class="fas fa-database mr-1"></i>fortress-postgres</span>
-                    <div class="vlan-pips" id="pips-postgres"></div>
-                    <span class="vlan-traffic-value" id="traffic-postgres">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-container="redis" style="--pip-color: #d82c20;">
-                    <span class="vlan-name"><i class="fas fa-memory mr-1"></i>fortress-redis</span>
-                    <div class="vlan-pips" id="pips-redis"></div>
-                    <span class="vlan-traffic-value" id="traffic-redis">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-container="qsecbit" style="--pip-color: #81c784;">
-                    <span class="vlan-name"><i class="fas fa-shield-alt mr-1"></i>fortress-qsecbit</span>
-                    <div class="vlan-pips" id="pips-qsecbit"></div>
-                    <span class="vlan-traffic-value" id="traffic-qsecbit">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-container="dnsxai" style="--pip-color: #ff9800;">
-                    <span class="vlan-name"><i class="fas fa-brain mr-1"></i>fortress-dnsxai</span>
-                    <div class="vlan-pips" id="pips-dnsxai"></div>
-                    <span class="vlan-traffic-value" id="traffic-dnsxai">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
-                </div>
-                <div class="vlan-traffic-row" data-container="dfs" style="--pip-color: #9c27b0;">
-                    <span class="vlan-name"><i class="fas fa-broadcast-tower mr-1"></i>fortress-dfs</span>
-                    <div class="vlan-pips" id="pips-dfs"></div>
-                    <span class="vlan-traffic-value" id="traffic-dfs">-- Mbps</span>
-                    <span class="vlan-traffic-direction">↑↓</span>
+            <div id="traffic-interfaces">
+                <div class="loading-overlay">
+                    <div class="spinner"></div>
+                    <span>Loading interfaces...</span>
                 </div>
             </div>
         </div>
@@ -949,36 +899,36 @@
             <!-- Cost Tracking -->
             <div class="col-md-6">
                 <div class="cost-panel">
-                    <h4><i class="fas fa-dollar-sign mr-2"></i>LTE Data Budget (wwan0)</h4>
+                    <h4><i class="fas fa-dollar-sign mr-2"></i>LTE Data Budget (<span id="lte-interface-name">wwan0</span>)</h4>
                     <div class="cost-grid">
                         <div class="cost-item">
                             <div class="cost-item-header">
                                 <span class="cost-item-label">Daily Usage</span>
-                                <span class="cost-item-value" id="daily-usage">145 MB</span>
+                                <span class="cost-item-value" id="daily-usage">-- MB</span>
                             </div>
                             <div class="cost-bar">
-                                <div class="cost-bar-fill" id="daily-bar" style="width: 29%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
+                                <div class="cost-bar-fill" id="daily-bar" style="width: 0%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
                             </div>
                             <div style="font-size: 0.7rem; color: #888; margin-top: 0.25rem;">
-                                <span id="daily-budget">500 MB budget</span> · <span id="daily-pct">29%</span>
+                                <span id="daily-budget">500 MB budget</span> · <span id="daily-pct">0%</span>
                             </div>
                         </div>
                         <div class="cost-item">
                             <div class="cost-item-header">
                                 <span class="cost-item-label">Monthly Usage</span>
-                                <span class="cost-item-value" id="monthly-usage">2.1 GB</span>
+                                <span class="cost-item-value" id="monthly-usage">-- GB</span>
                             </div>
                             <div class="cost-bar">
-                                <div class="cost-bar-fill" id="monthly-bar" style="width: 21%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
+                                <div class="cost-bar-fill" id="monthly-bar" style="width: 0%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
                             </div>
                             <div style="font-size: 0.7rem; color: #888; margin-top: 0.25rem;">
-                                <span id="monthly-budget">10 GB budget</span> · <span id="monthly-pct">21%</span>
+                                <span id="monthly-budget">10 GB budget</span> · <span id="monthly-pct">0%</span>
                             </div>
                         </div>
                         <div class="cost-item">
                             <div class="cost-item-header">
                                 <span class="cost-item-label">Current Cost</span>
-                                <span class="cost-item-value" id="current-cost">$4.30</span>
+                                <span class="cost-item-value" id="current-cost">$0.00</span>
                             </div>
                             <div style="font-size: 0.75rem; color: #81c784; margin-top: 0.5rem;">
                                 <i class="fas fa-check-circle mr-1"></i>Under budget
@@ -987,7 +937,7 @@
                         <div class="cost-item">
                             <div class="cost-item-header">
                                 <span class="cost-item-label">Budget Remaining</span>
-                                <span class="cost-item-value" id="budget-remaining">$15.70</span>
+                                <span class="cost-item-value" id="budget-remaining">$20.00</span>
                             </div>
                             <div style="font-size: 0.75rem; color: #888; margin-top: 0.5rem;">
                                 <i class="fas fa-info-circle mr-1"></i>$20/month total
@@ -1003,8 +953,6 @@
                     <h4><i class="fas fa-history mr-2"></i>Failover Timeline (24h)</h4>
                     <div class="timeline-track">
                         <div class="timeline-line"></div>
-                        <div class="timeline-event failover" id="event-1" style="left: 15%;" title="02:15 - Failover"></div>
-                        <div class="timeline-event failback" id="event-2" style="left: 35%;" title="06:42 - Failback"></div>
                         <div class="timeline-event now" style="left: 95%;" title="Now"></div>
                     </div>
                     <div class="timeline-labels">
@@ -1014,7 +962,10 @@
                     </div>
 
                     <div class="timeline-events-list" id="timeline-events">
-                        <!-- Populated by JS -->
+                        <div class="empty-state">
+                            <i class="fas fa-check-circle"></i>
+                            <p>No failover events in the last 24 hours</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1026,42 +977,27 @@
 
 {% block extra_js %}
 <script>
-const PIPS_PER_ROW = 20;
-const MBPS_PER_PIP = 5;
+// Traffic history for candlestick charts (keep last 30 samples)
+const trafficHistory = {};
+const MAX_HISTORY = 30;
 
-// Initialize traffic pips
-function initPips() {
-    document.querySelectorAll('.vlan-pips').forEach(container => {
-        let pipsHtml = '';
-        for (let i = 0; i < PIPS_PER_ROW; i++) {
-            pipsHtml += '<span class="pip"></span>';
-        }
-        container.innerHTML = pipsHtml;
-    });
-}
+// Interface type icons
+const interfaceIcons = {
+    'wan': 'fa-ethernet',
+    'lte': 'fa-signal',
+    'bridge': 'fa-project-diagram',
+    'wifi': 'fa-wifi',
+    'vlan': 'fa-layer-group',
+};
 
-// Update traffic pips for a VLAN
-function updateTrafficPips(vlanId, mbps) {
-    const container = document.getElementById(`pips-${vlanId}`);
-    const valueEl = document.getElementById(`traffic-${vlanId}`);
-
-    if (!container) return;
-
-    const activePips = Math.min(PIPS_PER_ROW, Math.ceil(mbps / MBPS_PER_PIP));
-    const pips = container.querySelectorAll('.pip');
-
-    pips.forEach((pip, i) => {
-        if (i < activePips) {
-            pip.classList.add('active');
-        } else {
-            pip.classList.remove('active');
-        }
-    });
-
-    if (valueEl) {
-        valueEl.textContent = `${mbps} Mbps`;
-    }
-}
+// Interface type colors
+const interfaceColors = {
+    'wan': '#4fc3f7',
+    'lte': '#ffb74d',
+    'bridge': '#ce93d8',
+    'wifi': '#81c784',
+    'vlan': '#64b5f6',
+};
 
 // Load SLA status
 async function loadSLAStatus() {
@@ -1077,53 +1013,70 @@ async function loadSLAStatus() {
     }
 }
 
+// Load traffic data
+async function loadTrafficData() {
+    try {
+        const res = await fetch('/slaai/api/traffic');
+        const data = await res.json();
+
+        if (data.success) {
+            updateTrafficCharts(data.traffic, data.vlans);
+        }
+    } catch (error) {
+        console.error('Error loading traffic:', error);
+    }
+}
+
 function updateDashboard(status) {
     // RTO
-    if (status.rto_actual_s !== undefined) {
-        document.getElementById('rto-value').textContent = status.rto_actual_s.toFixed(1);
-        const rtoPercent = Math.min(100, (status.rto_actual_s / status.rto_target_s) * 100);
-        updateGauge('rto-gauge', 100 - rtoPercent, rtoPercent <= 80 ? '#81c784' : '#ffb74d');
-    }
+    const rtoValue = status.rto_actual_s ?? '--';
+    document.getElementById('rto-value').textContent = typeof rtoValue === 'number' ? rtoValue.toFixed(1) : rtoValue;
 
     // RPO
-    if (status.rpo_actual_bytes !== undefined) {
-        document.getElementById('rpo-value').textContent = status.rpo_actual_bytes;
-    }
+    document.getElementById('rpo-value').textContent = status.rpo_actual_bytes ?? 0;
 
     // Uptime
-    if (status.uptime_pct !== undefined) {
-        document.getElementById('uptime-value').textContent = status.uptime_pct.toFixed(2);
-        updateGauge('uptime-gauge', status.uptime_pct, status.uptime_pct >= 99.9 ? '#81c784' : '#ffb74d');
-    }
+    const uptime = status.uptime_pct ?? 99.9;
+    document.getElementById('uptime-value').textContent = uptime.toFixed(2);
+    updateGauge('uptime-gauge', uptime, uptime >= 99.9 ? '#81c784' : '#ffb74d');
 
     // Failover count
-    if (status.failover_count_24h !== undefined) {
-        document.getElementById('failover-count').textContent = status.failover_count_24h;
-    }
+    document.getElementById('failover-count').textContent = status.failover_count_24h ?? 0;
 
-    // WAN health
-    if (status.primary_health !== undefined) {
-        const primaryPct = Math.round(status.primary_health * 100);
-        document.getElementById('primary-health-value').textContent = `${primaryPct}%`;
-        document.getElementById('primary-health-bar').style.width = `${primaryPct}%`;
-    }
+    // Primary WAN
+    updateWanCard('primary', status);
 
-    if (status.backup_health !== undefined) {
-        const backupPct = Math.round(status.backup_health * 100);
-        document.getElementById('backup-health-value').textContent = `${backupPct}%`;
-        document.getElementById('backup-health-bar').style.width = `${backupPct}%`;
+    // Backup WAN
+    updateWanCard('backup', status);
+
+    // WAN card classes based on active state
+    const primaryCard = document.getElementById('primary-wan-card');
+    const backupCard = document.getElementById('backup-wan-card');
+
+    primaryCard.classList.remove('active', 'failed', 'standby');
+    backupCard.classList.remove('active', 'failed', 'standby');
+
+    if (status.primary_status === 'ACTIVE') {
+        primaryCard.classList.add('active');
+        backupCard.classList.add('standby');
+    } else if (status.primary_status === 'FAILED') {
+        primaryCard.classList.add('failed');
+        if (status.backup_status === 'ACTIVE') {
+            backupCard.classList.add('active');
+        }
     }
 
     // Cost tracking
     if (status.cost_status) {
         const cost = status.cost_status;
-        document.getElementById('daily-usage').textContent = `${cost.daily_usage_mb} MB`;
-        document.getElementById('monthly-usage').textContent = `${(cost.monthly_usage_mb / 1024).toFixed(1)} GB`;
-        document.getElementById('current-cost').textContent = `$${cost.current_cost.toFixed(2)}`;
-        document.getElementById('budget-remaining').textContent = `$${cost.budget_remaining.toFixed(2)}`;
+        document.getElementById('lte-interface-name').textContent = cost.interface || 'wwan0';
+        document.getElementById('daily-usage').textContent = `${cost.daily_usage_mb || 0} MB`;
+        document.getElementById('monthly-usage').textContent = `${((cost.monthly_usage_mb || 0) / 1024).toFixed(1)} GB`;
+        document.getElementById('current-cost').textContent = `$${(cost.current_cost || 0).toFixed(2)}`;
+        document.getElementById('budget-remaining').textContent = `$${(cost.budget_remaining || 20).toFixed(2)}`;
 
-        const dailyPct = (cost.daily_usage_mb / cost.daily_budget_mb) * 100;
-        const monthlyPct = (cost.monthly_usage_mb / cost.monthly_budget_mb) * 100;
+        const dailyPct = ((cost.daily_usage_mb || 0) / (cost.daily_budget_mb || 500)) * 100;
+        const monthlyPct = ((cost.monthly_usage_mb || 0) / (cost.monthly_budget_mb || 10240)) * 100;
         document.getElementById('daily-bar').style.width = `${dailyPct}%`;
         document.getElementById('monthly-bar').style.width = `${monthlyPct}%`;
         document.getElementById('daily-pct').textContent = `${Math.round(dailyPct)}%`;
@@ -1131,9 +1084,190 @@ function updateDashboard(status) {
     }
 
     // Timeline events
-    if (status.failover_history) {
+    if (status.failover_history && status.failover_history.length > 0) {
         updateTimeline(status.failover_history);
     }
+}
+
+function updateWanCard(type, status) {
+    const prefix = type;
+    const iface = status[`${type}_interface`] || '--';
+    const health = status[`${type}_health`] || 0;
+    const statusText = status[`${type}_status`] || 'DOWN';
+    const rtt = status[`${type}_rtt`];
+    const jitter = status[`${type}_jitter`];
+    const signal = status[`${type}_signal`];
+    const loss = status[`${type}_loss`];
+    const ip = status[`${type}_ip`];
+
+    // Interface name
+    document.getElementById(`${prefix}-interface`).textContent = iface;
+
+    // Status badge
+    const badge = document.getElementById(`${prefix}-status-badge`);
+    badge.textContent = statusText === 'ACTIVE' ? '● ACTIVE' : (statusText === 'FAILED' ? '✕ FAILED' : '○ STANDBY');
+    badge.className = 'wan-status-badge ' + statusText.toLowerCase();
+
+    // Health
+    const healthPct = Math.round(health * 100);
+    document.getElementById(`${prefix}-health-value`).textContent = `${healthPct}%`;
+    const healthBar = document.getElementById(`${prefix}-health-bar`);
+    healthBar.style.width = `${healthPct}%`;
+    healthBar.className = 'health-bar-fill ' + (healthPct >= 80 ? 'good' : (healthPct >= 50 ? 'warning' : 'critical'));
+
+    // Metrics
+    document.getElementById(`${prefix}-rtt`).textContent = rtt ? `${rtt.toFixed(0)}ms` : '--';
+    if (type === 'primary') {
+        document.getElementById(`${prefix}-jitter`).textContent = jitter ? `${jitter.toFixed(1)}ms` : '--';
+    } else {
+        document.getElementById(`${prefix}-signal`).textContent = signal ? `${signal.toFixed(0)}dBm` : '--';
+    }
+    document.getElementById(`${prefix}-loss`).textContent = typeof loss === 'number' ? `${loss}%` : '--';
+    document.getElementById(`${prefix}-ip`).textContent = ip ? ip.split('/')[0] : '--';
+}
+
+function updateTrafficCharts(traffic, vlans) {
+    const container = document.getElementById('traffic-interfaces');
+
+    if (!traffic || traffic.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-network-wired"></i>
+                <p>No active interfaces detected</p>
+            </div>
+        `;
+        return;
+    }
+
+    // Group by type
+    const grouped = {
+        wan: traffic.filter(t => t.type === 'wan'),
+        lte: traffic.filter(t => t.type === 'lte'),
+        bridge: traffic.filter(t => t.type === 'bridge'),
+        wifi: traffic.filter(t => t.type === 'wifi'),
+        vlan: traffic.filter(t => t.type === 'vlan'),
+    };
+
+    let html = '';
+
+    // WAN Section
+    if (grouped.wan.length > 0 || grouped.lte.length > 0) {
+        html += `<div class="traffic-section-header"><i class="fas fa-globe"></i>WAN Interfaces</div>`;
+        [...grouped.wan, ...grouped.lte].forEach(iface => {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // Bridge & WiFi Section
+    if (grouped.bridge.length > 0 || grouped.wifi.length > 0) {
+        html += `<div class="traffic-section-header"><i class="fas fa-project-diagram"></i>Bridge & WiFi</div>`;
+        [...grouped.bridge, ...grouped.wifi].forEach(iface => {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // VLAN Section
+    if (grouped.vlan.length > 0) {
+        html += `<div class="traffic-section-header"><i class="fas fa-layer-group"></i>VLANs</div>`;
+        grouped.vlan.forEach(iface => {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    container.innerHTML = html;
+
+    // Update candlestick charts with history
+    traffic.forEach(iface => {
+        updateCandlestickHistory(iface);
+        renderCandlesticks(iface.interface);
+    });
+}
+
+function renderInterfaceRow(iface) {
+    const icon = interfaceIcons[iface.type] || 'fa-network-wired';
+    const color = interfaceColors[iface.type] || '#888';
+
+    return `
+        <div class="interface-traffic-row" data-interface="${iface.interface}">
+            <div class="interface-info">
+                <div class="interface-name">
+                    <i class="fas ${icon}" style="color: ${color};"></i>
+                    ${iface.interface}
+                </div>
+                <div class="interface-type">${iface.type.toUpperCase()}</div>
+            </div>
+            <div class="candlestick-chart" id="chart-${iface.interface}"></div>
+            <div class="traffic-values">
+                <div class="traffic-value">
+                    <div class="traffic-value-number download" id="dl-${iface.interface}">${iface.rx_mbps || 0} Mbps</div>
+                    <div class="traffic-value-label">↓ Download</div>
+                </div>
+                <div class="traffic-value">
+                    <div class="traffic-value-number upload" id="ul-${iface.interface}">${iface.tx_mbps || 0} Mbps</div>
+                    <div class="traffic-value-label">↑ Upload</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function updateCandlestickHistory(iface) {
+    if (!trafficHistory[iface.interface]) {
+        trafficHistory[iface.interface] = [];
+    }
+
+    trafficHistory[iface.interface].push({
+        rx: iface.rx_mbps || 0,
+        tx: iface.tx_mbps || 0,
+        time: Date.now()
+    });
+
+    // Keep only last N samples
+    if (trafficHistory[iface.interface].length > MAX_HISTORY) {
+        trafficHistory[iface.interface].shift();
+    }
+}
+
+function renderCandlesticks(ifaceName) {
+    const container = document.getElementById(`chart-${ifaceName}`);
+    if (!container) return;
+
+    const history = trafficHistory[ifaceName] || [];
+    if (history.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding: 0.5rem; font-size: 0.75rem;">Waiting for data...</div>';
+        return;
+    }
+
+    // Find max for scaling
+    const maxVal = Math.max(
+        ...history.map(h => Math.max(h.rx, h.tx)),
+        1  // Minimum to avoid division by zero
+    );
+
+    // Render candlesticks
+    let html = '';
+    history.forEach((sample, i) => {
+        const dlHeight = Math.min(40, (sample.rx / maxVal) * 35);
+        const ulHeight = Math.min(40, (sample.tx / maxVal) * 35);
+
+        html += `
+            <div class="candlestick" title="${sample.rx.toFixed(1)} Mbps ↓ / ${sample.tx.toFixed(1)} Mbps ↑">
+                <div class="candlestick-body">
+                    <div class="candlestick-download" style="height: ${dlHeight}px;"></div>
+                    <div class="candlestick-upload" style="height: ${ulHeight}px;"></div>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+
+    // Update current values
+    const latest = history[history.length - 1];
+    const dlEl = document.getElementById(`dl-${ifaceName}`);
+    const ulEl = document.getElementById(`ul-${ifaceName}`);
+    if (dlEl) dlEl.textContent = `${latest.rx.toFixed(1)} Mbps`;
+    if (ulEl) ulEl.textContent = `${latest.tx.toFixed(1)} Mbps`;
 }
 
 function updateGauge(id, percent, color) {
@@ -1163,154 +1297,27 @@ function updateTimeline(events) {
                 </div>
                 <div class="event-details">
                     <div class="event-type">${event.type.charAt(0).toUpperCase() + event.type.slice(1)}</div>
-                    <div class="event-reason">${event.reason}</div>
+                    <div class="event-reason">${event.reason || 'Manual switch'}</div>
                 </div>
                 <div class="event-time">
                     ${timeStr}
-                    <div class="event-duration">${event.duration_s}s</div>
+                    <div class="event-duration">${event.duration_s || 0}s</div>
                 </div>
             </div>
         `;
     }).join('');
 }
 
-// Simulate traffic for demo - all interfaces
-function simulateTraffic() {
-    // WAN interfaces
-    const wanInterfaces = {
-        'wan': { min: 150, max: 250 },
-        'lte': { min: 5, max: 25 }
-    };
-
-    // Bridge/WiFi interfaces
-    const bridgeInterfaces = {
-        'fts': { min: 180, max: 300 },
-        'wifi24': { min: 30, max: 50 },
-        'wifi5': { min: 70, max: 120 }
-    };
-
-    // VLAN interfaces
-    const vlans = {
-        100: { min: 40, max: 60 },
-        200: { min: 2, max: 8 },
-        30: { min: 20, max: 35 },
-        40: { min: 30, max: 55 },
-        20: { min: 5, max: 15 },
-        50: { min: 50, max: 70 },
-        99: { min: 0, max: 2 }
-    };
-
-    // Container interfaces
-    const containers = {
-        'web': { min: 5, max: 20 },
-        'postgres': { min: 2, max: 10 },
-        'redis': { min: 1, max: 5 },
-        'qsecbit': { min: 3, max: 12 },
-        'dnsxai': { min: 8, max: 25 },
-        'dfs': { min: 1, max: 4 }
-    };
-
-    // Update all interfaces
-    Object.entries(wanInterfaces).forEach(([iface, range]) => {
-        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
-        updateTrafficPipsGeneric(iface, traffic);
-    });
-
-    Object.entries(bridgeInterfaces).forEach(([iface, range]) => {
-        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
-        updateTrafficPipsGeneric(iface, traffic);
-    });
-
-    Object.entries(vlans).forEach(([vlan, range]) => {
-        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
-        updateTrafficPips(vlan, traffic);
-    });
-
-    Object.entries(containers).forEach(([container, range]) => {
-        const traffic = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
-        updateTrafficPipsGeneric(container, traffic);
-    });
-}
-
-// Generic traffic pips update
-function updateTrafficPipsGeneric(id, mbps) {
-    const container = document.getElementById(`pips-${id}`);
-    const valueEl = document.getElementById(`traffic-${id}`);
-
-    if (!container) return;
-
-    const activePips = Math.min(PIPS_PER_ROW, Math.ceil(mbps / MBPS_PER_PIP));
-    const pips = container.querySelectorAll('.pip');
-
-    pips.forEach((pip, i) => {
-        if (i < activePips) {
-            pip.classList.add('active');
-        } else {
-            pip.classList.remove('active');
-        }
-    });
-
-    if (valueEl) {
-        valueEl.textContent = `${mbps} Mbps`;
-    }
-}
-
-// Filter traffic sections
-function filterTrafficSections(filter) {
-    const sections = {
-        wan: document.getElementById('wan-traffic-pips'),
-        bridge: document.getElementById('bridge-traffic-pips'),
-        vlan: document.getElementById('vlan-traffic-pips'),
-        container: document.getElementById('container-traffic-pips')
-    };
-
-    const headers = document.querySelectorAll('.traffic-section-header');
-
-    if (filter === 'all') {
-        // Show all
-        Object.values(sections).forEach(section => {
-            if (section) section.style.display = 'block';
-        });
-        headers.forEach(h => h.style.display = 'flex');
-    } else {
-        // Hide all first
-        Object.values(sections).forEach(section => {
-            if (section) section.style.display = 'none';
-        });
-        headers.forEach(h => h.style.display = 'none');
-
-        // Show selected
-        if (sections[filter]) {
-            sections[filter].style.display = 'block';
-            // Find and show corresponding header
-            const headerIndex = Object.keys(sections).indexOf(filter);
-            if (headers[headerIndex]) headers[headerIndex].style.display = 'flex';
-        }
-    }
-}
-
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
-    initPips();
     loadSLAStatus();
-    simulateTraffic();
+    loadTrafficData();
 
-    // Filter button handlers
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            // Update active state
-            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-
-            // Apply filter
-            const filter = this.getAttribute('data-filter');
-            filterTrafficSections(filter);
-        });
-    });
-
-    // Refresh every 5 seconds
+    // Refresh status every 5 seconds
     setInterval(loadSLAStatus, 5000);
-    setInterval(simulateTraffic, 3000);
+
+    // Refresh traffic every 2 seconds for smoother charts
+    setInterval(loadTrafficData, 2000);
 });
 </script>
 {% endblock %}

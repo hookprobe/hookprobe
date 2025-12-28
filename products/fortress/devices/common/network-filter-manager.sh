@@ -159,17 +159,34 @@ EC:71:DB:camera:lan_only:Reolink
 48:78:5E:camera:lan_only:Eufy
 
 # ================================================
-# Voice Assistants -> internet_only (no LAN snooping)
+# Voice Assistants/Speakers -> streaming_target
+# Can receive streams from LAN + access internet
+# Cannot initiate LAN connections (security)
 # ================================================
-18:D6:C7:voice_assistant:internet_only:Google Nest
-1C:F2:9A:voice_assistant:internet_only:Google Nest
-54:60:09:voice_assistant:internet_only:Google Home
-F4:F5:D8:voice_assistant:internet_only:Google Home
-0C:47:C9:voice_assistant:internet_only:Amazon Echo
-34:D2:70:voice_assistant:internet_only:Amazon Echo
-50:DC:E7:voice_assistant:internet_only:Amazon Echo
-68:54:FD:voice_assistant:internet_only:Amazon Echo
-A0:02:DC:voice_assistant:internet_only:Amazon Echo
+18:D6:C7:voice_assistant:streaming_target:Google Nest
+1C:F2:9A:voice_assistant:streaming_target:Google Nest
+54:60:09:voice_assistant:streaming_target:Google Home
+F4:F5:D8:voice_assistant:streaming_target:Google Home
+0C:47:C9:voice_assistant:streaming_target:Amazon Echo
+34:D2:70:voice_assistant:streaming_target:Amazon Echo
+50:DC:E7:voice_assistant:streaming_target:Amazon Echo
+68:54:FD:voice_assistant:streaming_target:Amazon Echo
+A0:02:DC:voice_assistant:streaming_target:Amazon Echo
+
+# Apple HomePod / Apple TV -> streaming_target
+7C:D1:C3:voice_assistant:streaming_target:Apple HomePod
+40:83:DE:voice_assistant:streaming_target:Apple HomePod
+D0:03:4B:voice_assistant:streaming_target:Apple TV
+68:5B:35:voice_assistant:streaming_target:Apple TV
+
+# Sonos Speakers -> streaming_target
+00:0E:58:speaker:streaming_target:Sonos
+78:28:CA:speaker:streaming_target:Sonos
+5C:AA:FD:speaker:streaming_target:Sonos
+
+# Chromecast -> streaming_target
+54:60:09:streaming:streaming_target:Google Chromecast
+F4:F5:D8:streaming:streaming_target:Google Chromecast
 
 # ================================================
 # POS Terminals -> internet_only (payment processing)
@@ -328,6 +345,14 @@ table inet fortress_filter {
         comment "Full access devices - unrestricted"
     }
 
+    # Streaming target devices - can receive LAN streams + internet
+    # But cannot initiate arbitrary LAN connections
+    set streaming_target_macs {
+        type ether_addr
+        flags interval
+        comment "Streaming targets - receive from LAN + internet access"
+    }
+
     # ========================================
     # Input Chain (traffic TO the Fortress)
     # ========================================
@@ -387,6 +412,19 @@ table inet fortress_filter {
         # Block LAN access for internet_only devices
         # (Traffic destined for local addresses except gateway)
         ether saddr @internet_only_macs ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } counter drop
+
+        # ----------------------------------------
+        # STREAMING TARGET devices: Receive from LAN + Internet
+        # Can receive streams (AirPlay, Spotify Connect, Chromecast)
+        # Can access internet (cloud services, voice commands)
+        # Cannot initiate scans of LAN (security)
+        # ----------------------------------------
+        # Allow traffic TO streaming targets (mDNS, AirPlay, etc.)
+        ether daddr @streaming_target_macs accept
+        # Allow streaming targets to access internet
+        ether saddr @streaming_target_macs ip daddr != { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
+        # Block streaming targets from initiating LAN connections (except responses)
+        ether saddr @streaming_target_macs ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } ct state new counter drop
 
         # ----------------------------------------
         # FULL ACCESS devices: Allow everything
@@ -459,6 +497,7 @@ add_mac_to_set() {
     nft delete element inet fortress_filter lan_only_macs { "$mac" } 2>/dev/null || true
     nft delete element inet fortress_filter internet_only_macs { "$mac" } 2>/dev/null || true
     nft delete element inet fortress_filter full_access_macs { "$mac" } 2>/dev/null || true
+    nft delete element inet fortress_filter streaming_target_macs { "$mac" } 2>/dev/null || true
 
     # Add to specified set
     nft add element inet fortress_filter "$set_name" { "$mac" }
@@ -489,6 +528,10 @@ set_device_policy() {
         internet_only|internet|wan)
             add_mac_to_set "$mac" "internet_only_macs"
             log_success "$mac → internet_only (no LAN)"
+            ;;
+        streaming_target|streaming|speaker)
+            add_mac_to_set "$mac" "streaming_target_macs"
+            log_success "$mac → streaming_target (receive streams + internet)"
             ;;
         isolated|blocked|block)
             add_mac_to_set "$mac" "blocked_macs"
@@ -719,6 +762,14 @@ show_status() {
     done
     echo ""
 
+    echo "Streaming target devices (speakers, HomePod, Chromecast):"
+    nft list set inet fortress_filter streaming_target_macs 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | while read mac; do
+        local info=$(get_device_info "$mac")
+        local mfr=$(echo "$info" | cut -d: -f3)
+        echo "  $mac ($mfr)"
+    done
+    echo ""
+
     echo "OUI Database: $(grep -v '^#' "$OUI_DB_FILE" 2>/dev/null | grep -v '^$' | wc -l) entries"
     echo "Saved Policies: $(wc -l < "$MAC_POLICIES_FILE" 2>/dev/null | tr -d ' ') devices"
     echo ""
@@ -766,11 +817,12 @@ usage() {
     echo "  cleanup                     Remove all filter rules"
     echo ""
     echo "Policies:"
-    echo "  full_access    Full internet and LAN access"
-    echo "  lan_only       LAN only - NO internet (sensors, cameras)"
-    echo "  internet_only  Internet only - NO LAN (guests, POS)"
-    echo "  isolated       Completely isolated (blocked)"
-    echo "  default        Auto-assign based on OUI"
+    echo "  full_access      Full internet and LAN access (laptops, staff)"
+    echo "  lan_only         LAN only - NO internet (cameras, printers)"
+    echo "  internet_only    Internet only - NO LAN (POS, guests)"
+    echo "  streaming_target Receive streams + internet (HomePod, Echo, Sonos)"
+    echo "  isolated         Completely isolated (blocked)"
+    echo "  default          Auto-assign based on OUI"
     echo ""
     echo "Examples:"
     echo "  $0 init                              # Initialize rules"
