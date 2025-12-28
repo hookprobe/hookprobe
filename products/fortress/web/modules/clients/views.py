@@ -2,137 +2,64 @@
 Fortress Clients Views - Device management with VLAN assignment.
 
 Provides device inventory, discovery, blocking, and VLAN assignment.
+Uses real system data from ARP table and network interfaces.
 """
 
 from flask import render_template, request, jsonify, flash, redirect, url_for
 from flask_login import login_required, current_user
+from pathlib import Path
 
 from . import clients_bp
 from ..auth.decorators import operator_required
 
-# Import lib modules (with fallback for development)
-DB_AVAILABLE = False
+# Import system data module (provides real data without DB dependency)
+SYSTEM_DATA_AVAILABLE = False
 try:
     import sys
-    from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-    from database import get_db
-    from device_manager import get_device_manager
-    from vlan_manager import get_vlan_manager
-    DB_AVAILABLE = True
-except ImportError:
-    pass
-
-
-def get_demo_devices():
-    """Return demo devices when database unavailable."""
-    return [
-        {
-            'mac_address': 'AA:BB:CC:DD:EE:01',
-            'ip_address': '10.250.10.100',
-            'hostname': 'admin-laptop',
-            'vlan_id': 10,
-            'device_type': 'laptop',
-            'manufacturer': 'Dell Inc.',
-            'is_blocked': False,
-            'first_seen': '2025-12-14 10:00:00',
-            'last_seen': '2025-12-14 14:30:00',
-        },
-        {
-            'mac_address': 'AA:BB:CC:DD:EE:02',
-            'ip_address': '10.250.20.50',
-            'hostname': 'pos-terminal-1',
-            'vlan_id': 20,
-            'device_type': 'pos',
-            'manufacturer': 'Square Inc.',
-            'is_blocked': False,
-            'first_seen': '2025-12-10 08:00:00',
-            'last_seen': '2025-12-14 14:35:00',
-        },
-        {
-            'mac_address': 'AA:BB:CC:DD:EE:03',
-            'ip_address': '10.250.30.25',
-            'hostname': 'staff-phone',
-            'vlan_id': 30,
-            'device_type': 'phone',
-            'manufacturer': 'Apple Inc.',
-            'is_blocked': False,
-            'first_seen': '2025-12-12 09:00:00',
-            'last_seen': '2025-12-14 13:00:00',
-        },
-        {
-            'mac_address': 'AA:BB:CC:DD:EE:04',
-            'ip_address': '10.250.40.10',
-            'hostname': 'guest-laptop',
-            'vlan_id': 40,
-            'device_type': 'laptop',
-            'manufacturer': 'HP Inc.',
-            'is_blocked': False,
-            'first_seen': '2025-12-14 11:00:00',
-            'last_seen': '2025-12-14 14:20:00',
-        },
-        {
-            'mac_address': 'AA:BB:CC:DD:EE:05',
-            'ip_address': '10.250.99.5',
-            'hostname': 'security-camera-1',
-            'vlan_id': 99,
-            'device_type': 'camera',
-            'manufacturer': 'Hikvision',
-            'is_blocked': False,
-            'first_seen': '2025-12-01 00:00:00',
-            'last_seen': '2025-12-14 14:40:00',
-        },
-    ]
-
-
-def get_demo_vlans():
-    """Return demo VLANs for dropdown."""
-    return [
-        {'vlan_id': 10, 'name': 'Management'},
-        {'vlan_id': 20, 'name': 'POS'},
-        {'vlan_id': 30, 'name': 'Staff'},
-        {'vlan_id': 40, 'name': 'Guest'},
-        {'vlan_id': 99, 'name': 'IoT'},
-    ]
+    from system_data import (
+        get_all_devices,
+        get_device_count,
+        get_vlans,
+        get_device_by_mac,
+    )
+    SYSTEM_DATA_AVAILABLE = True
+except ImportError as e:
+    import logging
+    logging.warning(f"system_data module not available: {e}")
 
 
 @clients_bp.route('/')
 @login_required
 def index():
-    """Device inventory page."""
+    """Device inventory page - uses real system data."""
     devices = []
     vlans = []
     device_counts = {'total': 0, 'active': 0, 'blocked': 0}
 
-    if DB_AVAILABLE:
+    if SYSTEM_DATA_AVAILABLE:
         try:
-            device_mgr = get_device_manager()
-            devices = device_mgr.get_all_devices()
-            device_counts = device_mgr.get_device_count()
-
-            vlan_mgr = get_vlan_manager()
-            vlans = vlan_mgr.get_vlans()
-
-            # Convert datetime objects to strings
-            for device in devices:
-                for key in ['first_seen', 'last_seen']:
-                    if device.get(key):
-                        device[key] = str(device[key])
+            devices = get_all_devices()
+            counts = get_device_count()
+            device_counts = {
+                'total': counts.get('total', len(devices)),
+                'active': counts.get('reachable', 0),
+                'blocked': 0,  # Would need iptables check
+            }
+            vlans = get_vlans()
         except Exception as e:
+            import logging
+            logging.error(f'Error loading devices: {e}')
             flash(f'Error loading devices: {e}', 'danger')
-            devices = get_demo_devices()
-            vlans = get_demo_vlans()
     else:
-        devices = get_demo_devices()
-        vlans = get_demo_vlans()
-        device_counts = {'total': 5, 'active': 4, 'blocked': 0}
+        flash('System data module not available', 'warning')
 
     return render_template(
         'clients/index.html',
         devices=devices,
         vlans=vlans,
         device_counts=device_counts,
-        db_available=DB_AVAILABLE
+        system_data_available=SYSTEM_DATA_AVAILABLE
     )
 
 
@@ -140,16 +67,18 @@ def index():
 @login_required
 @operator_required
 def discover():
-    """Trigger device discovery scan."""
-    if not DB_AVAILABLE:
-        flash('Database not available for discovery', 'warning')
+    """Trigger device discovery scan using ARP."""
+    if not SYSTEM_DATA_AVAILABLE:
+        flash('System data module not available', 'warning')
         return redirect(url_for('clients.index'))
 
     try:
-        device_mgr = get_device_manager()
-        discovered = device_mgr.discover_devices()
-        new_count = len([d for d in discovered if d.get('is_new')])
-        flash(f'Discovery complete: {len(discovered)} devices found, {new_count} new', 'success')
+        # Force refresh by clearing cache
+        from system_data import _cache
+        _cache.clear()
+
+        devices = get_all_devices()
+        flash(f'Discovery complete: {len(devices)} devices found from ARP table', 'success')
     except Exception as e:
         flash(f'Discovery failed: {e}', 'danger')
 
@@ -159,40 +88,26 @@ def discover():
 @clients_bp.route('/<mac_address>')
 @login_required
 def detail(mac_address):
-    """Device detail page."""
+    """Device detail page - uses real system data."""
     device = None
+    vlans = []
 
-    if DB_AVAILABLE:
+    if SYSTEM_DATA_AVAILABLE:
         try:
-            device_mgr = get_device_manager()
-            device = device_mgr.get_device(mac_address)
+            device = get_device_by_mac(mac_address)
+            vlans = get_vlans()
         except Exception as e:
             flash(f'Error loading device: {e}', 'danger')
 
     if not device:
-        # Try demo data
-        for d in get_demo_devices():
-            if d['mac_address'] == mac_address:
-                device = d
-                break
-
-    if not device:
-        flash('Device not found', 'warning')
+        flash('Device not found or not currently connected', 'warning')
         return redirect(url_for('clients.index'))
-
-    vlans = get_demo_vlans()
-    if DB_AVAILABLE:
-        try:
-            vlan_mgr = get_vlan_manager()
-            vlans = vlan_mgr.get_vlans()
-        except Exception:
-            pass
 
     return render_template(
         'clients/detail.html',
         device=device,
         vlans=vlans,
-        db_available=DB_AVAILABLE
+        system_data_available=SYSTEM_DATA_AVAILABLE
     )
 
 
@@ -200,32 +115,16 @@ def detail(mac_address):
 @login_required
 @operator_required
 def assign_vlan(mac_address):
-    """Assign device to a VLAN."""
+    """Assign device to a VLAN (requires OVS commands)."""
     vlan_id = request.form.get('vlan_id', type=int)
 
     if vlan_id is None:
         flash('VLAN ID required', 'warning')
         return redirect(url_for('clients.detail', mac_address=mac_address))
 
-    if not DB_AVAILABLE:
-        flash('Database not available', 'warning')
-        return redirect(url_for('clients.detail', mac_address=mac_address))
-
-    try:
-        vlan_mgr = get_vlan_manager()
-        success = vlan_mgr.assign_device_to_vlan(
-            mac_address,
-            vlan_id,
-            reason=f'manual_assignment_by_{current_user.id}'
-        )
-
-        if success:
-            flash(f'Device assigned to VLAN {vlan_id}', 'success')
-        else:
-            flash('Failed to assign VLAN', 'danger')
-    except Exception as e:
-        flash(f'Error: {e}', 'danger')
-
+    # VLAN assignment would require OVS OpenFlow rules
+    # For now, inform user this is a manual operation
+    flash(f'VLAN assignment to {vlan_id} requires manual OVS configuration', 'info')
     return redirect(url_for('clients.detail', mac_address=mac_address))
 
 
@@ -233,21 +132,21 @@ def assign_vlan(mac_address):
 @login_required
 @operator_required
 def block(mac_address):
-    """Block a device."""
-    reason = request.form.get('reason', 'manual_block')
-
-    if not DB_AVAILABLE:
-        flash('Database not available', 'warning')
-        return redirect(url_for('clients.index'))
+    """Block a device using iptables/ebtables."""
+    import subprocess
 
     try:
-        device_mgr = get_device_manager()
-        success = device_mgr.block_device(mac_address, reason=reason)
-
-        if success:
+        # Block at Layer 2 using ebtables
+        result = subprocess.run(
+            ['ebtables', '-A', 'FORWARD', '-s', mac_address, '-j', 'DROP'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
             flash(f'Device {mac_address} blocked', 'success')
         else:
-            flash('Failed to block device', 'danger')
+            flash(f'Failed to block device: {result.stderr}', 'danger')
+    except FileNotFoundError:
+        flash('ebtables not available, cannot block device', 'warning')
     except Exception as e:
         flash(f'Error: {e}', 'danger')
 
@@ -258,19 +157,21 @@ def block(mac_address):
 @login_required
 @operator_required
 def unblock(mac_address):
-    """Unblock a device."""
-    if not DB_AVAILABLE:
-        flash('Database not available', 'warning')
-        return redirect(url_for('clients.index'))
+    """Unblock a device by removing ebtables rule."""
+    import subprocess
 
     try:
-        device_mgr = get_device_manager()
-        success = device_mgr.unblock_device(mac_address)
-
-        if success:
+        # Remove Layer 2 block using ebtables
+        result = subprocess.run(
+            ['ebtables', '-D', 'FORWARD', '-s', mac_address, '-j', 'DROP'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
             flash(f'Device {mac_address} unblocked', 'success')
         else:
-            flash('Failed to unblock device', 'danger')
+            flash(f'Device was not blocked or rule not found', 'info')
+    except FileNotFoundError:
+        flash('ebtables not available', 'warning')
     except Exception as e:
         flash(f'Error: {e}', 'danger')
 
@@ -280,25 +181,32 @@ def unblock(mac_address):
 @clients_bp.route('/export')
 @login_required
 def export():
-    """Export device inventory."""
+    """Export device inventory from real ARP data."""
+    import json
+    import csv
+    import io
+
     format_type = request.args.get('format', 'csv')
 
-    if not DB_AVAILABLE:
-        flash('Database not available for export', 'warning')
+    if not SYSTEM_DATA_AVAILABLE:
+        flash('System data not available for export', 'warning')
         return redirect(url_for('clients.index'))
 
     try:
-        device_mgr = get_device_manager()
+        devices = get_all_devices()
 
         if format_type == 'csv':
-            csv_data = device_mgr.export_inventory_csv()
-            return csv_data, 200, {
+            output = io.StringIO()
+            if devices:
+                writer = csv.DictWriter(output, fieldnames=devices[0].keys())
+                writer.writeheader()
+                writer.writerows(devices)
+            return output.getvalue(), 200, {
                 'Content-Type': 'text/csv',
                 'Content-Disposition': 'attachment; filename=devices.csv'
             }
         else:
-            json_data = device_mgr.export_inventory_json()
-            return json_data, 200, {
+            return json.dumps(devices, indent=2, default=str), 200, {
                 'Content-Type': 'application/json',
                 'Content-Disposition': 'attachment; filename=devices.json'
             }
