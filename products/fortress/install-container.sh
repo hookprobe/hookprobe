@@ -701,17 +701,33 @@ collect_configuration() {
 # ============================================================
 
 # Create fortress system user and group for container file access
-# Uses system UID/GID range (typically 100-999) reserved for services
-# Podman rootless mode handles UID mapping between container and host
+# IMPORTANT: GID 1000 is used to match the container's fortress group
+# This ensures files created on the host are readable inside containers
+# The container's fortress user (UID 1000, GID 1000) needs to read /etc/hookprobe
 create_fortress_user() {
     log_step "Creating fortress system user"
 
-    # Create fortress group as a system group
+    # Create fortress group with specific GID 1000 to match container
+    # The container's Containerfile.web uses: groupadd -r fortress -g 1000
     if ! getent group fortress &>/dev/null; then
-        groupadd --system fortress
-        log_info "Created fortress group (gid=$(getent group fortress | cut -d: -f3))"
+        # Try to create with GID 1000 (matches container)
+        if groupadd --gid 1000 fortress 2>/dev/null; then
+            log_info "Created fortress group (gid=1000)"
+        else
+            # GID 1000 may be taken, try with system GID
+            groupadd --system fortress
+            log_warn "Created fortress group with system GID (gid=$(getent group fortress | cut -d: -f3))"
+            log_warn "Container may have permission issues - consider using --gid 1000"
+        fi
     else
-        log_info "Fortress group exists (gid=$(getent group fortress | cut -d: -f3))"
+        local current_gid
+        current_gid=$(getent group fortress | cut -d: -f3)
+        if [ "$current_gid" = "1000" ]; then
+            log_info "Fortress group exists with correct GID (gid=1000)"
+        else
+            log_warn "Fortress group exists but GID mismatch (gid=$current_gid, expected=1000)"
+            log_warn "For proper container access, recreate group: groupdel fortress && groupadd --gid 1000 fortress"
+        fi
     fi
 
     # Check if fortress user already exists
@@ -967,10 +983,24 @@ print(hash.decode('utf-8'))
   "version": "1.0"
 }
 EOF
-    # Set ownership so container (fortress user) can read, but only root can write
-    chown root:fortress "$CONFIG_DIR/users.json"
-    chmod 640 "$CONFIG_DIR/users.json"
-    log_info "Admin user created"
+    # Set ownership so container (fortress user GID 1000) can read, but only root can write
+    # The container's fortress user is UID 1000, GID 1000 (see Containerfile.web)
+    local fortress_gid
+    fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
+
+    if [ "$fortress_gid" = "1000" ]; then
+        # GID matches container - use group ownership
+        chown root:fortress "$CONFIG_DIR/users.json"
+        chmod 640 "$CONFIG_DIR/users.json"
+        log_info "Admin user created (group-readable by fortress)"
+    else
+        # GID mismatch - use world-readable as fallback
+        # This is less secure but ensures login works
+        chown root:root "$CONFIG_DIR/users.json"
+        chmod 644 "$CONFIG_DIR/users.json"
+        log_warn "Admin user created (world-readable due to GID mismatch)"
+        log_warn "For security, recreate fortress group with GID 1000"
+    fi
 }
 
 create_configuration() {
@@ -2058,7 +2088,9 @@ EOF
 install_vlan_service() {
     log_info "Installing VLAN boot persistence..."
 
-    local install_base="/opt/hookprobe/products/fortress/devices/common"
+    # Use INSTALL_DIR which is /opt/hookprobe/fortress
+    # The systemd service ExecStart points to this path
+    local install_base="${INSTALL_DIR}/devices/common"
     mkdir -p "$install_base"
 
     # Install netplan generator
@@ -3049,23 +3081,46 @@ STATE_FILE="${CONFIG_DIR}/fortress-state.json"
 fix_config_permissions() {
     log_step "Setting config file permissions"
 
-    # Ensure fortress group ownership on config directory
-    chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
+    # Check if fortress group has correct GID (1000) to match container
+    local fortress_gid
+    fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
 
-    # Config files that container needs to read (640 = rw-r-----)
-    for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
-                "$CONFIG_DIR/wifi-interfaces.conf"; do
-        if [ -f "$file" ]; then
-            chown root:fortress "$file"
-            chmod 640 "$file"
-        fi
-    done
+    if [ "$fortress_gid" = "1000" ]; then
+        # GID matches container - use group ownership
+        chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
 
-    # Secrets that container needs (640)
+        # Config files that container needs to read (640 = rw-r-----)
+        for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
+                    "$CONFIG_DIR/wifi-interfaces.conf"; do
+            if [ -f "$file" ]; then
+                chown root:fortress "$file"
+                chmod 640 "$file"
+            fi
+        done
+    else
+        # GID mismatch - use world-readable as fallback for config files
+        log_warn "Fortress group GID mismatch (expected 1000, got $fortress_gid)"
+        log_warn "Using world-readable permissions for config files"
+
+        for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
+                    "$CONFIG_DIR/wifi-interfaces.conf"; do
+            if [ -f "$file" ]; then
+                chown root:root "$file"
+                chmod 644 "$file"
+            fi
+        done
+    fi
+
+    # Secrets that container needs (640 or 644 based on GID match)
     for file in "$CONFIG_DIR/secrets/fortress_secret_key"; do
         if [ -f "$file" ]; then
-            chown root:fortress "$file"
-            chmod 640 "$file"
+            if [ "$fortress_gid" = "1000" ]; then
+                chown root:fortress "$file"
+                chmod 640 "$file"
+            else
+                chown root:root "$file"
+                chmod 644 "$file"
+            fi
         fi
     done
 
@@ -3079,7 +3134,11 @@ fix_config_permissions() {
     done
 
     # Secrets directory should be accessible by group but files are restrictive
-    chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    if [ "$fortress_gid" = "1000" ]; then
+        chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    else
+        chmod 755 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    fi
 
     log_info "Config permissions set for container access"
 }
