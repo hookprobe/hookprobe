@@ -71,10 +71,9 @@ ENV DNSXAI_BLOCKLIST_DIR=/opt/hookprobe/shared/dnsXai/blocklists
 # Verify setup
 RUN python -c "print('dnsXai container ready')"
 
-# Health check - verify DNS server responds to queries
-# Send a proper DNS query for localhost and verify we get a response
+# Health check - verify HTTP API is responding
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); q=b'\\x00\\x01\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x09localhost\\x00\\x00\\x01\\x00\\x01'; s.sendto(q,('127.0.0.1',5353)); r=s.recv(512); s.close(); exit(0 if len(r)>12 else 1)" || exit 1
+    CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:8080/health", timeout=5)'
 
 # Expose ports: DNS (5353/udp) and HTTP API (8080/tcp)
 EXPOSE 5353/udp
