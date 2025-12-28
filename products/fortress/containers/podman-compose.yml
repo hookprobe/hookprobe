@@ -331,11 +331,12 @@ services:
     container_name: fts-suricata
     restart: unless-stopped
     hostname: fts-suricata
+    # Command: -i <interface> runs Suricata on the specified interface
+    # The jasonish/suricata image expects the interface as the first argument
+    command: ["-i", "${SURICATA_INTERFACE:-FTS}", "--set", "outputs.eve-log.enabled=yes"]
     environment:
       # Interface to monitor (set during install based on detection)
       SURICATA_INTERFACE: "${SURICATA_INTERFACE:-FTS}"
-      # Enable inline IPS mode (blocks threats vs just detecting)
-      SURICATA_OPTIONS: "-i ${SURICATA_INTERFACE:-FTS} --set outputs.eve-log.enabled=yes"
     volumes:
       - suricata_logs:/var/log/suricata
       - suricata_rules:/var/lib/suricata
