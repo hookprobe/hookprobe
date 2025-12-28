@@ -1,67 +1,51 @@
 """
 Fortress Dashboard Views
-Main overview page with widgets and stats - Optimized for performance.
+Main overview page with widgets and stats - Uses real system data.
 """
 
 import json
-import os
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
-from functools import lru_cache
+from datetime import datetime
 
 from flask import render_template, jsonify
 from flask_login import login_required
 
 from . import dashboard_bp
 
-# Cache timeouts (seconds)
-CACHE_TIMEOUT = 30
-_cache = {}
-
-
-def _get_cached(key: str, timeout: int = CACHE_TIMEOUT):
-    """Get cached value if not expired."""
-    if key in _cache:
-        value, timestamp = _cache[key]
-        if time.time() - timestamp < timeout:
-            return value
-    return None
-
-
-def _set_cached(key: str, value):
-    """Set cached value with timestamp."""
-    _cache[key] = (value, time.time())
+# Import system data module (provides real data without DB dependency)
+try:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
+    from system_data import (
+        get_all_devices,
+        get_device_count,
+        get_qsecbit_stats,
+        get_dns_blocked_count,
+        get_wan_health,
+        get_vlans,
+        get_network_topology,
+        get_dashboard_summary,
+    )
+    SYSTEM_DATA_AVAILABLE = True
+except ImportError as e:
+    SYSTEM_DATA_AVAILABLE = False
+    import logging
+    logging.warning(f"system_data module not available: {e}")
 
 
 def get_tunnel_status():
-    """Get Cloudflare Tunnel status (cached)."""
-    cached = _get_cached('tunnel_status', 60)
-    if cached is not None:
-        return cached
-
-    try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-        from cloudflare_tunnel import get_tunnel_status as _get_tunnel_status
-        result = _get_tunnel_status()
-        _set_cached('tunnel_status', result)
-        return result
-    except ImportError:
-        pass
-
+    """Get Cloudflare Tunnel status."""
     config_file = Path('/opt/hookprobe/fortress/tunnel/config.json')
     if config_file.exists():
         try:
             with open(config_file, 'r') as f:
                 config = json.load(f)
-            result = {
+            return {
                 'state': 'configured',
                 'hostname': config.get('hostname'),
                 'cloudflared_version': None
             }
-            _set_cached('tunnel_status', result)
-            return result
         except Exception:
             pass
 
@@ -264,35 +248,49 @@ def get_recent_threats():
 
 def get_recent_devices():
     """Get list of recently connected devices."""
-    cached = _get_cached('recent_devices', CACHE_TIMEOUT)
-    if cached is not None:
-        return cached
+    if not SYSTEM_DATA_AVAILABLE:
+        return []
 
-    try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-        from device_manager import get_device_manager
-        dm = get_device_manager()
-        devices = dm.get_all_devices()
+    devices = get_all_devices()
 
-        # Sort by last_seen and take top 5
-        devices.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
-        recent = []
-        for d in devices[:5]:
-            vlan_id = d.get('vlan_id', 0)
-            vlan_names = {10: 'Management', 20: 'POS', 30: 'Staff', 40: 'Guest', 99: 'IoT'}
-            recent.append({
-                'name': d.get('hostname') or d.get('manufacturer') or 'Unknown',
-                'ip': d.get('ip_address', ''),
-                'vlan': vlan_names.get(vlan_id, f'VLAN {vlan_id}'),
-                'time': _format_time_ago(d.get('last_seen'))
-            })
-        _set_cached('recent_devices', recent)
-        return recent
-    except Exception:
-        pass
+    # Sort by state (REACHABLE first) and take top 5
+    devices.sort(key=lambda x: (0 if x.get('state') == 'REACHABLE' else 1, x.get('last_seen', '')), reverse=True)
 
-    return []
+    recent = []
+    for d in devices[:5]:
+        vlan_id = d.get('vlan_id', 100)
+        vlan_names = {100: 'LAN', 200: 'MGMT'}
+
+        # Determine icon based on device type
+        device_type = d.get('device_type', 'unknown')
+        icon = 'laptop'
+        if device_type in ['phone', 'apple_device']:
+            icon = 'mobile-alt'
+        elif device_type == 'tablet':
+            icon = 'tablet-alt'
+        elif device_type in ['tv', 'smart_speaker']:
+            icon = 'tv'
+        elif device_type == 'printer':
+            icon = 'print'
+        elif device_type in ['camera', 'iot']:
+            icon = 'video'
+        elif device_type == 'desktop':
+            icon = 'desktop'
+
+        recent.append({
+            'name': d.get('hostname') or d.get('manufacturer') or 'Unknown Device',
+            'ip': d.get('ip_address', ''),
+            'mac': d.get('mac_address', ''),
+            'vlan': vlan_names.get(vlan_id, f'VLAN {vlan_id}'),
+            'state': d.get('state', 'UNKNOWN'),
+            'device_type': device_type,
+            'manufacturer': d.get('manufacturer'),
+            'icon': icon,
+            'is_wifi': d.get('is_wifi', False),
+            'time': _format_time_ago(d.get('last_seen')),
+        })
+
+    return recent
 
 
 def _format_time_ago(timestamp):
@@ -314,24 +312,34 @@ def _format_time_ago(timestamp):
         else:
             return f'{delta.days} days ago'
     except Exception:
-        return 'Unknown'
+        return 'Just now'
 
 
 @dashboard_bp.route('/dashboard')
 @login_required
 def index():
-    """Main dashboard page - optimized single query."""
-    stats = get_qsecbit_stats()
+    """Main dashboard page - uses real system data."""
+    if SYSTEM_DATA_AVAILABLE:
+        stats = get_qsecbit_stats()
+        device_count = len(get_all_devices())
+        wan_health = get_wan_health()
+        vlans = get_vlans()
+    else:
+        # Minimal fallback - no demo data
+        stats = {'score': 0, 'rag_status': 'UNKNOWN', 'threats_detected': 0}
+        device_count = 0
+        wan_health = {'primary': None, 'backup': None, 'active': None}
+        vlans = []
+
     tunnel = get_tunnel_status()
     wan = get_wan_stats()
 
     return render_template('dashboard/index.html',
                            qsecbit_score=stats.get('score', 0),
                            qsecbit_status=stats.get('rag_status', 'GREEN'),
-                           device_count=get_device_count(),
+                           device_count=device_count,
                            threats_blocked=stats.get('threats_detected', 0),
-                           dns_blocked=get_dns_blocked_count(),
-                           recent_threats=get_recent_threats(),
+                           dns_blocked=get_dns_blocked_count() if SYSTEM_DATA_AVAILABLE else 0,
                            recent_devices=get_recent_devices(),
                            tunnel_status=tunnel,
                            vlan_count=get_vlan_count(),
@@ -374,6 +382,9 @@ def api_stats():
 @login_required
 def api_refresh():
     """Force refresh all cached data."""
-    global _cache
-    _cache = {}
-    return jsonify({'success': True, 'message': 'Cache cleared'})
+    if SYSTEM_DATA_AVAILABLE:
+        # Clear the cache in system_data module
+        from system_data import _cache
+        _cache.clear()
+        return jsonify({'success': True, 'message': 'Cache cleared'})
+    return jsonify({'success': False, 'message': 'System data not available'})

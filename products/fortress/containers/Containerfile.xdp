@@ -45,11 +45,18 @@ RUN mkdir -p /opt/hookprobe/core/qsecbit \
              /opt/hookprobe/xdp/data \
              /var/log/hookprobe
 
-# Copy XDP manager from core
+# Copy XDP manager from core (only files needed for XDP)
 COPY core/qsecbit/xdp_manager.py /opt/hookprobe/core/qsecbit/
 COPY core/qsecbit/nic_detector.py /opt/hookprobe/core/qsecbit/
-COPY core/qsecbit/__init__.py /opt/hookprobe/core/qsecbit/
-COPY core/__init__.py /opt/hookprobe/core/
+
+# Create minimal __init__.py for XDP container (full one has too many deps)
+RUN echo '"""Minimal qsecbit package for XDP container."""' > /opt/hookprobe/core/qsecbit/__init__.py && \
+    echo 'from .xdp_manager import XDPManager, XDPStats, XDP_DDOS_PROGRAM' >> /opt/hookprobe/core/qsecbit/__init__.py && \
+    echo 'from .nic_detector import NICDetector, NICCapability, XDPMode' >> /opt/hookprobe/core/qsecbit/__init__.py && \
+    echo '__all__ = ["XDPManager", "XDPStats", "XDP_DDOS_PROGRAM", "NICDetector", "NICCapability", "XDPMode"]' >> /opt/hookprobe/core/qsecbit/__init__.py
+
+# Create core package __init__.py
+RUN echo '"""Core package."""' > /opt/hookprobe/core/__init__.py
 
 # Copy XDP daemon wrapper
 COPY products/fortress/containers/xdp_daemon.py /opt/hookprobe/xdp/
