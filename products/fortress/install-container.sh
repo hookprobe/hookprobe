@@ -99,6 +99,12 @@ check_prerequisites() {
             if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
                 log_info "Dual-WAN resilience active: $ENR_PRIMARY_IFACE + $ENR_BACKUP_IFACE"
             fi
+
+            # LOCK the network routes - prevent flapping during container builds
+            # Routes are now stable and won't be modified for the rest of installation
+            if type enr_lock_network &>/dev/null; then
+                enr_lock_network
+            fi
         else
             # Network resilience failed - try basic fallback
             log_warn "Automatic network setup failed, trying basic connectivity..."
@@ -695,17 +701,33 @@ collect_configuration() {
 # ============================================================
 
 # Create fortress system user and group for container file access
-# Uses system UID/GID range (typically 100-999) reserved for services
-# Podman rootless mode handles UID mapping between container and host
+# IMPORTANT: GID 1000 is used to match the container's fortress group
+# This ensures files created on the host are readable inside containers
+# The container's fortress user (UID 1000, GID 1000) needs to read /etc/hookprobe
 create_fortress_user() {
     log_step "Creating fortress system user"
 
-    # Create fortress group as a system group
+    # Create fortress group with specific GID 1000 to match container
+    # The container's Containerfile.web uses: groupadd -r fortress -g 1000
     if ! getent group fortress &>/dev/null; then
-        groupadd --system fortress
-        log_info "Created fortress group (gid=$(getent group fortress | cut -d: -f3))"
+        # Try to create with GID 1000 (matches container)
+        if groupadd --gid 1000 fortress 2>/dev/null; then
+            log_info "Created fortress group (gid=1000)"
+        else
+            # GID 1000 may be taken, try with system GID
+            groupadd --system fortress
+            log_warn "Created fortress group with system GID (gid=$(getent group fortress | cut -d: -f3))"
+            log_warn "Container may have permission issues - consider using --gid 1000"
+        fi
     else
-        log_info "Fortress group exists (gid=$(getent group fortress | cut -d: -f3))"
+        local current_gid
+        current_gid=$(getent group fortress | cut -d: -f3)
+        if [ "$current_gid" = "1000" ]; then
+            log_info "Fortress group exists with correct GID (gid=1000)"
+        else
+            log_warn "Fortress group exists but GID mismatch (gid=$current_gid, expected=1000)"
+            log_warn "For proper container access, recreate group: groupdel fortress && groupadd --gid 1000 fortress"
+        fi
     fi
 
     # Check if fortress user already exists
@@ -961,10 +983,24 @@ print(hash.decode('utf-8'))
   "version": "1.0"
 }
 EOF
-    # Set ownership so container (fortress user) can read, but only root can write
-    chown root:fortress "$CONFIG_DIR/users.json"
-    chmod 640 "$CONFIG_DIR/users.json"
-    log_info "Admin user created"
+    # Set ownership so container (fortress user GID 1000) can read, but only root can write
+    # The container's fortress user is UID 1000, GID 1000 (see Containerfile.web)
+    local fortress_gid
+    fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
+
+    if [ "$fortress_gid" = "1000" ]; then
+        # GID matches container - use group ownership
+        chown root:fortress "$CONFIG_DIR/users.json"
+        chmod 640 "$CONFIG_DIR/users.json"
+        log_info "Admin user created (group-readable by fortress)"
+    else
+        # GID mismatch - use world-readable as fallback
+        # This is less secure but ensures login works
+        chown root:root "$CONFIG_DIR/users.json"
+        chmod 644 "$CONFIG_DIR/users.json"
+        log_warn "Admin user created (world-readable due to GID mismatch)"
+        log_warn "For security, recreate fortress group with GID 1000"
+    fi
 }
 
 create_configuration() {
@@ -1920,8 +1956,18 @@ setup_vlan_dhcp() {
 
     mkdir -p "$(dirname "$config_file")"
 
-    # Remove old FTS-based config if exists (from previous filter mode install)
+    # Remove ALL old FTS/Fortress dnsmasq configs to avoid duplicate options
+    # This is critical: duplicate cache-size, interface, etc. cause dnsmasq to fail
+    log_info "Cleaning up old dnsmasq configs..."
     rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
 
     cat > "$config_file" << EOF
 # HookProbe Fortress DHCP Configuration (VLAN Mode)
@@ -2042,7 +2088,9 @@ EOF
 install_vlan_service() {
     log_info "Installing VLAN boot persistence..."
 
-    local install_base="/opt/hookprobe/products/fortress/devices/common"
+    # Use INSTALL_DIR which is /opt/hookprobe/fortress
+    # The systemd service ExecStart points to this path
+    local install_base="${INSTALL_DIR}/devices/common"
     mkdir -p "$install_base"
 
     # Install netplan generator
@@ -2160,43 +2208,36 @@ build_containers() {
     local skipped_count=0
 
     # ============================================================
-    # CRITICAL: Stabilize network BEFORE any container builds
+    # VERIFY network before container builds (routes are already locked)
     # ============================================================
-    # Container builds pull base images and dependencies. If network flaps
-    # during a build, it corrupts the container layer cache and fails.
-    # We MUST have stable routing before starting.
-    log_info "Stabilizing network before container builds..."
+    # Network was set up and locked in check_prerequisites().
+    # Here we just verify connectivity is still working - NO route modification.
+    log_info "Verifying network connectivity before container builds..."
 
-    if type ensure_network_connectivity &>/dev/null; then
-        # This sets up dual routes and removes dead ones
-        ensure_network_connectivity || true
-
-        # Show current routing state for debugging
-        log_info "Current default routes:"
-        ip route show default 2>/dev/null | while read -r line; do
-            log_info "  $line"
-        done
-
-        # Verify we have at least one working route
-        if ! ping -c1 -W3 8.8.8.8 &>/dev/null; then
-            log_warn "Primary connectivity check failed, checking backup..."
-            if [ -n "$ENR_BACKUP_IFACE" ]; then
-                local backup_ip
-                backup_ip=$(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
-                if [ -n "$backup_ip" ] && ping -c1 -W3 -I "$backup_ip" 8.8.8.8 &>/dev/null; then
-                    log_info "Backup interface ($ENR_BACKUP_IFACE) working - proceeding"
-                else
-                    log_error "No working network interface detected!"
-                    log_error "Cannot build containers without network connectivity"
-                    return 1
-                fi
-            fi
+    # Use fast check that doesn't modify routes
+    if type enr_check_connectivity_fast &>/dev/null; then
+        if enr_check_connectivity_fast; then
+            log_info "Network connectivity verified - ready for container builds"
         else
-            log_info "Network stable - ready for container builds"
+            log_error "Network connectivity lost!"
+            log_error "Cannot build containers without network connectivity"
+            log_info "Current routes:"
+            ip route show default 2>/dev/null | while read -r line; do
+                log_info "  $line"
+            done
+            return 1
         fi
+    else
+        # Fallback: simple ping check
+        if ! ping -c1 -W3 8.8.8.8 &>/dev/null && ! ping -c1 -W3 1.1.1.1 &>/dev/null; then
+            log_error "No network connectivity - cannot build containers"
+            return 1
+        fi
+        log_info "Network connectivity verified"
     fi
 
-    # Helper: Network-resilient podman build with automatic failover
+    # Helper: Network-resilient podman build with retry on failure
+    # NOTE: Routes are locked - we only check connectivity, never modify routes
     _podman_build_resilient() {
         local containerfile="$1"
         local tag="$2"
@@ -2205,9 +2246,12 @@ build_containers() {
         local retry=0
 
         while [ $retry -lt $max_retries ]; do
-            # Verify network before podman build (pulls base image)
-            if type ensure_network_connectivity &>/dev/null; then
-                ensure_network_connectivity || true
+            # Quick connectivity check (does NOT modify routes)
+            if type enr_check_connectivity_fast &>/dev/null; then
+                if ! enr_check_connectivity_fast; then
+                    log_warn "Network connectivity issue detected, waiting 5s..."
+                    sleep 5
+                fi
             fi
 
             if podman build -f "$containerfile" -t "$tag" "$context"; then
@@ -2216,7 +2260,7 @@ build_containers() {
 
             retry=$((retry + 1))
             if [ $retry -lt $max_retries ]; then
-                log_warn "Container build failed, checking network failover (attempt $((retry + 1))/$max_retries)..."
+                log_warn "Container build failed, retrying (attempt $((retry + 1))/$max_retries)..."
                 sleep 3
             fi
         done
@@ -3037,23 +3081,46 @@ STATE_FILE="${CONFIG_DIR}/fortress-state.json"
 fix_config_permissions() {
     log_step "Setting config file permissions"
 
-    # Ensure fortress group ownership on config directory
-    chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
+    # Check if fortress group has correct GID (1000) to match container
+    local fortress_gid
+    fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
 
-    # Config files that container needs to read (640 = rw-r-----)
-    for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
-                "$CONFIG_DIR/wifi-interfaces.conf"; do
-        if [ -f "$file" ]; then
-            chown root:fortress "$file"
-            chmod 640 "$file"
-        fi
-    done
+    if [ "$fortress_gid" = "1000" ]; then
+        # GID matches container - use group ownership
+        chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
 
-    # Secrets that container needs (640)
+        # Config files that container needs to read (640 = rw-r-----)
+        for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
+                    "$CONFIG_DIR/wifi-interfaces.conf"; do
+            if [ -f "$file" ]; then
+                chown root:fortress "$file"
+                chmod 640 "$file"
+            fi
+        done
+    else
+        # GID mismatch - use world-readable as fallback for config files
+        log_warn "Fortress group GID mismatch (expected 1000, got $fortress_gid)"
+        log_warn "Using world-readable permissions for config files"
+
+        for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
+                    "$CONFIG_DIR/wifi-interfaces.conf"; do
+            if [ -f "$file" ]; then
+                chown root:root "$file"
+                chmod 644 "$file"
+            fi
+        done
+    fi
+
+    # Secrets that container needs (640 or 644 based on GID match)
     for file in "$CONFIG_DIR/secrets/fortress_secret_key"; do
         if [ -f "$file" ]; then
-            chown root:fortress "$file"
-            chmod 640 "$file"
+            if [ "$fortress_gid" = "1000" ]; then
+                chown root:fortress "$file"
+                chmod 640 "$file"
+            else
+                chown root:root "$file"
+                chmod 644 "$file"
+            fi
         fi
     done
 
@@ -3067,7 +3134,11 @@ fix_config_permissions() {
     done
 
     # Secrets directory should be accessible by group but files are restrictive
-    chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    if [ "$fortress_gid" = "1000" ]; then
+        chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    else
+        chmod 755 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    fi
 
     log_info "Config permissions set for container access"
 }
