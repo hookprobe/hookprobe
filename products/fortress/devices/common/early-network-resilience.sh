@@ -404,74 +404,137 @@ _enr_setup_minimal_pbr() {
     ENR_PRIMARY_GATEWAY="$primary_gw"
     ENR_BACKUP_GATEWAY="$backup_gw"
 
-    # Set ACTIVE route based on current connectivity (SINGLE default route strategy)
-    # This ensures traffic uses the WORKING interface, not just lowest metric
-    _enr_set_active_route
+    # Setup BOTH routes with different metrics - kernel uses lowest metric automatically
+    # This is the stable approach: routes are constant, we only remove dead ones
+    _enr_setup_dual_routes
 
     ENR_PBR_ACTIVE=true
-    _enr_log_info "Minimal PBR active with health-based routing"
+    _enr_log_info "Dual-route failover active (primary=100, backup=200)"
 
     return 0
 }
 
-# Set active route - only ONE default route for the healthy interface
-# This is critical: metrics don't work when link is UP but traffic isn't flowing
-_enr_set_active_route() {
-    # IMPORTANT: Check connectivity BEFORE removing routes!
-    # Otherwise the connectivity check itself will fail (no route to 8.8.8.8)
-    local use_primary=false
-    local use_backup=false
+# Setup both default routes with different metrics
+# Kernel will automatically use lowest metric route that exists
+_enr_setup_dual_routes() {
+    _enr_log_info "Setting up dual default routes..."
 
-    # Check primary connectivity (using gateway ping - doesn't need default route)
-    if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
-        if _enr_check_interface_health "$ENR_PRIMARY_IFACE" "$ENR_PRIMARY_GATEWAY"; then
-            use_primary=true
+    # First, check what routes already exist
+    local existing_routes
+    existing_routes=$(ip route show default 2>/dev/null)
+
+    # Add primary route (metric 100) if we have gateway
+    if [ -n "$ENR_PRIMARY_GATEWAY" ] && [ -n "$ENR_PRIMARY_IFACE" ]; then
+        # Remove any existing route for this interface first (to reset metric)
+        ip route del default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" 2>/dev/null || true
+        ip route del default dev "$ENR_PRIMARY_IFACE" 2>/dev/null || true
+
+        # Add with metric 100 (preferred)
+        if ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null; then
+            _enr_log_info "  Primary route: via $ENR_PRIMARY_GATEWAY dev $ENR_PRIMARY_IFACE metric 100"
         fi
     fi
 
-    # Check backup connectivity
-    if [ -n "$ENR_BACKUP_IFACE" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
-        if _enr_check_interface_health "$ENR_BACKUP_IFACE" "$ENR_BACKUP_GATEWAY"; then
-            use_backup=true
+    # Add backup route (metric 200) if we have gateway
+    if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+        # Remove any existing route for this interface first (to reset metric)
+        ip route del default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
+        ip route del default dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
+
+        # Add with metric 200 (fallback)
+        if ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null; then
+            _enr_log_info "  Backup route:  via $ENR_BACKUP_GATEWAY dev $ENR_BACKUP_IFACE metric 200"
         fi
     fi
 
-    # Now remove ALL existing default routes
-    local max_tries=5
-    while ip route show default 2>/dev/null | grep -q "^default" && [ $max_tries -gt 0 ]; do
-        ip route del default 2>/dev/null || break
-        max_tries=$((max_tries - 1))
+    # Show current routing state
+    _enr_log_info "Current default routes:"
+    ip route show default 2>/dev/null | while read -r line; do
+        _enr_log_info "    $line"
     done
+}
 
-    # Add routes based on connectivity (active interface gets lower metric)
-    if [ "$use_primary" = "true" ]; then
-        ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
-        ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
-        _enr_log_info "Active route: PRIMARY ($ENR_PRIMARY_IFACE via $ENR_PRIMARY_GATEWAY)"
+# Health check - ping Google from each interface, remove route for dead interfaces only
+# CRITICAL: Never remove a working route, only dead ones
+_enr_remove_dead_routes() {
+    local primary_alive=false
+    local backup_alive=false
 
-        # Add backup as fallback (higher metric)
-        if [ "$use_backup" = "true" ]; then
-            ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null || true
+    # Test primary interface by pinging Google with source IP binding
+    if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
+        local primary_ip
+        primary_ip=$(ip -4 addr show "$ENR_PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+
+        if [ -n "$primary_ip" ]; then
+            if ping -c1 -W3 -I "$primary_ip" 8.8.8.8 &>/dev/null || \
+               ping -c1 -W3 -I "$primary_ip" 1.1.1.1 &>/dev/null; then
+                primary_alive=true
+                _enr_log_info "Primary ($ENR_PRIMARY_IFACE) can reach internet"
+            else
+                _enr_log_warn "Primary ($ENR_PRIMARY_IFACE) CANNOT reach internet"
+            fi
+        else
+            _enr_log_warn "Primary ($ENR_PRIMARY_IFACE) has no IP"
         fi
-    elif [ "$use_backup" = "true" ]; then
-        # Primary unhealthy, use backup only
-        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
-        ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-        _enr_log_warn "Active route: BACKUP ($ENR_BACKUP_IFACE via $ENR_BACKUP_GATEWAY) - Primary unhealthy!"
-    else
-        # CRITICAL: Both failed - restore at least one route so traffic can flow
-        _enr_log_error "No healthy WAN detected - restoring backup route anyway"
-        if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
-            ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
-            ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-        elif [ -n "$ENR_PRIMARY_GATEWAY" ] && [ -n "$ENR_PRIMARY_IFACE" ]; then
-            ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
-            ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
-        fi
-        return 1
     fi
 
-    return 0
+    # Test backup interface
+    if [ -n "$ENR_BACKUP_IFACE" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
+        local backup_ip
+        backup_ip=$(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+
+        if [ -n "$backup_ip" ]; then
+            if ping -c1 -W3 -I "$backup_ip" 8.8.8.8 &>/dev/null || \
+               ping -c1 -W3 -I "$backup_ip" 1.1.1.1 &>/dev/null; then
+                backup_alive=true
+                _enr_log_info "Backup ($ENR_BACKUP_IFACE) can reach internet"
+            else
+                _enr_log_warn "Backup ($ENR_BACKUP_IFACE) CANNOT reach internet"
+            fi
+        else
+            _enr_log_warn "Backup ($ENR_BACKUP_IFACE) has no IP"
+        fi
+    fi
+
+    # Only remove routes for DEAD interfaces - never touch working ones
+    if [ "$primary_alive" = "false" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
+        _enr_log_warn "Removing dead primary route..."
+        ip route del default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" 2>/dev/null || true
+    fi
+
+    if [ "$backup_alive" = "false" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
+        _enr_log_warn "Removing dead backup route..."
+        ip route del default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
+    fi
+
+    # Update active WAN tracking
+    if [ "$primary_alive" = "true" ]; then
+        ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
+    elif [ "$backup_alive" = "true" ]; then
+        ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+    fi
+
+    # Return success if at least one interface works
+    if [ "$primary_alive" = "true" ] || [ "$backup_alive" = "true" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Re-add route for recovered interface (called by monitor when interface recovers)
+_enr_restore_route() {
+    local iface="$1"
+    local gateway="$2"
+    local metric="$3"
+
+    # Check if route already exists
+    if ip route show default via "$gateway" dev "$iface" 2>/dev/null | grep -q "default"; then
+        return 0  # Already exists
+    fi
+
+    _enr_log_info "Restoring route: via $gateway dev $iface metric $metric"
+    ip route add default via "$gateway" dev "$iface" metric "$metric" 2>/dev/null || true
 }
 
 # Check interface health without requiring default route
@@ -544,139 +607,82 @@ _enr_log_debug() {
 # ============================================================
 
 # Main entry point - ensures network is available for installation
-# Call this before any network-dependent operation
+# STABLE APPROACH: Setup both routes with metrics, only remove dead ones
 ensure_network_connectivity() {
     local retry_lte="${1:-true}"  # Whether to try LTE if primary fails
+
+    _enr_log_info "Checking network connectivity..."
 
     # Step 1: Detect interfaces
     _enr_detect_primary_wan
     _enr_detect_lte_interface
 
-    # Step 2: Check primary WAN connectivity
-    if [ -n "$ENR_PRIMARY_IFACE" ] && _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
-        ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
-        _enr_log_info "Primary WAN ($ENR_PRIMARY_IFACE) has connectivity"
+    # Step 2: Get primary gateway if we have primary interface
+    if [ -n "$ENR_PRIMARY_IFACE" ] && [ -z "$ENR_PRIMARY_GATEWAY" ]; then
+        ENR_PRIMARY_GATEWAY=$(ip route show default dev "$ENR_PRIMARY_IFACE" 2>/dev/null | awk '{print $3}' | head -1)
+        [ -z "$ENR_PRIMARY_GATEWAY" ] && ENR_PRIMARY_GATEWAY=$(ip route show dev "$ENR_PRIMARY_IFACE" 2>/dev/null | awk '/via/ {print $3}' | head -1)
+    fi
 
-        # If we have LTE too, set up PBR for redundancy and start monitoring
-        if [ -n "$ENR_BACKUP_IFACE" ]; then
-            _enr_setup_minimal_pbr
-            # Start background monitor for continuous failover during installation
+    # Step 3: If LTE interface exists but no gateway, try to activate it
+    if [ "$retry_lte" = "true" ] && [ -n "$ENR_BACKUP_IFACE" ] && [ -z "$ENR_BACKUP_GATEWAY" ]; then
+        _enr_log_info "LTE interface found ($ENR_BACKUP_IFACE), activating..."
+        _enr_activate_lte
+    fi
+
+    # Step 4: Try to detect LTE if we don't have it yet
+    if [ -z "$ENR_BACKUP_IFACE" ] && [ "$retry_lte" = "true" ]; then
+        _enr_log_info "Looking for LTE modem..."
+        sleep 2
+        if _enr_detect_lte_interface; then
+            _enr_log_info "Found LTE interface: $ENR_BACKUP_IFACE"
+            _enr_activate_lte
+        fi
+    fi
+
+    # Step 5: Setup BOTH routes with different metrics
+    # This is the stable foundation - we NEVER remove all routes at once
+    _enr_log_info "Setting up dual-WAN routes..."
+
+    # Show what we have
+    _enr_log_info "  Primary: ${ENR_PRIMARY_IFACE:-none} (gw: ${ENR_PRIMARY_GATEWAY:-none})"
+    _enr_log_info "  Backup:  ${ENR_BACKUP_IFACE:-none} (gw: ${ENR_BACKUP_GATEWAY:-none})"
+
+    # Add primary route (metric 100) - will be preferred if working
+    if [ -n "$ENR_PRIMARY_GATEWAY" ] && [ -n "$ENR_PRIMARY_IFACE" ]; then
+        ip route del default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" 2>/dev/null || true
+        ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
+        _enr_log_info "Added primary route: metric 100"
+    fi
+
+    # Add backup route (metric 200) - automatic fallback
+    if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
+        ip route del default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
+        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null || true
+        _enr_log_info "Added backup route: metric 200"
+    fi
+
+    # Step 6: Test both interfaces and ONLY remove dead routes
+    _enr_log_info "Testing connectivity on each interface..."
+    if _enr_remove_dead_routes; then
+        _enr_log_info "Network ready - active WAN: $ENR_ACTIVE_WAN"
+
+        # Start background monitor for continuous health checking
+        if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
             enr_start_monitor
         fi
 
         return 0
     fi
 
-    _enr_log_warn "Primary WAN connectivity check failed"
+    # Step 7: Both failed - at least ensure one route exists for retry
+    _enr_log_error "Both WANs failed connectivity test"
 
-    # Step 3: Try backup (LTE) if available
-    if [ "$retry_lte" = "true" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
-        _enr_log_info "Attempting LTE failover..."
-
-        # Check if LTE already has connectivity
-        if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-            ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-            _enr_log_info "LTE ($ENR_BACKUP_IFACE) already has connectivity"
-            _enr_setup_minimal_pbr
-            enr_start_monitor  # Monitor for primary recovery
-            return 0
-        fi
-
-        # Try to activate LTE
-        if _enr_activate_lte; then
-            # CRITICAL: LTE is now active but default route may still point to dead primary!
-            # Force traffic through LTE by setting it as the default route
-            _enr_log_info "LTE activated - configuring route to use backup..."
-
-            # If we have backup gateway now, force it as default route
-            if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
-                # Remove all default routes (including dead primary)
-                local tries=5
-                while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-                    ip route del default 2>/dev/null || break
-                    tries=$((tries - 1))
-                done
-
-                # Add LTE as default route
-                ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
-                _enr_log_info "Default route set via LTE: $ENR_BACKUP_GATEWAY dev $ENR_BACKUP_IFACE"
-            fi
-
-            # Now check connectivity (should work since traffic goes through LTE)
-            if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-                ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-                _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
-                _enr_setup_minimal_pbr
-                enr_start_monitor  # Monitor for primary recovery
-                return 0
-            else
-                _enr_log_warn "LTE connectivity check failed even with direct route"
-            fi
-        fi
-    fi
-
-    # Step 4: Try to detect LTE if we don't have it yet
-    if [ -z "$ENR_BACKUP_IFACE" ] && [ "$retry_lte" = "true" ]; then
-        _enr_log_info "Looking for LTE modem..."
-
-        # Wait briefly for USB devices
-        sleep 2
-
-        if _enr_detect_lte_interface; then
-            _enr_log_info "Found LTE interface: $ENR_BACKUP_IFACE"
-
-            if _enr_activate_lte; then
-                # Same fix as Step 3: force route through LTE before checking
-                if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
-                    local tries=5
-                    while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-                        ip route del default 2>/dev/null || break
-                        tries=$((tries - 1))
-                    done
-                    ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
-                fi
-
-                if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-                    ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-                    _enr_log_info "Failover to LTE ($ENR_BACKUP_IFACE) successful"
-                    _enr_setup_minimal_pbr
-                    enr_start_monitor  # Monitor for primary recovery
-                    return 0
-                fi
-            fi
-        fi
-    fi
-
-    # Step 5: Last resort - check if primary came back
-    if [ -n "$ENR_PRIMARY_IFACE" ] && _enr_check_connectivity "$ENR_PRIMARY_IFACE"; then
-        ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
-        _enr_log_info "Primary WAN ($ENR_PRIMARY_IFACE) recovered"
-        return 0
-    fi
-
-    # Step 6: If we have LTE gateway but connectivity check failed, try one more time
-    # This handles the case where NM route conflicted with our check
+    # Keep at least backup route if we have it (don't remove anything more)
     if [ -n "$ENR_BACKUP_GATEWAY" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
-        _enr_log_warn "Last attempt: forcing all traffic through LTE..."
-
-        # Aggressively remove ALL default routes
-        local tries=10
-        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-            ip route del default 2>/dev/null || break
-            tries=$((tries - 1))
-        done
-
-        # Add LTE as ONLY default route
-        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
-
-        # Give kernel a moment to update routing cache
-        sleep 1
-
-        if _enr_check_connectivity "$ENR_BACKUP_IFACE"; then
-            ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-            _enr_log_info "LTE failover successful (forced route)"
-            return 0
-        fi
+        ip route replace default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null || true
+        _enr_log_warn "Keeping backup route for retry attempts"
+        ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
+        return 0  # Return success - let the command retry
     fi
 
     _enr_log_error "No network connectivity available"
@@ -720,7 +726,8 @@ ENR_MONITOR_PID=""
 ENR_MONITOR_PIDFILE="/run/enr-health-monitor.pid"
 
 # Start background health monitor during installation
-# This ensures failover happens even during long-running operations
+# STABLE APPROACH: Only remove dead routes, restore recovered ones
+# Never touch working routes - kernel handles metric-based failover automatically
 enr_start_monitor() {
     if [ -n "$ENR_MONITOR_PID" ] && kill -0 "$ENR_MONITOR_PID" 2>/dev/null; then
         _enr_log_info "Health monitor already running (PID $ENR_MONITOR_PID)"
@@ -737,54 +744,69 @@ enr_start_monitor() {
 
     # Run monitor in background
     (
-        local check_interval=10
-        local fail_count=0
-        local fail_threshold=2
-        local last_active="$ENR_ACTIVE_WAN"
+        local check_interval=15
+        local primary_was_dead=false
+        local backup_was_dead=false
 
         while true; do
             sleep "$check_interval"
 
-            # Check if primary is healthy using the new function that doesn't need default route
-            if _enr_check_interface_health "$ENR_PRIMARY_IFACE" "$ENR_PRIMARY_GATEWAY"; then
-                fail_count=0
+            # Get current IPs for testing
+            local primary_ip backup_ip
+            primary_ip=$(ip -4 addr show "$ENR_PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+            backup_ip=$(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
 
-                # If we were on backup and primary recovered, switch back
-                if [ "$last_active" = "$ENR_BACKUP_IFACE" ]; then
-                    _enr_log_info "Primary WAN recovered - switching back"
-                    _enr_set_active_route
-                    last_active="$ENR_ACTIVE_WAN"
+            # Test PRIMARY interface
+            local primary_alive=false
+            if [ -n "$primary_ip" ]; then
+                if ping -c1 -W3 -I "$primary_ip" 8.8.8.8 &>/dev/null; then
+                    primary_alive=true
+                fi
+            fi
+
+            # Test BACKUP interface
+            local backup_alive=false
+            if [ -n "$backup_ip" ]; then
+                if ping -c1 -W3 -I "$backup_ip" 8.8.8.8 &>/dev/null; then
+                    backup_alive=true
+                fi
+            fi
+
+            # Handle PRIMARY state changes
+            if [ "$primary_alive" = "true" ]; then
+                if [ "$primary_was_dead" = "true" ]; then
+                    _enr_log_info "Primary WAN recovered - restoring route (metric 100)"
+                    ip route add default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" metric 100 2>/dev/null || true
+                    primary_was_dead=false
                 fi
             else
-                fail_count=$((fail_count + 1))
-                _enr_log_warn "Primary connectivity check failed ($fail_count/$fail_threshold)"
-
-                # If failed enough times, switch to backup
-                if [ "$fail_count" -ge "$fail_threshold" ]; then
-                    # Check if backup is healthy
-                    if _enr_check_interface_health "$ENR_BACKUP_IFACE" "$ENR_BACKUP_GATEWAY"; then
-                        _enr_log_warn "Primary WAN unhealthy - switching to backup"
-                        _enr_set_active_route
-                        last_active="$ENR_ACTIVE_WAN"
-                        fail_count=0
-                    else
-                        # Both checks failed, but backup might still work for existing connections
-                        # Force switch to backup anyway - better than no connectivity
-                        _enr_log_error "Both WANs appear unhealthy - forcing backup route"
-
-                        # Remove all routes and add backup
-                        local tries=5
-                        while ip route show default 2>/dev/null | grep -q "^default" && [ $tries -gt 0 ]; do
-                            ip route del default 2>/dev/null || break
-                            tries=$((tries - 1))
-                        done
-
-                        ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 100 2>/dev/null || true
-                        ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
-                        last_active="$ENR_BACKUP_IFACE"
-                        fail_count=0
-                    fi
+                if [ "$primary_was_dead" = "false" ] && [ -n "$ENR_PRIMARY_GATEWAY" ]; then
+                    _enr_log_warn "Primary WAN dead - removing route"
+                    ip route del default via "$ENR_PRIMARY_GATEWAY" dev "$ENR_PRIMARY_IFACE" 2>/dev/null || true
+                    primary_was_dead=true
                 fi
+            fi
+
+            # Handle BACKUP state changes
+            if [ "$backup_alive" = "true" ]; then
+                if [ "$backup_was_dead" = "true" ]; then
+                    _enr_log_info "Backup WAN recovered - restoring route (metric 200)"
+                    ip route add default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" metric 200 2>/dev/null || true
+                    backup_was_dead=false
+                fi
+            else
+                if [ "$backup_was_dead" = "false" ] && [ -n "$ENR_BACKUP_GATEWAY" ]; then
+                    _enr_log_warn "Backup WAN dead - removing route"
+                    ip route del default via "$ENR_BACKUP_GATEWAY" dev "$ENR_BACKUP_IFACE" 2>/dev/null || true
+                    backup_was_dead=true
+                fi
+            fi
+
+            # Update active WAN tracking
+            if [ "$primary_alive" = "true" ]; then
+                ENR_ACTIVE_WAN="$ENR_PRIMARY_IFACE"
+            elif [ "$backup_alive" = "true" ]; then
+                ENR_ACTIVE_WAN="$ENR_BACKUP_IFACE"
             fi
         done
     ) &
