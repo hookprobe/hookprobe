@@ -99,8 +99,9 @@ export DNSXAI_USERDATA_DIR="$USERDATA_DIR"
 BLOCKLIST_FILE="$DATA_DIR/blocklist.txt"
 if [ ! -f "$BLOCKLIST_FILE" ] || [ ! -s "$BLOCKLIST_FILE" ]; then
     echo "[dnsXai] Blocklist not found, downloading on first run..."
-    # Run engine with --update-blocklist flag to download blocklists
-    timeout 120 python engine.py --update-blocklist --data-dir "$DATA_DIR" 2>&1 || {
+    # Run engine with --update flag to download blocklists
+    cd /opt/hookprobe/shared/dnsXai
+    timeout 120 python engine.py --update 2>&1 || {
         echo "[dnsXai] Warning: Blocklist download timed out or failed, will retry on next startup"
     }
     if [ -s "$BLOCKLIST_FILE" ]; then
