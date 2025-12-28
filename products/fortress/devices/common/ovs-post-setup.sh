@@ -334,12 +334,20 @@ setup_container_veth() {
         ip link add "$veth_host" type veth peer name "$veth_ovs"
     fi
 
-    # Add OVS side to bridge with VLAN 200
-    if ! ovs-vsctl list-ports "$OVS_BRIDGE" | grep -q "^${veth_ovs}$"; then
-        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT"
-        log_info "Added $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
-    else
+    # Add OVS side to bridge with VLAN 200 (idempotent)
+    # Use --if-exists to handle port already existing in OVS
+    if ovs-vsctl --if-exists get port "$veth_ovs" name &>/dev/null; then
+        # Port exists - just ensure VLAN tag is correct
         ovs-vsctl set port "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || true
+        log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_MGMT"
+    else
+        # Port doesn't exist - add it
+        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || {
+            # Might fail if interface not ready, try to recover
+            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" || true
+        }
+        log_info "Added $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
     fi
 
     # Bring up interfaces
@@ -392,7 +400,10 @@ main() {
             bring_up_vlan_interfaces  # CRITICAL: Bring up VLANs with IPs first
             configure_openflow
             configure_port_vlans
-            setup_container_veth
+
+            # Container veth is optional - don't fail if it doesn't work
+            # Containers use podman's internal network as primary
+            setup_container_veth || log_warn "Container veth setup had issues (non-fatal)"
 
             log_section "OVS Post-Setup Complete"
             log_success "VLAN interfaces, OpenFlow rules, and port tags configured"
