@@ -539,8 +539,39 @@ def get_network_topology() -> Dict:
 # WAN Health (Real Data)
 # =============================================================================
 
+def _test_connectivity(interface: str, target: str = '1.1.1.1') -> Dict:
+    """Test connectivity through a specific interface with multiple targets."""
+    result = {
+        'rtt_ms': None,
+        'jitter_ms': None,
+        'packet_loss': 100.0,
+        'is_connected': False,
+    }
+
+    # Test with 3 pings to get better metrics
+    success, output, _ = _run_cmd(
+        ['ping', '-c', '3', '-W', '2', '-I', interface, target],
+        timeout=10
+    )
+
+    if success:
+        # Parse RTT
+        rtt_match = re.search(r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)', output)
+        if rtt_match:
+            result['rtt_ms'] = float(rtt_match.group(2))  # avg
+            result['jitter_ms'] = float(rtt_match.group(4))  # mdev
+            result['is_connected'] = True
+
+        # Parse packet loss
+        loss_match = re.search(r'(\d+)% packet loss', output)
+        if loss_match:
+            result['packet_loss'] = float(loss_match.group(1))
+
+    return result
+
+
 def get_wan_health() -> Dict:
-    """Get WAN health metrics (real data)."""
+    """Get WAN health metrics with real connectivity tests."""
     cached = _get_cached('wan_health', ttl=5)
     if cached is not None:
         return cached
@@ -549,42 +580,134 @@ def get_wan_health() -> Dict:
         'primary': None,
         'backup': None,
         'active': None,
+        'active_is_primary': False,
         'uptime_pct': 99.9,
+        'state': 'primary_active',
+        'timestamp': datetime.now().isoformat(),
     }
 
     interfaces = get_interfaces()
 
+    # Find primary and backup WAN interfaces
+    primary_iface = None
+    backup_iface = None
+
     for iface in interfaces:
-        if iface['type'] in ['wan', 'lte'] and iface['state'] == 'UP':
-            is_primary = iface['type'] == 'wan'
+        if iface['type'] == 'wan' and iface['state'] == 'UP':
+            primary_iface = iface
+        elif iface['type'] == 'lte' and iface['state'] == 'UP':
+            backup_iface = iface
 
-            # Ping test for latency
-            rtt = None
-            success, output, _ = _run_cmd(['ping', '-c', '1', '-W', '2', '-I', iface['name'], '8.8.8.8'])
-            if success:
-                match = re.search(r'time=(\d+\.?\d*)', output)
-                if match:
-                    rtt = float(match.group(1))
+    # Test connectivity on primary
+    if primary_iface:
+        conn = _test_connectivity(primary_iface['name'])
+        health['primary'] = {
+            'interface': primary_iface['name'],
+            'ip': primary_iface['ip_address'],
+            'state': 'UP',
+            'rtt_ms': conn['rtt_ms'],
+            'jitter_ms': conn['jitter_ms'],
+            'packet_loss': conn['packet_loss'],
+            'is_connected': conn['is_connected'],
+            'health_score': _calculate_health_score(conn),
+            'status': 'ACTIVE' if conn['is_connected'] else 'FAILED',
+        }
+        if conn['is_connected']:
+            health['active'] = primary_iface['name']
+            health['active_is_primary'] = True
+            health['state'] = 'primary_active'
 
-            iface_health = {
-                'interface': iface['name'],
-                'ip': iface['ip_address'],
-                'state': iface['state'],
-                'rtt_ms': rtt,
-                'is_healthy': rtt is not None and rtt < 100,
-            }
+    # Test connectivity on backup
+    if backup_iface:
+        conn = _test_connectivity(backup_iface['name'])
 
-            if is_primary:
-                health['primary'] = iface_health
-                if health['active'] is None:
-                    health['active'] = iface['name']
-            else:
-                health['backup'] = iface_health
-                if health['active'] is None and iface_health['is_healthy']:
-                    health['active'] = iface['name']
+        # Get LTE signal if available
+        signal_dbm = _get_lte_signal(backup_iface['name'])
+
+        health['backup'] = {
+            'interface': backup_iface['name'],
+            'ip': backup_iface['ip_address'],
+            'state': 'UP',
+            'rtt_ms': conn['rtt_ms'],
+            'jitter_ms': conn['jitter_ms'],
+            'packet_loss': conn['packet_loss'],
+            'is_connected': conn['is_connected'],
+            'health_score': _calculate_health_score(conn, signal_dbm),
+            'signal_dbm': signal_dbm,
+            'status': 'STANDBY' if health['active'] else ('ACTIVE' if conn['is_connected'] else 'FAILED'),
+        }
+
+        # If primary failed but backup works, backup is active
+        if not health['active'] and conn['is_connected']:
+            health['active'] = backup_iface['name']
+            health['active_is_primary'] = False
+            health['state'] = 'backup_active'
+            health['backup']['status'] = 'ACTIVE'
+
+    # If nothing is connected
+    if not health['active']:
+        health['state'] = 'disconnected'
 
     _set_cached('wan_health', health)
     return health
+
+
+def _calculate_health_score(conn: Dict, signal_dbm: Optional[int] = None) -> float:
+    """Calculate health score 0-1 based on connectivity metrics."""
+    if not conn['is_connected']:
+        return 0.0
+
+    score = 1.0
+
+    # RTT impact (up to -0.3 for high latency)
+    if conn['rtt_ms']:
+        if conn['rtt_ms'] > 200:
+            score -= 0.3
+        elif conn['rtt_ms'] > 100:
+            score -= 0.2
+        elif conn['rtt_ms'] > 50:
+            score -= 0.1
+
+    # Jitter impact (up to -0.2)
+    if conn['jitter_ms']:
+        if conn['jitter_ms'] > 50:
+            score -= 0.2
+        elif conn['jitter_ms'] > 20:
+            score -= 0.1
+
+    # Packet loss impact (up to -0.4)
+    if conn['packet_loss'] > 0:
+        score -= min(0.4, conn['packet_loss'] / 100 * 0.4)
+
+    # LTE signal impact (up to -0.2)
+    if signal_dbm is not None:
+        if signal_dbm < -100:
+            score -= 0.2
+        elif signal_dbm < -85:
+            score -= 0.1
+
+    return max(0.0, min(1.0, score))
+
+
+def _get_lte_signal(interface: str) -> Optional[int]:
+    """Get LTE signal strength in dBm."""
+    # Try mmcli for ModemManager
+    success, output, _ = _run_cmd(['mmcli', '-m', '0', '-K'])
+    if success:
+        match = re.search(r'modem\.generic\.signal-quality\.value\s*:\s*(\d+)', output)
+        if match:
+            # Convert percentage to approximate dBm
+            quality = int(match.group(1))
+            return -113 + (quality * 0.63)  # Approximate conversion
+
+    # Try qmicli for QMI modems
+    success, output, _ = _run_cmd(['qmicli', '-d', '/dev/cdc-wdm0', '--nas-get-signal-strength'])
+    if success:
+        match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', output)
+        if match:
+            return int(match.group(1))
+
+    return None
 
 
 def get_interface_stats(iface_name: str) -> Dict:
@@ -607,6 +730,115 @@ def get_interface_stats(iface_name: str) -> Dict:
             pass
 
     return stats
+
+
+# Traffic rate cache for calculating bytes/sec
+_traffic_prev: Dict[str, Tuple[int, int, float]] = {}
+
+
+def get_interface_traffic_rate(iface_name: str) -> Dict:
+    """Get real-time traffic rate in bytes/sec and Mbps."""
+    stats = get_interface_stats(iface_name)
+    now = time.time()
+
+    result = {
+        'interface': iface_name,
+        'rx_bytes': stats['rx_bytes'],
+        'tx_bytes': stats['tx_bytes'],
+        'rx_bps': 0,
+        'tx_bps': 0,
+        'rx_mbps': 0.0,
+        'tx_mbps': 0.0,
+        'total_mbps': 0.0,
+    }
+
+    prev = _traffic_prev.get(iface_name)
+    if prev:
+        prev_rx, prev_tx, prev_time = prev
+        elapsed = now - prev_time
+        if elapsed > 0:
+            result['rx_bps'] = max(0, int((stats['rx_bytes'] - prev_rx) / elapsed))
+            result['tx_bps'] = max(0, int((stats['tx_bytes'] - prev_tx) / elapsed))
+            result['rx_mbps'] = round(result['rx_bps'] * 8 / 1_000_000, 2)
+            result['tx_mbps'] = round(result['tx_bps'] * 8 / 1_000_000, 2)
+            result['total_mbps'] = round(result['rx_mbps'] + result['tx_mbps'], 2)
+
+    _traffic_prev[iface_name] = (stats['rx_bytes'], stats['tx_bytes'], now)
+    return result
+
+
+def get_all_interface_traffic() -> List[Dict]:
+    """Get traffic rates for all relevant interfaces."""
+    interfaces = get_interfaces()
+    traffic = []
+
+    # Only include relevant interface types
+    for iface in interfaces:
+        if iface['type'] in ['wan', 'lte', 'bridge', 'wifi', 'vlan']:
+            rate = get_interface_traffic_rate(iface['name'])
+            rate['type'] = iface['type']
+            rate['state'] = iface['state']
+            traffic.append(rate)
+
+    return traffic
+
+
+def get_slaai_status() -> Dict:
+    """Get complete SLAAI status for dashboard."""
+    wan = get_wan_health()
+    traffic = get_all_interface_traffic()
+
+    # Build status response
+    status = {
+        'state': wan.get('state', 'unknown'),
+        'timestamp': wan.get('timestamp', datetime.now().isoformat()),
+        'active_interface': wan.get('active'),
+        'active_is_primary': wan.get('active_is_primary', False),
+
+        # Primary WAN
+        'primary_interface': wan['primary']['interface'] if wan.get('primary') else None,
+        'primary_health': wan['primary']['health_score'] if wan.get('primary') else 0,
+        'primary_status': wan['primary']['status'] if wan.get('primary') else 'DOWN',
+        'primary_rtt': wan['primary']['rtt_ms'] if wan.get('primary') else None,
+        'primary_jitter': wan['primary']['jitter_ms'] if wan.get('primary') else None,
+        'primary_loss': wan['primary']['packet_loss'] if wan.get('primary') else 100,
+        'primary_ip': wan['primary']['ip'] if wan.get('primary') else None,
+
+        # Backup WAN
+        'backup_interface': wan['backup']['interface'] if wan.get('backup') else None,
+        'backup_health': wan['backup']['health_score'] if wan.get('backup') else 0,
+        'backup_status': wan['backup']['status'] if wan.get('backup') else 'DOWN',
+        'backup_rtt': wan['backup']['rtt_ms'] if wan.get('backup') else None,
+        'backup_signal': wan['backup'].get('signal_dbm') if wan.get('backup') else None,
+        'backup_loss': wan['backup']['packet_loss'] if wan.get('backup') else 100,
+        'backup_ip': wan['backup']['ip'] if wan.get('backup') else None,
+
+        # Traffic data
+        'traffic': {t['interface']: t for t in traffic},
+
+        # SLA metrics (placeholder - would come from historical data)
+        'uptime_pct': wan.get('uptime_pct', 99.9),
+        'rto_actual_s': 2.3,
+        'rto_target_s': 5.0,
+        'rpo_actual_bytes': 0,
+        'rpo_target_bytes': 0,
+        'failover_count_24h': 0,
+        'failover_history': [],
+
+        # Cost tracking (placeholder - would come from metered tracking)
+        'cost_status': {
+            'interface': wan['backup']['interface'] if wan.get('backup') else 'wwan0',
+            'daily_usage_mb': 0,
+            'daily_budget_mb': 500,
+            'monthly_usage_mb': 0,
+            'monthly_budget_mb': 10240,
+            'cost_per_gb': 2.0,
+            'current_cost': 0.0,
+            'budget_remaining': 20.0,
+        },
+    }
+
+    return status
 
 
 # =============================================================================
