@@ -1744,12 +1744,17 @@ body {
 /* Toast Container */
 .toast-container {
     position: fixed;
-    top: 20px;
+    top: 70px;  /* Below navbar */
     right: 20px;
-    z-index: 9999;
+    z-index: 99999;  /* Above modals and AdminLTE sidebars */
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    pointer-events: none;  /* Allow clicks through when no toasts */
+}
+
+.toast-container .toast {
+    pointer-events: auto;  /* Re-enable clicks on toasts */
 }
 
 .toast {

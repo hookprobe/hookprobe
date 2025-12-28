@@ -791,7 +791,28 @@ def get_interface_traffic_rate(iface_name: str) -> Dict:
 
 
 def get_all_interface_traffic() -> List[Dict]:
-    """Get traffic rates for all relevant interfaces."""
+    """Get traffic rates for all relevant interfaces.
+
+    First checks for pre-written data from fts-qsecbit agent (required when
+    running in container without host network access). Falls back to live
+    stats if no recent data file exists.
+    """
+    # First, try to read pre-collected data from the agent
+    traffic_file = Path('/opt/hookprobe/fortress/data/interface_traffic.json')
+    if traffic_file.exists():
+        try:
+            data = json.loads(traffic_file.read_text())
+            # Check if data is recent (< 30 seconds old)
+            file_ts = data.get('timestamp', '')
+            if file_ts:
+                file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
+                age = (datetime.now() - file_time.replace(tzinfo=None)).total_seconds()
+                if age < 30:
+                    return data.get('interfaces', [])
+        except Exception as e:
+            logger.debug(f"Could not read interface_traffic.json: {e}")
+
+    # Fallback: collect live data (only works with host network access)
     interfaces = get_interfaces()
     traffic = []
 
@@ -832,9 +853,11 @@ def get_slaai_status() -> Dict:
         'backup_health': wan['backup']['health_score'] if wan.get('backup') else 0,
         'backup_status': wan['backup']['status'] if wan.get('backup') else 'DOWN',
         'backup_rtt': wan['backup']['rtt_ms'] if wan.get('backup') else None,
+        'backup_jitter': wan['backup'].get('jitter_ms') if wan.get('backup') else None,
         'backup_signal': wan['backup'].get('signal_dbm') if wan.get('backup') else None,
         'backup_loss': wan['backup']['packet_loss'] if wan.get('backup') else 100,
         'backup_ip': wan['backup']['ip'] if wan.get('backup') else None,
+        'backup_is_lte': wan['backup'].get('is_lte', False) if wan.get('backup') else False,
 
         # Traffic data
         'traffic': {t['interface']: t for t in traffic},
