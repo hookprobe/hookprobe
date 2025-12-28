@@ -25,26 +25,55 @@ mkdir -p "$DATA_DIR" "$USERDATA_DIR" "$LOG_DIR"
 # 3. DEFAULTS_DIR/whitelist.txt (bundled defaults)
 # ============================================================
 
-# Symlink whitelist from userdata to data directory if user whitelist exists
-# This allows the engine to always read from DATA_DIR while persisting in USERDATA_DIR
+# ============================================================
+# WHITELIST SYNCHRONIZATION
+# ============================================================
+# Ensure whitelist is synced between DATA_DIR (fast volume) and
+# USERDATA_DIR (persistent bind mount that survives reinstalls).
+#
+# Priority order:
+# 1. USERDATA_DIR/whitelist.txt (user's persistent whitelist)
+# 2. DATA_DIR/whitelist.txt (container volume, may have old data)
+# 3. DEFAULTS_DIR/whitelist.txt (bundled defaults)
+# ============================================================
+
 if [ -f "$USERDATA_DIR/whitelist.txt" ]; then
+    # User has a persistent whitelist - use it
     echo "[dnsXai] Using persistent user whitelist from $USERDATA_DIR"
-    # Copy to data dir (engine reads from there)
     cp "$USERDATA_DIR/whitelist.txt" "$DATA_DIR/whitelist.txt"
     echo "[dnsXai] User whitelist: $(wc -l < "$USERDATA_DIR/whitelist.txt") entries"
-elif [ ! -f "$DATA_DIR/whitelist.txt" ] && [ -f "$DEFAULTS_DIR/whitelist.txt" ]; then
-    # No user whitelist and no data whitelist - copy defaults to both locations
+elif [ -f "$DATA_DIR/whitelist.txt" ]; then
+    # No userdata whitelist, but data volume has one - sync to userdata for persistence
+    # This handles the case where user ran --purge but --keep-data preserved volumes
+    echo "[dnsXai] Syncing whitelist from data volume to persistent storage..."
+    cp "$DATA_DIR/whitelist.txt" "$USERDATA_DIR/whitelist.txt"
+    echo "[dnsXai] Whitelist synced: $(wc -l < "$DATA_DIR/whitelist.txt") entries"
+elif [ -f "$DEFAULTS_DIR/whitelist.txt" ]; then
+    # No whitelist anywhere - install defaults to both locations
     echo "[dnsXai] Initializing whitelist from defaults..."
     cp "$DEFAULTS_DIR/whitelist.txt" "$DATA_DIR/whitelist.txt"
     cp "$DEFAULTS_DIR/whitelist.txt" "$USERDATA_DIR/whitelist.txt"
     echo "[dnsXai] Default whitelist installed ($(wc -l < "$DATA_DIR/whitelist.txt") entries)"
+else
+    # No whitelist anywhere - create empty file
+    echo "[dnsXai] WARNING: No whitelist found, creating empty whitelist"
+    touch "$DATA_DIR/whitelist.txt"
+    touch "$USERDATA_DIR/whitelist.txt"
 fi
 
-# Create initial config if not exists (check userdata first)
+# ============================================================
+# CONFIG SYNCHRONIZATION
+# ============================================================
 if [ -f "$USERDATA_DIR/config.json" ]; then
+    # User has persistent config - use it
     echo "[dnsXai] Using persistent config from $USERDATA_DIR"
     cp "$USERDATA_DIR/config.json" "$DATA_DIR/config.json"
-elif [ ! -f "$DATA_DIR/config.json" ]; then
+elif [ -f "$DATA_DIR/config.json" ]; then
+    # No userdata config, but data volume has one - sync to userdata
+    echo "[dnsXai] Syncing config from data volume to persistent storage..."
+    cp "$DATA_DIR/config.json" "$USERDATA_DIR/config.json"
+else
+    # No config anywhere - create default
     echo "[dnsXai] Creating default configuration..."
     cat > "$DATA_DIR/config.json" << EOF
 {
