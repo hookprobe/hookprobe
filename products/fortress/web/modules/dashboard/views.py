@@ -362,6 +362,7 @@ def index():
                            threats_blocked=stats.get('threats_detected', 0),
                            dns_blocked=get_dns_blocked_count() if SYSTEM_DATA_AVAILABLE else 0,
                            recent_devices=get_recent_devices(),
+                           recent_threats=get_recent_threats(),
                            tunnel_status=tunnel,
                            vlan_count=get_vlan_count(),
                            wan_backup_health=wan.get('backup_health', 72),
