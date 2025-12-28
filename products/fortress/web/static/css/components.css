@@ -527,17 +527,29 @@ body {
 .dark-mode .progress-bar { background: linear-gradient(90deg, var(--hp-pacific) 0%, var(--hp-pacific-light) 100%); }
 
 /* Toastr - Ensure visibility above AdminLTE modals */
-#toast-container { z-index: 99999 !important; }
-#toast-container > .toast { opacity: 1 !important; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+#toast-container { z-index: 99999 !important; top: 70px !important; }
+#toast-container > .toast {
+    opacity: 1 !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+    border-radius: 4px !important;
+    min-width: 280px !important;
+}
 #toast-container > .toast .toast-message,
 #toast-container > .toast .toast-title { color: #fff !important; font-weight: 500; }
 #toast-container > .toast .toast-close-button { color: #fff !important; opacity: 0.8; }
 
-.dark-mode .toast { background: var(--bg-card); border: 1px solid var(--border-light); box-shadow: var(--shadow-lg); color: #fff; }
-.dark-mode .toast-success { background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%) !important; color: #fff !important; }
-.dark-mode .toast-error { background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%) !important; color: #fff !important; }
-.dark-mode .toast-info { background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%) !important; color: #fff !important; }
-.dark-mode .toast-warning { background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%) !important; color: #fff !important; }
+/* Toastr dark mode colors */
+.dark-mode #toast-container > .toast {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-light) !important;
+    box-shadow: var(--shadow-lg) !important;
+    color: #fff !important;
+    border-radius: 4px !important;
+}
+.dark-mode #toast-container > .toast-success { background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%) !important; }
+.dark-mode #toast-container > .toast-error { background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%) !important; }
+.dark-mode #toast-container > .toast-info { background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%) !important; }
+.dark-mode #toast-container > .toast-warning { background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%) !important; }
 
 /* Utility Classes - AdminLTE Extensions */
 .text-pacific { color: var(--hp-pacific) !important; }
@@ -1742,7 +1754,8 @@ body {
 .form-select:focus { outline: none; border-color: var(--border-focus); }
 
 /* Toast Container */
-.toast-container {
+/* Custom Fortress Toast (renamed to avoid conflicts with toastr) */
+.fts-toast-container {
     position: fixed;
     top: 70px;  /* Below navbar */
     right: 20px;
@@ -1753,11 +1766,11 @@ body {
     pointer-events: none;  /* Allow clicks through when no toasts */
 }
 
-.toast-container .toast {
+.fts-toast-container .fts-toast {
     pointer-events: auto;  /* Re-enable clicks on toasts */
 }
 
-.toast {
+.fts-toast {
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -1771,15 +1784,15 @@ body {
     transition: all 0.3s ease;
 }
 
-.toast.show { transform: translateX(0); opacity: 1; }
-.toast-icon { font-size: 1.1rem; }
-.toast-success .toast-icon { color: var(--color-success); }
-.toast-error .toast-icon { color: var(--color-danger); }
-.toast-warning .toast-icon { color: var(--color-warning); }
-.toast-info .toast-icon { color: var(--color-info); }
-.toast-message { flex: 1; font-size: var(--text-sm); }
-.toast-close { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: var(--space-1); }
-.toast-close:hover { color: var(--text-primary); }
+.fts-toast.show { transform: translateX(0); opacity: 1; }
+.fts-toast-icon { font-size: 1.1rem; }
+.fts-toast-success .fts-toast-icon { color: var(--color-success); }
+.fts-toast-error .fts-toast-icon { color: var(--color-danger); }
+.fts-toast-warning .fts-toast-icon { color: var(--color-warning); }
+.fts-toast-info .fts-toast-icon { color: var(--color-info); }
+.fts-toast-message { flex: 1; font-size: var(--text-sm); }
+.fts-toast-close { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: var(--space-1); }
+.fts-toast-close:hover { color: var(--text-primary); }
 
 
 /* =============================================================================
