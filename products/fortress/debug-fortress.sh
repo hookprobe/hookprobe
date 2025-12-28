@@ -169,6 +169,40 @@ for f in "$CONFIG_DIR/fortress.conf" "$CONFIG_DIR/users.json" "$STATE_DIR/netpla
     [ -f "$f" ] && ok "$(basename $f)" || warn "$(basename $f) missing"
 done
 
+section "PERMISSIONS"
+# Check fortress group GID (should be 1000 to match container)
+fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
+if [ "$fortress_gid" = "1000" ]; then
+    ok "fortress group GID=1000 (matches container)"
+elif [ -n "$fortress_gid" ]; then
+    warn "fortress group GID=$fortress_gid (expected 1000 for container access)"
+    echo "  Fix: groupdel fortress && groupadd --gid 1000 fortress"
+else
+    warn "fortress group does not exist"
+fi
+
+# Check users.json permissions
+if [ -f "$CONFIG_DIR/users.json" ]; then
+    perms=$(stat -c '%a %U:%G' "$CONFIG_DIR/users.json" 2>/dev/null)
+    echo "  users.json: $perms"
+    if [ "$fortress_gid" = "1000" ]; then
+        # Should be 640 root:fortress
+        if stat -c '%a' "$CONFIG_DIR/users.json" 2>/dev/null | grep -q "640" && \
+           stat -c '%G' "$CONFIG_DIR/users.json" 2>/dev/null | grep -q "fortress"; then
+            ok "users.json permissions correct"
+        else
+            warn "users.json may not be readable by container"
+        fi
+    else
+        # Should be 644 for fallback mode
+        if stat -c '%a' "$CONFIG_DIR/users.json" 2>/dev/null | grep -qE "644|664"; then
+            ok "users.json world-readable (fallback mode)"
+        else
+            warn "users.json may not be readable by container"
+        fi
+    fi
+fi
+
 section "WEB ACCESS"
 port="${WEB_PORT:-8443}"
 if command -v curl &>/dev/null; then
