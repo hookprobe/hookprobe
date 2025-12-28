@@ -213,37 +213,58 @@ def main() -> None:
     logger.info(f"Interface: {args.interface}")
     logger.info(f"API Port: {args.port}")
 
-    # Initialize XDP manager
-    xdp_manager = XDPManager(interface=args.interface, auto_detect=True)
+    # Initialize XDP manager with graceful degradation
+    xdp_enabled = False
+    try:
+        xdp_manager = XDPManager(interface=args.interface, auto_detect=True)
 
-    # Load XDP program
-    if not xdp_manager.load_program():
-        logger.error("Failed to load XDP program")
-        sys.exit(1)
-
-    logger.info("XDP program loaded successfully")
+        # Load XDP program
+        if xdp_manager.load_program():
+            logger.info("XDP program loaded successfully")
+            xdp_enabled = True
+        else:
+            logger.warning("XDP program could not be loaded - running in degraded mode")
+            logger.warning("XDP requires kernel headers and BCC. This is expected in containers.")
+            logger.warning("IP blocking will fall back to iptables if available.")
+    except Exception as e:
+        logger.warning(f"XDP initialization failed: {e}")
+        logger.warning("Running in degraded mode - XDP protection unavailable")
+        logger.warning("This is expected when running in a container without kernel headers.")
 
     # Start HTTP API server in background thread
+    # API always runs to provide health checks even in degraded mode
     api_thread = Thread(target=run_http_server, args=(args.port,), daemon=True)
     api_thread.start()
 
-    # Main loop - log stats periodically
-    try:
-        while True:
-            time.sleep(args.stats_interval)
+    if xdp_enabled:
+        # Main loop - log stats periodically
+        try:
+            while True:
+                time.sleep(args.stats_interval)
 
-            stats = xdp_manager.get_stats()
-            if stats:
-                logger.info(
-                    f"Stats: total={stats.total_packets} passed={stats.passed} "
-                    f"blocked={stats.dropped_blocked} ratelimit={stats.dropped_rate_limit} "
-                    f"syn_flood={stats.tcp_syn_flood} udp_flood={stats.udp_flood}"
-                )
-    except KeyboardInterrupt:
-        logger.info("Interrupted, shutting down...")
-    finally:
-        if xdp_manager:
-            xdp_manager.unload_program()
+                if xdp_manager and xdp_manager.enabled:
+                    stats = xdp_manager.get_stats()
+                    if stats:
+                        logger.info(
+                            f"Stats: total={stats.total_packets} passed={stats.passed} "
+                            f"blocked={stats.dropped_blocked} ratelimit={stats.dropped_rate_limit} "
+                            f"syn_flood={stats.tcp_syn_flood} udp_flood={stats.udp_flood}"
+                        )
+        except KeyboardInterrupt:
+            logger.info("Interrupted, shutting down...")
+        finally:
+            if xdp_manager:
+                xdp_manager.unload_program()
+    else:
+        # Degraded mode - just keep running to serve API health checks
+        logger.info("Running in degraded mode (XDP disabled)")
+        logger.info("Health API available at /health")
+        try:
+            while True:
+                time.sleep(60)
+                logger.debug("Heartbeat - running in degraded mode")
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
 
 
 if __name__ == '__main__':

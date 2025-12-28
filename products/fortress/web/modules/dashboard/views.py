@@ -26,12 +26,33 @@ try:
         get_vlans,
         get_network_topology,
         get_dashboard_summary,
+        _get_cached,
+        _set_cached,
+        CACHE_TTL,
     )
     SYSTEM_DATA_AVAILABLE = True
+    CACHE_TIMEOUT = CACHE_TTL  # Use the same timeout as system_data
 except ImportError as e:
     SYSTEM_DATA_AVAILABLE = False
+    CACHE_TIMEOUT = 30  # Fallback timeout
     import logging
     logging.warning(f"system_data module not available: {e}")
+
+    # Define local cache when system_data is not available
+    import time
+    _local_cache = {}
+
+    def _get_cached(key, ttl=CACHE_TIMEOUT):
+        """Get cached value if not expired (fallback implementation)."""
+        if key in _local_cache:
+            value, timestamp = _local_cache[key]
+            if time.time() - timestamp < ttl:
+                return value
+        return None
+
+    def _set_cached(key, value):
+        """Set cached value (fallback implementation)."""
+        _local_cache[key] = (value, time.time())
 
 
 def get_tunnel_status():
