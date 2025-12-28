@@ -831,9 +831,9 @@
             <div class="wan-card" id="backup-wan-card">
                 <div class="wan-card-header">
                     <div class="wan-card-title">
-                        <div class="icon backup"><i class="fas fa-signal"></i></div>
+                        <div class="icon backup" id="backup-icon"><i class="fas fa-signal"></i></div>
                         <div>
-                            <h4>Backup WAN (LTE)</h4>
+                            <h4 id="backup-title">Backup WAN</h4>
                             <span class="interface" id="backup-interface">--</span>
                         </div>
                     </div>
@@ -1099,9 +1099,23 @@ function updateWanCard(type, status) {
     const signal = status[`${type}_signal`];
     const loss = status[`${type}_loss`];
     const ip = status[`${type}_ip`];
+    const isLte = status[`${type}_is_lte`] || false;
 
     // Interface name
     document.getElementById(`${prefix}-interface`).textContent = iface;
+
+    // Update backup title and icon based on interface type
+    if (type === 'backup') {
+        const titleEl = document.getElementById('backup-title');
+        const iconEl = document.getElementById('backup-icon');
+        if (isLte) {
+            titleEl.textContent = 'Backup WAN (LTE)';
+            iconEl.innerHTML = '<i class="fas fa-signal"></i>';
+        } else if (iface && iface !== '--') {
+            titleEl.textContent = 'Backup WAN';
+            iconEl.innerHTML = '<i class="fas fa-ethernet"></i>';
+        }
+    }
 
     // Status badge
     const badge = document.getElementById(`${prefix}-status-badge`);
@@ -1120,7 +1134,15 @@ function updateWanCard(type, status) {
     if (type === 'primary') {
         document.getElementById(`${prefix}-jitter`).textContent = jitter ? `${jitter.toFixed(1)}ms` : '--';
     } else {
-        document.getElementById(`${prefix}-signal`).textContent = signal ? `${signal.toFixed(0)}dBm` : '--';
+        // For backup, show jitter if available (for ethernet backup), signal for LTE
+        const signalEl = document.getElementById(`${prefix}-signal`);
+        if (isLte && signal) {
+            signalEl.textContent = `${signal.toFixed(0)}dBm`;
+        } else if (jitter) {
+            signalEl.textContent = `${jitter.toFixed(1)}ms`;
+        } else {
+            signalEl.textContent = '--';
+        }
     }
     document.getElementById(`${prefix}-loss`).textContent = typeof loss === 'number' ? `${loss}%` : '--';
     document.getElementById(`${prefix}-ip`).textContent = ip ? ip.split('/')[0] : '--';
