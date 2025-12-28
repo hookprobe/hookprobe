@@ -99,6 +99,12 @@ check_prerequisites() {
             if [ -n "$ENR_PRIMARY_IFACE" ] && [ -n "$ENR_BACKUP_IFACE" ]; then
                 log_info "Dual-WAN resilience active: $ENR_PRIMARY_IFACE + $ENR_BACKUP_IFACE"
             fi
+
+            # LOCK the network routes - prevent flapping during container builds
+            # Routes are now stable and won't be modified for the rest of installation
+            if type enr_lock_network &>/dev/null; then
+                enr_lock_network
+            fi
         else
             # Network resilience failed - try basic fallback
             log_warn "Automatic network setup failed, trying basic connectivity..."
@@ -2160,43 +2166,36 @@ build_containers() {
     local skipped_count=0
 
     # ============================================================
-    # CRITICAL: Stabilize network BEFORE any container builds
+    # VERIFY network before container builds (routes are already locked)
     # ============================================================
-    # Container builds pull base images and dependencies. If network flaps
-    # during a build, it corrupts the container layer cache and fails.
-    # We MUST have stable routing before starting.
-    log_info "Stabilizing network before container builds..."
+    # Network was set up and locked in check_prerequisites().
+    # Here we just verify connectivity is still working - NO route modification.
+    log_info "Verifying network connectivity before container builds..."
 
-    if type ensure_network_connectivity &>/dev/null; then
-        # This sets up dual routes and removes dead ones
-        ensure_network_connectivity || true
-
-        # Show current routing state for debugging
-        log_info "Current default routes:"
-        ip route show default 2>/dev/null | while read -r line; do
-            log_info "  $line"
-        done
-
-        # Verify we have at least one working route
-        if ! ping -c1 -W3 8.8.8.8 &>/dev/null; then
-            log_warn "Primary connectivity check failed, checking backup..."
-            if [ -n "$ENR_BACKUP_IFACE" ]; then
-                local backup_ip
-                backup_ip=$(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
-                if [ -n "$backup_ip" ] && ping -c1 -W3 -I "$backup_ip" 8.8.8.8 &>/dev/null; then
-                    log_info "Backup interface ($ENR_BACKUP_IFACE) working - proceeding"
-                else
-                    log_error "No working network interface detected!"
-                    log_error "Cannot build containers without network connectivity"
-                    return 1
-                fi
-            fi
+    # Use fast check that doesn't modify routes
+    if type enr_check_connectivity_fast &>/dev/null; then
+        if enr_check_connectivity_fast; then
+            log_info "Network connectivity verified - ready for container builds"
         else
-            log_info "Network stable - ready for container builds"
+            log_error "Network connectivity lost!"
+            log_error "Cannot build containers without network connectivity"
+            log_info "Current routes:"
+            ip route show default 2>/dev/null | while read -r line; do
+                log_info "  $line"
+            done
+            return 1
         fi
+    else
+        # Fallback: simple ping check
+        if ! ping -c1 -W3 8.8.8.8 &>/dev/null && ! ping -c1 -W3 1.1.1.1 &>/dev/null; then
+            log_error "No network connectivity - cannot build containers"
+            return 1
+        fi
+        log_info "Network connectivity verified"
     fi
 
-    # Helper: Network-resilient podman build with automatic failover
+    # Helper: Network-resilient podman build with retry on failure
+    # NOTE: Routes are locked - we only check connectivity, never modify routes
     _podman_build_resilient() {
         local containerfile="$1"
         local tag="$2"
@@ -2205,9 +2204,12 @@ build_containers() {
         local retry=0
 
         while [ $retry -lt $max_retries ]; do
-            # Verify network before podman build (pulls base image)
-            if type ensure_network_connectivity &>/dev/null; then
-                ensure_network_connectivity || true
+            # Quick connectivity check (does NOT modify routes)
+            if type enr_check_connectivity_fast &>/dev/null; then
+                if ! enr_check_connectivity_fast; then
+                    log_warn "Network connectivity issue detected, waiting 5s..."
+                    sleep 5
+                fi
             fi
 
             if podman build -f "$containerfile" -t "$tag" "$context"; then
@@ -2216,7 +2218,7 @@ build_containers() {
 
             retry=$((retry + 1))
             if [ $retry -lt $max_retries ]; then
-                log_warn "Container build failed, checking network failover (attempt $((retry + 1))/$max_retries)..."
+                log_warn "Container build failed, retrying (attempt $((retry + 1))/$max_retries)..."
                 sleep 3
             fi
         done
