@@ -1060,8 +1060,21 @@ remove_installation() {
     fi
 
     # Clean up parent directories if empty
-    if [ -d "/var/lib/hookprobe" ] && [ -z "$(ls -A /var/lib/hookprobe 2>/dev/null)" ]; then
-        rmdir "/var/lib/hookprobe" 2>/dev/null || true
+    # IMPORTANT: Only remove /var/lib/hookprobe if in PURGE mode
+    # Otherwise preserve it for userdata persistence across reinstalls
+    if [ "$PURGE_MODE" = true ]; then
+        if [ -d "/var/lib/hookprobe" ] && [ -z "$(ls -A /var/lib/hookprobe 2>/dev/null)" ]; then
+            rmdir "/var/lib/hookprobe" 2>/dev/null || true
+        fi
+    else
+        # Ensure userdata directory exists for next install (even if empty)
+        # This preserves the mount point for dnsXai persistent data
+        if [ ! -d "/var/lib/hookprobe/userdata/dnsxai" ]; then
+            mkdir -p /var/lib/hookprobe/userdata/dnsxai 2>/dev/null || true
+            chmod 755 /var/lib/hookprobe/userdata 2>/dev/null || true
+            chmod 755 /var/lib/hookprobe/userdata/dnsxai 2>/dev/null || true
+        fi
+        log_info "Userdata directory preserved: /var/lib/hookprobe/userdata/"
     fi
 
     if [ -d "/opt/hookprobe" ] && [ -z "$(ls -A /opt/hookprobe 2>/dev/null)" ]; then
