@@ -526,12 +526,18 @@ body {
 .dark-mode .progress { background: var(--bg-input); border-radius: 8px; overflow: hidden; }
 .dark-mode .progress-bar { background: linear-gradient(90deg, var(--hp-pacific) 0%, var(--hp-pacific-light) 100%); }
 
-/* Toastr */
-.dark-mode .toast { background: var(--bg-card); border: 1px solid var(--border-light); box-shadow: var(--shadow-lg); }
-.dark-mode .toast-success { background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%); }
-.dark-mode .toast-error { background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%); }
-.dark-mode .toast-info { background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%); }
-.dark-mode .toast-warning { background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%); }
+/* Toastr - Ensure visibility above AdminLTE modals */
+#toast-container { z-index: 99999 !important; }
+#toast-container > .toast { opacity: 1 !important; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+#toast-container > .toast .toast-message,
+#toast-container > .toast .toast-title { color: #fff !important; font-weight: 500; }
+#toast-container > .toast .toast-close-button { color: #fff !important; opacity: 0.8; }
+
+.dark-mode .toast { background: var(--bg-card); border: 1px solid var(--border-light); box-shadow: var(--shadow-lg); color: #fff; }
+.dark-mode .toast-success { background: linear-gradient(135deg, var(--hp-green) 0%, #059669 100%) !important; color: #fff !important; }
+.dark-mode .toast-error { background: linear-gradient(135deg, var(--hp-watermelon) 0%, #dc2626 100%) !important; color: #fff !important; }
+.dark-mode .toast-info { background: linear-gradient(135deg, var(--hp-pacific) 0%, var(--hp-pacific-dark) 100%) !important; color: #fff !important; }
+.dark-mode .toast-warning { background: linear-gradient(135deg, var(--hp-amber) 0%, #d97706 100%) !important; color: #fff !important; }
 
 /* Utility Classes - AdminLTE Extensions */
 .text-pacific { color: var(--hp-pacific) !important; }
