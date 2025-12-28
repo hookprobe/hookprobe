@@ -632,19 +632,41 @@ class QSecBitFortressAgent:
         """
         import re
 
-        def test_connectivity(interface: str, target: str = '1.1.1.1') -> Dict:
-            """Test connectivity through a specific interface."""
+        def test_connectivity(interface: str, source_ip: str = None, target: str = '1.1.1.1') -> Dict:
+            """Test connectivity through a specific interface.
+
+            For LTE/wwan interfaces, using source IP is more reliable than interface name.
+            """
             result = {
                 'rtt_ms': None,
                 'jitter_ms': None,
                 'packet_loss': 100.0,
                 'is_connected': False,
             }
+
+            # Build ping command
+            # For LTE interfaces, use source IP if available (more reliable routing)
+            is_lte = interface.startswith(('wwan', 'usb', 'wwp'))
+
+            if source_ip and is_lte and source_ip != 'dynamic':
+                # Use source IP for LTE (strips CIDR notation if present)
+                src = source_ip.split('/')[0]
+                ping_cmd = ['ping', '-c', '3', '-W', '3', '-I', src, target]
+            else:
+                # Use interface name for ethernet
+                ping_cmd = ['ping', '-c', '3', '-W', '3', '-I', interface, target]
+
             try:
+                logger.debug(f"Testing connectivity: {' '.join(ping_cmd)}")
                 proc = subprocess.run(
-                    ['ping', '-c', '3', '-W', '2', '-I', interface, target],
-                    capture_output=True, text=True, timeout=10
+                    ping_cmd,
+                    capture_output=True, text=True, timeout=15
                 )
+
+                # Log output for debugging
+                if proc.returncode != 0:
+                    logger.debug(f"Ping failed on {interface}: rc={proc.returncode}, stderr={proc.stderr.strip()}")
+
                 if proc.returncode == 0:
                     # Parse RTT
                     rtt_match = re.search(
@@ -660,8 +682,26 @@ class QSecBitFortressAgent:
                     loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
                     if loss_match:
                         result['packet_loss'] = float(loss_match.group(1))
+                else:
+                    # Parse packet loss even on failure
+                    loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
+                    if loss_match:
+                        result['packet_loss'] = float(loss_match.group(1))
+                        # If we got some response (not 100% loss), connection is partially up
+                        if result['packet_loss'] < 100:
+                            result['is_connected'] = True
+                            # Try to get RTT from partial success
+                            rtt_match = re.search(
+                                r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
+                                proc.stdout
+                            )
+                            if rtt_match:
+                                result['rtt_ms'] = float(rtt_match.group(2))
+                                result['jitter_ms'] = float(rtt_match.group(4))
+            except subprocess.TimeoutExpired:
+                logger.debug(f"Ping timeout on {interface}")
             except Exception as e:
-                logger.debug(f"Ping failed on {interface}: {e}")
+                logger.debug(f"Ping error on {interface}: {e}")
 
             return result
 
@@ -834,7 +874,7 @@ class QSecBitFortressAgent:
 
         # Test primary WAN
         if primary_iface:
-            conn = test_connectivity(primary_iface['name'])
+            conn = test_connectivity(primary_iface['name'], primary_iface['ip'])
             health['primary'] = {
                 'interface': primary_iface['name'],
                 'ip': primary_iface['ip'],
@@ -853,7 +893,7 @@ class QSecBitFortressAgent:
 
         # Test backup WAN (could be second ethernet or LTE)
         if backup_iface:
-            conn = test_connectivity(backup_iface['name'])
+            conn = test_connectivity(backup_iface['name'], backup_iface['ip'])
 
             # Detect if this is an LTE interface
             is_lte = backup_iface['name'].startswith(('wwan', 'usb', 'wwp'))
