@@ -313,8 +313,18 @@
         "closeButton": true,
         "progressBar": true,
         "positionClass": "toast-top-right",
-        "timeOut": "3000"
+        "timeOut": "3000",
+        "extendedTimeOut": "1000",
+        "showMethod": "slideDown",
+        "hideMethod": "slideUp",
+        "newestOnTop": true
     };
+    // Offset toastr below navbar
+    document.addEventListener('DOMContentLoaded', function() {
+        const style = document.createElement('style');
+        style.textContent = '#toast-container.toast-top-right { top: 70px !important; right: 20px !important; }';
+        document.head.appendChild(style);
+    });
 </script>
 <!-- Fortress Component Library -->
 <script src="{{ url_for('static', filename='js/components.js') }}"></script>
