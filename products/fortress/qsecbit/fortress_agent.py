@@ -729,9 +729,17 @@ class QSecBitFortressAgent:
             name = iface.get('ifname', '')
             state = iface.get('operstate', 'UNKNOWN')
 
-            # Skip down interfaces
-            if state != 'UP':
+            # Check if this is an LTE interface (check early for special handling)
+            is_lte = name.startswith(('wwan', 'usb', 'wwp'))
+
+            # Skip down interfaces, but be lenient with LTE (may show as UNKNOWN)
+            if state not in ['UP', 'UNKNOWN'] and not is_lte:
                 continue
+
+            # For LTE, also check if interface exists in /sys/class/net (means it's active)
+            if is_lte and state not in ['UP', 'UNKNOWN']:
+                if not Path(f'/sys/class/net/{name}').exists():
+                    continue
 
             # Skip excluded interfaces
             if name in exclude_names:
@@ -746,9 +754,6 @@ class QSecBitFortressAgent:
                     ip_addr = f"{addr_info.get('local')}/{addr_info.get('prefixlen')}"
                     break
 
-            # Check if this is an LTE interface
-            is_lte = name.startswith(('wwan', 'usb', 'wwp'))
-
             # For LTE interfaces, try to get IP from nmcli if not in addr_info
             if is_lte and not ip_addr:
                 try:
@@ -762,17 +767,43 @@ class QSecBitFortressAgent:
                 except Exception:
                     pass
 
+                # Also try ip route to find if interface has routes
+                if not ip_addr:
+                    try:
+                        result = subprocess.run(
+                            ['ip', 'route', 'show', 'dev', name],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if result.returncode == 0 and result.stdout.strip():
+                            # Interface has routes, mark as having dynamic IP
+                            ip_addr = 'dynamic'
+                    except Exception:
+                        pass
+
             # Skip ethernet interfaces without IP, but allow LTE interfaces
             # (LTE may have dynamic IP or be a point-to-point link)
             if not ip_addr and not is_lte:
                 continue
 
+            # For LTE, check if it actually exists and has carrier
+            if is_lte:
+                carrier_file = Path(f'/sys/class/net/{name}/carrier')
+                if carrier_file.exists():
+                    try:
+                        carrier = carrier_file.read_text().strip()
+                        if carrier != '1':
+                            logger.debug(f"LTE interface {name} has no carrier, skipping")
+                            continue
+                    except Exception:
+                        pass  # Some interfaces don't support carrier check
+
             # Categorize interface
-            iface_info = {'name': name, 'ip': ip_addr or 'dynamic', 'state': 'UP'}
+            iface_info = {'name': name, 'ip': ip_addr or 'dynamic', 'state': state}
 
             if is_lte:
                 # LTE/cellular interfaces
                 lte_candidates.append(iface_info)
+                logger.debug(f"Found LTE candidate: {name} ip={ip_addr} state={state}")
             elif name.startswith('eth') or name.startswith('en') or name.startswith('eno'):
                 # Ethernet interfaces - potential WAN
                 wan_candidates.append(iface_info)
@@ -780,18 +811,26 @@ class QSecBitFortressAgent:
         # Sort WAN candidates by name for consistent ordering (eth0 before eth1)
         wan_candidates.sort(key=lambda x: x['name'])
 
+        # Log detected interfaces for debugging
+        logger.info(f"WAN candidates: {[c['name'] for c in wan_candidates]}, LTE candidates: {[c['name'] for c in lte_candidates]}")
+
         # Assign primary and backup
-        # Priority: First ethernet = primary, second ethernet or LTE = backup
+        # Priority for primary: First ethernet with IP
+        # Priority for backup: LTE preferred (for failover), then second ethernet
         if len(wan_candidates) >= 1:
             primary_iface = wan_candidates[0]
-        if len(wan_candidates) >= 2:
-            backup_iface = wan_candidates[1]
-        elif lte_candidates:
-            backup_iface = lte_candidates[0]
 
-        # Log detected interfaces for debugging
-        logger.debug(f"WAN detection: primary={primary_iface}, backup={backup_iface}")
-        logger.debug(f"WAN candidates: {wan_candidates}, LTE candidates: {lte_candidates}")
+        # Prefer LTE as backup (typical failover scenario: ethernet primary, LTE backup)
+        if lte_candidates:
+            backup_iface = lte_candidates[0]
+            logger.info(f"Using LTE as backup: {backup_iface['name']}")
+        elif len(wan_candidates) >= 2:
+            # Fall back to second ethernet if no LTE
+            backup_iface = wan_candidates[1]
+            logger.info(f"Using second ethernet as backup: {backup_iface['name']}")
+
+        # Log final selection
+        logger.info(f"WAN selection: primary={primary_iface['name'] if primary_iface else None}, backup={backup_iface['name'] if backup_iface else None}")
 
         # Test primary WAN
         if primary_iface:
