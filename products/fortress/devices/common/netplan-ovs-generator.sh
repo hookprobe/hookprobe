@@ -108,14 +108,22 @@ generate_netplan() {
     log_info "  MGMT VLAN: $VLAN_MGMT (10.200.100.1/30)"
     [ -n "$lan_ifaces" ] && log_info "  LAN interfaces: $lan_ifaces"
 
-    # Build interfaces list for YAML
+    # Build ethernets section for netplan (required before referencing in bridge)
+    local ethernets_yaml=""
     local iface_yaml=""
     if [ -n "$lan_ifaces" ]; then
+        ethernets_yaml="  # Physical LAN interfaces (OVS bridge ports)
+  ethernets:"
         iface_yaml="      interfaces:"
         for iface in $lan_ifaces; do
+            # Each interface needs to be defined in ethernets section
+            ethernets_yaml="$ethernets_yaml
+    $iface: {}"
             iface_yaml="$iface_yaml
         - $iface"
         done
+        ethernets_yaml="$ethernets_yaml
+"
     fi
 
     # Create netplan directory if needed
@@ -141,7 +149,7 @@ network:
   version: 2
   renderer: networkd
 
-  # OVS Bridge - all LAN traffic flows through here
+$ethernets_yaml  # OVS Bridge - all LAN traffic flows through here
   bridges:
     $OVS_BRIDGE:
       openvswitch: {}
