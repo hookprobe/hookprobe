@@ -5,398 +5,371 @@
 
 {% block extra_css %}
 <style>
-    .topology-mini {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border-radius: 10px;
-        padding: 20px;
-        min-height: 300px;
+    /* Dashboard-specific enhancements */
+    .dashboard-hero {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: var(--space-4);
+        margin-bottom: var(--space-6);
     }
-    .topology-node {
-        display: inline-block;
-        text-align: center;
-        padding: 10px;
-        margin: 5px;
-        border-radius: 8px;
-        color: white;
-        font-size: 12px;
-        transition: transform 0.2s;
-        cursor: pointer;
+
+    .security-gauge-section {
+        display: grid;
+        grid-template-columns: 200px 1fr;
+        gap: var(--space-6);
+        align-items: center;
     }
-    .topology-node:hover {
+
+    @media (max-width: 768px) {
+        .security-gauge-section {
+            grid-template-columns: 1fr;
+            text-align: center;
+        }
+    }
+
+    .wan-health-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: var(--space-4);
+    }
+
+    .network-topology {
+        display: flex;
+        align-items: center;
+        justify-content: space-around;
+        padding: var(--space-6) 0;
+        position: relative;
+    }
+
+    .network-topology::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 10%;
+        right: 10%;
+        height: 2px;
+        background: linear-gradient(90deg, var(--accent), var(--text-muted), var(--accent));
+        opacity: 0.3;
+    }
+
+    .topo-node {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        z-index: 1;
+    }
+
+    .topo-icon {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: var(--card-bg);
+        border: 2px solid var(--accent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+        margin-bottom: var(--space-2);
+        transition: all 0.3s ease;
+    }
+
+    .topo-node:hover .topo-icon {
         transform: scale(1.1);
+        box-shadow: 0 0 20px rgba(230, 149, 0, 0.3);
     }
-    .topology-node i {
-        font-size: 24px;
-        display: block;
-        margin-bottom: 5px;
+
+    .topo-label {
+        font-size: var(--text-xs);
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
-    .node-wan { background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%); }
-    .node-bridge { background: linear-gradient(135deg, #e69500 0%, #c77800 100%); }
-    .node-vlan { background: linear-gradient(135deg, #17a2b8 0%, #117a8b 100%); }
-    .node-wifi { background: linear-gradient(135deg, #6f42c1 0%, #563d7c 100%); }
-    .node-device { background: linear-gradient(135deg, #6c757d 0%, #495057 100%); }
-    .node-lte { background: linear-gradient(135deg, #fd7e14 0%, #d56b0a 100%); }
-    .connection-line {
-        border-left: 2px dashed rgba(255,255,255,0.3);
-        height: 20px;
-        margin-left: 50%;
+
+    .topo-value {
+        font-size: var(--text-sm);
+        font-weight: 600;
+        color: var(--text-primary);
     }
-    .wan-status-card {
-        border-left: 4px solid;
+
+    .quick-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: var(--space-3);
     }
-    .wan-primary { border-color: #28a745; }
-    .wan-backup { border-color: #ffc107; }
-    .wan-down { border-color: #dc3545; }
-    .rtt-badge {
-        font-size: 0.8rem;
-        padding: 2px 6px;
+
+    .quick-action-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: var(--space-4);
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: all 0.2s ease;
+    }
+
+    .quick-action-btn:hover {
+        background: var(--hover-bg);
+        border-color: var(--accent);
+        color: var(--accent);
+        transform: translateY(-2px);
+        text-decoration: none;
+    }
+
+    .quick-action-btn i {
+        font-size: 1.5rem;
+        margin-bottom: var(--space-2);
+    }
+
+    .quick-action-btn span {
+        font-size: var(--text-xs);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<!-- Top Metrics Row -->
-<div class="row">
-    <div class="col-12 col-sm-6 col-md-3">
-        <div class="info-box">
-            <span class="info-box-icon bg-{{ 'success' if qsecbit_status == 'GREEN' else 'warning' if qsecbit_status == 'AMBER' else 'danger' }} elevation-1">
-                <i class="fas fa-shield-halved"></i>
-            </span>
-            <div class="info-box-content">
-                <span class="info-box-text">Security Score</span>
-                <span class="info-box-number">{{ "%.0f"|format(qsecbit_score * 100) }}%</span>
-                <span class="badge badge-{{ 'success' if qsecbit_status == 'GREEN' else 'warning' if qsecbit_status == 'AMBER' else 'danger' }}">{{ qsecbit_status }}</span>
-            </div>
+<!-- Hero Stats Row -->
+<div class="dashboard-hero">
+    <!-- Security Score -->
+    <div class="stat-card stat-card-accent" id="stat-security">
+        <div class="stat-icon"><i class="fas fa-shield-halved"></i></div>
+        <div class="stat-content">
+            <div class="stat-label">Security Score</div>
+            <div class="stat-value">{{ "%.0f"|format(qsecbit_score * 100) }}<span class="stat-unit">%</span></div>
+        </div>
+        <span class="status-badge rag-{{ qsecbit_status|lower }}">{{ qsecbit_status }}</span>
+    </div>
+
+    <!-- Connected Devices -->
+    <div class="stat-card" id="stat-devices">
+        <div class="stat-icon"><i class="fas fa-laptop"></i></div>
+        <div class="stat-content">
+            <div class="stat-label">Connected Devices</div>
+            <div class="stat-value" data-animate="true">{{ device_count }}</div>
         </div>
     </div>
-    <div class="col-12 col-sm-6 col-md-3">
-        <div class="info-box">
-            <span class="info-box-icon bg-info elevation-1">
-                <i class="fas fa-laptop"></i>
-            </span>
-            <div class="info-box-content">
-                <span class="info-box-text">Connected Devices</span>
-                <span class="info-box-number" id="device-count">{{ device_count }}</span>
-            </div>
+
+    <!-- Threats Blocked -->
+    <div class="stat-card stat-card-danger" id="stat-threats">
+        <div class="stat-icon"><i class="fas fa-ban"></i></div>
+        <div class="stat-content">
+            <div class="stat-label">Threats Blocked</div>
+            <div class="stat-value" data-animate="true">{{ threats_blocked }}</div>
         </div>
     </div>
-    <div class="col-12 col-sm-6 col-md-3">
-        <div class="info-box">
-            <span class="info-box-icon bg-danger elevation-1">
-                <i class="fas fa-bug"></i>
-            </span>
-            <div class="info-box-content">
-                <span class="info-box-text">Threats Blocked</span>
-                <span class="info-box-number">{{ threats_blocked }}</span>
-                <small class="text-muted">L2-L7</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-sm-6 col-md-3">
-        <div class="info-box" style="cursor: pointer;" onclick="window.location.href='{{ url_for('dnsxai.index') }}'">
-            <span class="info-box-icon bg-warning elevation-1">
-                <i class="fas fa-brain"></i>
-            </span>
-            <div class="info-box-content">
-                <span class="info-box-text">DNS Blocked</span>
-                <span class="info-box-number">{{ "{:,}".format(dns_blocked) }}</span>
-                <small class="text-muted">Click to manage</small>
-            </div>
+
+    <!-- DNS Blocked -->
+    <div class="stat-card stat-card-info" id="stat-dns">
+        <div class="stat-icon"><i class="fas fa-brain"></i></div>
+        <div class="stat-content">
+            <div class="stat-label">DNS Blocked</div>
+            <div class="stat-value" data-animate="true">{{ dns_blocked }}</div>
         </div>
     </div>
 </div>
 
-<!-- WAN Health Section -->
-<div class="row">
-    <div class="col-12">
-        <div class="card card-outline card-primary">
-            <div class="card-header py-2">
-                <h3 class="card-title">
-                    <i class="fas fa-network-wired mr-2"></i>WAN Health
-                </h3>
-                <div class="card-tools">
-                    <a href="{{ url_for('slaai.index') }}" class="btn btn-tool">
-                        SLA AI <i class="fas fa-arrow-right"></i>
-                    </a>
+<!-- Main Dashboard Grid -->
+<div class="grid grid-2">
+    <!-- Left Column: Security & Network -->
+    <div>
+        <!-- QSecBit Gauge Card -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-header-title">
+                    <i class="fas fa-chart-pie"></i> Security Analysis
+                </div>
+                <div class="card-header-actions">
+                    <a href="{{ url_for('security.index') }}" class="btn btn-sm btn-link">Details</a>
                 </div>
             </div>
-            <div class="card-body py-2">
-                <div class="row">
-                    {% if wan_health and wan_health.primary %}
-                    <div class="col-md-4">
-                        <div class="card mb-0 wan-status-card {{ 'wan-primary' if wan_health.primary.is_healthy else 'wan-down' }}">
-                            <div class="card-body py-2">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>{{ wan_health.primary.interface }}</strong>
-                                        <span class="badge badge-{{ 'success' if wan_health.primary.is_healthy else 'danger' }} ml-1">
-                                            {{ 'PRIMARY' if wan_health.active == wan_health.primary.interface else 'STANDBY' }}
-                                        </span>
-                                    </div>
-                                    <div>
-                                        {% if wan_health.primary.rtt_ms %}
-                                        <span class="badge rtt-badge badge-{{ 'success' if wan_health.primary.rtt_ms < 50 else 'warning' if wan_health.primary.rtt_ms < 100 else 'danger' }}">
-                                            {{ "%.1f"|format(wan_health.primary.rtt_ms) }}ms
-                                        </span>
-                                        {% else %}
-                                        <span class="badge rtt-badge badge-secondary">--</span>
-                                        {% endif %}
-                                    </div>
-                                </div>
-                                <small class="text-muted">{{ wan_health.primary.ip or 'No IP' }}</small>
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    {% if wan_health and wan_health.backup %}
-                    <div class="col-md-4">
-                        <div class="card mb-0 wan-status-card {{ 'wan-backup' if wan_health.backup.is_healthy else 'wan-down' }}">
-                            <div class="card-body py-2">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>{{ wan_health.backup.interface }}</strong>
-                                        <span class="badge badge-{{ 'warning' if wan_health.active == wan_health.backup.interface else 'secondary' }} ml-1">
-                                            {{ 'ACTIVE' if wan_health.active == wan_health.backup.interface else 'BACKUP' }}
-                                        </span>
-                                    </div>
-                                    <div>
-                                        {% if wan_health.backup.rtt_ms %}
-                                        <span class="badge rtt-badge badge-{{ 'success' if wan_health.backup.rtt_ms < 100 else 'warning' if wan_health.backup.rtt_ms < 200 else 'danger' }}">
-                                            {{ "%.1f"|format(wan_health.backup.rtt_ms) }}ms
-                                        </span>
-                                        {% else %}
-                                        <span class="badge rtt-badge badge-secondary">--</span>
-                                        {% endif %}
-                                    </div>
-                                </div>
-                                <small class="text-muted">{{ wan_health.backup.ip or 'No IP' }}</small>
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <div class="col-md-4">
-                        <div class="card mb-0">
-                            <div class="card-body py-2">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>Uptime</strong>
-                                    </div>
-                                    <div>
-                                        <span class="badge badge-success">{{ "%.1f"|format(wan_health.uptime_pct|default(99.9)) }}%</span>
-                                    </div>
-                                </div>
-                                <small class="text-muted">Active: {{ wan_health.active or 'Unknown' }}</small>
-                            </div>
+            <div class="card-body">
+                <div class="security-gauge-section">
+                    <div class="gauge-ring" id="security-gauge" data-gauge data-gauge-value="{{ (qsecbit_score * 100)|int }}" data-gauge-max="100"></div>
+                    <div>
+                        <div class="traffic-pips" id="security-layers">
+                            <!-- Will be populated by JS -->
                         </div>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
-</div>
 
-<div class="row">
-    <!-- Network Topology -->
-    <div class="col-md-6">
+        <!-- Network Topology -->
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-sitemap mr-1"></i>
-                    Network Topology
-                </h3>
-                <div class="card-tools">
-                    <a href="{{ url_for('networks.topology') }}" class="btn btn-tool">
-                        Full View <i class="fas fa-arrow-right"></i>
-                    </a>
+                <div class="card-header-title">
+                    <i class="fas fa-project-diagram"></i> Network Topology
                 </div>
             </div>
-            <div class="card-body p-2">
-                <div class="topology-mini" id="topology-container">
-                    <!-- WAN Layer -->
-                    <div class="text-center mb-2">
-                        <span class="text-white-50 small">INTERNET</span>
+            <div class="card-body">
+                <div class="network-topology">
+                    <div class="topo-node">
+                        <div class="topo-icon"><i class="fas fa-globe text-info"></i></div>
+                        <div class="topo-label">WAN</div>
+                        <div class="topo-value" id="wan-status">Online</div>
                     </div>
-                    <div class="text-center">
-                        {% if wan_health and wan_health.primary %}
-                        <div class="topology-node node-wan">
-                            <i class="fas fa-globe"></i>
-                            {{ wan_health.primary.interface }}
-                        </div>
-                        {% endif %}
-                        {% if wan_health and wan_health.backup %}
-                        <div class="topology-node node-lte">
-                            <i class="fas fa-signal"></i>
-                            {{ wan_health.backup.interface }}
-                        </div>
-                        {% endif %}
+                    <div class="topo-node">
+                        <div class="topo-icon"><i class="fas fa-fort-awesome text-warning"></i></div>
+                        <div class="topo-label">Fortress</div>
+                        <div class="topo-value">Active</div>
                     </div>
-                    <div class="connection-line"></div>
-
-                    <!-- Bridge Layer -->
-                    <div class="text-center">
-                        <div class="topology-node node-bridge" style="width: 100px;">
-                            <i class="fas fa-network-wired"></i>
-                            FTS Bridge
-                        </div>
+                    <div class="topo-node">
+                        <div class="topo-icon"><i class="fas fa-sitemap text-success"></i></div>
+                        <div class="topo-label">VLANs</div>
+                        <div class="topo-value">{{ vlan_count|default(5) }}</div>
                     </div>
-                    <div class="connection-line"></div>
-
-                    <!-- VLAN Layer -->
-                    <div class="text-center">
-                        {% for vlan in vlans %}
-                        <div class="topology-node node-vlan">
-                            <i class="fas fa-layer-group"></i>
-                            {{ vlan.name }}
-                            <small class="d-block">{{ vlan.device_count }} dev</small>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <div class="connection-line"></div>
-
-                    <!-- Device Layer -->
-                    <div class="text-center">
-                        <span class="text-white-50 small">{{ device_count }} Connected Devices</span>
+                    <div class="topo-node">
+                        <div class="topo-icon"><i class="fas fa-laptop text-primary"></i></div>
+                        <div class="topo-label">Devices</div>
+                        <div class="topo-value">{{ device_count }}</div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Recently Connected Devices -->
-    <div class="col-md-6">
+    <!-- Right Column: WAN Health & Activity -->
+    <div>
+        <!-- WAN Health Card -->
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-laptop mr-1"></i>
-                    Connected Devices
-                </h3>
-                <div class="card-tools">
-                    <a href="{{ url_for('clients.index') }}" class="btn btn-tool">
-                        View All <i class="fas fa-arrow-right"></i>
-                    </a>
+                <div class="card-header-title">
+                    <i class="fas fa-heartbeat"></i> WAN Health
+                </div>
+                <div class="card-header-actions">
+                    <a href="{{ url_for('slaai.index') }}" class="btn btn-sm btn-link">SLA AI</a>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="wan-health-grid">
+                    <div class="health-bar-wrapper" data-health data-health-value="95" data-health-label="Primary WAN"></div>
+                    <div class="health-bar-wrapper" data-health data-health-value="{{ wan_backup_health|default(72) }}" data-health-label="Backup LTE"></div>
+                </div>
+                <div class="mt-4 traffic-pips" id="wan-traffic-pips"></div>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-header-title">
+                    <i class="fas fa-clock"></i> Recent Activity
+                </div>
+                <div class="card-header-actions">
+                    <a href="{{ url_for('security.index') }}" class="btn btn-sm btn-link">View All</a>
                 </div>
             </div>
             <div class="card-body p-0">
-                <ul class="list-group list-group-flush">
-                    {% for device in recent_devices %}
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <div>
-                            <i class="fas fa-{{ device.icon }} mr-2 text-{{ 'info' if device.is_wifi else 'secondary' }}"></i>
-                            <strong>{{ device.name }}</strong>
-                            {% if device.manufacturer %}
-                            <small class="text-muted ml-1">({{ device.manufacturer }})</small>
-                            {% endif %}
-                            <small class="text-muted d-block ml-4">
-                                {{ device.ip }} - {{ device.vlan }}
-                                {% if device.is_wifi %}<i class="fas fa-wifi text-info ml-1"></i>{% endif %}
-                            </small>
+                <div class="timeline" id="activity-timeline">
+                    {% for threat in recent_threats[:5] %}
+                    <div class="timeline-event">
+                        <div class="timeline-marker" data-severity="{{ threat.severity }}"></div>
+                        <div class="timeline-content">
+                            <div class="timeline-header">
+                                <span class="timeline-time">{{ threat.time }}</span>
+                                <span class="timeline-type">{{ threat.type }}</span>
+                            </div>
+                            <div class="timeline-body">{{ threat.source }}</div>
                         </div>
-                        <div class="text-right">
-                            <span class="badge badge-{{ 'success' if device.state == 'REACHABLE' else 'warning' if device.state == 'STALE' else 'secondary' }}">
-                                {{ device.state }}
-                            </span>
-                            <small class="text-muted d-block">{{ device.time }}</small>
-                        </div>
-                    </li>
+                    </div>
                     {% else %}
-                    <li class="list-group-item text-center text-muted">
-                        <i class="fas fa-search"></i> No devices detected yet
-                    </li>
+                    <div class="p-4 text-center text-muted">
+                        <i class="fas fa-check-circle text-success fa-2x mb-2"></i>
+                        <p class="mb-0">No recent threats detected</p>
+                    </div>
                     {% endfor %}
-                </ul>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Remote Access Status -->
-<div class="row">
-    <div class="col-12">
-        <div class="card card-outline {% if tunnel_status.state == 'connected' %}card-success{% elif tunnel_status.state == 'configured' %}card-warning{% else %}card-secondary{% endif %}">
-            <div class="card-header py-2">
-                <h3 class="card-title">
-                    <i class="fas fa-cloud mr-2"></i>Remote Access
-                </h3>
-                <div class="card-tools">
-                    <a href="{{ url_for('tunnel.index') }}" class="btn btn-tool">
-                        Configure <i class="fas fa-arrow-right"></i>
-                    </a>
-                </div>
-            </div>
-            <div class="card-body py-2">
-                {% if tunnel_status.state == 'connected' %}
-                <div class="d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="badge badge-success mr-2">
-                            <i class="fas fa-check-circle"></i> Connected
-                        </span>
-                        <a href="https://{{ tunnel_status.hostname }}" target="_blank" class="text-info">
-                            https://{{ tunnel_status.hostname }}
-                        </a>
-                    </div>
-                    <small class="text-muted">Access your Fortress from anywhere</small>
-                </div>
-                {% elif tunnel_status.state == 'configured' %}
-                <div class="d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="badge badge-warning mr-2">
-                            <i class="fas fa-pause-circle"></i> Stopped
-                        </span>
-                        <span class="text-muted">{{ tunnel_status.hostname or 'Configured' }}</span>
-                    </div>
-                    <a href="{{ url_for('tunnel.index') }}" class="btn btn-sm btn-success">
-                        <i class="fas fa-play"></i> Start
-                    </a>
-                </div>
-                {% else %}
-                <div class="d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="badge badge-secondary mr-2">
-                            <i class="fas fa-times-circle"></i> Not Configured
-                        </span>
-                        <span class="text-muted">Access your dashboard from your phone</span>
-                    </div>
-                    <a href="{{ url_for('tunnel.wizard') }}" class="btn btn-sm btn-primary">
-                        <i class="fas fa-magic"></i> Setup
-                    </a>
-                </div>
-                {% endif %}
-            </div>
+<div class="card mt-4">
+    <div class="card-header">
+        <div class="card-header-title">
+            <i class="fas fa-cloud"></i> Remote Access
         </div>
+        <div class="card-header-actions">
+            <a href="{{ url_for('tunnel.index') }}" class="btn btn-sm btn-link">Configure</a>
+        </div>
+    </div>
+    <div class="card-body py-3">
+        {% if tunnel_status.state == 'connected' %}
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div class="d-flex align-items-center gap-3">
+                <span class="status-badge wan-primary">Connected</span>
+                <a href="https://{{ tunnel_status.hostname }}" target="_blank" class="text-accent">
+                    <i class="fas fa-external-link-alt mr-1"></i>https://{{ tunnel_status.hostname }}
+                </a>
+            </div>
+            <small class="text-muted">Access your Fortress from anywhere securely</small>
+        </div>
+        {% elif tunnel_status.state == 'configured' %}
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div class="d-flex align-items-center gap-3">
+                <span class="status-badge wan-backup">Stopped</span>
+                <span class="text-muted">{{ tunnel_status.hostname or 'Tunnel configured' }}</span>
+            </div>
+            <form action="{{ url_for('tunnel.start') }}" method="post" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-success">
+                    <i class="fas fa-play mr-1"></i>Start Tunnel
+                </button>
+            </form>
+        </div>
+        {% else %}
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div class="d-flex align-items-center gap-3">
+                <span class="status-badge device-offline">Not Configured</span>
+                <span class="text-muted">Enable secure remote access to your dashboard</span>
+            </div>
+            <a href="{{ url_for('tunnel.wizard') }}" class="btn btn-sm btn-primary">
+                <i class="fas fa-magic mr-1"></i>Setup Wizard
+            </a>
+        </div>
+        {% endif %}
     </div>
 </div>
 
-<!-- Active VLANs -->
-<div class="row">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-layer-group mr-1"></i>
-                    Network Segments
-                </h3>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    {% for vlan in vlans %}
-                    <div class="col-md-3 col-sm-6 col-12 text-center mb-2">
-                        <div class="info-box bg-{{ 'info' if vlan.vlan_id == 100 else 'secondary' if vlan.vlan_id == 200 else 'primary' }} mb-0">
-                            <div class="info-box-content">
-                                <span class="info-box-text">{{ vlan.name }}</span>
-                                <span class="info-box-number">VLAN {{ vlan.vlan_id }}</span>
-                                <small>{{ vlan.device_count }} devices</small>
-                            </div>
-                        </div>
-                    </div>
-                    {% else %}
-                    <div class="col-12 text-center text-muted">
-                        <p>No VLANs configured</p>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
+<!-- Quick Actions -->
+<div class="card mt-4">
+    <div class="card-header">
+        <div class="card-header-title">
+            <i class="fas fa-bolt"></i> Quick Actions
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="quick-actions">
+            <a href="{{ url_for('clients.index') }}" class="quick-action-btn">
+                <i class="fas fa-laptop"></i>
+                <span>View Devices</span>
+            </a>
+            <a href="{{ url_for('networks.index') }}" class="quick-action-btn">
+                <i class="fas fa-sitemap"></i>
+                <span>Manage VLANs</span>
+            </a>
+            <a href="{{ url_for('security.index') }}" class="quick-action-btn">
+                <i class="fas fa-shield-halved"></i>
+                <span>Security</span>
+            </a>
+            <a href="{{ url_for('dnsxai.index') }}" class="quick-action-btn">
+                <i class="fas fa-brain"></i>
+                <span>dnsXai</span>
+            </a>
+            <a href="{{ url_for('slaai.index') }}" class="quick-action-btn">
+                <i class="fas fa-heartbeat"></i>
+                <span>WAN Health</span>
+            </a>
+            {% if current_user.is_admin %}
+            <a href="{{ url_for('settings.index') }}" class="quick-action-btn">
+                <i class="fas fa-cog"></i>
+                <span>Settings</span>
+            </a>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -411,20 +384,85 @@
 
 {% block extra_js %}
 <script>
-// Auto-refresh dashboard stats every 30 seconds
-setInterval(function() {
-    fetch('/api/dashboard/stats')
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                // Update device count
-                const deviceCount = document.getElementById('device-count');
-                if (deviceCount && data.devices !== undefined) {
-                    deviceCount.textContent = data.devices;
+(function() {
+    // Initialize Security Layers Traffic Pips
+    const securityLayers = new Fortress.TrafficPips(document.getElementById('security-layers'), {
+        sections: [
+            { id: 'l2', label: 'L2 Data Link', active: 10, status: 'nominal', value: '0 alerts' },
+            { id: 'l3', label: 'L3 Network', active: 8, status: 'nominal', value: '0 alerts' },
+            { id: 'l4', label: 'L4 Transport', active: 9, status: 'nominal', value: '0 alerts' },
+            { id: 'l7', label: 'L7 Application', active: 11, status: 'nominal', value: '0 alerts' }
+        ],
+        pulseInterval: 3000
+    });
+
+    // Initialize WAN Traffic Pips
+    const wanPips = new Fortress.TrafficPips(document.getElementById('wan-traffic-pips'), {
+        sections: [
+            { id: 'inbound', label: 'Inbound', active: 7, status: 'nominal', value: '{{ wan_inbound|default("12.5 MB/s") }}' },
+            { id: 'outbound', label: 'Outbound', active: 4, status: 'nominal', value: '{{ wan_outbound|default("3.2 MB/s") }}' }
+        ],
+        pulseInterval: 2000
+    });
+
+    // Initialize Security Gauge with proper animation
+    const gaugeEl = document.getElementById('security-gauge');
+    if (gaugeEl) {
+        const securityGauge = new Fortress.Gauge(gaugeEl, {
+            value: {{ (qsecbit_score * 100)|int }},
+            max: 100,
+            thresholds: { green: 45, amber: 70 },
+            suffix: '%',
+            onChange: function(value, color) {
+                // Update badge color
+                const badge = document.getElementById('qsecbit-badge');
+                if (badge) {
+                    badge.className = 'status-badge rag-' + color;
                 }
             }
-        })
-        .catch(err => console.log('Stats refresh error:', err));
-}, 30000);
+        });
+    }
+
+    // Auto-refresh dashboard stats
+    const poller = new Fortress.Poller({
+        url: '/api/dashboard/stats',
+        interval: 10000,
+        onData: function(data) {
+            if (data.qsecbit) {
+                // Update gauge
+                const gaugeEl = document.getElementById('security-gauge');
+                if (gaugeEl && gaugeEl._gauge) {
+                    gaugeEl._gauge.setValue(data.qsecbit.score * 100);
+                }
+            }
+
+            // Update stat cards with animation
+            if (data.device_count !== undefined) {
+                const el = document.querySelector('#stat-devices .stat-value');
+                if (el) Fortress.Utils.animateValue(el, parseInt(el.textContent) || 0, data.device_count);
+            }
+
+            if (data.threats_blocked !== undefined) {
+                const el = document.querySelector('#stat-threats .stat-value');
+                if (el) Fortress.Utils.animateValue(el, parseInt(el.textContent) || 0, data.threats_blocked);
+            }
+
+            if (data.dns_blocked !== undefined) {
+                const el = document.querySelector('#stat-dns .stat-value');
+                if (el) Fortress.Utils.animateValue(el, parseInt(el.textContent) || 0, data.dns_blocked);
+            }
+
+            // Update WAN status
+            if (data.wan_status) {
+                document.getElementById('wan-status').textContent = data.wan_status;
+            }
+        },
+        onError: function(err) {
+            console.log('Stats refresh error:', err);
+        }
+    });
+
+    poller.start();
+})();
 </script>
 {% endblock %}

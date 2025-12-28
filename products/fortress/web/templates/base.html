@@ -6,8 +6,8 @@
     <meta name="description" content="HookProbe Fortress - Small Business Security Gateway">
     <title>{% block title %}HookProbe Fortress{% endblock %}</title>
 
-    <!-- Google Fonts - Source Sans Pro (AdminLTE default) -->
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,700&display=fallback">
+    <!-- Google Fonts - Inter (Premium UI font) -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
     <!-- Font Awesome 6.5.1 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     <!-- AdminLTE 3.2.0 -->
@@ -16,15 +16,15 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/2.1.4/toastr.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     <!-- DataTables 1.13.7 -->
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap4.min.css" crossorigin="anonymous">
-    <!-- Custom Fortress styles -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fortress.css') }}">
+    <!-- Fortress Unified Design System (AdminLTE + Component Library) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{% filter urlencode %}<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23002742'/><path d='M50 15L20 30v40l30 15 30-15V30L50 15z' fill='%23e69500'/><path d='M50 25L30 35v30l20 10 20-10V35L50 25z' fill='%23002742'/></svg>{% endfilter %}">
 
     {% block extra_css %}{% endblock %}
 </head>
-<body class="hold-transition sidebar-mini layout-fixed dark-mode">
+<body class="hold-transition sidebar-mini sidebar-collapse layout-fixed dark-mode">
 <div class="wrapper">
 
     <!-- Navbar -->
@@ -35,12 +35,29 @@
                 <a class="nav-link" data-widget="pushmenu" href="#" role="button"><i class="fas fa-bars"></i></a>
             </li>
             <li class="nav-item d-none d-sm-inline-block">
-                <a href="{{ url_for('dashboard.index') }}" class="nav-link">Dashboard</a>
+                <a href="{{ url_for('dashboard.index') }}" class="nav-link">
+                    <i class="fas fa-fort-awesome mr-1"></i> Fortress
+                </a>
             </li>
         </ul>
 
         <!-- Right navbar links -->
         <ul class="navbar-nav ml-auto">
+            <!-- Live Status Indicator -->
+            <li class="nav-item">
+                <span class="nav-link" id="live-indicator">
+                    <span class="live-dot"></span>
+                    <span class="d-none d-md-inline">Live</span>
+                </span>
+            </li>
+
+            <!-- QSecBit RAG Status -->
+            <li class="nav-item">
+                <a class="nav-link" href="{{ url_for('security.index') }}" title="Security Status">
+                    <span class="status-badge rag-green" id="qsecbit-badge">GREEN</span>
+                </a>
+            </li>
+
             <!-- Notifications -->
             <li class="nav-item dropdown">
                 <a class="nav-link" data-toggle="dropdown" href="#">
@@ -50,31 +67,28 @@
                 <div class="dropdown-menu dropdown-menu-lg dropdown-menu-right">
                     <span class="dropdown-item dropdown-header">Notifications</span>
                     <div class="dropdown-divider"></div>
-                    <a href="{{ url_for('security.index') }}" class="dropdown-item">
-                        <i class="fas fa-shield-halved mr-2"></i> No active threats
-                    </a>
+                    <div id="notification-list">
+                        <a href="{{ url_for('security.index') }}" class="dropdown-item">
+                            <i class="fas fa-shield-halved mr-2 text-success"></i> No active threats
+                        </a>
+                    </div>
+                    <div class="dropdown-divider"></div>
+                    <a href="{{ url_for('security.index') }}" class="dropdown-item dropdown-footer">View All</a>
                 </div>
-            </li>
-
-            <!-- QSecBit Status -->
-            <li class="nav-item">
-                <a class="nav-link" href="{{ url_for('security.index') }}" title="QSecBit Status">
-                    <span class="badge" id="qsecbit-badge" style="background-color: #28a745;">GREEN</span>
-                </a>
             </li>
 
             <!-- User Menu -->
             <li class="nav-item dropdown">
                 <a class="nav-link" data-toggle="dropdown" href="#">
-                    <i class="far fa-user"></i>
-                    <span class="d-none d-md-inline">{{ current_user.display_name or current_user.id }}</span>
+                    <i class="far fa-user-circle"></i>
+                    <span class="d-none d-md-inline ml-1">{{ current_user.display_name or current_user.id }}</span>
                 </a>
                 <div class="dropdown-menu dropdown-menu-right">
                     <a href="{{ url_for('auth.profile') }}" class="dropdown-item">
                         <i class="fas fa-user mr-2"></i> Profile
                     </a>
                     <div class="dropdown-divider"></div>
-                    <a href="{{ url_for('auth.logout') }}" class="dropdown-item">
+                    <a href="{{ url_for('auth.logout') }}" class="dropdown-item text-danger">
                         <i class="fas fa-sign-out-alt mr-2"></i> Logout
                     </a>
                 </div>
@@ -86,7 +100,9 @@
     <aside class="main-sidebar sidebar-dark-primary elevation-4">
         <!-- Brand Logo -->
         <a href="{{ url_for('dashboard.index') }}" class="brand-link">
-            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="HookProbe" class="brand-image img-circle elevation-3" style="opacity: .8" onerror="this.style.display='none'">
+            <span class="brand-icon">
+                <i class="fas fa-shield-halved text-warning"></i>
+            </span>
             <span class="brand-text font-weight-light"><strong>Hook</strong>Probe</span>
         </a>
 
@@ -99,71 +115,132 @@
                 </div>
                 <div class="info">
                     <a href="#" class="d-block">Fortress</a>
-                    <small class="text-muted">Small Business Edition</small>
+                    <small class="text-muted">Small Business</small>
                 </div>
             </div>
 
-            <!-- Sidebar Menu -->
+            <!-- Sidebar Menu - 5 Tab Structure -->
             <nav class="mt-2">
-                <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu">
+                <ul class="nav nav-pills nav-sidebar flex-column nav-child-indent" data-widget="treeview" role="menu" data-accordion="true">
+
+                    <!-- 1. DASHBOARD -->
                     <li class="nav-item">
                         <a href="{{ url_for('dashboard.index') }}" class="nav-link {% if request.endpoint == 'dashboard.index' %}active{% endif %}">
                             <i class="nav-icon fas fa-tachometer-alt"></i>
                             <p>Dashboard</p>
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('security.index') }}" class="nav-link {% if 'security' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-shield-halved"></i>
-                            <p>Security</p>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('sdn.index') }}" class="nav-link {% if 'sdn' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-project-diagram"></i>
-                            <p>SDN Management</p>
-                            <span class="badge badge-warning right">New</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('clients.index') }}" class="nav-link {% if 'clients' in request.endpoint and 'sdn' not in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-laptop"></i>
-                            <p>Clients</p>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('networks.index') }}" class="nav-link {% if 'networks' in request.endpoint %}active{% endif %}">
+
+                    <!-- 2. NETWORK (Devices + VLANs + SDN) -->
+                    <li class="nav-item {% if 'clients' in request.endpoint or 'networks' in request.endpoint or 'sdn' in request.endpoint %}menu-open{% endif %}">
+                        <a href="#" class="nav-link {% if 'clients' in request.endpoint or 'networks' in request.endpoint or 'sdn' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-network-wired"></i>
-                            <p>Networks</p>
+                            <p>
+                                Network
+                                <i class="right fas fa-angle-left"></i>
+                            </p>
                         </a>
+                        <ul class="nav nav-treeview">
+                            <li class="nav-item">
+                                <a href="{{ url_for('clients.index') }}" class="nav-link {% if 'clients' in request.endpoint and 'sdn' not in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-laptop nav-icon"></i>
+                                    <p>Devices</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{{ url_for('networks.index') }}" class="nav-link {% if 'networks' in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-sitemap nav-icon"></i>
+                                    <p>VLANs</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{{ url_for('sdn.index') }}" class="nav-link {% if 'sdn' in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-project-diagram nav-icon"></i>
+                                    <p>SDN Control</p>
+                                </a>
+                            </li>
+                        </ul>
                     </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('dnsxai.index') }}" class="nav-link {% if 'dnsxai' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-brain"></i>
-                            <p>dnsXai</p>
+
+                    <!-- 3. SECURITY & AI (QSecBit + dnsXai + Threats) -->
+                    <li class="nav-item {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}menu-open{% endif %}">
+                        <a href="#" class="nav-link {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-shield-halved"></i>
+                            <p>
+                                Security & AI
+                                <i class="right fas fa-angle-left"></i>
+                                <span class="badge badge-success right" id="sidebar-rag-badge">OK</span>
+                            </p>
                         </a>
+                        <ul class="nav nav-treeview">
+                            <li class="nav-item">
+                                <a href="{{ url_for('security.index') }}" class="nav-link {% if 'security' in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-chart-line nav-icon"></i>
+                                    <p>QSecBit</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{{ url_for('dnsxai.index') }}" class="nav-link {% if 'dnsxai' in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-brain nav-icon"></i>
+                                    <p>dnsXai</p>
+                                </a>
+                            </li>
+                        </ul>
                     </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('tunnel.index') }}" class="nav-link {% if 'tunnel' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-cloud"></i>
-                            <p>Remote Access</p>
+
+                    <!-- 4. CONNECTIVITY (WAN + Traffic + Tunnel) -->
+                    <li class="nav-item {% if 'slaai' in request.endpoint or 'tunnel' in request.endpoint %}menu-open{% endif %}">
+                        <a href="#" class="nav-link {% if 'slaai' in request.endpoint or 'tunnel' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-globe"></i>
+                            <p>
+                                Connectivity
+                                <i class="right fas fa-angle-left"></i>
+                            </p>
                         </a>
+                        <ul class="nav nav-treeview">
+                            <li class="nav-item">
+                                <a href="{{ url_for('slaai.index') }}" class="nav-link {% if 'slaai' in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-heartbeat nav-icon"></i>
+                                    <p>WAN Health</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{{ url_for('tunnel.index') }}" class="nav-link {% if 'tunnel' in request.endpoint %}active{% endif %}">
+                                    <i class="fas fa-cloud nav-icon"></i>
+                                    <p>Remote Access</p>
+                                </a>
+                            </li>
+                        </ul>
                     </li>
+
+                    <!-- 5. SETTINGS (Admin only) -->
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('settings.index') }}" class="nav-link {% if 'settings' in request.endpoint %}active{% endif %}">
+                    <li class="nav-item {% if 'settings' in request.endpoint %}menu-open{% endif %}">
+                        <a href="#" class="nav-link {% if 'settings' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-cog"></i>
-                            <p>Settings</p>
+                            <p>
+                                Settings
+                                <i class="right fas fa-angle-left"></i>
+                            </p>
                         </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('settings.users') }}" class="nav-link">
-                            <i class="nav-icon fas fa-users-cog"></i>
-                            <p>Users</p>
-                        </a>
+                        <ul class="nav nav-treeview">
+                            <li class="nav-item">
+                                <a href="{{ url_for('settings.index') }}" class="nav-link {% if request.endpoint == 'settings.index' %}active{% endif %}">
+                                    <i class="fas fa-sliders-h nav-icon"></i>
+                                    <p>System</p>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="{{ url_for('settings.users') }}" class="nav-link {% if request.endpoint == 'settings.users' %}active{% endif %}">
+                                    <i class="fas fa-users-cog nav-icon"></i>
+                                    <p>Users</p>
+                                </a>
+                            </li>
+                        </ul>
                     </li>
                     {% endif %}
+
                 </ul>
             </nav>
         </div>
@@ -212,9 +289,9 @@
 
     <!-- Footer -->
     <footer class="main-footer">
-        <strong>&copy; {{ now.year }} <a href="https://hookprobe.com">HookProbe</a></strong>
+        <strong>&copy; {{ now.year if now else 2024 }} <a href="https://hookprobe.com">HookProbe</a></strong>
         <span class="float-right d-none d-sm-inline-block">
-            <i class="fas fa-shield-halved"></i> One node's detection &rarr; Everyone's protection
+            <i class="fas fa-shield-halved text-warning"></i> One node's detection &rarr; Everyone's protection
         </span>
     </footer>
 </div>
@@ -239,8 +316,51 @@
         "timeOut": "3000"
     };
 </script>
+<!-- Fortress Component Library -->
+<script src="{{ url_for('static', filename='js/components.js') }}"></script>
 <!-- Fortress JS -->
 <script src="{{ url_for('static', filename='js/fortress.js') }}"></script>
+
+<!-- Live Status Polling -->
+<script>
+(function() {
+    // Update QSecBit badge
+    function updateQSecBitBadge(status) {
+        const badge = document.getElementById('qsecbit-badge');
+        const sidebarBadge = document.getElementById('sidebar-rag-badge');
+        if (!badge) return;
+
+        badge.className = 'status-badge rag-' + status.toLowerCase();
+        badge.textContent = status.toUpperCase();
+
+        if (sidebarBadge) {
+            sidebarBadge.className = 'badge right badge-' +
+                (status === 'green' ? 'success' : status === 'amber' ? 'warning' : 'danger');
+            sidebarBadge.textContent = status === 'green' ? 'OK' : status.toUpperCase();
+        }
+    }
+
+    // Poll status
+    function pollStatus() {
+        fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                if (data.qsecbit_status) {
+                    updateQSecBitBadge(data.qsecbit_status);
+                }
+                if (data.notification_count !== undefined) {
+                    document.getElementById('notification-count').textContent = data.notification_count;
+                }
+            })
+            .catch(() => {});
+    }
+
+    // Start polling every 10 seconds
+    setInterval(pollStatus, 10000);
+    pollStatus();
+})();
+</script>
+
 {% block extra_js %}{% endblock %}
 </body>
 </html>
