@@ -667,10 +667,26 @@ class QSecBitFortressAgent:
         primary_iface = None
         backup_iface = None
 
+        # Collect all potential WAN interfaces
+        wan_candidates = []
+        lte_candidates = []
+
+        # Interfaces to exclude (bridges, containers, internal)
+        exclude_prefixes = ('lo', 'docker', 'podman', 'veth', 'br-', 'virbr', 'FTS', 'vlan')
+        exclude_names = {'lo', 'FTS', 'br0', 'br-lan'}
+
         for iface in interfaces:
             name = iface.get('ifname', '')
             state = iface.get('operstate', 'UNKNOWN')
+
+            # Skip down interfaces
             if state != 'UP':
+                continue
+
+            # Skip excluded interfaces
+            if name in exclude_names:
+                continue
+            if any(name.startswith(prefix) for prefix in exclude_prefixes):
                 continue
 
             # Get IP address
@@ -680,13 +696,35 @@ class QSecBitFortressAgent:
                     ip_addr = f"{addr_info.get('local')}/{addr_info.get('prefixlen')}"
                     break
 
-            # Detect interface type
-            if name.startswith('eth') or name.startswith('en'):
-                if not primary_iface:
-                    primary_iface = {'name': name, 'ip': ip_addr, 'state': 'UP'}
-            elif name.startswith('wwan') or name.startswith('usb'):
-                if not backup_iface:
-                    backup_iface = {'name': name, 'ip': ip_addr, 'state': 'UP'}
+            # Skip interfaces without IP (not configured for WAN)
+            if not ip_addr:
+                continue
+
+            # Categorize interface
+            iface_info = {'name': name, 'ip': ip_addr, 'state': 'UP'}
+
+            if name.startswith('wwan') or name.startswith('usb') or name.startswith('wwp'):
+                # LTE/cellular interfaces
+                lte_candidates.append(iface_info)
+            elif name.startswith('eth') or name.startswith('en') or name.startswith('eno'):
+                # Ethernet interfaces - potential WAN
+                wan_candidates.append(iface_info)
+
+        # Sort WAN candidates by name for consistent ordering (eth0 before eth1)
+        wan_candidates.sort(key=lambda x: x['name'])
+
+        # Assign primary and backup
+        # Priority: First ethernet = primary, second ethernet or LTE = backup
+        if len(wan_candidates) >= 1:
+            primary_iface = wan_candidates[0]
+        if len(wan_candidates) >= 2:
+            backup_iface = wan_candidates[1]
+        elif lte_candidates:
+            backup_iface = lte_candidates[0]
+
+        # Log detected interfaces for debugging
+        logger.debug(f"WAN detection: primary={primary_iface}, backup={backup_iface}")
+        logger.debug(f"WAN candidates: {wan_candidates}, LTE candidates: {lte_candidates}")
 
         # Test primary WAN
         if primary_iface:
@@ -707,9 +745,13 @@ class QSecBitFortressAgent:
                 health['active_is_primary'] = True
                 health['state'] = 'primary_active'
 
-        # Test backup WAN (LTE)
+        # Test backup WAN (could be second ethernet or LTE)
         if backup_iface:
             conn = test_connectivity(backup_iface['name'])
+
+            # Detect if this is an LTE interface
+            is_lte = backup_iface['name'].startswith(('wwan', 'usb', 'wwp'))
+
             health['backup'] = {
                 'interface': backup_iface['name'],
                 'ip': backup_iface['ip'],
@@ -719,7 +761,8 @@ class QSecBitFortressAgent:
                 'packet_loss': conn['packet_loss'],
                 'is_connected': conn['is_connected'],
                 'health_score': calculate_health_score(conn),
-                'signal_dbm': None,  # Could add mmcli parsing here
+                'signal_dbm': None,  # Could add mmcli parsing for LTE
+                'is_lte': is_lte,
                 'status': 'STANDBY' if health['active'] else ('ACTIVE' if conn['is_connected'] else 'FAILED'),
             }
             if not health['active'] and conn['is_connected']:
