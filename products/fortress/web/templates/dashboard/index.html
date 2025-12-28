@@ -373,6 +373,13 @@
         </div>
     </div>
 </div>
+
+{% if not system_data_available %}
+<div class="alert alert-warning">
+    <i class="fas fa-exclamation-triangle"></i>
+    <strong>Limited Data:</strong> System data module not available. Some metrics may not display correctly.
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}

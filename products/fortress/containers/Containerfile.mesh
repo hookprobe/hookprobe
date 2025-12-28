@@ -102,7 +102,7 @@ ENV CORTEX_WS_PORT=8766
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8766/health', timeout=5)" || exit 1
+    CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:8766/health", timeout=5)'
 
 # Expose ports
 # HTP Primary

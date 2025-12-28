@@ -96,11 +96,14 @@ services:
       --maxmemory-policy allkeys-lru
       --bind 0.0.0.0
       --requirepass "${REDIS_PASSWORD:-fortress_redis_secret}"
+    environment:
+      # Expose password to container for healthcheck
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
     volumes:
       - redis_data:/data
     healthcheck:
-      # Use shell form for proper env var expansion
-      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD:-fortress_redis_secret} ping | grep -q PONG"]
+      # Simple PING check - redis-cli reads REDISCLI_AUTH env var
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -207,8 +210,8 @@ services:
       - "0.0.0.0:5353:5353/udp"  # DNS accessible from LAN
       - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
     healthcheck:
-      # DNS query check - send query and verify response (no pgrep in slim images)
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); q=b'\\x00\\x01\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x09localhost\\x00\\x00\\x01\\x00\\x01'; s.sendto(q,('127.0.0.1',5353)); r=s.recv(512); s.close(); exit(0 if len(r)>12 else 1)"]
+      # Check HTTP API health endpoint using Python urllib (always available)
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/health\", timeout=5)'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -289,7 +292,7 @@ services:
       - NET_RAW
     # Health check - verify HTTP API is responding on port 9090
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/health', timeout=5)"]
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:9090/health\", timeout=5)'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -653,7 +656,7 @@ services:
       # Cortex WebSocket (local only)
       - "127.0.0.1:8766:8766"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/health', timeout=5)"]
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8766/health\", timeout=5)'"]
       interval: 30s
       timeout: 10s
       retries: 3

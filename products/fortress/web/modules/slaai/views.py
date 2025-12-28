@@ -19,21 +19,39 @@ from ..auth.decorators import operator_required
 
 logger = logging.getLogger(__name__)
 
-# Try to import SLA AI components
-SLAAI_AVAILABLE = False
+# Import system data module for real data
+SYSTEM_DATA_AVAILABLE = False
 try:
     import sys
     from pathlib import Path
-    # Add shared path
+    # Add lib path
+    lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+    if lib_path.exists() and str(lib_path) not in sys.path:
+        sys.path.insert(0, str(lib_path))
+
+    from system_data import (
+        get_wan_health,
+        get_slaai_status,
+        get_all_interface_traffic,
+        get_vlans,
+        get_interfaces,
+    )
+    SYSTEM_DATA_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"system_data module not available: {e}")
+
+# Try to import SLA AI engine components (optional)
+SLAAI_ENGINE_AVAILABLE = False
+try:
     shared_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'shared'
     if shared_path.exists() and str(shared_path) not in sys.path:
         sys.path.insert(0, str(shared_path))
 
     from slaai import SLAEngine, SLAState, SLAStatus
     from slaai.config import load_config
-    SLAAI_AVAILABLE = True
+    SLAAI_ENGINE_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"SLA AI not available: {e}")
+    logger.debug(f"SLA AI engine not available: {e}")
 
 
 def get_demo_sla_status():
@@ -103,7 +121,7 @@ def index():
     """SLA AI dashboard - main view."""
     return render_template(
         'slaai/index.html',
-        slaai_available=SLAAI_AVAILABLE
+        slaai_available=SYSTEM_DATA_AVAILABLE
     )
 
 
@@ -112,15 +130,16 @@ def index():
 def api_status():
     """Get current SLA status as JSON."""
     try:
-        if SLAAI_AVAILABLE:
-            # Try to read from state file
-            state_file = Path('/run/fortress/slaai-recommendation.json')
-            if state_file.exists():
-                with open(state_file) as f:
-                    data = json.load(f)
-                    return jsonify({'success': True, 'status': data})
+        # Use real system data if available
+        if SYSTEM_DATA_AVAILABLE:
+            status = get_slaai_status()
+            return jsonify({
+                'success': True,
+                'status': status,
+                'demo_mode': False
+            })
 
-        # Return demo data
+        # Fall back to demo data
         return jsonify({
             'success': True,
             'status': get_demo_sla_status(),
@@ -142,10 +161,30 @@ def api_status():
 def api_metrics():
     """Get WAN metrics for charts."""
     try:
-        # Generate time series data for last hour
+        if SYSTEM_DATA_AVAILABLE:
+            wan = get_wan_health()
+            now = datetime.now()
+
+            # Current metrics from real data
+            current_metrics = {
+                'timestamp': now.isoformat(),
+                'primary_rtt': wan['primary']['rtt_ms'] if wan.get('primary') else None,
+                'primary_jitter': wan['primary']['jitter_ms'] if wan.get('primary') else None,
+                'primary_loss': wan['primary']['packet_loss'] if wan.get('primary') else 100,
+                'backup_rtt': wan['backup']['rtt_ms'] if wan.get('backup') else None,
+                'backup_signal': wan['backup'].get('signal_dbm') if wan.get('backup') else None,
+                'backup_loss': wan['backup']['packet_loss'] if wan.get('backup') else 100,
+            }
+
+            return jsonify({
+                'success': True,
+                'metrics': [current_metrics],
+                'demo_mode': False
+            })
+
+        # Fallback to demo data
         now = datetime.now()
         metrics = []
-
         for i in range(60):
             ts = now - timedelta(minutes=60 - i)
             metrics.append({
@@ -159,10 +198,11 @@ def api_metrics():
         return jsonify({
             'success': True,
             'metrics': metrics,
-            'demo_mode': not SLAAI_AVAILABLE
+            'demo_mode': True
         })
 
     except Exception as e:
+        logger.error(f"Metrics error: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -175,7 +215,7 @@ def api_history():
         return jsonify({
             'success': True,
             'history': history,
-            'demo_mode': not SLAAI_AVAILABLE
+            'demo_mode': not SLAAI_ENGINE_AVAILABLE
         })
 
     except Exception as e:
@@ -192,7 +232,7 @@ def api_force_failover():
         return jsonify({
             'success': True,
             'message': 'Manual failover initiated',
-            'demo_mode': not SLAAI_AVAILABLE
+            'demo_mode': not SLAAI_ENGINE_AVAILABLE
         })
 
     except Exception as e:
@@ -208,8 +248,67 @@ def api_force_failback():
         return jsonify({
             'success': True,
             'message': 'Manual failback initiated',
-            'demo_mode': not SLAAI_AVAILABLE
+            'demo_mode': not SYSTEM_DATA_AVAILABLE
         })
 
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@slaai_bp.route('/api/traffic')
+@login_required
+def api_traffic():
+    """Get real-time traffic data for all interfaces."""
+    try:
+        if SYSTEM_DATA_AVAILABLE:
+            traffic = get_all_interface_traffic()
+            vlans = get_vlans()
+
+            return jsonify({
+                'success': True,
+                'traffic': traffic,
+                'vlans': vlans,
+                'demo_mode': False
+            })
+
+        # Fallback demo data
+        return jsonify({
+            'success': True,
+            'traffic': [],
+            'vlans': [],
+            'demo_mode': True
+        })
+
+    except Exception as e:
+        logger.error(f"Traffic API error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@slaai_bp.route('/api/interfaces')
+@login_required
+def api_interfaces():
+    """Get list of active interfaces."""
+    try:
+        if SYSTEM_DATA_AVAILABLE:
+            interfaces = get_interfaces()
+            # Filter to relevant interfaces
+            relevant = [
+                iface for iface in interfaces
+                if iface['type'] in ['wan', 'lte', 'bridge', 'wifi', 'vlan']
+                and iface['state'] == 'UP'
+            ]
+            return jsonify({
+                'success': True,
+                'interfaces': relevant,
+                'demo_mode': False
+            })
+
+        return jsonify({
+            'success': True,
+            'interfaces': [],
+            'demo_mode': True
+        })
+
+    except Exception as e:
+        logger.error(f"Interfaces API error: {e}")
         return jsonify({'success': False, 'error': str(e)})
