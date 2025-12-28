@@ -5,6 +5,7 @@ Main overview page with widgets and stats - Uses real system data.
 
 import json
 import time
+import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -13,46 +14,28 @@ from flask_login import login_required
 
 from . import dashboard_bp
 
-# Import system data module (provides real data without DB dependency)
-try:
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-    from system_data import (
-        get_all_devices,
-        get_device_count,
-        get_qsecbit_stats,
-        get_dns_blocked_count,
-        get_wan_health,
-        get_vlans,
-        get_network_topology,
-        get_dashboard_summary,
-        _get_cached,
-        _set_cached,
-        CACHE_TTL,
-    )
-    SYSTEM_DATA_AVAILABLE = True
-    CACHE_TIMEOUT = CACHE_TTL  # Use the same timeout as system_data
-except ImportError as e:
-    SYSTEM_DATA_AVAILABLE = False
-    CACHE_TIMEOUT = 30  # Fallback timeout
-    import logging
-    logging.warning(f"system_data module not available: {e}")
+logger = logging.getLogger(__name__)
 
-    # Define local cache when system_data is not available
-    import time
-    _local_cache = {}
+# Data directory - shared volume from fts-qsecbit agent
+DATA_DIR = Path('/opt/hookprobe/fortress/data')
 
-    def _get_cached(key, ttl=CACHE_TIMEOUT):
-        """Get cached value if not expired (fallback implementation)."""
-        if key in _local_cache:
-            value, timestamp = _local_cache[key]
-            if time.time() - timestamp < ttl:
-                return value
-        return None
+# Cache for local data
+_local_cache = {}
+CACHE_TIMEOUT = 30
 
-    def _set_cached(key, value):
-        """Set cached value (fallback implementation)."""
-        _local_cache[key] = (value, time.time())
+
+def _get_cached(key, ttl=CACHE_TIMEOUT):
+    """Get cached value if not expired."""
+    if key in _local_cache:
+        value, timestamp = _local_cache[key]
+        if time.time() - timestamp < ttl:
+            return value
+    return None
+
+
+def _set_cached(key, value):
+    """Set cached value."""
+    _local_cache[key] = (value, time.time())
 
 
 def get_tunnel_status():
@@ -69,52 +52,48 @@ def get_tunnel_status():
             }
         except Exception:
             pass
-
-    result = {'state': 'unconfigured', 'hostname': None, 'cloudflared_version': None}
-    _set_cached('tunnel_status', result)
-    return result
+    return {'state': 'unconfigured', 'hostname': None, 'cloudflared_version': None}
 
 
 def get_qsecbit_stats():
-    """Load QSecBit stats from file (cached)."""
+    """Load QSecBit stats from file (written by fts-qsecbit agent)."""
     cached = _get_cached('qsecbit_stats', 10)
     if cached is not None:
         return cached
 
-    stats_file = Path('/opt/hookprobe/fortress/data/qsecbit_stats.json')
+    stats_file = DATA_DIR / 'qsecbit_stats.json'
     try:
         if stats_file.exists():
             with open(stats_file, 'r') as f:
                 result = json.load(f)
                 _set_cached('qsecbit_stats', result)
                 return result
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Could not read qsecbit_stats.json: {e}")
 
-    result = {'score': 0.85, 'rag_status': 'GREEN', 'threats_detected': 0, 'vlan_violations': 0}
-    _set_cached('qsecbit_stats', result)
-    return result
+    # Default when no data available
+    return {'score': 0, 'rag_status': 'UNKNOWN', 'threats_detected': 0, 'vlan_violations': 0}
 
 
 def get_device_count():
-    """Get count of connected devices from device manager."""
+    """Get count of connected devices from ARP table or device manager data."""
     cached = _get_cached('device_count', CACHE_TIMEOUT)
     if cached is not None:
         return cached
 
+    # Try reading from device manager data file
+    devices_file = DATA_DIR / 'devices.json'
     try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-        from device_manager import get_device_manager
-        dm = get_device_manager()
-        counts = dm.get_device_count()
-        result = counts.get('total', 0)
-        _set_cached('device_count', result)
-        return result
+        if devices_file.exists():
+            with open(devices_file, 'r') as f:
+                devices = json.load(f)
+                count = len(devices) if isinstance(devices, list) else devices.get('total', 0)
+                _set_cached('device_count', count)
+                return count
     except Exception:
         pass
 
-    # Fallback: count from ARP table
+    # Fallback: count from ARP neighbor table (works in container with host network)
     try:
         import subprocess
         result = subprocess.run(['ip', 'neigh', 'show'], capture_output=True, text=True, timeout=5)
@@ -128,6 +107,41 @@ def get_device_count():
     return 0
 
 
+def get_all_devices():
+    """Get list of all connected devices."""
+    devices_file = DATA_DIR / 'devices.json'
+    try:
+        if devices_file.exists():
+            with open(devices_file, 'r') as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+    except Exception:
+        pass
+
+    # Fallback: build from ARP table
+    try:
+        import subprocess
+        result = subprocess.run(['ip', '-j', 'neigh', 'show'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            neighbors = json.loads(result.stdout)
+            devices = []
+            for n in neighbors:
+                if n.get('state') and n['state'] != 'FAILED':
+                    devices.append({
+                        'ip_address': n.get('dst', ''),
+                        'mac_address': n.get('lladdr', ''),
+                        'state': n.get('state', 'UNKNOWN'),
+                        'device_type': 'unknown',
+                        'hostname': None,
+                        'manufacturer': None,
+                    })
+            return devices
+    except Exception:
+        pass
+
+    return []
+
+
 def get_dns_blocked_count():
     """Get count of DNS queries blocked today from dnsXai."""
     cached = _get_cached('dns_blocked', CACHE_TIMEOUT)
@@ -135,7 +149,7 @@ def get_dns_blocked_count():
         return cached
 
     # Try to read from dnsXai stats file
-    stats_file = Path('/opt/hookprobe/fortress/data/dnsxai_stats.json')
+    stats_file = DATA_DIR / 'dnsxai_stats.json'
     try:
         if stats_file.exists():
             with open(stats_file, 'r') as f:
@@ -143,21 +157,6 @@ def get_dns_blocked_count():
                 result = data.get('blocked_today', 0)
                 _set_cached('dns_blocked', result)
                 return result
-    except Exception:
-        pass
-
-    # Fallback: parse dnsmasq log for blocked queries
-    try:
-        log_file = Path('/var/log/dnsmasq.log')
-        if log_file.exists():
-            today = datetime.now().strftime('%b %d')
-            count = 0
-            with open(log_file, 'r') as f:
-                for line in f:
-                    if today in line and ('blocked' in line.lower() or 'NXDOMAIN' in line):
-                        count += 1
-            _set_cached('dns_blocked', count)
-            return count
     except Exception:
         pass
 
@@ -170,64 +169,64 @@ def get_vlan_count():
     if cached is not None:
         return cached
 
+    # Try reading from config or data file
+    vlans_file = DATA_DIR / 'vlans.json'
     try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-        from vlan_manager import get_vlan_manager
-        vm = get_vlan_manager()
-        vlans = vm.get_vlans()
-        result = len(vlans) if vlans else 5  # Default to 5 VLANs
-        _set_cached('vlan_count', result)
-        return result
+        if vlans_file.exists():
+            with open(vlans_file, 'r') as f:
+                vlans = json.load(f)
+                count = len(vlans) if isinstance(vlans, list) else 0
+                _set_cached('vlan_count', count)
+                return count
     except Exception:
         pass
 
-    return 5  # Default VLAN count
+    # Default: assume standard VLAN setup
+    return 5
 
 
 def get_wan_stats():
-    """Get WAN interface statistics."""
+    """Get WAN interface statistics from agent data."""
     cached = _get_cached('wan_stats', 10)
     if cached is not None:
         return cached
 
     result = {
-        'primary_health': 95,
-        'backup_health': 72,
-        'inbound': '12.5 MB/s',
-        'outbound': '3.2 MB/s',
-        'status': 'online'
+        'primary_health': 0,
+        'backup_health': 0,
+        'inbound': '0 B',
+        'outbound': '0 B',
+        'status': 'unknown'
     }
 
-    # Try to read from SLA AI state file
+    # Read WAN health from agent data file
+    wan_file = DATA_DIR / 'wan_health.json'
     try:
-        state_file = Path('/run/fortress/slaai-recommendation.json')
-        if state_file.exists():
-            with open(state_file, 'r') as f:
+        if wan_file.exists():
+            with open(wan_file, 'r') as f:
                 data = json.load(f)
-                result['primary_health'] = int(data.get('primary_health', 0.95) * 100)
-                result['backup_health'] = int(data.get('backup_health', 0.72) * 100)
-                result['status'] = 'online' if data.get('active_interface') == data.get('primary_interface') else 'backup'
+                primary = data.get('primary', {})
+                backup = data.get('backup', {})
+                result['primary_health'] = int((primary.get('health_score', 0)) * 100)
+                result['backup_health'] = int((backup.get('health_score', 0)) * 100)
+                result['status'] = data.get('state', 'unknown')
     except Exception:
         pass
 
-    # Try to read interface traffic stats
+    # Read traffic from interface_traffic.json
+    traffic_file = DATA_DIR / 'interface_traffic.json'
     try:
-        import subprocess
-        # Get primary interface (usually eth0 or wan)
-        for iface in ['eth0', 'wan', 'ens3']:
-            rx_file = Path(f'/sys/class/net/{iface}/statistics/rx_bytes')
-            tx_file = Path(f'/sys/class/net/{iface}/statistics/tx_bytes')
-            if rx_file.exists() and tx_file.exists():
-                # Just read current values (actual rate would need history)
-                with open(rx_file) as f:
-                    rx = int(f.read().strip())
-                with open(tx_file) as f:
-                    tx = int(f.read().strip())
-                # Format for display (these are totals, not rate)
-                result['inbound'] = _format_rate(rx)
-                result['outbound'] = _format_rate(tx)
-                break
+        if traffic_file.exists():
+            with open(traffic_file, 'r') as f:
+                data = json.load(f)
+                interfaces = data.get('interfaces', [])
+                for iface in interfaces:
+                    if iface.get('type') == 'wan':
+                        rx = iface.get('rx_bps', 0)
+                        tx = iface.get('tx_bps', 0)
+                        result['inbound'] = _format_rate(rx)
+                        result['outbound'] = _format_rate(tx)
+                        break
     except Exception:
         pass
 
@@ -235,17 +234,15 @@ def get_wan_stats():
     return result
 
 
-def _format_rate(bytes_val):
-    """Format bytes as rate string (simplified)."""
-    if bytes_val > 1e12:
-        return f'{bytes_val / 1e12:.1f} TB'
-    if bytes_val > 1e9:
-        return f'{bytes_val / 1e9:.1f} GB'
-    if bytes_val > 1e6:
-        return f'{bytes_val / 1e6:.1f} MB'
-    if bytes_val > 1e3:
-        return f'{bytes_val / 1e3:.1f} KB'
-    return f'{bytes_val} B'
+def _format_rate(bytes_per_sec):
+    """Format bytes/sec as human readable rate."""
+    if bytes_per_sec > 1e9:
+        return f'{bytes_per_sec / 1e9:.1f} GB/s'
+    if bytes_per_sec > 1e6:
+        return f'{bytes_per_sec / 1e6:.1f} MB/s'
+    if bytes_per_sec > 1e3:
+        return f'{bytes_per_sec / 1e3:.1f} KB/s'
+    return f'{bytes_per_sec:.0f} B/s'
 
 
 def get_recent_threats():
@@ -254,11 +251,24 @@ def get_recent_threats():
     if cached is not None:
         return cached
 
-    threats_file = Path('/opt/hookprobe/fortress/data/recent_threats.json')
+    # Try qsecbit_stats.json first (has recent_threats field)
+    stats_file = DATA_DIR / 'qsecbit_stats.json'
+    try:
+        if stats_file.exists():
+            with open(stats_file, 'r') as f:
+                data = json.load(f)
+                threats = data.get('recent_threats', [])[:5]
+                _set_cached('recent_threats', threats)
+                return threats
+    except Exception:
+        pass
+
+    # Try dedicated threats file
+    threats_file = DATA_DIR / 'recent_threats.json'
     try:
         if threats_file.exists():
             with open(threats_file, 'r') as f:
-                result = json.load(f)[:5]  # Limit to 5 recent
+                result = json.load(f)[:5]
                 _set_cached('recent_threats', result)
                 return result
     except Exception:
@@ -269,9 +279,6 @@ def get_recent_threats():
 
 def get_recent_devices():
     """Get list of recently connected devices."""
-    if not SYSTEM_DATA_AVAILABLE:
-        return []
-
     devices = get_all_devices()
 
     # Sort by state (REACHABLE first) and take top 5
@@ -336,39 +343,38 @@ def _format_time_ago(timestamp):
         return 'Just now'
 
 
+def _check_data_available():
+    """Check if data files from agent are available."""
+    qsecbit_file = DATA_DIR / 'qsecbit_stats.json'
+    return qsecbit_file.exists()
+
+
 @dashboard_bp.route('/dashboard')
 @login_required
 def index():
-    """Main dashboard page - uses real system data."""
-    if SYSTEM_DATA_AVAILABLE:
-        stats = get_qsecbit_stats()
-        device_count = len(get_all_devices())
-        wan_health = get_wan_health()
-        vlans = get_vlans()
-    else:
-        # Minimal fallback - no demo data
-        stats = {'score': 0, 'rag_status': 'UNKNOWN', 'threats_detected': 0}
-        device_count = 0
-        wan_health = {'primary': None, 'backup': None, 'active': None}
-        vlans = []
+    """Main dashboard page - uses real system data from agent."""
+    data_available = _check_data_available()
 
-    tunnel = get_tunnel_status()
+    stats = get_qsecbit_stats()
+    device_count = get_device_count()
     wan = get_wan_stats()
+    tunnel = get_tunnel_status()
 
     return render_template('dashboard/index.html',
                            qsecbit_score=stats.get('score', 0),
                            qsecbit_status=stats.get('rag_status', 'GREEN'),
                            device_count=device_count,
                            threats_blocked=stats.get('threats_detected', 0),
-                           dns_blocked=get_dns_blocked_count() if SYSTEM_DATA_AVAILABLE else 0,
+                           dns_blocked=get_dns_blocked_count(),
                            recent_devices=get_recent_devices(),
                            recent_threats=get_recent_threats(),
                            tunnel_status=tunnel,
                            vlan_count=get_vlan_count(),
-                           wan_backup_health=wan.get('backup_health', 72),
-                           wan_inbound=wan.get('inbound', '0 B'),
-                           wan_outbound=wan.get('outbound', '0 B'),
-                           wan_status=wan.get('status', 'online'))
+                           wan_backup_health=wan.get('backup_health', 0),
+                           wan_inbound=wan.get('inbound', '0 B/s'),
+                           wan_outbound=wan.get('outbound', '0 B/s'),
+                           wan_status=wan.get('status', 'unknown'),
+                           system_data_available=data_available)
 
 
 @dashboard_bp.route('/api/dashboard/stats')
@@ -390,12 +396,13 @@ def api_stats():
         'dns_blocked': get_dns_blocked_count(),
         'tunnel': tunnel,
         'vlan_count': get_vlan_count(),
-        'wan_status': wan.get('status', 'online'),
-        'wan_primary_health': wan.get('primary_health', 95),
-        'wan_backup_health': wan.get('backup_health', 72),
-        'wan_inbound': wan.get('inbound', '0 B'),
-        'wan_outbound': wan.get('outbound', '0 B'),
+        'wan_status': wan.get('status', 'unknown'),
+        'wan_primary_health': wan.get('primary_health', 0),
+        'wan_backup_health': wan.get('backup_health', 0),
+        'wan_inbound': wan.get('inbound', '0 B/s'),
+        'wan_outbound': wan.get('outbound', '0 B/s'),
         'notification_count': len(get_recent_threats()),
+        'data_available': _check_data_available(),
         'timestamp': datetime.now().isoformat()
     })
 
@@ -404,9 +411,6 @@ def api_stats():
 @login_required
 def api_refresh():
     """Force refresh all cached data."""
-    if SYSTEM_DATA_AVAILABLE:
-        # Clear the cache in system_data module
-        from system_data import _cache
-        _cache.clear()
-        return jsonify({'success': True, 'message': 'Cache cleared'})
-    return jsonify({'success': False, 'message': 'System data not available'})
+    global _local_cache
+    _local_cache.clear()
+    return jsonify({'success': True, 'message': 'Cache cleared'})
