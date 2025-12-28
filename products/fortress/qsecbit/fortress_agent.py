@@ -885,12 +885,58 @@ class QSecBitFortressAgent:
         except Exception as e:
             logger.warning(f"Failed to save interface traffic: {e}")
 
+    def collect_devices(self) -> List[Dict]:
+        """Collect connected devices from ARP neighbor table."""
+        devices = []
+
+        try:
+            proc = subprocess.run(
+                ['ip', '-j', 'neigh', 'show'],
+                capture_output=True, text=True, timeout=10
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                neighbors = json.loads(proc.stdout)
+                for n in neighbors:
+                    state = n.get('state', ['UNKNOWN'])
+                    if isinstance(state, list):
+                        state = state[0] if state else 'UNKNOWN'
+                    if state in ['FAILED', 'INCOMPLETE']:
+                        continue
+
+                    mac = n.get('lladdr', '')
+                    devices.append({
+                        'ip_address': n.get('dst', ''),
+                        'mac_address': mac.upper() if mac else '',
+                        'state': state,
+                        'device_type': 'unknown',
+                        'hostname': None,
+                        'manufacturer': None,
+                        'interface': n.get('dev', ''),
+                        'last_seen': datetime.now().isoformat(),
+                    })
+        except Exception as e:
+            logger.debug(f"Failed to collect devices: {e}")
+
+        return devices
+
+    def save_devices(self):
+        """Collect and save device list for clients page."""
+        try:
+            devices = self.collect_devices()
+            devices_file = DATA_DIR / "devices.json"
+            with open(devices_file, 'w') as f:
+                json.dump(devices, f, indent=2)
+            logger.debug(f"Devices saved: {len(devices)} devices")
+        except Exception as e:
+            logger.warning(f"Failed to save devices: {e}")
+
     def run_monitoring_loop(self):
         """Main monitoring loop with L2-L7 threat detection"""
         logger.info("Starting QSecBit monitoring loop with L2-L7 detection...")
         interval = 10
         wan_health_counter = 0
         traffic_counter = 0
+        device_counter = 0
 
         while self.running.is_set():
             try:
@@ -908,6 +954,12 @@ class QSecBitFortressAgent:
                 if traffic_counter >= 1:  # Every 10 seconds
                     self.save_interface_traffic()
                     traffic_counter = 0
+
+                # Collect devices every 3 cycles (30 seconds)
+                device_counter += 1
+                if device_counter >= 3:
+                    self.save_devices()
+                    device_counter = 0
 
                 # Log detailed status
                 layer_summary = ' '.join([f"{k}={v:.2f}" for k, v in sample.layer_scores.items()])
