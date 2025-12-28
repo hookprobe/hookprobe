@@ -33,7 +33,7 @@
 | **Fortress development** | MVP plan | `products/fortress/DEVELOPMENT_PLAN.md` |
 | **Fortress user auth** | Local auth (max 5) | `products/fortress/web/modules/auth/models.py` |
 | **Fortress WiFi setup** | hostapd config | `products/fortress/devices/common/hostapd-generator.sh` |
-| **Fortress network setup** | Bridge, DHCP, NAT | `products/fortress/devices/common/bridge-manager.sh` |
+| **Fortress network setup** | OVS VLAN, DHCP, NAT | `products/fortress/devices/common/ovs-post-setup.sh` |
 | **Fortress containers** | Podman compose | `products/fortress/containers/podman-compose.yml` |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
@@ -51,7 +51,7 @@
 | **Response orchestration** | Automated mitigation | `core/qsecbit/response/orchestrator.py` |
 | **WiFi DFS intelligence** | ML channel scoring | `shared/wireless/dfs_intelligence.py` |
 | **WiFi channel scanning** | Congestion analysis | `shared/wireless/channel_scanner.py` |
-| **Fortress LAN bridging** | OVS bridge + DHCP | `products/fortress/setup.sh` (search `setup_lan_bridge`) |
+| **Fortress LAN bridging** | OVS VLAN + DHCP | `products/fortress/install-container.sh` (search `setup_network`) |
 | **Fortress device scripts** | Hardware profiles | `products/fortress/devices/common/` |
 | **SLA AI / Business Continuity** | Intelligent failover | `shared/slaai/` |
 | **WAN failover prediction** | LSTM predictor | `shared/slaai/predictor.py` |
@@ -1073,6 +1073,7 @@ from products.guardian.lib.layer_threat_detector import LayerThreatDetector
 ### Fortress - Small Business Security
 
 **Location**: `products/fortress/`
+**Version**: 5.5.0
 
 Enterprise-grade security for small businesses (flower shops, bakeries, retail, trades).
 
@@ -1083,12 +1084,12 @@ Enterprise-grade security for small businesses (flower shops, bakeries, retail, 
 - GDPR compliance requirements
 
 **Architecture**:
-- **Containers**: Podman with podman-compose orchestration
+- **Containers**: Podman with podman-compose orchestration (single `fts-internal` network)
 - **Web UI**: Flask + AdminLTE 3.x (gunicorn in container)
 - **Database**: PostgreSQL 15 with persistent volume
 - **Cache**: Redis 7 for sessions and rate limiting
-- **Network**: Linux bridge (`fortress`) with DHCP and NAT
-- **WiFi**: Dual-band hostapd AP bridged to LAN
+- **Network**: OVS bridge (`FTS`) - Layer 2 only, VLAN-based segmentation
+- **WiFi**: Dual-band hostapd AP with stable naming via udev rules
 - **Security Core**: QSecBit threat detection, dnsXai DNS protection, DFS WiFi intelligence
 
 **Installation**:
@@ -1104,48 +1105,91 @@ sudo ./install.sh --quick
 
 | Prompt | Default | Description |
 |--------|---------|-------------|
-| Network Mode | `filter` | nftables filtering (simpler) or VLAN |
-| ML Services | `Full` | Include QSecBit, dnsXai, DFS (recommended) |
+| LAN Subnet | `/23` | Network size (/29 to /23) |
 | Admin Username | `admin` | Web UI admin username |
 | Admin Password | (required) | Min 8 chars |
 | WiFi SSID | `HookProbe-Fortress` | Access point network name |
 | WiFi Password | Random 12-char | Or user-specified (min 8 chars) |
 | Web Port | `8443` | HTTPS port for admin UI |
 
-**Services**:
+**Services (Containers)**:
 
 | Container | Purpose | Profile |
 |-----------|---------|---------|
-| fortress-postgres | PostgreSQL database | Core |
-| fortress-redis | Session cache, rate limiting | Core |
-| fortress-web | Flask admin UI (gunicorn) | Core |
-| fortress-qsecbit | QSecBit threat detection | Core |
-| fortress-dnsxai | dnsXai DNS ML protection | Core |
-| fortress-dfs | DFS WiFi channel intelligence | Core |
-| fortress-grafana | Monitoring dashboard | Optional (`--profile monitoring`) |
-| fortress-victoria | Metrics database | Optional (`--profile monitoring`) |
-| fortress-lstm-trainer | ML training (one-shot) | Optional (`--profile training`) |
+| fts-postgres | PostgreSQL database | Core |
+| fts-redis | Session cache, rate limiting | Core |
+| fts-web | Flask admin UI (gunicorn) | Core |
+| fts-qsecbit | QSecBit threat detection (host network) | Core |
+| fts-dnsxai | dnsXai DNS ML protection | Core |
+| fts-dfs | DFS WiFi channel intelligence | Core |
+| fts-grafana | Monitoring dashboard | Optional (`--profile monitoring`) |
+| fts-victoria | VictoriaMetrics database | Optional (`--profile monitoring`) |
+| fts-lstm-trainer | ML training (one-shot) | Optional (`--profile training`) |
+| fts-suricata | Suricata IDS (host network) | Optional (`--profile ids`) |
+| fts-zeek | Zeek network analysis (host network) | Optional (`--profile ids`) |
+| fts-xdp | XDP/eBPF DDoS protection | Optional (`--profile ids`) |
+| fts-n8n | n8n workflow automation | Optional (`--profile automation`) |
+| fts-clickhouse | ClickHouse analytics | Optional (`--profile analytics`) |
+| fts-mesh | HTP/Neuro/DSM mesh orchestrator | Optional (`--profile mesh`) |
+| fts-cloudflared | Cloudflare Tunnel | Optional (`--profile tunnel`) |
 
-**Network Configuration**:
-- **Bridge**: `fortress` (10.200.0.1/24)
-- **DHCP Range**: 10.200.0.100 - 10.200.0.200
-- **DNS**: dnsmasq on bridge interface
+**Network Architecture (VLAN Mode)**:
+- **OVS Bridge**: `FTS` - Layer 2 switch (NO IP address)
+- **VLAN 100 (LAN)**: `vlan100` interface with IP 10.200.0.1/XX (configurable subnet)
+- **VLAN 200 (MGMT)**: `vlan200` interface with IP 10.200.100.1/30
+- **DHCP**: dnsmasq on `vlan100` (range calculated based on subnet size)
 - **NAT**: iptables masquerade on WAN interface
-- **WiFi**: hostapd dual-band (2.4GHz + 5GHz if available)
+- **Container Network**: `fts-internal` (172.20.200.0/24) for inter-container communication
+- **WiFi**: hostapd bridged to OVS (`wlan_24ghz`, `wlan_5ghz` stable names)
+
+**Subnet Sizes**:
+
+| Mask | Devices | DHCP Range |
+|------|---------|------------|
+| /29 | 6 | 10.200.0.2 - 10.200.0.6 |
+| /28 | 14 | 10.200.0.2 - 10.200.0.14 |
+| /27 | 30 | 10.200.0.10 - 10.200.0.30 |
+| /26 | 62 | 10.200.0.10 - 10.200.0.62 |
+| /25 | 126 | 10.200.0.10 - 10.200.0.126 |
+| /24 | 254 | 10.200.0.100 - 10.200.0.200 |
+| /23 | 510 | 10.200.0.100 - 10.200.1.200 |
+
+**Systemd Services**:
+
+| Service | Purpose |
+|---------|---------|
+| `fortress.service` | Main container orchestration (podman-compose) |
+| `fortress-vlan.service` | OVS post-setup after netplan |
+| `fts-hostapd-24ghz.service` | 2.4GHz WiFi access point |
+| `fts-hostapd-5ghz.service` | 5GHz WiFi access point |
 
 **Key Files**:
 - `install.sh` - Unified installer (defaults to container mode)
 - `install-container.sh` - Container-based installation
 - `uninstall.sh` - Complete removal with data preservation options
-- `fortress-ctl.sh` - Runtime management (upgrade, backup, status)
+- `fortress-ctl.sh` - Runtime management (backup, status)
 - `containers/podman-compose.yml` - Container orchestration
 - `containers/Containerfile.*` - Container definitions
-- `devices/common/` - Network detection and configuration scripts
+- `devices/common/netplan-ovs-generator.sh` - Netplan config generator
+- `devices/common/ovs-post-setup.sh` - OVS OpenFlow rules and VLAN setup
+- `devices/common/hostapd-generator.sh` - WiFi AP configuration
+- `systemd/fortress-vlan.service` - VLAN boot persistence
 
-**Web UI**:
-- `web/app.py` - Flask application factory with Flask-Login
-- `web/modules/` - Blueprint modules (auth, dashboard, security, clients, etc.)
-- `web/templates/base.html` - AdminLTE base layout
+**Web UI Modules** (`web/modules/`):
+
+| Module | Purpose |
+|--------|---------|
+| `auth/` | Authentication (Flask-Login, bcrypt) |
+| `dashboard/` | Main dashboard |
+| `clients/` | Connected device management |
+| `sdn/` | Unified SDN device/policy management |
+| `slaai/` | SLA AI WAN failover dashboard |
+| `security/` | QSecBit security metrics |
+| `dnsxai/` | DNS protection settings |
+| `networks/` | Network configuration |
+| `settings/` | System settings |
+| `tunnel/` | Cloudflare Tunnel management |
+| `api/` | REST API endpoints |
 
 **Authentication**:
 - **Storage**: JSON file (`/etc/hookprobe/users.json`)
@@ -1157,23 +1201,32 @@ sudo ./install.sh --quick
 **Useful Commands**:
 ```bash
 # Service management
-systemctl status fortress           # Check container status
-systemctl restart fortress          # Restart containers
-systemctl status fortress-hostapd-* # WiFi AP status
+systemctl status fortress             # Check container orchestration
+systemctl restart fortress            # Restart all containers
+systemctl status fortress-vlan        # OVS/VLAN status
+systemctl status fts-hostapd-24ghz    # 2.4GHz WiFi status
+systemctl status fts-hostapd-5ghz     # 5GHz WiFi status
 
 # Container logs
-podman logs fortress-web            # Web app logs
-podman logs fortress-postgres       # Database logs
-podman logs fortress-qsecbit        # Threat detection logs
+podman logs fts-web                   # Web app logs
+podman logs fts-postgres              # Database logs
+podman logs fts-qsecbit               # Threat detection logs
+podman logs fts-dnsxai                # DNS protection logs
 
 # Network status
-ip link show fortress               # Bridge status
-cat /etc/dnsmasq.d/fortress-bridge.conf  # DHCP config
+ovs-vsctl show                        # OVS bridge status
+ip addr show vlan100                  # LAN VLAN IP
+ip addr show vlan200                  # MGMT VLAN IP
+cat /etc/dnsmasq.d/fts-vlan.conf      # DHCP config
 
-# Backup and upgrade
-./fortress-ctl.sh backup            # Create backup
-./fortress-ctl.sh upgrade --app     # Hot upgrade
+# Backup
+./fortress-ctl.sh backup              # Create backup
 ```
+
+**WiFi Interface Naming**:
+- udev rules created during install (`/etc/udev/rules.d/70-fts-wifi.rules`)
+- MAC address-based stable naming: `wlan_24ghz`, `wlan_5ghz`
+- Interface mapping saved to `/etc/hookprobe/wifi-interfaces.conf`
 
 **Development Plan**: See `products/fortress/DEVELOPMENT_PLAN.md`
 
