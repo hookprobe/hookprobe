@@ -574,6 +574,56 @@ class QSecBitFortressAgent:
         except Exception as e:
             logger.error(f"Failed to save stats: {e}")
 
+    def _get_lte_signal(self, iface_name: str) -> Optional[float]:
+        """Get LTE signal strength in dBm using mmcli or other methods."""
+        signal_dbm = None
+
+        # Try mmcli first (ModemManager)
+        try:
+            # List modems
+            result = subprocess.run(
+                ['mmcli', '-L'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and '/Modem/' in result.stdout:
+                # Extract modem number
+                import re
+                match = re.search(r'/Modem/(\d+)', result.stdout)
+                if match:
+                    modem_num = match.group(1)
+                    # Get signal quality
+                    result = subprocess.run(
+                        ['mmcli', '-m', modem_num, '--signal-get'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        # Parse RSSI from output
+                        for line in result.stdout.split('\n'):
+                            if 'rssi' in line.lower():
+                                match = re.search(r'(-?\d+\.?\d*)\s*dBm', line)
+                                if match:
+                                    signal_dbm = float(match.group(1))
+                                    break
+        except Exception:
+            pass
+
+        # Fallback: try qmicli for Qualcomm modems
+        if signal_dbm is None:
+            try:
+                result = subprocess.run(
+                    ['qmicli', '-d', f'/dev/cdc-{iface_name}', '--nas-get-signal-strength'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    import re
+                    match = re.search(r'Network.*:\s*\'(-?\d+)\s*dBm\'', result.stdout)
+                    if match:
+                        signal_dbm = float(match.group(1))
+            except Exception:
+                pass
+
+        return signal_dbm
+
     def collect_wan_health(self) -> Dict:
         """Collect WAN health data for SLAAI dashboard.
 
@@ -696,14 +746,31 @@ class QSecBitFortressAgent:
                     ip_addr = f"{addr_info.get('local')}/{addr_info.get('prefixlen')}"
                     break
 
-            # Skip interfaces without IP (not configured for WAN)
-            if not ip_addr:
+            # Check if this is an LTE interface
+            is_lte = name.startswith(('wwan', 'usb', 'wwp'))
+
+            # For LTE interfaces, try to get IP from nmcli if not in addr_info
+            if is_lte and not ip_addr:
+                try:
+                    # Try nmcli to get connection info
+                    result = subprocess.run(
+                        ['nmcli', '-g', 'IP4.ADDRESS', 'device', 'show', name],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        ip_addr = result.stdout.strip().split()[0]
+                except Exception:
+                    pass
+
+            # Skip ethernet interfaces without IP, but allow LTE interfaces
+            # (LTE may have dynamic IP or be a point-to-point link)
+            if not ip_addr and not is_lte:
                 continue
 
             # Categorize interface
-            iface_info = {'name': name, 'ip': ip_addr, 'state': 'UP'}
+            iface_info = {'name': name, 'ip': ip_addr or 'dynamic', 'state': 'UP'}
 
-            if name.startswith('wwan') or name.startswith('usb') or name.startswith('wwp'):
+            if is_lte:
                 # LTE/cellular interfaces
                 lte_candidates.append(iface_info)
             elif name.startswith('eth') or name.startswith('en') or name.startswith('eno'):
@@ -752,6 +819,11 @@ class QSecBitFortressAgent:
             # Detect if this is an LTE interface
             is_lte = backup_iface['name'].startswith(('wwan', 'usb', 'wwp'))
 
+            # Try to get LTE signal strength
+            signal_dbm = None
+            if is_lte:
+                signal_dbm = self._get_lte_signal(backup_iface['name'])
+
             health['backup'] = {
                 'interface': backup_iface['name'],
                 'ip': backup_iface['ip'],
@@ -760,8 +832,8 @@ class QSecBitFortressAgent:
                 'jitter_ms': conn['jitter_ms'],
                 'packet_loss': conn['packet_loss'],
                 'is_connected': conn['is_connected'],
-                'health_score': calculate_health_score(conn),
-                'signal_dbm': None,  # Could add mmcli parsing for LTE
+                'health_score': calculate_health_score(conn, signal_dbm),
+                'signal_dbm': signal_dbm,
                 'is_lte': is_lte,
                 'status': 'STANDBY' if health['active'] else ('ACTIVE' if conn['is_connected'] else 'FAILED'),
             }
