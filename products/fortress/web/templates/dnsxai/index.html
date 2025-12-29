@@ -383,7 +383,8 @@
                     </table>
                 </div>
                 <div class="mt-2 text-muted small">
-                    <span id="blocked-modal-count">0</span> blocked domains shown
+                    <span id="blocked-modal-count">0</span> unique blocked domains shown
+                    <span class="ml-2">(deduplicated, excludes whitelisted)</span>
                 </div>
             </div>
             <div class="modal-footer">
@@ -679,23 +680,28 @@ async function loadBlocked() {
     try {
         const resp = await fetch('/dnsxai/api/blocked?limit=20');
         const data = await resp.json();
-        const domains = data.domains || [];
+        const domains = data.blocked || [];
 
         const tbody = document.getElementById('blocked-body');
         if (domains.length === 0) {
             tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center">No blocked domains</td></tr>';
         } else {
-            tbody.innerHTML = domains.map(d => `
+            tbody.innerHTML = domains.map(d => {
+                const escaped = d.domain.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                const reasonBadge = d.ml_classified
+                    ? '<span class="badge badge-primary">ML</span>'
+                    : '<span class="badge badge-secondary">List</span>';
+                return `
                 <tr>
                     <td class="text-monospace" style="font-size: 0.85em; word-break: break-all;">${d.domain}</td>
-                    <td><span class="badge badge-danger">${d.block_count}</span></td>
+                    <td>${reasonBadge}</td>
                     <td>
-                        <button class="btn btn-xs btn-success" onclick="addWhitelistDomain('${d.domain}')" title="Whitelist">
+                        <button class="btn btn-xs btn-success" onclick="addWhitelistDomain('${escaped}')" title="Whitelist">
                             <i class="fas fa-check"></i>
                         </button>
                     </td>
                 </tr>
-            `).join('');
+            `}).join('');
         }
     } catch(e) {
         console.error('Failed to load blocked:', e);
