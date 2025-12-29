@@ -133,14 +133,96 @@ OUI_DATABASE = {
 }
 
 
+# IEEE OUI file path (installed by ieee-data package or hwdata)
+OUI_FILE = Path('/usr/share/misc/oui.txt')
+OUI_FILE_ALT = Path('/usr/share/hwdata/oui.txt')
+_oui_cache: Dict[str, str] = {}
+_oui_loaded = False
+
+
+def is_locally_administered_mac(mac_address: str) -> bool:
+    """Check if MAC address is locally administered (randomized).
+
+    The second nibble of a MAC address indicates if it's locally administered:
+    - If the second least significant bit is 1, it's locally administered
+    - This means second nibble is 2, 3, 6, 7, A, B, E, or F
+
+    iOS 14+, Android 10+, Windows 10+ use MAC randomization by default.
+    """
+    if not mac_address or len(mac_address) < 2:
+        return False
+
+    # Get second character (second nibble)
+    mac_clean = mac_address.replace(':', '').replace('-', '').upper()
+    if len(mac_clean) < 2:
+        return False
+
+    second_nibble = mac_clean[1]
+    # Locally administered if second nibble is 2, 3, 6, 7, A, B, E, or F
+    return second_nibble in '2367ABEF'
+
+
+def _load_oui_database():
+    """Load IEEE OUI database from system file."""
+    global _oui_cache, _oui_loaded
+
+    if _oui_loaded:
+        return
+
+    _oui_loaded = True
+
+    # Try to load from IEEE OUI file
+    oui_file = None
+    for path in [OUI_FILE, OUI_FILE_ALT]:
+        if path.exists():
+            oui_file = path
+            break
+
+    if oui_file:
+        try:
+            with open(oui_file, 'r', errors='ignore') as f:
+                for line in f:
+                    if '(hex)' in line:
+                        parts = line.split('(hex)')
+                        if len(parts) >= 2:
+                            # Format: "00-00-00   (hex)		Xerox Corporation"
+                            prefix = parts[0].strip().replace('-', '').upper()
+                            vendor = parts[1].strip()
+                            if prefix and vendor:
+                                _oui_cache[prefix] = vendor
+            logger.info(f"Loaded {len(_oui_cache)} OUI entries from {oui_file}")
+        except Exception as e:
+            logger.warning(f"Failed to load OUI file: {e}")
+
+
 def lookup_manufacturer(mac_address: str) -> str:
-    """Lookup manufacturer from MAC OUI prefix."""
+    """Lookup manufacturer from MAC OUI prefix.
+
+    Uses IEEE OUI database file if available, falls back to built-in database.
+    Returns 'Private' for locally administered (randomized) MAC addresses.
+    """
     if not mac_address:
         return 'Unknown'
+
+    # Check if MAC is locally administered (randomized)
+    if is_locally_administered_mac(mac_address):
+        return 'Private'
+
+    # Get OUI prefix (first 6 hex chars without separators)
+    mac_clean = mac_address.replace(':', '').replace('-', '').upper()
+    oui_prefix = mac_clean[:6]
     mac_prefix = mac_address[:8].upper()
+
+    # Try IEEE OUI database first
+    _load_oui_database()
+    if oui_prefix in _oui_cache:
+        return _oui_cache[oui_prefix]
+
+    # Fall back to built-in database
     for manufacturer, ouis in OUI_DATABASE.items():
         if mac_prefix in ouis:
             return manufacturer
+
     return 'Unknown'
 
 
@@ -339,6 +421,12 @@ def detect_device_type(mac: str, hostname: str, manufacturer: str) -> str:
     if manufacturer_lower in ['hikvision', 'dahua']:
         return 'ip_camera'
 
+    # Priority 5: For randomized MACs, classify as mobile/laptop
+    # iOS 14+, Android 10+, Windows 10+ use MAC randomization by default
+    # These are typically phones, tablets, or modern laptops
+    if manufacturer_lower == 'private':
+        return 'mobile_device'
+
     return 'unknown'
 
 
@@ -417,6 +505,7 @@ def get_device_display_info(device_type: str) -> Dict[str, str]:
         'google_device': {'name': 'Google Device', 'icon': 'fa-google', 'category': 'smart_home'},
         'windows_device': {'name': 'Windows Device', 'icon': 'fa-windows', 'category': 'computer'},
         'philips_device': {'name': 'Philips Device', 'icon': 'fa-lightbulb', 'category': 'smart_home'},
+        'mobile_device': {'name': 'Mobile Device', 'icon': 'fa-mobile-alt', 'category': 'mobile'},
         'unknown': {'name': 'Unknown Device', 'icon': 'fa-question-circle', 'category': 'unknown'},
     }
     return DEVICE_DISPLAY.get(device_type, DEVICE_DISPLAY['unknown'])
@@ -1162,9 +1251,15 @@ class QSecBitFortressAgent:
         def test_connectivity(interface: str, source_ip: str = None, target: str = '1.1.1.1') -> Dict:
             """Test connectivity through a specific interface.
 
-            For LTE/wwan interfaces, using source IP is more reliable than interface name.
-            Falls back to alternative methods if the primary method fails.
+            Uses multiple methods in order of reliability:
+            1. Socket-based TCP connect (most reliable, works with policy routing)
+            2. ICMP ping via subprocess
+            3. HTTP-based fallback for LTE interfaces
+
+            For LTE/wwan interfaces, uses SO_BINDTODEVICE to force traffic through the interface.
             """
+            import socket
+
             result = {
                 'rtt_ms': None,
                 'jitter_ms': None,
@@ -1173,138 +1268,149 @@ class QSecBitFortressAgent:
             }
 
             is_lte = interface.startswith(('wwan', 'usb', 'wwp'))
+            src_ip = source_ip.split('/')[0] if source_ip and source_ip != 'dynamic' else None
 
-            # For LTE, try to get the actual source IP if we only have 'dynamic'
-            if is_lte and (not source_ip or source_ip == 'dynamic'):
+            # Get source IP from interface if not provided
+            if not src_ip:
                 try:
-                    # Use ip route get to find the source IP for reaching the target
-                    route_result = subprocess.run(
-                        ['ip', 'route', 'get', target, 'oif', interface],
+                    result_cmd = subprocess.run(
+                        ['ip', '-j', 'addr', 'show', interface],
                         capture_output=True, text=True, timeout=5
                     )
-                    if route_result.returncode == 0:
-                        # Parse: "1.1.1.1 dev wwan0 src 10.178.230.158"
-                        match = re.search(r'src\s+([\d.]+)', route_result.stdout)
-                        if match:
-                            source_ip = match.group(1)
-                            logger.debug(f"Got source IP {source_ip} for LTE interface {interface}")
+                    if result_cmd.returncode == 0:
+                        iface_data = json.loads(result_cmd.stdout)
+                        if iface_data:
+                            for addr in iface_data[0].get('addr_info', []):
+                                if addr.get('family') == 'inet':
+                                    src_ip = addr.get('local')
+                                    logger.debug(f"Got source IP {src_ip} from interface {interface}")
+                                    break
                 except Exception as e:
-                    logger.debug(f"Could not get route info for {interface}: {e}")
+                    logger.debug(f"Could not get IP from interface {interface}: {e}")
 
-            # Build ping commands to try (in order of preference)
+            # Method 1: Socket-based TCP connect test (most reliable)
+            # This works even with policy routing because we bind to the device
+            tcp_targets = [
+                ('1.1.1.1', 80),      # Cloudflare HTTP
+                ('1.1.1.1', 443),     # Cloudflare HTTPS
+                ('8.8.8.8', 53),      # Google DNS
+            ]
+
+            for target_ip, target_port in tcp_targets:
+                rtt_samples = []
+                success_count = 0
+                attempts = 3
+
+                for _ in range(attempts):
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(3.0)
+
+                        # Bind to interface using SO_BINDTODEVICE (requires CAP_NET_RAW)
+                        try:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode())
+                        except (OSError, PermissionError) as e:
+                            # Fallback: bind to source IP if SO_BINDTODEVICE fails
+                            if src_ip:
+                                sock.bind((src_ip, 0))
+                            else:
+                                logger.debug(f"SO_BINDTODEVICE failed and no source IP: {e}")
+                                sock.close()
+                                continue
+
+                        start = time.time()
+                        sock.connect((target_ip, target_port))
+                        elapsed = (time.time() - start) * 1000  # ms
+                        sock.close()
+
+                        rtt_samples.append(elapsed)
+                        success_count += 1
+
+                    except socket.timeout:
+                        logger.debug(f"TCP connect timeout to {target_ip}:{target_port} via {interface}")
+                    except OSError as e:
+                        logger.debug(f"TCP connect error to {target_ip}:{target_port} via {interface}: {e}")
+                    except Exception as e:
+                        logger.debug(f"TCP test exception: {e}")
+
+                if success_count > 0:
+                    result['is_connected'] = True
+                    result['rtt_ms'] = sum(rtt_samples) / len(rtt_samples)
+                    # Calculate jitter as standard deviation
+                    if len(rtt_samples) > 1:
+                        mean = result['rtt_ms']
+                        variance = sum((x - mean) ** 2 for x in rtt_samples) / len(rtt_samples)
+                        result['jitter_ms'] = variance ** 0.5
+                    else:
+                        result['jitter_ms'] = 0.0
+                    result['packet_loss'] = ((attempts - success_count) / attempts) * 100
+                    logger.info(f"TCP connectivity OK for {interface}: RTT={result['rtt_ms']:.1f}ms, loss={result['packet_loss']:.0f}%")
+                    return result
+
+            # Method 2: ICMP ping with subprocess
             ping_commands = []
 
-            if is_lte and source_ip and source_ip != 'dynamic':
-                # Primary: Use source IP for LTE (most reliable)
-                src = source_ip.split('/')[0]
-                ping_commands.append(['ping', '-c', '3', '-W', '3', '-I', src, target])
-                # Fallback: Try interface name anyway
-                ping_commands.append(['ping', '-c', '3', '-W', '3', '-I', interface, target])
-            else:
-                # Use interface name
-                ping_commands.append(['ping', '-c', '3', '-W', '3', '-I', interface, target])
+            if src_ip:
+                # Try source IP first (works with policy routing)
+                ping_commands.append(['ping', '-c', '3', '-W', '2', '-I', src_ip, '1.1.1.1'])
+            # Also try interface name
+            ping_commands.append(['ping', '-c', '3', '-W', '2', '-I', interface, '1.1.1.1'])
 
-            # Try each ping command until one succeeds
             proc = None
             for ping_cmd in ping_commands:
                 try:
                     logger.debug(f"Testing connectivity: {' '.join(ping_cmd)}")
-                    proc = subprocess.run(
-                        ping_cmd,
-                        capture_output=True, text=True, timeout=15
-                    )
+                    proc = subprocess.run(ping_cmd, capture_output=True, text=True, timeout=12)
 
-                    # Log output for debugging
                     if proc.returncode != 0:
                         logger.debug(f"Ping failed on {interface}: rc={proc.returncode}, stderr={proc.stderr.strip()}")
-                        continue  # Try next command
+                        continue
 
-                    if proc.returncode == 0:
-                        # Parse RTT
-                        rtt_match = re.search(
-                            r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
-                            proc.stdout
-                        )
-                        if rtt_match:
-                            result['rtt_ms'] = float(rtt_match.group(2))
-                            result['jitter_ms'] = float(rtt_match.group(4))
-                            result['is_connected'] = True
+                    # Parse RTT
+                    rtt_match = re.search(
+                        r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
+                        proc.stdout
+                    )
+                    if rtt_match:
+                        result['rtt_ms'] = float(rtt_match.group(2))
+                        result['jitter_ms'] = float(rtt_match.group(4))
+                        result['is_connected'] = True
 
-                        # Parse packet loss
-                        loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
-                        if loss_match:
-                            result['packet_loss'] = float(loss_match.group(1))
+                    # Parse packet loss
+                    loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
+                    if loss_match:
+                        result['packet_loss'] = float(loss_match.group(1))
 
-                        # Success - return immediately
+                    if result['is_connected']:
+                        logger.info(f"Ping connectivity OK for {interface}: RTT={result['rtt_ms']:.1f}ms")
                         return result
 
                 except subprocess.TimeoutExpired:
-                    logger.debug(f"Ping timeout on {interface} with command: {ping_cmd}")
-                    continue  # Try next command
+                    logger.debug(f"Ping timeout on {interface}")
                 except Exception as e:
                     logger.debug(f"Ping error on {interface}: {e}")
-                    continue  # Try next command
 
-            # All ping commands failed - try to parse any partial response from last attempt
-            if proc and proc.stdout:
-                loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
-                if loss_match:
-                    result['packet_loss'] = float(loss_match.group(1))
-                    # If we got some response (not 100% loss), connection is partially up
-                    if result['packet_loss'] < 100:
-                        result['is_connected'] = True
-                        rtt_match = re.search(
-                            r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
-                            proc.stdout
-                        )
-                        if rtt_match:
-                            result['rtt_ms'] = float(rtt_match.group(2))
-                            result['jitter_ms'] = float(rtt_match.group(4))
-
-            # If ping failed for LTE, try HTTP-based test as fallback
-            # This is more reliable for point-to-point links with policy routing
-            if is_lte and not result['is_connected']:
+            # Method 3: HTTP-based test for LTE (fallback)
+            if not result['is_connected']:
                 try:
-                    logger.debug(f"Ping failed for {interface}, trying HTTP fallback")
+                    logger.debug(f"Trying HTTP test for {interface}")
                     start = time.time()
                     http_result = subprocess.run(
                         ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
                          '--interface', interface, '--connect-timeout', '5',
-                         '--max-time', '10', 'http://1.1.1.1'],
-                        capture_output=True, text=True, timeout=15
+                         '--max-time', '8', 'http://1.1.1.1'],
+                        capture_output=True, text=True, timeout=12
                     )
-                    elapsed = (time.time() - start) * 1000  # ms
+                    elapsed = (time.time() - start) * 1000
 
-                    if http_result.returncode == 0 and http_result.stdout.strip() == '200':
-                        logger.debug(f"HTTP fallback succeeded for {interface} in {elapsed:.0f}ms")
+                    if http_result.returncode == 0 and http_result.stdout.strip() in ['200', '301', '302']:
+                        logger.info(f"HTTP fallback succeeded for {interface} in {elapsed:.0f}ms")
                         result['is_connected'] = True
                         result['rtt_ms'] = elapsed
                         result['jitter_ms'] = 0
                         result['packet_loss'] = 0
                 except Exception as e:
                     logger.debug(f"HTTP fallback failed for {interface}: {e}")
-
-            # If still not connected, try wget as last resort (some systems lack curl)
-            if is_lte and not result['is_connected']:
-                try:
-                    logger.debug(f"Trying wget fallback for {interface}")
-                    start = time.time()
-                    wget_result = subprocess.run(
-                        ['wget', '-q', '-O', '/dev/null', '--timeout=5',
-                         '--bind-address', source_ip.split('/')[0] if source_ip else '0.0.0.0',
-                         'http://1.1.1.1'],
-                        capture_output=True, text=True, timeout=15
-                    )
-                    elapsed = (time.time() - start) * 1000
-
-                    if wget_result.returncode == 0:
-                        logger.debug(f"wget fallback succeeded for {interface} in {elapsed:.0f}ms")
-                        result['is_connected'] = True
-                        result['rtt_ms'] = elapsed
-                        result['jitter_ms'] = 0
-                        result['packet_loss'] = 0
-                except Exception as e:
-                    logger.debug(f"wget fallback failed for {interface}: {e}")
 
             return result
 
@@ -1382,21 +1488,39 @@ class QSecBitFortressAgent:
             pass
 
         # Get interface with default route (this is the real WAN)
+        # Parse multiple route formats:
+        # - "default via 192.168.1.1 dev eth0"
+        # - "default via 192.168.1.1 dev eth0 proto dhcp metric 100"
+        # - "default dev wwan0 proto static" (point-to-point, no gateway)
+        # - "default dev wwan0 scope link" (direct link)
         wan_interface_from_route = None
+        default_routes = []  # Track all default routes with metrics
         try:
             result = subprocess.run(
                 ['ip', 'route', 'show', 'default'],
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0 and result.stdout.strip():
-                # Parse "default via X.X.X.X dev ethX"
-                import re
-                match = re.search(r'default\s+via\s+[\d.]+\s+dev\s+(\S+)', result.stdout)
-                if match:
-                    wan_interface_from_route = match.group(1)
-                    logger.info(f"WAN interface from default route: {wan_interface_from_route}")
-        except Exception:
-            pass
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    # Extract device name - handles both "via X dev Y" and "dev Y" formats
+                    dev_match = re.search(r'\bdev\s+(\S+)', line)
+                    if dev_match:
+                        dev_name = dev_match.group(1)
+                        # Extract metric if present (lower = preferred)
+                        metric_match = re.search(r'\bmetric\s+(\d+)', line)
+                        metric = int(metric_match.group(1)) if metric_match else 0
+                        default_routes.append((metric, dev_name, line))
+                        logger.debug(f"Found default route: dev={dev_name} metric={metric}")
+
+                # Sort by metric (lowest first) and take primary WAN
+                if default_routes:
+                    default_routes.sort(key=lambda x: x[0])
+                    wan_interface_from_route = default_routes[0][1]
+                    logger.info(f"WAN interface from default route: {wan_interface_from_route} (metric={default_routes[0][0]})")
+        except Exception as e:
+            logger.debug(f"Failed to get default route: {e}")
 
         for iface in interfaces:
             name = iface.get('ifname', '')
@@ -1702,6 +1826,9 @@ class QSecBitFortressAgent:
             pass
 
         # Get interface with default route (this is the WAN)
+        # Parse multiple route formats:
+        # - "default via 192.168.1.1 dev eth0"
+        # - "default dev wwan0" (point-to-point, no gateway)
         wan_interface = None
         try:
             result = subprocess.run(
@@ -1709,11 +1836,23 @@ class QSecBitFortressAgent:
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0 and result.stdout.strip():
-                match = re.search(r'default\s+via\s+[\d.]+\s+dev\s+(\S+)', result.stdout)
-                if match:
-                    wan_interface = match.group(1)
-        except Exception:
-            pass
+                # Find all default routes with metrics
+                default_routes = []
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    dev_match = re.search(r'\bdev\s+(\S+)', line)
+                    if dev_match:
+                        metric_match = re.search(r'\bmetric\s+(\d+)', line)
+                        metric = int(metric_match.group(1)) if metric_match else 0
+                        default_routes.append((metric, dev_match.group(1)))
+                # Sort by metric and take lowest
+                if default_routes:
+                    default_routes.sort(key=lambda x: x[0])
+                    wan_interface = default_routes[0][1]
+                    logger.debug(f"WAN interface from default route: {wan_interface}")
+        except Exception as e:
+            logger.debug(f"Failed to get default route for traffic: {e}")
 
         traffic = []
         now = time.time()
@@ -1825,8 +1964,30 @@ class QSecBitFortressAgent:
         - Manufacturer from OUI database
         - Hostname from reverse DNS lookup
         - Device type based on manufacturer and hostname
+
+        Filters out:
+        - Internal container network devices (podman, docker, veth)
+        - OVS internal interfaces (FTS, FTS-mirror)
+        - IPv6 link-local addresses (fe80::)
         """
         devices = []
+
+        # Interfaces to exclude (internal/container networks)
+        exclude_interface_prefixes = (
+            'podman', 'docker', 'veth', 'cni', 'br-',  # Container networks
+            'FTS',  # OVS bridge and mirrors
+            'lo',   # Loopback
+        )
+
+        # IP prefixes to exclude (container networks, link-local)
+        exclude_ip_prefixes = (
+            '172.20.200.',  # Container network (fts-internal)
+            '172.17.',      # Docker default
+            '172.18.',      # Docker networks
+            '172.19.',      # Docker networks
+            'fe80:',        # IPv6 link-local
+            '::1',          # IPv6 loopback
+        )
 
         try:
             proc = subprocess.run(
@@ -1844,7 +2005,19 @@ class QSecBitFortressAgent:
 
                     ip_addr = n.get('dst', '')
                     mac = n.get('lladdr', '')
+                    interface = n.get('dev', '')
+
                     if not mac:
+                        continue
+
+                    # Filter out internal interfaces
+                    if any(interface.startswith(prefix) for prefix in exclude_interface_prefixes):
+                        logger.debug(f"Skipping device on internal interface: {interface}")
+                        continue
+
+                    # Filter out internal IP ranges
+                    if any(ip_addr.startswith(prefix) for prefix in exclude_ip_prefixes):
+                        logger.debug(f"Skipping device with internal IP: {ip_addr}")
                         continue
 
                     mac = mac.upper()
@@ -1861,7 +2034,7 @@ class QSecBitFortressAgent:
                         'device_type': device_type,
                         'hostname': hostname,
                         'manufacturer': manufacturer,
-                        'interface': n.get('dev', ''),
+                        'interface': interface,
                         'last_seen': datetime.now().isoformat(),
                     })
         except Exception as e:
