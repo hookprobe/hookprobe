@@ -75,23 +75,91 @@
         text-transform: uppercase;
     }
 
-    /* Protection level mini display */
-    .protection-level-bar {
-        height: 8px;
-        background: linear-gradient(to right, #6c757d 0%, #17a2b8 20%, #28a745 40%, #ffc107 60%, #fd7e14 80%, #dc3545 100%);
-        border-radius: 4px;
+    /* Unified Protection Level Slider */
+    .protection-slider-container {
         position: relative;
+        padding: 8px 0;
     }
-    .protection-level-marker {
-        position: absolute;
-        top: -4px;
-        width: 16px;
-        height: 16px;
-        background: white;
+    .protection-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 12px;
+        border-radius: 6px;
+        background: linear-gradient(to right,
+            #6c757d 0%,
+            #17a2b8 20%,
+            #28a745 40%,
+            #ffc107 60%,
+            #fd7e14 80%,
+            #dc3545 100%
+        );
+        outline: none;
+        cursor: pointer;
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.3), 0 2px 4px rgba(0,0,0,0.2);
+    }
+    /* Webkit (Chrome, Safari, Edge) */
+    .protection-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
-        border: 2px solid #343a40;
-        transform: translateX(-50%);
-        transition: left 0.3s ease;
+        background: #fff;
+        border: 3px solid #212529;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 2px rgba(255,255,255,0.2);
+        cursor: grab;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .protection-slider::-webkit-slider-thumb:hover {
+        transform: scale(1.1);
+        box-shadow: 0 3px 12px rgba(0,0,0,0.5), 0 0 0 3px rgba(255,255,255,0.3);
+    }
+    .protection-slider::-webkit-slider-thumb:active {
+        cursor: grabbing;
+        transform: scale(1.15);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.6), 0 0 0 4px rgba(255,255,255,0.4);
+    }
+    /* Firefox */
+    .protection-slider::-moz-range-thumb {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #fff;
+        border: 3px solid #212529;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 2px rgba(255,255,255,0.2);
+        cursor: grab;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .protection-slider::-moz-range-thumb:hover {
+        transform: scale(1.1);
+    }
+    .protection-slider::-moz-range-thumb:active {
+        cursor: grabbing;
+        transform: scale(1.15);
+    }
+    .protection-slider::-moz-range-track {
+        height: 12px;
+        border-radius: 6px;
+        background: transparent;
+    }
+    /* Level labels */
+    .protection-labels {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #6c757d;
+    }
+    .protection-labels span {
+        flex: 1;
+        text-align: center;
+        transition: color 0.2s ease, transform 0.2s ease;
+    }
+    .protection-labels span.active {
+        color: #fff;
+        transform: scale(1.1);
     }
 
     /* Modal improvements */
@@ -192,24 +260,23 @@
                     </div>
                 </div>
 
-                <!-- Protection Level -->
+                <!-- Protection Level - Unified Slider -->
                 <div class="mb-4">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span class="text-muted small">Protection Level</span>
-                        <span id="level-name" class="badge badge-success">Strong</span>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="text-muted small text-uppercase font-weight-bold">Protection Level</span>
+                        <span id="level-name" class="badge badge-success px-3 py-2" style="font-size: 0.85rem;">Strong</span>
                     </div>
-                    <div class="protection-level-bar">
-                        <div class="protection-level-marker" id="level-marker" style="left: 60%;"></div>
+                    <div class="protection-slider-container">
+                        <input type="range" class="protection-slider" min="0" max="5" value="3" id="protection-level"
+                               oninput="updateLevelDisplay(this.value)" onchange="setProtectionLevel(this.value)">
                     </div>
-                    <input type="range" class="custom-range mt-2" min="0" max="5" value="3" id="protection-level"
-                           oninput="updateLevelDisplay(this.value)" onchange="setProtectionLevel(this.value)">
-                    <div class="d-flex justify-content-between text-muted" style="font-size: 0.65rem;">
-                        <span>OFF</span>
-                        <span>BASE</span>
-                        <span>ENHANCED</span>
-                        <span>STRONG</span>
-                        <span>MAX</span>
-                        <span>FULL</span>
+                    <div class="protection-labels" id="protection-labels">
+                        <span data-level="0">OFF</span>
+                        <span data-level="1">BASE</span>
+                        <span data-level="2">ENHANCED</span>
+                        <span data-level="3" class="active">STRONG</span>
+                        <span data-level="4">MAX</span>
+                        <span data-level="5">FULL</span>
                     </div>
                 </div>
 
@@ -655,11 +722,21 @@ async function checkPauseStatus() {
 // === PROTECTION LEVEL ===
 function updateLevelDisplay(level) {
     const name = document.getElementById('level-name');
-    const marker = document.getElementById('level-marker');
+    const labels = document.querySelectorAll('#protection-labels span');
 
+    // Update badge
     name.textContent = LEVEL_NAMES[level];
-    name.className = 'badge badge-' + LEVEL_COLORS[level];
-    marker.style.left = (level * 20) + '%';
+    name.className = 'badge badge-' + LEVEL_COLORS[level] + ' px-3 py-2';
+    name.style.fontSize = '0.85rem';
+
+    // Highlight active label
+    labels.forEach((label, idx) => {
+        if (idx == level) {
+            label.classList.add('active');
+        } else {
+            label.classList.remove('active');
+        }
+    });
 }
 
 async function setProtectionLevel(level) {
