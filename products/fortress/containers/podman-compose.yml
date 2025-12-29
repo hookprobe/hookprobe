@@ -209,8 +209,11 @@ services:
       # Bind mount logs to host for ML training data visibility
       - /var/log/hookprobe:/var/log/hookprobe
       - /etc/hookprobe:/etc/hookprobe:ro
+      # DoT (DNS over TLS) certificates - writable for auto-generation
+      - dnsxai_certs:/etc/hookprobe/certs
     ports:
-      - "0.0.0.0:5353:5353/udp"  # DNS accessible from LAN
+      - "0.0.0.0:5353:5353/udp"  # Plain DNS accessible from LAN
+      - "0.0.0.0:853:853/tcp"    # DoT (DNS over TLS) for Windows/modern clients
       - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
     healthcheck:
       # Check HTTP API health endpoint using Python urllib (always available)
@@ -721,6 +724,9 @@ volumes:
   dnsxai_logs:
     driver: local
     name: fts-dnsxai-logs
+  dnsxai_certs:
+    driver: local
+    name: fts-dnsxai-certs
   dfs_data:
     driver: local
     name: fts-dfs-data
