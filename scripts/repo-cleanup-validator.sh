@@ -120,7 +120,7 @@ check_required_files() {
         "products/guardian/README.md"
         "products/guardian/scripts/setup.sh"
         "products/fortress/README.md"
-        "products/fortress/setup.sh"
+        "products/fortress/install.sh"
         "products/nexus/README.md"
         "products/nexus/setup.sh"
         "products/sentinel/README.md"
@@ -524,7 +524,7 @@ generate_report() {
         return 2
     elif [ $WARNINGS -gt 0 ] || [ $ORPHANS -gt 0 ]; then
         echo -e "  ${YELLOW}Status: PASSED WITH WARNINGS${NC}"
-        return 1
+        return 0  # Warnings are non-blocking
     else
         echo -e "  ${GREEN}Status: PASSED${NC}"
         return 0

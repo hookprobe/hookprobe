@@ -336,7 +336,7 @@ HookProbe follows [Semantic Versioning](https://semver.org/):
 
 ## Migration Guides
 
-- [v4.x to v5.0](MIGRATION_GUIDE_v4_to_v5.md) - **BREAKING CHANGES**
+- v4.x to v5.0 - **BREAKING CHANGES** (fresh install recommended due to architectural changes)
 - v3.x to v4.0 - Not documented (fresh install recommended)
 - v2.x to v3.0 - Not documented (fresh install recommended)
 
@@ -450,7 +450,7 @@ For v1.x and v2.x, perform a fresh v5.0 installation and manually migrate data.
 
 ## Future Roadmap
 
-See [RELEASE_NOTES_v5.0.md](RELEASE_NOTES_v5.0.md#roadmap) for:
+Planned features for future releases:
 - v5.1 features (Q1 2026)
 - v5.2 features (Q2 2026)
 - v6.0 features (Q4 2026)
@@ -459,13 +459,13 @@ See [RELEASE_NOTES_v5.0.md](RELEASE_NOTES_v5.0.md#roadmap) for:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute to HookProbe.
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for how to contribute to HookProbe.
 
 ---
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for:
+See [docs/SECURITY.md](docs/SECURITY.md) for:
 - Vulnerability reporting
 - Security policy
 - Supported versions
