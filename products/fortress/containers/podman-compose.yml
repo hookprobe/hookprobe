@@ -607,7 +607,7 @@ services:
   # Port Selection (from shared/mesh/ARCHITECTURE.md):
   #   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
   #   FALLBACK:  8543/UDP + 8543/TCP (TLS-wrapped, avoids web UI 8443 conflict)
-  #   STEALTH:   853/UDP + 853/TCP (DoT/DoQ cover)
+  #   STEALTH:   8853/UDP + 8853/TCP (DoT/DoQ cover, 853 used by dnsXai DoT)
   #   RELAY:     3478/UDP (STUN/TURN for NAT traversal)
   mesh-orchestrator:
     build:
@@ -625,7 +625,7 @@ services:
       # HTP configuration
       HTP_PRIMARY_PORT: 8144
       HTP_FALLBACK_PORT: 8543
-      HTP_STEALTH_PORT: 853
+      HTP_STEALTH_PORT: 8853
       HTP_RELAY_PORT: 3478
       # Neuro configuration
       NEURO_WEIGHT_DIR: /opt/hookprobe/mesh/neuro
@@ -656,9 +656,9 @@ services:
       # HTP Fallback (TLS-wrapped, 8543 to avoid conflict with web UI on 8443)
       - "0.0.0.0:8543:8543/udp"
       - "0.0.0.0:8543:8543/tcp"
-      # HTP Stealth (DoT/DoQ cover traffic)
-      - "0.0.0.0:853:853/udp"
-      - "0.0.0.0:853:853/tcp"
+      # HTP Stealth (DoT/DoQ cover traffic, port 853 used by dnsXai for real DoT)
+      - "0.0.0.0:8853:8853/udp"
+      - "0.0.0.0:8853:8853/tcp"
       # STUN/TURN Relay for NAT traversal
       - "0.0.0.0:3478:3478/udp"
       # Cortex WebSocket (local only)
