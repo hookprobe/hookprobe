@@ -832,26 +832,49 @@ def get_slaai_status() -> Dict:
     wan = get_wan_health()
     traffic = get_all_interface_traffic()
 
+    # Extract interface info
+    primary_iface = wan['primary']['interface'] if wan.get('primary') else None
+    backup_iface = wan['backup']['interface'] if wan.get('backup') else None
+    primary_status = wan['primary']['status'] if wan.get('primary') else 'DOWN'
+    backup_status = wan['backup']['status'] if wan.get('backup') else 'DOWN'
+
+    # Determine active interface - use explicit active or infer from status
+    active_iface = wan.get('active')
+    active_is_primary = wan.get('active_is_primary', False)
+
+    # If active is not set, infer from status
+    if not active_iface:
+        if primary_status == 'ACTIVE':
+            active_iface = primary_iface
+            active_is_primary = True
+        elif backup_status == 'ACTIVE':
+            active_iface = backup_iface
+            active_is_primary = False
+        elif primary_iface and primary_status != 'FAILED':
+            # Default to primary if it's not failed
+            active_iface = primary_iface
+            active_is_primary = True
+
     # Build status response
     status = {
-        'state': wan.get('state', 'unknown'),
+        'state': wan.get('state', 'primary_active' if active_is_primary else 'backup_active'),
         'timestamp': wan.get('timestamp', datetime.now().isoformat()),
-        'active_interface': wan.get('active'),
-        'active_is_primary': wan.get('active_is_primary', False),
+        'active_interface': active_iface,
+        'active_is_primary': active_is_primary,
 
         # Primary WAN
-        'primary_interface': wan['primary']['interface'] if wan.get('primary') else None,
+        'primary_interface': primary_iface,
         'primary_health': wan['primary']['health_score'] if wan.get('primary') else 0,
-        'primary_status': wan['primary']['status'] if wan.get('primary') else 'DOWN',
+        'primary_status': primary_status,
         'primary_rtt': wan['primary']['rtt_ms'] if wan.get('primary') else None,
         'primary_jitter': wan['primary']['jitter_ms'] if wan.get('primary') else None,
         'primary_loss': wan['primary']['packet_loss'] if wan.get('primary') else 100,
         'primary_ip': wan['primary']['ip'] if wan.get('primary') else None,
 
         # Backup WAN
-        'backup_interface': wan['backup']['interface'] if wan.get('backup') else None,
+        'backup_interface': backup_iface,
         'backup_health': wan['backup']['health_score'] if wan.get('backup') else 0,
-        'backup_status': wan['backup']['status'] if wan.get('backup') else 'DOWN',
+        'backup_status': backup_status,
         'backup_rtt': wan['backup']['rtt_ms'] if wan.get('backup') else None,
         'backup_jitter': wan['backup'].get('jitter_ms') if wan.get('backup') else None,
         'backup_signal': wan['backup'].get('signal_dbm') if wan.get('backup') else None,
@@ -862,6 +885,13 @@ def get_slaai_status() -> Dict:
         # Traffic data
         'traffic': {t['interface']: t for t in traffic},
 
+        # LSTM Prediction (placeholder - would come from ML engine)
+        'prediction': {
+            'failure_probability': 0.08,
+            'confidence': 0.87,
+            'predicted_failure_time': None,
+        },
+
         # SLA metrics (placeholder - would come from historical data)
         'uptime_pct': wan.get('uptime_pct', 99.9),
         'rto_actual_s': 2.3,
@@ -871,9 +901,22 @@ def get_slaai_status() -> Dict:
         'failover_count_24h': 0,
         'failover_history': [],
 
+        # DNS status (placeholder)
+        'dns_status': {
+            'active_provider': 'cloudflare',
+            'latency_ms': 12,
+            'health': 0.98,
+        },
+
+        # Failback status
+        'failback_status': {
+            'can_failback': not active_is_primary and primary_status != 'FAILED',
+            'reason': 'Primary is active' if active_is_primary else 'Primary not yet recovered',
+        },
+
         # Cost tracking (placeholder - would come from metered tracking)
         'cost_status': {
-            'interface': wan['backup']['interface'] if wan.get('backup') else 'wwan0',
+            'interface': backup_iface or 'wwan0',
             'daily_usage_mb': 0,
             'daily_budget_mb': 500,
             'monthly_usage_mb': 0,

@@ -70,7 +70,11 @@ class Database:
     def get_connection(self) -> Generator:
         """Get a database connection from the pool."""
         if not self._initialized:
-            self.initialize()
+            if not self.initialize():
+                raise RuntimeError("Database not available - connection pool not initialized")
+
+        if self._pool is None:
+            raise RuntimeError("Database connection pool is None")
 
         conn = self._pool.getconn()
         try:

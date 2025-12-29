@@ -550,29 +550,138 @@ class CNAMEUncloaker:
     # Legitimate CDN/infrastructure domains - NEVER block these
     # These are used by major services for content delivery
     LEGITIMATE_INFRASTRUCTURE = {
-        # Apple CDN infrastructure
+        # === Apple Ecosystem ===
         'aaplimg.com', 'apple-dns.net', 'apple.com', 'icloud.com',
         'mzstatic.com', 'apple-cloudkit.com', 'cdn-apple.com',
-        # Akamai (used by many legitimate services)
-        'akadns.net', 'akamaiedge.net', 'akamai.net', 'akamaihd.net',
-        'edgekey.net', 'edgesuite.net', 'akamaitechnologies.com',
-        # Fastly (used by many legitimate services)
-        'fastly.net', 'fastlylb.net', 'freetls.fastly.net',
-        # Cloudflare
-        'cloudflare.com', 'cloudflare-dns.com', 'cloudflare.net',
-        # Google infrastructure
-        'google.com', 'googleapis.com', 'gstatic.com', 'googlevideo.com',
-        'googleusercontent.com', 'ggpht.com', '1e100.net',
-        # Microsoft/Azure
+        'icloud-content.com', 'apple-mapkit.com', 'apple-livephotoskit.com',
+        'itunes.apple.com', 'itunes.com', 'itunesconnect.apple.com',
+        'apps.apple.com', 'appstore.com', 'apple.news',
+        'gs.apple.com', 'lcdn-locator.apple.com', 'lcdn-registration.apple.com',
+        'setup.icloud.com', 'fmf.icloud.com', 'fmip.icloud.com',
+        'keyvalueservice.icloud.com', 'configuration.apple.com',
+
+        # === Microsoft Ecosystem ===
         'microsoft.com', 'microsoftonline.com', 'azure.com',
         'azureedge.net', 'windows.net', 'office.com', 'office365.com',
-        # Amazon (infrastructure, not tracking)
+        'windowsupdate.com', 'update.microsoft.com', 'download.microsoft.com',
+        'office.net', 'sharepoint.com', 'onedrive.com', 'onedrive.live.com',
+        'outlook.com', 'outlook.office.com', 'outlook.office365.com',
+        'live.com', 'live.net', 'hotmail.com',
+        'skype.com', 'skypeforbusiness.com', 'lync.com',
+        'teams.microsoft.com', 'teams.live.com',
+        'msn.com', 'bing.com', 'bingapis.com',
+        'visualstudio.com', 'vsassets.io', 'azure-dns.com', 'azure-dns.net',
+        'msedge.net', 'msftauth.net', 'msauthimages.net', 'msftauthimages.net',
+        'login.microsoftonline.com', 'login.live.com', 'login.windows.net',
+        'wns.windows.com', 'notify.windows.com',
+        'windowsphone.com', 's-microsoft.com', 'sfx.ms',
+        'trafficmanager.net', 'azurewebsites.net', 'blob.core.windows.net',
+        'cloudapp.net', 'cloudapp.azure.com', 'azure-api.net',
+
+        # === Google Ecosystem ===
+        'google.com', 'googleapis.com', 'gstatic.com', 'googlevideo.com',
+        'googleusercontent.com', 'ggpht.com', '1e100.net',
+        'google.co.uk', 'google.ca', 'google.de', 'google.fr',
+        'youtube.com', 'youtu.be', 'ytimg.com', 'youtube-nocookie.com',
+        'gmail.com', 'googlemail.com',
+        'drive.google.com', 'docs.google.com', 'sheets.google.com',
+        'meet.google.com', 'hangouts.google.com',
+        'chromium.org', 'googlesyndication.com',
+        'gvt1.com', 'gvt2.com', 'gvt3.com',
+        'android.com', 'android.clients.google.com',
+        'firebase.google.com', 'firebaseio.com', 'firebasestorage.googleapis.com',
+        'recaptcha.net', 'www.gstatic.com', 'fonts.gstatic.com',
+
+        # === Amazon/AWS ===
         'amazonaws.com', 'amazon.com', 'cloudfront.net',
-        # Other major CDNs
+        'amazon.co.uk', 'amazon.de', 'amazon.fr', 'amazon.ca',
+        'aws.amazon.com', 'awsstatic.com', 's3.amazonaws.com',
+        'elasticbeanstalk.com', 'awsglobalaccelerator.com',
+        'amazonwebservices.com', 'alexa.amazon.com',
+
+        # === CDN Providers ===
+        # Akamai
+        'akadns.net', 'akamaiedge.net', 'akamai.net', 'akamaihd.net',
+        'edgekey.net', 'edgesuite.net', 'akamaitechnologies.com',
+        'akamai.com', 'akamaized.net',
+        # Fastly
+        'fastly.net', 'fastlylb.net', 'freetls.fastly.net', 'fastly.com',
+        # Cloudflare
+        'cloudflare.com', 'cloudflare-dns.com', 'cloudflare.net',
+        'cloudflaressl.com', 'cloudflare-ipfs.com',
+        # Other CDNs
         'edgecastcdn.net', 'stackpathdns.com', 'kxcdn.com',
         'cdn77.org', 'cdninstagram.com', 'fbcdn.net',
-        # DNS providers
+        'jsdelivr.net', 'unpkg.com', 'cdnjs.com', 'cdnjs.cloudflare.com',
+        'bootstrapcdn.com', 'maxcdn.bootstrapcdn.com',
+        'imgix.net', 'imgix.com',
+
+        # === Enterprise Software Vendors ===
+        # Dell
+        'dell.com', 'dell.net', 'delltechnologies.com', 'dellcdn.com',
+        'alienware.com', 'vmware.com', 'emc.com',
+        # HP/HPE
+        'hp.com', 'hpe.com', 'hp.net',
+        # Intel
+        'intel.com', 'intel.net',
+        # Lenovo
+        'lenovo.com', 'lenovo.net',
+        # Cisco
+        'cisco.com', 'webex.com', 'ciscospark.com', 'meraki.com',
+        # IBM
+        'ibm.com', 'ibmcloud.com', 'bluemix.net',
+        # Oracle
+        'oracle.com', 'oraclecloud.com',
+        # SAP
+        'sap.com', 'sapcloud.com',
+        # Salesforce
+        'salesforce.com', 'force.com', 'sfdc.net', 'salesforceliveagent.com',
+        # Adobe
+        'adobe.com', 'adobelogin.com', 'adobecc.com', 'typekit.net',
+        'adobedtm.com', 'adobe.io', 'behance.net',
+        # Atlassian
+        'atlassian.com', 'atlassian.net', 'bitbucket.org', 'trello.com',
+        # Slack
+        'slack.com', 'slack-edge.com', 'slack-imgs.com', 'slack-files.com',
+        # Zoom
+        'zoom.us', 'zoom.com', 'zoomgov.com',
+        # Dropbox
+        'dropbox.com', 'dropboxapi.com', 'dropboxstatic.com',
+        # GitHub/GitLab
+        'github.com', 'github.io', 'githubusercontent.com', 'githubassets.com',
+        'gitlab.com', 'gitlab.io',
+
+        # === Security/Certificate Providers ===
+        # Let's Encrypt (Certificate Authority)
+        'lencr.org', 'letsencrypt.org', 'letsencrypt.com',
+        # Other CAs
+        'digicert.com', 'geotrust.com', 'verisign.com', 'symantec.com',
+        'globalsign.com', 'comodo.com', 'sectigo.com', 'comodoca.com',
+        'entrust.net', 'entrust.com', 'godaddy.com',
+        # OCSP/CRL endpoints
+        'ocsp.digicert.com', 'crl.microsoft.com', 'pki.goog',
+
+        # === Payment Processors ===
+        'paypal.com', 'paypalobjects.com',
+        'stripe.com', 'stripe.network',
+        'braintreegateway.com', 'braintree-api.com',
+        'square.com', 'squareup.com',
+
+        # === Social/Communication (Infrastructure) ===
+        'facebook.com', 'fb.com', 'facebook.net', 'fbcdn.net',
+        'instagram.com', 'cdninstagram.com',
+        'whatsapp.com', 'whatsapp.net',
+        'twitter.com', 'twimg.com', 'x.com',
+        'linkedin.com', 'licdn.com',
+        'pinterest.com', 'pinimg.com',
+        'reddit.com', 'redd.it', 'redditmedia.com',
+        'telegram.org', 't.me',
+        'discord.com', 'discordapp.com', 'discord.gg',
+
+        # === DNS Providers ===
         'quad9.net', 'opendns.com', 'cleanbrowsing.org',
+        'nextdns.io', 'adguard-dns.io', 'controld.com',
+        'doh.dns.apple.com', 'dns.google', 'one.one.one.one',
     }
 
     # OS/Browser connectivity check domains - CRITICAL: NEVER block these
@@ -1065,6 +1174,7 @@ class AIAdBlocker:
         """Load blocklist and whitelist from files."""
         blocklist_path = self.data_dir / self.config.blocklist_file
         whitelist_path = self.data_dir / self.config.whitelist_file
+        enterprise_whitelist_path = self.data_dir / 'enterprise-whitelist.txt'
 
         if blocklist_path.exists():
             with open(blocklist_path, 'r') as f:
@@ -1075,6 +1185,7 @@ class AIAdBlocker:
                 )
             self.logger.info(f"Loaded {len(self.blocklist)} blocked domains")
 
+        # Load user whitelist
         if whitelist_path.exists():
             with open(whitelist_path, 'r') as f:
                 self.whitelist = set(
@@ -1083,6 +1194,36 @@ class AIAdBlocker:
                     if line.strip() and not line.startswith('#')
                 )
             self.logger.info(f"Loaded {len(self.whitelist)} whitelisted domains")
+
+        # Load enterprise whitelist (comprehensive list of known safe domains)
+        if enterprise_whitelist_path.exists():
+            try:
+                with open(enterprise_whitelist_path, 'r') as f:
+                    enterprise_domains = set(
+                        line.strip().lower()
+                        for line in f
+                        if line.strip() and not line.startswith('#')
+                    )
+                # Merge with user whitelist
+                self.whitelist.update(enterprise_domains)
+                self.logger.info(f"Loaded {len(enterprise_domains)} enterprise whitelist domains")
+            except Exception as e:
+                self.logger.warning(f"Failed to load enterprise whitelist: {e}")
+
+        # Also check for enterprise whitelist in shared location
+        shared_enterprise_path = Path('/opt/hookprobe/shared/dnsXai/data/enterprise-whitelist.txt')
+        if shared_enterprise_path.exists() and shared_enterprise_path != enterprise_whitelist_path:
+            try:
+                with open(shared_enterprise_path, 'r') as f:
+                    enterprise_domains = set(
+                        line.strip().lower()
+                        for line in f
+                        if line.strip() and not line.startswith('#')
+                    )
+                self.whitelist.update(enterprise_domains)
+                self.logger.info(f"Loaded {len(enterprise_domains)} shared enterprise whitelist domains")
+            except Exception as e:
+                self.logger.warning(f"Failed to load shared enterprise whitelist: {e}")
 
     def _save_blocklist(self):
         """Save blocklist to file."""
