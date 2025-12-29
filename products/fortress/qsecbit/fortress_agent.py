@@ -1101,6 +1101,151 @@ class QSecBitFortressAgent:
 
         return devices
 
+    def collect_wifi_status(self) -> Dict:
+        """Collect WiFi status from hostapd config and runtime status.
+
+        This runs with host network access, so we can read hostapd configs
+        and run hostapd_cli to get live data.
+        Data is written to wifi_status.json for the web container to read.
+        """
+        import re
+
+        status = {
+            'timestamp': datetime.now().isoformat(),
+            'interfaces': [],
+            'primary_ssid': None,
+            'primary_channel': None,
+            'primary_band': None,
+        }
+
+        # Try multiple hostapd config locations
+        hostapd_configs = [
+            '/etc/hostapd/fortress.conf',
+            '/etc/hostapd/hostapd.conf',
+            '/etc/hostapd/fts-24ghz.conf',
+            '/etc/hostapd/fts-5ghz.conf',
+            '/etc/hostapd/fortress-5ghz.conf',
+        ]
+
+        # Also check if there's a directory with multiple configs
+        hostapd_dir = Path('/etc/hostapd')
+        if hostapd_dir.exists():
+            for conf in hostapd_dir.glob('*.conf'):
+                if str(conf) not in hostapd_configs:
+                    hostapd_configs.append(str(conf))
+
+        for config_path in hostapd_configs:
+            if not Path(config_path).exists():
+                continue
+
+            try:
+                iface_info = {
+                    'config_file': config_path,
+                    'interface': None,
+                    'ssid': None,
+                    'channel': None,
+                    'hw_mode': None,
+                    'band': None,
+                    'clients': 0,
+                    'state': 'unknown',
+                }
+
+                with open(config_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('#') or '=' not in line:
+                            continue
+                        key, _, value = line.partition('=')
+                        key = key.strip()
+                        value = value.strip()
+
+                        if key == 'interface':
+                            iface_info['interface'] = value
+                        elif key == 'ssid':
+                            iface_info['ssid'] = value
+                        elif key == 'channel':
+                            try:
+                                iface_info['channel'] = int(value)
+                            except ValueError:
+                                pass
+                        elif key == 'hw_mode':
+                            iface_info['hw_mode'] = value
+
+                # Determine band from hw_mode or channel
+                if iface_info['hw_mode'] == 'a':
+                    iface_info['band'] = '5GHz'
+                elif iface_info['hw_mode'] in ['g', 'b']:
+                    iface_info['band'] = '2.4GHz'
+                elif iface_info['channel']:
+                    iface_info['band'] = '5GHz' if iface_info['channel'] > 14 else '2.4GHz'
+
+                # Try to get live status from hostapd_cli
+                if iface_info['interface']:
+                    try:
+                        result = subprocess.run(
+                            ['hostapd_cli', '-i', iface_info['interface'], 'status'],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if result.returncode == 0:
+                            iface_info['state'] = 'running'
+                            for line in result.stdout.split('\n'):
+                                if line.startswith('channel='):
+                                    try:
+                                        iface_info['channel'] = int(line.split('=')[1])
+                                    except ValueError:
+                                        pass
+                                elif line.startswith('ssid='):
+                                    iface_info['ssid'] = line.split('=')[1]
+                        else:
+                            iface_info['state'] = 'stopped'
+                    except Exception:
+                        pass
+
+                    # Count connected clients
+                    try:
+                        result = subprocess.run(
+                            ['hostapd_cli', '-i', iface_info['interface'], 'all_sta'],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if result.returncode == 0:
+                            # Count MAC addresses (lines matching MAC pattern)
+                            mac_count = 0
+                            for line in result.stdout.split('\n'):
+                                if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', line.strip()):
+                                    mac_count += 1
+                            iface_info['clients'] = mac_count
+                    except Exception:
+                        pass
+
+                # Only add if we got meaningful data
+                if iface_info['ssid'] or iface_info['interface']:
+                    status['interfaces'].append(iface_info)
+
+                    # Set primary (5GHz preferred, or first found)
+                    if status['primary_ssid'] is None or iface_info['band'] == '5GHz':
+                        status['primary_ssid'] = iface_info['ssid']
+                        status['primary_channel'] = iface_info['channel']
+                        status['primary_band'] = iface_info['band']
+
+            except Exception as e:
+                logger.debug(f"Failed to read hostapd config {config_path}: {e}")
+
+        return status
+
+    def save_wifi_status(self):
+        """Collect and save WiFi status for SDN dashboard."""
+        try:
+            wifi_status = self.collect_wifi_status()
+            wifi_file = DATA_DIR / "wifi_status.json"
+            with open(wifi_file, 'w') as f:
+                json.dump(wifi_status, f, indent=2)
+            if wifi_status['primary_ssid']:
+                logger.debug(f"WiFi status saved: SSID={wifi_status['primary_ssid']} channel={wifi_status['primary_channel']}")
+            else:
+                logger.debug("WiFi status saved: no hostapd configs found")
+        except Exception as e:
+            logger.warning(f"Failed to save WiFi status: {e}")
+
     def save_devices(self):
         """Collect and save device list for clients page."""
         try:
@@ -1119,6 +1264,7 @@ class QSecBitFortressAgent:
         wan_health_counter = 0
         traffic_counter = 0
         device_counter = 0
+        wifi_counter = 0
 
         while self.running.is_set():
             try:
@@ -1142,6 +1288,12 @@ class QSecBitFortressAgent:
                 if device_counter >= 3:
                     self.save_devices()
                     device_counter = 0
+
+                # Collect WiFi status every 3 cycles (30 seconds)
+                wifi_counter += 1
+                if wifi_counter >= 3:
+                    self.save_wifi_status()
+                    wifi_counter = 0
 
                 # Log detailed status
                 layer_summary = ' '.join([f"{k}={v:.2f}" for k, v in sample.layer_scores.items()])

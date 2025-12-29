@@ -138,18 +138,100 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# DATA FILE PATHS (written by qsecbit agent running with host network)
+# ============================================================
+DATA_DIR = Path('/opt/hookprobe/fortress/data')
+
+
+def _read_agent_data(filename: str, max_age_seconds: int = 60) -> dict:
+    """Read data from qsecbit agent data file if recent enough."""
+    data_file = DATA_DIR / filename
+    if not data_file.exists():
+        return None
+    try:
+        data = json.loads(data_file.read_text())
+        # Check if data is recent
+        if 'timestamp' in data:
+            from datetime import datetime
+            file_ts = data['timestamp']
+            if isinstance(file_ts, str):
+                # Parse ISO format timestamp
+                file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
+                if file_time.tzinfo:
+                    file_time = file_time.replace(tzinfo=None)
+                age = (datetime.now() - file_time).total_seconds()
+                if age < max_age_seconds:
+                    return data
+        else:
+            # No timestamp, just return the data
+            return data
+    except Exception as e:
+        logger.debug(f"Failed to read agent data from {filename}: {e}")
+    return None
+
+
+# ============================================================
 # REAL DATA COLLECTION - Live system data
 # ============================================================
 
 def get_real_devices():
     """
-    Collect real device data from system sources:
-    - ARP table (ip neigh show)
-    - DHCP leases (dnsmasq)
-    - OUI classification for manufacturer/category
+    Collect real device data from system sources.
+
+    Priority 1: Read from devices.json written by qsecbit agent
+    Priority 2: Direct ARP/DHCP collection (works if container has host network)
 
     Returns list of devices with real data.
     """
+    # Priority 1: Try to read from qsecbit agent data file
+    agent_data = _read_agent_data('devices.json', max_age_seconds=120)
+    if agent_data and isinstance(agent_data, list) and len(agent_data) > 0:
+        # Enrich with OUI classification and format for SDN display
+        enriched = []
+        for device in agent_data:
+            mac = device.get('mac_address', '')
+            classification = classify_device(mac)
+            category = classification.get('category', 'unknown')
+            manufacturer = classification.get('manufacturer', device.get('manufacturer', 'Unknown'))
+
+            # Determine network policy
+            policy_map = {
+                'iot': 'lan_only',
+                'camera': 'lan_only',
+                'pos': 'internet_only',
+                'voice_assistant': 'internet_only',
+                'printer': 'lan_only',
+                'workstation': 'full_access',
+                'phone': 'full_access',
+                'tablet': 'full_access',
+                'unknown': 'default',
+            }
+            network_policy = policy_map.get(category, 'default')
+
+            enriched.append({
+                'mac_address': mac,
+                'ip_address': device.get('ip_address', ''),
+                'hostname': device.get('hostname') or f'device-{mac[-5:].replace(":", "")}',
+                'device_type': category,
+                'manufacturer': manufacturer,
+                'network_policy': network_policy,
+                'vlan_id': 100,  # Default LAN VLAN
+                'internet_access': network_policy in ('full_access', 'internet_only'),
+                'lan_access': network_policy in ('full_access', 'lan_only'),
+                'is_blocked': device.get('is_blocked', False),
+                'is_online': device.get('state') in ('REACHABLE', 'DELAY'),
+                'oui_category': category,
+                'auto_policy': classification.get('recommended_policy', 'default'),
+                'first_seen': device.get('first_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                'last_seen': device.get('last_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                'bytes_sent': device.get('bytes_sent', 0),
+                'bytes_received': device.get('bytes_received', 0),
+            })
+        logger.debug(f"Loaded {len(enriched)} devices from agent data file")
+        return enriched
+
+    # Priority 2: Fallback to direct collection (legacy, works with host network)
+    logger.debug("No agent data available, falling back to direct collection")
     devices = []
     arp_devices = {}
     dhcp_leases = {}
@@ -1462,27 +1544,40 @@ def api_wifi_intelligence():
         'ssid': None,
     }
 
-    # Read hostapd config for current channel
-    hostapd_conf = '/etc/hostapd/fortress.conf'
-    if os.path.exists(hostapd_conf):
-        try:
-            with open(hostapd_conf, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('channel='):
-                        data['current_channel'] = int(line.split('=')[1])
-                    elif line.startswith('hw_mode='):
-                        data['hw_mode'] = line.split('=')[1]
-                    elif line.startswith('interface='):
-                        data['wifi_interface'] = line.split('=')[1]
-                    elif line.startswith('ssid='):
-                        data['ssid'] = line.split('=')[1]
+    # Priority 1: Read from wifi_status.json written by qsecbit agent
+    wifi_data = _read_agent_data('wifi_status.json', max_age_seconds=120)
+    if wifi_data and wifi_data.get('primary_ssid'):
+        data['ssid'] = wifi_data.get('primary_ssid')
+        data['current_channel'] = wifi_data.get('primary_channel')
+        data['band'] = wifi_data.get('primary_band', '5GHz')
+        data['hw_mode'] = 'a' if data['band'] == '5GHz' else 'g'
+        if wifi_data.get('interfaces'):
+            # Use first interface info
+            first_iface = wifi_data['interfaces'][0]
+            data['wifi_interface'] = first_iface.get('interface')
+        logger.debug(f"Loaded WiFi status from agent data: SSID={data['ssid']} channel={data['current_channel']}")
+    else:
+        # Priority 2: Fallback - Read hostapd config directly (works if mounted)
+        hostapd_conf = '/etc/hostapd/fortress.conf'
+        if os.path.exists(hostapd_conf):
+            try:
+                with open(hostapd_conf, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('channel='):
+                            data['current_channel'] = int(line.split('=')[1])
+                        elif line.startswith('hw_mode='):
+                            data['hw_mode'] = line.split('=')[1]
+                        elif line.startswith('interface='):
+                            data['wifi_interface'] = line.split('=')[1]
+                        elif line.startswith('ssid='):
+                            data['ssid'] = line.split('=')[1]
 
-            # Determine band from hw_mode or channel
-            if data['hw_mode'] == 'a' or (data['current_channel'] and data['current_channel'] > 14):
-                data['band'] = '5GHz'
-        except Exception:
-            pass
+                # Determine band from hw_mode or channel
+                if data['hw_mode'] == 'a' or (data['current_channel'] and data['current_channel'] > 14):
+                    data['band'] = '5GHz'
+            except Exception:
+                pass
 
     # Read channel state file for optimization history
     state_file = '/var/lib/fortress/channel_state.json'
