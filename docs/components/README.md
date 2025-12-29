@@ -185,7 +185,7 @@ HookProbe uses a **modular POD architecture** where each POD serves a specific s
 - Network direction-aware detection
 - Energy anomaly detection
 
-**Documentation**: [POD-007.md](POD-007.md) | [../src/qsecbit/README.md](../../src/qsecbit/README.md)
+**Documentation**: [POD-007.md](POD-007.md) | [../../core/qsecbit/README.md](../../core/qsecbit/README.md)
 
 ---
 
@@ -208,7 +208,7 @@ HookProbe uses a **modular POD architecture** where each POD serves a specific s
 - Web scraping and analysis
 - Custom integrations
 
-**Documentation**: [POD-008.md](POD-008.md) | [../../install/addons/n8n/README.md](../../install/addons/n8n/README.md)
+**Documentation**: [POD-008.md](POD-008.md) | [../../deploy/addons/n8n/README.md](../../deploy/addons/n8n/README.md)
 
 ---
 
@@ -427,8 +427,7 @@ See [../../docs/CONTRIBUTING.md](../../docs/CONTRIBUTING.md) for guidelines.
 ## 📚 Additional Resources
 
 - **Main README**: [../../README.md](../../README.md)
-- **Architecture Overview**: [../architecture/security-model.md](../architecture/security-model.md)
-- **Installation Guide**: [../../QUICK-START.md](../../QUICK-START.md)
+- **Installation Guide**: [../installation/INSTALLATION.md](../installation/INSTALLATION.md)
 - **Beginner's Guide**: [../installation/BEGINNER-GUIDE.md](../installation/BEGINNER-GUIDE.md)
 
 ---
