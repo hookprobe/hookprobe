@@ -848,6 +848,62 @@ def get_all_interface_traffic() -> List[Dict]:
     return traffic
 
 
+def _get_cost_status(backup_iface: Optional[str]) -> Dict:
+    """Get LTE/metered connection cost status.
+
+    Reads user-configured limits from /etc/hookprobe/lte-limits.json
+    Returns None for budget values when user hasn't set limits (unlimited).
+    """
+    interface = backup_iface or 'wwan0'
+
+    # Default: unlimited (None means no limit set by user)
+    status = {
+        'interface': interface,
+        'daily_usage_mb': 0,
+        'daily_budget_mb': None,  # None = unlimited
+        'monthly_usage_mb': 0,
+        'monthly_budget_mb': None,  # None = unlimited
+        'cost_per_gb': None,  # None = not tracking cost
+        'current_cost': 0.0,
+        'budget_remaining': None,  # None = no budget set
+    }
+
+    # Try to read user-configured limits
+    limits_file = Path('/etc/hookprobe/lte-limits.json')
+    if limits_file.exists():
+        try:
+            limits = json.loads(limits_file.read_text())
+            # Only set budget if user has configured a non-zero limit
+            if limits.get('daily_budget_mb') and limits['daily_budget_mb'] > 0:
+                status['daily_budget_mb'] = limits['daily_budget_mb']
+            if limits.get('monthly_budget_gb') and limits['monthly_budget_gb'] > 0:
+                status['monthly_budget_mb'] = limits['monthly_budget_gb'] * 1024
+            if limits.get('cost_per_gb') and limits['cost_per_gb'] > 0:
+                status['cost_per_gb'] = limits['cost_per_gb']
+        except (json.JSONDecodeError, IOError) as e:
+            logger.debug(f"Could not read lte-limits.json: {e}")
+
+    # Try to read actual usage from agent data file
+    usage_file = Path('/opt/hookprobe/fortress/data/lte_usage.json')
+    if usage_file.exists():
+        try:
+            usage = json.loads(usage_file.read_text())
+            status['daily_usage_mb'] = usage.get('daily_usage_mb', 0)
+            status['monthly_usage_mb'] = usage.get('monthly_usage_mb', 0)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Calculate cost and remaining budget if cost tracking is enabled
+    if status['cost_per_gb'] is not None and status['cost_per_gb'] > 0:
+        status['current_cost'] = round((status['monthly_usage_mb'] / 1024) * status['cost_per_gb'], 2)
+
+        if status['monthly_budget_mb'] is not None:
+            remaining_mb = max(0, status['monthly_budget_mb'] - status['monthly_usage_mb'])
+            status['budget_remaining'] = round((remaining_mb / 1024) * status['cost_per_gb'], 2)
+
+    return status
+
+
 def get_slaai_status() -> Dict:
     """Get complete SLAAI status for dashboard."""
     wan = get_wan_health()
@@ -935,17 +991,9 @@ def get_slaai_status() -> Dict:
             'reason': 'Primary is active' if active_is_primary else 'Primary not yet recovered',
         },
 
-        # Cost tracking (placeholder - would come from metered tracking)
-        'cost_status': {
-            'interface': backup_iface or 'wwan0',
-            'daily_usage_mb': 0,
-            'daily_budget_mb': 500,
-            'monthly_usage_mb': 0,
-            'monthly_budget_mb': 10240,
-            'cost_per_gb': 2.0,
-            'current_cost': 0.0,
-            'budget_remaining': 20.0,
-        },
+        # Cost tracking - reads user-configured limits from settings file
+        # None = unlimited (no budget set by user)
+        'cost_status': _get_cost_status(backup_iface),
     }
 
     return status
