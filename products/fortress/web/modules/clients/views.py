@@ -14,8 +14,8 @@ import io
 from pathlib import Path
 from datetime import datetime
 
-from flask import render_template, request, jsonify, flash, redirect, url_for, Response
-from flask_login import login_required, current_user
+from flask import request, jsonify, flash, redirect, url_for, Response
+from flask_login import login_required
 
 from . import clients_bp
 from ..auth.decorators import operator_required
@@ -142,47 +142,6 @@ def get_device_count():
     }
 
 
-def get_device_by_mac(mac_address):
-    """Get a specific device by MAC address."""
-    devices = get_all_devices()
-    mac_upper = mac_address.upper().replace('-', ':')
-    for d in devices:
-        if d.get('mac_address', '').upper() == mac_upper:
-            return d
-    return None
-
-
-def get_vlans():
-    """Get configured VLANs from data files."""
-    cached = _get_cached('vlans', 60)
-    if cached is not None:
-        return cached
-
-    vlans = []
-
-    # Try reading from data file
-    vlans_file = DATA_DIR / 'vlans.json'
-    try:
-        if vlans_file.exists():
-            with open(vlans_file, 'r') as f:
-                vlans = json.load(f)
-                _set_cached('vlans', vlans)
-                return vlans
-    except Exception:
-        pass
-
-    # Fallback: return default VLANs
-    vlans = [
-        {'id': 100, 'name': 'LAN', 'description': 'Main LAN network'},
-        {'id': 200, 'name': 'MGMT', 'description': 'Management network'},
-        {'id': 300, 'name': 'GUEST', 'description': 'Guest network'},
-        {'id': 400, 'name': 'IOT', 'description': 'IoT devices'},
-        {'id': 500, 'name': 'SECURITY', 'description': 'Security cameras'},
-    ]
-    _set_cached('vlans', vlans)
-    return vlans
-
-
 @clients_bp.route('/')
 @login_required
 def index():
@@ -227,25 +186,6 @@ def discover():
     return redirect(url_for('clients.index'))
 
 
-@clients_bp.route('/<mac_address>')
-@login_required
-def detail(mac_address):
-    """Device detail page."""
-    device = get_device_by_mac(mac_address)
-    vlans = get_vlans()
-
-    if not device:
-        flash('Device not found or not currently connected', 'warning')
-        return redirect(url_for('clients.index'))
-
-    return render_template(
-        'clients/detail.html',
-        device=device,
-        vlans=vlans,
-        system_data_available=True
-    )
-
-
 @clients_bp.route('/<mac_address>/assign-vlan', methods=['POST'])
 @login_required
 @operator_required
@@ -255,12 +195,12 @@ def assign_vlan(mac_address):
 
     if vlan_id is None:
         flash('VLAN ID required', 'warning')
-        return redirect(url_for('clients.detail', mac_address=mac_address))
+        return redirect(url_for('sdn.device_detail', mac_address=mac_address))
 
     # VLAN assignment requires OVS OpenFlow rules
     # For now, inform user this is a manual operation
     flash(f'VLAN assignment to {vlan_id} requires manual OVS configuration', 'info')
-    return redirect(url_for('clients.detail', mac_address=mac_address))
+    return redirect(url_for('sdn.device_detail', mac_address=mac_address))
 
 
 @clients_bp.route('/<mac_address>/block', methods=['POST'])
