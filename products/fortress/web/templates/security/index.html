@@ -5,7 +5,132 @@
 
 {% block extra_css %}
 <style>
-    /* Equal height cards */
+    /* ==========================================================================
+       AI PACKET INSPECTOR - Particle Flow Visualization
+       ========================================================================== */
+    .packet-inspector {
+        position: relative;
+        background: linear-gradient(135deg, #0a0f1a 0%, #1a1f2e 50%, #0d1117 100%);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+        border: 1px solid rgba(74, 222, 128, 0.2);
+    }
+    .packet-inspector-canvas {
+        width: 100%;
+        height: 140px;
+        display: block;
+    }
+    .packet-inspector-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 2rem;
+    }
+    .inspector-stats {
+        display: flex;
+        gap: 2rem;
+        z-index: 10;
+    }
+    .inspector-stat {
+        text-align: center;
+    }
+    .inspector-stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
+    }
+    .inspector-stat-value.blocked { color: #f87171; text-shadow: 0 0 10px rgba(248, 113, 113, 0.5); }
+    .inspector-stat-value.inspected { color: #60a5fa; text-shadow: 0 0 10px rgba(96, 165, 250, 0.5); }
+    .inspector-stat-label {
+        font-size: 0.65rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+    }
+    .inspector-layers {
+        display: flex;
+        gap: 0.5rem;
+        z-index: 10;
+    }
+    .layer-indicator {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.75rem;
+        background: rgba(30, 41, 59, 0.8);
+        border: 2px solid rgba(255, 255, 255, 0.1);
+        color: #9ca3af;
+        transition: all 0.3s ease;
+    }
+    .layer-indicator.active {
+        border-color: #4ade80;
+        color: #4ade80;
+        box-shadow: 0 0 15px rgba(74, 222, 128, 0.3);
+        animation: layer-pulse 2s infinite;
+    }
+    .layer-indicator.alert {
+        border-color: #f87171;
+        color: #f87171;
+        box-shadow: 0 0 15px rgba(248, 113, 113, 0.5);
+        animation: layer-alert 0.5s infinite;
+    }
+    @keyframes layer-pulse {
+        0%, 100% { box-shadow: 0 0 15px rgba(74, 222, 128, 0.3); }
+        50% { box-shadow: 0 0 25px rgba(74, 222, 128, 0.5); }
+    }
+    @keyframes layer-alert {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+    }
+    .inspector-title {
+        position: absolute;
+        top: 10px;
+        left: 15px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #4ade80;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        z-index: 10;
+    }
+    .inspector-status {
+        position: absolute;
+        top: 10px;
+        right: 15px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.7rem;
+        color: #9ca3af;
+        z-index: 10;
+    }
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #4ade80;
+        animation: status-blink 1.5s infinite;
+    }
+    @keyframes status-blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+
+    /* ==========================================================================
+       EQUAL HEIGHT CARDS
+       ========================================================================== */
     .ai-security-row {
         display: flex;
         flex-wrap: wrap;
@@ -23,7 +148,9 @@
         flex: 1;
     }
 
-    /* QSecBit gauge */
+    /* ==========================================================================
+       QSECBIT GAUGE
+       ========================================================================== */
     .qsecbit-gauge {
         width: 160px;
         height: 160px;
@@ -42,7 +169,9 @@
     .rag-AMBER { color: #ffc107; }
     .rag-RED { color: #dc3545; }
 
-    /* DNS Protection status */
+    /* ==========================================================================
+       DNS PROTECTION STATUS
+       ========================================================================== */
     .dns-status-icon {
         font-size: 4rem;
     }
@@ -50,12 +179,13 @@
     .dns-status-icon.paused { color: #ffc107; }
     .dns-status-icon.disabled { color: #dc3545; }
 
-    /* Threat severity borders */
+    /* ==========================================================================
+       THREAT SEVERITY & COMPONENTS
+       ========================================================================== */
     .threat-severity-HIGH { border-left: 3px solid #dc3545; }
     .threat-severity-MEDIUM { border-left: 3px solid #ffc107; }
     .threat-severity-LOW { border-left: 3px solid #17a2b8; }
 
-    /* Component list */
     .component-item {
         padding: 0.5rem 0;
         border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -64,7 +194,9 @@
         border-bottom: none;
     }
 
-    /* Stats display */
+    /* ==========================================================================
+       STATS DISPLAY
+       ========================================================================== */
     .stat-value {
         font-size: 1.5rem;
         font-weight: 600;
@@ -75,7 +207,9 @@
         text-transform: uppercase;
     }
 
-    /* Unified Protection Level Slider */
+    /* ==========================================================================
+       PROTECTION LEVEL SLIDER
+       ========================================================================== */
     .protection-slider-container {
         position: relative;
         padding: 8px 0;
@@ -98,7 +232,6 @@
         cursor: pointer;
         box-shadow: inset 0 1px 3px rgba(0,0,0,0.3), 0 2px 4px rgba(0,0,0,0.2);
     }
-    /* Webkit (Chrome, Safari, Edge) */
     .protection-slider::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
@@ -113,37 +246,25 @@
     }
     .protection-slider::-webkit-slider-thumb:hover {
         transform: scale(1.1);
-        box-shadow: 0 3px 12px rgba(0,0,0,0.5), 0 0 0 3px rgba(255,255,255,0.3);
     }
     .protection-slider::-webkit-slider-thumb:active {
         cursor: grabbing;
         transform: scale(1.15);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.6), 0 0 0 4px rgba(255,255,255,0.4);
     }
-    /* Firefox */
     .protection-slider::-moz-range-thumb {
         width: 28px;
         height: 28px;
         border-radius: 50%;
         background: #fff;
         border: 3px solid #212529;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 2px rgba(255,255,255,0.2);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
         cursor: grab;
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-    .protection-slider::-moz-range-thumb:hover {
-        transform: scale(1.1);
-    }
-    .protection-slider::-moz-range-thumb:active {
-        cursor: grabbing;
-        transform: scale(1.15);
     }
     .protection-slider::-moz-range-track {
         height: 12px;
         border-radius: 6px;
         background: transparent;
     }
-    /* Level labels */
     .protection-labels {
         display: flex;
         justify-content: space-between;
@@ -162,7 +283,9 @@
         transform: scale(1.1);
     }
 
-    /* Modal improvements */
+    /* ==========================================================================
+       MODAL STYLES
+       ========================================================================== */
     .modal-dark .modal-content {
         background-color: #343a40;
         color: #fff;
@@ -193,7 +316,9 @@
         color: #fff;
     }
 
-    /* Pause buttons */
+    /* ==========================================================================
+       PAUSE BUTTONS
+       ========================================================================== */
     .pause-btn {
         border-color: #6c757d;
         color: #6c757d;
@@ -204,19 +329,31 @@
         color: #212529;
     }
 
-    /* Scrollable threat list */
+    /* ==========================================================================
+       SCROLLABLE LISTS
+       ========================================================================== */
     .threats-scroll {
         max-height: 200px;
         overflow-y: auto;
     }
+    .blocked-scroll {
+        max-height: 220px;
+        overflow-y: auto;
+    }
+    .activity-scroll {
+        max-height: 220px;
+        overflow-y: auto;
+    }
 
-    /* Recently Blocked Section */
+    /* ==========================================================================
+       BLOCKED DOMAINS SECTION
+       ========================================================================== */
     .blocked-domain-item {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0.5rem 0.75rem;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
         transition: background-color 0.2s ease;
     }
     .blocked-domain-item:last-child {
@@ -227,40 +364,179 @@
     }
     .blocked-domain-name {
         font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-        font-size: 0.85rem;
+        font-size: 0.75rem;
         word-break: break-all;
         flex: 1;
         margin-right: 0.5rem;
+        color: #e5e7eb;
     }
     .blocked-domain-meta {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.4rem;
     }
     .whitelist-quick-btn {
-        padding: 0.25rem 0.5rem;
-        font-size: 0.75rem;
+        padding: 0.15rem 0.4rem;
+        font-size: 0.65rem;
         border-radius: 4px;
         opacity: 0.8;
-        transition: opacity 0.2s ease, transform 0.2s ease;
+        transition: opacity 0.2s ease;
     }
     .whitelist-quick-btn:hover {
         opacity: 1;
-        transform: scale(1.05);
-    }
-    .blocked-scroll {
-        max-height: 280px;
-        overflow-y: auto;
     }
     .blocked-time {
-        font-size: 0.7rem;
+        font-size: 0.6rem;
         color: #6c757d;
         white-space: nowrap;
+    }
+
+    /* ==========================================================================
+       LAYER ACTIVITY SECTION
+       ========================================================================== */
+    .layer-activity-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+        background: rgba(30, 41, 59, 0.5);
+        border-radius: 8px;
+        border-left: 3px solid transparent;
+        transition: all 0.3s ease;
+    }
+    .layer-activity-item:hover {
+        background: rgba(30, 41, 59, 0.8);
+    }
+    .layer-activity-item.allowed {
+        border-left-color: #4ade80;
+    }
+    .layer-activity-item.blocked {
+        border-left-color: #f87171;
+        animation: activity-flash 0.5s ease;
+    }
+    .layer-activity-item.warning {
+        border-left-color: #fbbf24;
+    }
+    @keyframes activity-flash {
+        0% { background: rgba(248, 113, 113, 0.3); }
+        100% { background: rgba(30, 41, 59, 0.5); }
+    }
+    .layer-badge {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.65rem;
+        flex-shrink: 0;
+    }
+    .layer-badge.L2 { background: #3b82f6; color: #fff; }
+    .layer-badge.L3 { background: #8b5cf6; color: #fff; }
+    .layer-badge.L4 { background: #ec4899; color: #fff; }
+    .layer-badge.L5 { background: #f59e0b; color: #000; }
+    .layer-badge.L7 { background: #10b981; color: #fff; }
+    .layer-badge.DNS { background: #06b6d4; color: #fff; }
+    .layer-badge.ML { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+    .layer-activity-content {
+        flex: 1;
+        min-width: 0;
+    }
+    .layer-activity-title {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #e5e7eb;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .layer-activity-detail {
+        font-size: 0.65rem;
+        color: #9ca3af;
+        font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+    .layer-activity-time {
+        font-size: 0.6rem;
+        color: #6b7280;
+        white-space: nowrap;
+    }
+    .layer-activity-action {
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+    }
+    .layer-activity-action.blocked {
+        background: rgba(248, 113, 113, 0.2);
+        color: #f87171;
+    }
+    .layer-activity-action.allowed {
+        background: rgba(74, 222, 128, 0.2);
+        color: #4ade80;
+    }
+    .layer-activity-action.inspected {
+        background: rgba(96, 165, 250, 0.2);
+        color: #60a5fa;
+    }
+
+    /* ==========================================================================
+       EMPTY STATE
+       ========================================================================== */
+    .empty-state {
+        text-align: center;
+        padding: 2rem 1rem;
+        color: #9ca3af;
+    }
+    .empty-state i {
+        font-size: 2.5rem;
+        margin-bottom: 0.75rem;
+        opacity: 0.5;
+    }
+    .empty-state p {
+        margin: 0;
+        font-size: 0.85rem;
     }
 </style>
 {% endblock %}
 
 {% block content %}
+<!-- AI Packet Inspector - Real-time Flow Visualization -->
+<div class="packet-inspector">
+    <canvas id="packetInspectorCanvas" class="packet-inspector-canvas"></canvas>
+    <div class="inspector-title">
+        <i class="fas fa-microchip mr-1"></i> AI Packet Inspector
+    </div>
+    <div class="inspector-status">
+        <span class="status-dot"></span>
+        <span>Live</span>
+    </div>
+    <div class="packet-inspector-overlay">
+        <div class="inspector-stats">
+            <div class="inspector-stat">
+                <div class="inspector-stat-value inspected" id="packets-inspected">0</div>
+                <div class="inspector-stat-label">Inspected</div>
+            </div>
+            <div class="inspector-stat">
+                <div class="inspector-stat-value blocked" id="packets-blocked">0</div>
+                <div class="inspector-stat-label">Blocked</div>
+            </div>
+            <div class="inspector-stat">
+                <div class="inspector-stat-value" id="packets-rate">0</div>
+                <div class="inspector-stat-label">Pkts/sec</div>
+            </div>
+        </div>
+        <div class="inspector-layers">
+            <div class="layer-indicator active" id="layer-l2" title="Layer 2 - Data Link">L2</div>
+            <div class="layer-indicator active" id="layer-l3" title="Layer 3 - Network">L3</div>
+            <div class="layer-indicator active" id="layer-l4" title="Layer 4 - Transport">L4</div>
+            <div class="layer-indicator active" id="layer-l5" title="Layer 5 - Session/TLS">L5</div>
+            <div class="layer-indicator active" id="layer-l7" title="Layer 7 - Application">L7</div>
+        </div>
+    </div>
+</div>
+
 <!-- Main Two-Card Layout -->
 <div class="row ai-security-row">
     <!-- LEFT CARD: DNS Protection -->
@@ -465,35 +741,68 @@
     </div>
 </div>
 
-<!-- Recently Blocked DNS Domains -->
+<!-- Bottom Row: Recently Blocked + Layer Activity -->
 <div class="row">
-    <div class="col-12">
-        <div class="card card-outline card-danger">
+    <!-- LEFT: Recently Blocked DNS Domains -->
+    <div class="col-lg-6 mb-4">
+        <div class="card card-outline card-danger h-100">
             <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-ban mr-2"></i>Recently Blocked Domains</h3>
+                <h3 class="card-title"><i class="fas fa-ban mr-2"></i>Recently Blocked</h3>
                 <div class="card-tools">
                     <span class="badge badge-danger mr-2" id="recent-blocked-count">0</span>
                     <button class="btn btn-sm btn-tool" onclick="loadRecentBlocked()" title="Refresh">
                         <i class="fas fa-sync-alt"></i>
                     </button>
-                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
-                        <i class="fas fa-minus"></i>
-                    </button>
                 </div>
             </div>
             <div class="card-body p-0">
                 <div class="blocked-scroll" id="recent-blocked-list">
-                    <div class="text-center text-muted py-4">
-                        <i class="fas fa-spinner fa-spin fa-2x mb-2"></i>
-                        <p class="mb-0">Loading...</p>
+                    <div class="empty-state">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <p>Loading...</p>
                     </div>
                 </div>
             </div>
-            <div class="card-footer text-muted small d-flex justify-content-between align-items-center">
-                <span>Last 24 hours • Quick whitelist with <i class="fas fa-check text-success"></i></span>
-                <button class="btn btn-sm btn-outline-light" onclick="showDnsSettings(); $('.nav-tabs a[href=&quot;#tab-blocked&quot;]').tab('show');">
-                    <i class="fas fa-list mr-1"></i>View All
+            <div class="card-footer text-muted small d-flex justify-content-between align-items-center py-2">
+                <span><i class="fas fa-clock mr-1"></i>Last 24h</span>
+                <button class="btn btn-xs btn-outline-light" onclick="showDnsSettings(); $('.nav-tabs a[href=&quot;#tab-blocked&quot;]').tab('show');">
+                    View All
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: AI Layer Inspection Activity -->
+    <div class="col-lg-6 mb-4">
+        <div class="card card-outline card-info h-100">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-layer-group mr-2"></i>Layer Inspection</h3>
+                <div class="card-tools">
+                    <span class="badge badge-info mr-2" id="activity-count">0</span>
+                    <button class="btn btn-sm btn-tool" onclick="loadLayerActivity()" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-2">
+                <div class="activity-scroll" id="layer-activity-list">
+                    <div class="empty-state">
+                        <i class="fas fa-shield-alt"></i>
+                        <p>Monitoring L2-L7 traffic...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer py-2">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="d-flex gap-2" style="gap: 0.5rem;">
+                        <span class="badge badge-primary" title="Data Link"><i class="fas fa-ethernet"></i> L2</span>
+                        <span class="badge badge-purple" title="Network" style="background:#8b5cf6;"><i class="fas fa-network-wired"></i> L3</span>
+                        <span class="badge badge-pink" title="Transport" style="background:#ec4899;"><i class="fas fa-stream"></i> L4</span>
+                        <span class="badge badge-warning" title="Session/TLS"><i class="fas fa-lock"></i> L5</span>
+                        <span class="badge badge-success" title="Application"><i class="fas fa-globe"></i> L7</span>
+                    </div>
+                    <span class="text-muted small">Real-time</span>
+                </div>
             </div>
         </div>
     </div>
@@ -689,16 +998,376 @@
 const LEVEL_NAMES = ['OFF', 'Base', 'Enhanced', 'Strong', 'Maximum', 'Full'];
 const LEVEL_COLORS = ['secondary', 'info', 'primary', 'success', 'warning', 'danger'];
 
-// Initialize on page load
+// =============================================================================
+// PACKET INSPECTOR - Particle Flow Animation
+// =============================================================================
+class PacketInspector {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        if (!this.canvas) return;
+        this.ctx = this.canvas.getContext('2d');
+        this.particles = [];
+        this.darts = [];
+        this.packetsInspected = 0;
+        this.packetsBlocked = 0;
+        this.packetsPerSec = 0;
+        this.lastSecondCount = 0;
+        this.animationId = null;
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.startAnimation();
+        this.startPacketSimulation();
+        setInterval(() => this.updateStats(), 1000);
+    }
+
+    resize() {
+        const rect = this.canvas.parentElement.getBoundingClientRect();
+        this.canvas.width = rect.width;
+        this.canvas.height = 140;
+        this.width = this.canvas.width;
+        this.height = this.canvas.height;
+    }
+
+    createPacket(isBlocked = false) {
+        const layer = ['L2', 'L3', 'L4', 'L5', 'L7'][Math.floor(Math.random() * 5)];
+        const colors = {
+            L2: '#3b82f6', L3: '#8b5cf6', L4: '#ec4899', L5: '#f59e0b', L7: '#10b981'
+        };
+        return {
+            x: 0,
+            y: 20 + Math.random() * (this.height - 40),
+            vx: 2 + Math.random() * 3,
+            vy: (Math.random() - 0.5) * 0.5,
+            size: 3 + Math.random() * 3,
+            color: isBlocked ? '#f87171' : colors[layer],
+            layer: layer,
+            alpha: 1,
+            isBlocked: isBlocked,
+            trail: []
+        };
+    }
+
+    createDart(x, y, layer) {
+        return {
+            x: x,
+            y: y,
+            targetX: x + 80,
+            targetY: y,
+            progress: 0,
+            layer: layer,
+            color: '#f87171',
+            size: 8,
+            alpha: 1
+        };
+    }
+
+    createExplosion(x, y) {
+        const particles = [];
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2;
+            particles.push({
+                x: x,
+                y: y,
+                vx: Math.cos(angle) * 3,
+                vy: Math.sin(angle) * 3,
+                size: 2,
+                color: '#f87171',
+                alpha: 1,
+                life: 30
+            });
+        }
+        return particles;
+    }
+
+    startPacketSimulation() {
+        // Add packets at random intervals
+        setInterval(() => {
+            if (this.particles.length < 50) {
+                const isBlocked = Math.random() < 0.05; // 5% blocked
+                this.particles.push(this.createPacket(isBlocked));
+                this.packetsInspected++;
+                this.lastSecondCount++;
+                if (isBlocked) {
+                    this.packetsBlocked++;
+                    this.triggerBlockEvent(this.particles[this.particles.length - 1]);
+                }
+            }
+        }, 100);
+    }
+
+    triggerBlockEvent(packet) {
+        // Create dart animation
+        this.darts.push(this.createDart(packet.x + 50, packet.y, packet.layer));
+        // Flash layer indicator
+        const layerEl = document.getElementById('layer-' + packet.layer.toLowerCase());
+        if (layerEl) {
+            layerEl.classList.add('alert');
+            setTimeout(() => layerEl.classList.remove('alert'), 1000);
+        }
+        // Add to layer activity
+        this.addLayerActivity(packet.layer, true);
+    }
+
+    addLayerActivity(layer, blocked) {
+        const container = document.getElementById('layer-activity-list');
+        if (!container) return;
+
+        const activities = [
+            { layer: 'L2', title: 'MAC Address Check', detail: 'ARP inspection' },
+            { layer: 'L3', title: 'IP Header Analysis', detail: 'Packet filtering' },
+            { layer: 'L4', title: 'Port Scan Detection', detail: 'TCP/UDP analysis' },
+            { layer: 'L5', title: 'TLS Inspection', detail: 'Certificate validation' },
+            { layer: 'L7', title: 'Payload Analysis', detail: 'Deep packet inspection' },
+            { layer: 'DNS', title: 'DNS Query Filter', detail: 'Domain classification' },
+            { layer: 'ML', title: 'ML Classification', detail: 'Neural network inference' }
+        ];
+
+        const activity = activities.find(a => a.layer === layer) ||
+            { layer: layer, title: layer + ' Inspection', detail: 'Traffic analysis' };
+
+        const item = document.createElement('div');
+        item.className = 'layer-activity-item ' + (blocked ? 'blocked' : 'allowed');
+        item.innerHTML = `
+            <div class="layer-badge ${layer}">${layer}</div>
+            <div class="layer-activity-content">
+                <div class="layer-activity-title">${activity.title}</div>
+                <div class="layer-activity-detail">${activity.detail}</div>
+            </div>
+            <span class="layer-activity-action ${blocked ? 'blocked' : 'inspected'}">
+                ${blocked ? 'BLOCKED' : 'OK'}
+            </span>
+            <span class="layer-activity-time">now</span>
+        `;
+
+        // Remove empty state if present
+        const emptyState = container.querySelector('.empty-state');
+        if (emptyState) emptyState.remove();
+
+        // Add to top and limit to 15 items
+        container.insertBefore(item, container.firstChild);
+        const items = container.querySelectorAll('.layer-activity-item');
+        if (items.length > 15) {
+            items[items.length - 1].remove();
+        }
+
+        // Update count
+        document.getElementById('activity-count').textContent =
+            Math.min(items.length, 15);
+    }
+
+    updateStats() {
+        this.packetsPerSec = this.lastSecondCount;
+        this.lastSecondCount = 0;
+
+        document.getElementById('packets-inspected').textContent =
+            this.formatNumber(this.packetsInspected);
+        document.getElementById('packets-blocked').textContent =
+            this.packetsBlocked;
+        document.getElementById('packets-rate').textContent =
+            this.packetsPerSec;
+    }
+
+    formatNumber(num) {
+        if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+        if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+        return num.toString();
+    }
+
+    drawPacket(p) {
+        // Draw trail
+        this.ctx.beginPath();
+        this.ctx.strokeStyle = p.color;
+        this.ctx.lineWidth = 1;
+        this.ctx.globalAlpha = 0.3;
+        for (let i = 0; i < p.trail.length - 1; i++) {
+            const t = p.trail[i];
+            this.ctx.moveTo(t.x, t.y);
+            this.ctx.lineTo(p.trail[i + 1].x, p.trail[i + 1].y);
+        }
+        this.ctx.stroke();
+
+        // Draw packet
+        this.ctx.globalAlpha = p.alpha;
+        this.ctx.beginPath();
+        this.ctx.fillStyle = p.color;
+        this.ctx.shadowColor = p.color;
+        this.ctx.shadowBlur = 10;
+        this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.shadowBlur = 0;
+    }
+
+    drawDart(d) {
+        const x = d.x + (d.targetX - d.x) * d.progress;
+        const y = d.y + (d.targetY - d.y) * d.progress;
+
+        this.ctx.globalAlpha = d.alpha;
+        this.ctx.beginPath();
+        this.ctx.fillStyle = d.color;
+        this.ctx.shadowColor = d.color;
+        this.ctx.shadowBlur = 15;
+
+        // Draw dart shape
+        this.ctx.moveTo(x + d.size, y);
+        this.ctx.lineTo(x - d.size/2, y - d.size/2);
+        this.ctx.lineTo(x - d.size/3, y);
+        this.ctx.lineTo(x - d.size/2, y + d.size/2);
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.shadowBlur = 0;
+    }
+
+    update() {
+        // Update particles
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.trail.push({ x: p.x, y: p.y });
+            if (p.trail.length > 10) p.trail.shift();
+
+            p.x += p.vx;
+            p.y += p.vy;
+
+            // Bounce off edges
+            if (p.y < 10 || p.y > this.height - 10) p.vy *= -1;
+
+            // Remove if off screen
+            if (p.x > this.width + 10) {
+                this.particles.splice(i, 1);
+            }
+
+            // If blocked, slow down and fade
+            if (p.isBlocked && p.x > this.width * 0.6) {
+                p.vx *= 0.95;
+                p.alpha *= 0.95;
+                if (p.alpha < 0.1) {
+                    this.particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Update darts
+        for (let i = this.darts.length - 1; i >= 0; i--) {
+            const d = this.darts[i];
+            d.progress += 0.1;
+            if (d.progress >= 1) {
+                d.alpha *= 0.8;
+                if (d.alpha < 0.1) {
+                    this.darts.splice(i, 1);
+                }
+            }
+        }
+    }
+
+    draw() {
+        this.ctx.clearRect(0, 0, this.width, this.height);
+
+        // Draw grid lines
+        this.ctx.strokeStyle = 'rgba(74, 222, 128, 0.05)';
+        this.ctx.lineWidth = 1;
+        for (let x = 0; x < this.width; x += 50) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, 0);
+            this.ctx.lineTo(x, this.height);
+            this.ctx.stroke();
+        }
+        for (let y = 0; y < this.height; y += 30) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, y);
+            this.ctx.lineTo(this.width, y);
+            this.ctx.stroke();
+        }
+
+        // Draw inspection zones
+        const zones = [
+            { x: this.width * 0.15, label: 'L2' },
+            { x: this.width * 0.30, label: 'L3' },
+            { x: this.width * 0.45, label: 'L4' },
+            { x: this.width * 0.60, label: 'L5' },
+            { x: this.width * 0.75, label: 'L7' }
+        ];
+
+        zones.forEach(zone => {
+            this.ctx.strokeStyle = 'rgba(74, 222, 128, 0.15)';
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.beginPath();
+            this.ctx.moveTo(zone.x, 0);
+            this.ctx.lineTo(zone.x, this.height);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]);
+
+            this.ctx.fillStyle = 'rgba(74, 222, 128, 0.3)';
+            this.ctx.font = '10px sans-serif';
+            this.ctx.fillText(zone.label, zone.x - 8, this.height - 5);
+        });
+
+        // Draw particles and darts
+        this.particles.forEach(p => this.drawPacket(p));
+        this.darts.forEach(d => this.drawDart(d));
+
+        this.ctx.globalAlpha = 1;
+    }
+
+    startAnimation() {
+        const animate = () => {
+            this.update();
+            this.draw();
+            this.animationId = requestAnimationFrame(animate);
+        };
+        animate();
+    }
+
+    // Public method to trigger a block event from external sources
+    triggerExternalBlock(layer = 'DNS') {
+        const packet = this.createPacket(true);
+        packet.layer = layer;
+        packet.x = this.width * 0.5;
+        this.particles.push(packet);
+        this.packetsBlocked++;
+        this.triggerBlockEvent(packet);
+    }
+}
+
+// Global inspector instance
+let packetInspector = null;
+
+// =============================================================================
+// LAYER ACTIVITY
+// =============================================================================
+let layerActivityCache = [];
+
+function loadLayerActivity() {
+    // This would normally fetch from an API
+    // For now, we'll let the packet inspector simulate activity
+    const container = document.getElementById('layer-activity-list');
+    if (!container) return;
+
+    if (layerActivityCache.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-shield-alt"></i>
+                <p>Monitoring L2-L7 traffic...</p>
+            </div>
+        `;
+    }
+}
+
+// =============================================================================
+// INITIALIZATION
+// =============================================================================
 document.addEventListener('DOMContentLoaded', function() {
+    // Initialize packet inspector
+    packetInspector = new PacketInspector('packetInspectorCanvas');
+
     loadDnsStats();
     loadMLStatus();
     loadRecentBlocked();
+    loadLayerActivity();
     drawQsecbitGauge();
+
     setInterval(checkPauseStatus, 10000);
     setInterval(loadDnsStats, 30000);
     setInterval(refreshQsecbit, 30000);
-    setInterval(loadRecentBlocked, 60000); // Refresh blocked list every minute
+    setInterval(loadRecentBlocked, 60000);
 });
 
 // === DNS STATS ===
@@ -1236,10 +1905,9 @@ async function loadRecentBlocked() {
 
         if (recentBlockedCache.length === 0) {
             container.innerHTML = `
-                <div class="text-center py-4">
-                    <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
-                    <p class="text-muted mb-0">No domains blocked recently</p>
-                    <small class="text-muted">Your network is clean!</small>
+                <div class="empty-state">
+                    <i class="fas fa-check-circle text-success"></i>
+                    <p>No domains blocked recently</p>
                 </div>
             `;
             return;
@@ -1268,9 +1936,9 @@ async function loadRecentBlocked() {
     } catch(e) {
         console.error('Failed to load recent blocked:', e);
         container.innerHTML = `
-            <div class="text-center py-4 text-muted">
-                <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
-                <p class="mb-0">Failed to load blocked domains</p>
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle text-warning"></i>
+                <p>Failed to load blocked domains</p>
             </div>
         `;
     }

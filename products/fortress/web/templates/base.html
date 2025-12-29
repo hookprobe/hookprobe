@@ -148,7 +148,7 @@
                             <i class="nav-icon fas fa-shield-halved"></i>
                             <p>
                                 AI Security
-                                <span class="badge badge-success right" id="sidebar-rag-badge">OK</span>
+                                <span class="badge right sidebar-rag-badge rag-green" id="sidebar-rag-badge">GREEN</span>
                             </p>
                         </a>
                     </li>
@@ -305,13 +305,14 @@
         const sidebarBadge = document.getElementById('sidebar-rag-badge');
         if (!badge) return;
 
-        badge.className = 'status-badge rag-' + status.toLowerCase();
+        const statusLower = status.toLowerCase();
+        badge.className = 'status-badge rag-' + statusLower;
         badge.textContent = status.toUpperCase();
 
         if (sidebarBadge) {
-            sidebarBadge.className = 'badge right badge-' +
-                (status === 'green' ? 'success' : status === 'amber' ? 'warning' : 'danger');
-            sidebarBadge.textContent = status === 'green' ? 'OK' : status.toUpperCase();
+            // Use RAG-specific classes for dynamic coloring
+            sidebarBadge.className = 'badge right sidebar-rag-badge rag-' + statusLower;
+            sidebarBadge.textContent = status.toUpperCase();
         }
     }
 
