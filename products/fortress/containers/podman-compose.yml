@@ -163,7 +163,8 @@ services:
       - web_data:/app/data
       - web_logs:/app/logs
       # Share data from qsecbit agent (WAN health, QSecBit stats, SLAAI data)
-      - agent_data:/opt/hookprobe/fortress/data:ro
+      # Uses bind mount to match agent's bind mount (data visible on host)
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
     # Container network - accessible via VLAN 200 routing from management network
@@ -284,7 +285,8 @@ services:
       # Metrics export to Victoria (mgmt tier)
       VICTORIA_PUSH_URL: http://172.20.203.11:8428/api/v1/write
     volumes:
-      - agent_data:/opt/hookprobe/fortress/data
+      # Bind mount for shared data (visible on host and other containers)
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data
       - /etc/hookprobe:/etc/hookprobe:ro
       - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
     # Host network REQUIRED for traffic analysis on all interfaces
@@ -313,7 +315,7 @@ services:
       LSTM_CHECKPOINT_DIR: /opt/hookprobe/fortress/data/ml-models/checkpoints
     volumes:
       - ml_models:/opt/hookprobe/fortress/data/ml-models
-      - agent_data:/opt/hookprobe/fortress/data:ro  # Read threat data
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro  # Read threat data
     networks:
       fts-internal:
         ipv4_address: 172.20.200.40
@@ -724,9 +726,8 @@ volumes:
     name: fts-dfs-data
 
   # ML Tier
-  agent_data:
-    driver: local
-    name: fts-agent-data
+  # Note: agent_data is now a bind mount to /opt/hookprobe/fortress/data
+  # This allows host visibility and sharing between containers
   ml_models:
     driver: local
     name: fts-ml-models
