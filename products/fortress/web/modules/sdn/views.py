@@ -190,10 +190,14 @@ def _read_agent_data(filename: str, max_age_seconds: int = 60) -> dict:
 
 def get_real_devices():
     """
-    Collect real device data from system sources.
+    Collect real device data from system sources with database sync.
 
     Priority 1: Read from devices.json written by qsecbit agent
     Priority 2: Direct ARP/DHCP collection (works if container has host network)
+
+    Database sync:
+    - Syncs detected devices to database (upsert)
+    - Merges persisted data (policies, blocked status) from database
 
     Returns list of devices with real data.
     """
@@ -213,15 +217,34 @@ def get_real_devices():
             device_list = agent_data
 
     if device_list and len(device_list) > 0:
+        # Load persisted device data from database (policies, blocked status, etc.)
+        db_devices = {}
+        if DB_AVAILABLE:
+            try:
+                db = get_db()
+                all_db_devices = db.fetch_all("""
+                    SELECT mac_address, network_policy, vlan_id, is_blocked, is_known,
+                           internet_access, lan_access, notes, first_seen
+                    FROM devices
+                """)
+                for row in all_db_devices:
+                    db_devices[row['mac_address'].upper()] = row
+                logger.debug(f"Loaded {len(db_devices)} devices from database for merge")
+            except Exception as e:
+                logger.debug(f"Could not load database devices: {e}")
+
         # Enrich with OUI classification and format for SDN display
         enriched = []
         for device in device_list:
-            mac = device.get('mac_address', '')
+            mac = device.get('mac_address', '').upper()
             classification = classify_device(mac)
             category = classification.get('category', 'unknown')
             manufacturer = classification.get('manufacturer', device.get('manufacturer', 'Unknown'))
 
-            # Determine network policy
+            # Check for persisted data in database
+            db_device = db_devices.get(mac, {})
+
+            # Determine network policy - use database value if set, otherwise derive from category
             policy_map = {
                 'iot': 'lan_only',
                 'camera': 'lan_only',
@@ -233,19 +256,42 @@ def get_real_devices():
                 'tablet': 'full_access',
                 'unknown': 'default',
             }
-            network_policy = policy_map.get(category, 'default')
+            default_policy = policy_map.get(category, 'default')
+            network_policy = db_device.get('network_policy') or default_policy
 
-            enriched.append({
+            # Use database values for persistence, fallback to defaults
+            vlan_id = db_device.get('vlan_id') or 100
+            is_blocked = db_device.get('is_blocked', False)
+            is_known = db_device.get('is_known', False)
+
+            # Internet/LAN access from database or derived from policy
+            if db_device.get('internet_access') is not None:
+                internet_access = db_device['internet_access']
+            else:
+                internet_access = network_policy in ('full_access', 'internet_only')
+
+            if db_device.get('lan_access') is not None:
+                lan_access = db_device['lan_access']
+            else:
+                lan_access = network_policy in ('full_access', 'lan_only')
+
+            # First seen from database if available
+            first_seen = device.get('first_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            if db_device.get('first_seen'):
+                first_seen = str(db_device['first_seen'])
+
+            enriched_device = {
                 'mac_address': mac,
                 'ip_address': device.get('ip_address', ''),
                 'hostname': device.get('hostname') or f'device-{mac[-5:].replace(":", "")}',
                 'device_type': category,
                 'manufacturer': manufacturer,
                 'network_policy': network_policy,
-                'vlan_id': 100,  # Default LAN VLAN
-                'internet_access': network_policy in ('full_access', 'internet_only'),
-                'lan_access': network_policy in ('full_access', 'lan_only'),
-                'is_blocked': device.get('is_blocked', False),
+                'vlan_id': vlan_id,
+                'internet_access': internet_access,
+                'lan_access': lan_access,
+                'is_blocked': is_blocked,
+                'is_known': is_known,
                 # Check multiple state indicators for online status
                 'is_online': (
                     device.get('is_online', False) or
@@ -254,11 +300,29 @@ def get_real_devices():
                 ),
                 'oui_category': category,
                 'auto_policy': classification.get('recommended_policy', 'default'),
-                'first_seen': device.get('first_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                'first_seen': first_seen,
                 'last_seen': device.get('last_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                 'bytes_sent': device.get('bytes_sent', 0),
                 'bytes_received': device.get('bytes_received', 0),
-            })
+                'notes': db_device.get('notes', ''),
+            }
+            enriched.append(enriched_device)
+
+            # Sync to database (upsert) - only if not already in database
+            if DB_AVAILABLE and mac not in db_devices:
+                try:
+                    db = get_db()
+                    db.upsert_device(
+                        mac_address=mac,
+                        ip_address=device.get('ip_address'),
+                        hostname=device.get('hostname'),
+                        vlan_id=100,  # Default VLAN
+                        device_type=category,
+                        manufacturer=manufacturer
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not sync device {mac} to database: {e}")
+
         logger.info(f"Returning {len(enriched)} enriched devices from agent data file")
         return enriched
 
