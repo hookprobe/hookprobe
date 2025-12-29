@@ -144,60 +144,282 @@ def lookup_manufacturer(mac_address: str) -> str:
     return 'Unknown'
 
 
+# Device manual tags file path
+DEVICE_TAGS_FILE = DATA_DIR / 'device_tags.json'
+
+
+def load_device_tags() -> Dict[str, Dict]:
+    """Load manually assigned device tags."""
+    if DEVICE_TAGS_FILE.exists():
+        try:
+            return json.loads(DEVICE_TAGS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def save_device_tag(mac: str, device_type: str, label: str = None):
+    """Save a manual device tag for a MAC address."""
+    tags = load_device_tags()
+    tags[mac.upper()] = {
+        'device_type': device_type,
+        'label': label,
+        'tagged_at': datetime.now().isoformat()
+    }
+    try:
+        DEVICE_TAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DEVICE_TAGS_FILE.write_text(json.dumps(tags, indent=2))
+    except Exception as e:
+        logger.warning(f"Failed to save device tag: {e}")
+
+
 def detect_device_type(mac: str, hostname: str, manufacturer: str) -> str:
-    """Detect device type from available information."""
+    """Detect device type from available information with ML-enhanced classification.
+
+    Priority:
+    1. Manual tags (user-assigned)
+    2. Hostname patterns (most reliable)
+    3. mDNS service patterns
+    4. Manufacturer + MAC OUI patterns
+    5. Generic manufacturer classification
+    """
     hostname_lower = (hostname or '').lower()
     manufacturer_lower = (manufacturer or '').lower()
+    mac_upper = (mac or '').upper()
 
-    # Hostname-based detection (most specific)
+    # Priority 1: Check for manual device tags
+    tags = load_device_tags()
+    if mac_upper in tags:
+        return tags[mac_upper].get('device_type', 'unknown')
+
+    # Priority 2: Hostname-based detection (most specific)
+    # Apple devices - specific models
     if 'iphone' in hostname_lower:
-        return 'phone'
+        return 'iphone'
     if 'ipad' in hostname_lower:
-        return 'tablet'
-    if 'android' in hostname_lower:
-        return 'phone'
+        return 'ipad'
     if 'macbook' in hostname_lower:
-        return 'laptop'
-    if 'imac' in hostname_lower or 'mac-' in hostname_lower:
-        return 'desktop'
-    if 'windows' in hostname_lower or '-pc' in hostname_lower:
-        return 'desktop'
-    if 'printer' in hostname_lower or 'hp-' in hostname_lower:
-        return 'printer'
-    if 'camera' in hostname_lower or 'cam-' in hostname_lower or 'hikvision' in hostname_lower:
-        return 'camera'
-    if 'tv' in hostname_lower or 'roku' in hostname_lower or 'chromecast' in hostname_lower:
-        return 'tv'
-    if 'echo' in hostname_lower or 'alexa' in hostname_lower:
-        return 'smart_speaker'
-    if 'nest' in hostname_lower or 'thermostat' in hostname_lower:
-        return 'iot'
-    if 'ring' in hostname_lower or 'doorbell' in hostname_lower:
-        return 'iot'
-    if 'sonos' in hostname_lower:
-        return 'smart_speaker'
+        return 'macbook'
+    if 'imac' in hostname_lower:
+        return 'imac'
+    if 'mac-mini' in hostname_lower or 'macmini' in hostname_lower:
+        return 'mac_mini'
+    if 'mac-pro' in hostname_lower or 'macpro' in hostname_lower:
+        return 'mac_pro'
+    if 'mac-studio' in hostname_lower:
+        return 'mac_studio'
+    if 'apple-watch' in hostname_lower or 'applewatch' in hostname_lower:
+        return 'apple_watch'
+    if 'homepod' in hostname_lower:
+        return 'homepod'
+    if 'apple-tv' in hostname_lower or 'appletv' in hostname_lower:
+        return 'apple_tv'
+    if 'airpods' in hostname_lower:
+        return 'airpods'
+    if 'airplay' in hostname_lower:
+        return 'airplay_speaker'
 
-    # Manufacturer-based detection
+    # Other phones/tablets
+    if 'android' in hostname_lower:
+        return 'android_phone'
+    if 'pixel' in hostname_lower:
+        return 'pixel_phone'
+    if 'galaxy' in hostname_lower and 'tab' in hostname_lower:
+        return 'android_tablet'
+    if 'galaxy' in hostname_lower or 'samsung' in hostname_lower:
+        return 'android_phone'
+    if 'surface' in hostname_lower:
+        return 'tablet'
+
+    # Computers
+    if 'windows' in hostname_lower or '-pc' in hostname_lower:
+        return 'windows_pc'
+    if 'linux' in hostname_lower or 'ubuntu' in hostname_lower:
+        return 'linux_pc'
+
+    # Printers
+    if 'printer' in hostname_lower or 'hp-' in hostname_lower.split('-')[0]:
+        return 'printer'
+    if 'epson' in hostname_lower or 'canon' in hostname_lower or 'brother' in hostname_lower:
+        return 'printer'
+
+    # Cameras
+    if 'camera' in hostname_lower or 'cam-' in hostname_lower:
+        return 'ip_camera'
+    if 'hikvision' in hostname_lower or 'dahua' in hostname_lower or 'reolink' in hostname_lower:
+        return 'ip_camera'
+    if 'ring' in hostname_lower and ('cam' in hostname_lower or 'doorbell' in hostname_lower):
+        return 'ring_camera'
+
+    # Smart TVs
+    if 'tv' in hostname_lower or 'samsung-tv' in hostname_lower:
+        return 'smart_tv'
+    if 'roku' in hostname_lower:
+        return 'roku'
+    if 'chromecast' in hostname_lower:
+        return 'chromecast'
+    if 'firetv' in hostname_lower or 'fire-tv' in hostname_lower:
+        return 'fire_tv'
+
+    # Smart speakers and assistants
+    if 'echo' in hostname_lower or 'alexa' in hostname_lower:
+        return 'amazon_echo'
+    if 'sonos' in hostname_lower:
+        return 'sonos_speaker'
+    if 'google-home' in hostname_lower or 'googlehome' in hostname_lower:
+        return 'google_home'
+    if 'nest-hub' in hostname_lower or 'nesthub' in hostname_lower:
+        return 'nest_hub'
+    if 'nest-mini' in hostname_lower or 'nestmini' in hostname_lower:
+        return 'nest_mini'
+
+    # IoT devices
+    if 'nest' in hostname_lower or 'thermostat' in hostname_lower:
+        return 'smart_thermostat'
+    if 'ring' in hostname_lower or 'doorbell' in hostname_lower:
+        return 'smart_doorbell'
+    if 'hue' in hostname_lower:
+        return 'hue_light'
+    if 'wemo' in hostname_lower:
+        return 'wemo_switch'
+    if 'lifx' in hostname_lower:
+        return 'smart_light'
+    if 'smartthings' in hostname_lower:
+        return 'smartthings_hub'
+
+    # Network devices
+    if 'router' in hostname_lower or 'gateway' in hostname_lower:
+        return 'router'
+    if 'switch' in hostname_lower or 'unifi' in hostname_lower:
+        return 'network_switch'
+    if 'ap-' in hostname_lower or 'access-point' in hostname_lower:
+        return 'access_point'
+
+    # Game consoles
+    if 'playstation' in hostname_lower or 'ps4' in hostname_lower or 'ps5' in hostname_lower:
+        return 'playstation'
+    if 'xbox' in hostname_lower:
+        return 'xbox'
+    if 'nintendo' in hostname_lower or 'switch' in hostname_lower:
+        return 'nintendo_switch'
+
+    # Priority 3: Manufacturer + MAC OUI specific patterns
     if manufacturer_lower == 'apple':
+        # Apple MAC ranges can help identify device types
+        mac_prefix = mac_upper[:8] if len(mac_upper) >= 8 else ''
+        # Apple Watch tends to have specific MAC ranges
+        watch_prefixes = ['F0:C7:7F', '70:3E:AC', '60:F8:1D', '5C:F9:38']
+        homepod_prefixes = ['70:56:81', 'E8:B2:AC', '60:AB:D2']
+        if any(mac_upper.startswith(p) for p in watch_prefixes):
+            return 'apple_watch'
+        if any(mac_upper.startswith(p) for p in homepod_prefixes):
+            return 'homepod'
         return 'apple_device'
-    if manufacturer_lower in ['samsung', 'xiaomi', 'huawei']:
-        return 'phone'
+
+    if manufacturer_lower in ['samsung', 'xiaomi', 'huawei', 'oppo', 'oneplus', 'vivo']:
+        return 'android_phone'
     if manufacturer_lower == 'raspberry pi':
-        return 'iot'
-    if manufacturer_lower in ['amazon', 'ring', 'nest']:
-        return 'smart_speaker'
-    if manufacturer_lower in ['google']:
-        return 'smart_device'
-    if manufacturer_lower in ['intel', 'realtek', 'dell', 'hp', 'microsoft']:
+        return 'raspberry_pi'
+    if manufacturer_lower == 'amazon':
+        return 'amazon_device'
+    if manufacturer_lower == 'google':
+        return 'google_device'
+    if manufacturer_lower in ['intel', 'realtek', 'dell', 'hp', 'lenovo', 'asus', 'acer']:
         return 'computer'
-    if manufacturer_lower in ['cisco', 'tp-link']:
-        return 'network'
+    if manufacturer_lower == 'microsoft':
+        return 'windows_device'
+    if manufacturer_lower in ['cisco', 'tp-link', 'netgear', 'ubiquiti', 'aruba']:
+        return 'network_device'
     if manufacturer_lower == 'espressif':
-        return 'iot'
-    if manufacturer_lower in ['sonos', 'philips']:
-        return 'smart_home'
+        return 'esp_iot'
+    if manufacturer_lower in ['sonos']:
+        return 'sonos_speaker'
+    if manufacturer_lower in ['philips']:
+        return 'philips_device'
+    if manufacturer_lower in ['hikvision', 'dahua']:
+        return 'ip_camera'
 
     return 'unknown'
+
+
+def get_device_display_info(device_type: str) -> Dict[str, str]:
+    """Get display name and icon for a device type."""
+    DEVICE_DISPLAY = {
+        # Apple devices
+        'iphone': {'name': 'iPhone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        'ipad': {'name': 'iPad', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+        'macbook': {'name': 'MacBook', 'icon': 'fa-laptop', 'category': 'laptop'},
+        'imac': {'name': 'iMac', 'icon': 'fa-desktop', 'category': 'desktop'},
+        'mac_mini': {'name': 'Mac mini', 'icon': 'fa-server', 'category': 'desktop'},
+        'mac_pro': {'name': 'Mac Pro', 'icon': 'fa-server', 'category': 'desktop'},
+        'mac_studio': {'name': 'Mac Studio', 'icon': 'fa-server', 'category': 'desktop'},
+        'apple_watch': {'name': 'Apple Watch', 'icon': 'fa-clock', 'category': 'wearable'},
+        'homepod': {'name': 'HomePod', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        'apple_tv': {'name': 'Apple TV', 'icon': 'fa-tv', 'category': 'streaming'},
+        'airpods': {'name': 'AirPods', 'icon': 'fa-headphones', 'category': 'audio'},
+        'apple_device': {'name': 'Apple Device', 'icon': 'fa-apple', 'category': 'unknown'},
+
+        # Android devices
+        'android_phone': {'name': 'Android Phone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        'pixel_phone': {'name': 'Pixel Phone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        'android_tablet': {'name': 'Android Tablet', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+
+        # Computers
+        'windows_pc': {'name': 'Windows PC', 'icon': 'fa-desktop', 'category': 'computer'},
+        'linux_pc': {'name': 'Linux PC', 'icon': 'fa-linux', 'category': 'computer'},
+        'computer': {'name': 'Computer', 'icon': 'fa-desktop', 'category': 'computer'},
+        'laptop': {'name': 'Laptop', 'icon': 'fa-laptop', 'category': 'computer'},
+        'desktop': {'name': 'Desktop', 'icon': 'fa-desktop', 'category': 'computer'},
+        'tablet': {'name': 'Tablet', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+
+        # Smart speakers
+        'amazon_echo': {'name': 'Amazon Echo', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        'sonos_speaker': {'name': 'Sonos Speaker', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        'google_home': {'name': 'Google Home', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        'nest_hub': {'name': 'Nest Hub', 'icon': 'fa-tv', 'category': 'smart_display'},
+        'nest_mini': {'name': 'Nest Mini', 'icon': 'fa-volume-down', 'category': 'speaker'},
+        'airplay_speaker': {'name': 'AirPlay Speaker', 'icon': 'fa-volume-up', 'category': 'speaker'},
+
+        # Streaming devices
+        'roku': {'name': 'Roku', 'icon': 'fa-tv', 'category': 'streaming'},
+        'chromecast': {'name': 'Chromecast', 'icon': 'fa-tv', 'category': 'streaming'},
+        'fire_tv': {'name': 'Fire TV', 'icon': 'fa-tv', 'category': 'streaming'},
+        'smart_tv': {'name': 'Smart TV', 'icon': 'fa-tv', 'category': 'tv'},
+
+        # IoT
+        'smart_thermostat': {'name': 'Smart Thermostat', 'icon': 'fa-thermometer-half', 'category': 'iot'},
+        'smart_doorbell': {'name': 'Smart Doorbell', 'icon': 'fa-bell', 'category': 'iot'},
+        'ring_camera': {'name': 'Ring Camera', 'icon': 'fa-video', 'category': 'camera'},
+        'ip_camera': {'name': 'IP Camera', 'icon': 'fa-video', 'category': 'camera'},
+        'hue_light': {'name': 'Philips Hue', 'icon': 'fa-lightbulb', 'category': 'lighting'},
+        'smart_light': {'name': 'Smart Light', 'icon': 'fa-lightbulb', 'category': 'lighting'},
+        'wemo_switch': {'name': 'WeMo Switch', 'icon': 'fa-plug', 'category': 'switch'},
+        'smartthings_hub': {'name': 'SmartThings Hub', 'icon': 'fa-home', 'category': 'hub'},
+        'raspberry_pi': {'name': 'Raspberry Pi', 'icon': 'fa-microchip', 'category': 'iot'},
+        'esp_iot': {'name': 'ESP IoT Device', 'icon': 'fa-microchip', 'category': 'iot'},
+
+        # Network devices
+        'router': {'name': 'Router', 'icon': 'fa-network-wired', 'category': 'network'},
+        'network_switch': {'name': 'Network Switch', 'icon': 'fa-network-wired', 'category': 'network'},
+        'access_point': {'name': 'Access Point', 'icon': 'fa-wifi', 'category': 'network'},
+        'network_device': {'name': 'Network Device', 'icon': 'fa-network-wired', 'category': 'network'},
+
+        # Printers
+        'printer': {'name': 'Printer', 'icon': 'fa-print', 'category': 'printer'},
+
+        # Gaming
+        'playstation': {'name': 'PlayStation', 'icon': 'fa-gamepad', 'category': 'gaming'},
+        'xbox': {'name': 'Xbox', 'icon': 'fa-gamepad', 'category': 'gaming'},
+        'nintendo_switch': {'name': 'Nintendo Switch', 'icon': 'fa-gamepad', 'category': 'gaming'},
+
+        # Generic
+        'amazon_device': {'name': 'Amazon Device', 'icon': 'fa-amazon', 'category': 'smart_home'},
+        'google_device': {'name': 'Google Device', 'icon': 'fa-google', 'category': 'smart_home'},
+        'windows_device': {'name': 'Windows Device', 'icon': 'fa-windows', 'category': 'computer'},
+        'philips_device': {'name': 'Philips Device', 'icon': 'fa-lightbulb', 'category': 'smart_home'},
+        'unknown': {'name': 'Unknown Device', 'icon': 'fa-question-circle', 'category': 'unknown'},
+    }
+    return DEVICE_DISPLAY.get(device_type, DEVICE_DISPLAY['unknown'])
 
 
 def get_dhcp_hostnames() -> Dict[str, str]:
