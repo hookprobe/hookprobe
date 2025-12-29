@@ -209,8 +209,11 @@ services:
       # Bind mount logs to host for ML training data visibility
       - /var/log/hookprobe:/var/log/hookprobe
       - /etc/hookprobe:/etc/hookprobe:ro
+      # DoT (DNS over TLS) certificates - writable for auto-generation
+      - dnsxai_certs:/etc/hookprobe/certs
     ports:
-      - "0.0.0.0:5353:5353/udp"  # DNS accessible from LAN
+      - "0.0.0.0:5353:5353/udp"  # Plain DNS accessible from LAN
+      - "0.0.0.0:853:853/tcp"    # DoT (DNS over TLS) for Windows/modern clients
       - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
     healthcheck:
       # Check HTTP API health endpoint using Python urllib (always available)
@@ -603,7 +606,7 @@ services:
   # Enables secure mesh communication with Guardian, Sentinel, Nexus, MSSP
   # Port Selection (from shared/mesh/ARCHITECTURE.md):
   #   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
-  #   FALLBACK:  8443/UDP + 8443/TCP (TLS-wrapped, avoids 443 conflict)
+  #   FALLBACK:  8543/UDP + 8543/TCP (TLS-wrapped, avoids web UI 8443 conflict)
   #   STEALTH:   853/UDP + 853/TCP (DoT/DoQ cover)
   #   RELAY:     3478/UDP (STUN/TURN for NAT traversal)
   mesh-orchestrator:
@@ -621,7 +624,7 @@ services:
       MESH_DATA_DIR: /opt/hookprobe/mesh/data
       # HTP configuration
       HTP_PRIMARY_PORT: 8144
-      HTP_FALLBACK_PORT: 8443
+      HTP_FALLBACK_PORT: 8543
       HTP_STEALTH_PORT: 853
       HTP_RELAY_PORT: 3478
       # Neuro configuration
@@ -650,9 +653,9 @@ services:
       # HTP Primary (UDP-first design for low-latency mesh)
       - "0.0.0.0:8144:8144/udp"
       - "0.0.0.0:8144:8144/tcp"
-      # HTP Fallback (TLS-wrapped, alternative to 443 to avoid conflicts)
-      - "0.0.0.0:8443:8443/udp"
-      - "0.0.0.0:8443:8443/tcp"
+      # HTP Fallback (TLS-wrapped, 8543 to avoid conflict with web UI on 8443)
+      - "0.0.0.0:8543:8543/udp"
+      - "0.0.0.0:8543:8543/tcp"
       # HTP Stealth (DoT/DoQ cover traffic)
       - "0.0.0.0:853:853/udp"
       - "0.0.0.0:853:853/tcp"
@@ -721,6 +724,9 @@ volumes:
   dnsxai_logs:
     driver: local
     name: fts-dnsxai-logs
+  dnsxai_certs:
+    driver: local
+    name: fts-dnsxai-certs
   dfs_data:
     driver: local
     name: fts-dfs-data
