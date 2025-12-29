@@ -527,6 +527,44 @@ class SimpleDomainFeatureExtractor:
     TRACKER_BASES = {'tracker', 'analytics', 'metrics', 'telemetry', 'stats',
                      'tracking', 'pixel', 'beacon', 'collect', 'adtech'}
 
+    # CRITICAL: System connectivity check domains - NEVER block these
+    # Blocking these breaks network detection and captive portal login
+    SYSTEM_CONNECTIVITY_DOMAINS = {
+        # Microsoft NCSI (Network Connectivity Status Indicator)
+        'msftconnecttest.com', 'msftncsi.com', 'dns.msftncsi.com',
+        'www.msftconnecttest.com', 'ipv6.msftconnecttest.com',
+        # Apple Captive Network Assistant
+        'captive.apple.com', 'www.apple.com',
+        # Google connectivity check
+        'connectivitycheck.gstatic.com', 'clients3.google.com',
+        'connectivitycheck.android.com', 'play.googleapis.com',
+        # Mozilla/Firefox captive portal detection
+        'detectportal.firefox.com',
+        # Ubuntu/Debian connectivity check
+        'connectivity-check.ubuntu.com', 'nmcheck.gnome.org',
+        # Chromebook
+        'clients1.google.com',
+        # Generic connectivity
+        'captive.g.aaplimg.com',
+    }
+
+    # Known security/proxy service domains (legitimate web security)
+    SECURITY_SERVICE_DOMAINS = {
+        'webdefence.global.blackspider.com',  # Symantec Web Security
+        'pac.webdefence.global.blackspider.com',  # Proxy auto-config
+        'wss.webdefence.global.blackspider.com',
+        'zscaler.com', 'zscaler.net', 'zscloud.net',  # Zscaler
+        'forcepoint.net',  # Forcepoint web security
+        'bluecoat.com',  # Symantec BlueCoat
+    }
+
+    # Legitimate CDN/infrastructure domains - context-sensitive (not auto-block)
+    LEGITIMATE_INFRASTRUCTURE = {
+        'microsoft.com', 'apple.com', 'google.com', 'akamai.com',
+        'cloudflare.com', 'amazonaws.com', 'azureedge.net', 'cloudfront.net',
+        'gstatic.com', 'googleapis.com', 'icloud.com', 'office.com',
+    }
+
     def __init__(self):
         import re
         # Compile single regex for all keywords - O(1) lookup
@@ -534,6 +572,29 @@ class SimpleDomainFeatureExtractor:
             r'\b(' + '|'.join(re.escape(k) for k in sorted(self.TRACKER_KEYWORDS.keys(), key=len, reverse=True)) + r')',
             re.IGNORECASE
         )
+
+    def _is_protected_domain(self, domain: str) -> bool:
+        """Check if domain is protected (system connectivity, security, CDN)."""
+        domain_lower = domain.lower()
+
+        # Check exact match first
+        if domain_lower in self.SYSTEM_CONNECTIVITY_DOMAINS:
+            return True
+        if domain_lower in self.SECURITY_SERVICE_DOMAINS:
+            return True
+
+        # Check parent domains
+        parts = domain_lower.split('.')
+        for i in range(len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in self.SYSTEM_CONNECTIVITY_DOMAINS:
+                return True
+            if parent in self.SECURITY_SERVICE_DOMAINS:
+                return True
+            if parent in self.LEGITIMATE_INFRASTRUCTURE:
+                return True
+
+        return False
 
     def quick_classify(self, domain: str) -> Tuple[bool, float, str]:
         """
@@ -545,6 +606,10 @@ class SimpleDomainFeatureExtractor:
         """
         domain_lower = domain.lower().strip('.')
         parts = domain_lower.split('.')
+
+        # 0. CRITICAL: Never block system connectivity/security domains
+        if self._is_protected_domain(domain_lower):
+            return False, 0.0, "protected"
 
         # 1. Keyword scan - single regex pass, return highest confidence match
         matches = self._keyword_pattern.findall(domain_lower)

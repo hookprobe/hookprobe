@@ -131,61 +131,26 @@
                         </a>
                     </li>
 
-                    <!-- 2. NETWORK (Devices + VLANs + SDN) -->
-                    <li class="nav-item {% if 'clients' in request.endpoint or 'networks' in request.endpoint or 'sdn' in request.endpoint %}menu-open{% endif %}">
-                        <a href="#" class="nav-link {% if 'clients' in request.endpoint or 'networks' in request.endpoint or 'sdn' in request.endpoint %}active{% endif %}">
+                    <!-- 2. SDN AI (Unified Devices + VLANs + Network Control) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('sdn.index') }}" class="nav-link {% if 'clients' in request.endpoint or 'networks' in request.endpoint or 'sdn' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-network-wired"></i>
                             <p>
-                                Network
-                                <i class="right fas fa-angle-left"></i>
+                                SDN AI
+                                <span class="badge badge-info right" id="sidebar-devices-badge">--</span>
                             </p>
                         </a>
-                        <ul class="nav nav-treeview">
-                            <li class="nav-item">
-                                <a href="{{ url_for('clients.index') }}" class="nav-link {% if 'clients' in request.endpoint and 'sdn' not in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-laptop nav-icon"></i>
-                                    <p>Devices</p>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a href="{{ url_for('networks.index') }}" class="nav-link {% if 'networks' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-sitemap nav-icon"></i>
-                                    <p>VLANs</p>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a href="{{ url_for('sdn.index') }}" class="nav-link {% if 'sdn' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-project-diagram nav-icon"></i>
-                                    <p>SDN Control</p>
-                                </a>
-                            </li>
-                        </ul>
                     </li>
 
-                    <!-- 3. SECURITY & AI (QSecBit + dnsXai + Threats) -->
-                    <li class="nav-item {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}menu-open{% endif %}">
-                        <a href="#" class="nav-link {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}active{% endif %}">
+                    <!-- 3. AI SECURITY (Unified QSecBit + dnsXai) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('security.index') }}" class="nav-link {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-shield-halved"></i>
                             <p>
-                                Security & AI
-                                <i class="right fas fa-angle-left"></i>
+                                AI Security
                                 <span class="badge badge-success right" id="sidebar-rag-badge">OK</span>
                             </p>
                         </a>
-                        <ul class="nav nav-treeview">
-                            <li class="nav-item">
-                                <a href="{{ url_for('security.index') }}" class="nav-link {% if 'security' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-chart-line nav-icon"></i>
-                                    <p>QSecBit</p>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a href="{{ url_for('dnsxai.index') }}" class="nav-link {% if 'dnsxai' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-brain nav-icon"></i>
-                                    <p>dnsXai</p>
-                                </a>
-                            </li>
-                        </ul>
                     </li>
 
                     <!-- 4. CONNECTIVITY (WAN + Traffic + Tunnel) -->
@@ -350,16 +315,27 @@
         }
     }
 
+    // Update SDN devices badge
+    function updateDevicesBadge(count) {
+        const badge = document.getElementById('sidebar-devices-badge');
+        if (badge && count !== undefined) {
+            badge.textContent = count;
+        }
+    }
+
     // Poll status
     function pollStatus() {
         fetch('/api/status')
             .then(r => r.json())
             .then(data => {
-                if (data.qsecbit_status) {
-                    updateQSecBitBadge(data.qsecbit_status);
+                if (data.qsecbit && data.qsecbit.status) {
+                    updateQSecBitBadge(data.qsecbit.status);
                 }
                 if (data.notification_count !== undefined) {
                     document.getElementById('notification-count').textContent = data.notification_count;
+                }
+                if (data.device_count !== undefined) {
+                    updateDevicesBadge(data.device_count);
                 }
             })
             .catch(() => {});
