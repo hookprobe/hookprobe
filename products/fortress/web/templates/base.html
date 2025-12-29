@@ -153,29 +153,12 @@
                         </a>
                     </li>
 
-                    <!-- 4. CONNECTIVITY (WAN + Traffic + Tunnel) -->
-                    <li class="nav-item {% if 'slaai' in request.endpoint or 'tunnel' in request.endpoint %}menu-open{% endif %}">
-                        <a href="#" class="nav-link {% if 'slaai' in request.endpoint or 'tunnel' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-globe"></i>
-                            <p>
-                                Connectivity
-                                <i class="right fas fa-angle-left"></i>
-                            </p>
+                    <!-- 4. REMOTE ACCESS (Cloudflare Tunnel) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('tunnel.index') }}" class="nav-link {% if 'tunnel' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-cloud"></i>
+                            <p>Remote Access</p>
                         </a>
-                        <ul class="nav nav-treeview">
-                            <li class="nav-item">
-                                <a href="{{ url_for('slaai.index') }}" class="nav-link {% if 'slaai' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-heartbeat nav-icon"></i>
-                                    <p>WAN Health</p>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a href="{{ url_for('tunnel.index') }}" class="nav-link {% if 'tunnel' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-cloud nav-icon"></i>
-                                    <p>Remote Access</p>
-                                </a>
-                            </li>
-                        </ul>
                     </li>
 
                     <!-- 5. SETTINGS (Admin only) -->
