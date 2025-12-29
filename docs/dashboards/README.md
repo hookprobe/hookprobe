@@ -433,7 +433,7 @@ See [../CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
 ### HookProbe Documentation
 
 - **Main README**: [../../README.md](../../README.md)
-- **Web Server Setup**: [../../install/addons/webserver/README.md](../../install/addons/webserver/README.md)
+- **Web Server Setup**: [../../deploy/addons/webserver/README.md](../../deploy/addons/webserver/README.md)
 - **IAM Integration**: [../IAM-INTEGRATION-GUIDE.md](../IAM-INTEGRATION-GUIDE.md)
 
 ---

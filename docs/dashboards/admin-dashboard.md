@@ -485,7 +485,7 @@ podman restart hookprobe-pod-005-monitoring-victoria
 - **Main README**: [../../README.md](../../README.md)
 - **Dashboard Overview**: [README.md](README.md)
 - **MSSP Dashboard**: [mssp-dashboard.md](mssp-dashboard.md)
-- **Web Server Setup**: [../../install/addons/webserver/README.md](../../install/addons/webserver/README.md)
+- **Web Server Setup**: [../../deploy/addons/webserver/README.md](../../deploy/addons/webserver/README.md)
 - **IAM Integration**: [../IAM-INTEGRATION-GUIDE.md](../IAM-INTEGRATION-GUIDE.md)
 
 ---
