@@ -291,7 +291,9 @@ services:
       # Bind mount for shared data (visible on host and other containers)
       - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data
       - /etc/hookprobe:/etc/hookprobe:ro
+      - /etc/hostapd:/etc/hostapd:ro  # Read hostapd config for WiFi SSID/channel
       - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
+      - /run/hostapd:/run/hostapd:ro  # Access hostapd control socket
     # Host network REQUIRED for traffic analysis on all interfaces
     network_mode: host
     cap_add:
