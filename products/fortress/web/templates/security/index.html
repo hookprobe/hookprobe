@@ -209,6 +209,54 @@
         max-height: 200px;
         overflow-y: auto;
     }
+
+    /* Recently Blocked Section */
+    .blocked-domain-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        transition: background-color 0.2s ease;
+    }
+    .blocked-domain-item:last-child {
+        border-bottom: none;
+    }
+    .blocked-domain-item:hover {
+        background-color: rgba(255,255,255,0.05);
+    }
+    .blocked-domain-name {
+        font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        font-size: 0.85rem;
+        word-break: break-all;
+        flex: 1;
+        margin-right: 0.5rem;
+    }
+    .blocked-domain-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .whitelist-quick-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.75rem;
+        border-radius: 4px;
+        opacity: 0.8;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    .whitelist-quick-btn:hover {
+        opacity: 1;
+        transform: scale(1.05);
+    }
+    .blocked-scroll {
+        max-height: 280px;
+        overflow-y: auto;
+    }
+    .blocked-time {
+        font-size: 0.7rem;
+        color: #6c757d;
+        white-space: nowrap;
+    }
 </style>
 {% endblock %}
 
@@ -417,6 +465,40 @@
     </div>
 </div>
 
+<!-- Recently Blocked DNS Domains -->
+<div class="row">
+    <div class="col-12">
+        <div class="card card-outline card-danger">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-ban mr-2"></i>Recently Blocked Domains</h3>
+                <div class="card-tools">
+                    <span class="badge badge-danger mr-2" id="recent-blocked-count">0</span>
+                    <button class="btn btn-sm btn-tool" onclick="loadRecentBlocked()" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                        <i class="fas fa-minus"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="blocked-scroll" id="recent-blocked-list">
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-spinner fa-spin fa-2x mb-2"></i>
+                        <p class="mb-0">Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer text-muted small d-flex justify-content-between align-items-center">
+                <span>Last 24 hours • Quick whitelist with <i class="fas fa-check text-success"></i></span>
+                <button class="btn btn-sm btn-outline-light" onclick="showDnsSettings(); $('.nav-tabs a[href=&quot;#tab-blocked&quot;]').tab('show');">
+                    <i class="fas fa-list mr-1"></i>View All
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% if not data_available %}
 <div class="alert alert-info">
     <i class="fas fa-info-circle mr-2"></i>
@@ -611,10 +693,12 @@ const LEVEL_COLORS = ['secondary', 'info', 'primary', 'success', 'warning', 'dan
 document.addEventListener('DOMContentLoaded', function() {
     loadDnsStats();
     loadMLStatus();
+    loadRecentBlocked();
     drawQsecbitGauge();
     setInterval(checkPauseStatus, 10000);
     setInterval(loadDnsStats, 30000);
     setInterval(refreshQsecbit, 30000);
+    setInterval(loadRecentBlocked, 60000); // Refresh blocked list every minute
 });
 
 // === DNS STATS ===
@@ -1134,6 +1218,129 @@ async function whitelistBlocked(domain) {
             toastr.success('Whitelisted');
         }
     } catch(e) {}
+}
+
+// === RECENTLY BLOCKED (Main Page) ===
+let recentBlockedCache = [];
+
+async function loadRecentBlocked() {
+    const container = document.getElementById('recent-blocked-list');
+    const countBadge = document.getElementById('recent-blocked-count');
+
+    try {
+        const resp = await fetch('/dnsxai/api/blocked?limit=20');
+        const data = await resp.json();
+        recentBlockedCache = data.blocked || [];
+
+        countBadge.textContent = recentBlockedCache.length;
+
+        if (recentBlockedCache.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-4">
+                    <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                    <p class="text-muted mb-0">No domains blocked recently</p>
+                    <small class="text-muted">Your network is clean!</small>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = recentBlockedCache.map(d => {
+            const esc = d.domain.replace(/'/g, "\\'");
+            const badge = d.ml_classified
+                ? '<span class="badge badge-primary" title="ML Classified">ML</span>'
+                : '<span class="badge badge-secondary" title="Blocklist Match">List</span>';
+            const time = d.timestamp ? formatTimeAgo(d.timestamp) : '';
+
+            return `
+                <div class="blocked-domain-item" id="blocked-${esc.replace(/[^a-z0-9]/gi, '_')}">
+                    <div class="blocked-domain-name">${d.domain}</div>
+                    <div class="blocked-domain-meta">
+                        ${time ? `<span class="blocked-time">${time}</span>` : ''}
+                        ${badge}
+                        <button class="btn btn-success whitelist-quick-btn" onclick="quickWhitelist('${esc}')" title="Add to Whitelist">
+                            <i class="fas fa-check"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch(e) {
+        console.error('Failed to load recent blocked:', e);
+        container.innerHTML = `
+            <div class="text-center py-4 text-muted">
+                <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                <p class="mb-0">Failed to load blocked domains</p>
+            </div>
+        `;
+    }
+}
+
+async function quickWhitelist(domain) {
+    const itemId = 'blocked-' + domain.replace(/[^a-z0-9]/gi, '_');
+    const item = document.getElementById(itemId);
+
+    // Show loading state
+    if (item) {
+        item.style.opacity = '0.5';
+        item.querySelector('button').disabled = true;
+        item.querySelector('button').innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({domain})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            // Animate removal
+            if (item) {
+                item.style.transition = 'all 0.3s ease';
+                item.style.transform = 'translateX(100%)';
+                item.style.opacity = '0';
+                setTimeout(() => {
+                    item.remove();
+                    // Update count
+                    recentBlockedCache = recentBlockedCache.filter(d => d.domain !== domain);
+                    document.getElementById('recent-blocked-count').textContent = recentBlockedCache.length;
+
+                    if (recentBlockedCache.length === 0) {
+                        loadRecentBlocked();
+                    }
+                }, 300);
+            }
+            toastr.success(`${domain} whitelisted`);
+
+            // Refresh modal whitelist if open
+            if ($('#dnsSettingsModal').hasClass('show')) {
+                loadWhitelist();
+            }
+        } else {
+            throw new Error(data.error || 'Failed');
+        }
+    } catch(e) {
+        // Restore state on error
+        if (item) {
+            item.style.opacity = '1';
+            item.querySelector('button').disabled = false;
+            item.querySelector('button').innerHTML = '<i class="fas fa-check"></i>';
+        }
+        toastr.error('Failed to whitelist domain');
+    }
+}
+
+function formatTimeAgo(timestamp) {
+    const now = Date.now();
+    const time = new Date(timestamp).getTime();
+    const diff = Math.floor((now - time) / 1000);
+
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
 }
 </script>
 {% endblock %}
