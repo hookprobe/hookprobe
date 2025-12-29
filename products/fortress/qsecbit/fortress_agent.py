@@ -1368,6 +1368,36 @@ class QSecBitFortressAgent:
         exclude_prefixes = ('lo', 'docker', 'podman', 'veth', 'br-', 'virbr', 'FTS', 'vlan')
         exclude_names = {'lo', 'FTS', 'br0', 'br-lan'}
 
+        # Get interfaces that are part of OVS bridge (these are LAN ports, not WAN)
+        ovs_bridge_ports = set()
+        try:
+            result = subprocess.run(
+                ['ovs-vsctl', 'list-ports', 'FTS'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                ovs_bridge_ports = set(p.strip() for p in result.stdout.strip().split('\n') if p.strip())
+                logger.debug(f"OVS bridge ports (LAN): {ovs_bridge_ports}")
+        except Exception:
+            pass
+
+        # Get interface with default route (this is the real WAN)
+        wan_interface_from_route = None
+        try:
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'default'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Parse "default via X.X.X.X dev ethX"
+                import re
+                match = re.search(r'default\s+via\s+[\d.]+\s+dev\s+(\S+)', result.stdout)
+                if match:
+                    wan_interface_from_route = match.group(1)
+                    logger.info(f"WAN interface from default route: {wan_interface_from_route}")
+        except Exception:
+            pass
+
         for iface in interfaces:
             name = iface.get('ifname', '')
             state = iface.get('operstate', 'UNKNOWN')
@@ -1448,8 +1478,23 @@ class QSecBitFortressAgent:
                 lte_candidates.append(iface_info)
                 logger.debug(f"Found LTE candidate: {name} ip={ip_addr} state={state}")
             elif name.startswith('eth') or name.startswith('en') or name.startswith('eno'):
-                # Ethernet interfaces - potential WAN
-                wan_candidates.append(iface_info)
+                # Ethernet interface - check if it's WAN or LAN
+                # Skip if it's part of OVS bridge (LAN port)
+                if name in ovs_bridge_ports:
+                    logger.debug(f"Skipping {name} - is OVS bridge port (LAN)")
+                    continue
+
+                # Only add as WAN candidate if:
+                # 1. It has the default route, OR
+                # 2. No default route detected yet (fallback)
+                if wan_interface_from_route:
+                    if name == wan_interface_from_route:
+                        wan_candidates.append(iface_info)
+                        logger.debug(f"Found WAN candidate (default route): {name}")
+                else:
+                    # No default route detected, use first non-bridge ethernet
+                    wan_candidates.append(iface_info)
+                    logger.debug(f"Found WAN candidate (fallback): {name}")
 
         # Sort WAN candidates by name for consistent ordering (eth0 before eth1)
         wan_candidates.sort(key=lambda x: x['name'])
@@ -1629,6 +1674,8 @@ class QSecBitFortressAgent:
         This runs with host network access, so we can read /sys/class/net stats.
         Data is written to interface_traffic.json for the web container to read.
         """
+        import re
+
         # Get interfaces
         try:
             proc = subprocess.run(
@@ -1642,6 +1689,32 @@ class QSecBitFortressAgent:
         except Exception:
             interfaces = []
 
+        # Get OVS bridge ports (these are LAN, not WAN)
+        ovs_bridge_ports = set()
+        try:
+            result = subprocess.run(
+                ['ovs-vsctl', 'list-ports', 'FTS'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                ovs_bridge_ports = set(p.strip() for p in result.stdout.strip().split('\n') if p.strip())
+        except Exception:
+            pass
+
+        # Get interface with default route (this is the WAN)
+        wan_interface = None
+        try:
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'default'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                match = re.search(r'default\s+via\s+[\d.]+\s+dev\s+(\S+)', result.stdout)
+                if match:
+                    wan_interface = match.group(1)
+        except Exception:
+            pass
+
         traffic = []
         now = time.time()
 
@@ -1650,10 +1723,25 @@ class QSecBitFortressAgent:
             name = iface.get('ifname', '')
             state = iface.get('operstate', 'UNKNOWN')
 
+            # Skip interfaces without IP (except WiFi which might be AP mode)
+            has_ip = False
+            for addr_info in iface.get('addr_info', []):
+                if addr_info.get('family') == 'inet':
+                    has_ip = True
+                    break
+
             # Determine interface type
             iface_type = None
             if name.startswith('eth') or name.startswith('en') or name.startswith('eno'):
-                iface_type = 'wan'
+                # Check if it's actually WAN or LAN
+                if name in ovs_bridge_ports:
+                    iface_type = 'lan'  # Part of OVS bridge = LAN
+                elif wan_interface and name == wan_interface:
+                    iface_type = 'wan'  # Has default route = WAN
+                elif not wan_interface and name not in ovs_bridge_ports and has_ip:
+                    iface_type = 'wan'  # Fallback: non-bridge with IP = WAN
+                else:
+                    continue  # Skip unknown ethernet without IP
             elif name.startswith('wwan') or name.startswith('usb') or name.startswith('wwp'):
                 iface_type = 'lte'
             elif name in ['FTS', 'br0', 'br-lan']:
@@ -1664,6 +1752,12 @@ class QSecBitFortressAgent:
                 iface_type = 'vlan'
 
             if not iface_type:
+                continue
+
+            # Filter: only show interfaces that are UP and have IP (except LTE/WiFi)
+            if state not in ['UP', 'UNKNOWN']:
+                continue
+            if not has_ip and iface_type not in ['lte', 'wifi']:
                 continue
 
             # Read stats from /sys/class/net
