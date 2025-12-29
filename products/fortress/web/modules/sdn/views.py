@@ -246,7 +246,12 @@ def get_real_devices():
                 'internet_access': network_policy in ('full_access', 'internet_only'),
                 'lan_access': network_policy in ('full_access', 'lan_only'),
                 'is_blocked': device.get('is_blocked', False),
-                'is_online': device.get('state') in ('REACHABLE', 'DELAY'),
+                # Check multiple state indicators for online status
+                'is_online': (
+                    device.get('is_online', False) or
+                    device.get('state') in ('REACHABLE', 'DELAY', 'reachable', 'delay') or
+                    device.get('status') in ('online', 'ONLINE', 'active', 'ACTIVE')
+                ),
                 'oui_category': category,
                 'auto_policy': classification.get('recommended_policy', 'default'),
                 'first_seen': device.get('first_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
@@ -1712,42 +1717,94 @@ def api_wifi_intelligence():
         'optimization_method': dfs_data.get('scan_mode', 'basic_scan'),
         'wifi_interface': None,
         'ssid': None,
+        # Dual-band support
+        'ssid_24ghz': None,
+        'ssid_5ghz': None,
+        'channel_24ghz': None,
+        'channel_5ghz': None,
     }
 
     # Priority 1: Read from wifi_status.json written by qsecbit agent
     wifi_data = _read_agent_data('wifi_status.json', max_age_seconds=120)
-    if wifi_data and wifi_data.get('primary_ssid'):
-        data['ssid'] = wifi_data.get('primary_ssid')
-        data['current_channel'] = wifi_data.get('primary_channel')
-        data['band'] = wifi_data.get('primary_band', '5GHz')
-        data['hw_mode'] = 'a' if data['band'] == '5GHz' else 'g'
-        if wifi_data.get('interfaces'):
-            # Use first interface info
-            first_iface = wifi_data['interfaces'][0]
-            data['wifi_interface'] = first_iface.get('interface')
-        logger.debug(f"Loaded WiFi status from agent data: SSID={data['ssid']} channel={data['current_channel']}")
-    else:
-        # Priority 2: Fallback - Read hostapd config directly (works if mounted)
-        hostapd_conf = '/etc/hostapd/fortress.conf'
-        if os.path.exists(hostapd_conf):
-            try:
-                with open(hostapd_conf, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('channel='):
-                            data['current_channel'] = int(line.split('=')[1])
-                        elif line.startswith('hw_mode='):
-                            data['hw_mode'] = line.split('=')[1]
-                        elif line.startswith('interface='):
-                            data['wifi_interface'] = line.split('=')[1]
-                        elif line.startswith('ssid='):
-                            data['ssid'] = line.split('=')[1]
+    if wifi_data:
+        # Support dual-band from agent data
+        if wifi_data.get('ssid_24ghz') or wifi_data.get('ssid_5ghz'):
+            data['ssid_24ghz'] = wifi_data.get('ssid_24ghz')
+            data['ssid_5ghz'] = wifi_data.get('ssid_5ghz')
+            data['channel_24ghz'] = wifi_data.get('channel_24ghz')
+            data['channel_5ghz'] = wifi_data.get('channel_5ghz')
+            # Use 5GHz as primary if available
+            data['ssid'] = data['ssid_5ghz'] or data['ssid_24ghz']
+            data['current_channel'] = data['channel_5ghz'] or data['channel_24ghz']
+            data['band'] = '5GHz' if data['channel_5ghz'] else '2.4GHz'
+        elif wifi_data.get('primary_ssid'):
+            data['ssid'] = wifi_data.get('primary_ssid')
+            data['current_channel'] = wifi_data.get('primary_channel')
+            data['band'] = wifi_data.get('primary_band', '5GHz')
+            data['hw_mode'] = 'a' if data['band'] == '5GHz' else 'g'
 
-                # Determine band from hw_mode or channel
-                if data['hw_mode'] == 'a' or (data['current_channel'] and data['current_channel'] > 14):
-                    data['band'] = '5GHz'
-            except Exception:
-                pass
+        # Process interfaces for dual-band info
+        if wifi_data.get('interfaces'):
+            for iface_info in wifi_data['interfaces']:
+                channel = iface_info.get('channel')
+                ssid = iface_info.get('ssid')
+                if channel and channel <= 14:
+                    data['channel_24ghz'] = channel
+                    data['ssid_24ghz'] = ssid or data['ssid']
+                elif channel and channel > 14:
+                    data['channel_5ghz'] = channel
+                    data['ssid_5ghz'] = ssid or data['ssid']
+                if not data['wifi_interface']:
+                    data['wifi_interface'] = iface_info.get('interface')
+
+        logger.debug(f"Loaded WiFi status from agent data: SSID={data['ssid']} ch_24={data['channel_24ghz']} ch_5={data['channel_5ghz']}")
+    else:
+        # Priority 2: Fallback - Read hostapd config files directly
+        # Check for dual-band configs
+        hostapd_configs = [
+            ('/etc/hostapd/fortress-5ghz.conf', '5GHz'),
+            ('/etc/hostapd/fortress-24ghz.conf', '2.4GHz'),
+            ('/etc/hostapd/fortress.conf', None),  # Single config fallback
+        ]
+
+        for conf_path, band_hint in hostapd_configs:
+            if os.path.exists(conf_path):
+                try:
+                    conf_data = {}
+                    with open(conf_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith('channel='):
+                                conf_data['channel'] = int(line.split('=')[1])
+                            elif line.startswith('hw_mode='):
+                                conf_data['hw_mode'] = line.split('=')[1]
+                            elif line.startswith('interface='):
+                                conf_data['interface'] = line.split('=')[1]
+                            elif line.startswith('ssid='):
+                                conf_data['ssid'] = line.split('=')[1]
+
+                    # Determine band
+                    ch = conf_data.get('channel')
+                    is_5ghz = (band_hint == '5GHz' or
+                               conf_data.get('hw_mode') == 'a' or
+                               (ch and ch > 14))
+
+                    if is_5ghz:
+                        data['channel_5ghz'] = ch
+                        data['ssid_5ghz'] = conf_data.get('ssid')
+                    else:
+                        data['channel_24ghz'] = ch
+                        data['ssid_24ghz'] = conf_data.get('ssid')
+
+                    # Set primary values
+                    if not data['current_channel']:
+                        data['current_channel'] = ch
+                        data['hw_mode'] = conf_data.get('hw_mode', 'a' if is_5ghz else 'g')
+                        data['wifi_interface'] = conf_data.get('interface')
+                        data['ssid'] = conf_data.get('ssid')
+                        data['band'] = '5GHz' if is_5ghz else '2.4GHz'
+                except Exception:
+                    pass
 
     # Read channel state file for optimization history
     state_file = '/var/lib/fortress/channel_state.json'
