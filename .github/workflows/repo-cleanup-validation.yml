@@ -54,7 +54,7 @@ jobs:
             "install.sh"
             "uninstall.sh"
             "products/guardian/scripts/setup.sh"
-            "products/fortress/setup.sh"
+            "products/fortress/install.sh"
             "products/nexus/setup.sh"
             "products/sentinel/bootstrap.sh"
           )
