@@ -151,9 +151,16 @@ def _read_agent_data(filename: str, max_age_seconds: int = 60) -> dict:
     but still returns stale data (marked with _stale=True) rather than None.
     This ensures we always have data to display when the agent is running.
     """
+    # Check if data directory exists
+    if not DATA_DIR.exists():
+        logger.debug(f"Data directory not found: {DATA_DIR} - ensure qsecbit agent is running")
+        return None
+
     data_file = DATA_DIR / filename
     if not data_file.exists():
-        logger.debug(f"Agent data file not found: {data_file}")
+        # List available files for debugging
+        available = list(DATA_DIR.glob('*.json')) if DATA_DIR.exists() else []
+        logger.debug(f"Agent data file not found: {data_file}. Available: {[f.name for f in available]}")
         return None
     try:
         data = json.loads(data_file.read_text())
@@ -256,6 +263,10 @@ def get_real_devices():
         # Enrich with OUI classification and format for SDN display
         enriched = []
         for device in device_list:
+            # Skip if device is not a dict (handle unexpected data formats)
+            if not isinstance(device, dict):
+                logger.warning(f"Skipping non-dict device entry: {type(device)}")
+                continue
             mac = device.get('mac_address', '').upper()
             classification = classify_device(mac)
             category = classification.get('category', 'unknown')
@@ -392,6 +403,10 @@ def get_real_devices():
                         'state': state,
                         'is_online': state in ('REACHABLE', 'DELAY'),
                     }
+    except FileNotFoundError:
+        # 'ip' command not available in container - this is expected
+        # Device data should come from the qsecbit agent's devices.json file
+        logger.debug("ARP collection skipped: 'ip' command not available in container")
     except Exception as e:
         logger.warning(f"Failed to read ARP table: {e}")
 
@@ -494,6 +509,13 @@ def get_real_devices():
             'bytes_sent': 0,
             'bytes_received': 0,
         })
+
+    if not devices:
+        logger.info("No devices found. Check: 1) qsecbit agent is running, "
+                    "2) /opt/hookprobe/fortress/data/devices.json exists, "
+                    "3) clients are connected to the network")
+    else:
+        logger.info(f"Returning {len(devices)} devices from direct collection (Priority 2)")
 
     return devices
 

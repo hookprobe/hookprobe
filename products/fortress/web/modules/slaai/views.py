@@ -35,6 +35,9 @@ try:
         get_all_interface_traffic,
         get_vlans,
         get_interfaces,
+        reset_lte_usage,
+        get_lte_usage,
+        update_lte_usage,
     )
     SYSTEM_DATA_AVAILABLE = True
 except ImportError as e:
@@ -308,4 +311,73 @@ def api_interfaces():
 
     except Exception as e:
         logger.error(f"Interfaces API error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@slaai_bp.route('/api/lte-usage')
+@login_required
+def api_lte_usage():
+    """Get LTE data usage statistics."""
+    try:
+        if SYSTEM_DATA_AVAILABLE:
+            # Update usage from interface stats and return current values
+            update_lte_usage()
+            usage = get_lte_usage()
+            return jsonify({
+                'success': True,
+                'usage': usage,
+                'demo_mode': False
+            })
+
+        # Fallback demo data
+        return jsonify({
+            'success': True,
+            'usage': {
+                'interface': 'wwan0',
+                'daily_mb': 145.5,
+                'monthly_mb': 2150.0,
+                'month': '2025-12',
+                'day': '2025-12-29',
+                'last_update': None,
+            },
+            'demo_mode': True
+        })
+
+    except Exception as e:
+        logger.error(f"LTE usage API error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@slaai_bp.route('/api/lte-usage/reset', methods=['POST'])
+@login_required
+@operator_required
+def api_reset_lte_usage():
+    """Reset LTE usage counters (operator/admin only)."""
+    try:
+        if not SYSTEM_DATA_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'error': 'System data module not available',
+                'demo_mode': True
+            })
+
+        # Get reset type from request (default: 'monthly')
+        data = request.get_json() or {}
+        reset_type = data.get('type', 'monthly')
+
+        if reset_type not in ['all', 'daily', 'monthly']:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid reset type: {reset_type}. Use: all, daily, or monthly'
+            })
+
+        result = reset_lte_usage(reset_type)
+        return jsonify({
+            'success': True,
+            'result': result,
+            'message': f'LTE usage counters reset ({reset_type})'
+        })
+
+    except Exception as e:
+        logger.error(f"LTE reset API error: {e}")
         return jsonify({'success': False, 'error': str(e)})
