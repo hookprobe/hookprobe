@@ -1,1095 +1,738 @@
 #!/usr/bin/env python3
 """
-Fortress SDN Auto-Pilot
+Fortress SDN Auto Pilot - Premium Heuristic Scoring Engine
 
-Intelligent device classification and automatic VLAN segmentation using:
-- OUI (vendor) fingerprinting
-- Protocol detection (Matter, Thread, Zigbee)
-- Behavioral analysis
-- OpenFlow-based micro-segmentation
+Philosophy: "Guilty until proven Innocent"
+Goal: 99% accuracy device classification using multiple identity signals.
 
-Network Segments:
-  VLAN 10: SecMON   - Security monitoring (NVR, SIEM, sensors)
-  VLAN 20: POS      - Point of Sale terminals
-  VLAN 30: Clients  - Staff devices (laptops, phones)
-  VLAN 50: Cameras  - IP cameras, CCTV
-  VLAN 60: IIoT     - IoT devices (thermostats, Matter/Thread)
-  VLAN 99: Quarantine - Suspicious/unknown devices
+Identity Stack (Weighted Scoring):
+- DHCP Option 55 Fingerprint (50%): OS/Device "DNA" - hardest to spoof
+- MAC OUI Vendor (20%): Manufacturer identification
+- Hostname Analysis (20%): User-assigned name patterns
+- Active Probing (10%): Open ports/services behavior
 
-Author: HookProbe Team
-Version: 1.0.0
-License: AGPL-3.0
+Policies (matching device_policies.py):
+- QUARANTINE: Unknown devices, no network access (default)
+- INTERNET_ONLY: Can access internet but not LAN devices
+- LAN_ONLY: Can access LAN but not internet (IoT, printers)
+- NORMAL: Curated IoT (HomePod, Echo, Matter/Thread bridges)
+- FULL_ACCESS: Management devices with full access
+
+Storage: SQLite database at /var/lib/hookprobe/autopilot.db
 """
 
-import logging
-import re
+import sqlite3
 import json
+import logging
 import subprocess
-import hashlib
-import time
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Set, Tuple, Any
-from enum import IntEnum, Enum
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# Database paths
+AUTOPILOT_DB = Path('/var/lib/hookprobe/autopilot.db')
+FINGERPRINT_DB_FILE = Path('/opt/hookprobe/fortress/data/dhcp_fingerprints.json')
 
-# =============================================================================
-# Device Trust Integration
-# =============================================================================
-
-# Try to import Device Trust Framework
-TRUST_FRAMEWORK_AVAILABLE = False
-try:
-    from .device_trust_framework import (
-        DeviceTrustFramework,
-        TrustLevel,
-        TrustAssessment,
-        DeviceFingerprint as TrustFingerprint,
-        get_trust_framework,
-    )
-    TRUST_FRAMEWORK_AVAILABLE = True
-except ImportError:
-    # Stub classes for when trust framework not available
-    class TrustLevel(IntEnum):
-        UNTRUSTED = 0
-        MINIMAL = 1
-        STANDARD = 2
-        HIGH = 3
-        ENTERPRISE = 4
-
-    def get_trust_framework():
-        return None
+# Network configuration
+GATEWAY_IP = "10.200.0.1"
+LAN_SUBNET = "10.200.0.0/23"
 
 
 # =============================================================================
-# Network Segment Definitions
+# DHCP Option 55 Fingerprint Database - The Device "DNA"
 # =============================================================================
 
-class NetworkSegment(IntEnum):
-    """Network segment VLAN IDs for small business deployment."""
-    SECMON = 10       # Security monitoring devices
-    POS = 20          # Point of Sale terminals
-    CLIENTS = 30      # Staff devices (laptops, phones)
-    CAMERAS = 50      # IP cameras, CCTV
-    IIOT = 60         # IoT devices (Matter/Thread/Zigbee)
-    GUEST = 40        # Guest WiFi
-    QUARANTINE = 99   # Suspicious devices
+FINGERPRINT_DATABASE = {
+    # Apple Devices
+    "1,3,6,15,119,252": {"os": "Apple iOS/macOS", "category": "apple", "confidence": 0.95},
+    "1,121,3,6,15,119,252": {"os": "Apple iOS 14+", "category": "apple", "confidence": 0.98},
+    "1,3,6,15,119,95,252": {"os": "Apple HomePod/Apple TV", "category": "smart_hub", "confidence": 0.99},
 
+    # Android/Linux
+    "1,3,6,15,26,28,51,58,59": {"os": "Android/Linux", "category": "android", "confidence": 0.90},
+    "1,3,6,28,33,121": {"os": "Android 10+", "category": "android", "confidence": 0.92},
 
-class DeviceCategory(str, Enum):
-    """Device classification categories."""
-    SECMON = "secmon"           # Security monitoring
-    POS = "pos"                 # Point of Sale
-    CLIENT = "client"           # Staff devices
-    CAMERA = "camera"           # IP cameras
-    IIOT = "iiot"               # Industrial IoT
-    NETWORK = "network"         # Network equipment
-    PRINTER = "printer"         # Printers
-    UNKNOWN = "unknown"         # Unknown devices
+    # Windows
+    "1,3,6,15,31,33,43,44,46,47,121,249,252": {"os": "Windows 10/11", "category": "workstation", "confidence": 0.95},
+    "1,15,3,6,44,46,47,31,33,121,249,252": {"os": "Windows Server", "category": "server", "confidence": 0.90},
 
+    # Smart Home Devices
+    "1,3,6,15,28,33": {"os": "Amazon Echo", "category": "smart_hub", "confidence": 0.97},
+    "1,3,6,12,15,28,42": {"os": "Philips Hue Bridge", "category": "bridge", "confidence": 0.99},
+    "1,3,6,15,28,42": {"os": "Google Home/Nest", "category": "smart_hub", "confidence": 0.96},
+    "1,3,6,12,15,28,40,41,42": {"os": "Sonos Speaker", "category": "smart_hub", "confidence": 0.98},
 
-class ProtocolType(str, Enum):
-    """IoT protocol types."""
-    MATTER = "matter"
-    THREAD = "thread"
-    ZIGBEE = "zigbee"
-    ZWAVE = "zwave"
-    WIFI = "wifi"
-    ETHERNET = "ethernet"
+    # IoT Devices
+    "1,3,6,12,15,28": {"os": "Generic IoT", "category": "iot", "confidence": 0.75},
+    "1,3,6": {"os": "Minimal DHCP", "category": "iot", "confidence": 0.60},
+    "1,3,6,15": {"os": "Basic IoT", "category": "iot", "confidence": 0.70},
 
+    # Printers
+    "1,3,6,15,44,47": {"os": "HP Printer", "category": "printer", "confidence": 0.95},
+    "1,3,6,15,12,44": {"os": "Brother Printer", "category": "printer", "confidence": 0.93},
+    "1,3,6,15,12,44,47": {"os": "Canon/Epson Printer", "category": "printer", "confidence": 0.90},
 
-# =============================================================================
-# OUI Database - Vendor Classification
-# =============================================================================
+    # Network Equipment
+    "1,3,6,15,66,67": {"os": "Network Equipment (PXE)", "category": "network", "confidence": 0.85},
+    "1,28,2,3,15,6,12": {"os": "Ubiquiti UniFi", "category": "network", "confidence": 0.95},
 
-# Comprehensive OUI database for device fingerprinting
-# Format: 'OUI_PREFIX': ('VENDOR', DeviceCategory, NetworkSegment)
-OUI_DATABASE: Dict[str, Tuple[str, DeviceCategory, NetworkSegment]] = {
-    # ----- POS / Payment Terminals -----
-    '00:0B:CD': ('Ingenico', DeviceCategory.POS, NetworkSegment.POS),
-    '00:17:EB': ('Ingenico', DeviceCategory.POS, NetworkSegment.POS),
-    '00:20:44': ('Verifone', DeviceCategory.POS, NetworkSegment.POS),
-    '00:0A:27': ('Verifone', DeviceCategory.POS, NetworkSegment.POS),
-    '00:13:B4': ('Verifone', DeviceCategory.POS, NetworkSegment.POS),
-    '00:E0:00': ('Clover', DeviceCategory.POS, NetworkSegment.POS),
-    '00:24:D1': ('PAX Technology', DeviceCategory.POS, NetworkSegment.POS),
-    '00:26:57': ('Castles Technology', DeviceCategory.POS, NetworkSegment.POS),
-    '64:62:66': ('Square', DeviceCategory.POS, NetworkSegment.POS),
+    # Security Cameras
+    "1,3,6,15,28,33,42": {"os": "Hikvision/Dahua", "category": "camera", "confidence": 0.92},
+    "1,3,6,28": {"os": "IP Camera", "category": "camera", "confidence": 0.80},
 
-    # ----- IP Cameras / CCTV -----
-    '00:0C:F6': ('Axis Communications', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    'AC:CC:8E': ('Axis Communications', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '00:40:8C': ('Hikvision', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '28:57:BE': ('Hikvision', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '54:C4:15': ('Hikvision', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '44:19:B6': ('Hikvision', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '00:1F:54': ('Dahua', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '3C:EF:8C': ('Dahua', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    'D4:6E:5C': ('Dahua', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '00:04:A5': ('Vivotek', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '00:E0:18': ('Bosch Security', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '00:0F:3D': ('D-Link (Cameras)', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '18:AE:BB': ('Reolink', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    '9C:8E:CD': ('Amcrest', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    'B0:C5:54': ('Ubiquiti UniFi Protect', DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
+    # ESP/Tuya IoT
+    "1,3,6,15,26,28,51,58,59,43": {"os": "ESP8266/ESP32", "category": "iot", "confidence": 0.88},
+    "1,3,28,6": {"os": "Tuya/Smart Life", "category": "iot", "confidence": 0.85},
 
-    # ----- NVR / Security Monitoring -----
-    '00:0D:7C': ('Synology (NVR)', DeviceCategory.SECMON, NetworkSegment.SECMON),
-    '00:11:32': ('Synology', DeviceCategory.SECMON, NetworkSegment.SECMON),
-    '00:24:21': ('QNAP', DeviceCategory.SECMON, NetworkSegment.SECMON),
-    '24:5E:BE': ('QNAP', DeviceCategory.SECMON, NetworkSegment.SECMON),
-    '00:18:4D': ('Milestone Systems', DeviceCategory.SECMON, NetworkSegment.SECMON),
+    # Gaming
+    "1,3,6,15,28,33,44": {"os": "PlayStation", "category": "gaming", "confidence": 0.90},
+    "1,3,6,15,31,33,43,44,46,47": {"os": "Xbox", "category": "gaming", "confidence": 0.88},
+    "1,3,6,12,15,17,28,42": {"os": "Nintendo Switch", "category": "gaming", "confidence": 0.92},
 
-    # ----- IoT / Smart Home (Matter/Thread capable) -----
-    'D4:F5:47': ('Google Nest', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '18:B4:30': ('Nest Labs', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '64:16:66': ('Nest Labs', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'F4:F5:D8': ('Google Home', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '30:FD:38': ('Google Nest Hub', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '94:EB:2C': ('Google', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'B0:FC:0D': ('Amazon Echo', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'F0:F0:A4': ('Amazon Alexa', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '68:54:FD': ('Amazon Echo', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'FC:65:DE': ('Amazon Echo', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'D0:73:D5': ('Ring', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '0C:47:C9': ('Ring', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '34:86:5D': ('Ecobee', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '44:61:32': ('Ecobee', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:17:88': ('Philips Hue', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'EC:B5:FA': ('Philips Hue', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:0D:6F': ('Ember (Zigbee)', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '84:18:26': ('Silicon Labs (Thread)', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '60:A4:23': ('Silicon Labs (Matter)', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:12:4B': ('Texas Instruments (Zigbee)', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:0B:57': ('Nordic Semiconductor (Thread)', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'C4:7C:8D': ('Nordic Semiconductor', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:1E:C0': ('Tado', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '70:EE:50': ('Netatmo', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:04:74': ('Honeywell', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    'C0:C1:C0': ('Honeywell', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:18:2A': ('Schneider Electric', DeviceCategory.IIOT, NetworkSegment.IIOT),
-    '00:13:A2': ('Digi International (Zigbee)', DeviceCategory.IIOT, NetworkSegment.IIOT),
+    # Raspberry Pi / Linux SBC
+    "1,3,6,12,15,28,42,121": {"os": "Raspberry Pi OS", "category": "sbc", "confidence": 0.90},
+    "1,28,2,3,15,6,119,12,44,47,26,121,42": {"os": "Debian/Ubuntu", "category": "workstation", "confidence": 0.88},
+}
 
-    # ----- Staff Devices / Clients -----
+# OUI Vendor Database (subset - expand as needed)
+OUI_DATABASE = {
     # Apple
-    '00:1C:B3': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:03:93': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:1D:4F': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'A4:5E:60': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'AC:BC:32': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'B0:34:95': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'B8:09:8A': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'D4:9A:20': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'DC:2B:2A': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    'F0:B4:79': ('Apple', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
+    "3C:06:30": "Apple", "40:ED:CF": "Apple", "78:31:C1": "Apple",
+    "A8:66:7F": "Apple", "B8:17:C2": "Apple", "F0:B4:79": "Apple",
+    # Amazon
+    "0C:47:C9": "Amazon", "34:D2:70": "Amazon", "68:37:E9": "Amazon",
+    "A0:02:DC": "Amazon", "FC:65:DE": "Amazon",
+    # Google
+    "48:D6:D5": "Google", "54:60:09": "Google", "F4:F5:D8": "Google",
     # Samsung
-    '00:00:F0': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:12:47': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:15:B9': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:17:D5': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:21:D1': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:26:37': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:E0:64': ('Samsung', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
+    "00:17:D5": "Samsung", "00:1D:F6": "Samsung", "00:21:19": "Samsung",
+    # Raspberry Pi
+    "B8:27:EB": "Raspberry Pi", "DC:A6:32": "Raspberry Pi", "E4:5F:01": "Raspberry Pi",
+    # Intel
+    "00:1F:3B": "Intel", "00:24:D7": "Intel", "3C:97:0E": "Intel",
     # Dell
-    '00:06:5B': ('Dell', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:08:74': ('Dell', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:0B:DB': ('Dell', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:0D:56': ('Dell', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:11:43': ('Dell', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:14:22': ('Dell', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
+    "00:14:22": "Dell", "00:21:9B": "Dell", "18:A9:9B": "Dell",
     # HP
-    '00:01:E6': ('HP', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:02:A5': ('HP', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:04:EA': ('HP', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:0A:57': ('HP', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    # Lenovo
-    '00:06:1B': ('Lenovo', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:09:2D': ('Lenovo', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:1A:6B': ('Lenovo', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:21:6A': ('Lenovo', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    # Intel (laptops/desktops)
-    '00:02:B3': ('Intel', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:03:47': ('Intel', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    '00:13:02': ('Intel', DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-
-    # ----- Printers -----
-    '00:00:48': ('HP Printer', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:60:B0': ('HP Printer', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:80:77': ('Brother', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:1B:A9': ('Brother', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:00:74': ('Canon', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:1E:8F': ('Canon', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:00:00': ('Xerox', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:00:AA': ('Xerox', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-    '00:21:B7': ('Epson', DeviceCategory.PRINTER, NetworkSegment.IIOT),
-
-    # ----- Network Equipment (internal monitoring) -----
-    '00:00:0C': ('Cisco', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '00:01:42': ('Cisco', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '00:17:94': ('Cisco', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '00:27:19': ('TP-Link', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '14:CC:20': ('TP-Link', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '50:C7:BF': ('TP-Link', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '00:1D:7E': ('Netgear', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '20:4E:7F': ('Netgear', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    'B4:FB:E4': ('Ubiquiti', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    '04:18:D6': ('Ubiquiti', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-    'DC:9F:DB': ('Ubiquiti', DeviceCategory.NETWORK, NetworkSegment.SECMON),
-}
-
-# Hostname patterns for classification
-HOSTNAME_PATTERNS: Dict[str, Tuple[DeviceCategory, NetworkSegment]] = {
-    r'(?i)(pos|payment|terminal|register|till)': (DeviceCategory.POS, NetworkSegment.POS),
-    r'(?i)(cam|camera|cctv|nvr|dvr|ipcam)': (DeviceCategory.CAMERA, NetworkSegment.CAMERAS),
-    r'(?i)(siem|ids|ips|sensor|monitor|nvr)': (DeviceCategory.SECMON, NetworkSegment.SECMON),
-    r'(?i)(nest|thermostat|ecobee|hue|alexa|echo|home)': (DeviceCategory.IIOT, NetworkSegment.IIOT),
-    r'(?i)(iphone|ipad|macbook|android|galaxy|pixel)': (DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    r'(?i)(laptop|desktop|workstation|pc-|win-)': (DeviceCategory.CLIENT, NetworkSegment.CLIENTS),
-    r'(?i)(printer|print|hp-|brother|canon|epson)': (DeviceCategory.PRINTER, NetworkSegment.IIOT),
+    "00:1E:0B": "HP", "00:21:5A": "HP", "3C:D9:2B": "HP",
+    # Philips (Hue)
+    "00:17:88": "Philips",
+    # Sonos
+    "5C:AA:FD": "Sonos", "78:28:CA": "Sonos",
+    # Hikvision
+    "00:0C:B5": "Hikvision", "44:19:B6": "Hikvision",
+    # Espressif (ESP32/ESP8266)
+    "24:0A:C4": "Espressif", "5C:CF:7F": "Espressif", "84:CC:A8": "Espressif",
+    "A4:CF:12": "Espressif", "C4:4F:33": "Espressif",
+    # Tuya
+    "10:D5:61": "Tuya", "D8:1F:12": "Tuya",
 }
 
 
-# =============================================================================
-# Device Fingerprint
-# =============================================================================
-
 @dataclass
-class DeviceFingerprint:
-    """Complete device fingerprint for classification."""
-    mac_address: str
-    ip_address: Optional[str] = None
-    hostname: Optional[str] = None
-    vendor: Optional[str] = None
-    category: DeviceCategory = DeviceCategory.UNKNOWN
-    segment: NetworkSegment = NetworkSegment.QUARANTINE
-    protocol: Optional[ProtocolType] = None
-    confidence: float = 0.0
-    first_seen: str = field(default_factory=lambda: datetime.now().isoformat())
-    last_seen: str = field(default_factory=lambda: datetime.now().isoformat())
+class IdentityScore:
+    """Result of device identity scoring."""
+    policy: str
+    confidence: float
+    vendor: str
+    os_fingerprint: str
+    category: str
+    signals: Dict[str, float]
+    reason: str
 
-    # Traffic metrics
-    bytes_in: int = 0
-    bytes_out: int = 0
-    packets_in: int = 0
-    packets_out: int = 0
-
-    # Classification metadata
-    oui_match: bool = False
-    hostname_match: bool = False
-    dhcp_fingerprint: Optional[str] = None
-    user_assigned: bool = False
-
-    # Trust Framework Integration (CIA Triad)
-    trust_level: int = 0                  # TrustLevel enum value
-    trust_verified: bool = False          # Trust assessment completed
-    certificate_issued: bool = False      # Device has certificate
-    attestation_verified: bool = False    # TPM/Neuro attestation verified
-    fingerprint_hash: Optional[str] = None  # Device fingerprint binding
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            'mac_address': self.mac_address,
-            'ip_address': self.ip_address,
-            'hostname': self.hostname,
-            'vendor': self.vendor,
-            'category': self.category.value,
-            'segment': self.segment.value,
-            'segment_name': self.segment.name,
-            'protocol': self.protocol.value if self.protocol else None,
-            'confidence': self.confidence,
-            'first_seen': self.first_seen,
-            'last_seen': self.last_seen,
-            'bytes_in': self.bytes_in,
-            'bytes_out': self.bytes_out,
-            'packets_in': self.packets_in,
-            'packets_out': self.packets_out,
-            # Trust information
-            'trust_level': self.trust_level,
-            'trust_level_name': TrustLevel(self.trust_level).name if self.trust_level >= 0 else 'UNKNOWN',
-            'trust_verified': self.trust_verified,
-            'certificate_issued': self.certificate_issued,
-            'attestation_verified': self.attestation_verified,
-        }
-
-
-@dataclass
-class SegmentStats:
-    """Traffic statistics for a network segment."""
-    segment: NetworkSegment
-    device_count: int = 0
-    active_count: int = 0
-    bytes_in: int = 0
-    bytes_out: int = 0
-    packets_in: int = 0
-    packets_out: int = 0
-    bandwidth_mbps: float = 0.0
-    # Time-series for visualization (last 60 samples)
-    traffic_history: List[Dict[str, Any]] = field(default_factory=list)
-
-    def add_sample(self, timestamp: float, bytes_in: int, bytes_out: int):
-        """Add a traffic sample for visualization."""
-        self.traffic_history.append({
-            'ts': timestamp,
-            'in': bytes_in,
-            'out': bytes_out,
-        })
-        # Keep last 60 samples (1 minute at 1-second intervals)
-        if len(self.traffic_history) > 60:
-            self.traffic_history = self.traffic_history[-60:]
-
-
-# =============================================================================
-# SDN Auto-Pilot Engine
-# =============================================================================
 
 class SDNAutoPilot:
-    """
-    Intelligent SDN controller for automatic device classification and segmentation.
+    """Premium SDN Auto Pilot with Heuristic Scoring Engine."""
 
-    Features:
-    - OUI-based vendor identification
-    - Protocol detection (Matter/Thread/Zigbee)
-    - Behavioral fingerprinting
-    - Automatic VLAN assignment
-    - OpenFlow rule generation
-    - Per-segment traffic monitoring
-    """
+    def __init__(self, db_path: Path = AUTOPILOT_DB):
+        self.db_path = db_path
+        self._ensure_db()
+        self._load_custom_fingerprints()
 
-    def __init__(self, ovs_bridge: str = 'FTS', config_path: str = '/etc/hookprobe',
-                 trust_enabled: bool = True):
-        self.ovs_bridge = ovs_bridge
-        self.config_path = Path(config_path)
-        self.trust_enabled = trust_enabled and TRUST_FRAMEWORK_AVAILABLE
+    def _ensure_db(self):
+        """Create database and tables."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._get_conn() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS device_identity (
+                    mac TEXT PRIMARY KEY,
+                    ip TEXT,
+                    hostname TEXT,
+                    vendor TEXT,
+                    dhcp_fingerprint TEXT,
+                    os_detected TEXT,
+                    category TEXT,
+                    policy TEXT DEFAULT 'quarantine',
+                    confidence REAL DEFAULT 0.0,
+                    signals TEXT,
+                    manual_override INTEGER DEFAULT 0,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    updated_at TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS device_metrics (
+                    mac TEXT PRIMARY KEY,
+                    avg_jitter_ms REAL DEFAULT 0,
+                    peak_jitter_ms REAL DEFAULT 0,
+                    anomaly_count INTEGER DEFAULT 0,
+                    last_anomaly TEXT,
+                    auto_quarantined INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS fingerprint_learning (
+                    fingerprint TEXT PRIMARY KEY,
+                    device_count INTEGER DEFAULT 0,
+                    common_vendor TEXT,
+                    common_category TEXT,
+                    last_seen TEXT
+                )
+            ''')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_policy ON device_identity(policy)')
+            conn.commit()
 
-        # Device registry
-        self.devices: Dict[str, DeviceFingerprint] = {}
-
-        # Segment statistics
-        self.segment_stats: Dict[NetworkSegment, SegmentStats] = {
-            seg: SegmentStats(segment=seg) for seg in NetworkSegment
-        }
-
-        # User overrides (MAC -> segment)
-        self.user_assignments: Dict[str, NetworkSegment] = {}
-
-        # OpenFlow flow cache
-        self._flow_cache: Set[str] = set()
-
-        # Device Trust Framework
-        self._trust_framework = None
-        if self.trust_enabled:
-            try:
-                self._trust_framework = get_trust_framework()
-                logger.info("Device Trust Framework integrated (CIA triad enabled)")
-            except Exception as e:
-                logger.warning(f"Trust Framework unavailable: {e}")
-                self.trust_enabled = False
-
-        # Load persistent config
-        self._load_config()
-
-        logger.info(f"SDN Auto-Pilot initialized for bridge {ovs_bridge} "
-                   f"(trust: {'enabled' if self.trust_enabled else 'disabled'})")
-
-    def _load_config(self):
-        """Load persistent configuration."""
-        config_file = self.config_path / 'sdn_autopilot.json'
-        if config_file.exists():
-            try:
-                with open(config_file) as f:
-                    config = json.load(f)
-                self.user_assignments = {
-                    mac: NetworkSegment(vlan)
-                    for mac, vlan in config.get('user_assignments', {}).items()
-                }
-                logger.info(f"Loaded {len(self.user_assignments)} user assignments")
-            except Exception as e:
-                logger.warning(f"Failed to load config: {e}")
-
-    def _save_config(self):
-        """Save persistent configuration."""
-        config_file = self.config_path / 'sdn_autopilot.json'
+    @contextmanager
+    def _get_conn(self):
+        """Get database connection."""
+        conn = sqlite3.connect(str(self.db_path), timeout=10)
+        conn.row_factory = sqlite3.Row
         try:
-            config = {
-                'user_assignments': {
-                    mac: seg.value for mac, seg in self.user_assignments.items()
-                }
+            yield conn
+        finally:
+            conn.close()
+
+    def _load_custom_fingerprints(self):
+        """Load custom fingerprint database if available."""
+        self.fingerprints = FINGERPRINT_DATABASE.copy()
+        if FINGERPRINT_DB_FILE.exists():
+            try:
+                custom = json.loads(FINGERPRINT_DB_FILE.read_text())
+                self.fingerprints.update(custom)
+                logger.info(f"Loaded {len(custom)} custom fingerprints")
+            except (json.JSONDecodeError, IOError) as e:
+                logger.debug(f"No custom fingerprints: {e}")
+
+        self.oui_db = OUI_DATABASE.copy()
+
+    # =========================================================================
+    # IDENTITY SCORING ENGINE - The 99% Accuracy Brain
+    # =========================================================================
+
+    def calculate_identity(self, mac: str, hostname: Optional[str] = None,
+                          dhcp_fingerprint: Optional[str] = None,
+                          open_ports: Optional[List[int]] = None) -> IdentityScore:
+        """
+        Heuristic Scoring Engine for device identity.
+
+        Weights:
+        - DHCP Option 55 (50%): Device DNA
+        - MAC OUI Vendor (20%): Manufacturer
+        - Hostname (20%): Name patterns
+        - Active Probing (10%): Port behavior
+        """
+        mac = mac.upper()
+        hostname = hostname.strip() if hostname else None
+        signals = {'dhcp': 0.0, 'oui': 0.0, 'hostname': 0.0, 'probe': 0.0}
+
+        # Get vendor from OUI
+        oui = mac[:8].replace('-', ':')
+        vendor = self.oui_db.get(oui, "Unknown")
+        os_fingerprint = "Unknown"
+        category = "unknown"
+
+        # 1. DHCP Fingerprint (50% weight)
+        if dhcp_fingerprint:
+            fp_info = self.fingerprints.get(dhcp_fingerprint)
+            if fp_info:
+                os_fingerprint = fp_info['os']
+                category = fp_info['category']
+                signals['dhcp'] = fp_info['confidence'] * 0.50
+            else:
+                self._learn_fingerprint(dhcp_fingerprint, vendor, category)
+                signals['dhcp'] = 0.10
+
+        # 2. OUI Vendor (20% weight)
+        if vendor != "Unknown":
+            signals['oui'] = 0.15
+            # Bonus for vendor/fingerprint alignment
+            if os_fingerprint != "Unknown" and vendor.lower() in os_fingerprint.lower():
+                signals['oui'] = 0.20
+
+        # 3. Hostname (20% weight)
+        if hostname:
+            hn = hostname.lower()
+            patterns = {
+                'homepod': ('smart_hub', 0.20), 'echo': ('smart_hub', 0.20),
+                'google-home': ('smart_hub', 0.20), 'iphone': ('phone', 0.18),
+                'ipad': ('tablet', 0.18), 'macbook': ('laptop', 0.18),
+                'android': ('phone', 0.15), 'galaxy': ('phone', 0.15),
+                'printer': ('printer', 0.18), 'cam': ('camera', 0.15),
             }
-            config_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_file, 'w') as f:
-                json.dump(config, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to save config: {e}")
+            for pattern, (cat, score) in patterns.items():
+                if pattern in hn:
+                    signals['hostname'] = max(signals['hostname'], score)
+                    if category == "unknown":
+                        category = cat
+                    break
+            if hn in ('', '*', 'unknown', 'null'):
+                signals['hostname'] = -0.05
+        else:
+            signals['hostname'] = -0.05
 
-    # =========================================================================
-    # Device Classification
-    # =========================================================================
+        # 4. Active Probing (10% weight)
+        if open_ports:
+            if any(p in open_ports for p in [22, 3389, 5900]):
+                signals['probe'] = 0.08
+                if category == "unknown":
+                    category = "workstation"
+            elif any(p in open_ports for p in [9100, 631, 515]):
+                signals['probe'] = 0.10
+                if category == "unknown":
+                    category = "printer"
 
-    def classify_device(
-        self,
-        mac_address: str,
-        ip_address: Optional[str] = None,
-        hostname: Optional[str] = None,
-        dhcp_vendor_class: Optional[str] = None,
-        dhcp_options: Optional[List[int]] = None,
-    ) -> DeviceFingerprint:
-        """
-        Classify a device and determine its network segment.
+        # Calculate total and determine policy
+        total = sum(max(0, s) for s in signals.values())
+        policy, reason = self._determine_policy(total, category, vendor, hostname)
 
-        Classification priority:
-        1. User manual assignment
-        2. Trust Framework verification (CIA triad)
-        3. OUI database match
-        4. Hostname pattern match
-        5. Default to quarantine (untrusted)
-
-        Returns:
-            DeviceFingerprint with classification results
-        """
-        mac = mac_address.upper()
-        oui = mac[:8]
-
-        # Check if already classified
-        if mac in self.devices:
-            fp = self.devices[mac]
-            fp.last_seen = datetime.now().isoformat()
-            if ip_address:
-                fp.ip_address = ip_address
-            if hostname:
-                fp.hostname = hostname
-
-            # Re-verify trust if enabled (periodic re-authentication)
-            if self.trust_enabled and self._trust_framework:
-                self._update_trust_status(fp, hostname, dhcp_vendor_class, dhcp_options)
-
-            return fp
-
-        # Initialize fingerprint
-        fp = DeviceFingerprint(
-            mac_address=mac,
-            ip_address=ip_address,
-            hostname=hostname
+        return IdentityScore(
+            policy=policy,
+            confidence=min(1.0, total),
+            vendor=vendor,
+            os_fingerprint=os_fingerprint,
+            category=category,
+            signals=signals,
+            reason=reason
         )
 
-        # 1. Check user override first
-        if mac in self.user_assignments:
-            fp.segment = self.user_assignments[mac]
-            fp.category = self._segment_to_category(fp.segment)
-            fp.confidence = 1.0
-            fp.user_assigned = True
-            fp.trust_level = TrustLevel.ENTERPRISE  # User-assigned gets highest trust
-            fp.trust_verified = True
-            logger.info(f"Device {mac} -> VLAN {fp.segment.value} (user assigned)")
+    def _determine_policy(self, score: float, category: str, vendor: str,
+                         hostname: Optional[str]) -> Tuple[str, str]:
+        """Determine policy based on score and category."""
+        if score >= 0.80:
+            if category in ('smart_hub', 'bridge'):
+                return 'normal', f"Verified {category} (score: {score:.2f})"
+            elif category in ('phone', 'tablet', 'laptop', 'workstation', 'gaming'):
+                return 'internet_only', f"Verified device (score: {score:.2f})"
+            elif category in ('printer', 'camera', 'iot', 'sensor'):
+                return 'lan_only', f"Verified IoT (score: {score:.2f})"
+            elif category == 'sbc' and 'raspberry' in vendor.lower():
+                return 'full_access', f"Management device (score: {score:.2f})"
+            return 'internet_only', f"Verified (score: {score:.2f})"
+        elif score >= 0.50:
+            if category in ('printer', 'camera', 'iot'):
+                return 'lan_only', f"Likely IoT (score: {score:.2f})"
+            return 'internet_only', f"Generic device (score: {score:.2f})"
+        elif vendor in ('Intel', 'Dell', 'HP', 'Lenovo'):
+            return 'internet_only', "Workstation vendor"
 
-        # 2. Trust Framework verification (CIA Triad)
-        elif self.trust_enabled and self._trust_framework:
-            trust_result = self._verify_device_trust(
-                mac, hostname, dhcp_vendor_class, dhcp_options
-            )
-            fp.trust_level = trust_result['trust_level']
-            fp.trust_verified = True
-            fp.certificate_issued = trust_result.get('certificate_verified', False)
-            fp.attestation_verified = trust_result.get('attestation_verified', False)
-            fp.fingerprint_hash = trust_result.get('fingerprint_hash')
+        # Zero-knowledge quarantine
+        no_hn = not hostname or hostname.lower() in ('', '*', 'unknown', 'null')
+        if no_hn and vendor == "Unknown":
+            return 'quarantine', "Zero-knowledge - awaiting identification"
+        elif score < 0.30:
+            return 'quarantine', f"Low confidence (score: {score:.2f})"
 
-            # Apply trust-based VLAN override
-            if trust_result['trust_level'] == TrustLevel.UNTRUSTED:
-                fp.segment = NetworkSegment.QUARANTINE
-                fp.confidence = 0.2
-                logger.warning(f"Device {mac} -> QUARANTINE (untrusted)")
-            elif trust_result['trust_level'] == TrustLevel.MINIMAL:
-                fp.segment = NetworkSegment.GUEST
-                fp.confidence = 0.5
-                logger.info(f"Device {mac} -> GUEST (minimal trust)")
-            else:
-                # Standard+ trust: use OUI classification
-                self._classify_by_oui_and_hostname(fp, oui, hostname)
+        return 'internet_only', f"Default (score: {score:.2f})"
 
-        # 3. No trust framework: OUI database lookup
-        elif oui in OUI_DATABASE:
-            vendor, category, segment = OUI_DATABASE[oui]
-            fp.vendor = vendor
-            fp.category = category
-            fp.segment = segment
-            fp.oui_match = True
-            fp.confidence = 0.9
-            fp.trust_level = TrustLevel.MINIMAL  # OUI-only is minimal trust
-            logger.info(f"Device {mac} -> VLAN {segment.value} ({vendor}, OUI match)")
-
-        # 4. Hostname pattern match
-        elif hostname:
-            for pattern, (category, segment) in HOSTNAME_PATTERNS.items():
-                if re.search(pattern, hostname):
-                    fp.category = category
-                    fp.segment = segment
-                    fp.hostname_match = True
-                    fp.confidence = 0.7
-                    fp.trust_level = TrustLevel.MINIMAL
-                    logger.info(f"Device {mac} -> VLAN {segment.value} (hostname: {hostname})")
-                    break
-
-        # 5. Default to quarantine for unknown devices
-        if fp.segment == NetworkSegment.QUARANTINE and not fp.user_assigned:
-            fp.confidence = 0.3
-            fp.trust_level = TrustLevel.UNTRUSTED
-            logger.warning(f"Unknown device {mac} -> VLAN 99 (quarantine)")
-
-        # Store device
-        self.devices[mac] = fp
-
-        # Update segment stats
-        self.segment_stats[fp.segment].device_count += 1
-
-        # Apply OVS flow rules
-        self._apply_vlan_flow(mac, fp.segment)
-
-        return fp
-
-    def _classify_by_oui_and_hostname(self, fp: DeviceFingerprint,
-                                       oui: str, hostname: Optional[str]):
-        """Apply OUI and hostname classification to fingerprint."""
-        if oui in OUI_DATABASE:
-            vendor, category, segment = OUI_DATABASE[oui]
-            fp.vendor = vendor
-            fp.category = category
-            fp.segment = segment
-            fp.oui_match = True
-            fp.confidence = 0.9
-            logger.info(f"Device {fp.mac_address} -> VLAN {segment.value} ({vendor})")
-
-        elif hostname:
-            for pattern, (category, segment) in HOSTNAME_PATTERNS.items():
-                if re.search(pattern, hostname):
-                    fp.category = category
-                    fp.segment = segment
-                    fp.hostname_match = True
-                    fp.confidence = 0.7
-                    break
-
-    def _verify_device_trust(
-        self,
-        mac_address: str,
-        hostname: Optional[str],
-        dhcp_vendor_class: Optional[str],
-        dhcp_options: Optional[List[int]]
-    ) -> Dict[str, Any]:
-        """
-        Verify device trust using CIA triad.
-
-        Returns:
-            Trust assessment result
-        """
-        if not self._trust_framework:
-            return {'trust_level': TrustLevel.MINIMAL}
-
-        try:
-            # Create fingerprint for trust framework
-            trust_fp = self._trust_framework.create_fingerprint(
-                mac_address=mac_address,
-                dhcp_hostname=hostname,
-                dhcp_vendor_class=dhcp_vendor_class,
-                dhcp_options=dhcp_options or []
-            )
-
-            # Assess trust
-            assessment = self._trust_framework.assess_trust(
-                mac_address=mac_address,
-                current_fingerprint=trust_fp,
-                segment_hint=None  # Let trust framework decide
-            )
-
-            return {
-                'trust_level': assessment.trust_level,
-                'assigned_vlan': assessment.assigned_vlan,
-                'oui_verified': assessment.oui_verified,
-                'fingerprint_verified': assessment.fingerprint_verified,
-                'certificate_verified': assessment.certificate_verified,
-                'attestation_verified': assessment.attestation_verified,
-                'confidence': assessment.confidence,
-                'fingerprint_hash': trust_fp.compute_fingerprint_hash() if trust_fp else None,
-            }
-
-        except Exception as e:
-            logger.error(f"Trust verification failed for {mac_address}: {e}")
-            return {'trust_level': TrustLevel.UNTRUSTED}
-
-    def _update_trust_status(
-        self,
-        fp: DeviceFingerprint,
-        hostname: Optional[str],
-        dhcp_vendor_class: Optional[str],
-        dhcp_options: Optional[List[int]]
-    ):
-        """Update trust status for existing device (re-verification)."""
-        if not self._trust_framework:
-            return
-
-        try:
-            trust_result = self._verify_device_trust(
-                fp.mac_address, hostname, dhcp_vendor_class, dhcp_options
-            )
-
-            old_trust = fp.trust_level
-            new_trust = trust_result['trust_level']
-
-            # Update trust info
-            fp.trust_level = new_trust
-            fp.trust_verified = True
-            fp.certificate_issued = trust_result.get('certificate_verified', False)
-            fp.attestation_verified = trust_result.get('attestation_verified', False)
-
-            # If trust degraded, move to appropriate segment
-            if new_trust < old_trust:
-                logger.warning(f"Device {fp.mac_address} trust degraded: L{old_trust} -> L{new_trust}")
-                if new_trust == TrustLevel.UNTRUSTED:
-                    old_segment = fp.segment
-                    fp.segment = NetworkSegment.QUARANTINE
-                    self.segment_stats[old_segment].device_count -= 1
-                    self.segment_stats[fp.segment].device_count += 1
-                    self._apply_vlan_flow(fp.mac_address, fp.segment)
-
-        except Exception as e:
-            logger.error(f"Trust update failed for {fp.mac_address}: {e}")
-
-    def _segment_to_category(self, segment: NetworkSegment) -> DeviceCategory:
-        """Map segment to default category."""
-        mapping = {
-            NetworkSegment.SECMON: DeviceCategory.SECMON,
-            NetworkSegment.POS: DeviceCategory.POS,
-            NetworkSegment.CLIENTS: DeviceCategory.CLIENT,
-            NetworkSegment.CAMERAS: DeviceCategory.CAMERA,
-            NetworkSegment.IIOT: DeviceCategory.IIOT,
-            NetworkSegment.GUEST: DeviceCategory.UNKNOWN,
-            NetworkSegment.QUARANTINE: DeviceCategory.UNKNOWN,
-        }
-        return mapping.get(segment, DeviceCategory.UNKNOWN)
-
-    def assign_device_segment(
-        self,
-        mac_address: str,
-        segment: NetworkSegment,
-        persist: bool = True
-    ) -> bool:
-        """
-        Manually assign a device to a network segment.
-
-        Args:
-            mac_address: Device MAC address
-            segment: Target network segment
-            persist: Save to persistent config
-
-        Returns:
-            True if successful
-        """
-        mac = mac_address.upper()
-
-        # Update or create fingerprint
-        if mac in self.devices:
-            old_segment = self.devices[mac].segment
-            self.segment_stats[old_segment].device_count -= 1
-
-            self.devices[mac].segment = segment
-            self.devices[mac].category = self._segment_to_category(segment)
-            self.devices[mac].user_assigned = True
-            self.devices[mac].confidence = 1.0
-        else:
-            fp = DeviceFingerprint(
-                mac_address=mac,
-                segment=segment,
-                category=self._segment_to_category(segment),
-                user_assigned=True,
-                confidence=1.0
-            )
-            self.devices[mac] = fp
-
-        # Update segment stats
-        self.segment_stats[segment].device_count += 1
-
-        # Store user assignment
-        self.user_assignments[mac] = segment
-
-        if persist:
-            self._save_config()
-
-        # Apply OpenFlow rule
-        self._apply_vlan_flow(mac, segment)
-
-        logger.info(f"Device {mac} manually assigned to VLAN {segment.value} ({segment.name})")
-        return True
+    def _learn_fingerprint(self, fingerprint: str, vendor: str, category: str):
+        """Learn unknown fingerprints."""
+        with self._get_conn() as conn:
+            conn.execute('''
+                INSERT INTO fingerprint_learning (fingerprint, device_count, common_vendor, common_category, last_seen)
+                VALUES (?, 1, ?, ?, ?)
+                ON CONFLICT(fingerprint) DO UPDATE SET
+                    device_count = device_count + 1,
+                    last_seen = excluded.last_seen
+            ''', (fingerprint, vendor, category, datetime.now().isoformat()))
+            conn.commit()
 
     # =========================================================================
-    # OpenFlow Integration
+    # OPENFLOW POLICY GENERATOR
     # =========================================================================
 
-    def _apply_vlan_flow(self, mac_address: str, segment: NetworkSegment):
-        """Apply OpenFlow rule for MAC-to-VLAN mapping."""
-        mac = mac_address.upper()
-        vlan_id = segment.value
-
-        # Create flow identifier for dedup
-        flow_id = f"{mac}:{vlan_id}"
-        if flow_id in self._flow_cache:
-            return
-
-        try:
-            # Add OVS flow for VLAN tagging
-            cmd = [
-                'ovs-ofctl', 'add-flow', self.ovs_bridge,
-                f'priority=200,dl_src={mac},actions=mod_vlan_vid:{vlan_id},normal'
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-
-            if result.returncode == 0:
-                self._flow_cache.add(flow_id)
-                logger.debug(f"Applied OVS flow: {mac} -> VLAN {vlan_id}")
-            else:
-                logger.warning(f"Failed to apply OVS flow: {result.stderr}")
-
-        except Exception as e:
-            logger.error(f"OVS flow error: {e}")
-
-    def generate_openflow_rules(self) -> List[str]:
-        """Generate all OpenFlow rules for current device mappings."""
+    def generate_openflow_rules(self, mac: str, ip: str, policy: str) -> List[Dict]:
+        """Generate OpenFlow rules for micro-segmentation on VLAN 100."""
+        mac = mac.upper()
         rules = []
 
-        # Table 0: Ingress classification
-        rules.append(f"table=0,priority=100,arp,actions=CONTROLLER")
-        rules.append(f"table=0,priority=100,udp,tp_dst=67,actions=CONTROLLER")
-        rules.append(f"table=0,priority=100,udp,tp_dst=68,actions=CONTROLLER")
-
-        # Per-device VLAN rules (priority 200)
-        for mac, fp in self.devices.items():
-            vlan_id = fp.segment.value
-            rules.append(
-                f"table=0,priority=200,dl_src={mac},"
-                f"actions=mod_vlan_vid:{vlan_id},goto_table:10"
-            )
-
-        # Table 10: Segment isolation
-        for src_seg in NetworkSegment:
-            for dst_seg in NetworkSegment:
-                if src_seg == dst_seg:
-                    # Same segment: allow
-                    rules.append(
-                        f"table=10,priority=100,dl_vlan={src_seg.value},"
-                        f"actions=normal"
-                    )
-                elif self._allow_inter_segment(src_seg, dst_seg):
-                    # Allowed cross-segment
-                    rules.append(
-                        f"table=10,priority=90,dl_vlan={src_seg.value},"
-                        f"reg0={dst_seg.value},actions=normal"
-                    )
-                else:
-                    # Block cross-segment (implicit drop)
-                    pass
-
         # Default drop
-        rules.append(f"table=10,priority=0,actions=drop")
+        rules.append({
+            'priority': 1, 'match': {'eth_src': mac},
+            'actions': [], 'comment': f"Default deny {mac}"
+        })
+
+        if policy == 'quarantine':
+            # Only DHCP/DNS to gateway
+            rules.append({
+                'priority': 100,
+                'match': {'eth_src': mac, 'udp_dst': 67},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow DHCP"
+            })
+            rules.append({
+                'priority': 100,
+                'match': {'eth_src': mac, 'udp_dst': 53},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow DNS"
+            })
+
+        elif policy == 'internet_only':
+            rules.append({
+                'priority': 500,
+                'match': {'eth_src': mac, 'ipv4_dst': GATEWAY_IP},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow gateway"
+            })
+            rules.append({
+                'priority': 400,
+                'match': {'eth_src': mac, 'ipv4_dst': LAN_SUBNET},
+                'actions': [], 'comment': "Block LAN"
+            })
+            rules.append({
+                'priority': 300,
+                'match': {'eth_src': mac},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow external"
+            })
+
+        elif policy == 'lan_only':
+            rules.append({
+                'priority': 500,
+                'match': {'eth_src': mac, 'ipv4_dst': LAN_SUBNET},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow LAN"
+            })
+            rules.append({
+                'priority': 450,
+                'match': {'eth_src': mac, 'ipv4_dst': GATEWAY_IP},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow gateway"
+            })
+
+        elif policy == 'normal':
+            rules.append({
+                'priority': 600,
+                'match': {'eth_src': mac},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Allow all (curated IoT)"
+            })
+
+        elif policy == 'full_access':
+            rules.append({
+                'priority': 1000,
+                'match': {'eth_src': mac},
+                'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
+                'comment': "Full access"
+            })
 
         return rules
 
-    def _allow_inter_segment(self, src: NetworkSegment, dst: NetworkSegment) -> bool:
-        """Check if inter-segment traffic is allowed."""
-        # Define allowed inter-segment communication
-        allowed = {
-            # SecMON can access all segments (for monitoring)
-            (NetworkSegment.SECMON, NetworkSegment.CAMERAS): True,
-            (NetworkSegment.SECMON, NetworkSegment.POS): True,
-            (NetworkSegment.SECMON, NetworkSegment.CLIENTS): True,
-            (NetworkSegment.SECMON, NetworkSegment.IIOT): True,
-            # Clients can access printers (IIoT segment)
-            (NetworkSegment.CLIENTS, NetworkSegment.IIOT): True,
-            # POS is isolated (no cross-segment by default)
-            # Cameras -> SecMON for NVR access
-            (NetworkSegment.CAMERAS, NetworkSegment.SECMON): True,
-        }
-        return allowed.get((src, dst), False)
+    def apply_policy(self, mac: str, ip: str, policy: str) -> bool:
+        """Apply OpenFlow rules via OVS."""
+        rules = self.generate_openflow_rules(mac, ip, policy)
+        logger.info(f"Applying [{policy}] to {mac} ({ip})")
+
+        for rule in rules:
+            self._apply_ovs_flow(rule)
+        return True
+
+    def _apply_ovs_flow(self, rule: Dict) -> bool:
+        """Apply a flow rule to OVS."""
+        try:
+            match_parts = []
+            for k, v in rule['match'].items():
+                if k == 'eth_src':
+                    match_parts.append(f"dl_src={v}")
+                elif k == 'ipv4_dst':
+                    match_parts.append(f"nw_dst={v}")
+                elif k == 'udp_dst':
+                    match_parts.append(f"tp_dst={v}")
+
+            match_str = ','.join(match_parts)
+            actions = "drop" if not rule['actions'] else "output:NORMAL"
+
+            cmd = ['ovs-ofctl', 'add-flow', 'FTS',
+                   f"priority={rule['priority']},{match_str},actions={actions}"]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except Exception as e:
+            logger.debug(f"OVS flow: {e}")
+            return False
 
     # =========================================================================
-    # Traffic Monitoring
+    # JITTER-BASED KILL SWITCH
     # =========================================================================
 
-    def update_device_traffic(
-        self,
-        mac_address: str,
-        bytes_in: int,
-        bytes_out: int,
-        packets_in: int = 0,
-        packets_out: int = 0
-    ):
-        """Update traffic counters for a device."""
-        mac = mac_address.upper()
+    def check_anomaly(self, mac: str, jitter_ms: float, threshold: float = 3.0) -> bool:
+        """
+        Auto-quarantine if jitter exceeds threshold multiplier of average.
+        Returns True if device was quarantined.
+        """
+        mac = mac.upper()
 
-        if mac not in self.devices:
-            # Auto-classify if new
-            self.classify_device(mac)
+        with self._get_conn() as conn:
+            row = conn.execute(
+                'SELECT avg_jitter_ms FROM device_metrics WHERE mac = ?', (mac,)
+            ).fetchone()
 
-        fp = self.devices[mac]
-        fp.bytes_in += bytes_in
-        fp.bytes_out += bytes_out
-        fp.packets_in += packets_in
-        fp.packets_out += packets_out
-        fp.last_seen = datetime.now().isoformat()
+            if row and row['avg_jitter_ms'] > 0:
+                avg = row['avg_jitter_ms']
+                if jitter_ms > avg * threshold:
+                    # Auto-quarantine
+                    conn.execute('''
+                        UPDATE device_metrics SET
+                            peak_jitter_ms = MAX(peak_jitter_ms, ?),
+                            anomaly_count = anomaly_count + 1,
+                            last_anomaly = ?,
+                            auto_quarantined = 1
+                        WHERE mac = ?
+                    ''', (jitter_ms, datetime.now().isoformat(), mac))
 
-        # Update segment stats
-        stats = self.segment_stats[fp.segment]
-        stats.bytes_in += bytes_in
-        stats.bytes_out += bytes_out
-        stats.packets_in += packets_in
-        stats.packets_out += packets_out
+                    conn.execute('''
+                        UPDATE device_identity SET policy = 'quarantine', updated_at = ?
+                        WHERE mac = ? AND manual_override = 0
+                    ''', (datetime.now().isoformat(), mac))
+                    conn.commit()
 
-        # Add time-series sample
-        stats.add_sample(time.time(), bytes_in, bytes_out)
+                    logger.warning(f"ANOMALY: {mac} jitter {jitter_ms}ms > {avg*threshold}ms - QUARANTINE")
+                    return True
 
-    def get_segment_stats(self, segment: NetworkSegment) -> Dict[str, Any]:
-        """Get statistics for a network segment."""
-        stats = self.segment_stats[segment]
+                # Update rolling average
+                new_avg = avg * 0.9 + jitter_ms * 0.1
+                conn.execute('UPDATE device_metrics SET avg_jitter_ms = ? WHERE mac = ?',
+                           (new_avg, mac))
+            else:
+                conn.execute('''
+                    INSERT OR REPLACE INTO device_metrics (mac, avg_jitter_ms, peak_jitter_ms)
+                    VALUES (?, ?, ?)
+                ''', (mac, jitter_ms, jitter_ms))
+            conn.commit()
 
-        # Calculate active devices (seen in last 5 minutes)
-        cutoff = datetime.now() - timedelta(minutes=5)
-        active = sum(
-            1 for fp in self.devices.values()
-            if fp.segment == segment and fp.last_seen > cutoff.isoformat()
-        )
-        stats.active_count = active
-
-        return {
-            'segment': segment.name,
-            'vlan_id': segment.value,
-            'device_count': stats.device_count,
-            'active_count': stats.active_count,
-            'bytes_in': stats.bytes_in,
-            'bytes_out': stats.bytes_out,
-            'packets_in': stats.packets_in,
-            'packets_out': stats.packets_out,
-            'bandwidth_mbps': stats.bandwidth_mbps,
-            'traffic_history': stats.traffic_history[-60:],  # Last 60 samples
-        }
-
-    def get_all_segment_stats(self) -> Dict[str, Dict[str, Any]]:
-        """Get statistics for all segments."""
-        return {
-            seg.name: self.get_segment_stats(seg)
-            for seg in NetworkSegment
-            if seg != NetworkSegment.QUARANTINE  # Exclude quarantine from dashboard
-        }
+        return False
 
     # =========================================================================
-    # Device Queries
+    # DEVICE SYNC
     # =========================================================================
 
-    def get_devices_by_segment(self, segment: NetworkSegment) -> List[DeviceFingerprint]:
-        """Get all devices in a segment."""
-        return [
-            fp for fp in self.devices.values()
-            if fp.segment == segment
-        ]
+    def sync_device(self, mac: str, ip: str, hostname: Optional[str] = None,
+                   dhcp_fingerprint: Optional[str] = None,
+                   apply_rules: bool = True) -> IdentityScore:
+        """Sync device through auto-pilot pipeline."""
+        mac = mac.upper()
+        identity = self.calculate_identity(mac, hostname, dhcp_fingerprint)
 
-    def get_all_devices(self) -> List[Dict[str, Any]]:
-        """Get all devices as list of dicts."""
-        return [fp.to_dict() for fp in self.devices.values()]
+        with self._get_conn() as conn:
+            # Check manual override
+            existing = conn.execute(
+                'SELECT policy, manual_override FROM device_identity WHERE mac = ?', (mac,)
+            ).fetchone()
 
-    def get_device(self, mac_address: str) -> Optional[DeviceFingerprint]:
-        """Get device by MAC address."""
-        return self.devices.get(mac_address.upper())
+            if existing and existing['manual_override']:
+                identity = IdentityScore(
+                    policy=existing['policy'],
+                    confidence=identity.confidence,
+                    vendor=identity.vendor,
+                    os_fingerprint=identity.os_fingerprint,
+                    category=identity.category,
+                    signals=identity.signals,
+                    reason="Manual override"
+                )
 
-    def get_segment_summary(self) -> Dict[str, Dict[str, Any]]:
-        """Get summary for dashboard cards."""
-        summary = {}
-        for seg in [
-            NetworkSegment.SECMON,
-            NetworkSegment.CLIENTS,
-            NetworkSegment.POS,
-            NetworkSegment.CAMERAS,
-            NetworkSegment.IIOT
-        ]:
-            stats = self.segment_stats[seg]
-            devices = self.get_devices_by_segment(seg)
+            now = datetime.now().isoformat()
+            conn.execute('''
+                INSERT INTO device_identity
+                    (mac, ip, hostname, vendor, dhcp_fingerprint, os_detected,
+                     category, policy, confidence, signals, first_seen, last_seen, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(mac) DO UPDATE SET
+                    ip = excluded.ip,
+                    hostname = COALESCE(excluded.hostname, hostname),
+                    vendor = excluded.vendor,
+                    dhcp_fingerprint = COALESCE(excluded.dhcp_fingerprint, dhcp_fingerprint),
+                    os_detected = excluded.os_detected,
+                    category = excluded.category,
+                    policy = CASE WHEN manual_override = 1 THEN policy ELSE excluded.policy END,
+                    confidence = excluded.confidence,
+                    signals = excluded.signals,
+                    last_seen = excluded.last_seen,
+                    updated_at = excluded.updated_at
+            ''', (mac, ip, hostname, identity.vendor, dhcp_fingerprint,
+                  identity.os_fingerprint, identity.category, identity.policy,
+                  identity.confidence, json.dumps(identity.signals), now, now, now))
+            conn.commit()
 
-            # Calculate throughput (simplified)
-            recent = stats.traffic_history[-10:] if stats.traffic_history else []
-            if len(recent) >= 2:
-                time_delta = recent[-1]['ts'] - recent[0]['ts']
-                if time_delta > 0:
-                    bytes_delta = sum(s['in'] + s['out'] for s in recent)
-                    stats.bandwidth_mbps = (bytes_delta * 8) / (time_delta * 1_000_000)
+        if apply_rules:
+            self.apply_policy(mac, ip, identity.policy)
 
-            # Calculate trust distribution for segment
-            trust_counts = {level.name: 0 for level in TrustLevel}
-            for fp in devices:
-                level_name = TrustLevel(fp.trust_level).name if fp.trust_level >= 0 else 'UNKNOWN'
-                if level_name in trust_counts:
-                    trust_counts[level_name] += 1
+        logger.info(f"{mac}: {identity.policy} ({identity.confidence:.2f}) - {identity.reason}")
+        return identity
 
-            summary[seg.name] = {
-                'vlan_id': seg.value,
-                'name': self._segment_display_name(seg),
-                'icon': self._segment_icon(seg),
-                'color': self._segment_color(seg),
-                'device_count': len(devices),
-                'active_count': stats.active_count,
-                'bytes_in': stats.bytes_in,
-                'bytes_out': stats.bytes_out,
-                'bandwidth_mbps': round(stats.bandwidth_mbps, 2),
-                'traffic_history': stats.traffic_history[-60:],
-                # Trust distribution
-                'trust_counts': trust_counts,
-                'trust_verified_count': sum(1 for fp in devices if fp.trust_verified),
-                'certificate_count': sum(1 for fp in devices if fp.certificate_issued),
-                'top_devices': [
-                    {
-                        'mac': fp.mac_address,
-                        'hostname': fp.hostname or fp.vendor or 'Unknown',
-                        'bytes': fp.bytes_in + fp.bytes_out,
-                        'trust_level': TrustLevel(fp.trust_level).name if fp.trust_level >= 0 else 'UNKNOWN',
-                        'trust_verified': fp.trust_verified,
-                        'certificate_issued': fp.certificate_issued,
-                    }
-                    for fp in sorted(devices, key=lambda x: x.bytes_in + x.bytes_out, reverse=True)[:5]
-                ]
-            }
+    def sync_all(self, devices: List[Dict], apply_rules: bool = True) -> Dict:
+        """Sync all devices."""
+        results = {'total': 0, 'quarantine': 0, 'internet_only': 0,
+                   'lan_only': 0, 'normal': 0, 'full_access': 0}
 
-        return summary
+        for d in devices:
+            if not d.get('mac'):
+                continue
+            identity = self.sync_device(
+                mac=d['mac'], ip=d.get('ip', ''),
+                hostname=d.get('hostname'),
+                dhcp_fingerprint=d.get('dhcp_sig') or d.get('dhcp_fingerprint'),
+                apply_rules=apply_rules
+            )
+            results['total'] += 1
+            results[identity.policy] = results.get(identity.policy, 0) + 1
 
-    def get_trust_summary(self) -> Dict[str, Any]:
-        """Get overall trust statistics across all devices."""
-        total_devices = len(self.devices)
-        if total_devices == 0:
+        return results
+
+    def get_device(self, mac: str) -> Optional[Dict]:
+        """Get device from database."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                'SELECT * FROM device_identity WHERE mac = ?', (mac.upper(),)
+            ).fetchone()
+            if row:
+                d = dict(row)
+                d['signals'] = json.loads(d['signals']) if d['signals'] else {}
+                return d
+        return None
+
+    def get_all_devices(self) -> List[Dict]:
+        """Get all devices."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                'SELECT * FROM device_identity ORDER BY last_seen DESC'
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def set_manual_policy(self, mac: str, policy: str) -> bool:
+        """Set manual policy override."""
+        with self._get_conn() as conn:
+            conn.execute('''
+                UPDATE device_identity SET policy = ?, manual_override = 1, updated_at = ?
+                WHERE mac = ?
+            ''', (policy, datetime.now().isoformat(), mac.upper()))
+            conn.commit()
+            return conn.total_changes > 0
+
+    def clear_manual_override(self, mac: str) -> bool:
+        """Clear manual override."""
+        with self._get_conn() as conn:
+            conn.execute('''
+                UPDATE device_identity SET manual_override = 0, updated_at = ?
+                WHERE mac = ?
+            ''', (datetime.now().isoformat(), mac.upper()))
+            conn.commit()
+            return conn.total_changes > 0
+
+    def get_stats(self) -> Dict:
+        """Get statistics."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                'SELECT policy, COUNT(*) as count FROM device_identity GROUP BY policy'
+            ).fetchall()
+            by_policy = {r['policy']: r['count'] for r in rows}
+
+            row = conn.execute('''
+                SELECT COUNT(*) as total, AVG(confidence) as avg_conf,
+                       SUM(manual_override) as manual
+                FROM device_identity
+            ''').fetchone()
+
             return {
-                'total_devices': 0,
-                'trust_framework_enabled': self.trust_enabled,
-                'by_trust_level': {},
-                'verified_count': 0,
-                'certificate_count': 0,
-                'attestation_count': 0,
+                'total': row['total'] if row else 0,
+                'avg_confidence': round(row['avg_conf'] or 0, 2),
+                'manual_overrides': row['manual'] if row else 0,
+                'by_policy': by_policy,
             }
-
-        # Count by trust level
-        trust_counts = {level.name: 0 for level in TrustLevel}
-        verified_count = 0
-        certificate_count = 0
-        attestation_count = 0
-
-        for fp in self.devices.values():
-            level_name = TrustLevel(fp.trust_level).name if fp.trust_level >= 0 else 'UNKNOWN'
-            if level_name in trust_counts:
-                trust_counts[level_name] += 1
-            if fp.trust_verified:
-                verified_count += 1
-            if fp.certificate_issued:
-                certificate_count += 1
-            if fp.attestation_verified:
-                attestation_count += 1
-
-        return {
-            'total_devices': total_devices,
-            'trust_framework_enabled': self.trust_enabled,
-            'by_trust_level': trust_counts,
-            'verified_count': verified_count,
-            'verified_percent': round(verified_count / total_devices * 100, 1),
-            'certificate_count': certificate_count,
-            'certificate_percent': round(certificate_count / total_devices * 100, 1),
-            'attestation_count': attestation_count,
-            'attestation_percent': round(attestation_count / total_devices * 100, 1),
-        }
-
-    def _segment_display_name(self, seg: NetworkSegment) -> str:
-        """Get display name for segment."""
-        names = {
-            NetworkSegment.SECMON: 'Security Monitoring',
-            NetworkSegment.CLIENTS: 'Staff Devices',
-            NetworkSegment.POS: 'Point of Sale',
-            NetworkSegment.CAMERAS: 'Security Cameras',
-            NetworkSegment.IIOT: 'IoT / Smart Devices',
-            NetworkSegment.GUEST: 'Guest Network',
-            NetworkSegment.QUARANTINE: 'Quarantine',
-        }
-        return names.get(seg, seg.name)
-
-    def _segment_icon(self, seg: NetworkSegment) -> str:
-        """Get icon class for segment."""
-        icons = {
-            NetworkSegment.SECMON: 'fa-shield-alt',
-            NetworkSegment.CLIENTS: 'fa-laptop',
-            NetworkSegment.POS: 'fa-credit-card',
-            NetworkSegment.CAMERAS: 'fa-video',
-            NetworkSegment.IIOT: 'fa-thermometer-half',
-            NetworkSegment.GUEST: 'fa-wifi',
-            NetworkSegment.QUARANTINE: 'fa-exclamation-triangle',
-        }
-        return icons.get(seg, 'fa-network-wired')
-
-    def _segment_color(self, seg: NetworkSegment) -> str:
-        """Get color for segment."""
-        colors = {
-            NetworkSegment.SECMON: '#17a2b8',     # Info blue
-            NetworkSegment.CLIENTS: '#28a745',    # Success green
-            NetworkSegment.POS: '#ffc107',        # Warning yellow
-            NetworkSegment.CAMERAS: '#6f42c1',    # Purple
-            NetworkSegment.IIOT: '#fd7e14',       # Orange
-            NetworkSegment.GUEST: '#20c997',      # Teal
-            NetworkSegment.QUARANTINE: '#dc3545', # Danger red
-        }
-        return colors.get(seg, '#6c757d')
 
 
 # =============================================================================
-# Singleton Instance
+# CONVENIENCE FUNCTIONS
 # =============================================================================
 
 _autopilot: Optional[SDNAutoPilot] = None
 
 
-def get_sdn_autopilot(ovs_bridge: str = 'FTS') -> SDNAutoPilot:
-    """Get the SDN Auto-Pilot singleton."""
+def get_autopilot() -> SDNAutoPilot:
+    """Get global Auto Pilot instance."""
     global _autopilot
     if _autopilot is None:
-        _autopilot = SDNAutoPilot(ovs_bridge=ovs_bridge)
+        _autopilot = SDNAutoPilot()
     return _autopilot
 
 
+def identify_device(mac: str, hostname: str = None,
+                   dhcp_fingerprint: str = None) -> IdentityScore:
+    """Quick device identification."""
+    return get_autopilot().calculate_identity(mac, hostname, dhcp_fingerprint)
+
+
+def sync_device(mac: str, ip: str, hostname: str = None,
+               dhcp_fingerprint: str = None) -> IdentityScore:
+    """Sync device through auto-pilot."""
+    return get_autopilot().sync_device(mac, ip, hostname, dhcp_fingerprint)
+
+
 # =============================================================================
-# CLI Interface
+# CLI
 # =============================================================================
 
-if __name__ == '__main__':
-    import argparse
+if __name__ == "__main__":
+    import sys
 
-    parser = argparse.ArgumentParser(description='SDN Auto-Pilot CLI')
-    parser.add_argument('command', choices=['classify', 'assign', 'list', 'stats', 'rules'])
-    parser.add_argument('--mac', help='MAC address')
-    parser.add_argument('--segment', type=int, help='VLAN segment ID')
-    parser.add_argument('--ip', help='IP address')
-    parser.add_argument('--hostname', help='Hostname')
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-    args = parser.parse_args()
+    if len(sys.argv) < 2:
+        print("Usage: sdn_autopilot.py <command> [args]")
+        print("\nCommands:")
+        print("  identify <mac> [hostname] [dhcp_sig]")
+        print("  sync <mac> <ip> [hostname] [dhcp_sig]")
+        print("  stats")
+        print("  list")
+        sys.exit(1)
 
-    logging.basicConfig(level=logging.INFO)
-    autopilot = get_sdn_autopilot()
+    cmd = sys.argv[1].lower()
+    pilot = get_autopilot()
 
-    if args.command == 'classify' and args.mac:
-        fp = autopilot.classify_device(args.mac, args.ip, args.hostname)
-        print(json.dumps(fp.to_dict(), indent=2))
+    if cmd == "identify" and len(sys.argv) >= 3:
+        mac = sys.argv[2]
+        hostname = sys.argv[3] if len(sys.argv) > 3 else None
+        dhcp_sig = sys.argv[4] if len(sys.argv) > 4 else None
 
-    elif args.command == 'assign' and args.mac and args.segment:
-        seg = NetworkSegment(args.segment)
-        autopilot.assign_device_segment(args.mac, seg)
-        print(f"Assigned {args.mac} to VLAN {args.segment} ({seg.name})")
+        result = pilot.calculate_identity(mac, hostname, dhcp_sig)
+        print(f"\nDevice: {mac}")
+        print(f"  Policy:     {result.policy}")
+        print(f"  Confidence: {result.confidence:.2f}")
+        print(f"  Vendor:     {result.vendor}")
+        print(f"  OS:         {result.os_fingerprint}")
+        print(f"  Category:   {result.category}")
+        print(f"  Reason:     {result.reason}")
+        print(f"  Signals:    {result.signals}")
 
-    elif args.command == 'list':
-        devices = autopilot.get_all_devices()
-        print(json.dumps(devices, indent=2))
+    elif cmd == "sync" and len(sys.argv) >= 4:
+        mac, ip = sys.argv[2], sys.argv[3]
+        hostname = sys.argv[4] if len(sys.argv) > 4 else None
+        dhcp_sig = sys.argv[5] if len(sys.argv) > 5 else None
 
-    elif args.command == 'stats':
-        stats = autopilot.get_segment_summary()
-        print(json.dumps(stats, indent=2))
+        result = pilot.sync_device(mac, ip, hostname, dhcp_sig)
+        print(f"\nSynced: {mac} -> {result.policy} ({result.confidence:.2f})")
 
-    elif args.command == 'rules':
-        rules = autopilot.generate_openflow_rules()
-        for rule in rules:
-            print(rule)
+    elif cmd == "stats":
+        stats = pilot.get_stats()
+        print(f"\nSDN Auto-Pilot Stats")
+        print(f"  Total: {stats['total']}")
+        print(f"  Avg Confidence: {stats['avg_confidence']}")
+        print(f"  By Policy: {stats['by_policy']}")
+
+    elif cmd == "list":
+        devices = pilot.get_all_devices()
+        print(f"\nDevices ({len(devices)}):")
+        for d in devices:
+            print(f"  {d['mac']}: {d['policy']} ({d.get('confidence', 0):.2f})")
