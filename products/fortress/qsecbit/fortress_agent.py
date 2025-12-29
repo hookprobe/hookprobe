@@ -133,14 +133,96 @@ OUI_DATABASE = {
 }
 
 
+# IEEE OUI file path (installed by ieee-data package or hwdata)
+OUI_FILE = Path('/usr/share/misc/oui.txt')
+OUI_FILE_ALT = Path('/usr/share/hwdata/oui.txt')
+_oui_cache: Dict[str, str] = {}
+_oui_loaded = False
+
+
+def is_locally_administered_mac(mac_address: str) -> bool:
+    """Check if MAC address is locally administered (randomized).
+
+    The second nibble of a MAC address indicates if it's locally administered:
+    - If the second least significant bit is 1, it's locally administered
+    - This means second nibble is 2, 3, 6, 7, A, B, E, or F
+
+    iOS 14+, Android 10+, Windows 10+ use MAC randomization by default.
+    """
+    if not mac_address or len(mac_address) < 2:
+        return False
+
+    # Get second character (second nibble)
+    mac_clean = mac_address.replace(':', '').replace('-', '').upper()
+    if len(mac_clean) < 2:
+        return False
+
+    second_nibble = mac_clean[1]
+    # Locally administered if second nibble is 2, 3, 6, 7, A, B, E, or F
+    return second_nibble in '2367ABEF'
+
+
+def _load_oui_database():
+    """Load IEEE OUI database from system file."""
+    global _oui_cache, _oui_loaded
+
+    if _oui_loaded:
+        return
+
+    _oui_loaded = True
+
+    # Try to load from IEEE OUI file
+    oui_file = None
+    for path in [OUI_FILE, OUI_FILE_ALT]:
+        if path.exists():
+            oui_file = path
+            break
+
+    if oui_file:
+        try:
+            with open(oui_file, 'r', errors='ignore') as f:
+                for line in f:
+                    if '(hex)' in line:
+                        parts = line.split('(hex)')
+                        if len(parts) >= 2:
+                            # Format: "00-00-00   (hex)		Xerox Corporation"
+                            prefix = parts[0].strip().replace('-', '').upper()
+                            vendor = parts[1].strip()
+                            if prefix and vendor:
+                                _oui_cache[prefix] = vendor
+            logger.info(f"Loaded {len(_oui_cache)} OUI entries from {oui_file}")
+        except Exception as e:
+            logger.warning(f"Failed to load OUI file: {e}")
+
+
 def lookup_manufacturer(mac_address: str) -> str:
-    """Lookup manufacturer from MAC OUI prefix."""
+    """Lookup manufacturer from MAC OUI prefix.
+
+    Uses IEEE OUI database file if available, falls back to built-in database.
+    Returns 'Private' for locally administered (randomized) MAC addresses.
+    """
     if not mac_address:
         return 'Unknown'
+
+    # Check if MAC is locally administered (randomized)
+    if is_locally_administered_mac(mac_address):
+        return 'Private'
+
+    # Get OUI prefix (first 6 hex chars without separators)
+    mac_clean = mac_address.replace(':', '').replace('-', '').upper()
+    oui_prefix = mac_clean[:6]
     mac_prefix = mac_address[:8].upper()
+
+    # Try IEEE OUI database first
+    _load_oui_database()
+    if oui_prefix in _oui_cache:
+        return _oui_cache[oui_prefix]
+
+    # Fall back to built-in database
     for manufacturer, ouis in OUI_DATABASE.items():
         if mac_prefix in ouis:
             return manufacturer
+
     return 'Unknown'
 
 
@@ -339,6 +421,12 @@ def detect_device_type(mac: str, hostname: str, manufacturer: str) -> str:
     if manufacturer_lower in ['hikvision', 'dahua']:
         return 'ip_camera'
 
+    # Priority 5: For randomized MACs, classify as mobile/laptop
+    # iOS 14+, Android 10+, Windows 10+ use MAC randomization by default
+    # These are typically phones, tablets, or modern laptops
+    if manufacturer_lower == 'private':
+        return 'mobile_device'
+
     return 'unknown'
 
 
@@ -417,6 +505,7 @@ def get_device_display_info(device_type: str) -> Dict[str, str]:
         'google_device': {'name': 'Google Device', 'icon': 'fa-google', 'category': 'smart_home'},
         'windows_device': {'name': 'Windows Device', 'icon': 'fa-windows', 'category': 'computer'},
         'philips_device': {'name': 'Philips Device', 'icon': 'fa-lightbulb', 'category': 'smart_home'},
+        'mobile_device': {'name': 'Mobile Device', 'icon': 'fa-mobile-alt', 'category': 'mobile'},
         'unknown': {'name': 'Unknown Device', 'icon': 'fa-question-circle', 'category': 'unknown'},
     }
     return DEVICE_DISPLAY.get(device_type, DEVICE_DISPLAY['unknown'])
