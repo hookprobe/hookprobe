@@ -575,10 +575,10 @@ See [CONTRIBUTING.md](../../docs/CONTRIBUTING.md) for development guidelines.
 ## 📚 References
 
 - [N8N Documentation](https://docs.n8n.io/)
-- [QSECBIT Algorithm](../../src/qsecbit/README.md)
-- [ClickHouse Integration](../../docs/guides/clickhouse-integration.md)
+- [QSECBIT Algorithm](../../core/qsecbit/README.md)
+- [ClickHouse Quick Start](../../docs/guides/clickhouse-quick-start.md)
 - [VictoriaMetrics Setup](https://victoriametrics.com/)
-- [HookProbe Architecture](../../docs/architecture/security-model.md)
+- [HookProbe Architecture](../../ARCHITECTURE.md)
 
 ---
 
