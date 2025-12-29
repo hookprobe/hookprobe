@@ -45,12 +45,13 @@
                                     </div>
                                     <div>
                                         <h2 class="mb-0" style="color: #fff; font-weight: 700;">
-                                            <span id="wifi-channel">--</span>
-                                            <small class="text-muted" id="wifi-band" style="font-size: 0.6em; color: #aaa !important;">--</small>
+                                            <span id="wifi-ssid">Loading...</span>
                                         </h2>
                                         <p class="mb-0" style="color: #888; font-size: 0.85em;">
                                             <i class="fas fa-wifi mr-1"></i>
-                                            <span id="wifi-ssid">Loading...</span>
+                                            <span id="wifi-band">--</span>
+                                            <span class="ml-2 text-muted">|</span>
+                                            <span class="ml-2">CH <span id="wifi-channel">--</span></span>
                                         </p>
                                     </div>
                                 </div>
@@ -673,17 +674,24 @@ function loadWifiIntelligence() {
 }
 
 function updateWifiDisplay(data) {
-    // Update channel and band
-    if (data.current_channel) {
-        $('#wifi-channel').text('CH ' + data.current_channel);
-        $('#wifi-band').text(data.band || '');
-    }
-
-    // Update SSID
+    // Update SSID (main heading)
     if (data.ssid) {
         $('#wifi-ssid').text(data.ssid);
     } else {
-        $('#wifi-ssid').text('Fortress Network');
+        $('#wifi-ssid').text('No WiFi');
+    }
+
+    // Update band and channel (subtitle)
+    if (data.current_channel) {
+        $('#wifi-channel').text(data.current_channel);
+    } else {
+        $('#wifi-channel').text('--');
+    }
+
+    if (data.band) {
+        $('#wifi-band').text(data.band);
+    } else {
+        $('#wifi-band').text('--');
     }
 
     // Update ML Score

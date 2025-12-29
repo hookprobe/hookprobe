@@ -133,6 +133,7 @@ import subprocess
 import re
 import sqlite3
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -382,16 +383,25 @@ def get_real_devices():
 
 def get_dfs_intelligence():
     """
-    Get real DFS/WiFi intelligence data from the database.
+    Get real DFS/WiFi intelligence data from multiple sources.
+
+    Priority:
+    1. DFS container API (fts-dfs on port 8050)
+    2. DFS database file
+    3. WiFi status data file (from qsecbit agent)
+    4. Direct hostapd_cli query
+    5. Calculate ML score from channel characteristics
 
     Returns dict with:
-    - ml_channel_score: Current ML-based channel safety score
+    - ml_channel_score: Current ML-based channel safety score (0-100)
     - radar_events: Count of radar events in last 30 days
     - channel_switches: Count of channel switches in last 30 days
     - current_channel: Current WiFi channel
     - next_optimization: Next scheduled optimization time
     - last_optimization: Last optimization timestamp
     """
+    import urllib.request
+
     data = {
         'ml_channel_score': None,
         'radar_events': 0,
@@ -402,7 +412,27 @@ def get_dfs_intelligence():
         'scan_mode': 'basic',
     }
 
-    # Try to get data from DFS database
+    # Priority 1: Try DFS container API
+    try:
+        dfs_api_url = os.environ.get('DFS_API_URL', 'http://fts-dfs:8050')
+        req = urllib.request.Request(f'{dfs_api_url}/api/status', timeout=3)
+        with urllib.request.urlopen(req, timeout=3) as response:
+            api_data = json.loads(response.read().decode())
+            if api_data.get('success'):
+                status = api_data.get('status', {})
+                data['current_channel'] = status.get('current_channel')
+                data['ml_channel_score'] = status.get('channel_score')
+                data['radar_events'] = status.get('radar_events_30d', 0)
+                data['channel_switches'] = status.get('channel_switches_30d', 0)
+                data['last_optimization'] = status.get('last_scan')
+                data['scan_mode'] = 'dfs_intelligence'
+                if data['ml_channel_score'] is not None:
+                    logger.debug(f"DFS API: channel={data['current_channel']} score={data['ml_channel_score']}")
+                    return data
+    except Exception as e:
+        logger.debug(f"DFS API not available: {e}")
+
+    # Priority 2: Try to get data from DFS database
     db_path = '/var/lib/hookprobe/dfs_intelligence.db'
     try:
         if Path(db_path).exists():
@@ -438,33 +468,56 @@ def get_dfs_intelligence():
                 data['last_optimization'] = row[1]
 
             conn.close()
+            data['scan_mode'] = 'dfs_database'
     except Exception as e:
         logger.debug(f"Failed to read DFS database: {e}")
 
-    # Get current channel from hostapd
-    try:
-        result = subprocess.run(
-            ['hostapd_cli', '-i', 'wlan0', 'status'],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if line.startswith('channel='):
-                    data['current_channel'] = int(line.split('=')[1])
-                    break
-    except Exception as e:
-        logger.debug(f"Failed to get hostapd status: {e}")
-
-    # Get ML channel score if DFS available
-    if DFS_AVAILABLE and data['current_channel']:
+    # Priority 3: Get WiFi info from qsecbit agent data file
+    wifi_file = DATA_DIR / 'wifi_status.json'
+    if wifi_file.exists() and data['current_channel'] is None:
         try:
-            db = DFSDatabase(db_path)
-            scorer = ChannelScorer(db)
-            score = scorer.score_channel(data['current_channel'])
-            if score:
-                data['ml_channel_score'] = round(score.total_score * 100)
+            wifi_data = json.loads(wifi_file.read_text())
+            if wifi_data.get('primary_channel'):
+                data['current_channel'] = wifi_data['primary_channel']
+                logger.debug(f"Got channel from wifi_status.json: {data['current_channel']}")
         except Exception as e:
-            logger.debug(f"Failed to get ML channel score: {e}")
+            logger.debug(f"Failed to read wifi_status.json: {e}")
+
+    # Priority 4: Get current channel from hostapd (fallback)
+    if data['current_channel'] is None:
+        try:
+            result = subprocess.run(
+                ['hostapd_cli', '-i', 'wlan0', 'status'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.startswith('channel='):
+                        data['current_channel'] = int(line.split('=')[1])
+                        break
+        except Exception as e:
+            logger.debug(f"Failed to get hostapd status: {e}")
+
+    # Priority 5: Calculate ML channel score
+    if data['ml_channel_score'] is None and data['current_channel']:
+        # Try DFS module scorer first
+        if DFS_AVAILABLE:
+            try:
+                db = DFSDatabase(db_path)
+                scorer = ChannelScorer(db)
+                score = scorer.score_channel(data['current_channel'])
+                if score:
+                    data['ml_channel_score'] = round(score.total_score * 100)
+                    data['scan_mode'] = 'dfs_intelligence'
+            except Exception as e:
+                logger.debug(f"DFS scorer failed: {e}")
+
+        # Fallback: Calculate score from channel characteristics
+        if data['ml_channel_score'] is None:
+            channel = data['current_channel']
+            score = calculate_channel_score(channel, data['radar_events'])
+            data['ml_channel_score'] = score
+            data['scan_mode'] = 'channel_analysis'
 
     # Get next optimization time from systemd timer
     try:
@@ -475,12 +528,72 @@ def get_dfs_intelligence():
         if result.returncode == 0 and '=' in result.stdout:
             timestamp = result.stdout.strip().split('=')[1]
             if timestamp and timestamp != 'n/a':
-                # Convert to readable format
                 data['next_optimization'] = timestamp
     except Exception as e:
         logger.debug(f"Failed to get optimization timer: {e}")
 
     return data
+
+
+def calculate_channel_score(channel: int, radar_events: int = 0) -> int:
+    """
+    Calculate ML-style channel score based on channel characteristics.
+
+    Factors:
+    - DFS status (UNII bands)
+    - Channel width capability
+    - Regulatory restrictions
+    - Radar event history
+    - Congestion (estimated from band)
+
+    Returns score 0-100 (higher = better)
+    """
+    if not channel:
+        return None
+
+    score = 100
+
+    # 5GHz DFS channels (UNII-2A: 52-64, UNII-2C: 100-144)
+    dfs_channels = list(range(52, 65)) + list(range(100, 145))
+    unii1_channels = list(range(36, 49))  # Non-DFS, always safe
+    unii3_channels = list(range(149, 166))  # Non-DFS, high power
+
+    # 2.4GHz channels
+    if channel <= 14:
+        # 2.4GHz is typically more congested
+        score = 60
+        # Channels 1, 6, 11 are non-overlapping (better)
+        if channel in [1, 6, 11]:
+            score = 70
+        return score
+
+    # 5GHz scoring
+    if channel in unii1_channels:
+        # UNII-1: No DFS, indoor, typically cleaner
+        score = 85
+    elif channel in unii3_channels:
+        # UNII-3: No DFS, high power, outdoor friendly
+        score = 80
+    elif channel in dfs_channels:
+        # DFS channels: Good spectrum but radar risk
+        score = 75
+
+        # UNII-2C (100-144) has weather radar - higher risk
+        if channel >= 100 and channel <= 144:
+            score = 70
+
+        # Penalize for radar events
+        if radar_events > 0:
+            score -= min(20, radar_events * 5)
+
+    # Channel width bonus (80MHz capable channels)
+    # Primary 80MHz channels: 36, 52, 100, 116, 132, 149
+    primary_80mhz = [36, 52, 100, 116, 132, 149]
+    if channel in primary_80mhz:
+        score += 5
+
+    # Clamp to 0-100
+    return max(0, min(100, score))
 
 
 def get_real_network_stats(devices):
@@ -896,11 +1009,12 @@ def index():
             # Only log, don't flash - we'll fall back to demo data
             logger.debug(f"Database not available: {e}")
 
-    # Priority 3: Fall back to demo data only if no real data found
+    # Priority 3: NO demo data - show empty state for real-world deployments
+    # User explicitly requested: "remove the demo data, dont need any other data -- use only real data"
     if not devices:
-        devices = get_demo_devices()
-        vlans = get_demo_vlans()
-        logger.info("Using demo data (no real devices found)")
+        devices = []
+        vlans = []
+        logger.info("No devices found - waiting for real device data from qsecbit agent")
 
     # Get real DFS/WiFi intelligence data
     try:
@@ -1001,16 +1115,7 @@ def device_detail(mac_address):
         except Exception as e:
             flash(f'Error loading device: {e}', 'warning')
 
-    if not device:
-        # Try demo data
-        for d in get_demo_devices():
-            if d['mac_address'].upper() == mac_address.upper():
-                classification = classify_device(d['mac_address'])
-                d['oui_category'] = classification.get('category', d.get('oui_category', 'unknown'))
-                d['auto_policy'] = classification.get('recommended_policy', d.get('auto_policy', 'default'))
-                device = format_device_for_template(d)
-                break
-
+    # No demo fallback - only show real devices
     if not device:
         flash('Device not found', 'warning')
         return redirect(url_for('sdn.index'))
@@ -1426,9 +1531,9 @@ def api_devices():
         except Exception:
             pass
 
-    # Priority 3: Fall back to demo data only if no real data found
+    # No demo fallback - return empty if no real devices found
     if not devices:
-        devices = get_demo_devices()
+        devices = []
 
     # Apply filters
     policy_filter = request.args.get('policy')
@@ -1718,9 +1823,9 @@ def export_devices():
         except Exception:
             pass
 
-    # Priority 3: Fall back to demo data
+    # No demo fallback - return empty if no real devices found
     if not devices:
-        devices = get_demo_devices()
+        devices = []
 
     if format_type == 'csv':
         import csv
