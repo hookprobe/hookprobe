@@ -430,7 +430,7 @@
                         <i class="fas fa-laptop" style="font-size: 4rem; color: #fff;"></i>
                     </div>
                     <div class="stats-content" style="position: relative; z-index: 1;">
-                        <h3 class="stats-number mb-1" id="stat-total" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.total_devices }}</h3>
+                        <h3 class="stats-number mb-1" id="stat-total" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.total or 0 }}</h3>
                         <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Total Devices</p>
                     </div>
                 </div>
@@ -443,7 +443,7 @@
                         <i class="fas fa-wifi" style="font-size: 4rem; color: #fff;"></i>
                     </div>
                     <div class="stats-content" style="position: relative; z-index: 1;">
-                        <h3 class="stats-number mb-1" id="stat-online" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.online_devices }}</h3>
+                        <h3 class="stats-number mb-1" id="stat-online" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.online or 0 }}</h3>
                         <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Online</p>
                     </div>
                 </div>
@@ -456,21 +456,21 @@
                         <i class="fas fa-power-off" style="font-size: 4rem; color: #fff;"></i>
                     </div>
                     <div class="stats-content" style="position: relative; z-index: 1;">
-                        <h3 class="stats-number mb-1" id="stat-offline" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.offline_devices }}</h3>
+                        <h3 class="stats-number mb-1" id="stat-offline" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.offline or 0 }}</h3>
                         <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Offline</p>
                     </div>
                 </div>
             </div>
 
-            <!-- Blocked Devices -->
+            <!-- Quarantined Devices -->
             <div class="col-lg-3 col-6 mb-3">
                 <div class="stats-card" style="background: linear-gradient(135deg, #c33764 0%, #1d2671 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(195,55,100,0.3); transition: transform 0.2s, box-shadow 0.2s;">
                     <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
                         <i class="fas fa-ban" style="font-size: 4rem; color: #fff;"></i>
                     </div>
                     <div class="stats-content" style="position: relative; z-index: 1;">
-                        <h3 class="stats-number mb-1" id="stat-blocked" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.blocked_devices }}</h3>
-                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Blocked</p>
+                        <h3 class="stats-number mb-1" id="stat-quarantined" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.quarantined or 0 }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Quarantined</p>
                     </div>
                 </div>
             </div>
@@ -620,8 +620,8 @@
                             <tbody>
                                 {% for device in devices %}
                                 <tr data-mac="{{ device.mac_address }}"
-                                    data-policy="{{ device.network_policy }}"
-                                    data-category="{{ device.oui_category }}"
+                                    data-policy="{{ device.policy }}"
+                                    data-category="{{ device.device_type }}"
                                     data-online="{{ 'true' if device.is_online else 'false' }}"
                                     data-blocked="{{ 'true' if device.is_blocked else 'false' }}">
                                     <td>
@@ -660,25 +660,31 @@
                                             'voice_assistant': 'fa-volume-up',
                                             'mobile': 'fa-mobile-alt',
                                             'network': 'fa-network-wired',
+                                            'homepod': 'fa-home',
+                                            'echo': 'fa-volume-up',
+                                            'google_home': 'fa-home',
+                                            'smart_hub': 'fa-home',
+                                            'bridge': 'fa-project-diagram',
+                                            'iphone': 'fa-mobile-alt',
+                                            'android': 'fa-mobile-alt',
+                                            'phone': 'fa-mobile-alt',
+                                            'tablet': 'fa-tablet-alt',
+                                            'laptop': 'fa-laptop',
+                                            'macbook': 'fa-laptop',
+                                            'raspberry_pi': 'fa-server',
+                                            'smart_plug': 'fa-plug',
+                                            'sensor': 'fa-thermometer-half',
                                             'unknown': 'fa-question'
                                         } %}
-                                        <i class="fas {{ category_icons.get(device.oui_category, 'fa-question') }} mr-1"></i>
-                                        {{ device.oui_category | capitalize }}
+                                        <i class="fas {{ category_icons.get(device.device_type, 'fa-question') }} mr-1"></i>
+                                        {{ device.device_type | replace('_', ' ') | capitalize }}
                                     </td>
                                     <td>
-                                        {% set policy_colors = {
-                                            'full_access': 'success',
-                                            'lan_only': 'info',
-                                            'internet_only': 'primary',
-                                            'isolated': 'danger',
-                                            'default': 'secondary'
-                                        } %}
-                                        <span class="badge badge-{{ policy_colors.get(device.network_policy, 'secondary') }}">
-                                            {{ device.network_policy | replace('_', ' ') | title }}
+                                        {# Use new policy colors from device_policies module #}
+                                        <span class="badge badge-{{ device.policy_color or 'secondary' }}">
+                                            <i class="fas {{ device.policy_icon or 'fa-question' }} mr-1"></i>
+                                            {{ device.policy_name or (device.policy | replace('_', ' ') | title) }}
                                         </span>
-                                        {% if device.network_policy != device.auto_policy %}
-                                        <i class="fas fa-user-edit text-warning ml-1" title="Manual override (OUI: {{ device.auto_policy }})"></i>
-                                        {% endif %}
                                     </td>
                                     <td>
                                         {% if device.internet_access %}
@@ -1365,11 +1371,11 @@ $(document).ready(function() {
         $.get('{{ url_for("sdn.api_stats") }}')
             .done(function(data) {
                 if (data.success && data.stats) {
-                    // Update statistics cards
-                    $('.small-box.bg-info .inner h3').text(data.stats.total_devices);
-                    $('.small-box.bg-success .inner h3').text(data.stats.online_devices);
-                    $('.small-box.bg-warning .inner h3').text(data.stats.offline_devices);
-                    $('.small-box.bg-danger .inner h3').text(data.stats.blocked_devices);
+                    // Update statistics cards (new simple device_policies module format)
+                    $('#stat-total').text(data.stats.total || 0);
+                    $('#stat-online').text(data.stats.online || 0);
+                    $('#stat-offline').text(data.stats.offline || 0);
+                    $('#stat-quarantined').text(data.stats.quarantined || 0);
                 }
             });
     }, 30000);  // 30 second refresh
