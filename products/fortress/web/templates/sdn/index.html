@@ -2,6 +2,202 @@
 
 {% block title %}SDN AI - Intelligent Network Control{% endblock %}
 
+{% block extra_css %}
+<style>
+/* Premium Stats Cards */
+.stats-card {
+    cursor: pointer;
+}
+.stats-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.35) !important;
+}
+
+/* Premium Table Styling */
+#devices-table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+#devices-table thead th {
+    background: linear-gradient(180deg, #2d2d3a 0%, #1f1f2e 100%);
+    border-bottom: 2px solid #00d9ff;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    color: #8b8b9a;
+    padding: 1rem 0.75rem;
+}
+#devices-table tbody tr {
+    transition: background-color 0.15s ease;
+}
+#devices-table tbody tr:hover {
+    background-color: rgba(0, 217, 255, 0.08) !important;
+}
+#devices-table td {
+    vertical-align: middle;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    padding: 0.75rem;
+}
+
+/* Action Buttons */
+#devices-table .btn-group .btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* Empty State */
+.dataTables_empty {
+    padding: 3rem 1rem !important;
+    text-align: center;
+}
+
+/* Premium Empty State */
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: #6c7a89;
+}
+.empty-state i {
+    font-size: 4rem;
+    margin-bottom: 1.5rem;
+    opacity: 0.5;
+}
+.empty-state h4 {
+    color: #8b8b9a;
+    margin-bottom: 0.75rem;
+}
+.empty-state p {
+    max-width: 400px;
+    margin: 0 auto 1.5rem;
+}
+
+/* Policy Reference Accordion */
+.policy-card {
+    transition: all 0.2s ease;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+.policy-card:hover {
+    border-color: rgba(0,217,255,0.3);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+/* Filters Card */
+.card-outline.card-primary {
+    border-top: 3px solid #00d9ff;
+}
+
+/* WAN Health Bar Improvements */
+#wan-health-bar .progress {
+    border-radius: 3px;
+    overflow: hidden;
+}
+#wan-health-bar .progress-bar {
+    transition: width 0.5s ease, background-color 0.3s ease;
+}
+
+/* Badge improvements */
+.badge-sm {
+    font-size: 0.65rem;
+    padding: 0.25rem 0.5rem;
+}
+
+/* Premium DataTable Pagination */
+.dataTables_wrapper .dataTables_paginate .paginate_button {
+    border: none;
+    background: rgba(255,255,255,0.05);
+    color: #8b8b9a !important;
+    margin: 0 2px;
+    border-radius: 4px;
+    padding: 0.375rem 0.75rem;
+    transition: all 0.2s ease;
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+    background: rgba(0,217,255,0.15) !important;
+    color: #00d9ff !important;
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button.current {
+    background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%) !important;
+    color: #fff !important;
+    box-shadow: 0 2px 8px rgba(0,217,255,0.3);
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* DataTable Info & Length Styling */
+.dataTables_wrapper .dataTables_info {
+    color: #6c7a89;
+    font-size: 0.85rem;
+}
+.dataTables_wrapper .dataTables_length select,
+.dataTables_wrapper .dataTables_filter input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #fff;
+    border-radius: 4px;
+    padding: 0.375rem 0.75rem;
+}
+.dataTables_wrapper .dataTables_filter input:focus {
+    border-color: #00d9ff;
+    box-shadow: 0 0 0 2px rgba(0,217,255,0.2);
+    outline: none;
+}
+
+/* Device Name Hover Effect */
+#devices-table tbody tr td:nth-child(3) {
+    color: #00d9ff;
+    cursor: pointer;
+}
+#devices-table tbody tr td:nth-child(3):hover {
+    text-decoration: underline;
+}
+
+/* Status Badge Animation */
+.badge-success, .badge-warning, .badge-danger {
+    animation: pulseGlow 2s infinite;
+}
+@keyframes pulseGlow {
+    0%, 100% { box-shadow: none; }
+    50% { box-shadow: 0 0 8px currentColor; }
+}
+
+/* Filter Card Enhancement */
+.card-outline.card-primary .card-header {
+    background: rgba(0,217,255,0.05);
+}
+.card-outline.card-primary .form-control {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(255,255,255,0.1);
+    color: #fff;
+}
+.card-outline.card-primary .form-control:focus {
+    border-color: #00d9ff;
+    box-shadow: 0 0 0 2px rgba(0,217,255,0.2);
+}
+
+/* Quick Action Buttons */
+.btn-outline-success, .btn-outline-danger, .btn-outline-info {
+    border-width: 1px;
+}
+.btn-outline-success:hover, .btn-outline-danger:hover, .btn-outline-info:hover {
+    transform: scale(1.05);
+}
+
+/* Tooltip Styling */
+.tooltip-inner {
+    background: #1a1a2e;
+    border: 1px solid rgba(0,217,255,0.3);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+.tooltip.bs-tooltip-top .arrow::before {
+    border-top-color: rgba(0,217,255,0.3);
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="content-header">
     <div class="container-fluid">
@@ -225,49 +421,57 @@
             </div>
         </div>
 
-        <!-- Statistics Cards -->
-        <div class="row">
+        <!-- Statistics Cards - Premium Design -->
+        <div class="row" id="stats-cards">
             <!-- Total Devices -->
-            <div class="col-lg-3 col-6">
-                <div class="small-box bg-info">
-                    <div class="inner">
-                        <h3>{{ stats.total_devices }}</h3>
-                        <p>Total Devices</p>
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(30,60,114,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-laptop" style="font-size: 4rem; color: #fff;"></i>
                     </div>
-                    <div class="icon"><i class="fas fa-laptop"></i></div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-total" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.total_devices }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Total Devices</p>
+                    </div>
                 </div>
             </div>
 
             <!-- Online Devices -->
-            <div class="col-lg-3 col-6">
-                <div class="small-box bg-success">
-                    <div class="inner">
-                        <h3>{{ stats.online_devices }}</h3>
-                        <p>Online</p>
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(17,153,142,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-wifi" style="font-size: 4rem; color: #fff;"></i>
                     </div>
-                    <div class="icon"><i class="fas fa-wifi"></i></div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-online" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.online_devices }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Online</p>
+                    </div>
                 </div>
             </div>
 
             <!-- Offline Devices -->
-            <div class="col-lg-3 col-6">
-                <div class="small-box bg-warning">
-                    <div class="inner">
-                        <h3>{{ stats.offline_devices }}</h3>
-                        <p>Offline</p>
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(245,87,108,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-power-off" style="font-size: 4rem; color: #fff;"></i>
                     </div>
-                    <div class="icon"><i class="fas fa-power-off"></i></div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-offline" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.offline_devices }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Offline</p>
+                    </div>
                 </div>
             </div>
 
             <!-- Blocked Devices -->
-            <div class="col-lg-3 col-6">
-                <div class="small-box bg-danger">
-                    <div class="inner">
-                        <h3>{{ stats.blocked_devices }}</h3>
-                        <p>Blocked</p>
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #c33764 0%, #1d2671 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(195,55,100,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-ban" style="font-size: 4rem; color: #fff;"></i>
                     </div>
-                    <div class="icon"><i class="fas fa-ban"></i></div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-blocked" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.blocked_devices }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Blocked</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -844,11 +1048,12 @@ $(document).ready(function() {
     // Pulse animation every 3 seconds
     setInterval(pulseWifiIcon, 3000);
 
-    // Initialize DataTable
+    // Initialize DataTable with premium styling
     var table = $('#devices-table').DataTable({
         "paging": true,
         "pageLength": 25,
         "lengthChange": true,
+        "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
         "searching": true,
         "ordering": true,
         "order": [[2, 'asc']],
@@ -857,7 +1062,25 @@ $(document).ready(function() {
         "responsive": true,
         "columnDefs": [
             { "orderable": false, "targets": [0, 10] }
-        ]
+        ],
+        "language": {
+            "emptyTable": '<div class="empty-state"><i class="fas fa-network-wired"></i><h4>No Devices Found</h4><p>Click <strong>Discover</strong> to scan your network for devices, or connect a device to your WiFi network.</p><button class="btn btn-primary" onclick="$(\'#btn-discover\').click()"><i class="fas fa-search mr-2"></i>Discover Devices</button></div>',
+            "zeroRecords": '<div class="empty-state"><i class="fas fa-filter"></i><h4>No Matching Devices</h4><p>No devices match your current filter criteria. Try adjusting your filters or clear them to see all devices.</p></div>',
+            "info": "Showing _START_ to _END_ of _TOTAL_ devices",
+            "infoEmpty": "No devices to display",
+            "infoFiltered": "(filtered from _MAX_ total devices)",
+            "paginate": {
+                "first": '<i class="fas fa-angle-double-left"></i>',
+                "last": '<i class="fas fa-angle-double-right"></i>',
+                "next": '<i class="fas fa-angle-right"></i>',
+                "previous": '<i class="fas fa-angle-left"></i>'
+            }
+        },
+        "drawCallback": function() {
+            // Style pagination buttons
+            $('.paginate_button').addClass('btn btn-sm');
+            $('.paginate_button.current').addClass('btn-primary');
+        }
     });
 
     // Filter by policy
@@ -1188,10 +1411,23 @@ $(document).ready(function() {
 
     // Update WAN Health bar
     function updateWanHealthBar(status) {
-        // Primary WAN
-        var primaryHealth = Math.round((status.primary_health || 0.95) * 100);
+        // Primary WAN - use explicit null/undefined check, not ||
+        var primaryHealth = (status.primary_health !== undefined && status.primary_health !== null)
+            ? Math.round(status.primary_health * 100)
+            : 0;  // Default to 0 if no data, not 95%
         $('#wan-primary-health').css('width', primaryHealth + '%');
-        $('#wan-primary-interface').text(status.primary_interface || 'eth0');
+        $('#wan-primary-interface').text(status.primary_interface || '--');
+
+        // Update primary progress bar color based on health
+        var primaryBar = $('#wan-primary-health');
+        primaryBar.removeClass('bg-success bg-warning bg-danger');
+        if (primaryHealth >= 70) {
+            primaryBar.addClass('bg-success');
+        } else if (primaryHealth >= 40) {
+            primaryBar.addClass('bg-warning');
+        } else {
+            primaryBar.addClass('bg-danger');
+        }
 
         // Determine if primary is active (multiple checks for reliability)
         var primaryIsActive = (
@@ -1202,18 +1438,31 @@ $(document).ready(function() {
 
         // Primary status badge
         var primaryBadge = $('#wan-primary-status');
-        if (primaryIsActive) {
+        if (primaryIsActive && primaryHealth > 0) {
             primaryBadge.removeClass('badge-secondary badge-danger').addClass('badge-success').text('ACTIVE');
-        } else if (primaryHealth < 50 || status.primary_status === 'FAILED') {
-            primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('FAILED');
+        } else if (primaryHealth === 0 || status.primary_status === 'FAILED' || !status.primary_interface) {
+            primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('DOWN');
         } else {
             primaryBadge.removeClass('badge-success badge-danger').addClass('badge-secondary').text('STANDBY');
         }
 
-        // Backup WAN
-        var backupHealth = Math.round((status.backup_health || 0.72) * 100);
+        // Backup WAN - use explicit null/undefined check
+        var backupHealth = (status.backup_health !== undefined && status.backup_health !== null)
+            ? Math.round(status.backup_health * 100)
+            : 0;  // Default to 0 if no data
         $('#wan-backup-health').css('width', backupHealth + '%');
-        $('#wan-backup-interface').text(status.backup_interface || 'wwan0');
+        $('#wan-backup-interface').text(status.backup_interface || '--');
+
+        // Update backup progress bar color based on health
+        var backupBar = $('#wan-backup-health');
+        backupBar.removeClass('bg-success bg-warning bg-danger');
+        if (backupHealth >= 70) {
+            backupBar.addClass('bg-success');
+        } else if (backupHealth >= 40) {
+            backupBar.addClass('bg-warning');
+        } else {
+            backupBar.addClass('bg-danger');
+        }
 
         // Determine if backup is active
         var backupIsActive = (
@@ -1224,10 +1473,10 @@ $(document).ready(function() {
 
         // Backup status badge
         var backupBadge = $('#wan-backup-status');
-        if (backupIsActive) {
+        if (backupIsActive && backupHealth > 0) {
             backupBadge.removeClass('badge-secondary badge-danger').addClass('badge-warning').text('ACTIVE');
-        } else if (backupHealth < 30 || status.backup_status === 'FAILED') {
-            backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('FAILED');
+        } else if (backupHealth === 0 || status.backup_status === 'FAILED' || !status.backup_interface) {
+            backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('DOWN');
         } else {
             backupBadge.removeClass('badge-warning badge-danger').addClass('badge-secondary').text('STANDBY');
         }
