@@ -848,31 +848,226 @@ def get_all_interface_traffic() -> List[Dict]:
     return traffic
 
 
+# =============================================================================
+# LTE/Metered Connection Usage Tracking
+# =============================================================================
+
+# Data directory for persistent storage
+LTE_USAGE_FILE = Path('/opt/hookprobe/fortress/data/lte_usage.json')
+LTE_LIMITS_FILE = Path('/etc/hookprobe/lte-limits.json')
+
+
+def _ensure_data_dir():
+    """Ensure data directory exists."""
+    LTE_USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _get_lte_interface() -> Optional[str]:
+    """Find the LTE/metered interface."""
+    interfaces = get_interfaces()
+    for iface in interfaces:
+        if iface['type'] == 'lte' and iface['state'] == 'UP':
+            return iface['name']
+    # Check common LTE interface names
+    for name in ['wwan0', 'usb0', 'enp0s20u1', 'wwp0s20u1']:
+        if Path(f'/sys/class/net/{name}').exists():
+            return name
+    return None
+
+
+def _load_lte_usage() -> Dict:
+    """Load LTE usage data from persistent storage."""
+    default = {
+        'interface': None,
+        'month': datetime.now().strftime('%Y-%m'),
+        'day': datetime.now().strftime('%Y-%m-%d'),
+        'monthly_bytes': 0,
+        'daily_bytes': 0,
+        'last_rx_bytes': 0,
+        'last_tx_bytes': 0,
+        'last_update': None,
+        'reset_history': [],
+    }
+
+    if not LTE_USAGE_FILE.exists():
+        return default
+
+    try:
+        data = json.loads(LTE_USAGE_FILE.read_text())
+        # Check for month rollover - auto-reset monthly counter
+        current_month = datetime.now().strftime('%Y-%m')
+        if data.get('month') != current_month:
+            logger.info(f"New month detected, resetting monthly LTE usage counter")
+            data['monthly_bytes'] = 0
+            data['month'] = current_month
+
+        # Check for day rollover - auto-reset daily counter
+        current_day = datetime.now().strftime('%Y-%m-%d')
+        if data.get('day') != current_day:
+            data['daily_bytes'] = 0
+            data['day'] = current_day
+
+        return data
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning(f"Could not load LTE usage data: {e}")
+        return default
+
+
+def _save_lte_usage(data: Dict):
+    """Save LTE usage data to persistent storage."""
+    _ensure_data_dir()
+    try:
+        data['last_update'] = datetime.now().isoformat()
+        LTE_USAGE_FILE.write_text(json.dumps(data, indent=2))
+    except IOError as e:
+        logger.error(f"Could not save LTE usage data: {e}")
+
+
+def update_lte_usage(interface: Optional[str] = None) -> Dict:
+    """Update LTE usage by reading current interface statistics.
+
+    This function should be called periodically (e.g., every 30s) to track
+    cumulative data usage. It calculates the delta from the last reading
+    and adds it to the cumulative totals.
+    """
+    iface = interface or _get_lte_interface()
+    if not iface:
+        return {'error': 'No LTE interface found'}
+
+    # Get current interface stats
+    stats = get_interface_stats(iface)
+    current_rx = stats['rx_bytes']
+    current_tx = stats['tx_bytes']
+    current_total = current_rx + current_tx
+
+    # Load stored usage
+    usage = _load_lte_usage()
+
+    # Calculate delta (handle counter reset/overflow)
+    last_rx = usage.get('last_rx_bytes', 0)
+    last_tx = usage.get('last_tx_bytes', 0)
+
+    # If current is less than last, counter was reset (reboot)
+    if current_rx >= last_rx and current_tx >= last_tx:
+        delta_rx = current_rx - last_rx
+        delta_tx = current_tx - last_tx
+    else:
+        # Counter reset detected - just use current values as delta
+        # This happens after system reboot
+        delta_rx = current_rx
+        delta_tx = current_tx
+        logger.info(f"LTE counter reset detected, using current values as delta")
+
+    delta_bytes = delta_rx + delta_tx
+
+    # Update cumulative totals
+    usage['interface'] = iface
+    usage['monthly_bytes'] = usage.get('monthly_bytes', 0) + delta_bytes
+    usage['daily_bytes'] = usage.get('daily_bytes', 0) + delta_bytes
+    usage['last_rx_bytes'] = current_rx
+    usage['last_tx_bytes'] = current_tx
+
+    # Save updated usage
+    _save_lte_usage(usage)
+
+    return {
+        'interface': iface,
+        'delta_bytes': delta_bytes,
+        'monthly_bytes': usage['monthly_bytes'],
+        'daily_bytes': usage['daily_bytes'],
+        'monthly_mb': round(usage['monthly_bytes'] / (1024 * 1024), 2),
+        'daily_mb': round(usage['daily_bytes'] / (1024 * 1024), 2),
+    }
+
+
+def reset_lte_usage(reset_type: str = 'all') -> Dict:
+    """Reset LTE usage counters.
+
+    Args:
+        reset_type: 'all' to reset both daily and monthly,
+                   'daily' to reset only daily counter,
+                   'monthly' to reset only monthly counter
+    """
+    usage = _load_lte_usage()
+
+    # Record reset in history
+    reset_record = {
+        'timestamp': datetime.now().isoformat(),
+        'type': reset_type,
+        'monthly_bytes_before': usage.get('monthly_bytes', 0),
+        'daily_bytes_before': usage.get('daily_bytes', 0),
+    }
+
+    if reset_type in ['all', 'monthly']:
+        usage['monthly_bytes'] = 0
+        usage['month'] = datetime.now().strftime('%Y-%m')
+
+    if reset_type in ['all', 'daily']:
+        usage['daily_bytes'] = 0
+        usage['day'] = datetime.now().strftime('%Y-%m-%d')
+
+    # Keep last 10 reset records
+    usage.setdefault('reset_history', []).append(reset_record)
+    usage['reset_history'] = usage['reset_history'][-10:]
+
+    _save_lte_usage(usage)
+
+    logger.info(f"LTE usage reset ({reset_type}): was {reset_record['monthly_bytes_before']} bytes monthly")
+
+    return {
+        'success': True,
+        'reset_type': reset_type,
+        'previous_monthly_mb': round(reset_record['monthly_bytes_before'] / (1024 * 1024), 2),
+        'previous_daily_mb': round(reset_record['daily_bytes_before'] / (1024 * 1024), 2),
+    }
+
+
+def get_lte_usage() -> Dict:
+    """Get current LTE usage without updating counters."""
+    usage = _load_lte_usage()
+    return {
+        'interface': usage.get('interface'),
+        'monthly_bytes': usage.get('monthly_bytes', 0),
+        'daily_bytes': usage.get('daily_bytes', 0),
+        'monthly_mb': round(usage.get('monthly_bytes', 0) / (1024 * 1024), 2),
+        'daily_mb': round(usage.get('daily_bytes', 0) / (1024 * 1024), 2),
+        'month': usage.get('month'),
+        'day': usage.get('day'),
+        'last_update': usage.get('last_update'),
+    }
+
+
 def _get_cost_status(backup_iface: Optional[str]) -> Dict:
     """Get LTE/metered connection cost status.
 
-    Reads user-configured limits from /etc/hookprobe/lte-limits.json
+    Reads actual interface usage and user-configured limits.
     Returns None for budget values when user hasn't set limits (unlimited).
     """
-    interface = backup_iface or 'wwan0'
+    interface = backup_iface or _get_lte_interface() or 'wwan0'
+
+    # Update usage tracking (reads from interface stats)
+    update_lte_usage(interface)
+
+    # Get current usage
+    usage = get_lte_usage()
 
     # Default: unlimited (None means no limit set by user)
     status = {
         'interface': interface,
-        'daily_usage_mb': 0,
+        'daily_usage_mb': usage['daily_mb'],
         'daily_budget_mb': None,  # None = unlimited
-        'monthly_usage_mb': 0,
+        'monthly_usage_mb': usage['monthly_mb'],
         'monthly_budget_mb': None,  # None = unlimited
         'cost_per_gb': None,  # None = not tracking cost
         'current_cost': 0.0,
         'budget_remaining': None,  # None = no budget set
+        'last_update': usage.get('last_update'),
     }
 
     # Try to read user-configured limits
-    limits_file = Path('/etc/hookprobe/lte-limits.json')
-    if limits_file.exists():
+    if LTE_LIMITS_FILE.exists():
         try:
-            limits = json.loads(limits_file.read_text())
+            limits = json.loads(LTE_LIMITS_FILE.read_text())
             # Only set budget if user has configured a non-zero limit
             if limits.get('daily_budget_mb') and limits['daily_budget_mb'] > 0:
                 status['daily_budget_mb'] = limits['daily_budget_mb']
@@ -882,16 +1077,6 @@ def _get_cost_status(backup_iface: Optional[str]) -> Dict:
                 status['cost_per_gb'] = limits['cost_per_gb']
         except (json.JSONDecodeError, IOError) as e:
             logger.debug(f"Could not read lte-limits.json: {e}")
-
-    # Try to read actual usage from agent data file
-    usage_file = Path('/opt/hookprobe/fortress/data/lte_usage.json')
-    if usage_file.exists():
-        try:
-            usage = json.loads(usage_file.read_text())
-            status['daily_usage_mb'] = usage.get('daily_usage_mb', 0)
-            status['monthly_usage_mb'] = usage.get('monthly_usage_mb', 0)
-        except (json.JSONDecodeError, IOError):
-            pass
 
     # Calculate cost and remaining budget if cost tracking is enabled
     if status['cost_per_gb'] is not None and status['cost_per_gb'] > 0:
