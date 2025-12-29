@@ -575,6 +575,37 @@ class CNAMEUncloaker:
         'quad9.net', 'opendns.com', 'cleanbrowsing.org',
     }
 
+    # OS/Browser connectivity check domains - CRITICAL: NEVER block these
+    # Blocking these breaks network detection and captive portal login
+    SYSTEM_CONNECTIVITY_DOMAINS = {
+        # Microsoft NCSI (Network Connectivity Status Indicator)
+        'msftconnecttest.com', 'msftncsi.com', 'dns.msftncsi.com',
+        'www.msftconnecttest.com', 'ipv6.msftconnecttest.com',
+        # Apple Captive Network Assistant
+        'captive.apple.com', 'www.apple.com',
+        # Google connectivity check
+        'connectivitycheck.gstatic.com', 'clients3.google.com',
+        'connectivitycheck.android.com', 'play.googleapis.com',
+        # Mozilla/Firefox captive portal detection
+        'detectportal.firefox.com',
+        # Ubuntu/Debian connectivity check
+        'connectivity-check.ubuntu.com', 'nmcheck.gnome.org',
+        # Chromebook
+        'clients1.google.com',
+        # Generic connectivity
+        'captive.g.aaplimg.com',
+    }
+
+    # Known security/proxy service domains (legitimate web security)
+    SECURITY_SERVICE_DOMAINS = {
+        'webdefence.global.blackspider.com',  # Symantec Web Security
+        'pac.webdefence.global.blackspider.com',  # Proxy auto-config
+        'wss.webdefence.global.blackspider.com',
+        'zscaler.com', 'zscaler.net', 'zscloud.net',  # Zscaler
+        'forcepoint.net',  # Forcepoint web security
+        'bluecoat.com',  # Symantec BlueCoat
+    }
+
     def __init__(self, config: AdBlockConfig):
         self.config = config
         self.cache: Dict[str, Tuple[List[str], datetime]] = {}
@@ -651,15 +682,30 @@ class CNAMEUncloaker:
     def _is_legitimate_infrastructure(self, domain: str) -> bool:
         """Check if domain belongs to legitimate CDN/infrastructure."""
         domain_lower = domain.lower()
-        # Check exact match
+
+        # Check system connectivity domains first (highest priority)
+        if domain_lower in self.SYSTEM_CONNECTIVITY_DOMAINS:
+            return True
+
+        # Check security services
+        if domain_lower in self.SECURITY_SERVICE_DOMAINS:
+            return True
+
+        # Check exact match for infrastructure
         if domain_lower in self.LEGITIMATE_INFRASTRUCTURE:
             return True
+
         # Check parent domains (e.g., subdomain.aaplimg.com -> aaplimg.com)
         parts = domain_lower.split('.')
         for i in range(len(parts)):
             parent = '.'.join(parts[i:])
             if parent in self.LEGITIMATE_INFRASTRUCTURE:
                 return True
+            if parent in self.SYSTEM_CONNECTIVITY_DOMAINS:
+                return True
+            if parent in self.SECURITY_SERVICE_DOMAINS:
+                return True
+
         return False
 
     def _is_whitelisted(self, domain: str, whitelist: Set[str]) -> bool:
@@ -1119,10 +1165,11 @@ class AIAdBlocker:
         Classify a domain using all available methods.
 
         Order of checks:
-        1. Whitelist (allow)
-        2. Blocklist (block)
-        3. CNAME uncloaking (block if tracker in chain)
-        4. ML classification (block if confident)
+        1. System connectivity domains (NEVER block)
+        2. Whitelist (allow)
+        3. Blocklist (block, unless system domain)
+        4. CNAME uncloaking (block if tracker in chain)
+        5. ML classification (block if confident)
 
         Returns ClassificationResult with full details.
         """
@@ -1130,6 +1177,20 @@ class AIAdBlocker:
 
         with self.stats_lock:
             self.stats['total_queries'] += 1
+
+        # 0. Check system connectivity domains (CRITICAL: NEVER block these)
+        # These are OS/browser connectivity checks that must always work
+        if self._is_system_connectivity_domain(domain):
+            result = ClassificationResult(
+                domain=domain,
+                category=DomainCategory.LEGITIMATE,
+                confidence=1.0,
+                method='system_connectivity',
+                blocked=False
+            )
+            with self.stats_lock:
+                self.stats['allowed'] += 1
+            return result
 
         # 1. Check whitelist
         if self._is_whitelisted(domain):
@@ -1254,6 +1315,22 @@ class AIAdBlocker:
                 return True
 
         return False
+
+    def _is_system_connectivity_domain(self, domain: str) -> bool:
+        """Check if domain is a system/browser connectivity check.
+
+        These domains are used by operating systems and browsers to detect:
+        - Network connectivity (NCSI, CNA)
+        - Captive portal presence
+        - Internet access availability
+
+        CRITICAL: These should NEVER be blocked as it breaks:
+        - WiFi captive portal login
+        - Network status indicators
+        - VPN/proxy detection
+        """
+        # Use the lists from CNAMEUncloaker
+        return self.cname_uncloaker._is_legitimate_infrastructure(domain)
 
     def _record_classification(self, result: ClassificationResult):
         """Record classification for history/debugging."""
