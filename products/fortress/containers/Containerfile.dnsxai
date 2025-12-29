@@ -34,6 +34,7 @@ FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcap2-bin \
+    openssl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 1000 -g nogroup -d /opt/hookprobe dnsxai
 
@@ -45,8 +46,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN mkdir -p /opt/hookprobe/shared/dnsXai/data \
              /opt/hookprobe/shared/dnsXai/defaults \
              /opt/hookprobe/shared/dnsXai/blocklists \
+             /etc/hookprobe/certs \
              /var/log/hookprobe \
-    && chown -R dnsxai:nogroup /opt/hookprobe /var/log/hookprobe
+    && chown -R dnsxai:nogroup /opt/hookprobe /var/log/hookprobe /etc/hookprobe
 
 # Copy dnsXai module
 COPY --chown=dnsxai:nogroup shared/dnsXai/ /opt/hookprobe/shared/dnsXai/
@@ -75,8 +77,9 @@ RUN python -c "print('dnsXai container ready')"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:8080/health", timeout=5)'
 
-# Expose ports: DNS (5353/udp) and HTTP API (8080/tcp)
+# Expose ports: DNS (5353/udp), DoT (853/tcp), HTTP API (8080/tcp)
 EXPOSE 5353/udp
+EXPOSE 853/tcp
 EXPOSE 8080/tcp
 
 # Run as root in container for rootless podman bind mount compatibility
@@ -85,6 +88,6 @@ EXPOSE 8080/tcp
 
 WORKDIR /opt/hookprobe/shared/dnsXai
 
-# Use entrypoint script to copy defaults to data volume on first run
+# Use entrypoint script which handles all DNS/DoT flags
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["--serve", "--address", "0.0.0.0", "--port", "5353", "--upstream", "1.1.1.1"]
+# Default CMD is empty - entrypoint handles all flags including DoT

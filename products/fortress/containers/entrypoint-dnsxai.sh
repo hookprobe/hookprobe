@@ -133,4 +133,10 @@ trap cleanup SIGTERM SIGINT
 # --serve: Start the DNS resolver service
 # --address: Listen on all interfaces (required for container networking)
 # --port: Explicit port (matches container port mapping)
-exec python engine.py --serve --address 0.0.0.0 --port 5353 "$@"
+# --dot: Enable DNS over TLS for Windows/modern clients that require encrypted DNS
+# --dot-port: DoT listens on standard port 853
+exec python engine.py --serve --address 0.0.0.0 --port 5353 \
+    --dot --dot-port 853 \
+    --dot-cert /etc/hookprobe/certs/dnsxai.crt \
+    --dot-key /etc/hookprobe/certs/dnsxai.key \
+    "$@"
