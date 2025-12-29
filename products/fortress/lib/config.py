@@ -172,31 +172,76 @@ class FortressConfig:
 
     @classmethod
     def from_file(cls, config_path: str) -> "FortressConfig":
-        """Load configuration from file."""
+        """Load configuration from file.
+
+        Supports both INI format (with [section] headers) and shell format (KEY=VALUE).
+        """
         config = cls()
         path = Path(config_path)
 
         if not path.exists():
             return config
 
-        parser = configparser.ConfigParser()
-        parser.read(path)
+        # First, try to detect format by checking for section headers
+        try:
+            content = path.read_text()
+            has_section_headers = any(line.strip().startswith('[') for line in content.split('\n'))
 
-        # General section
-        if parser.has_section('general'):
-            config.node_id = parser.get('general', 'node_id', fallback=config.node_id)
-            config.tier = parser.get('general', 'tier', fallback=config.tier)
-            config.version = parser.get('general', 'version', fallback=config.version)
+            if has_section_headers:
+                # INI format with [section] headers
+                parser = configparser.ConfigParser()
+                parser.read(path)
 
-        # Network section
-        if parser.has_section('network'):
-            config.ovs_bridge = parser.get('network', 'ovs_bridge', fallback=config.ovs_bridge)
-            config.macsec_enabled = parser.getboolean('network', 'macsec_enabled', fallback=config.macsec_enabled)
+                # General section
+                if parser.has_section('general'):
+                    config.node_id = parser.get('general', 'node_id', fallback=config.node_id)
+                    config.tier = parser.get('general', 'tier', fallback=config.tier)
+                    config.version = parser.get('general', 'version', fallback=config.version)
 
-        # Security section
-        if parser.has_section('security'):
-            config.qsecbit_enabled = parser.getboolean('security', 'qsecbit_enabled', fallback=config.qsecbit_enabled)
-            config.openflow_enabled = parser.getboolean('security', 'openflow_enabled', fallback=config.openflow_enabled)
+                # Network section
+                if parser.has_section('network'):
+                    config.ovs_bridge = parser.get('network', 'ovs_bridge', fallback=config.ovs_bridge)
+                    config.macsec_enabled = parser.getboolean('network', 'macsec_enabled', fallback=config.macsec_enabled)
+
+                # Security section
+                if parser.has_section('security'):
+                    config.qsecbit_enabled = parser.getboolean('security', 'qsecbit_enabled', fallback=config.qsecbit_enabled)
+                    config.openflow_enabled = parser.getboolean('security', 'openflow_enabled', fallback=config.openflow_enabled)
+            else:
+                # Shell format (KEY=VALUE)
+                shell_config = {}
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' in line:
+                        key, _, value = line.partition('=')
+                        # Remove quotes from value
+                        value = value.strip().strip('"').strip("'")
+                        shell_config[key.strip().upper()] = value
+
+                # Map shell variables to config
+                if 'NODE_ID' in shell_config:
+                    config.node_id = shell_config['NODE_ID']
+                if 'FORTRESS_MODE' in shell_config:
+                    # Container vs native mode - info only
+                    pass
+                if 'OVS_BRIDGE' in shell_config:
+                    config.ovs_bridge = shell_config['OVS_BRIDGE']
+                if 'LAN_SUBNET' in shell_config:
+                    config.lan_subnet = shell_config['LAN_SUBNET']
+                if 'LAN_GATEWAY' in shell_config:
+                    config.lan_gateway = shell_config['LAN_GATEWAY']
+                if 'WAN_INTERFACE' in shell_config:
+                    config.wan_interface = shell_config['WAN_INTERFACE']
+                if 'QSECBIT_ENABLED' in shell_config:
+                    config.qsecbit_enabled = shell_config['QSECBIT_ENABLED'].lower() in ('true', '1', 'yes')
+                if 'MACSEC_ENABLED' in shell_config:
+                    config.macsec_enabled = shell_config['MACSEC_ENABLED'].lower() in ('true', '1', 'yes')
+
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to parse config file {path}: {e}")
 
         # Load secrets
         config._load_secrets()

@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}SDN Management - Network Control{% endblock %}
+{% block title %}SDN AI - Intelligent Network Control{% endblock %}
 
 {% block content %}
 <div class="content-header">
     <div class="container-fluid">
         <div class="row mb-2">
             <div class="col-sm-6">
-                <h1 class="m-0"><i class="fas fa-network-wired mr-2"></i>SDN Management</h1>
+                <h1 class="m-0"><i class="fas fa-network-wired mr-2"></i>SDN AI</h1>
             </div>
             <div class="col-sm-6">
                 <ol class="breadcrumb float-sm-right">
                     <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
-                    <li class="breadcrumb-item active">SDN Management</li>
+                    <li class="breadcrumb-item active">SDN AI</li>
                 </ol>
             </div>
         </div>
@@ -137,6 +137,86 @@
                     <!-- Progress bar for countdown -->
                     <div class="progress" style="height: 4px; background: rgba(255,255,255,0.05); border-radius: 0;">
                         <div class="progress-bar" id="countdown-progress" role="progressbar" style="width: 0%; background: linear-gradient(90deg, #00d9ff, #00ff88); transition: width 1s linear;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- WAN Health Bar -->
+        <div class="row mb-3" id="wan-health-bar">
+            <div class="col-12">
+                <div class="card mb-0" style="background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%); border: none; border-radius: 12px;">
+                    <div class="card-body py-3">
+                        <div class="row align-items-center">
+                            <!-- Primary WAN -->
+                            <div class="col-lg-3 col-md-6 mb-2 mb-lg-0">
+                                <div class="d-flex align-items-center">
+                                    <div class="wan-icon mr-3" style="width: 45px; height: 45px; background: rgba(79,195,247,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                                        <i class="fas fa-ethernet fa-lg" style="color: #4fc3f7;"></i>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <small class="text-muted">Primary WAN</small>
+                                            <span id="wan-primary-status" class="badge badge-success badge-sm">ACTIVE</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px; background: rgba(255,255,255,0.1);">
+                                            <div class="progress-bar bg-success" id="wan-primary-health" style="width: 95%;"></div>
+                                        </div>
+                                        <small class="text-white-50" id="wan-primary-interface">eth0</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Backup WAN -->
+                            <div class="col-lg-3 col-md-6 mb-2 mb-lg-0">
+                                <div class="d-flex align-items-center">
+                                    <div class="wan-icon mr-3" style="width: 45px; height: 45px; background: rgba(255,152,0,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                                        <i class="fas fa-signal fa-lg" style="color: #ffb74d;"></i>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <small class="text-muted">Backup WAN</small>
+                                            <span id="wan-backup-status" class="badge badge-secondary badge-sm">STANDBY</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px; background: rgba(255,255,255,0.1);">
+                                            <div class="progress-bar bg-warning" id="wan-backup-health" style="width: 72%;"></div>
+                                        </div>
+                                        <small class="text-white-50" id="wan-backup-interface">wwan0</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- LSTM Prediction -->
+                            <div class="col-lg-3 col-md-6 mb-2 mb-lg-0 text-center">
+                                <div class="d-flex align-items-center justify-content-center">
+                                    <div class="mr-3" style="width: 50px; height: 50px; position: relative;">
+                                        <svg viewBox="0 0 36 36" style="width: 100%; height: 100%; transform: rotate(-90deg);">
+                                            <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                                            <circle id="lstm-confidence-ring" cx="18" cy="18" r="15" fill="none" stroke="#00ff88" stroke-width="3"
+                                                    stroke-dasharray="87, 100" stroke-linecap="round"/>
+                                        </svg>
+                                        <span style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #00ff88; font-weight: 700; font-size: 0.8rem;" id="lstm-confidence">87%</span>
+                                    </div>
+                                    <div class="text-left">
+                                        <small class="text-muted d-block">LSTM Prediction</small>
+                                        <span class="text-success" id="lstm-status"><i class="fas fa-check-circle mr-1"></i>Stable</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Actions -->
+                            <div class="col-lg-3 col-md-6 text-center text-lg-right">
+                                <div class="d-flex justify-content-center justify-content-lg-end align-items-center">
+                                    <div class="mr-3 text-right d-none d-md-block">
+                                        <small class="text-muted d-block">Uptime</small>
+                                        <span class="text-white font-weight-bold" id="wan-uptime">99.9%</span>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-info" onclick="showWanHealthModal()" title="Full WAN Health Dashboard">
+                                        <i class="fas fa-expand-alt mr-1"></i>Details
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1043,6 +1123,265 @@ $(document).ready(function() {
         updateRefreshIndicator();
         location.reload();
     });
+
+    // === WAN HEALTH FUNCTIONS ===
+
+    // Load WAN Health data
+    function loadWanHealth() {
+        $.get('/slaai/api/status')
+            .done(function(data) {
+                if (data.success && data.status) {
+                    updateWanHealthBar(data.status);
+                }
+            })
+            .fail(function() {
+                // Use fallback values on failure
+                console.log('WAN Health API not available');
+            });
+    }
+
+    // Update WAN Health bar
+    function updateWanHealthBar(status) {
+        // Primary WAN
+        var primaryHealth = Math.round((status.primary_health || 0.95) * 100);
+        $('#wan-primary-health').css('width', primaryHealth + '%');
+        $('#wan-primary-interface').text(status.primary_interface || 'eth0');
+
+        // Primary status
+        var primaryBadge = $('#wan-primary-status');
+        if (status.active_interface === status.primary_interface) {
+            primaryBadge.removeClass('badge-secondary badge-danger').addClass('badge-success').text('ACTIVE');
+        } else if (primaryHealth < 50) {
+            primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('FAILED');
+        } else {
+            primaryBadge.removeClass('badge-success badge-danger').addClass('badge-secondary').text('STANDBY');
+        }
+
+        // Backup WAN
+        var backupHealth = Math.round((status.backup_health || 0.72) * 100);
+        $('#wan-backup-health').css('width', backupHealth + '%');
+        $('#wan-backup-interface').text(status.backup_interface || 'wwan0');
+
+        // Backup status
+        var backupBadge = $('#wan-backup-status');
+        if (status.active_interface === status.backup_interface) {
+            backupBadge.removeClass('badge-secondary badge-danger').addClass('badge-warning').text('ACTIVE');
+        } else if (backupHealth < 30) {
+            backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('FAILED');
+        } else {
+            backupBadge.removeClass('badge-warning badge-danger').addClass('badge-secondary').text('STANDBY');
+        }
+
+        // LSTM Prediction
+        if (status.prediction) {
+            var confidence = Math.round((status.prediction.confidence || 0.87) * 100);
+            var failureProb = status.prediction.failure_probability || 0.08;
+
+            $('#lstm-confidence').text(confidence + '%');
+            $('#lstm-confidence-ring').attr('stroke-dasharray', confidence + ', 100');
+
+            // Status text
+            if (failureProb > 0.5) {
+                $('#lstm-status').html('<i class="fas fa-exclamation-triangle mr-1"></i>Risk').removeClass('text-success text-warning').addClass('text-danger');
+                $('#lstm-confidence-ring').attr('stroke', '#e57373');
+                $('#lstm-confidence').css('color', '#e57373');
+            } else if (failureProb > 0.2) {
+                $('#lstm-status').html('<i class="fas fa-exclamation-circle mr-1"></i>Warning').removeClass('text-success text-danger').addClass('text-warning');
+                $('#lstm-confidence-ring').attr('stroke', '#ffb74d');
+                $('#lstm-confidence').css('color', '#ffb74d');
+            } else {
+                $('#lstm-status').html('<i class="fas fa-check-circle mr-1"></i>Stable').removeClass('text-danger text-warning').addClass('text-success');
+                $('#lstm-confidence-ring').attr('stroke', '#00ff88');
+                $('#lstm-confidence').css('color', '#00ff88');
+            }
+        }
+
+        // Uptime
+        if (status.uptime_pct !== undefined) {
+            $('#wan-uptime').text(status.uptime_pct.toFixed(1) + '%');
+        }
+    }
+
+    // Load WAN Health on page load and every 15 seconds
+    loadWanHealth();
+    setInterval(loadWanHealth, 15000);
 });
+
+// Show WAN Health Modal
+function showWanHealthModal() {
+    // Load full SLA status
+    $.get('/slaai/api/status')
+        .done(function(data) {
+            var status = data.status || {};
+
+            // Build modal content
+            var content = `
+                <div class="row">
+                    <!-- Primary WAN Card -->
+                    <div class="col-md-6 mb-3">
+                        <div class="card bg-dark h-100" style="border: 2px solid ${status.active_interface === status.primary_interface ? 'rgba(76,175,80,0.6)' : 'rgba(255,255,255,0.1)'};">
+                            <div class="card-header bg-transparent">
+                                <h5 class="mb-0"><i class="fas fa-ethernet mr-2 text-info"></i>Primary WAN</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Interface</span>
+                                    <code>${status.primary_interface || 'eth0'}</code>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Health</span>
+                                    <span class="${Math.round((status.primary_health || 0) * 100) > 80 ? 'text-success' : 'text-warning'}">${Math.round((status.primary_health || 0) * 100)}%</span>
+                                </div>
+                                <div class="progress mb-3" style="height: 8px;">
+                                    <div class="progress-bar bg-success" style="width: ${Math.round((status.primary_health || 0) * 100)}%"></div>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Status</span>
+                                    <span class="badge ${status.active_interface === status.primary_interface ? 'badge-success' : 'badge-secondary'}">${status.active_interface === status.primary_interface ? 'ACTIVE' : 'STANDBY'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Backup WAN Card -->
+                    <div class="col-md-6 mb-3">
+                        <div class="card bg-dark h-100" style="border: 2px solid ${status.active_interface === status.backup_interface ? 'rgba(255,152,0,0.6)' : 'rgba(255,255,255,0.1)'};">
+                            <div class="card-header bg-transparent">
+                                <h5 class="mb-0"><i class="fas fa-signal mr-2 text-warning"></i>Backup WAN (LTE)</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Interface</span>
+                                    <code>${status.backup_interface || 'wwan0'}</code>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Health</span>
+                                    <span class="${Math.round((status.backup_health || 0) * 100) > 50 ? 'text-success' : 'text-warning'}">${Math.round((status.backup_health || 0) * 100)}%</span>
+                                </div>
+                                <div class="progress mb-3" style="height: 8px;">
+                                    <div class="progress-bar bg-warning" style="width: ${Math.round((status.backup_health || 0) * 100)}%"></div>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Status</span>
+                                    <span class="badge ${status.active_interface === status.backup_interface ? 'badge-warning' : 'badge-secondary'}">${status.active_interface === status.backup_interface ? 'ACTIVE' : 'STANDBY'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SLA Metrics Row -->
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <div class="card bg-dark text-center">
+                            <div class="card-body py-3">
+                                <h4 class="text-success mb-1">${(status.uptime_pct || 99.9).toFixed(2)}%</h4>
+                                <small class="text-muted">Uptime (30d)</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="card bg-dark text-center">
+                            <div class="card-body py-3">
+                                <h4 class="text-info mb-1">${(status.rto_actual_s || 2.3).toFixed(1)}s</h4>
+                                <small class="text-muted">RTO Actual</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="card bg-dark text-center">
+                            <div class="card-body py-3">
+                                <h4 class="text-warning mb-1">${status.failover_count_24h || 0}</h4>
+                                <small class="text-muted">Failovers (24h)</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cost Tracking -->
+                ${status.cost_status ? `
+                <div class="card bg-dark mb-3">
+                    <div class="card-header bg-transparent">
+                        <h6 class="mb-0"><i class="fas fa-dollar-sign mr-2"></i>LTE Cost Tracking</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-6">
+                                <small class="text-muted">Daily Usage</small>
+                                <div class="progress mt-1" style="height: 6px;">
+                                    <div class="progress-bar bg-info" style="width: ${Math.min(100, (status.cost_status.daily_usage_mb / status.cost_status.daily_budget_mb) * 100)}%"></div>
+                                </div>
+                                <small>${status.cost_status.daily_usage_mb} / ${status.cost_status.daily_budget_mb} MB</small>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Monthly Usage</small>
+                                <div class="progress mt-1" style="height: 6px;">
+                                    <div class="progress-bar bg-warning" style="width: ${Math.min(100, (status.cost_status.monthly_usage_mb / status.cost_status.monthly_budget_mb) * 100)}%"></div>
+                                </div>
+                                <small>${(status.cost_status.monthly_usage_mb / 1024).toFixed(1)} / ${(status.cost_status.monthly_budget_mb / 1024).toFixed(0)} GB</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- Failover History -->
+                ${status.failover_history && status.failover_history.length > 0 ? `
+                <div class="card bg-dark">
+                    <div class="card-header bg-transparent">
+                        <h6 class="mb-0"><i class="fas fa-history mr-2"></i>Recent Events</h6>
+                    </div>
+                    <div class="card-body p-0">
+                        <table class="table table-dark table-striped mb-0">
+                            <thead><tr><th>Time</th><th>Type</th><th>From</th><th>To</th><th>Duration</th></tr></thead>
+                            <tbody>
+                                ${status.failover_history.slice(0, 5).map(e => `
+                                    <tr>
+                                        <td><small>${new Date(e.timestamp).toLocaleString()}</small></td>
+                                        <td><span class="badge badge-${e.type === 'failover' ? 'danger' : 'success'}">${e.type}</span></td>
+                                        <td><code>${e.from_interface}</code></td>
+                                        <td><code>${e.to_interface}</code></td>
+                                        <td>${e.duration_s}s</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                ` : ''}
+            `;
+
+            $('#wan-modal-body').html(content);
+            $('#wan-health-modal').modal('show');
+        })
+        .fail(function() {
+            $('#wan-modal-body').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle mr-2"></i>Could not load WAN Health data</div>');
+            $('#wan-health-modal').modal('show');
+        });
+}
 </script>
+
+<!-- WAN Health Modal -->
+<div class="modal fade" id="wan-health-modal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content bg-dark">
+            <div class="modal-header" style="background: linear-gradient(135deg, #0f2027 0%, #203a43 100%); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="fas fa-heartbeat mr-2 text-info"></i>WAN Health Dashboard</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body" id="wan-modal-body" style="background: #1a1a2e;">
+                <div class="text-center py-4">
+                    <i class="fas fa-spinner fa-spin fa-2x text-muted"></i>
+                    <p class="mt-2 text-muted">Loading...</p>
+                </div>
+            </div>
+            <div class="modal-footer" style="background: #1a1a2e; border-top: 1px solid rgba(255,255,255,0.1);">
+                <a href="{{ url_for('slaai.index') }}" class="btn btn-outline-info">
+                    <i class="fas fa-external-link-alt mr-1"></i>Full Dashboard
+                </a>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
