@@ -3212,3 +3212,173 @@ def api_policies_available():
         'policies': policies,
         'categories': categories,
     })
+
+
+# ============================================================
+# DEVICE TAGGING API - Manual device classification
+# ============================================================
+
+DEVICE_TAGS_FILE = DATA_DIR / 'device_tags.json'
+
+
+def load_device_tags():
+    """Load manually assigned device tags."""
+    if DEVICE_TAGS_FILE.exists():
+        try:
+            return json.loads(DEVICE_TAGS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def save_device_tags(tags):
+    """Save device tags to file."""
+    try:
+        DEVICE_TAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DEVICE_TAGS_FILE.write_text(json.dumps(tags, indent=2))
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save device tags: {e}")
+        return False
+
+
+@sdn_bp.route('/api/device/<mac_address>/tag', methods=['POST'])
+@login_required
+@operator_required
+def api_device_tag(mac_address):
+    """
+    Manually tag a device with a device type and optional label.
+
+    POST data:
+        device_type: Device type (e.g., 'iphone', 'apple_watch', 'homepod', 'smart_tv')
+        label: Optional friendly label for the device
+    """
+    mac = mac_address.upper().replace('-', ':')
+    data = request.get_json() or {}
+
+    device_type = data.get('device_type')
+    label = data.get('label')
+
+    if not device_type:
+        return jsonify({'success': False, 'error': 'device_type is required'}), 400
+
+    # Load existing tags
+    tags = load_device_tags()
+
+    # Update or create tag
+    tags[mac] = {
+        'device_type': device_type,
+        'label': label,
+        'tagged_at': datetime.now().isoformat(),
+        'tagged_by': current_user.username if hasattr(current_user, 'username') else 'admin'
+    }
+
+    if save_device_tags(tags):
+        return jsonify({
+            'success': True,
+            'message': f'Device {mac} tagged as {device_type}',
+            'tag': tags[mac]
+        })
+    else:
+        return jsonify({'success': False, 'error': 'Failed to save tag'}), 500
+
+
+@sdn_bp.route('/api/device/<mac_address>/tag', methods=['DELETE'])
+@login_required
+@operator_required
+def api_device_untag(mac_address):
+    """Remove manual tag from a device (revert to auto-detection)."""
+    mac = mac_address.upper().replace('-', ':')
+
+    tags = load_device_tags()
+    if mac in tags:
+        del tags[mac]
+        if save_device_tags(tags):
+            return jsonify({
+                'success': True,
+                'message': f'Tag removed from {mac} - device will use auto-detection'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save'}), 500
+    else:
+        return jsonify({'success': False, 'error': 'Device has no manual tag'}), 404
+
+
+@sdn_bp.route('/api/device/tags')
+@login_required
+def api_device_tags_list():
+    """List all manually tagged devices."""
+    tags = load_device_tags()
+    return jsonify({
+        'success': True,
+        'count': len(tags),
+        'tags': tags
+    })
+
+
+@sdn_bp.route('/api/device/types')
+@login_required
+def api_device_types():
+    """Get available device types for manual tagging."""
+    device_types = [
+        # Apple devices
+        {'id': 'iphone', 'name': 'iPhone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        {'id': 'ipad', 'name': 'iPad', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+        {'id': 'macbook', 'name': 'MacBook', 'icon': 'fa-laptop', 'category': 'laptop'},
+        {'id': 'imac', 'name': 'iMac', 'icon': 'fa-desktop', 'category': 'desktop'},
+        {'id': 'mac_mini', 'name': 'Mac mini', 'icon': 'fa-server', 'category': 'desktop'},
+        {'id': 'apple_watch', 'name': 'Apple Watch', 'icon': 'fa-clock', 'category': 'wearable'},
+        {'id': 'homepod', 'name': 'HomePod', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'apple_tv', 'name': 'Apple TV', 'icon': 'fa-tv', 'category': 'streaming'},
+        {'id': 'airpods', 'name': 'AirPods', 'icon': 'fa-headphones', 'category': 'audio'},
+
+        # Android devices
+        {'id': 'android_phone', 'name': 'Android Phone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        {'id': 'android_tablet', 'name': 'Android Tablet', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+
+        # Computers
+        {'id': 'windows_pc', 'name': 'Windows PC', 'icon': 'fa-desktop', 'category': 'computer'},
+        {'id': 'linux_pc', 'name': 'Linux PC', 'icon': 'fa-linux', 'category': 'computer'},
+        {'id': 'laptop', 'name': 'Laptop', 'icon': 'fa-laptop', 'category': 'computer'},
+
+        # Smart speakers
+        {'id': 'amazon_echo', 'name': 'Amazon Echo', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'sonos_speaker', 'name': 'Sonos Speaker', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'google_home', 'name': 'Google Home', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'nest_hub', 'name': 'Nest Hub', 'icon': 'fa-tv', 'category': 'smart_display'},
+
+        # Streaming devices
+        {'id': 'smart_tv', 'name': 'Smart TV', 'icon': 'fa-tv', 'category': 'tv'},
+        {'id': 'roku', 'name': 'Roku', 'icon': 'fa-tv', 'category': 'streaming'},
+        {'id': 'chromecast', 'name': 'Chromecast', 'icon': 'fa-tv', 'category': 'streaming'},
+        {'id': 'fire_tv', 'name': 'Fire TV', 'icon': 'fa-tv', 'category': 'streaming'},
+
+        # IoT
+        {'id': 'ip_camera', 'name': 'IP Camera', 'icon': 'fa-video', 'category': 'camera'},
+        {'id': 'ring_camera', 'name': 'Ring Camera', 'icon': 'fa-video', 'category': 'camera'},
+        {'id': 'smart_thermostat', 'name': 'Smart Thermostat', 'icon': 'fa-thermometer-half', 'category': 'iot'},
+        {'id': 'smart_doorbell', 'name': 'Smart Doorbell', 'icon': 'fa-bell', 'category': 'iot'},
+        {'id': 'smart_light', 'name': 'Smart Light', 'icon': 'fa-lightbulb', 'category': 'lighting'},
+        {'id': 'raspberry_pi', 'name': 'Raspberry Pi', 'icon': 'fa-microchip', 'category': 'iot'},
+
+        # Network devices
+        {'id': 'router', 'name': 'Router', 'icon': 'fa-network-wired', 'category': 'network'},
+        {'id': 'network_switch', 'name': 'Network Switch', 'icon': 'fa-network-wired', 'category': 'network'},
+        {'id': 'access_point', 'name': 'Access Point', 'icon': 'fa-wifi', 'category': 'network'},
+
+        # Printers
+        {'id': 'printer', 'name': 'Printer', 'icon': 'fa-print', 'category': 'printer'},
+
+        # Gaming
+        {'id': 'playstation', 'name': 'PlayStation', 'icon': 'fa-gamepad', 'category': 'gaming'},
+        {'id': 'xbox', 'name': 'Xbox', 'icon': 'fa-gamepad', 'category': 'gaming'},
+        {'id': 'nintendo_switch', 'name': 'Nintendo Switch', 'icon': 'fa-gamepad', 'category': 'gaming'},
+
+        # Generic
+        {'id': 'unknown', 'name': 'Unknown Device', 'icon': 'fa-question-circle', 'category': 'unknown'},
+    ]
+
+    return jsonify({
+        'success': True,
+        'device_types': device_types
+    })
