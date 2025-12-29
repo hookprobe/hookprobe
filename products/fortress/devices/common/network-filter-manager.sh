@@ -400,6 +400,27 @@ table inet fortress_filter {
         ct state established,related accept
 
         # ----------------------------------------
+        # ENCRYPTED DNS BYPASS PREVENTION
+        # Block external DoT/DoH to force DNS through dnsXai
+        # ----------------------------------------
+        # Allow DoT (853) only to local gateway (Fortress)
+        tcp dport 853 ip daddr 10.200.0.1 accept
+        tcp dport 853 counter log prefix "DOT_BYPASS: " drop
+
+        # Block known DoH providers on port 443 (IPv4)
+        # This prevents Windows/browsers from using encrypted DNS that bypasses dnsXai
+        ip daddr {
+            1.1.1.1, 1.0.0.1,                    # Cloudflare
+            104.16.248.249, 104.16.249.249,      # Cloudflare secondary
+            8.8.8.8, 8.8.4.4,                    # Google
+            9.9.9.9, 149.112.112.112,            # Quad9
+            94.140.14.14, 94.140.15.15,          # AdGuard
+            45.90.28.0, 45.90.30.0,              # NextDNS
+            208.67.222.222, 208.67.220.220,      # OpenDNS
+            185.228.168.168, 185.228.169.168     # CleanBrowsing
+        } tcp dport 443 counter log prefix "DOH_BYPASS: " drop
+
+        # ----------------------------------------
         # LAN-ONLY devices: Allow LAN, block WAN
         # ----------------------------------------
         # Block internet access for lan_only devices

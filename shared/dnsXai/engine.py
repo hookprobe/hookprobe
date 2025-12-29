@@ -1740,6 +1740,200 @@ if DNSLIB_AVAILABLE:
 
 
 # =============================================================================
+# DNS over TLS (DoT) Server
+# =============================================================================
+
+class DoTServer:
+    """
+    DNS over TLS (DoT) Server - RFC 7858
+
+    Provides encrypted DNS on port 853 for Windows/iOS/Android clients
+    that prioritize encrypted DNS. Uses the same AIAdBlockResolver for
+    consistent protection across encrypted and plain DNS.
+
+    Windows 10/11 and modern browsers will automatically use DoT/DoH
+    when available, bypassing plain DNS. This server ensures all clients
+    get dnsXai protection regardless of their DNS encryption preference.
+    """
+
+    def __init__(self, resolver, address: str = '0.0.0.0', port: int = 853,
+                 cert_file: str = None, key_file: str = None):
+        self.resolver = resolver
+        self.address = address
+        self.port = port
+        self.cert_file = cert_file or '/etc/hookprobe/certs/dnsxai.crt'
+        self.key_file = key_file or '/etc/hookprobe/certs/dnsxai.key'
+        self.logger = logging.getLogger("DoTServer")
+        self._running = False
+        self._server_socket = None
+        self._thread = None
+
+    def _create_ssl_context(self):
+        """Create SSL context for DoT."""
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+
+        # Load certificate and key
+        try:
+            ctx.load_cert_chain(self.cert_file, self.key_file)
+            self.logger.info(f"Loaded TLS certificate from {self.cert_file}")
+        except FileNotFoundError:
+            self.logger.warning("TLS certificate not found, generating self-signed...")
+            self._generate_self_signed_cert()
+            ctx.load_cert_chain(self.cert_file, self.key_file)
+        except Exception as e:
+            self.logger.error(f"Failed to load TLS certificate: {e}")
+            raise
+
+        return ctx
+
+    def _generate_self_signed_cert(self):
+        """Generate self-signed certificate for DoT."""
+        import subprocess
+        from pathlib import Path
+
+        cert_dir = Path(self.cert_file).parent
+        cert_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate using openssl
+        cmd = [
+            'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
+            '-keyout', self.key_file,
+            '-out', self.cert_file,
+            '-days', '365',
+            '-nodes',
+            '-subj', '/CN=dnsxai.local/O=HookProbe/C=US',
+            '-addext', 'subjectAltName=DNS:dnsxai.local,DNS:fortress.local,IP:10.200.0.1'
+        ]
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            self.logger.info(f"Generated self-signed certificate: {self.cert_file}")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Failed to generate certificate: {e.stderr.decode()}")
+            raise
+        except FileNotFoundError:
+            self.logger.error("openssl not found, cannot generate certificate")
+            raise
+
+    def _handle_client(self, client_socket, client_addr):
+        """Handle a single DoT client connection."""
+        try:
+            while self._running:
+                # DNS over TLS uses 2-byte length prefix (RFC 7858)
+                length_data = client_socket.recv(2)
+                if not length_data or len(length_data) < 2:
+                    break
+
+                msg_length = struct.unpack('!H', length_data)[0]
+                if msg_length > 65535 or msg_length < 12:
+                    self.logger.warning(f"Invalid DNS message length: {msg_length}")
+                    break
+
+                # Receive the DNS message
+                dns_data = b''
+                remaining = msg_length
+                while remaining > 0:
+                    chunk = client_socket.recv(min(remaining, 4096))
+                    if not chunk:
+                        break
+                    dns_data += chunk
+                    remaining -= len(chunk)
+
+                if len(dns_data) != msg_length:
+                    self.logger.warning(f"Incomplete DNS message: got {len(dns_data)}, expected {msg_length}")
+                    break
+
+                # Parse and resolve
+                try:
+                    request = DNSRecord.parse(dns_data)
+                    response = self.resolver.resolve(request, None)
+                    response_data = response.pack()
+
+                    # Send response with length prefix
+                    client_socket.sendall(struct.pack('!H', len(response_data)) + response_data)
+
+                except Exception as e:
+                    self.logger.error(f"DNS resolution error: {e}")
+                    break
+
+        except Exception as e:
+            if self._running:
+                self.logger.debug(f"Client {client_addr} error: {e}")
+        finally:
+            try:
+                client_socket.close()
+            except:
+                pass
+
+    def _server_loop(self):
+        """Main server loop accepting TLS connections."""
+        import ssl
+
+        ssl_context = self._create_ssl_context()
+
+        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server_socket.bind((self.address, self.port))
+        self._server_socket.listen(100)
+        self._server_socket.settimeout(1.0)
+
+        self.logger.info(f"DoT server listening on {self.address}:{self.port}")
+
+        while self._running:
+            try:
+                client_socket, client_addr = self._server_socket.accept()
+
+                # Wrap with TLS
+                try:
+                    tls_socket = ssl_context.wrap_socket(client_socket, server_side=True)
+
+                    # Handle in thread
+                    client_thread = threading.Thread(
+                        target=self._handle_client,
+                        args=(tls_socket, client_addr),
+                        daemon=True
+                    )
+                    client_thread.start()
+
+                except ssl.SSLError as e:
+                    self.logger.debug(f"TLS handshake failed from {client_addr}: {e}")
+                    client_socket.close()
+
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self._running:
+                    self.logger.error(f"Accept error: {e}")
+
+        if self._server_socket:
+            self._server_socket.close()
+
+    def start(self):
+        """Start the DoT server in a background thread."""
+        if self._running:
+            return
+
+        self._running = True
+        self._thread = threading.Thread(target=self._server_loop, daemon=True)
+        self._thread.start()
+        self.logger.info("DoT server started")
+
+    def stop(self):
+        """Stop the DoT server."""
+        self._running = False
+        if self._server_socket:
+            try:
+                self._server_socket.close()
+            except:
+                pass
+        if self._thread:
+            self._thread.join(timeout=2)
+        self.logger.info("DoT server stopped")
+
+
+# =============================================================================
 # CLI and Main
 # =============================================================================
 
@@ -1781,6 +1975,23 @@ def main():
     parser.add_argument(
         '-v', '--verbose', action='store_true',
         help='Verbose output'
+    )
+    # DoT (DNS over TLS) options
+    parser.add_argument(
+        '--dot', action='store_true',
+        help='Enable DNS over TLS (DoT) server on port 853'
+    )
+    parser.add_argument(
+        '--dot-port', type=int, default=853,
+        help='DoT listen port (default: 853)'
+    )
+    parser.add_argument(
+        '--dot-cert', type=str, default='/etc/hookprobe/certs/dnsxai.crt',
+        help='TLS certificate file for DoT'
+    )
+    parser.add_argument(
+        '--dot-key', type=str, default='/etc/hookprobe/certs/dnsxai.key',
+        help='TLS private key file for DoT'
     )
 
     args = parser.parse_args()
@@ -1858,6 +2069,19 @@ def main():
             address=config.dns_listen_addr
         )
 
+        # Optionally start DoT server for encrypted DNS
+        dot_server = None
+        if args.dot:
+            print(f"[*] DoT (DNS over TLS) enabled on {config.dns_listen_addr}:{args.dot_port}")
+            dot_server = DoTServer(
+                resolver,
+                address=config.dns_listen_addr,
+                port=args.dot_port,
+                cert_file=args.dot_cert,
+                key_file=args.dot_key
+            )
+            dot_server.start()
+
         print(f"\n[+] DNS server running. Press Ctrl+C to stop.\n")
 
         try:
@@ -1867,6 +2091,8 @@ def main():
         except KeyboardInterrupt:
             print("\n[*] Shutting down...")
             server.stop()
+            if dot_server:
+                dot_server.stop()
             blocker.stop()
 
         return
