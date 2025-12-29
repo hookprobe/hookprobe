@@ -636,6 +636,7 @@ class QSecBitFortressAgent:
             """Test connectivity through a specific interface.
 
             For LTE/wwan interfaces, using source IP is more reliable than interface name.
+            Falls back to alternative methods if the primary method fails.
             """
             result = {
                 'rtt_ms': None,
@@ -644,64 +645,94 @@ class QSecBitFortressAgent:
                 'is_connected': False,
             }
 
-            # Build ping command
-            # For LTE interfaces, use source IP if available (more reliable routing)
             is_lte = interface.startswith(('wwan', 'usb', 'wwp'))
 
-            if source_ip and is_lte and source_ip != 'dynamic':
-                # Use source IP for LTE (strips CIDR notation if present)
-                src = source_ip.split('/')[0]
-                ping_cmd = ['ping', '-c', '3', '-W', '3', '-I', src, target]
-            else:
-                # Use interface name for ethernet
-                ping_cmd = ['ping', '-c', '3', '-W', '3', '-I', interface, target]
-
-            try:
-                logger.debug(f"Testing connectivity: {' '.join(ping_cmd)}")
-                proc = subprocess.run(
-                    ping_cmd,
-                    capture_output=True, text=True, timeout=15
-                )
-
-                # Log output for debugging
-                if proc.returncode != 0:
-                    logger.debug(f"Ping failed on {interface}: rc={proc.returncode}, stderr={proc.stderr.strip()}")
-
-                if proc.returncode == 0:
-                    # Parse RTT
-                    rtt_match = re.search(
-                        r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
-                        proc.stdout
+            # For LTE, try to get the actual source IP if we only have 'dynamic'
+            if is_lte and (not source_ip or source_ip == 'dynamic'):
+                try:
+                    # Use ip route get to find the source IP for reaching the target
+                    route_result = subprocess.run(
+                        ['ip', 'route', 'get', target, 'oif', interface],
+                        capture_output=True, text=True, timeout=5
                     )
-                    if rtt_match:
-                        result['rtt_ms'] = float(rtt_match.group(2))
-                        result['jitter_ms'] = float(rtt_match.group(4))
-                        result['is_connected'] = True
+                    if route_result.returncode == 0:
+                        # Parse: "1.1.1.1 dev wwan0 src 10.178.230.158"
+                        match = re.search(r'src\s+([\d.]+)', route_result.stdout)
+                        if match:
+                            source_ip = match.group(1)
+                            logger.debug(f"Got source IP {source_ip} for LTE interface {interface}")
+                except Exception as e:
+                    logger.debug(f"Could not get route info for {interface}: {e}")
 
-                    # Parse packet loss
-                    loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
-                    if loss_match:
-                        result['packet_loss'] = float(loss_match.group(1))
-                else:
-                    # Parse packet loss even on failure
-                    loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
-                    if loss_match:
-                        result['packet_loss'] = float(loss_match.group(1))
-                        # If we got some response (not 100% loss), connection is partially up
-                        if result['packet_loss'] < 100:
+            # Build ping commands to try (in order of preference)
+            ping_commands = []
+
+            if is_lte and source_ip and source_ip != 'dynamic':
+                # Primary: Use source IP for LTE (most reliable)
+                src = source_ip.split('/')[0]
+                ping_commands.append(['ping', '-c', '3', '-W', '3', '-I', src, target])
+                # Fallback: Try interface name anyway
+                ping_commands.append(['ping', '-c', '3', '-W', '3', '-I', interface, target])
+            else:
+                # Use interface name
+                ping_commands.append(['ping', '-c', '3', '-W', '3', '-I', interface, target])
+
+            # Try each ping command until one succeeds
+            proc = None
+            for ping_cmd in ping_commands:
+                try:
+                    logger.debug(f"Testing connectivity: {' '.join(ping_cmd)}")
+                    proc = subprocess.run(
+                        ping_cmd,
+                        capture_output=True, text=True, timeout=15
+                    )
+
+                    # Log output for debugging
+                    if proc.returncode != 0:
+                        logger.debug(f"Ping failed on {interface}: rc={proc.returncode}, stderr={proc.stderr.strip()}")
+                        continue  # Try next command
+
+                    if proc.returncode == 0:
+                        # Parse RTT
+                        rtt_match = re.search(
+                            r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
+                            proc.stdout
+                        )
+                        if rtt_match:
+                            result['rtt_ms'] = float(rtt_match.group(2))
+                            result['jitter_ms'] = float(rtt_match.group(4))
                             result['is_connected'] = True
-                            # Try to get RTT from partial success
-                            rtt_match = re.search(
-                                r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
-                                proc.stdout
-                            )
-                            if rtt_match:
-                                result['rtt_ms'] = float(rtt_match.group(2))
-                                result['jitter_ms'] = float(rtt_match.group(4))
-            except subprocess.TimeoutExpired:
-                logger.debug(f"Ping timeout on {interface}")
-            except Exception as e:
-                logger.debug(f"Ping error on {interface}: {e}")
+
+                        # Parse packet loss
+                        loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
+                        if loss_match:
+                            result['packet_loss'] = float(loss_match.group(1))
+
+                        # Success - return immediately
+                        return result
+
+                except subprocess.TimeoutExpired:
+                    logger.debug(f"Ping timeout on {interface} with command: {ping_cmd}")
+                    continue  # Try next command
+                except Exception as e:
+                    logger.debug(f"Ping error on {interface}: {e}")
+                    continue  # Try next command
+
+            # All commands failed - try to parse any partial response from last attempt
+            if proc and proc.stdout:
+                loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
+                if loss_match:
+                    result['packet_loss'] = float(loss_match.group(1))
+                    # If we got some response (not 100% loss), connection is partially up
+                    if result['packet_loss'] < 100:
+                        result['is_connected'] = True
+                        rtt_match = re.search(
+                            r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
+                            proc.stdout
+                        )
+                        if rtt_match:
+                            result['rtt_ms'] = float(rtt_match.group(2))
+                            result['jitter_ms'] = float(rtt_match.group(4))
 
             return result
 
