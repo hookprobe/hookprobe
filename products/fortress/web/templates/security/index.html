@@ -75,23 +75,91 @@
         text-transform: uppercase;
     }
 
-    /* Protection level mini display */
-    .protection-level-bar {
-        height: 8px;
-        background: linear-gradient(to right, #6c757d 0%, #17a2b8 20%, #28a745 40%, #ffc107 60%, #fd7e14 80%, #dc3545 100%);
-        border-radius: 4px;
+    /* Unified Protection Level Slider */
+    .protection-slider-container {
         position: relative;
+        padding: 8px 0;
     }
-    .protection-level-marker {
-        position: absolute;
-        top: -4px;
-        width: 16px;
-        height: 16px;
-        background: white;
+    .protection-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 12px;
+        border-radius: 6px;
+        background: linear-gradient(to right,
+            #6c757d 0%,
+            #17a2b8 20%,
+            #28a745 40%,
+            #ffc107 60%,
+            #fd7e14 80%,
+            #dc3545 100%
+        );
+        outline: none;
+        cursor: pointer;
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.3), 0 2px 4px rgba(0,0,0,0.2);
+    }
+    /* Webkit (Chrome, Safari, Edge) */
+    .protection-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
-        border: 2px solid #343a40;
-        transform: translateX(-50%);
-        transition: left 0.3s ease;
+        background: #fff;
+        border: 3px solid #212529;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 2px rgba(255,255,255,0.2);
+        cursor: grab;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .protection-slider::-webkit-slider-thumb:hover {
+        transform: scale(1.1);
+        box-shadow: 0 3px 12px rgba(0,0,0,0.5), 0 0 0 3px rgba(255,255,255,0.3);
+    }
+    .protection-slider::-webkit-slider-thumb:active {
+        cursor: grabbing;
+        transform: scale(1.15);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.6), 0 0 0 4px rgba(255,255,255,0.4);
+    }
+    /* Firefox */
+    .protection-slider::-moz-range-thumb {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #fff;
+        border: 3px solid #212529;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 2px rgba(255,255,255,0.2);
+        cursor: grab;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .protection-slider::-moz-range-thumb:hover {
+        transform: scale(1.1);
+    }
+    .protection-slider::-moz-range-thumb:active {
+        cursor: grabbing;
+        transform: scale(1.15);
+    }
+    .protection-slider::-moz-range-track {
+        height: 12px;
+        border-radius: 6px;
+        background: transparent;
+    }
+    /* Level labels */
+    .protection-labels {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #6c757d;
+    }
+    .protection-labels span {
+        flex: 1;
+        text-align: center;
+        transition: color 0.2s ease, transform 0.2s ease;
+    }
+    .protection-labels span.active {
+        color: #fff;
+        transform: scale(1.1);
     }
 
     /* Modal improvements */
@@ -140,6 +208,54 @@
     .threats-scroll {
         max-height: 200px;
         overflow-y: auto;
+    }
+
+    /* Recently Blocked Section */
+    .blocked-domain-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        transition: background-color 0.2s ease;
+    }
+    .blocked-domain-item:last-child {
+        border-bottom: none;
+    }
+    .blocked-domain-item:hover {
+        background-color: rgba(255,255,255,0.05);
+    }
+    .blocked-domain-name {
+        font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        font-size: 0.85rem;
+        word-break: break-all;
+        flex: 1;
+        margin-right: 0.5rem;
+    }
+    .blocked-domain-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .whitelist-quick-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.75rem;
+        border-radius: 4px;
+        opacity: 0.8;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    .whitelist-quick-btn:hover {
+        opacity: 1;
+        transform: scale(1.05);
+    }
+    .blocked-scroll {
+        max-height: 280px;
+        overflow-y: auto;
+    }
+    .blocked-time {
+        font-size: 0.7rem;
+        color: #6c757d;
+        white-space: nowrap;
     }
 </style>
 {% endblock %}
@@ -192,34 +308,42 @@
                     </div>
                 </div>
 
-                <!-- Protection Level -->
+                <!-- Protection Level - Unified Slider -->
                 <div class="mb-4">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span class="text-muted small">Protection Level</span>
-                        <span id="level-name" class="badge badge-success">Strong</span>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="text-muted small text-uppercase font-weight-bold">Protection Level</span>
+                        <span id="level-name" class="badge badge-success px-3 py-2" style="font-size: 0.85rem;">Strong</span>
                     </div>
-                    <div class="protection-level-bar">
-                        <div class="protection-level-marker" id="level-marker" style="left: 60%;"></div>
+                    <div class="protection-slider-container">
+                        <input type="range" class="protection-slider" min="0" max="5" value="3" id="protection-level"
+                               oninput="updateLevelDisplay(this.value)" onchange="setProtectionLevel(this.value)">
                     </div>
-                    <input type="range" class="custom-range mt-2" min="0" max="5" value="3" id="protection-level"
-                           oninput="updateLevelDisplay(this.value)" onchange="setProtectionLevel(this.value)">
-                    <div class="d-flex justify-content-between text-muted" style="font-size: 0.65rem;">
-                        <span>OFF</span>
-                        <span>BASE</span>
-                        <span>ENHANCED</span>
-                        <span>STRONG</span>
-                        <span>MAX</span>
-                        <span>FULL</span>
+                    <div class="protection-labels" id="protection-labels">
+                        <span data-level="0">OFF</span>
+                        <span data-level="1">BASE</span>
+                        <span data-level="2">ENHANCED</span>
+                        <span data-level="3" class="active">STRONG</span>
+                        <span data-level="4">MAX</span>
+                        <span data-level="5">FULL</span>
                     </div>
                 </div>
 
-                <!-- ML Status -->
+                <!-- ML Status with Training Button -->
                 <div class="d-flex justify-content-between align-items-center p-2 bg-dark rounded">
                     <div>
                         <i class="fas fa-brain text-primary mr-2"></i>
                         <span>ML/LSTM Threat Detection</span>
                     </div>
-                    <span id="ml-status" class="badge badge-secondary">Checking...</span>
+                    <div class="d-flex align-items-center">
+                        <span id="ml-status" class="badge badge-secondary mr-2">Checking...</span>
+                        <button id="train-btn" class="btn btn-sm btn-outline-info" onclick="trainML()" title="Train ML Model" style="display: none;">
+                            <i class="fas fa-graduation-cap"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="ml-training-progress" class="mt-2 p-2 bg-info text-white rounded" style="display: none;">
+                    <i class="fas fa-spinner fa-spin mr-2"></i>
+                    <span id="ml-training-text">Training in progress...</span>
                 </div>
             </div>
         </div>
@@ -341,10 +465,44 @@
     </div>
 </div>
 
-{% if not db_available %}
-<div class="alert alert-warning">
-    <i class="fas fa-exclamation-triangle mr-2"></i>
-    <strong>Demo Mode:</strong> Database not connected. Showing sample data.
+<!-- Recently Blocked DNS Domains -->
+<div class="row">
+    <div class="col-12">
+        <div class="card card-outline card-danger">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-ban mr-2"></i>Recently Blocked Domains</h3>
+                <div class="card-tools">
+                    <span class="badge badge-danger mr-2" id="recent-blocked-count">0</span>
+                    <button class="btn btn-sm btn-tool" onclick="loadRecentBlocked()" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                        <i class="fas fa-minus"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="blocked-scroll" id="recent-blocked-list">
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-spinner fa-spin fa-2x mb-2"></i>
+                        <p class="mb-0">Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer text-muted small d-flex justify-content-between align-items-center">
+                <span>Last 24 hours • Quick whitelist with <i class="fas fa-check text-success"></i></span>
+                <button class="btn btn-sm btn-outline-light" onclick="showDnsSettings(); $('.nav-tabs a[href=&quot;#tab-blocked&quot;]').tab('show');">
+                    <i class="fas fa-list mr-1"></i>View All
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not data_available %}
+<div class="alert alert-info">
+    <i class="fas fa-info-circle mr-2"></i>
+    <strong>No Data:</strong> QSecBit agent is starting up. Security metrics will appear once data is collected.
 </div>
 {% endif %}
 
@@ -535,10 +693,12 @@ const LEVEL_COLORS = ['secondary', 'info', 'primary', 'success', 'warning', 'dan
 document.addEventListener('DOMContentLoaded', function() {
     loadDnsStats();
     loadMLStatus();
+    loadRecentBlocked();
     drawQsecbitGauge();
     setInterval(checkPauseStatus, 10000);
     setInterval(loadDnsStats, 30000);
     setInterval(refreshQsecbit, 30000);
+    setInterval(loadRecentBlocked, 60000); // Refresh blocked list every minute
 });
 
 // === DNS STATS ===
@@ -646,11 +806,21 @@ async function checkPauseStatus() {
 // === PROTECTION LEVEL ===
 function updateLevelDisplay(level) {
     const name = document.getElementById('level-name');
-    const marker = document.getElementById('level-marker');
+    const labels = document.querySelectorAll('#protection-labels span');
 
+    // Update badge
     name.textContent = LEVEL_NAMES[level];
-    name.className = 'badge badge-' + LEVEL_COLORS[level];
-    marker.style.left = (level * 20) + '%';
+    name.className = 'badge badge-' + LEVEL_COLORS[level] + ' px-3 py-2';
+    name.style.fontSize = '0.85rem';
+
+    // Highlight active label
+    labels.forEach((label, idx) => {
+        if (idx == level) {
+            label.classList.add('active');
+        } else {
+            label.classList.remove('active');
+        }
+    });
 }
 
 async function setProtectionLevel(level) {
@@ -676,23 +846,100 @@ async function loadMLStatus() {
         const data = await resp.json();
 
         const status = document.getElementById('ml-status');
+        const trainBtn = document.getElementById('train-btn');
+        const progress = document.getElementById('ml-training-progress');
+
         if (data.training_in_progress) {
             status.textContent = 'Training...';
-            status.className = 'badge badge-info';
+            status.className = 'badge badge-info mr-2';
+            trainBtn.style.display = 'none';
+            progress.style.display = 'block';
         } else if (data.model_trained) {
             status.textContent = 'Active';
-            status.className = 'badge badge-success';
+            status.className = 'badge badge-success mr-2';
+            trainBtn.style.display = 'inline-block';
+            trainBtn.title = 'Retrain ML Model';
+            progress.style.display = 'none';
         } else if (data.ready_for_training) {
             status.textContent = 'Ready';
-            status.className = 'badge badge-primary';
+            status.className = 'badge badge-primary mr-2';
+            trainBtn.style.display = 'inline-block';
+            trainBtn.title = `Train ML Model (${data.training_samples || 0} samples)`;
+            progress.style.display = 'none';
         } else {
             status.textContent = 'Learning';
-            status.className = 'badge badge-secondary';
+            status.className = 'badge badge-secondary mr-2';
+            // Show train button if we have some samples
+            if (data.training_samples && data.training_samples > 50) {
+                trainBtn.style.display = 'inline-block';
+                trainBtn.title = `Train ML Model (${data.training_samples} samples)`;
+            } else {
+                trainBtn.style.display = 'none';
+            }
+            progress.style.display = 'none';
         }
     } catch(e) {
         document.getElementById('ml-status').textContent = 'Offline';
-        document.getElementById('ml-status').className = 'badge badge-danger';
+        document.getElementById('ml-status').className = 'badge badge-danger mr-2';
+        document.getElementById('train-btn').style.display = 'none';
+        document.getElementById('ml-training-progress').style.display = 'none';
     }
+}
+
+async function trainML() {
+    const trainBtn = document.getElementById('train-btn');
+    const progress = document.getElementById('ml-training-progress');
+    const progressText = document.getElementById('ml-training-text');
+
+    // Confirm training
+    if (!confirm('Start ML training? This may take a few minutes.')) {
+        return;
+    }
+
+    // Show progress
+    trainBtn.disabled = true;
+    progress.style.display = 'block';
+    progressText.textContent = 'Starting training...';
+
+    try {
+        const resp = await fetch('/dnsxai/api/ml/train', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            progressText.textContent = 'Training complete!';
+            progress.className = 'mt-2 p-2 bg-success text-white rounded';
+            toastr.success('ML model trained successfully');
+
+            setTimeout(() => {
+                progress.style.display = 'none';
+                progress.className = 'mt-2 p-2 bg-info text-white rounded';
+                loadMLStatus();
+            }, 2000);
+        } else {
+            progressText.textContent = data.error || 'Training failed';
+            progress.className = 'mt-2 p-2 bg-danger text-white rounded';
+            toastr.error(data.error || 'Training failed');
+
+            setTimeout(() => {
+                progress.style.display = 'none';
+                progress.className = 'mt-2 p-2 bg-info text-white rounded';
+            }, 3000);
+        }
+    } catch(e) {
+        progressText.textContent = 'Connection error';
+        progress.className = 'mt-2 p-2 bg-danger text-white rounded';
+        toastr.error('Failed to connect to ML service');
+
+        setTimeout(() => {
+            progress.style.display = 'none';
+            progress.className = 'mt-2 p-2 bg-info text-white rounded';
+        }, 3000);
+    }
+
+    trainBtn.disabled = false;
 }
 
 // === QSECBIT GAUGE ===
@@ -971,6 +1218,129 @@ async function whitelistBlocked(domain) {
             toastr.success('Whitelisted');
         }
     } catch(e) {}
+}
+
+// === RECENTLY BLOCKED (Main Page) ===
+let recentBlockedCache = [];
+
+async function loadRecentBlocked() {
+    const container = document.getElementById('recent-blocked-list');
+    const countBadge = document.getElementById('recent-blocked-count');
+
+    try {
+        const resp = await fetch('/dnsxai/api/blocked?limit=20');
+        const data = await resp.json();
+        recentBlockedCache = data.blocked || [];
+
+        countBadge.textContent = recentBlockedCache.length;
+
+        if (recentBlockedCache.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-4">
+                    <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                    <p class="text-muted mb-0">No domains blocked recently</p>
+                    <small class="text-muted">Your network is clean!</small>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = recentBlockedCache.map(d => {
+            const esc = d.domain.replace(/'/g, "\\'");
+            const badge = d.ml_classified
+                ? '<span class="badge badge-primary" title="ML Classified">ML</span>'
+                : '<span class="badge badge-secondary" title="Blocklist Match">List</span>';
+            const time = d.timestamp ? formatTimeAgo(d.timestamp) : '';
+
+            return `
+                <div class="blocked-domain-item" id="blocked-${esc.replace(/[^a-z0-9]/gi, '_')}">
+                    <div class="blocked-domain-name">${d.domain}</div>
+                    <div class="blocked-domain-meta">
+                        ${time ? `<span class="blocked-time">${time}</span>` : ''}
+                        ${badge}
+                        <button class="btn btn-success whitelist-quick-btn" onclick="quickWhitelist('${esc}')" title="Add to Whitelist">
+                            <i class="fas fa-check"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch(e) {
+        console.error('Failed to load recent blocked:', e);
+        container.innerHTML = `
+            <div class="text-center py-4 text-muted">
+                <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                <p class="mb-0">Failed to load blocked domains</p>
+            </div>
+        `;
+    }
+}
+
+async function quickWhitelist(domain) {
+    const itemId = 'blocked-' + domain.replace(/[^a-z0-9]/gi, '_');
+    const item = document.getElementById(itemId);
+
+    // Show loading state
+    if (item) {
+        item.style.opacity = '0.5';
+        item.querySelector('button').disabled = true;
+        item.querySelector('button').innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({domain})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            // Animate removal
+            if (item) {
+                item.style.transition = 'all 0.3s ease';
+                item.style.transform = 'translateX(100%)';
+                item.style.opacity = '0';
+                setTimeout(() => {
+                    item.remove();
+                    // Update count
+                    recentBlockedCache = recentBlockedCache.filter(d => d.domain !== domain);
+                    document.getElementById('recent-blocked-count').textContent = recentBlockedCache.length;
+
+                    if (recentBlockedCache.length === 0) {
+                        loadRecentBlocked();
+                    }
+                }, 300);
+            }
+            toastr.success(`${domain} whitelisted`);
+
+            // Refresh modal whitelist if open
+            if ($('#dnsSettingsModal').hasClass('show')) {
+                loadWhitelist();
+            }
+        } else {
+            throw new Error(data.error || 'Failed');
+        }
+    } catch(e) {
+        // Restore state on error
+        if (item) {
+            item.style.opacity = '1';
+            item.querySelector('button').disabled = false;
+            item.querySelector('button').innerHTML = '<i class="fas fa-check"></i>';
+        }
+        toastr.error('Failed to whitelist domain');
+    }
+}
+
+function formatTimeAgo(timestamp) {
+    const now = Date.now();
+    const time = new Date(timestamp).getTime();
+    const diff = Math.floor((now - time) / 1000);
+
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
 }
 </script>
 {% endblock %}

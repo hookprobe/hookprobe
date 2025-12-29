@@ -1147,11 +1147,18 @@ $(document).ready(function() {
         $('#wan-primary-health').css('width', primaryHealth + '%');
         $('#wan-primary-interface').text(status.primary_interface || 'eth0');
 
-        // Primary status
+        // Determine if primary is active (multiple checks for reliability)
+        var primaryIsActive = (
+            status.active_interface === status.primary_interface ||
+            status.active_is_primary === true ||
+            status.primary_status === 'ACTIVE'
+        );
+
+        // Primary status badge
         var primaryBadge = $('#wan-primary-status');
-        if (status.active_interface === status.primary_interface) {
+        if (primaryIsActive) {
             primaryBadge.removeClass('badge-secondary badge-danger').addClass('badge-success').text('ACTIVE');
-        } else if (primaryHealth < 50) {
+        } else if (primaryHealth < 50 || status.primary_status === 'FAILED') {
             primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('FAILED');
         } else {
             primaryBadge.removeClass('badge-success badge-danger').addClass('badge-secondary').text('STANDBY');
@@ -1162,11 +1169,18 @@ $(document).ready(function() {
         $('#wan-backup-health').css('width', backupHealth + '%');
         $('#wan-backup-interface').text(status.backup_interface || 'wwan0');
 
-        // Backup status
+        // Determine if backup is active
+        var backupIsActive = (
+            status.active_interface === status.backup_interface ||
+            (status.active_is_primary === false && status.active_interface) ||
+            status.backup_status === 'ACTIVE'
+        );
+
+        // Backup status badge
         var backupBadge = $('#wan-backup-status');
-        if (status.active_interface === status.backup_interface) {
+        if (backupIsActive) {
             backupBadge.removeClass('badge-secondary badge-danger').addClass('badge-warning').text('ACTIVE');
-        } else if (backupHealth < 30) {
+        } else if (backupHealth < 30 || status.backup_status === 'FAILED') {
             backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('FAILED');
         } else {
             backupBadge.removeClass('badge-warning badge-danger').addClass('badge-secondary').text('STANDBY');
