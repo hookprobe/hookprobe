@@ -40,6 +40,7 @@ try:
         set_device_policy,
         get_device_db,
         get_policy_info,
+        get_recommended_policy,
         NetworkPolicy,
         POLICY_INFO,
     )
@@ -47,6 +48,25 @@ try:
     logger.info("Device policies module loaded successfully")
 except ImportError as e:
     logger.warning(f"Device policies module not available: {e}")
+
+
+def classify_device(mac_address: str) -> dict:
+    """Simple device classification based on MAC address.
+
+    Returns basic classification info. For full OUI lookup, the device_policies
+    module handles this during device discovery.
+    """
+    mac = mac_address.upper() if mac_address else ''
+    oui = mac[:8] if len(mac) >= 8 else mac
+
+    # Basic classification - actual device info comes from device_policies module
+    return {
+        'mac_address': mac,
+        'oui': oui,
+        'category': 'unknown',
+        'recommended_policy': 'quarantine',
+        'manufacturer': 'Unknown'
+    }
 
 # DFS Intelligence for WiFi channel data
 DFS_AVAILABLE = False
@@ -121,333 +141,9 @@ def _read_agent_data(filename: str, max_age_seconds: int = 60) -> dict:
     return None
 
 
-# ============================================================
-# REAL DATA COLLECTION - Live system data
-# ============================================================
-
-def get_real_devices():
-    """
-    Collect real device data from system sources with database sync.
-
-    Priority 1: Read from devices.json written by qsecbit agent
-    Priority 2: Direct ARP/DHCP collection (works if container has host network)
-
-    Database sync:
-    - Syncs detected devices to database (upsert)
-    - Merges persisted data (policies, blocked status) from database
-
-    Returns list of devices with real data.
-    """
-    # Priority 1: Try to read from qsecbit agent data file
-    agent_data = _read_agent_data('devices.json', max_age_seconds=120)
-    logger.info(f"Agent data loaded: {type(agent_data)}, keys: {list(agent_data.keys()) if isinstance(agent_data, dict) else 'N/A'}")
-
-    # Handle both old format (list) and new format (dict with 'devices' key)
-    device_list = None
-    if agent_data:
-        if isinstance(agent_data, dict) and 'devices' in agent_data:
-            # New format: {timestamp: ..., devices: [...], count: ...}
-            device_list = agent_data.get('devices', [])
-            logger.info(f"Found {len(device_list)} devices in agent data (dict format)")
-        elif isinstance(agent_data, list):
-            # Old format: plain list of devices
-            device_list = agent_data
-
-    if device_list and len(device_list) > 0:
-        # Load persisted device data from database (policies, blocked status, etc.)
-        db_devices = {}
-        if DB_AVAILABLE:
-            try:
-                db = get_db()
-                all_db_devices = db.fetch_all("""
-                    SELECT mac_address, network_policy, vlan_id, is_blocked, is_known,
-                           internet_access, lan_access, notes, first_seen
-                    FROM devices
-                """)
-                # Handle both dict and tuple results (psycopg2 may return either)
-                for row in all_db_devices:
-                    if isinstance(row, dict):
-                        mac_key = row.get('mac_address', '').upper()
-                        if mac_key:
-                            db_devices[mac_key] = row
-                    elif isinstance(row, (list, tuple)) and len(row) >= 1:
-                        # Tuple format: (mac_address, network_policy, vlan_id, is_blocked, is_known, ...)
-                        mac_key = str(row[0]).upper() if row[0] else ''
-                        if mac_key:
-                            db_devices[mac_key] = {
-                                'mac_address': row[0],
-                                'network_policy': row[1] if len(row) > 1 else None,
-                                'vlan_id': row[2] if len(row) > 2 else None,
-                                'is_blocked': row[3] if len(row) > 3 else False,
-                                'is_known': row[4] if len(row) > 4 else False,
-                                'internet_access': row[5] if len(row) > 5 else None,
-                                'lan_access': row[6] if len(row) > 6 else None,
-                                'notes': row[7] if len(row) > 7 else '',
-                                'first_seen': row[8] if len(row) > 8 else None,
-                            }
-                logger.debug(f"Loaded {len(db_devices)} devices from database for merge")
-            except Exception as e:
-                logger.warning(f"Could not load database devices: {e}")
-                db_devices = {}  # Continue without database data
-
-        # Enrich with OUI classification and format for SDN display
-        enriched = []
-        for device in device_list:
-            # Skip if device is not a dict (handle unexpected data formats)
-            if not isinstance(device, dict):
-                logger.warning(f"Skipping non-dict device entry: {type(device)}")
-                continue
-            mac = device.get('mac_address', '').upper()
-            classification = classify_device(mac)
-            category = classification.get('category', 'unknown')
-            manufacturer = classification.get('manufacturer', device.get('manufacturer', 'Unknown'))
-
-            # Check for persisted data in database (safely)
-            db_device = db_devices.get(mac) if isinstance(db_devices, dict) else None
-            if db_device is None or not isinstance(db_device, dict):
-                db_device = {}
-
-            # Determine network policy - use database value if set, otherwise derive from category
-            policy_map = {
-                'iot': 'lan_only',
-                'camera': 'lan_only',
-                'pos': 'internet_only',
-                'voice_assistant': 'internet_only',
-                'printer': 'lan_only',
-                'workstation': 'full_access',
-                'phone': 'full_access',
-                'tablet': 'full_access',
-                'unknown': 'default',
-            }
-            default_policy = policy_map.get(category, 'default')
-            network_policy = db_device.get('network_policy') or default_policy
-
-            # Use database values for persistence, fallback to defaults
-            vlan_id = db_device.get('vlan_id') or 100
-            is_blocked = db_device.get('is_blocked', False)
-            is_known = db_device.get('is_known', False)
-
-            # Internet/LAN access from database or derived from policy
-            if db_device.get('internet_access') is not None:
-                internet_access = db_device['internet_access']
-            else:
-                internet_access = network_policy in ('full_access', 'internet_only')
-
-            if db_device.get('lan_access') is not None:
-                lan_access = db_device['lan_access']
-            else:
-                lan_access = network_policy in ('full_access', 'lan_only')
-
-            # First seen from database if available
-            first_seen = device.get('first_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            if db_device.get('first_seen'):
-                first_seen = str(db_device['first_seen'])
-
-            enriched_device = {
-                'mac_address': mac,
-                'ip_address': device.get('ip_address', ''),
-                'hostname': device.get('hostname') or f'device-{mac[-5:].replace(":", "")}',
-                'device_type': category,
-                'manufacturer': manufacturer,
-                'network_policy': network_policy,
-                'vlan_id': vlan_id,
-                'internet_access': internet_access,
-                'lan_access': lan_access,
-                'is_blocked': is_blocked,
-                'is_known': is_known,
-                # Check multiple state indicators for online status
-                'is_online': (
-                    device.get('is_online', False) or
-                    device.get('state') in ('REACHABLE', 'DELAY', 'reachable', 'delay') or
-                    device.get('status') in ('online', 'ONLINE', 'active', 'ACTIVE')
-                ),
-                'oui_category': category,
-                'auto_policy': classification.get('recommended_policy', 'default'),
-                'first_seen': first_seen,
-                'last_seen': device.get('last_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-                'bytes_sent': device.get('bytes_sent', 0),
-                'bytes_received': device.get('bytes_received', 0),
-                'notes': db_device.get('notes', ''),
-            }
-            enriched.append(enriched_device)
-
-            # Sync to database (upsert) - only if not already in database
-            if DB_AVAILABLE and mac not in db_devices:
-                try:
-                    db = get_db()
-                    db.upsert_device(
-                        mac_address=mac,
-                        ip_address=device.get('ip_address'),
-                        hostname=device.get('hostname'),
-                        vlan_id=100,  # Default VLAN
-                        device_type=category,
-                        manufacturer=manufacturer
-                    )
-                except Exception as e:
-                    logger.debug(f"Could not sync device {mac} to database: {e}")
-
-        logger.info(f"Returning {len(enriched)} enriched devices from agent data file")
-        return enriched
-
-    # Priority 2: Fallback to direct collection (legacy, works with host network)
-    logger.info("No agent data available, falling back to direct collection")
-    devices = []
-    arp_devices = {}
-    dhcp_leases = {}
-    blocked_macs = set()
-
-    # 1. Get ARP table for live devices
-    try:
-        result = subprocess.run(
-            ['ip', 'neigh', 'show'],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().split('\n'):
-                if not line or 'FAILED' in line:
-                    continue
-                parts = line.split()
-                if len(parts) < 4:
-                    continue
-
-                ip_address = parts[0]
-                mac_address = None
-                state = 'STALE'
-
-                # Find MAC address
-                for i, part in enumerate(parts):
-                    if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', part):
-                        mac_address = part.upper()
-                        break
-
-                if 'REACHABLE' in line:
-                    state = 'REACHABLE'
-                elif 'STALE' in line:
-                    state = 'STALE'
-                elif 'DELAY' in line:
-                    state = 'DELAY'
-
-                if mac_address:
-                    arp_devices[mac_address] = {
-                        'ip_address': ip_address,
-                        'state': state,
-                        'is_online': state in ('REACHABLE', 'DELAY'),
-                    }
-    except FileNotFoundError:
-        # 'ip' command not available in container - this is expected
-        # Device data should come from the qsecbit agent's devices.json file
-        logger.debug("ARP collection skipped: 'ip' command not available in container")
-    except Exception as e:
-        logger.warning(f"Failed to read ARP table: {e}")
-
-    # 2. Get DHCP leases for hostnames
-    dhcp_files = [
-        '/var/lib/misc/dnsmasq.leases',
-        '/var/lib/dnsmasq/dnsmasq.leases',
-        '/var/lib/dhcp/dhcpd.leases',
-    ]
-    for dhcp_file in dhcp_files:
-        try:
-            with open(dhcp_file, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) >= 4:
-                        # Format: timestamp MAC IP hostname client-id
-                        mac = parts[1].upper()
-                        ip = parts[2]
-                        hostname = parts[3] if parts[3] != '*' else None
-                        dhcp_leases[mac] = {
-                            'ip_address': ip,
-                            'hostname': hostname,
-                            'lease_time': parts[0],
-                        }
-        except FileNotFoundError:
-            continue
-        except Exception as e:
-            logger.warning(f"Failed to read DHCP leases from {dhcp_file}: {e}")
-
-    # 3. Get blocked MACs from OVS flows
-    try:
-        result = subprocess.run(
-            ['ovs-ofctl', 'dump-flows', 'FTS'],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if 'actions=drop' in line and 'dl_src=' in line:
-                    match = re.search(r'dl_src=([0-9A-Fa-f:]+)', line)
-                    if match:
-                        blocked_macs.add(match.group(1).upper())
-    except Exception as e:
-        logger.debug(f"Failed to read OVS flows: {e}")
-
-    # 4. Merge data sources
-    all_macs = set(arp_devices.keys()) | set(dhcp_leases.keys())
-
-    for mac in all_macs:
-        arp_info = arp_devices.get(mac, {})
-        dhcp_info = dhcp_leases.get(mac, {})
-
-        # Get IP from ARP first, fallback to DHCP
-        ip_address = arp_info.get('ip_address') or dhcp_info.get('ip_address', '')
-
-        # Online if in ARP table with REACHABLE/DELAY state
-        is_online = arp_info.get('is_online', False)
-
-        # Blocked if MAC is in OVS drop flows
-        is_blocked = mac in blocked_macs
-
-        # Hostname from DHCP
-        hostname = dhcp_info.get('hostname', '')
-
-        # OUI classification
-        classification = classify_device(mac)
-        manufacturer = classification.get('manufacturer', 'Unknown')
-        category = classification.get('category', 'unknown')
-        recommended_policy = classification.get('recommended_policy', 'default')
-
-        # Determine network policy based on category
-        policy_map = {
-            'iot': 'lan_only',
-            'camera': 'lan_only',
-            'pos': 'internet_only',
-            'voice_assistant': 'internet_only',
-            'printer': 'lan_only',
-            'workstation': 'full_access',
-            'phone': 'full_access',
-            'tablet': 'full_access',
-            'unknown': 'default',
-        }
-        network_policy = policy_map.get(category, recommended_policy)
-
-        devices.append({
-            'mac_address': mac,
-            'ip_address': ip_address,
-            'hostname': hostname or f'device-{mac[-5:].replace(":", "")}',
-            'device_type': category,
-            'manufacturer': manufacturer,
-            'network_policy': network_policy,
-            'vlan_id': 100,  # Default LAN VLAN
-            'internet_access': network_policy in ('full_access', 'internet_only'),
-            'lan_access': network_policy in ('full_access', 'lan_only'),
-            'is_blocked': is_blocked,
-            'is_online': is_online,
-            'oui_category': category,
-            'auto_policy': recommended_policy,
-            'first_seen': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'last_seen': datetime.now().strftime('%Y-%m-%d %H:%M:%S') if is_online else '',
-            'bytes_sent': 0,
-            'bytes_received': 0,
-        })
-
-    if not devices:
-        logger.info("No devices found. Check: 1) qsecbit agent is running, "
-                    "2) /opt/hookprobe/fortress/data/devices.json exists, "
-                    "3) clients are connected to the network")
-    else:
-        logger.info(f"Returning {len(devices)} devices from direct collection (Priority 2)")
-
-    return devices
+# NOTE: The old get_real_devices() function has been removed.
+# Device management now uses the simple device_policies module with SQLite storage.
+# See device_policies.py in lib/ for the new implementation.
 
 
 def get_dfs_intelligence():
@@ -665,197 +361,9 @@ def calculate_channel_score(channel: int, radar_events: int = 0) -> int:
     return max(0, min(100, score))
 
 
-def get_real_network_stats(devices):
-    """
-    Calculate real network statistics from device list.
-    """
-    stats = {
-        'total_devices': len(devices),
-        'online_devices': 0,
-        'offline_devices': 0,
-        'blocked_devices': 0,
-        'policy_counts': {},
-        'category_counts': {},
-    }
-
-    for device in devices:
-        if device.get('is_online'):
-            stats['online_devices'] += 1
-        else:
-            stats['offline_devices'] += 1
-
-        if device.get('is_blocked'):
-            stats['blocked_devices'] += 1
-
-        policy = device.get('network_policy', 'default')
-        stats['policy_counts'][policy] = stats['policy_counts'].get(policy, 0) + 1
-
-        category = device.get('oui_category', 'unknown')
-        stats['category_counts'][category] = stats['category_counts'].get(category, 0) + 1
-
-    return stats
-
-
 # ============================================================
-# DEMO DATA (fallback only)
+# DEMO DATA (fallback only - kept for VLANs and policies)
 # ============================================================
-
-def get_demo_devices():
-    """Return demo devices with full SDN info."""
-    return [
-        {
-            'mac_address': 'B8:27:EB:12:34:56',
-            'ip_address': '192.168.1.105',
-            'hostname': 'rpi-sensor-1',
-            'device_type': 'iot',
-            'manufacturer': 'Raspberry Pi Foundation',
-            'network_policy': 'lan_only',
-            'vlan_id': 99,
-            'internet_access': False,
-            'lan_access': True,
-            'is_blocked': False,
-            'is_online': True,
-            'oui_category': 'iot',
-            'auto_policy': 'lan_only',
-            'first_seen': '2025-12-10 08:00:00',
-            'last_seen': '2025-12-17 14:30:00',
-            'bytes_sent': 1024000,
-            'bytes_received': 2048000,
-        },
-        {
-            'mac_address': '00:17:88:AA:BB:CC',
-            'ip_address': '192.168.1.110',
-            'hostname': 'hue-bridge',
-            'device_type': 'iot',
-            'manufacturer': 'Philips Hue',
-            'network_policy': 'lan_only',
-            'vlan_id': 99,
-            'internet_access': False,
-            'lan_access': True,
-            'is_blocked': False,
-            'is_online': True,
-            'oui_category': 'iot',
-            'auto_policy': 'lan_only',
-            'first_seen': '2025-12-01 00:00:00',
-            'last_seen': '2025-12-17 14:35:00',
-            'bytes_sent': 512000,
-            'bytes_received': 256000,
-        },
-        {
-            'mac_address': '58:E6:BA:11:22:33',
-            'ip_address': '192.168.1.50',
-            'hostname': 'square-pos-1',
-            'device_type': 'pos',
-            'manufacturer': 'Square Inc.',
-            'network_policy': 'internet_only',
-            'vlan_id': 20,
-            'internet_access': True,
-            'lan_access': False,
-            'is_blocked': False,
-            'is_online': True,
-            'oui_category': 'pos',
-            'auto_policy': 'internet_only',
-            'first_seen': '2025-12-05 09:00:00',
-            'last_seen': '2025-12-17 14:40:00',
-            'bytes_sent': 5120000,
-            'bytes_received': 1024000,
-        },
-        {
-            'mac_address': '0C:47:C9:AA:BB:CC',
-            'ip_address': '192.168.1.120',
-            'hostname': 'echo-dot-kitchen',
-            'device_type': 'voice_assistant',
-            'manufacturer': 'Amazon Echo',
-            'network_policy': 'internet_only',
-            'vlan_id': 99,
-            'internet_access': True,
-            'lan_access': False,
-            'is_blocked': False,
-            'is_online': True,
-            'oui_category': 'voice_assistant',
-            'auto_policy': 'internet_only',
-            'first_seen': '2025-12-08 10:00:00',
-            'last_seen': '2025-12-17 14:20:00',
-            'bytes_sent': 2048000,
-            'bytes_received': 10240000,
-        },
-        {
-            'mac_address': '00:0C:B5:44:55:66',
-            'ip_address': '192.168.1.200',
-            'hostname': 'cam-front-door',
-            'device_type': 'camera',
-            'manufacturer': 'Hikvision',
-            'network_policy': 'lan_only',
-            'vlan_id': 99,
-            'internet_access': False,
-            'lan_access': True,
-            'is_blocked': False,
-            'is_online': True,
-            'oui_category': 'camera',
-            'auto_policy': 'lan_only',
-            'first_seen': '2025-12-01 00:00:00',
-            'last_seen': '2025-12-17 14:45:00',
-            'bytes_sent': 102400000,
-            'bytes_received': 1024000,
-        },
-        {
-            'mac_address': '3C:06:30:DE:AD:BE',
-            'ip_address': '192.168.1.25',
-            'hostname': 'macbook-sarah',
-            'device_type': 'workstation',
-            'manufacturer': 'Apple Inc.',
-            'network_policy': 'full_access',
-            'vlan_id': 30,
-            'internet_access': True,
-            'lan_access': True,
-            'is_blocked': False,
-            'is_online': True,
-            'oui_category': 'workstation',
-            'auto_policy': 'full_access',
-            'first_seen': '2025-12-12 08:30:00',
-            'last_seen': '2025-12-17 14:50:00',
-            'bytes_sent': 50240000,
-            'bytes_received': 150720000,
-        },
-        {
-            'mac_address': '00:1E:0B:77:88:99',
-            'ip_address': '192.168.1.210',
-            'hostname': 'hp-printer-office',
-            'device_type': 'printer',
-            'manufacturer': 'HP Inc.',
-            'network_policy': 'lan_only',
-            'vlan_id': 99,
-            'internet_access': False,
-            'lan_access': True,
-            'is_blocked': False,
-            'is_online': False,
-            'oui_category': 'printer',
-            'auto_policy': 'lan_only',
-            'first_seen': '2025-12-03 00:00:00',
-            'last_seen': '2025-12-17 12:00:00',
-            'bytes_sent': 10240000,
-            'bytes_received': 5120000,
-        },
-        {
-            'mac_address': 'DE:AD:BE:EF:CA:FE',
-            'ip_address': '192.168.1.99',
-            'hostname': 'unknown-device',
-            'device_type': 'unknown',
-            'manufacturer': 'Unknown',
-            'network_policy': 'isolated',
-            'vlan_id': 40,
-            'internet_access': False,
-            'lan_access': False,
-            'is_blocked': True,
-            'is_online': False,
-            'oui_category': 'unknown',
-            'auto_policy': 'default',
-            'first_seen': '2025-12-17 10:00:00',
-            'last_seen': '2025-12-17 10:05:00',
-            'bytes_sent': 1024,
-            'bytes_received': 2048,
-        },
-    ]
 
 
 def get_demo_policies():
@@ -918,31 +426,6 @@ def get_demo_vlans():
         {'vlan_id': 40, 'name': 'Guest', 'subnet': '10.250.40.0/24', 'device_count': 1},
         {'vlan_id': 99, 'name': 'IoT', 'subnet': '10.250.99.0/24', 'device_count': 3},
     ]
-
-
-def get_demo_stats():
-    """Return demo statistics."""
-    return {
-        'total_devices': 8,
-        'online_devices': 6,
-        'offline_devices': 2,
-        'blocked_devices': 1,
-        'policy_counts': {
-            'full_access': 1,
-            'lan_only': 4,
-            'internet_only': 2,
-            'isolated': 1,
-        },
-        'category_counts': {
-            'iot': 2,
-            'camera': 1,
-            'pos': 1,
-            'voice_assistant': 1,
-            'workstation': 1,
-            'printer': 1,
-            'unknown': 1,
-        },
-    }
 
 
 def format_device_for_template(device):
@@ -1115,35 +598,6 @@ def index():
         policy_manager_available=DEVICE_POLICIES_AVAILABLE,
         using_real_data=using_real_data
     )
-
-
-def calculate_stats(devices):
-    """Calculate statistics from device list."""
-    stats = {
-        'total_devices': len(devices),
-        'online_devices': 0,
-        'offline_devices': 0,
-        'blocked_devices': 0,
-        'policy_counts': {},
-        'category_counts': {},
-    }
-
-    for device in devices:
-        if device.get('is_online'):
-            stats['online_devices'] += 1
-        else:
-            stats['offline_devices'] += 1
-
-        if device.get('is_blocked'):
-            stats['blocked_devices'] += 1
-
-        policy = device.get('network_policy', 'default')
-        stats['policy_counts'][policy] = stats['policy_counts'].get(policy, 0) + 1
-
-        category = device.get('oui_category', 'unknown')
-        stats['category_counts'][category] = stats['category_counts'].get(category, 0) + 1
-
-    return stats
 
 
 # ============================================================
@@ -1588,17 +1042,18 @@ def api_devices():
 @sdn_bp.route('/api/debug/devices')
 @login_required
 def api_debug_devices():
-    """Debug endpoint to view raw device data from agent file."""
+    """Debug endpoint to view device data from agent file and policy database."""
     data_file = DATA_DIR / 'devices.json'
     result = {
         'file_path': str(data_file),
         'file_exists': data_file.exists(),
         'raw_data': None,
-        'parsed_devices': None,
-        'get_real_devices_result': None,
+        'device_policies_available': DEVICE_POLICIES_AVAILABLE,
+        'devices_from_module': None,
         'errors': []
     }
 
+    # Check raw agent file
     if data_file.exists():
         try:
             result['raw_data'] = json.loads(data_file.read_text())
@@ -1607,15 +1062,19 @@ def api_debug_devices():
         except Exception as e:
             result['errors'].append(f"Failed to read raw file: {e}")
 
-    try:
-        devices = get_real_devices()
-        result['get_real_devices_result'] = {
-            'success': devices is not None,
-            'count': len(devices) if devices else 0,
-            'devices': devices[:5] if devices else []  # First 5 only
-        }
-    except Exception as e:
-        result['errors'].append(f"get_real_devices() error: {e}")
+    # Check device_policies module
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
+            devices = get_all_devices()
+            result['devices_from_module'] = {
+                'success': True,
+                'count': len(devices),
+                'devices': devices[:5] if devices else []  # First 5 only
+            }
+        except Exception as e:
+            result['errors'].append(f"get_all_devices() error: {e}")
+    else:
+        result['errors'].append("device_policies module not available")
 
     return jsonify(result)
 
@@ -1915,37 +1374,19 @@ def api_wifi_intelligence():
 @sdn_bp.route('/export')
 @login_required
 def export_devices():
-    """Export device inventory with SDN info."""
+    """Export device inventory with SDN info.
+
+    Uses new simple device_policies module.
+    """
     format_type = request.args.get('format', 'json')
     devices = []
 
-    # Priority 1: Try to get real data from system
-    try:
-        real_devices = get_real_devices()
-        if real_devices:
-            devices = real_devices
-    except Exception:
-        pass
-
-    # Priority 2: Try database if no real data
-    if not devices and DB_AVAILABLE:
+    # Use new simple device_policies module
+    if DEVICE_POLICIES_AVAILABLE:
         try:
-            device_mgr = get_device_manager()
-            devices = device_mgr.get_all_devices()
-            for device in devices:
-                classification = classify_device(device.get('mac_address', ''))
-                device['oui_category'] = classification.get('category', 'unknown')
-                device['auto_policy'] = classification.get('recommended_policy', 'default')
-
-                for key in ['first_seen', 'last_seen']:
-                    if device.get(key) and not isinstance(device[key], str):
-                        device[key] = str(device[key])
-        except Exception:
-            pass
-
-    # No demo fallback - return empty if no real devices found
-    if not devices:
-        devices = []
+            devices = get_all_devices()
+        except Exception as e:
+            logger.error(f"Failed to get devices for export: {e}")
 
     if format_type == 'csv':
         import csv
