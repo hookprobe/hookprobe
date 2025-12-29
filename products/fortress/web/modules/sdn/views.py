@@ -145,27 +145,40 @@ DATA_DIR = Path('/opt/hookprobe/fortress/data')
 
 
 def _read_agent_data(filename: str, max_age_seconds: int = 60) -> dict:
-    """Read data from qsecbit agent data file if recent enough."""
+    """Read data from qsecbit agent data file.
+
+    Returns data if file exists. If data has a timestamp, checks freshness
+    but still returns stale data (marked with _stale=True) rather than None.
+    This ensures we always have data to display when the agent is running.
+    """
     data_file = DATA_DIR / filename
     if not data_file.exists():
+        logger.debug(f"Agent data file not found: {data_file}")
         return None
     try:
         data = json.loads(data_file.read_text())
-        # Check if data is recent
+        # Check if data is recent (but return stale data anyway)
         if 'timestamp' in data:
             from datetime import datetime
             file_ts = data['timestamp']
             if isinstance(file_ts, str):
-                # Parse ISO format timestamp
-                file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
-                if file_time.tzinfo:
-                    file_time = file_time.replace(tzinfo=None)
-                age = (datetime.now() - file_time).total_seconds()
-                if age < max_age_seconds:
-                    return data
-        else:
-            # No timestamp, just return the data
-            return data
+                try:
+                    # Parse ISO format timestamp
+                    file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
+                    if file_time.tzinfo:
+                        file_time = file_time.replace(tzinfo=None)
+                    age = (datetime.now() - file_time).total_seconds()
+                    if age >= max_age_seconds:
+                        # Data is stale but still usable - log warning and mark as stale
+                        logger.debug(f"Agent data {filename} is stale ({age:.0f}s old)")
+                        data['_stale'] = True
+                        data['_age_seconds'] = age
+                except ValueError as e:
+                    logger.debug(f"Could not parse timestamp in {filename}: {e}")
+        # Always return data if we got this far
+        return data
+    except json.JSONDecodeError as e:
+        logger.warning(f"Invalid JSON in agent data {filename}: {e}")
     except Exception as e:
         logger.debug(f"Failed to read agent data from {filename}: {e}")
     return None
@@ -186,10 +199,21 @@ def get_real_devices():
     """
     # Priority 1: Try to read from qsecbit agent data file
     agent_data = _read_agent_data('devices.json', max_age_seconds=120)
-    if agent_data and isinstance(agent_data, list) and len(agent_data) > 0:
+
+    # Handle both old format (list) and new format (dict with 'devices' key)
+    device_list = None
+    if agent_data:
+        if isinstance(agent_data, dict) and 'devices' in agent_data:
+            # New format: {timestamp: ..., devices: [...], count: ...}
+            device_list = agent_data.get('devices', [])
+        elif isinstance(agent_data, list):
+            # Old format: plain list of devices
+            device_list = agent_data
+
+    if device_list and len(device_list) > 0:
         # Enrich with OUI classification and format for SDN display
         enriched = []
-        for device in agent_data:
+        for device in device_list:
             mac = device.get('mac_address', '')
             classification = classify_device(mac)
             category = classification.get('category', 'unknown')

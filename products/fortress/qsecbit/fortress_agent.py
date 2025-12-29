@@ -956,15 +956,100 @@ class QSecBitFortressAgent:
         return health
 
     def save_wan_health(self):
-        """Collect and save WAN health data for SLAAI dashboard."""
+        """Collect and save WAN health data for SLAAI dashboard.
+
+        Merges data from:
+        1. Live ping connectivity tests (collect_wan_health)
+        2. PBR failover state file (/run/fortress/wan-failover.state)
+        3. PBR JSON state file (/var/lib/fortress/wan-failover-state.json)
+        """
         try:
             health = self.collect_wan_health()
+
+            # Try to read PBR state for additional info (route switching status)
+            pbr_state = self._read_pbr_state()
+            if pbr_state:
+                # Merge PBR status info
+                health['pbr'] = pbr_state
+
+                # Override active WAN if PBR has definitive info
+                if pbr_state.get('active_wan'):
+                    if pbr_state['active_wan'] != health.get('active'):
+                        logger.debug(f"PBR override: active WAN {pbr_state['active_wan']} vs ping {health.get('active')}")
+                        health['active'] = pbr_state['active_wan']
+                        health['active_is_primary'] = pbr_state.get('primary_status') == 'ACTIVE'
+
+                # Use PBR status if our ping tests failed but PBR says link is up
+                if health.get('primary') and not health['primary'].get('is_connected'):
+                    if pbr_state.get('primary_status') == 'ACTIVE':
+                        health['primary']['status'] = 'ACTIVE'
+                        health['primary']['health_score'] = max(0.5, health['primary'].get('health_score', 0))
+
+                if health.get('backup') and not health['backup'].get('is_connected'):
+                    if pbr_state.get('backup_status') == 'ACTIVE':
+                        health['backup']['status'] = 'ACTIVE'
+                        health['backup']['health_score'] = max(0.5, health['backup'].get('health_score', 0))
+
             wan_file = DATA_DIR / "wan_health.json"
             with open(wan_file, 'w') as f:
                 json.dump(health, f, indent=2)
-            logger.debug(f"WAN health saved: state={health['state']}")
+            logger.debug(f"WAN health saved: state={health['state']}, active={health.get('active')}")
         except Exception as e:
             logger.warning(f"Failed to save WAN health: {e}")
+
+    def _read_pbr_state(self) -> Dict:
+        """Read PBR (Policy-Based Routing) failover state.
+
+        Returns info about which WAN is currently active according to PBR.
+        """
+        state = {}
+
+        # Try shell format state file first (more frequently updated)
+        shell_state_file = Path('/run/fortress/wan-failover.state')
+        if shell_state_file.exists():
+            try:
+                content = shell_state_file.read_text()
+                for line in content.strip().split('\n'):
+                    if '=' in line:
+                        key, _, value = line.partition('=')
+                        key = key.strip().lower()
+                        value = value.strip().strip('"\'')
+                        if key == 'primary_status':
+                            state['primary_status'] = value
+                        elif key == 'backup_status':
+                            state['backup_status'] = value
+                        elif key == 'active_wan':
+                            state['active_wan'] = value
+                        elif key == 'primary_interface':
+                            state['primary_interface'] = value
+                        elif key == 'backup_interface':
+                            state['backup_interface'] = value
+                        elif key == 'failover_count':
+                            state['failover_count'] = int(value) if value.isdigit() else 0
+                state['source'] = 'shell'
+                return state
+            except Exception as e:
+                logger.debug(f"Failed to read PBR shell state: {e}")
+
+        # Try JSON format state file
+        json_state_file = Path('/var/lib/fortress/wan-failover-state.json')
+        if json_state_file.exists():
+            try:
+                data = json.loads(json_state_file.read_text())
+                state = {
+                    'primary_status': data.get('primary', {}).get('status', 'UNKNOWN'),
+                    'backup_status': data.get('backup', {}).get('status', 'UNKNOWN'),
+                    'active_wan': data.get('active_interface'),
+                    'primary_interface': data.get('primary', {}).get('interface'),
+                    'backup_interface': data.get('backup', {}).get('interface'),
+                    'failover_count': data.get('failover_count', 0),
+                    'source': 'json',
+                }
+                return state
+            except Exception as e:
+                logger.debug(f"Failed to read PBR JSON state: {e}")
+
+        return {}
 
     def collect_interface_traffic(self) -> List[Dict]:
         """Collect interface traffic statistics for all relevant interfaces.
@@ -1251,8 +1336,14 @@ class QSecBitFortressAgent:
         try:
             devices = self.collect_devices()
             devices_file = DATA_DIR / "devices.json"
+            # Wrap in dict with timestamp for age validation
+            data = {
+                'timestamp': datetime.now().isoformat(),
+                'devices': devices,
+                'count': len(devices),
+            }
             with open(devices_file, 'w') as f:
-                json.dump(devices, f, indent=2)
+                json.dump(data, f, indent=2)
             logger.debug(f"Devices saved: {len(devices)} devices")
         except Exception as e:
             logger.warning(f"Failed to save devices: {e}")

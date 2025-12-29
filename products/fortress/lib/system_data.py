@@ -587,14 +587,35 @@ def get_wan_health() -> Dict:
     if wan_health_file.exists():
         try:
             data = json.loads(wan_health_file.read_text())
-            # Check if data is recent (< 60 seconds old)
+            # Check if data exists - be lenient with age (agent writes every 30s)
+            # Allow up to 120 seconds for startup delays or slow systems
             file_ts = data.get('timestamp', '')
             if file_ts:
-                file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
-                age = (datetime.now() - file_time.replace(tzinfo=None)).total_seconds()
-                if age < 60:
+                try:
+                    file_time = datetime.fromisoformat(file_ts.replace('Z', '+00:00'))
+                    age = (datetime.now() - file_time.replace(tzinfo=None)).total_seconds()
+                    if age < 120:
+                        _set_cached('wan_health', data)
+                        return data
+                    else:
+                        logger.warning(f"WAN health data is stale ({age:.0f}s old), using anyway")
+                        # Still return stale data rather than failed fallback
+                        data['_stale'] = True
+                        data['_age_seconds'] = age
+                        _set_cached('wan_health', data)
+                        return data
+                except ValueError as e:
+                    logger.debug(f"Could not parse timestamp '{file_ts}': {e}")
+                    # No valid timestamp, but data exists - return it
                     _set_cached('wan_health', data)
                     return data
+            else:
+                # No timestamp field, just return the data
+                logger.debug("WAN health file has no timestamp, using anyway")
+                _set_cached('wan_health', data)
+                return data
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in wan_health.json: {e}")
         except Exception as e:
             logger.debug(f"Could not read wan_health.json: {e}")
 

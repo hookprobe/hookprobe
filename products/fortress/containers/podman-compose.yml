@@ -294,6 +294,8 @@ services:
       - /etc/hostapd:/etc/hostapd:ro  # Read hostapd config for WiFi SSID/channel
       - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
       - /run/hostapd:/run/hostapd:ro  # Access hostapd control socket
+      - /run/fortress:/run/fortress:ro  # PBR failover state file
+      - /var/lib/fortress:/var/lib/fortress:ro  # PBR JSON state file
     # Host network REQUIRED for traffic analysis on all interfaces
     network_mode: host
     cap_add:
