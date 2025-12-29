@@ -1159,7 +1159,8 @@ def index():
 
     # Always use standard policies
     policies = get_demo_policies()
-    stats = get_real_network_stats(devices) if devices else get_demo_stats()
+    # Always use real stats from actual devices - no demo fallback
+    stats = get_real_network_stats(devices)
 
     logger.info(f"Rendering SDN index with {len(devices)} devices, using_real_data={using_real_data}")
     if devices:
