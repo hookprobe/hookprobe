@@ -227,11 +227,31 @@ def get_real_devices():
                            internet_access, lan_access, notes, first_seen
                     FROM devices
                 """)
+                # Handle both dict and tuple results (psycopg2 may return either)
                 for row in all_db_devices:
-                    db_devices[row['mac_address'].upper()] = row
+                    if isinstance(row, dict):
+                        mac_key = row.get('mac_address', '').upper()
+                        if mac_key:
+                            db_devices[mac_key] = row
+                    elif isinstance(row, (list, tuple)) and len(row) >= 1:
+                        # Tuple format: (mac_address, network_policy, vlan_id, is_blocked, is_known, ...)
+                        mac_key = str(row[0]).upper() if row[0] else ''
+                        if mac_key:
+                            db_devices[mac_key] = {
+                                'mac_address': row[0],
+                                'network_policy': row[1] if len(row) > 1 else None,
+                                'vlan_id': row[2] if len(row) > 2 else None,
+                                'is_blocked': row[3] if len(row) > 3 else False,
+                                'is_known': row[4] if len(row) > 4 else False,
+                                'internet_access': row[5] if len(row) > 5 else None,
+                                'lan_access': row[6] if len(row) > 6 else None,
+                                'notes': row[7] if len(row) > 7 else '',
+                                'first_seen': row[8] if len(row) > 8 else None,
+                            }
                 logger.debug(f"Loaded {len(db_devices)} devices from database for merge")
             except Exception as e:
-                logger.debug(f"Could not load database devices: {e}")
+                logger.warning(f"Could not load database devices: {e}")
+                db_devices = {}  # Continue without database data
 
         # Enrich with OUI classification and format for SDN display
         enriched = []
@@ -241,8 +261,10 @@ def get_real_devices():
             category = classification.get('category', 'unknown')
             manufacturer = classification.get('manufacturer', device.get('manufacturer', 'Unknown'))
 
-            # Check for persisted data in database
-            db_device = db_devices.get(mac, {})
+            # Check for persisted data in database (safely)
+            db_device = db_devices.get(mac) if isinstance(db_devices, dict) else None
+            if db_device is None or not isinstance(db_device, dict):
+                db_device = {}
 
             # Determine network policy - use database value if set, otherwise derive from category
             policy_map = {
