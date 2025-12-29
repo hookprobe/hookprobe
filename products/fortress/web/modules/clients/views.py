@@ -186,18 +186,8 @@ def get_vlans():
 @clients_bp.route('/')
 @login_required
 def index():
-    """Device inventory page - uses real system data."""
-    devices = get_all_devices()
-    vlans = get_vlans()
-    device_counts = get_device_count()
-
-    return render_template(
-        'clients/index.html',
-        devices=devices,
-        vlans=vlans,
-        device_counts=device_counts,
-        system_data_available=True  # Always true now - reads from real data
-    )
+    """Redirect to unified SDN AI page."""
+    return redirect(url_for('sdn.index'))
 
 
 @clients_bp.route('/discover', methods=['POST'])
