@@ -129,5 +129,8 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
-# Start DNS engine in foreground
-exec python engine.py "$@"
+# Start DNS engine in foreground with server mode
+# --serve: Start the DNS resolver service
+# --address: Listen on all interfaces (required for container networking)
+# --port: Explicit port (matches container port mapping)
+exec python engine.py --serve --address 0.0.0.0 --port 5353 "$@"
