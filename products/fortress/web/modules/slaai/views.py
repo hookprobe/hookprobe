@@ -72,12 +72,12 @@ def get_demo_sla_status():
         'cost_status': {
             'interface': 'wwan0',
             'daily_usage_mb': 145,
-            'daily_budget_mb': 500,
+            'daily_budget_mb': None,  # None = unlimited (no user-configured limit)
             'monthly_usage_mb': 2150,
-            'monthly_budget_mb': 10240,
-            'cost_per_gb': 2.0,
-            'current_cost': 4.30,
-            'budget_remaining': 15.70,
+            'monthly_budget_mb': None,  # None = unlimited (no user-configured limit)
+            'cost_per_gb': None,  # None = not tracking cost
+            'current_cost': 0.0,
+            'budget_remaining': None,
         },
         'dns_status': {
             'active_provider': 'cloudflare',
