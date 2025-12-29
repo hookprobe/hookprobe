@@ -8,7 +8,7 @@ Provides:
 - LSTM prediction confidence
 """
 
-from flask import render_template, jsonify, request
+from flask import render_template, jsonify, request, redirect, url_for
 from flask_login import login_required
 from datetime import datetime, timedelta
 import json
@@ -118,11 +118,8 @@ def get_demo_sla_status():
 @slaai_bp.route('/')
 @login_required
 def index():
-    """SLA AI dashboard - main view."""
-    return render_template(
-        'slaai/index.html',
-        slaai_available=SYSTEM_DATA_AVAILABLE
-    )
+    """SLA AI dashboard - redirect to SDN page which now includes traffic monitoring."""
+    return redirect(url_for('sdn.index'))
 
 
 @slaai_bp.route('/api/status')
