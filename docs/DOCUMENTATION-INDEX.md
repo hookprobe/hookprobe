@@ -85,9 +85,9 @@ HookProbe is advanced network security software that operates without the comple
 - **[Automated Response](../shared/response/README.md)** - Threat mitigation
 
 ### Network Security
-- **[Network Segmentation](../shared/network/README.md)** - VLAN isolation
-- **[SDN Controller](../shared/network/sdn/README.md)** - OpenFlow management
-- **[Mobile Protection](../shared/mobile_security/README.md)** - Travel security
+- **Network Segmentation** - VLAN isolation (see Guardian/Fortress setup guides)
+- **SDN Controller** - OpenFlow management (see Fortress SDN module)
+- **[Mesh Architecture](../shared/mesh/ARCHITECTURE.md)** - Collective defense network
 
 ### DNS Protection
 - **[dnsXai Overview](../shared/dnsXai/README.md)** - AI DNS filtering
