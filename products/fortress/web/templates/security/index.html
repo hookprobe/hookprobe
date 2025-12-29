@@ -213,13 +213,22 @@
                     </div>
                 </div>
 
-                <!-- ML Status -->
+                <!-- ML Status with Training Button -->
                 <div class="d-flex justify-content-between align-items-center p-2 bg-dark rounded">
                     <div>
                         <i class="fas fa-brain text-primary mr-2"></i>
                         <span>ML/LSTM Threat Detection</span>
                     </div>
-                    <span id="ml-status" class="badge badge-secondary">Checking...</span>
+                    <div class="d-flex align-items-center">
+                        <span id="ml-status" class="badge badge-secondary mr-2">Checking...</span>
+                        <button id="train-btn" class="btn btn-sm btn-outline-info" onclick="trainML()" title="Train ML Model" style="display: none;">
+                            <i class="fas fa-graduation-cap"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="ml-training-progress" class="mt-2 p-2 bg-info text-white rounded" style="display: none;">
+                    <i class="fas fa-spinner fa-spin mr-2"></i>
+                    <span id="ml-training-text">Training in progress...</span>
                 </div>
             </div>
         </div>
@@ -341,10 +350,10 @@
     </div>
 </div>
 
-{% if not db_available %}
-<div class="alert alert-warning">
-    <i class="fas fa-exclamation-triangle mr-2"></i>
-    <strong>Demo Mode:</strong> Database not connected. Showing sample data.
+{% if not data_available %}
+<div class="alert alert-info">
+    <i class="fas fa-info-circle mr-2"></i>
+    <strong>No Data:</strong> QSecBit agent is starting up. Security metrics will appear once data is collected.
 </div>
 {% endif %}
 
@@ -676,23 +685,100 @@ async function loadMLStatus() {
         const data = await resp.json();
 
         const status = document.getElementById('ml-status');
+        const trainBtn = document.getElementById('train-btn');
+        const progress = document.getElementById('ml-training-progress');
+
         if (data.training_in_progress) {
             status.textContent = 'Training...';
-            status.className = 'badge badge-info';
+            status.className = 'badge badge-info mr-2';
+            trainBtn.style.display = 'none';
+            progress.style.display = 'block';
         } else if (data.model_trained) {
             status.textContent = 'Active';
-            status.className = 'badge badge-success';
+            status.className = 'badge badge-success mr-2';
+            trainBtn.style.display = 'inline-block';
+            trainBtn.title = 'Retrain ML Model';
+            progress.style.display = 'none';
         } else if (data.ready_for_training) {
             status.textContent = 'Ready';
-            status.className = 'badge badge-primary';
+            status.className = 'badge badge-primary mr-2';
+            trainBtn.style.display = 'inline-block';
+            trainBtn.title = `Train ML Model (${data.training_samples || 0} samples)`;
+            progress.style.display = 'none';
         } else {
             status.textContent = 'Learning';
-            status.className = 'badge badge-secondary';
+            status.className = 'badge badge-secondary mr-2';
+            // Show train button if we have some samples
+            if (data.training_samples && data.training_samples > 50) {
+                trainBtn.style.display = 'inline-block';
+                trainBtn.title = `Train ML Model (${data.training_samples} samples)`;
+            } else {
+                trainBtn.style.display = 'none';
+            }
+            progress.style.display = 'none';
         }
     } catch(e) {
         document.getElementById('ml-status').textContent = 'Offline';
-        document.getElementById('ml-status').className = 'badge badge-danger';
+        document.getElementById('ml-status').className = 'badge badge-danger mr-2';
+        document.getElementById('train-btn').style.display = 'none';
+        document.getElementById('ml-training-progress').style.display = 'none';
     }
+}
+
+async function trainML() {
+    const trainBtn = document.getElementById('train-btn');
+    const progress = document.getElementById('ml-training-progress');
+    const progressText = document.getElementById('ml-training-text');
+
+    // Confirm training
+    if (!confirm('Start ML training? This may take a few minutes.')) {
+        return;
+    }
+
+    // Show progress
+    trainBtn.disabled = true;
+    progress.style.display = 'block';
+    progressText.textContent = 'Starting training...';
+
+    try {
+        const resp = await fetch('/dnsxai/api/ml/train', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            progressText.textContent = 'Training complete!';
+            progress.className = 'mt-2 p-2 bg-success text-white rounded';
+            toastr.success('ML model trained successfully');
+
+            setTimeout(() => {
+                progress.style.display = 'none';
+                progress.className = 'mt-2 p-2 bg-info text-white rounded';
+                loadMLStatus();
+            }, 2000);
+        } else {
+            progressText.textContent = data.error || 'Training failed';
+            progress.className = 'mt-2 p-2 bg-danger text-white rounded';
+            toastr.error(data.error || 'Training failed');
+
+            setTimeout(() => {
+                progress.style.display = 'none';
+                progress.className = 'mt-2 p-2 bg-info text-white rounded';
+            }, 3000);
+        }
+    } catch(e) {
+        progressText.textContent = 'Connection error';
+        progress.className = 'mt-2 p-2 bg-danger text-white rounded';
+        toastr.error('Failed to connect to ML service');
+
+        setTimeout(() => {
+            progress.style.display = 'none';
+            progress.className = 'mt-2 p-2 bg-info text-white rounded';
+        }, 3000);
+    }
+
+    trainBtn.disabled = false;
 }
 
 // === QSECBIT GAUGE ===
