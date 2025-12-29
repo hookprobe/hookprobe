@@ -23,7 +23,7 @@
 
 > **Note**: Web application is optional. Core security (Neuro, DSM, Qsecbit) works without UI.
 
-📖 **Installation**: [install/addons/webserver/](../../install/addons/webserver/)
+📖 **Installation**: [deploy/addons/webserver/](../../deploy/addons/webserver/)
 
 ## Architecture
 
@@ -62,7 +62,7 @@
 
 ```bash
 # Navigate to addon directory
-cd ../../install/addons/webserver
+cd ../../deploy/addons/webserver
 
 # Option A: Podman container (recommended)
 sudo ./setup-webserver-podman.sh edge
@@ -71,7 +71,7 @@ sudo ./setup-webserver-podman.sh edge
 sudo ./setup-webserver.sh edge
 ```
 
-See [Installation Guide](../../install/addons/webserver/README.md) for complete instructions.
+See [Installation Guide](../../deploy/addons/webserver/README.md) for complete instructions.
 
 ---
 
@@ -379,7 +379,7 @@ ls -la staticfiles/
 
 ## Contributing
 
-See main [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
+See main [CONTRIBUTING.md](../../docs/CONTRIBUTING.md) for guidelines.
 
 ## License
 

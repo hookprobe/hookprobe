@@ -727,10 +727,10 @@ After MSSP cloud deployment:
 
 ## References
 
-- **[HTP Protocol](../../src/neuro/transport/htp.py)** - Transport implementation
-- **[Device Registry](../../src/mssp/device_registry.py)** - MSSP registry
-- **[Hardware Fingerprinting](../../src/neuro/identity/hardware_fingerprint.py)** - Device identity
-- **[GeoIP Service](../../src/mssp/geolocation.py)** - Geolocation
+- **[HTP Protocol](../../core/htp/transport/htp.py)** - Transport implementation
+- **[Device Registry](../../products/mssp/device_registry.py)** - MSSP registry
+- **[Hardware Fingerprinting](../../core/neuro/identity/hardware_fingerprint.py)** - Device identity
+- **[GeoIP Service](../../products/mssp/geolocation.py)** - Geolocation
 
 ---
 

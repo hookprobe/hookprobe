@@ -70,15 +70,14 @@ HookProbe isn't just software—it's a movement to make enterprise-grade cyberse
 
 1. **[Main README](README.md)** - Project overview, features, hardware compatibility
 2. **[Documentation Index](docs/DOCUMENTATION-INDEX.md)** - Navigate all documentation
-3. **[Security Model](docs/architecture/security-model.md)** - Understand the six-layer defense
-4. **[Qsecbit AI Algorithm](src/qsecbit/README.md)** - Learn about threat detection
+3. **[Qsecbit AI Algorithm](core/qsecbit/README.md)** - Learn about threat detection
 
 ### Get Involved
 
 **Explore Optional Features**:
-- **[n8n Workflow Automation](install/addons/n8n/README.md)** (POD-008) - AI-powered content generation
+- **[n8n Workflow Automation](deploy/addons/n8n/README.md)** (POD-008) - AI-powered content generation
 - **[Email System](infrastructure/pod-009-email/README.md)** (POD-009) - Self-hosted email with DMZ security
-- **[Web Dashboard](install/addons/webserver/README.md)** - AdminLTE admin interface
+- **[Web Dashboard](deploy/addons/webserver/README.md)** - AdminLTE admin interface
 
 **Join the Community**:
 - ⭐ **Star the project** on GitHub
@@ -116,7 +115,7 @@ HookProbe isn't just software—it's a movement to make enterprise-grade cyberse
 **Need Assistance?**
 - 📖 **[Documentation Index](docs/DOCUMENTATION-INDEX.md)** - Find answers fast
 - 🐛 **[GitHub Issues](https://github.com/hookprobe/hookprobe/issues)** - Report bugs or ask questions
-- 📧 **[Security Contact](SECURITY.md)** - Responsible disclosure
+- 📧 **[Security Contact](docs/SECURITY.md)** - Responsible disclosure
 - 🤝 **[Contributing Guide](docs/CONTRIBUTING.md)** - Join development
 
 **Common Questions**:
@@ -211,7 +210,7 @@ Remember: **Every expert was once a beginner.** Don't hesitate to ask questions,
 
 - **GitHub**: https://github.com/hookprobe/hookprobe
 - **Issues**: https://github.com/hookprobe/hookprobe/issues
-- **Security**: [SECURITY.md](SECURITY.md)
+- **Security**: [docs/SECURITY.md](docs/SECURITY.md)
 - **Contributing**: [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 - **Documentation**: [DOCUMENTATION-INDEX.md](docs/DOCUMENTATION-INDEX.md)
 
