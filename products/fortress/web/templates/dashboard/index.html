@@ -241,7 +241,7 @@
                     <i class="fas fa-heartbeat"></i> WAN Health
                 </div>
                 <div class="card-header-actions">
-                    <a href="{{ url_for('slaai.index') }}" class="btn btn-sm btn-link">SLA AI</a>
+                    <a href="{{ url_for('sdn.index') }}" class="btn btn-sm btn-link">Details</a>
                 </div>
             </div>
             <div class="card-body">
@@ -360,9 +360,9 @@
                 <i class="fas fa-brain"></i>
                 <span>dnsXai</span>
             </a>
-            <a href="{{ url_for('slaai.index') }}" class="quick-action-btn">
-                <i class="fas fa-heartbeat"></i>
-                <span>WAN Health</span>
+            <a href="{{ url_for('sdn.index') }}" class="quick-action-btn">
+                <i class="fas fa-network-wired"></i>
+                <span>SDN AI</span>
             </a>
             {% if current_user.is_admin %}
             <a href="{{ url_for('settings.index') }}" class="quick-action-btn">
