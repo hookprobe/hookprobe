@@ -1287,6 +1287,40 @@ body {
 .status-badge.wan-backup { background: var(--color-warning-muted); color: var(--color-warning); }
 .status-badge.device-offline { background: var(--bg-highlight); color: var(--text-muted); }
 
+/* Sidebar RAG Badge - Dynamic status colors */
+.sidebar-rag-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.2em 0.5em;
+    letter-spacing: 0.05em;
+    transition: all 0.3s ease;
+}
+.sidebar-rag-badge.rag-green {
+    background: var(--color-success) !important;
+    color: #000 !important;
+    box-shadow: 0 0 8px var(--color-success);
+}
+.sidebar-rag-badge.rag-amber {
+    background: var(--color-warning) !important;
+    color: #000 !important;
+    box-shadow: 0 0 8px var(--color-warning);
+    animation: pulse-warning 2s infinite;
+}
+.sidebar-rag-badge.rag-red {
+    background: var(--color-danger) !important;
+    color: #fff !important;
+    box-shadow: 0 0 12px var(--color-danger);
+    animation: pulse-danger 1s infinite;
+}
+@keyframes pulse-warning {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+@keyframes pulse-danger {
+    0%, 100% { opacity: 1; box-shadow: 0 0 12px var(--color-danger); }
+    50% { opacity: 0.85; box-shadow: 0 0 20px var(--color-danger); }
+}
+
 
 /* =============================================================================
    7. TIMELINE
