@@ -49,6 +49,23 @@ try:
 except ImportError as e:
     logger.warning(f"Device policies module not available: {e}")
 
+# Import SDN Auto Pilot module (premium heuristic scoring engine)
+SDN_AUTOPILOT_AVAILABLE = False
+try:
+    from sdn_autopilot import (
+        get_autopilot as get_sdn_autopilot,
+        SDNAutoPilot,
+        IdentityScore,
+    )
+    SDN_AUTOPILOT_AVAILABLE = True
+    logger.info("SDN Auto Pilot module loaded successfully")
+except ImportError as e:
+    logger.warning(f"SDN Auto Pilot module not available: {e}")
+
+    # Stub function to prevent NameError
+    def get_sdn_autopilot():
+        return None
+
 
 def classify_device(mac_address: str) -> dict:
     """Simple device classification based on MAC address.
@@ -67,6 +84,37 @@ def classify_device(mac_address: str) -> dict:
         'recommended_policy': 'quarantine',
         'manufacturer': 'Unknown'
     }
+
+# NetworkSegment enum - maps to policy names for legacy compatibility
+from enum import Enum
+
+class NetworkSegment(Enum):
+    """Network segments (maps to NetworkPolicy for SDN Auto Pilot)."""
+    QUARANTINE = 0    # quarantine policy
+    INTERNET_ONLY = 1 # internet_only policy
+    LAN_ONLY = 2      # lan_only policy
+    NORMAL = 3        # normal policy (smart home hubs)
+    FULL_ACCESS = 4   # full_access policy (management)
+    TRUSTED = 5       # Alias for full_access
+    IOT = 6           # Alias for lan_only
+    IIOT = 7          # Industrial IoT - lan_only
+    GUEST = 8         # Alias for internet_only
+
+    def to_policy(self) -> str:
+        """Convert segment to policy name."""
+        mapping = {
+            NetworkSegment.QUARANTINE: 'quarantine',
+            NetworkSegment.INTERNET_ONLY: 'internet_only',
+            NetworkSegment.LAN_ONLY: 'lan_only',
+            NetworkSegment.NORMAL: 'normal',
+            NetworkSegment.FULL_ACCESS: 'full_access',
+            NetworkSegment.TRUSTED: 'full_access',
+            NetworkSegment.IOT: 'lan_only',
+            NetworkSegment.IIOT: 'lan_only',
+            NetworkSegment.GUEST: 'internet_only',
+        }
+        return mapping.get(self, 'quarantine')
+
 
 # DFS Intelligence for WiFi channel data
 DFS_AVAILABLE = False
