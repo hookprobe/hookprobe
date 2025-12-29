@@ -200,16 +200,175 @@ def detect_device_type(mac: str, hostname: str, manufacturer: str) -> str:
     return 'unknown'
 
 
-def resolve_hostname(ip_address: str) -> str:
-    """Resolve hostname from IP address via reverse DNS."""
+def get_dhcp_hostnames() -> Dict[str, str]:
+    """Get hostnames from dnsmasq DHCP leases file.
+
+    This is the most reliable source as it contains what devices
+    told the DHCP server during lease acquisition.
+    """
+    hostnames = {}  # MAC -> hostname
+
+    # Common dnsmasq lease file locations
+    lease_files = [
+        '/var/lib/misc/dnsmasq.leases',
+        '/var/lib/dnsmasq/dnsmasq.leases',
+        '/tmp/dhcp.leases',
+        '/var/run/dnsmasq/leases',
+    ]
+
+    for lease_file in lease_files:
+        if Path(lease_file).exists():
+            try:
+                with open(lease_file) as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        # Format: timestamp MAC IP hostname client-id
+                        if len(parts) >= 4:
+                            mac = parts[1].upper()
+                            hostname = parts[3]
+                            # Skip placeholder hostnames
+                            if hostname != '*' and hostname != '':
+                                hostnames[mac] = hostname
+            except Exception:
+                pass
+            break  # Use first found lease file
+
+    return hostnames
+
+
+def get_mdns_hostnames() -> Dict[str, str]:
+    """Get hostnames from mDNS/Avahi discovery.
+
+    Uses avahi-browse to discover devices advertising via mDNS.
+    Returns IP -> hostname mapping.
+    """
+    hostnames = {}  # IP -> hostname
+
+    try:
+        # Run avahi-browse to discover all services (timeout after 3 seconds)
+        result = subprocess.run(
+            ['avahi-browse', '-atrp'],  # all, terminate, resolve, parseable
+            capture_output=True, text=True, timeout=5
+        )
+
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                # Parseable format: +;interface;protocol;name;type;domain;hostname;address;port;txt
+                # We want the resolved entries (=)
+                if line.startswith('='):
+                    parts = line.split(';')
+                    if len(parts) >= 8:
+                        hostname = parts[6]  # hostname field
+                        ip_addr = parts[7]   # address field
+                        if ip_addr and hostname and not hostname.endswith('.local'):
+                            # Remove .local suffix if present
+                            hostname = hostname.replace('.local', '')
+                            hostnames[ip_addr] = hostname
+    except subprocess.TimeoutExpired:
+        pass
+    except FileNotFoundError:
+        # avahi-browse not installed
+        pass
+    except Exception:
+        pass
+
+    return hostnames
+
+
+def get_netbios_hostnames() -> Dict[str, str]:
+    """Get hostnames from NetBIOS (Windows devices).
+
+    Uses nbtscan to discover Windows device names.
+    Returns IP -> hostname mapping.
+    """
+    hostnames = {}  # IP -> hostname
+
+    try:
+        # Scan local network for NetBIOS names
+        result = subprocess.run(
+            ['nbtscan', '-q', '-s', '\t', '10.200.0.0/23'],  # Fortress default subnet
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                parts = line.strip().split('\t')
+                if len(parts) >= 2:
+                    ip_addr = parts[0].strip()
+                    hostname = parts[1].strip()
+                    if ip_addr and hostname:
+                        hostnames[ip_addr] = hostname
+    except subprocess.TimeoutExpired:
+        pass
+    except FileNotFoundError:
+        # nbtscan not installed
+        pass
+    except Exception:
+        pass
+
+    return hostnames
+
+
+# Cache for hostname lookups (refreshed every 30 seconds with device collection)
+_hostname_cache = {
+    'dhcp': {},      # MAC -> hostname
+    'mdns': {},      # IP -> hostname
+    'netbios': {},   # IP -> hostname
+    'last_refresh': 0
+}
+
+
+def refresh_hostname_cache():
+    """Refresh all hostname caches from various sources."""
+    global _hostname_cache
+
+    _hostname_cache['dhcp'] = get_dhcp_hostnames()
+    _hostname_cache['mdns'] = get_mdns_hostnames()
+    _hostname_cache['netbios'] = get_netbios_hostnames()
+    _hostname_cache['last_refresh'] = time.time()
+
+    total = len(_hostname_cache['dhcp']) + len(_hostname_cache['mdns']) + len(_hostname_cache['netbios'])
+    logger.debug(f"Hostname cache refreshed: {len(_hostname_cache['dhcp'])} DHCP, "
+                 f"{len(_hostname_cache['mdns'])} mDNS, {len(_hostname_cache['netbios'])} NetBIOS")
+
+
+def resolve_hostname(ip_address: str, mac_address: str = None) -> str:
+    """Resolve hostname using multiple sources (most reliable first).
+
+    Priority:
+    1. DHCP leases (device-provided hostname, most reliable)
+    2. mDNS/Avahi (Apple devices, Linux, printers)
+    3. NetBIOS (Windows devices)
+    4. Reverse DNS (fallback, often unreliable)
+    """
     import socket
+
+    # Refresh cache if stale (older than 60 seconds)
+    if time.time() - _hostname_cache['last_refresh'] > 60:
+        refresh_hostname_cache()
+
+    # 1. Check DHCP hostname (by MAC address)
+    if mac_address:
+        mac_upper = mac_address.upper()
+        if mac_upper in _hostname_cache['dhcp']:
+            return _hostname_cache['dhcp'][mac_upper]
+
+    # 2. Check mDNS hostname
+    if ip_address in _hostname_cache['mdns']:
+        return _hostname_cache['mdns'][ip_address]
+
+    # 3. Check NetBIOS hostname
+    if ip_address in _hostname_cache['netbios']:
+        return _hostname_cache['netbios'][ip_address]
+
+    # 4. Fallback to reverse DNS
     try:
         hostname = socket.gethostbyaddr(ip_address)[0]
-        # Don't return if it's just the IP address
-        if hostname != ip_address:
+        if hostname != ip_address and not hostname.startswith(ip_address.replace('.', '-')):
             return hostname
     except (socket.herror, socket.gaierror, socket.timeout):
         pass
+
     return None
 
 
@@ -1376,7 +1535,7 @@ class QSecBitFortressAgent:
 
                     # Enrich device data
                     manufacturer = lookup_manufacturer(mac)
-                    hostname = resolve_hostname(ip_addr)
+                    hostname = resolve_hostname(ip_addr, mac)  # Pass MAC for DHCP lookup
                     device_type = detect_device_type(mac, hostname, manufacturer)
 
                     devices.append({
