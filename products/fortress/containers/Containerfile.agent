@@ -34,11 +34,14 @@ RUN pip install --no-cache-dir -r /tmp/requirements-ml.txt
 FROM python:3.11-slim-bookworm
 
 # Runtime dependencies only
+# hostapd package includes hostapd_cli for WiFi status
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 \
     libgomp1 \
     iproute2 \
     nftables \
+    hostapd \
+    openvswitch-switch \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
 
