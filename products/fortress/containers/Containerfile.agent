@@ -38,6 +38,7 @@ FROM python:3.11-slim-bookworm
 # curl for HTTP-based connectivity tests (more reliable for LTE)
 # avahi-utils for mDNS hostname discovery (Apple devices, printers)
 # nbtscan for NetBIOS hostname discovery (Windows devices)
+# hwdata provides /usr/share/hwdata/oui.txt for manufacturer lookup (~40K entries)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 \
     libgomp1 \
@@ -48,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     avahi-utils \
     nbtscan \
+    hwdata \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
 
