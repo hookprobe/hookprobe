@@ -1528,23 +1528,37 @@ function showWanHealthModal() {
                 ${status.cost_status ? `
                 <div class="card bg-dark mb-3">
                     <div class="card-header bg-transparent">
-                        <h6 class="mb-0"><i class="fas fa-dollar-sign mr-2"></i>LTE Cost Tracking</h6>
+                        <h6 class="mb-0"><i class="fas fa-dollar-sign mr-2"></i>LTE Data Usage</h6>
                     </div>
                     <div class="card-body">
                         <div class="row">
                             <div class="col-6">
                                 <small class="text-muted">Daily Usage</small>
-                                <div class="progress mt-1" style="height: 6px;">
-                                    <div class="progress-bar bg-info" style="width: ${Math.min(100, (status.cost_status.daily_usage_mb / status.cost_status.daily_budget_mb) * 100)}%"></div>
-                                </div>
-                                <small>${status.cost_status.daily_usage_mb} / ${status.cost_status.daily_budget_mb} MB</small>
+                                ${status.cost_status.daily_budget_mb ? `
+                                    <div class="progress mt-1" style="height: 6px;">
+                                        <div class="progress-bar bg-info" style="width: ${Math.min(100, (status.cost_status.daily_usage_mb / status.cost_status.daily_budget_mb) * 100)}%"></div>
+                                    </div>
+                                    <small>${status.cost_status.daily_usage_mb} / ${status.cost_status.daily_budget_mb} MB</small>
+                                ` : `
+                                    <div class="mt-1">
+                                        <small class="text-info">${status.cost_status.daily_usage_mb} MB</small>
+                                        <small class="text-muted ml-1">/ Unlimited</small>
+                                    </div>
+                                `}
                             </div>
                             <div class="col-6">
                                 <small class="text-muted">Monthly Usage</small>
-                                <div class="progress mt-1" style="height: 6px;">
-                                    <div class="progress-bar bg-warning" style="width: ${Math.min(100, (status.cost_status.monthly_usage_mb / status.cost_status.monthly_budget_mb) * 100)}%"></div>
-                                </div>
-                                <small>${(status.cost_status.monthly_usage_mb / 1024).toFixed(1)} / ${(status.cost_status.monthly_budget_mb / 1024).toFixed(0)} GB</small>
+                                ${status.cost_status.monthly_budget_mb ? `
+                                    <div class="progress mt-1" style="height: 6px;">
+                                        <div class="progress-bar bg-warning" style="width: ${Math.min(100, (status.cost_status.monthly_usage_mb / status.cost_status.monthly_budget_mb) * 100)}%"></div>
+                                    </div>
+                                    <small>${(status.cost_status.monthly_usage_mb / 1024).toFixed(1)} / ${(status.cost_status.monthly_budget_mb / 1024).toFixed(0)} GB</small>
+                                ` : `
+                                    <div class="mt-1">
+                                        <small class="text-warning">${(status.cost_status.monthly_usage_mb / 1024).toFixed(1)} GB</small>
+                                        <small class="text-muted ml-1">/ Unlimited</small>
+                                    </div>
+                                `}
                             </div>
                         </div>
                     </div>
