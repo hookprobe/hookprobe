@@ -525,8 +525,7 @@ podman restart hookprobe-pod-007-ai-response-qsecbit
 - **Main README**: [../../README.md](../../README.md)
 - **Dashboard Overview**: [README.md](README.md)
 - **Admin Dashboard**: [admin-dashboard.md](admin-dashboard.md)
-- **Security Model**: [../architecture/security-model.md](../architecture/security-model.md)
-- **Qsecbit Algorithm**: [../../src/qsecbit/README.md](../../src/qsecbit/README.md)
+- **Qsecbit Algorithm**: [../../core/qsecbit/README.md](../../core/qsecbit/README.md)
 
 ---
 
