@@ -34,11 +34,14 @@ RUN pip install --no-cache-dir -r /tmp/requirements-ml.txt
 FROM python:3.11-slim-bookworm
 
 # Runtime dependencies only
+# hostapd package includes hostapd_cli for WiFi status
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 \
     libgomp1 \
     iproute2 \
     nftables \
+    hostapd \
+    openvswitch-switch \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
 
@@ -77,8 +80,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
 # Note: This container typically runs with --network=host for traffic analysis
 EXPOSE 9090
 
-# Run as non-root (but needs CAP_NET_ADMIN, CAP_NET_RAW for packet capture)
-USER fortress
+# Run as root in container for rootless podman bind mount compatibility
+# Container root maps to the host user running podman, allowing writes to bind mounts
+# The container needs CAP_NET_ADMIN, CAP_NET_RAW for packet capture anyway
+# USER fortress
+
+WORKDIR /opt/hookprobe
 
 ENTRYPOINT ["python", "-m", "fortress.qsecbit.fortress_agent"]
 CMD ["--config", "/etc/hookprobe/qsecbit.conf"]
