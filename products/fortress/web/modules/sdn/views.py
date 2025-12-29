@@ -765,33 +765,34 @@ def index():
     if not devices and DB_AVAILABLE:
         try:
             device_mgr = get_device_manager()
-            devices = device_mgr.get_all_devices()
+            db_devices = device_mgr.get_all_devices()
 
-            # Enrich devices with OUI classification
-            for device in devices:
-                mac = device.get('mac_address', '')
-                classification = classify_device(mac)
-                device['oui_category'] = classification.get('category', 'unknown')
-                device['auto_policy'] = classification.get('recommended_policy', 'default')
-                device['manufacturer'] = device.get('manufacturer') or classification.get('manufacturer', 'Unknown')
+            if db_devices:
+                # Enrich devices with OUI classification
+                for device in db_devices:
+                    mac = device.get('mac_address', '')
+                    classification = classify_device(mac)
+                    device['oui_category'] = classification.get('category', 'unknown')
+                    device['auto_policy'] = classification.get('recommended_policy', 'default')
+                    device['manufacturer'] = device.get('manufacturer') or classification.get('manufacturer', 'Unknown')
 
-                # Convert datetime
-                for key in ['first_seen', 'last_seen']:
-                    if device.get(key) and not isinstance(device[key], str):
-                        device[key] = str(device[key])
+                    # Convert datetime
+                    for key in ['first_seen', 'last_seen']:
+                        if device.get(key) and not isinstance(device[key], str):
+                            device[key] = str(device[key])
 
-                # Determine online status (last seen within 5 minutes)
-                device['is_online'] = False  # Will be updated by ARP scan
+                    # Determine online status (last seen within 5 minutes)
+                    device['is_online'] = False  # Will be updated by ARP scan
 
-            if devices:
+                devices = db_devices
                 using_real_data = True
 
             vlan_mgr = get_vlan_manager()
             vlans = vlan_mgr.get_vlans()
 
         except Exception as e:
-            logger.warning(f"Database error: {e}")
-            flash(f'Error loading devices: {e}', 'warning')
+            # Only log, don't flash - we'll fall back to demo data
+            logger.debug(f"Database not available: {e}")
 
     # Priority 3: Fall back to demo data only if no real data found
     if not devices:
