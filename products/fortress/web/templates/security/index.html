@@ -816,12 +816,13 @@
 {% endif %}
 
 <!-- DNS Settings Modal -->
-<div class="modal fade modal-dark" id="dnsSettingsModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+<div class="modal fade modal-dark" id="dnsSettingsModal" tabindex="-1" role="dialog"
+     aria-labelledby="dnsSettingsModalLabel" aria-modal="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable" role="document">
         <div class="modal-content">
             <div class="modal-header bg-success">
-                <h5 class="modal-title"><i class="fas fa-cog mr-2"></i>DNS Protection Settings</h5>
-                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+                <h5 class="modal-title" id="dnsSettingsModalLabel"><i class="fas fa-cog mr-2"></i>DNS Protection Settings</h5>
+                <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body p-0">
                 <!-- Tabs -->
@@ -1852,13 +1853,38 @@ async function refreshQsecbit() {
 }
 
 // === DNS SETTINGS MODAL ===
+let dnsSettingsTrigger = null;  // Track the element that opened the modal
+
 function showDnsSettings() {
+    // Store the trigger element for focus restoration
+    dnsSettingsTrigger = document.activeElement;
     $('#dnsSettingsModal').modal('show');
     loadPrivacy();
     loadWhitelist();
     loadSources();
     loadBlockedModal();
 }
+
+// Handle modal close - restore focus to trigger element
+$('#dnsSettingsModal').on('hidden.bs.modal', function() {
+    // Move focus back to the trigger element to avoid aria-hidden issues
+    if (dnsSettingsTrigger && dnsSettingsTrigger.focus) {
+        // Small delay to ensure modal animation completes
+        setTimeout(() => {
+            dnsSettingsTrigger.focus();
+            dnsSettingsTrigger = null;
+        }, 10);
+    }
+});
+
+// Ensure focus is moved before aria-hidden is applied
+$('#dnsSettingsModal').on('hide.bs.modal', function() {
+    // If an element inside the modal has focus, blur it first
+    const activeElement = document.activeElement;
+    if (this.contains(activeElement)) {
+        activeElement.blur();
+    }
+});
 
 // === PRIVACY ===
 async function loadPrivacy() {
@@ -1909,12 +1935,29 @@ async function applyPrivacyPreset(preset) {
 
 // === WHITELIST ===
 async function loadWhitelist() {
+    const tbody = document.getElementById('whitelist-body');
+    if (!tbody) return;
+
     try {
         const resp = await fetch('/dnsxai/api/whitelist');
+
+        // Handle non-OK responses gracefully
+        if (!resp.ok) {
+            console.warn('Whitelist API returned status:', resp.status);
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Whitelist service unavailable</td></tr>';
+            return;
+        }
+
         const data = await resp.json();
         const list = data.whitelist || [];
 
-        const tbody = document.getElementById('whitelist-body');
+        // Check for API-level errors
+        if (data.error) {
+            console.warn('Whitelist API error:', data.error);
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Could not load whitelist</td></tr>';
+            return;
+        }
+
         if (list.length === 0) {
             tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">No whitelisted domains</td></tr>';
         } else {
@@ -1929,7 +1972,10 @@ async function loadWhitelist() {
                 </tr>
             `).join('');
         }
-    } catch(e) {}
+    } catch(e) {
+        console.warn('Failed to load whitelist:', e);
+        tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Error loading whitelist</td></tr>';
+    }
 }
 
 async function addWhitelist() {
