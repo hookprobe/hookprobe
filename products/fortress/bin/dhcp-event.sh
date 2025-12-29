@@ -3,10 +3,16 @@
 # dhcp-event.sh - DHCP lease event handler for Fortress
 # Called by dnsmasq on DHCP events: add, old, del
 #
-# Usage: dhcp-event.sh <action> <mac> <ip> [hostname] [vendor-class]
+# Usage: dhcp-event.sh <action> <mac> <ip> [hostname]
 #
-# This script integrates with the device manager to track devices
-# and apply automatic VLAN/policy assignments based on OUI.
+# Environment variables from dnsmasq:
+#   DNSMASQ_REQUESTED_OPTIONS - DHCP Option 55 fingerprint (device DNA)
+#   DNSMASQ_VENDOR_CLASS - Vendor class identifier
+#   DNSMASQ_CLIENT_ID - Client identifier
+#   DNSMASQ_INTERFACE - Network interface
+#
+# This script integrates with SDN Auto Pilot for device classification
+# and OpenFlow micro-segmentation policy enforcement.
 
 set -e
 
@@ -14,7 +20,10 @@ ACTION="${1:-}"
 MAC="${2:-}"
 IP="${3:-}"
 HOSTNAME="${4:-}"
+# CRITICAL: DHCP Option 55 fingerprint - the device "DNA"
+DHCP_FINGERPRINT="${DNSMASQ_REQUESTED_OPTIONS:-}"
 VENDOR_CLASS="${DNSMASQ_VENDOR_CLASS:-}"
+INTERFACE="${DNSMASQ_INTERFACE:-}"
 
 # Paths
 DATA_DIR="/opt/hookprobe/fortress/data"
@@ -30,47 +39,70 @@ NOW=$(date '+%Y-%m-%d %H:%M:%S')
 
 # Log event (fast, non-blocking)
 log_event() {
-    echo "$NOW $ACTION $MAC $IP $HOSTNAME $VENDOR_CLASS" >> "$LEASE_LOG" 2>/dev/null &
+    echo "$NOW $ACTION $MAC $IP $HOSTNAME fp=$DHCP_FINGERPRINT vc=$VENDOR_CLASS if=$INTERFACE" >> "$LEASE_LOG" 2>/dev/null &
 }
 
-# Update device database (async to prevent DHCP slowdown)
-update_device_db() {
+# Process device through SDN Auto Pilot (async to prevent DHCP slowdown)
+process_device() {
     # Run in background to not block DHCP response
     (
-        # Python script for database update
-        python3 << 'PYTHON_SCRIPT' "$MAC" "$IP" "$HOSTNAME" "$VENDOR_CLASS" "$ACTION" 2>/dev/null
+        # Python script for SDN Auto Pilot classification and OpenFlow rules
+        python3 << 'PYTHON_SCRIPT' "$MAC" "$IP" "$HOSTNAME" "$DHCP_FINGERPRINT" "$ACTION" 2>/dev/null
 import sys
 import json
-import os
+import logging
 from datetime import datetime
 from pathlib import Path
 
-mac = sys.argv[1] if len(sys.argv) > 1 else ""
+# Setup logging
+logging.basicConfig(
+    filename='/opt/hookprobe/fortress/data/autopilot.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s'
+)
+logger = logging.getLogger('dhcp-event')
+
+# Parse arguments
+mac = sys.argv[1].upper() if len(sys.argv) > 1 else ""
 ip = sys.argv[2] if len(sys.argv) > 2 else ""
 hostname = sys.argv[3] if len(sys.argv) > 3 else ""
-vendor = sys.argv[4] if len(sys.argv) > 4 else ""
+dhcp_fingerprint = sys.argv[4] if len(sys.argv) > 4 else ""
 action = sys.argv[5] if len(sys.argv) > 5 else "add"
 
 if not mac:
     sys.exit(0)
 
-# Try to use device_manager
+# =========================================================================
+# SDN AUTO PILOT INTEGRATION
+# =========================================================================
 try:
     sys.path.insert(0, '/opt/hookprobe/fortress/lib')
-    from device_manager import get_device_manager
-    dm = get_device_manager()
-    if action in ['add', 'old']:
-        dm.db.upsert_device(
-            mac_address=mac.upper(),
-            ip_address=ip,
-            hostname=hostname or None
-        )
-    elif action == 'del':
-        pass  # Don't delete, just mark inactive
-except Exception:
-    pass
+    from sdn_autopilot import get_autopilot
 
-# Also update local JSON file for fast dashboard access
+    autopilot = get_autopilot()
+
+    if action in ['add', 'old']:
+        # Full device classification + OpenFlow rule application
+        result = autopilot.sync_device(
+            mac=mac,
+            ip=ip,
+            hostname=hostname or None,
+            dhcp_fingerprint=dhcp_fingerprint or None,
+            apply_rules=True  # Auto-apply OpenFlow rules
+        )
+        logger.info(f"DHCP {action}: {mac} -> {result.policy} "
+                   f"(confidence={result.confidence:.2f}, fp={dhcp_fingerprint})")
+
+    elif action == 'del':
+        # Mark device inactive but keep policy (will reapply on reconnect)
+        logger.info(f"DHCP del: {mac} lease released")
+
+except Exception as e:
+    logger.error(f"SDN Auto Pilot error: {e}")
+
+# =========================================================================
+# UPDATE LOCAL JSON FILE (for fast dashboard access)
+# =========================================================================
 devices_file = Path('/opt/hookprobe/fortress/data/devices.json')
 try:
     devices = {}
@@ -78,33 +110,35 @@ try:
         with open(devices_file, 'r') as f:
             devices = json.load(f)
 
+    now = datetime.now().isoformat()
+
     if action in ['add', 'old']:
-        if mac.upper() not in devices:
-            devices[mac.upper()] = {}
-        devices[mac.upper()].update({
-            'mac_address': mac.upper(),
+        if mac not in devices:
+            devices[mac] = {'first_seen': now}
+        devices[mac].update({
+            'mac_address': mac,
             'ip_address': ip,
             'hostname': hostname,
-            'vendor_class': vendor,
-            'last_seen': datetime.now().isoformat(),
+            'dhcp_fingerprint': dhcp_fingerprint,
+            'last_seen': now,
             'is_active': True
         })
-        if action == 'add':
-            devices[mac.upper()]['first_seen'] = datetime.now().isoformat()
     elif action == 'del':
-        if mac.upper() in devices:
-            devices[mac.upper()]['is_active'] = False
-            devices[mac.upper()]['last_seen'] = datetime.now().isoformat()
+        if mac in devices:
+            devices[mac]['is_active'] = False
+            devices[mac]['last_seen'] = now
 
     with open(devices_file, 'w') as f:
-        json.dump(devices, f)
-except Exception:
-    pass
+        json.dump(devices, f, indent=2)
+except Exception as e:
+    logger.debug(f"JSON update error: {e}")
 
-# Update stats
+# =========================================================================
+# UPDATE STATS
+# =========================================================================
 stats_file = Path('/opt/hookprobe/fortress/data/dhcp_stats.json')
 try:
-    stats = {'total_leases': 0, 'add_events': 0, 'del_events': 0}
+    stats = {'total_leases': 0, 'add_events': 0, 'del_events': 0, 'old_events': 0}
     if stats_file.exists():
         with open(stats_file, 'r') as f:
             stats = json.load(f)
@@ -112,11 +146,14 @@ try:
     if action == 'add':
         stats['add_events'] = stats.get('add_events', 0) + 1
         stats['total_leases'] = stats.get('total_leases', 0) + 1
+    elif action == 'old':
+        stats['old_events'] = stats.get('old_events', 0) + 1
     elif action == 'del':
         stats['del_events'] = stats.get('del_events', 0) + 1
         stats['total_leases'] = max(0, stats.get('total_leases', 1) - 1)
 
-    stats['last_event'] = datetime.now().isoformat()
+    stats['last_event'] = now
+    stats['last_mac'] = mac
 
     with open(stats_file, 'w') as f:
         json.dump(stats, f)
@@ -139,14 +176,20 @@ notify_ui() {
 
 # Main execution
 case "$ACTION" in
-    add|old|del)
+    add|old)
+        # New or renewed lease - full classification pipeline
         log_event
-        update_device_db
+        process_device
         notify_ui
         ;;
+    del)
+        # Lease released - log only
+        log_event
+        process_device
+        ;;
     init)
-        # dnsmasq startup - clear stale data
-        echo "DHCP event handler initialized at $NOW" >> "$LEASE_LOG"
+        # dnsmasq startup - initialize
+        echo "DHCP event handler initialized at $NOW (SDN Auto Pilot enabled)" >> "$LEASE_LOG"
         ;;
     tftp)
         # TFTP event - ignore
