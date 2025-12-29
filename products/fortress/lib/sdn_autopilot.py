@@ -47,9 +47,17 @@ LAN_SUBNET = "10.200.0.0/23"
 # =============================================================================
 
 FINGERPRINT_DATABASE = {
-    # Apple Devices
-    "1,3,6,15,119,252": {"os": "Apple iOS/macOS", "category": "apple", "confidence": 0.95},
-    "1,121,3,6,15,119,252": {"os": "Apple iOS 14+", "category": "apple", "confidence": 0.98},
+    # Apple macOS (laptops/desktops)
+    "1,3,6,15,119,252": {"os": "macOS", "category": "laptop", "confidence": 0.95},
+    "1,121,3,6,15,119,252": {"os": "macOS Monterey+", "category": "laptop", "confidence": 0.98},
+    "1,121,3,6,15,108,114,119,162,252,95,44,46": {"os": "macOS Sonoma/Sequoia", "category": "laptop", "confidence": 0.98},
+    "1,121,3,6,15,119,252,95,44,46": {"os": "macOS Ventura", "category": "laptop", "confidence": 0.98},
+
+    # Apple iOS (iPhones/iPads)
+    "1,121,3,6,15,119,252": {"os": "iOS 14+", "category": "phone", "confidence": 0.98},
+    "1,3,6,15,119,252": {"os": "iOS/iPadOS", "category": "phone", "confidence": 0.95},
+
+    # Apple Smart Home
     "1,3,6,15,119,95,252": {"os": "Apple HomePod/Apple TV", "category": "smart_hub", "confidence": 0.99},
 
     # Android/Linux
@@ -257,11 +265,24 @@ class SDNAutoPilot:
                 signals['dhcp'] = 0.10
 
         # 2. OUI Vendor (20% weight)
+        # Check for randomized/private MAC (locally-administered bit set)
+        is_randomized_mac = (int(mac.split(':')[0], 16) & 0x02) != 0
+
         if vendor != "Unknown":
             signals['oui'] = 0.15
             # Bonus for vendor/fingerprint alignment
             if os_fingerprint != "Unknown" and vendor.lower() in os_fingerprint.lower():
                 signals['oui'] = 0.20
+        elif is_randomized_mac and os_fingerprint != "Unknown":
+            # Randomized MAC but fingerprint identifies vendor - give partial OUI credit
+            signals['oui'] = 0.12
+            # Infer vendor from fingerprint for logging
+            if 'macos' in os_fingerprint.lower() or 'ios' in os_fingerprint.lower():
+                vendor = "Apple (randomized MAC)"
+            elif 'android' in os_fingerprint.lower():
+                vendor = "Android (randomized MAC)"
+            elif 'windows' in os_fingerprint.lower():
+                vendor = "Windows (randomized MAC)"
 
         # 3. Hostname (20% weight)
         if hostname:
