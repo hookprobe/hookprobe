@@ -66,6 +66,152 @@ CONFIG_DIR = Path("/etc/hookprobe")
 # OVS Bridge name (FTS = abbreviation for fortress)
 OVS_BRIDGE = os.environ.get('OVS_BRIDGE', 'FTS')
 
+# OUI Database for manufacturer lookup (common vendors)
+OUI_DATABASE = {
+    'Apple': [
+        '00:1C:B3', '00:03:93', '00:0A:27', '00:0A:95', '00:10:FA', '00:11:24',
+        '00:14:51', '00:16:CB', '00:17:F2', '00:19:E3', '00:1B:63', '00:1D:4F',
+        '00:1E:52', '00:1E:C2', '00:1F:5B', '00:1F:F3', '00:21:E9', '00:22:41',
+        '00:23:12', '00:23:32', '00:23:6C', '00:23:DF', '00:24:36', '00:25:00',
+        'A4:5E:60', 'AC:BC:32', 'B0:34:95', 'B8:09:8A', 'BC:52:B7', 'C0:84:7A',
+        'D4:9A:20', 'DC:2B:2A', 'E0:B9:BA', 'F0:B4:79', 'F4:5C:89', '3C:06:30',
+        '8C:85:90', 'A8:66:7F', 'AC:DE:48', 'B4:F0:AB', 'C8:69:CD', 'D0:C5:D3',
+    ],
+    'Samsung': [
+        '00:00:F0', '00:07:AB', '00:09:18', '00:12:47', '00:12:FB', '00:13:77',
+        '00:15:99', '00:15:B9', '00:16:32', '00:16:6B', '00:16:6C', '00:17:C9',
+        '08:D4:2B', '10:D5:42', '14:89:FD', '18:3A:2D', '1C:62:B8', '20:D3:90',
+    ],
+    'Google': [
+        '3C:5A:B4', '94:EB:2C', 'F4:F5:D8', '54:60:09', 'F8:8F:CA', '94:94:26',
+        '00:1A:11', '1C:F2:9A', '30:FD:38', '44:07:0B',
+    ],
+    'Intel': [
+        '00:02:B3', '00:03:47', '00:04:23', '00:07:E9', '00:0C:F1', '00:0E:0C',
+        '00:0E:35', '00:11:11', '00:12:F0', '00:13:02', '00:13:20', '00:13:CE',
+        '00:15:00', '00:16:6F', '00:16:76', '00:16:EA', '00:16:EB', '00:18:DE',
+    ],
+    'Realtek': ['00:E0:4C', '52:54:00', '00:20:18', '00:0A:CD', '00:40:F4'],
+    'Dell': [
+        '00:06:5B', '00:08:74', '00:0B:DB', '00:0D:56', '00:0F:1F', '00:11:43',
+        '00:12:3F', '00:13:72', '00:14:22', '00:15:C5', '00:18:8B', '00:19:B9',
+    ],
+    'HP': [
+        '00:01:E6', '00:02:A5', '00:04:EA', '00:08:02', '00:0A:57', '00:0B:CD',
+        '00:0D:9D', '00:0E:7F', '00:0F:20', '00:0F:61', '00:10:83', '00:11:0A',
+    ],
+    'Cisco': [
+        '00:00:0C', '00:01:42', '00:01:43', '00:01:63', '00:01:64', '00:01:96',
+        '00:01:97', '00:01:C7', '00:01:C9', '00:02:3D', '00:02:4A', '00:02:4B',
+    ],
+    'TP-Link': [
+        '00:27:19', '14:CC:20', '30:B5:C2', '50:C7:BF', '54:C8:0F', '60:E3:27',
+        '64:66:B3', '6C:5A:B5', '70:4F:57', '74:DA:88', '78:44:76', '80:89:17',
+    ],
+    'Xiaomi': [
+        '00:9E:C8', '0C:1D:AF', '10:2A:B3', '14:F6:5A', '18:59:36', '1C:5F:2B',
+        '20:47:DA', '28:6C:07', '2C:56:DC', '34:80:B3', '38:A4:ED', '3C:BD:D8',
+    ],
+    'Huawei': [
+        '00:1E:10', '00:25:9E', '00:25:68', '00:34:FE', '00:46:4B', '00:5A:13',
+        '00:66:4B', '00:9A:CD', '00:E0:FC', '04:02:1F', '04:25:C5', '04:33:89',
+    ],
+    'Raspberry Pi': ['B8:27:EB', 'DC:A6:32', 'E4:5F:01', '28:CD:C1', 'D8:3A:DD'],
+    'Amazon': [
+        '00:FC:8B', '0C:47:C9', '10:CE:A9', '18:74:2E', '34:D2:70', '38:F7:3D',
+        '40:A2:DB', '44:65:0D', '4C:EF:C0', '50:DC:E7', '68:37:E9', '68:54:FD',
+    ],
+    'Microsoft': [
+        '00:0D:3A', '00:12:5A', '00:15:5D', '00:17:FA', '00:1D:D8', '00:22:48',
+        '00:25:AE', '28:18:78', '30:59:B7', '48:50:73', '50:1A:C5', '58:82:A8',
+    ],
+    'Espressif': ['24:0A:C4', '24:62:AB', '30:AE:A4', '3C:61:05', '4C:11:AE', '5C:CF:7F'],
+    'Sonos': ['00:0E:58', '34:7E:5C', '54:2A:1B', '78:28:CA', '94:9F:3E'],
+    'Ring': ['0C:8C:DC', '20:72:64', '34:71:7A', '50:4E:DC', '7C:50:79'],
+    'Nest': ['18:B4:30', '64:16:66', 'F8:8F:CA'],
+    'Philips': ['00:09:97', '00:17:88', '00:1F:E4'],
+}
+
+
+def lookup_manufacturer(mac_address: str) -> str:
+    """Lookup manufacturer from MAC OUI prefix."""
+    if not mac_address:
+        return 'Unknown'
+    mac_prefix = mac_address[:8].upper()
+    for manufacturer, ouis in OUI_DATABASE.items():
+        if mac_prefix in ouis:
+            return manufacturer
+    return 'Unknown'
+
+
+def detect_device_type(mac: str, hostname: str, manufacturer: str) -> str:
+    """Detect device type from available information."""
+    hostname_lower = (hostname or '').lower()
+    manufacturer_lower = (manufacturer or '').lower()
+
+    # Hostname-based detection (most specific)
+    if 'iphone' in hostname_lower:
+        return 'phone'
+    if 'ipad' in hostname_lower:
+        return 'tablet'
+    if 'android' in hostname_lower:
+        return 'phone'
+    if 'macbook' in hostname_lower:
+        return 'laptop'
+    if 'imac' in hostname_lower or 'mac-' in hostname_lower:
+        return 'desktop'
+    if 'windows' in hostname_lower or '-pc' in hostname_lower:
+        return 'desktop'
+    if 'printer' in hostname_lower or 'hp-' in hostname_lower:
+        return 'printer'
+    if 'camera' in hostname_lower or 'cam-' in hostname_lower or 'hikvision' in hostname_lower:
+        return 'camera'
+    if 'tv' in hostname_lower or 'roku' in hostname_lower or 'chromecast' in hostname_lower:
+        return 'tv'
+    if 'echo' in hostname_lower or 'alexa' in hostname_lower:
+        return 'smart_speaker'
+    if 'nest' in hostname_lower or 'thermostat' in hostname_lower:
+        return 'iot'
+    if 'ring' in hostname_lower or 'doorbell' in hostname_lower:
+        return 'iot'
+    if 'sonos' in hostname_lower:
+        return 'smart_speaker'
+
+    # Manufacturer-based detection
+    if manufacturer_lower == 'apple':
+        return 'apple_device'
+    if manufacturer_lower in ['samsung', 'xiaomi', 'huawei']:
+        return 'phone'
+    if manufacturer_lower == 'raspberry pi':
+        return 'iot'
+    if manufacturer_lower in ['amazon', 'ring', 'nest']:
+        return 'smart_speaker'
+    if manufacturer_lower in ['google']:
+        return 'smart_device'
+    if manufacturer_lower in ['intel', 'realtek', 'dell', 'hp', 'microsoft']:
+        return 'computer'
+    if manufacturer_lower in ['cisco', 'tp-link']:
+        return 'network'
+    if manufacturer_lower == 'espressif':
+        return 'iot'
+    if manufacturer_lower in ['sonos', 'philips']:
+        return 'smart_home'
+
+    return 'unknown'
+
+
+def resolve_hostname(ip_address: str) -> str:
+    """Resolve hostname from IP address via reverse DNS."""
+    import socket
+    try:
+        hostname = socket.gethostbyaddr(ip_address)[0]
+        # Don't return if it's just the IP address
+        if hostname != ip_address:
+            return hostname
+    except (socket.herror, socket.gaierror, socket.timeout):
+        pass
+    return None
+
 
 @dataclass
 class QSecBitConfig:
@@ -718,7 +864,7 @@ class QSecBitFortressAgent:
                     logger.debug(f"Ping error on {interface}: {e}")
                     continue  # Try next command
 
-            # All commands failed - try to parse any partial response from last attempt
+            # All ping commands failed - try to parse any partial response from last attempt
             if proc and proc.stdout:
                 loss_match = re.search(r'(\d+)% packet loss', proc.stdout)
                 if loss_match:
@@ -733,6 +879,51 @@ class QSecBitFortressAgent:
                         if rtt_match:
                             result['rtt_ms'] = float(rtt_match.group(2))
                             result['jitter_ms'] = float(rtt_match.group(4))
+
+            # If ping failed for LTE, try HTTP-based test as fallback
+            # This is more reliable for point-to-point links with policy routing
+            if is_lte and not result['is_connected']:
+                try:
+                    logger.debug(f"Ping failed for {interface}, trying HTTP fallback")
+                    start = time.time()
+                    http_result = subprocess.run(
+                        ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
+                         '--interface', interface, '--connect-timeout', '5',
+                         '--max-time', '10', 'http://1.1.1.1'],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    elapsed = (time.time() - start) * 1000  # ms
+
+                    if http_result.returncode == 0 and http_result.stdout.strip() == '200':
+                        logger.debug(f"HTTP fallback succeeded for {interface} in {elapsed:.0f}ms")
+                        result['is_connected'] = True
+                        result['rtt_ms'] = elapsed
+                        result['jitter_ms'] = 0
+                        result['packet_loss'] = 0
+                except Exception as e:
+                    logger.debug(f"HTTP fallback failed for {interface}: {e}")
+
+            # If still not connected, try wget as last resort (some systems lack curl)
+            if is_lte and not result['is_connected']:
+                try:
+                    logger.debug(f"Trying wget fallback for {interface}")
+                    start = time.time()
+                    wget_result = subprocess.run(
+                        ['wget', '-q', '-O', '/dev/null', '--timeout=5',
+                         '--bind-address', source_ip.split('/')[0] if source_ip else '0.0.0.0',
+                         'http://1.1.1.1'],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    elapsed = (time.time() - start) * 1000
+
+                    if wget_result.returncode == 0:
+                        logger.debug(f"wget fallback succeeded for {interface} in {elapsed:.0f}ms")
+                        result['is_connected'] = True
+                        result['rtt_ms'] = elapsed
+                        result['jitter_ms'] = 0
+                        result['packet_loss'] = 0
+                except Exception as e:
+                    logger.debug(f"wget fallback failed for {interface}: {e}")
 
             return result
 
@@ -1153,7 +1344,13 @@ class QSecBitFortressAgent:
             logger.warning(f"Failed to save interface traffic: {e}")
 
     def collect_devices(self) -> List[Dict]:
-        """Collect connected devices from ARP neighbor table."""
+        """Collect connected devices from ARP neighbor table with enrichment.
+
+        Enriches each device with:
+        - Manufacturer from OUI database
+        - Hostname from reverse DNS lookup
+        - Device type based on manufacturer and hostname
+        """
         devices = []
 
         try:
@@ -1170,20 +1367,32 @@ class QSecBitFortressAgent:
                     if state in ['FAILED', 'INCOMPLETE']:
                         continue
 
+                    ip_addr = n.get('dst', '')
                     mac = n.get('lladdr', '')
+                    if not mac:
+                        continue
+
+                    mac = mac.upper()
+
+                    # Enrich device data
+                    manufacturer = lookup_manufacturer(mac)
+                    hostname = resolve_hostname(ip_addr)
+                    device_type = detect_device_type(mac, hostname, manufacturer)
+
                     devices.append({
-                        'ip_address': n.get('dst', ''),
-                        'mac_address': mac.upper() if mac else '',
+                        'ip_address': ip_addr,
+                        'mac_address': mac,
                         'state': state,
-                        'device_type': 'unknown',
-                        'hostname': None,
-                        'manufacturer': None,
+                        'device_type': device_type,
+                        'hostname': hostname,
+                        'manufacturer': manufacturer,
                         'interface': n.get('dev', ''),
                         'last_seen': datetime.now().isoformat(),
                     })
         except Exception as e:
             logger.debug(f"Failed to collect devices: {e}")
 
+        logger.debug(f"Collected {len(devices)} devices with enrichment")
         return devices
 
     def collect_wifi_status(self) -> Dict:
