@@ -109,6 +109,26 @@ try:
 except ImportError:
     pass
 
+# Device Data Manager for CRUD operations
+DEVICE_DATA_MANAGER_AVAILABLE = False
+try:
+    from lib.device_data_manager import (
+        get_device_data_manager,
+        DevicePolicy as DataPolicy,
+        DeviceCategory as DataCategory,
+    )
+    DEVICE_DATA_MANAGER_AVAILABLE = True
+except ImportError:
+    try:
+        from device_data_manager import (
+            get_device_data_manager,
+            DevicePolicy as DataPolicy,
+            DeviceCategory as DataCategory,
+        )
+        DEVICE_DATA_MANAGER_AVAILABLE = True
+    except ImportError:
+        pass
+
 import subprocess
 import re
 import sqlite3
@@ -765,33 +785,34 @@ def index():
     if not devices and DB_AVAILABLE:
         try:
             device_mgr = get_device_manager()
-            devices = device_mgr.get_all_devices()
+            db_devices = device_mgr.get_all_devices()
 
-            # Enrich devices with OUI classification
-            for device in devices:
-                mac = device.get('mac_address', '')
-                classification = classify_device(mac)
-                device['oui_category'] = classification.get('category', 'unknown')
-                device['auto_policy'] = classification.get('recommended_policy', 'default')
-                device['manufacturer'] = device.get('manufacturer') or classification.get('manufacturer', 'Unknown')
+            if db_devices:
+                # Enrich devices with OUI classification
+                for device in db_devices:
+                    mac = device.get('mac_address', '')
+                    classification = classify_device(mac)
+                    device['oui_category'] = classification.get('category', 'unknown')
+                    device['auto_policy'] = classification.get('recommended_policy', 'default')
+                    device['manufacturer'] = device.get('manufacturer') or classification.get('manufacturer', 'Unknown')
 
-                # Convert datetime
-                for key in ['first_seen', 'last_seen']:
-                    if device.get(key) and not isinstance(device[key], str):
-                        device[key] = str(device[key])
+                    # Convert datetime
+                    for key in ['first_seen', 'last_seen']:
+                        if device.get(key) and not isinstance(device[key], str):
+                            device[key] = str(device[key])
 
-                # Determine online status (last seen within 5 minutes)
-                device['is_online'] = False  # Will be updated by ARP scan
+                    # Determine online status (last seen within 5 minutes)
+                    device['is_online'] = False  # Will be updated by ARP scan
 
-            if devices:
+                devices = db_devices
                 using_real_data = True
 
             vlan_mgr = get_vlan_manager()
             vlans = vlan_mgr.get_vlans()
 
         except Exception as e:
-            logger.warning(f"Database error: {e}")
-            flash(f'Error loading devices: {e}', 'warning')
+            # Only log, don't flash - we'll fall back to demo data
+            logger.debug(f"Database not available: {e}")
 
     # Priority 3: Fall back to demo data only if no real data found
     if not devices:
@@ -942,11 +963,18 @@ def set_policy():
         return jsonify({'success': False, 'error': f'Invalid policy: {policy}'}), 400
 
     try:
+        # Use device data manager for persistent CRUD (primary)
+        if DEVICE_DATA_MANAGER_AVAILABLE:
+            ddm = get_device_data_manager()
+            ddm.set_policy(mac_address, policy)
+
+        # Legacy: policy manager for nftables
         if POLICY_MANAGER_AVAILABLE:
             from network_policy_manager import NetworkPolicyManager, NetworkPolicy
             manager = NetworkPolicyManager(use_nftables=True)
             manager.set_policy(mac_address, NetworkPolicy(policy), assigned_by=f'web:{current_user.id}')
 
+        # Legacy: database for additional tracking
         if DB_AVAILABLE:
             db = get_db()
             db.execute(
@@ -989,11 +1017,18 @@ def auto_classify():
         classification = classify_device(mac_address)
         recommended = classification.get('recommended_policy', 'default')
 
+        # Use device data manager for persistent CRUD (primary)
+        if DEVICE_DATA_MANAGER_AVAILABLE:
+            ddm = get_device_data_manager()
+            ddm.update(mac_address, policy=recommended, category=classification.get('category', 'unknown'))
+
+        # Legacy: policy manager for nftables
         if POLICY_MANAGER_AVAILABLE:
             from network_policy_manager import NetworkPolicyManager, NetworkPolicy
             manager = NetworkPolicyManager(use_nftables=True)
             manager.set_policy(mac_address, NetworkPolicy(recommended), assigned_by='oui')
 
+        # Legacy: database for additional tracking
         if DB_AVAILABLE:
             db = get_db()
             db.execute(
@@ -1005,6 +1040,7 @@ def auto_classify():
             'success': True,
             'category': classification.get('category'),
             'policy': recommended,
+            'policy_applied': recommended,
             'classification': classification
         })
 
@@ -1022,11 +1058,18 @@ def disconnect_device():
         return jsonify({'success': False, 'error': 'MAC address required'}), 400
 
     try:
+        # Use device data manager for persistent CRUD (primary)
+        if DEVICE_DATA_MANAGER_AVAILABLE:
+            ddm = get_device_data_manager()
+            ddm.set_policy(mac_address, 'isolated')
+
+        # Legacy: policy manager for nftables
         if POLICY_MANAGER_AVAILABLE:
             from network_policy_manager import NetworkPolicyManager, NetworkPolicy
             manager = NetworkPolicyManager(use_nftables=True)
             manager.set_policy(mac_address, NetworkPolicy.ISOLATED, assigned_by=f'disconnect:{current_user.id}')
 
+        # Legacy: database for additional tracking
         if DB_AVAILABLE:
             db = get_db()
             db.audit_log(
@@ -1056,11 +1099,18 @@ def block_device():
         return jsonify({'success': False, 'error': 'MAC address required'}), 400
 
     try:
+        # Use device data manager for persistent CRUD (primary)
+        if DEVICE_DATA_MANAGER_AVAILABLE:
+            ddm = get_device_data_manager()
+            ddm.block(mac_address, reason)
+
+        # Legacy: policy manager for nftables
         if POLICY_MANAGER_AVAILABLE:
             from network_policy_manager import NetworkPolicyManager, NetworkPolicy
             manager = NetworkPolicyManager(use_nftables=True)
             manager.set_policy(mac_address, NetworkPolicy.ISOLATED, assigned_by=f'block:{current_user.id}')
 
+        # Legacy: database for additional tracking
         if DB_AVAILABLE:
             db = get_db()
             db.execute(
@@ -1095,11 +1145,18 @@ def unblock_device():
         classification = classify_device(mac_address)
         recommended = classification.get('recommended_policy', 'default')
 
+        # Use device data manager for persistent CRUD (primary)
+        if DEVICE_DATA_MANAGER_AVAILABLE:
+            ddm = get_device_data_manager()
+            ddm.unblock(mac_address)
+
+        # Legacy: policy manager for nftables
         if POLICY_MANAGER_AVAILABLE:
             from network_policy_manager import NetworkPolicyManager, NetworkPolicy
             manager = NetworkPolicyManager(use_nftables=True)
             manager.set_policy(mac_address, NetworkPolicy(recommended), assigned_by='unblock')
 
+        # Legacy: database for additional tracking
         if DB_AVAILABLE:
             db = get_db()
             db.execute(
@@ -2444,3 +2501,449 @@ def api_move_device():
             'success': True,
             'message': f'Device {mac_address} moved to {segment} (demo mode)'
         })
+
+
+# ============================================================
+# DEVICE DATA CRUD API - Persistent device management
+# ============================================================
+
+@sdn_bp.route('/api/device/register', methods=['POST'])
+@login_required
+@operator_required
+def api_device_register():
+    """
+    Create/register a device with policy assignment.
+
+    POST data:
+        mac_address: Device MAC address (required)
+        name: Friendly name
+        policy: Network policy (full_access, lan_only, internet_only, isolated, default)
+        notes: Optional notes
+        is_trusted: Whether device is trusted
+    """
+    data = request.get_json() or {}
+    mac_address = data.get('mac_address', '').upper().strip()
+
+    if not mac_address:
+        return jsonify({'success': False, 'error': 'MAC address required'}), 400
+
+    # Validate MAC format
+    import re
+    if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_address.replace('-', ':')):
+        return jsonify({'success': False, 'error': 'Invalid MAC address format'}), 400
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            entry = manager.create(
+                mac_address=mac_address,
+                name=data.get('name', ''),
+                policy=data.get('policy', 'default'),
+                notes=data.get('notes', ''),
+                is_trusted=data.get('is_trusted', False),
+            )
+
+            return jsonify({
+                'success': True,
+                'device': {
+                    'mac_address': entry.mac_address,
+                    'name': entry.name,
+                    'policy': entry.policy,
+                    'category': entry.category,
+                    'manufacturer': entry.manufacturer,
+                    'is_trusted': entry.is_trusted,
+                    'created_at': entry.created_at,
+                }
+            })
+        except Exception as e:
+            logger.error(f"Failed to register device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'device': {
+                'mac_address': mac_address,
+                'name': data.get('name', ''),
+                'policy': data.get('policy', 'default'),
+            },
+            'note': 'Demo mode - device not persisted'
+        })
+
+
+@sdn_bp.route('/api/device/<mac_address>')
+@login_required
+def api_device_get(mac_address):
+    """Get device details by MAC address."""
+    mac = mac_address.upper().replace('-', ':')
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            device = manager.read(mac)
+
+            if device:
+                return jsonify({'success': True, 'device': device})
+            else:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+        except Exception as e:
+            logger.error(f"Failed to get device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        # Return demo data
+        return jsonify({
+            'success': True,
+            'device': {
+                'mac_address': mac,
+                'ip_address': '',
+                'name': '',
+                'policy': 'default',
+                'category': 'unknown',
+                'manufacturer': 'Unknown',
+            }
+        })
+
+
+@sdn_bp.route('/api/device/<mac_address>', methods=['PUT', 'PATCH'])
+@login_required
+@operator_required
+def api_device_update(mac_address):
+    """
+    Update a device entry.
+
+    PUT/PATCH data:
+        name: Friendly name
+        policy: Network policy
+        notes: Notes
+        is_trusted: Trusted flag
+        is_blocked: Blocked flag
+        category: Device category
+    """
+    mac = mac_address.upper().replace('-', ':')
+    data = request.get_json() or {}
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+
+            # Filter allowed fields
+            allowed = {'name', 'policy', 'notes', 'is_trusted', 'is_blocked', 'category'}
+            updates = {k: v for k, v in data.items() if k in allowed}
+
+            entry = manager.update(mac, **updates)
+
+            if entry:
+                return jsonify({
+                    'success': True,
+                    'device': {
+                        'mac_address': entry.mac_address,
+                        'name': entry.name,
+                        'policy': entry.policy,
+                        'category': entry.category,
+                        'is_blocked': entry.is_blocked,
+                        'is_trusted': entry.is_trusted,
+                        'updated_at': entry.updated_at,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Update failed'}), 500
+        except Exception as e:
+            logger.error(f"Failed to update device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'device': {'mac_address': mac, **data},
+            'note': 'Demo mode - changes not persisted'
+        })
+
+
+@sdn_bp.route('/api/device/<mac_address>', methods=['DELETE'])
+@login_required
+@operator_required
+def api_device_delete(mac_address):
+    """Delete a device entry."""
+    mac = mac_address.upper().replace('-', ':')
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            success = manager.delete(mac)
+
+            if success:
+                return jsonify({'success': True, 'message': f'Device {mac} deleted'})
+            else:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+        except Exception as e:
+            logger.error(f"Failed to delete device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'message': f'Device {mac} deleted (demo mode)'
+        })
+
+
+@sdn_bp.route('/api/device/<mac_address>/policy', methods=['POST'])
+@login_required
+@operator_required
+def api_device_set_policy(mac_address):
+    """
+    Set network policy for a device.
+
+    POST data:
+        policy: Network policy (full_access, lan_only, internet_only, isolated, default)
+    """
+    mac = mac_address.upper().replace('-', ':')
+    data = request.get_json() or {}
+    policy = data.get('policy', 'default')
+
+    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'default']
+    if policy not in valid_policies:
+        return jsonify({
+            'success': False,
+            'error': f'Invalid policy. Must be one of: {", ".join(valid_policies)}'
+        }), 400
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            success = manager.set_policy(mac, policy)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Policy set to {policy} for {mac}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to set policy'}), 500
+        except Exception as e:
+            logger.error(f"Failed to set device policy: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'message': f'Policy set to {policy} for {mac} (demo mode)'
+        })
+
+
+@sdn_bp.route('/api/device/<mac_address>/block', methods=['POST'])
+@login_required
+@operator_required
+def api_device_block(mac_address):
+    """Block a device."""
+    mac = mac_address.upper().replace('-', ':')
+    data = request.get_json() or {}
+    reason = data.get('reason', '')
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            success = manager.block(mac, reason)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Device {mac} blocked'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to block device'}), 500
+        except Exception as e:
+            logger.error(f"Failed to block device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'message': f'Device {mac} blocked (demo mode)'
+        })
+
+
+@sdn_bp.route('/api/device/<mac_address>/unblock', methods=['POST'])
+@login_required
+@operator_required
+def api_device_unblock(mac_address):
+    """Unblock a device."""
+    mac = mac_address.upper().replace('-', ':')
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            success = manager.unblock(mac)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Device {mac} unblocked'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to unblock device'}), 500
+        except Exception as e:
+            logger.error(f"Failed to unblock device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'message': f'Device {mac} unblocked (demo mode)'
+        })
+
+
+@sdn_bp.route('/api/device/list')
+@login_required
+def api_device_list():
+    """
+    List all devices with optional filters.
+
+    Query params:
+        policy: Filter by policy
+        category: Filter by category
+        online: Filter online/offline (true/false)
+    """
+    policy = request.args.get('policy')
+    category = request.args.get('category')
+    online = request.args.get('online')
+
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+
+            if policy:
+                devices = manager.list_by_policy(policy)
+            elif category:
+                devices = manager.list_by_category(category)
+            else:
+                devices = manager.list_all()
+
+            # Filter by online status
+            if online is not None:
+                online_bool = online.lower() in ('true', '1', 'yes')
+                devices = [
+                    d for d in devices
+                    if (d.get('state') in ('REACHABLE', 'DELAY')) == online_bool
+                ]
+
+            return jsonify({
+                'success': True,
+                'devices': devices,
+                'count': len(devices),
+            })
+        except Exception as e:
+            logger.error(f"Failed to list devices: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        # Return demo data
+        return jsonify({
+            'success': True,
+            'devices': [],
+            'count': 0,
+            'note': 'Device data manager not available'
+        })
+
+
+@sdn_bp.route('/api/device/stats')
+@login_required
+def api_device_stats():
+    """Get device statistics."""
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            stats = manager.get_stats()
+            return jsonify({'success': True, 'stats': stats})
+        except Exception as e:
+            logger.error(f"Failed to get device stats: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'stats': {
+                'total': 0,
+                'online': 0,
+                'offline': 0,
+                'blocked': 0,
+                'registered': 0,
+                'by_policy': {},
+                'by_category': {},
+            }
+        })
+
+
+@sdn_bp.route('/api/device/sync-policies', methods=['POST'])
+@login_required
+@operator_required
+def api_device_sync_policies():
+    """Sync all device policies to OpenFlow rules."""
+    if DEVICE_DATA_MANAGER_AVAILABLE:
+        try:
+            manager = get_device_data_manager()
+            manager.sync_policies()
+            return jsonify({
+                'success': True,
+                'message': 'All policies synced to network'
+            })
+        except Exception as e:
+            logger.error(f"Failed to sync policies: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'message': 'Policies synced (demo mode)'
+        })
+
+
+@sdn_bp.route('/api/policies/available')
+@login_required
+def api_policies_available():
+    """Get available network policies with descriptions."""
+    policies = [
+        {
+            'id': 'full_access',
+            'name': 'Full Access',
+            'description': 'Full internet and LAN access (staff, trusted devices)',
+            'icon': 'fas fa-globe',
+            'color': 'success',
+        },
+        {
+            'id': 'lan_only',
+            'name': 'LAN Only',
+            'description': 'LAN access only, no internet (cameras, printers, IoT)',
+            'icon': 'fas fa-network-wired',
+            'color': 'info',
+        },
+        {
+            'id': 'internet_only',
+            'name': 'Internet Only',
+            'description': 'Internet only, no LAN access (guests, POS, voice assistants)',
+            'icon': 'fas fa-cloud',
+            'color': 'primary',
+        },
+        {
+            'id': 'isolated',
+            'name': 'Isolated',
+            'description': 'Completely isolated, no network access (quarantined)',
+            'icon': 'fas fa-ban',
+            'color': 'danger',
+        },
+        {
+            'id': 'default',
+            'name': 'Default (Auto)',
+            'description': 'Auto-classified based on device type',
+            'icon': 'fas fa-magic',
+            'color': 'secondary',
+        },
+    ]
+
+    categories = [
+        {'id': 'workstation', 'name': 'Workstation', 'icon': 'fas fa-desktop'},
+        {'id': 'mobile', 'name': 'Mobile', 'icon': 'fas fa-mobile-alt'},
+        {'id': 'iot', 'name': 'IoT', 'icon': 'fas fa-microchip'},
+        {'id': 'camera', 'name': 'Camera', 'icon': 'fas fa-video'},
+        {'id': 'printer', 'name': 'Printer', 'icon': 'fas fa-print'},
+        {'id': 'pos', 'name': 'POS Terminal', 'icon': 'fas fa-cash-register'},
+        {'id': 'voice_assistant', 'name': 'Voice Assistant', 'icon': 'fas fa-microphone'},
+        {'id': 'network', 'name': 'Network Equipment', 'icon': 'fas fa-network-wired'},
+        {'id': 'unknown', 'name': 'Unknown', 'icon': 'fas fa-question'},
+    ]
+
+    return jsonify({
+        'success': True,
+        'policies': policies,
+        'categories': categories,
+    })

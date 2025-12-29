@@ -34,6 +34,11 @@ def get_network_policy_manager():
     from .network_policy_manager import NetworkPolicyManager
     return NetworkPolicyManager()
 
+def get_device_data_manager():
+    """Get the device data manager singleton (file-based CRUD)."""
+    from .device_data_manager import get_device_data_manager as _get_ddm
+    return _get_ddm()
+
 
 __all__ = [
     # Config
@@ -49,6 +54,7 @@ __all__ = [
     'get_vlan_manager',
     'get_sdn_autopilot',
     'get_network_policy_manager',
+    'get_device_data_manager',
 ]
 
 __version__ = '5.5.0'
