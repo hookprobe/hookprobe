@@ -1964,8 +1964,30 @@ class QSecBitFortressAgent:
         - Manufacturer from OUI database
         - Hostname from reverse DNS lookup
         - Device type based on manufacturer and hostname
+
+        Filters out:
+        - Internal container network devices (podman, docker, veth)
+        - OVS internal interfaces (FTS, FTS-mirror)
+        - IPv6 link-local addresses (fe80::)
         """
         devices = []
+
+        # Interfaces to exclude (internal/container networks)
+        exclude_interface_prefixes = (
+            'podman', 'docker', 'veth', 'cni', 'br-',  # Container networks
+            'FTS',  # OVS bridge and mirrors
+            'lo',   # Loopback
+        )
+
+        # IP prefixes to exclude (container networks, link-local)
+        exclude_ip_prefixes = (
+            '172.20.200.',  # Container network (fts-internal)
+            '172.17.',      # Docker default
+            '172.18.',      # Docker networks
+            '172.19.',      # Docker networks
+            'fe80:',        # IPv6 link-local
+            '::1',          # IPv6 loopback
+        )
 
         try:
             proc = subprocess.run(
@@ -1983,7 +2005,19 @@ class QSecBitFortressAgent:
 
                     ip_addr = n.get('dst', '')
                     mac = n.get('lladdr', '')
+                    interface = n.get('dev', '')
+
                     if not mac:
+                        continue
+
+                    # Filter out internal interfaces
+                    if any(interface.startswith(prefix) for prefix in exclude_interface_prefixes):
+                        logger.debug(f"Skipping device on internal interface: {interface}")
+                        continue
+
+                    # Filter out internal IP ranges
+                    if any(ip_addr.startswith(prefix) for prefix in exclude_ip_prefixes):
+                        logger.debug(f"Skipping device with internal IP: {ip_addr}")
                         continue
 
                     mac = mac.upper()
@@ -2000,7 +2034,7 @@ class QSecBitFortressAgent:
                         'device_type': device_type,
                         'hostname': hostname,
                         'manufacturer': manufacturer,
-                        'interface': n.get('dev', ''),
+                        'interface': interface,
                         'last_seen': datetime.now().isoformat(),
                     })
         except Exception as e:
