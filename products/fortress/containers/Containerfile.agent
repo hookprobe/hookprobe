@@ -35,6 +35,9 @@ FROM python:3.11-slim-bookworm
 
 # Runtime dependencies only
 # hostapd package includes hostapd_cli for WiFi status
+# curl for HTTP-based connectivity tests (more reliable for LTE)
+# avahi-utils for mDNS hostname discovery (Apple devices, printers)
+# nbtscan for NetBIOS hostname discovery (Windows devices)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 \
     libgomp1 \
@@ -42,6 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nftables \
     hostapd \
     openvswitch-switch \
+    curl \
+    avahi-utils \
+    nbtscan \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
 
