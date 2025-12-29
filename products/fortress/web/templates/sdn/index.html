@@ -606,6 +606,28 @@
             </div>
         </div>
 
+        <!-- Interface Traffic (Real-time) -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card" style="background: #1a1a2e; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h3 class="card-title"><i class="fas fa-chart-bar mr-2"></i>Interface Traffic (Real-time)</h3>
+                            <div class="d-flex align-items-center" style="font-size: 0.75rem; color: #888;">
+                                <span class="mr-3"><span style="display: inline-block; width: 12px; height: 12px; background: #4fc3f7; border-radius: 2px; margin-right: 4px;"></span>Download</span>
+                                <span><span style="display: inline-block; width: 12px; height: 12px; background: #ff6b6b; border-radius: 2px; margin-right: 4px;"></span>Upload</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body pt-0" id="traffic-interfaces">
+                        <div class="text-center py-4 text-muted">
+                            <i class="fas fa-spinner fa-spin mr-2"></i>Loading interfaces...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 </section>
 
@@ -674,35 +696,45 @@ function loadWifiIntelligence() {
 }
 
 function updateWifiDisplay(data) {
-    // Update SSID (main heading)
-    if (data.ssid) {
-        $('#wifi-ssid').text(data.ssid);
+    // Update SSID - show both bands if available
+    if (data.ssid || data.ssid_24ghz || data.ssid_5ghz) {
+        var ssidText = data.ssid || data.ssid_5ghz || data.ssid_24ghz || 'Fortress-WiFi';
+        $('#wifi-ssid').text(ssidText);
     } else {
         $('#wifi-ssid').text('No WiFi');
     }
 
-    // Update band and channel (subtitle)
-    if (data.current_channel) {
-        $('#wifi-channel').text(data.current_channel);
-    } else {
-        $('#wifi-channel').text('--');
+    // Update band and channel display - show both bands if available
+    var bandInfo = [];
+    if (data.channel_24ghz) {
+        bandInfo.push('2.4GHz CH' + data.channel_24ghz);
+    }
+    if (data.channel_5ghz || data.current_channel > 14) {
+        var ch5 = data.channel_5ghz || data.current_channel;
+        bandInfo.push('5GHz CH' + ch5);
     }
 
-    if (data.band) {
-        $('#wifi-band').text(data.band);
+    if (bandInfo.length > 0) {
+        $('#wifi-band').html(bandInfo.join(' <span class="text-muted mx-1">|</span> '));
+        $('#wifi-channel').text(data.current_channel || data.channel_5ghz || data.channel_24ghz || '--');
+    } else if (data.current_channel) {
+        $('#wifi-channel').text(data.current_channel);
+        $('#wifi-band').text(data.band || '--');
     } else {
+        $('#wifi-channel').text('--');
         $('#wifi-band').text('--');
     }
 
-    // Update ML Score
+    // Update ML Score - normalize if needed (score could be 0-1 or 0-100)
     if (data.ml_score !== null && data.ml_score !== undefined) {
         var score = parseFloat(data.ml_score);
-        var scorePercent = Math.round(score * 100);
+        // Normalize: if score > 1, assume it's already a percentage
+        var scorePercent = score > 1 ? Math.min(100, Math.round(score)) : Math.round(score * 100);
         $('#ml-score-value').text(scorePercent + '%');
-        $('#ml-score-ring').attr('stroke-dasharray', scorePercent + ', 100');
+        $('#ml-score-ring').attr('stroke-dasharray', Math.min(100, scorePercent) + ', 100');
 
-        // Color based on score
-        var color = score >= 0.8 ? '#00ff88' : (score >= 0.6 ? '#ffd93d' : '#ff6b6b');
+        // Color based on normalized percentage
+        var color = scorePercent >= 80 ? '#00ff88' : (scorePercent >= 60 ? '#ffd93d' : '#ff6b6b');
         $('#ml-score-ring').attr('stroke', color);
         $('#ml-score-value').css('color', color);
     } else {
@@ -1227,7 +1259,173 @@ $(document).ready(function() {
     // Load WAN Health on page load and every 15 seconds
     loadWanHealth();
     setInterval(loadWanHealth, 15000);
+
+    // Load traffic data on page load and every 2 seconds
+    loadTrafficData();
+    setInterval(loadTrafficData, 2000);
 });
+
+// === INTERFACE TRAFFIC ===
+var trafficHistory = {};
+var MAX_HISTORY = 30;
+
+// Interface type icons and colors
+var interfaceIcons = {
+    'wan': 'fa-ethernet',
+    'lte': 'fa-signal',
+    'bridge': 'fa-project-diagram',
+    'wifi': 'fa-wifi',
+    'vlan': 'fa-layer-group',
+};
+
+var interfaceColors = {
+    'wan': '#4fc3f7',
+    'lte': '#ffb74d',
+    'bridge': '#ce93d8',
+    'wifi': '#81c784',
+    'vlan': '#64b5f6',
+};
+
+function loadTrafficData() {
+    $.get('/slaai/api/traffic')
+        .done(function(data) {
+            if (data.success) {
+                updateTrafficCharts(data.traffic, data.vlans);
+            }
+        })
+        .fail(function() {
+            $('#traffic-interfaces').html('<div class="text-center py-3 text-muted"><i class="fas fa-info-circle mr-1"></i>Traffic data unavailable</div>');
+        });
+}
+
+function updateTrafficCharts(traffic, vlans) {
+    var container = $('#traffic-interfaces');
+
+    if (!traffic || traffic.length === 0) {
+        container.html('<div class="text-center py-3 text-muted"><i class="fas fa-network-wired mr-1"></i>No active interfaces detected</div>');
+        return;
+    }
+
+    // Group by type
+    var grouped = {
+        wan: traffic.filter(function(t) { return t.type === 'wan'; }),
+        lte: traffic.filter(function(t) { return t.type === 'lte'; }),
+        bridge: traffic.filter(function(t) { return t.type === 'bridge'; }),
+        wifi: traffic.filter(function(t) { return t.type === 'wifi'; }),
+        vlan: traffic.filter(function(t) { return t.type === 'vlan'; })
+    };
+
+    var html = '';
+
+    // WAN Section
+    if (grouped.wan.length > 0 || grouped.lte.length > 0) {
+        html += '<div class="traffic-section-header"><i class="fas fa-globe mr-2" style="color: #888;"></i><span style="color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">WAN Interfaces</span></div>';
+        grouped.wan.concat(grouped.lte).forEach(function(iface) {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // Bridge & WiFi Section
+    if (grouped.bridge.length > 0 || grouped.wifi.length > 0) {
+        html += '<div class="traffic-section-header mt-3"><i class="fas fa-project-diagram mr-2" style="color: #888;"></i><span style="color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">Bridge & WiFi</span></div>';
+        grouped.bridge.concat(grouped.wifi).forEach(function(iface) {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // VLAN Section
+    if (grouped.vlan.length > 0) {
+        html += '<div class="traffic-section-header mt-3"><i class="fas fa-layer-group mr-2" style="color: #888;"></i><span style="color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">VLANs</span></div>';
+        grouped.vlan.forEach(function(iface) {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    container.html(html);
+
+    // Update candlestick charts
+    traffic.forEach(function(iface) {
+        updateCandlestickHistory(iface);
+        renderCandlesticks(iface.interface);
+    });
+}
+
+function renderInterfaceRow(iface) {
+    var icon = interfaceIcons[iface.type] || 'fa-network-wired';
+    var color = interfaceColors[iface.type] || '#888';
+
+    return '<div class="d-flex align-items-center py-2" style="border-bottom: 1px solid rgba(255,255,255,0.06);" data-interface="' + iface.interface + '">' +
+        '<div style="width: 140px; flex-shrink: 0;">' +
+            '<div class="d-flex align-items-center">' +
+                '<i class="fas ' + icon + ' mr-2" style="color: ' + color + '; width: 18px; text-align: center;"></i>' +
+                '<span style="color: #fff; font-size: 0.9rem;">' + iface.interface + '</span>' +
+            '</div>' +
+            '<div style="font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 26px;">' + iface.type.toUpperCase() + '</div>' +
+        '</div>' +
+        '<div class="flex-grow-1 mx-3" id="chart-' + iface.interface + '" style="height: 40px; display: flex; align-items: flex-end; gap: 2px;"></div>' +
+        '<div class="d-flex" style="width: 180px; flex-shrink: 0; justify-content: flex-end; gap: 1rem;">' +
+            '<div class="text-right">' +
+                '<div style="font-size: 0.95rem; font-weight: 600; color: #4fc3f7; font-family: monospace;" id="dl-' + iface.interface + '">' + (iface.rx_mbps || 0).toFixed(1) + ' Mbps</div>' +
+                '<div style="font-size: 0.65rem; color: #666; text-transform: uppercase;">↓ Download</div>' +
+            '</div>' +
+            '<div class="text-right">' +
+                '<div style="font-size: 0.95rem; font-weight: 600; color: #ff6b6b; font-family: monospace;" id="ul-' + iface.interface + '">' + (iface.tx_mbps || 0).toFixed(1) + ' Mbps</div>' +
+                '<div style="font-size: 0.65rem; color: #666; text-transform: uppercase;">↑ Upload</div>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
+}
+
+function updateCandlestickHistory(iface) {
+    if (!trafficHistory[iface.interface]) {
+        trafficHistory[iface.interface] = [];
+    }
+
+    trafficHistory[iface.interface].push({
+        rx: iface.rx_mbps || 0,
+        tx: iface.tx_mbps || 0,
+        time: Date.now()
+    });
+
+    if (trafficHistory[iface.interface].length > MAX_HISTORY) {
+        trafficHistory[iface.interface].shift();
+    }
+}
+
+function renderCandlesticks(ifaceName) {
+    var container = document.getElementById('chart-' + ifaceName);
+    if (!container) return;
+
+    var history = trafficHistory[ifaceName] || [];
+    if (history.length === 0) {
+        container.innerHTML = '<span style="color: #666; font-size: 0.75rem;">Waiting...</span>';
+        return;
+    }
+
+    var maxVal = Math.max.apply(null, history.map(function(h) { return Math.max(h.rx, h.tx); }).concat([1]));
+
+    var html = '';
+    history.forEach(function(sample) {
+        var dlHeight = Math.min(40, (sample.rx / maxVal) * 35);
+        var ulHeight = Math.min(40, (sample.tx / maxVal) * 35);
+
+        html += '<div style="flex: 1; max-width: 8px; display: flex; flex-direction: column; align-items: center;">' +
+            '<div style="width: 100%; display: flex; flex-direction: column; border-radius: 1px;">' +
+                '<div style="background: linear-gradient(180deg, #4fc3f7, #29b6f6); border-radius: 1px 1px 0 0; height: ' + dlHeight + 'px;"></div>' +
+                '<div style="background: linear-gradient(180deg, #ff6b6b, #ee5a5a); border-radius: 0 0 1px 1px; height: ' + ulHeight + 'px;"></div>' +
+            '</div>' +
+        '</div>';
+    });
+
+    container.innerHTML = html;
+
+    // Update current values
+    var latest = history[history.length - 1];
+    var dlEl = document.getElementById('dl-' + ifaceName);
+    var ulEl = document.getElementById('ul-' + ifaceName);
+    if (dlEl) dlEl.textContent = latest.rx.toFixed(1) + ' Mbps';
+    if (ulEl) ulEl.textContent = latest.tx.toFixed(1) + ' Mbps';
+}
 
 // Show WAN Health Modal
 function showWanHealthModal() {
