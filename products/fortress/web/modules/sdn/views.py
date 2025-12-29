@@ -199,6 +199,7 @@ def get_real_devices():
     """
     # Priority 1: Try to read from qsecbit agent data file
     agent_data = _read_agent_data('devices.json', max_age_seconds=120)
+    logger.info(f"Agent data loaded: {type(agent_data)}, keys: {list(agent_data.keys()) if isinstance(agent_data, dict) else 'N/A'}")
 
     # Handle both old format (list) and new format (dict with 'devices' key)
     device_list = None
@@ -206,6 +207,7 @@ def get_real_devices():
         if isinstance(agent_data, dict) and 'devices' in agent_data:
             # New format: {timestamp: ..., devices: [...], count: ...}
             device_list = agent_data.get('devices', [])
+            logger.info(f"Found {len(device_list)} devices in agent data (dict format)")
         elif isinstance(agent_data, list):
             # Old format: plain list of devices
             device_list = agent_data
@@ -252,11 +254,11 @@ def get_real_devices():
                 'bytes_sent': device.get('bytes_sent', 0),
                 'bytes_received': device.get('bytes_received', 0),
             })
-        logger.debug(f"Loaded {len(enriched)} devices from agent data file")
+        logger.info(f"Returning {len(enriched)} enriched devices from agent data file")
         return enriched
 
     # Priority 2: Fallback to direct collection (legacy, works with host network)
-    logger.debug("No agent data available, falling back to direct collection")
+    logger.info("No agent data available, falling back to direct collection")
     devices = []
     arp_devices = {}
     dhcp_leases = {}
@@ -1068,6 +1070,10 @@ def index():
     policies = get_demo_policies()
     stats = get_real_network_stats(devices) if devices else get_demo_stats()
 
+    logger.info(f"Rendering SDN index with {len(devices)} devices, using_real_data={using_real_data}")
+    if devices:
+        logger.info(f"First device sample: mac={devices[0].get('mac_address')}, hostname={devices[0].get('hostname')}")
+
     return render_template(
         'sdn/index.html',
         devices=devices,
@@ -1578,6 +1584,41 @@ def api_devices():
         'devices': devices,
         'using_real_data': using_real_data
     })
+
+
+@sdn_bp.route('/api/debug/devices')
+@login_required
+def api_debug_devices():
+    """Debug endpoint to view raw device data from agent file."""
+    data_file = DATA_DIR / 'devices.json'
+    result = {
+        'file_path': str(data_file),
+        'file_exists': data_file.exists(),
+        'raw_data': None,
+        'parsed_devices': None,
+        'get_real_devices_result': None,
+        'errors': []
+    }
+
+    if data_file.exists():
+        try:
+            result['raw_data'] = json.loads(data_file.read_text())
+            if isinstance(result['raw_data'], dict):
+                result['device_count_in_file'] = len(result['raw_data'].get('devices', []))
+        except Exception as e:
+            result['errors'].append(f"Failed to read raw file: {e}")
+
+    try:
+        devices = get_real_devices()
+        result['get_real_devices_result'] = {
+            'success': devices is not None,
+            'count': len(devices) if devices else 0,
+            'devices': devices[:5] if devices else []  # First 5 only
+        }
+    except Exception as e:
+        result['errors'].append(f"get_real_devices() error: {e}")
+
+    return jsonify(result)
 
 
 @sdn_bp.route('/api/stats')
