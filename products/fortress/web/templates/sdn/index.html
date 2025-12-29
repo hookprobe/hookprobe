@@ -50,8 +50,10 @@
                                         <p class="mb-0" style="color: #888; font-size: 0.85em;">
                                             <i class="fas fa-wifi mr-1"></i>
                                             <span id="wifi-band">--</span>
-                                            <span class="ml-2 text-muted">|</span>
-                                            <span class="ml-2">CH <span id="wifi-channel">--</span></span>
+                                            <span id="wifi-channel-wrapper" class="ml-2" style="display: none;">
+                                                <span class="text-muted">|</span>
+                                                <span class="ml-1">CH <span id="wifi-channel">--</span></span>
+                                            </span>
                                         </p>
                                     </div>
                                 </div>
@@ -715,14 +717,18 @@ function updateWifiDisplay(data) {
     }
 
     if (bandInfo.length > 0) {
+        // Dual-band: show channels inline with bands, hide separate channel display
         $('#wifi-band').html(bandInfo.join(' <span class="text-muted mx-1">|</span> '));
-        $('#wifi-channel').text(data.current_channel || data.channel_5ghz || data.channel_24ghz || '--');
+        $('#wifi-channel-wrapper').hide();
     } else if (data.current_channel) {
+        // Single band: show band and separate channel
         $('#wifi-channel').text(data.current_channel);
         $('#wifi-band').text(data.band || '--');
+        $('#wifi-channel-wrapper').show();
     } else {
         $('#wifi-channel').text('--');
         $('#wifi-band').text('--');
+        $('#wifi-channel-wrapper').show();
     }
 
     // Update ML Score - normalize if needed (score could be 0-1 or 0-100)
