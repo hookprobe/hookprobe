@@ -47,19 +47,33 @@ process_device() {
     # Run in background to not block DHCP response
     (
         # Python script for SDN Auto Pilot classification and OpenFlow rules
-        python3 << 'PYTHON_SCRIPT' "$MAC" "$IP" "$HOSTNAME" "$DHCP_FINGERPRINT" "$ACTION" 2>/dev/null
+        # NOTE: Using '-' tells python to read script from stdin, args come after
+        python3 - "$MAC" "$IP" "$HOSTNAME" "$DHCP_FINGERPRINT" "$ACTION" <<'PYTHON_SCRIPT'
 import sys
+import os
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
 
-# Setup logging
-logging.basicConfig(
-    filename='/opt/hookprobe/fortress/data/autopilot.log',
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s: %(message)s'
-)
+# Ensure data directory exists and is writable
+data_dir = Path('/opt/hookprobe/fortress/data')
+data_dir.mkdir(parents=True, exist_ok=True)
+
+# Setup logging - with fallback to stderr if file not writable
+log_file = data_dir / 'autopilot.log'
+try:
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(message)s'
+    )
+except Exception:
+    # Fallback to stderr (captured in debug log)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(message)s'
+    )
 logger = logging.getLogger('dhcp-event')
 
 # Parse arguments
@@ -160,7 +174,7 @@ try:
 except Exception:
     pass
 PYTHON_SCRIPT
-    ) &
+    ) >> /opt/hookprobe/fortress/data/autopilot_debug.log 2>&1 &
 }
 
 # Notify web UI of new device (optional websocket)
