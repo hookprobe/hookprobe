@@ -816,12 +816,13 @@
 {% endif %}
 
 <!-- DNS Settings Modal -->
-<div class="modal fade modal-dark" id="dnsSettingsModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+<div class="modal fade modal-dark" id="dnsSettingsModal" tabindex="-1" role="dialog"
+     aria-labelledby="dnsSettingsModalLabel" aria-modal="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable" role="document">
         <div class="modal-content">
             <div class="modal-header bg-success">
-                <h5 class="modal-title"><i class="fas fa-cog mr-2"></i>DNS Protection Settings</h5>
-                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+                <h5 class="modal-title" id="dnsSettingsModalLabel"><i class="fas fa-cog mr-2"></i>DNS Protection Settings</h5>
+                <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body p-0">
                 <!-- Tabs -->
@@ -1044,12 +1045,13 @@ class PacketInspector {
             y: 20 + Math.random() * (this.height - 40),
             vx: 2 + Math.random() * 3,
             vy: (Math.random() - 0.5) * 0.5,
-            size: 3 + Math.random() * 3,
+            size: 10 + Math.random() * 4,  // Font size for binary
             color: isBlocked ? '#f87171' : colors[layer],
             layer: layer,
             alpha: 1,
             isBlocked: isBlocked,
-            trail: []
+            trail: [],
+            binary: Math.random() < 0.5 ? '0' : '1'  // Random binary value
         };
     }
 
@@ -1120,36 +1122,39 @@ class PacketInspector {
     }
 
     killPacket(packet) {
-        // Create a dead packet that falls and sweeps to the bin
+        // Create a dead packet - larger binary with "BLOCKED" label that falls to the bin
         this.deadPackets.push({
             x: packet.x,
             y: packet.y,
             vx: 0.5 + Math.random() * 1,  // Slight rightward momentum
             vy: 0,                         // Will be affected by gravity
-            size: packet.size,
+            size: packet.size * 2.5,       // Grow bigger when blocked
             color: '#f87171',
             alpha: 1,
             rotation: 0,
-            rotationSpeed: (Math.random() - 0.5) * 0.3,
+            rotationSpeed: (Math.random() - 0.5) * 0.15,
             onFloor: false,
-            sweepSpeed: 2 + Math.random() * 2
+            sweepSpeed: 2 + Math.random() * 2,
+            binary: packet.binary,          // Keep the binary value
+            showBlockedLabel: true          // Show "BLOCKED" text
         });
 
-        // Create explosion particles
+        // Create binary debris (smaller 0s and 1s)
         for (let i = 0; i < 6; i++) {
             const angle = (i / 6) * Math.PI * 2;
             this.deadPackets.push({
                 x: packet.x,
                 y: packet.y,
-                vx: Math.cos(angle) * 2,
-                vy: Math.sin(angle) * 2,
-                size: 1.5,
+                vx: Math.cos(angle) * 2.5,
+                vy: Math.sin(angle) * 2.5,
+                size: 8,
                 color: '#fca5a5',
                 alpha: 1,
                 rotation: 0,
                 rotationSpeed: 0,
                 isDebris: true,
-                life: 20
+                life: 25,
+                binary: Math.random() < 0.5 ? '0' : '1'  // Random binary debris
             });
         }
     }
@@ -1220,47 +1225,30 @@ class PacketInspector {
     }
 
     drawPacket(p) {
-        // Draw trail
-        this.ctx.beginPath();
-        this.ctx.strokeStyle = p.color;
-        this.ctx.lineWidth = 1;
-        this.ctx.globalAlpha = 0.3;
-        for (let i = 0; i < p.trail.length - 1; i++) {
+        // Draw trail of smaller binary values
+        this.ctx.globalAlpha = 0.15;
+        this.ctx.font = `${p.size * 0.6}px 'Courier New', monospace`;
+        this.ctx.fillStyle = p.color;
+        for (let i = 0; i < p.trail.length; i++) {
             const t = p.trail[i];
-            this.ctx.moveTo(t.x, t.y);
-            this.ctx.lineTo(p.trail[i + 1].x, p.trail[i + 1].y);
+            const trailAlpha = (i / p.trail.length) * 0.15;
+            this.ctx.globalAlpha = trailAlpha;
+            this.ctx.fillText(p.binary, t.x, t.y + p.size / 3);
         }
-        this.ctx.stroke();
 
-        // Draw packet
+        // Draw binary digit (0 or 1)
         this.ctx.globalAlpha = p.alpha;
-        this.ctx.beginPath();
+        this.ctx.font = `bold ${p.size}px 'Courier New', monospace`;
         this.ctx.fillStyle = p.color;
         this.ctx.shadowColor = p.color;
-        this.ctx.shadowBlur = 10;
-        this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        this.ctx.fill();
+        this.ctx.shadowBlur = 8;
+        this.ctx.fillText(p.binary, p.x, p.y + p.size / 3);
         this.ctx.shadowBlur = 0;
     }
 
     drawDart(d) {
-        const x = d.x + (d.targetX - d.x) * d.progress;
-        const y = d.y + (d.targetY - d.y) * d.progress;
-
-        this.ctx.globalAlpha = d.alpha;
-        this.ctx.beginPath();
-        this.ctx.fillStyle = d.color;
-        this.ctx.shadowColor = d.color;
-        this.ctx.shadowBlur = 15;
-
-        // Draw dart shape
-        this.ctx.moveTo(x + d.size, y);
-        this.ctx.lineTo(x - d.size/2, y - d.size/2);
-        this.ctx.lineTo(x - d.size/3, y);
-        this.ctx.lineTo(x - d.size/2, y + d.size/2);
-        this.ctx.closePath();
-        this.ctx.fill();
-        this.ctx.shadowBlur = 0;
+        // Darts are no longer used - blocked packets grow and fall directly
+        // This function is kept for compatibility but draws nothing visible
     }
 
     update() {
@@ -1426,35 +1414,42 @@ class PacketInspector {
         this.ctx.globalAlpha = dp.alpha;
 
         if (dp.isDebris) {
-            // Draw debris as small fading particles
-            this.ctx.beginPath();
+            // Draw debris as small fading binary digits
+            this.ctx.font = `${dp.size}px 'Courier New', monospace`;
             this.ctx.fillStyle = dp.color;
-            this.ctx.arc(dp.x, dp.y, dp.size, 0, Math.PI * 2);
-            this.ctx.fill();
+            this.ctx.fillText(dp.binary || '0', dp.x, dp.y);
         } else {
-            // Draw dead packet with rotation
+            // Draw dead packet with rotation - large binary digit
             this.ctx.translate(dp.x, dp.y);
             this.ctx.rotate(dp.rotation);
 
-            // Draw X mark on dead packet
-            this.ctx.beginPath();
+            // Draw large binary digit with glow
+            this.ctx.font = `bold ${dp.size}px 'Courier New', monospace`;
             this.ctx.fillStyle = dp.color;
             this.ctx.shadowColor = dp.color;
-            this.ctx.shadowBlur = 8;
-            this.ctx.arc(0, 0, dp.size, 0, Math.PI * 2);
-            this.ctx.fill();
+            this.ctx.shadowBlur = 15;
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(dp.binary || '1', 0, dp.size / 3);
 
-            // X mark
+            // Draw "BLOCKED" label below the binary
+            if (dp.showBlockedLabel && !dp.onFloor) {
+                this.ctx.font = `bold 8px 'Courier New', monospace`;
+                this.ctx.fillStyle = '#fee2e2';
+                this.ctx.shadowBlur = 5;
+                this.ctx.fillText('BLOCKED', 0, dp.size / 3 + 12);
+            }
+
+            // Draw strike-through line
             this.ctx.strokeStyle = '#7f1d1d';
-            this.ctx.lineWidth = 1.5;
+            this.ctx.lineWidth = 2;
             this.ctx.beginPath();
-            this.ctx.moveTo(-dp.size * 0.5, -dp.size * 0.5);
-            this.ctx.lineTo(dp.size * 0.5, dp.size * 0.5);
-            this.ctx.moveTo(dp.size * 0.5, -dp.size * 0.5);
-            this.ctx.lineTo(-dp.size * 0.5, dp.size * 0.5);
+            const textWidth = dp.size * 0.6;
+            this.ctx.moveTo(-textWidth, 0);
+            this.ctx.lineTo(textWidth, 0);
             this.ctx.stroke();
 
             this.ctx.shadowBlur = 0;
+            this.ctx.textAlign = 'left';
         }
 
         this.ctx.restore();
@@ -1858,13 +1853,38 @@ async function refreshQsecbit() {
 }
 
 // === DNS SETTINGS MODAL ===
+let dnsSettingsTrigger = null;  // Track the element that opened the modal
+
 function showDnsSettings() {
+    // Store the trigger element for focus restoration
+    dnsSettingsTrigger = document.activeElement;
     $('#dnsSettingsModal').modal('show');
     loadPrivacy();
     loadWhitelist();
     loadSources();
     loadBlockedModal();
 }
+
+// Handle modal close - restore focus to trigger element
+$('#dnsSettingsModal').on('hidden.bs.modal', function() {
+    // Move focus back to the trigger element to avoid aria-hidden issues
+    if (dnsSettingsTrigger && dnsSettingsTrigger.focus) {
+        // Small delay to ensure modal animation completes
+        setTimeout(() => {
+            dnsSettingsTrigger.focus();
+            dnsSettingsTrigger = null;
+        }, 10);
+    }
+});
+
+// Ensure focus is moved before aria-hidden is applied
+$('#dnsSettingsModal').on('hide.bs.modal', function() {
+    // If an element inside the modal has focus, blur it first
+    const activeElement = document.activeElement;
+    if (this.contains(activeElement)) {
+        activeElement.blur();
+    }
+});
 
 // === PRIVACY ===
 async function loadPrivacy() {
@@ -1915,12 +1935,29 @@ async function applyPrivacyPreset(preset) {
 
 // === WHITELIST ===
 async function loadWhitelist() {
+    const tbody = document.getElementById('whitelist-body');
+    if (!tbody) return;
+
     try {
         const resp = await fetch('/dnsxai/api/whitelist');
+
+        // Handle non-OK responses gracefully
+        if (!resp.ok) {
+            console.warn('Whitelist API returned status:', resp.status);
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Whitelist service unavailable</td></tr>';
+            return;
+        }
+
         const data = await resp.json();
         const list = data.whitelist || [];
 
-        const tbody = document.getElementById('whitelist-body');
+        // Check for API-level errors
+        if (data.error) {
+            console.warn('Whitelist API error:', data.error);
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Could not load whitelist</td></tr>';
+            return;
+        }
+
         if (list.length === 0) {
             tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">No whitelisted domains</td></tr>';
         } else {
@@ -1935,7 +1972,10 @@ async function loadWhitelist() {
                 </tr>
             `).join('');
         }
-    } catch(e) {}
+    } catch(e) {
+        console.warn('Failed to load whitelist:', e);
+        tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Error loading whitelist</td></tr>';
+    }
 }
 
 async function addWhitelist() {

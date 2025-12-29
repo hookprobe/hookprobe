@@ -291,21 +291,49 @@ def get_vlan_stats(vlan_id):
 
 @api_bp.route('/devices')
 @login_required
-@db_required
 def list_devices():
-    """List all devices."""
-    vlan_id = request.args.get('vlan_id', type=int)
-    active_only = request.args.get('active', 'false').lower() == 'true'
+    """List all devices.
 
-    device_mgr = get_device_manager()
-    devices = device_mgr.get_all_devices(vlan_id=vlan_id, active_only=active_only)
+    Priority 1: Read from qsecbit agent data file (devices.json)
+    Priority 2: Fallback to database if available
+    """
+    from pathlib import Path
+
+    devices = []
+    source = 'none'
+
+    # Priority 1: Try to read from qsecbit agent data file
+    data_file = Path('/opt/hookprobe/fortress/data/devices.json')
+    if data_file.exists():
+        try:
+            data = json.loads(data_file.read_text())
+            if isinstance(data, dict) and 'devices' in data:
+                devices = data.get('devices', [])
+            elif isinstance(data, list):
+                devices = data
+            if devices:
+                source = 'agent'
+        except Exception:
+            pass
+
+    # Priority 2: Fallback to database
+    if not devices and DB_AVAILABLE:
+        try:
+            vlan_id = request.args.get('vlan_id', type=int)
+            active_only = request.args.get('active', 'false').lower() == 'true'
+
+            device_mgr = get_device_manager()
+            devices = device_mgr.get_all_devices(vlan_id=vlan_id, active_only=active_only)
+            source = 'database'
+        except Exception:
+            pass
 
     for device in devices:
         for key in ['first_seen', 'last_seen']:
-            if device.get(key):
+            if device.get(key) and not isinstance(device[key], str):
                 device[key] = str(device[key])
 
-    return jsonify({'devices': devices, 'count': len(devices)})
+    return jsonify({'devices': devices, 'count': len(devices), 'source': source})
 
 
 @api_bp.route('/devices/<mac_address>')

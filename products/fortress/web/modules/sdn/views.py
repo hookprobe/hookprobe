@@ -199,6 +199,7 @@ def get_real_devices():
     """
     # Priority 1: Try to read from qsecbit agent data file
     agent_data = _read_agent_data('devices.json', max_age_seconds=120)
+    logger.info(f"Agent data loaded: {type(agent_data)}, keys: {list(agent_data.keys()) if isinstance(agent_data, dict) else 'N/A'}")
 
     # Handle both old format (list) and new format (dict with 'devices' key)
     device_list = None
@@ -206,6 +207,7 @@ def get_real_devices():
         if isinstance(agent_data, dict) and 'devices' in agent_data:
             # New format: {timestamp: ..., devices: [...], count: ...}
             device_list = agent_data.get('devices', [])
+            logger.info(f"Found {len(device_list)} devices in agent data (dict format)")
         elif isinstance(agent_data, list):
             # Old format: plain list of devices
             device_list = agent_data
@@ -244,7 +246,12 @@ def get_real_devices():
                 'internet_access': network_policy in ('full_access', 'internet_only'),
                 'lan_access': network_policy in ('full_access', 'lan_only'),
                 'is_blocked': device.get('is_blocked', False),
-                'is_online': device.get('state') in ('REACHABLE', 'DELAY'),
+                # Check multiple state indicators for online status
+                'is_online': (
+                    device.get('is_online', False) or
+                    device.get('state') in ('REACHABLE', 'DELAY', 'reachable', 'delay') or
+                    device.get('status') in ('online', 'ONLINE', 'active', 'ACTIVE')
+                ),
                 'oui_category': category,
                 'auto_policy': classification.get('recommended_policy', 'default'),
                 'first_seen': device.get('first_seen', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
@@ -252,11 +259,11 @@ def get_real_devices():
                 'bytes_sent': device.get('bytes_sent', 0),
                 'bytes_received': device.get('bytes_received', 0),
             })
-        logger.debug(f"Loaded {len(enriched)} devices from agent data file")
+        logger.info(f"Returning {len(enriched)} enriched devices from agent data file")
         return enriched
 
     # Priority 2: Fallback to direct collection (legacy, works with host network)
-    logger.debug("No agent data available, falling back to direct collection")
+    logger.info("No agent data available, falling back to direct collection")
     devices = []
     arp_devices = {}
     dhcp_leases = {}
@@ -1068,6 +1075,10 @@ def index():
     policies = get_demo_policies()
     stats = get_real_network_stats(devices) if devices else get_demo_stats()
 
+    logger.info(f"Rendering SDN index with {len(devices)} devices, using_real_data={using_real_data}")
+    if devices:
+        logger.info(f"First device sample: mac={devices[0].get('mac_address')}, hostname={devices[0].get('hostname')}")
+
     return render_template(
         'sdn/index.html',
         devices=devices,
@@ -1580,6 +1591,41 @@ def api_devices():
     })
 
 
+@sdn_bp.route('/api/debug/devices')
+@login_required
+def api_debug_devices():
+    """Debug endpoint to view raw device data from agent file."""
+    data_file = DATA_DIR / 'devices.json'
+    result = {
+        'file_path': str(data_file),
+        'file_exists': data_file.exists(),
+        'raw_data': None,
+        'parsed_devices': None,
+        'get_real_devices_result': None,
+        'errors': []
+    }
+
+    if data_file.exists():
+        try:
+            result['raw_data'] = json.loads(data_file.read_text())
+            if isinstance(result['raw_data'], dict):
+                result['device_count_in_file'] = len(result['raw_data'].get('devices', []))
+        except Exception as e:
+            result['errors'].append(f"Failed to read raw file: {e}")
+
+    try:
+        devices = get_real_devices()
+        result['get_real_devices_result'] = {
+            'success': devices is not None,
+            'count': len(devices) if devices else 0,
+            'devices': devices[:5] if devices else []  # First 5 only
+        }
+    except Exception as e:
+        result['errors'].append(f"get_real_devices() error: {e}")
+
+    return jsonify(result)
+
+
 @sdn_bp.route('/api/stats')
 @login_required
 def api_stats():
@@ -1671,42 +1717,94 @@ def api_wifi_intelligence():
         'optimization_method': dfs_data.get('scan_mode', 'basic_scan'),
         'wifi_interface': None,
         'ssid': None,
+        # Dual-band support
+        'ssid_24ghz': None,
+        'ssid_5ghz': None,
+        'channel_24ghz': None,
+        'channel_5ghz': None,
     }
 
     # Priority 1: Read from wifi_status.json written by qsecbit agent
     wifi_data = _read_agent_data('wifi_status.json', max_age_seconds=120)
-    if wifi_data and wifi_data.get('primary_ssid'):
-        data['ssid'] = wifi_data.get('primary_ssid')
-        data['current_channel'] = wifi_data.get('primary_channel')
-        data['band'] = wifi_data.get('primary_band', '5GHz')
-        data['hw_mode'] = 'a' if data['band'] == '5GHz' else 'g'
-        if wifi_data.get('interfaces'):
-            # Use first interface info
-            first_iface = wifi_data['interfaces'][0]
-            data['wifi_interface'] = first_iface.get('interface')
-        logger.debug(f"Loaded WiFi status from agent data: SSID={data['ssid']} channel={data['current_channel']}")
-    else:
-        # Priority 2: Fallback - Read hostapd config directly (works if mounted)
-        hostapd_conf = '/etc/hostapd/fortress.conf'
-        if os.path.exists(hostapd_conf):
-            try:
-                with open(hostapd_conf, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('channel='):
-                            data['current_channel'] = int(line.split('=')[1])
-                        elif line.startswith('hw_mode='):
-                            data['hw_mode'] = line.split('=')[1]
-                        elif line.startswith('interface='):
-                            data['wifi_interface'] = line.split('=')[1]
-                        elif line.startswith('ssid='):
-                            data['ssid'] = line.split('=')[1]
+    if wifi_data:
+        # Support dual-band from agent data
+        if wifi_data.get('ssid_24ghz') or wifi_data.get('ssid_5ghz'):
+            data['ssid_24ghz'] = wifi_data.get('ssid_24ghz')
+            data['ssid_5ghz'] = wifi_data.get('ssid_5ghz')
+            data['channel_24ghz'] = wifi_data.get('channel_24ghz')
+            data['channel_5ghz'] = wifi_data.get('channel_5ghz')
+            # Use 5GHz as primary if available
+            data['ssid'] = data['ssid_5ghz'] or data['ssid_24ghz']
+            data['current_channel'] = data['channel_5ghz'] or data['channel_24ghz']
+            data['band'] = '5GHz' if data['channel_5ghz'] else '2.4GHz'
+        elif wifi_data.get('primary_ssid'):
+            data['ssid'] = wifi_data.get('primary_ssid')
+            data['current_channel'] = wifi_data.get('primary_channel')
+            data['band'] = wifi_data.get('primary_band', '5GHz')
+            data['hw_mode'] = 'a' if data['band'] == '5GHz' else 'g'
 
-                # Determine band from hw_mode or channel
-                if data['hw_mode'] == 'a' or (data['current_channel'] and data['current_channel'] > 14):
-                    data['band'] = '5GHz'
-            except Exception:
-                pass
+        # Process interfaces for dual-band info
+        if wifi_data.get('interfaces'):
+            for iface_info in wifi_data['interfaces']:
+                channel = iface_info.get('channel')
+                ssid = iface_info.get('ssid')
+                if channel and channel <= 14:
+                    data['channel_24ghz'] = channel
+                    data['ssid_24ghz'] = ssid or data['ssid']
+                elif channel and channel > 14:
+                    data['channel_5ghz'] = channel
+                    data['ssid_5ghz'] = ssid or data['ssid']
+                if not data['wifi_interface']:
+                    data['wifi_interface'] = iface_info.get('interface')
+
+        logger.debug(f"Loaded WiFi status from agent data: SSID={data['ssid']} ch_24={data['channel_24ghz']} ch_5={data['channel_5ghz']}")
+    else:
+        # Priority 2: Fallback - Read hostapd config files directly
+        # Check for dual-band configs
+        hostapd_configs = [
+            ('/etc/hostapd/fortress-5ghz.conf', '5GHz'),
+            ('/etc/hostapd/fortress-24ghz.conf', '2.4GHz'),
+            ('/etc/hostapd/fortress.conf', None),  # Single config fallback
+        ]
+
+        for conf_path, band_hint in hostapd_configs:
+            if os.path.exists(conf_path):
+                try:
+                    conf_data = {}
+                    with open(conf_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith('channel='):
+                                conf_data['channel'] = int(line.split('=')[1])
+                            elif line.startswith('hw_mode='):
+                                conf_data['hw_mode'] = line.split('=')[1]
+                            elif line.startswith('interface='):
+                                conf_data['interface'] = line.split('=')[1]
+                            elif line.startswith('ssid='):
+                                conf_data['ssid'] = line.split('=')[1]
+
+                    # Determine band
+                    ch = conf_data.get('channel')
+                    is_5ghz = (band_hint == '5GHz' or
+                               conf_data.get('hw_mode') == 'a' or
+                               (ch and ch > 14))
+
+                    if is_5ghz:
+                        data['channel_5ghz'] = ch
+                        data['ssid_5ghz'] = conf_data.get('ssid')
+                    else:
+                        data['channel_24ghz'] = ch
+                        data['ssid_24ghz'] = conf_data.get('ssid')
+
+                    # Set primary values
+                    if not data['current_channel']:
+                        data['current_channel'] = ch
+                        data['hw_mode'] = conf_data.get('hw_mode', 'a' if is_5ghz else 'g')
+                        data['wifi_interface'] = conf_data.get('interface')
+                        data['ssid'] = conf_data.get('ssid')
+                        data['band'] = '5GHz' if is_5ghz else '2.4GHz'
+                except Exception:
+                    pass
 
     # Read channel state file for optimization history
     state_file = '/var/lib/fortress/channel_state.json'
@@ -3170,4 +3268,174 @@ def api_policies_available():
         'success': True,
         'policies': policies,
         'categories': categories,
+    })
+
+
+# ============================================================
+# DEVICE TAGGING API - Manual device classification
+# ============================================================
+
+DEVICE_TAGS_FILE = DATA_DIR / 'device_tags.json'
+
+
+def load_device_tags():
+    """Load manually assigned device tags."""
+    if DEVICE_TAGS_FILE.exists():
+        try:
+            return json.loads(DEVICE_TAGS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def save_device_tags(tags):
+    """Save device tags to file."""
+    try:
+        DEVICE_TAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DEVICE_TAGS_FILE.write_text(json.dumps(tags, indent=2))
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save device tags: {e}")
+        return False
+
+
+@sdn_bp.route('/api/device/<mac_address>/tag', methods=['POST'])
+@login_required
+@operator_required
+def api_device_tag(mac_address):
+    """
+    Manually tag a device with a device type and optional label.
+
+    POST data:
+        device_type: Device type (e.g., 'iphone', 'apple_watch', 'homepod', 'smart_tv')
+        label: Optional friendly label for the device
+    """
+    mac = mac_address.upper().replace('-', ':')
+    data = request.get_json() or {}
+
+    device_type = data.get('device_type')
+    label = data.get('label')
+
+    if not device_type:
+        return jsonify({'success': False, 'error': 'device_type is required'}), 400
+
+    # Load existing tags
+    tags = load_device_tags()
+
+    # Update or create tag
+    tags[mac] = {
+        'device_type': device_type,
+        'label': label,
+        'tagged_at': datetime.now().isoformat(),
+        'tagged_by': current_user.username if hasattr(current_user, 'username') else 'admin'
+    }
+
+    if save_device_tags(tags):
+        return jsonify({
+            'success': True,
+            'message': f'Device {mac} tagged as {device_type}',
+            'tag': tags[mac]
+        })
+    else:
+        return jsonify({'success': False, 'error': 'Failed to save tag'}), 500
+
+
+@sdn_bp.route('/api/device/<mac_address>/tag', methods=['DELETE'])
+@login_required
+@operator_required
+def api_device_untag(mac_address):
+    """Remove manual tag from a device (revert to auto-detection)."""
+    mac = mac_address.upper().replace('-', ':')
+
+    tags = load_device_tags()
+    if mac in tags:
+        del tags[mac]
+        if save_device_tags(tags):
+            return jsonify({
+                'success': True,
+                'message': f'Tag removed from {mac} - device will use auto-detection'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save'}), 500
+    else:
+        return jsonify({'success': False, 'error': 'Device has no manual tag'}), 404
+
+
+@sdn_bp.route('/api/device/tags')
+@login_required
+def api_device_tags_list():
+    """List all manually tagged devices."""
+    tags = load_device_tags()
+    return jsonify({
+        'success': True,
+        'count': len(tags),
+        'tags': tags
+    })
+
+
+@sdn_bp.route('/api/device/types')
+@login_required
+def api_device_types():
+    """Get available device types for manual tagging."""
+    device_types = [
+        # Apple devices
+        {'id': 'iphone', 'name': 'iPhone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        {'id': 'ipad', 'name': 'iPad', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+        {'id': 'macbook', 'name': 'MacBook', 'icon': 'fa-laptop', 'category': 'laptop'},
+        {'id': 'imac', 'name': 'iMac', 'icon': 'fa-desktop', 'category': 'desktop'},
+        {'id': 'mac_mini', 'name': 'Mac mini', 'icon': 'fa-server', 'category': 'desktop'},
+        {'id': 'apple_watch', 'name': 'Apple Watch', 'icon': 'fa-clock', 'category': 'wearable'},
+        {'id': 'homepod', 'name': 'HomePod', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'apple_tv', 'name': 'Apple TV', 'icon': 'fa-tv', 'category': 'streaming'},
+        {'id': 'airpods', 'name': 'AirPods', 'icon': 'fa-headphones', 'category': 'audio'},
+
+        # Android devices
+        {'id': 'android_phone', 'name': 'Android Phone', 'icon': 'fa-mobile-alt', 'category': 'phone'},
+        {'id': 'android_tablet', 'name': 'Android Tablet', 'icon': 'fa-tablet-alt', 'category': 'tablet'},
+
+        # Computers
+        {'id': 'windows_pc', 'name': 'Windows PC', 'icon': 'fa-desktop', 'category': 'computer'},
+        {'id': 'linux_pc', 'name': 'Linux PC', 'icon': 'fa-linux', 'category': 'computer'},
+        {'id': 'laptop', 'name': 'Laptop', 'icon': 'fa-laptop', 'category': 'computer'},
+
+        # Smart speakers
+        {'id': 'amazon_echo', 'name': 'Amazon Echo', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'sonos_speaker', 'name': 'Sonos Speaker', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'google_home', 'name': 'Google Home', 'icon': 'fa-volume-up', 'category': 'speaker'},
+        {'id': 'nest_hub', 'name': 'Nest Hub', 'icon': 'fa-tv', 'category': 'smart_display'},
+
+        # Streaming devices
+        {'id': 'smart_tv', 'name': 'Smart TV', 'icon': 'fa-tv', 'category': 'tv'},
+        {'id': 'roku', 'name': 'Roku', 'icon': 'fa-tv', 'category': 'streaming'},
+        {'id': 'chromecast', 'name': 'Chromecast', 'icon': 'fa-tv', 'category': 'streaming'},
+        {'id': 'fire_tv', 'name': 'Fire TV', 'icon': 'fa-tv', 'category': 'streaming'},
+
+        # IoT
+        {'id': 'ip_camera', 'name': 'IP Camera', 'icon': 'fa-video', 'category': 'camera'},
+        {'id': 'ring_camera', 'name': 'Ring Camera', 'icon': 'fa-video', 'category': 'camera'},
+        {'id': 'smart_thermostat', 'name': 'Smart Thermostat', 'icon': 'fa-thermometer-half', 'category': 'iot'},
+        {'id': 'smart_doorbell', 'name': 'Smart Doorbell', 'icon': 'fa-bell', 'category': 'iot'},
+        {'id': 'smart_light', 'name': 'Smart Light', 'icon': 'fa-lightbulb', 'category': 'lighting'},
+        {'id': 'raspberry_pi', 'name': 'Raspberry Pi', 'icon': 'fa-microchip', 'category': 'iot'},
+
+        # Network devices
+        {'id': 'router', 'name': 'Router', 'icon': 'fa-network-wired', 'category': 'network'},
+        {'id': 'network_switch', 'name': 'Network Switch', 'icon': 'fa-network-wired', 'category': 'network'},
+        {'id': 'access_point', 'name': 'Access Point', 'icon': 'fa-wifi', 'category': 'network'},
+
+        # Printers
+        {'id': 'printer', 'name': 'Printer', 'icon': 'fa-print', 'category': 'printer'},
+
+        # Gaming
+        {'id': 'playstation', 'name': 'PlayStation', 'icon': 'fa-gamepad', 'category': 'gaming'},
+        {'id': 'xbox', 'name': 'Xbox', 'icon': 'fa-gamepad', 'category': 'gaming'},
+        {'id': 'nintendo_switch', 'name': 'Nintendo Switch', 'icon': 'fa-gamepad', 'category': 'gaming'},
+
+        # Generic
+        {'id': 'unknown', 'name': 'Unknown Device', 'icon': 'fa-question-circle', 'category': 'unknown'},
+    ]
+
+    return jsonify({
+        'success': True,
+        'device_types': device_types
     })
