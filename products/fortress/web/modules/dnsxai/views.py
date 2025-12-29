@@ -95,8 +95,9 @@ def save_json_file(path: Path, data: dict) -> bool:
 @dnsxai_bp.route('/')
 @login_required
 def index():
-    """dnsXai main page."""
-    return render_template('dnsxai/index.html')
+    """Redirect to unified AI Security page."""
+    from flask import redirect, url_for
+    return redirect(url_for('security.index'))
 
 
 # =============================================================================

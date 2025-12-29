@@ -162,30 +162,15 @@
                         </ul>
                     </li>
 
-                    <!-- 3. SECURITY & AI (QSecBit + dnsXai + Threats) -->
-                    <li class="nav-item {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}menu-open{% endif %}">
-                        <a href="#" class="nav-link {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}active{% endif %}">
+                    <!-- 3. AI SECURITY (Unified QSecBit + dnsXai) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('security.index') }}" class="nav-link {% if 'security' in request.endpoint or 'dnsxai' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-shield-halved"></i>
                             <p>
-                                Security & AI
-                                <i class="right fas fa-angle-left"></i>
+                                AI Security
                                 <span class="badge badge-success right" id="sidebar-rag-badge">OK</span>
                             </p>
                         </a>
-                        <ul class="nav nav-treeview">
-                            <li class="nav-item">
-                                <a href="{{ url_for('security.index') }}" class="nav-link {% if 'security' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-chart-line nav-icon"></i>
-                                    <p>QSecBit</p>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a href="{{ url_for('dnsxai.index') }}" class="nav-link {% if 'dnsxai' in request.endpoint %}active{% endif %}">
-                                    <i class="fas fa-brain nav-icon"></i>
-                                    <p>dnsXai</p>
-                                </a>
-                            </li>
-                        </ul>
                     </li>
 
                     <!-- 4. CONNECTIVITY (WAN + Traffic + Tunnel) -->
