@@ -762,6 +762,11 @@ create_directories() {
     chmod 755 /var/lib/hookprobe/userdata
     chmod 755 /var/lib/hookprobe/userdata/dnsxai
 
+    # Data directory needs to be writable by qsecbit container (runs as uid 1000)
+    # This is a bind mount shared between host and containers for device data
+    chmod 777 "$INSTALL_DIR/data"
+    chown 1000:1000 "$INSTALL_DIR/data" 2>/dev/null || true
+
     # Bootstrap dnsXai defaults to userdata if not present
     # This ensures defaults are available even before container first starts
     # Container entrypoint will sync these properly on startup
