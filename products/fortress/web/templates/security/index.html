@@ -1008,11 +1008,15 @@ class PacketInspector {
         this.ctx = this.canvas.getContext('2d');
         this.particles = [];
         this.darts = [];
+        this.deadPackets = [];  // Packets killed by darts, falling to the bin
         this.packetsInspected = 0;
         this.packetsBlocked = 0;
         this.packetsPerSec = 0;
         this.lastSecondCount = 0;
         this.animationId = null;
+        this.gravity = 0.3;
+        this.floorY = 0;  // Will be set in resize
+        this.binX = 0;    // Will be set in resize
         this.resize();
         window.addEventListener('resize', () => this.resize());
         this.startAnimation();
@@ -1026,6 +1030,8 @@ class PacketInspector {
         this.canvas.height = 140;
         this.width = this.canvas.width;
         this.height = this.canvas.height;
+        this.floorY = this.height - 15;  // Floor line
+        this.binX = this.width - 40;     // Bin position
     }
 
     createPacket(isBlocked = false) {
@@ -1098,6 +1104,11 @@ class PacketInspector {
     triggerBlockEvent(packet) {
         // Create dart animation
         this.darts.push(this.createDart(packet.x + 50, packet.y, packet.layer));
+
+        // Mark packet for death - dart will "kill" it
+        packet.markedForDeath = true;
+        packet.deathTimer = 15; // Frames until dart hits
+
         // Flash layer indicator
         const layerEl = document.getElementById('layer-' + packet.layer.toLowerCase());
         if (layerEl) {
@@ -1106,6 +1117,41 @@ class PacketInspector {
         }
         // Add to layer activity
         this.addLayerActivity(packet.layer, true);
+    }
+
+    killPacket(packet) {
+        // Create a dead packet that falls and sweeps to the bin
+        this.deadPackets.push({
+            x: packet.x,
+            y: packet.y,
+            vx: 0.5 + Math.random() * 1,  // Slight rightward momentum
+            vy: 0,                         // Will be affected by gravity
+            size: packet.size,
+            color: '#f87171',
+            alpha: 1,
+            rotation: 0,
+            rotationSpeed: (Math.random() - 0.5) * 0.3,
+            onFloor: false,
+            sweepSpeed: 2 + Math.random() * 2
+        });
+
+        // Create explosion particles
+        for (let i = 0; i < 6; i++) {
+            const angle = (i / 6) * Math.PI * 2;
+            this.deadPackets.push({
+                x: packet.x,
+                y: packet.y,
+                vx: Math.cos(angle) * 2,
+                vy: Math.sin(angle) * 2,
+                size: 1.5,
+                color: '#fca5a5',
+                alpha: 1,
+                rotation: 0,
+                rotationSpeed: 0,
+                isDebris: true,
+                life: 20
+            });
+        }
     }
 
     addLayerActivity(layer, blocked) {
@@ -1224,6 +1270,18 @@ class PacketInspector {
             p.trail.push({ x: p.x, y: p.y });
             if (p.trail.length > 10) p.trail.shift();
 
+            // Handle death timer - when dart hits, kill the packet
+            if (p.markedForDeath) {
+                p.deathTimer--;
+                if (p.deathTimer <= 0) {
+                    this.killPacket(p);
+                    this.particles.splice(i, 1);
+                    continue;
+                }
+                // Slow down while waiting for dart
+                p.vx *= 0.9;
+            }
+
             p.x += p.vx;
             p.y += p.vy;
 
@@ -1233,15 +1291,6 @@ class PacketInspector {
             // Remove if off screen
             if (p.x > this.width + 10) {
                 this.particles.splice(i, 1);
-            }
-
-            // If blocked, slow down and fade
-            if (p.isBlocked && p.x > this.width * 0.6) {
-                p.vx *= 0.95;
-                p.alpha *= 0.95;
-                if (p.alpha < 0.1) {
-                    this.particles.splice(i, 1);
-                }
             }
         }
 
@@ -1253,6 +1302,57 @@ class PacketInspector {
                 d.alpha *= 0.8;
                 if (d.alpha < 0.1) {
                     this.darts.splice(i, 1);
+                }
+            }
+        }
+
+        // Update dead packets (falling and sweeping to bin)
+        for (let i = this.deadPackets.length - 1; i >= 0; i--) {
+            const dp = this.deadPackets[i];
+
+            // Handle explosion debris
+            if (dp.isDebris) {
+                dp.life--;
+                dp.alpha = dp.life / 20;
+                dp.x += dp.vx;
+                dp.y += dp.vy;
+                dp.vy += 0.1; // Light gravity
+                if (dp.life <= 0) {
+                    this.deadPackets.splice(i, 1);
+                }
+                continue;
+            }
+
+            // Apply gravity until hitting floor
+            if (!dp.onFloor) {
+                dp.vy += this.gravity;
+                dp.y += dp.vy;
+                dp.x += dp.vx;
+                dp.rotation += dp.rotationSpeed;
+
+                // Hit the floor
+                if (dp.y >= this.floorY) {
+                    dp.y = this.floorY;
+                    dp.vy = -dp.vy * 0.3; // Small bounce
+                    dp.onFloor = dp.vy > -1; // Settle if bounce is small
+                    if (dp.onFloor) {
+                        dp.vy = 0;
+                        dp.rotation = 0;
+                    }
+                }
+            } else {
+                // On floor - sweep to the right toward bin
+                dp.x += dp.sweepSpeed;
+
+                // Slow down near bin
+                if (dp.x > this.binX - 30) {
+                    dp.sweepSpeed *= 0.95;
+                    dp.alpha *= 0.92;
+                }
+
+                // Remove when in bin
+                if (dp.x >= this.binX || dp.alpha < 0.05) {
+                    this.deadPackets.splice(i, 1);
                 }
             }
         }
@@ -1300,11 +1400,119 @@ class PacketInspector {
             this.ctx.fillText(zone.label, zone.x - 8, this.height - 5);
         });
 
+        // Draw floor line (subtle)
+        this.ctx.strokeStyle = 'rgba(248, 113, 113, 0.15)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, this.floorY + 5);
+        this.ctx.lineTo(this.width, this.floorY + 5);
+        this.ctx.stroke();
+
+        // Draw bin icon
+        this.drawBin();
+
+        // Draw dead packets (falling/sweeping)
+        this.deadPackets.forEach(dp => this.drawDeadPacket(dp));
+
         // Draw particles and darts
         this.particles.forEach(p => this.drawPacket(p));
         this.darts.forEach(d => this.drawDart(d));
 
         this.ctx.globalAlpha = 1;
+    }
+
+    drawDeadPacket(dp) {
+        this.ctx.save();
+        this.ctx.globalAlpha = dp.alpha;
+
+        if (dp.isDebris) {
+            // Draw debris as small fading particles
+            this.ctx.beginPath();
+            this.ctx.fillStyle = dp.color;
+            this.ctx.arc(dp.x, dp.y, dp.size, 0, Math.PI * 2);
+            this.ctx.fill();
+        } else {
+            // Draw dead packet with rotation
+            this.ctx.translate(dp.x, dp.y);
+            this.ctx.rotate(dp.rotation);
+
+            // Draw X mark on dead packet
+            this.ctx.beginPath();
+            this.ctx.fillStyle = dp.color;
+            this.ctx.shadowColor = dp.color;
+            this.ctx.shadowBlur = 8;
+            this.ctx.arc(0, 0, dp.size, 0, Math.PI * 2);
+            this.ctx.fill();
+
+            // X mark
+            this.ctx.strokeStyle = '#7f1d1d';
+            this.ctx.lineWidth = 1.5;
+            this.ctx.beginPath();
+            this.ctx.moveTo(-dp.size * 0.5, -dp.size * 0.5);
+            this.ctx.lineTo(dp.size * 0.5, dp.size * 0.5);
+            this.ctx.moveTo(dp.size * 0.5, -dp.size * 0.5);
+            this.ctx.lineTo(-dp.size * 0.5, dp.size * 0.5);
+            this.ctx.stroke();
+
+            this.ctx.shadowBlur = 0;
+        }
+
+        this.ctx.restore();
+    }
+
+    drawBin() {
+        const x = this.binX;
+        const y = this.floorY - 5;
+        const w = 25;
+        const h = 20;
+
+        this.ctx.save();
+
+        // Bin glow when dead packets are nearby
+        const nearbyPackets = this.deadPackets.filter(dp =>
+            !dp.isDebris && dp.onFloor && dp.x > this.binX - 60
+        ).length;
+
+        if (nearbyPackets > 0) {
+            this.ctx.shadowColor = '#f87171';
+            this.ctx.shadowBlur = 15 + nearbyPackets * 3;
+        }
+
+        // Bin body
+        this.ctx.fillStyle = 'rgba(127, 29, 29, 0.6)';
+        this.ctx.strokeStyle = '#f87171';
+        this.ctx.lineWidth = 1.5;
+
+        // Trapezoid bin shape
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - w/2 + 3, y - h);
+        this.ctx.lineTo(x + w/2 - 3, y - h);
+        this.ctx.lineTo(x + w/2, y);
+        this.ctx.lineTo(x - w/2, y);
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.stroke();
+
+        // Bin lid
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - w/2 - 2, y - h);
+        this.ctx.lineTo(x + w/2 + 2, y - h);
+        this.ctx.stroke();
+
+        // Bin icon (trash lines)
+        this.ctx.strokeStyle = 'rgba(248, 113, 113, 0.5)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - 5, y - h + 5);
+        this.ctx.lineTo(x - 5, y - 3);
+        this.ctx.moveTo(x, y - h + 5);
+        this.ctx.lineTo(x, y - 3);
+        this.ctx.moveTo(x + 5, y - h + 5);
+        this.ctx.lineTo(x + 5, y - 3);
+        this.ctx.stroke();
+
+        this.ctx.shadowBlur = 0;
+        this.ctx.restore();
     }
 
     startAnimation() {
