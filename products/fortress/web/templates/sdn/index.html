@@ -1776,8 +1776,11 @@ function showWanHealthModal() {
                 <!-- Cost Tracking -->
                 ${status.cost_status ? `
                 <div class="card bg-dark mb-3">
-                    <div class="card-header bg-transparent">
-                        <h6 class="mb-0"><i class="fas fa-dollar-sign mr-2"></i>LTE Data Usage</h6>
+                    <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0"><i class="fas fa-tachometer-alt mr-2"></i>LTE Data Usage</h6>
+                        <button class="btn btn-sm btn-outline-warning" onclick="resetLteUsage()" title="Reset monthly counter to 0">
+                            <i class="fas fa-undo mr-1"></i>Reset
+                        </button>
                     </div>
                     <div class="card-body">
                         <div class="row">
@@ -1787,10 +1790,10 @@ function showWanHealthModal() {
                                     <div class="progress mt-1" style="height: 6px;">
                                         <div class="progress-bar bg-info" style="width: ${Math.min(100, (status.cost_status.daily_usage_mb / status.cost_status.daily_budget_mb) * 100)}%"></div>
                                     </div>
-                                    <small>${status.cost_status.daily_usage_mb} / ${status.cost_status.daily_budget_mb} MB</small>
+                                    <small>${status.cost_status.daily_usage_mb.toFixed(1)} / ${status.cost_status.daily_budget_mb} MB</small>
                                 ` : `
                                     <div class="mt-1">
-                                        <small class="text-info">${status.cost_status.daily_usage_mb} MB</small>
+                                        <small class="text-info">${status.cost_status.daily_usage_mb.toFixed(1)} MB</small>
                                         <small class="text-muted ml-1">/ Unlimited</small>
                                     </div>
                                 `}
@@ -1801,15 +1804,20 @@ function showWanHealthModal() {
                                     <div class="progress mt-1" style="height: 6px;">
                                         <div class="progress-bar bg-warning" style="width: ${Math.min(100, (status.cost_status.monthly_usage_mb / status.cost_status.monthly_budget_mb) * 100)}%"></div>
                                     </div>
-                                    <small>${(status.cost_status.monthly_usage_mb / 1024).toFixed(1)} / ${(status.cost_status.monthly_budget_mb / 1024).toFixed(0)} GB</small>
+                                    <small>${(status.cost_status.monthly_usage_mb / 1024).toFixed(2)} / ${(status.cost_status.monthly_budget_mb / 1024).toFixed(0)} GB</small>
                                 ` : `
                                     <div class="mt-1">
-                                        <small class="text-warning">${(status.cost_status.monthly_usage_mb / 1024).toFixed(1)} GB</small>
+                                        <small class="text-warning">${(status.cost_status.monthly_usage_mb / 1024).toFixed(2)} GB</small>
                                         <small class="text-muted ml-1">/ Unlimited</small>
                                     </div>
                                 `}
                             </div>
                         </div>
+                        ${status.cost_status.last_update ? `
+                        <div class="mt-2 text-muted" style="font-size: 0.7rem;">
+                            <i class="fas fa-clock mr-1"></i>Updated: ${new Date(status.cost_status.last_update).toLocaleString()}
+                        </div>
+                        ` : ''}
                     </div>
                 </div>
                 ` : ''}
@@ -1847,6 +1855,33 @@ function showWanHealthModal() {
             $('#wan-modal-body').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle mr-2"></i>Could not load WAN Health data</div>');
             $('#wan-health-modal').modal('show');
         });
+}
+
+// Reset LTE Usage Counter
+function resetLteUsage() {
+    // Confirm with user
+    if (!confirm('Are you sure you want to reset the LTE data usage counter to 0?\n\nThis will reset the monthly usage tracking.')) {
+        return;
+    }
+
+    $.ajax({
+        url: '/slaai/api/lte-usage/reset',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ type: 'monthly' }),
+        success: function(data) {
+            if (data.success) {
+                toastr.success('LTE usage counter reset successfully');
+                // Reload the WAN health data to reflect the change
+                loadWanHealth();
+            } else {
+                toastr.error(data.error || 'Failed to reset LTE usage');
+            }
+        },
+        error: function(xhr, status, error) {
+            toastr.error('Failed to reset LTE usage: ' + error);
+        }
+    });
 }
 </script>
 
