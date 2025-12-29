@@ -32,37 +32,9 @@ except ImportError as e:
 @networks_bp.route('/')
 @login_required
 def index():
-    """VLAN overview page - uses real system data."""
-    vlans = []
-
-    if SYSTEM_DATA_AVAILABLE:
-        try:
-            vlans = get_vlans()
-            # Enrich with additional status info
-            for vlan in vlans:
-                vlan['interface_up'] = vlan.get('state') == 'UP'
-                vlan['dhcp_running'] = True  # dnsmasq provides DHCP
-                vlan['is_isolated'] = vlan.get('vlan_id') == 200  # MGMT is isolated
-        except Exception as e:
-            import logging
-            logging.error(f'Error loading VLANs: {e}')
-            flash(f'Error loading VLANs: {e}', 'danger')
-    else:
-        flash('System data module not available', 'warning')
-
-    # Calculate totals
-    total_devices = sum(v.get('device_count', 0) for v in vlans)
-    active_vlans = sum(1 for v in vlans if v.get('interface_up'))
-    isolated_vlans = sum(1 for v in vlans if v.get('is_isolated'))
-
-    return render_template(
-        'networks/index.html',
-        vlans=vlans,
-        total_devices=total_devices,
-        active_vlans=active_vlans,
-        isolated_vlans=isolated_vlans,
-        system_data_available=SYSTEM_DATA_AVAILABLE
-    )
+    """Redirect to unified SDN AI page."""
+    from flask import redirect, url_for
+    return redirect(url_for('sdn.index'))
 
 
 @networks_bp.route('/<int:vlan_id>')
