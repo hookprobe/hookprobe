@@ -1,10 +1,10 @@
 [Unit]
-Description=Fortress LTE Traffic Collector
+Description=Fortress LTE Usage Tracker (Watermark-based)
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/hookprobe/fortress/devices/common/lte-traffic-collector.sh
+ExecStart=/opt/hookprobe/fortress/devices/common/lte-usage-tracker.sh collect
 User=root
 Group=root
 
