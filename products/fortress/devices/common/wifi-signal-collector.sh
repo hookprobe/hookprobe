@@ -26,8 +26,10 @@ THRESHOLD_NEAR=-65        # Same room
 THRESHOLD_FAR=-75         # Adjacent room
 # Below -75 = "Distant" (potential security concern for full_access devices)
 
-# Ensure directories exist
+# Ensure directories exist with proper permissions (container runs as UID 1000)
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
+chmod 777 "$DATA_DIR" 2>/dev/null || true
+chown 1000:1000 "$DATA_DIR" 2>/dev/null || true
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"

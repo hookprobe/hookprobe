@@ -23,9 +23,22 @@ OUTPUT_FILE="$DATA_DIR/lte_usage.json"
 TEMP_FILE="$DATA_DIR/.lte_usage.tmp"
 RESET_REQUEST_FILE="$DATA_DIR/.lte_reset_request"
 
-# Ensure directories exist
+# Ensure directories exist with proper permissions
 mkdir -p "$DATA_DIR"
 mkdir -p "$(dirname "$DB_FILE")"
+
+# Fix permissions on data directory (container runs as UID 1000)
+# This ensures the container can read the files we write
+chmod 777 "$DATA_DIR" 2>/dev/null || true
+chown 1000:1000 "$DATA_DIR" 2>/dev/null || true
+
+# Remove corrupt JSON file if it exists but is invalid
+if [ -f "$OUTPUT_FILE" ]; then
+    if ! python3 -c "import json; json.load(open('$OUTPUT_FILE'))" 2>/dev/null; then
+        echo "Removing corrupt LTE usage JSON file"
+        rm -f "$OUTPUT_FILE"
+    fi
+fi
 
 # Check for pending reset requests (from container via trigger file)
 check_reset_requests() {
