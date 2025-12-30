@@ -145,12 +145,12 @@
     outline: none;
 }
 
-/* Device Name Hover Effect */
-#devices-table tbody tr td:nth-child(3) {
+/* Device Name Hover Effect - Column 1 (Device) */
+#devices-table tbody tr td:nth-child(1) .device-name {
     color: #00d9ff;
     cursor: pointer;
 }
-#devices-table tbody tr td:nth-child(3):hover {
+#devices-table tbody tr td:nth-child(1):hover .device-name {
     text-decoration: underline;
 }
 
@@ -648,6 +648,9 @@
                                     'unknown': 'fa-question-circle'
                                 } %}
                                 <tr data-mac="{{ device.mac_address }}"
+                                    data-policy="{{ device.policy }}"
+                                    data-category="{{ device.device_type }}"
+                                    data-status="{% if device.is_blocked %}blocked{% elif device.is_online %}online{% elif device.is_idle %}idle{% else %}offline{% endif %}"
                                     class="device-row"
                                     style="cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;"
                                     onmouseover="this.style.background='rgba(255,255,255,0.05)'"
@@ -1030,7 +1033,8 @@ $(document).ready(function() {
     // Pulse animation every 3 seconds
     setInterval(pulseWifiIcon, 3000);
 
-    // Initialize DataTable with premium styling
+    // Initialize DataTable with premium styling (4-column layout)
+    // Columns: Device (0), Status (1), Policy (2), Signal (3)
     var table = $('#devices-table').DataTable({
         "paging": true,
         "pageLength": 25,
@@ -1038,15 +1042,15 @@ $(document).ready(function() {
         "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
         "searching": true,
         "ordering": true,
-        "order": [[2, 'asc']],
+        "order": [[0, 'asc']],  // Sort by Device name
         "info": true,
         "autoWidth": false,
         "responsive": true,
         "columnDefs": [
-            { "orderable": false, "targets": [0, 10] }
+            { "orderable": false, "targets": [3] }  // Signal column not sortable
         ],
         "language": {
-            "emptyTable": '<div class="empty-state"><i class="fas fa-network-wired"></i><h4>No Devices Found</h4><p>Click <strong>Discover</strong> to scan your network for devices, or connect a device to your WiFi network.</p><button class="btn btn-primary" onclick="$(\'#btn-discover\').click()"><i class="fas fa-search mr-2"></i>Discover Devices</button></div>',
+            "emptyTable": '<div class="empty-state"><i class="fas fa-network-wired"></i><h4>No Devices Found</h4><p>Click <strong>Discover</strong> to scan your network for devices, or connect a device to your WiFi network.</p><button class="btn btn-primary" onclick="document.getElementById(\'btn-discover\').click()"><i class="fas fa-search mr-2"></i>Discover Devices</button></div>',
             "zeroRecords": '<div class="empty-state"><i class="fas fa-filter"></i><h4>No Matching Devices</h4><p>No devices match your current filter criteria. Try adjusting your filters or clear them to see all devices.</p></div>',
             "info": "Showing _START_ to _END_ of _TOTAL_ devices",
             "infoEmpty": "No devices to display",
@@ -1065,58 +1069,40 @@ $(document).ready(function() {
         }
     });
 
-    // Filter by policy
-    $('#filter-policy').on('change', function() {
-        var policy = $(this).val();
-        table.column(7).search(policy).draw();
-    });
+    // Custom filtering using data attributes (more reliable than column text search)
+    $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+        if (settings.sTableId !== 'devices-table') return true;
 
-    // Filter by category
-    $('#filter-category').on('change', function() {
-        var category = $(this).val();
-        table.column(6).search(category).draw();
-    });
+        var row = table.row(dataIndex).node();
+        if (!row) return true;
 
-    // Filter by status
-    $('#filter-status').on('change', function() {
-        var status = $(this).val();
-        if (status === 'online') {
-            table.column(1).search('Online').draw();
-        } else if (status === 'offline') {
-            table.column(1).search('Offline').draw();
-        } else if (status === 'blocked') {
-            table.column(1).search('Blocked').draw();
-        } else {
-            table.column(1).search('').draw();
+        var $row = $(row);
+        var policyFilter = $('#filter-policy').val();
+        var categoryFilter = $('#filter-category').val();
+        var statusFilter = $('#filter-status').val();
+
+        // Policy filter
+        if (policyFilter && $row.data('policy') !== policyFilter) {
+            return false;
         }
-    });
 
-    // Select all checkbox
-    $('#select-all').on('change', function() {
-        $('.device-select').prop('checked', this.checked);
-        updateBulkActions();
-    });
-
-    // Individual checkbox
-    $(document).on('change', '.device-select', function() {
-        updateBulkActions();
-    });
-
-    function updateBulkActions() {
-        var count = $('.device-select:checked').length;
-        $('#selected-count').text(count);
-        if (count > 0) {
-            $('#bulk-actions').slideDown();
-        } else {
-            $('#bulk-actions').slideUp();
+        // Category filter
+        if (categoryFilter && $row.data('category') !== categoryFilter) {
+            return false;
         }
-    }
 
-    function getSelectedMacs() {
-        return $('.device-select:checked').map(function() {
-            return $(this).val();
-        }).get();
-    }
+        // Status filter
+        if (statusFilter && $row.data('status') !== statusFilter) {
+            return false;
+        }
+
+        return true;
+    });
+
+    // Filter event handlers
+    $('#filter-policy, #filter-category, #filter-status').on('change', function() {
+        table.draw();
+    });
 
     // Refresh button
     $('#btn-refresh').on('click', function() {
