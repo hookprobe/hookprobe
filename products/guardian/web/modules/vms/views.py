@@ -183,11 +183,11 @@ def api_vms_list():
 @vms_bp.route('/api/vms/<vm_name>')
 def api_vm_detail(vm_name):
     """Get detailed information about a specific VM."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     info = _get_vm_info(vm_name)
@@ -202,11 +202,11 @@ def api_vm_detail(vm_name):
 @vms_bp.route('/api/vms/<vm_name>/start', methods=['POST'])
 def api_vm_start(vm_name):
     """Start a VM."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     output, success = _run_virsh(['start', vm_name])
@@ -226,11 +226,11 @@ def api_vm_start(vm_name):
 @vms_bp.route('/api/vms/<vm_name>/stop', methods=['POST'])
 def api_vm_stop(vm_name):
     """Stop (graceful shutdown) a VM."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     output, success = _run_virsh(['shutdown', vm_name])
@@ -249,11 +249,11 @@ def api_vm_stop(vm_name):
 @vms_bp.route('/api/vms/<vm_name>/force-stop', methods=['POST'])
 def api_vm_force_stop(vm_name):
     """Force stop a VM (like pulling the power cord)."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     output, success = _run_virsh(['destroy', vm_name])
@@ -272,11 +272,11 @@ def api_vm_force_stop(vm_name):
 @vms_bp.route('/api/vms/<vm_name>/restart', methods=['POST'])
 def api_vm_restart(vm_name):
     """Restart a VM."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     # Try graceful reboot first
@@ -296,11 +296,11 @@ def api_vm_restart(vm_name):
 @vms_bp.route('/api/vms/<vm_name>/autostart', methods=['POST'])
 def api_vm_autostart(vm_name):
     """Enable/disable VM autostart."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     data = request.get_json() or {}
@@ -326,11 +326,11 @@ def api_vm_autostart(vm_name):
 @vms_bp.route('/api/vms/<vm_name>/console')
 def api_vm_console_info(vm_name):
     """Get VNC console connection info for a VM."""
-    if not _check_libvirt_available():
     valid, error_response = _validate_vm_name(vm_name)
     if not valid:
         return error_response
 
+    if not _check_libvirt_available():
         return jsonify({'error': 'VM support not available'}), 503
 
     # Get VNC display port
