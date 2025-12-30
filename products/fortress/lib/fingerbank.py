@@ -205,11 +205,42 @@ APPLE_FINGERPRINTS = {
         "hierarchy": ["Apple", "HomePod", "HomePod 2nd Gen"]
     },
 
-    # Apple Watch (when on WiFi directly)
+    # Apple Watch (multiple watchOS versions)
     "1,3,6,15,119,252,78,79": {
         "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
-        "os": "watchOS", "confidence": 0.97,
+        "os": "watchOS 7-8", "confidence": 0.97,
         "hierarchy": ["Apple", "Apple Watch", "watchOS"]
+    },
+    "1,121,3,6,15,119,252,78,79": {
+        "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 9+", "confidence": 0.98,
+        "hierarchy": ["Apple", "Apple Watch", "watchOS 9"]
+    },
+    "1,121,3,6,15,119,252,78,79,95": {
+        "name": "Apple Watch Ultra", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 9+", "confidence": 0.99,
+        "hierarchy": ["Apple", "Apple Watch", "Ultra"]
+    },
+    "1,3,6,15,119,252,78": {
+        "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 6-7", "confidence": 0.96,
+        "hierarchy": ["Apple", "Apple Watch", "watchOS Legacy"]
+    },
+    "1,121,3,6,15,119,252,95,78,79": {
+        "name": "Apple Watch Series 9", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 10", "confidence": 0.99,
+        "hierarchy": ["Apple", "Apple Watch", "Series 9"]
+    },
+    "1,3,6,15,119,78,79,252": {
+        "name": "Apple Watch SE", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS", "confidence": 0.97,
+        "hierarchy": ["Apple", "Apple Watch", "SE"]
+    },
+    # Generic Apple signature (fallback for any Apple device)
+    "1,3,6,15,119,252,95": {
+        "name": "Apple Device", "vendor": "Apple", "category": "laptop",
+        "os": "macOS/iOS", "confidence": 0.92,
+        "hierarchy": ["Apple"]
     },
 }
 
@@ -1595,25 +1626,32 @@ class Fingerbank:
             if exact and exact['confidence'] >= 0.90:
                 return self._build_result(exact, mac, hostname)
 
-        # 2. Try fuzzy fingerprint match
+        # 2. Try vendor signature family detection (Apple, Samsung, etc.)
+        # This runs BEFORE fuzzy match to give higher confidence to known patterns
+        if dhcp_fingerprint:
+            family_match = self._match_vendor_signature(dhcp_fingerprint, is_randomized)
+            if family_match and family_match['confidence'] >= 0.85:
+                return self._build_result(family_match, mac, hostname)
+
+        # 3. Try fuzzy fingerprint match (reduced confidence for partial matches)
         if dhcp_fingerprint:
             fuzzy = self._match_fingerprint_fuzzy(dhcp_fingerprint)
             if fuzzy and fuzzy['confidence'] >= 0.75:
                 return self._build_result(fuzzy, mac, hostname)
 
-        # 3. Try OUI + hostname combination
+        # 4. Try OUI + hostname combination
         vendor = self._lookup_oui(mac)
         hostname_match = self._match_hostname(hostname, vendor)
         if hostname_match and hostname_match['confidence'] >= 0.70:
             return self._build_result(hostname_match, mac, hostname, vendor)
 
-        # 4. For randomized MACs with vendor_class, boost confidence
+        # 5. For randomized MACs with vendor_class, try lower threshold
         if is_randomized and vendor_class:
             vc_match = self._match_vendor_class(vendor_class, mac, hostname)
             if vc_match and vc_match['confidence'] >= 0.70:
                 return self._build_result(vc_match, mac, hostname)
 
-        # 5. Try Fingerbank API for unknown devices
+        # 6. Try Fingerbank API for unknown devices
         if dhcp_fingerprint and self.api_key:
             api_result = self._query_fingerbank_api(
                 dhcp_fingerprint, mac, hostname, vendor_class
@@ -1621,7 +1659,7 @@ class Fingerbank:
             if api_result:
                 return self._build_result(api_result, mac, hostname)
 
-        # 6. Build best-effort identification
+        # 7. Build best-effort identification
         return self._build_fallback_result(mac, vendor, hostname, dhcp_fingerprint)
 
     def _is_randomized_mac(self, mac: str) -> bool:
@@ -1838,6 +1876,88 @@ class Fingerbank:
                 best_match['similarity'] = similarity
 
         return best_match
+
+    def _match_vendor_signature(self, fingerprint: str,
+                                 is_randomized: bool) -> Optional[dict]:
+        """
+        Match device by vendor-specific DHCP fingerprint signatures.
+
+        Vendors like Apple, Samsung, and Google have characteristic DHCP
+        option patterns that identify their devices even without exact match.
+        """
+        if not fingerprint:
+            return None
+
+        fp_set = set(fingerprint.split(','))
+
+        # Apple signature: Core options 1,3,6,15,119,252 with optional extras
+        apple_core = {'1', '3', '6', '15', '119', '252'}
+        apple_extended = {'95', '121', '44', '46'}  # Common Apple extras
+        apple_watch_sig = {'78', '79'}  # Apple Watch specific
+
+        if apple_core.issubset(fp_set):
+            # Check for Apple Watch
+            if apple_watch_sig.issubset(fp_set):
+                confidence = 0.92 if is_randomized else 0.95
+                return {
+                    'name': 'Apple Watch', 'vendor': 'Apple', 'category': 'wearable',
+                    'os': 'watchOS', 'confidence': confidence,
+                    'hierarchy': ['Apple', 'Apple Watch'],
+                    'match_type': 'signature'
+                }
+
+            # Check for modern Apple (has 121)
+            has_121 = '121' in fp_set
+            has_extended = len(apple_extended & fp_set) >= 2
+
+            if has_121 and has_extended:
+                # Modern iOS/macOS (iOS 14+, macOS 11+)
+                confidence = 0.90 if is_randomized else 0.93
+                return {
+                    'name': 'Apple Device (Modern)', 'vendor': 'Apple',
+                    'category': 'phone', 'os': 'iOS/macOS',
+                    'confidence': confidence,
+                    'hierarchy': ['Apple', 'iOS/macOS'],
+                    'match_type': 'signature'
+                }
+            else:
+                # Legacy Apple or HomePod/AppleTV
+                confidence = 0.88 if is_randomized else 0.91
+                return {
+                    'name': 'Apple Device', 'vendor': 'Apple',
+                    'category': 'phone', 'os': 'iOS/macOS',
+                    'confidence': confidence,
+                    'hierarchy': ['Apple'],
+                    'match_type': 'signature'
+                }
+
+        # Samsung/Android signature: Different patterns
+        android_core = {'1', '3', '6', '15', '28', '51', '58', '59'}
+        android_alt = {'1', '3', '6', '15', '26', '28', '51', '58', '59', '43'}
+
+        if len(android_core & fp_set) >= 6 or len(android_alt & fp_set) >= 7:
+            confidence = 0.85 if is_randomized else 0.88
+            return {
+                'name': 'Android Device', 'vendor': 'Android',
+                'category': 'phone', 'os': 'Android',
+                'confidence': confidence,
+                'hierarchy': ['Android'],
+                'match_type': 'signature'
+            }
+
+        # Windows signature: 1,3,6,15,31,33,43,44,46,47,121,249,252
+        windows_core = {'1', '3', '6', '15', '31', '33', '44', '46', '47', '121', '249', '252'}
+        if len(windows_core & fp_set) >= 9:
+            confidence = 0.90
+            return {
+                'name': 'Windows PC', 'vendor': 'Microsoft',
+                'category': 'workstation', 'os': 'Windows',
+                'confidence': confidence,
+                'hierarchy': ['Microsoft', 'Windows'],
+                'match_type': 'signature'
+            }
+
+        return None
 
     # =========================================================================
     # OUI LOOKUP
