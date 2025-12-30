@@ -44,7 +44,18 @@ fi
 check_reset_requests() {
     if [ -f "$RESET_REQUEST_FILE" ]; then
         local reset_type
-        reset_type=$(cat "$RESET_REQUEST_FILE" 2>/dev/null | grep -o '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/')
+        # Use Python for reliable JSON parsing
+        reset_type=$(python3 -c "
+import json
+import sys
+try:
+    with open('$RESET_REQUEST_FILE') as f:
+        data = json.load(f)
+    print(data.get('type', 'all'))
+except Exception as e:
+    print('all', file=sys.stderr)
+    print('all')
+" 2>/dev/null || echo "all")
 
         if [ -n "$reset_type" ]; then
             echo "Processing reset request: $reset_type"
