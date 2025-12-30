@@ -12,6 +12,7 @@ Network Policies:
 from flask import render_template, request, jsonify, flash, redirect, url_for
 from flask_login import login_required, current_user
 from datetime import datetime
+from typing import Dict, List, Optional
 import json
 import logging
 import os
@@ -1018,32 +1019,265 @@ def bulk_auto_classify():
 @login_required
 @operator_required
 def discover_devices():
-    """Trigger network device discovery."""
-    if not DB_AVAILABLE:
-        return jsonify({'success': False, 'error': 'Database not available'}), 503
+    """Load devices from autopilot.db.
+
+    Returns devices already classified by SDN Auto Pilot from
+    /var/lib/hookprobe/autopilot.db. No network rescan needed.
+    """
+    if not SDN_AUTOPILOT_AVAILABLE:
+        return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
 
     try:
-        device_mgr = get_device_manager()
-        discovered = device_mgr.discover_devices()
+        autopilot = get_sdn_autopilot()
+        if not autopilot:
+            return jsonify({'success': False, 'error': 'Auto Pilot not initialized'}), 503
 
-        # Classify new devices
-        for device in discovered:
-            if device.get('is_new'):
-                classification = classify_device(device['mac_address'])
-                device['oui_category'] = classification.get('category', 'unknown')
-                device['auto_policy'] = classification.get('recommended_policy', 'default')
+        # Get all devices from autopilot.db (already classified)
+        db_devices = autopilot.get_all_devices()
 
-        new_count = len([d for d in discovered if d.get('is_new')])
+        # Convert to frontend format
+        devices = []
+        for d in db_devices:
+            device = {
+                'mac_address': d.get('mac', ''),
+                'ip_address': d.get('ip', ''),
+                'hostname': d.get('hostname', ''),
+                'friendly_name': d.get('friendly_name', '') or d.get('device_type', ''),
+                'manufacturer': d.get('vendor', 'Unknown'),
+                'device_type': d.get('device_type') or d.get('category', 'unknown'),
+                'policy': d.get('policy', 'quarantine'),
+                'confidence': d.get('confidence', 0.0),
+                'category': d.get('category', 'unknown'),
+                'is_online': True,  # Assume online if in DB
+                'first_seen': d.get('first_seen', ''),
+                'last_seen': d.get('last_seen', ''),
+            }
+            devices.append(device)
+
+        logger.info(f"Loaded {len(devices)} devices from autopilot.db")
 
         return jsonify({
             'success': True,
-            'total': len(discovered),
-            'new': new_count,
-            'devices': discovered
+            'total': len(devices),
+            'new': 0,  # Not doing new discovery, just loading
+            'devices': devices
         })
 
     except Exception as e:
+        logger.error(f"Device discovery failed: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _scan_network_devices() -> List[Dict]:
+    """Scan network for devices using ARP table.
+
+    Simple network scan that doesn't require PostgreSQL.
+    Returns list of discovered devices with basic info.
+    """
+    devices = []
+
+    try:
+        # Get ARP table entries
+        result = subprocess.run(
+            ['ip', 'neigh', 'show'],
+            capture_output=True, text=True, timeout=30
+        )
+
+        if result.returncode != 0:
+            logger.warning(f"ip neigh failed: {result.stderr}")
+            return devices
+
+        for line in result.stdout.strip().split('\n'):
+            if not line or 'FAILED' in line:
+                continue
+
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+
+            ip_address = parts[0]
+            mac_address = None
+            state = 'STALE'
+
+            # Find MAC address and state
+            for i, part in enumerate(parts):
+                if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', part):
+                    mac_address = part.upper()
+                if part in ['REACHABLE', 'STALE', 'DELAY', 'PROBE']:
+                    state = part
+
+            if not mac_address:
+                continue
+
+            # Skip localhost/gateway MACs
+            if mac_address.startswith('00:00:00') or mac_address == 'FF:FF:FF:FF:FF:FF':
+                continue
+
+            # Get manufacturer from OUI
+            manufacturer = _lookup_oui(mac_address)
+
+            # Try to resolve hostname
+            hostname = _resolve_hostname(ip_address)
+
+            # Detect device type
+            device_type = _detect_device_type(mac_address, hostname, manufacturer)
+
+            devices.append({
+                'mac_address': mac_address,
+                'ip_address': ip_address,
+                'hostname': hostname,
+                'manufacturer': manufacturer,
+                'device_type': device_type,
+                'state': state,
+                'is_online': state == 'REACHABLE',
+            })
+
+    except subprocess.TimeoutExpired:
+        logger.error("Network scan timed out")
+    except Exception as e:
+        logger.error(f"Network scan error: {e}")
+
+    return devices
+
+
+def _lookup_oui(mac_address: str) -> str:
+    """Lookup manufacturer from MAC OUI prefix."""
+    oui = mac_address[:8].upper()
+
+    # Common manufacturer OUIs
+    OUI_MAP = {
+        # Apple
+        'A4:5E:60': 'Apple', 'AC:BC:32': 'Apple', 'B0:34:95': 'Apple',
+        'B8:09:8A': 'Apple', 'BC:52:B7': 'Apple', 'C0:84:7A': 'Apple',
+        'D4:9A:20': 'Apple', 'DC:2B:2A': 'Apple', 'E0:B9:BA': 'Apple',
+        'F0:B4:79': 'Apple', 'F4:5C:89': 'Apple', '00:1C:B3': 'Apple',
+        '14:7D:DA': 'Apple', '28:6A:BA': 'Apple', '3C:06:30': 'Apple',
+        # Samsung
+        '00:00:F0': 'Samsung', '8C:71:F8': 'Samsung', 'AC:5F:3E': 'Samsung',
+        'E4:7C:F9': 'Samsung', 'F0:25:B7': 'Samsung', '94:35:0A': 'Samsung',
+        # Google/Nest
+        '3C:5A:B4': 'Google', '94:EB:2C': 'Google', 'F4:F5:D8': 'Google',
+        '54:60:09': 'Google', 'F8:8F:CA': 'Google', '18:D6:C7': 'Google',
+        # Amazon
+        '00:FC:8B': 'Amazon', '0C:47:C9': 'Amazon', '34:D2:70': 'Amazon',
+        '40:B4:CD': 'Amazon', '44:65:0D': 'Amazon', '68:54:FD': 'Amazon',
+        # Intel
+        '00:02:B3': 'Intel', '00:03:47': 'Intel', '3C:A9:F4': 'Intel',
+        '8C:EC:4B': 'Intel', 'A4:C4:94': 'Intel', 'B4:96:91': 'Intel',
+        # Raspberry Pi
+        'B8:27:EB': 'Raspberry Pi', 'DC:A6:32': 'Raspberry Pi',
+        'E4:5F:01': 'Raspberry Pi', '28:CD:C1': 'Raspberry Pi',
+        # TP-Link
+        '00:27:19': 'TP-Link', '14:CC:20': 'TP-Link', '30:B5:C2': 'TP-Link',
+        '50:C7:BF': 'TP-Link', '54:C8:0F': 'TP-Link', '60:E3:27': 'TP-Link',
+        # Hikvision (cameras)
+        '44:19:B6': 'Hikvision', 'C0:56:E3': 'Hikvision', 'BC:AD:28': 'Hikvision',
+        # Ubiquiti
+        '04:18:D6': 'Ubiquiti', '24:A4:3C': 'Ubiquiti', 'F0:9F:C2': 'Ubiquiti',
+        # HP
+        '00:01:E6': 'HP', '00:02:A5': 'HP', '3C:D9:2B': 'HP',
+    }
+
+    return OUI_MAP.get(oui, 'Unknown')
+
+
+def _resolve_hostname(ip_address: str) -> str:
+    """Resolve hostname via reverse DNS."""
+    try:
+        import socket
+        hostname = socket.gethostbyaddr(ip_address)[0]
+        return hostname if hostname != ip_address else None
+    except Exception:
+        return None
+
+
+def _detect_device_type(mac: str, hostname: str, manufacturer: str) -> str:
+    """Detect device type from available information."""
+    hostname_lower = (hostname or '').lower()
+    manufacturer_lower = (manufacturer or '').lower()
+
+    # Hostname-based detection
+    if 'iphone' in hostname_lower:
+        return 'iphone'
+    if 'ipad' in hostname_lower:
+        return 'tablet'
+    if 'macbook' in hostname_lower:
+        return 'macbook'
+    if 'imac' in hostname_lower:
+        return 'desktop'
+    if 'android' in hostname_lower:
+        return 'android'
+    if 'printer' in hostname_lower or 'hp-' in hostname_lower:
+        return 'printer'
+    if 'camera' in hostname_lower or 'cam' in hostname_lower:
+        return 'camera'
+    if 'echo' in hostname_lower or 'alexa' in hostname_lower:
+        return 'voice_assistant'
+    if 'google-home' in hostname_lower or 'nest' in hostname_lower:
+        return 'voice_assistant'
+
+    # Manufacturer-based detection
+    if manufacturer_lower == 'apple':
+        return 'apple_device'
+    if manufacturer_lower == 'raspberry pi':
+        return 'raspberry_pi'
+    if manufacturer_lower in ['samsung', 'google']:
+        return 'mobile'
+    if manufacturer_lower in ['amazon']:
+        return 'voice_assistant'
+    if manufacturer_lower in ['hikvision']:
+        return 'camera'
+    if manufacturer_lower in ['hp']:
+        return 'workstation'
+
+    return 'unknown'
+
+
+def _write_devices_json(devices: List[Dict]):
+    """Write discovered devices to JSON file for agent compatibility."""
+    try:
+        data_dir = Path('/opt/hookprobe/fortress/data')
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        devices_file = data_dir / 'devices.json'
+
+        # Read existing data
+        existing_data = {}
+        if devices_file.exists():
+            try:
+                existing_data = json.loads(devices_file.read_text())
+                if not isinstance(existing_data, dict):
+                    existing_data = {'devices': existing_data if isinstance(existing_data, list) else []}
+            except Exception:
+                existing_data = {'devices': []}
+
+        # Merge with discovered devices
+        existing_macs = {d.get('mac_address', '').upper() for d in existing_data.get('devices', [])}
+        merged_devices = list(existing_data.get('devices', []))
+
+        for device in devices:
+            mac = device.get('mac_address', '').upper()
+            if mac not in existing_macs:
+                merged_devices.append(device)
+                existing_macs.add(mac)
+            else:
+                # Update existing device
+                for i, d in enumerate(merged_devices):
+                    if d.get('mac_address', '').upper() == mac:
+                        merged_devices[i].update(device)
+                        break
+
+        # Write updated data
+        output = {
+            'devices': merged_devices,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'web_discovery'
+        }
+        devices_file.write_text(json.dumps(output, indent=2))
+        logger.info(f"Updated devices.json with {len(merged_devices)} devices")
+
+    except Exception as e:
+        logger.warning(f"Failed to write devices.json: {e}")
 
 
 # ============================================================
