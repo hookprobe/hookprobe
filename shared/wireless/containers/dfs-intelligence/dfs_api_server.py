@@ -502,7 +502,9 @@ def main():
 
     # Run with gunicorn in production, Flask dev server for debugging
     if os.environ.get("DFS_DEBUG", "").lower() == "true":
-        app.run(host=API_HOST, port=API_PORT, debug=True)
+        # Use reloader for development but disable debugger for security
+        # The Werkzeug debugger can execute arbitrary code if exposed
+        app.run(host=API_HOST, port=API_PORT, use_reloader=True, use_debugger=False)
     else:
         # In container, use gunicorn via entrypoint
         app.run(host=API_HOST, port=API_PORT)

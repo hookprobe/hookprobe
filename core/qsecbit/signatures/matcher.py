@@ -104,7 +104,7 @@ class BloomFilter:
         """Generate multiple hash values for an item."""
         hashes = []
         for i in range(self.hash_count):
-            h = hashlib.md5(f"{item}:{i}".encode()).hexdigest()
+            h = hashlib.md5(f"{item}:{i}".encode(), usedforsecurity=False).hexdigest()
             hashes.append(int(h[:8], 16) % self.size)
         return hashes
 
@@ -474,7 +474,9 @@ class SignatureMatcher:
         # Create a simple hash of feature values
         feature_str = str(sorted(features.items()))
         context_str = f"{layer}:{protocol}:{port}"
-        return hashlib.md5(f"{feature_str}:{context_str}".encode()).hexdigest()[:16]
+        return hashlib.md5(
+            f"{feature_str}:{context_str}".encode(), usedforsecurity=False
+        ).hexdigest()[:16]
 
     def _add_to_cache(self, key: str, result: MatchResult):
         """Add result to cache with LRU eviction."""

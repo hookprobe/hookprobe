@@ -499,7 +499,8 @@ class DefenseOrchestrator:
     def _cache_key(self, ioc: IoC) -> str:
         """Generate cache key for IoC"""
         return hashlib.md5(
-            f"{ioc.ioc_type.value}:{ioc.value}:{ioc.attack_category}".encode()
+            f"{ioc.ioc_type.value}:{ioc.value}:{ioc.attack_category}".encode(),
+            usedforsecurity=False
         ).hexdigest()[:16]
 
     def trigger_n8n_workflow(
