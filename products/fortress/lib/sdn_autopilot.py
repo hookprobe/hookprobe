@@ -172,7 +172,8 @@ class SDNAutoPilot:
     """Premium SDN Auto Pilot with Heuristic Scoring Engine."""
 
     def __init__(self, db_path: Path = AUTOPILOT_DB):
-        self.db_path = db_path
+        # Accept both str and Path for flexibility in testing
+        self.db_path = Path(db_path) if isinstance(db_path, str) else db_path
         self._ensure_db()
         self._load_custom_fingerprints()
 
