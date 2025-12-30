@@ -381,3 +381,114 @@ def api_reset_lte_usage():
     except Exception as e:
         logger.error(f"LTE reset API error: {e}")
         return jsonify({'success': False, 'error': str(e)})
+
+
+# LTE Limits Configuration File
+LTE_LIMITS_FILE = Path('/etc/hookprobe/lte-limits.json')
+
+
+@slaai_bp.route('/api/lte-limits')
+@login_required
+def api_get_lte_limits():
+    """Get current LTE data limits configuration."""
+    try:
+        # Default limits (unlimited)
+        limits = {
+            'monthly_limit_gb': None,  # None = unlimited
+            'daily_limit_gb': None,
+            'warning_threshold_percent': 80,
+            'critical_threshold_percent': 95,
+            'cost_per_gb': None,  # None = not tracking cost
+            'billing_cycle_day': 1,  # Day of month when usage resets
+        }
+
+        if LTE_LIMITS_FILE.exists():
+            try:
+                stored = json.loads(LTE_LIMITS_FILE.read_text())
+                limits.update(stored)
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        return jsonify({
+            'success': True,
+            'limits': limits
+        })
+
+    except Exception as e:
+        logger.error(f"LTE limits GET error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@slaai_bp.route('/api/lte-limits', methods=['POST'])
+@login_required
+@operator_required
+def api_set_lte_limits():
+    """Set LTE data limits configuration.
+
+    Simple JSON format:
+    {
+        "monthly_limit_gb": 10,       // null for unlimited
+        "daily_limit_gb": null,       // null for unlimited
+        "warning_threshold_percent": 80,
+        "critical_threshold_percent": 95,
+        "cost_per_gb": 5.00,          // null to disable cost tracking
+        "billing_cycle_day": 1        // 1-28
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        # Load existing limits
+        limits = {}
+        if LTE_LIMITS_FILE.exists():
+            try:
+                limits = json.loads(LTE_LIMITS_FILE.read_text())
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Update with new values (only specified fields)
+        allowed_fields = [
+            'monthly_limit_gb',
+            'daily_limit_gb',
+            'warning_threshold_percent',
+            'critical_threshold_percent',
+            'cost_per_gb',
+            'billing_cycle_day',
+            # Legacy field support
+            'monthly_budget_gb',
+            'daily_budget_mb',
+        ]
+
+        for field in allowed_fields:
+            if field in data:
+                value = data[field]
+                # Convert empty string to None
+                if value == '' or value == 0:
+                    value = None
+                limits[field] = value
+
+        # Map new field names to legacy for compatibility
+        if 'monthly_limit_gb' in limits and limits['monthly_limit_gb']:
+            limits['monthly_budget_gb'] = limits['monthly_limit_gb']
+        if 'daily_limit_gb' in limits and limits['daily_limit_gb']:
+            limits['daily_budget_mb'] = limits['daily_limit_gb'] * 1024
+
+        # Ensure config directory exists
+        LTE_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save to file
+        LTE_LIMITS_FILE.write_text(json.dumps(limits, indent=2))
+
+        logger.info(f"LTE limits updated: {limits}")
+
+        return jsonify({
+            'success': True,
+            'message': 'LTE limits saved',
+            'limits': limits
+        })
+
+    except Exception as e:
+        logger.error(f"LTE limits POST error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
