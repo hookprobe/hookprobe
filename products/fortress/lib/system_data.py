@@ -854,7 +854,7 @@ def get_all_interface_traffic() -> List[Dict]:
 
 # Data directory for persistent storage
 LTE_USAGE_FILE = Path('/opt/hookprobe/fortress/data/lte_usage.json')
-LTE_LIMITS_FILE = Path('/etc/hookprobe/lte-limits.json')
+LTE_LIMITS_FILE = Path('/var/lib/hookprobe/lte-limits.json')
 
 
 def _ensure_data_dir():
@@ -898,19 +898,9 @@ def _load_lte_usage() -> Dict:
 
     try:
         data = json.loads(LTE_USAGE_FILE.read_text())
-        # Check for month rollover - auto-reset monthly counter
-        current_month = datetime.now().strftime('%Y-%m')
-        if data.get('month') != current_month:
-            logger.info(f"New month detected, resetting monthly LTE usage counter")
-            data['monthly_bytes'] = 0
-            data['month'] = current_month
-
-        # Check for day rollover - auto-reset daily counter
-        current_day = datetime.now().strftime('%Y-%m-%d')
-        if data.get('day') != current_day:
-            data['daily_bytes'] = 0
-            data['day'] = current_day
-
+        # Note: Day/month rollover is managed by the host lte-usage-tracker.sh script.
+        # The container just reads the data as-is to avoid timezone mismatches
+        # and because the file is effectively read-only from the container.
         return data
     except json.JSONDecodeError as e:
         logger.warning(f"Could not load LTE usage data (corrupt JSON): {e}")
