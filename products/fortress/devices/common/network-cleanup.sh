@@ -422,8 +422,8 @@ server=1.1.1.1
 server=8.8.8.8
 
 # Local domain
-domain=fortress.local
-local=/fortress.local/
+domain=hookprobe.local
+local=/hookprobe.local/
 
 # Logging
 log-dhcp
