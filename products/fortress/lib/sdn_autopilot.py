@@ -231,7 +231,21 @@ class SDNAutoPilot:
                         updated_at TEXT,
                         status TEXT DEFAULT 'offline',
                         last_packet_count INTEGER DEFAULT 0,
-                        neighbor_state TEXT DEFAULT 'UNKNOWN'
+                        neighbor_state TEXT DEFAULT 'UNKNOWN',
+                        -- WiFi signal data (updated by host collector)
+                        wifi_rssi INTEGER DEFAULT NULL,
+                        wifi_quality INTEGER DEFAULT NULL,
+                        wifi_proximity TEXT DEFAULT NULL,
+                        wifi_band TEXT DEFAULT NULL,
+                        wifi_interface TEXT DEFAULT NULL,
+                        -- Traffic counters (from OpenFlow/WiFi)
+                        rx_bytes INTEGER DEFAULT 0,
+                        tx_bytes INTEGER DEFAULT 0,
+                        connected_time INTEGER DEFAULT 0,
+                        -- User-defined tags (JSON array)
+                        tags TEXT DEFAULT '[]',
+                        -- Connection type
+                        connection_type TEXT DEFAULT 'unknown'
                     )
                 ''')
                 conn.execute('''
@@ -253,8 +267,22 @@ class SDNAutoPilot:
                         last_seen TEXT
                     )
                 ''')
+                # Connection history table for timeline visualization
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS connection_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mac TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        details TEXT,
+                        FOREIGN KEY (mac) REFERENCES device_identity(mac)
+                    )
+                ''')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_policy ON device_identity(policy)')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_status ON device_identity(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_proximity ON device_identity(wifi_proximity)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_history_mac ON connection_history(mac)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_history_ts ON connection_history(timestamp)')
 
                 # Migrate existing tables - add new columns if missing
                 try:
@@ -267,6 +295,49 @@ class SDNAutoPilot:
                     pass
                 try:
                     conn.execute('ALTER TABLE device_identity ADD COLUMN neighbor_state TEXT DEFAULT "UNKNOWN"')
+                except sqlite3.OperationalError:
+                    pass
+                # New columns for WiFi signal
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN wifi_rssi INTEGER DEFAULT NULL')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN wifi_quality INTEGER DEFAULT NULL')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN wifi_proximity TEXT DEFAULT NULL')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN wifi_band TEXT DEFAULT NULL')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN wifi_interface TEXT DEFAULT NULL')
+                except sqlite3.OperationalError:
+                    pass
+                # Traffic counters
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN rx_bytes INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN tx_bytes INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN connected_time INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass
+                # Tags
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN tags TEXT DEFAULT "[]"')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN connection_type TEXT DEFAULT "unknown"')
                 except sqlite3.OperationalError:
                     pass
 
@@ -1238,6 +1309,328 @@ class SDNAutoPilot:
                 GROUP BY status
             ''').fetchall()
             return {r['status'] or 'unknown': r['count'] for r in rows}
+
+    # =========================================================================
+    # WIFI SIGNAL & PROXIMITY MANAGEMENT
+    # =========================================================================
+
+    def update_wifi_signals(self, signals_data: List[Dict]) -> int:
+        """Update WiFi signal data for devices from host collector.
+
+        Args:
+            signals_data: List of dicts with mac, rssi, quality, proximity, band, etc.
+
+        Returns:
+            Number of devices updated
+        """
+        updated = 0
+        with self._get_conn() as conn:
+            for signal in signals_data:
+                mac = signal.get('mac', '').upper()
+                if not mac:
+                    continue
+
+                # Check if device exists
+                exists = conn.execute(
+                    'SELECT 1 FROM device_identity WHERE mac = ?', (mac,)
+                ).fetchone()
+
+                if exists:
+                    conn.execute('''
+                        UPDATE device_identity SET
+                            wifi_rssi = ?,
+                            wifi_quality = ?,
+                            wifi_proximity = ?,
+                            wifi_band = ?,
+                            wifi_interface = ?,
+                            rx_bytes = COALESCE(?, rx_bytes),
+                            tx_bytes = COALESCE(?, tx_bytes),
+                            connected_time = COALESCE(?, connected_time),
+                            connection_type = 'wifi',
+                            updated_at = ?
+                        WHERE mac = ?
+                    ''', (
+                        signal.get('rssi'),
+                        signal.get('quality'),
+                        signal.get('proximity'),
+                        signal.get('band'),
+                        signal.get('interface'),
+                        signal.get('rx_bytes'),
+                        signal.get('tx_bytes'),
+                        signal.get('connected_time'),
+                        datetime.now().isoformat(),
+                        mac
+                    ))
+                    updated += 1
+
+            conn.commit()
+
+        logger.info(f"Updated WiFi signals for {updated} devices")
+        return updated
+
+    def get_device_detail(self, mac: str) -> Optional[Dict]:
+        """Get comprehensive device detail for modal view.
+
+        Includes: identity, policy, WiFi signal, traffic, tags, history.
+        """
+        mac = mac.upper()
+        with self._get_conn() as conn:
+            row = conn.execute(
+                'SELECT * FROM device_identity WHERE mac = ?', (mac,)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            device = dict(row)
+
+            # Parse tags JSON
+            try:
+                device['tags'] = json.loads(device.get('tags') or '[]')
+            except json.JSONDecodeError:
+                device['tags'] = []
+
+            # Parse signals JSON
+            try:
+                device['signals'] = json.loads(device.get('signals') or '{}')
+            except json.JSONDecodeError:
+                device['signals'] = {}
+
+            # Get metrics
+            metrics = conn.execute(
+                'SELECT * FROM device_metrics WHERE mac = ?', (mac,)
+            ).fetchone()
+            device['metrics'] = dict(metrics) if metrics else {}
+
+            # Get connection history (last 24 hours)
+            history = conn.execute('''
+                SELECT event_type, timestamp, details
+                FROM connection_history
+                WHERE mac = ? AND timestamp > datetime('now', '-24 hours')
+                ORDER BY timestamp DESC
+                LIMIT 50
+            ''', (mac,)).fetchall()
+            device['history'] = [dict(h) for h in history]
+
+            # Format traffic for display
+            rx_bytes = device.get('rx_bytes') or 0
+            tx_bytes = device.get('tx_bytes') or 0
+            device['traffic'] = {
+                'rx_bytes': rx_bytes,
+                'tx_bytes': tx_bytes,
+                'rx_formatted': self._format_bytes(rx_bytes),
+                'tx_formatted': self._format_bytes(tx_bytes),
+                'total_formatted': self._format_bytes(rx_bytes + tx_bytes)
+            }
+
+            return device
+
+    def _format_bytes(self, bytes_val: int) -> str:
+        """Format bytes to human readable."""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if bytes_val < 1024:
+                return f"{bytes_val:.1f} {unit}"
+            bytes_val /= 1024
+        return f"{bytes_val:.1f} PB"
+
+    # =========================================================================
+    # TAG MANAGEMENT
+    # =========================================================================
+
+    def add_tag(self, mac: str, tag: str) -> bool:
+        """Add a tag to a device."""
+        mac = mac.upper()
+        tag = tag.strip()
+        if not tag:
+            return False
+
+        with self._get_conn() as conn:
+            row = conn.execute(
+                'SELECT tags FROM device_identity WHERE mac = ?', (mac,)
+            ).fetchone()
+
+            if not row:
+                return False
+
+            try:
+                tags = json.loads(row['tags'] or '[]')
+            except json.JSONDecodeError:
+                tags = []
+
+            if tag not in tags:
+                tags.append(tag)
+                conn.execute(
+                    'UPDATE device_identity SET tags = ?, updated_at = ? WHERE mac = ?',
+                    (json.dumps(tags), datetime.now().isoformat(), mac)
+                )
+                conn.commit()
+
+            return True
+
+    def remove_tag(self, mac: str, tag: str) -> bool:
+        """Remove a tag from a device."""
+        mac = mac.upper()
+
+        with self._get_conn() as conn:
+            row = conn.execute(
+                'SELECT tags FROM device_identity WHERE mac = ?', (mac,)
+            ).fetchone()
+
+            if not row:
+                return False
+
+            try:
+                tags = json.loads(row['tags'] or '[]')
+            except json.JSONDecodeError:
+                tags = []
+
+            if tag in tags:
+                tags.remove(tag)
+                conn.execute(
+                    'UPDATE device_identity SET tags = ?, updated_at = ? WHERE mac = ?',
+                    (json.dumps(tags), datetime.now().isoformat(), mac)
+                )
+                conn.commit()
+
+            return True
+
+    def get_all_tags(self) -> List[str]:
+        """Get all unique tags across all devices."""
+        tags = set()
+        with self._get_conn() as conn:
+            rows = conn.execute('SELECT tags FROM device_identity').fetchall()
+            for row in rows:
+                try:
+                    device_tags = json.loads(row['tags'] or '[]')
+                    tags.update(device_tags)
+                except json.JSONDecodeError:
+                    pass
+        return sorted(tags)
+
+    # =========================================================================
+    # CONNECTION HISTORY
+    # =========================================================================
+
+    def log_connection_event(self, mac: str, event_type: str, details: str = None):
+        """Log a connection event for history tracking.
+
+        Event types: connected, disconnected, policy_changed, signal_weak, etc.
+        """
+        mac = mac.upper()
+        with self._get_conn() as conn:
+            conn.execute('''
+                INSERT INTO connection_history (mac, event_type, timestamp, details)
+                VALUES (?, ?, ?, ?)
+            ''', (mac, event_type, datetime.now().isoformat(), details))
+            conn.commit()
+
+    def get_connection_timeline(self, mac: str, hours: int = 24) -> List[Dict]:
+        """Get connection timeline for visualization."""
+        mac = mac.upper()
+        with self._get_conn() as conn:
+            rows = conn.execute('''
+                SELECT event_type, timestamp, details
+                FROM connection_history
+                WHERE mac = ? AND timestamp > datetime('now', ? || ' hours')
+                ORDER BY timestamp ASC
+            ''', (mac, f'-{hours}')).fetchall()
+            return [dict(r) for r in rows]
+
+    # =========================================================================
+    # PROXIMITY-BASED SECURITY POLICY
+    # =========================================================================
+
+    # Proximity thresholds (dBm)
+    PROXIMITY_IMMEDIATE = -45   # Very close, high trust
+    PROXIMITY_NEAR = -65        # Same room, trusted
+    PROXIMITY_FAR = -75         # Adjacent room, reduced trust
+    # Below -75 = "distant" - potential security concern
+
+    def enforce_proximity_policies(self) -> Dict[str, str]:
+        """Enforce proximity-based security policies.
+
+        Devices with full_access policy that move to 'distant' proximity
+        are automatically downgraded to 'internet_only' for security.
+
+        Returns dict of MAC -> action taken
+        """
+        actions = {}
+        now = datetime.now().isoformat()
+
+        with self._get_conn() as conn:
+            # Find full_access devices with distant proximity
+            risky_devices = conn.execute('''
+                SELECT mac, wifi_rssi, wifi_proximity, policy, friendly_name
+                FROM device_identity
+                WHERE policy = 'full_access'
+                  AND wifi_proximity = 'distant'
+                  AND manual_override = 0
+            ''').fetchall()
+
+            for device in risky_devices:
+                mac = device['mac']
+                name = device['friendly_name'] or mac
+
+                # Downgrade policy
+                conn.execute('''
+                    UPDATE device_identity
+                    SET policy = 'internet_only', updated_at = ?
+                    WHERE mac = ?
+                ''', (now, mac))
+
+                # Log the event
+                self.log_connection_event(
+                    mac,
+                    'proximity_downgrade',
+                    f'Auto-downgraded from full_access to internet_only (signal: {device["wifi_rssi"]} dBm)'
+                )
+
+                actions[mac] = 'downgraded'
+                logger.warning(f"Proximity security: {name} downgraded to internet_only (signal too weak)")
+
+            # Find devices that returned to near proximity - restore policy
+            restored_devices = conn.execute('''
+                SELECT mac, wifi_rssi, wifi_proximity, friendly_name
+                FROM device_identity
+                WHERE policy = 'internet_only'
+                  AND wifi_proximity IN ('immediate', 'near')
+                  AND manual_override = 0
+            ''').fetchall()
+
+            # Note: We don't auto-restore to full_access for security
+            # Admin must manually re-enable if needed
+
+            conn.commit()
+
+        if actions:
+            logger.info(f"Proximity enforcement: {len(actions)} devices affected")
+
+        return actions
+
+    def get_proximity_report(self) -> Dict:
+        """Get proximity security report."""
+        with self._get_conn() as conn:
+            # Count by proximity
+            proximity_counts = conn.execute('''
+                SELECT wifi_proximity, COUNT(*) as count
+                FROM device_identity
+                WHERE wifi_proximity IS NOT NULL
+                GROUP BY wifi_proximity
+            ''').fetchall()
+
+            # Find devices at risk (full_access + far/distant)
+            at_risk = conn.execute('''
+                SELECT mac, friendly_name, wifi_rssi, wifi_proximity, policy
+                FROM device_identity
+                WHERE policy IN ('full_access', 'lan_only')
+                  AND wifi_proximity IN ('far', 'distant')
+            ''').fetchall()
+
+            return {
+                'proximity_distribution': {r['wifi_proximity']: r['count'] for r in proximity_counts},
+                'devices_at_risk': [dict(d) for d in at_risk],
+                'risk_count': len(at_risk)
+            }
 
 
 # =============================================================================

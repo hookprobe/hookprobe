@@ -1,0 +1,12 @@
+[Unit]
+Description=Fortress WiFi Signal Collector Timer
+Documentation=https://hookprobe.com/docs/fortress/wifi-signal
+
+[Timer]
+# Run every 30 seconds for responsive signal tracking
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

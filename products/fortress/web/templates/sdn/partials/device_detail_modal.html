@@ -1,0 +1,679 @@
+<!-- Device Detail Modal - Premium SDN Dashboard -->
+<div class="modal fade" id="deviceDetailModal" tabindex="-1" role="dialog" aria-labelledby="deviceDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl" role="document">
+        <div class="modal-content" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;">
+            <!-- Modal Header -->
+            <div class="modal-header border-bottom border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 16px 16px 0 0;">
+                <div class="d-flex align-items-center w-100">
+                    <div class="device-icon mr-3" id="modal-device-icon">
+                        <i class="fas fa-laptop fa-2x text-primary"></i>
+                    </div>
+                    <div class="flex-grow-1">
+                        <h4 class="modal-title mb-0 text-white" id="modal-device-name">Loading...</h4>
+                        <small class="text-muted" id="modal-device-mac">--:--:--:--:--:--</small>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <span class="badge mr-3" id="modal-status-badge" style="font-size: 0.9rem;">
+                            <i class="fas fa-circle mr-1"></i> <span id="modal-status-text">--</span>
+                        </span>
+                        <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="modal-body p-4">
+                <div class="row">
+                    <!-- Left Column: Identity & WiFi Signal -->
+                    <div class="col-lg-6">
+                        <!-- Identity Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-id-card mr-2 text-info"></i>Identity</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">IP Address</small>
+                                        <div class="text-white" id="modal-ip">--</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Hostname</small>
+                                        <div class="text-white text-truncate" id="modal-hostname">--</div>
+                                    </div>
+                                </div>
+                                <hr class="border-secondary my-2">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">Vendor</small>
+                                        <div class="text-white" id="modal-vendor">--</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Category</small>
+                                        <div class="text-white" id="modal-category">--</div>
+                                    </div>
+                                </div>
+                                <hr class="border-secondary my-2">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">First Seen</small>
+                                        <div class="text-white" id="modal-first-seen">--</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Last Seen</small>
+                                        <div class="text-white" id="modal-last-seen">--</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- WiFi Signal Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-wifi mr-2 text-success"></i>WiFi Signal</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row align-items-center">
+                                    <div class="col-4 text-center">
+                                        <div class="signal-gauge mb-2" id="modal-signal-gauge">
+                                            <svg viewBox="0 0 100 60" width="100" height="60">
+                                                <path d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="8" stroke-linecap="round"/>
+                                                <path d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="#28a745" stroke-width="8" stroke-linecap="round" id="signal-arc" stroke-dasharray="0, 126"/>
+                                            </svg>
+                                        </div>
+                                        <div class="h3 mb-0 text-white" id="modal-signal-quality">--%</div>
+                                        <small class="text-muted">Quality</small>
+                                    </div>
+                                    <div class="col-8">
+                                        <div class="mb-2">
+                                            <small class="text-muted">RSSI</small>
+                                            <div class="text-white"><span id="modal-rssi">--</span> dBm</div>
+                                        </div>
+                                        <div class="mb-2">
+                                            <small class="text-muted">Proximity</small>
+                                            <div>
+                                                <span class="badge" id="modal-proximity-badge">--</span>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <small class="text-muted">Band / Interface</small>
+                                            <div class="text-white"><span id="modal-wifi-band">--</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="alert alert-warning mt-2 mb-0 py-1 px-2 d-none" id="modal-proximity-warning" style="font-size: 0.8rem;">
+                                    <i class="fas fa-exclamation-triangle mr-1"></i>
+                                    <span id="modal-proximity-warning-text"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Traffic Card -->
+                        <div class="card" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-chart-line mr-2 text-warning"></i>Traffic (Session)</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row text-center">
+                                    <div class="col-4">
+                                        <div class="h5 mb-0 text-info"><i class="fas fa-arrow-down mr-1"></i><span id="modal-rx">--</span></div>
+                                        <small class="text-muted">Download</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <div class="h5 mb-0 text-success"><i class="fas fa-arrow-up mr-1"></i><span id="modal-tx">--</span></div>
+                                        <small class="text-muted">Upload</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <div class="h5 mb-0 text-white"><i class="fas fa-clock mr-1"></i><span id="modal-connected-time">--</span></div>
+                                        <small class="text-muted">Duration</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Policy & Tags -->
+                    <div class="col-lg-6">
+                        <!-- Network Access Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-network-wired mr-2 text-primary"></i>Network Access</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <small class="text-muted">Current Policy</small>
+                                        <div class="h5 mb-0">
+                                            <span class="badge badge-lg" id="modal-policy-badge">--</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Confidence</small>
+                                        <div class="text-white"><span id="modal-confidence">--</span>%</div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <small class="text-muted d-block mb-2">Change Policy</small>
+                                    <div class="btn-group btn-group-sm w-100" role="group">
+                                        <button type="button" class="btn btn-outline-danger policy-btn" data-policy="quarantine">
+                                            <i class="fas fa-ban"></i> Quarantine
+                                        </button>
+                                        <button type="button" class="btn btn-outline-warning policy-btn" data-policy="internet_only">
+                                            <i class="fas fa-globe"></i> Internet
+                                        </button>
+                                        <button type="button" class="btn btn-outline-info policy-btn" data-policy="lan_only">
+                                            <i class="fas fa-home"></i> LAN
+                                        </button>
+                                        <button type="button" class="btn btn-outline-success policy-btn" data-policy="full_access">
+                                            <i class="fas fa-check"></i> Full
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="row text-center small">
+                                    <div class="col-3">
+                                        <i class="fas fa-globe text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-internet">--</span>
+                                    </div>
+                                    <div class="col-3">
+                                        <i class="fas fa-home text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-lan">--</span>
+                                    </div>
+                                    <div class="col-3">
+                                        <i class="fas fa-server text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-mgmt">--</span>
+                                    </div>
+                                    <div class="col-3">
+                                        <i class="fas fa-print text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-print">--</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tags Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-tags mr-2 text-purple"></i>Tags</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div id="modal-tags-container" class="mb-2">
+                                    <!-- Tags rendered here -->
+                                </div>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control bg-dark text-white border-secondary" id="modal-new-tag" placeholder="Add tag..." maxlength="32">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-outline-info" type="button" id="modal-add-tag-btn">
+                                            <i class="fas fa-plus"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <small class="text-muted">Tags help organize devices (e.g., "Staff", "Kitchen", "John's Phone")</small>
+                            </div>
+                        </div>
+
+                        <!-- Connection History Card -->
+                        <div class="card" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-history mr-2 text-secondary"></i>Connection History (24h)</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <!-- Timeline visualization -->
+                                <div class="timeline-container mb-2" style="height: 30px; background: rgba(0,0,0,0.3); border-radius: 4px; position: relative; overflow: hidden;">
+                                    <div id="modal-timeline-bars" style="display: flex; height: 100%; position: relative;">
+                                        <!-- Timeline bars rendered here -->
+                                    </div>
+                                    <div class="timeline-labels d-flex justify-content-between px-1" style="position: absolute; bottom: -18px; width: 100%;">
+                                        <small class="text-muted">24h ago</small>
+                                        <small class="text-muted">12h</small>
+                                        <small class="text-muted">Now</small>
+                                    </div>
+                                </div>
+                                <div class="mt-4">
+                                    <div id="modal-history-list" style="max-height: 100px; overflow-y: auto;">
+                                        <!-- History events rendered here -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="modal-footer border-top border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 0 0 16px 16px;">
+                <button type="button" class="btn btn-outline-danger" id="modal-block-btn">
+                    <i class="fas fa-ban mr-1"></i> Block Device
+                </button>
+                <button type="button" class="btn btn-outline-warning" id="modal-disconnect-btn">
+                    <i class="fas fa-plug mr-1"></i> Disconnect
+                </button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+/* Device Detail Modal Styles */
+#deviceDetailModal .badge-lg {
+    font-size: 1rem;
+    padding: 0.5rem 1rem;
+}
+
+#deviceDetailModal .badge-success { background: rgba(40,167,69,0.8); }
+#deviceDetailModal .badge-warning { background: rgba(255,193,7,0.8); color: #000; }
+#deviceDetailModal .badge-danger { background: rgba(220,53,69,0.8); }
+#deviceDetailModal .badge-info { background: rgba(23,162,184,0.8); }
+#deviceDetailModal .badge-primary { background: rgba(0,123,255,0.8); }
+
+#deviceDetailModal .policy-btn.active {
+    font-weight: bold;
+}
+
+#deviceDetailModal .tag-badge {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(138, 43, 226, 0.3);
+    border: 1px solid rgba(138, 43, 226, 0.5);
+    color: #d8b4fe;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    margin: 0.125rem;
+    font-size: 0.8rem;
+}
+
+#deviceDetailModal .tag-badge .remove-tag {
+    margin-left: 0.5rem;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+#deviceDetailModal .tag-badge .remove-tag:hover {
+    opacity: 1;
+    color: #dc3545;
+}
+
+#deviceDetailModal .proximity-immediate { background: #28a745; color: white; }
+#deviceDetailModal .proximity-near { background: #17a2b8; color: white; }
+#deviceDetailModal .proximity-far { background: #ffc107; color: black; }
+#deviceDetailModal .proximity-distant { background: #dc3545; color: white; }
+
+#deviceDetailModal .timeline-bar {
+    height: 100%;
+    min-width: 2px;
+}
+#deviceDetailModal .timeline-bar.online { background: #28a745; }
+#deviceDetailModal .timeline-bar.idle { background: #ffc107; }
+#deviceDetailModal .timeline-bar.offline { background: rgba(255,255,255,0.1); }
+
+#deviceDetailModal .history-event {
+    padding: 0.25rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.8rem;
+}
+#deviceDetailModal .history-event:last-child {
+    border-bottom: none;
+}
+
+/* Text colors for access icons */
+#deviceDetailModal .text-allowed { color: #28a745; }
+#deviceDetailModal .text-blocked { color: #dc3545; }
+</style>
+
+<script>
+// Device Detail Modal Controller
+var DeviceDetailModal = {
+    currentMac: null,
+
+    open: function(mac) {
+        this.currentMac = mac;
+        $('#deviceDetailModal').modal('show');
+        this.loadDevice(mac);
+    },
+
+    loadDevice: function(mac) {
+        var self = this;
+
+        // Show loading state
+        $('#modal-device-name').text('Loading...');
+
+        $.get('{{ url_for("sdn.api_device_detail", mac_address="PLACEHOLDER") }}'.replace('PLACEHOLDER', mac))
+            .done(function(data) {
+                if (data.success && data.device) {
+                    self.renderDevice(data.device);
+                } else {
+                    toastr.error(data.error || 'Failed to load device');
+                }
+            })
+            .fail(function() {
+                toastr.error('Failed to load device details');
+            });
+    },
+
+    renderDevice: function(device) {
+        // Header
+        $('#modal-device-name').text(device.friendly_name || device.hostname || device.device_type || 'Unknown Device');
+        $('#modal-device-mac').text(device.mac);
+
+        // Status badge
+        var statusBadge = $('#modal-status-badge');
+        var status = device.status || 'offline';
+        statusBadge.removeClass('badge-success badge-warning badge-secondary')
+            .addClass(status === 'online' ? 'badge-success' : status === 'idle' ? 'badge-warning' : 'badge-secondary');
+        $('#modal-status-text').text(status.charAt(0).toUpperCase() + status.slice(1));
+
+        // Identity
+        $('#modal-ip').text(device.ip || '--');
+        $('#modal-hostname').text(device.hostname || '--');
+        $('#modal-vendor').text(device.vendor || '--');
+        $('#modal-category').text(device.category || device.device_type || '--');
+        $('#modal-first-seen').text(this.formatDate(device.first_seen));
+        $('#modal-last-seen').text(this.formatDate(device.last_seen));
+
+        // WiFi Signal
+        var quality = device.wifi_quality || 0;
+        var rssi = device.wifi_rssi;
+        $('#modal-signal-quality').text(quality + '%');
+        $('#modal-rssi').text(rssi || '--');
+
+        // Update signal arc (126 is full arc length)
+        var arcLength = (quality / 100) * 126;
+        $('#signal-arc').attr('stroke-dasharray', arcLength + ', 126');
+        $('#signal-arc').attr('stroke', quality > 70 ? '#28a745' : quality > 40 ? '#ffc107' : '#dc3545');
+
+        // Proximity badge
+        var proximity = device.wifi_proximity || 'unknown';
+        $('#modal-proximity-badge')
+            .removeClass('proximity-immediate proximity-near proximity-far proximity-distant badge-secondary')
+            .addClass(proximity !== 'unknown' ? 'proximity-' + proximity : 'badge-secondary')
+            .text(proximity.charAt(0).toUpperCase() + proximity.slice(1));
+
+        // Proximity warning
+        if (proximity === 'distant' && (device.policy === 'full_access' || device.policy === 'lan_only')) {
+            $('#modal-proximity-warning').removeClass('d-none');
+            $('#modal-proximity-warning-text').text('Device has high access but weak signal - potential security risk');
+        } else {
+            $('#modal-proximity-warning').addClass('d-none');
+        }
+
+        $('#modal-wifi-band').text((device.wifi_band || '--') + ' / ' + (device.wifi_interface || '--'));
+
+        // Traffic
+        var traffic = device.traffic || {};
+        $('#modal-rx').text(traffic.rx_formatted || '0 B');
+        $('#modal-tx').text(traffic.tx_formatted || '0 B');
+        $('#modal-connected-time').text(this.formatDuration(device.connected_time || 0));
+
+        // Policy
+        this.renderPolicy(device.policy || 'quarantine');
+        $('#modal-confidence').text(Math.round((device.confidence || 0) * 100));
+
+        // Access indicators
+        this.renderAccessIndicators(device.policy);
+
+        // Tags
+        this.renderTags(device.tags || []);
+
+        // History
+        this.renderHistory(device.history || []);
+    },
+
+    renderPolicy: function(policy) {
+        var policyColors = {
+            'quarantine': 'danger',
+            'internet_only': 'warning',
+            'lan_only': 'info',
+            'normal': 'primary',
+            'full_access': 'success'
+        };
+        var policyNames = {
+            'quarantine': 'QUARANTINE',
+            'internet_only': 'INTERNET ONLY',
+            'lan_only': 'LAN ONLY',
+            'normal': 'NORMAL',
+            'full_access': 'FULL ACCESS'
+        };
+
+        $('#modal-policy-badge')
+            .removeClass('badge-success badge-warning badge-danger badge-info badge-primary')
+            .addClass('badge-' + (policyColors[policy] || 'secondary'))
+            .text(policyNames[policy] || policy);
+
+        // Highlight active policy button
+        $('.policy-btn').removeClass('active btn-danger btn-warning btn-info btn-success')
+            .addClass('btn-outline-' + (function(p) {
+                return p === 'quarantine' ? 'danger' : p === 'internet_only' ? 'warning' : p === 'lan_only' ? 'info' : 'success';
+            })(policy));
+        $('.policy-btn[data-policy="' + policy + '"]')
+            .removeClass('btn-outline-danger btn-outline-warning btn-outline-info btn-outline-success')
+            .addClass('active btn-' + (policyColors[policy] || 'secondary'));
+    },
+
+    renderAccessIndicators: function(policy) {
+        var access = {
+            'quarantine': { internet: false, lan: false, mgmt: false, print: false },
+            'internet_only': { internet: true, lan: false, mgmt: false, print: false },
+            'lan_only': { internet: false, lan: true, mgmt: false, print: true },
+            'normal': { internet: true, lan: true, mgmt: false, print: true },
+            'full_access': { internet: true, lan: true, mgmt: true, print: true }
+        }[policy] || { internet: false, lan: false, mgmt: false, print: false };
+
+        function indicator(allowed) {
+            return allowed
+                ? '<span class="text-allowed"><i class="fas fa-check"></i></span>'
+                : '<span class="text-blocked"><i class="fas fa-times"></i></span>';
+        }
+
+        $('#modal-access-internet').html(indicator(access.internet));
+        $('#modal-access-lan').html(indicator(access.lan));
+        $('#modal-access-mgmt').html(indicator(access.mgmt));
+        $('#modal-access-print').html(indicator(access.print));
+    },
+
+    renderTags: function(tags) {
+        var self = this;
+        var html = '';
+
+        if (tags.length === 0) {
+            html = '<small class="text-muted">No tags - add tags to organize this device</small>';
+        } else {
+            tags.forEach(function(tag) {
+                html += '<span class="tag-badge">' + self.escapeHtml(tag) +
+                    '<span class="remove-tag" data-tag="' + self.escapeHtml(tag) + '">&times;</span></span>';
+            });
+        }
+
+        $('#modal-tags-container').html(html);
+    },
+
+    renderHistory: function(history) {
+        if (!history || history.length === 0) {
+            $('#modal-history-list').html('<small class="text-muted">No recent events</small>');
+            $('#modal-timeline-bars').html('<div class="timeline-bar offline" style="flex: 1;"></div>');
+            return;
+        }
+
+        // Render event list
+        var listHtml = '';
+        history.slice(0, 10).forEach(function(event) {
+            var icon = event.event_type === 'connected' ? 'fa-plug text-success' :
+                       event.event_type === 'disconnected' ? 'fa-plug text-danger' :
+                       event.event_type === 'policy_changed' ? 'fa-shield-alt text-warning' :
+                       event.event_type === 'proximity_downgrade' ? 'fa-exclamation-triangle text-danger' :
+                       'fa-info-circle text-info';
+
+            listHtml += '<div class="history-event">' +
+                '<i class="fas ' + icon + ' mr-2"></i>' +
+                '<span class="text-white">' + event.event_type.replace(/_/g, ' ') + '</span>' +
+                '<small class="text-muted float-right">' + DeviceDetailModal.formatTime(event.timestamp) + '</small>' +
+                '</div>';
+        });
+        $('#modal-history-list').html(listHtml);
+
+        // Simple timeline bars (just show a placeholder for now)
+        $('#modal-timeline-bars').html(
+            '<div class="timeline-bar offline" style="flex: 0.3;"></div>' +
+            '<div class="timeline-bar online" style="flex: 0.4;"></div>' +
+            '<div class="timeline-bar idle" style="flex: 0.2;"></div>' +
+            '<div class="timeline-bar online" style="flex: 0.1;"></div>'
+        );
+    },
+
+    setPolicy: function(policy) {
+        var self = this;
+        if (!this.currentMac) return;
+
+        $.ajax({
+            url: '{{ url_for("sdn.api_device_set_policy", mac_address="PLACEHOLDER") }}'.replace('PLACEHOLDER', this.currentMac),
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ policy: policy })
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Policy updated to ' + policy);
+                self.renderPolicy(policy);
+                self.renderAccessIndicators(policy);
+            } else {
+                toastr.error(data.error || 'Failed to update policy');
+            }
+        })
+        .fail(function() {
+            toastr.error('Failed to update policy');
+        });
+    },
+
+    addTag: function(tag) {
+        var self = this;
+        if (!this.currentMac || !tag) return;
+
+        $.ajax({
+            url: '{{ url_for("sdn.api_device_add_tag", mac_address="PLACEHOLDER") }}'.replace('PLACEHOLDER', this.currentMac),
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ tag: tag })
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Tag added');
+                self.loadDevice(self.currentMac);
+                $('#modal-new-tag').val('');
+            } else {
+                toastr.error(data.error || 'Failed to add tag');
+            }
+        })
+        .fail(function() {
+            toastr.error('Failed to add tag');
+        });
+    },
+
+    removeTag: function(tag) {
+        var self = this;
+        if (!this.currentMac) return;
+
+        $.ajax({
+            url: '{{ url_for("sdn.api_device_remove_tag", mac_address="PLACEHOLDER", tag="TAG") }}'
+                .replace('PLACEHOLDER', this.currentMac)
+                .replace('TAG', encodeURIComponent(tag)),
+            method: 'DELETE'
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Tag removed');
+                self.loadDevice(self.currentMac);
+            } else {
+                toastr.error(data.error || 'Failed to remove tag');
+            }
+        })
+        .fail(function() {
+            toastr.error('Failed to remove tag');
+        });
+    },
+
+    formatDate: function(dateStr) {
+        if (!dateStr) return '--';
+        try {
+            var date = new Date(dateStr);
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        } catch (e) {
+            return dateStr;
+        }
+    },
+
+    formatTime: function(dateStr) {
+        if (!dateStr) return '--';
+        try {
+            var date = new Date(dateStr);
+            return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        } catch (e) {
+            return dateStr;
+        }
+    },
+
+    formatDuration: function(seconds) {
+        if (!seconds) return '--';
+        var h = Math.floor(seconds / 3600);
+        var m = Math.floor((seconds % 3600) / 60);
+        if (h > 0) return h + 'h ' + m + 'm';
+        return m + 'm';
+    },
+
+    escapeHtml: function(str) {
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+};
+
+// Event handlers
+$(document).ready(function() {
+    // Policy buttons
+    $(document).on('click', '.policy-btn', function() {
+        var policy = $(this).data('policy');
+        DeviceDetailModal.setPolicy(policy);
+    });
+
+    // Add tag button
+    $('#modal-add-tag-btn').click(function() {
+        var tag = $('#modal-new-tag').val().trim();
+        if (tag) {
+            DeviceDetailModal.addTag(tag);
+        }
+    });
+
+    // Add tag on Enter
+    $('#modal-new-tag').keypress(function(e) {
+        if (e.which === 13) {
+            var tag = $(this).val().trim();
+            if (tag) {
+                DeviceDetailModal.addTag(tag);
+            }
+        }
+    });
+
+    // Remove tag
+    $(document).on('click', '.remove-tag', function() {
+        var tag = $(this).data('tag');
+        DeviceDetailModal.removeTag(tag);
+    });
+
+    // Block device
+    $('#modal-block-btn').click(function() {
+        if (confirm('Block this device? It will be completely isolated from the network.')) {
+            DeviceDetailModal.setPolicy('quarantine');
+        }
+    });
+
+    // Disconnect device
+    $('#modal-disconnect-btn').click(function() {
+        toastr.info('Disconnect feature coming soon');
+    });
+});
+
+// Global function to open modal from table row click
+function openDeviceDetail(mac) {
+    DeviceDetailModal.open(mac);
+}
+</script>

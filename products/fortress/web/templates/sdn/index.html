@@ -588,194 +588,147 @@
             </div>
         </div>
 
-        <!-- Device Table -->
+        <!-- Device Table - Premium Clean Design -->
         <div class="row">
             <div class="col-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="fas fa-list mr-2"></i>Network Devices</h3>
+                <div class="card" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: none; border-radius: 12px;">
+                    <div class="card-header border-0 pb-0" style="background: transparent;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h3 class="card-title text-white mb-0">
+                                <i class="fas fa-network-wired mr-2 text-info"></i>Network Devices
+                            </h3>
+                            <div class="card-tools">
+                                <span class="badge badge-light mr-2" id="device-count-badge">{{ devices|length }} devices</span>
+                                <button type="button" class="btn btn-sm btn-outline-info" onclick="location.reload();">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
+                            </div>
+                        </div>
                     </div>
-                    <div class="card-body table-responsive p-0">
-                        <table id="devices-table" class="table table-hover table-striped">
+                    <div class="card-body p-3">
+                        <table id="devices-table" class="table table-borderless mb-0" style="color: #e0e0e0;">
                             <thead>
-                                <tr>
-                                    <th style="width: 30px;">
-                                        <div class="custom-control custom-checkbox">
-                                            <input type="checkbox" class="custom-control-input" id="select-all">
-                                            <label class="custom-control-label" for="select-all"></label>
-                                        </div>
-                                    </th>
-                                    <th>Status</th>
-                                    <th>Hostname</th>
-                                    <th>IP Address</th>
-                                    <th>MAC Address</th>
-                                    <th>Vendor</th>
-                                    <th>Category</th>
-                                    <th>Policy</th>
-                                    <th>Access</th>
-                                    <th>Last Seen</th>
-                                    <th style="width: 150px;">Actions</th>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+                                    <th style="width: 50%; padding-left: 1rem;">Device</th>
+                                    <th style="width: 15%; text-align: center;">Status</th>
+                                    <th style="width: 20%; text-align: center;">Policy</th>
+                                    <th style="width: 15%; text-align: center;">Signal</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for device in devices %}
+                                {% set category_icons = {
+                                    'iot': 'fa-microchip',
+                                    'camera': 'fa-video',
+                                    'pos': 'fa-cash-register',
+                                    'printer': 'fa-print',
+                                    'workstation': 'fa-desktop',
+                                    'voice_assistant': 'fa-volume-up',
+                                    'mobile': 'fa-mobile-alt',
+                                    'network': 'fa-network-wired',
+                                    'homepod': 'fa-home',
+                                    'echo': 'fa-volume-up',
+                                    'google_home': 'fa-home',
+                                    'smart_hub': 'fa-home',
+                                    'bridge': 'fa-project-diagram',
+                                    'iphone': 'fa-mobile-alt',
+                                    'android': 'fa-mobile-alt',
+                                    'phone': 'fa-mobile-alt',
+                                    'tablet': 'fa-tablet-alt',
+                                    'laptop': 'fa-laptop',
+                                    'macbook': 'fa-laptop',
+                                    'raspberry_pi': 'fa-server',
+                                    'smart_plug': 'fa-plug',
+                                    'sensor': 'fa-thermometer-half',
+                                    'tv': 'fa-tv',
+                                    'smart_tv': 'fa-tv',
+                                    'health': 'fa-heartbeat',
+                                    'watch': 'fa-clock',
+                                    'sbc': 'fa-microchip',
+                                    'unknown': 'fa-question-circle'
+                                } %}
                                 <tr data-mac="{{ device.mac_address }}"
-                                    data-policy="{{ device.policy }}"
-                                    data-category="{{ device.device_type }}"
-                                    data-online="{{ 'true' if device.is_online else 'false' }}"
-                                    data-blocked="{{ 'true' if device.is_blocked else 'false' }}">
-                                    <td>
-                                        <div class="custom-control custom-checkbox">
-                                            <input type="checkbox" class="custom-control-input device-select"
-                                                   id="select-{{ device.mac_address | replace(':', '') }}"
-                                                   value="{{ device.mac_address }}">
-                                            <label class="custom-control-label"
-                                                   for="select-{{ device.mac_address | replace(':', '') }}"></label>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        {% if device.is_blocked %}
-                                        <span class="badge badge-danger"><i class="fas fa-ban"></i> Blocked</span>
-                                        {% elif device.is_online %}
-                                        <span class="badge badge-success"><i class="fas fa-circle"></i> Online</span>
-                                        {% elif device.is_idle %}
-                                        <span class="badge badge-warning"><i class="fas fa-moon"></i> Idle</span>
-                                        {% else %}
-                                        <span class="badge badge-secondary"><i class="far fa-circle"></i> Offline</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        <a href="{{ url_for('sdn.device_detail', mac_address=device.mac_address) }}">
-                                            <strong>{{ device.hostname or 'Unknown' }}</strong>
-                                        </a>
-                                    </td>
-                                    <td><code>{{ device.ip_address or 'N/A' }}</code></td>
-                                    <td><code>{{ device.mac_address }}</code></td>
-                                    <td>{{ device.manufacturer or 'Unknown' }}</td>
-                                    <td>
-                                        {% set category_icons = {
-                                            'iot': 'fa-microchip',
-                                            'camera': 'fa-video',
-                                            'pos': 'fa-cash-register',
-                                            'printer': 'fa-print',
-                                            'workstation': 'fa-desktop',
-                                            'voice_assistant': 'fa-volume-up',
-                                            'mobile': 'fa-mobile-alt',
-                                            'network': 'fa-network-wired',
-                                            'homepod': 'fa-home',
-                                            'echo': 'fa-volume-up',
-                                            'google_home': 'fa-home',
-                                            'smart_hub': 'fa-home',
-                                            'bridge': 'fa-project-diagram',
-                                            'iphone': 'fa-mobile-alt',
-                                            'android': 'fa-mobile-alt',
-                                            'phone': 'fa-mobile-alt',
-                                            'tablet': 'fa-tablet-alt',
-                                            'laptop': 'fa-laptop',
-                                            'macbook': 'fa-laptop',
-                                            'raspberry_pi': 'fa-server',
-                                            'smart_plug': 'fa-plug',
-                                            'sensor': 'fa-thermometer-half',
-                                            'unknown': 'fa-question'
-                                        } %}
-                                        <i class="fas {{ category_icons.get(device.device_type, 'fa-question') }} mr-1"></i>
-                                        {{ device.device_type | replace('_', ' ') | capitalize }}
-                                    </td>
-                                    <td>
-                                        {# Use new policy colors from device_policies module #}
-                                        <span class="badge badge-{{ device.policy_color or 'secondary' }}">
-                                            <i class="fas {{ device.policy_icon or 'fa-question' }} mr-1"></i>
-                                            {{ device.policy_name or (device.policy | replace('_', ' ') | title) }}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        {% if device.internet_access %}
-                                        <span class="badge badge-dark" style="background: rgba(40,167,69,0.2); border: 1px solid rgba(40,167,69,0.4);" title="Internet Access"><i class="fas fa-globe text-success"></i></span>
-                                        {% else %}
-                                        <span class="badge badge-dark" style="background: rgba(108,117,125,0.2); border: 1px solid rgba(108,117,125,0.3);" title="No Internet"><i class="fas fa-globe text-muted"></i></span>
-                                        {% endif %}
-                                        {% if device.lan_access %}
-                                        <span class="badge badge-dark" style="background: rgba(40,167,69,0.2); border: 1px solid rgba(40,167,69,0.4);" title="LAN Access"><i class="fas fa-network-wired text-success"></i></span>
-                                        {% else %}
-                                        <span class="badge badge-dark" style="background: rgba(108,117,125,0.2); border: 1px solid rgba(108,117,125,0.3);" title="No LAN"><i class="fas fa-network-wired text-muted"></i></span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        <small class="text-muted">{{ device.last_seen }}</small>
-                                    </td>
-                                    <td>
-                                        <div class="btn-group btn-group-sm">
-                                            <a href="{{ url_for('sdn.device_detail', mac_address=device.mac_address) }}"
-                                               class="btn btn-default" title="Details">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
-                                            <button type="button" class="btn btn-default dropdown-toggle dropdown-toggle-split"
-                                                    data-toggle="dropdown">
-                                                <span class="sr-only">Actions</span>
-                                            </button>
-                                            <div class="dropdown-menu dropdown-menu-right">
-                                                <a class="dropdown-item btn-auto-classify" href="#"
-                                                   data-mac="{{ device.mac_address }}">
-                                                    <i class="fas fa-magic mr-2"></i> Auto-Classify
-                                                </a>
-                                                <div class="dropdown-divider"></div>
-                                                <h6 class="dropdown-header">Set Policy</h6>
-                                                {% for policy in policies %}
-                                                <a class="dropdown-item btn-set-policy" href="#"
-                                                   data-mac="{{ device.mac_address }}"
-                                                   data-policy="{{ policy.name }}">
-                                                    <i class="fas {{ policy.icon }} mr-2 text-{{ policy.color }}"></i>
-                                                    {{ policy.display_name }}
-                                                </a>
-                                                {% endfor %}
-                                                <div class="dropdown-divider"></div>
-                                                {% if device.is_blocked %}
-                                                <a class="dropdown-item text-success btn-unblock" href="#"
-                                                   data-mac="{{ device.mac_address }}">
-                                                    <i class="fas fa-check mr-2"></i> Unblock
-                                                </a>
-                                                {% else %}
-                                                <a class="dropdown-item btn-disconnect" href="#"
-                                                   data-mac="{{ device.mac_address }}">
-                                                    <i class="fas fa-plug mr-2"></i> Disconnect
-                                                </a>
-                                                <a class="dropdown-item text-danger btn-block" href="#"
-                                                   data-mac="{{ device.mac_address }}">
-                                                    <i class="fas fa-ban mr-2"></i> Block
-                                                </a>
-                                                {% endif %}
-                                                <div class="dropdown-divider"></div>
-                                                <h6 class="dropdown-header">Move to Segment</h6>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="10">
-                                                    <i class="fas fa-shield-alt mr-2 text-info"></i> SECMON
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="20">
-                                                    <i class="fas fa-credit-card mr-2 text-warning"></i> POS
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="30">
-                                                    <i class="fas fa-laptop mr-2 text-success"></i> CLIENTS
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="40">
-                                                    <i class="fas fa-wifi mr-2 text-primary"></i> GUEST
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="50">
-                                                    <i class="fas fa-video mr-2 text-purple"></i> CAMERAS
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="60">
-                                                    <i class="fas fa-microchip mr-2 text-orange"></i> IIOT
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment text-danger" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="99">
-                                                    <i class="fas fa-exclamation-triangle mr-2"></i> QUARANTINE
-                                                </a>
+                                    class="device-row"
+                                    style="cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;"
+                                    onmouseover="this.style.background='rgba(255,255,255,0.05)'"
+                                    onmouseout="this.style.background='transparent'"
+                                    onclick="openDeviceDetail('{{ device.mac_address }}')">
+                                    <!-- Device Column: Icon + Name + MAC -->
+                                    <td style="padding: 0.75rem 1rem;">
+                                        <div class="d-flex align-items-center">
+                                            <div class="device-icon-wrapper mr-3" style="width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                                                <i class="fas {{ category_icons.get(device.device_type, 'fa-question-circle') }} text-info"></i>
+                                            </div>
+                                            <div>
+                                                <div class="device-name" style="font-weight: 600; color: #fff;">
+                                                    {{ device.friendly_name or device.hostname or device.device_type | replace('_', ' ') | title or 'Unknown Device' }}
+                                                </div>
+                                                <div class="device-meta" style="font-size: 0.75rem; color: #888;">
+                                                    {{ device.manufacturer or 'Unknown' }} · {{ device.mac_address }}
+                                                </div>
                                             </div>
                                         </div>
+                                    </td>
+                                    <!-- Status Column: Simple Dot -->
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        {% if device.is_blocked %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(220,53,69,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #dc3545; border-radius: 50%; margin-right: 0.5rem;"></span>
+                                            <span style="color: #dc3545;">Blocked</span>
+                                        </span>
+                                        {% elif device.is_online %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(40,167,69,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #28a745; border-radius: 50%; margin-right: 0.5rem; animation: pulse 2s infinite;"></span>
+                                            <span style="color: #28a745;">Online</span>
+                                        </span>
+                                        {% elif device.is_idle %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(255,193,7,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #ffc107; border-radius: 50%; margin-right: 0.5rem;"></span>
+                                            <span style="color: #ffc107;">Idle</span>
+                                        </span>
+                                        {% else %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(108,117,125,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #6c757d; border-radius: 50%; margin-right: 0.5rem;"></span>
+                                            <span style="color: #6c757d;">Offline</span>
+                                        </span>
+                                        {% endif %}
+                                    </td>
+                                    <!-- Policy Column: Colored Badge -->
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        {% set policy_styles = {
+                                            'quarantine': ('rgba(220,53,69,0.3)', '#ff6b6b', 'fa-ban'),
+                                            'internet_only': ('rgba(255,193,7,0.3)', '#ffc107', 'fa-globe'),
+                                            'lan_only': ('rgba(23,162,184,0.3)', '#17a2b8', 'fa-home'),
+                                            'normal': ('rgba(0,123,255,0.3)', '#007bff', 'fa-check'),
+                                            'full_access': ('rgba(40,167,69,0.3)', '#28a745', 'fa-shield-alt')
+                                        } %}
+                                        {% set ps = policy_styles.get(device.policy, ('rgba(108,117,125,0.3)', '#6c757d', 'fa-question')) %}
+                                        <span class="policy-badge" style="display: inline-flex; align-items: center; padding: 0.35rem 0.75rem; background: {{ ps[0] }}; border: 1px solid {{ ps[1] }}; border-radius: 6px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: {{ ps[1] }};">
+                                            <i class="fas {{ ps[2] }} mr-1" style="font-size: 0.7rem;"></i>
+                                            {{ device.policy | replace('_', ' ') }}
+                                        </span>
+                                    </td>
+                                    <!-- Signal Column: WiFi Bars -->
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        {% if device.wifi_quality is defined and device.wifi_quality %}
+                                        {% set q = device.wifi_quality %}
+                                        <div class="signal-bars" style="display: inline-flex; align-items: flex-end; gap: 2px; height: 20px;" title="{{ device.wifi_rssi or '?' }} dBm">
+                                            <div style="width: 4px; height: 5px; background: {% if q > 0 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                            <div style="width: 4px; height: 9px; background: {% if q > 25 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                            <div style="width: 4px; height: 13px; background: {% if q > 50 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                            <div style="width: 4px; height: 17px; background: {% if q > 75 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                        </div>
+                                        {% else %}
+                                        <i class="fas fa-ethernet text-muted" title="Wired or no signal data"></i>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center py-5" style="color: #666;">
+                                        <i class="fas fa-inbox fa-3x mb-3" style="color: #444;"></i>
+                                        <p class="mb-0">No devices found</p>
+                                        <small>Devices will appear here when they connect to the network</small>
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -785,6 +738,24 @@
                 </div>
             </div>
         </div>
+
+        <style>
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        #devices-table th {
+            font-weight: 500;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+            padding: 0.75rem 1rem;
+        }
+        .device-row:active {
+            background: rgba(255,255,255,0.1) !important;
+        }
+        </style>
 
         <!-- Policy Legend -->
         <div class="row">
@@ -870,6 +841,9 @@
         </div>
     </div>
 </div>
+
+<!-- Device Detail Modal -->
+{% include 'sdn/partials/device_detail_modal.html' %}
 
 {% endblock %}
 
@@ -1340,6 +1314,18 @@ $(document).ready(function() {
                     toastr.error('Bulk block failed');
                 }
             });
+        }
+    });
+
+    // Device row click - open detail modal
+    $(document).on('click', '.device-row', function(e) {
+        // Don't open modal if clicking on buttons or links
+        if ($(e.target).closest('button, a, .dropdown, .custom-checkbox').length) {
+            return;
+        }
+        var mac = $(this).data('mac');
+        if (mac) {
+            openDeviceDetail(mac);
         }
     });
 
