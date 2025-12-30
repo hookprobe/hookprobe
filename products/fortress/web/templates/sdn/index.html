@@ -2212,9 +2212,11 @@ function resetLteUsage() {
 <script>
 // LTE Settings Functions
 function openLteSettings() {
+    console.log('Opening LTE settings modal...');
     // Load current settings
     $.get('/slaai/api/lte-limits')
         .done(function(data) {
+            console.log('LTE limits loaded:', data);
             if (data.success && data.limits) {
                 var limits = data.limits;
                 $('#lte-monthly-limit').val(limits.monthly_limit_gb || '');
@@ -2223,7 +2225,8 @@ function openLteSettings() {
             }
             $('#lte-settings-modal').modal('show');
         })
-        .fail(function() {
+        .fail(function(xhr, status, error) {
+            console.error('Failed to load LTE limits:', status, error);
             // Show modal with defaults on error
             $('#lte-settings-modal').modal('show');
         });
@@ -2248,6 +2251,8 @@ function saveLteSettings() {
         cost_per_gb: costPerGb ? parseFloat(costPerGb) : null
     };
 
+    console.log('Saving LTE settings:', settings);
+
     $.ajax({
         url: '/slaai/api/lte-limits',
         method: 'POST',
@@ -2255,8 +2260,9 @@ function saveLteSettings() {
         data: JSON.stringify(settings)
     })
     .done(function(data) {
+        console.log('LTE settings response:', data);
         if (data.success) {
-            toastr.success('LTE settings saved');
+            toastr.success('LTE settings saved successfully');
             $('#lte-settings-modal').modal('hide');
             // Refresh WAN health display
             loadWanHealth();
@@ -2264,8 +2270,9 @@ function saveLteSettings() {
             toastr.error(data.error || 'Failed to save settings');
         }
     })
-    .fail(function() {
-        toastr.error('Failed to save LTE settings');
+    .fail(function(xhr, status, error) {
+        console.error('LTE settings error:', status, error, xhr.responseText);
+        toastr.error('Failed to save LTE settings: ' + (xhr.responseJSON ? xhr.responseJSON.error : error));
     });
 }
 </script>
