@@ -1405,6 +1405,64 @@ SPECIFIC_OUI_DEVICES = {
                  "os": "Embedded", "confidence": 0.85, "hierarchy": ["Tuya"]},
     "7C:F6:66": {"name": "Tuya Smart Device", "vendor": "Tuya", "category": "iot",
                  "os": "Embedded", "confidence": 0.85, "hierarchy": ["Tuya"]},
+
+    # ==========================================================================
+    # WORKSTATION VENDORS (Dell, Lenovo, HP, etc.)
+    # ==========================================================================
+
+    # Dell (common OUIs)
+    "9C:B1:50": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "18:66:DA": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "D4:BE:D9": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "F8:BC:12": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "B8:CA:3A": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "54:BF:64": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "34:17:EB": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "E4:54:E8": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "28:F1:0E": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+    "00:14:22": {"name": "Dell Computer", "vendor": "Dell", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Dell", "Workstation"]},
+
+    # Lenovo (common OUIs)
+    "98:FA:9B": {"name": "Lenovo Computer", "vendor": "Lenovo", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Lenovo", "Workstation"]},
+    "50:7B:9D": {"name": "Lenovo Computer", "vendor": "Lenovo", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Lenovo", "Workstation"]},
+    "C8:5B:76": {"name": "Lenovo Computer", "vendor": "Lenovo", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Lenovo", "Workstation"]},
+    "00:21:5E": {"name": "Lenovo Computer", "vendor": "Lenovo", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Lenovo", "Workstation"]},
+    "28:D2:44": {"name": "Lenovo Computer", "vendor": "Lenovo", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["Lenovo", "Workstation"]},
+
+    # HP (common OUIs)
+    "3C:D9:2B": {"name": "HP Computer", "vendor": "HP", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["HP", "Workstation"]},
+    "10:60:4B": {"name": "HP Computer", "vendor": "HP", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["HP", "Workstation"]},
+    "D8:9E:F3": {"name": "HP Computer", "vendor": "HP", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["HP", "Workstation"]},
+    "38:63:BB": {"name": "HP Computer", "vendor": "HP", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["HP", "Workstation"]},
+    "8C:DC:D4": {"name": "HP Computer", "vendor": "HP", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.88, "hierarchy": ["HP", "Workstation"]},
+
+    # Intel (NUC, compute sticks, etc.)
+    "00:1E:67": {"name": "Intel Device", "vendor": "Intel", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.85, "hierarchy": ["Intel"]},
+    "B4:96:91": {"name": "Intel Device", "vendor": "Intel", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.85, "hierarchy": ["Intel"]},
+    "8C:8D:28": {"name": "Intel Device", "vendor": "Intel", "category": "workstation",
+                 "os": "Windows/Linux", "confidence": 0.85, "hierarchy": ["Intel"]},
 }
 
 
@@ -2087,6 +2145,16 @@ class Fingerbank:
             'Raspberry Pi': 'sbc', 'Ubiquiti': 'network', 'TP-Link': 'network',
             'Ring': 'camera', 'Nest': 'smart_hub', 'Philips Hue': 'bridge',
             'Sonos': 'voice_assistant',
+            # Workstation vendors
+            'Dell': 'workstation', 'Lenovo': 'workstation', 'ASUS': 'workstation',
+            'Acer': 'workstation', 'Intel': 'workstation', 'AMD': 'workstation',
+            'MSI': 'workstation', 'Gigabyte': 'workstation',
+            # Mobile vendors
+            'OnePlus': 'phone', 'Xiaomi': 'phone', 'Huawei': 'phone',
+            'Oppo': 'phone', 'Vivo': 'phone', 'Realme': 'phone',
+            # IoT vendors
+            'Withings': 'health', 'Fitbit': 'wearable',
+            'Espressif': 'iot', 'Tuya': 'iot',
         }
 
         if vendor in vendor_categories:
