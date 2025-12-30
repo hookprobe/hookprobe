@@ -2246,6 +2246,54 @@ EOF
     systemctl enable fts-device-status.timer 2>/dev/null || true
     systemctl start fts-device-status.timer 2>/dev/null || true
     log_success "Device status updater installed (timer runs every 30s)"
+
+    # -------------------------------------------------------------------------
+    # LTE Traffic Collector (for wwan0 metered data tracking)
+    # -------------------------------------------------------------------------
+    log_info "Installing LTE traffic collector..."
+
+    local lte_script_src="${SCRIPT_DIR}/devices/common/lte-traffic-collector.sh"
+    local lte_script_dst="${INSTALL_DIR}/devices/common/lte-traffic-collector.sh"
+    if [ -f "$lte_script_src" ]; then
+        mkdir -p "${INSTALL_DIR}/devices/common"
+        cp "$lte_script_src" "$lte_script_dst"
+        chmod +x "$lte_script_dst"
+    fi
+
+    # Create LTE collector service
+    cat > /etc/systemd/system/fts-lte-collector.service << 'EOF'
+[Unit]
+Description=Fortress LTE Traffic Collector
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/devices/common/lte-traffic-collector.sh
+User=root
+Group=root
+Nice=19
+IOSchedulingClass=idle
+EOF
+
+    # Create LTE collector timer (runs every 30s)
+    cat > /etc/systemd/system/fts-lte-collector.timer << 'EOF'
+[Unit]
+Description=Fortress LTE Traffic Collector Timer
+Requires=fts-lte-collector.service
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fts-lte-collector.timer 2>/dev/null || true
+    systemctl start fts-lte-collector.timer 2>/dev/null || true
+    log_success "LTE traffic collector installed (timer runs every 30s)"
 }
 
 # Check if container image needs rebuilding
