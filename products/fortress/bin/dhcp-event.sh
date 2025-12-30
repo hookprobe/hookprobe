@@ -48,7 +48,8 @@ process_device() {
     (
         # Python script for SDN Auto Pilot classification and OpenFlow rules
         # NOTE: Using '-' tells python to read script from stdin, args come after
-        python3 - "$MAC" "$IP" "$HOSTNAME" "$DHCP_FINGERPRINT" "$ACTION" <<'PYTHON_SCRIPT'
+        # Args: MAC IP HOSTNAME FINGERPRINT ACTION VENDOR_CLASS
+        python3 - "$MAC" "$IP" "$HOSTNAME" "$DHCP_FINGERPRINT" "$ACTION" "$VENDOR_CLASS" <<'PYTHON_SCRIPT'
 import sys
 import os
 import json
@@ -82,6 +83,7 @@ ip = sys.argv[2] if len(sys.argv) > 2 else ""
 hostname = sys.argv[3] if len(sys.argv) > 3 else ""
 dhcp_fingerprint = sys.argv[4] if len(sys.argv) > 4 else ""
 action = sys.argv[5] if len(sys.argv) > 5 else "add"
+vendor_class = sys.argv[6] if len(sys.argv) > 6 else ""  # DHCP Option 60
 
 if not mac:
     sys.exit(0)
@@ -102,10 +104,13 @@ try:
             ip=ip,
             hostname=hostname or None,
             dhcp_fingerprint=dhcp_fingerprint or None,
+            vendor_class=vendor_class or None,  # Pass DHCP Option 60
             apply_rules=True  # Auto-apply OpenFlow rules
         )
+        # Log with vendor_class for debugging
+        vc_info = f", vc={vendor_class}" if vendor_class else ""
         logger.info(f"DHCP {action}: {mac} -> {result.policy} "
-                   f"(confidence={result.confidence:.2f}, fp={dhcp_fingerprint})")
+                   f"(confidence={result.confidence:.2f}, fp={dhcp_fingerprint}{vc_info})")
 
     elif action == 'del':
         # Mark device inactive but keep policy (will reapply on reconnect)
