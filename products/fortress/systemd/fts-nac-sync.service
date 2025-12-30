@@ -1,0 +1,13 @@
+[Unit]
+Description=Fortress NAC Policy Sync Service
+After=fortress-vlan.service
+Requires=fortress-vlan.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh --trigger
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
