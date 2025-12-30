@@ -39,6 +39,13 @@ try:
 except ImportError:
     HAS_FINGERBANK = False
 
+# Import mDNS resolver for premium friendly names
+try:
+    from mdns_resolver import MDNSResolver, IdentityConsolidator, resolve_premium_name
+    HAS_MDNS = True
+except ImportError:
+    HAS_MDNS = False
+
 logger = logging.getLogger(__name__)
 
 # Database paths
@@ -177,6 +184,7 @@ class SDNAutoPilot:
                     mac TEXT PRIMARY KEY,
                     ip TEXT,
                     hostname TEXT,
+                    friendly_name TEXT,
                     vendor TEXT,
                     dhcp_fingerprint TEXT,
                     os_detected TEXT,
@@ -659,6 +667,53 @@ class SDNAutoPilot:
     # DEVICE SYNC
     # =========================================================================
 
+    def _clean_hostname_to_display(self, hostname: str) -> str:
+        """
+        Clean hostname to friendly display format.
+
+        Converts: "Johns-Apple-Watch" → "John's Apple Watch"
+        """
+        if not hostname:
+            return ""
+
+        import re
+        name = hostname
+
+        # Apply possessive patterns
+        name = re.sub(r"(\w+)s-", r"\1's ", name, flags=re.IGNORECASE)
+        name = re.sub(r"(\w+)-s-", r"\1's ", name, flags=re.IGNORECASE)
+
+        # Replace hyphens/underscores with spaces
+        name = name.replace("-", " ").replace("_", " ")
+
+        # Title case with Apple product awareness
+        words = name.split()
+        result = []
+        for word in words:
+            lower = word.lower()
+            if lower.startswith('iphone'):
+                result.append('iPhone' + word[6:])
+            elif lower.startswith('ipad'):
+                result.append('iPad' + word[4:])
+            elif lower == 'macbook':
+                result.append('MacBook')
+            elif lower == 'macbookpro':
+                result.append('MacBook Pro')
+            elif lower == 'macbookair':
+                result.append('MacBook Air')
+            elif lower == 'appletv':
+                result.append('Apple TV')
+            elif lower == 'applewatch':
+                result.append('Apple Watch')
+            elif lower == 'homepod':
+                result.append('HomePod')
+            elif lower == 'airpods':
+                result.append('AirPods')
+            else:
+                result.append(word.capitalize())
+
+        return " ".join(result)
+
     def sync_device(self, mac: str, ip: str, hostname: Optional[str] = None,
                    dhcp_fingerprint: Optional[str] = None,
                    vendor_class: Optional[str] = None,
@@ -666,6 +721,20 @@ class SDNAutoPilot:
         """Sync device through auto-pilot pipeline."""
         mac = mac.upper()
         identity = self.calculate_identity(mac, hostname, dhcp_fingerprint, vendor_class)
+
+        # Premium: Resolve friendly name via mDNS/Bonjour
+        friendly_name = None
+        if HAS_MDNS and ip:
+            try:
+                friendly_name = resolve_premium_name(ip, mac, hostname)
+                if friendly_name and friendly_name != "Unknown Device":
+                    logger.debug(f"{mac}: mDNS resolved '{friendly_name}'")
+            except Exception as e:
+                logger.debug(f"mDNS resolution failed: {e}")
+
+        # Fallback to cleaned hostname if no mDNS name
+        if not friendly_name and hostname:
+            friendly_name = self._clean_hostname_to_display(hostname)
 
         with self._get_conn() as conn:
             # Check manual override
@@ -687,12 +756,13 @@ class SDNAutoPilot:
             now = datetime.now().isoformat()
             conn.execute('''
                 INSERT INTO device_identity
-                    (mac, ip, hostname, vendor, dhcp_fingerprint, os_detected,
+                    (mac, ip, hostname, friendly_name, vendor, dhcp_fingerprint, os_detected,
                      category, policy, confidence, signals, first_seen, last_seen, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(mac) DO UPDATE SET
                     ip = excluded.ip,
                     hostname = COALESCE(excluded.hostname, hostname),
+                    friendly_name = COALESCE(excluded.friendly_name, friendly_name),
                     vendor = excluded.vendor,
                     dhcp_fingerprint = COALESCE(excluded.dhcp_fingerprint, dhcp_fingerprint),
                     os_detected = excluded.os_detected,
@@ -702,7 +772,7 @@ class SDNAutoPilot:
                     signals = excluded.signals,
                     last_seen = excluded.last_seen,
                     updated_at = excluded.updated_at
-            ''', (mac, ip, hostname, identity.vendor, dhcp_fingerprint,
+            ''', (mac, ip, hostname, friendly_name, identity.vendor, dhcp_fingerprint,
                   identity.os_fingerprint, identity.category, identity.policy,
                   identity.confidence, json.dumps(identity.signals), now, now, now))
             conn.commit()
@@ -710,7 +780,9 @@ class SDNAutoPilot:
         if apply_rules:
             self.apply_policy(mac, ip, identity.policy)
 
-        logger.info(f"{mac}: {identity.policy} ({identity.confidence:.2f}) - {identity.reason}")
+        # Log with friendly name if available
+        display = friendly_name or hostname or mac
+        logger.info(f"{display}: {identity.policy} ({identity.confidence:.2f}) - {identity.reason}")
         return identity
 
     def sync_all(self, devices: List[Dict], apply_rules: bool = True) -> Dict:
