@@ -112,22 +112,38 @@ def _load_device_status_cache() -> Dict[str, Dict]:
     try:
         if DHCP_DEVICES_FILE.exists():
             dhcp_data = json.loads(DHCP_DEVICES_FILE.read_text())
-            for mac, device in dhcp_data.items():
-                mac_upper = mac.upper()
-                cache[mac_upper] = {
-                    'status': 'online' if device.get('is_active', False) else 'offline',
-                    'neighbor_state': 'REACHABLE' if device.get('is_active', False) else 'STALE',
-                    'last_packet_count': 0,
-                    'ip': device.get('ip_address', ''),
-                    'hostname': device.get('hostname', ''),
-                    'vendor': '',  # Will be detected by Fingerbank from OUI
-                    # CRITICAL: DHCP fingerprint data for Fingerbank identification
-                    'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
-                    'vendor_class': device.get('vendor_class', ''),
-                    'first_seen': device.get('first_seen', ''),
-                    'last_seen': device.get('last_seen', ''),
-                }
-            logger.debug(f"Loaded DHCP devices: {len(cache)} devices with fingerprints")
+            # Validate JSON is a dict
+            if not isinstance(dhcp_data, dict):
+                logger.warning(f"DHCP devices file has unexpected format: {type(dhcp_data)}")
+            else:
+                for mac, device in dhcp_data.items():
+                    # Skip entries that aren't dicts (corrupt data)
+                    if not isinstance(device, dict):
+                        logger.debug(f"Skipping non-dict entry for {mac}: {type(device)}")
+                        continue
+                    mac_upper = mac.upper()
+                    cache[mac_upper] = {
+                        'status': 'online' if device.get('is_active', False) else 'offline',
+                        'neighbor_state': 'REACHABLE' if device.get('is_active', False) else 'STALE',
+                        'last_packet_count': 0,
+                        'ip': device.get('ip_address', ''),
+                        'hostname': device.get('hostname', ''),
+                        'vendor': '',  # Will be detected by Fingerbank from OUI
+                        # CRITICAL: DHCP fingerprint data for Fingerbank identification
+                        'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
+                        'vendor_class': device.get('vendor_class', ''),
+                        'first_seen': device.get('first_seen', ''),
+                        'last_seen': device.get('last_seen', ''),
+                    }
+                logger.debug(f"Loaded DHCP devices: {len(cache)} devices with fingerprints")
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse DHCP devices JSON (corrupt file?): {e}")
+        # Try to remove corrupt file
+        try:
+            DHCP_DEVICES_FILE.unlink()
+            logger.info("Removed corrupt DHCP devices file")
+        except Exception:
+            pass
     except Exception as e:
         logger.warning(f"Failed to load DHCP devices: {e}")
 
