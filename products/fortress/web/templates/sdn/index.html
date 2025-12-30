@@ -638,6 +638,8 @@
                                         <span class="badge badge-danger"><i class="fas fa-ban"></i> Blocked</span>
                                         {% elif device.is_online %}
                                         <span class="badge badge-success"><i class="fas fa-circle"></i> Online</span>
+                                        {% elif device.is_idle %}
+                                        <span class="badge badge-warning"><i class="fas fa-moon"></i> Idle</span>
                                         {% else %}
                                         <span class="badge badge-secondary"><i class="far fa-circle"></i> Offline</span>
                                         {% endif %}
@@ -688,14 +690,14 @@
                                     </td>
                                     <td>
                                         {% if device.internet_access %}
-                                        <span class="badge badge-light" title="Internet Access"><i class="fas fa-globe text-success"></i></span>
+                                        <span class="badge badge-dark" style="background: rgba(40,167,69,0.2); border: 1px solid rgba(40,167,69,0.4);" title="Internet Access"><i class="fas fa-globe text-success"></i></span>
                                         {% else %}
-                                        <span class="badge badge-light" title="No Internet"><i class="fas fa-globe text-muted"></i></span>
+                                        <span class="badge badge-dark" style="background: rgba(108,117,125,0.2); border: 1px solid rgba(108,117,125,0.3);" title="No Internet"><i class="fas fa-globe text-muted"></i></span>
                                         {% endif %}
                                         {% if device.lan_access %}
-                                        <span class="badge badge-light" title="LAN Access"><i class="fas fa-network-wired text-success"></i></span>
+                                        <span class="badge badge-dark" style="background: rgba(40,167,69,0.2); border: 1px solid rgba(40,167,69,0.4);" title="LAN Access"><i class="fas fa-network-wired text-success"></i></span>
                                         {% else %}
-                                        <span class="badge badge-light" title="No LAN"><i class="fas fa-network-wired text-muted"></i></span>
+                                        <span class="badge badge-dark" style="background: rgba(108,117,125,0.2); border: 1px solid rgba(108,117,125,0.3);" title="No LAN"><i class="fas fa-network-wired text-muted"></i></span>
                                         {% endif %}
                                     </td>
                                     <td>

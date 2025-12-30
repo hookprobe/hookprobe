@@ -758,8 +758,8 @@ dhcp-option=3,10.200.0.1
 dhcp-option=6,10.200.0.1
 
 # Domain
-domain=fortress.local
-local=/fortress.local/
+domain=hookprobe.local
+local=/hookprobe.local/
 
 # Logging
 log-dhcp
