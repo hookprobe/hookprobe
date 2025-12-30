@@ -2237,7 +2237,7 @@ def api_quarantine_device():
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
-            success = autopilot.set_policy(mac_address, 'quarantine')
+            success = autopilot.set_manual_policy(mac_address, 'quarantine')
 
             if success:
                 # Also revoke certificate if trust framework available
@@ -2529,7 +2529,7 @@ def api_move_device():
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
-            success = autopilot.set_policy(mac_address, policy)
+            success = autopilot.set_manual_policy(mac_address, policy)
 
             if success:
                 return jsonify({
@@ -3262,15 +3262,26 @@ def api_device_add_tag(mac_address):
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
+
+            # Check if device exists first
+            device = autopilot.get_device(mac)
+            if not device:
+                return jsonify({
+                    'success': False,
+                    'error': f'Device {mac} not found in database'
+                }), 404
+
             success = autopilot.add_tag(mac, tag)
 
             if success:
+                # Log the event
+                autopilot.log_connection_event(mac, 'tag_added', f'Tag "{tag}" added')
                 return jsonify({
                     'success': True,
                     'message': f'Tag "{tag}" added to device'
                 })
             else:
-                return jsonify({'success': False, 'error': 'Failed to add tag'}), 500
+                return jsonify({'success': False, 'error': 'Failed to add tag to database'}), 500
         except Exception as e:
             logger.error(f"Failed to add tag: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -3288,15 +3299,26 @@ def api_device_remove_tag(mac_address, tag):
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
+
+            # Check if device exists first
+            device = autopilot.get_device(mac)
+            if not device:
+                return jsonify({
+                    'success': False,
+                    'error': f'Device {mac} not found in database'
+                }), 404
+
             success = autopilot.remove_tag(mac, tag)
 
             if success:
+                # Log the event
+                autopilot.log_connection_event(mac, 'tag_removed', f'Tag "{tag}" removed')
                 return jsonify({
                     'success': True,
                     'message': f'Tag "{tag}" removed from device'
                 })
             else:
-                return jsonify({'success': False, 'error': 'Failed to remove tag'}), 500
+                return jsonify({'success': False, 'error': 'Failed to remove tag from database'}), 500
         except Exception as e:
             logger.error(f"Failed to remove tag: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -3354,7 +3376,7 @@ def api_device_disconnect(mac_address):
     if also_block and SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
-            autopilot.set_device_policy(mac, 'quarantine', confidence=1.0)
+            autopilot.set_manual_policy(mac, 'quarantine')
             results['blocked'] = True
         except Exception as e:
             logger.warning(f"Failed to block device: {e}")
