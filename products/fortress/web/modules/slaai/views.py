@@ -478,10 +478,18 @@ def api_set_lte_limits():
             limits['daily_budget_mb'] = limits['daily_limit_gb'] * 1024
 
         # Ensure config directory exists
-        LTE_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            LTE_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            logger.error(f"Permission denied creating directory: {LTE_LIMITS_FILE.parent}")
+            return jsonify({'success': False, 'error': f'Permission denied creating directory'}), 500
 
         # Save to file
-        LTE_LIMITS_FILE.write_text(json.dumps(limits, indent=2))
+        try:
+            LTE_LIMITS_FILE.write_text(json.dumps(limits, indent=2))
+        except PermissionError:
+            logger.error(f"Permission denied writing to: {LTE_LIMITS_FILE}")
+            return jsonify({'success': False, 'error': 'Permission denied saving settings'}), 500
 
         logger.info(f"LTE limits updated: {limits}")
 
@@ -492,5 +500,5 @@ def api_set_lte_limits():
         })
 
     except Exception as e:
-        logger.error(f"LTE limits POST error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"LTE limits POST error: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500

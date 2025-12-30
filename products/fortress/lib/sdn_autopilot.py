@@ -365,10 +365,10 @@ class SDNAutoPilot:
             conn.close()
 
     def _ensure_columns_exist(self):
-        """Ensure all required columns exist in the database.
+        """Ensure all required columns and tables exist in the database.
 
-        This runs migrations for any missing columns. Called on first query
-        if we detect a column is missing.
+        This runs migrations for any missing columns/tables. Called on startup
+        to handle schema changes gracefully.
         """
         required_columns = {
             'status': "TEXT DEFAULT 'offline'",
@@ -388,7 +388,20 @@ class SDNAutoPilot:
 
         try:
             with self._get_conn() as conn:
-                # Get existing columns
+                # Ensure connection_history table exists (might be missing in old databases)
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS connection_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mac TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        details TEXT
+                    )
+                ''')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_history_mac ON connection_history(mac)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_history_ts ON connection_history(timestamp)')
+
+                # Get existing columns in device_identity
                 cursor = conn.execute("PRAGMA table_info(device_identity)")
                 existing_columns = {row['name'] for row in cursor.fetchall()}
 
@@ -403,7 +416,7 @@ class SDNAutoPilot:
 
                 conn.commit()
         except Exception as e:
-            logger.warning(f"Column migration failed: {e}")
+            logger.warning(f"Schema migration failed: {e}")
 
     def _load_custom_fingerprints(self):
         """Load fingerprint databases."""
