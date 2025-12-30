@@ -132,7 +132,9 @@ class ICECandidate:
     def from_tuple(cls, addr: Tuple[str, int], ctype: str = "host",
                    priority: int = 0) -> "ICECandidate":
         """Create from (ip, port) tuple"""
-        foundation = hashlib.md5(f"{addr[0]}:{addr[1]}".encode()).hexdigest()[:8]
+        foundation = hashlib.md5(
+            f"{addr[0]}:{addr[1]}".encode(), usedforsecurity=False
+        ).hexdigest()[:8]
         return cls(
             type=ctype,
             ip=addr[0],
@@ -468,7 +470,8 @@ class ICEAgent:
                 port=result.public_port,
                 priority=ICECandidate._calc_priority("srflx"),
                 foundation=hashlib.md5(
-                    f"srflx:{result.public_ip}:{result.public_port}".encode()
+                    f"srflx:{result.public_ip}:{result.public_port}".encode(),
+                    usedforsecurity=False
                 ).hexdigest()[:8],
                 related_ip=result.local_ip,
                 related_port=result.local_port

@@ -167,7 +167,7 @@ class ThreatSignature:
     def get_hash(self) -> str:
         """Get unique hash for this signature."""
         content = f"{self.sig_id}:{self.layer.name}:{self.name}"
-        return hashlib.md5(content.encode()).hexdigest()[:12]
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 class SignatureDatabase:
