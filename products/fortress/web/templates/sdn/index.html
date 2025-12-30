@@ -1980,9 +1980,14 @@ function showWanHealthModal() {
                 <div class="card bg-dark mb-3">
                     <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
                         <h6 class="mb-0"><i class="fas fa-tachometer-alt mr-2"></i>LTE Data Usage</h6>
-                        <button class="btn btn-sm btn-outline-warning" onclick="resetLteUsage()" title="Reset monthly counter to 0">
-                            <i class="fas fa-undo mr-1"></i>Reset
-                        </button>
+                        <div>
+                            <button class="btn btn-sm btn-outline-info mr-1" onclick="openLteSettings()" title="Set monthly data limit">
+                                <i class="fas fa-cog"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-warning" onclick="resetLteUsage()" title="Reset monthly counter to 0">
+                                <i class="fas fa-undo mr-1"></i>Reset
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body">
                         <div class="row">
@@ -2107,4 +2112,142 @@ function resetLteUsage() {
         </div>
     </div>
 </div>
+
+<!-- LTE Settings Modal -->
+<div class="modal fade" id="lte-settings-modal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark">
+            <div class="modal-header" style="background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="fas fa-sim-card mr-2 text-info"></i>LTE Data Limit Settings</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body" style="background: #1a1a2e;">
+                <form id="lte-settings-form">
+                    <!-- Monthly Limit -->
+                    <div class="form-group">
+                        <label class="text-white">Monthly Data Limit</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                   id="lte-monthly-limit" placeholder="Leave empty for unlimited"
+                                   min="0" max="1000" step="0.5">
+                            <div class="input-group-append">
+                                <span class="input-group-text bg-secondary text-white">GB</span>
+                            </div>
+                        </div>
+                        <small class="text-muted">Set your carrier's monthly data cap (e.g., 10 GB)</small>
+                    </div>
+
+                    <!-- Warning Threshold -->
+                    <div class="form-group">
+                        <label class="text-white">Warning at</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                   id="lte-warning-threshold" value="80"
+                                   min="50" max="99" step="5">
+                            <div class="input-group-append">
+                                <span class="input-group-text bg-secondary text-white">%</span>
+                            </div>
+                        </div>
+                        <small class="text-muted">Show warning when usage reaches this percentage</small>
+                    </div>
+
+                    <!-- Quick Presets -->
+                    <div class="form-group">
+                        <label class="text-white d-block">Quick Presets</label>
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(5)">5 GB</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(10)">10 GB</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(20)">20 GB</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(50)">50 GB</button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="setLtePreset(null)">Unlimited</button>
+                        </div>
+                    </div>
+
+                    <!-- Optional: Cost per GB -->
+                    <div class="form-group">
+                        <label class="text-white">
+                            <i class="fas fa-dollar-sign mr-1 text-success"></i>Cost per GB (optional)
+                        </label>
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text bg-secondary text-white">$</span>
+                            </div>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                   id="lte-cost-per-gb" placeholder="Leave empty to disable"
+                                   min="0" max="100" step="0.50">
+                        </div>
+                        <small class="text-muted">Track estimated cost (e.g., $5/GB overage fee)</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer" style="background: #1a1a2e; border-top: 1px solid rgba(255,255,255,0.1);">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveLteSettings()">
+                    <i class="fas fa-save mr-1"></i>Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// LTE Settings Functions
+function openLteSettings() {
+    // Load current settings
+    $.get('/slaai/api/lte-limits')
+        .done(function(data) {
+            if (data.success && data.limits) {
+                var limits = data.limits;
+                $('#lte-monthly-limit').val(limits.monthly_limit_gb || '');
+                $('#lte-warning-threshold').val(limits.warning_threshold_percent || 80);
+                $('#lte-cost-per-gb').val(limits.cost_per_gb || '');
+            }
+            $('#lte-settings-modal').modal('show');
+        })
+        .fail(function() {
+            // Show modal with defaults on error
+            $('#lte-settings-modal').modal('show');
+        });
+}
+
+function setLtePreset(gb) {
+    if (gb === null) {
+        $('#lte-monthly-limit').val('');
+    } else {
+        $('#lte-monthly-limit').val(gb);
+    }
+}
+
+function saveLteSettings() {
+    var monthlyLimit = $('#lte-monthly-limit').val();
+    var warningThreshold = $('#lte-warning-threshold').val();
+    var costPerGb = $('#lte-cost-per-gb').val();
+
+    var settings = {
+        monthly_limit_gb: monthlyLimit ? parseFloat(monthlyLimit) : null,
+        warning_threshold_percent: parseInt(warningThreshold) || 80,
+        cost_per_gb: costPerGb ? parseFloat(costPerGb) : null
+    };
+
+    $.ajax({
+        url: '/slaai/api/lte-limits',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(settings)
+    })
+    .done(function(data) {
+        if (data.success) {
+            toastr.success('LTE settings saved');
+            $('#lte-settings-modal').modal('hide');
+            // Refresh WAN health display
+            loadWanHealth();
+        } else {
+            toastr.error(data.error || 'Failed to save settings');
+        }
+    })
+    .fail(function() {
+        toastr.error('Failed to save LTE settings');
+    });
+}
+</script>
 {% endblock %}

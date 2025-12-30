@@ -2248,27 +2248,43 @@ EOF
     log_success "Device status updater installed (timer runs every 30s)"
 
     # -------------------------------------------------------------------------
-    # LTE Traffic Collector (for wwan0 metered data tracking)
+    # LTE Usage Tracker (watermark-based metered data tracking)
+    # Uses SQLite database for proper baseline/reset handling
     # -------------------------------------------------------------------------
-    log_info "Installing LTE traffic collector..."
+    log_info "Installing LTE usage tracker..."
 
+    # Ensure sqlite3 is available for watermark tracking
+    if ! command -v sqlite3 &>/dev/null; then
+        log_info "Installing sqlite3..."
+        apt-get update -qq && apt-get install -y -qq sqlite3 >/dev/null 2>&1 || true
+    fi
+
+    # Deploy new watermark-based tracker (primary)
+    local lte_tracker_src="${SCRIPT_DIR}/devices/common/lte-usage-tracker.sh"
+    local lte_tracker_dst="${INSTALL_DIR}/devices/common/lte-usage-tracker.sh"
+    if [ -f "$lte_tracker_src" ]; then
+        mkdir -p "${INSTALL_DIR}/devices/common"
+        cp "$lte_tracker_src" "$lte_tracker_dst"
+        chmod +x "$lte_tracker_dst"
+    fi
+
+    # Also deploy legacy collector (for compatibility)
     local lte_script_src="${SCRIPT_DIR}/devices/common/lte-traffic-collector.sh"
     local lte_script_dst="${INSTALL_DIR}/devices/common/lte-traffic-collector.sh"
     if [ -f "$lte_script_src" ]; then
-        mkdir -p "${INSTALL_DIR}/devices/common"
         cp "$lte_script_src" "$lte_script_dst"
         chmod +x "$lte_script_dst"
     fi
 
-    # Create LTE collector service
+    # Create LTE usage tracker service (uses watermark method)
     cat > /etc/systemd/system/fts-lte-collector.service << 'EOF'
 [Unit]
-Description=Fortress LTE Traffic Collector
+Description=Fortress LTE Usage Tracker (Watermark-based)
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/hookprobe/fortress/devices/common/lte-traffic-collector.sh
+ExecStart=/opt/hookprobe/fortress/devices/common/lte-usage-tracker.sh collect
 User=root
 Group=root
 Nice=19
@@ -2278,7 +2294,7 @@ EOF
     # Create LTE collector timer (runs every 30s)
     cat > /etc/systemd/system/fts-lte-collector.timer << 'EOF'
 [Unit]
-Description=Fortress LTE Traffic Collector Timer
+Description=Fortress LTE Usage Tracker Timer
 Requires=fts-lte-collector.service
 
 [Timer]
@@ -2293,7 +2309,7 @@ EOF
     systemctl daemon-reload
     systemctl enable fts-lte-collector.timer 2>/dev/null || true
     systemctl start fts-lte-collector.timer 2>/dev/null || true
-    log_success "LTE traffic collector installed (timer runs every 30s)"
+    log_success "LTE usage tracker installed (watermark-based, timer runs every 30s)"
 }
 
 # Check if container image needs rebuilding
