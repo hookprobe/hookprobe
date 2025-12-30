@@ -7,6 +7,9 @@ import subprocess
 from flask import jsonify, request, current_app
 from . import vms_bp
 
+# Guardian manages only these specific VMs through this API.
+MANAGED_VMS = {'homeassistant', 'openmediavault'}
+
 
 def _run_virsh(args, timeout=30):
     """Run virsh command safely and return output."""
@@ -37,6 +40,20 @@ def _check_libvirt_available():
         return result.stdout.strip() == 'active'
     except Exception:
         return False
+
+def _validate_vm_name(vm_name):
+    """
+    Ensure the requested VM name is one of the Guardian-managed VMs.
+
+    Returns:
+        tuple[bool, tuple|None]: (is_valid, error_response)
+            If not valid, error_response is a (response, status_code) tuple.
+    """
+    # Enforce exact match against allowlist to avoid controlling arbitrary domains
+    if vm_name not in MANAGED_VMS:
+        return False, (jsonify({'error': f'VM {vm_name} not managed'}), 404)
+    return True, None
+
 
 
 def _get_vm_info(vm_name):
@@ -149,11 +166,8 @@ def api_vms_list():
             'error': 'VM support not available (libvirt not running)'
         }), 503
 
-    # Guardian manages these specific VMs
-    managed_vms = ['homeassistant', 'openmediavault']
-
     vms = []
-    for vm_name in managed_vms:
+    for vm_name in MANAGED_VMS:
         info = _get_vm_info(vm_name)
         if info:
             info['url'] = _get_vm_url(vm_name)
@@ -170,6 +184,10 @@ def api_vms_list():
 def api_vm_detail(vm_name):
     """Get detailed information about a specific VM."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     info = _get_vm_info(vm_name)
@@ -185,6 +203,10 @@ def api_vm_detail(vm_name):
 def api_vm_start(vm_name):
     """Start a VM."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     output, success = _run_virsh(['start', vm_name])
@@ -205,6 +227,10 @@ def api_vm_start(vm_name):
 def api_vm_stop(vm_name):
     """Stop (graceful shutdown) a VM."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     output, success = _run_virsh(['shutdown', vm_name])
@@ -224,6 +250,10 @@ def api_vm_stop(vm_name):
 def api_vm_force_stop(vm_name):
     """Force stop a VM (like pulling the power cord)."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     output, success = _run_virsh(['destroy', vm_name])
@@ -243,6 +273,10 @@ def api_vm_force_stop(vm_name):
 def api_vm_restart(vm_name):
     """Restart a VM."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     # Try graceful reboot first
@@ -263,6 +297,10 @@ def api_vm_restart(vm_name):
 def api_vm_autostart(vm_name):
     """Enable/disable VM autostart."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     data = request.get_json() or {}
@@ -289,6 +327,10 @@ def api_vm_autostart(vm_name):
 def api_vm_console_info(vm_name):
     """Get VNC console connection info for a VM."""
     if not _check_libvirt_available():
+    valid, error_response = _validate_vm_name(vm_name)
+    if not valid:
+        return error_response
+
         return jsonify({'error': 'VM support not available'}), 503
 
     # Get VNC display port
