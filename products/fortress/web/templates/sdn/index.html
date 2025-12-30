@@ -638,6 +638,8 @@
                                         <span class="badge badge-danger"><i class="fas fa-ban"></i> Blocked</span>
                                         {% elif device.is_online %}
                                         <span class="badge badge-success"><i class="fas fa-circle"></i> Online</span>
+                                        {% elif device.is_idle %}
+                                        <span class="badge badge-warning"><i class="fas fa-moon"></i> Idle</span>
                                         {% else %}
                                         <span class="badge badge-secondary"><i class="far fa-circle"></i> Offline</span>
                                         {% endif %}

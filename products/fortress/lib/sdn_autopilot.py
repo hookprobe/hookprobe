@@ -197,7 +197,10 @@ class SDNAutoPilot:
                     manual_override INTEGER DEFAULT 0,
                     first_seen TEXT,
                     last_seen TEXT,
-                    updated_at TEXT
+                    updated_at TEXT,
+                    status TEXT DEFAULT 'offline',
+                    last_packet_count INTEGER DEFAULT 0,
+                    neighbor_state TEXT DEFAULT 'UNKNOWN'
                 )
             ''')
             conn.execute('''
@@ -220,6 +223,22 @@ class SDNAutoPilot:
                 )
             ''')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_policy ON device_identity(policy)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_status ON device_identity(status)')
+
+            # Migrate existing tables - add new columns if missing
+            try:
+                conn.execute('ALTER TABLE device_identity ADD COLUMN status TEXT DEFAULT "offline"')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE device_identity ADD COLUMN last_packet_count INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute('ALTER TABLE device_identity ADD COLUMN neighbor_state TEXT DEFAULT "UNKNOWN"')
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
 
     @contextmanager
@@ -999,6 +1018,189 @@ class SDNAutoPilot:
                 'manual_overrides': row['manual'] if row else 0,
                 'by_policy': by_policy,
             }
+
+    # =========================================================================
+    # PREMIUM STATUS TRACKING - OpenFlow + Kernel Neighbor State
+    # =========================================================================
+
+    def get_neighbor_states(self) -> Dict[str, Dict]:
+        """Get kernel neighbor (ARP) states for all devices.
+
+        Returns dict mapping IP -> {mac, state, ip}
+        States: REACHABLE, STALE, DELAY, PROBE, FAILED, INCOMPLETE
+        """
+        neighbors = {}
+        try:
+            result = subprocess.run(
+                ['ip', 'neigh', 'show'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        ip = parts[0]
+                        mac = None
+                        state = 'UNKNOWN'
+                        for i, part in enumerate(parts):
+                            if ':' in part and len(part) == 17:  # MAC format
+                                mac = part.upper()
+                            if part in ('REACHABLE', 'STALE', 'DELAY', 'PROBE', 'FAILED', 'INCOMPLETE', 'PERMANENT'):
+                                state = part
+                        if mac:
+                            neighbors[ip] = {'mac': mac, 'state': state, 'ip': ip}
+        except Exception as e:
+            logger.debug(f"Failed to get neighbor states: {e}")
+        return neighbors
+
+    def get_flow_counters(self, mac: str = None) -> Dict[str, int]:
+        """Get OpenFlow packet counters for devices.
+
+        Returns dict mapping MAC -> packet_count
+        Uses OVS-OFCTL to query flow statistics.
+        """
+        counters = {}
+        try:
+            # Get flow stats from OVS bridge
+            result = subprocess.run(
+                ['ovs-ofctl', 'dump-flows', 'FTS', '-O', 'OpenFlow13'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                import re
+                for line in result.stdout.strip().split('\n'):
+                    # Parse dl_src (source MAC) and n_packets
+                    mac_match = re.search(r'dl_src=([0-9a-fA-F:]+)', line)
+                    pkt_match = re.search(r'n_packets=(\d+)', line)
+                    if mac_match and pkt_match:
+                        flow_mac = mac_match.group(1).upper()
+                        packets = int(pkt_match.group(1))
+                        # Sum packets for same MAC (multiple flows)
+                        counters[flow_mac] = counters.get(flow_mac, 0) + packets
+        except Exception as e:
+            logger.debug(f"Failed to get flow counters: {e}")
+        return counters
+
+    def update_online_status(self) -> Dict[str, str]:
+        """Update online status for all devices using premium detection.
+
+        Uses three-tier status:
+        - ONLINE: Active traffic in last 60s OR neighbor REACHABLE
+        - IDLE: No recent traffic but neighbor STALE/DELAY (sleeping device)
+        - OFFLINE: No traffic and no ARP response for > 5 minutes
+
+        Returns dict mapping MAC -> new_status
+        """
+        import math
+
+        # Decay constant for probability calculation (λ)
+        # Higher = faster decay to offline
+        DECAY_LAMBDA = 0.005  # ~5 min half-life
+
+        # Thresholds
+        ONLINE_THRESHOLD = 60      # seconds - active traffic
+        IDLE_THRESHOLD = 300       # 5 minutes - still in ARP table
+        OFFLINE_THRESHOLD = 600    # 10 minutes - definitely gone
+
+        results = {}
+        now = datetime.now()
+
+        # Get kernel neighbor states and flow counters
+        neighbors = self.get_neighbor_states()
+        flow_counters = self.get_flow_counters()
+
+        # Build IP -> MAC mapping from neighbors
+        ip_to_mac = {v['ip']: v['mac'] for v in neighbors.values()}
+        mac_to_neighbor = {v['mac']: v for v in neighbors.values()}
+
+        with self._get_conn() as conn:
+            devices = conn.execute('SELECT * FROM device_identity').fetchall()
+
+            for row in devices:
+                mac = row['mac']
+                ip = row['ip']
+                last_seen_str = row['last_seen']
+                prev_packet_count = row['last_packet_count'] or 0
+
+                # Calculate time since last seen
+                elapsed = OFFLINE_THRESHOLD + 1  # Default to offline
+                if last_seen_str:
+                    try:
+                        last_seen = datetime.fromisoformat(last_seen_str)
+                        elapsed = (now - last_seen).total_seconds()
+                    except ValueError:
+                        pass
+
+                # Get current flow counter
+                current_packets = flow_counters.get(mac, 0)
+                has_new_traffic = current_packets > prev_packet_count
+
+                # Get neighbor state
+                neighbor_info = mac_to_neighbor.get(mac, {})
+                neighbor_state = neighbor_info.get('state', 'UNKNOWN')
+
+                # Determine status using priority logic
+                new_status = 'offline'
+
+                # 1. Check for active traffic (highest priority)
+                if has_new_traffic:
+                    new_status = 'online'
+                    elapsed = 0  # Reset timer
+
+                # 2. Check neighbor state
+                elif neighbor_state in ('REACHABLE',):
+                    new_status = 'online'
+                elif neighbor_state in ('STALE', 'DELAY', 'PROBE'):
+                    # Device is in ARP cache but not actively communicating
+                    if elapsed < IDLE_THRESHOLD:
+                        new_status = 'idle'
+                    else:
+                        new_status = 'offline'
+                elif neighbor_state in ('FAILED', 'INCOMPLETE'):
+                    new_status = 'offline'
+
+                # 3. Fallback to time-based with probability decay
+                else:
+                    # Calculate probability of presence: P = e^(-λt)
+                    prob_present = math.exp(-DECAY_LAMBDA * elapsed)
+
+                    if elapsed < ONLINE_THRESHOLD and prob_present > 0.8:
+                        new_status = 'online'
+                    elif elapsed < IDLE_THRESHOLD and prob_present > 0.3:
+                        new_status = 'idle'
+                    else:
+                        new_status = 'offline'
+
+                # Update database
+                update_time = now.isoformat() if has_new_traffic else last_seen_str
+                conn.execute('''
+                    UPDATE device_identity
+                    SET status = ?, last_packet_count = ?, neighbor_state = ?,
+                        last_seen = COALESCE(?, last_seen)
+                    WHERE mac = ?
+                ''', (new_status, current_packets, neighbor_state, update_time, mac))
+
+                results[mac] = new_status
+
+            conn.commit()
+
+        logger.info(f"Status update: {sum(1 for s in results.values() if s == 'online')} online, "
+                   f"{sum(1 for s in results.values() if s == 'idle')} idle, "
+                   f"{sum(1 for s in results.values() if s == 'offline')} offline")
+
+        return results
+
+    def get_status_stats(self) -> Dict:
+        """Get device status statistics."""
+        with self._get_conn() as conn:
+            rows = conn.execute('''
+                SELECT status, COUNT(*) as count
+                FROM device_identity
+                GROUP BY status
+            ''').fetchall()
+            return {r['status'] or 'unknown': r['count'] for r in rows}
 
 
 # =============================================================================

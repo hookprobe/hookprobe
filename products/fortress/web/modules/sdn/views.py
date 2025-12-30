@@ -580,6 +580,12 @@ def index():
         try:
             autopilot = get_sdn_autopilot()
             if autopilot:
+                # Update device status using OpenFlow counters + kernel neighbor state
+                try:
+                    autopilot.update_online_status()
+                except Exception as e:
+                    logger.warning(f"Status update failed (will use cached): {e}")
+
                 db_devices = autopilot.get_all_devices()
                 # Convert autopilot format to template format
                 for d in db_devices:
@@ -591,6 +597,13 @@ def index():
                             policy_info = POLICY_INFO.get(NetworkPolicy(policy), {})
                         except ValueError:
                             logger.warning(f"Unknown policy '{policy}' for device {d.get('mac')}")
+
+                    # Map status to display values (online/idle/offline)
+                    status = d.get('status', 'offline')
+                    is_online = status == 'online'
+                    is_idle = status == 'idle'
+                    is_offline = status == 'offline'
+
                     device = {
                         'mac_address': d.get('mac', ''),
                         'ip_address': d.get('ip', ''),
@@ -603,7 +616,11 @@ def index():
                         'policy_color': policy_info.get('color', 'secondary'),
                         'policy_icon': policy_info.get('icon', 'fa-question'),
                         'confidence': d.get('confidence', 0.0),
-                        'is_online': True,  # Assume online if in DB
+                        'status': status,
+                        'is_online': is_online,
+                        'is_idle': is_idle,
+                        'is_offline': is_offline,
+                        'neighbor_state': d.get('neighbor_state', 'UNKNOWN'),
                         'is_blocked': policy == 'quarantine',
                         'internet_access': policy in ('internet_only', 'full_access', 'normal'),
                         'lan_access': policy in ('lan_only', 'full_access', 'normal'),
@@ -616,7 +633,8 @@ def index():
                 stats = {
                     'total': len(devices),
                     'online': len([d for d in devices if d['is_online']]),
-                    'offline': len([d for d in devices if not d['is_online']]),
+                    'idle': len([d for d in devices if d.get('is_idle')]),
+                    'offline': len([d for d in devices if d.get('is_offline')]),
                     'quarantined': len([d for d in devices if d['policy'] == 'quarantine']),
                     'policy_counts': {}
                 }
