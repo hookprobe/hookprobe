@@ -759,6 +759,11 @@ create_directories() {
     chmod 700 "$INSTALL_DIR/containers/secrets"
     chmod 750 "$CONFIG_DIR/secrets"  # Group-readable for fortress user
     chmod 755 "$LOG_DIR"
+
+    # /var/lib/hookprobe - writable for SDN autopilot database
+    # The autopilot.db stores device classification, policies, WiFi signals
+    chmod 777 /var/lib/hookprobe
+    chown 1000:1000 /var/lib/hookprobe 2>/dev/null || true
     chmod 755 /var/lib/hookprobe/userdata
     chmod 755 /var/lib/hookprobe/userdata/dnsxai
 
