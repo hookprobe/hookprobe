@@ -325,22 +325,68 @@ class SDNAutoPilot:
     def _determine_policy_from_fingerbank(self, score: float, category: str,
                                           vendor: str, hostname: Optional[str],
                                           device_name: str) -> Tuple[str, str]:
-        """Determine policy from Fingerbank identification."""
-        # High confidence devices
+        """
+        Determine policy from Fingerbank identification.
+
+        Policy Hierarchy:
+        1. Management Devices (MacBook, iPad, iMac) - full network control
+        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - normal LAN
+        3. Trusted Infrastructure (Raspberry Pi) - normal access
+        4. Smart Home devices - normal
+        5. Personal Devices (non-Apple) - internet_only
+        6. IoT Devices - lan_only
+        7. Unknown - quarantine
+        """
+        # =======================================================================
+        # MANAGEMENT DEVICES - Full network control (can manage other devices)
+        # =======================================================================
+
+        # MacBook, iPad, iMac, Mac Mini, Mac Pro are management devices
+        if vendor == "Apple" and score >= 0.80:
+            if category in ('laptop', 'tablet', 'desktop'):
+                return 'full_access', f"Management: {device_name} (Apple)"
+
+        # =======================================================================
+        # APPLE ECOSYSTEM - Normal LAN access for inter-device communication
+        # =======================================================================
+
+        # iPhone, Apple Watch, HomePod, Apple TV get normal policy
+        # Enables Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit
+        if vendor == "Apple" and score >= 0.75:
+            return 'normal', f"Apple Ecosystem: {device_name}"
+
+        # =======================================================================
+        # TRUSTED INFRASTRUCTURE - Normal access (not management)
+        # =======================================================================
+
+        # Raspberry Pi: Trusted but not management
+        if vendor == "Raspberry Pi" and score >= 0.80:
+            return 'normal', f"Trusted SBC: {device_name}"
+
+        # =======================================================================
+        # HIGH CONFIDENCE DEVICES (score >= 0.80)
+        # =======================================================================
         if score >= 0.80:
+            # Smart home devices need LAN access for control
             if category in ('voice_assistant', 'smart_hub', 'bridge'):
                 return 'normal', f"Verified {device_name} (score: {score:.2f})"
+            # Personal devices - internet access only (non-Apple)
             elif category in ('phone', 'tablet', 'laptop', 'workstation', 'desktop', 'gaming', 'streaming', 'smart_tv', 'wearable'):
                 return 'internet_only', f"Verified {device_name} (score: {score:.2f})"
+            # IoT devices - LAN only (no internet)
             elif category in ('printer', 'camera', 'doorbell', 'thermostat', 'iot', 'appliance', 'sensor', 'smart_plug', 'smart_light'):
                 return 'lan_only', f"Verified IoT: {device_name} (score: {score:.2f})"
-            elif category == 'sbc' and 'raspberry' in vendor.lower():
-                return 'full_access', f"Management device: {device_name}"
+            # SBCs get normal access
+            elif category == 'sbc':
+                return 'normal', f"SBC: {device_name}"
+            # Servers get full access
             elif category == 'server':
                 return 'full_access', f"Server: {device_name} (score: {score:.2f})"
             return 'internet_only', f"Verified: {device_name} (score: {score:.2f})"
 
-        # Medium confidence
+        # =======================================================================
+        # MEDIUM CONFIDENCE DEVICES (score >= 0.50)
+        # =======================================================================
         elif score >= 0.50:
             if category in ('printer', 'camera', 'iot', 'thermostat', 'appliance'):
                 return 'lan_only', f"Likely IoT: {device_name} (score: {score:.2f})"
@@ -352,7 +398,9 @@ class SDNAutoPilot:
         elif vendor in ('Intel', 'Dell', 'HP', 'Lenovo', 'ASUS', 'Acer'):
             return 'internet_only', f"Workstation vendor ({vendor})"
 
-        # Low confidence - quarantine
+        # =======================================================================
+        # LOW CONFIDENCE - QUARANTINE
+        # =======================================================================
         no_hn = not hostname or hostname.lower() in ('', '*', 'unknown', 'null')
         if no_hn and vendor in ("Unknown", "Randomized MAC"):
             return 'quarantine', "Zero-knowledge - awaiting identification"
@@ -466,16 +514,29 @@ class SDNAutoPilot:
 
     def _determine_policy(self, score: float, category: str, vendor: str,
                          hostname: Optional[str]) -> Tuple[str, str]:
-        """Determine policy based on score and category."""
+        """Determine policy based on score and category (legacy method)."""
+        # Management: MacBook, iPad, iMac get full_access
+        if vendor == "Apple" and score >= 0.80:
+            if category in ('laptop', 'tablet', 'desktop'):
+                return 'full_access', f"Management (Apple {category})"
+
+        # Apple Ecosystem: Other Apple devices get 'normal'
+        if vendor == "Apple" and score >= 0.75:
+            return 'normal', f"Apple Ecosystem (score: {score:.2f})"
+
+        # Raspberry Pi: Trusted but not management
+        if vendor == "Raspberry Pi" and score >= 0.80:
+            return 'normal', f"Trusted SBC (score: {score:.2f})"
+
         if score >= 0.80:
-            if category in ('smart_hub', 'bridge'):
+            if category in ('smart_hub', 'bridge', 'voice_assistant'):
                 return 'normal', f"Verified {category} (score: {score:.2f})"
             elif category in ('phone', 'tablet', 'laptop', 'workstation', 'gaming'):
                 return 'internet_only', f"Verified device (score: {score:.2f})"
             elif category in ('printer', 'camera', 'iot', 'sensor'):
                 return 'lan_only', f"Verified IoT (score: {score:.2f})"
-            elif category == 'sbc' and 'raspberry' in vendor.lower():
-                return 'full_access', f"Management device (score: {score:.2f})"
+            elif category == 'sbc':
+                return 'normal', f"SBC (score: {score:.2f})"
             return 'internet_only', f"Verified (score: {score:.2f})"
         elif score >= 0.50:
             if category in ('printer', 'camera', 'iot'):

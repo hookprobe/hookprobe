@@ -2248,6 +2248,58 @@ class Fingerbank:
             logger.debug(f"Error learning fingerprint: {e}")
 
     # =========================================================================
+    # POLICY DETERMINATION
+    # =========================================================================
+
+    def _determine_policy(self, vendor: str, category: str, confidence: float) -> str:
+        """
+        Determine network access policy based on vendor, category, and confidence.
+
+        Policy Hierarchy:
+        1. Management Devices (MacBook, iPad) - full network control
+        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - normal LAN access
+        3. Trusted Infrastructure (Raspberry Pi) - normal access
+        4. Category-based policies from CATEGORY_POLICIES
+        5. Default to quarantine for unknown
+
+        Management Philosophy:
+        MacBook and iPad are designated management devices with full_access.
+        They can manage the network, access all VLANs, and control other devices.
+        Other Apple devices get 'normal' for inter-device communication only.
+        """
+        # =====================================================================
+        # MANAGEMENT DEVICES - Full network control
+        # =====================================================================
+
+        # MacBook and iPad are management devices (can control network)
+        # category: laptop = MacBook, tablet = iPad, desktop = iMac/Mac Mini/Mac Pro
+        if vendor == "Apple" and confidence >= 0.80:
+            if category in ('laptop', 'tablet', 'desktop'):
+                return 'full_access'
+
+        # =====================================================================
+        # APPLE ECOSYSTEM - Normal LAN access for inter-device communication
+        # =====================================================================
+
+        # iPhone, Apple Watch, HomePod, Apple TV get normal policy
+        # Enables Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit
+        if vendor == "Apple" and confidence >= 0.75:
+            return 'normal'
+
+        # =====================================================================
+        # TRUSTED INFRASTRUCTURE - Normal access
+        # =====================================================================
+
+        # Raspberry Pi: Trusted but not management
+        if vendor == "Raspberry Pi" and confidence >= 0.80:
+            return 'normal'
+
+        # =====================================================================
+        # CATEGORY-BASED POLICIES
+        # =====================================================================
+        return CATEGORY_POLICIES.get(category, 'quarantine')
+
+    # =========================================================================
     # RESULT BUILDERS
     # =========================================================================
 
@@ -2292,14 +2344,16 @@ class Fingerbank:
                 name = 'Apple TV'
                 category = 'streaming'
 
-        policy = CATEGORY_POLICIES.get(category, 'quarantine')
+        # Determine policy with vendor ecosystem overrides
+        confidence = match.get('confidence', 0.5)
+        policy = self._determine_policy(vendor, category, confidence)
 
         return DeviceInfo(
             name=name,
             vendor=vendor,
             category=category,
             os=match.get('os', 'Unknown'),
-            confidence=match.get('confidence', 0.5),
+            confidence=confidence,
             hierarchy=match.get('hierarchy', []),
             policy=policy
         )
@@ -2354,7 +2408,8 @@ class Fingerbank:
         if vendor in vendor_categories:
             category = vendor_categories[vendor]
 
-        policy = CATEGORY_POLICIES.get(category, 'quarantine')
+        # Use vendor-aware policy determination
+        policy = self._determine_policy(vendor, category, confidence)
 
         return DeviceInfo(
             name=name,
