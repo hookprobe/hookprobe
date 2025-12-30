@@ -2276,6 +2276,14 @@ EOF
         chmod +x "$lte_script_dst"
     fi
 
+    # Deploy NAC policy sync script
+    local nac_script_src="${SCRIPT_DIR}/devices/common/nac-policy-sync.sh"
+    local nac_script_dst="${INSTALL_DIR}/devices/common/nac-policy-sync.sh"
+    if [ -f "$nac_script_src" ]; then
+        cp "$nac_script_src" "$nac_script_dst"
+        chmod +x "$nac_script_dst"
+    fi
+
     # Create LTE usage tracker service (uses watermark method)
     cat > /etc/systemd/system/fts-lte-collector.service << 'EOF'
 [Unit]
@@ -2363,6 +2371,14 @@ EOF
     systemctl enable fts-wifi-signal.timer 2>/dev/null || true
     systemctl start fts-wifi-signal.timer 2>/dev/null || true
     log_success "WiFi signal collector installed (timer runs every 30s)"
+
+    # NAC policy sync timer for real-time quarantine enforcement
+    cp "$SCRIPT_DIR/systemd/fts-nac-sync.service" /etc/systemd/system/
+    cp "$SCRIPT_DIR/systemd/fts-nac-sync.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable fts-nac-sync.timer 2>/dev/null || true
+    systemctl start fts-nac-sync.timer 2>/dev/null || true
+    log_success "NAC policy sync timer installed (runs every 5s)"
 }
 
 # Check if container image needs rebuilding
