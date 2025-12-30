@@ -1040,6 +1040,42 @@ OUI_DATABASE = {
     "40:6C:8F": "Apple", "40:83:1D": "Apple", "40:98:AD": "Apple",
     "40:9C:28": "Apple", "40:A6:D9": "Apple", "40:B3:95": "Apple",
     "40:BC:60": "Apple", "40:CB:C0": "Apple", "40:D3:2D": "Apple",
+    # Additional Apple OUIs (HomePod, Watch, newer devices)
+    "40:ED:CF": "Apple", "44:2A:60": "Apple", "44:D8:84": "Apple",
+    "48:3B:38": "Apple", "48:D7:05": "Apple", "4C:32:75": "Apple",
+    "54:4E:90": "Apple", "58:B0:35": "Apple", "5C:8D:4E": "Apple",
+    "60:F8:1D": "Apple", "64:4B:F0": "Apple", "68:D9:3C": "Apple",
+    "6C:96:CF": "Apple", "70:DE:E2": "Apple", "78:7E:61": "Apple",
+    "7C:D1:C3": "Apple", "80:E6:50": "Apple", "84:FC:FE": "Apple",
+    "88:66:5A": "Apple", "8C:85:90": "Apple", "90:8D:6C": "Apple",
+    "94:E9:79": "Apple", "98:01:A7": "Apple", "9C:8B:A0": "Apple",
+    "A0:99:9B": "Apple", "A4:83:E7": "Apple", "A8:51:5B": "Apple",
+    "AC:1F:74": "Apple", "B0:34:95": "Apple", "B4:F0:AB": "Apple",
+    "B8:17:C2": "Apple", "BC:52:B7": "Apple", "C0:A5:3E": "Apple",
+    "C4:2A:D0": "Apple", "C8:69:CD": "Apple", "CC:20:E8": "Apple",
+    "D0:03:4B": "Apple", "D4:61:9D": "Apple", "D8:00:4D": "Apple",
+    "DC:2B:2A": "Apple", "E0:5F:45": "Apple", "E4:25:E7": "Apple",
+    "E8:80:2E": "Apple", "EC:35:86": "Apple", "F0:18:98": "Apple",
+    "F4:31:C3": "Apple", "F8:27:93": "Apple", "FC:E9:98": "Apple",
+
+    # Withings / Nokia Health (smart scales, blood pressure monitors)
+    "00:24:E4": "Withings",
+
+    # Espressif ESP8266/ESP32 (common IoT devices)
+    "24:0A:C4": "Espressif", "24:62:AB": "Espressif", "24:6F:28": "Espressif",
+    "2C:3A:E8": "Espressif", "30:AE:A4": "Espressif", "3C:71:BF": "Espressif",
+    "40:F5:20": "Espressif", "48:3F:DA": "Espressif", "4C:11:AE": "Espressif",
+    "5C:CF:7F": "Espressif", "60:01:94": "Espressif", "68:C6:3A": "Espressif",
+    "80:7D:3A": "Espressif", "84:CC:A8": "Espressif", "84:F3:EB": "Espressif",
+    "8C:AA:B5": "Espressif", "90:97:D5": "Espressif", "94:B9:7E": "Espressif",
+    "98:CD:AC": "Espressif", "A0:20:A6": "Espressif", "A4:7B:9D": "Espressif",
+    "A4:CF:12": "Espressif", "AC:67:B2": "Espressif", "B4:E6:2D": "Espressif",
+    "BC:DD:C2": "Espressif", "C4:4F:33": "Espressif", "C8:2B:96": "Espressif",
+    "CC:50:E3": "Espressif", "D8:A0:1D": "Espressif", "DC:4F:22": "Espressif",
+    "E8:DB:84": "Espressif", "EC:FA:BC": "Espressif", "F4:CF:A2": "Espressif",
+
+    # Tuya IoT (generic smart home devices)
+    "7C:78:B2": "Tuya", "D8:1F:12": "Tuya", "34:EA:34": "Tuya",
 
     # Samsung
     "00:00:F0": "Samsung", "00:02:78": "Samsung", "00:07:AB": "Samsung",
@@ -1349,12 +1385,22 @@ class Fingerbank:
             mac: MAC address (required)
             dhcp_fingerprint: DHCP Option 55 fingerprint
             hostname: Device hostname
-            vendor_class: DHCP vendor class
+            vendor_class: DHCP Option 60 vendor class (HIGH VALUE!)
 
         Returns:
             DeviceInfo with identification result
         """
         mac = mac.upper().replace('-', ':')
+
+        # Check for randomized MAC (locally administered bit)
+        is_randomized = self._is_randomized_mac(mac)
+
+        # 0. HIGHEST PRIORITY: DHCP Option 60 Vendor Class
+        # This is explicit vendor identification - very high confidence!
+        if vendor_class:
+            vc_match = self._match_vendor_class(vendor_class, mac, hostname)
+            if vc_match and vc_match['confidence'] >= 0.90:
+                return self._build_result(vc_match, mac, hostname)
 
         # 1. Try exact fingerprint match (fastest, highest confidence)
         if dhcp_fingerprint:
@@ -1374,7 +1420,13 @@ class Fingerbank:
         if hostname_match and hostname_match['confidence'] >= 0.70:
             return self._build_result(hostname_match, mac, hostname, vendor)
 
-        # 4. Try Fingerbank API for unknown devices
+        # 4. For randomized MACs with vendor_class, boost confidence
+        if is_randomized and vendor_class:
+            vc_match = self._match_vendor_class(vendor_class, mac, hostname)
+            if vc_match and vc_match['confidence'] >= 0.70:
+                return self._build_result(vc_match, mac, hostname)
+
+        # 5. Try Fingerbank API for unknown devices
         if dhcp_fingerprint and self.api_key:
             api_result = self._query_fingerbank_api(
                 dhcp_fingerprint, mac, hostname, vendor_class
@@ -1382,8 +1434,175 @@ class Fingerbank:
             if api_result:
                 return self._build_result(api_result, mac, hostname)
 
-        # 5. Build best-effort identification
+        # 6. Build best-effort identification
         return self._build_fallback_result(mac, vendor, hostname, dhcp_fingerprint)
+
+    def _is_randomized_mac(self, mac: str) -> bool:
+        """
+        Check if MAC is randomized/locally administered.
+
+        Randomized MACs have the second nibble as 2, 6, A, or E.
+        This indicates the "locally administered" bit is set.
+        """
+        try:
+            first_byte = mac.split(':')[0]
+            second_nibble = first_byte[1].upper()
+            return second_nibble in ('2', '6', 'A', 'E')
+        except (IndexError, AttributeError):
+            return False
+
+    def _match_vendor_class(self, vendor_class: str, mac: str,
+                            hostname: Optional[str]) -> Optional[dict]:
+        """
+        Match device by DHCP Option 60 Vendor Class.
+
+        This is HIGH confidence identification as devices explicitly
+        declare their vendor/type in this field.
+        """
+        if not vendor_class:
+            return None
+
+        vc = vendor_class.lower()
+
+        # Apple devices (Watch, HomePod, etc.)
+        if 'apple' in vc:
+            if 'watch' in vc:
+                return {
+                    'name': 'Apple Watch', 'vendor': 'Apple', 'category': 'wearable',
+                    'os': 'watchOS', 'confidence': 0.98,
+                    'hierarchy': ['Apple', 'Apple Watch', 'watchOS'],
+                    'match_type': 'vendor_class'
+                }
+            elif 'homepod' in vc:
+                return {
+                    'name': 'HomePod', 'vendor': 'Apple', 'category': 'voice_assistant',
+                    'os': 'audioOS', 'confidence': 0.99,
+                    'hierarchy': ['Apple', 'HomePod'],
+                    'match_type': 'vendor_class'
+                }
+            elif 'tv' in vc or 'appletv' in vc:
+                return {
+                    'name': 'Apple TV', 'vendor': 'Apple', 'category': 'streaming',
+                    'os': 'tvOS', 'confidence': 0.98,
+                    'hierarchy': ['Apple', 'Apple TV'],
+                    'match_type': 'vendor_class'
+                }
+            else:
+                # Generic Apple device
+                return {
+                    'name': 'Apple Device', 'vendor': 'Apple', 'category': 'phone',
+                    'os': 'iOS/macOS', 'confidence': 0.95,
+                    'hierarchy': ['Apple'],
+                    'match_type': 'vendor_class'
+                }
+
+        # Microsoft Windows
+        if 'msft' in vc or 'microsoft' in vc:
+            # Parse MSFT version: "MSFT 5.0" = Windows 2000/XP, "MSFT 5.1" = XP
+            version = ""
+            if 'msft 5.0' in vc:
+                version = "Windows 2000/XP"
+            elif 'msft 5.1' in vc:
+                version = "Windows XP"
+            elif 'msft 6.0' in vc:
+                version = "Windows Vista/7"
+            elif 'msft 6.1' in vc:
+                version = "Windows 7"
+            elif 'msft 6.2' in vc:
+                version = "Windows 8"
+            elif 'msft 6.3' in vc:
+                version = "Windows 8.1"
+            elif 'msft 10.0' in vc or 'msft' in vc:
+                version = "Windows 10/11"
+
+            return {
+                'name': f'Windows ({version})' if version else 'Windows PC',
+                'vendor': 'Microsoft', 'category': 'workstation',
+                'os': version or 'Windows', 'confidence': 0.95,
+                'hierarchy': ['Microsoft', 'Windows', version or 'Desktop'],
+                'match_type': 'vendor_class'
+            }
+
+        # Android devices
+        if 'android' in vc or 'dhcpcd' in vc:
+            return {
+                'name': 'Android Device', 'vendor': 'Android', 'category': 'phone',
+                'os': 'Android', 'confidence': 0.90,
+                'hierarchy': ['Android'],
+                'match_type': 'vendor_class'
+            }
+
+        # Huawei (Watch, Phone, etc.)
+        if 'huawei' in vc:
+            if 'watch' in vc:
+                return {
+                    'name': 'Huawei Watch', 'vendor': 'Huawei', 'category': 'wearable',
+                    'os': 'HarmonyOS', 'confidence': 0.98,
+                    'hierarchy': ['Huawei', 'Watch'],
+                    'match_type': 'vendor_class'
+                }
+            return {
+                'name': 'Huawei Device', 'vendor': 'Huawei', 'category': 'phone',
+                'os': 'HarmonyOS/Android', 'confidence': 0.92,
+                'hierarchy': ['Huawei'],
+                'match_type': 'vendor_class'
+            }
+
+        # Samsung devices
+        if 'samsung' in vc:
+            return {
+                'name': 'Samsung Device', 'vendor': 'Samsung', 'category': 'phone',
+                'os': 'Android/Tizen', 'confidence': 0.92,
+                'hierarchy': ['Samsung'],
+                'match_type': 'vendor_class'
+            }
+
+        # Roku
+        if 'roku' in vc:
+            return {
+                'name': 'Roku', 'vendor': 'Roku', 'category': 'streaming',
+                'os': 'Roku OS', 'confidence': 0.95,
+                'hierarchy': ['Roku'],
+                'match_type': 'vendor_class'
+            }
+
+        # Amazon devices
+        if 'amazon' in vc or 'kindle' in vc or 'fire' in vc:
+            return {
+                'name': 'Amazon Device', 'vendor': 'Amazon', 'category': 'streaming',
+                'os': 'Fire OS', 'confidence': 0.92,
+                'hierarchy': ['Amazon'],
+                'match_type': 'vendor_class'
+            }
+
+        # Linux/Unix
+        if 'linux' in vc or 'ubuntu' in vc or 'debian' in vc:
+            return {
+                'name': 'Linux Device', 'vendor': 'Linux', 'category': 'workstation',
+                'os': 'Linux', 'confidence': 0.88,
+                'hierarchy': ['Linux'],
+                'match_type': 'vendor_class'
+            }
+
+        # Cisco
+        if 'cisco' in vc:
+            return {
+                'name': 'Cisco Device', 'vendor': 'Cisco', 'category': 'network',
+                'os': 'Cisco IOS', 'confidence': 0.95,
+                'hierarchy': ['Cisco'],
+                'match_type': 'vendor_class'
+            }
+
+        # HP Printer
+        if 'hewlett-packard' in vc or 'hp ' in vc:
+            return {
+                'name': 'HP Device', 'vendor': 'HP', 'category': 'printer',
+                'os': 'HP Firmware', 'confidence': 0.90,
+                'hierarchy': ['HP'],
+                'match_type': 'vendor_class'
+            }
+
+        return None
 
     # =========================================================================
     # FINGERPRINT MATCHING
