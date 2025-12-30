@@ -339,7 +339,7 @@ var DeviceDetailModal = {
         // Show loading state
         $('#modal-device-name').text('Loading...');
 
-        $.get('{{ url_for("sdn.api_device_detail", mac_address="PLACEHOLDER") }}'.replace('PLACEHOLDER', mac))
+        $.get('/sdn/api/device/' + encodeURIComponent(mac) + '/detail')
             .done(function(data) {
                 if (data.success && data.device) {
                     self.renderDevice(data.device);
@@ -526,7 +526,7 @@ var DeviceDetailModal = {
         if (!this.currentMac) return;
 
         $.ajax({
-            url: '{{ url_for("sdn.api_device_set_policy", mac_address="PLACEHOLDER") }}'.replace('PLACEHOLDER', this.currentMac),
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/policy',
             method: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ policy: policy })
@@ -550,7 +550,7 @@ var DeviceDetailModal = {
         if (!this.currentMac || !tag) return;
 
         $.ajax({
-            url: '{{ url_for("sdn.api_device_add_tag", mac_address="PLACEHOLDER") }}'.replace('PLACEHOLDER', this.currentMac),
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/tags',
             method: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ tag: tag })
@@ -574,9 +574,7 @@ var DeviceDetailModal = {
         if (!this.currentMac) return;
 
         $.ajax({
-            url: '{{ url_for("sdn.api_device_remove_tag", mac_address="PLACEHOLDER", tag="TAG") }}'
-                .replace('PLACEHOLDER', this.currentMac)
-                .replace('TAG', encodeURIComponent(tag)),
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/tags/' + encodeURIComponent(tag),
             method: 'DELETE'
         })
         .done(function(data) {
