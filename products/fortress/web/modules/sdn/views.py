@@ -618,11 +618,11 @@ def index():
                     'online': len([d for d in devices if d['is_online']]),
                     'offline': len([d for d in devices if not d['is_online']]),
                     'quarantined': len([d for d in devices if d['policy'] == 'quarantine']),
-                    'by_policy': {}
+                    'policy_counts': {}
                 }
                 for d in devices:
                     policy = d['policy']
-                    stats['by_policy'][policy] = stats['by_policy'].get(policy, 0) + 1
+                    stats['policy_counts'][policy] = stats['policy_counts'].get(policy, 0) + 1
 
                 using_real_data = len(devices) > 0
                 logger.info(f"Loaded {len(devices)} devices from autopilot.db")
@@ -657,7 +657,7 @@ def index():
 
     # Set default stats if still empty
     if not stats:
-        stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'by_policy': {}}
+        stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'policy_counts': {}}
 
     # Get real DFS/WiFi intelligence data
     try:
@@ -1420,7 +1420,7 @@ def api_stats():
 
     Uses new simple device_policies module with SQLite storage.
     """
-    stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'by_policy': {}}
+    stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'policy_counts': {}}
     using_real_data = False
 
     # Use new simple device_policies module
