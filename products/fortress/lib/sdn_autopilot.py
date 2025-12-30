@@ -1076,8 +1076,8 @@ class SDNAutoPilot:
             conn.execute('''
                 INSERT INTO device_identity
                     (mac, ip, hostname, friendly_name, device_type, vendor, dhcp_fingerprint, os_detected,
-                     category, policy, confidence, signals, first_seen, last_seen, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     category, policy, confidence, signals, first_seen, last_seen, updated_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')
                 ON CONFLICT(mac) DO UPDATE SET
                     ip = excluded.ip,
                     hostname = COALESCE(excluded.hostname, hostname),
@@ -1091,7 +1091,8 @@ class SDNAutoPilot:
                     confidence = excluded.confidence,
                     signals = excluded.signals,
                     last_seen = excluded.last_seen,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    status = 'online'
             ''', (mac, ip, hostname, friendly_name, identity.device_name, identity.vendor, dhcp_fingerprint,
                   identity.os_fingerprint, identity.category, identity.policy,
                   identity.confidence, json.dumps(identity.signals), now, now, now))
@@ -1191,16 +1192,16 @@ class SDNAutoPilot:
                 )
                 return self.get_device(mac)
 
-            # Just update last_seen and IP if provided
+            # Update last_seen, IP, and set status to online (device is active if we're seeing it)
             with self._get_conn() as conn:
                 if ip:
                     conn.execute('''
-                        UPDATE device_identity SET ip = ?, last_seen = ?, updated_at = ?
+                        UPDATE device_identity SET ip = ?, last_seen = ?, updated_at = ?, status = 'online'
                         WHERE mac = ?
                     ''', (ip, now, now, mac))
                 else:
                     conn.execute('''
-                        UPDATE device_identity SET last_seen = ?, updated_at = ?
+                        UPDATE device_identity SET last_seen = ?, updated_at = ?, status = 'online'
                         WHERE mac = ?
                     ''', (now, now, mac))
                 conn.commit()
@@ -1231,11 +1232,12 @@ class SDNAutoPilot:
                     # Get vendor from OUI for basic identification
                     oui = mac[:8]
                     vendor = self._get_vendor_from_oui(oui)
+                    # Set status to 'online' since we're creating this in response to activity
                     conn.execute('''
                         INSERT OR IGNORE INTO device_identity
                             (mac, ip, hostname, vendor, category, policy, confidence,
-                             signals, first_seen, last_seen, updated_at, tags)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             signals, first_seen, last_seen, updated_at, tags, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online')
                     ''', (mac, ip or '', hostname or '', vendor, 'unknown', 'quarantine',
                           0.5, '{}', now, now, now, '[]'))
                     conn.commit()

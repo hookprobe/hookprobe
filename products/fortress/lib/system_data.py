@@ -876,7 +876,11 @@ def _get_lte_interface() -> Optional[str]:
 
 
 def _load_lte_usage() -> Dict:
-    """Load LTE usage data from persistent storage."""
+    """Load LTE usage data from persistent storage.
+
+    The file is managed by the host lte-usage-tracker.sh script.
+    This function only reads the data (read-only from container).
+    """
     default = {
         'interface': None,
         'month': datetime.now().strftime('%Y-%m'),
@@ -908,19 +912,37 @@ def _load_lte_usage() -> Dict:
             data['day'] = current_day
 
         return data
-    except (json.JSONDecodeError, IOError) as e:
+    except json.JSONDecodeError as e:
+        logger.warning(f"Could not load LTE usage data (corrupt JSON): {e}")
+        # Try to remove corrupt file so host script can recreate it
+        try:
+            LTE_USAGE_FILE.unlink()
+            logger.info("Removed corrupt LTE usage file - will be recreated by host script")
+        except (IOError, PermissionError):
+            pass  # Can't delete, that's okay
+        return default
+    except IOError as e:
         logger.warning(f"Could not load LTE usage data: {e}")
         return default
 
 
 def _save_lte_usage(data: Dict):
-    """Save LTE usage data to persistent storage."""
+    """Save LTE usage data to persistent storage.
+
+    Note: The file is primarily managed by the host lte-usage-tracker.sh script.
+    This function is a fallback for when the host script isn't running.
+    Permission errors are expected when running in a container with read-only mount.
+    """
     _ensure_data_dir()
     try:
         data['last_update'] = datetime.now().isoformat()
         LTE_USAGE_FILE.write_text(json.dumps(data, indent=2))
+    except PermissionError:
+        # Expected in container mode - host script manages the file
+        # Only log at debug level to avoid log spam
+        logger.debug("LTE usage file is read-only (managed by host script)")
     except IOError as e:
-        logger.error(f"Could not save LTE usage data: {e}")
+        logger.warning(f"Could not save LTE usage data: {e}")
 
 
 def update_lte_usage(interface: Optional[str] = None) -> Dict:
@@ -1052,13 +1074,14 @@ def _get_cost_status(backup_iface: Optional[str]) -> Dict:
 
     Reads actual interface usage and user-configured limits.
     Returns None for budget values when user hasn't set limits (unlimited).
+
+    Note: Usage data is managed by the host lte-usage-tracker.sh script.
+    We only read the data here (read-only from container).
     """
     interface = backup_iface or _get_lte_interface() or 'wwan0'
 
-    # Update usage tracking (reads from interface stats)
-    update_lte_usage(interface)
-
-    # Get current usage
+    # Get current usage from host-managed file
+    # Note: The host lte-usage-tracker.sh script updates this file
     usage = get_lte_usage()
 
     # Default: unlimited (None means no limit set by user)
