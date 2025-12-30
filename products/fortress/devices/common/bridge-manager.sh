@@ -489,8 +489,8 @@ dhcp-option=3,$gateway
 dhcp-option=6,$gateway
 
 # Domain
-domain=fortress.local
-local=/fortress.local/
+domain=hookprobe.local
+local=/hookprobe.local/
 
 # Logging
 log-dhcp
@@ -552,8 +552,8 @@ dhcp-option=3,$gateway
 dhcp-option=6,$gateway
 
 # Domain
-domain=fortress.local
-local=/fortress.local/
+domain=hookprobe.local
+local=/hookprobe.local/
 
 # Logging
 log-dhcp

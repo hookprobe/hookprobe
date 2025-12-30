@@ -296,8 +296,8 @@ dhcp-option=3,$LAN_GATEWAY
 dhcp-option=6,$LAN_GATEWAY
 
 # Domain
-domain=fortress.local
-local=/fortress.local/
+domain=hookprobe.local
+local=/hookprobe.local/
 
 # Logging
 log-queries
