@@ -1349,22 +1349,26 @@ $(document).ready(function() {
         var mac = $(this).data('mac');
         var segment = $(this).data('segment');
         var segmentNames = {
-            10: 'SECMON', 20: 'POS', 30: 'CLIENTS',
-            40: 'GUEST', 50: 'CAMERAS', 60: 'IIOT', 99: 'QUARANTINE'
+            'SECMON': 'Security Monitor', 'POS': 'Point of Sale', 'CLIENTS': 'Clients',
+            'GUEST': 'Guest', 'CAMERAS': 'Cameras', 'IIOT': 'Industrial IoT', 'QUARANTINE': 'Quarantine'
         };
 
-        $.post('{{ url_for("sdn.assign_segment") }}', {
-            mac: mac,
-            segment: segment
-        }, function(data) {
-            if (data.success) {
-                toastr.success('Moved to ' + segmentNames[segment]);
-                setTimeout(function() { location.reload(); }, 1000);
-            } else {
-                toastr.error(data.error || 'Failed to move device');
+        $.ajax({
+            url: '{{ url_for("sdn.api_move_device") }}',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac_address: mac, segment: segment }),
+            success: function(data) {
+                if (data.success) {
+                    toastr.success('Moved to ' + (segmentNames[segment] || segment));
+                    setTimeout(function() { location.reload(); }, 1000);
+                } else {
+                    toastr.error(data.error || 'Failed to move device');
+                }
+            },
+            error: function() {
+                toastr.error('Network error');
             }
-        }).fail(function() {
-            toastr.error('Network error');
         });
     });
 
