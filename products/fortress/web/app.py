@@ -111,6 +111,20 @@ def create_app(config_class=Config):
             bytes_value /= 1024
         return f'{bytes_value:.1f} PB'
 
+    # Sync NAC policies to OpenFlow on startup
+    # OpenFlow rules are volatile - sync from persistent database
+    with app.app_context():
+        try:
+            import sys
+            sys.path.insert(0, '/opt/hookprobe/fortress/lib')
+            from device_policies import sync_all_policies
+            synced = sync_all_policies()
+            app.logger.info(f"NAC startup: synced {synced} device policies to OpenFlow")
+        except ImportError:
+            app.logger.debug("device_policies not available - skipping NAC sync")
+        except Exception as e:
+            app.logger.warning(f"NAC startup sync failed: {e}")
+
     return app
 
 

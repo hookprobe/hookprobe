@@ -23,10 +23,54 @@ import subprocess
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from enum import Enum
+from ipaddress import ip_network
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Network configuration for policy enforcement
+# Uses broader /16 to match ovs-post-setup.sh base rules
+# Per-device rules use higher priority to override base permissive rules
+DEFAULT_LAN_NETWORK = "10.200.0.0/16"
+DEFAULT_GATEWAY_IP = "10.200.0.1"
+CONTAINER_NETWORK = "172.20.0.0/16"
+INSTALL_STATE_FILE = Path('/etc/hookprobe/install-state.conf')
+
+
+def _get_network_config() -> Tuple[str, str]:
+    """
+    Get LAN network and gateway from install state or use defaults.
+
+    Returns:
+        Tuple of (lan_network, gateway_ip)
+    """
+    lan_network = DEFAULT_LAN_NETWORK
+    gateway_ip = DEFAULT_GATEWAY_IP
+
+    # Try to load from install state
+    if INSTALL_STATE_FILE.exists():
+        try:
+            with open(INSTALL_STATE_FILE) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('LAN_SUBNET='):
+                        subnet = line.split('=', 1)[1].strip('"\'')
+                        # Convert user subnet to /16 for broader matching
+                        # User may have /24, /23, etc. but we use /16 for OVS rules
+                        try:
+                            net = ip_network(subnet, strict=False)
+                            # Use 10.200.0.0/16 for any 10.200.x.x subnet
+                            if net.network_address.packed[0] == 10 and net.network_address.packed[1] == 200:
+                                lan_network = "10.200.0.0/16"
+                        except ValueError:
+                            pass
+                    elif line.startswith('LAN_GATEWAY='):
+                        gateway_ip = line.split('=', 1)[1].strip('"\'')
+        except Exception as e:
+            logger.debug(f"Could not load network config: {e}")
+
+    return lan_network, gateway_ip
 
 # Data directories
 DATA_DIR = Path('/opt/hookprobe/fortress/data')
@@ -549,43 +593,140 @@ class DeviceDataManager:
         return entry is not None
 
     def _apply_policy_rules(self, mac: str, policy: str):
-        """Apply OpenFlow rules for device policy."""
+        """
+        Apply OpenFlow rules for device policy.
+
+        Policy enforcement uses IP-based rules to provide proper access control:
+        - Priority 700+: Per-device policy rules (overrides base priority 500 rules)
+        - Priority 500: Base LAN permissive rules (from ovs-post-setup.sh)
+        - Priority 1000: ARP/DHCP essential services
+
+        Traffic flow for each policy:
+        - ISOLATED: Drop all traffic (quarantine)
+        - LAN_ONLY: Allow LAN (10.200.0.0/16), block internet (non-RFC1918)
+        - INTERNET_ONLY: Block LAN (except gateway), allow internet
+        - FULL_ACCESS/NORMAL: Allow all (no rules needed, default allow)
+        """
         try:
             # Remove existing rules for this MAC
             self._remove_policy_rules(mac)
+            mac_upper = mac.upper()
 
-            if policy == "isolated":
-                # Drop all traffic
-                subprocess.run([
-                    'ovs-ofctl', 'add-flow', OVS_BRIDGE,
-                    f'priority=1000,dl_src={mac},actions=drop'
-                ], capture_output=True, timeout=5)
-                subprocess.run([
-                    'ovs-ofctl', 'add-flow', OVS_BRIDGE,
-                    f'priority=1000,dl_dst={mac},actions=drop'
-                ], capture_output=True, timeout=5)
-                logger.info(f"Applied ISOLATED policy for {mac}")
+            # Get network configuration
+            lan_network, gateway_ip = _get_network_config()
+
+            if policy in ("isolated", "quarantine"):
+                # Priority 1000: Drop ALL traffic - highest priority quarantine
+                # Bidirectional: block both outgoing and incoming
+                # Allow only DHCP (for getting IP) and DNS (for captive portal)
+                # Priority 1001: Allow DHCP request/response
+                self._add_flow(f'priority=1001,udp,dl_src={mac_upper},tp_dst=67,actions=NORMAL')
+                self._add_flow(f'priority=1001,udp,dl_dst={mac_upper},tp_src=67,actions=NORMAL')
+                # Priority 1001: Allow DNS to gateway only (for captive portal redirect)
+                self._add_flow(f'priority=1001,udp,dl_src={mac_upper},nw_dst={gateway_ip},tp_dst=53,actions=NORMAL')
+                self._add_flow(f'priority=1001,udp,dl_dst={mac_upper},nw_src={gateway_ip},tp_src=53,actions=NORMAL')
+                # Priority 1000: Drop everything else
+                self._add_flow(f'priority=1000,dl_src={mac_upper},actions=drop')
+                self._add_flow(f'priority=1000,dl_dst={mac_upper},actions=drop')
+                logger.info(f"Applied QUARANTINE policy for {mac} - all traffic blocked except DHCP/DNS")
 
             elif policy == "lan_only":
-                # Allow LAN, block internet (port 1 is typically WAN)
-                subprocess.run([
-                    'ovs-ofctl', 'add-flow', OVS_BRIDGE,
-                    f'priority=900,dl_src={mac},in_port=1,actions=drop'
-                ], capture_output=True, timeout=5)
-                logger.info(f"Applied LAN_ONLY policy for {mac}")
+                # LAN_ONLY: Can access LAN devices, gateway, but NOT internet
+                # Strategy: Block traffic to non-private destinations
+
+                # Priority 750: Allow traffic to gateway (for DHCP, DNS via gateway)
+                self._add_flow(
+                    f'priority=750,ip,dl_src={mac_upper},nw_dst={gateway_ip},actions=NORMAL'
+                )
+
+                # Priority 740: Allow traffic to LAN subnet (10.200.0.0/16)
+                self._add_flow(
+                    f'priority=740,ip,dl_src={mac_upper},nw_dst={lan_network},actions=NORMAL'
+                )
+
+                # Priority 730: Allow return traffic FROM LAN to this device
+                self._add_flow(
+                    f'priority=730,ip,dl_dst={mac_upper},nw_src={lan_network},actions=NORMAL'
+                )
+
+                # Priority 720: Allow container network (for local services)
+                self._add_flow(
+                    f'priority=720,ip,dl_src={mac_upper},nw_dst={CONTAINER_NETWORK},actions=NORMAL'
+                )
+
+                # Priority 600: DROP all other IP traffic (internet-bound)
+                # This blocks traffic to public IPs while allowing LAN
+                self._add_flow(
+                    f'priority=600,ip,dl_src={mac_upper},actions=drop'
+                )
+
+                logger.info(f"Applied LAN_ONLY policy for {mac} - internet blocked")
 
             elif policy == "internet_only":
-                # Block LAN-to-LAN traffic (allow only WAN)
-                # This is more complex - need to identify LAN ports
-                # For now, just log intent
-                logger.info(f"Applied INTERNET_ONLY policy for {mac} (simplified)")
+                # INTERNET_ONLY: Can access internet, but NOT other LAN devices
+                # Use case: Guest devices, POS terminals (payment gateway only)
+                # Strategy: Block traffic to LAN subnet except gateway
 
-            elif policy == "full_access":
-                # No restrictions (default allow)
-                logger.info(f"Applied FULL_ACCESS policy for {mac}")
+                # Priority 750: Allow traffic to gateway (required for routing)
+                self._add_flow(
+                    f'priority=750,ip,dl_src={mac_upper},nw_dst={gateway_ip},actions=NORMAL'
+                )
+
+                # Priority 740: Allow return traffic FROM gateway
+                self._add_flow(
+                    f'priority=740,ip,dl_dst={mac_upper},nw_src={gateway_ip},actions=NORMAL'
+                )
+
+                # Priority 700: Block traffic to LAN subnet (except gateway handled above)
+                # This prevents device from reaching other LAN devices
+                self._add_flow(
+                    f'priority=700,ip,dl_src={mac_upper},nw_dst={lan_network},actions=drop'
+                )
+
+                # Priority 700: Block incoming traffic FROM other LAN devices
+                # Prevents other LAN devices from initiating to this device
+                self._add_flow(
+                    f'priority=700,ip,dl_dst={mac_upper},nw_src={lan_network},actions=drop'
+                )
+
+                # Priority 650: Allow all other traffic (internet)
+                # Lower priority than block rules, matches internet-bound traffic
+                self._add_flow(
+                    f'priority=650,ip,dl_src={mac_upper},actions=NORMAL'
+                )
+
+                # Priority 650: Allow return traffic from internet
+                self._add_flow(
+                    f'priority=650,ip,dl_dst={mac_upper},actions=NORMAL'
+                )
+
+                logger.info(f"Applied INTERNET_ONLY policy for {mac} - LAN isolated")
+
+            elif policy in ("full_access", "normal", "default"):
+                # FULL_ACCESS/NORMAL: No restrictions, use base permissive rules
+                # No additional rules needed - priority 500 base rules allow all
+                logger.info(f"Applied {policy.upper()} policy for {mac} - unrestricted")
+
+            else:
+                logger.warning(f"Unknown policy '{policy}' for {mac} - no rules applied")
 
         except Exception as e:
             logger.warning(f"Failed to apply policy rules for {mac}: {e}")
+
+    def _add_flow(self, flow_spec: str) -> bool:
+        """Add an OpenFlow rule to OVS bridge."""
+        try:
+            result = subprocess.run(
+                ['ovs-ofctl', 'add-flow', OVS_BRIDGE, flow_spec],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                logger.debug(f"OVS add-flow failed: {result.stderr}")
+                return False
+            return True
+        except Exception as e:
+            logger.debug(f"OVS add-flow exception: {e}")
+            return False
 
     def _remove_policy_rules(self, mac: str):
         """Remove OpenFlow rules for a device."""
