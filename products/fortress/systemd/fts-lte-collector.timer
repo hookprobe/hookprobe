@@ -1,0 +1,12 @@
+[Unit]
+Description=Fortress LTE Traffic Collector Timer
+Requires=fts-lte-collector.service
+
+[Timer]
+# Run every 30 seconds
+OnBootSec=10s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
