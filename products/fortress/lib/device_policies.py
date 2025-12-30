@@ -134,7 +134,12 @@ class DevicePolicyDB:
     def set_policy(self, mac: str, policy: str, hostname: str = None,
                    manufacturer: str = None, device_type: str = None,
                    notes: str = None) -> Dict:
-        """Set or update device policy."""
+        """Set or update device policy.
+
+        This method:
+        1. Stores the policy in SQLite database
+        2. Applies OpenFlow rules via device_data_manager for enforcement
+        """
         mac = mac.upper()
         now = datetime.now().isoformat()
 
@@ -170,7 +175,22 @@ class DevicePolicyDB:
 
             conn.commit()
 
+        # Apply OpenFlow rules for actual network enforcement
+        self._apply_openflow_rules(mac, policy)
+
         return self.get_device(mac)
+
+    def _apply_openflow_rules(self, mac: str, policy: str):
+        """Apply OpenFlow rules via device_data_manager for NAC enforcement."""
+        try:
+            from device_data_manager import get_device_data_manager
+            ddm = get_device_data_manager()
+            ddm._apply_policy_rules(mac, policy)
+            logger.debug(f"Applied OpenFlow rules for {mac} with policy {policy}")
+        except ImportError:
+            logger.warning("device_data_manager not available - OpenFlow rules not applied")
+        except Exception as e:
+            logger.warning(f"Failed to apply OpenFlow rules for {mac}: {e}")
 
     def get_all_policies(self) -> Dict[str, str]:
         """Get all MAC -> policy mappings."""
@@ -376,3 +396,29 @@ def get_policy_info(policy: str) -> Dict:
         return POLICY_INFO.get(policy_enum, POLICY_INFO[NetworkPolicy.QUARANTINE])
     except ValueError:
         return POLICY_INFO[NetworkPolicy.QUARANTINE]
+
+
+def sync_all_policies() -> int:
+    """
+    Sync all stored policies to OpenFlow rules.
+
+    Call this on startup to restore NAC enforcement after reboot.
+    OpenFlow rules in OVS are volatile and lost on restart, but
+    policies persist in SQLite database.
+
+    Returns:
+        Number of policies synced
+    """
+    db = get_device_db()
+    policies = db.get_all_policies()
+
+    synced = 0
+    for mac, policy in policies.items():
+        try:
+            db._apply_openflow_rules(mac, policy)
+            synced += 1
+        except Exception as e:
+            logger.warning(f"Failed to sync policy for {mac}: {e}")
+
+    logger.info(f"Synced {synced}/{len(policies)} device policies to OpenFlow")
+    return synced
