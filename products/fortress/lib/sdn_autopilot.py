@@ -26,7 +26,7 @@ import sqlite3
 import json
 import logging
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from contextlib import contextmanager
@@ -880,12 +880,12 @@ class SDNAutoPilot:
                 'comment': "Allow gateway"
             })
 
-        elif policy == 'normal':
+        elif policy in ('normal', 'smart_home'):
             rules.append({
                 'priority': 600,
                 'match': {'eth_src': mac},
                 'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
-                'comment': "Allow all (curated IoT)"
+                'comment': "Allow all (Smart Home / curated IoT)"
             })
 
         elif policy == 'full_access':
@@ -928,7 +928,7 @@ class SDNAutoPilot:
 
         Args:
             mac: Device MAC address
-            policy: Policy name (quarantine, internet_only, lan_only, normal, full_access)
+            policy: Policy name (quarantine, internet_only, lan_only, normal/smart_home, full_access)
 
         Returns:
             True if successful, False otherwise
@@ -936,27 +936,32 @@ class SDNAutoPilot:
         mac = mac.upper()
 
         # Normalize policy names
+        # smart_home is an alias for 'normal' (LAN + Internet, no container access)
         policy_aliases = {
             'isolated': 'quarantine',
             'full_access': 'normal',
+            'smart_home': 'normal',
         }
         policy = policy_aliases.get(policy, policy)
 
-        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access', 'smart_home']
         if policy not in valid_policies:
             logger.warning(f"Invalid policy: {policy}")
             return False
 
         try:
             with self._get_conn() as conn:
-                # Check if device exists
+                # Check if device exists and get current policy for event logging
                 row = conn.execute(
-                    'SELECT ip FROM device_identity WHERE mac = ?', (mac,)
+                    'SELECT ip, policy, friendly_name, hostname FROM device_identity WHERE mac = ?', (mac,)
                 ).fetchone()
 
                 if not row:
                     logger.warning(f"Device {mac} not found in database")
                     return False
+
+                old_policy = row['policy']
+                device_name = row['friendly_name'] or row['hostname'] or mac
 
                 # Update policy and set manual_override to prevent auto-classification
                 conn.execute('''
@@ -969,6 +974,13 @@ class SDNAutoPilot:
                 conn.commit()
 
                 logger.info(f"Policy for {mac} set to {policy} (manual override enabled)")
+
+                # Log policy change event for connection history
+                if old_policy != policy:
+                    self.log_connection_event(
+                        mac, 'policy_changed',
+                        f'Policy changed: {old_policy} → {policy} for {device_name}'
+                    )
 
                 # Apply OpenFlow rules if device has IP
                 ip = row['ip'] if row else None
@@ -1129,10 +1141,14 @@ class SDNAutoPilot:
             friendly_name = self._clean_hostname_to_display(hostname)
 
         with self._get_conn() as conn:
-            # Check manual override
+            # Check existing device state for connection event logging
             existing = conn.execute(
-                'SELECT policy, manual_override FROM device_identity WHERE mac = ?', (mac,)
+                'SELECT policy, manual_override, status FROM device_identity WHERE mac = ?', (mac,)
             ).fetchone()
+
+            # Track if this is a new device or reconnection for event logging
+            is_new_device = existing is None
+            was_offline = existing and existing['status'] == 'offline'
 
             if existing and existing['manual_override']:
                 identity = IdentityScore(
@@ -1172,11 +1188,17 @@ class SDNAutoPilot:
                   identity.confidence, json.dumps(identity.signals), now, now, now))
             conn.commit()
 
+        # Log connection event for history tracking
+        display = friendly_name or hostname or mac
+        if is_new_device:
+            self.log_connection_event(mac, 'connected', f'New device: {display} ({identity.vendor or "Unknown vendor"})')
+        elif was_offline:
+            self.log_connection_event(mac, 'reconnected', f'Device reconnected: {display}')
+
         if apply_rules:
             self.apply_policy(mac, ip, identity.policy)
 
         # Log with friendly name if available
-        display = friendly_name or hostname or mac
         logger.info(f"{display}: {identity.policy} ({identity.confidence:.2f}) - {identity.reason}")
         return identity
 
@@ -1729,11 +1751,16 @@ class SDNAutoPilot:
         with self._get_conn() as conn:
             devices = conn.execute('SELECT * FROM device_identity').fetchall()
 
+            # Track status transitions for connection history logging
+            status_transitions = []
+
             for row in devices:
                 mac = row['mac']
                 ip = row['ip']
                 last_seen_str = row['last_seen']
                 prev_packet_count = row['last_packet_count'] or 0
+                prev_status = row['status'] or 'offline'
+                device_name = row.get('friendly_name') or row.get('hostname') or mac
 
                 # Calculate time since last seen
                 elapsed = OFFLINE_THRESHOLD + 1  # Default to offline
@@ -1795,7 +1822,21 @@ class SDNAutoPilot:
 
                 results[mac] = new_status
 
+                # Track significant status transitions for event logging
+                if prev_status != new_status:
+                    if new_status == 'offline' and prev_status in ('online', 'idle'):
+                        status_transitions.append((mac, 'disconnected', f'Device went offline: {device_name}'))
+                    elif new_status == 'online' and prev_status == 'offline':
+                        status_transitions.append((mac, 'reconnected', f'Device came online: {device_name}'))
+
             conn.commit()
+
+        # Log status transition events (outside transaction for safety)
+        for mac, event_type, details in status_transitions:
+            try:
+                self.log_connection_event(mac, event_type, details)
+            except Exception as e:
+                logger.debug(f"Failed to log status transition for {mac}: {e}")
 
         logger.info(f"Status update: {sum(1 for s in results.values() if s == 'online')} online, "
                    f"{sum(1 for s in results.values() if s == 'idle')} idle, "
@@ -1942,13 +1983,15 @@ class SDNAutoPilot:
 
             # Get connection history (table might not exist in older databases)
             try:
+                # Use strftime to compare timestamps properly (ISO format with T separator)
+                cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
                 history = conn.execute('''
                     SELECT event_type, timestamp, details
                     FROM connection_history
-                    WHERE mac = ? AND timestamp > datetime('now', '-24 hours')
+                    WHERE mac = ? AND timestamp > ?
                     ORDER BY timestamp DESC
                     LIMIT 50
-                ''', (mac,)).fetchall()
+                ''', (mac, cutoff)).fetchall()
                 device['history'] = [dict(h) for h in history]
             except sqlite3.OperationalError:
                 # Table doesn't exist
@@ -2069,13 +2112,14 @@ class SDNAutoPilot:
     def get_connection_timeline(self, mac: str, hours: int = 24) -> List[Dict]:
         """Get connection timeline for visualization."""
         mac = mac.upper()
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
         with self._get_conn() as conn:
             rows = conn.execute('''
                 SELECT event_type, timestamp, details
                 FROM connection_history
-                WHERE mac = ? AND timestamp > datetime('now', ? || ' hours')
+                WHERE mac = ? AND timestamp > ?
                 ORDER BY timestamp ASC
-            ''', (mac, f'-{hours}')).fetchall()
+            ''', (mac, cutoff)).fetchall()
             return [dict(r) for r in rows]
 
     # =========================================================================
