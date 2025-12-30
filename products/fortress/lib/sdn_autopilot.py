@@ -1087,14 +1087,42 @@ class SDNAutoPilot:
             return [dict(r) for r in rows]
 
     def set_manual_policy(self, mac: str, policy: str) -> bool:
-        """Set manual policy override."""
+        """Set manual policy override and apply OpenFlow rules.
+
+        This method:
+        1. Updates the policy in the database with manual_override flag
+        2. Applies OpenFlow rules via OVS for immediate enforcement
+        """
+        mac = mac.upper()
+        ip = None
+
         with self._get_conn() as conn:
+            # Get device's IP for OpenFlow rules
+            row = conn.execute(
+                'SELECT ip FROM device_identity WHERE mac = ?', (mac,)
+            ).fetchone()
+            if row:
+                ip = row['ip']
+
+            # Update database
             conn.execute('''
                 UPDATE device_identity SET policy = ?, manual_override = 1, updated_at = ?
                 WHERE mac = ?
-            ''', (policy, datetime.now().isoformat(), mac.upper()))
+            ''', (policy, datetime.now().isoformat(), mac))
             conn.commit()
-            return conn.total_changes > 0
+            updated = conn.total_changes > 0
+
+        # Apply OpenFlow rules for immediate enforcement
+        if updated and ip:
+            try:
+                self.apply_policy(mac, ip, policy)
+                logger.info(f"Policy changed: {mac} -> {policy} (OpenFlow applied)")
+            except Exception as e:
+                logger.warning(f"Policy updated but OpenFlow failed for {mac}: {e}")
+        elif updated:
+            logger.warning(f"Policy updated for {mac} but no IP - OpenFlow not applied")
+
+        return updated
 
     def clear_manual_override(self, mac: str) -> bool:
         """Clear manual override."""

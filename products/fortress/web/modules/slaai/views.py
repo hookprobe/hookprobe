@@ -384,7 +384,9 @@ def api_reset_lte_usage():
 
 
 # LTE Limits Configuration File
-LTE_LIMITS_FILE = Path('/etc/hookprobe/lte-limits.json')
+# Stored in /var/lib/hookprobe/ which is mounted as :rw in container
+# (/etc/hookprobe/ is mounted as :ro for security)
+LTE_LIMITS_FILE = Path('/var/lib/hookprobe/lte-limits.json')
 
 
 @slaai_bp.route('/api/lte-limits')
