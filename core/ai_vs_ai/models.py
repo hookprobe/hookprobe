@@ -198,7 +198,8 @@ class ThreatPrediction:
     def __post_init__(self):
         if not self.prediction_id:
             self.prediction_id = hashlib.md5(
-                f"{self.timestamp}:{self.predicted_attack}".encode()
+                f"{self.timestamp}:{self.predicted_attack}".encode(),
+                usedforsecurity=False
             ).hexdigest()[:12]
         if not self.timestamp:
             self.timestamp = datetime.now().isoformat()
@@ -256,7 +257,8 @@ class DefenseStrategy:
     def __post_init__(self):
         if not self.strategy_id:
             self.strategy_id = hashlib.md5(
-                f"{self.ioc_id}:{self.timestamp}".encode()
+                f"{self.ioc_id}:{self.timestamp}".encode(),
+                usedforsecurity=False
             ).hexdigest()[:12]
         if not self.timestamp:
             self.timestamp = datetime.now().isoformat()
@@ -297,7 +299,8 @@ class ComputeTask:
     def __post_init__(self):
         if not self.task_id:
             self.task_id = hashlib.md5(
-                f"{self.task_type}:{datetime.now().isoformat()}".encode()
+                f"{self.task_type}:{datetime.now().isoformat()}".encode(),
+                usedforsecurity=False
             ).hexdigest()[:12]
 
     def can_run_on_fortress(self) -> bool:
@@ -343,7 +346,8 @@ class AIConsultationRequest:
     def __post_init__(self):
         if not self.request_id:
             self.request_id = hashlib.md5(
-                f"{datetime.now().isoformat()}".encode()
+                f"{datetime.now().isoformat()}".encode(),
+                usedforsecurity=False
             ).hexdigest()[:12]
         if not self.timestamp:
             self.timestamp = datetime.now().isoformat()
@@ -376,7 +380,8 @@ class AIConsultationResponse:
     def __post_init__(self):
         if not self.response_id:
             self.response_id = hashlib.md5(
-                f"{self.request_id}:{datetime.now().isoformat()}".encode()
+                f"{self.request_id}:{datetime.now().isoformat()}".encode(),
+                usedforsecurity=False
             ).hexdigest()[:12]
         if not self.timestamp:
             self.timestamp = datetime.now().isoformat()
