@@ -130,11 +130,11 @@ update_status() {
             status="idle"
         fi
 
-        # Update counters
+        # Update counters (use : || true to prevent set -e exit on 0++ returning 0)
         case "$status" in
-            online) ((online++)) ;;
-            idle) ((idle++)) ;;
-            offline) ((offline++)) ;;
+            online) ((++online)) || true ;;
+            idle) ((++idle)) || true ;;
+            offline) ((++offline)) || true ;;
         esac
 
         # Update last_seen if new traffic
