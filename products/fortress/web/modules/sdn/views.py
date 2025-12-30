@@ -2736,17 +2736,32 @@ def api_device_set_policy(mac_address):
     Set network policy for a device.
 
     POST data:
-        policy: Network policy (full_access, lan_only, internet_only, isolated, default)
+        policy: Network policy
+
+    Accepted policies (with aliases for compatibility):
+        - quarantine / isolated: No network access (DHCP/DNS only)
+        - internet_only: Internet access, no LAN
+        - lan_only: LAN access, no internet
+        - normal / full_access: Full network access
+        - default: Use OUI-based default
     """
     mac = mac_address.upper().replace('-', ':')
     data = request.get_json() or {}
     policy = data.get('policy', 'default')
 
+    # Policy name normalization (device_policies uses quarantine/normal,
+    # device_data_manager uses isolated/full_access)
+    policy_aliases = {
+        'quarantine': 'isolated',    # Both mean "block all"
+        'normal': 'full_access',     # Both mean "allow all"
+    }
+    policy = policy_aliases.get(policy, policy)
+
     valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'default']
     if policy not in valid_policies:
         return jsonify({
             'success': False,
-            'error': f'Invalid policy. Must be one of: {", ".join(valid_policies)}'
+            'error': f'Invalid policy. Must be one of: quarantine, internet_only, lan_only, normal, full_access, default'
         }), 400
 
     if DEVICE_DATA_MANAGER_AVAILABLE:
@@ -2755,6 +2770,9 @@ def api_device_set_policy(mac_address):
             success = manager.set_policy(mac, policy)
 
             if success:
+                # Apply OpenFlow rules for immediate enforcement
+                manager._apply_policy_rules(mac, policy)
+
                 return jsonify({
                     'success': True,
                     'message': f'Policy set to {policy} for {mac}'
