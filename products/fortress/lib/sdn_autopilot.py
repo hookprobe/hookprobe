@@ -1372,6 +1372,7 @@ class SDNAutoPilot:
         """Get comprehensive device detail for modal view.
 
         Includes: identity, policy, WiFi signal, traffic, tags, history.
+        Handles missing tables gracefully for older database versions.
         """
         mac = mac.upper()
         with self._get_conn() as conn:
@@ -1387,30 +1388,38 @@ class SDNAutoPilot:
             # Parse tags JSON
             try:
                 device['tags'] = json.loads(device.get('tags') or '[]')
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError):
                 device['tags'] = []
 
             # Parse signals JSON
             try:
                 device['signals'] = json.loads(device.get('signals') or '{}')
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError):
                 device['signals'] = {}
 
-            # Get metrics
-            metrics = conn.execute(
-                'SELECT * FROM device_metrics WHERE mac = ?', (mac,)
-            ).fetchone()
-            device['metrics'] = dict(metrics) if metrics else {}
+            # Get metrics (table might not exist in older databases)
+            try:
+                metrics = conn.execute(
+                    'SELECT * FROM device_metrics WHERE mac = ?', (mac,)
+                ).fetchone()
+                device['metrics'] = dict(metrics) if metrics else {}
+            except sqlite3.OperationalError:
+                # Table doesn't exist
+                device['metrics'] = {}
 
-            # Get connection history (last 24 hours)
-            history = conn.execute('''
-                SELECT event_type, timestamp, details
-                FROM connection_history
-                WHERE mac = ? AND timestamp > datetime('now', '-24 hours')
-                ORDER BY timestamp DESC
-                LIMIT 50
-            ''', (mac,)).fetchall()
-            device['history'] = [dict(h) for h in history]
+            # Get connection history (table might not exist in older databases)
+            try:
+                history = conn.execute('''
+                    SELECT event_type, timestamp, details
+                    FROM connection_history
+                    WHERE mac = ? AND timestamp > datetime('now', '-24 hours')
+                    ORDER BY timestamp DESC
+                    LIMIT 50
+                ''', (mac,)).fetchall()
+                device['history'] = [dict(h) for h in history]
+            except sqlite3.OperationalError:
+                # Table doesn't exist
+                device['history'] = []
 
             # Format traffic for display
             rx_bytes = device.get('rx_bytes') or 0
