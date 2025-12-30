@@ -968,9 +968,12 @@ var DeviceDetailModal = {
         var listHtml = '';
         history.slice(0, 10).forEach(function(event) {
             var icon = event.event_type === 'connected' ? 'fa-plug text-success' :
+                       event.event_type === 'reconnected' ? 'fa-sync-alt text-success' :
                        event.event_type === 'disconnected' ? 'fa-plug text-danger' :
                        event.event_type === 'policy_changed' ? 'fa-shield-alt text-warning' :
                        event.event_type === 'proximity_downgrade' ? 'fa-exclamation-triangle text-danger' :
+                       event.event_type === 'tag_added' ? 'fa-tag text-info' :
+                       event.event_type === 'tag_removed' ? 'fa-tag text-muted' :
                        'fa-info-circle text-info';
 
             listHtml += '<div class="history-event">' +
