@@ -1144,19 +1144,26 @@ class SDNAutoPilot:
             return [dict(r) for r in rows]
 
     def ensure_device_exists(self, mac: str, ip: str = None, hostname: str = None,
-                              vendor: str = None, device_type: str = None) -> Dict:
+                              dhcp_fingerprint: str = None, vendor_class: str = None) -> Dict:
         """Ensure a device exists in the database, creating it if necessary.
 
-        This method is called before operations that require the device to exist
-        (like adding tags, setting policies, etc.). It creates a minimal device
-        entry if one doesn't already exist.
+        This method uses the full Fingerbank identification pipeline to properly
+        classify devices. It's called before operations that require the device
+        to exist (like adding tags, setting policies, etc.).
+
+        Identity Stack (via Fingerbank module):
+        - DHCP Option 55 Fingerprint (50%): OS/Device "DNA" - hardest to spoof
+        - MAC OUI Vendor (20%): Manufacturer identification (30,000+ vendors)
+        - Hostname Analysis (20%): User-assigned name patterns
+        - Fuzzy Matching: Similar fingerprint detection
+        - Fingerbank API: Cloud lookup for unknown devices
 
         Args:
             mac: Device MAC address (required)
             ip: IP address (optional, for discovery)
             hostname: Hostname (optional)
-            vendor: Vendor name (optional, will be detected from OUI if not provided)
-            device_type: Device type/category (optional)
+            dhcp_fingerprint: DHCP Option 55 fingerprint (optional but valuable)
+            vendor_class: DHCP Option 60 vendor class (optional, high value)
 
         Returns:
             Device dict (existing or newly created)
@@ -1164,10 +1171,26 @@ class SDNAutoPilot:
         mac = mac.upper()
         now = datetime.now().isoformat()
 
-        # Check if device already exists
+        # Check if device already exists with good confidence
         existing = self.get_device(mac)
         if existing:
-            # Update last_seen and IP if provided
+            confidence = existing.get('confidence', 0)
+
+            # If we have new identification data, re-run classification
+            if dhcp_fingerprint and confidence < 0.8:
+                # Re-classify with new fingerprint data
+                logger.debug(f"Re-classifying {mac} with new fingerprint data")
+                self.sync_device(
+                    mac=mac,
+                    ip=ip or existing.get('ip', ''),
+                    hostname=hostname or existing.get('hostname'),
+                    dhcp_fingerprint=dhcp_fingerprint,
+                    vendor_class=vendor_class,
+                    apply_rules=False  # Don't reapply if manual override
+                )
+                return self.get_device(mac)
+
+            # Just update last_seen and IP if provided
             with self._get_conn() as conn:
                 if ip:
                     conn.execute('''
@@ -1182,40 +1205,22 @@ class SDNAutoPilot:
                 conn.commit()
             return self.get_device(mac)
 
-        # Device doesn't exist - create a new entry
-        # Try to get vendor from OUI if not provided
-        if not vendor:
-            oui = mac[:8]
-            vendor = self._get_vendor_from_oui(oui)
+        # Device doesn't exist - run through full Fingerbank pipeline
+        # This will:
+        # 1. Use Fingerbank for comprehensive identification
+        # 2. Resolve friendly name via mDNS/Bonjour
+        # 3. Calculate proper confidence scores
+        # 4. Assign appropriate policy based on device category
+        self.sync_device(
+            mac=mac,
+            ip=ip or '',
+            hostname=hostname,
+            dhcp_fingerprint=dhcp_fingerprint,
+            vendor_class=vendor_class,
+            apply_rules=True  # Apply OpenFlow rules for new devices
+        )
 
-        # Default policy for new devices is quarantine (safe default)
-        default_policy = 'quarantine'
-
-        with self._get_conn() as conn:
-            conn.execute('''
-                INSERT INTO device_identity
-                    (mac, ip, hostname, friendly_name, device_type, vendor, category,
-                     policy, confidence, signals, first_seen, last_seen, updated_at, tags)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                mac,
-                ip or '',
-                hostname or '',
-                hostname or '',  # friendly_name defaults to hostname
-                device_type or 'unknown',
-                vendor or 'Unknown',
-                'unknown',
-                default_policy,
-                0.5,  # default confidence
-                '{}',  # empty signals
-                now,
-                now,
-                now,
-                '[]'  # empty tags
-            ))
-            conn.commit()
-
-        logger.info(f"Created new device entry: {mac} (IP: {ip}, Hostname: {hostname})")
+        logger.info(f"Created device via Fingerbank pipeline: {mac} (IP: {ip}, Hostname: {hostname})")
         return self.get_device(mac)
 
     def _get_vendor_from_oui(self, oui: str) -> str:
@@ -1397,34 +1402,65 @@ class SDNAutoPilot:
     def sync_from_device_list(self, devices: List[Dict]) -> int:
         """Sync devices from a list (e.g., from device_status.json or DHCP leases).
 
-        Creates database entries for devices that don't exist yet.
+        Uses the full Fingerbank identification pipeline to properly classify
+        devices. Creates database entries for new devices and updates existing
+        ones if new identification data is available.
+
+        Identity Stack (via Fingerbank module):
+        - DHCP Option 55 Fingerprint (50%): OS/Device "DNA" - hardest to spoof
+        - MAC OUI Vendor (20%): Manufacturer identification (30,000+ vendors)
+        - Hostname Analysis (20%): User-assigned name patterns
+        - Fuzzy Matching: Similar fingerprint detection
+        - Fingerbank API: Cloud lookup for unknown devices
 
         Args:
-            devices: List of dicts with at least 'mac' key, optionally 'ip', 'hostname', 'vendor'
+            devices: List of dicts with keys:
+                - mac: MAC address (required)
+                - ip: IP address (optional)
+                - hostname: Device hostname (optional)
+                - dhcp_fingerprint: DHCP Option 55 (optional but valuable)
+                - dhcp_sig: Alias for dhcp_fingerprint (optional)
+                - vendor_class: DHCP Option 60 (optional, high value)
 
         Returns:
-            Number of new devices created
+            Number of devices synced (new + updated)
         """
-        created = 0
+        synced = 0
         for device in devices:
             mac = device.get('mac', '').upper()
             if not mac or len(mac) < 17:  # Skip invalid MACs
                 continue
 
+            # Extract DHCP fingerprint from various possible keys
+            dhcp_fingerprint = (
+                device.get('dhcp_fingerprint') or
+                device.get('dhcp_sig') or
+                device.get('fingerprint')
+            )
+            vendor_class = device.get('vendor_class')
+
+            # Check existing device
             existing = self.get_device(mac)
-            if not existing:
+
+            # Sync if: device doesn't exist, or we have new fingerprint data
+            should_sync = (
+                not existing or
+                (dhcp_fingerprint and existing.get('confidence', 0) < 0.8)
+            )
+
+            if should_sync:
                 self.ensure_device_exists(
                     mac=mac,
                     ip=device.get('ip'),
                     hostname=device.get('hostname') or device.get('name'),
-                    vendor=device.get('vendor'),
-                    device_type=device.get('device_type') or device.get('category')
+                    dhcp_fingerprint=dhcp_fingerprint,
+                    vendor_class=vendor_class
                 )
-                created += 1
+                synced += 1
 
-        if created > 0:
-            logger.info(f"Synced {created} new devices to database")
-        return created
+        if synced > 0:
+            logger.info(f"Synced {synced} devices via Fingerbank pipeline")
+        return synced
 
     def set_manual_policy(self, mac: str, policy: str) -> bool:
         """Set manual policy override and apply OpenFlow rules.
