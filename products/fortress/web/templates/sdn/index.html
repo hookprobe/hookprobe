@@ -892,13 +892,15 @@ var DeviceDetailModal = {
             'internet_only': 'warning',
             'lan_only': 'info',
             'normal': 'primary',
+            'smart_home': 'primary',
             'full_access': 'success'
         };
         var policyNames = {
             'quarantine': 'QUARANTINE',
             'internet_only': 'INTERNET ONLY',
             'lan_only': 'LAN ONLY',
-            'normal': 'NORMAL',
+            'normal': 'SMART HOME',
+            'smart_home': 'SMART HOME',
             'full_access': 'FULL ACCESS'
         };
 
@@ -923,6 +925,7 @@ var DeviceDetailModal = {
             'internet_only': { internet: true, lan: false, mgmt: false, print: false },
             'lan_only': { internet: false, lan: true, mgmt: false, print: true },
             'normal': { internet: true, lan: true, mgmt: false, print: true },
+            'smart_home': { internet: true, lan: true, mgmt: false, print: true },
             'full_access': { internet: true, lan: true, mgmt: true, print: true }
         }[policy] || { internet: false, lan: false, mgmt: false, print: false };
 
