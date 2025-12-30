@@ -167,6 +167,8 @@ services:
       - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
+      # SDN Auto Pilot database (device classification data)
+      - /var/lib/hookprobe:/var/lib/hookprobe:ro
     # Container network - accessible via VLAN 200 routing from management network
     # Access: MGMT VLAN (10.200.100.x) → veth bridge → Container (172.20.200.20:8443)
     networks:
