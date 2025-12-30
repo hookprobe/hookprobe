@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 AUTOPILOT_DB = Path('/var/lib/hookprobe/autopilot.db')
 FINGERPRINT_DB_FILE = Path('/opt/hookprobe/fortress/data/dhcp_fingerprints.json')
 
+# Trigger files for host-side scripts (container can't run OVS commands)
+NAC_POLICY_TRIGGER_FILE = Path('/opt/hookprobe/fortress/data/.nac_policy_sync')
+
 # Network configuration
 GATEWAY_IP = "10.200.0.1"
 LAN_SUBNET = "10.200.0.0/23"
@@ -175,6 +178,7 @@ class SDNAutoPilot:
         # Accept both str and Path for flexibility in testing
         self.db_path = Path(db_path) if isinstance(db_path, str) else db_path
         self._ensure_db()
+        self._ensure_columns_exist()  # Run migrations for missing columns
         self._load_custom_fingerprints()
 
     def _ensure_db(self):
@@ -359,6 +363,47 @@ class SDNAutoPilot:
             yield conn
         finally:
             conn.close()
+
+    def _ensure_columns_exist(self):
+        """Ensure all required columns exist in the database.
+
+        This runs migrations for any missing columns. Called on first query
+        if we detect a column is missing.
+        """
+        required_columns = {
+            'status': "TEXT DEFAULT 'offline'",
+            'last_packet_count': 'INTEGER DEFAULT 0',
+            'neighbor_state': "TEXT DEFAULT 'UNKNOWN'",
+            'wifi_rssi': 'INTEGER DEFAULT NULL',
+            'wifi_quality': 'INTEGER DEFAULT NULL',
+            'wifi_proximity': 'TEXT DEFAULT NULL',
+            'wifi_band': 'TEXT DEFAULT NULL',
+            'wifi_interface': 'TEXT DEFAULT NULL',
+            'rx_bytes': 'INTEGER DEFAULT 0',
+            'tx_bytes': 'INTEGER DEFAULT 0',
+            'connected_time': 'INTEGER DEFAULT 0',
+            'tags': "TEXT DEFAULT '[]'",
+            'connection_type': "TEXT DEFAULT 'unknown'",
+        }
+
+        try:
+            with self._get_conn() as conn:
+                # Get existing columns
+                cursor = conn.execute("PRAGMA table_info(device_identity)")
+                existing_columns = {row['name'] for row in cursor.fetchall()}
+
+                # Add missing columns
+                for col_name, col_def in required_columns.items():
+                    if col_name not in existing_columns:
+                        try:
+                            conn.execute(f'ALTER TABLE device_identity ADD COLUMN {col_name} {col_def}')
+                            logger.info(f"Added missing column: {col_name}")
+                        except sqlite3.OperationalError as e:
+                            logger.debug(f"Could not add column {col_name}: {e}")
+
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Column migration failed: {e}")
 
     def _load_custom_fingerprints(self):
         """Load fingerprint databases."""
@@ -841,13 +886,29 @@ class SDNAutoPilot:
         return rules
 
     def apply_policy(self, mac: str, ip: str, policy: str) -> bool:
-        """Apply OpenFlow rules via OVS."""
-        rules = self.generate_openflow_rules(mac, ip, policy)
-        logger.info(f"Applying [{policy}] to {mac} ({ip})")
+        """Apply OpenFlow rules via trigger file for host-side execution.
 
-        for rule in rules:
-            self._apply_ovs_flow(rule)
-        return True
+        The container cannot run OVS commands directly since OVS runs on the host.
+        Instead, we write a trigger file that the host's nac-policy-sync.sh script
+        picks up and applies the OpenFlow rules.
+        """
+        logger.info(f"Requesting policy [{policy}] for {mac} ({ip})")
+
+        # Write trigger file for host-side script to apply OpenFlow rules
+        try:
+            trigger_data = {
+                'mac': mac.upper(),
+                'ip': ip,
+                'policy': policy,
+                'timestamp': datetime.now().isoformat(),
+            }
+            NAC_POLICY_TRIGGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+            NAC_POLICY_TRIGGER_FILE.write_text(json.dumps(trigger_data))
+            logger.info(f"NAC policy trigger written for {mac} -> {policy}")
+            return True
+        except IOError as e:
+            logger.error(f"Failed to write policy trigger: {e}")
+            return False
 
     def set_policy(self, mac: str, policy: str) -> bool:
         """Set and persist network policy for a device.
