@@ -181,14 +181,45 @@ class DevicePolicyDB:
         return self.get_device(mac)
 
     def _apply_openflow_rules(self, mac: str, policy: str):
-        """Apply OpenFlow rules via device_data_manager for NAC enforcement."""
+        """Apply OpenFlow rules via device_data_manager for NAC enforcement.
+
+        Policy name mapping for compatibility:
+        - quarantine -> isolated (both mean block all)
+        - normal -> full_access (both mean allow all)
+        """
+        # Map device_policies names to device_data_manager names
+        policy_map = {
+            'quarantine': 'isolated',
+            'normal': 'full_access',
+        }
+        internal_policy = policy_map.get(policy, policy)
+
         try:
-            from device_data_manager import get_device_data_manager
-            ddm = get_device_data_manager()
-            ddm._apply_policy_rules(mac, policy)
-            logger.debug(f"Applied OpenFlow rules for {mac} with policy {policy}")
-        except ImportError:
-            logger.warning("device_data_manager not available - OpenFlow rules not applied")
+            # Try different import paths for flexibility
+            ddm = None
+            try:
+                # When running from same directory or lib/ is in path
+                from device_data_manager import get_device_data_manager
+                ddm = get_device_data_manager()
+            except ImportError:
+                try:
+                    # When running from web module
+                    import sys
+                    from pathlib import Path
+                    lib_path = Path(__file__).parent
+                    if str(lib_path) not in sys.path:
+                        sys.path.insert(0, str(lib_path))
+                    from device_data_manager import get_device_data_manager
+                    ddm = get_device_data_manager()
+                except ImportError:
+                    pass
+
+            if ddm:
+                ddm._apply_policy_rules(mac, internal_policy)
+                logger.debug(f"Applied OpenFlow rules for {mac} with policy {internal_policy}")
+            else:
+                logger.warning("device_data_manager not available - OpenFlow rules not applied")
+
         except Exception as e:
             logger.warning(f"Failed to apply OpenFlow rules for {mac}: {e}")
 
