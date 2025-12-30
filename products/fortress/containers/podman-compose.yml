@@ -164,11 +164,13 @@ services:
       - web_logs:/app/logs
       # Share data from qsecbit agent (WAN health, QSecBit stats, SLAAI data)
       # Uses bind mount to match agent's bind mount (data visible on host)
-      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
+      # NOTE: rw required for web UI to save LTE usage data, device status, etc.
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:rw
       # Bind mount host config directory (install script creates users.json here)
       - /etc/hookprobe:/etc/hookprobe:ro
       # SDN Auto Pilot database (device classification data)
-      - /var/lib/hookprobe:/var/lib/hookprobe:ro
+      # NOTE: rw required for web UI to set policies (quarantine, move segment, etc.)
+      - /var/lib/hookprobe:/var/lib/hookprobe:rw
     # Container network - accessible via VLAN 200 routing from management network
     # Access: MGMT VLAN (10.200.100.x) → veth bridge → Container (172.20.200.20:8443)
     networks:
