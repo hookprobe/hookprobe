@@ -256,7 +256,8 @@ class TLSParser:
                 '-'.join(str(f) for f in ec_point_formats),
             ]
             ja3_string = ','.join(ja3_parts)
-            ja3_hash = hashlib.md5(ja3_string.encode()).hexdigest()
+            # JA3 fingerprint uses MD5 by standard spec (not for security)
+            ja3_hash = hashlib.md5(ja3_string.encode(), usedforsecurity=False).hexdigest()
 
             # Map version
             version_map = {
