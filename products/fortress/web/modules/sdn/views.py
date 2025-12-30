@@ -3162,3 +3162,219 @@ def api_device_types():
         'success': True,
         'device_types': device_types
     })
+
+
+# =============================================================================
+# DEVICE DETAIL MODAL API - Premium SDN Features
+# =============================================================================
+
+@sdn_bp.route('/api/device/<mac_address>/detail')
+@login_required
+def api_device_detail(mac_address):
+    """Get comprehensive device detail for modal view.
+
+    Returns: identity, policy, WiFi signal, traffic, tags, connection history.
+    """
+    mac = mac_address.upper().replace('-', ':')
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            device = autopilot.get_device_detail(mac)
+
+            if not device:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+
+            return jsonify({
+                'success': True,
+                'device': device
+            })
+        except Exception as e:
+            logger.error(f"Failed to get device detail: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'SDN Auto Pilot not available'
+        }), 503
+
+
+@sdn_bp.route('/api/device/<mac_address>/tags', methods=['POST'])
+@login_required
+@operator_required
+def api_device_add_tag(mac_address):
+    """Add a user tag to a device."""
+    mac = mac_address.upper().replace('-', ':')
+    data = request.get_json() or {}
+    tag = data.get('tag', '').strip()
+
+    if not tag:
+        return jsonify({'success': False, 'error': 'Tag required'}), 400
+
+    if len(tag) > 32:
+        return jsonify({'success': False, 'error': 'Tag too long (max 32 chars)'}), 400
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            success = autopilot.add_tag(mac, tag)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Tag "{tag}" added to device'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to add tag'}), 500
+        except Exception as e:
+            logger.error(f"Failed to add tag: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
+
+
+@sdn_bp.route('/api/device/<mac_address>/tags/<tag>', methods=['DELETE'])
+@login_required
+@operator_required
+def api_device_remove_tag(mac_address, tag):
+    """Remove a user tag from a device."""
+    mac = mac_address.upper().replace('-', ':')
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            success = autopilot.remove_tag(mac, tag)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Tag "{tag}" removed from device'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to remove tag'}), 500
+        except Exception as e:
+            logger.error(f"Failed to remove tag: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
+
+
+@sdn_bp.route('/api/device/<mac_address>/timeline')
+@login_required
+def api_device_timeline(mac_address):
+    """Get connection timeline for a device (last 24 hours)."""
+    mac = mac_address.upper().replace('-', ':')
+    hours = request.args.get('hours', 24, type=int)
+
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            timeline = autopilot.get_connection_timeline(mac, hours)
+
+            return jsonify({
+                'success': True,
+                'timeline': timeline,
+                'hours': hours
+            })
+        except Exception as e:
+            logger.error(f"Failed to get timeline: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
+
+
+@sdn_bp.route('/api/tags')
+@login_required
+def api_all_tags():
+    """Get all unique tags across all devices."""
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            tags = autopilot.get_all_tags()
+
+            return jsonify({
+                'success': True,
+                'tags': tags,
+                'count': len(tags)
+            })
+        except Exception as e:
+            logger.error(f"Failed to get tags: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({'success': True, 'tags': [], 'count': 0})
+
+
+@sdn_bp.route('/api/proximity/report')
+@login_required
+def api_proximity_report():
+    """Get proximity security report."""
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            report = autopilot.get_proximity_report()
+
+            return jsonify({
+                'success': True,
+                **report
+            })
+        except Exception as e:
+            logger.error(f"Failed to get proximity report: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'proximity_distribution': {},
+            'devices_at_risk': [],
+            'risk_count': 0
+        })
+
+
+@sdn_bp.route('/api/proximity/enforce', methods=['POST'])
+@login_required
+@operator_required
+def api_proximity_enforce():
+    """Manually trigger proximity-based policy enforcement."""
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            actions = autopilot.enforce_proximity_policies()
+
+            return jsonify({
+                'success': True,
+                'actions': actions,
+                'affected_count': len(actions)
+            })
+        except Exception as e:
+            logger.error(f"Failed to enforce proximity policies: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
+
+
+@sdn_bp.route('/api/wifi/signals')
+@login_required
+def api_wifi_signals():
+    """Get current WiFi signal data from host collector cache."""
+    import os
+
+    signals_file = '/opt/hookprobe/fortress/data/wifi_signals.json'
+
+    if os.path.exists(signals_file):
+        try:
+            with open(signals_file, 'r') as f:
+                data = json.load(f)
+            return jsonify({
+                'success': True,
+                **data
+            })
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Failed to read WiFi signals: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    else:
+        return jsonify({
+            'success': True,
+            'timestamp': None,
+            'stations': [],
+            'station_count': 0,
+            'note': 'WiFi signal collector not running'
+        })
