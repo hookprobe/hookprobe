@@ -30,6 +30,9 @@ GATEWAY_IP="${GATEWAY_IP:-10.200.0.1}"
 CONTAINER_NETWORK="172.20.0.0/16"
 
 # Database paths
+# Primary: SDN Autopilot database (device_identity table)
+AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
+# Legacy: Old devices database
 DEVICES_DB="/var/lib/hookprobe/devices.db"
 DEVICE_REGISTRY="/opt/hookprobe/fortress/data/device_registry.json"
 
@@ -117,11 +120,42 @@ apply_policy() {
     esac
 }
 
-# Sync all policies from SQLite database
+# Sync all policies from SDN Autopilot database (PRIMARY)
+sync_from_autopilot() {
+    if [ ! -f "$AUTOPILOT_DB" ]; then
+        log_info "No autopilot database found at $AUTOPILOT_DB"
+        return 1
+    fi
+
+    if ! command -v sqlite3 &>/dev/null; then
+        log_warn "sqlite3 not found - cannot sync policies"
+        return 1
+    fi
+
+    local synced=0
+    local failed=0
+
+    # Query device_identity table for devices with policies
+    # Only sync devices that have restrictive policies (not normal/full_access)
+    while IFS='|' read -r mac policy ip; do
+        if [ -n "$mac" ] && [ -n "$policy" ]; then
+            if apply_policy "$mac" "$policy"; then
+                synced=$((synced + 1))
+            else
+                failed=$((failed + 1))
+            fi
+        fi
+    done < <(sqlite3 "$AUTOPILOT_DB" "SELECT mac, policy, ip FROM device_identity WHERE policy IS NOT NULL AND policy != '' AND policy NOT IN ('normal', 'full_access')" 2>/dev/null || true)
+
+    log_info "NAC autopilot sync complete: $synced synced, $failed failed"
+    return 0
+}
+
+# Sync all policies from legacy SQLite database (FALLBACK)
 sync_from_sqlite() {
     if [ ! -f "$DEVICES_DB" ]; then
-        log_info "No devices database found at $DEVICES_DB - nothing to sync"
-        return 0
+        log_info "No legacy devices database found at $DEVICES_DB"
+        return 1
     fi
 
     if ! command -v sqlite3 &>/dev/null; then
@@ -143,7 +177,7 @@ sync_from_sqlite() {
         fi
     done < <(sqlite3 "$DEVICES_DB" "SELECT mac_address, policy FROM devices WHERE policy IS NOT NULL AND policy != ''" 2>/dev/null || true)
 
-    log_info "NAC policy sync complete: $synced synced, $failed failed"
+    log_info "NAC legacy sync complete: $synced synced, $failed failed"
     return 0
 }
 
@@ -192,21 +226,42 @@ show_status() {
     echo "=== NAC Policy Sync Status ==="
     echo ""
 
+    # Check SDN Autopilot database (primary)
+    if [ -f "$AUTOPILOT_DB" ]; then
+        echo "SDN Autopilot Database: $AUTOPILOT_DB"
+        if command -v sqlite3 &>/dev/null; then
+            local count
+            count=$(sqlite3 "$AUTOPILOT_DB" "SELECT COUNT(*) FROM device_identity WHERE policy IS NOT NULL" 2>/dev/null || echo "0")
+            echo "  Devices with policies: $count"
+            echo ""
+            echo "  Policies breakdown:"
+            sqlite3 "$AUTOPILOT_DB" "SELECT policy, COUNT(*) FROM device_identity WHERE policy IS NOT NULL GROUP BY policy" 2>/dev/null | \
+                while IFS='|' read -r policy cnt; do
+                    printf "    %-15s %s\n" "$policy" "$cnt"
+                done
+            echo ""
+            echo "  Quarantine devices:"
+            sqlite3 "$AUTOPILOT_DB" "SELECT mac, ip, hostname FROM device_identity WHERE policy = 'quarantine'" 2>/dev/null | \
+                while IFS='|' read -r mac ip hostname; do
+                    printf "    %s (%s) %s\n" "$mac" "${ip:-no-ip}" "${hostname:-no-hostname}"
+                done
+        fi
+    else
+        echo "SDN Autopilot Database: Not found"
+    fi
+
+    echo ""
+
+    # Check legacy database
     if [ -f "$DEVICES_DB" ]; then
-        echo "Database: $DEVICES_DB"
+        echo "Legacy Database: $DEVICES_DB (fallback)"
         if command -v sqlite3 &>/dev/null; then
             local count
             count=$(sqlite3 "$DEVICES_DB" "SELECT COUNT(*) FROM devices WHERE policy IS NOT NULL" 2>/dev/null || echo "0")
             echo "  Devices with policies: $count"
-            echo ""
-            echo "  Policies breakdown:"
-            sqlite3 "$DEVICES_DB" "SELECT policy, COUNT(*) FROM devices WHERE policy IS NOT NULL GROUP BY policy" 2>/dev/null | \
-                while IFS='|' read -r policy count; do
-                    printf "    %-15s %s\n" "$policy" "$count"
-                done
         fi
     else
-        echo "Database: Not found"
+        echo "Legacy Database: Not found"
     fi
 
     echo ""
@@ -246,8 +301,10 @@ main() {
 
             log_info "Starting NAC policy sync..."
 
-            # Try SQLite first, then JSON fallback
-            if [ -f "$DEVICES_DB" ]; then
+            # Try SDN Autopilot database first (PRIMARY), then legacy, then JSON
+            if [ -f "$AUTOPILOT_DB" ]; then
+                sync_from_autopilot
+            elif [ -f "$DEVICES_DB" ]; then
                 sync_from_sqlite
             elif [ -f "$DEVICE_REGISTRY" ]; then
                 sync_from_json

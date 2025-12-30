@@ -558,6 +558,90 @@ class TestRegressions:
         # Confidence should be higher than default 0.5 if Fingerbank is working
         # (depends on whether Fingerbank module is available)
 
+    def test_wifi_signal_update_creates_device(self, temp_db):
+        """Regression: WiFi signal update should auto-create device if not exists."""
+        from sdn_autopilot import SDNAutoPilot
+
+        pilot = SDNAutoPilot(db_path=temp_db)
+
+        # Device doesn't exist yet
+        assert pilot.get_device("DC:A6:32:A4:B6:88") is None
+
+        # Simulate WiFi signal data from wifi-signal-collector.sh
+        wifi_signals = [
+            {
+                'mac': 'DC:A6:32:A4:B6:88',
+                'rssi': -55,
+                'quality': 90,
+                'proximity': 'near',
+                'band': '5GHz',
+                'interface': 'wlan_5ghz',
+                'rx_bytes': 12345,
+                'tx_bytes': 6789,
+                'connected_time': 3600
+            }
+        ]
+
+        # Update WiFi signals - should auto-create the device
+        updated = pilot.update_wifi_signals(wifi_signals)
+        assert updated == 1
+
+        # Device should now exist
+        device = pilot.get_device("DC:A6:32:A4:B6:88")
+        assert device is not None
+
+        # Should have WiFi connection type and signal data
+        assert device['connection_type'] == 'wifi'
+        assert device['wifi_rssi'] == -55
+        assert device['wifi_quality'] == 90
+        assert device['wifi_proximity'] == 'near'
+        assert device['wifi_band'] == '5GHz'
+        assert device['status'] == 'online'
+
+        # Should have vendor from OUI lookup (Raspberry Pi = DC:A6:32)
+        assert 'Raspberry' in device.get('vendor', '')
+
+    def test_wifi_signal_update_existing_device(self, temp_db):
+        """Test WiFi signal update on existing device."""
+        from sdn_autopilot import SDNAutoPilot
+
+        pilot = SDNAutoPilot(db_path=temp_db)
+
+        # First create the device
+        pilot.ensure_device_exists(
+            mac="DC:A6:32:A4:B6:99",
+            ip="10.200.0.50",
+            hostname="test-pi"
+        )
+
+        device = pilot.get_device("DC:A6:32:A4:B6:99")
+        assert device is not None
+        assert device['connection_type'] == 'unknown'  # Default before WiFi update
+
+        # Now update with WiFi signal
+        wifi_signals = [
+            {
+                'mac': 'DC:A6:32:A4:B6:99',
+                'rssi': -65,
+                'quality': 70,
+                'proximity': 'far',
+                'band': '2.4GHz',
+                'interface': 'wlan_24ghz'
+            }
+        ]
+
+        updated = pilot.update_wifi_signals(wifi_signals)
+        assert updated == 1
+
+        # Device should be updated with WiFi info
+        device = pilot.get_device("DC:A6:32:A4:B6:99")
+        assert device['connection_type'] == 'wifi'
+        assert device['wifi_rssi'] == -65
+        assert device['wifi_quality'] == 70
+        assert device['wifi_proximity'] == 'far'
+        assert device['wifi_band'] == '2.4GHz'
+        assert device['status'] == 'online'
+
 
 # =============================================================================
 # FLASK API INTEGRATION TESTS
