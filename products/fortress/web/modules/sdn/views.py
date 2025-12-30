@@ -584,8 +584,13 @@ def index():
                 # Convert autopilot format to template format
                 for d in db_devices:
                     policy = d.get('policy', 'quarantine')
-                    # Get policy info for display
-                    policy_info = POLICY_INFO.get(NetworkPolicy(policy), {}) if DEVICE_POLICIES_AVAILABLE else {}
+                    # Get policy info for display (safely handle unknown policies)
+                    policy_info = {}
+                    if DEVICE_POLICIES_AVAILABLE:
+                        try:
+                            policy_info = POLICY_INFO.get(NetworkPolicy(policy), {})
+                        except ValueError:
+                            logger.warning(f"Unknown policy '{policy}' for device {d.get('mac')}")
                     device = {
                         'mac_address': d.get('mac', ''),
                         'ip_address': d.get('ip', ''),
