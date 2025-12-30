@@ -148,6 +148,85 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 - Multi-WAN support
 - Advanced traffic analysis
 
+### SDN Autopilot & Network Access Control
+
+Fortress includes an intelligent **SDN Autopilot** system that automatically identifies, classifies, and applies network policies to devices:
+
+| Feature | Description |
+|---------|-------------|
+| **Device Identification** | OUI lookup + DHCP fingerprinting + Fingerbank integration |
+| **Premium Device Modal** | Click any device to see details, set policy, add tags |
+| **OpenFlow Enforcement** | Real-time policy enforcement at the network switch level |
+| **WiFi Signal Tracking** | See signal strength for wireless devices |
+| **One-Click Actions** | Block, quarantine, or disconnect with a single click |
+
+#### Network Policies
+
+| Policy | Internet | LAN | Use Case |
+|--------|----------|-----|----------|
+| **Quarantine** | ❌ | ❌ | Unknown/suspicious devices (DHCP/DNS only) |
+| **Internet Only** | ✅ | ❌ | Guest devices, POS terminals |
+| **LAN Only** | ❌ | ✅ | IoT devices, printers, cameras |
+| **Normal** | ✅ | ✅ | Smart home hubs (HomePod, Echo) |
+| **Full Access** | ✅ | ✅ | Trusted management devices |
+
+#### How It Works
+
+1. **Device connects** to network (WiFi or wired)
+2. **DHCP event** triggers SDN Autopilot classification
+3. **OUI + fingerprinting** identifies device type
+4. **Policy applied** automatically based on device category
+5. **OpenFlow rules** enforced at OVS bridge level
+
+#### Testing Policies
+
+```bash
+# View current OpenFlow rules for a device
+ovs-ofctl dump-flows FTS | grep "AA:BB:CC:DD:EE:FF"
+
+# Test quarantine (should block internet)
+# Device can only get DHCP and query DNS
+
+# Test internet_only (should reach google but not LAN)
+ping 8.8.8.8       # Should work
+ping 10.200.0.50   # Should fail (other LAN device)
+
+# Test lan_only (should reach LAN but not internet)
+ping 10.200.0.50   # Should work
+ping 8.8.8.8       # Should fail
+```
+
+### LTE Data Usage Tracking
+
+For businesses with LTE failover, Fortress tracks metered data usage with enterprise-grade accuracy:
+
+| Feature | Description |
+|---------|-------------|
+| **Watermark Tracking** | Professional baseline method (same as ISPs) |
+| **Monthly/Daily Counters** | Track usage by period |
+| **Persistent Database** | SQLite-based, survives reboots |
+| **Accurate Resets** | Click "Reset" and counter actually goes to 0 |
+| **Data Limits** | Set monthly limits with warning thresholds |
+
+#### How It Works
+
+Kernel network counters are read-only (can't be reset). Fortress uses the "watermark" method:
+
+1. Store baseline snapshot when period starts or user resets
+2. Calculate usage as: `current_counter - baseline`
+3. When user resets, update baseline to current (usage shows 0)
+
+```bash
+# Check current LTE usage
+cat /opt/hookprobe/fortress/data/lte_usage.json
+
+# Manual reset
+/opt/hookprobe/fortress/devices/common/lte-usage-tracker.sh reset monthly
+
+# View SQLite database
+sqlite3 /var/lib/hookprobe/lte_usage.db "SELECT * FROM baselines"
+```
+
 ---
 
 ## Installation
