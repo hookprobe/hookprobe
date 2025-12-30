@@ -1134,6 +1134,15 @@ OUI_DATABASE = {
     "10:30:47": "Samsung", "10:D3:8A": "Samsung", "14:49:E0": "Samsung",
     "14:89:FD": "Samsung", "14:A3:64": "Samsung", "14:B4:84": "Samsung",
     "18:22:7E": "Samsung", "18:3A:2D": "Samsung", "18:67:B0": "Samsung",
+    # Samsung Smart TVs (additional OUIs)
+    "64:E6:82": "Samsung", "78:BD:BC": "Samsung", "80:8A:BD": "Samsung",
+    "84:A4:66": "Samsung", "8C:79:F5": "Samsung", "90:F1:AA": "Samsung",
+    "94:35:0A": "Samsung", "98:52:B1": "Samsung", "A0:82:1F": "Samsung",
+    "A8:9F:EC": "Samsung", "AC:5A:14": "Samsung", "B4:3A:28": "Samsung",
+    "BC:14:85": "Samsung", "C0:48:E6": "Samsung", "C4:57:6E": "Samsung",
+    "CC:07:AB": "Samsung", "D0:59:E4": "Samsung", "D4:88:90": "Samsung",
+    "E4:7C:F9": "Samsung", "E8:3A:12": "Samsung", "F0:25:B7": "Samsung",
+    "F4:7B:5E": "Samsung", "FC:03:9F": "Samsung", "FC:A1:83": "Samsung",
 
     # Google
     "00:1A:11": "Google", "08:9E:08": "Google", "18:D6:C7": "Google",
@@ -1494,6 +1503,38 @@ SPECIFIC_OUI_DEVICES = {
                  "os": "Windows/Linux", "confidence": 0.85, "hierarchy": ["Intel"]},
     "8C:8D:28": {"name": "Intel Device", "vendor": "Intel", "category": "workstation",
                  "os": "Windows/Linux", "confidence": 0.85, "hierarchy": ["Intel"]},
+
+    # ==========================================================================
+    # SMART TVs
+    # ==========================================================================
+
+    # Samsung Smart TV (common OUIs - Tizen OS)
+    "80:8A:BD": {"name": "Samsung Smart TV", "vendor": "Samsung", "category": "smart_tv",
+                 "os": "Tizen", "confidence": 0.90, "hierarchy": ["Samsung", "Smart TV"]},
+    "64:E6:82": {"name": "Samsung Smart TV", "vendor": "Samsung", "category": "smart_tv",
+                 "os": "Tizen", "confidence": 0.90, "hierarchy": ["Samsung", "Smart TV"]},
+    "78:BD:BC": {"name": "Samsung Smart TV", "vendor": "Samsung", "category": "smart_tv",
+                 "os": "Tizen", "confidence": 0.90, "hierarchy": ["Samsung", "Smart TV"]},
+    "8C:79:F5": {"name": "Samsung Smart TV", "vendor": "Samsung", "category": "smart_tv",
+                 "os": "Tizen", "confidence": 0.90, "hierarchy": ["Samsung", "Smart TV"]},
+    "F4:7B:5E": {"name": "Samsung Smart TV", "vendor": "Samsung", "category": "smart_tv",
+                 "os": "Tizen", "confidence": 0.90, "hierarchy": ["Samsung", "Smart TV"]},
+    "D0:59:E4": {"name": "Samsung Smart TV", "vendor": "Samsung", "category": "smart_tv",
+                 "os": "Tizen", "confidence": 0.90, "hierarchy": ["Samsung", "Smart TV"]},
+
+    # LG Smart TV (webOS)
+    "58:FD:B1": {"name": "LG Smart TV", "vendor": "LG", "category": "smart_tv",
+                 "os": "webOS", "confidence": 0.90, "hierarchy": ["LG", "Smart TV"]},
+    "74:40:BE": {"name": "LG Smart TV", "vendor": "LG", "category": "smart_tv",
+                 "os": "webOS", "confidence": 0.90, "hierarchy": ["LG", "Smart TV"]},
+    "A8:23:FE": {"name": "LG Smart TV", "vendor": "LG", "category": "smart_tv",
+                 "os": "webOS", "confidence": 0.90, "hierarchy": ["LG", "Smart TV"]},
+
+    # Sony Bravia (Android TV)
+    "04:5D:4B": {"name": "Sony Bravia TV", "vendor": "Sony", "category": "smart_tv",
+                 "os": "Android TV", "confidence": 0.90, "hierarchy": ["Sony", "Bravia"]},
+    "AC:9B:0A": {"name": "Sony Bravia TV", "vendor": "Sony", "category": "smart_tv",
+                 "os": "Android TV", "confidence": 0.90, "hierarchy": ["Sony", "Bravia"]},
 }
 
 
