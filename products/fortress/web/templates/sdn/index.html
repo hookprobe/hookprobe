@@ -476,136 +476,69 @@
             </div>
         </div>
 
-        <!-- Filters and Actions Row -->
-        <div class="row mb-3">
-            <div class="col-12">
-                <div class="card card-outline card-primary">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="fas fa-filter mr-2"></i>Filters & Actions</h3>
-                        <div class="card-tools">
-                            <button type="button" class="btn btn-tool" data-card-widget="collapse">
-                                <i class="fas fa-minus"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="row">
-                            <!-- Policy Filter -->
-                            <div class="col-md-3">
-                                <label>Filter by Policy</label>
-                                <select id="filter-policy" class="form-control">
-                                    <option value="">All Policies</option>
-                                    {% for policy in policies %}
-                                    <option value="{{ policy.name }}">{{ policy.display_name }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-
-                            <!-- Category Filter -->
-                            <div class="col-md-3">
-                                <label>Filter by Category</label>
-                                <select id="filter-category" class="form-control">
-                                    <option value="">All Categories</option>
-                                    <option value="iot">IoT Devices</option>
-                                    <option value="camera">Cameras</option>
-                                    <option value="pos">POS Terminals</option>
-                                    <option value="printer">Printers</option>
-                                    <option value="workstation">Workstations</option>
-                                    <option value="voice_assistant">Voice Assistants</option>
-                                    <option value="unknown">Unknown</option>
-                                </select>
-                            </div>
-
-                            <!-- Status Filter -->
-                            <div class="col-md-2">
-                                <label>Status</label>
-                                <select id="filter-status" class="form-control">
-                                    <option value="">All</option>
-                                    <option value="online">Online</option>
-                                    <option value="offline">Offline</option>
-                                    <option value="blocked">Blocked</option>
-                                </select>
-                            </div>
-
-                            <!-- Actions -->
-                            <div class="col-md-4">
-                                <label>&nbsp;</label>
-                                <div class="btn-group d-block">
-                                    <button type="button" id="btn-discover" class="btn btn-primary">
-                                        <i class="fas fa-search mr-1"></i> Discover
-                                    </button>
-                                    <button type="button" id="btn-refresh" class="btn btn-default">
-                                        <i class="fas fa-sync-alt mr-1"></i> Refresh
-                                    </button>
-                                    <div class="btn-group">
-                                        <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
-                                            <i class="fas fa-download mr-1"></i> Export
-                                        </button>
-                                        <div class="dropdown-menu">
-                                            <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='csv') }}">
-                                                <i class="fas fa-file-csv mr-2"></i> CSV
-                                            </a>
-                                            <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='json') }}">
-                                                <i class="fas fa-file-code mr-2"></i> JSON
-                                            </a>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Bulk Actions (shown when devices selected) -->
-                        <div class="row mt-3" id="bulk-actions" style="display: none;">
-                            <div class="col-12">
-                                <div class="alert alert-info mb-0">
-                                    <strong><span id="selected-count">0</span> devices selected</strong>
-                                    <div class="btn-group float-right">
-                                        <button type="button" class="btn btn-sm btn-primary" id="bulk-auto-classify">
-                                            <i class="fas fa-magic mr-1"></i> Auto-Classify
-                                        </button>
-                                        <div class="btn-group">
-                                            <button type="button" class="btn btn-sm btn-warning dropdown-toggle" data-toggle="dropdown">
-                                                <i class="fas fa-exchange-alt mr-1"></i> Set Policy
-                                            </button>
-                                            <div class="dropdown-menu">
-                                                {% for policy in policies %}
-                                                <a class="dropdown-item bulk-policy" data-policy="{{ policy.name }}">
-                                                    <i class="fas {{ policy.icon }} mr-2 text-{{ policy.color }}"></i>
-                                                    {{ policy.display_name }}
-                                                </a>
-                                                {% endfor %}
-                                            </div>
-                                        </div>
-                                        <button type="button" class="btn btn-sm btn-danger" id="bulk-block">
-                                            <i class="fas fa-ban mr-1"></i> Block All
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Device Table - Premium Clean Design -->
+        <!-- Network Devices - Unified Card with Filters -->
         <div class="row">
             <div class="col-12">
                 <div class="card" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: none; border-radius: 12px;">
-                    <div class="card-header border-0 pb-0" style="background: transparent;">
-                        <div class="d-flex justify-content-between align-items-center">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <!-- Title Row -->
+                        <div class="d-flex justify-content-between align-items-center mb-3">
                             <h3 class="card-title text-white mb-0">
                                 <i class="fas fa-network-wired mr-2 text-info"></i>Network Devices
                             </h3>
-                            <div class="card-tools">
+                            <div class="d-flex align-items-center">
                                 <span class="badge badge-light mr-2" id="device-count-badge">{{ devices|length }} devices</span>
-                                <button type="button" class="btn btn-sm btn-outline-info" onclick="location.reload();">
+                                <button type="button" id="btn-discover" class="btn btn-sm btn-primary mr-1" title="Discover">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                                <button type="button" id="btn-refresh" class="btn btn-sm btn-outline-info" title="Refresh">
                                     <i class="fas fa-sync-alt"></i>
                                 </button>
                             </div>
                         </div>
+                        <!-- Inline Filters Row -->
+                        <div class="d-flex flex-wrap align-items-center" style="gap: 0.75rem;">
+                            <select id="filter-policy" class="form-control form-control-sm" style="width: auto; min-width: 130px; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: #fff;">
+                                <option value="">All Policies</option>
+                                {% for policy in policies %}
+                                <option value="{{ policy.name }}">{{ policy.display_name }}</option>
+                                {% endfor %}
+                            </select>
+                            <select id="filter-category" class="form-control form-control-sm" style="width: auto; min-width: 130px; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: #fff;">
+                                <option value="">All Types</option>
+                                <option value="iot">IoT</option>
+                                <option value="camera">Camera</option>
+                                <option value="pos">POS</option>
+                                <option value="printer">Printer</option>
+                                <option value="workstation">Workstation</option>
+                                <option value="laptop">Laptop</option>
+                                <option value="mobile">Mobile</option>
+                                <option value="unknown">Unknown</option>
+                            </select>
+                            <select id="filter-status" class="form-control form-control-sm" style="width: auto; min-width: 100px; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: #fff;">
+                                <option value="">All Status</option>
+                                <option value="online">Online</option>
+                                <option value="offline">Offline</option>
+                                <option value="blocked">Blocked</option>
+                            </select>
+                            <div class="ml-auto">
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-toggle="dropdown" style="border-color: rgba(255,255,255,0.2); color: #aaa;">
+                                        <i class="fas fa-download mr-1"></i> Export
+                                    </button>
+                                    <div class="dropdown-menu dropdown-menu-right">
+                                        <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='csv') }}">
+                                            <i class="fas fa-file-csv mr-2"></i> CSV
+                                        </a>
+                                        <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='json') }}">
+                                            <i class="fas fa-file-code mr-2"></i> JSON
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="card-body p-3">
+                    <div class="card-body p-3 pt-2">
                         <table id="devices-table" class="table table-borderless mb-0" style="color: #e0e0e0;">
                             <thead>
                                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
@@ -738,6 +671,26 @@
                             </tbody>
                         </table>
                     </div>
+                    <!-- Policy Reference Footer - Integrated -->
+                    <div class="card-footer border-0 pt-2 pb-3" style="background: rgba(0,0,0,0.2);">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap" style="gap: 0.5rem;">
+                            {% for policy in policies %}
+                            <div class="d-flex align-items-center px-2" style="flex: 1; min-width: 140px;">
+                                <span class="mr-2" style="width: 8px; height: 8px; border-radius: 50%; background: var(--{{ policy.color }}, #6c757d);
+                                    {% if policy.color == 'danger' %}background: #dc3545;{% endif %}
+                                    {% if policy.color == 'warning' %}background: #ffc107;{% endif %}
+                                    {% if policy.color == 'info' %}background: #17a2b8;{% endif %}
+                                    {% if policy.color == 'primary' %}background: #007bff;{% endif %}
+                                    {% if policy.color == 'success' %}background: #28a745;{% endif %}
+                                "></span>
+                                <span style="font-size: 0.75rem; color: #aaa;">
+                                    <strong style="color: #ddd;">{{ policy.display_name }}</strong>
+                                    <span class="ml-1">({{ stats.policy_counts.get(policy.name, 0) }})</span>
+                                </span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -759,40 +712,6 @@
             background: rgba(255,255,255,0.1) !important;
         }
         </style>
-
-        <!-- Policy Legend -->
-        <div class="row">
-            <div class="col-12">
-                <div class="card card-outline card-secondary collapsed-card">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>Policy Reference</h3>
-                        <div class="card-tools">
-                            <button type="button" class="btn btn-tool" data-card-widget="collapse">
-                                <i class="fas fa-plus"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="row">
-                            {% for policy in policies %}
-                            <div class="col-md-4 col-lg-2">
-                                <div class="info-box bg-{{ policy.color }}">
-                                    <span class="info-box-icon"><i class="fas {{ policy.icon }}"></i></span>
-                                    <div class="info-box-content">
-                                        <span class="info-box-text">{{ policy.display_name }}</span>
-                                        <span class="info-box-number">
-                                            {{ stats.policy_counts.get(policy.name, 0) }} devices
-                                        </span>
-                                        <small>{{ policy.description }}</small>
-                                    </div>
-                                </div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- Interface Traffic (Real-time) -->
         <div class="row">
@@ -1104,11 +1023,6 @@ $(document).ready(function() {
         table.draw();
     });
 
-    // Refresh button
-    $('#btn-refresh').on('click', function() {
-        location.reload();
-    });
-
     // Discover button
     $('#btn-discover').on('click', function() {
         var btn = $(this);
@@ -1223,83 +1137,6 @@ $(document).ready(function() {
                 .fail(function() {
                     toastr.error('Request failed');
                 });
-        }
-    });
-
-    // Bulk auto-classify
-    $('#bulk-auto-classify').on('click', function() {
-        var macs = getSelectedMacs();
-        if (macs.length === 0) return;
-
-        if (confirm('Auto-classify ' + macs.length + ' devices based on OUI?')) {
-            $.ajax({
-                url: '{{ url_for("sdn.bulk_auto_classify") }}',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({ mac_addresses: macs }),
-                success: function(data) {
-                    if (data.success) {
-                        toastr.success(data.message);
-                        setTimeout(function() { location.reload(); }, 1500);
-                    } else {
-                        toastr.warning(data.message);
-                    }
-                },
-                error: function() {
-                    toastr.error('Bulk classification failed');
-                }
-            });
-        }
-    });
-
-    // Bulk set policy
-    $(document).on('click', '.bulk-policy', function(e) {
-        e.preventDefault();
-        var policy = $(this).data('policy');
-        var macs = getSelectedMacs();
-
-        if (macs.length === 0) return;
-
-        if (confirm('Set policy "' + policy + '" for ' + macs.length + ' devices?')) {
-            $.ajax({
-                url: '{{ url_for("sdn.bulk_set_policy") }}',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({ mac_addresses: macs, policy: policy }),
-                success: function(data) {
-                    if (data.success) {
-                        toastr.success(data.message);
-                        setTimeout(function() { location.reload(); }, 1500);
-                    } else {
-                        toastr.warning(data.message);
-                    }
-                },
-                error: function() {
-                    toastr.error('Bulk policy update failed');
-                }
-            });
-        }
-    });
-
-    // Bulk block
-    $('#bulk-block').on('click', function() {
-        var macs = getSelectedMacs();
-        if (macs.length === 0) return;
-
-        if (confirm('Block ' + macs.length + ' devices? They will be isolated from the network.')) {
-            $.ajax({
-                url: '{{ url_for("sdn.bulk_set_policy") }}',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({ mac_addresses: macs, policy: 'isolated' }),
-                success: function(data) {
-                    toastr.success(data.message);
-                    setTimeout(function() { location.reload(); }, 1500);
-                },
-                error: function() {
-                    toastr.error('Bulk block failed');
-                }
-            });
         }
     });
 
