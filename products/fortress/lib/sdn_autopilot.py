@@ -328,28 +328,40 @@ class SDNAutoPilot:
         """
         Determine policy from Fingerbank identification.
 
-        Policy Philosophy:
-        - Apple Ecosystem: All Apple devices get 'normal' policy to enable
-          Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit communication.
-        - Raspberry Pi: Management devices get 'full_access'
-        - Trusted Smart Home: Voice assistants, smart hubs get 'normal'
-        - Personal Devices: Windows/Linux laptops get 'internet_only'
-        - IoT Devices: Cameras, printers get 'lan_only'
-        - Unknown: Low confidence devices get 'quarantine'
+        Policy Hierarchy:
+        1. Management Devices (MacBook, iPad, iMac) - full network control
+        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - normal LAN
+        3. Trusted Infrastructure (Raspberry Pi) - normal access
+        4. Smart Home devices - normal
+        5. Personal Devices (non-Apple) - internet_only
+        6. IoT Devices - lan_only
+        7. Unknown - quarantine
         """
         # =======================================================================
-        # TRUSTED VENDOR ECOSYSTEMS - Full inter-device communication
+        # MANAGEMENT DEVICES - Full network control (can manage other devices)
         # =======================================================================
 
-        # Apple Ecosystem: All Apple devices need to communicate with each other
-        # via Bonjour (mDNS/UDP 5353), AirPlay, AirDrop, Handoff, HomeKit, etc.
-        # iPhone, iPad, MacBook, Apple Watch, HomePod, Apple TV all get 'normal'
-        if vendor == "Apple" and score >= 0.75:
-            return 'normal', f"Apple Ecosystem: {device_name} (trusted)"
+        # MacBook, iPad, iMac, Mac Mini, Mac Pro are management devices
+        if vendor == "Apple" and score >= 0.80:
+            if category in ('laptop', 'tablet', 'desktop'):
+                return 'full_access', f"Management: {device_name} (Apple)"
 
-        # Raspberry Pi Foundation (our management/infrastructure devices)
+        # =======================================================================
+        # APPLE ECOSYSTEM - Normal LAN access for inter-device communication
+        # =======================================================================
+
+        # iPhone, Apple Watch, HomePod, Apple TV get normal policy
+        # Enables Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit
+        if vendor == "Apple" and score >= 0.75:
+            return 'normal', f"Apple Ecosystem: {device_name}"
+
+        # =======================================================================
+        # TRUSTED INFRASTRUCTURE - Normal access (not management)
+        # =======================================================================
+
+        # Raspberry Pi: Trusted but not management
         if vendor == "Raspberry Pi" and score >= 0.80:
-            return 'full_access', f"Management device: {device_name}"
+            return 'normal', f"Trusted SBC: {device_name}"
 
         # =======================================================================
         # HIGH CONFIDENCE DEVICES (score >= 0.80)
@@ -503,13 +515,18 @@ class SDNAutoPilot:
     def _determine_policy(self, score: float, category: str, vendor: str,
                          hostname: Optional[str]) -> Tuple[str, str]:
         """Determine policy based on score and category (legacy method)."""
-        # Apple Ecosystem: All Apple devices get 'normal' for inter-device communication
+        # Management: MacBook, iPad, iMac get full_access
+        if vendor == "Apple" and score >= 0.80:
+            if category in ('laptop', 'tablet', 'desktop'):
+                return 'full_access', f"Management (Apple {category})"
+
+        # Apple Ecosystem: Other Apple devices get 'normal'
         if vendor == "Apple" and score >= 0.75:
             return 'normal', f"Apple Ecosystem (score: {score:.2f})"
 
-        # Raspberry Pi: Management devices
+        # Raspberry Pi: Trusted but not management
         if vendor == "Raspberry Pi" and score >= 0.80:
-            return 'full_access', f"Management device (score: {score:.2f})"
+            return 'normal', f"Trusted SBC (score: {score:.2f})"
 
         if score >= 0.80:
             if category in ('smart_hub', 'bridge', 'voice_assistant'):
