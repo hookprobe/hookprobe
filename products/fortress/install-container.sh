@@ -2310,6 +2310,59 @@ EOF
     systemctl enable fts-lte-collector.timer 2>/dev/null || true
     systemctl start fts-lte-collector.timer 2>/dev/null || true
     log_success "LTE usage tracker installed (watermark-based, timer runs every 30s)"
+
+    # -------------------------------------------------------------------------
+    # WiFi Signal Collector (premium SDN feature)
+    # Collects RSSI/signal quality from hostapd for connected WiFi clients
+    # -------------------------------------------------------------------------
+    log_info "Installing WiFi signal collector..."
+
+    local wifi_script_src="${SCRIPT_DIR}/devices/common/wifi-signal-collector.sh"
+    local wifi_script_dst="${INSTALL_DIR}/devices/common/wifi-signal-collector.sh"
+    if [ -f "$wifi_script_src" ]; then
+        cp "$wifi_script_src" "$wifi_script_dst"
+        chmod +x "$wifi_script_dst"
+        log_info "  Installed: wifi-signal-collector.sh"
+    else
+        log_warn "  wifi-signal-collector.sh not found at $wifi_script_src"
+    fi
+
+    # Create WiFi signal collector service
+    cat > /etc/systemd/system/fts-wifi-signal.service << 'EOF'
+[Unit]
+Description=Fortress WiFi Signal Collector
+After=network.target fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/devices/common/wifi-signal-collector.sh
+User=root
+Group=root
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create WiFi signal collector timer (runs every 30s)
+    cat > /etc/systemd/system/fts-wifi-signal.timer << 'EOF'
+[Unit]
+Description=Fortress WiFi Signal Collector Timer
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable fts-wifi-signal.timer 2>/dev/null || true
+    systemctl start fts-wifi-signal.timer 2>/dev/null || true
+    log_success "WiFi signal collector installed (timer runs every 30s)"
 }
 
 # Check if container image needs rebuilding
@@ -3502,8 +3555,14 @@ uninstall() {
     systemctl disable fortress 2>/dev/null || true
     systemctl disable fts-hostapd-2g 2>/dev/null || true
     systemctl disable fts-hostapd-5g 2>/dev/null || true
+    # Stop and disable host timers
+    systemctl stop fts-device-status.timer fts-lte-collector.timer fts-wifi-signal.timer 2>/dev/null || true
+    systemctl disable fts-device-status.timer fts-lte-collector.timer fts-wifi-signal.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fortress.service
     rm -f /etc/systemd/system/fts-hostapd-*.service
+    rm -f /etc/systemd/system/fts-device-status.service /etc/systemd/system/fts-device-status.timer
+    rm -f /etc/systemd/system/fts-lte-collector.service /etc/systemd/system/fts-lte-collector.timer
+    rm -f /etc/systemd/system/fts-wifi-signal.service /etc/systemd/system/fts-wifi-signal.timer
     systemctl daemon-reload
 
     # Stage 5: Remove OVS network configuration

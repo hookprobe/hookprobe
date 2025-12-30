@@ -239,6 +239,12 @@ EOF
     last_reset=$(sqlite3 "$DB_FILE" "SELECT reset_at FROM resets
         WHERE interface='$iface' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
 
+    # Format last_reset for JSON (null if empty, quoted string otherwise)
+    local last_reset_json="null"
+    if [ -n "$last_reset" ]; then
+        last_reset_json="\"$last_reset\""
+    fi
+
     # Write output JSON
     cat > "$TEMP_FILE" << EOF
 {
@@ -261,14 +267,16 @@ EOF
     "rx": $daily_rx_base,
     "tx": $daily_tx_base
   },
-  "last_reset": ${last_reset:+\"$last_reset\"}${last_reset:-null},
+  "last_reset": $last_reset_json,
   "last_update": "$(date -Iseconds)",
   "tracking_method": "watermark"
 }
 EOF
 
     mv "$TEMP_FILE" "$OUTPUT_FILE"
-    chmod 644 "$OUTPUT_FILE"
+    # Make writable by container (runs as UID 1000)
+    chmod 666 "$OUTPUT_FILE"
+    chown 1000:1000 "$OUTPUT_FILE" 2>/dev/null || true
 }
 
 # Reset command (called by API)
