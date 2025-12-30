@@ -252,6 +252,7 @@ class SDNAutoPilot:
 
     def calculate_identity(self, mac: str, hostname: Optional[str] = None,
                           dhcp_fingerprint: Optional[str] = None,
+                          vendor_class: Optional[str] = None,
                           open_ports: Optional[List[int]] = None) -> IdentityScore:
         """
         Identify device using Fingerbank (if available) or legacy scoring.
@@ -260,19 +261,21 @@ class SDNAutoPilot:
         """
         # Use Fingerbank for comprehensive identification
         if HAS_FINGERBANK and self.fingerbank:
-            return self._identify_with_fingerbank(mac, hostname, dhcp_fingerprint, open_ports)
+            return self._identify_with_fingerbank(mac, hostname, dhcp_fingerprint, vendor_class, open_ports)
 
         # Legacy identification
         return self._identify_legacy(mac, hostname, dhcp_fingerprint, open_ports)
 
     def _identify_with_fingerbank(self, mac: str, hostname: Optional[str],
                                    dhcp_fingerprint: Optional[str],
+                                   vendor_class: Optional[str],
                                    open_ports: Optional[List[int]]) -> IdentityScore:
         """Use Fingerbank module for device identification."""
         device = self.fingerbank.identify(
             mac=mac,
             dhcp_fingerprint=dhcp_fingerprint,
-            hostname=hostname
+            hostname=hostname,
+            vendor_class=vendor_class  # Pass DHCP Option 60
         )
 
         # Apply probing bonus if available
@@ -658,10 +661,11 @@ class SDNAutoPilot:
 
     def sync_device(self, mac: str, ip: str, hostname: Optional[str] = None,
                    dhcp_fingerprint: Optional[str] = None,
+                   vendor_class: Optional[str] = None,
                    apply_rules: bool = True) -> IdentityScore:
         """Sync device through auto-pilot pipeline."""
         mac = mac.upper()
-        identity = self.calculate_identity(mac, hostname, dhcp_fingerprint)
+        identity = self.calculate_identity(mac, hostname, dhcp_fingerprint, vendor_class)
 
         with self._get_conn() as conn:
             # Check manual override
