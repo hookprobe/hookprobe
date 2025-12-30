@@ -5,11 +5,12 @@ Fortress SDN Auto Pilot - Premium Heuristic Scoring Engine
 Philosophy: "Guilty until proven Innocent"
 Goal: 99% accuracy device classification using multiple identity signals.
 
-Identity Stack (Weighted Scoring):
+Identity Stack (via Fingerbank module):
 - DHCP Option 55 Fingerprint (50%): OS/Device "DNA" - hardest to spoof
-- MAC OUI Vendor (20%): Manufacturer identification
+- MAC OUI Vendor (20%): Manufacturer identification (30,000+ vendors)
 - Hostname Analysis (20%): User-assigned name patterns
-- Active Probing (10%): Open ports/services behavior
+- Fuzzy Matching: Similar fingerprint detection
+- Fingerbank API: Cloud lookup for unknown devices
 
 Policies (matching device_policies.py):
 - QUARANTINE: Unknown devices, no network access (default)
@@ -30,6 +31,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from contextlib import contextmanager
 from dataclasses import dataclass
+
+# Import comprehensive Fingerbank module
+try:
+    from fingerbank import Fingerbank, get_fingerbank, DeviceInfo, CATEGORY_POLICIES
+    HAS_FINGERBANK = True
+except ImportError:
+    HAS_FINGERBANK = False
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +223,18 @@ class SDNAutoPilot:
             conn.close()
 
     def _load_custom_fingerprints(self):
-        """Load custom fingerprint database if available."""
+        """Load fingerprint databases."""
+        # Use comprehensive Fingerbank module if available
+        if HAS_FINGERBANK:
+            self.fingerbank = get_fingerbank()
+            stats = self.fingerbank.get_stats()
+            logger.info(f"Fingerbank loaded: {stats['loaded_fingerprints']} fingerprints, "
+                       f"{stats['oui_entries']} OUI entries")
+        else:
+            self.fingerbank = None
+            logger.warning("Fingerbank module not available, using legacy database")
+
+        # Legacy fallback
         self.fingerprints = FINGERPRINT_DATABASE.copy()
         if FINGERPRINT_DB_FILE.exists():
             try:
@@ -232,6 +251,103 @@ class SDNAutoPilot:
     # =========================================================================
 
     def calculate_identity(self, mac: str, hostname: Optional[str] = None,
+                          dhcp_fingerprint: Optional[str] = None,
+                          open_ports: Optional[List[int]] = None) -> IdentityScore:
+        """
+        Identify device using Fingerbank (if available) or legacy scoring.
+
+        Returns IdentityScore with policy, confidence, and device details.
+        """
+        # Use Fingerbank for comprehensive identification
+        if HAS_FINGERBANK and self.fingerbank:
+            return self._identify_with_fingerbank(mac, hostname, dhcp_fingerprint, open_ports)
+
+        # Legacy identification
+        return self._identify_legacy(mac, hostname, dhcp_fingerprint, open_ports)
+
+    def _identify_with_fingerbank(self, mac: str, hostname: Optional[str],
+                                   dhcp_fingerprint: Optional[str],
+                                   open_ports: Optional[List[int]]) -> IdentityScore:
+        """Use Fingerbank module for device identification."""
+        device = self.fingerbank.identify(
+            mac=mac,
+            dhcp_fingerprint=dhcp_fingerprint,
+            hostname=hostname
+        )
+
+        # Apply probing bonus if available
+        confidence = device.confidence
+        category = device.category
+
+        if open_ports:
+            if any(p in open_ports for p in [22, 3389, 5900]):
+                confidence = min(1.0, confidence + 0.08)
+                if category == "unknown":
+                    category = "workstation"
+            elif any(p in open_ports for p in [9100, 631, 515]):
+                confidence = min(1.0, confidence + 0.10)
+                if category == "unknown":
+                    category = "printer"
+
+        # Determine policy based on score thresholds
+        policy, reason = self._determine_policy_from_fingerbank(
+            confidence, category, device.vendor, hostname, device.name
+        )
+
+        return IdentityScore(
+            policy=policy,
+            confidence=confidence,
+            vendor=device.vendor,
+            os_fingerprint=device.os,
+            category=category,
+            signals={
+                'fingerbank_confidence': device.confidence,
+                'name': device.name,
+                'hierarchy': device.hierarchy,
+            },
+            reason=reason
+        )
+
+    def _determine_policy_from_fingerbank(self, score: float, category: str,
+                                          vendor: str, hostname: Optional[str],
+                                          device_name: str) -> Tuple[str, str]:
+        """Determine policy from Fingerbank identification."""
+        # High confidence devices
+        if score >= 0.80:
+            if category in ('voice_assistant', 'smart_hub', 'bridge'):
+                return 'normal', f"Verified {device_name} (score: {score:.2f})"
+            elif category in ('phone', 'tablet', 'laptop', 'workstation', 'desktop', 'gaming', 'streaming', 'smart_tv', 'wearable'):
+                return 'internet_only', f"Verified {device_name} (score: {score:.2f})"
+            elif category in ('printer', 'camera', 'doorbell', 'thermostat', 'iot', 'appliance', 'sensor', 'smart_plug', 'smart_light'):
+                return 'lan_only', f"Verified IoT: {device_name} (score: {score:.2f})"
+            elif category == 'sbc' and 'raspberry' in vendor.lower():
+                return 'full_access', f"Management device: {device_name}"
+            elif category == 'server':
+                return 'full_access', f"Server: {device_name} (score: {score:.2f})"
+            return 'internet_only', f"Verified: {device_name} (score: {score:.2f})"
+
+        # Medium confidence
+        elif score >= 0.50:
+            if category in ('printer', 'camera', 'iot', 'thermostat', 'appliance'):
+                return 'lan_only', f"Likely IoT: {device_name} (score: {score:.2f})"
+            if category in ('voice_assistant', 'smart_hub', 'bridge'):
+                return 'normal', f"Likely smart home: {device_name} (score: {score:.2f})"
+            return 'internet_only', f"Generic device: {device_name} (score: {score:.2f})"
+
+        # Known workstation vendors get internet access
+        elif vendor in ('Intel', 'Dell', 'HP', 'Lenovo', 'ASUS', 'Acer'):
+            return 'internet_only', f"Workstation vendor ({vendor})"
+
+        # Low confidence - quarantine
+        no_hn = not hostname or hostname.lower() in ('', '*', 'unknown', 'null')
+        if no_hn and vendor in ("Unknown", "Randomized MAC"):
+            return 'quarantine', "Zero-knowledge - awaiting identification"
+        elif score < 0.30:
+            return 'quarantine', f"Low confidence (score: {score:.2f})"
+
+        return 'internet_only', f"Default (score: {score:.2f})"
+
+    def _identify_legacy(self, mac: str, hostname: Optional[str] = None,
                           dhcp_fingerprint: Optional[str] = None,
                           open_ports: Optional[List[int]] = None) -> IdentityScore:
         """
