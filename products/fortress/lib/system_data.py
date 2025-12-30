@@ -996,15 +996,13 @@ LTE_RESET_REQUEST_FILE = Path('/opt/hookprobe/fortress/data/.lte_reset_request')
 
 
 def reset_lte_usage(reset_type: str = 'all') -> Dict:
-    """Reset LTE usage counters using watermark method.
-
-    This writes a trigger file that the host-side lte-usage-tracker.sh
-    script will pick up and process. The script updates the SQLite
-    database baselines, which makes the counters show 0.
+    """Reset LTE usage counters by updating baselines.
 
     The kernel counters are read-only - we can't actually reset them.
-    Instead, we store the current value as a "baseline" and calculate
-    usage as (current - baseline). Resetting means updating the baseline.
+    Instead, we update the baseline to the current hw values, making
+    calculated usage = (current - baseline) = 0.
+
+    Also writes a trigger file for the host script as a backup mechanism.
 
     Args:
         reset_type: 'all' to reset both daily and monthly,
@@ -1017,31 +1015,63 @@ def reset_lte_usage(reset_type: str = 'all') -> Dict:
     previous_monthly = usage.get('monthly_bytes', 0)
     previous_daily = usage.get('daily_bytes', 0)
 
-    # Write trigger file for host-side script
-    # The lte-usage-tracker.sh will pick this up on next run (within 30s)
-    try:
-        reset_request = {
-            'type': reset_type,
-            'timestamp': datetime.now().isoformat(),
-            'requested_by': 'web_api',
-        }
-        LTE_RESET_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LTE_RESET_REQUEST_FILE.write_text(json.dumps(reset_request))
-        logger.info(f"LTE reset request written ({reset_type})")
-    except IOError as e:
-        logger.error(f"Failed to write reset request: {e}")
-        return {
-            'success': False,
-            'error': f'Failed to write reset request: {e}',
-        }
+    # Get current hardware counters
+    hw_rx = usage.get('hw_rx_bytes', 0)
+    hw_tx = usage.get('hw_tx_bytes', 0)
 
-    return {
-        'success': True,
-        'reset_type': reset_type,
-        'previous_monthly_mb': round(previous_monthly / (1024 * 1024), 2),
-        'previous_daily_mb': round(previous_daily / (1024 * 1024), 2),
-        'message': 'Reset request queued. Counters will reset within 30 seconds.',
-    }
+    now = datetime.now()
+
+    # Directly update baselines and reset counters
+    if reset_type in ('monthly', 'all'):
+        usage['monthly_bytes'] = 0
+        usage['monthly_baseline'] = {'rx': hw_rx, 'tx': hw_tx}
+        usage['month'] = now.strftime('%Y-%m')
+        logger.info(f"Monthly LTE usage reset (was {previous_monthly / (1024*1024):.2f} MB)")
+
+    if reset_type in ('daily', 'all'):
+        usage['daily_bytes'] = 0
+        usage['daily_baseline'] = {'rx': hw_rx, 'tx': hw_tx}
+        usage['day'] = now.strftime('%Y-%m-%d')
+        logger.info(f"Daily LTE usage reset (was {previous_daily / (1024*1024):.2f} MB)")
+
+    usage['last_reset'] = now.strftime('%Y-%m-%d %H:%M:%S')
+    usage['last_update'] = now.isoformat()
+
+    # Try to save directly to the file
+    try:
+        LTE_USAGE_FILE.write_text(json.dumps(usage, indent=2))
+        logger.info(f"LTE usage file updated directly ({reset_type} reset)")
+        return {
+            'success': True,
+            'reset_type': reset_type,
+            'previous_monthly_mb': round(previous_monthly / (1024 * 1024), 2),
+            'previous_daily_mb': round(previous_daily / (1024 * 1024), 2),
+            'message': f'Usage counters reset successfully ({reset_type})',
+        }
+    except (PermissionError, IOError) as e:
+        # Fallback: write trigger file for host script
+        logger.warning(f"Direct file update failed ({e}), using trigger file")
+        try:
+            reset_request = {
+                'type': reset_type,
+                'timestamp': now.isoformat(),
+                'requested_by': 'web_api',
+            }
+            LTE_RESET_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LTE_RESET_REQUEST_FILE.write_text(json.dumps(reset_request))
+            return {
+                'success': True,
+                'reset_type': reset_type,
+                'previous_monthly_mb': round(previous_monthly / (1024 * 1024), 2),
+                'previous_daily_mb': round(previous_daily / (1024 * 1024), 2),
+                'message': 'Reset request queued. Counters will reset within 30 seconds.',
+            }
+        except IOError as e2:
+            logger.error(f"Failed to write reset request: {e2}")
+            return {
+                'success': False,
+                'error': f'Failed to reset: {e2}',
+            }
 
 
 def get_lte_usage() -> Dict:
