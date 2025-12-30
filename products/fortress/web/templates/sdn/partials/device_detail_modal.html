@@ -156,17 +156,20 @@
                                 </div>
                                 <div class="mb-3">
                                     <small class="text-muted d-block mb-2">Change Policy</small>
-                                    <div class="btn-group btn-group-sm w-100" role="group">
-                                        <button type="button" class="btn btn-outline-danger policy-btn" data-policy="quarantine">
+                                    <div class="btn-group btn-group-sm w-100 flex-wrap" role="group">
+                                        <button type="button" class="btn btn-outline-danger policy-btn" data-policy="quarantine" title="No network access">
                                             <i class="fas fa-ban"></i> Quarantine
                                         </button>
-                                        <button type="button" class="btn btn-outline-warning policy-btn" data-policy="internet_only">
+                                        <button type="button" class="btn btn-outline-warning policy-btn" data-policy="internet_only" title="Internet only, no LAN">
                                             <i class="fas fa-globe"></i> Internet
                                         </button>
-                                        <button type="button" class="btn btn-outline-info policy-btn" data-policy="lan_only">
+                                        <button type="button" class="btn btn-outline-info policy-btn" data-policy="lan_only" title="LAN only, no internet">
                                             <i class="fas fa-home"></i> LAN
                                         </button>
-                                        <button type="button" class="btn btn-outline-success policy-btn" data-policy="full_access">
+                                        <button type="button" class="btn btn-outline-primary policy-btn" data-policy="normal" title="Smart home/IoT - LAN + Internet, no containers">
+                                            <i class="fas fa-lightbulb"></i> Smart Home
+                                        </button>
+                                        <button type="button" class="btn btn-outline-success policy-btn" data-policy="full_access" title="Full access including containers">
                                             <i class="fas fa-check"></i> Full
                                         </button>
                                     </div>
