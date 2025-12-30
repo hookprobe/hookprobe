@@ -14,6 +14,12 @@ set -e
 OUTPUT_FILE="/opt/hookprobe/fortress/data/device_status.json"
 AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
 OVS_BRIDGE="FTS"
+DATA_DIR="$(dirname "$OUTPUT_FILE")"
+
+# Ensure data directory has proper permissions (container runs as UID 1000)
+mkdir -p "$DATA_DIR"
+chmod 777 "$DATA_DIR" 2>/dev/null || true
+chown 1000:1000 "$DATA_DIR" 2>/dev/null || true
 
 # Thresholds (seconds)
 ONLINE_THRESHOLD=60
