@@ -173,6 +173,7 @@ stop_services() {
         "fts-dfs-api"
         "fts-ml-aggregator"
         "fts-lstm-train"
+        "fts-device-status"
     )
 
     # Stop timers first
@@ -180,6 +181,7 @@ stop_services() {
     systemctl stop fts-channel-optimize.timer 2>/dev/null || true
     systemctl stop fts-channel-calibrate.timer 2>/dev/null || true
     systemctl stop fts-lstm-train.timer 2>/dev/null || true
+    systemctl stop fts-device-status.timer 2>/dev/null || true
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -390,6 +392,7 @@ remove_systemd_services() {
         "fts-dfs-api"
         "fts-ml-aggregator"
         "fts-lstm-train"
+        "fts-device-status"
     )
 
     # Disable and remove channel optimization timer
@@ -406,6 +409,11 @@ remove_systemd_services() {
     log_info "Removing fts-lstm-train.timer..."
     systemctl disable fts-lstm-train.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fts-lstm-train.timer
+
+    # Disable and remove device status timer
+    log_info "Removing fts-device-status.timer..."
+    systemctl disable fts-device-status.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-device-status.timer
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
