@@ -980,8 +980,19 @@ def update_lte_usage(interface: Optional[str] = None) -> Dict:
     }
 
 
+LTE_RESET_REQUEST_FILE = Path('/opt/hookprobe/fortress/data/.lte_reset_request')
+
+
 def reset_lte_usage(reset_type: str = 'all') -> Dict:
-    """Reset LTE usage counters.
+    """Reset LTE usage counters using watermark method.
+
+    This writes a trigger file that the host-side lte-usage-tracker.sh
+    script will pick up and process. The script updates the SQLite
+    database baselines, which makes the counters show 0.
+
+    The kernel counters are read-only - we can't actually reset them.
+    Instead, we store the current value as a "baseline" and calculate
+    usage as (current - baseline). Resetting means updating the baseline.
 
     Args:
         reset_type: 'all' to reset both daily and monthly,
@@ -990,35 +1001,34 @@ def reset_lte_usage(reset_type: str = 'all') -> Dict:
     """
     usage = _load_lte_usage()
 
-    # Record reset in history
-    reset_record = {
-        'timestamp': datetime.now().isoformat(),
-        'type': reset_type,
-        'monthly_bytes_before': usage.get('monthly_bytes', 0),
-        'daily_bytes_before': usage.get('daily_bytes', 0),
-    }
+    # Get current values before reset
+    previous_monthly = usage.get('monthly_bytes', 0)
+    previous_daily = usage.get('daily_bytes', 0)
 
-    if reset_type in ['all', 'monthly']:
-        usage['monthly_bytes'] = 0
-        usage['month'] = datetime.now().strftime('%Y-%m')
-
-    if reset_type in ['all', 'daily']:
-        usage['daily_bytes'] = 0
-        usage['day'] = datetime.now().strftime('%Y-%m-%d')
-
-    # Keep last 10 reset records
-    usage.setdefault('reset_history', []).append(reset_record)
-    usage['reset_history'] = usage['reset_history'][-10:]
-
-    _save_lte_usage(usage)
-
-    logger.info(f"LTE usage reset ({reset_type}): was {reset_record['monthly_bytes_before']} bytes monthly")
+    # Write trigger file for host-side script
+    # The lte-usage-tracker.sh will pick this up on next run (within 30s)
+    try:
+        reset_request = {
+            'type': reset_type,
+            'timestamp': datetime.now().isoformat(),
+            'requested_by': 'web_api',
+        }
+        LTE_RESET_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LTE_RESET_REQUEST_FILE.write_text(json.dumps(reset_request))
+        logger.info(f"LTE reset request written ({reset_type})")
+    except IOError as e:
+        logger.error(f"Failed to write reset request: {e}")
+        return {
+            'success': False,
+            'error': f'Failed to write reset request: {e}',
+        }
 
     return {
         'success': True,
         'reset_type': reset_type,
-        'previous_monthly_mb': round(reset_record['monthly_bytes_before'] / (1024 * 1024), 2),
-        'previous_daily_mb': round(reset_record['daily_bytes_before'] / (1024 * 1024), 2),
+        'previous_monthly_mb': round(previous_monthly / (1024 * 1024), 2),
+        'previous_daily_mb': round(previous_daily / (1024 * 1024), 2),
+        'message': 'Reset request queued. Counters will reset within 30 seconds.',
     }
 
 
