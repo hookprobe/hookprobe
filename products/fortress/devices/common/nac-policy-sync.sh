@@ -29,6 +29,9 @@ LAN_NETWORK="${LAN_NETWORK:-10.200.0.0/16}"
 GATEWAY_IP="${GATEWAY_IP:-10.200.0.1}"
 CONTAINER_NETWORK="172.20.0.0/16"
 
+# Trigger file from container for real-time policy application
+POLICY_TRIGGER_FILE="/opt/hookprobe/fortress/data/.nac_policy_sync"
+
 # Database paths
 # Primary: SDN Autopilot database (device_identity table)
 AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
@@ -39,6 +42,32 @@ DEVICE_REGISTRY="/opt/hookprobe/fortress/data/device_registry.json"
 log_info() { logger -t "$LOG_TAG" "$1" 2>/dev/null || true; echo "[INFO] $1"; }
 log_warn() { logger -t "$LOG_TAG" -p warning "$1" 2>/dev/null || true; echo "[WARN] $1"; }
 log_error() { logger -t "$LOG_TAG" -p err "$1" 2>/dev/null || true; echo "[ERROR] $1"; }
+
+# Check for policy trigger file from container
+check_policy_trigger() {
+    if [ -f "$POLICY_TRIGGER_FILE" ]; then
+        local mac policy
+        # Parse JSON trigger file using Python
+        read -r mac policy < <(python3 -c "
+import json
+import sys
+try:
+    with open('$POLICY_TRIGGER_FILE') as f:
+        data = json.load(f)
+    print(data.get('mac', ''), data.get('policy', ''))
+except Exception as e:
+    print('', '', file=sys.stderr)
+" 2>/dev/null || echo "")
+
+        if [ -n "$mac" ] && [ -n "$policy" ]; then
+            log_info "Processing policy trigger: $mac -> $policy"
+            apply_policy "$mac" "$policy"
+        fi
+
+        # Remove the trigger file
+        rm -f "$POLICY_TRIGGER_FILE"
+    fi
+}
 
 # Apply OpenFlow rule
 add_flow() {
@@ -283,13 +312,22 @@ main() {
         --status)
             show_status
             ;;
+        --trigger)
+            # Fast path: only check trigger file from container
+            if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+                log_error "OVS bridge $OVS_BRIDGE not found"
+                exit 1
+            fi
+            check_policy_trigger
+            ;;
         --help|-h)
-            echo "Usage: $0 [--status|--help]"
+            echo "Usage: $0 [--status|--trigger|--help]"
             echo ""
             echo "Syncs NAC device policies from database to OpenFlow rules."
             echo ""
             echo "Options:"
             echo "  --status    Show current sync status"
+            echo "  --trigger   Only check for container trigger file (fast path)"
             echo "  --help      Show this help"
             ;;
         *)
@@ -298,6 +336,9 @@ main() {
                 log_error "OVS bridge $OVS_BRIDGE not found"
                 exit 1
             fi
+
+            # First check for any pending policy trigger from container
+            check_policy_trigger
 
             log_info "Starting NAC policy sync..."
 
