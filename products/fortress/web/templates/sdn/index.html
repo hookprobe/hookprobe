@@ -822,33 +822,49 @@ var DeviceDetailModal = {
         $('#modal-first-seen').text(this.formatDate(device.first_seen));
         $('#modal-last-seen').text(this.formatDate(device.last_seen));
 
-        // WiFi Signal
+        // WiFi Signal - check if device has WiFi data
+        var hasWifiData = device.wifi_rssi !== null && device.wifi_rssi !== undefined;
         var quality = device.wifi_quality || 0;
         var rssi = device.wifi_rssi;
-        $('#modal-signal-quality').text(quality + '%');
-        $('#modal-rssi').text(rssi || '--');
 
-        // Update signal arc (126 is full arc length)
-        var arcLength = (quality / 100) * 126;
-        $('#signal-arc').attr('stroke-dasharray', arcLength + ', 126');
-        $('#signal-arc').attr('stroke', quality > 70 ? '#28a745' : quality > 40 ? '#ffc107' : '#dc3545');
+        if (hasWifiData) {
+            $('#modal-signal-quality').text(quality + '%');
+            $('#modal-rssi').text(rssi || '--');
 
-        // Proximity badge
-        var proximity = device.wifi_proximity || 'unknown';
-        $('#modal-proximity-badge')
-            .removeClass('proximity-immediate proximity-near proximity-far proximity-distant badge-secondary')
-            .addClass(proximity !== 'unknown' ? 'proximity-' + proximity : 'badge-secondary')
-            .text(proximity.charAt(0).toUpperCase() + proximity.slice(1));
+            // Update signal arc (126 is full arc length)
+            var arcLength = (quality / 100) * 126;
+            $('#signal-arc').attr('stroke-dasharray', arcLength + ', 126');
+            $('#signal-arc').attr('stroke', quality > 70 ? '#28a745' : quality > 40 ? '#ffc107' : '#dc3545');
 
-        // Proximity warning
-        if (proximity === 'distant' && (device.policy === 'full_access' || device.policy === 'lan_only')) {
-            $('#modal-proximity-warning').removeClass('d-none');
-            $('#modal-proximity-warning-text').text('Device has high access but weak signal - potential security risk');
+            // Proximity badge
+            var proximity = device.wifi_proximity || 'unknown';
+            $('#modal-proximity-badge')
+                .removeClass('proximity-immediate proximity-near proximity-far proximity-distant badge-secondary')
+                .addClass(proximity !== 'unknown' ? 'proximity-' + proximity : 'badge-secondary')
+                .text(proximity.charAt(0).toUpperCase() + proximity.slice(1));
+
+            // Proximity warning
+            if (proximity === 'distant' && (device.policy === 'full_access' || device.policy === 'lan_only')) {
+                $('#modal-proximity-warning').removeClass('d-none');
+                $('#modal-proximity-warning-text').text('Device has high access but weak signal - potential security risk');
+            } else {
+                $('#modal-proximity-warning').addClass('d-none');
+            }
+
+            $('#modal-wifi-band').text((device.wifi_band || '--') + ' / ' + (device.wifi_interface || '--'));
         } else {
+            // Device likely connected via Ethernet or not currently on WiFi
+            $('#modal-signal-quality').text('--');
+            $('#modal-rssi').text('N/A');
+            $('#signal-arc').attr('stroke-dasharray', '0, 126');
+            $('#signal-arc').attr('stroke', '#6c757d');
+            $('#modal-proximity-badge')
+                .removeClass('proximity-immediate proximity-near proximity-far proximity-distant')
+                .addClass('badge-secondary')
+                .text('Wired/Offline');
             $('#modal-proximity-warning').addClass('d-none');
+            $('#modal-wifi-band').text('Ethernet / Not on WiFi');
         }
-
-        $('#modal-wifi-band').text((device.wifi_band || '--') + ' / ' + (device.wifi_interface || '--'));
 
         // Traffic
         var traffic = device.traffic || {};
@@ -1594,125 +1610,128 @@ $(document).ready(function() {
         updateRefreshIndicator();
         location.reload();
     });
+});
 
-    // === WAN HEALTH FUNCTIONS ===
+// === WAN HEALTH FUNCTIONS (Global scope for access from modal functions) ===
 
-    // Load WAN Health data
-    function loadWanHealth() {
-        $.get('/slaai/api/status')
-            .done(function(data) {
-                if (data.success && data.status) {
-                    updateWanHealthBar(data.status);
-                }
-            })
-            .fail(function() {
-                // Use fallback values on failure
-                console.log('WAN Health API not available');
-            });
-    }
-
-    // Update WAN Health bar
-    function updateWanHealthBar(status) {
-        // Primary WAN - use explicit null/undefined check, not ||
-        var primaryHealth = (status.primary_health !== undefined && status.primary_health !== null)
-            ? Math.round(status.primary_health * 100)
-            : 0;  // Default to 0 if no data, not 95%
-        $('#wan-primary-health').css('width', primaryHealth + '%');
-        $('#wan-primary-interface').text(status.primary_interface || '--');
-
-        // Update primary progress bar color based on health
-        var primaryBar = $('#wan-primary-health');
-        primaryBar.removeClass('bg-success bg-warning bg-danger');
-        if (primaryHealth >= 70) {
-            primaryBar.addClass('bg-success');
-        } else if (primaryHealth >= 40) {
-            primaryBar.addClass('bg-warning');
-        } else {
-            primaryBar.addClass('bg-danger');
-        }
-
-        // Determine if primary is active (multiple checks for reliability)
-        var primaryIsActive = (
-            status.active_interface === status.primary_interface ||
-            status.active_is_primary === true ||
-            status.primary_status === 'ACTIVE'
-        );
-
-        // Primary status badge
-        var primaryBadge = $('#wan-primary-status');
-        if (primaryIsActive && primaryHealth > 0) {
-            primaryBadge.removeClass('badge-secondary badge-danger').addClass('badge-success').text('ACTIVE');
-        } else if (primaryHealth === 0 || status.primary_status === 'FAILED' || !status.primary_interface) {
-            primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('DOWN');
-        } else {
-            primaryBadge.removeClass('badge-success badge-danger').addClass('badge-secondary').text('STANDBY');
-        }
-
-        // Backup WAN - use explicit null/undefined check
-        var backupHealth = (status.backup_health !== undefined && status.backup_health !== null)
-            ? Math.round(status.backup_health * 100)
-            : 0;  // Default to 0 if no data
-        $('#wan-backup-health').css('width', backupHealth + '%');
-        $('#wan-backup-interface').text(status.backup_interface || '--');
-
-        // Update backup progress bar color based on health
-        var backupBar = $('#wan-backup-health');
-        backupBar.removeClass('bg-success bg-warning bg-danger');
-        if (backupHealth >= 70) {
-            backupBar.addClass('bg-success');
-        } else if (backupHealth >= 40) {
-            backupBar.addClass('bg-warning');
-        } else {
-            backupBar.addClass('bg-danger');
-        }
-
-        // Determine if backup is active
-        var backupIsActive = (
-            status.active_interface === status.backup_interface ||
-            (status.active_is_primary === false && status.active_interface) ||
-            status.backup_status === 'ACTIVE'
-        );
-
-        // Backup status badge
-        var backupBadge = $('#wan-backup-status');
-        if (backupIsActive && backupHealth > 0) {
-            backupBadge.removeClass('badge-secondary badge-danger').addClass('badge-warning').text('ACTIVE');
-        } else if (backupHealth === 0 || status.backup_status === 'FAILED' || !status.backup_interface) {
-            backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('DOWN');
-        } else {
-            backupBadge.removeClass('badge-warning badge-danger').addClass('badge-secondary').text('STANDBY');
-        }
-
-        // LSTM Prediction
-        if (status.prediction) {
-            var confidence = Math.round((status.prediction.confidence || 0.87) * 100);
-            var failureProb = status.prediction.failure_probability || 0.08;
-
-            $('#lstm-confidence').text(confidence + '%');
-            $('#lstm-confidence-ring').attr('stroke-dasharray', confidence + ', 100');
-
-            // Status text
-            if (failureProb > 0.5) {
-                $('#lstm-status').html('<i class="fas fa-exclamation-triangle mr-1"></i>Risk').removeClass('text-success text-warning').addClass('text-danger');
-                $('#lstm-confidence-ring').attr('stroke', '#e57373');
-                $('#lstm-confidence').css('color', '#e57373');
-            } else if (failureProb > 0.2) {
-                $('#lstm-status').html('<i class="fas fa-exclamation-circle mr-1"></i>Warning').removeClass('text-success text-danger').addClass('text-warning');
-                $('#lstm-confidence-ring').attr('stroke', '#ffb74d');
-                $('#lstm-confidence').css('color', '#ffb74d');
-            } else {
-                $('#lstm-status').html('<i class="fas fa-check-circle mr-1"></i>Stable').removeClass('text-danger text-warning').addClass('text-success');
-                $('#lstm-confidence-ring').attr('stroke', '#00ff88');
-                $('#lstm-confidence').css('color', '#00ff88');
+// Load WAN Health data
+function loadWanHealth() {
+    $.get('/slaai/api/status')
+        .done(function(data) {
+            if (data.success && data.status) {
+                updateWanHealthBar(data.status);
             }
-        }
+        })
+        .fail(function() {
+            // Use fallback values on failure
+            console.log('WAN Health API not available');
+        });
+}
 
-        // Uptime
-        if (status.uptime_pct !== undefined) {
-            $('#wan-uptime').text(status.uptime_pct.toFixed(1) + '%');
+// Update WAN Health bar
+function updateWanHealthBar(status) {
+    // Primary WAN - use explicit null/undefined check, not ||
+    var primaryHealth = (status.primary_health !== undefined && status.primary_health !== null)
+        ? Math.round(status.primary_health * 100)
+        : 0;  // Default to 0 if no data, not 95%
+    $('#wan-primary-health').css('width', primaryHealth + '%');
+    $('#wan-primary-interface').text(status.primary_interface || '--');
+
+    // Update primary progress bar color based on health
+    var primaryBar = $('#wan-primary-health');
+    primaryBar.removeClass('bg-success bg-warning bg-danger');
+    if (primaryHealth >= 70) {
+        primaryBar.addClass('bg-success');
+    } else if (primaryHealth >= 40) {
+        primaryBar.addClass('bg-warning');
+    } else {
+        primaryBar.addClass('bg-danger');
+    }
+
+    // Determine if primary is active (multiple checks for reliability)
+    var primaryIsActive = (
+        status.active_interface === status.primary_interface ||
+        status.active_is_primary === true ||
+        status.primary_status === 'ACTIVE'
+    );
+
+    // Primary status badge
+    var primaryBadge = $('#wan-primary-status');
+    if (primaryIsActive && primaryHealth > 0) {
+        primaryBadge.removeClass('badge-secondary badge-danger').addClass('badge-success').text('ACTIVE');
+    } else if (primaryHealth === 0 || status.primary_status === 'FAILED' || !status.primary_interface) {
+        primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('DOWN');
+    } else {
+        primaryBadge.removeClass('badge-success badge-danger').addClass('badge-secondary').text('STANDBY');
+    }
+
+    // Backup WAN - use explicit null/undefined check
+    var backupHealth = (status.backup_health !== undefined && status.backup_health !== null)
+        ? Math.round(status.backup_health * 100)
+        : 0;  // Default to 0 if no data
+    $('#wan-backup-health').css('width', backupHealth + '%');
+    $('#wan-backup-interface').text(status.backup_interface || '--');
+
+    // Update backup progress bar color based on health
+    var backupBar = $('#wan-backup-health');
+    backupBar.removeClass('bg-success bg-warning bg-danger');
+    if (backupHealth >= 70) {
+        backupBar.addClass('bg-success');
+    } else if (backupHealth >= 40) {
+        backupBar.addClass('bg-warning');
+    } else {
+        backupBar.addClass('bg-danger');
+    }
+
+    // Determine if backup is active
+    var backupIsActive = (
+        status.active_interface === status.backup_interface ||
+        (status.active_is_primary === false && status.active_interface) ||
+        status.backup_status === 'ACTIVE'
+    );
+
+    // Backup status badge
+    var backupBadge = $('#wan-backup-status');
+    if (backupIsActive && backupHealth > 0) {
+        backupBadge.removeClass('badge-secondary badge-danger').addClass('badge-warning').text('ACTIVE');
+    } else if (backupHealth === 0 || status.backup_status === 'FAILED' || !status.backup_interface) {
+        backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('DOWN');
+    } else {
+        backupBadge.removeClass('badge-warning badge-danger').addClass('badge-secondary').text('STANDBY');
+    }
+
+    // LSTM Prediction
+    if (status.prediction) {
+        var confidence = Math.round((status.prediction.confidence || 0.87) * 100);
+        var failureProb = status.prediction.failure_probability || 0.08;
+
+        $('#lstm-confidence').text(confidence + '%');
+        $('#lstm-confidence-ring').attr('stroke-dasharray', confidence + ', 100');
+
+        // Status text
+        if (failureProb > 0.5) {
+            $('#lstm-status').html('<i class="fas fa-exclamation-triangle mr-1"></i>Risk').removeClass('text-success text-warning').addClass('text-danger');
+            $('#lstm-confidence-ring').attr('stroke', '#e57373');
+            $('#lstm-confidence').css('color', '#e57373');
+        } else if (failureProb > 0.2) {
+            $('#lstm-status').html('<i class="fas fa-exclamation-circle mr-1"></i>Warning').removeClass('text-success text-danger').addClass('text-warning');
+            $('#lstm-confidence-ring').attr('stroke', '#ffb74d');
+            $('#lstm-confidence').css('color', '#ffb74d');
+        } else {
+            $('#lstm-status').html('<i class="fas fa-check-circle mr-1"></i>Stable').removeClass('text-danger text-warning').addClass('text-success');
+            $('#lstm-confidence-ring').attr('stroke', '#00ff88');
+            $('#lstm-confidence').css('color', '#00ff88');
         }
     }
 
+    // Uptime
+    if (status.uptime_pct !== undefined) {
+        $('#wan-uptime').text(status.uptime_pct.toFixed(1) + '%');
+    }
+}
+
+// Initialize WAN Health and Traffic on DOM ready
+$(function() {
     // Load WAN Health on page load and every 15 seconds
     loadWanHealth();
     setInterval(loadWanHealth, 15000);

@@ -98,7 +98,7 @@ def _load_device_status_cache() -> Dict[str, Dict]:
     (which has access to ip neigh and ovs-ofctl). Web container reads this
     cached status.
 
-    Returns dict mapping MAC -> {status, neighbor_state, last_packet_count}
+    Returns dict mapping MAC -> {status, neighbor_state, last_packet_count, ip, hostname}
     """
     cache = {}
     try:
@@ -111,6 +111,9 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                         'status': device.get('status', 'offline'),
                         'neighbor_state': device.get('neighbor_state', 'UNKNOWN'),
                         'last_packet_count': device.get('last_packet_count', 0),
+                        'ip': device.get('ip', ''),
+                        'hostname': device.get('hostname', '') or device.get('name', ''),
+                        'vendor': device.get('vendor', ''),
                     }
             logger.debug(f"Loaded status cache: {len(cache)} devices")
     except Exception as e:
@@ -587,6 +590,20 @@ def index():
                 # Load device status from host-generated cache file
                 # (web container can't run ip neigh/ovs-ofctl directly)
                 status_cache = _load_device_status_cache()
+
+                # Sync devices from status cache to database
+                # This ensures any devices discovered by the host are persisted
+                if status_cache:
+                    devices_to_sync = [
+                        {
+                            'mac': mac,
+                            'ip': info.get('ip', ''),
+                            'hostname': info.get('hostname', ''),
+                            'vendor': info.get('vendor', '')
+                        }
+                        for mac, info in status_cache.items()
+                    ]
+                    autopilot.sync_from_device_list(devices_to_sync)
 
                 db_devices = autopilot.get_all_devices()
                 # Convert autopilot format to template format
@@ -2757,14 +2774,45 @@ def api_device_set_policy(mac_address):
     }
     policy = policy_aliases.get(policy, policy)
 
-    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'default']
+    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'normal', 'default']
     if policy not in valid_policies:
         return jsonify({
             'success': False,
             'error': f'Invalid policy. Must be one of: quarantine, internet_only, lan_only, normal, full_access, default'
         }), 400
 
-    if DEVICE_DATA_MANAGER_AVAILABLE:
+    # Try SDN Autopilot first (primary method)
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+
+            # Auto-create device if it doesn't exist
+            device = autopilot.get_device(mac)
+            if not device:
+                # Try to get additional info from device status cache
+                status_cache = _load_device_status_cache()
+                device_info = status_cache.get(mac, {})
+                ip = device_info.get('ip', '')
+
+                # Create the device entry
+                device = autopilot.ensure_device_exists(mac=mac, ip=ip)
+                logger.info(f"Auto-created device {mac} for policy operation")
+
+            success = autopilot.set_policy(mac, policy)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Policy set to {policy} for {mac}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to set policy'}), 500
+        except Exception as e:
+            logger.error(f"Failed to set device policy via autopilot: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # Fallback to DeviceDataManager if available
+    elif DEVICE_DATA_MANAGER_AVAILABLE:
         try:
             manager = get_device_data_manager()
             success = manager.set_policy(mac, policy)
@@ -2784,9 +2832,9 @@ def api_device_set_policy(mac_address):
             return jsonify({'success': False, 'error': str(e)}), 500
     else:
         return jsonify({
-            'success': True,
-            'message': f'Policy set to {policy} for {mac} (demo mode)'
-        })
+            'success': False,
+            'error': 'Policy management not available - SDN Autopilot database not initialized'
+        }), 503
 
 
 @sdn_bp.route('/api/device/<mac_address>/block', methods=['POST'])
@@ -3227,8 +3275,22 @@ def api_device_detail(mac_address):
 
             device = autopilot.get_device_detail(mac)
 
+            # Auto-create device if it doesn't exist (from device status cache)
             if not device:
-                return jsonify({'success': False, 'error': 'Device not found'}), 404
+                # Try to get info from device status cache
+                status_cache = _load_device_status_cache()
+                device_info = status_cache.get(mac, {})
+                ip = device_info.get('ip', '')
+
+                # Create the device entry
+                autopilot.ensure_device_exists(mac=mac, ip=ip)
+                logger.info(f"Auto-created device {mac} for detail view")
+
+                # Get the newly created device
+                device = autopilot.get_device_detail(mac)
+
+            if not device:
+                return jsonify({'success': False, 'error': 'Device not found and could not be created'}), 404
 
             return jsonify({
                 'success': True,
@@ -3263,13 +3325,17 @@ def api_device_add_tag(mac_address):
         try:
             autopilot = get_sdn_autopilot()
 
-            # Check if device exists first
+            # Auto-create device if it doesn't exist (get IP from status cache if available)
             device = autopilot.get_device(mac)
             if not device:
-                return jsonify({
-                    'success': False,
-                    'error': f'Device {mac} not found in database'
-                }), 404
+                # Try to get additional info from device status cache
+                status_cache = _load_device_status_cache()
+                device_info = status_cache.get(mac, {})
+                ip = device_info.get('ip', '')
+
+                # Create the device entry
+                device = autopilot.ensure_device_exists(mac=mac, ip=ip)
+                logger.info(f"Auto-created device {mac} for tag operation")
 
             success = autopilot.add_tag(mac, tag)
 
