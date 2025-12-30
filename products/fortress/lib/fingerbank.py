@@ -2212,16 +2212,49 @@ class Fingerbank:
 
     def _build_result(self, match: dict, mac: str, hostname: Optional[str],
                       vendor_override: Optional[str] = None) -> DeviceInfo:
-        """Build DeviceInfo from match result."""
+        """Build DeviceInfo from match result, with hostname disambiguation."""
         vendor = vendor_override or match.get('vendor', 'Unknown')
         if vendor == "Unknown":
             vendor = self._lookup_oui(mac)
 
         category = match.get('category', 'unknown')
+        name = match.get('name', 'Unknown Device')
+
+        # Use hostname to disambiguate Apple devices with shared fingerprints
+        if hostname and vendor == "Apple":
+            hn_lower = hostname.lower()
+            if 'macbook' in hn_lower:
+                name = 'MacBook'
+                category = 'laptop'
+            elif 'imac' in hn_lower:
+                name = 'iMac'
+                category = 'desktop'
+            elif 'mac-mini' in hn_lower or 'macmini' in hn_lower:
+                name = 'Mac Mini'
+                category = 'desktop'
+            elif 'mac-pro' in hn_lower or 'macpro' in hn_lower:
+                name = 'Mac Pro'
+                category = 'desktop'
+            elif 'iphone' in hn_lower:
+                name = 'iPhone'
+                category = 'phone'
+            elif 'ipad' in hn_lower:
+                name = 'iPad'
+                category = 'tablet'
+            elif 'apple-watch' in hn_lower or 'applewatch' in hn_lower:
+                name = 'Apple Watch'
+                category = 'wearable'
+            elif 'homepod' in hn_lower:
+                name = 'HomePod'
+                category = 'voice_assistant'
+            elif 'apple-tv' in hn_lower or 'appletv' in hn_lower:
+                name = 'Apple TV'
+                category = 'streaming'
+
         policy = CATEGORY_POLICIES.get(category, 'quarantine')
 
         return DeviceInfo(
-            name=match.get('name', 'Unknown Device'),
+            name=name,
             vendor=vendor,
             category=category,
             os=match.get('os', 'Unknown'),
