@@ -3168,6 +3168,29 @@ def api_device_types():
 # DEVICE DETAIL MODAL API - Premium SDN Features
 # =============================================================================
 
+def _sync_wifi_signals_to_db():
+    """Sync WiFi signal data from host collector JSON to database."""
+    import os
+    signals_file = '/opt/hookprobe/fortress/data/wifi_signals.json'
+
+    if not os.path.exists(signals_file):
+        return 0
+
+    try:
+        with open(signals_file, 'r') as f:
+            data = json.load(f)
+
+        stations = data.get('stations', [])
+        if not stations:
+            return 0
+
+        autopilot = get_sdn_autopilot()
+        return autopilot.update_wifi_signals(stations)
+    except Exception as e:
+        logger.warning(f"Failed to sync WiFi signals: {e}")
+        return 0
+
+
 @sdn_bp.route('/api/device/<mac_address>/detail')
 @login_required
 def api_device_detail(mac_address):
@@ -3180,6 +3203,10 @@ def api_device_detail(mac_address):
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
+
+            # Sync WiFi signals from host collector before getting device detail
+            _sync_wifi_signals_to_db()
+
             device = autopilot.get_device_detail(mac)
 
             if not device:
