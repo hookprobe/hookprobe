@@ -2256,27 +2256,43 @@ class Fingerbank:
         Determine network access policy based on vendor, category, and confidence.
 
         Policy Hierarchy:
-        1. Trusted Vendor Ecosystems (Apple, Raspberry Pi) - priority override
-        2. Category-based policies from CATEGORY_POLICIES
-        3. Default to quarantine for unknown
+        1. Management Devices (MacBook, iPad) - full network control
+        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - normal LAN access
+        3. Trusted Infrastructure (Raspberry Pi) - normal access
+        4. Category-based policies from CATEGORY_POLICIES
+        5. Default to quarantine for unknown
 
-        Apple Ecosystem Philosophy:
-        All Apple devices get 'normal' policy to enable Bonjour/mDNS,
-        AirPlay, AirDrop, Handoff, HomeKit, and inter-device communication.
-        This is safe because Apple devices have strong security posture.
+        Management Philosophy:
+        MacBook and iPad are designated management devices with full_access.
+        They can manage the network, access all VLANs, and control other devices.
+        Other Apple devices get 'normal' for inter-device communication only.
         """
         # =====================================================================
-        # TRUSTED VENDOR ECOSYSTEMS - Override category-based policy
+        # MANAGEMENT DEVICES - Full network control
         # =====================================================================
 
-        # Apple Ecosystem: All Apple devices communicate via Bonjour/mDNS
-        # iPhone, iPad, Mac, Apple Watch, HomePod, Apple TV need LAN access
+        # MacBook and iPad are management devices (can control network)
+        # category: laptop = MacBook, tablet = iPad, desktop = iMac/Mac Mini/Mac Pro
+        if vendor == "Apple" and confidence >= 0.80:
+            if category in ('laptop', 'tablet', 'desktop'):
+                return 'full_access'
+
+        # =====================================================================
+        # APPLE ECOSYSTEM - Normal LAN access for inter-device communication
+        # =====================================================================
+
+        # iPhone, Apple Watch, HomePod, Apple TV get normal policy
+        # Enables Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit
         if vendor == "Apple" and confidence >= 0.75:
             return 'normal'
 
-        # Raspberry Pi Foundation: Our management/infrastructure devices
+        # =====================================================================
+        # TRUSTED INFRASTRUCTURE - Normal access
+        # =====================================================================
+
+        # Raspberry Pi: Trusted but not management
         if vendor == "Raspberry Pi" and confidence >= 0.80:
-            return 'full_access'
+            return 'normal'
 
         # =====================================================================
         # CATEGORY-BASED POLICIES
