@@ -2119,6 +2119,17 @@ install_vlan_service() {
         return 1
     fi
 
+    # Install NAC policy sync script (syncs device policies to OpenFlow after boot)
+    local nac_sync_src="${DEVICES_DIR}/common/nac-policy-sync.sh"
+    local nac_sync_dst="$install_base/nac-policy-sync.sh"
+    if [ -f "$nac_sync_src" ]; then
+        cp "$nac_sync_src" "$nac_sync_dst"
+        chmod +x "$nac_sync_dst"
+        log_info "  Installed: nac-policy-sync.sh"
+    else
+        log_warn "  nac-policy-sync.sh not found - NAC policies will sync via web app"
+    fi
+
     # Copy and enable systemd service
     local service_src="${FORTRESS_ROOT}/systemd/fortress-vlan.service"
     local service_dst="/etc/systemd/system/fortress-vlan.service"
@@ -2948,6 +2959,16 @@ fi
 log_info "Installing OpenFlow rules..."
 export OVS_BRIDGE LAN_SUBNET_MASK
 "$OVS_SCRIPT" flows 2>/dev/null || log_warn "Failed to install OpenFlow rules"
+
+# Sync NAC device policies to OpenFlow (per-device rules with higher priority)
+NAC_SYNC_SCRIPT="/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh"
+if [ -f "$NAC_SYNC_SCRIPT" ]; then
+    log_info "Syncing NAC device policies..."
+    export OVS_BRIDGE LAN_NETWORK GATEWAY_IP
+    "$NAC_SYNC_SCRIPT" 2>/dev/null || log_warn "NAC policy sync failed (non-fatal)"
+else
+    log_info "NAC sync script not found - will sync when web app starts"
+fi
 
 log_info "Waiting for containers..."
 
