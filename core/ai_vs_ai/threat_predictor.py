@@ -107,7 +107,11 @@ class ThreatPredictor:
 
             if self.model_path.exists():
                 self._model = ThreatLSTM()
-                self._model.load_state_dict(torch.load(self.model_path))
+                # Use weights_only=True to prevent arbitrary code execution
+                # during deserialization (CWE-502)
+                self._model.load_state_dict(
+                    torch.load(self.model_path, weights_only=True)
+                )
                 self._model.eval()
                 self._model_loaded = True
                 print(f"LSTM model loaded from {self.model_path}")
