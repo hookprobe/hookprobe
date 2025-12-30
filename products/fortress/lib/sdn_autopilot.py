@@ -26,7 +26,7 @@ import sqlite3
 import json
 import logging
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from contextlib import contextmanager
@@ -880,12 +880,12 @@ class SDNAutoPilot:
                 'comment': "Allow gateway"
             })
 
-        elif policy == 'normal':
+        elif policy in ('normal', 'smart_home'):
             rules.append({
                 'priority': 600,
                 'match': {'eth_src': mac},
                 'actions': [{'type': 'OUTPUT', 'port': 'NORMAL'}],
-                'comment': "Allow all (curated IoT)"
+                'comment': "Allow all (Smart Home / curated IoT)"
             })
 
         elif policy == 'full_access':
@@ -928,7 +928,7 @@ class SDNAutoPilot:
 
         Args:
             mac: Device MAC address
-            policy: Policy name (quarantine, internet_only, lan_only, normal, full_access)
+            policy: Policy name (quarantine, internet_only, lan_only, normal/smart_home, full_access)
 
         Returns:
             True if successful, False otherwise
@@ -936,13 +936,15 @@ class SDNAutoPilot:
         mac = mac.upper()
 
         # Normalize policy names
+        # smart_home is an alias for 'normal' (LAN + Internet, no container access)
         policy_aliases = {
             'isolated': 'quarantine',
             'full_access': 'normal',
+            'smart_home': 'normal',
         }
         policy = policy_aliases.get(policy, policy)
 
-        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access', 'smart_home']
         if policy not in valid_policies:
             logger.warning(f"Invalid policy: {policy}")
             return False
@@ -1942,13 +1944,15 @@ class SDNAutoPilot:
 
             # Get connection history (table might not exist in older databases)
             try:
+                # Use strftime to compare timestamps properly (ISO format with T separator)
+                cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
                 history = conn.execute('''
                     SELECT event_type, timestamp, details
                     FROM connection_history
-                    WHERE mac = ? AND timestamp > datetime('now', '-24 hours')
+                    WHERE mac = ? AND timestamp > ?
                     ORDER BY timestamp DESC
                     LIMIT 50
-                ''', (mac,)).fetchall()
+                ''', (mac, cutoff)).fetchall()
                 device['history'] = [dict(h) for h in history]
             except sqlite3.OperationalError:
                 # Table doesn't exist
@@ -2069,13 +2073,14 @@ class SDNAutoPilot:
     def get_connection_timeline(self, mac: str, hours: int = 24) -> List[Dict]:
         """Get connection timeline for visualization."""
         mac = mac.upper()
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
         with self._get_conn() as conn:
             rows = conn.execute('''
                 SELECT event_type, timestamp, details
                 FROM connection_history
-                WHERE mac = ? AND timestamp > datetime('now', ? || ' hours')
+                WHERE mac = ? AND timestamp > ?
                 ORDER BY timestamp ASC
-            ''', (mac, f'-{hours}')).fetchall()
+            ''', (mac, cutoff)).fetchall()
             return [dict(r) for r in rows]
 
     # =========================================================================
