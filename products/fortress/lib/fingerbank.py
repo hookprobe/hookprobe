@@ -2248,6 +2248,42 @@ class Fingerbank:
             logger.debug(f"Error learning fingerprint: {e}")
 
     # =========================================================================
+    # POLICY DETERMINATION
+    # =========================================================================
+
+    def _determine_policy(self, vendor: str, category: str, confidence: float) -> str:
+        """
+        Determine network access policy based on vendor, category, and confidence.
+
+        Policy Hierarchy:
+        1. Trusted Vendor Ecosystems (Apple, Raspberry Pi) - priority override
+        2. Category-based policies from CATEGORY_POLICIES
+        3. Default to quarantine for unknown
+
+        Apple Ecosystem Philosophy:
+        All Apple devices get 'normal' policy to enable Bonjour/mDNS,
+        AirPlay, AirDrop, Handoff, HomeKit, and inter-device communication.
+        This is safe because Apple devices have strong security posture.
+        """
+        # =====================================================================
+        # TRUSTED VENDOR ECOSYSTEMS - Override category-based policy
+        # =====================================================================
+
+        # Apple Ecosystem: All Apple devices communicate via Bonjour/mDNS
+        # iPhone, iPad, Mac, Apple Watch, HomePod, Apple TV need LAN access
+        if vendor == "Apple" and confidence >= 0.75:
+            return 'normal'
+
+        # Raspberry Pi Foundation: Our management/infrastructure devices
+        if vendor == "Raspberry Pi" and confidence >= 0.80:
+            return 'full_access'
+
+        # =====================================================================
+        # CATEGORY-BASED POLICIES
+        # =====================================================================
+        return CATEGORY_POLICIES.get(category, 'quarantine')
+
+    # =========================================================================
     # RESULT BUILDERS
     # =========================================================================
 
@@ -2292,14 +2328,16 @@ class Fingerbank:
                 name = 'Apple TV'
                 category = 'streaming'
 
-        policy = CATEGORY_POLICIES.get(category, 'quarantine')
+        # Determine policy with vendor ecosystem overrides
+        confidence = match.get('confidence', 0.5)
+        policy = self._determine_policy(vendor, category, confidence)
 
         return DeviceInfo(
             name=name,
             vendor=vendor,
             category=category,
             os=match.get('os', 'Unknown'),
-            confidence=match.get('confidence', 0.5),
+            confidence=confidence,
             hierarchy=match.get('hierarchy', []),
             policy=policy
         )
@@ -2354,7 +2392,8 @@ class Fingerbank:
         if vendor in vendor_categories:
             category = vendor_categories[vendor]
 
-        policy = CATEGORY_POLICIES.get(category, 'quarantine')
+        # Use vendor-aware policy determination
+        policy = self._determine_policy(vendor, category, confidence)
 
         return DeviceInfo(
             name=name,
