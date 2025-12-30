@@ -177,69 +177,106 @@ class SDNAutoPilot:
         self._load_custom_fingerprints()
 
     def _ensure_db(self):
-        """Create database and tables."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        """Create database and tables.
+
+        Handles read-only mounts gracefully (container scenario).
+        If database is read-only, just verify it exists and is readable.
+        """
+        # Check if database already exists
+        if self.db_path.exists():
+            # Try to open for reading to verify access
+            try:
+                conn = sqlite3.connect(f'file:{self.db_path}?mode=ro', uri=True, timeout=10)
+                conn.row_factory = sqlite3.Row
+                # Verify table exists
+                cursor = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='device_identity'"
+                )
+                if cursor.fetchone():
+                    conn.close()
+                    logger.debug("Database exists and is readable (read-only mode)")
+                    return
+                conn.close()
+            except sqlite3.OperationalError as e:
+                logger.warning(f"Cannot open database for reading: {e}")
+                raise
+
+        # Database doesn't exist or table missing - try to create (write mode)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            # Read-only filesystem
+            logger.warning(f"Cannot create database directory (read-only?): {e}")
+            raise
+
         with self._get_conn() as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS device_identity (
-                    mac TEXT PRIMARY KEY,
-                    ip TEXT,
-                    hostname TEXT,
-                    friendly_name TEXT,
-                    device_type TEXT,
-                    vendor TEXT,
-                    dhcp_fingerprint TEXT,
-                    os_detected TEXT,
-                    category TEXT,
-                    policy TEXT DEFAULT 'quarantine',
-                    confidence REAL DEFAULT 0.0,
-                    signals TEXT,
-                    manual_override INTEGER DEFAULT 0,
-                    first_seen TEXT,
-                    last_seen TEXT,
-                    updated_at TEXT,
-                    status TEXT DEFAULT 'offline',
-                    last_packet_count INTEGER DEFAULT 0,
-                    neighbor_state TEXT DEFAULT 'UNKNOWN'
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS device_metrics (
-                    mac TEXT PRIMARY KEY,
-                    avg_jitter_ms REAL DEFAULT 0,
-                    peak_jitter_ms REAL DEFAULT 0,
-                    anomaly_count INTEGER DEFAULT 0,
-                    last_anomaly TEXT,
-                    auto_quarantined INTEGER DEFAULT 0
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS fingerprint_learning (
-                    fingerprint TEXT PRIMARY KEY,
-                    device_count INTEGER DEFAULT 0,
-                    common_vendor TEXT,
-                    common_category TEXT,
-                    last_seen TEXT
-                )
-            ''')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_policy ON device_identity(policy)')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_status ON device_identity(status)')
+            try:
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS device_identity (
+                        mac TEXT PRIMARY KEY,
+                        ip TEXT,
+                        hostname TEXT,
+                        friendly_name TEXT,
+                        device_type TEXT,
+                        vendor TEXT,
+                        dhcp_fingerprint TEXT,
+                        os_detected TEXT,
+                        category TEXT,
+                        policy TEXT DEFAULT 'quarantine',
+                        confidence REAL DEFAULT 0.0,
+                        signals TEXT,
+                        manual_override INTEGER DEFAULT 0,
+                        first_seen TEXT,
+                        last_seen TEXT,
+                        updated_at TEXT,
+                        status TEXT DEFAULT 'offline',
+                        last_packet_count INTEGER DEFAULT 0,
+                        neighbor_state TEXT DEFAULT 'UNKNOWN'
+                    )
+                ''')
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS device_metrics (
+                        mac TEXT PRIMARY KEY,
+                        avg_jitter_ms REAL DEFAULT 0,
+                        peak_jitter_ms REAL DEFAULT 0,
+                        anomaly_count INTEGER DEFAULT 0,
+                        last_anomaly TEXT,
+                        auto_quarantined INTEGER DEFAULT 0
+                    )
+                ''')
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS fingerprint_learning (
+                        fingerprint TEXT PRIMARY KEY,
+                        device_count INTEGER DEFAULT 0,
+                        common_vendor TEXT,
+                        common_category TEXT,
+                        last_seen TEXT
+                    )
+                ''')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_policy ON device_identity(policy)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_status ON device_identity(status)')
 
-            # Migrate existing tables - add new columns if missing
-            try:
-                conn.execute('ALTER TABLE device_identity ADD COLUMN status TEXT DEFAULT "offline"')
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            try:
-                conn.execute('ALTER TABLE device_identity ADD COLUMN last_packet_count INTEGER DEFAULT 0')
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute('ALTER TABLE device_identity ADD COLUMN neighbor_state TEXT DEFAULT "UNKNOWN"')
-            except sqlite3.OperationalError:
-                pass
+                # Migrate existing tables - add new columns if missing
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN status TEXT DEFAULT "offline"')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN last_packet_count INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE device_identity ADD COLUMN neighbor_state TEXT DEFAULT "UNKNOWN"')
+                except sqlite3.OperationalError:
+                    pass
 
-            conn.commit()
+                conn.commit()
+                logger.debug("Database initialized (write mode)")
+            except sqlite3.OperationalError as e:
+                if 'readonly' in str(e).lower():
+                    logger.warning(f"Database is read-only, skipping schema creation: {e}")
+                else:
+                    raise
 
     @contextmanager
     def _get_conn(self):
