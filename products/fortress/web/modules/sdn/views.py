@@ -118,35 +118,7 @@ def _load_device_status_cache() -> Dict[str, Dict]:
     return cache
 
 
-# NetworkSegment enum - maps to policy names for legacy compatibility
-from enum import Enum
-
-class NetworkSegment(Enum):
-    """Network segments (maps to NetworkPolicy for SDN Auto Pilot)."""
-    QUARANTINE = 0    # quarantine policy
-    INTERNET_ONLY = 1 # internet_only policy
-    LAN_ONLY = 2      # lan_only policy
-    NORMAL = 3        # normal policy (smart home hubs)
-    FULL_ACCESS = 4   # full_access policy (management)
-    TRUSTED = 5       # Alias for full_access
-    IOT = 6           # Alias for lan_only
-    IIOT = 7          # Industrial IoT - lan_only
-    GUEST = 8         # Alias for internet_only
-
-    def to_policy(self) -> str:
-        """Convert segment to policy name."""
-        mapping = {
-            NetworkSegment.QUARANTINE: 'quarantine',
-            NetworkSegment.INTERNET_ONLY: 'internet_only',
-            NetworkSegment.LAN_ONLY: 'lan_only',
-            NetworkSegment.NORMAL: 'normal',
-            NetworkSegment.FULL_ACCESS: 'full_access',
-            NetworkSegment.TRUSTED: 'full_access',
-            NetworkSegment.IOT: 'lan_only',
-            NetworkSegment.IIOT: 'lan_only',
-            NetworkSegment.GUEST: 'internet_only',
-        }
-        return mapping.get(self, 'quarantine')
+# Note: NetworkSegment enum removed - using NetworkPolicy from device_policies module
 
 
 # DFS Intelligence for WiFi channel data
@@ -1472,18 +1444,54 @@ def api_debug_devices():
 def api_stats():
     """Get SDN statistics.
 
-    Uses new simple device_policies module with SQLite storage.
+    Uses autopilot.db for device data (consistent with index view).
     """
-    stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'policy_counts': {}}
+    stats = {'total': 0, 'online': 0, 'idle': 0, 'offline': 0, 'quarantined': 0, 'policy_counts': {}}
     using_real_data = False
 
-    # Use new simple device_policies module
-    if DEVICE_POLICIES_AVAILABLE:
+    # Use SDN Auto Pilot (autopilot.db) - same source as index view
+    if SDN_AUTOPILOT_AVAILABLE:
         try:
-            stats = get_device_stats()
-            using_real_data = stats.get('total', 0) > 0
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                # Load status from cache
+                status_cache = _load_device_status_cache()
+                devices = autopilot.get_all_devices()
+
+                # Calculate stats
+                online = 0
+                idle = 0
+                offline = 0
+                policy_counts = {}
+
+                for d in devices:
+                    mac = d.get('mac', '').upper()
+                    policy = d.get('policy', 'quarantine')
+
+                    # Get status from cache
+                    cached = status_cache.get(mac, {})
+                    status = cached.get('status') or d.get('status', 'offline')
+
+                    if status == 'online':
+                        online += 1
+                    elif status == 'idle':
+                        idle += 1
+                    else:
+                        offline += 1
+
+                    policy_counts[policy] = policy_counts.get(policy, 0) + 1
+
+                stats = {
+                    'total': len(devices),
+                    'online': online,
+                    'idle': idle,
+                    'offline': offline,
+                    'quarantined': policy_counts.get('quarantine', 0),
+                    'policy_counts': policy_counts,
+                }
+                using_real_data = len(devices) > 0
         except Exception as e:
-            logger.error(f"Failed to get stats: {e}")
+            logger.error(f"Failed to get stats from autopilot: {e}")
 
     # Add DFS intelligence data
     try:
@@ -1940,21 +1948,12 @@ def segments():
 @sdn_bp.route('/api/segments')
 @login_required
 def api_segments():
-    """Get all segment statistics (JSON)."""
-    if SDN_AUTOPILOT_AVAILABLE:
-        try:
-            autopilot = get_sdn_autopilot()
-            return jsonify({
-                'success': True,
-                'segments': autopilot.get_segment_summary()
-            })
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-    else:
-        return jsonify({
-            'success': True,
-            'segments': get_demo_segment_data()
-        })
+    """Get all segment statistics (JSON) - returns demo data."""
+    # Segment APIs return demo data since segment feature is not fully implemented
+    return jsonify({
+        'success': True,
+        'segments': get_demo_segment_data()
+    })
 
 
 @sdn_bp.route('/api/segments/<segment_name>')
@@ -1962,27 +1961,13 @@ def api_segments():
 def api_segment_detail(segment_name):
     """Get detailed statistics for a specific segment."""
     segment_name = segment_name.upper()
-
-    if SDN_AUTOPILOT_AVAILABLE:
-        try:
-            autopilot = get_sdn_autopilot()
-            segment = NetworkSegment[segment_name]
-            return jsonify({
-                'success': True,
-                'segment': autopilot.get_segment_stats(segment)
-            })
-        except KeyError:
-            return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-    else:
-        demo = get_demo_segment_data()
-        if segment_name in demo:
-            return jsonify({
-                'success': True,
-                'segment': demo[segment_name]
-            })
-        return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+    demo = get_demo_segment_data()
+    if segment_name in demo:
+        return jsonify({
+            'success': True,
+            'segment': demo[segment_name]
+        })
+    return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
 
 
 @sdn_bp.route('/api/segments/<segment_name>/devices')
@@ -1990,33 +1975,15 @@ def api_segment_detail(segment_name):
 def api_segment_devices(segment_name):
     """Get devices in a specific segment."""
     segment_name = segment_name.upper()
-
-    if SDN_AUTOPILOT_AVAILABLE:
-        try:
-            autopilot = get_sdn_autopilot()
-            segment = NetworkSegment[segment_name]
-            devices = autopilot.get_devices_by_segment(segment)
-            return jsonify({
-                'success': True,
-                'segment': segment_name,
-                'count': len(devices),
-                'devices': [d.to_dict() for d in devices]
-            })
-        except KeyError:
-            return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-    else:
-        # Return demo devices for the segment
-        demo = get_demo_segment_data()
-        if segment_name in demo:
-            return jsonify({
-                'success': True,
-                'segment': segment_name,
-                'count': len(demo[segment_name].get('top_devices', [])),
-                'devices': demo[segment_name].get('top_devices', [])
-            })
-        return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
+    demo = get_demo_segment_data()
+    if segment_name in demo:
+        return jsonify({
+            'success': True,
+            'segment': segment_name,
+            'count': len(demo[segment_name].get('top_devices', [])),
+            'devices': demo[segment_name].get('top_devices', [])
+        })
+    return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
 
 
 @sdn_bp.route('/api/segments/<segment_name>/traffic')
@@ -2024,72 +1991,14 @@ def api_segment_devices(segment_name):
 def api_segment_traffic(segment_name):
     """Get traffic history for a segment (for live chart updates)."""
     segment_name = segment_name.upper()
-
-    if SDN_AUTOPILOT_AVAILABLE:
-        try:
-            autopilot = get_sdn_autopilot()
-            segment = NetworkSegment[segment_name]
-            stats = autopilot.get_segment_stats(segment)
-            return jsonify({
-                'success': True,
-                'segment': segment_name,
-                'traffic_history': stats.get('traffic_history', [])
-            })
-        except KeyError:
-            return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-    else:
-        demo = get_demo_segment_data()
-        if segment_name in demo:
-            return jsonify({
-                'success': True,
-                'segment': segment_name,
-                'traffic_history': demo[segment_name].get('traffic_history', [])
-            })
-        return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
-
-
-@sdn_bp.route('/assign-segment', methods=['POST'])
-@login_required
-@operator_required
-def assign_segment():
-    """Assign a device to a network segment."""
-    mac_address = request.form.get('mac')
-    segment_id = request.form.get('segment')
-
-    if not mac_address or not segment_id:
-        return jsonify({'success': False, 'error': 'MAC address and segment required'}), 400
-
-    try:
-        segment_id = int(segment_id)
-    except ValueError:
-        return jsonify({'success': False, 'error': 'Invalid segment ID'}), 400
-
-    if SDN_AUTOPILOT_AVAILABLE:
-        try:
-            autopilot = get_sdn_autopilot()
-            segment = NetworkSegment(segment_id)
-            success = autopilot.assign_device_segment(mac_address, segment, persist=True)
-
-            if success:
-                return jsonify({
-                    'success': True,
-                    'message': f'Device assigned to {segment.name} (VLAN {segment_id})'
-                })
-            else:
-                return jsonify({'success': False, 'error': 'Assignment failed'}), 500
-
-        except ValueError:
-            return jsonify({'success': False, 'error': f'Invalid segment: {segment_id}'}), 400
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-    else:
-        # Demo mode - just return success
+    demo = get_demo_segment_data()
+    if segment_name in demo:
         return jsonify({
             'success': True,
-            'message': f'Device assigned to VLAN {segment_id} (demo mode)'
+            'segment': segment_name,
+            'traffic_history': demo[segment_name].get('traffic_history', [])
         })
+    return jsonify({'success': False, 'error': f'Unknown segment: {segment_name}'}), 404
 
 
 # ============================================================
@@ -2328,11 +2237,7 @@ def api_quarantine_device():
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
-            success = autopilot.assign_device_segment(
-                mac_address,
-                NetworkSegment.QUARANTINE,
-                persist=True
-            )
+            success = autopilot.set_policy(mac_address, 'quarantine')
 
             if success:
                 # Also revoke certificate if trust framework available
@@ -2594,7 +2499,7 @@ def parse_iw_output(output):
 @login_required
 @operator_required
 def api_move_device():
-    """Move a device to a different segment."""
+    """Move a device to a different segment/policy."""
     data = request.get_json() or {}
     mac_address = data.get('mac_address')
     segment = data.get('segment', '').upper()
@@ -2605,35 +2510,26 @@ def api_move_device():
     if not segment:
         return jsonify({'success': False, 'error': 'Segment required'}), 400
 
-    # Map segment name to NetworkSegment enum
-    segment_map = {
-        'SECMON': 'SECMON',
-        'POS': 'POS',
-        'STAFF': 'CLIENTS',
-        'CLIENTS': 'CLIENTS',
-        'GUEST': 'GUEST',
-        'CAMERAS': 'CAMERAS',
-        'IIOT': 'IIOT',
-        'QUARANTINE': 'QUARANTINE',
+    # Map segment names to policy names
+    segment_to_policy = {
+        'SECMON': 'full_access',
+        'POS': 'lan_only',
+        'STAFF': 'full_access',
+        'CLIENTS': 'full_access',
+        'GUEST': 'internet_only',
+        'CAMERAS': 'lan_only',
+        'IIOT': 'lan_only',
+        'QUARANTINE': 'quarantine',
     }
 
-    if segment not in segment_map:
+    policy = segment_to_policy.get(segment)
+    if not policy:
         return jsonify({'success': False, 'error': f'Invalid segment: {segment}'}), 400
 
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
-
-            # Get the NetworkSegment enum value
-            target_segment = getattr(NetworkSegment, segment_map[segment], None)
-            if target_segment is None:
-                return jsonify({'success': False, 'error': f'Segment not found: {segment}'}), 400
-
-            success = autopilot.assign_device_segment(
-                mac_address,
-                target_segment,
-                persist=True
-            )
+            success = autopilot.set_policy(mac_address, policy)
 
             if success:
                 return jsonify({
