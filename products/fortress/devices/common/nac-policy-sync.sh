@@ -99,16 +99,23 @@ apply_policy() {
 
     case "$policy" in
         isolated|quarantine)
-            # Priority 1001: Allow DHCP
+            # QUARANTINE: Block all traffic except DHCP and DNS to gateway
+            # Priority 1001: Allow DHCP (so device can get/renew IP)
             add_flow "priority=1001,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
             add_flow "priority=1001,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
-            # Priority 1001: Allow DNS to gateway
+            # Priority 1001: Allow DNS to gateway only (for captive portal)
             add_flow "priority=1001,udp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
             add_flow "priority=1001,udp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
-            # Priority 1000: Drop everything else
-            add_flow "priority=1000,dl_src=$mac,actions=drop"
-            add_flow "priority=1000,dl_dst=$mac,actions=drop"
-            log_info "Applied QUARANTINE policy for $mac"
+            # Priority 1001: Allow ARP (needed for basic connectivity)
+            add_flow "priority=1001,arp,dl_src=$mac,actions=NORMAL"
+            add_flow "priority=1001,arp,dl_dst=$mac,actions=NORMAL"
+            # Priority 1000: Drop all IP traffic (explicit)
+            add_flow "priority=1000,ip,dl_src=$mac,actions=drop"
+            add_flow "priority=1000,ip,dl_dst=$mac,actions=drop"
+            # Priority 999: Drop any other Ethernet frames
+            add_flow "priority=999,dl_src=$mac,actions=drop"
+            add_flow "priority=999,dl_dst=$mac,actions=drop"
+            log_info "Applied QUARANTINE policy for $mac (blocks all except DHCP/DNS)"
             ;;
 
         lan_only)
@@ -313,12 +320,19 @@ main() {
             show_status
             ;;
         --trigger)
-            # Fast path: only check trigger file from container
+            # Check trigger file AND sync from database
+            # This ensures policies persist even after OVS restarts
             if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
                 log_error "OVS bridge $OVS_BRIDGE not found"
                 exit 1
             fi
+            # First check for any pending trigger from container
             check_policy_trigger
+            # Then sync all restrictive policies from database
+            # This is fast since we only sync quarantine/internet_only/lan_only
+            if [ -f "$AUTOPILOT_DB" ]; then
+                sync_from_autopilot
+            fi
             ;;
         --help|-h)
             echo "Usage: $0 [--status|--trigger|--help]"
