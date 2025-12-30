@@ -2757,14 +2757,32 @@ def api_device_set_policy(mac_address):
     }
     policy = policy_aliases.get(policy, policy)
 
-    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'default']
+    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'normal', 'default']
     if policy not in valid_policies:
         return jsonify({
             'success': False,
             'error': f'Invalid policy. Must be one of: quarantine, internet_only, lan_only, normal, full_access, default'
         }), 400
 
-    if DEVICE_DATA_MANAGER_AVAILABLE:
+    # Try SDN Autopilot first (primary method)
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            success = autopilot.set_policy(mac, policy)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Policy set to {policy} for {mac}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to set policy - device may not exist'}), 500
+        except Exception as e:
+            logger.error(f"Failed to set device policy via autopilot: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # Fallback to DeviceDataManager if available
+    elif DEVICE_DATA_MANAGER_AVAILABLE:
         try:
             manager = get_device_data_manager()
             success = manager.set_policy(mac, policy)
@@ -2784,9 +2802,9 @@ def api_device_set_policy(mac_address):
             return jsonify({'success': False, 'error': str(e)}), 500
     else:
         return jsonify({
-            'success': True,
-            'message': f'Policy set to {policy} for {mac} (demo mode)'
-        })
+            'success': False,
+            'error': 'Policy management not available - SDN Autopilot database not initialized'
+        }), 503
 
 
 @sdn_bp.route('/api/device/<mac_address>/block', methods=['POST'])

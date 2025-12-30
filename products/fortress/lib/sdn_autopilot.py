@@ -848,6 +848,63 @@ class SDNAutoPilot:
             self._apply_ovs_flow(rule)
         return True
 
+    def set_policy(self, mac: str, policy: str) -> bool:
+        """Set and persist network policy for a device.
+
+        Args:
+            mac: Device MAC address
+            policy: Policy name (quarantine, internet_only, lan_only, normal, full_access)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        mac = mac.upper()
+
+        # Normalize policy names
+        policy_aliases = {
+            'isolated': 'quarantine',
+            'full_access': 'normal',
+        }
+        policy = policy_aliases.get(policy, policy)
+
+        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+        if policy not in valid_policies:
+            logger.warning(f"Invalid policy: {policy}")
+            return False
+
+        try:
+            with self._get_conn() as conn:
+                # Check if device exists
+                row = conn.execute(
+                    'SELECT ip FROM device_identity WHERE mac = ?', (mac,)
+                ).fetchone()
+
+                if not row:
+                    logger.warning(f"Device {mac} not found in database")
+                    return False
+
+                # Update policy and set manual_override to prevent auto-classification
+                conn.execute('''
+                    UPDATE device_identity SET
+                        policy = ?,
+                        manual_override = 1,
+                        updated_at = ?
+                    WHERE mac = ?
+                ''', (policy, datetime.now().isoformat(), mac))
+                conn.commit()
+
+                logger.info(f"Policy for {mac} set to {policy} (manual override enabled)")
+
+                # Apply OpenFlow rules if device has IP
+                ip = row['ip'] if row else None
+                if ip:
+                    self.apply_policy(mac, ip, policy)
+
+                return True
+        except Exception as e:
+            logger.error(f"Failed to set policy for {mac}: {e}")
+            return False
+
     def _apply_ovs_flow(self, rule: Dict) -> bool:
         """Apply a flow rule to OVS."""
         try:
