@@ -1121,7 +1121,32 @@ $(document).ready(function() {
 
     // Disconnect device
     $('#modal-disconnect-btn').click(function() {
-        toastr.info('Disconnect feature coming soon');
+        if (!DeviceDetailModal.currentMac) return;
+
+        if (confirm('Disconnect this device from WiFi?\n\nThe device will be kicked from the network but may reconnect automatically.')) {
+            $.ajax({
+                url: '/sdn/api/device/' + encodeURIComponent(DeviceDetailModal.currentMac) + '/disconnect',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({})
+            })
+            .done(function(data) {
+                if (data.success) {
+                    toastr.success(data.message || 'Device disconnected');
+                    // Refresh device data
+                    DeviceDetailModal.loadDevice(DeviceDetailModal.currentMac);
+                } else {
+                    toastr.error(data.error || 'Failed to disconnect device');
+                }
+            })
+            .fail(function(xhr) {
+                var error = 'Failed to disconnect device';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    error = xhr.responseJSON.error;
+                }
+                toastr.error(error);
+            });
+        }
     });
 });
 
