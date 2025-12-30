@@ -351,8 +351,8 @@ server=8.8.8.8
 server=127.0.0.1#5353
 
 # Local domain
-local=/fortress.local/
-domain=fortress.local
+local=/hookprobe.local/
+domain=hookprobe.local
 expand-hosts
 no-hosts
 
@@ -387,8 +387,8 @@ dhcp-option=lan,3,$LAN_GATEWAY
 dhcp-option=lan,6,$LAN_GATEWAY
 
 # Domain search
-dhcp-option=lan,15,fortress.local
-dhcp-option=lan,119,fortress.local
+dhcp-option=lan,15,hookprobe.local
+dhcp-option=lan,119,hookprobe.local
 
 # ============================================
 # Lease database and event handling
