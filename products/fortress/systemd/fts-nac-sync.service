@@ -1,13 +1,17 @@
 [Unit]
 Description=Fortress NAC Policy Sync Service
-After=fortress-vlan.service
+After=fortress-vlan.service openvswitch-switch.service
 Requires=fortress-vlan.service
+Wants=openvswitch-switch.service
 
 [Service]
 Type=oneshot
+# --trigger now does both: check trigger file AND sync from database
 ExecStart=/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh --trigger
 StandardOutput=journal
 StandardError=journal
+# Don't fail if script returns non-zero (e.g., no policies to sync)
+SuccessExitStatus=0 1
 
 [Install]
 WantedBy=multi-user.target
