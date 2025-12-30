@@ -11,7 +11,7 @@ aiohttp>=3.9.0,<4.0.0             # Async HTTP client/server
 websockets>=12.0,<13.0            # WebSocket support for Cortex
 
 # Cryptography (HTP post-quantum, Neuro signatures)
-cryptography>=41.0.0,<43.0.0      # RSA, ChaCha20-Poly1305
+cryptography>=44.0.1,<45.0.0      # RSA, ChaCha20-Poly1305 (fixed CVE-2024-12797)
 pynacl>=1.5.0,<2.0.0              # Ed25519, X25519 for HTP
 # pqcrypto>=0.1.0                 # Kyber KEM (optional, uncomment if available)
 
