@@ -623,8 +623,10 @@
                                     data-policy="{{ device.policy }}"
                                     data-category="{{ device.device_type }}"
                                     data-online="{{ 'true' if device.is_online else 'false' }}"
-                                    data-blocked="{{ 'true' if device.is_blocked else 'false' }}">
-                                    <td>
+                                    data-blocked="{{ 'true' if device.is_blocked else 'false' }}"
+                                    class="device-row"
+                                    style="cursor: pointer;">
+                                    <td onclick="event.stopPropagation();">
                                         <div class="custom-control custom-checkbox">
                                             <input type="checkbox" class="custom-control-input device-select"
                                                    id="select-{{ device.mac_address | replace(':', '') }}"
@@ -645,7 +647,7 @@
                                         {% endif %}
                                     </td>
                                     <td>
-                                        <a href="{{ url_for('sdn.device_detail', mac_address=device.mac_address) }}">
+                                        <a href="#" onclick="event.stopPropagation(); openDeviceDetail('{{ device.mac_address }}'); return false;">
                                             <strong>{{ device.hostname or 'Unknown' }}</strong>
                                         </a>
                                     </td>
@@ -745,34 +747,9 @@
                                                 </a>
                                                 {% endif %}
                                                 <div class="dropdown-divider"></div>
-                                                <h6 class="dropdown-header">Move to Segment</h6>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="SECMON">
-                                                    <i class="fas fa-shield-alt mr-2 text-info"></i> SECMON
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="POS">
-                                                    <i class="fas fa-credit-card mr-2 text-warning"></i> POS
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="CLIENTS">
-                                                    <i class="fas fa-laptop mr-2 text-success"></i> CLIENTS
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="GUEST">
-                                                    <i class="fas fa-wifi mr-2 text-primary"></i> GUEST
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="CAMERAS">
-                                                    <i class="fas fa-video mr-2 text-purple"></i> CAMERAS
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="IIOT">
-                                                    <i class="fas fa-microchip mr-2 text-orange"></i> IIOT
-                                                </a>
-                                                <a class="dropdown-item btn-move-segment text-danger" href="#"
-                                                   data-mac="{{ device.mac_address }}" data-segment="QUARANTINE">
-                                                    <i class="fas fa-exclamation-triangle mr-2"></i> QUARANTINE
+                                                <a class="dropdown-item" href="#"
+                                                   onclick="event.preventDefault(); openDeviceDetail('{{ device.mac_address }}');">
+                                                    <i class="fas fa-info-circle mr-2 text-info"></i> View Details
                                                 </a>
                                             </div>
                                         </div>
@@ -870,6 +847,9 @@
         </div>
     </div>
 </div>
+
+<!-- Device Detail Modal -->
+{% include 'sdn/partials/device_detail_modal.html' %}
 
 {% endblock %}
 
@@ -1340,6 +1320,18 @@ $(document).ready(function() {
                     toastr.error('Bulk block failed');
                 }
             });
+        }
+    });
+
+    // Device row click - open detail modal
+    $(document).on('click', '.device-row', function(e) {
+        // Don't open modal if clicking on buttons or links
+        if ($(e.target).closest('button, a, .dropdown, .custom-checkbox').length) {
+            return;
+        }
+        var mac = $(this).data('mac');
+        if (mac) {
+            openDeviceDetail(mac);
         }
     });
 
