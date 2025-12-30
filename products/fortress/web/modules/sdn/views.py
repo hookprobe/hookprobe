@@ -575,37 +575,84 @@ def index():
     network_mode = 'vlan'  # Always VLAN mode
     using_real_data = False
 
-    # Use new simple device_policies module (SQLite-based)
-    if DEVICE_POLICIES_AVAILABLE:
+    # Primary: Use SDN Auto Pilot (autopilot.db) for device data
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                db_devices = autopilot.get_all_devices()
+                # Convert autopilot format to template format
+                for d in db_devices:
+                    policy = d.get('policy', 'quarantine')
+                    # Get policy info for display
+                    policy_info = POLICY_INFO.get(NetworkPolicy(policy), {}) if DEVICE_POLICIES_AVAILABLE else {}
+                    device = {
+                        'mac_address': d.get('mac', ''),
+                        'ip_address': d.get('ip', ''),
+                        'hostname': d.get('friendly_name') or d.get('hostname') or d.get('device_type', 'Unknown'),
+                        'friendly_name': d.get('friendly_name', ''),
+                        'manufacturer': d.get('vendor', 'Unknown'),
+                        'device_type': d.get('category', 'unknown'),
+                        'policy': policy,
+                        'policy_name': policy_info.get('name', policy.replace('_', ' ').title()),
+                        'policy_color': policy_info.get('color', 'secondary'),
+                        'policy_icon': policy_info.get('icon', 'fa-question'),
+                        'confidence': d.get('confidence', 0.0),
+                        'is_online': True,  # Assume online if in DB
+                        'is_blocked': policy == 'quarantine',
+                        'internet_access': policy in ('internet_only', 'full_access', 'normal'),
+                        'lan_access': policy in ('lan_only', 'full_access', 'normal'),
+                        'first_seen': d.get('first_seen', ''),
+                        'last_seen': d.get('last_seen', ''),
+                    }
+                    devices.append(device)
+
+                # Calculate stats from devices
+                stats = {
+                    'total': len(devices),
+                    'online': len([d for d in devices if d['is_online']]),
+                    'offline': len([d for d in devices if not d['is_online']]),
+                    'quarantined': len([d for d in devices if d['policy'] == 'quarantine']),
+                    'by_policy': {}
+                }
+                for d in devices:
+                    policy = d['policy']
+                    stats['by_policy'][policy] = stats['by_policy'].get(policy, 0) + 1
+
+                using_real_data = len(devices) > 0
+                logger.info(f"Loaded {len(devices)} devices from autopilot.db")
+        except Exception as e:
+            logger.error(f"Failed to load from autopilot.db: {e}")
+
+    # Fallback: Use device_policies module if no autopilot data
+    if not devices and DEVICE_POLICIES_AVAILABLE:
         try:
             devices = get_all_devices()
             stats = get_device_stats()
             using_real_data = len(devices) > 0
             logger.info(f"Loaded {len(devices)} devices from device_policies module")
-
-            # Build policies list from POLICY_INFO
-            policies = []
-            for policy_enum, info in POLICY_INFO.items():
-                policies.append({
-                    'name': policy_enum.value,
-                    'display_name': info['name'],
-                    'description': info['description'],
-                    'internet_access': info['internet'],
-                    'lan_access': info['lan'],
-                    'icon': info['icon'],
-                    'color': info['color'],
-                })
-
         except Exception as e:
             logger.error(f"Failed to get device data: {e}")
-            devices = []
-            stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'by_policy': {}}
+
+    # Build policies list from POLICY_INFO
+    if DEVICE_POLICIES_AVAILABLE:
+        policies = []
+        for policy_enum, info in POLICY_INFO.items():
+            policies.append({
+                'name': policy_enum.value,
+                'display_name': info['name'],
+                'description': info['description'],
+                'internet_access': info['internet'],
+                'lan_access': info['lan'],
+                'icon': info['icon'],
+                'color': info['color'],
+            })
     else:
-        # Fallback if device_policies module not available
-        logger.warning("device_policies module not available - no device data")
-        devices = []
-        stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'by_policy': {}}
         policies = get_demo_policies()
+
+    # Set default stats if still empty
+    if not stats:
+        stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'by_policy': {}}
 
     # Get real DFS/WiFi intelligence data
     try:
