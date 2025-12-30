@@ -47,18 +47,25 @@ get_interface_stats() {
     echo "$rx_bytes $tx_bytes"
 }
 
-# Format bytes to human readable
+# Format bytes to human readable (always GB for LTE - more consistent)
 format_bytes() {
     local bytes=$1
-    if [ "$bytes" -ge 1073741824 ]; then
+    # Always show GB for values over 100MB (more consistent for LTE metering)
+    if [ "$bytes" -ge 104857600 ]; then
         echo "$(awk "BEGIN {printf \"%.2f\", $bytes/1073741824}") GB"
     elif [ "$bytes" -ge 1048576 ]; then
-        echo "$(awk "BEGIN {printf \"%.2f\", $bytes/1048576}") MB"
+        echo "$(awk "BEGIN {printf \"%.1f\", $bytes/1048576}") MB"
     elif [ "$bytes" -ge 1024 ]; then
-        echo "$(awk "BEGIN {printf \"%.2f\", $bytes/1024}") KB"
+        echo "$(awk "BEGIN {printf \"%.1f\", $bytes/1024}") KB"
     else
         echo "$bytes B"
     fi
+}
+
+# Format bytes always as GB (for consistency in dashboard)
+format_bytes_gb() {
+    local bytes=$1
+    echo "$(awk "BEGIN {printf \"%.2f\", $bytes/1073741824}") GB"
 }
 
 # Main collection logic
@@ -136,7 +143,7 @@ EOF
     local rx_mbps=0
     local tx_mbps=0
 
-    # Write output
+    # Write output - always use GB for daily/monthly (consistent LTE metering)
     cat > "$TEMP_FILE" << EOF
 {
   "interface": "$iface",
@@ -144,8 +151,10 @@ EOF
   "day": "$current_day",
   "monthly_bytes": $monthly_bytes,
   "daily_bytes": $daily_bytes,
-  "monthly_formatted": "$(format_bytes $monthly_bytes)",
-  "daily_formatted": "$(format_bytes $daily_bytes)",
+  "monthly_formatted": "$(format_bytes_gb $monthly_bytes)",
+  "daily_formatted": "$(format_bytes_gb $daily_bytes)",
+  "monthly_gb": $(awk "BEGIN {printf \"%.2f\", $monthly_bytes/1073741824}"),
+  "daily_gb": $(awk "BEGIN {printf \"%.2f\", $daily_bytes/1073741824}"),
   "last_rx_bytes": $current_rx,
   "last_tx_bytes": $current_tx,
   "current_rx_formatted": "$(format_bytes $current_rx)",
