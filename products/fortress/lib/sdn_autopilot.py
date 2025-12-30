@@ -165,6 +165,7 @@ class IdentityScore:
     category: str
     signals: Dict[str, float]
     reason: str
+    device_name: str = ""  # Specific product name (HomePod, iPhone, Dell Latitude)
 
 
 class SDNAutoPilot:
@@ -185,6 +186,7 @@ class SDNAutoPilot:
                     ip TEXT,
                     hostname TEXT,
                     friendly_name TEXT,
+                    device_type TEXT,
                     vendor TEXT,
                     dhcp_fingerprint TEXT,
                     os_detected TEXT,
@@ -316,7 +318,8 @@ class SDNAutoPilot:
                 'name': device.name,
                 'hierarchy': device.hierarchy,
             },
-            reason=reason
+            reason=reason,
+            device_name=device.name  # Store specific product name (HomePod, iPhone, etc.)
         )
 
     def _determine_policy_from_fingerbank(self, score: float, category: str,
@@ -447,6 +450,9 @@ class SDNAutoPilot:
         total = sum(max(0, s) for s in signals.values())
         policy, reason = self._determine_policy(total, category, vendor, hostname)
 
+        # Determine device name from category/vendor/hostname
+        device_name = self._infer_device_name(vendor, category, hostname, os_fingerprint)
+
         return IdentityScore(
             policy=policy,
             confidence=min(1.0, total),
@@ -454,7 +460,8 @@ class SDNAutoPilot:
             os_fingerprint=os_fingerprint,
             category=category,
             signals=signals,
-            reason=reason
+            reason=reason,
+            device_name=device_name
         )
 
     def _determine_policy(self, score: float, category: str, vendor: str,
@@ -485,6 +492,71 @@ class SDNAutoPilot:
             return 'quarantine', f"Low confidence (score: {score:.2f})"
 
         return 'internet_only', f"Default (score: {score:.2f})"
+
+    def _infer_device_name(self, vendor: str, category: str, hostname: Optional[str],
+                           os_fingerprint: str) -> str:
+        """Infer device name from available signals (legacy fallback)."""
+        # Try to extract from hostname patterns
+        if hostname:
+            hn_lower = hostname.lower()
+            # Apple products
+            if 'macbook' in hn_lower:
+                return 'MacBook'
+            if 'imac' in hn_lower:
+                return 'iMac'
+            if 'iphone' in hn_lower:
+                return 'iPhone'
+            if 'ipad' in hn_lower:
+                return 'iPad'
+            if 'apple-watch' in hn_lower or 'applewatch' in hn_lower:
+                return 'Apple Watch'
+            if 'homepod' in hn_lower:
+                return 'HomePod'
+            # Android devices
+            if 'pixel' in hn_lower:
+                return 'Google Pixel'
+            if 'samsung' in hn_lower or 'galaxy' in hn_lower:
+                return 'Samsung Galaxy'
+            # Consoles
+            if 'playstation' in hn_lower or 'ps5' in hn_lower or 'ps4' in hn_lower:
+                return 'PlayStation'
+            if 'xbox' in hn_lower:
+                return 'Xbox'
+            if 'switch' in hn_lower:
+                return 'Nintendo Switch'
+
+        # Fall back to OS fingerprint pattern
+        if os_fingerprint:
+            os_lower = os_fingerprint.lower()
+            if 'macos' in os_lower:
+                return 'Mac Computer'
+            if 'ios' in os_lower or 'ipad' in os_lower:
+                return 'iOS Device'
+            if 'android' in os_lower:
+                return 'Android Device'
+            if 'windows' in os_lower:
+                return 'Windows PC'
+            if 'raspberry' in os_lower:
+                return 'Raspberry Pi'
+
+        # Fall back to vendor + category
+        if vendor and vendor != "Unknown":
+            category_map = {
+                'laptop': 'Laptop',
+                'workstation': 'Workstation',
+                'desktop': 'Desktop',
+                'phone': 'Phone',
+                'tablet': 'Tablet',
+                'smart_hub': 'Smart Hub',
+                'printer': 'Printer',
+                'camera': 'Camera',
+                'gaming': 'Gaming Console',
+                'sbc': 'SBC',
+            }
+            cat_name = category_map.get(category, 'Device')
+            return f"{vendor} {cat_name}"
+
+        return "Unknown Device"
 
     def _learn_fingerprint(self, fingerprint: str, vendor: str, category: str):
         """Learn unknown fingerprints."""
@@ -750,19 +822,21 @@ class SDNAutoPilot:
                     os_fingerprint=identity.os_fingerprint,
                     category=identity.category,
                     signals=identity.signals,
-                    reason="Manual override"
+                    reason="Manual override",
+                    device_name=identity.device_name
                 )
 
             now = datetime.now().isoformat()
             conn.execute('''
                 INSERT INTO device_identity
-                    (mac, ip, hostname, friendly_name, vendor, dhcp_fingerprint, os_detected,
+                    (mac, ip, hostname, friendly_name, device_type, vendor, dhcp_fingerprint, os_detected,
                      category, policy, confidence, signals, first_seen, last_seen, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(mac) DO UPDATE SET
                     ip = excluded.ip,
                     hostname = COALESCE(excluded.hostname, hostname),
                     friendly_name = COALESCE(excluded.friendly_name, friendly_name),
+                    device_type = COALESCE(excluded.device_type, device_type),
                     vendor = excluded.vendor,
                     dhcp_fingerprint = COALESCE(excluded.dhcp_fingerprint, dhcp_fingerprint),
                     os_detected = excluded.os_detected,
@@ -772,7 +846,7 @@ class SDNAutoPilot:
                     signals = excluded.signals,
                     last_seen = excluded.last_seen,
                     updated_at = excluded.updated_at
-            ''', (mac, ip, hostname, friendly_name, identity.vendor, dhcp_fingerprint,
+            ''', (mac, ip, hostname, friendly_name, identity.device_name, identity.vendor, dhcp_fingerprint,
                   identity.os_fingerprint, identity.category, identity.policy,
                   identity.confidence, json.dumps(identity.signals), now, now, now))
             conn.commit()

@@ -140,7 +140,7 @@ try:
     for mac, hostname, fingerprint, expected in test_devices:
         result = fb.identify(mac, fingerprint, hostname)
         status = "✓" if result.confidence >= 0.85 else "✗"
-        print(f"{status} {expected}: {result.vendor} | {result.confidence:.2f} | {result.policy}")
+        print(f"{status} {expected}: {result.name} ({result.vendor}) | {result.confidence:.2f} | {result.policy}")
 
 except Exception as e:
     print(f"✗ FAIL: Test failed: {e}")
