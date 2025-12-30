@@ -78,6 +78,8 @@ CATEGORY_POLICIES = {
     'infrastructure': 'full_access',
     'server': 'full_access',
     'management': 'full_access',
+    'network': 'full_access',      # Ubiquiti, TP-Link network devices
+    'sbc': 'normal',               # Raspberry Pi, etc. (trusted but limited)
 
     # Normal access - trusted smart home
     'smart_hub': 'normal',
@@ -95,6 +97,7 @@ CATEGORY_POLICIES = {
     'streaming': 'internet_only',
     'smart_tv': 'internet_only',
     'wearable': 'internet_only',
+    'health': 'internet_only',     # Withings, Fitbit (need cloud sync)
 
     # LAN only - IoT devices
     'printer': 'lan_only',
@@ -1210,6 +1213,20 @@ OUI_DATABASE = {
     "24:6E:96": "Dell", "24:B6:FD": "Dell", "28:C8:25": "Dell",
     "28:F1:0E": "Dell", "34:17:EB": "Dell", "34:48:ED": "Dell",
     "34:E6:D7": "Dell", "3C:2A:F4": "Dell", "44:A8:42": "Dell",
+    "4C:D9:8F": "Dell", "54:9F:35": "Dell", "54:AB:3A": "Dell",
+    "54:BF:64": "Dell", "5C:26:0A": "Dell", "5C:F9:DD": "Dell",
+    "64:00:6A": "Dell", "6C:2B:59": "Dell", "74:86:7A": "Dell",
+    "74:E6:E2": "Dell", "78:2B:CB": "Dell", "78:45:C4": "Dell",
+    "80:18:44": "Dell", "84:2B:2B": "Dell", "84:7B:EB": "Dell",
+    "88:6F:D4": "Dell", "90:B1:1C": "Dell", "98:90:96": "Dell",
+    "9C:B1:50": "Dell", "A4:1F:72": "Dell", "A4:BA:DB": "Dell",
+    "B0:83:FE": "Dell", "B4:E1:0F": "Dell", "B8:2A:72": "Dell",
+    "B8:AC:6F": "Dell", "B8:CA:3A": "Dell", "BC:30:5B": "Dell",
+    "C8:1F:66": "Dell", "C8:4B:D6": "Dell", "D0:67:E5": "Dell",
+    "D4:81:D7": "Dell", "D4:AE:52": "Dell", "D4:BE:D9": "Dell",
+    "E0:DB:55": "Dell", "E4:54:E8": "Dell", "EC:F4:BB": "Dell",
+    "F0:1F:AF": "Dell", "F4:8E:38": "Dell", "F8:B1:56": "Dell",
+    "F8:BC:12": "Dell", "F8:CA:B8": "Dell", "F8:DB:88": "Dell",
 
     # Lenovo
     "00:06:1B": "Lenovo", "00:09:6B": "Lenovo", "00:0A:E4": "Lenovo",
@@ -1284,6 +1301,110 @@ OUI_DATABASE = {
     "00:0E:58": "Sonos", "34:7E:5C": "Sonos", "48:A6:B8": "Sonos",
     "54:2A:1B": "Sonos", "5C:AA:FD": "Sonos", "78:28:CA": "Sonos",
     "94:9F:3E": "Sonos", "B8:E9:37": "Sonos", "C4:38:FF": "Sonos",
+}
+
+
+# =============================================================================
+# SPECIFIC OUI → DEVICE TYPE MAPPINGS (High confidence identification)
+# These OUIs are known to belong to specific device types
+# =============================================================================
+
+SPECIFIC_OUI_DEVICES = {
+    # Apple HomePod (distinct from general Apple OUIs)
+    "40:ED:CF": {"name": "HomePod", "vendor": "Apple", "category": "voice_assistant",
+                 "os": "audioOS", "confidence": 0.92, "hierarchy": ["Apple", "HomePod"]},
+
+    # Raspberry Pi Foundation
+    "DC:A6:32": {"name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
+                 "os": "Linux", "confidence": 0.95, "hierarchy": ["Raspberry Pi"]},
+    "B8:27:EB": {"name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
+                 "os": "Linux", "confidence": 0.95, "hierarchy": ["Raspberry Pi"]},
+    "E4:5F:01": {"name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
+                 "os": "Linux", "confidence": 0.95, "hierarchy": ["Raspberry Pi"]},
+    "D8:3A:DD": {"name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
+                 "os": "Linux", "confidence": 0.95, "hierarchy": ["Raspberry Pi"]},
+    "2C:CF:67": {"name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
+                 "os": "Linux", "confidence": 0.95, "hierarchy": ["Raspberry Pi"]},
+
+    # Withings (smart scales, health devices)
+    "00:24:E4": {"name": "Withings Health Device", "vendor": "Withings", "category": "health",
+                 "os": "Embedded", "confidence": 0.90, "hierarchy": ["Withings", "Health"]},
+
+    # Ring (doorbells, cameras)
+    "34:3E:A4": {"name": "Ring Doorbell/Camera", "vendor": "Ring", "category": "camera",
+                 "os": "Embedded", "confidence": 0.92, "hierarchy": ["Amazon", "Ring"]},
+    "54:A4:93": {"name": "Ring Doorbell/Camera", "vendor": "Ring", "category": "camera",
+                 "os": "Embedded", "confidence": 0.92, "hierarchy": ["Amazon", "Ring"]},
+    "CC:9E:A2": {"name": "Ring Doorbell/Camera", "vendor": "Ring", "category": "camera",
+                 "os": "Embedded", "confidence": 0.92, "hierarchy": ["Amazon", "Ring"]},
+
+    # Google/Nest
+    "18:D6:C7": {"name": "Nest Device", "vendor": "Google", "category": "smart_hub",
+                 "os": "Embedded", "confidence": 0.90, "hierarchy": ["Google", "Nest"]},
+    "64:16:66": {"name": "Nest Device", "vendor": "Google", "category": "smart_hub",
+                 "os": "Embedded", "confidence": 0.90, "hierarchy": ["Google", "Nest"]},
+    "F4:F5:D8": {"name": "Google Home/Nest", "vendor": "Google", "category": "voice_assistant",
+                 "os": "Cast OS", "confidence": 0.92, "hierarchy": ["Google", "Home"]},
+    "1C:F2:9A": {"name": "Google Home/Nest", "vendor": "Google", "category": "voice_assistant",
+                 "os": "Cast OS", "confidence": 0.92, "hierarchy": ["Google", "Home"]},
+
+    # Amazon Echo
+    "FC:65:DE": {"name": "Amazon Echo", "vendor": "Amazon", "category": "voice_assistant",
+                 "os": "Fire OS", "confidence": 0.95, "hierarchy": ["Amazon", "Echo"]},
+    "68:54:FD": {"name": "Amazon Echo", "vendor": "Amazon", "category": "voice_assistant",
+                 "os": "Fire OS", "confidence": 0.95, "hierarchy": ["Amazon", "Echo"]},
+    "A0:02:DC": {"name": "Amazon Echo", "vendor": "Amazon", "category": "voice_assistant",
+                 "os": "Fire OS", "confidence": 0.95, "hierarchy": ["Amazon", "Echo"]},
+    "4C:EF:C0": {"name": "Amazon Echo", "vendor": "Amazon", "category": "voice_assistant",
+                 "os": "Fire OS", "confidence": 0.95, "hierarchy": ["Amazon", "Echo"]},
+
+    # Sonos
+    "00:0E:58": {"name": "Sonos Speaker", "vendor": "Sonos", "category": "voice_assistant",
+                 "os": "Sonos OS", "confidence": 0.95, "hierarchy": ["Sonos"]},
+    "34:7E:5C": {"name": "Sonos Speaker", "vendor": "Sonos", "category": "voice_assistant",
+                 "os": "Sonos OS", "confidence": 0.95, "hierarchy": ["Sonos"]},
+    "48:A6:B8": {"name": "Sonos Speaker", "vendor": "Sonos", "category": "voice_assistant",
+                 "os": "Sonos OS", "confidence": 0.95, "hierarchy": ["Sonos"]},
+
+    # Philips Hue
+    "00:17:88": {"name": "Philips Hue Bridge", "vendor": "Philips", "category": "bridge",
+                 "os": "Embedded", "confidence": 0.95, "hierarchy": ["Philips", "Hue"]},
+    "EC:B5:FA": {"name": "Philips Hue Bridge", "vendor": "Philips", "category": "bridge",
+                 "os": "Embedded", "confidence": 0.95, "hierarchy": ["Philips", "Hue"]},
+
+    # Ubiquiti
+    "FC:EC:DA": {"name": "Ubiquiti UniFi", "vendor": "Ubiquiti", "category": "network",
+                 "os": "UniFi OS", "confidence": 0.95, "hierarchy": ["Ubiquiti", "UniFi"]},
+    "80:2A:A8": {"name": "Ubiquiti UniFi", "vendor": "Ubiquiti", "category": "network",
+                 "os": "UniFi OS", "confidence": 0.95, "hierarchy": ["Ubiquiti", "UniFi"]},
+    "24:5A:4C": {"name": "Ubiquiti UniFi", "vendor": "Ubiquiti", "category": "network",
+                 "os": "UniFi OS", "confidence": 0.95, "hierarchy": ["Ubiquiti", "UniFi"]},
+    "44:D9:E7": {"name": "Ubiquiti UniFi", "vendor": "Ubiquiti", "category": "network",
+                 "os": "UniFi OS", "confidence": 0.95, "hierarchy": ["Ubiquiti", "UniFi"]},
+
+    # TP-Link
+    "50:C7:BF": {"name": "TP-Link Device", "vendor": "TP-Link", "category": "network",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["TP-Link"]},
+    "60:E3:27": {"name": "TP-Link Device", "vendor": "TP-Link", "category": "network",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["TP-Link"]},
+
+    # Espressif (ESP8266/ESP32 IoT devices)
+    "24:0A:C4": {"name": "ESP8266/ESP32 IoT", "vendor": "Espressif", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Espressif", "ESP"]},
+    "24:62:AB": {"name": "ESP8266/ESP32 IoT", "vendor": "Espressif", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Espressif", "ESP"]},
+    "30:AE:A4": {"name": "ESP8266/ESP32 IoT", "vendor": "Espressif", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Espressif", "ESP"]},
+    "A4:CF:12": {"name": "ESP8266/ESP32 IoT", "vendor": "Espressif", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Espressif", "ESP"]},
+    "CC:50:E3": {"name": "ESP8266/ESP32 IoT", "vendor": "Espressif", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Espressif", "ESP"]},
+
+    # Tuya Smart (common IoT platform)
+    "D8:1F:12": {"name": "Tuya Smart Device", "vendor": "Tuya", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Tuya"]},
+    "7C:F6:66": {"name": "Tuya Smart Device", "vendor": "Tuya", "category": "iot",
+                 "os": "Embedded", "confidence": 0.85, "hierarchy": ["Tuya"]},
 }
 
 
@@ -1401,6 +1522,14 @@ class Fingerbank:
             vc_match = self._match_vendor_class(vendor_class, mac, hostname)
             if vc_match and vc_match['confidence'] >= 0.90:
                 return self._build_result(vc_match, mac, hostname)
+
+        # 0.5. Check SPECIFIC_OUI_DEVICES for known device types
+        # These OUIs map directly to specific device types (e.g., HomePod, Raspberry Pi)
+        oui_prefix = mac[:8].upper()
+        if oui_prefix in SPECIFIC_OUI_DEVICES:
+            specific = SPECIFIC_OUI_DEVICES[oui_prefix].copy()
+            specific['match_type'] = 'specific_oui'
+            return self._build_result(specific, mac, hostname)
 
         # 1. Try exact fingerprint match (fastest, highest confidence)
         if dhcp_fingerprint:
