@@ -1212,14 +1212,36 @@ class SDNAutoPilot:
         # 2. Resolve friendly name via mDNS/Bonjour
         # 3. Calculate proper confidence scores
         # 4. Assign appropriate policy based on device category
-        self.sync_device(
-            mac=mac,
-            ip=ip or '',
-            hostname=hostname,
-            dhcp_fingerprint=dhcp_fingerprint,
-            vendor_class=vendor_class,
-            apply_rules=True  # Apply OpenFlow rules for new devices
-        )
+        try:
+            self.sync_device(
+                mac=mac,
+                ip=ip or '',
+                hostname=hostname,
+                dhcp_fingerprint=dhcp_fingerprint,
+                vendor_class=vendor_class,
+                apply_rules=False  # Don't apply rules - web container can't access OVS
+            )
+        except Exception as e:
+            # Log but don't fail - device creation is more important than rule application
+            logger.warning(f"sync_device failed for {mac}: {e}")
+            # Try a simple insert as fallback
+            try:
+                with self._get_conn() as conn:
+                    now = datetime.now().isoformat()
+                    # Get vendor from OUI for basic identification
+                    oui = mac[:8]
+                    vendor = self._get_vendor_from_oui(oui)
+                    conn.execute('''
+                        INSERT OR IGNORE INTO device_identity
+                            (mac, ip, hostname, vendor, category, policy, confidence,
+                             signals, first_seen, last_seen, updated_at, tags)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (mac, ip or '', hostname or '', vendor, 'unknown', 'quarantine',
+                          0.5, '{}', now, now, now, '[]'))
+                    conn.commit()
+                logger.info(f"Fallback device creation for {mac}")
+            except Exception as e2:
+                logger.error(f"Fallback device creation also failed for {mac}: {e2}")
 
         logger.info(f"Created device via Fingerbank pipeline: {mac} (IP: {ip}, Hostname: {hostname})")
         return self.get_device(mac)
@@ -1740,6 +1762,8 @@ class SDNAutoPilot:
                     'SELECT 1 FROM device_identity WHERE mac = ?', (mac,)
                 ).fetchone()
 
+                now = datetime.now().isoformat()
+
                 if exists:
                     conn.execute('''
                         UPDATE device_identity SET
@@ -1752,6 +1776,8 @@ class SDNAutoPilot:
                             tx_bytes = COALESCE(?, tx_bytes),
                             connected_time = COALESCE(?, connected_time),
                             connection_type = 'wifi',
+                            status = 'online',
+                            last_seen = ?,
                             updated_at = ?
                         WHERE mac = ?
                     ''', (
@@ -1763,10 +1789,36 @@ class SDNAutoPilot:
                         signal.get('rx_bytes'),
                         signal.get('tx_bytes'),
                         signal.get('connected_time'),
-                        datetime.now().isoformat(),
+                        now,
+                        now,
                         mac
                     ))
                     updated += 1
+                else:
+                    # WiFi device not in database - create it with basic info
+                    # Will be fully identified later via DHCP event or Fingerbank
+                    oui = mac[:8]
+                    vendor = self._get_vendor_from_oui(oui)
+                    conn.execute('''
+                        INSERT INTO device_identity (
+                            mac, vendor, connection_type, wifi_rssi, wifi_quality,
+                            wifi_proximity, wifi_band, wifi_interface, rx_bytes, tx_bytes,
+                            connected_time, status, policy, confidence, first_seen, last_seen, updated_at
+                        ) VALUES (?, ?, 'wifi', ?, ?, ?, ?, ?, ?, ?, ?, 'online', 'quarantine', 0.3, ?, ?, ?)
+                    ''', (
+                        mac, vendor,
+                        signal.get('rssi'),
+                        signal.get('quality'),
+                        signal.get('proximity'),
+                        signal.get('band'),
+                        signal.get('interface'),
+                        signal.get('rx_bytes', 0),
+                        signal.get('tx_bytes', 0),
+                        signal.get('connected_time', 0),
+                        now, now, now
+                    ))
+                    updated += 1
+                    logger.info(f"Auto-registered WiFi device: {mac} ({vendor})")
 
             conn.commit()
 
