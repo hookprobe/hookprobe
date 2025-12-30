@@ -1019,58 +1019,48 @@ def bulk_auto_classify():
 @login_required
 @operator_required
 def discover_devices():
-    """Trigger network device discovery.
+    """Load devices from autopilot.db.
 
-    Scans the network using ARP table and stores discovered devices
-    in SQLite database. Works independently of PostgreSQL.
+    Returns devices already classified by SDN Auto Pilot from
+    /var/lib/hookprobe/autopilot.db. No network rescan needed.
     """
-    if not DEVICE_POLICIES_AVAILABLE:
-        return jsonify({'success': False, 'error': 'Device policies module not available'}), 503
+    if not SDN_AUTOPILOT_AVAILABLE:
+        return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
 
     try:
-        discovered = _scan_network_devices()
-        new_count = 0
+        autopilot = get_sdn_autopilot()
+        if not autopilot:
+            return jsonify({'success': False, 'error': 'Auto Pilot not initialized'}), 503
 
-        # Store discovered devices in SQLite and classify
-        db = get_device_db()
-        for device in discovered:
-            mac = device.get('mac_address', '').upper()
-            if not mac:
-                continue
+        # Get all devices from autopilot.db (already classified)
+        db_devices = autopilot.get_all_devices()
 
-            # Check if device exists
-            existing = db.get_device(mac)
-            device['is_new'] = existing is None
+        # Convert to frontend format
+        devices = []
+        for d in db_devices:
+            device = {
+                'mac_address': d.get('mac', ''),
+                'ip_address': d.get('ip', ''),
+                'hostname': d.get('hostname', ''),
+                'friendly_name': d.get('friendly_name', '') or d.get('device_type', ''),
+                'manufacturer': d.get('vendor', 'Unknown'),
+                'device_type': d.get('device_type') or d.get('category', 'unknown'),
+                'policy': d.get('policy', 'quarantine'),
+                'confidence': d.get('confidence', 0.0),
+                'category': d.get('category', 'unknown'),
+                'is_online': True,  # Assume online if in DB
+                'first_seen': d.get('first_seen', ''),
+                'last_seen': d.get('last_seen', ''),
+            }
+            devices.append(device)
 
-            if device['is_new']:
-                new_count += 1
-                # Auto-classify and assign policy
-                classification = classify_device(mac)
-                device['oui_category'] = classification.get('category', 'unknown')
-                device['auto_policy'] = classification.get('recommended_policy', 'quarantine')
-
-                # Store in SQLite with auto-assigned policy
-                db.set_policy(
-                    mac=mac,
-                    policy=device['auto_policy'],
-                    hostname=device.get('hostname'),
-                    manufacturer=device.get('manufacturer'),
-                    device_type=device.get('device_type')
-                )
-                logger.info(f"New device discovered: {mac} -> policy={device['auto_policy']}")
-            else:
-                # Update last_seen for existing device
-                device['oui_category'] = existing.get('device_type', 'unknown')
-                device['auto_policy'] = existing.get('policy', 'quarantine')
-
-        # Also write to devices.json for agent compatibility
-        _write_devices_json(discovered)
+        logger.info(f"Loaded {len(devices)} devices from autopilot.db")
 
         return jsonify({
             'success': True,
-            'total': len(discovered),
-            'new': new_count,
-            'devices': discovered
+            'total': len(devices),
+            'new': 0,  # Not doing new discovery, just loading
+            'devices': devices
         })
 
     except Exception as e:
