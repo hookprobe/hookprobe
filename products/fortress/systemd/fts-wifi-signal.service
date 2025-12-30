@@ -1,0 +1,18 @@
+[Unit]
+Description=Fortress WiFi Signal Collector
+Documentation=https://hookprobe.com/docs/fortress/wifi-signal
+After=network.target hostapd.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/devices/common/wifi-signal-collector.sh
+User=root
+Group=root
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
