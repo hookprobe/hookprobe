@@ -1205,6 +1205,9 @@ setup_network() {
 
                     # Install services for boot persistence
                     install_vlan_service
+
+                    # Install device status updater (tracks online/idle/offline via OpenFlow + ARP)
+                    install_device_status_service
                 else
                     log_error "Netplan apply failed"
                     "$netplan_gen" remove 2>/dev/null || true
@@ -2162,6 +2165,82 @@ EOF
     systemctl daemon-reload
     systemctl enable fortress-vlan.service 2>/dev/null || true
     log_success "VLAN service installed - netplan creates bridge, service configures OVS"
+}
+
+# Install device status updater service and timer
+# Runs on HOST to track device online/idle/offline status using OpenFlow + neighbor state
+install_device_status_service() {
+    log_info "Installing device status updater..."
+
+    local install_base="${INSTALL_DIR}/devices/common"
+    local data_dir="${INSTALL_DIR}/data"
+    mkdir -p "$install_base" "$data_dir"
+
+    # Install device status updater script
+    local status_src="${DEVICES_DIR}/common/device-status-updater.sh"
+    local status_dst="$install_base/device-status-updater.sh"
+    if [ -f "$status_src" ]; then
+        cp "$status_src" "$status_dst"
+        chmod +x "$status_dst"
+        log_info "  Installed: device-status-updater.sh"
+    else
+        log_warn "  device-status-updater.sh not found at $status_src"
+        return 1
+    fi
+
+    # Install systemd service
+    local service_src="${FORTRESS_ROOT}/systemd/fts-device-status.service"
+    local service_dst="/etc/systemd/system/fts-device-status.service"
+    if [ -f "$service_src" ]; then
+        cp "$service_src" "$service_dst"
+    else
+        # Create service inline if file not found
+        cat > "$service_dst" << 'EOF'
+[Unit]
+Description=HookProbe Fortress Device Status Updater
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target openvswitch-switch.service fortress.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/devices/common/device-status-updater.sh
+User=root
+Group=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-device-status
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+
+    # Install systemd timer
+    local timer_src="${FORTRESS_ROOT}/systemd/fts-device-status.timer"
+    local timer_dst="/etc/systemd/system/fts-device-status.timer"
+    if [ -f "$timer_src" ]; then
+        cp "$timer_src" "$timer_dst"
+    else
+        # Create timer inline if file not found
+        cat > "$timer_dst" << 'EOF'
+[Unit]
+Description=HookProbe Fortress Device Status Timer
+Documentation=https://github.com/hookprobe/hookprobe
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+    fi
+
+    systemctl daemon-reload
+    systemctl enable fts-device-status.timer 2>/dev/null || true
+    systemctl start fts-device-status.timer 2>/dev/null || true
+    log_success "Device status updater installed (timer runs every 30s)"
 }
 
 # Check if container image needs rebuilding
