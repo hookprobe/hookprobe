@@ -848,6 +848,63 @@ class SDNAutoPilot:
             self._apply_ovs_flow(rule)
         return True
 
+    def set_policy(self, mac: str, policy: str) -> bool:
+        """Set and persist network policy for a device.
+
+        Args:
+            mac: Device MAC address
+            policy: Policy name (quarantine, internet_only, lan_only, normal, full_access)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        mac = mac.upper()
+
+        # Normalize policy names
+        policy_aliases = {
+            'isolated': 'quarantine',
+            'full_access': 'normal',
+        }
+        policy = policy_aliases.get(policy, policy)
+
+        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+        if policy not in valid_policies:
+            logger.warning(f"Invalid policy: {policy}")
+            return False
+
+        try:
+            with self._get_conn() as conn:
+                # Check if device exists
+                row = conn.execute(
+                    'SELECT ip FROM device_identity WHERE mac = ?', (mac,)
+                ).fetchone()
+
+                if not row:
+                    logger.warning(f"Device {mac} not found in database")
+                    return False
+
+                # Update policy and set manual_override to prevent auto-classification
+                conn.execute('''
+                    UPDATE device_identity SET
+                        policy = ?,
+                        manual_override = 1,
+                        updated_at = ?
+                    WHERE mac = ?
+                ''', (policy, datetime.now().isoformat(), mac))
+                conn.commit()
+
+                logger.info(f"Policy for {mac} set to {policy} (manual override enabled)")
+
+                # Apply OpenFlow rules if device has IP
+                ip = row['ip'] if row else None
+                if ip:
+                    self.apply_policy(mac, ip, policy)
+
+                return True
+        except Exception as e:
+            logger.error(f"Failed to set policy for {mac}: {e}")
+            return False
+
     def _apply_ovs_flow(self, rule: Dict) -> bool:
         """Apply a flow rule to OVS."""
         try:
@@ -1085,6 +1142,289 @@ class SDNAutoPilot:
                 'SELECT * FROM device_identity ORDER BY last_seen DESC'
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def ensure_device_exists(self, mac: str, ip: str = None, hostname: str = None,
+                              vendor: str = None, device_type: str = None) -> Dict:
+        """Ensure a device exists in the database, creating it if necessary.
+
+        This method is called before operations that require the device to exist
+        (like adding tags, setting policies, etc.). It creates a minimal device
+        entry if one doesn't already exist.
+
+        Args:
+            mac: Device MAC address (required)
+            ip: IP address (optional, for discovery)
+            hostname: Hostname (optional)
+            vendor: Vendor name (optional, will be detected from OUI if not provided)
+            device_type: Device type/category (optional)
+
+        Returns:
+            Device dict (existing or newly created)
+        """
+        mac = mac.upper()
+        now = datetime.now().isoformat()
+
+        # Check if device already exists
+        existing = self.get_device(mac)
+        if existing:
+            # Update last_seen and IP if provided
+            with self._get_conn() as conn:
+                if ip:
+                    conn.execute('''
+                        UPDATE device_identity SET ip = ?, last_seen = ?, updated_at = ?
+                        WHERE mac = ?
+                    ''', (ip, now, now, mac))
+                else:
+                    conn.execute('''
+                        UPDATE device_identity SET last_seen = ?, updated_at = ?
+                        WHERE mac = ?
+                    ''', (now, now, mac))
+                conn.commit()
+            return self.get_device(mac)
+
+        # Device doesn't exist - create a new entry
+        # Try to get vendor from OUI if not provided
+        if not vendor:
+            oui = mac[:8]
+            vendor = self._get_vendor_from_oui(oui)
+
+        # Default policy for new devices is quarantine (safe default)
+        default_policy = 'quarantine'
+
+        with self._get_conn() as conn:
+            conn.execute('''
+                INSERT INTO device_identity
+                    (mac, ip, hostname, friendly_name, device_type, vendor, category,
+                     policy, confidence, signals, first_seen, last_seen, updated_at, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                mac,
+                ip or '',
+                hostname or '',
+                hostname or '',  # friendly_name defaults to hostname
+                device_type or 'unknown',
+                vendor or 'Unknown',
+                'unknown',
+                default_policy,
+                0.5,  # default confidence
+                '{}',  # empty signals
+                now,
+                now,
+                now,
+                '[]'  # empty tags
+            ))
+            conn.commit()
+
+        logger.info(f"Created new device entry: {mac} (IP: {ip}, Hostname: {hostname})")
+        return self.get_device(mac)
+
+    def _get_vendor_from_oui(self, oui: str) -> str:
+        """Get vendor name from OUI prefix."""
+        # Common OUI prefixes for quick lookup
+        oui_vendors = {
+            '00:1A:11': 'Google',
+            '3C:5A:B4': 'Google',
+            'F4:F5:D8': 'Google',
+            'A4:77:33': 'Google',
+            '94:EB:2C': 'Google',
+            '00:17:C4': 'Quanta',
+            '00:1B:63': 'Apple',
+            '00:1E:C2': 'Apple',
+            '00:21:E9': 'Apple',
+            '00:22:41': 'Apple',
+            '00:23:12': 'Apple',
+            '00:23:32': 'Apple',
+            '00:23:6C': 'Apple',
+            '00:23:DF': 'Apple',
+            '00:25:00': 'Apple',
+            '00:25:4B': 'Apple',
+            '00:25:BC': 'Apple',
+            '00:26:08': 'Apple',
+            '00:26:4A': 'Apple',
+            '00:26:B0': 'Apple',
+            '00:26:BB': 'Apple',
+            '00:50:E4': 'Apple',
+            '04:0C:CE': 'Apple',
+            '04:15:52': 'Apple',
+            '04:1E:64': 'Apple',
+            '04:26:65': 'Apple',
+            '04:48:9A': 'Apple',
+            '04:52:F3': 'Apple',
+            '04:54:53': 'Apple',
+            '04:69:F8': 'Apple',
+            '04:D3:CF': 'Apple',
+            '04:DB:56': 'Apple',
+            '04:E5:36': 'Apple',
+            '04:F1:3E': 'Apple',
+            '04:F7:E4': 'Apple',
+            '08:00:27': 'VirtualBox',
+            '08:66:98': 'Apple',
+            '08:6D:41': 'Apple',
+            '10:40:F3': 'Apple',
+            '10:93:E9': 'Apple',
+            '10:94:BB': 'Apple',
+            '10:9A:DD': 'Apple',
+            '10:DD:B1': 'Apple',
+            '14:10:9F': 'Apple',
+            '14:5A:05': 'Apple',
+            '14:8F:C6': 'Apple',
+            '14:99:E2': 'Apple',
+            '18:20:32': 'Apple',
+            '18:34:51': 'Apple',
+            '18:65:90': 'Apple',
+            '18:81:0E': 'Apple',
+            '18:9E:FC': 'Apple',
+            '18:AF:61': 'Apple',
+            '18:AF:8F': 'Apple',
+            '18:E7:F4': 'Apple',
+            '18:EE:69': 'Apple',
+            '18:F6:43': 'Apple',
+            '1C:1A:C0': 'Apple',
+            '1C:36:BB': 'Apple',
+            '1C:5C:F2': 'Apple',
+            '1C:91:48': 'Apple',
+            '1C:9E:46': 'Apple',
+            '1C:AB:A7': 'Apple',
+            '1C:E6:2B': 'Apple',
+            '20:3C:AE': 'Apple',
+            '20:78:F0': 'Apple',
+            '20:7D:74': 'Apple',
+            '20:9B:CD': 'Apple',
+            '20:A2:E4': 'Apple',
+            '20:AB:37': 'Apple',
+            '20:C9:D0': 'Apple',
+            '24:1E:EB': 'Apple',
+            '24:24:0E': 'Apple',
+            '24:5B:A7': 'Apple',
+            '24:AB:81': 'Apple',
+            '24:E3:14': 'Apple',
+            '24:F0:94': 'Apple',
+            '24:F6:77': 'Apple',
+            '28:0B:5C': 'Apple',
+            '28:37:37': 'Apple',
+            '28:5A:EB': 'Apple',
+            '28:6A:B8': 'Apple',
+            '28:6A:BA': 'Apple',
+            '28:A0:2B': 'Apple',
+            '28:CF:DA': 'Apple',
+            '28:CF:E9': 'Apple',
+            '28:E0:2C': 'Apple',
+            '28:E1:4C': 'Apple',
+            '28:E7:CF': 'Apple',
+            '28:ED:6A': 'Apple',
+            '28:F0:76': 'Apple',
+            '2C:1F:23': 'Apple',
+            '2C:20:0B': 'Apple',
+            '2C:33:61': 'Apple',
+            '2C:54:CF': 'Apple',
+            '2C:B4:3A': 'Apple',
+            '2C:BE:08': 'Apple',
+            '2C:F0:A2': 'Apple',
+            '2C:F0:EE': 'Apple',
+            '30:35:AD': 'Apple',
+            '30:63:6B': 'Apple',
+            '30:90:AB': 'Apple',
+            '30:F7:C5': 'Apple',
+            '34:08:BC': 'Apple',
+            '34:12:98': 'Apple',
+            '34:15:9E': 'Apple',
+            '34:36:3B': 'Apple',
+            '34:51:C9': 'Apple',
+            '34:A3:95': 'Apple',
+            '34:AB:37': 'Apple',
+            '34:C0:59': 'Apple',
+            '34:E2:FD': 'Apple',
+            '38:0F:4A': 'Apple',
+            '38:48:4C': 'Apple',
+            '38:4F:F0': 'Apple',
+            '38:53:9C': 'Apple',
+            '38:66:F0': 'Apple',
+            '38:71:DE': 'Apple',
+            '38:B5:4D': 'Apple',
+            '38:C9:86': 'Apple',
+            '38:CA:DA': 'Apple',
+            '3C:06:30': 'Apple',
+            '3C:07:71': 'Apple',
+            '3C:15:C2': 'Apple',
+            '3C:2E:F9': 'Apple',
+            '80:8A:BD': 'Samsung',
+            '00:12:FB': 'Samsung',
+            '00:13:77': 'Samsung',
+            '00:15:B9': 'Samsung',
+            '00:16:32': 'Samsung',
+            '00:16:6B': 'Samsung',
+            '00:16:6C': 'Samsung',
+            '00:17:C9': 'Samsung',
+            '00:17:D5': 'Samsung',
+            '00:18:AF': 'Samsung',
+            '00:1A:8A': 'Samsung',
+            '00:1B:98': 'Samsung',
+            '00:1C:43': 'Samsung',
+            '00:1D:25': 'Samsung',
+            '00:1D:F6': 'Samsung',
+            '00:1E:7D': 'Samsung',
+            '00:1E:E1': 'Samsung',
+            '00:1E:E2': 'Samsung',
+            '00:1F:CC': 'Samsung',
+            '00:1F:CD': 'Samsung',
+            '00:21:19': 'Samsung',
+            '00:21:4C': 'Samsung',
+            '00:21:D1': 'Samsung',
+            '00:21:D2': 'Samsung',
+            '00:23:39': 'Samsung',
+            '00:23:3A': 'Samsung',
+            '00:23:99': 'Samsung',
+            '00:23:D6': 'Samsung',
+            '00:23:D7': 'Samsung',
+            '00:24:54': 'Samsung',
+            '00:24:90': 'Samsung',
+            '00:24:91': 'Samsung',
+            '00:25:66': 'Samsung',
+            '00:25:67': 'Samsung',
+            '00:26:37': 'Samsung',
+            '00:26:5D': 'Samsung',
+            '00:26:5F': 'Samsung',
+            'DC:A6:32': 'Raspberry Pi',
+            'B8:27:EB': 'Raspberry Pi',
+            'E4:5F:01': 'Raspberry Pi',
+            '00:50:56': 'VMware',
+            '00:0C:29': 'VMware',
+            '00:05:69': 'VMware',
+        }
+        oui_upper = oui.upper()
+        return oui_vendors.get(oui_upper, 'Unknown')
+
+    def sync_from_device_list(self, devices: List[Dict]) -> int:
+        """Sync devices from a list (e.g., from device_status.json or DHCP leases).
+
+        Creates database entries for devices that don't exist yet.
+
+        Args:
+            devices: List of dicts with at least 'mac' key, optionally 'ip', 'hostname', 'vendor'
+
+        Returns:
+            Number of new devices created
+        """
+        created = 0
+        for device in devices:
+            mac = device.get('mac', '').upper()
+            if not mac or len(mac) < 17:  # Skip invalid MACs
+                continue
+
+            existing = self.get_device(mac)
+            if not existing:
+                self.ensure_device_exists(
+                    mac=mac,
+                    ip=device.get('ip'),
+                    hostname=device.get('hostname') or device.get('name'),
+                    vendor=device.get('vendor'),
+                    device_type=device.get('device_type') or device.get('category')
+                )
+                created += 1
+
+        if created > 0:
+            logger.info(f"Synced {created} new devices to database")
+        return created
 
     def set_manual_policy(self, mac: str, policy: str) -> bool:
         """Set manual policy override and apply OpenFlow rules.
