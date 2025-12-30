@@ -2420,19 +2420,35 @@ def api_sdn_devices():
             devices = autopilot.get_all_devices()
 
             # Transform to SDN format
+            # Map policy to segment and trust level
+            policy_to_segment = {
+                'full_access': ('TRUSTED', 4),
+                'lan_only': ('LAN', 3),
+                'internet_only': ('GUEST', 2),
+                'quarantine': ('QUARANTINE', 0),
+                'isolated': ('QUARANTINE', 0),
+            }
+
             sdn_devices = []
             for device in devices:
+                policy = device.get('policy', 'quarantine')
+                segment, trust = policy_to_segment.get(policy, ('GUEST', 1))
+
                 sdn_devices.append({
-                    'mac': device.get('mac_address', ''),
-                    'hostname': device.get('hostname', 'Unknown'),
-                    'ip_address': device.get('ip_address', '--'),
+                    'mac': device.get('mac', ''),
+                    'hostname': device.get('hostname') or device.get('friendly_name') or 'Unknown',
+                    'ip_address': device.get('ip', '--'),
                     'vendor': device.get('vendor', 'Unknown'),
-                    'segment': device.get('segment_name', 'GUEST'),
+                    'segment': segment,
                     'vlan_id': device.get('vlan_id', 40),
-                    'trust_level': device.get('trust_level', 1),
-                    'connection_type': device.get('connection_type', 'lan'),
-                    'band': device.get('band'),
-                    'online': device.get('is_online', False),
+                    'trust_level': trust,
+                    'connection_type': device.get('connection_type', 'unknown'),
+                    'band': device.get('wifi_band'),
+                    'online': device.get('status') == 'online',
+                    # WiFi signal data
+                    'wifi_rssi': device.get('wifi_rssi'),
+                    'wifi_quality': device.get('wifi_quality'),
+                    'wifi_proximity': device.get('wifi_proximity'),
                 })
 
             return jsonify({'success': True, 'devices': sdn_devices})
