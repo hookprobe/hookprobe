@@ -18,7 +18,7 @@
 #   - QUARANTINE: Priority 1000-1001 (drop all except DHCP/DNS)
 #   - LAN_ONLY: Priority 600-750 (allow LAN, block internet)
 #   - INTERNET_ONLY: Priority 650-750 (block LAN, allow internet)
-#   - FULL_ACCESS/NORMAL: No rules needed (use base priority 500)
+#   - FULL_ACCESS/NORMAL/SMART_HOME: No rules needed (use base priority 500)
 #
 
 set -e
@@ -138,7 +138,7 @@ apply_policy() {
             log_info "Applied INTERNET_ONLY policy for $mac"
             ;;
 
-        full_access|normal|default|"")
+        full_access|normal|smart_home|default|"")
             # No per-device rules needed - base priority 500 rules allow all
             log_info "Applied FULL_ACCESS policy for $mac (no restrictions)"
             ;;
@@ -174,7 +174,7 @@ sync_from_autopilot() {
                 failed=$((failed + 1))
             fi
         fi
-    done < <(sqlite3 "$AUTOPILOT_DB" "SELECT mac, policy, ip FROM device_identity WHERE policy IS NOT NULL AND policy != '' AND policy NOT IN ('normal', 'full_access')" 2>/dev/null || true)
+    done < <(sqlite3 "$AUTOPILOT_DB" "SELECT mac, policy, ip FROM device_identity WHERE policy IS NOT NULL AND policy != '' AND policy NOT IN ('normal', 'smart_home', 'full_access')" 2>/dev/null || true)
 
     log_info "NAC autopilot sync complete: $synced synced, $failed failed"
     return 0
