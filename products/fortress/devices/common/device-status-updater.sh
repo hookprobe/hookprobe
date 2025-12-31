@@ -165,6 +165,52 @@ ENTRY
 )
     done < <(sqlite3 "$AUTOPILOT_DB" "SELECT mac, ip, COALESCE(friendly_name, hostname, ''), policy FROM device_identity" 2>/dev/null)
 
+    # Also add ARP-discovered devices not yet in autopilot.db
+    # This ensures new devices show online status before they're classified
+    declare -A processed_macs
+    for mac in "${!neighbor_state[@]}"; do
+        processed_macs["$mac"]=1
+    done
+
+    # Check which ARP devices are not in DB and add them
+    while IFS='|' read -r mac state ip; do
+        [ -z "$mac" ] && continue
+
+        # Skip if already processed from autopilot.db
+        if sqlite3 "$AUTOPILOT_DB" "SELECT 1 FROM device_identity WHERE mac = '$mac'" 2>/dev/null | grep -q 1; then
+            continue
+        fi
+
+        # New device from ARP - add to output
+        local status="offline"
+        if [ "$state" = "REACHABLE" ]; then
+            status="online"
+            ((++online)) || true
+        elif [ "$state" = "STALE" ] || [ "$state" = "DELAY" ] || [ "$state" = "PROBE" ]; then
+            status="idle"
+            ((++idle)) || true
+        else
+            ((++offline)) || true
+        fi
+
+        [ "$first" = false ] && devices_json+=","
+        first=false
+        devices_json+=$(cat <<ENTRY
+{
+  "mac": "$mac",
+  "ip": "$ip",
+  "hostname": "",
+  "policy": "quarantine",
+  "status": "$status",
+  "neighbor_state": "$state",
+  "last_packet_count": 0,
+  "last_seen_epoch": $now,
+  "discovered_via": "arp"
+}
+ENTRY
+)
+    done < <(get_neighbor_states)
+
     devices_json+="]"
 
     # Write output
