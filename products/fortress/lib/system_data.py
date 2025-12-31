@@ -1121,11 +1121,23 @@ def _get_cost_status(backup_iface: Optional[str]) -> Dict:
     if LTE_LIMITS_FILE.exists():
         try:
             limits = json.loads(LTE_LIMITS_FILE.read_text())
-            # Only set budget if user has configured a non-zero limit
-            if limits.get('daily_budget_mb') and limits['daily_budget_mb'] > 0:
+            # Check both new and legacy field names for compatibility
+            # New names: monthly_limit_gb, daily_limit_gb
+            # Legacy names: monthly_budget_gb, daily_budget_mb
+
+            # Monthly limit (check new name first, then legacy)
+            monthly_gb = limits.get('monthly_limit_gb') or limits.get('monthly_budget_gb')
+            if monthly_gb and monthly_gb > 0:
+                status['monthly_budget_mb'] = monthly_gb * 1024
+
+            # Daily limit (check new name first, then legacy)
+            daily_gb = limits.get('daily_limit_gb')
+            if daily_gb and daily_gb > 0:
+                status['daily_budget_mb'] = daily_gb * 1024  # Convert GB to MB
+            elif limits.get('daily_budget_mb') and limits['daily_budget_mb'] > 0:
                 status['daily_budget_mb'] = limits['daily_budget_mb']
-            if limits.get('monthly_budget_gb') and limits['monthly_budget_gb'] > 0:
-                status['monthly_budget_mb'] = limits['monthly_budget_gb'] * 1024
+
+            # Cost per GB
             if limits.get('cost_per_gb') and limits['cost_per_gb'] > 0:
                 status['cost_per_gb'] = limits['cost_per_gb']
         except (json.JSONDecodeError, IOError) as e:
