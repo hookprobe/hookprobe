@@ -93,6 +93,33 @@ DEVICE_STATUS_CACHE = Path('/opt/hookprobe/fortress/data/device_status.json')
 # DHCP devices file (updated by dhcp-event.sh with DHCP fingerprints)
 DHCP_DEVICES_FILE = Path('/opt/hookprobe/fortress/data/devices.json')
 
+# WiFi signals file (updated by wifi-signal-collector.sh)
+WIFI_SIGNALS_FILE = Path('/opt/hookprobe/fortress/data/wifi_signals.json')
+
+
+def _load_wifi_signals() -> Dict[str, Dict]:
+    """Load WiFi signal data from host-generated file.
+
+    Returns dict mapping MAC -> {wifi_rssi, wifi_quality, wifi_proximity, interface}
+    """
+    signals = {}
+    try:
+        if WIFI_SIGNALS_FILE.exists():
+            data = json.loads(WIFI_SIGNALS_FILE.read_text())
+            for station in data.get('stations', []):
+                mac = station.get('mac', '').upper()
+                if mac:
+                    signals[mac] = {
+                        'wifi_rssi': station.get('rssi'),
+                        'wifi_quality': station.get('quality'),
+                        'wifi_proximity': station.get('proximity'),
+                        'wifi_interface': station.get('interface'),
+                        'wifi_band': station.get('band'),
+                    }
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Failed to load WiFi signals: {e}")
+    return signals
+
 
 def _load_device_status_cache() -> Dict[str, Dict]:
     """Load device status and DHCP fingerprints from host-generated files.
@@ -653,6 +680,9 @@ def index():
                 # (web container can't run ip neigh/ovs-ofctl directly)
                 status_cache = _load_device_status_cache()
 
+                # Load WiFi signal data from host-generated file
+                wifi_signals = _load_wifi_signals()
+
                 # Sync devices from status cache to database
                 # This ensures any devices discovered by the host are persisted
                 # and properly classified via Fingerbank using DHCP fingerprints
@@ -695,6 +725,9 @@ def index():
                     is_idle = status == 'idle'
                     is_offline = status == 'offline'
 
+                    # Get WiFi signal data if available
+                    wifi_data = wifi_signals.get(mac, {})
+
                     device = {
                         'mac_address': mac,
                         'ip_address': d.get('ip', ''),
@@ -717,6 +750,12 @@ def index():
                         'lan_access': policy in ('lan_only', 'full_access', 'normal'),
                         'first_seen': d.get('first_seen', ''),
                         'last_seen': d.get('last_seen', ''),
+                        # WiFi signal data (from host wifi-signal-collector.sh)
+                        'wifi_rssi': wifi_data.get('wifi_rssi'),
+                        'wifi_quality': wifi_data.get('wifi_quality'),
+                        'wifi_proximity': wifi_data.get('wifi_proximity'),
+                        'wifi_interface': wifi_data.get('wifi_interface'),
+                        'wifi_band': wifi_data.get('wifi_band'),
                     }
                     devices.append(device)
 
@@ -1463,6 +1502,17 @@ def api_devices():
         except Exception as e:
             logger.error(f"Failed to get devices: {e}")
             devices = []
+
+    # Load WiFi signals and merge into device data
+    wifi_signals = _load_wifi_signals()
+    for device in devices:
+        mac = device.get('mac_address', '').upper()
+        wifi_data = wifi_signals.get(mac, {})
+        device['wifi_rssi'] = wifi_data.get('wifi_rssi')
+        device['wifi_quality'] = wifi_data.get('wifi_quality')
+        device['wifi_proximity'] = wifi_data.get('wifi_proximity')
+        device['wifi_interface'] = wifi_data.get('wifi_interface')
+        device['wifi_band'] = wifi_data.get('wifi_band')
 
     # Apply filters
     policy_filter = request.args.get('policy')
@@ -3497,17 +3547,23 @@ def api_device_disconnect(mac_address):
 
     This sends a deauth frame via hostapd_cli to force the client to disconnect.
     The client will typically reconnect automatically unless also blocked.
+
+    Options (JSON body):
+    - block: bool - Also quarantine the device
+    - delete: bool - Remove device from database (for manual/test devices)
     """
     import subprocess
 
     mac = mac_address.upper().replace('-', ':')
     data = request.get_json() or {}
     also_block = data.get('block', False)
+    also_delete = data.get('delete', False)
 
     results = {
         'deauth_sent': False,
         'interfaces_tried': [],
-        'blocked': False
+        'blocked': False,
+        'deleted': False
     }
 
     # Try to deauth from all hostapd interfaces
@@ -3544,14 +3600,43 @@ def api_device_disconnect(mac_address):
         except Exception as e:
             logger.warning(f"Failed to block device: {e}")
 
+    # Delete device from database if requested (for manual/test devices)
+    if also_delete and SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot.delete_device(mac):
+                results['deleted'] = True
+                logger.info(f"Deleted device {mac} from database")
+        except Exception as e:
+            logger.warning(f"Failed to delete device: {e}")
+
+    # Build response message
+    msg_parts = []
     if results['deauth_sent']:
-        msg = 'Device disconnected from WiFi'
-        if results['blocked']:
-            msg += ' and blocked'
+        msg_parts.append('disconnected from WiFi')
+    if results['blocked']:
+        msg_parts.append('blocked')
+    if results['deleted']:
+        msg_parts.append('removed from database')
+
+    if msg_parts:
+        msg = 'Device ' + ' and '.join(msg_parts)
         return jsonify({'success': True, 'message': msg, 'details': results})
+    elif also_delete and results['deleted']:
+        # Device was only deleted (not on WiFi)
+        return jsonify({
+            'success': True,
+            'message': 'Device removed from database',
+            'details': results
+        })
     elif not results['interfaces_tried']:
         # Running in container - can't access hostapd directly
-        # Mark as disconnected in database at least
+        if results['deleted']:
+            return jsonify({
+                'success': True,
+                'message': 'Device removed from database',
+                'details': results
+            })
         return jsonify({
             'success': True,
             'message': 'Device marked as disconnected (hostapd not accessible from container)',
