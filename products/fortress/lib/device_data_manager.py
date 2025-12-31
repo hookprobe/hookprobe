@@ -19,7 +19,6 @@ License: AGPL-3.0
 
 import json
 import logging
-import subprocess
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from enum import Enum
@@ -77,7 +76,11 @@ DATA_DIR = Path('/opt/hookprobe/fortress/data')
 REGISTRY_FILE = DATA_DIR / 'device_registry.json'
 DEVICES_FILE = DATA_DIR / 'devices.json'
 
-# OVS Bridge
+# Policy trigger file - shared volume for container-to-host communication
+# The host-side nac-policy-sync.sh reads this and applies OVS rules
+POLICY_TRIGGER_FILE = DATA_DIR / '.nac_policy_sync'
+
+# OVS Bridge (only used by host script, not directly from container)
 OVS_BRIDGE = 'FTS'
 
 
@@ -560,8 +563,39 @@ class DeviceDataManager:
         }
 
     # ========================================
-    # Policy Enforcement
+    # Policy Enforcement via Trigger File
     # ========================================
+    #
+    # IMPORTANT: OVS runs on the host, not in the container.
+    # We use a trigger file mechanism to communicate policy changes:
+    # 1. Container writes policy request to POLICY_TRIGGER_FILE
+    # 2. Host-side nac-policy-sync.sh reads it and applies OVS rules
+    # 3. systemd timer runs the script every 5 seconds
+    #
+    # This ensures OVS commands are executed on the host where they work.
+
+    def _write_policy_trigger(self, mac: str, policy: str):
+        """
+        Write policy trigger file for host-side OVS rule application.
+
+        The host-side nac-policy-sync.sh script reads this file and applies
+        the appropriate OpenFlow rules. This is necessary because OVS runs
+        on the host, not in the container.
+
+        Args:
+            mac: Device MAC address
+            policy: Policy to apply (quarantine, lan_only, internet_only, etc.)
+        """
+        try:
+            trigger_data = {
+                'mac': mac.upper(),
+                'policy': policy,
+                'timestamp': datetime.now().isoformat(),
+            }
+            POLICY_TRIGGER_FILE.write_text(json.dumps(trigger_data, indent=2))
+            logger.info(f"Policy trigger written: {mac} -> {policy}")
+        except Exception as e:
+            logger.warning(f"Failed to write policy trigger for {mac}: {e}")
 
     def set_policy(self, mac_address: str, policy: str) -> bool:
         """
@@ -574,7 +608,7 @@ class DeviceDataManager:
         Returns:
             True if successful
         """
-        valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'default']
+        valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'default', 'normal', 'smart_home']
         if policy not in valid_policies:
             logger.warning(f"Invalid policy: {policy}")
             return False
@@ -594,191 +628,62 @@ class DeviceDataManager:
 
     def _apply_policy_rules(self, mac: str, policy: str):
         """
-        Apply OpenFlow rules for device policy.
+        Request policy application via trigger file.
 
-        Policy enforcement uses IP-based rules to provide proper access control:
-        - Priority 700+: Per-device policy rules (overrides base priority 500 rules)
-        - Priority 500: Base LAN permissive rules (from ovs-post-setup.sh)
-        - Priority 1000: ARP/DHCP essential services
+        The actual OpenFlow rules are applied by the host-side
+        nac-policy-sync.sh script, which reads the trigger file.
 
-        Traffic flow for each policy:
-        - ISOLATED: Drop all traffic (quarantine)
-        - LAN_ONLY: Allow LAN (10.200.0.0/16), block internet (non-RFC1918)
-        - INTERNET_ONLY: Block LAN (except gateway), allow internet
-        - FULL_ACCESS/NORMAL: Allow all (no rules needed, default allow)
+        Policy types:
+        - quarantine/isolated: Block all traffic except DHCP/DNS
+        - lan_only: Allow LAN, block internet
+        - internet_only: Block LAN, allow internet
+        - full_access/normal/smart_home: No restrictions
         """
-        try:
-            # Remove existing rules for this MAC
-            self._remove_policy_rules(mac)
-            mac_upper = mac.upper()
+        mac_upper = mac.upper()
 
-            # Get network configuration
-            lan_network, gateway_ip = _get_network_config()
+        # Normalize policy names
+        policy_map = {
+            'isolated': 'quarantine',
+            'default': 'normal',
+            'full_access': 'normal',
+        }
+        effective_policy = policy_map.get(policy, policy)
 
-            if policy in ("isolated", "quarantine"):
-                # Priority 1000: Drop ALL traffic - highest priority quarantine
-                # Bidirectional: block both outgoing and incoming
-                # Allow only DHCP (for getting IP) and DNS (for captive portal)
-                # Priority 1001: Allow DHCP request/response
-                self._add_flow(f'priority=1001,udp,dl_src={mac_upper},tp_dst=67,actions=NORMAL')
-                self._add_flow(f'priority=1001,udp,dl_dst={mac_upper},tp_src=67,actions=NORMAL')
-                # Priority 1001: Allow DNS to gateway only (for captive portal redirect)
-                self._add_flow(f'priority=1001,udp,dl_src={mac_upper},nw_dst={gateway_ip},tp_dst=53,actions=NORMAL')
-                self._add_flow(f'priority=1001,udp,dl_dst={mac_upper},nw_src={gateway_ip},tp_src=53,actions=NORMAL')
-                # Priority 1000: Drop everything else
-                self._add_flow(f'priority=1000,dl_src={mac_upper},actions=drop')
-                self._add_flow(f'priority=1000,dl_dst={mac_upper},actions=drop')
-                logger.info(f"Applied QUARANTINE policy for {mac} - all traffic blocked except DHCP/DNS")
-
-            elif policy == "lan_only":
-                # LAN_ONLY: Can access LAN devices, gateway, but NOT internet
-                # Strategy: Block traffic to non-private destinations
-
-                # Priority 750: Allow traffic to gateway (for DHCP, DNS via gateway)
-                self._add_flow(
-                    f'priority=750,ip,dl_src={mac_upper},nw_dst={gateway_ip},actions=NORMAL'
-                )
-
-                # Priority 740: Allow traffic to LAN subnet (10.200.0.0/16)
-                self._add_flow(
-                    f'priority=740,ip,dl_src={mac_upper},nw_dst={lan_network},actions=NORMAL'
-                )
-
-                # Priority 730: Allow return traffic FROM LAN to this device
-                self._add_flow(
-                    f'priority=730,ip,dl_dst={mac_upper},nw_src={lan_network},actions=NORMAL'
-                )
-
-                # Priority 720: Allow container network (for local services)
-                self._add_flow(
-                    f'priority=720,ip,dl_src={mac_upper},nw_dst={CONTAINER_NETWORK},actions=NORMAL'
-                )
-
-                # Priority 600: DROP all other IP traffic (internet-bound)
-                # This blocks traffic to public IPs while allowing LAN
-                self._add_flow(
-                    f'priority=600,ip,dl_src={mac_upper},actions=drop'
-                )
-
-                logger.info(f"Applied LAN_ONLY policy for {mac} - internet blocked")
-
-            elif policy == "internet_only":
-                # INTERNET_ONLY: Can access internet, but NOT other LAN devices
-                # Use case: Guest devices, POS terminals (payment gateway only)
-                # Strategy: Block traffic to LAN subnet except gateway
-
-                # Priority 750: Allow traffic to gateway (required for routing)
-                self._add_flow(
-                    f'priority=750,ip,dl_src={mac_upper},nw_dst={gateway_ip},actions=NORMAL'
-                )
-
-                # Priority 740: Allow return traffic FROM gateway
-                self._add_flow(
-                    f'priority=740,ip,dl_dst={mac_upper},nw_src={gateway_ip},actions=NORMAL'
-                )
-
-                # Priority 700: Block traffic to LAN subnet (except gateway handled above)
-                # This prevents device from reaching other LAN devices
-                self._add_flow(
-                    f'priority=700,ip,dl_src={mac_upper},nw_dst={lan_network},actions=drop'
-                )
-
-                # Priority 700: Block incoming traffic FROM other LAN devices
-                # Prevents other LAN devices from initiating to this device
-                self._add_flow(
-                    f'priority=700,ip,dl_dst={mac_upper},nw_src={lan_network},actions=drop'
-                )
-
-                # Priority 650: Allow all other traffic (internet)
-                # Lower priority than block rules, matches internet-bound traffic
-                self._add_flow(
-                    f'priority=650,ip,dl_src={mac_upper},actions=NORMAL'
-                )
-
-                # Priority 650: Allow return traffic from internet
-                self._add_flow(
-                    f'priority=650,ip,dl_dst={mac_upper},actions=NORMAL'
-                )
-
-                logger.info(f"Applied INTERNET_ONLY policy for {mac} - LAN isolated")
-
-            elif policy in ("full_access", "normal", "default"):
-                # FULL_ACCESS/NORMAL: No restrictions, use base permissive rules
-                # No additional rules needed - priority 500 base rules allow all
-                logger.info(f"Applied {policy.upper()} policy for {mac} - unrestricted")
-
-            else:
-                logger.warning(f"Unknown policy '{policy}' for {mac} - no rules applied")
-
-        except Exception as e:
-            logger.warning(f"Failed to apply policy rules for {mac}: {e}")
-
-    def _add_flow(self, flow_spec: str) -> bool:
-        """Add an OpenFlow rule to OVS bridge."""
-        try:
-            result = subprocess.run(
-                ['ovs-ofctl', 'add-flow', OVS_BRIDGE, flow_spec],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode != 0:
-                logger.debug(f"OVS add-flow failed: {result.stderr}")
-                return False
-            return True
-        except Exception as e:
-            logger.debug(f"OVS add-flow exception: {e}")
-            return False
-
-    def _remove_policy_rules(self, mac: str):
-        """Remove OpenFlow rules for a device."""
-        try:
-            subprocess.run([
-                'ovs-ofctl', 'del-flows', OVS_BRIDGE, f'dl_src={mac}'
-            ], capture_output=True, timeout=5)
-            subprocess.run([
-                'ovs-ofctl', 'del-flows', OVS_BRIDGE, f'dl_dst={mac}'
-            ], capture_output=True, timeout=5)
-        except Exception as e:
-            logger.debug(f"Failed to remove policy rules for {mac}: {e}")
+        # Write trigger file for host-side application
+        self._write_policy_trigger(mac_upper, effective_policy)
+        logger.info(f"Requested {effective_policy.upper()} policy for {mac}")
 
     def _block_device(self, mac: str):
-        """Block a device using OVS."""
-        try:
-            subprocess.run([
-                'ovs-ofctl', 'add-flow', OVS_BRIDGE,
-                f'priority=2000,dl_src={mac},actions=drop'
-            ], capture_output=True, timeout=5)
-            subprocess.run([
-                'ovs-ofctl', 'add-flow', OVS_BRIDGE,
-                f'priority=2000,dl_dst={mac},actions=drop'
-            ], capture_output=True, timeout=5)
-            logger.info(f"Blocked device: {mac}")
-        except Exception as e:
-            logger.warning(f"Failed to block device {mac}: {e}")
+        """Block a device by applying quarantine policy."""
+        # Use quarantine policy for blocking
+        self._write_policy_trigger(mac.upper(), 'quarantine')
+        logger.info(f"Block requested for device: {mac}")
 
     def _unblock_device(self, mac: str):
-        """Unblock a device by removing block rules."""
-        try:
-            subprocess.run([
-                'ovs-ofctl', 'del-flows', OVS_BRIDGE,
-                f'priority=2000,dl_src={mac}'
-            ], capture_output=True, timeout=5)
-            subprocess.run([
-                'ovs-ofctl', 'del-flows', OVS_BRIDGE,
-                f'priority=2000,dl_dst={mac}'
-            ], capture_output=True, timeout=5)
-            logger.info(f"Unblocked device: {mac}")
-        except Exception as e:
-            logger.warning(f"Failed to unblock device {mac}: {e}")
+        """Unblock a device by applying normal policy."""
+        mac_upper = mac.upper()
+        entry = self._registry.get(mac_upper)
+        # Restore original policy or use normal
+        policy = entry.policy if entry and entry.policy not in ('isolated', 'quarantine') else 'normal'
+        self._write_policy_trigger(mac_upper, policy)
+        logger.info(f"Unblock requested for device: {mac}")
 
     def sync_policies(self):
-        """Sync all device policies to OpenFlow rules."""
-        logger.info("Syncing all device policies...")
+        """
+        Request sync of all device policies.
+
+        Note: For bulk sync, we write each policy trigger sequentially.
+        The host-side script processes them via the database sync.
+        """
+        logger.info("Requesting sync of all device policies...")
+        synced = 0
         for mac, entry in self._registry.items():
             if entry.is_blocked:
-                self._block_device(mac)
-            else:
-                self._apply_policy_rules(mac, entry.policy)
-        logger.info(f"Synced {len(self._registry)} device policies")
+                self._write_policy_trigger(mac, 'quarantine')
+            elif entry.policy not in ('normal', 'full_access', 'default', 'smart_home', ''):
+                self._write_policy_trigger(mac, entry.policy)
+            synced += 1
+        logger.info(f"Requested sync for {synced} device policies")
 
 
 # Singleton instance
