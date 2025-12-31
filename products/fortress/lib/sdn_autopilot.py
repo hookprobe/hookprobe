@@ -1241,6 +1241,46 @@ class SDNAutoPilot:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def delete_device(self, mac: str) -> bool:
+        """Delete a device from the database.
+
+        This removes the device from device_identity table and any associated
+        tags and connection history. Used for removing manually added test
+        devices or cleaning up stale entries.
+
+        Args:
+            mac: Device MAC address
+
+        Returns:
+            True if device was deleted, False if not found
+        """
+        mac = mac.upper()
+        try:
+            with self._get_conn() as conn:
+                # Check if device exists
+                existing = conn.execute(
+                    'SELECT mac FROM device_identity WHERE mac = ?', (mac,)
+                ).fetchone()
+
+                if not existing:
+                    return False
+
+                # Delete from device_identity (main table)
+                conn.execute('DELETE FROM device_identity WHERE mac = ?', (mac,))
+
+                # Delete associated tags
+                conn.execute('DELETE FROM device_tags WHERE mac = ?', (mac,))
+
+                # Delete connection history
+                conn.execute('DELETE FROM connection_history WHERE mac = ?', (mac,))
+
+                conn.commit()
+                logger.info(f"Deleted device {mac} from database")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to delete device {mac}: {e}")
+            return False
+
     def ensure_device_exists(self, mac: str, ip: str = None, hostname: str = None,
                               dhcp_fingerprint: str = None, vendor_class: str = None) -> Dict:
         """Ensure a device exists in the database, creating it if necessary.
