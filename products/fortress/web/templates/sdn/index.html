@@ -1145,7 +1145,11 @@ $(document).ready(function() {
     $('#modal-disconnect-btn').click(function() {
         if (!DeviceDetailModal.currentMac) return;
 
-        if (confirm('Disconnect this device from WiFi?\n\nThe device will be kicked from the network but may reconnect automatically.')) {
+        // Show options: disconnect only, or disconnect and remove from database
+        var action = confirm('Disconnect this device from WiFi?\n\nClick OK to disconnect.\nThe device will be kicked from the network but may reconnect automatically.\n\nTo also REMOVE the device from the database (for test/manual devices), click Cancel and use the delete option.');
+
+        if (action) {
+            // Just disconnect
             $.ajax({
                 url: '/sdn/api/device/' + encodeURIComponent(DeviceDetailModal.currentMac) + '/disconnect',
                 method: 'POST',
@@ -1168,6 +1172,33 @@ $(document).ready(function() {
                 }
                 toastr.error(error);
             });
+        } else {
+            // Offer to delete
+            if (confirm('Remove this device from the database?\n\nThis will delete the device entry and all associated data.\nUse this for test devices or devices that were added manually.')) {
+                $.ajax({
+                    url: '/sdn/api/device/' + encodeURIComponent(DeviceDetailModal.currentMac) + '/disconnect',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({delete: true})
+                })
+                .done(function(data) {
+                    if (data.success) {
+                        toastr.success(data.message || 'Device removed');
+                        // Close modal and refresh device list
+                        $('#deviceDetailModal').modal('hide');
+                        loadDevices();
+                    } else {
+                        toastr.error(data.error || 'Failed to remove device');
+                    }
+                })
+                .fail(function(xhr) {
+                    var error = 'Failed to remove device';
+                    if (xhr.responseJSON && xhr.responseJSON.error) {
+                        error = xhr.responseJSON.error;
+                    }
+                    toastr.error(error);
+                });
+            }
         }
     });
 });
