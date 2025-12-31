@@ -167,6 +167,7 @@ ENTRY
 
     # Also add ARP-discovered devices not yet in autopilot.db
     # This ensures new devices show online status before they're classified
+    # Only include LAN devices (10.200.x.x), not container network (172.20.x.x)
     declare -A processed_macs
     for mac in "${!neighbor_state[@]}"; do
         processed_macs["$mac"]=1
@@ -175,6 +176,13 @@ ENTRY
     # Check which ARP devices are not in DB and add them
     while IFS='|' read -r mac state ip; do
         [ -z "$mac" ] && continue
+
+        # Filter: Only include LAN devices (10.200.x.x for VLAN 100/200)
+        # Skip container network (172.20.x.x), loopback, and other non-LAN IPs
+        case "$ip" in
+            10.200.*) ;; # LAN VLAN - include
+            *) continue ;; # Skip all other networks (containers, etc.)
+        esac
 
         # Skip if already processed from autopilot.db
         if sqlite3 "$AUTOPILOT_DB" "SELECT 1 FROM device_identity WHERE mac = '$mac'" 2>/dev/null | grep -q 1; then
