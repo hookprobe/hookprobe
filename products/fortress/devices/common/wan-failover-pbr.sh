@@ -1273,42 +1273,30 @@ cleanup_nat_rules() {
 }
 
 # Restore NetworkManager default route settings (called during cleanup)
+# NOTE: This function is intentionally minimal to avoid disrupting active connections.
+# Previously, aggressive nmcli modifications and netplan apply would cause NM to
+# restart or lose connections during service restart.
 restore_networkmanager_management() {
-    log_info "Restoring NetworkManager route settings for WAN interfaces..."
+    log_info "Preserving NetworkManager settings (no changes during cleanup)..."
 
-    if ! command -v nmcli &>/dev/null; then
-        return 0
+    # IMPORTANT: Do NOT modify NM connections during cleanup!
+    # - nmcli connection modify on active connections can trigger reconnection
+    # - netplan apply can restart networkd/NM and drop connections
+    # - nmcli general reload can cause NM to re-evaluate all connections
+    #
+    # The never-default and ignore-auto-routes settings we applied during setup
+    # are harmless to leave in place. They only affect route handling, not
+    # basic connectivity. If user wants to fully restore, they can:
+    #   nmcli connection modify <conn> ipv4.never-default no
+    #   nmcli connection modify <conn> ipv4.ignore-auto-routes no
+
+    # Only remove the netplan override file (doesn't require netplan apply)
+    if [ -f /etc/netplan/99-fortress-wan-no-routes.yaml ]; then
+        rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
+        log_info "Removed netplan override file (apply manually with 'netplan apply' if needed)"
     fi
 
-    # For each WAN interface, restore default route settings
-    for iface in "${PRIMARY_IFACE:-}" "${BACKUP_IFACE:-}"; do
-        [ -z "$iface" ] && continue
-
-        # Find the connection name for this interface
-        local conn_name
-        conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
-
-        if [ -n "$conn_name" ]; then
-            log_info "Restoring route settings for '$conn_name' ($iface)..."
-
-            # Re-enable default gateway and auto-routes
-            nmcli connection modify "$conn_name" ipv4.never-default no 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes no 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv6.never-default no 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes no 2>/dev/null || true
-
-            log_info "$iface ($conn_name): default route settings restored"
-        fi
-    done
-
-    # Remove netplan override file if it exists
-    rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
-    if command -v netplan &>/dev/null; then
-        netplan apply 2>/dev/null || true
-    fi
-
-    # Reload NM config
-    nmcli general reload conf 2>/dev/null || true
+    log_info "NetworkManager connections preserved"
 }
 
 # ============================================================
