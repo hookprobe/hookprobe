@@ -93,9 +93,11 @@ if not mac:
 # =========================================================================
 try:
     sys.path.insert(0, '/opt/hookprobe/fortress/lib')
-    from sdn_autopilot import get_autopilot
+    from sdn_autopilot import SDNAutoPilot
 
-    autopilot = get_autopilot()
+    # Use HOST database path (not container path /app/db/autopilot.db)
+    HOST_DB_PATH = '/var/lib/hookprobe/autopilot.db'
+    autopilot = SDNAutoPilot(HOST_DB_PATH)
 
     if action in ['add', 'old']:
         # Full device classification + OpenFlow rule application
