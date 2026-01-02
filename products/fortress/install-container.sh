@@ -714,10 +714,15 @@ create_fortress_user() {
         if groupadd --gid 1000 fortress 2>/dev/null; then
             log_info "Created fortress group (gid=1000)"
         else
-            # GID 1000 may be taken, try with system GID
+            # GID 1000 may be taken by another group, check what's using it
+            local gid_owner
+            gid_owner=$(getent group 1000 2>/dev/null | cut -d: -f1 || echo "")
+            if [ -n "$gid_owner" ]; then
+                log_warn "GID 1000 is used by group '$gid_owner'"
+            fi
+            # Create with system GID as fallback
             groupadd --system fortress
             log_warn "Created fortress group with system GID (gid=$(getent group fortress | cut -d: -f3))"
-            log_warn "Container may have permission issues - consider using --gid 1000"
         fi
     else
         local current_gid
@@ -725,8 +730,30 @@ create_fortress_user() {
         if [ "$current_gid" = "1000" ]; then
             log_info "Fortress group exists with correct GID (gid=1000)"
         else
-            log_warn "Fortress group exists but GID mismatch (gid=$current_gid, expected=1000)"
-            log_warn "For proper container access, recreate group: groupdel fortress && groupadd --gid 1000 fortress"
+            # GID mismatch - try to fix it automatically
+            log_info "Fortress group GID mismatch (gid=$current_gid, expected=1000), fixing..."
+
+            # Check if we can safely recreate the group
+            # First, check if GID 1000 is available
+            local gid_owner
+            gid_owner=$(getent group 1000 2>/dev/null | cut -d: -f1 || echo "")
+
+            if [ -z "$gid_owner" ]; then
+                # GID 1000 is available - recreate the group
+                if groupdel fortress 2>/dev/null; then
+                    if groupadd --gid 1000 fortress 2>/dev/null; then
+                        log_info "Recreated fortress group with correct GID (gid=1000)"
+                    else
+                        # Fallback: recreate with any available GID
+                        groupadd --system fortress
+                        log_warn "Recreated fortress group with system GID (gid=$(getent group fortress | cut -d: -f3))"
+                    fi
+                else
+                    log_warn "Could not delete old fortress group (may be in use)"
+                fi
+            else
+                log_warn "GID 1000 is used by group '$gid_owner', keeping current GID $current_gid"
+            fi
         fi
     fi
 
@@ -764,6 +791,15 @@ create_directories() {
     # The autopilot.db stores device classification, policies, WiFi signals
     chmod 777 /var/lib/hookprobe
     chown 1000:1000 /var/lib/hookprobe 2>/dev/null || true
+
+    # Ensure autopilot.db has correct permissions (writable by web container uid 1000)
+    # The database may be created by qsecbit (host network) or web (container)
+    local autopilot_db="/var/lib/hookprobe/autopilot.db"
+    if [ -f "$autopilot_db" ]; then
+        chmod 666 "$autopilot_db"
+        chown 1000:1000 "$autopilot_db" 2>/dev/null || true
+    fi
+
     chmod 755 /var/lib/hookprobe/userdata
     chmod 755 /var/lib/hookprobe/userdata/dnsxai
 
@@ -826,6 +862,14 @@ EOF
     # Copy device profiles
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
+
+    # Copy bin scripts (dhcp-event.sh, etc.)
+    if [ -d "${SCRIPT_DIR}/bin" ]; then
+        mkdir -p "${INSTALL_DIR}/bin"
+        cp -r "${SCRIPT_DIR}/bin/"* "${INSTALL_DIR}/bin/" 2>/dev/null || true
+        chmod +x "${INSTALL_DIR}/bin/"*.sh 2>/dev/null || true
+        log_info "  Installed: bin/ scripts (dhcp-event.sh, etc.)"
+    fi
 
     # Ensure all shell scripts are executable (git may not preserve executable bit)
     find "${INSTALL_DIR}/devices" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
@@ -2064,6 +2108,11 @@ Wants=network-online.target
 [Service]
 # Wait a bit for VLAN interfaces to get IP addresses
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1" && exit 0; sleep 1; done; echo "Warning: vlan100 not ready"'
+
+# Clear default ExecStartPost/ExecStopPost that try to register with resolvconf/systemd-resolved
+# This prevents "Failed to set DNS configuration" errors when systemd-resolved isn't running
+ExecStartPost=
+ExecStopPost=
 EOF
 
     systemctl daemon-reload
@@ -2193,9 +2242,18 @@ WantedBy=multi-user.target
 EOF
     fi
 
+    # Install OVS cleanup service (runs BEFORE netplan to fix stale OVS state)
+    local cleanup_src="${FORTRESS_ROOT}/systemd/fortress-ovs-cleanup.service"
+    local cleanup_dst="/etc/systemd/system/fortress-ovs-cleanup.service"
+    if [ -f "$cleanup_src" ]; then
+        cp "$cleanup_src" "$cleanup_dst"
+        log_info "  Installed: fortress-ovs-cleanup.service (pre-netplan OVS cleanup)"
+    fi
+
     systemctl daemon-reload
     systemctl enable fortress-vlan.service 2>/dev/null || true
-    log_success "VLAN service installed - netplan creates bridge, service configures OVS"
+    systemctl enable fortress-ovs-cleanup.service 2>/dev/null || true
+    log_success "VLAN services installed - OVS cleanup runs before netplan on boot"
 }
 
 # Install device status updater service and timer
@@ -3139,7 +3197,8 @@ attach_container_if_running() {
         if "$ovs_script" attach "$container" "$ip" "$tier" 2>/dev/null; then
             log_info "  $container: attached to OVS ($tier tier)"
         else
-            log_warn "  $container: failed to attach to OVS"
+            # OVS attachment is optional - containers work fine on podman network
+            log_info "  $container: skipped OVS attachment (using podman network)"
         fi
     elif [ "$optional" = "true" ]; then
         # Optional containers - silently skip if not running
@@ -3471,6 +3530,15 @@ fix_config_permissions() {
         chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
     else
         chmod 755 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    fi
+
+    # Ensure autopilot.db is writable by web container (uid 1000)
+    # The database stores device info, WiFi signals, and policies
+    local autopilot_db="/var/lib/hookprobe/autopilot.db"
+    if [ -f "$autopilot_db" ]; then
+        chmod 666 "$autopilot_db"
+        chown 1000:1000 "$autopilot_db" 2>/dev/null || true
+        log_info "  autopilot.db permissions fixed for container access"
     fi
 
     log_info "Config permissions set for container access"

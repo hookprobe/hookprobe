@@ -1,0 +1,30 @@
+[Unit]
+Description=HookProbe Fortress PBR WAN Failover
+Documentation=https://hookprobe.com/docs/fortress/wan-failover
+After=network-online.target systemd-networkd.service NetworkManager.service fortress-vlan.service
+Wants=network-online.target
+# Only run if config exists
+ConditionPathExists=/etc/hookprobe/wan-failover.conf
+
+[Service]
+Type=simple
+ExecStartPre=-/opt/hookprobe/fortress/devices/common/wan-failover-pbr.sh setup
+ExecStart=/opt/hookprobe/fortress/devices/common/wan-failover-pbr.sh start
+ExecStop=/opt/hookprobe/fortress/devices/common/wan-failover-pbr.sh stop
+ExecStopPost=-/opt/hookprobe/fortress/devices/common/wan-failover-pbr.sh cleanup
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-wan-failover
+
+# Runtime directory
+RuntimeDirectory=fortress
+RuntimeDirectoryMode=0755
+
+# Security hardening
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+[Unit]
+Description=HookProbe Fortress OVS Pre-Netplan Cleanup
+Documentation=https://hookprobe.com/docs/fortress
+# Run BEFORE netplan-ovs services to clean stale OVS state
+Before=netplan-ovs-FTS.service netplan-ovs-cleanup.service
+After=openvswitch-switch.service
+Wants=openvswitch-switch.service
+# Only run if OVS is installed
+ConditionPathExists=/usr/bin/ovs-vsctl
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Clean up stray OVS bridges and detach misattached ports
+# This fixes the "enp3s0 attached to bridge vlan100" error on reboot
+ExecStart=/bin/bash -c '\
+    for br in vlan100 vlan200 vlan1; do \
+        if /usr/bin/ovs-vsctl br-exists "$br" 2>/dev/null; then \
+            echo "Removing stray OVS bridge: $br"; \
+            for port in $(/usr/bin/ovs-vsctl list-ports "$br" 2>/dev/null); do \
+                /usr/bin/ovs-vsctl --if-exists del-port "$br" "$port" 2>/dev/null || true; \
+            done; \
+            /usr/bin/ovs-vsctl --if-exists del-br "$br" 2>/dev/null || true; \
+        fi; \
+    done; \
+    for iface in $(/sbin/ip link show 2>/dev/null | grep -oP "^\\d+:\\s+\\K[^:@]+" | grep -E "^(eth|enp|eno|ens)"); do \
+        attached=$(/usr/bin/ovs-vsctl port-to-br "$iface" 2>/dev/null || true); \
+        if [ -n "$attached" ] && [ "$attached" != "FTS" ]; then \
+            echo "Detaching $iface from wrong bridge $attached"; \
+            /usr/bin/ovs-vsctl --if-exists del-port "$attached" "$iface" 2>/dev/null || true; \
+        fi; \
+    done; \
+    echo "OVS cleanup complete"'
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fortress-ovs-cleanup
+
+[Install]
+WantedBy=multi-user.target
