@@ -41,6 +41,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
 
 # ============================================================
+# PARSE ARGUMENTS
+# ============================================================
+FORCE_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force|-f)
+            FORCE_MODE=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# ============================================================
 # PREREQUISITES
 # ============================================================
 check_root() {
@@ -697,6 +714,12 @@ remove_guardian_directories() {
 remove_packages() {
     log_step "Removing installed packages (optional)..."
 
+    if [ "$FORCE_MODE" = true ]; then
+        # In force mode, skip optional package removal
+        log_info "Force mode - skipping optional package removal"
+        return 0
+    fi
+
     read -p "Remove hostapd and dnsmasq packages? (yes/no) [no]: " remove_pkgs
     if [ "$remove_pkgs" != "yes" ]; then
         log_info "Skipping package removal"
@@ -835,11 +858,16 @@ remove_vm_support() {
     vms=$(virsh list --all --name 2>/dev/null | grep -v "^$" || true)
 
     if [ -n "$vms" ]; then
-        echo ""
-        echo -e "${YELLOW}Found the following VMs:${NC}"
-        virsh list --all 2>/dev/null || true
-        echo ""
-        read -p "Remove all VMs? This will destroy VM data! (yes/no) [no]: " remove_vms
+        local remove_vms="no"
+        if [ "$FORCE_MODE" = false ]; then
+            echo ""
+            echo -e "${YELLOW}Found the following VMs:${NC}"
+            virsh list --all 2>/dev/null || true
+            echo ""
+            read -p "Remove all VMs? This will destroy VM data! (yes/no) [no]: " remove_vms
+        else
+            log_info "Force mode - preserving VMs"
+        fi
 
         if [ "$remove_vms" == "yes" ]; then
             for vm in $vms; do
@@ -875,7 +903,12 @@ remove_vm_support() {
 
     # Remove VM storage directory
     if [ -d /var/lib/hookprobe/vms ]; then
-        read -p "Remove VM storage directory (/var/lib/hookprobe/vms)? (yes/no) [no]: " remove_vm_storage
+        local remove_vm_storage="no"
+        if [ "$FORCE_MODE" = false ]; then
+            read -p "Remove VM storage directory (/var/lib/hookprobe/vms)? (yes/no) [no]: " remove_vm_storage
+        else
+            log_info "Force mode - preserving VM storage"
+        fi
         if [ "$remove_vm_storage" == "yes" ]; then
             log_info "Removing VM storage directory..."
             rm -rf /var/lib/hookprobe/vms
@@ -892,8 +925,13 @@ remove_vm_support() {
     fi
 
     # Optional: Remove libvirt packages
-    echo ""
-    read -p "Remove VM packages (qemu, libvirt)? (yes/no) [no]: " remove_vm_pkgs
+    local remove_vm_pkgs="no"
+    if [ "$FORCE_MODE" = false ]; then
+        echo ""
+        read -p "Remove VM packages (qemu, libvirt)? (yes/no) [no]: " remove_vm_pkgs
+    else
+        log_info "Force mode - preserving VM packages"
+    fi
     if [ "$remove_vm_pkgs" == "yes" ]; then
         log_info "Removing VM packages..."
 
@@ -1010,10 +1048,14 @@ main() {
     echo -e "  - VM support (QEMU/KVM, libvirt, VMs if installed)"
     echo ""
 
-    read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
-    if [ "$confirm" != "yes" ]; then
-        log_info "Uninstall cancelled"
-        exit 0
+    if [ "$FORCE_MODE" = false ]; then
+        read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
+        if [ "$confirm" != "yes" ]; then
+            log_info "Uninstall cancelled"
+            exit 0
+        fi
+    else
+        log_info "Force mode enabled - skipping confirmation"
     fi
 
     echo ""
