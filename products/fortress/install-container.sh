@@ -2155,6 +2155,15 @@ install_vlan_service() {
         log_warn "  dhcp-event.sh not found - device fingerprinting disabled"
     fi
 
+    # Install fortress-ctl CLI to /usr/local/bin
+    local ctl_src="${FORTRESS_ROOT}/fortress-ctl.sh"
+    local ctl_dst="/usr/local/bin/fortress-ctl"
+    if [ -f "$ctl_src" ]; then
+        cp "$ctl_src" "$ctl_dst"
+        chmod +x "$ctl_dst"
+        log_info "  Installed: fortress-ctl CLI"
+    fi
+
     # Copy and enable systemd service
     local service_src="${FORTRESS_ROOT}/systemd/fortress-vlan.service"
     local service_dst="/etc/systemd/system/fortress-vlan.service"
