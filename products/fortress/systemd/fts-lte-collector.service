@@ -1,6 +1,8 @@
 [Unit]
 Description=Fortress LTE Usage Tracker (Watermark-based)
 After=network.target
+# Only run if the script exists and LTE interface is available
+ConditionPathExists=/opt/hookprobe/fortress/devices/common/lte-usage-tracker.sh
 
 [Service]
 Type=oneshot
@@ -11,6 +13,9 @@ Group=root
 # Minimal resources
 Nice=19
 IOSchedulingClass=idle
+
+# Don't fail the boot if this fails
+SuccessExitStatus=0 1
 
 [Install]
 WantedBy=multi-user.target
