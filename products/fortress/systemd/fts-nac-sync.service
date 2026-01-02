@@ -1,8 +1,8 @@
 [Unit]
 Description=Fortress NAC Policy Sync Service
 After=fortress-vlan.service openvswitch-switch.service
-Requires=fortress-vlan.service
-Wants=openvswitch-switch.service
+# Only run if the script and required services exist
+ConditionPathExists=/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh
 
 [Service]
 Type=oneshot

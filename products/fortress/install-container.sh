@@ -2289,6 +2289,8 @@ EOF
 [Unit]
 Description=Fortress LTE Usage Tracker (Watermark-based)
 After=network.target
+# Only run if the script exists
+ConditionPathExists=/opt/hookprobe/fortress/devices/common/lte-usage-tracker.sh
 
 [Service]
 Type=oneshot
@@ -2297,6 +2299,8 @@ User=root
 Group=root
 Nice=19
 IOSchedulingClass=idle
+# Don't fail the boot if this fails
+SuccessExitStatus=0 1
 EOF
 
     # Create LTE collector timer (runs every 30s)
@@ -2340,6 +2344,8 @@ EOF
 [Unit]
 Description=Fortress WiFi Signal Collector
 After=network.target fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+# Only run if the script exists
+ConditionPathExists=/opt/hookprobe/fortress/devices/common/wifi-signal-collector.sh
 
 [Service]
 Type=oneshot
@@ -2348,6 +2354,8 @@ User=root
 Group=root
 Nice=19
 IOSchedulingClass=idle
+# Don't fail the boot if this fails
+SuccessExitStatus=0 1
 
 [Install]
 WantedBy=multi-user.target
