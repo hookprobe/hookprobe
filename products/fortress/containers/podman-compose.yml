@@ -164,13 +164,15 @@ services:
       - web_logs:/app/logs
       # Share data from qsecbit agent (WAN health, QSecBit stats, SLAAI data)
       # Uses bind mount to match agent's bind mount (data visible on host)
-      # NOTE: rw required for web UI to save LTE usage data, device status, etc.
-      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:rw
+      # NOTE: rw,U required - U suffix auto-adjusts ownership to container user
+      # This fixes GID mismatch when host fortress group != container GID 1000
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:rw,U
       # Bind mount host config directory (install script creates users.json here)
+      # Read-only, world-readable (644) - no secrets stored here
       - /etc/hookprobe:/etc/hookprobe:ro
       # SDN Auto Pilot database (device classification data)
-      # NOTE: rw required for web UI to set policies (quarantine, move segment, etc.)
-      - /var/lib/hookprobe:/var/lib/hookprobe:rw
+      # NOTE: rw,U required for web UI to set policies (quarantine, move segment, etc.)
+      - /var/lib/hookprobe:/var/lib/hookprobe:rw,U
     # Container network - accessible via VLAN 200 routing from management network
     # Access: MGMT VLAN (10.200.100.x) → veth bridge → Container (172.20.200.20:8443)
     networks:
@@ -208,10 +210,10 @@ services:
       - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
       - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
       # PERSISTENT USER DATA - survives uninstall/reinstall (whitelist, config)
-      # This bind-mount takes precedence over container defaults
-      - /var/lib/hookprobe/userdata/dnsxai:/opt/hookprobe/shared/dnsXai/userdata
+      # U suffix auto-adjusts ownership to container user (fixes GID mismatch)
+      - /var/lib/hookprobe/userdata/dnsxai:/opt/hookprobe/shared/dnsXai/userdata:U
       # Bind mount logs to host for ML training data visibility
-      - /var/log/hookprobe:/var/log/hookprobe
+      - /var/log/hookprobe:/var/log/hookprobe:U
       - /etc/hookprobe:/etc/hookprobe:ro
       # DoT (DNS over TLS) certificates - writable for auto-generation
       - dnsxai_certs:/etc/hookprobe/certs
@@ -293,7 +295,8 @@ services:
       VICTORIA_PUSH_URL: http://172.20.203.11:8428/api/v1/write
     volumes:
       # Bind mount for shared data (visible on host and other containers)
-      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data
+      # U suffix auto-adjusts ownership to container user (fixes GID mismatch)
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:U
       - /etc/hookprobe:/etc/hookprobe:ro
       - /etc/hostapd:/etc/hostapd:ro  # Read hostapd config for WiFi SSID/channel
       - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
