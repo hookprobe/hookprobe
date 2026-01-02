@@ -2099,6 +2099,11 @@ Wants=network-online.target
 [Service]
 # Wait a bit for VLAN interfaces to get IP addresses
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1" && exit 0; sleep 1; done; echo "Warning: vlan100 not ready"'
+
+# Clear default ExecStartPost/ExecStopPost that try to register with resolvconf/systemd-resolved
+# This prevents "Failed to set DNS configuration" errors when systemd-resolved isn't running
+ExecStartPost=
+ExecStopPost=
 EOF
 
     systemctl daemon-reload
