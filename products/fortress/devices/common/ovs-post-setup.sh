@@ -335,13 +335,22 @@ setup_container_veth() {
     fi
 
     # Add OVS side to bridge with VLAN 200 (idempotent)
-    # Use --if-exists to handle port already existing in OVS
-    if ovs-vsctl --if-exists get port "$veth_ovs" name &>/dev/null; then
-        # Port exists - just ensure VLAN tag is correct
-        ovs-vsctl set port "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || true
-        log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_MGMT"
+    # Check if port exists using port-to-br (more reliable than --if-exists get)
+    if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
+        # Port exists in some bridge - ensure it's on our bridge with correct VLAN
+        local current_br
+        current_br=$(ovs-vsctl port-to-br "$veth_ovs" 2>/dev/null || true)
+        if [ "$current_br" = "$OVS_BRIDGE" ]; then
+            ovs-vsctl set port "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || true
+            log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_MGMT"
+        else
+            # Port on wrong bridge - move it
+            ovs-vsctl --if-exists del-port "$current_br" "$veth_ovs"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" || true
+            log_info "Moved $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
+        fi
     else
-        # Port doesn't exist - add it
+        # Port doesn't exist in OVS - add it
         ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || {
             # Might fail if interface not ready, try to recover
             ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
