@@ -309,6 +309,18 @@ generate_dhcp_config() {
     local dhcp_iface
     dhcp_iface=$(get_dhcp_interface)
 
+    # Remove ALL old FTS/Fortress dnsmasq configs to avoid duplicate options
+    # This is critical: duplicate cache-size, interface, etc. cause dnsmasq to fail
+    log_info "Cleaning up old dnsmasq configs..."
+    rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
+
     # Calculate DHCP range
     local dhcp_range
     dhcp_range=$(calculate_dhcp_range "$LAN_SUBNET_MASK")
