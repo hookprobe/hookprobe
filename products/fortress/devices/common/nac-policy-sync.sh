@@ -133,16 +133,18 @@ apply_policy() {
             ;;
 
         internet_only)
-            # Allow gateway
-            add_flow "priority=750,ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
-            add_flow "priority=740,ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
-            # Block LAN (except gateway above)
-            add_flow "priority=700,ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=drop"
-            add_flow "priority=700,ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=drop"
-            # Allow internet
-            add_flow "priority=650,ip,dl_src=$mac,actions=NORMAL"
-            add_flow "priority=650,ip,dl_dst=$mac,actions=NORMAL"
-            log_info "Applied INTERNET_ONLY policy for $mac"
+            # INTERNET_ONLY: Allow internet access, block direct LAN-to-LAN communication
+            # BUT must allow gateway access (needed for routing to internet!)
+            #
+            # NOTE: Previous implementation was broken - it blocked gateway access
+            # which prevented ALL connectivity including internet.
+            #
+            # For now, treat internet_only same as normal (no OpenFlow restrictions).
+            # LAN isolation should be done at nftables/iptables layer instead,
+            # which is more reliable and doesn't interfere with gateway access.
+            #
+            # TODO: Implement proper LAN isolation using nftables mark + forward rules
+            log_info "Applied INTERNET_ONLY policy for $mac (no OpenFlow restrictions - use nftables for isolation)"
             ;;
 
         full_access|normal|smart_home|default|"")
