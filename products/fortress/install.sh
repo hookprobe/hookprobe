@@ -637,12 +637,27 @@ do_full_purge() {
     echo -e "${CYAN}This returns the system to a clean state for fresh install.${NC}"
     echo ""
 
-    read -p "Type 'PURGE' to confirm complete removal and reboot: " confirm
+    # Allow multiple attempts for confirmation
+    local attempts=0
+    local max_attempts=3
+    while [ $attempts -lt $max_attempts ]; do
+        read -p "Type 'PURGE' to confirm complete removal and reboot (or 'cancel' to abort): " confirm
 
-    if [ "$confirm" != "PURGE" ]; then
-        log_info "Purge cancelled"
-        return 1
-    fi
+        if [ "$confirm" = "PURGE" ]; then
+            break
+        elif [ "$confirm" = "cancel" ] || [ "$confirm" = "CANCEL" ]; then
+            log_info "Purge cancelled"
+            return 1
+        else
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}Invalid input. Please type 'PURGE' exactly (${max_attempts}-${attempts} attempts remaining)${NC}"
+            else
+                log_info "Maximum attempts reached. Purge cancelled."
+                return 1
+            fi
+        fi
+    done
 
     echo ""
     log_step "Starting full system purge..."
@@ -726,6 +741,28 @@ do_full_purge() {
     rm -rf /var/lib/fortress 2>/dev/null || true
     rm -rf /var/log/hookprobe 2>/dev/null || true
     rm -rf /var/backups/fortress 2>/dev/null || true
+
+    # Configure network wait services to be lenient after purge (prevents boot failures)
+    log_info "Configuring network-wait services for safe reboot..."
+    if systemctl is-enabled systemd-networkd-wait-online.service &>/dev/null; then
+        mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d
+        cat > /etc/systemd/system/systemd-networkd-wait-online.service.d/99-fortress-cleanup.conf << 'EOF'
+# Fortress cleanup - prevent boot failure after purge
+[Service]
+ExecStart=
+ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any --timeout=30
+SuccessExitStatus=0 1 2
+EOF
+    fi
+    if systemctl is-enabled NetworkManager-wait-online.service &>/dev/null; then
+        mkdir -p /etc/systemd/system/NetworkManager-wait-online.service.d
+        cat > /etc/systemd/system/NetworkManager-wait-online.service.d/99-fortress-cleanup.conf << 'EOF'
+# Fortress cleanup - prevent boot failure after purge
+[Service]
+SuccessExitStatus=0 1 2
+TimeoutStartSec=30
+EOF
+    fi
 
     # Reload systemd
     systemctl daemon-reload 2>/dev/null || true
