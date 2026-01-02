@@ -2,6 +2,8 @@
 Description=HookProbe Fortress Device Status Updater
 Documentation=https://github.com/hookprobe/hookprobe
 After=network.target openvswitch-switch.service fortress.service
+# Only run if the script exists
+ConditionPathExists=/opt/hookprobe/fortress/devices/common/device-status-updater.sh
 
 [Service]
 Type=oneshot
@@ -13,6 +15,9 @@ Group=root
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=fts-device-status
+
+# Don't fail the boot if this fails
+SuccessExitStatus=0 1
 
 [Install]
 WantedBy=multi-user.target
