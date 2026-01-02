@@ -782,6 +782,9 @@ def index():
         try:
             devices = get_all_devices()
             stats = get_device_stats()
+            # Ensure policy_counts is set (get_device_stats returns 'by_policy')
+            if 'policy_counts' not in stats:
+                stats['policy_counts'] = stats.get('by_policy', {})
             using_real_data = len(devices) > 0
             logger.info(f"Loaded {len(devices)} devices from device_policies module")
         except Exception as e:
@@ -806,6 +809,10 @@ def index():
     # Set default stats if still empty
     if not stats:
         stats = {'total': 0, 'online': 0, 'offline': 0, 'quarantined': 0, 'policy_counts': {}}
+
+    # Ensure policy_counts always exists (template requires it)
+    if 'policy_counts' not in stats:
+        stats['policy_counts'] = stats.get('by_policy', {})
 
     # Get real DFS/WiFi intelligence data
     try:
