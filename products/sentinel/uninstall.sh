@@ -47,6 +47,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
 
 # ============================================================
+# PARSE ARGUMENTS
+# ============================================================
+FORCE_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force|-f)
+            FORCE_MODE=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# ============================================================
 # PREREQUISITES
 # ============================================================
 check_root() {
@@ -251,10 +268,15 @@ handle_logs() {
     log_step "Handling log files..."
 
     if [ -d "$LOG_DIR" ]; then
-        echo ""
-        echo -e "${YELLOW}Log files are preserved at:${NC} $LOG_DIR"
-        echo ""
-        read -p "Remove log files too? (yes/no) [no]: " remove_logs
+        local remove_logs="no"
+        if [ "$FORCE_MODE" = false ]; then
+            echo ""
+            echo -e "${YELLOW}Log files are preserved at:${NC} $LOG_DIR"
+            echo ""
+            read -p "Remove log files too? (yes/no) [no]: " remove_logs
+        else
+            log_info "Force mode - preserving log files"
+        fi
         if [ "$remove_logs" = "yes" ]; then
             log_info "Removing log directory..."
             rm -rf "$LOG_DIR/sentinel.log"*
@@ -291,10 +313,14 @@ main() {
     echo -e "  - sentinel-uninstall command"
     echo ""
 
-    read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
-    if [ "$confirm" != "yes" ]; then
-        log_info "Uninstall cancelled"
-        exit 0
+    if [ "$FORCE_MODE" = false ]; then
+        read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
+        if [ "$confirm" != "yes" ]; then
+            log_info "Uninstall cancelled"
+            exit 0
+        fi
+    else
+        log_info "Force mode enabled - skipping confirmation"
     fi
 
     echo ""
