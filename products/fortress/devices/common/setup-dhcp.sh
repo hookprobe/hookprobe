@@ -368,9 +368,14 @@ min-cache-ttl=300
 # ============================================
 # Interface binding
 # ============================================
-# DHCP listens on vlan100 (FTS bridge has no IP)
+# DHCP/DNS listens ONLY on vlan100 (LAN gateway)
+# Using bind-interfaces + listen-address to avoid conflict with
+# Podman's aardvark-dns which listens on 172.20.200.1:53
 interface=$dhcp_iface
-bind-dynamic
+bind-interfaces
+listen-address=$LAN_GATEWAY
+# Don't listen on localhost (avoids conflict with systemd-resolved)
+except-interface=lo
 
 # ============================================
 # DHCP Configuration (/$LAN_SUBNET_MASK)
