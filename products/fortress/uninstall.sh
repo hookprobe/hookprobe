@@ -384,6 +384,7 @@ remove_systemd_services() {
     local services=(
         "fortress"
         "fortress-vlan"
+        "fortress-ovs-cleanup"
         "hookprobe-fortress"
         "fts-qsecbit"
         "fts-lte"
@@ -642,11 +643,6 @@ remove_ovs_config() {
         return 0
     fi
 
-    if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
-        log_info "OVS bridge '$OVS_BRIDGE' does not exist, skipping"
-        return 0
-    fi
-
     # Load saved LAN configuration to identify WAN (which must NOT be touched)
     local wan_iface=""
     local lan_ifaces=""
@@ -661,6 +657,51 @@ remove_ovs_config() {
     if [ -z "$wan_iface" ]; then
         wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
         [ -n "$wan_iface" ] && log_info "WAN detected from default route: $wan_iface"
+    fi
+
+    # Collect physical interfaces that need to be restored after OVS cleanup
+    local interfaces_to_restore=""
+
+    # First, remove any ports from interfaces that are attached to wrong bridges
+    # This fixes the "enp3s0 attached to bridge vlan100" issue
+    for port_iface in $(ip link show 2>/dev/null | grep -oP '^\d+:\s+\K[^:@]+' | grep -E '^(eth|enp|eno|ens)'); do
+        # Skip the WAN interface - don't touch it
+        if [ "$port_iface" = "$wan_iface" ]; then
+            continue
+        fi
+        # Check which OVS bridge this port is attached to (if any)
+        local attached_bridge
+        attached_bridge=$(ovs-vsctl port-to-br "$port_iface" 2>/dev/null || true)
+        if [ -n "$attached_bridge" ]; then
+            log_info "Detaching $port_iface from bridge $attached_bridge"
+            ovs-vsctl --if-exists del-port "$attached_bridge" "$port_iface" 2>/dev/null || true
+            interfaces_to_restore="$interfaces_to_restore $port_iface"
+        fi
+    done
+
+    # Remove stray OVS bridges that might have been created incorrectly
+    # vlan100 and vlan200 should be internal ports, not separate bridges
+    for stray_bridge in vlan100 vlan200 vlan1; do
+        if ovs-vsctl br-exists "$stray_bridge" 2>/dev/null; then
+            log_warn "Found stray OVS bridge: $stray_bridge (removing)"
+            # Remove all ports from the stray bridge first
+            local stray_ports
+            stray_ports=$(ovs-vsctl list-ports "$stray_bridge" 2>/dev/null || true)
+            for port in $stray_ports; do
+                if [ "$port" != "$wan_iface" ]; then
+                    ovs-vsctl --if-exists del-port "$stray_bridge" "$port" 2>/dev/null || true
+                    interfaces_to_restore="$interfaces_to_restore $port"
+                fi
+            done
+            # Delete the stray bridge
+            ovs-vsctl --if-exists del-br "$stray_bridge" 2>/dev/null || true
+        fi
+    done
+
+    # Now handle the main FTS bridge
+    if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+        log_info "OVS bridge '$OVS_BRIDGE' does not exist, skipping"
+        return 0
     fi
 
     # Remove all ports from the bridge
@@ -702,6 +743,27 @@ remove_ovs_config() {
         log_info "  Your internet connection through this interface is intact"
         log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     fi
+
+    # Restore LAN interfaces to normal operation
+    # After removing from OVS, interfaces need to be brought back up
+    for iface in $interfaces_to_restore; do
+        # Skip WAN, skip virtual/internal interfaces
+        if [ "$iface" = "$wan_iface" ]; then
+            continue
+        fi
+        if [[ ! "$iface" =~ ^(eth|enp|eno|ens) ]]; then
+            continue
+        fi
+        log_info "Restoring interface: $iface"
+        # Bring interface up
+        ip link set "$iface" up 2>/dev/null || true
+        # Let NetworkManager manage it again
+        if command -v nmcli &>/dev/null; then
+            nmcli device set "$iface" managed yes 2>/dev/null || true
+            # Try to get DHCP on the interface (non-blocking)
+            nmcli device connect "$iface" 2>/dev/null &
+        fi
+    done
 
     log_info "OVS configuration removed"
 }

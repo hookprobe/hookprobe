@@ -2242,9 +2242,18 @@ WantedBy=multi-user.target
 EOF
     fi
 
+    # Install OVS cleanup service (runs BEFORE netplan to fix stale OVS state)
+    local cleanup_src="${FORTRESS_ROOT}/systemd/fortress-ovs-cleanup.service"
+    local cleanup_dst="/etc/systemd/system/fortress-ovs-cleanup.service"
+    if [ -f "$cleanup_src" ]; then
+        cp "$cleanup_src" "$cleanup_dst"
+        log_info "  Installed: fortress-ovs-cleanup.service (pre-netplan OVS cleanup)"
+    fi
+
     systemctl daemon-reload
     systemctl enable fortress-vlan.service 2>/dev/null || true
-    log_success "VLAN service installed - netplan creates bridge, service configures OVS"
+    systemctl enable fortress-ovs-cleanup.service 2>/dev/null || true
+    log_success "VLAN services installed - OVS cleanup runs before netplan on boot"
 }
 
 # Install device status updater service and timer
