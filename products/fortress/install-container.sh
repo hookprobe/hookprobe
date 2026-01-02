@@ -854,6 +854,14 @@ EOF
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
 
+    # Copy bin scripts (dhcp-event.sh, etc.)
+    if [ -d "${SCRIPT_DIR}/bin" ]; then
+        mkdir -p "${INSTALL_DIR}/bin"
+        cp -r "${SCRIPT_DIR}/bin/"* "${INSTALL_DIR}/bin/" 2>/dev/null || true
+        chmod +x "${INSTALL_DIR}/bin/"*.sh 2>/dev/null || true
+        log_info "  Installed: bin/ scripts (dhcp-event.sh, etc.)"
+    fi
+
     # Ensure all shell scripts are executable (git may not preserve executable bit)
     find "${INSTALL_DIR}/devices" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
