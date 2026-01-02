@@ -130,10 +130,12 @@ parse_args() {
                 echo "  • fts-victoria-data    - Metrics history"
                 echo "  • fts-*-data           - All other data volumes"
                 echo ""
-                echo "Always preserved (unless --purge):"
-                echo "  • /var/lib/hookprobe/userdata/dnsxai/"
-                echo "    - whitelist.txt      - User's DNS whitelist"
-                echo "    - config.json        - dnsXai configuration"
+                echo "ALWAYS preserved (even with --purge):"
+                echo "  • /var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
+                echo "    - User's DNS whitelist is NEVER removed"
+                echo ""
+                echo "Removed with --purge:"
+                echo "  • Other userdata files (blocked traffic logs, etc.)"
                 echo ""
                 exit 0
                 ;;
@@ -290,6 +292,11 @@ cleanup_network_interfaces() {
     rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-wan-failover-dns.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-mgmt-vlan.conf 2>/dev/null || true
+
+    # Remove dnsmasq lease files
+    log_info "Removing dnsmasq lease files..."
+    rm -f /var/lib/misc/fortress-dnsmasq.leases 2>/dev/null || true
+    rm -f /var/lib/misc/dnsmasq.leases 2>/dev/null || true
 
     # Remove dnsmasq systemd drop-in for OVS dependency
     rm -rf /etc/systemd/system/dnsmasq.service.d 2>/dev/null || true
@@ -1116,19 +1123,38 @@ remove_installation() {
         log_info "SDN Auto Pilot database preserved: /var/lib/hookprobe/autopilot.db"
     fi
 
-    # User data directory (whitelist, configs) - ONLY removed with --purge
-    # This allows reinstallation to preserve user's whitelist and blocked traffic logs
-    if [ "$PURGE_MODE" = true ]; then
-        if [ -d "/var/lib/hookprobe/userdata" ]; then
-            log_info "Removing user data (--purge mode)..."
-            rm -rf /var/lib/hookprobe/userdata
+    # User data directory handling
+    # CRITICAL: dnsXai whitelist is ALWAYS preserved - user's custom rules must never be lost
+    # Other userdata (blocked traffic logs, etc.) can be removed with --purge
+    if [ -d "/var/lib/hookprobe/userdata" ]; then
+        # Always preserve dnsXai whitelist
+        local whitelist_file="/var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
+        local whitelist_backup=""
+
+        if [ -f "$whitelist_file" ]; then
+            log_info "Preserving dnsXai whitelist (ALWAYS protected)..."
+            whitelist_backup=$(mktemp)
+            cp "$whitelist_file" "$whitelist_backup"
         fi
-    else
-        if [ -d "/var/lib/hookprobe/userdata" ]; then
-            log_info "Preserving user data: /var/lib/hookprobe/userdata/"
-            log_info "  (contains dnsXai whitelist, blocked traffic logs)"
-            log_info "  Use --purge to remove this data"
+
+        if [ "$PURGE_MODE" = true ]; then
+            log_info "Removing user data (--purge mode, except whitelist)..."
+            # Remove everything except the whitelist
+            find /var/lib/hookprobe/userdata -type f ! -name "whitelist.txt" -delete 2>/dev/null || true
+            # Remove empty directories but keep dnsxai
+            find /var/lib/hookprobe/userdata -mindepth 1 -type d -empty -delete 2>/dev/null || true
         fi
+
+        # Restore whitelist if it was backed up
+        if [ -n "$whitelist_backup" ] && [ -f "$whitelist_backup" ]; then
+            mkdir -p /var/lib/hookprobe/userdata/dnsxai 2>/dev/null || true
+            cp "$whitelist_backup" "$whitelist_file"
+            rm -f "$whitelist_backup"
+            log_info "  dnsXai whitelist restored: $whitelist_file"
+        fi
+
+        log_info "Userdata preserved: /var/lib/hookprobe/userdata/"
+        log_info "  dnsXai whitelist is ALWAYS protected and will never be removed"
     fi
 
     # Clean up parent directories if empty
@@ -1260,6 +1286,21 @@ handle_logs() {
             fi
         fi
     fi
+
+    # Remove additional Fortress log files
+    if [ "$KEEP_LOGS" = false ]; then
+        # dnsmasq log
+        if [ -f "/var/log/fortress-dnsmasq.log" ]; then
+            log_info "Removing /var/log/fortress-dnsmasq.log..."
+            rm -f /var/log/fortress-dnsmasq.log
+        fi
+
+        # Fortress service logs directory
+        if [ -d "/var/log/fortress" ]; then
+            log_info "Removing /var/log/fortress/ directory..."
+            rm -rf /var/log/fortress
+        fi
+    fi
 }
 
 # ============================================================
@@ -1376,7 +1417,10 @@ main() {
         echo -e "  • All udev rules"
         echo -e "  • All sysctl settings"
         echo -e "  • All systemd services"
-        echo -e "  ${RED}• User data (dnsXai whitelist, blocked traffic logs)${NC}"
+        echo -e "  • User data (blocked traffic logs, etc.)"
+        echo ""
+        echo -e "${GREEN}PROTECTED (never removed):${NC}"
+        echo -e "  • dnsXai whitelist (/var/lib/hookprobe/userdata/dnsxai/whitelist.txt)"
         echo ""
     fi
 
