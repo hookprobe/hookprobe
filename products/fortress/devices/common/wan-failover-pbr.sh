@@ -88,16 +88,17 @@ METRIC_BACKUP_DEMOTED=120
 # FWMARK_TERTIARY=0x300
 # FWMARK_QUATERNARY=0x400
 
-# Default health check settings
+# Default health check settings (optimized for fast failover)
 PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
-PING_COUNT=2
-PING_TIMEOUT=3
-CHECK_INTERVAL=5
+PING_COUNT=1        # Single ping per target (faster)
+PING_TIMEOUT=2      # 2 second timeout per ping
+CHECK_INTERVAL=3    # Check every 3 seconds
 
 # Hysteresis settings (prevent flapping)
 # Note: Config file may use FAIL_THRESHOLD/RECOVER_THRESHOLD - we map them below
 UP_THRESHOLD=3      # Require X consecutive successes to mark UP
-DOWN_THRESHOLD=3    # Require X consecutive failures to mark DOWN
+DOWN_THRESHOLD=2    # Require X consecutive failures to mark DOWN (faster failover)
+# With these settings, failover happens in: 2 failures × 3s interval = 6-9 seconds
 
 # DNS failover settings
 DNS_FAILOVER_ENABLED="${DNS_FAILOVER_ENABLED:-true}"
