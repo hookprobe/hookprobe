@@ -2260,7 +2260,7 @@ EOF
     fi
 
     # Deploy new watermark-based tracker (primary)
-    local lte_tracker_src="${SCRIPT_DIR}/devices/common/lte-usage-tracker.sh"
+    local lte_tracker_src="${FORTRESS_ROOT}/devices/common/lte-usage-tracker.sh"
     local lte_tracker_dst="${INSTALL_DIR}/devices/common/lte-usage-tracker.sh"
     if [ -f "$lte_tracker_src" ]; then
         mkdir -p "${INSTALL_DIR}/devices/common"
@@ -2269,7 +2269,7 @@ EOF
     fi
 
     # Also deploy legacy collector (for compatibility)
-    local lte_script_src="${SCRIPT_DIR}/devices/common/lte-traffic-collector.sh"
+    local lte_script_src="${FORTRESS_ROOT}/devices/common/lte-traffic-collector.sh"
     local lte_script_dst="${INSTALL_DIR}/devices/common/lte-traffic-collector.sh"
     if [ -f "$lte_script_src" ]; then
         cp "$lte_script_src" "$lte_script_dst"
@@ -2277,7 +2277,7 @@ EOF
     fi
 
     # Deploy NAC policy sync script
-    local nac_script_src="${SCRIPT_DIR}/devices/common/nac-policy-sync.sh"
+    local nac_script_src="${FORTRESS_ROOT}/devices/common/nac-policy-sync.sh"
     local nac_script_dst="${INSTALL_DIR}/devices/common/nac-policy-sync.sh"
     if [ -f "$nac_script_src" ]; then
         cp "$nac_script_src" "$nac_script_dst"
@@ -2329,7 +2329,7 @@ EOF
     # -------------------------------------------------------------------------
     log_info "Installing WiFi signal collector..."
 
-    local wifi_script_src="${SCRIPT_DIR}/devices/common/wifi-signal-collector.sh"
+    local wifi_script_src="${FORTRESS_ROOT}/devices/common/wifi-signal-collector.sh"
     local wifi_script_dst="${INSTALL_DIR}/devices/common/wifi-signal-collector.sh"
     if [ -f "$wifi_script_src" ]; then
         cp "$wifi_script_src" "$wifi_script_dst"
@@ -2381,8 +2381,8 @@ EOF
     log_success "WiFi signal collector installed (timer runs every 30s)"
 
     # NAC policy sync timer for real-time quarantine enforcement
-    cp "$SCRIPT_DIR/systemd/fts-nac-sync.service" /etc/systemd/system/
-    cp "$SCRIPT_DIR/systemd/fts-nac-sync.timer" /etc/systemd/system/
+    cp "$FORTRESS_ROOT/systemd/fts-nac-sync.service" /etc/systemd/system/
+    cp "$FORTRESS_ROOT/systemd/fts-nac-sync.timer" /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable fts-nac-sync.timer 2>/dev/null || true
     systemctl start fts-nac-sync.timer 2>/dev/null || true
