@@ -681,9 +681,36 @@ setup_routing_tables() {
         log_info "Backup table configured: default via $BACKUP_GATEWAY dev $BACKUP_IFACE"
     fi
 
+    # CRITICAL: Add LAN/local routes to both WAN tables
+    # Without these, reply packets marked with fwmark get routed via WAN default
+    # instead of being delivered locally to LAN clients (vlan100, vlan200, etc.)
+    add_local_routes_to_pbr_tables
+
     # IMPORTANT: Keep a default route in main table as fallback
     # This ensures connectivity even if PBR marking fails
     update_main_table_route
+}
+
+# Add local routes (LAN, VLAN, container networks) to PBR tables
+# This ensures reply packets can be delivered to local clients even when
+# they are marked with a fwmark for policy-based routing
+add_local_routes_to_pbr_tables() {
+    log_info "Adding local routes to PBR tables..."
+
+    # Get all local routes (scope link) that are NOT on WAN interfaces
+    local local_routes
+    local_routes=$(ip route show scope link 2>/dev/null | grep -v "dev $PRIMARY_IFACE" | grep -v "dev $BACKUP_IFACE")
+
+    while read -r route; do
+        [ -z "$route" ] && continue
+        # Add to primary table
+        ip route add $route table $TABLE_PRIMARY 2>/dev/null || true
+        # Add to backup table
+        ip route add $route table $TABLE_BACKUP 2>/dev/null || true
+        log_debug "Added local route to PBR tables: $route"
+    done <<< "$local_routes"
+
+    log_info "Local routes added to PBR tables"
 }
 
 ensure_main_table_routes() {
