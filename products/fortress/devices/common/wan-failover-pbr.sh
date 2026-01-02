@@ -577,8 +577,8 @@ cleanup_stray_routes() {
         log_debug "Found route with metric < 10"
     fi
 
-    # Do NOT cleanup routes with metric >= 100 - they don't affect active routing
-    # This is the key fix: stop fighting with NM/MM over standby routes
+    # Routes with higher metrics don't affect active routing, but we'll clean
+    # them up in remove_duplicate_routes() after our routes are established
 
     if [ "$needs_cleanup" = "true" ]; then
         # Rate limit: only cleanup once per 30 seconds
@@ -618,6 +618,51 @@ cleanup_stray_routes() {
 
         # Ensure our routes exist with correct metrics
         ensure_main_table_routes
+    fi
+}
+
+# Remove duplicate default routes on the same interface
+# Called after our routes are established to clean up NM/DHCP duplicates
+# This prevents route table clutter while avoiding the "fighting NM" problem
+remove_duplicate_routes() {
+    local cleaned=0
+
+    # For primary interface: remove routes with metrics other than our target
+    if [ -n "${PRIMARY_IFACE:-}" ] && [ -n "${PRIMARY_GATEWAY:-}" ]; then
+        # Check if we have our route (metric 10 or 110)
+        if ip route show default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null | \
+           grep -qE "metric ($METRIC_PRIMARY|$METRIC_PRIMARY_DEMOTED)"; then
+            # Remove any other routes via this interface/gateway with different metrics
+            local other_routes
+            other_routes=$(ip route show default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null | \
+                          grep -vE "metric ($METRIC_PRIMARY|$METRIC_PRIMARY_DEMOTED)( |$)")
+            while read -r route; do
+                [ -z "$route" ] && continue
+                log_info "Removing duplicate route: $route"
+                ip route del $route 2>/dev/null && cleaned=$((cleaned + 1))
+            done <<< "$other_routes"
+        fi
+    fi
+
+    # For backup interface: remove routes with metrics other than our target
+    if [ -n "${BACKUP_IFACE:-}" ] && [ -n "${BACKUP_GATEWAY:-}" ]; then
+        # Check if we have our route (metric 20 or 120)
+        if ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | \
+           grep -qE "metric ($METRIC_BACKUP|$METRIC_BACKUP_DEMOTED)"; then
+            # Remove any other routes via this interface/gateway with different metrics
+            local other_routes
+            other_routes=$(ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | \
+                          grep -vE "metric ($METRIC_BACKUP|$METRIC_BACKUP_DEMOTED)( |$)")
+            while read -r route; do
+                [ -z "$route" ] && continue
+                log_info "Removing duplicate route: $route"
+                ip route del $route 2>/dev/null && cleaned=$((cleaned + 1))
+            done <<< "$other_routes"
+        fi
+    fi
+
+    if [ $cleaned -gt 0 ]; then
+        log_info "Removed $cleaned duplicate route(s)"
     fi
 }
 
@@ -839,6 +884,9 @@ update_main_table_route() {
     [ "${PRIMARY_DEMOTED:-false}" = "true" ] && eff_primary="${METRIC_PRIMARY_DEMOTED}"
     [ "${BACKUP_DEMOTED:-false}" = "true" ] && eff_backup="${METRIC_BACKUP_DEMOTED}"
     log_info "Main table routes updated (effective metrics: primary=$eff_primary, backup=$eff_backup)"
+
+    # Remove duplicate routes added by NetworkManager/DHCP after our routes are established
+    remove_duplicate_routes
 }
 
 setup_ip_rules() {
@@ -852,6 +900,7 @@ setup_ip_rules() {
     # Remove old rules (clean slate)
     ip rule del fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY 2>/dev/null || true
     ip rule del fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP 2>/dev/null || true
+    # Remove legacy fallback rule if it exists (from older versions)
     ip rule del table $TABLE_PRIMARY priority 1000 2>/dev/null || true
     [ -n "$primary_ip" ] && ip rule del from "$primary_ip" table $TABLE_PRIMARY 2>/dev/null || true
     [ -n "$backup_ip" ] && ip rule del from "$backup_ip" table $TABLE_BACKUP 2>/dev/null || true
@@ -872,8 +921,12 @@ setup_ip_rules() {
     ip rule add fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY priority 100
     ip rule add fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP priority 200
 
-    # Fallback rule: unmarked packets use primary (if available)
-    ip rule add table $TABLE_PRIMARY priority 1000 2>/dev/null || true
+    # NOTE: We intentionally do NOT add a "fallback" rule like:
+    #   ip rule add table $TABLE_PRIMARY priority 1000
+    # This would catch ALL traffic and break LAN routing because the WAN tables
+    # only have default routes, not LAN routes (10.200.0.0/X).
+    # Unmarked packets correctly fall through to main table (priority 32766)
+    # which has proper routes for both LAN and WAN.
 
     log_info "IP rules configured"
 }
