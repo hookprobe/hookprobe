@@ -484,6 +484,133 @@ uninstall_staged() {
 }
 
 # ============================================================
+# DEVICE MANAGEMENT
+# ============================================================
+AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
+
+device_list() {
+    log_step "Connected Devices"
+
+    if [ ! -f "$AUTOPILOT_DB" ]; then
+        log_error "Device database not found: $AUTOPILOT_DB"
+        exit 1
+    fi
+
+    echo ""
+    printf "%-19s %-15s %-15s %-30s\n" "MAC ADDRESS" "POLICY" "STATUS" "NAME"
+    printf "%-19s %-15s %-15s %-30s\n" "-------------------" "---------------" "---------------" "------------------------------"
+
+    sqlite3 -separator '|' "$AUTOPILOT_DB" \
+        "SELECT mac, policy, status, COALESCE(friendly_name, hostname, 'Unknown') FROM devices ORDER BY last_seen DESC;" 2>/dev/null | \
+    while IFS='|' read -r mac policy status name; do
+        # Colorize policy
+        case "$policy" in
+            quarantine) policy_color="${RED}${policy}${NC}" ;;
+            internet_only) policy_color="${GREEN}${policy}${NC}" ;;
+            lan_only) policy_color="${YELLOW}${policy}${NC}" ;;
+            normal|smart_home) policy_color="${CYAN}${policy}${NC}" ;;
+            full_access) policy_color="${BLUE}${policy}${NC}" ;;
+            *) policy_color="$policy" ;;
+        esac
+        printf "%-19s %-15b %-15s %-30s\n" "$mac" "$policy_color" "$status" "${name:0:30}"
+    done
+    echo ""
+}
+
+device_show() {
+    local mac="${1:-}"
+
+    if [ -z "$mac" ]; then
+        log_error "MAC address required"
+        echo "Usage: fortress-ctl device show <mac-address>"
+        exit 1
+    fi
+
+    mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]')
+
+    if [ ! -f "$AUTOPILOT_DB" ]; then
+        log_error "Device database not found"
+        exit 1
+    fi
+
+    log_step "Device Details: $mac"
+    echo ""
+
+    sqlite3 -header -column "$AUTOPILOT_DB" \
+        "SELECT mac, ip, hostname, friendly_name, vendor, category, policy, status, confidence, first_seen, last_seen, manual_override FROM devices WHERE mac='$mac';" 2>/dev/null || {
+        log_error "Device not found: $mac"
+        exit 1
+    }
+    echo ""
+}
+
+device_set_policy() {
+    local mac="${1:-}"
+    local policy="${2:-}"
+
+    if [ -z "$mac" ] || [ -z "$policy" ]; then
+        log_error "MAC address and policy required"
+        echo ""
+        echo "Usage: fortress-ctl device set-policy <mac-address> <policy>"
+        echo ""
+        echo "Available policies:"
+        echo "  quarantine     - Block all network access"
+        echo "  internet_only  - Internet access only (no LAN)"
+        echo "  lan_only       - LAN access only (no internet)"
+        echo "  normal         - LAN + Internet (aka smart_home)"
+        echo "  full_access    - Full access including management"
+        echo ""
+        exit 1
+    fi
+
+    mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]')
+    policy=$(echo "$policy" | tr '[:upper:]' '[:lower:]')
+
+    # Validate policy
+    case "$policy" in
+        quarantine|internet_only|lan_only|normal|smart_home|full_access)
+            # Normalize smart_home to normal
+            [ "$policy" = "smart_home" ] && policy="normal"
+            ;;
+        *)
+            log_error "Invalid policy: $policy"
+            echo "Valid policies: quarantine, internet_only, lan_only, normal, full_access"
+            exit 1
+            ;;
+    esac
+
+    if [ ! -f "$AUTOPILOT_DB" ]; then
+        log_error "Device database not found"
+        exit 1
+    fi
+
+    # Update database
+    sqlite3 "$AUTOPILOT_DB" \
+        "UPDATE devices SET policy='$policy', manual_override=1 WHERE mac='$mac';" 2>/dev/null
+
+    # Check if device exists
+    local result
+    result=$(sqlite3 "$AUTOPILOT_DB" "SELECT mac FROM devices WHERE mac='$mac';" 2>/dev/null)
+
+    if [ -z "$result" ]; then
+        log_error "Device not found: $mac"
+        exit 1
+    fi
+
+    log_info "Policy updated: $mac → $policy"
+
+    # Trigger OpenFlow rule update if NAC sync script exists
+    local nac_script="/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh"
+    if [ -x "$nac_script" ]; then
+        log_substep "Syncing OpenFlow rules..."
+        "$nac_script" 2>/dev/null || log_warn "OpenFlow sync failed (non-fatal)"
+    fi
+
+    echo ""
+    log_info "Device policy changed successfully"
+}
+
+# ============================================================
 # STATUS
 # ============================================================
 show_status() {
@@ -544,6 +671,11 @@ Commands:
     --keep-config Preserve configuration files
     --purge       Remove everything including backups
 
+  device        Manage network devices
+    list                        List all devices with policies
+    show <mac>                  Show device details
+    set-policy <mac> <policy>   Change device network policy
+
   backup        Create backup
     --full        Full backup (all data)
     --db          Database only
@@ -560,17 +692,19 @@ Commands:
 
   list-backups  List available backups
 
-Upgrading:
-  To upgrade Fortress, use uninstall with --keep-data then reinstall:
-    fortress-ctl backup --full
-    fortress-ctl uninstall --keep-data
-    ./install.sh
+Device Policies:
+  quarantine     - Block all network access (default for unknown)
+  internet_only  - Internet only, no LAN access
+  lan_only       - LAN only, no internet access
+  normal         - LAN + Internet (smart home devices)
+  full_access    - Full access including management network
 
 Examples:
-  fortress-ctl install --container
+  fortress-ctl device list
+  fortress-ctl device set-policy AA:BB:CC:DD:EE:FF internet_only
+  fortress-ctl device show 66:E1:5E:04:CE:05
   fortress-ctl backup --full
   fortress-ctl uninstall --keep-data
-  fortress-ctl restore /var/backups/fortress/fortress_full_20250101.tar.gz
 
 EOF
 }
@@ -585,6 +719,15 @@ main() {
     # Check root for most commands
     case "$command" in
         status|list-backups|help|--help|-h)
+            ;;
+        device)
+            # device list/show don't need root, but set-policy does
+            if [ "${1:-}" = "set-policy" ] || [ "${1:-}" = "policy" ]; then
+                if [ "$EUID" -ne 0 ]; then
+                    log_error "This command requires root privileges"
+                    exit 1
+                fi
+            fi
             ;;
         *)
             if [ "$EUID" -ne 0 ]; then
@@ -661,6 +804,28 @@ main() {
                 exit 1
             fi
             restore_backup "$backup_file"
+            ;;
+
+        device)
+            local subcommand="${1:-list}"
+            shift || true
+
+            case "$subcommand" in
+                list|ls)
+                    device_list
+                    ;;
+                show|info)
+                    device_show "$1"
+                    ;;
+                set-policy|policy)
+                    device_set_policy "$1" "$2"
+                    ;;
+                *)
+                    log_error "Unknown device subcommand: $subcommand"
+                    echo "Usage: fortress-ctl device [list|show|set-policy]"
+                    exit 1
+                    ;;
+            esac
             ;;
 
         stop)
