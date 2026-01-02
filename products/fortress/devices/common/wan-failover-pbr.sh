@@ -644,22 +644,8 @@ remove_duplicate_routes() {
         fi
     fi
 
-    # For backup interface: remove routes with metrics other than our target
-    if [ -n "${BACKUP_IFACE:-}" ] && [ -n "${BACKUP_GATEWAY:-}" ]; then
-        # Check if we have our route (metric 20 or 120)
-        if ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | \
-           grep -qE "metric ($METRIC_BACKUP|$METRIC_BACKUP_DEMOTED)"; then
-            # Remove any other routes via this interface/gateway with different metrics
-            local other_routes
-            other_routes=$(ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | \
-                          grep -vE "metric ($METRIC_BACKUP|$METRIC_BACKUP_DEMOTED)( |$)")
-            while read -r route; do
-                [ -z "$route" ] && continue
-                log_info "Removing duplicate route: $route"
-                ip route del $route 2>/dev/null && cleaned=$((cleaned + 1))
-            done <<< "$other_routes"
-        fi
-    fi
+    # For backup interface: DO NOT touch - let NM/carrier manage it
+    # We only manage primary interface routes
 
     if [ $cleaned -gt 0 ]; then
         log_info "Removed $cleaned duplicate route(s)"
@@ -761,41 +747,13 @@ ensure_main_table_routes() {
         fi
     fi
 
-    # Backup WAN - check if route exists with correct metric
+    # Backup WAN (LTE/modem) - DO NOT add/modify routes, use NM/carrier managed routes
+    # NetworkManager/ModemManager manages the backup route with their own metrics
     if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
-        # Determine target metric based on demoted state
-        local backup_target_metric=$METRIC_BACKUP
-        local backup_wrong_metric=$METRIC_BACKUP_DEMOTED
-        if [ "${BACKUP_DEMOTED:-false}" = "true" ]; then
-            backup_target_metric=$METRIC_BACKUP_DEMOTED
-            backup_wrong_metric=$METRIC_BACKUP
-        fi
-
-        local backup_route_ok=false
-        if echo "$route_info" | grep -q "via $BACKUP_GATEWAY dev $BACKUP_IFACE.*metric $backup_target_metric"; then
-            backup_route_ok=true
-        fi
-
-        if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
-            # Should have route - add if missing or wrong metric
-            if [ "$backup_route_ok" = "false" ]; then
-                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_target_metric 2>/dev/null || true
-                # Remove route with wrong metric if it exists
-                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_wrong_metric 2>/dev/null || true
-                log_info "Added backup route: via $BACKUP_GATEWAY metric $backup_target_metric"
-            fi
+        if ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
+            log_debug "Backup route exists (managed by NM/carrier)"
         else
-            # Backup is down but NEVER remove LTE/modem route
-            # LTE is the last-resort failsafe - keep it always available
-            # When primary is healthy, traffic will use primary (lower metric)
-            # When primary fails, traffic automatically goes to backup via metrics
-            log_debug "Backup reports down but keeping LTE route as failsafe (metric $METRIC_BACKUP)"
-            # Ensure backup route exists even if health check failed
-            # (LTE modems can have temporary health check failures but still work)
-            if ! ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
-                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
-                log_info "Restored backup/LTE route as failsafe"
-            fi
+            log_warn "No backup route found from NM/carrier"
         fi
     fi
 }
@@ -848,33 +806,16 @@ update_main_table_route() {
         fi
     fi
 
-    # Backup WAN - use demoted metric if SLA AI says degraded
+    # Backup WAN (LTE/modem) - DO NOT add routes, use existing NM/carrier routes
+    # NetworkManager/ModemManager manages the backup route with their own metrics (e.g., 200)
+    # We just verify the route exists and use it as-is for failover
     if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
-        local backup_metric=$METRIC_BACKUP
-        if [ "${BACKUP_DEMOTED:-false}" = "true" ]; then
-            backup_metric=$METRIC_BACKUP_DEMOTED
-        fi
-
-        if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
-            # Interface healthy - ensure route exists with correct metric
-            ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_metric 2>/dev/null || \
-                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_metric 2>/dev/null || true
-            # Remove route with wrong metric if it exists
-            if [ "$backup_metric" = "$METRIC_BACKUP" ]; then
-                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-            else
-                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
-            fi
-            log_debug "Backup route: via $BACKUP_GATEWAY dev $BACKUP_IFACE metric $backup_metric"
+        # Check if NM/carrier route exists (any metric)
+        if ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
+            log_debug "Backup route exists (managed by NM/carrier): via $BACKUP_GATEWAY dev $BACKUP_IFACE"
         else
-            # Backup is down but NEVER remove LTE/modem route
-            # LTE is the last-resort failsafe - always keep it available
-            log_debug "Backup health check failed but keeping LTE route (metric $backup_metric)"
-            # Ensure backup route exists even if health check failed
-            if ! ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
-                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_metric 2>/dev/null || true
-                log_info "Restored backup/LTE route as failsafe"
-            fi
+            # Only add route if NM/carrier hasn't provided one (shouldn't happen normally)
+            log_warn "No backup route found - NM/carrier may not have configured it yet"
         fi
     fi
 
