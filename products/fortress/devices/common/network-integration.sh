@@ -827,13 +827,13 @@ BACKUP_GATEWAY="${backup_gw:-}"
 PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
 
 # Timing
-CHECK_INTERVAL=5        # Seconds between health checks
-PING_TIMEOUT=3          # Timeout for each ping
-PING_COUNT=2            # Pings per target
+CHECK_INTERVAL=3        # Seconds between health checks (faster detection)
+PING_TIMEOUT=2          # Timeout for each ping
+PING_COUNT=1            # Single ping per target (faster)
 
 # Hysteresis thresholds (prevent flapping)
 UP_THRESHOLD=3          # Consecutive successes to mark UP
-DOWN_THRESHOLD=3        # Consecutive failures to mark DOWN
+DOWN_THRESHOLD=2        # Consecutive failures to mark DOWN (faster failover)
 
 # Debug mode (set to 1 for verbose logging)
 DEBUG=0
@@ -896,25 +896,28 @@ install_pbr_failover_service() {
     # Create runtime directory
     mkdir -p /run/fortress
 
+    # Create the systemd service
+    # Note: We don't require nftables.service because nftables is a package, not a service
     cat > /etc/systemd/system/fts-wan-failover.service << EOF
 [Unit]
 Description=HookProbe Fortress PBR WAN Failover
 Documentation=https://hookprobe.com/docs/fortress/wan-failover
-After=network-online.target NetworkManager.service nftables.service
+After=network-online.target systemd-networkd.service NetworkManager.service fortress-vlan.service
 Wants=network-online.target
-Requires=nftables.service
+# Only run if config exists
 ConditionPathExists=/etc/hookprobe/wan-failover.conf
 
 [Service]
 Type=simple
-ExecStartPre=$pbr_script setup
+ExecStartPre=-$pbr_script setup
 ExecStart=$pbr_script start
 ExecStop=$pbr_script stop
-ExecStopPost=$pbr_script cleanup
+ExecStopPost=-$pbr_script cleanup
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=fts-wan-failover
 
 # Runtime directory
 RuntimeDirectory=fortress
