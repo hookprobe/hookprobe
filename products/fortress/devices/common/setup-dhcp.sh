@@ -309,22 +309,24 @@ generate_dhcp_config() {
     local dhcp_iface
     dhcp_iface=$(get_dhcp_interface)
 
-    # FIRST: Extract subnet from existing config files BEFORE deleting them
-    # This preserves the user's original subnet selection
-    if [ -z "${LAN_SUBNET_MASK:-}" ] || [ "$LAN_SUBNET_MASK" = "24" ]; then
+    # FALLBACK: If state file didn't load values, try to detect from existing config files
+    # This handles edge cases where state file is missing but configs exist
+    if [ "$LAN_SUBNET_MASK" = "24" ]; then
         local detected_mask=""
         # Check fts-vlan.conf (install-container.sh format)
+        # Format: "# LAN Subnet: 10.200.0.0/29" or "configured subnet: /29"
         if [ -f /etc/dnsmasq.d/fts-vlan.conf ]; then
-            detected_mask=$(grep -oP 'subnet: /\K\d+' /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null || true)
-            if [ -n "$detected_mask" ]; then
+            # Try multiple patterns (case insensitive)
+            detected_mask=$(grep -i "subnet.*/" /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null | grep -oE '/[0-9]+' | head -1 | tr -d '/' || true)
+            if [ -n "$detected_mask" ] && [ "$detected_mask" != "24" ]; then
                 log_info "Detected subnet /$detected_mask from existing fts-vlan.conf"
                 LAN_SUBNET_MASK="$detected_mask"
             fi
         fi
         # Check fortress.conf (setup-dhcp.sh format)
         if [ -z "$detected_mask" ] && [ -f /etc/dnsmasq.d/fortress.conf ]; then
-            detected_mask=$(grep -oP 'LAN Subnet: 10\.200\.0\.0/\K\d+' /etc/dnsmasq.d/fortress.conf 2>/dev/null || true)
-            if [ -n "$detected_mask" ]; then
+            detected_mask=$(grep -i "subnet.*/" /etc/dnsmasq.d/fortress.conf 2>/dev/null | grep -oE '/[0-9]+' | head -1 | tr -d '/' || true)
+            if [ -n "$detected_mask" ] && [ "$detected_mask" != "24" ]; then
                 log_info "Detected subnet /$detected_mask from existing fortress.conf"
                 LAN_SUBNET_MASK="$detected_mask"
             fi
@@ -343,13 +345,31 @@ generate_dhcp_config() {
     rm -f /etc/dnsmasq.d/fortress-bridge.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
 
-    # Calculate DHCP range
-    local dhcp_range
-    dhcp_range=$(calculate_dhcp_range "$LAN_SUBNET_MASK")
-    local dhcp_start="${dhcp_range%%,*}"
-    local dhcp_rest="${dhcp_range#*,}"
-    local dhcp_end="${dhcp_rest%%,*}"
-    local dhcp_netmask="${dhcp_rest##*,}"
+    # Use DHCP range from state file if loaded, otherwise calculate
+    local dhcp_start dhcp_end dhcp_netmask
+    if [ -n "${LAN_DHCP_START:-}" ] && [ -n "${LAN_DHCP_END:-}" ]; then
+        dhcp_start="$LAN_DHCP_START"
+        dhcp_end="$LAN_DHCP_END"
+        # Calculate netmask from subnet mask
+        case "$LAN_SUBNET_MASK" in
+            29) dhcp_netmask="255.255.255.248" ;;
+            28) dhcp_netmask="255.255.255.240" ;;
+            27) dhcp_netmask="255.255.255.224" ;;
+            26) dhcp_netmask="255.255.255.192" ;;
+            25) dhcp_netmask="255.255.255.128" ;;
+            24) dhcp_netmask="255.255.255.0" ;;
+            23) dhcp_netmask="255.255.254.0" ;;
+            *)  dhcp_netmask="255.255.255.0" ;;
+        esac
+    else
+        # Calculate DHCP range from subnet mask
+        local dhcp_range
+        dhcp_range=$(calculate_dhcp_range "$LAN_SUBNET_MASK")
+        dhcp_start="${dhcp_range%%,*}"
+        local dhcp_rest="${dhcp_range#*,}"
+        dhcp_end="${dhcp_rest%%,*}"
+        dhcp_netmask="${dhcp_rest##*,}"
+    fi
 
     log_info "Generating DHCP config:"
     log_info "  Interface:  $dhcp_iface"
@@ -556,18 +576,36 @@ usage() {
 load_state() {
     local state_file="/etc/hookprobe/fortress-state.json"
     if [ -f "$state_file" ]; then
-        # Load subnet mask from state file if not already set via environment
-        if [ -z "${LAN_SUBNET_MASK:-}" ] || [ "$LAN_SUBNET_MASK" = "24" ]; then
-            local mask
-            mask=$(python3 -c "import json; s=json.load(open('$state_file')).get('lan_subnet', '10.200.0.0/24'); print(s.split('/')[1])" 2>/dev/null || echo "24")
-            LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-$mask}"
+        log_info "Loading configuration from $state_file"
+
+        # Load subnet mask from state file
+        # Only skip if explicitly set via environment (not default "24")
+        local mask
+        mask=$(python3 -c "import json; s=json.load(open('$state_file')).get('lan_subnet', ''); print(s.split('/')[1] if '/' in s else '')" 2>/dev/null || true)
+        if [ -n "$mask" ]; then
+            LAN_SUBNET_MASK="$mask"
+            log_info "  Subnet mask: /$LAN_SUBNET_MASK (from state file)"
         fi
-        # Load gateway from state file if not already set via environment
-        if [ -z "${LAN_GATEWAY:-}" ] || [ "$LAN_GATEWAY" = "10.200.0.1" ]; then
-            local gw
-            gw=$(python3 -c "import json; print(json.load(open('$state_file')).get('lan_gateway', '10.200.0.1'))" 2>/dev/null || echo "10.200.0.1")
-            LAN_GATEWAY="${LAN_GATEWAY:-$gw}"
+
+        # Load gateway from state file
+        local gw
+        gw=$(python3 -c "import json; print(json.load(open('$state_file')).get('lan_gateway', ''))" 2>/dev/null || true)
+        if [ -n "$gw" ]; then
+            LAN_GATEWAY="$gw"
+            log_info "  Gateway: $LAN_GATEWAY (from state file)"
         fi
+
+        # Load DHCP range from state file (more reliable than calculating)
+        local dhcp_start dhcp_end
+        dhcp_start=$(python3 -c "import json; print(json.load(open('$state_file')).get('lan_dhcp_start', ''))" 2>/dev/null || true)
+        dhcp_end=$(python3 -c "import json; print(json.load(open('$state_file')).get('lan_dhcp_end', ''))" 2>/dev/null || true)
+        if [ -n "$dhcp_start" ] && [ -n "$dhcp_end" ]; then
+            LAN_DHCP_START="$dhcp_start"
+            LAN_DHCP_END="$dhcp_end"
+            log_info "  DHCP range: $LAN_DHCP_START - $LAN_DHCP_END (from state file)"
+        fi
+    else
+        log_warn "State file not found: $state_file (using defaults)"
     fi
 }
 
