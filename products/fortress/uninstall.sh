@@ -285,6 +285,7 @@ cleanup_network_interfaces() {
     rm -f /etc/dnsmasq.d/fortress*.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-ovs.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-bridge.conf 2>/dev/null || true
+    rm -f /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-vlans.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-dns-forward.conf 2>/dev/null || true
     rm -f /etc/dnsmasq.d/fts-wan-failover-dns.conf 2>/dev/null || true
@@ -512,6 +513,7 @@ remove_management_scripts() {
         "/usr/local/bin/fts-dnsxai-privacy"
         "/usr/local/bin/dfs-channel-selector"
         "/usr/local/bin/fts-lan-bridge.sh"
+        "/usr/local/bin/fortress-ctl"
     )
 
     for script in "${scripts[@]}"; do
@@ -966,9 +968,10 @@ remove_configuration() {
     fi
 
     # Remove dnsmasq configuration (both old and new VLAN config)
-    if [ -f /etc/dnsmasq.d/fortress.conf ] || [ -f /etc/dnsmasq.d/fts-vlans.conf ]; then
+    if [ -f /etc/dnsmasq.d/fortress.conf ] || [ -f /etc/dnsmasq.d/fts-vlan.conf ] || [ -f /etc/dnsmasq.d/fts-vlans.conf ]; then
         log_info "Removing dnsmasq configuration..."
         rm -f /etc/dnsmasq.d/fortress.conf
+        rm -f /etc/dnsmasq.d/fts-vlan.conf
         rm -f /etc/dnsmasq.d/fts-vlans.conf
         rm -f /etc/dnsmasq.d/fts-bridge.conf
     fi
@@ -1107,6 +1110,10 @@ remove_installation() {
         # Remove ML training logs
         rm -f /var/log/hookprobe/ml-aggregator.log 2>/dev/null || true
         rm -f /var/log/hookprobe/lstm-training.log 2>/dev/null || true
+        # Remove SDN Auto Pilot database
+        rm -f /var/lib/hookprobe/autopilot.db 2>/dev/null || true
+    else
+        log_info "SDN Auto Pilot database preserved: /var/lib/hookprobe/autopilot.db"
     fi
 
     # User data directory (whitelist, configs) - ONLY removed with --purge
