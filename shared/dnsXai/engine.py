@@ -81,7 +81,7 @@ class AdBlockConfig:
     blocklist_sources: List[str] = field(default_factory=lambda: [
         "https://big.oisd.nl/",
         "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-        "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/combined_disguised_trackers.txt",
+        "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_trackers_justdomains.txt",
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/pro.txt",
     ])
 
