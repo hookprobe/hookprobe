@@ -170,16 +170,17 @@ uninstall_everything() {
     echo ""
 
     # Uninstall all product tiers (ignore errors - component may not be installed)
-    bash "$SCRIPT_DIR/products/sentinel/uninstall.sh" 2>/dev/null || true
-    bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" 2>/dev/null || true
-    bash "$SCRIPT_DIR/products/fortress/uninstall.sh" 2>/dev/null || true
-    bash "$SCRIPT_DIR/products/nexus/uninstall.sh" 2>/dev/null || true
+    # Pass --force to skip prompts during batch uninstall
+    bash "$SCRIPT_DIR/products/sentinel/uninstall.sh" --force 2>/dev/null || true
+    bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" --force 2>/dev/null || true
+    bash "$SCRIPT_DIR/products/fortress/uninstall.sh" --purge --force 2>/dev/null || true
+    bash "$SCRIPT_DIR/products/nexus/uninstall.sh" --force 2>/dev/null || true
     bash "$SCRIPT_DIR/products/mssp/uninstall.sh" --complete --force 2>/dev/null || true
 
-    # Uninstall infrastructure
-    bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh" 2>/dev/null || true
-    bash "$SCRIPT_DIR/deploy/edge/uninstall.sh" 2>/dev/null || true
-    bash "$SCRIPT_DIR/deploy/cloud/uninstall.sh" 2>/dev/null || true
+    # Uninstall infrastructure (pass --force if supported)
+    bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh" --force 2>/dev/null || true
+    bash "$SCRIPT_DIR/deploy/edge/uninstall.sh" --force 2>/dev/null || true
+    bash "$SCRIPT_DIR/deploy/cloud/uninstall.sh" --force 2>/dev/null || true
 
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
