@@ -2794,6 +2794,22 @@ MDNSCONF
     setup_traffic_flow
 
     # ========================================
+    # CLEANUP REDUNDANT DNSMASQ CONFIG
+    # ========================================
+    # fts-vlan.conf already has all DNS settings, remove any duplicate
+    if [ -f "/etc/dnsmasq.d/fts-vlan.conf" ] && grep -q "^server=" /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null; then
+        if [ -f "/etc/dnsmasq.d/fts-dns-forward.conf" ]; then
+            rm -f /etc/dnsmasq.d/fts-dns-forward.conf
+            log_info "Removed redundant fts-dns-forward.conf"
+        fi
+    fi
+
+    # Ensure dnsmasq is running
+    if ! systemctl is-active dnsmasq &>/dev/null; then
+        systemctl restart dnsmasq 2>/dev/null || log_warn "dnsmasq failed to start"
+    fi
+
+    # ========================================
     # START OPTIONAL SERVICES
     # ========================================
     # Since podman-compose 1.x doesn't support --profile, we start

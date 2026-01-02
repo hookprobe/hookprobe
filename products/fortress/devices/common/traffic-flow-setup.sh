@@ -245,34 +245,30 @@ setup_dns_forwarding() {
     log_section "Configuring DNS Forwarding"
 
     local dnsmasq_conf="/etc/dnsmasq.d/fts-dns-forward.conf"
+    local main_config="/etc/dnsmasq.d/fts-vlan.conf"
 
-    # If fts-vlan.conf exists, it already has cache-size and no-resolv
-    # We only need to add server= directives for DNS forwarding
-    local has_main_config=false
-    if [ -f "/etc/dnsmasq.d/fts-vlan.conf" ]; then
-        has_main_config=true
-        log_info "Main dnsmasq config exists, only adding DNS servers"
+    # Check if fts-vlan.conf exists AND already has server= lines configured
+    # If so, skip creating fts-dns-forward.conf entirely to avoid duplicate entries
+    if [ -f "$main_config" ] && grep -q "^server=" "$main_config" 2>/dev/null; then
+        log_info "DNS forwarding already configured in fts-vlan.conf"
+        # Remove any stale fts-dns-forward.conf to avoid duplicates
+        if [ -f "$dnsmasq_conf" ]; then
+            rm -f "$dnsmasq_conf"
+            log_info "Removed redundant fts-dns-forward.conf"
+        fi
+        # Reload dnsmasq if running to apply any changes
+        if systemctl is-active dnsmasq &>/dev/null; then
+            systemctl reload dnsmasq 2>/dev/null || true
+        fi
+        return 0
     fi
 
+    # No main config with DNS - create fts-dns-forward.conf
     # Check if dnsXai container is running
     if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-dnsxai"; then
         log_info "dnsXai container detected, configuring DNS forwarding"
 
-        if [ "$has_main_config" = true ]; then
-            # Only add server lines - avoid duplicate cache-size/no-resolv
-            cat > "$dnsmasq_conf" << 'EOF'
-# HookProbe Fortress - DNS Forwarding to dnsXai
-# Forward DNS queries to ML-powered DNS protection
-
-# Primary: dnsXai container (on container network)
-server=127.0.0.1#5353
-
-# Fallback: Public DNS if dnsXai is unavailable
-server=1.1.1.1
-server=8.8.8.8
-EOF
-        else
-            cat > "$dnsmasq_conf" << 'EOF'
+        cat > "$dnsmasq_conf" << 'EOF'
 # HookProbe Fortress - DNS Forwarding to dnsXai
 # Forward DNS queries to ML-powered DNS protection
 
@@ -289,25 +285,9 @@ no-resolv
 # Cache size
 cache-size=1000
 EOF
-        fi
-
-        # Reload dnsmasq if running
-        if systemctl is-active dnsmasq &>/dev/null; then
-            systemctl reload dnsmasq
-            log_info "dnsmasq reloaded with dnsXai forwarding"
-        fi
     else
         log_warn "dnsXai container not running, using fallback DNS"
-        if [ "$has_main_config" = true ]; then
-            cat > "$dnsmasq_conf" << 'EOF'
-# HookProbe Fortress - DNS Forwarding (fallback)
-# dnsXai not available, using public DNS
-
-server=1.1.1.1
-server=8.8.8.8
-EOF
-        else
-            cat > "$dnsmasq_conf" << 'EOF'
+        cat > "$dnsmasq_conf" << 'EOF'
 # HookProbe Fortress - DNS Forwarding (fallback)
 # dnsXai not available, using public DNS
 
@@ -316,7 +296,12 @@ server=8.8.8.8
 no-resolv
 cache-size=1000
 EOF
-        fi
+    fi
+
+    # Reload dnsmasq if running
+    if systemctl is-active dnsmasq &>/dev/null; then
+        systemctl reload dnsmasq
+        log_info "dnsmasq reloaded with DNS forwarding config"
     fi
 }
 
