@@ -501,7 +501,7 @@ device_list() {
     printf "%-19s %-15s %-15s %-30s\n" "-------------------" "---------------" "---------------" "------------------------------"
 
     sqlite3 -separator '|' "$AUTOPILOT_DB" \
-        "SELECT mac, policy, status, COALESCE(friendly_name, hostname, 'Unknown') FROM devices ORDER BY last_seen DESC;" 2>/dev/null | \
+        "SELECT mac, policy, status, COALESCE(friendly_name, hostname, 'Unknown') FROM device_identity ORDER BY last_seen DESC;" 2>/dev/null | \
     while IFS='|' read -r mac policy status name; do
         # Colorize policy
         case "$policy" in
@@ -537,7 +537,7 @@ device_show() {
     echo ""
 
     sqlite3 -header -column "$AUTOPILOT_DB" \
-        "SELECT mac, ip, hostname, friendly_name, vendor, category, policy, status, confidence, first_seen, last_seen, manual_override FROM devices WHERE mac='$mac';" 2>/dev/null || {
+        "SELECT mac, ip, hostname, friendly_name, vendor, category, policy, status, confidence, first_seen, last_seen, manual_override FROM device_identity WHERE mac='$mac';" 2>/dev/null || {
         log_error "Device not found: $mac"
         exit 1
     }
@@ -586,11 +586,11 @@ device_set_policy() {
 
     # Update database
     sqlite3 "$AUTOPILOT_DB" \
-        "UPDATE devices SET policy='$policy', manual_override=1 WHERE mac='$mac';" 2>/dev/null
+        "UPDATE device_identity SET policy='$policy', manual_override=1 WHERE mac='$mac';" 2>/dev/null
 
     # Check if device exists
     local result
-    result=$(sqlite3 "$AUTOPILOT_DB" "SELECT mac FROM devices WHERE mac='$mac';" 2>/dev/null)
+    result=$(sqlite3 "$AUTOPILOT_DB" "SELECT mac FROM device_identity WHERE mac='$mac';" 2>/dev/null)
 
     if [ -z "$result" ]; then
         log_error "Device not found: $mac"
