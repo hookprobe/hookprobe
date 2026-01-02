@@ -2,6 +2,8 @@
 Description=Fortress WiFi Signal Collector
 Documentation=https://hookprobe.com/docs/fortress/wifi-signal
 After=network.target hostapd.service
+# Only run if the script exists
+ConditionPathExists=/opt/hookprobe/fortress/devices/common/wifi-signal-collector.sh
 
 [Service]
 Type=oneshot
@@ -13,6 +15,9 @@ Group=root
 NoNewPrivileges=false
 ProtectSystem=false
 PrivateTmp=true
+
+# Don't fail the boot if this fails
+SuccessExitStatus=0 1
 
 [Install]
 WantedBy=multi-user.target
