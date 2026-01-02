@@ -2020,6 +2020,10 @@ log-queries
 # Cache
 cache-size=1000
 
+# DHCP event script for device fingerprinting and SDN Auto Pilot
+# Captures DHCP Option 55 (fingerprint) for device identification
+dhcp-script=/opt/hookprobe/fortress/bin/dhcp-event.sh
+
 # Forward DNS to dnsXai container (published on host port 5353)
 server=127.0.0.1#5353
 
@@ -2136,6 +2140,19 @@ install_vlan_service() {
         log_info "  Installed: nac-policy-sync.sh"
     else
         log_warn "  nac-policy-sync.sh not found - NAC policies will sync via web app"
+    fi
+
+    # Install DHCP event handler for device fingerprinting (SDN Auto Pilot)
+    local bin_dir="${INSTALL_DIR}/bin"
+    mkdir -p "$bin_dir"
+    local dhcp_event_src="${FORTRESS_ROOT}/bin/dhcp-event.sh"
+    local dhcp_event_dst="$bin_dir/dhcp-event.sh"
+    if [ -f "$dhcp_event_src" ]; then
+        cp "$dhcp_event_src" "$dhcp_event_dst"
+        chmod +x "$dhcp_event_dst"
+        log_info "  Installed: dhcp-event.sh (DHCP fingerprinting)"
+    else
+        log_warn "  dhcp-event.sh not found - device fingerprinting disabled"
     fi
 
     # Copy and enable systemd service
