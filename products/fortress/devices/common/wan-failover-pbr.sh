@@ -694,10 +694,18 @@ ensure_main_table_routes() {
                 log_info "Added primary route: via $PRIMARY_GATEWAY metric $primary_target_metric"
             fi
         else
-            # Should NOT have route - remove both normal and demoted metrics
+            # Should NOT have route - remove ALL default routes via this interface
+            # This is aggressive but necessary because NM/DHCP may re-add routes
+            log_info "Removing ALL default routes via $PRIMARY_IFACE (internet unreachable)"
+
+            # Remove specific metric routes
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
-            log_debug "Removed primary routes (interface down)"
+
+            # Remove any other default routes via this interface (added by NM/DHCP)
+            while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do
+                log_debug "Removed additional default route via $PRIMARY_IFACE"
+            done
         fi
     fi
 
@@ -725,10 +733,17 @@ ensure_main_table_routes() {
                 log_info "Added backup route: via $BACKUP_GATEWAY metric $backup_target_metric"
             fi
         else
-            # Should NOT have route - remove both normal and demoted metrics
+            # Should NOT have route - remove ALL default routes via this interface
+            log_info "Removing ALL default routes via $BACKUP_IFACE (internet unreachable)"
+
+            # Remove specific metric routes
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-            log_debug "Removed backup routes (interface down)"
+
+            # Remove any other default routes via this interface (added by NM/DHCP)
+            while ip route del default dev "$BACKUP_IFACE" 2>/dev/null; do
+                log_debug "Removed additional default route via $BACKUP_IFACE"
+            done
         fi
     fi
 }
@@ -769,10 +784,12 @@ update_main_table_route() {
             fi
             log_debug "Primary route: via $PRIMARY_GATEWAY dev $PRIMARY_IFACE metric $primary_metric"
         else
-            # Interface down - remove route (both metrics)
+            # Interface down/unreachable - remove ALL routes via this interface
+            log_info "Primary route removed (internet unreachable via $PRIMARY_IFACE)"
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
-            log_debug "Primary route removed (interface down)"
+            # Also remove any routes NM/DHCP may have added
+            while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do :; done
         fi
     fi
 
@@ -795,10 +812,12 @@ update_main_table_route() {
             fi
             log_debug "Backup route: via $BACKUP_GATEWAY dev $BACKUP_IFACE metric $backup_metric"
         else
-            # Interface down - remove route (both metrics)
+            # Interface down/unreachable - remove ALL routes via this interface
+            log_info "Backup route removed (internet unreachable via $BACKUP_IFACE)"
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-            log_debug "Backup route removed (interface down)"
+            # Also remove any routes NM/DHCP may have added
+            while ip route del default dev "$BACKUP_IFACE" 2>/dev/null; do :; done
         fi
     fi
 
