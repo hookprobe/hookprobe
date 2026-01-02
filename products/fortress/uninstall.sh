@@ -155,10 +155,12 @@ stop_services() {
         "fts-qsecbit"
         "fts-lte"
         "fts-lte-failover"
+        "fts-lte-collector"
         "fts-wan-failover"
         "fts-tunnel"
         "fts-dnsmasq"
         "fts-wifi-allocator"
+        "fts-wifi-signal"
         "fts-hostapd"
         "fts-hostapd-24ghz"
         "fts-hostapd-5ghz"
@@ -174,6 +176,7 @@ stop_services() {
         "fts-ml-aggregator"
         "fts-lstm-train"
         "fts-device-status"
+        "fts-nac-sync"
     )
 
     # Stop timers first
@@ -182,6 +185,9 @@ stop_services() {
     systemctl stop fts-channel-calibrate.timer 2>/dev/null || true
     systemctl stop fts-lstm-train.timer 2>/dev/null || true
     systemctl stop fts-device-status.timer 2>/dev/null || true
+    systemctl stop fts-lte-collector.timer 2>/dev/null || true
+    systemctl stop fts-wifi-signal.timer 2>/dev/null || true
+    systemctl stop fts-nac-sync.timer 2>/dev/null || true
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -374,10 +380,12 @@ remove_systemd_services() {
         "fts-qsecbit"
         "fts-lte"
         "fts-lte-failover"
+        "fts-lte-collector"
         "fts-wan-failover"
         "fts-tunnel"
         "fts-dnsmasq"
         "fts-wifi-allocator"
+        "fts-wifi-signal"
         "fts-hostapd"
         "fts-hostapd-24ghz"
         "fts-hostapd-5ghz"
@@ -393,6 +401,7 @@ remove_systemd_services() {
         "fts-ml-aggregator"
         "fts-lstm-train"
         "fts-device-status"
+        "fts-nac-sync"
     )
 
     # Disable and remove channel optimization timer
@@ -414,6 +423,21 @@ remove_systemd_services() {
     log_info "Removing fts-device-status.timer..."
     systemctl disable fts-device-status.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fts-device-status.timer
+
+    # Disable and remove LTE collector timer
+    log_info "Removing fts-lte-collector.timer..."
+    systemctl disable fts-lte-collector.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-lte-collector.timer
+
+    # Disable and remove WiFi signal collector timer
+    log_info "Removing fts-wifi-signal.timer..."
+    systemctl disable fts-wifi-signal.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-wifi-signal.timer
+
+    # Disable and remove NAC sync timer
+    log_info "Removing fts-nac-sync.timer..."
+    systemctl disable fts-nac-sync.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-nac-sync.timer
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then

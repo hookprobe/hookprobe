@@ -699,6 +699,25 @@ do_full_purge() {
     rm -f /etc/sysctl.d/*fts*.conf 2>/dev/null || true
     sysctl --system &>/dev/null || true
 
+    # Remove all systemd services and timers (extra cleanup)
+    log_info "Removing systemd services and timers..."
+    for svc in fortress fortress-vlan hookprobe-fortress fts-qsecbit fts-lte fts-lte-failover \
+               fts-lte-collector fts-wan-failover fts-tunnel fts-dnsmasq fts-wifi-allocator \
+               fts-wifi-signal fts-hostapd fts-hostapd-24ghz fts-hostapd-5ghz fts-adaptive-txpower \
+               fts-nat fts-web fts-channel-optimize fts-channel-calibrate fts-channel-quickstart \
+               fts-channel-standard fts-dfs-monitor fts-dfs-api fts-ml-aggregator fts-lstm-train \
+               fts-device-status fts-nac-sync; do
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+        rm -f "/etc/systemd/system/${svc}.service" 2>/dev/null || true
+        rm -f "/etc/systemd/system/${svc}.timer" 2>/dev/null || true
+    done
+    # Remove any remaining fts-* service/timer files
+    rm -f /etc/systemd/system/fts-*.service 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-*.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fortress*.service 2>/dev/null || true
+    rm -f /etc/systemd/system/hookprobe-*.service 2>/dev/null || true
+
     # Remove all hookprobe directories
     rm -rf /opt/hookprobe 2>/dev/null || true
     rm -rf /etc/hookprobe 2>/dev/null || true
