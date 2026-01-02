@@ -309,6 +309,28 @@ generate_dhcp_config() {
     local dhcp_iface
     dhcp_iface=$(get_dhcp_interface)
 
+    # FIRST: Extract subnet from existing config files BEFORE deleting them
+    # This preserves the user's original subnet selection
+    if [ -z "${LAN_SUBNET_MASK:-}" ] || [ "$LAN_SUBNET_MASK" = "24" ]; then
+        local detected_mask=""
+        # Check fts-vlan.conf (install-container.sh format)
+        if [ -f /etc/dnsmasq.d/fts-vlan.conf ]; then
+            detected_mask=$(grep -oP 'subnet: /\K\d+' /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null || true)
+            if [ -n "$detected_mask" ]; then
+                log_info "Detected subnet /$detected_mask from existing fts-vlan.conf"
+                LAN_SUBNET_MASK="$detected_mask"
+            fi
+        fi
+        # Check fortress.conf (setup-dhcp.sh format)
+        if [ -z "$detected_mask" ] && [ -f /etc/dnsmasq.d/fortress.conf ]; then
+            detected_mask=$(grep -oP 'LAN Subnet: 10\.200\.0\.0/\K\d+' /etc/dnsmasq.d/fortress.conf 2>/dev/null || true)
+            if [ -n "$detected_mask" ]; then
+                log_info "Detected subnet /$detected_mask from existing fortress.conf"
+                LAN_SUBNET_MASK="$detected_mask"
+            fi
+        fi
+    fi
+
     # Remove ALL old FTS/Fortress dnsmasq configs to avoid duplicate options
     # This is critical: duplicate cache-size, interface, etc. cause dnsmasq to fail
     log_info "Cleaning up old dnsmasq configs..."
