@@ -455,6 +455,39 @@ remove_systemd_services() {
     rm -rf /etc/systemd/system/systemd-networkd-wait-online.service.d 2>/dev/null || true
     rm -rf /etc/systemd/system/NetworkManager-wait-online.service.d 2>/dev/null || true
 
+    # Configure network wait services to be more lenient after uninstall
+    # This prevents boot failures if interfaces were removed but services still wait for them
+    log_info "Configuring network-wait services for safe boot..."
+
+    # Create a drop-in to make systemd-networkd-wait-online not fail boot
+    if systemctl is-enabled systemd-networkd-wait-online.service &>/dev/null; then
+        mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d
+        cat > /etc/systemd/system/systemd-networkd-wait-online.service.d/99-fortress-cleanup.conf << 'EOF'
+# Fortress cleanup - prevent boot failure after uninstall
+# This override will be removed on next system update or manually
+[Service]
+# Use --any to succeed when any interface is online (not all)
+ExecStart=
+ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any --timeout=30
+# Don't fail the boot if this times out
+SuccessExitStatus=0 1 2
+EOF
+        log_info "  Created lenient override for systemd-networkd-wait-online"
+    fi
+
+    # Same for NetworkManager-wait-online
+    if systemctl is-enabled NetworkManager-wait-online.service &>/dev/null; then
+        mkdir -p /etc/systemd/system/NetworkManager-wait-online.service.d
+        cat > /etc/systemd/system/NetworkManager-wait-online.service.d/99-fortress-cleanup.conf << 'EOF'
+# Fortress cleanup - prevent boot failure after uninstall
+[Service]
+# Don't fail the boot if this times out
+SuccessExitStatus=0 1 2
+TimeoutStartSec=30
+EOF
+        log_info "  Created lenient override for NetworkManager-wait-online"
+    fi
+
     systemctl daemon-reload
     log_info "Systemd services removed"
 }
