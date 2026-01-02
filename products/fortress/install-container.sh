@@ -2020,6 +2020,10 @@ log-queries
 # Cache
 cache-size=1000
 
+# DHCP event script for device fingerprinting and SDN Auto Pilot
+# Captures DHCP Option 55 (fingerprint) for device identification
+dhcp-script=/opt/hookprobe/fortress/bin/dhcp-event.sh
+
 # Forward DNS to dnsXai container (published on host port 5353)
 server=127.0.0.1#5353
 
@@ -2136,6 +2140,19 @@ install_vlan_service() {
         log_info "  Installed: nac-policy-sync.sh"
     else
         log_warn "  nac-policy-sync.sh not found - NAC policies will sync via web app"
+    fi
+
+    # Install DHCP event handler for device fingerprinting (SDN Auto Pilot)
+    local bin_dir="${INSTALL_DIR}/bin"
+    mkdir -p "$bin_dir"
+    local dhcp_event_src="${FORTRESS_ROOT}/bin/dhcp-event.sh"
+    local dhcp_event_dst="$bin_dir/dhcp-event.sh"
+    if [ -f "$dhcp_event_src" ]; then
+        cp "$dhcp_event_src" "$dhcp_event_dst"
+        chmod +x "$dhcp_event_dst"
+        log_info "  Installed: dhcp-event.sh (DHCP fingerprinting)"
+    else
+        log_warn "  dhcp-event.sh not found - device fingerprinting disabled"
     fi
 
     # Copy and enable systemd service
@@ -2705,6 +2722,46 @@ start_containers() {
     done
 
     # ========================================
+    # PORT CONFLICT RESOLUTION
+    # ========================================
+    # dnsXai requires ports 5353 (DNS) and 853 (DoT)
+    # Port 5353 is commonly used by mDNS (Avahi/systemd-resolved)
+    log_info "Resolving port conflicts for dnsXai..."
+
+    # Disable Avahi mDNS responder if running (uses 5353)
+    if systemctl is-active avahi-daemon &>/dev/null; then
+        log_info "  Stopping avahi-daemon (uses port 5353)..."
+        systemctl stop avahi-daemon 2>/dev/null || true
+        systemctl disable avahi-daemon 2>/dev/null || true
+    fi
+
+    # Disable systemd-resolved mDNS if it's using 5353
+    if ss -tulpn 2>/dev/null | grep -q ":5353.*systemd-resolve"; then
+        log_info "  Disabling systemd-resolved mDNS..."
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat > /etc/systemd/resolved.conf.d/no-mdns.conf << 'MDNSCONF'
+[Resolve]
+# Disable mDNS to free port 5353 for dnsXai
+MulticastDNS=no
+MDNSCONF
+        systemctl restart systemd-resolved 2>/dev/null || true
+    fi
+
+    # Force-kill any remaining processes on required ports
+    fuser -k 5353/udp 2>/dev/null || true
+    fuser -k 5353/tcp 2>/dev/null || true
+    fuser -k 853/tcp 2>/dev/null || true
+    sleep 1  # Give ports time to be released
+
+    # Verify ports are free
+    if ss -tulpn 2>/dev/null | grep -q ":5353 "; then
+        log_warn "Port 5353 still in use - dnsXai may fail to start"
+        ss -tulpn 2>/dev/null | grep ":5353 " | head -3
+    else
+        log_info "  Port 5353 is available"
+    fi
+
+    # ========================================
     # START: Launch containers
     # ========================================
     # Start all services (security core + data tier)
@@ -2752,6 +2809,22 @@ start_containers() {
 
     # Setup traffic flow rules (NAT, PBR integration)
     setup_traffic_flow
+
+    # ========================================
+    # CLEANUP REDUNDANT DNSMASQ CONFIG
+    # ========================================
+    # fts-vlan.conf already has all DNS settings, remove any duplicate
+    if [ -f "/etc/dnsmasq.d/fts-vlan.conf" ] && grep -q "^server=" /etc/dnsmasq.d/fts-vlan.conf 2>/dev/null; then
+        if [ -f "/etc/dnsmasq.d/fts-dns-forward.conf" ]; then
+            rm -f /etc/dnsmasq.d/fts-dns-forward.conf
+            log_info "Removed redundant fts-dns-forward.conf"
+        fi
+    fi
+
+    # Ensure dnsmasq is running
+    if ! systemctl is-active dnsmasq &>/dev/null; then
+        systemctl restart dnsmasq 2>/dev/null || log_warn "dnsmasq failed to start"
+    fi
 
     # ========================================
     # START OPTIONAL SERVICES
