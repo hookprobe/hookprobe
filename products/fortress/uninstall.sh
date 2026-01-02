@@ -101,7 +101,7 @@ parse_args() {
                 echo "Options:"
                 echo "  --force, -f     Skip confirmation prompts"
                 echo "  --purge         COMPLETE removal - containers, images, volumes,"
-                echo "                  networks, configs, data, logs, udev rules, everything"
+                echo "                  networks, configs, data, logs, udev rules, user/group"
                 echo "  --keep-logs     Preserve log files"
                 echo "  --keep-data     Preserve Podman volumes (database, redis, etc.) and data dirs"
                 echo "  --keep-config   Preserve configuration files (for reinstall)"
@@ -1183,6 +1183,37 @@ remove_installation() {
 }
 
 # ============================================================
+# REMOVE FORTRESS USER AND GROUP
+# ============================================================
+remove_fortress_user_group() {
+    log_step "Removing fortress user and group..."
+
+    # Only remove in purge mode to allow clean reinstalls
+    if [ "$PURGE_MODE" != true ]; then
+        log_info "Preserving fortress user/group (use --purge to remove)"
+        return 0
+    fi
+
+    # Remove fortress user
+    if id "fortress" &>/dev/null; then
+        log_info "Removing fortress user..."
+        userdel fortress 2>/dev/null || {
+            log_warn "Could not remove fortress user (may have running processes)"
+        }
+    fi
+
+    # Remove fortress group
+    if getent group fortress &>/dev/null; then
+        log_info "Removing fortress group..."
+        groupdel fortress 2>/dev/null || {
+            log_warn "Could not remove fortress group"
+        }
+    fi
+
+    log_info "User and group cleanup complete"
+}
+
+# ============================================================
 # REMOVE ROUTING TABLES
 # ============================================================
 remove_routing_tables() {
@@ -1418,6 +1449,7 @@ main() {
         echo -e "  • All sysctl settings"
         echo -e "  • All systemd services"
         echo -e "  • User data (blocked traffic logs, etc.)"
+        echo -e "  • Fortress user and group"
         echo ""
         echo -e "${GREEN}PROTECTED (never removed):${NC}"
         echo -e "  • dnsXai whitelist (/var/lib/hookprobe/userdata/dnsxai/whitelist.txt)"
@@ -1516,6 +1548,7 @@ main() {
 
     # Stage 10: Cleanup and verify
     log_step "Stage 10/10: Final cleanup and verification"
+    remove_fortress_user_group
     remove_state_file
     verify_uninstall
 
