@@ -775,13 +775,22 @@ create_directories() {
     chmod 777 /var/lib/hookprobe
     chown 1000:1000 /var/lib/hookprobe 2>/dev/null || true
 
-    # Ensure autopilot.db has correct permissions (writable by web container uid 1000)
-    # The database may be created by qsecbit (host network) or web (container)
+    # Pre-create databases with correct permissions (critical for fresh install!)
+    # If we don't do this, the first process to create them might be root
+    # and then the web container (uid 1000) can't write to them
     local autopilot_db="/var/lib/hookprobe/autopilot.db"
-    if [ -f "$autopilot_db" ]; then
-        chmod 666 "$autopilot_db"
-        chown 1000:1000 "$autopilot_db" 2>/dev/null || true
-    fi
+    local dfs_db="/var/lib/hookprobe/dfs_intelligence.db"
+    local devices_db="/var/lib/hookprobe/devices.db"
+
+    for db_file in "$autopilot_db" "$dfs_db" "$devices_db"; do
+        if [ ! -f "$db_file" ]; then
+            # Create empty SQLite database with correct ownership
+            touch "$db_file"
+            log_info "Pre-created database: $db_file"
+        fi
+        chmod 666 "$db_file"
+        chown 1000:1000 "$db_file" 2>/dev/null || true
+    done
 
     chmod 755 /var/lib/hookprobe/userdata
     chmod 755 /var/lib/hookprobe/userdata/dnsxai
@@ -3526,14 +3535,20 @@ fix_config_permissions() {
         chmod 755 "$CONFIG_DIR/secrets" 2>/dev/null || true
     fi
 
-    # Ensure autopilot.db is writable by web container (uid 1000)
-    # The database stores device info, WiFi signals, and policies
+    # Ensure all databases are writable by web container (uid 1000)
+    # The databases store device info, WiFi signals, DFS data, and policies
     local autopilot_db="/var/lib/hookprobe/autopilot.db"
-    if [ -f "$autopilot_db" ]; then
-        chmod 666 "$autopilot_db"
-        chown 1000:1000 "$autopilot_db" 2>/dev/null || true
-        log_info "  autopilot.db permissions fixed for container access"
-    fi
+    local dfs_db="/var/lib/hookprobe/dfs_intelligence.db"
+    local devices_db="/var/lib/hookprobe/devices.db"
+
+    for db_file in "$autopilot_db" "$dfs_db" "$devices_db"; do
+        if [ ! -f "$db_file" ]; then
+            touch "$db_file"
+        fi
+        chmod 666 "$db_file"
+        chown 1000:1000 "$db_file" 2>/dev/null || true
+    done
+    log_info "  Database permissions fixed for container access"
 
     log_info "Config permissions set for container access"
 }
