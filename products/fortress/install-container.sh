@@ -2705,6 +2705,46 @@ start_containers() {
     done
 
     # ========================================
+    # PORT CONFLICT RESOLUTION
+    # ========================================
+    # dnsXai requires ports 5353 (DNS) and 853 (DoT)
+    # Port 5353 is commonly used by mDNS (Avahi/systemd-resolved)
+    log_info "Resolving port conflicts for dnsXai..."
+
+    # Disable Avahi mDNS responder if running (uses 5353)
+    if systemctl is-active avahi-daemon &>/dev/null; then
+        log_info "  Stopping avahi-daemon (uses port 5353)..."
+        systemctl stop avahi-daemon 2>/dev/null || true
+        systemctl disable avahi-daemon 2>/dev/null || true
+    fi
+
+    # Disable systemd-resolved mDNS if it's using 5353
+    if ss -tulpn 2>/dev/null | grep -q ":5353.*systemd-resolve"; then
+        log_info "  Disabling systemd-resolved mDNS..."
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat > /etc/systemd/resolved.conf.d/no-mdns.conf << 'MDNSCONF'
+[Resolve]
+# Disable mDNS to free port 5353 for dnsXai
+MulticastDNS=no
+MDNSCONF
+        systemctl restart systemd-resolved 2>/dev/null || true
+    fi
+
+    # Force-kill any remaining processes on required ports
+    fuser -k 5353/udp 2>/dev/null || true
+    fuser -k 5353/tcp 2>/dev/null || true
+    fuser -k 853/tcp 2>/dev/null || true
+    sleep 1  # Give ports time to be released
+
+    # Verify ports are free
+    if ss -tulpn 2>/dev/null | grep -q ":5353 "; then
+        log_warn "Port 5353 still in use - dnsXai may fail to start"
+        ss -tulpn 2>/dev/null | grep ":5353 " | head -3
+    else
+        log_info "  Port 5353 is available"
+    fi
+
+    # ========================================
     # START: Launch containers
     # ========================================
     # Start all services (security core + data tier)
