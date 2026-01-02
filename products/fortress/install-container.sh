@@ -2017,11 +2017,17 @@ setup_vlan_dhcp() {
 # IMPORTANT: In VLAN mode, dnsmasq listens on vlan100, NOT the FTS bridge
 # FTS bridge is a Layer 2 switch only - no IP address
 
-# Bind to VLAN 100 (LAN) interface
+# ============================================
+# Interface binding
+# ============================================
+# DHCP/DNS listens ONLY on vlan100 (LAN gateway)
+# Using bind-interfaces + listen-address to avoid conflict with
+# Podman's aardvark-dns which listens on 172.20.200.1:53
 interface=${lan_interface}
-
-# Use bind-dynamic to wait for interface to appear (critical for boot order)
-bind-dynamic
+bind-interfaces
+listen-address=${gateway_lan}
+# Don't listen on localhost (avoids conflict with systemd-resolved)
+except-interface=lo
 
 # Don't read /etc/resolv.conf - use our explicit servers
 no-resolv
