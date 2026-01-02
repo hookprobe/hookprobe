@@ -2783,6 +2783,12 @@ def api_device_get(mac_address):
             device = manager.read(mac)
 
             if device:
+                # Merge real-time status from status_cache (ip neigh)
+                status_cache = _load_device_status_cache()
+                live_status = status_cache.get(mac, {})
+                if live_status:
+                    device['status'] = live_status.get('status', device.get('status', 'offline'))
+                    device['neighbor_state'] = live_status.get('neighbor_state', '')
                 return jsonify({'success': True, 'device': device})
             else:
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
@@ -3440,6 +3446,17 @@ def api_device_detail(mac_address):
 
             if not device:
                 return jsonify({'success': False, 'error': 'Device not found and could not be created'}), 404
+
+            # Merge real-time status from status_cache (ip neigh) into device data
+            # The database status may be stale - status_cache has live data
+            status_cache = _load_device_status_cache()
+            live_status = status_cache.get(mac, {})
+            if live_status:
+                device['status'] = live_status.get('status', device.get('status', 'offline'))
+                device['neighbor_state'] = live_status.get('neighbor_state', '')
+                # Update IP if we have a more recent one from ARP
+                if live_status.get('ip') and not device.get('ip'):
+                    device['ip'] = live_status['ip']
 
             return jsonify({
                 'success': True,
