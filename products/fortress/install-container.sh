@@ -791,6 +791,15 @@ create_directories() {
     # The autopilot.db stores device classification, policies, WiFi signals
     chmod 777 /var/lib/hookprobe
     chown 1000:1000 /var/lib/hookprobe 2>/dev/null || true
+
+    # Ensure autopilot.db has correct permissions (writable by web container uid 1000)
+    # The database may be created by qsecbit (host network) or web (container)
+    local autopilot_db="/var/lib/hookprobe/autopilot.db"
+    if [ -f "$autopilot_db" ]; then
+        chmod 666 "$autopilot_db"
+        chown 1000:1000 "$autopilot_db" 2>/dev/null || true
+    fi
+
     chmod 755 /var/lib/hookprobe/userdata
     chmod 755 /var/lib/hookprobe/userdata/dnsxai
 
@@ -3512,6 +3521,15 @@ fix_config_permissions() {
         chmod 750 "$CONFIG_DIR/secrets" 2>/dev/null || true
     else
         chmod 755 "$CONFIG_DIR/secrets" 2>/dev/null || true
+    fi
+
+    # Ensure autopilot.db is writable by web container (uid 1000)
+    # The database stores device info, WiFi signals, and policies
+    local autopilot_db="/var/lib/hookprobe/autopilot.db"
+    if [ -f "$autopilot_db" ]; then
+        chmod 666 "$autopilot_db"
+        chown 1000:1000 "$autopilot_db" 2>/dev/null || true
+        log_info "  autopilot.db permissions fixed for container access"
     fi
 
     log_info "Config permissions set for container access"
