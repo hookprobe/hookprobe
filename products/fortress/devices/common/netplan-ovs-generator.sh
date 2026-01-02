@@ -195,6 +195,9 @@ $bridge_config
         - ${GATEWAY_MGMT}/30
 EOF
 
+    # Set proper permissions (netplan requires 600 for security)
+    chmod 600 "$NETPLAN_FILE"
+
     log_success "Netplan config written to $NETPLAN_FILE"
 
     # Save state
