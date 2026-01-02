@@ -900,6 +900,7 @@ setup_ip_rules() {
     # Remove old rules (clean slate)
     ip rule del fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY 2>/dev/null || true
     ip rule del fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP 2>/dev/null || true
+    # Remove legacy fallback rule if it exists (from older versions)
     ip rule del table $TABLE_PRIMARY priority 1000 2>/dev/null || true
     [ -n "$primary_ip" ] && ip rule del from "$primary_ip" table $TABLE_PRIMARY 2>/dev/null || true
     [ -n "$backup_ip" ] && ip rule del from "$backup_ip" table $TABLE_BACKUP 2>/dev/null || true
@@ -920,8 +921,12 @@ setup_ip_rules() {
     ip rule add fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY priority 100
     ip rule add fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP priority 200
 
-    # Fallback rule: unmarked packets use primary (if available)
-    ip rule add table $TABLE_PRIMARY priority 1000 2>/dev/null || true
+    # NOTE: We intentionally do NOT add a "fallback" rule like:
+    #   ip rule add table $TABLE_PRIMARY priority 1000
+    # This would catch ALL traffic and break LAN routing because the WAN tables
+    # only have default routes, not LAN routes (10.200.0.0/X).
+    # Unmarked packets correctly fall through to main table (priority 32766)
+    # which has proper routes for both LAN and WAN.
 
     log_info "IP rules configured"
 }
