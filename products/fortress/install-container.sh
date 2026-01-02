@@ -701,59 +701,42 @@ collect_configuration() {
 # ============================================================
 
 # Create fortress system user and group for container file access
-# IMPORTANT: GID 1000 is used to match the container's fortress group
-# This ensures files created on the host are readable inside containers
-# The container's fortress user (UID 1000, GID 1000) needs to read /etc/hookprobe
+# NOTE: Containers use UID/GID 1000 internally, but podman-compose.yml uses
+# the :U volume suffix to auto-adjust ownership on bind mounts. This means
+# even if host GID differs from 1000, containers can still access the files.
+# For read-only mounts (/etc/hookprobe), files are made world-readable (644).
 create_fortress_user() {
     log_step "Creating fortress system user"
 
-    # Create fortress group with specific GID 1000 to match container
-    # The container's Containerfile.web uses: groupadd -r fortress -g 1000
+    # Create fortress group - prefer GID 1000 to match container, but not required
+    # The :U volume suffix in podman-compose.yml handles ownership mapping
     if ! getent group fortress &>/dev/null; then
-        # Try to create with GID 1000 (matches container)
+        # Try to create with GID 1000 (matches container for best compatibility)
         if groupadd --gid 1000 fortress 2>/dev/null; then
             log_info "Created fortress group (gid=1000)"
         else
-            # GID 1000 may be taken by another group, check what's using it
+            # GID 1000 may be taken by another group (common with user's personal group)
             local gid_owner
             gid_owner=$(getent group 1000 2>/dev/null | cut -d: -f1 || echo "")
             if [ -n "$gid_owner" ]; then
-                log_warn "GID 1000 is used by group '$gid_owner'"
+                log_info "GID 1000 is used by group '$gid_owner' (normal for user's primary group)"
             fi
-            # Create with system GID as fallback
+            # Create with system GID - the :U volume suffix handles ownership mapping
             groupadd --system fortress
-            log_warn "Created fortress group with system GID (gid=$(getent group fortress | cut -d: -f3))"
+            local new_gid
+            new_gid=$(getent group fortress | cut -d: -f3)
+            log_info "Created fortress group with system GID (gid=$new_gid)"
+            log_info "Note: Podman :U volume suffix handles container UID/GID mapping"
         fi
     else
         local current_gid
         current_gid=$(getent group fortress | cut -d: -f3)
         if [ "$current_gid" = "1000" ]; then
-            log_info "Fortress group exists with correct GID (gid=1000)"
+            log_info "Fortress group exists with GID 1000"
         else
-            # GID mismatch - try to fix it automatically
-            log_info "Fortress group GID mismatch (gid=$current_gid, expected=1000), fixing..."
-
-            # Check if we can safely recreate the group
-            # First, check if GID 1000 is available
-            local gid_owner
-            gid_owner=$(getent group 1000 2>/dev/null | cut -d: -f1 || echo "")
-
-            if [ -z "$gid_owner" ]; then
-                # GID 1000 is available - recreate the group
-                if groupdel fortress 2>/dev/null; then
-                    if groupadd --gid 1000 fortress 2>/dev/null; then
-                        log_info "Recreated fortress group with correct GID (gid=1000)"
-                    else
-                        # Fallback: recreate with any available GID
-                        groupadd --system fortress
-                        log_warn "Recreated fortress group with system GID (gid=$(getent group fortress | cut -d: -f3))"
-                    fi
-                else
-                    log_warn "Could not delete old fortress group (may be in use)"
-                fi
-            else
-                log_warn "GID 1000 is used by group '$gid_owner', keeping current GID $current_gid"
-            fi
+            # GID mismatch - no longer an issue due to :U volume suffix
+            log_info "Fortress group exists (gid=$current_gid)"
+            log_info "Note: Podman :U volume suffix handles container UID/GID mapping"
         fi
     fi
 
@@ -1037,23 +1020,23 @@ print(hash.decode('utf-8'))
   "version": "1.0"
 }
 EOF
-    # Set ownership so container (fortress user GID 1000) can read, but only root can write
-    # The container's fortress user is UID 1000, GID 1000 (see Containerfile.web)
+    # Set ownership so container can read users.json
+    # /etc/hookprobe is mounted as :ro (read-only), so we use world-readable (644)
+    # This is safe because passwords are bcrypt-hashed and secrets are in env vars
     local fortress_gid
     fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
 
     if [ "$fortress_gid" = "1000" ]; then
-        # GID matches container - use group ownership
+        # GID matches container - use group ownership for tighter permissions
         chown root:fortress "$CONFIG_DIR/users.json"
         chmod 640 "$CONFIG_DIR/users.json"
         log_info "Admin user created (group-readable by fortress)"
     else
-        # GID mismatch - use world-readable as fallback
-        # This is less secure but ensures login works
+        # GID differs from container - use world-readable for read-only config mount
+        # This is acceptable security: passwords are bcrypt-hashed, secrets are in env vars
         chown root:root "$CONFIG_DIR/users.json"
         chmod 644 "$CONFIG_DIR/users.json"
-        log_warn "Admin user created (world-readable due to GID mismatch)"
-        log_warn "For security, recreate fortress group with GID 1000"
+        log_info "Admin user created (world-readable for container access)"
     fi
 }
 
@@ -2236,6 +2219,9 @@ Type=oneshot
 RemainAfterExit=yes
 # Run OVS post-setup (brings up VLANs, OpenFlow rules, port VLANs, container veth)
 ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
+# CRITICAL: Restart dnsmasq after OVS flows are configured
+# This ensures DHCP works - dnsmasq may have started before OpenFlow rules
+ExecStartPost=-/bin/systemctl restart dnsmasq.service
 
 [Install]
 WantedBy=multi-user.target
@@ -3470,15 +3456,17 @@ STATE_FILE="${CONFIG_DIR}/fortress-state.json"
 
 # Fix config file permissions for container access
 # Called after all config files are created to ensure proper ownership
+# Note: /etc/hookprobe is mounted read-only in containers, so world-readable (644) is acceptable
+# Writable volumes use :U suffix in podman-compose.yml to auto-adjust ownership
 fix_config_permissions() {
     log_step "Setting config file permissions"
 
-    # Check if fortress group has correct GID (1000) to match container
+    # Check if fortress group has GID 1000 (matches container)
     local fortress_gid
     fortress_gid=$(getent group fortress 2>/dev/null | cut -d: -f3)
 
     if [ "$fortress_gid" = "1000" ]; then
-        # GID matches container - use group ownership
+        # GID matches container - use group ownership for tighter permissions
         chgrp -R fortress "$CONFIG_DIR" 2>/dev/null || true
 
         # Config files that container needs to read (640 = rw-r-----)
@@ -3490,9 +3478,9 @@ fix_config_permissions() {
             fi
         done
     else
-        # GID mismatch - use world-readable as fallback for config files
-        log_warn "Fortress group GID mismatch (expected 1000, got $fortress_gid)"
-        log_warn "Using world-readable permissions for config files"
+        # GID differs from container - use world-readable for read-only config mount
+        # This is acceptable: passwords are bcrypt-hashed, secrets are in env vars
+        log_info "Using world-readable config files (GID $fortress_gid != container GID 1000)"
 
         for file in "$CONFIG_DIR/users.json" "$CONFIG_DIR/fortress.conf" \
                     "$CONFIG_DIR/wifi-interfaces.conf"; do
