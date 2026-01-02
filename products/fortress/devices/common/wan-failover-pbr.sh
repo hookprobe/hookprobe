@@ -661,14 +661,22 @@ ensure_main_table_routes() {
     #   - Primary: METRIC_PRIMARY (10) or METRIC_PRIMARY_DEMOTED (110) if SLA AI demoted
     #   - Backup:  METRIC_BACKUP (20) or METRIC_BACKUP_DEMOTED (120) if SLA AI demoted
     #
-    # Only ADD routes for healthy interfaces, only REMOVE for unhealthy.
-    # Let the kernel's metric-based routing do the failover automatically.
+    # Route removal policy:
+    #   - Primary (physical WAN): Removed when unhealthy - forces traffic to backup
+    #   - Backup (LTE/modem): NEVER removed - always kept as last-resort failsafe
     #
-    # SLA AI demotion: When degradation is predicted, metric increases to allow
-    # other healthy WANs to take priority without removing the route entirely.
+    # The LTE route is preserved even if health checks fail because:
+    #   1. LTE modems can have intermittent connectivity that still works
+    #   2. Health check failures don't mean the modem is completely dead
+    #   3. Having a route to a "degraded" modem is better than no route at all
+    #   4. When primary is healthy, traffic uses primary anyway (lower metric)
 
     local route_info
     route_info=$(ip route show default 2>/dev/null)
+
+    # Count current default routes (needed for last-resort logic)
+    local route_count
+    route_count=$(echo "$route_info" | grep -c "^default" 2>/dev/null || echo "0")
 
     # Primary WAN - check if route exists with correct metric
     if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
@@ -694,18 +702,17 @@ ensure_main_table_routes() {
                 log_info "Added primary route: via $PRIMARY_GATEWAY metric $primary_target_metric"
             fi
         else
-            # Should NOT have route - remove ALL default routes via this interface
-            # This is aggressive but necessary because NM/DHCP may re-add routes
-            log_info "Removing ALL default routes via $PRIMARY_IFACE (internet unreachable)"
-
-            # Remove specific metric routes
-            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
-            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
-
-            # Remove any other default routes via this interface (added by NM/DHCP)
-            while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do
-                log_debug "Removed additional default route via $PRIMARY_IFACE"
-            done
+            # Primary is down - only remove if backup is up (don't leave no routes)
+            if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+                log_info "Removing ALL default routes via $PRIMARY_IFACE (internet unreachable)"
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do
+                    log_debug "Removed additional default route via $PRIMARY_IFACE"
+                done
+            else
+                log_warn "Keeping primary route as last resort (backup also down)"
+            fi
         fi
     fi
 
@@ -733,17 +740,17 @@ ensure_main_table_routes() {
                 log_info "Added backup route: via $BACKUP_GATEWAY metric $backup_target_metric"
             fi
         else
-            # Should NOT have route - remove ALL default routes via this interface
-            log_info "Removing ALL default routes via $BACKUP_IFACE (internet unreachable)"
-
-            # Remove specific metric routes
-            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
-            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-
-            # Remove any other default routes via this interface (added by NM/DHCP)
-            while ip route del default dev "$BACKUP_IFACE" 2>/dev/null; do
-                log_debug "Removed additional default route via $BACKUP_IFACE"
-            done
+            # Backup is down but NEVER remove LTE/modem route
+            # LTE is the last-resort failsafe - keep it always available
+            # When primary is healthy, traffic will use primary (lower metric)
+            # When primary fails, traffic automatically goes to backup via metrics
+            log_debug "Backup reports down but keeping LTE route as failsafe (metric $METRIC_BACKUP)"
+            # Ensure backup route exists even if health check failed
+            # (LTE modems can have temporary health check failures but still work)
+            if ! ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
+                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                log_info "Restored backup/LTE route as failsafe"
+            fi
         fi
     fi
 }
@@ -756,12 +763,12 @@ update_main_table_route() {
     #   - Tertiary:       metric 30 (future)
     #   - Quaternary:     metric 40 (future)
     #
-    # Routes are ADDED when interface is healthy, REMOVED when unhealthy.
-    # Kernel automatically uses the lowest-metric route that exists.
-    # NO metric swapping, NO "active/standby" logic here.
+    # Route removal policy:
+    #   - Primary (physical WAN): Removed when unhealthy - forces traffic to backup
+    #   - Backup (LTE/modem): NEVER removed - always kept as last-resort failsafe
     #
-    # SLA AI demotion: Metric temporarily increased when degradation is predicted,
-    # allowing other healthy WANs to take priority without losing connectivity.
+    # Kernel automatically uses the lowest-metric route that exists.
+    # SLA AI demotion: Metric temporarily increased when degradation is predicted.
 
     log_info "Updating main table routes (fixed metrics)..."
 
@@ -784,12 +791,15 @@ update_main_table_route() {
             fi
             log_debug "Primary route: via $PRIMARY_GATEWAY dev $PRIMARY_IFACE metric $primary_metric"
         else
-            # Interface down/unreachable - remove ALL routes via this interface
-            log_info "Primary route removed (internet unreachable via $PRIMARY_IFACE)"
-            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
-            ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
-            # Also remove any routes NM/DHCP may have added
-            while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do :; done
+            # Primary down - only remove if backup is up (never leave no routes)
+            if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+                log_info "Primary route removed (internet unreachable via $PRIMARY_IFACE)"
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do :; done
+            else
+                log_warn "Keeping primary route (backup also down)"
+            fi
         fi
     fi
 
@@ -812,12 +822,14 @@ update_main_table_route() {
             fi
             log_debug "Backup route: via $BACKUP_GATEWAY dev $BACKUP_IFACE metric $backup_metric"
         else
-            # Interface down/unreachable - remove ALL routes via this interface
-            log_info "Backup route removed (internet unreachable via $BACKUP_IFACE)"
-            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
-            ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-            # Also remove any routes NM/DHCP may have added
-            while ip route del default dev "$BACKUP_IFACE" 2>/dev/null; do :; done
+            # Backup is down but NEVER remove LTE/modem route
+            # LTE is the last-resort failsafe - always keep it available
+            log_debug "Backup health check failed but keeping LTE route (metric $backup_metric)"
+            # Ensure backup route exists even if health check failed
+            if ! ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
+                ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $backup_metric 2>/dev/null || true
+                log_info "Restored backup/LTE route as failsafe"
+            fi
         fi
     fi
 
@@ -1261,42 +1273,30 @@ cleanup_nat_rules() {
 }
 
 # Restore NetworkManager default route settings (called during cleanup)
+# NOTE: This function is intentionally minimal to avoid disrupting active connections.
+# Previously, aggressive nmcli modifications and netplan apply would cause NM to
+# restart or lose connections during service restart.
 restore_networkmanager_management() {
-    log_info "Restoring NetworkManager route settings for WAN interfaces..."
+    log_info "Preserving NetworkManager settings (no changes during cleanup)..."
 
-    if ! command -v nmcli &>/dev/null; then
-        return 0
+    # IMPORTANT: Do NOT modify NM connections during cleanup!
+    # - nmcli connection modify on active connections can trigger reconnection
+    # - netplan apply can restart networkd/NM and drop connections
+    # - nmcli general reload can cause NM to re-evaluate all connections
+    #
+    # The never-default and ignore-auto-routes settings we applied during setup
+    # are harmless to leave in place. They only affect route handling, not
+    # basic connectivity. If user wants to fully restore, they can:
+    #   nmcli connection modify <conn> ipv4.never-default no
+    #   nmcli connection modify <conn> ipv4.ignore-auto-routes no
+
+    # Only remove the netplan override file (doesn't require netplan apply)
+    if [ -f /etc/netplan/99-fortress-wan-no-routes.yaml ]; then
+        rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
+        log_info "Removed netplan override file (apply manually with 'netplan apply' if needed)"
     fi
 
-    # For each WAN interface, restore default route settings
-    for iface in "${PRIMARY_IFACE:-}" "${BACKUP_IFACE:-}"; do
-        [ -z "$iface" ] && continue
-
-        # Find the connection name for this interface
-        local conn_name
-        conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
-
-        if [ -n "$conn_name" ]; then
-            log_info "Restoring route settings for '$conn_name' ($iface)..."
-
-            # Re-enable default gateway and auto-routes
-            nmcli connection modify "$conn_name" ipv4.never-default no 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes no 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv6.never-default no 2>/dev/null || true
-            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes no 2>/dev/null || true
-
-            log_info "$iface ($conn_name): default route settings restored"
-        fi
-    done
-
-    # Remove netplan override file if it exists
-    rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
-    if command -v netplan &>/dev/null; then
-        netplan apply 2>/dev/null || true
-    fi
-
-    # Reload NM config
-    nmcli general reload conf 2>/dev/null || true
+    log_info "NetworkManager connections preserved"
 }
 
 # ============================================================
