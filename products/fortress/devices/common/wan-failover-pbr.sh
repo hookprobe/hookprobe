@@ -694,10 +694,18 @@ ensure_main_table_routes() {
                 log_info "Added primary route: via $PRIMARY_GATEWAY metric $primary_target_metric"
             fi
         else
-            # Should NOT have route - remove both normal and demoted metrics
+            # Should NOT have route - remove ALL default routes via this interface
+            # This is aggressive but necessary because NM/DHCP may re-add routes
+            log_info "Removing ALL default routes via $PRIMARY_IFACE (internet unreachable)"
+
+            # Remove specific metric routes
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
-            log_debug "Removed primary routes (interface down)"
+
+            # Remove any other default routes via this interface (added by NM/DHCP)
+            while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do
+                log_debug "Removed additional default route via $PRIMARY_IFACE"
+            done
         fi
     fi
 
@@ -725,10 +733,17 @@ ensure_main_table_routes() {
                 log_info "Added backup route: via $BACKUP_GATEWAY metric $backup_target_metric"
             fi
         else
-            # Should NOT have route - remove both normal and demoted metrics
+            # Should NOT have route - remove ALL default routes via this interface
+            log_info "Removing ALL default routes via $BACKUP_IFACE (internet unreachable)"
+
+            # Remove specific metric routes
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-            log_debug "Removed backup routes (interface down)"
+
+            # Remove any other default routes via this interface (added by NM/DHCP)
+            while ip route del default dev "$BACKUP_IFACE" 2>/dev/null; do
+                log_debug "Removed additional default route via $BACKUP_IFACE"
+            done
         fi
     fi
 }
@@ -769,10 +784,12 @@ update_main_table_route() {
             fi
             log_debug "Primary route: via $PRIMARY_GATEWAY dev $PRIMARY_IFACE metric $primary_metric"
         else
-            # Interface down - remove route (both metrics)
+            # Interface down/unreachable - remove ALL routes via this interface
+            log_info "Primary route removed (internet unreachable via $PRIMARY_IFACE)"
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
             ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
-            log_debug "Primary route removed (interface down)"
+            # Also remove any routes NM/DHCP may have added
+            while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do :; done
         fi
     fi
 
@@ -795,10 +812,12 @@ update_main_table_route() {
             fi
             log_debug "Backup route: via $BACKUP_GATEWAY dev $BACKUP_IFACE metric $backup_metric"
         else
-            # Interface down - remove route (both metrics)
+            # Interface down/unreachable - remove ALL routes via this interface
+            log_info "Backup route removed (internet unreachable via $BACKUP_IFACE)"
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
             ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
-            log_debug "Backup route removed (interface down)"
+            # Also remove any routes NM/DHCP may have added
+            while ip route del default dev "$BACKUP_IFACE" 2>/dev/null; do :; done
         fi
     fi
 
@@ -1288,11 +1307,9 @@ restore_networkmanager_management() {
 HEALTH_CHECK_TARGET="${HEALTH_CHECK_TARGET:-1.1.1.1}"
 
 check_interface_health() {
-    # Simple IP SLA health check
-    # WAN is UP if and only if: ping to 1.1.1.1 responds
-    # That's it. No other checks needed.
-    #
-    # Returns: 0 if healthy (ping responds), 1 if unhealthy (ping fails)
+    # IP SLA health check - ping targets through specific interface
+    # Uses configured PING_TARGETS, PING_COUNT, and PING_TIMEOUT
+    # Returns: 0 if healthy (any target responds), 1 if unhealthy (all fail)
 
     local iface="$1"
     local iface_ip
@@ -1322,16 +1339,32 @@ check_interface_health() {
         temp_route_added=true
     fi
 
-    # IP SLA check: ping 1.1.1.1 via this interface
+    # IP SLA check: ping targets via this interface
+    # Success if ANY target responds
     local ping_result=1
-    if ping -c 2 -W 3 -I "$iface" "$HEALTH_CHECK_TARGET" >/dev/null 2>&1; then
-        log_debug "[$iface] UP - ping $HEALTH_CHECK_TARGET OK"
-        ping_result=0
-    elif ping -c 2 -W 3 -I "$iface_ip" "$HEALTH_CHECK_TARGET" >/dev/null 2>&1; then
-        log_debug "[$iface] UP - ping $HEALTH_CHECK_TARGET OK (via source IP)"
-        ping_result=0
-    else
-        log_debug "[$iface] DOWN - ping $HEALTH_CHECK_TARGET FAILED"
+    local target
+    for target in $PING_TARGETS; do
+        # Use configured PING_COUNT and PING_TIMEOUT (defaults: 1 ping, 2s timeout)
+        if ping -c "${PING_COUNT:-1}" -W "${PING_TIMEOUT:-2}" -I "$iface" "$target" >/dev/null 2>&1; then
+            log_debug "[$iface] UP - ping $target OK"
+            ping_result=0
+            break  # One success is enough
+        fi
+    done
+
+    # If interface bind fails, try with source IP
+    if [ $ping_result -ne 0 ]; then
+        for target in $PING_TARGETS; do
+            if ping -c "${PING_COUNT:-1}" -W "${PING_TIMEOUT:-2}" -I "$iface_ip" "$target" >/dev/null 2>&1; then
+                log_debug "[$iface] UP - ping $target OK (via source IP)"
+                ping_result=0
+                break
+            fi
+        done
+    fi
+
+    if [ $ping_result -ne 0 ]; then
+        log_debug "[$iface] DOWN - all ping targets failed"
     fi
 
     # Remove temporary route if we added one
@@ -1385,6 +1418,8 @@ PRIMARY_STATUS=unknown
 BACKUP_STATUS=unknown
 PRIMARY_COUNT=0
 BACKUP_COUNT=0
+PRIMARY_FAIL_STREAK=0
+BACKUP_FAIL_STREAK=0
 ACTIVE_WAN=$initial_active
 LAST_CHECK=$(date +%s)
 FAILOVER_COUNT=0
@@ -1411,6 +1446,8 @@ PRIMARY_STATUS=$PRIMARY_STATUS
 BACKUP_STATUS=$BACKUP_STATUS
 PRIMARY_COUNT=$PRIMARY_COUNT
 BACKUP_COUNT=$BACKUP_COUNT
+PRIMARY_FAIL_STREAK=${PRIMARY_FAIL_STREAK:-0}
+BACKUP_FAIL_STREAK=${BACKUP_FAIL_STREAK:-0}
 ACTIVE_WAN=$ACTIVE_WAN
 LAST_CHECK=$(date +%s)
 FAILOVER_COUNT=$FAILOVER_COUNT
@@ -1659,10 +1696,12 @@ do_health_check() {
         primary_now="up"
         PRIMARY_COUNT=$((PRIMARY_COUNT + 1))
         [ $PRIMARY_COUNT -gt $UP_THRESHOLD ] && PRIMARY_COUNT=$UP_THRESHOLD
+        PRIMARY_FAIL_STREAK=0  # Reset consecutive failure counter on success
     else
         primary_now="down"
         PRIMARY_COUNT=$((PRIMARY_COUNT - 1))
         [ $PRIMARY_COUNT -lt 0 ] && PRIMARY_COUNT=0
+        PRIMARY_FAIL_STREAK=$((${PRIMARY_FAIL_STREAK:-0} + 1))  # Track consecutive failures
     fi
 
     # Check backup (modem)
@@ -1670,10 +1709,12 @@ do_health_check() {
         backup_now="up"
         BACKUP_COUNT=$((BACKUP_COUNT + 1))
         [ $BACKUP_COUNT -gt $UP_THRESHOLD ] && BACKUP_COUNT=$UP_THRESHOLD
+        BACKUP_FAIL_STREAK=0  # Reset consecutive failure counter on success
     else
         backup_now="down"
         BACKUP_COUNT=$((BACKUP_COUNT - 1))
         [ $BACKUP_COUNT -lt 0 ] && BACKUP_COUNT=0
+        BACKUP_FAIL_STREAK=$((${BACKUP_FAIL_STREAK:-0} + 1))  # Track consecutive failures
     fi
 
     # Track previous status for change detection
@@ -1681,16 +1722,32 @@ do_health_check() {
     local old_backup_status="${BACKUP_STATUS:-down}"
 
     # Apply hysteresis: only change status when threshold reached
+    # UP: need UP_THRESHOLD consecutive successes (slow recovery, prevents flapping)
+    # DOWN: need DOWN_THRESHOLD consecutive failures (fast failover)
     if [ $PRIMARY_COUNT -ge $UP_THRESHOLD ]; then
         PRIMARY_STATUS="up"
-    elif [ $PRIMARY_COUNT -eq 0 ]; then
+        PRIMARY_FAIL_STREAK=0  # Reset fail streak on recovery
+    fi
+    # Use DOWN_THRESHOLD for faster failover detection
+    # When fail streak reaches DOWN_THRESHOLD, mark as down immediately
+    if [ ${PRIMARY_FAIL_STREAK:-0} -ge $DOWN_THRESHOLD ]; then
+        if [ "${PRIMARY_STATUS:-up}" != "down" ]; then
+            log_warn "PRIMARY WAN FAILED: ${PRIMARY_FAIL_STREAK} consecutive failures (threshold: $DOWN_THRESHOLD)"
+        fi
         PRIMARY_STATUS="down"
+        PRIMARY_COUNT=0  # Reset health count
     fi
 
     if [ $BACKUP_COUNT -ge $UP_THRESHOLD ]; then
         BACKUP_STATUS="up"
-    elif [ $BACKUP_COUNT -eq 0 ]; then
+        BACKUP_FAIL_STREAK=0  # Reset fail streak on recovery
+    fi
+    if [ ${BACKUP_FAIL_STREAK:-0} -ge $DOWN_THRESHOLD ]; then
+        if [ "${BACKUP_STATUS:-up}" != "down" ]; then
+            log_warn "BACKUP WAN FAILED: ${BACKUP_FAIL_STREAK} consecutive failures (threshold: $DOWN_THRESHOLD)"
+        fi
         BACKUP_STATUS="down"
+        BACKUP_COUNT=0  # Reset health count
     fi
 
     # Detect interface recovery (down -> up transition)
