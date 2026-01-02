@@ -65,18 +65,29 @@ LAN_SUBNET = "10.200.0.0/23"
 # =============================================================================
 
 FINGERPRINT_DATABASE = {
-    # Apple macOS (laptops/desktops)
+    # Apple macOS (laptops/desktops) - various versions
     "1,3,6,15,119,252": {"os": "macOS", "category": "laptop", "confidence": 0.95},
     "1,121,3,6,15,119,252": {"os": "macOS Monterey+", "category": "laptop", "confidence": 0.98},
     "1,121,3,6,15,108,114,119,162,252,95,44,46": {"os": "macOS Sonoma/Sequoia", "category": "laptop", "confidence": 0.98},
     "1,121,3,6,15,119,252,95,44,46": {"os": "macOS Ventura", "category": "laptop", "confidence": 0.98},
+    "1,3,6,15,119,95,252,44,46": {"os": "macOS Big Sur", "category": "laptop", "confidence": 0.96},
 
-    # Apple iOS (iPhones/iPads)
+    # Apple iOS (iPhones/iPads) - comprehensive list for randomized MACs
     "1,121,3,6,15,119,252": {"os": "iOS 14+", "category": "phone", "confidence": 0.98},
     "1,3,6,15,119,252": {"os": "iOS/iPadOS", "category": "phone", "confidence": 0.95},
+    "1,121,3,6,15,119,252,95": {"os": "iOS 16+", "category": "phone", "confidence": 0.98},
+    "1,121,3,6,15,119,252,95,44,46": {"os": "iOS 17+", "category": "phone", "confidence": 0.99},
+    "1,3,6,15,119,95,252,44,46": {"os": "iOS 15", "category": "phone", "confidence": 0.97},
+    "1,121,3,6,15,108,114,119,252": {"os": "iPadOS 17+", "category": "tablet", "confidence": 0.98},
+    "1,3,6,15,119,95,252": {"os": "iOS/iPadOS", "category": "phone", "confidence": 0.96},
+    # iOS uses various Option 55 combinations - catch more patterns
+    "1,3,6,15,119": {"os": "iOS (minimal)", "category": "phone", "confidence": 0.85},
+    "1,121,3,6,15,119": {"os": "iOS 14+", "category": "phone", "confidence": 0.90},
 
-    # Apple Smart Home
+    # Apple Smart Home / Apple TV / HomePod
     "1,3,6,15,119,95,252": {"os": "Apple HomePod/Apple TV", "category": "smart_hub", "confidence": 0.99},
+    "1,3,6,15,119,252,95": {"os": "Apple TV", "category": "smart_hub", "confidence": 0.98},
+    "1,121,3,6,15,119,95,252": {"os": "Apple HomePod mini", "category": "smart_hub", "confidence": 0.99},
 
     # Android/Linux
     "1,3,6,15,26,28,51,58,59": {"os": "Android/Linux", "category": "android", "confidence": 0.90},
@@ -583,6 +594,19 @@ class SDNAutoPilot:
         # Known workstation vendors get internet access
         elif vendor in ('Intel', 'Dell', 'HP', 'Lenovo', 'ASUS', 'Acer'):
             return 'internet_only', f"Workstation vendor ({vendor})"
+
+        # =======================================================================
+        # RANDOMIZED MAC WITH IDENTIFIED OS - ALLOW INTERNET ACCESS
+        # =======================================================================
+        # Apple/Android/Windows devices with randomized MACs should get internet
+        # even with lower scores - they're identified via fingerprint
+        elif "randomized MAC" in vendor.lower():
+            if 'apple' in vendor.lower() or 'ios' in os_fingerprint.lower() or 'macos' in os_fingerprint.lower():
+                return 'internet_only', f"Apple device (randomized MAC, score: {score:.2f})"
+            elif 'android' in vendor.lower() or 'android' in os_fingerprint.lower():
+                return 'internet_only', f"Android device (randomized MAC, score: {score:.2f})"
+            elif 'windows' in vendor.lower() or 'windows' in os_fingerprint.lower():
+                return 'internet_only', f"Windows device (randomized MAC, score: {score:.2f})"
 
         # =======================================================================
         # LOW CONFIDENCE - QUARANTINE
