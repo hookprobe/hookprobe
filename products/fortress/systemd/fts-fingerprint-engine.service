@@ -1,20 +1,19 @@
 [Unit]
 Description=HookProbe Fortress Unified Fingerprint Engine
 Documentation=https://github.com/hookprobe/hookprobe
-After=network.target openvswitch-switch.service fortress.service fts-postgres.service
-Wants=fts-postgres.service
+After=network.target openvswitch-switch.service fortress.service
 # Only run if the Python module exists
 ConditionPathExists=/opt/hookprobe/fortress/lib/unified_fingerprint_engine.py
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m products.fortress.lib.unified_fingerprint_engine --daemon
-WorkingDirectory=/opt/hookprobe
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/unified_fingerprint_engine.py --daemon
+WorkingDirectory=/opt/hookprobe/fortress
 User=fortress
 Group=fortress
 
-# Environment
-Environment=PYTHONPATH=/opt/hookprobe
+# Environment - include lib directory in Python path for imports
+Environment=PYTHONPATH=/opt/hookprobe/fortress/lib:/opt/hookprobe/fortress:/opt/hookprobe
 Environment=FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
 
 # Restart policy
