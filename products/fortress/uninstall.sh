@@ -179,6 +179,9 @@ stop_services() {
         "fts-lstm-train"
         "fts-device-status"
         "fts-nac-sync"
+        "fts-fingerprint-engine"
+        "fts-presence-sensor"
+        "fts-bubble-manager"
     )
 
     # Stop timers first
@@ -411,6 +414,9 @@ remove_systemd_services() {
         "fts-lstm-train"
         "fts-device-status"
         "fts-nac-sync"
+        "fts-fingerprint-engine"
+        "fts-presence-sensor"
+        "fts-bubble-manager"
     )
 
     # Disable and remove channel optimization timer
@@ -846,6 +852,102 @@ remove_nftables_filtering() {
     rm -rf /var/lib/fortress/filters
 
     log_info "nftables filtering removed"
+}
+
+# ============================================================
+# REMOVE AI FINGERPRINTING DATABASES
+# ============================================================
+remove_fingerprinting_data() {
+    log_step "Removing AI fingerprinting and Ecosystem Bubble data..."
+
+    if [ "$KEEP_DATA" = true ]; then
+        log_info "Preserving fingerprinting data (--keep-data specified)"
+        log_info "  Databases preserved for reinstallation:"
+        for db in fingerprint.db device_confidence.db ja3_signatures.db \
+                  presence.db bubbles.db behavior_clusters.db ecosystem_bubbles.db; do
+            [ -f "/var/lib/hookprobe/$db" ] && log_info "    • $db"
+        done
+        [ -d "/var/lib/hookprobe/ml_fingerprint_models" ] && log_info "    • ml_fingerprint_models/"
+        return 0
+    fi
+
+    # ML Fingerprint Classifier databases
+    local fingerprint_dbs=(
+        "/var/lib/hookprobe/fingerprint.db"
+        "/var/lib/hookprobe/device_confidence.db"
+        "/var/lib/hookprobe/ml_fingerprint_models"
+    )
+
+    for db in "${fingerprint_dbs[@]}"; do
+        if [ -e "$db" ]; then
+            log_info "Removing: $db"
+            rm -rf "$db"
+        fi
+    done
+
+    # JA3 TLS Fingerprinting database
+    if [ -f "/var/lib/hookprobe/ja3_signatures.db" ]; then
+        log_info "Removing: ja3_signatures.db"
+        rm -f /var/lib/hookprobe/ja3_signatures.db
+    fi
+
+    # Unified Fingerprint Engine database
+    if [ -f "/var/lib/hookprobe/unified_fingerprint.db" ]; then
+        log_info "Removing: unified_fingerprint.db"
+        rm -f /var/lib/hookprobe/unified_fingerprint.db
+    fi
+
+    # Fingerbank API cache and config
+    if [ -f "/etc/hookprobe/fingerbank.json" ]; then
+        log_info "Removing: fingerbank.json (API config)"
+        rm -f /etc/hookprobe/fingerbank.json
+    fi
+    if [ -f "/var/lib/hookprobe/fingerbank_cache.db" ]; then
+        log_info "Removing: fingerbank_cache.db"
+        rm -f /var/lib/hookprobe/fingerbank_cache.db
+    fi
+
+    # Presence Sensor databases (Ecosystem Bubble)
+    local presence_dbs=(
+        "/var/lib/hookprobe/presence.db"
+        "/var/lib/hookprobe/mdns_discovery.db"
+        "/var/lib/hookprobe/ble_proximity.db"
+    )
+
+    for db in "${presence_dbs[@]}"; do
+        if [ -f "$db" ]; then
+            log_info "Removing: $(basename $db)"
+            rm -f "$db"
+        fi
+    done
+
+    # Behavioral Clustering databases
+    if [ -f "/var/lib/hookprobe/behavior_clusters.db" ]; then
+        log_info "Removing: behavior_clusters.db"
+        rm -f /var/lib/hookprobe/behavior_clusters.db
+    fi
+
+    # Ecosystem Bubble databases
+    local bubble_dbs=(
+        "/var/lib/hookprobe/ecosystem_bubbles.db"
+        "/var/lib/hookprobe/bubbles.db"
+        "/var/lib/hookprobe/bubble_sdn_rules.db"
+    )
+
+    for db in "${bubble_dbs[@]}"; do
+        if [ -f "$db" ]; then
+            log_info "Removing: $(basename $db)"
+            rm -f "$db"
+        fi
+    done
+
+    # Remove bubble state directory
+    if [ -d "/var/lib/fortress/bubbles" ]; then
+        log_info "Removing bubble state directory..."
+        rm -rf /var/lib/fortress/bubbles
+    fi
+
+    log_info "AI fingerprinting and Ecosystem Bubble data removed"
 }
 
 # ============================================================
@@ -1581,6 +1683,7 @@ main() {
     remove_macsec_interfaces
     remove_nftables_filtering
     remove_dfs_intelligence
+    remove_fingerprinting_data
 
     # Stage 5: Remove systemd services
     log_step "Stage 5/10: Removing systemd services"
