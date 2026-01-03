@@ -730,6 +730,16 @@ class PresenceSensor:
             ble_thread = threading.Thread(target=run_ble, daemon=True)
             ble_thread.start()
 
+        # Start periodic persistence (every 30 seconds)
+        def persist_loop():
+            import time
+            while self.running:
+                time.sleep(30)
+                self.persist_state()
+
+        persist_thread = threading.Thread(target=persist_loop, daemon=True)
+        persist_thread.start()
+
         logger.info("Presence sensor started")
 
     def stop(self):
