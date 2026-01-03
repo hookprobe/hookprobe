@@ -278,8 +278,12 @@ setup_dns_forwarding() {
 # HookProbe Fortress - DNS Forwarding to dnsXai
 # Forward DNS queries to ML-powered DNS protection
 
-# Primary: dnsXai container
-server=127.0.0.1#5353
+# strict-order ensures servers are tried in the order listed
+strict-order
+
+# Primary: dnsXai ML protection (localhost:53)
+# Port 53 frees 5353 for mDNS/Bonjour discovery
+server=127.0.0.1
 
 # Fallback: Public DNS if dnsXai is unavailable
 server=1.1.1.1
