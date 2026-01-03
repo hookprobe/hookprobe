@@ -1,0 +1,81 @@
+# ==============================================================================
+# Fortress Ecosystem Bubble Manager Container
+# ==============================================================================
+# Same-user device detection using mDNS, behavioral clustering, and ML
+#
+# Build:
+#   podman build -f Containerfile.bubble -t fts-bubble:latest ../..
+#
+# Run:
+#   podman run --network=host fts-bubble:latest
+#
+# Requires host network for:
+#   - mDNS multicast (224.0.0.251:5353) for device discovery
+#   - OVS OpenFlow commands (ovs-ofctl, ovs-vsctl)
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for scikit-learn
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install ML and mDNS dependencies
+RUN pip install --no-cache-dir \
+    "numpy>=1.24.0,<2.0.0" \
+    "scikit-learn>=1.3.0,<2.0.0" \
+    "zeroconf>=0.80.0,<1.0.0"
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Install OVS tools for OpenFlow rule management
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openvswitch-switch \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe bubble
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/fortress/lib \
+             /opt/hookprobe/fortress/data \
+             /var/lib/hookprobe \
+             /var/lib/fortress \
+             /var/log/hookprobe \
+             /etc/hookprobe \
+    && chown -R bubble:nogroup /opt/hookprobe /var/lib/hookprobe /var/lib/fortress /var/log/hookprobe
+
+# Copy bubble manager modules
+COPY --chown=bubble:nogroup products/fortress/lib/ecosystem_bubble.py /opt/hookprobe/fortress/lib/
+COPY --chown=bubble:nogroup products/fortress/lib/behavior_clustering.py /opt/hookprobe/fortress/lib/
+COPY --chown=bubble:nogroup products/fortress/lib/presence_sensor.py /opt/hookprobe/fortress/lib/
+COPY --chown=bubble:nogroup products/fortress/lib/__init__.py /opt/hookprobe/fortress/lib/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe/fortress/lib:/opt/hookprobe/fortress:/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
+
+# Verify setup
+RUN python -c "import numpy; import sklearn; import zeroconf; print('Bubble manager dependencies ready')"
+
+# Health check - verify process is running
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD pgrep -f "ecosystem_bubble.py" > /dev/null || exit 1
+
+WORKDIR /opt/hookprobe/fortress/lib
+
+# Run as root for OVS access (ovs-ofctl requires root)
+# Host network mode required for mDNS multicast
+ENTRYPOINT ["python3", "ecosystem_bubble.py", "--start"]
