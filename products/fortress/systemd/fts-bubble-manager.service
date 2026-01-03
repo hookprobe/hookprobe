@@ -5,23 +5,24 @@ After=network.target openvswitch-switch.service fortress.service fts-presence-se
 Wants=fts-presence-sensor.service fts-fingerprint-engine.service
 # Only run if the Python module exists
 ConditionPathExists=/opt/hookprobe/fortress/lib/ecosystem_bubble.py
+# Start rate limiting (must be in [Unit] section)
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m products.fortress.lib.ecosystem_bubble --daemon
-WorkingDirectory=/opt/hookprobe
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/ecosystem_bubble.py --daemon
+WorkingDirectory=/opt/hookprobe/fortress
 User=fortress
 Group=fortress
 
-# Environment
-Environment=PYTHONPATH=/opt/hookprobe
+# Environment - include lib directory in Python path for imports
+Environment=PYTHONPATH=/opt/hookprobe/fortress/lib:/opt/hookprobe/fortress:/opt/hookprobe
 Environment=FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
 
 # Restart policy
 Restart=on-failure
 RestartSec=10
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 # Logging
 StandardOutput=journal
