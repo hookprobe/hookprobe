@@ -1,0 +1,44 @@
+[Unit]
+Description=HookProbe Fortress Ecosystem Bubble Manager
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target openvswitch-switch.service fortress.service fts-presence-sensor.service
+Wants=fts-presence-sensor.service fts-fingerprint-engine.service
+# Only run if the Python module exists
+ConditionPathExists=/opt/hookprobe/fortress/lib/ecosystem_bubble.py
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m products.fortress.lib.ecosystem_bubble --daemon
+WorkingDirectory=/opt/hookprobe
+User=fortress
+Group=fortress
+
+# Environment
+Environment=PYTHONPATH=/opt/hookprobe
+Environment=FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-bubble-manager
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/hookprobe
+ReadWritePaths=/var/lib/fortress
+ReadWritePaths=/var/log/hookprobe
+PrivateTmp=true
+
+# Capabilities for OVS/OpenFlow control
+AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
