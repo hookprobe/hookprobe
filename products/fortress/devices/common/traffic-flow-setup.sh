@@ -114,6 +114,12 @@ table inet fts_nat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
 
+        # SNAT for container replies to LAN clients
+        # Containers on 172.20.200.0/24 replying to LAN clients (10.200.x.x)
+        # must use the MGMT gateway IP so clients see responses from
+        # the same IP they connected to (10.200.100.1 for dashboard)
+        ip saddr 172.20.200.0/24 ip daddr 10.200.0.0/8 snat to 10.200.100.1
+
 NFTEOF
 
     # Add masquerade rules for each WAN interface
