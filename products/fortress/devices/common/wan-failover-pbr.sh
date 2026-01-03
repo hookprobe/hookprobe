@@ -1751,6 +1751,37 @@ verify_ovs_health() {
     fi
 }
 
+# Restore NAC (Network Access Control) policies after OVS repair
+# This ensures device policies persist across WAN failover events
+restore_nac_policies() {
+    local NAC_SYNC_SCRIPT="/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh"
+
+    # Skip if script doesn't exist (NAC not installed)
+    if [ ! -x "$NAC_SYNC_SCRIPT" ]; then
+        log_debug "NAC policy sync script not found - skipping policy restore"
+        return 0
+    fi
+
+    log_info "Restoring NAC device policies after OVS repair..."
+
+    # Use --trigger for fast sync (only restrictive policies: quarantine, internet_only, lan_only)
+    if "$NAC_SYNC_SCRIPT" --trigger 2>/dev/null; then
+        log_info "NAC policies restored successfully"
+        return 0
+    else
+        # If trigger fails, try full sync as fallback
+        log_warn "NAC trigger sync failed, attempting full sync..."
+        if "$NAC_SYNC_SCRIPT" 2>/dev/null; then
+            log_info "NAC policies restored via full sync"
+            return 0
+        else
+            log_error "Failed to restore NAC policies - device restrictions may be lost"
+            logger -t "$LOG_TAG" -p err "NAC policy restore failed after OVS repair"
+            return 1
+        fi
+    fi
+}
+
 repair_ovs_openflow() {
     local OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
     local OVS_POST_SETUP="/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh"
@@ -1762,6 +1793,8 @@ repair_ovs_openflow() {
         log_info "OVS: Running ovs-post-setup.sh to restore OpenFlow rules..."
         if "$OVS_POST_SETUP" setup 2>/dev/null; then
             log_info "OVS: OpenFlow rules restored via ovs-post-setup.sh"
+            # CRITICAL: Also restore per-device NAC policies
+            restore_nac_policies
             return 0
         else
             log_warn "OVS: ovs-post-setup.sh failed, trying manual repair..."
@@ -1801,6 +1834,10 @@ repair_ovs_openflow() {
 
     log_info "OVS: Minimal OpenFlow rules restored"
     logger -t "$LOG_TAG" -p notice "OVS OpenFlow rules repaired after WAN failover event"
+
+    # CRITICAL: Restore per-device NAC policies that were cleared
+    # Without this, devices lose their policy restrictions (quarantine, internet_only, etc.)
+    restore_nac_policies
 }
 
 do_health_check() {
