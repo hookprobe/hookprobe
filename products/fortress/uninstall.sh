@@ -1334,6 +1334,9 @@ remove_sysctl_settings() {
         iptables -t nat -D POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null || true
     done
 
+    # Remove container SNAT rule for LAN client access
+    iptables -t nat -D POSTROUTING -s 172.20.200.0/24 -d 10.200.0.0/8 -j SNAT --to-source 10.200.100.1 2>/dev/null || true
+
     # Clean up FORWARD rules for fortress bridge and OVS bridge
     iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o fortress -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
