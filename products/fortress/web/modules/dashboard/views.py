@@ -518,3 +518,266 @@ def api_refresh():
     global _local_cache
     _local_cache.clear()
     return jsonify({'success': True, 'message': 'Cache cleared'})
+
+
+def get_network_interfaces():
+    """Get all network interfaces with their status."""
+    interfaces = []
+    try:
+        import subprocess
+        # Get interface list
+        result = subprocess.run(['ip', '-j', 'link', 'show'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            links = json.loads(result.stdout)
+            for link in links:
+                name = link.get('ifname', '')
+                # Skip loopback and virtual interfaces we don't care about
+                if name in ('lo', 'podman0', 'veth*') or name.startswith('veth'):
+                    continue
+
+                state = link.get('operstate', 'UNKNOWN')
+                interfaces.append({
+                    'name': name,
+                    'state': state,
+                    'mac': link.get('address', ''),
+                    'type': _classify_interface_type(name)
+                })
+    except Exception as e:
+        logger.debug(f"Could not get interfaces: {e}")
+
+    return interfaces
+
+
+def _classify_interface_type(name):
+    """Classify interface type based on name."""
+    if name.startswith(('eth', 'enp', 'eno', 'ens')):
+        return 'wan' if '0' in name or '1' in name else 'lan'
+    elif name.startswith('wwan') or name.startswith('ww'):
+        return 'lte'
+    elif name.startswith('wlan') or name.startswith('wl'):
+        return 'wifi'
+    elif name.startswith('vlan'):
+        return 'vlan'
+    elif name in ('FTS', 'br0', 'ovs-system'):
+        return 'bridge'
+    return 'other'
+
+
+def get_topology_data():
+    """Build network topology data for D3.js visualization."""
+    # Get interfaces
+    interfaces = get_network_interfaces()
+
+    # Get devices from autopilot or ARP
+    devices = get_all_devices()
+
+    # Get SDN summary for policy counts
+    sdn = get_sdn_autopilot_summary()
+
+    # Build nodes and links for D3
+    nodes = []
+    links = []
+
+    # Add WAN interfaces
+    wan_nodes = []
+    for iface in interfaces:
+        if iface['type'] in ('wan', 'lte'):
+            node_id = f"wan_{iface['name']}"
+            wan_nodes.append(node_id)
+            nodes.append({
+                'id': node_id,
+                'type': 'wan',
+                'subtype': iface['type'],
+                'label': iface['name'].upper(),
+                'status': 'online' if iface['state'] == 'UP' else 'offline',
+                'icon': 'globe' if iface['type'] == 'wan' else 'signal'
+            })
+
+    # Add FTS Bridge (central hub)
+    bridge_id = 'bridge_fts'
+    nodes.append({
+        'id': bridge_id,
+        'type': 'bridge',
+        'label': 'FTS Bridge',
+        'status': 'online',
+        'icon': 'network-wired'
+    })
+
+    # Link WANs to bridge
+    for wan_id in wan_nodes:
+        links.append({
+            'source': wan_id,
+            'target': bridge_id,
+            'type': 'wan_link'
+        })
+
+    # Define policies
+    policies = [
+        {'id': 'policy_quarantine', 'name': 'quarantine', 'label': 'Quarantine', 'color': '#dc3545', 'icon': 'ban'},
+        {'id': 'policy_internet_only', 'name': 'internet_only', 'label': 'Internet Only', 'color': '#17a2b8', 'icon': 'globe'},
+        {'id': 'policy_lan_only', 'name': 'lan_only', 'label': 'LAN Only', 'color': '#ffc107', 'icon': 'home'},
+        {'id': 'policy_normal', 'name': 'normal', 'label': 'Normal', 'color': '#28a745', 'icon': 'check-circle'},
+        {'id': 'policy_full_access', 'name': 'full_access', 'label': 'Full Access', 'color': '#007bff', 'icon': 'shield-alt'},
+    ]
+
+    # Add policy nodes
+    for policy in policies:
+        nodes.append({
+            'id': policy['id'],
+            'type': 'policy',
+            'name': policy['name'],
+            'label': policy['label'],
+            'color': policy['color'],
+            'icon': policy['icon'],
+            'device_count': 0
+        })
+        # Link policy to bridge
+        links.append({
+            'source': bridge_id,
+            'target': policy['id'],
+            'type': 'policy_link'
+        })
+
+    # Add VLANs
+    vlans = [
+        {'id': 'vlan_100', 'vlan_id': 100, 'label': 'VLAN 100 (LAN)', 'color': '#6f42c1'},
+        {'id': 'vlan_200', 'vlan_id': 200, 'label': 'VLAN 200 (MGMT)', 'color': '#fd7e14'},
+    ]
+
+    for vlan in vlans:
+        nodes.append({
+            'id': vlan['id'],
+            'type': 'vlan',
+            'vlan_id': vlan['vlan_id'],
+            'label': vlan['label'],
+            'color': vlan['color'],
+            'icon': 'layer-group'
+        })
+
+    # Add devices and link them to policies
+    policy_counts = {p['name']: 0 for p in policies}
+
+    for i, device in enumerate(devices):
+        mac = device.get('mac_address', f'unknown_{i}')
+        device_id = f"device_{mac.replace(':', '_')}"
+        policy = device.get('policy', 'normal')
+        vlan_id = device.get('vlan_id', 100)
+
+        # Determine device icon
+        device_type = device.get('device_type', 'unknown')
+        icon = 'laptop'
+        if device_type in ['phone', 'apple_device', 'mobile']:
+            icon = 'mobile-alt'
+        elif device_type == 'tablet':
+            icon = 'tablet-alt'
+        elif device_type in ['tv', 'smart_tv']:
+            icon = 'tv'
+        elif device_type == 'printer':
+            icon = 'print'
+        elif device_type in ['camera', 'iot', 'smart_home']:
+            icon = 'video'
+        elif device_type == 'desktop':
+            icon = 'desktop'
+        elif device_type == 'server':
+            icon = 'server'
+        elif device_type == 'gaming':
+            icon = 'gamepad'
+
+        nodes.append({
+            'id': device_id,
+            'type': 'device',
+            'label': device.get('hostname') or device.get('manufacturer') or 'Unknown',
+            'mac': mac,
+            'ip': device.get('ip_address', ''),
+            'policy': policy,
+            'vlan_id': vlan_id,
+            'device_type': device_type,
+            'manufacturer': device.get('manufacturer'),
+            'status': 'online' if device.get('state') in ['REACHABLE', 'STALE'] else 'offline',
+            'icon': icon,
+            'is_wifi': device.get('is_wifi', False)
+        })
+
+        # Link device to its policy
+        policy_id = f"policy_{policy}"
+        if policy in policy_counts:
+            policy_counts[policy] += 1
+        links.append({
+            'source': policy_id,
+            'target': device_id,
+            'type': 'device_link'
+        })
+
+    # Update policy device counts
+    for node in nodes:
+        if node['type'] == 'policy' and node.get('name') in policy_counts:
+            node['device_count'] = policy_counts[node['name']]
+
+    return {
+        'nodes': nodes,
+        'links': links,
+        'stats': {
+            'total_devices': len(devices),
+            'wan_count': len(wan_nodes),
+            'policy_counts': policy_counts
+        }
+    }
+
+
+@dashboard_bp.route('/api/dashboard/topology')
+@login_required
+def api_topology():
+    """Get network topology data for D3.js visualization."""
+    return jsonify(get_topology_data())
+
+
+@dashboard_bp.route('/api/dashboard/device/<mac>/policy', methods=['PATCH'])
+@login_required
+def api_update_device_policy(mac):
+    """Update device policy via drag-and-drop."""
+    from flask import request
+
+    data = request.get_json()
+    new_policy = data.get('policy')
+
+    if not new_policy:
+        return jsonify({'success': False, 'error': 'Policy required'}), 400
+
+    valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+    if new_policy not in valid_policies:
+        return jsonify({'success': False, 'error': f'Invalid policy: {new_policy}'}), 400
+
+    # Update in autopilot database
+    autopilot_db = Path('/var/lib/hookprobe/autopilot.db')
+    try:
+        if autopilot_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(autopilot_db), timeout=5)
+            cursor = conn.cursor()
+
+            # Normalize MAC address
+            mac_normalized = mac.lower().replace('-', ':')
+
+            cursor.execute("""
+                UPDATE device_identity SET policy = ?, updated_at = datetime('now')
+                WHERE LOWER(mac_address) = ?
+            """, (new_policy, mac_normalized))
+
+            if cursor.rowcount == 0:
+                conn.close()
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+
+            conn.commit()
+            conn.close()
+
+            # Clear cache to reflect change
+            _local_cache.clear()
+
+            # TODO: Trigger OpenFlow rule update via network-filter-manager.sh
+
+            return jsonify({'success': True, 'message': f'Policy updated to {new_policy}'})
+    except Exception as e:
+        logger.error(f"Failed to update device policy: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({'success': False, 'error': 'Database not available'}), 500
