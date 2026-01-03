@@ -319,6 +319,50 @@ services:
       start_period: 20s
     # Core service - always started (provides mesh threat detection)
 
+  # Ecosystem Bubble Manager - Same-user device detection (mDNS, ML clustering)
+  # Uses host network for mDNS multicast (224.0.0.251:5353) and OVS access
+  bubble-manager:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.bubble
+    image: localhost/fts-bubble:latest
+    container_name: fts-bubble-manager
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FORTRESS_CONFIG: /etc/hookprobe/fortress.conf
+      PYTHONPATH: /opt/hookprobe/fortress/lib:/opt/hookprobe/fortress:/opt/hookprobe
+      # Database access for device identity
+      DATABASE_HOST: 172.20.200.10
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+    volumes:
+      # Data directories
+      - /var/lib/hookprobe:/var/lib/hookprobe:U
+      - /var/lib/fortress:/var/lib/fortress:U
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:U
+      # Configuration
+      - /etc/hookprobe:/etc/hookprobe:ro
+      # OVS socket for OpenFlow commands (ovs-ofctl, ovs-vsctl)
+      - /run/openvswitch:/run/openvswitch
+    # Host network REQUIRED for:
+    # - mDNS multicast discovery (224.0.0.251:5353)
+    # - OVS OpenFlow rule application
+    network_mode: host
+    cap_add:
+      - NET_ADMIN  # Required for OVS OpenFlow commands
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'ecosystem_bubble.py' > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Core service - always started (enables Apple ecosystem, smart home grouping)
+
   # LSTM Trainer - PyTorch model training (scheduled job)
   lstm-trainer:
     build:
