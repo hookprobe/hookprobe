@@ -1828,6 +1828,16 @@ repair_ovs_openflow() {
     # Priority 700: Multicast (SSDP, IGMP for AirPlay, HomeKit, smart home)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL" 2>/dev/null || true
 
+    # Priority 700: IPv6 multicast (essential for HomeKit, HomePod, AirPlay)
+    # 33:33:xx:xx:xx:xx = IPv6 multicast MAC addresses
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 700: All IPv6 traffic (HomeKit, AirPlay heavily use IPv6)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ipv6,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 600: ICMPv6 (Neighbor Discovery Protocol)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=600,icmp6,actions=NORMAL" 2>/dev/null || true
+
     # Priority 500: LAN traffic
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
