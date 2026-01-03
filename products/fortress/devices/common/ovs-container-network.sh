@@ -767,10 +767,15 @@ log-dhcp
 # Cache
 cache-size=1000
 
-# Forward DNS to dnsXai container (published on host port 5353)
-server=127.0.0.1#5353
+# DNS resolution order: try dnsXai first, then fallback to upstream
+# strict-order ensures servers are tried in the order listed
+strict-order
 
-# Fallback upstream DNS servers (used if dnsXai is unreachable)
+# Primary: dnsXai ML protection (localhost:53)
+# Port 53 frees 5353 for mDNS/Bonjour discovery
+server=127.0.0.1
+
+# Fallback: Public DNS (used if dnsXai container is down)
 server=1.1.1.1
 server=8.8.8.8
 EOF
