@@ -2679,6 +2679,18 @@ build_containers() {
         skipped_count=$((skipped_count + 1))
     fi
 
+    if needs_rebuild "localhost/fts-bubble:latest" "Containerfile.bubble" "$repo_root"; then
+        log_info "  - Building bubble-manager (ecosystem detection)..."
+        _podman_build_resilient Containerfile.bubble localhost/fts-bubble:latest "$repo_root" || {
+            log_error "Failed to build bubble-manager container"
+            exit 1
+        }
+        built_count=$((built_count + 1))
+    else
+        log_info "  - Skipping bubble-manager (already built)"
+        skipped_count=$((skipped_count + 1))
+    fi
+
     # LSTM trainer is optional (used for retraining models)
     if needs_rebuild "localhost/fts-lstm:latest" "Containerfile.lstm" "$repo_root"; then
         log_info "  - Building lstm-trainer (optional training)..."
@@ -3652,13 +3664,15 @@ DBEOF
         log_warn "Database initialization skipped (Python not available)"
     }
 
-    # Enable and start services (containers should be running at this point)
+    # Enable and start services
+    # Note: fts-bubble-manager runs in a container (managed by fortress.service)
+    #       The systemd service just monitors the container status
     systemctl daemon-reload
     systemctl enable fts-fingerprint-engine.service 2>/dev/null || true
     systemctl enable fts-presence-sensor.service 2>/dev/null || true
     systemctl enable fts-bubble-manager.service 2>/dev/null || true
 
-    # Start services now (containers are already running)
+    # Start host-based services (fingerprint-engine and presence-sensor run on host)
     log_info "Starting AI Fingerprinting services..."
     systemctl start fts-fingerprint-engine.service 2>/dev/null || {
         log_warn "fts-fingerprint-engine failed to start (may need dependencies)"
@@ -3666,8 +3680,11 @@ DBEOF
     systemctl start fts-presence-sensor.service 2>/dev/null || {
         log_warn "fts-presence-sensor failed to start (may need bluetooth)"
     }
+
+    # Bubble manager runs in container - just verify it's running
+    log_info "Verifying bubble-manager container..."
     systemctl start fts-bubble-manager.service 2>/dev/null || {
-        log_warn "fts-bubble-manager failed to start (may need presence-sensor)"
+        log_warn "fts-bubble-manager container not running (check: podman logs fts-bubble-manager)"
     }
 
     log_info "AI Fingerprinting services installed and started"
