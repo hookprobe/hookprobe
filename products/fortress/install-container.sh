@@ -2108,8 +2108,9 @@ Wants=network-online.target
 # Exit with failure if not ready after 60 seconds - systemd will retry
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do ip addr show vlan100 2>/dev/null | grep -q "inet 10.200" && exit 0; sleep 1; done; echo "ERROR: vlan100 not ready after 60s"; exit 1'
 
-# Restart on failure (vlan100 might not be ready yet at boot)
-Restart=on-failure
+# ALWAYS restart dnsmasq if it stops (not just on failure)
+# This ensures DHCP is always available for clients
+Restart=always
 RestartSec=5
 
 # Clear default ExecStartPost/ExecStopPost that try to register with resolvconf/systemd-resolved
@@ -2241,7 +2242,8 @@ RemainAfterExit=yes
 ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
 # CRITICAL: Restart dnsmasq after OVS flows are configured
 # This ensures DHCP works - dnsmasq may have started before OpenFlow rules
-ExecStartPost=-/bin/systemctl restart dnsmasq.service
+# Use --no-block to avoid deadlock (dnsmasq has After=fortress-vlan.service)
+ExecStartPost=-/bin/systemctl restart --no-block dnsmasq.service
 
 [Install]
 WantedBy=multi-user.target
