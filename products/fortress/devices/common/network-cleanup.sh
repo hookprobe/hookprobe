@@ -175,6 +175,9 @@ ensure_ovs_bridge() {
         ovs-vsctl add-br "$OVS_BRIDGE"
     fi
 
+    # Disable multicast snooping - CRITICAL for HomeKit, HomePod, AirPlay
+    ovs-vsctl set bridge "$OVS_BRIDGE" mcast_snooping_enable=false 2>/dev/null || true
+
     # Bring bridge up
     ip link set "$OVS_BRIDGE" up
 
