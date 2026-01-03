@@ -240,6 +240,7 @@ class PresenceSensor:
         # mDNS
         self._zeroconf: Optional['Zeroconf'] = None
         self._browsers: List['ServiceBrowser'] = []
+        self._mdns_available = False  # Set to True when mDNS sensing starts successfully
 
         # Event correlation
         self._event_window: List[PresenceEvent] = []
@@ -309,6 +310,7 @@ class PresenceSensor:
         """Start mDNS service discovery."""
         if not HAS_ZEROCONF:
             logger.warning("zeroconf not installed - mDNS sensing disabled")
+            self._mdns_available = False
             return
 
         try:
@@ -327,8 +329,20 @@ class PresenceSensor:
                 self._browsers.append(browser)
 
             logger.info(f"Started mDNS sensing for {len(all_services)} service types")
+            self._mdns_available = True
+        except OSError as e:
+            # Common case: avahi-daemon binds exclusively to port 5353
+            if "Address in use" in str(e) or e.errno == 98:
+                logger.error(f"Address in use when binding to ('', 5353); "
+                           f"When using avahi, make sure disallow-other-stacks is set to no in avahi-daemon.conf")
+                logger.warning("Bubble manager will continue without mDNS discovery - "
+                             "DHCP fingerprinting and behavioral clustering still active")
+            else:
+                logger.error(f"Could not start mDNS sensing: {e}")
+            self._mdns_available = False
         except Exception as e:
             logger.error(f"Could not start mDNS sensing: {e}")
+            self._mdns_available = False
 
     def _process_mdns_service(self, info, service_type: str, name: str):
         """Process a discovered mDNS service."""
