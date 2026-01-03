@@ -1821,6 +1821,13 @@ repair_ovs_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=53,actions=NORMAL" 2>/dev/null || true
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,tcp,tp_dst=53,actions=NORMAL" 2>/dev/null || true
 
+    # Priority 800: mDNS/Bonjour (essential for Apple ecosystem, Chromecast, etc.)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=5353,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_src=5353,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 700: Multicast (SSDP, IGMP for AirPlay, HomeKit, smart home)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL" 2>/dev/null || true
+
     # Priority 500: LAN traffic
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true

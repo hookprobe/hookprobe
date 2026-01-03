@@ -230,6 +230,15 @@ configure_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=53,actions=NORMAL"
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,tcp,tp_dst=53,actions=NORMAL"
 
+    # Priority 800: Allow mDNS/Bonjour (essential for Apple ecosystem, Chromecast, etc.)
+    # mDNS uses multicast 224.0.0.251:5353 for device discovery
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=5353,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_src=5353,actions=NORMAL"
+
+    # Priority 700: Allow multicast traffic (SSDP, IGMP, etc.)
+    # Required for device discovery, AirPlay, HomeKit, smart home protocols
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL"
+
     # Priority 500: Permissive rules for LAN traffic (10.200.0.0/16)
     # Broader /16 handles any user-configured subnet mask (/29 to /22)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL"
