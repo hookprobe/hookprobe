@@ -216,6 +216,10 @@ configure_openflow() {
     # which operates at a higher layer and doesn't have these issues.
     ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
 
+    # Disable multicast snooping - CRITICAL for HomeKit, HomePod, AirPlay, Chromecast
+    # When enabled, OVS may block multicast if IGMP isn't properly handled
+    ovs-vsctl set bridge "$OVS_BRIDGE" mcast_snooping_enable=false 2>/dev/null || true
+
     # Clear existing flows
     ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
 
@@ -239,6 +243,19 @@ configure_openflow() {
     # Required for device discovery, AirPlay, HomeKit, smart home protocols
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL"
 
+    # Priority 700: Allow IPv6 multicast (essential for HomeKit, HomePod, AirPlay)
+    # IPv6 multicast uses Ethernet addresses starting with 33:33:xx:xx:xx:xx
+    # This covers ff02::fb (mDNS), ff02::1 (all-nodes), ff02::2 (all-routers)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00,actions=NORMAL"
+
+    # Priority 700: Allow all IPv6 traffic (HomeKit, AirPlay heavily use IPv6)
+    # dl_type=0x86dd is IPv6
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ipv6,actions=NORMAL"
+
+    # Priority 600: Allow ICMPv6 (Neighbor Discovery Protocol - essential for IPv6)
+    # Without NDP, IPv6 devices cannot discover each other
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=600,icmp6,actions=NORMAL"
+
     # Priority 500: Permissive rules for LAN traffic (10.200.0.0/16)
     # Broader /16 handles any user-configured subnet mask (/29 to /22)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL"
@@ -252,7 +269,8 @@ configure_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL"
 
     log_success "OpenFlow rules configured"
-    log_info "  ARP, DHCP, DNS: priority 800-1000"
+    log_info "  ARP, DHCP, DNS, mDNS: priority 800-1000"
+    log_info "  IPv4/IPv6 multicast (HomeKit, AirPlay): priority 700"
     log_info "  LAN (10.200.0.0/16): priority 500"
     log_info "  Containers (172.20.0.0/16): priority 500"
 }
