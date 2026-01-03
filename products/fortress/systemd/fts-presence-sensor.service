@@ -1,0 +1,37 @@
+[Unit]
+Description=HookProbe Fortress Multi-Modal Presence Sensor
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target openvswitch-switch.service fortress.service
+# BLE scanning may require bluetooth service
+After=bluetooth.service
+Wants=bluetooth.service
+# Only run if the Python module exists
+ConditionPathExists=/opt/hookprobe/fortress/lib/presence_sensor.py
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m products.fortress.lib.presence_sensor --daemon
+WorkingDirectory=/opt/hookprobe
+User=root
+Group=root
+
+# Environment
+Environment=PYTHONPATH=/opt/hookprobe
+Environment=FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-presence-sensor
+
+# Note: Runs as root for BLE and mDNS access
+# Security is maintained via Python capability dropping
+
+[Install]
+WantedBy=multi-user.target
