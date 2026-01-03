@@ -6,6 +6,7 @@ Main overview page with widgets and stats - Uses real system data.
 import json
 import time
 import logging
+import sys
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +16,29 @@ from flask_login import login_required
 from . import dashboard_bp
 
 logger = logging.getLogger(__name__)
+
+# Add lib path for device_policies import
+lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+if lib_path.exists() and str(lib_path) not in sys.path:
+    sys.path.insert(0, str(lib_path))
+
+# Import device policies module (same as SDN module uses)
+DEVICE_POLICIES_AVAILABLE = False
+try:
+    from device_policies import (
+        get_all_devices as get_all_devices_from_db,
+        get_device_stats,
+        NetworkPolicy,
+        POLICY_INFO,
+    )
+    DEVICE_POLICIES_AVAILABLE = True
+    logger.info("Dashboard: device_policies module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Dashboard: device_policies module not available: {e}")
+
+    # Stub function for when module not available
+    def get_all_devices_from_db():
+        return []
 
 # Data directory - shared volume from fts-qsecbit agent
 DATA_DIR = Path('/opt/hookprobe/fortress/data')
@@ -76,12 +100,22 @@ def get_qsecbit_stats():
 
 
 def get_device_count():
-    """Get count of connected devices from ARP table or device manager data."""
+    """Get count of connected devices from database, ARP table or device manager data."""
     cached = _get_cached('device_count', CACHE_TIMEOUT)
     if cached is not None:
         return cached
 
-    # Try reading from device manager data file
+    # Use device_policies module (same as SDN dashboard)
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
+            devices = get_all_devices_from_db()
+            count = len(devices)
+            _set_cached('device_count', count)
+            return count
+        except Exception:
+            pass
+
+    # Fallback: Try reading from device manager data file
     devices_file = DATA_DIR / 'devices.json'
     try:
         if devices_file.exists():
@@ -93,7 +127,7 @@ def get_device_count():
     except Exception:
         pass
 
-    # Fallback: count from ARP neighbor table (works in container with host network)
+    # Final fallback: count from ARP neighbor table (works in container with host network)
     try:
         import subprocess
         result = subprocess.run(['ip', 'neigh', 'show'], capture_output=True, text=True, timeout=5)
@@ -108,7 +142,43 @@ def get_device_count():
 
 
 def get_all_devices():
-    """Get list of all connected devices."""
+    """Get list of all connected devices.
+
+    Priority:
+    1. device_policies module (SQLite database) - same source as SDN dashboard
+    2. JSON file from agent
+    3. ARP table fallback
+    """
+    # Use device_policies module (same as SDN dashboard)
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
+            devices = get_all_devices_from_db()
+            if devices:
+                # Transform to expected format for dashboard/topology
+                return [
+                    {
+                        'mac_address': d.get('mac_address', ''),
+                        'ip_address': d.get('ip_address', ''),
+                        'hostname': d.get('hostname'),
+                        'manufacturer': d.get('manufacturer', 'Unknown'),
+                        'device_type': d.get('device_type', 'unknown'),
+                        'policy': d.get('policy', 'quarantine'),
+                        'policy_name': d.get('policy_name', 'Quarantine'),
+                        'policy_color': d.get('policy_color', 'danger'),
+                        'vlan_id': 200 if d.get('policy') == 'full_access' else 100,
+                        'state': 'REACHABLE' if d.get('is_online') else 'STALE',
+                        'is_online': d.get('is_online', False),
+                        'is_wifi': d.get('interface', '').startswith('wlan'),
+                        'interface': d.get('interface', ''),
+                        'first_seen': d.get('first_seen'),
+                        'last_seen': d.get('last_seen'),
+                    }
+                    for d in devices
+                ]
+        except Exception as e:
+            logger.warning(f"Failed to get devices from database: {e}")
+
+    # Fallback: JSON file from agent
     devices_file = DATA_DIR / 'devices.json'
     try:
         if devices_file.exists():
@@ -118,7 +188,7 @@ def get_all_devices():
     except Exception:
         pass
 
-    # Fallback: build from ARP table
+    # Final fallback: build from ARP table
     try:
         import subprocess
         result = subprocess.run(['ip', '-j', 'neigh', 'show'], capture_output=True, text=True, timeout=5)
@@ -134,6 +204,7 @@ def get_all_devices():
                         'device_type': 'unknown',
                         'hostname': None,
                         'manufacturer': None,
+                        'policy': 'quarantine',
                     })
             return devices
     except Exception:
@@ -638,7 +709,7 @@ def get_topology_data():
             'type': 'policy_link'
         })
 
-    # Add VLANs
+    # Add VLANs and link them to bridge
     vlans = [
         {'id': 'vlan_100', 'vlan_id': 100, 'label': 'VLAN 100 (LAN)', 'color': '#6f42c1'},
         {'id': 'vlan_200', 'vlan_id': 200, 'label': 'VLAN 200 (MGMT)', 'color': '#fd7e14'},
@@ -652,6 +723,12 @@ def get_topology_data():
             'label': vlan['label'],
             'color': vlan['color'],
             'icon': 'layer-group'
+        })
+        # Link VLAN to bridge
+        links.append({
+            'source': bridge_id,
+            'target': vlan['id'],
+            'type': 'vlan_link'
         })
 
     # Add devices and link them to policies

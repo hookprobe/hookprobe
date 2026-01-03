@@ -1692,6 +1692,117 @@ verify_nat_rules() {
     fi
 }
 
+# ============================================================
+# OVS/OpenFlow Health Verification
+# ============================================================
+# WAN failover operates at L3/L4 (routing, NAT, packet marking)
+# OVS/OpenFlow operates at L2 (switching, VLAN tagging)
+# These SHOULD be independent, but network stack events can
+# sometimes disrupt OVS state. This function ensures OVS is
+# healthy after any WAN failover event.
+
+verify_ovs_health() {
+    # Skip if OVS is not installed
+    command -v ovs-vsctl &>/dev/null || return 0
+    command -v ovs-ofctl &>/dev/null || return 0
+
+    local OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+    local needs_repair=false
+
+    # Check 1: Verify OVS bridge exists
+    if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+        log_debug "OVS bridge $OVS_BRIDGE not found - skipping verification"
+        return 0
+    fi
+
+    # Check 2: Verify essential OpenFlow rules exist
+    # These are the minimum rules needed for network connectivity
+    local flow_count
+    flow_count=$(ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | wc -l)
+
+    if [ "$flow_count" -lt 4 ]; then
+        log_warn "OVS: Only $flow_count flows found (expected 4+) - OpenFlow rules missing"
+        needs_repair=true
+    fi
+
+    # Check 3: Verify ARP flow exists (critical for L2)
+    if ! ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep -q "arp"; then
+        log_warn "OVS: ARP flow missing - network will be broken"
+        needs_repair=true
+    fi
+
+    # Check 4: Verify DHCP flow exists
+    if ! ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep -q "tp_dst=67\|tp_dst=68"; then
+        log_warn "OVS: DHCP flows missing - clients won't get IP addresses"
+        needs_repair=true
+    fi
+
+    # Check 5: Verify bridge is in standalone mode (not stuck)
+    local fail_mode
+    fail_mode=$(ovs-vsctl get-fail-mode "$OVS_BRIDGE" 2>/dev/null || echo "unknown")
+    if [ "$fail_mode" != "standalone" ]; then
+        log_warn "OVS: Unexpected fail-mode '$fail_mode' (expected 'standalone')"
+        needs_repair=true
+    fi
+
+    # Repair if needed
+    if [ "$needs_repair" = "true" ]; then
+        repair_ovs_openflow
+    fi
+}
+
+repair_ovs_openflow() {
+    local OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+    local OVS_POST_SETUP="/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh"
+
+    log_warn "OVS: Attempting automatic repair..."
+
+    # Method 1: Try running ovs-post-setup.sh if it exists
+    if [ -x "$OVS_POST_SETUP" ]; then
+        log_info "OVS: Running ovs-post-setup.sh to restore OpenFlow rules..."
+        if "$OVS_POST_SETUP" setup 2>/dev/null; then
+            log_info "OVS: OpenFlow rules restored via ovs-post-setup.sh"
+            return 0
+        else
+            log_warn "OVS: ovs-post-setup.sh failed, trying manual repair..."
+        fi
+    fi
+
+    # Method 2: Manual minimal repair - restore essential flows
+    log_info "OVS: Applying minimal OpenFlow rules..."
+
+    # Ensure standalone mode
+    ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
+
+    # Clear and re-add essential flows
+    ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
+
+    # Priority 1000: ARP (essential for L2)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,arp,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 900: DHCP (essential for IP assignment)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=67,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=68,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 800: DNS
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=53,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,tcp,tp_dst=53,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 500: LAN traffic
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 500: Container traffic
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=172.20.0.0/16,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=172.20.0.0/16,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 0: Default normal switching
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL" 2>/dev/null || true
+
+    log_info "OVS: Minimal OpenFlow rules restored"
+    logger -t "$LOG_TAG" -p notice "OVS OpenFlow rules repaired after WAN failover event"
+}
+
 do_health_check() {
     load_state
 
@@ -1910,6 +2021,11 @@ do_health_check() {
         # Update DNS
         update_dns_for_wan "$ACTIVE_WAN"
 
+        # Verify OVS/OpenFlow health after failover
+        # WAN failover operates at L3/L4, OVS at L2 - they should be independent
+        # but we check as a safety net in case something disrupted OVS
+        verify_ovs_health
+
         logger -t "$LOG_TAG" -p notice "WAN failover completed: $old_active -> $ACTIVE_WAN"
     fi
 
@@ -1931,15 +2047,41 @@ cmd_setup() {
 
     load_config || exit 1
 
-    # Prevent NetworkManager from adding routes
-    configure_networkmanager_no_default_route
+    # =========================================================================
+    # PERSISTENT CONFIGURATION (only run once, during initial installation)
+    # These operations can disrupt OVS/OpenFlow and should NOT run on every
+    # service restart. They modify netplan/NetworkManager which can trigger
+    # network stack reconfiguration that clears OpenFlow flows.
+    # =========================================================================
+    local SETUP_DONE_FILE="/var/lib/fortress/wan-failover-setup-done"
 
-    # Prevent netplan/systemd-networkd from adding routes
-    configure_netplan_no_routes
+    if [ ! -f "$SETUP_DONE_FILE" ]; then
+        log_info "First-time setup: configuring network managers..."
 
-    # Prevent ModemManager/carrier from pushing routes
-    configure_modemmanager_no_routes
+        # Prevent NetworkManager from adding routes
+        configure_networkmanager_no_default_route
 
+        # Prevent netplan/systemd-networkd from adding routes
+        # WARNING: This calls 'netplan apply' which can reset OVS bridges!
+        # Only run once during initial installation, not on service restarts.
+        configure_netplan_no_routes
+
+        # Prevent ModemManager/carrier from pushing routes
+        configure_modemmanager_no_routes
+
+        # Mark first-time setup as complete
+        mkdir -p "$(dirname "$SETUP_DONE_FILE")"
+        date -Iseconds > "$SETUP_DONE_FILE"
+        log_info "First-time network configuration complete"
+    else
+        log_debug "Skipping network manager configuration (already done on $(cat "$SETUP_DONE_FILE"))"
+    fi
+
+    # =========================================================================
+    # RUNTIME CONFIGURATION (safe to run on every service restart)
+    # These operations only affect routing tables and nftables, which don't
+    # interfere with OVS/OpenFlow at Layer 2.
+    # =========================================================================
     setup_rt_tables
     setup_routing_tables
     setup_ip_rules
@@ -2163,7 +2305,27 @@ cmd_cleanup() {
     # Remove state
     rm -f "$STATE_FILE" "$PID_FILE"
 
+    # Remove setup-done marker to allow full re-setup
+    rm -f /var/lib/fortress/wan-failover-setup-done
+
     log_info "Cleanup complete"
+}
+
+cmd_force_setup() {
+    log_info "Force re-running full setup (including netplan/NetworkManager)..."
+
+    # Remove the setup-done marker to force full reconfiguration
+    rm -f /var/lib/fortress/wan-failover-setup-done
+
+    # WARNING: This will run netplan apply which can disrupt OVS!
+    # Make sure to restart fortress-vlan.service afterward to restore OpenFlow rules.
+    log_warn "This will run 'netplan apply' which may reset OVS OpenFlow rules!"
+    log_warn "After completion, run: systemctl restart fortress-vlan.service"
+
+    # Run the normal setup (which will now do full configuration)
+    cmd_setup
+
+    log_info "Full setup complete. Remember to restart fortress-vlan.service if OVS is affected."
 }
 
 # ============================================================
@@ -2173,6 +2335,9 @@ cmd_cleanup() {
 case "${1:-}" in
     setup)
         cmd_setup
+        ;;
+    force-setup)
+        cmd_force_setup
         ;;
     start)
         cmd_start
@@ -2196,17 +2361,18 @@ case "${1:-}" in
         cmd_cleanup
         ;;
     *)
-        echo "Usage: $0 {setup|start|stop|status|failover|failback|check|cleanup}"
+        echo "Usage: $0 {setup|force-setup|start|stop|status|failover|failback|check|cleanup}"
         echo ""
         echo "Commands:"
-        echo "  setup     - Initial PBR setup (routing tables, rules, nftables)"
-        echo "  start     - Start the health monitoring daemon"
-        echo "  stop      - Stop the monitoring daemon"
-        echo "  status    - Show current failover status"
-        echo "  failover  - Force immediate failover to backup"
-        echo "  failback  - Force immediate failback to primary"
-        echo "  check     - Run single health check (for cron)"
-        echo "  cleanup   - Remove all PBR configuration"
+        echo "  setup       - PBR setup (safe: skips netplan on repeat runs)"
+        echo "  force-setup - Full setup including netplan (WARNING: may reset OVS!)"
+        echo "  start       - Start the health monitoring daemon"
+        echo "  stop        - Stop the monitoring daemon"
+        echo "  status      - Show current failover status"
+        echo "  failover    - Force immediate failover to backup"
+        echo "  failback    - Force immediate failback to primary"
+        echo "  check       - Run single health check (for cron)"
+        echo "  cleanup     - Remove all PBR configuration"
         exit 1
         ;;
 esac
