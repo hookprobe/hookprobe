@@ -68,6 +68,15 @@
     cursor: grabbing;
 }
 
+/* Ecosystem bubble styles */
+.ecosystem-bubble {
+    pointer-events: none;
+}
+
+.bubble-label {
+    text-shadow: 0 0 3px rgba(0,0,0,0.8);
+}
+
 /* Node styles */
 .node {
     cursor: pointer;
@@ -572,6 +581,10 @@
                         <span class="topology-legend-dot" style="background: #007bff;"></span>
                         <span>Full Access</span>
                     </div>
+                    <div class="topology-legend-item" title="Same-user device grouping detected by AI">
+                        <span class="topology-legend-dot" style="background: rgba(66, 133, 244, 0.3); border: 2px dashed #4285F4;"></span>
+                        <span>Ecosystem Bubble</span>
+                    </div>
                 </div>
             </div>
             <svg id="topology-svg"></svg>
@@ -910,11 +923,44 @@
             .catch(err => console.error('Failed to load topology:', err));
     }
 
+    let bubbleElements = null;  // Ecosystem bubble elements
+    let ecosystemBubbles = [];   // Bubble data
+
     function renderTopology(data) {
         nodes = data.nodes;
         links = data.links;
+        ecosystemBubbles = data.ecosystem_bubbles || [];
 
         g.selectAll('*').remove();
+
+        // Render ecosystem bubbles FIRST (behind everything else) - 30% opacity
+        if (ecosystemBubbles.length > 0) {
+            bubbleElements = g.append('g')
+                .attr('class', 'ecosystem-bubbles')
+                .selectAll('g')
+                .data(ecosystemBubbles)
+                .enter()
+                .append('g')
+                .attr('class', 'ecosystem-bubble');
+
+            bubbleElements.append('ellipse')
+                .attr('rx', 80)
+                .attr('ry', 50)
+                .attr('fill', d => d.color)
+                .attr('opacity', 0.3)
+                .attr('stroke', d => d.color)
+                .attr('stroke-width', 2)
+                .attr('stroke-dasharray', '5,3');
+
+            bubbleElements.append('text')
+                .attr('class', 'bubble-label')
+                .attr('dy', -55)
+                .attr('text-anchor', 'middle')
+                .attr('fill', d => d.color)
+                .attr('font-size', '11px')
+                .attr('font-weight', '600')
+                .text(d => d.ecosystem.charAt(0).toUpperCase() + d.ecosystem.slice(1) + ' Bubble');
+        }
 
         // Create links
         linkElements = g.append('g')
@@ -1052,6 +1098,36 @@
             .attr('y2', d => d.target.y);
 
         nodeElements.attr('transform', d => `translate(${d.x},${d.y})`);
+
+        // Update ecosystem bubble positions (centered on member devices)
+        if (bubbleElements) {
+            bubbleElements.each(function(bubble) {
+                // Find member device nodes
+                const memberMacs = bubble.devices.map(m => m.toUpperCase());
+                const memberNodes = nodes.filter(n =>
+                    n.type === 'device' && memberMacs.includes(n.mac?.toUpperCase())
+                );
+
+                if (memberNodes.length > 0) {
+                    // Calculate centroid of member devices
+                    const cx = d3.mean(memberNodes, d => d.x);
+                    const cy = d3.mean(memberNodes, d => d.y);
+
+                    // Calculate bounding box to size the ellipse
+                    const xs = memberNodes.map(d => d.x);
+                    const ys = memberNodes.map(d => d.y);
+                    const rx = Math.max(60, (d3.max(xs) - d3.min(xs)) / 2 + 40);
+                    const ry = Math.max(40, (d3.max(ys) - d3.min(ys)) / 2 + 30);
+
+                    d3.select(this)
+                        .attr('transform', `translate(${cx},${cy})`);
+
+                    d3.select(this).select('ellipse')
+                        .attr('rx', rx)
+                        .attr('ry', ry);
+                }
+            });
+        }
     }
 
     function dragStarted(event, d) {
