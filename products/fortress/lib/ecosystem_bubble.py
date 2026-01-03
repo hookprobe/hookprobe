@@ -934,7 +934,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Ecosystem Bubble Manager')
-    parser.add_argument('--start', action='store_true', help='Start manager')
+    parser.add_argument('--start', '--daemon', action='store_true', help='Start manager (daemon mode)')
     parser.add_argument('--stats', action='store_true', help='Show statistics')
     parser.add_argument('--list', action='store_true', help='List all bubbles')
     parser.add_argument('--check', nargs=2, metavar=('MAC1', 'MAC2'),
