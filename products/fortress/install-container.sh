@@ -4289,6 +4289,26 @@ main() {
     fix_config_permissions  # Ensure container can read config files
     save_installation_state
 
+    # Final service restarts to ensure clean state
+    log_step "Finalizing services"
+
+    # Stop and start dnsmasq to pick up VLAN config changes cleanly
+    # (stop+start avoids issues with interface binding during restart)
+    systemctl stop dnsmasq 2>/dev/null || true
+    sleep 1
+    systemctl start dnsmasq 2>/dev/null || {
+        log_warn "dnsmasq failed to start - may need manual intervention"
+    }
+
+    # Start fortress service if not already running (container orchestration)
+    if ! systemctl is-active --quiet fortress 2>/dev/null; then
+        systemctl start fortress 2>/dev/null || {
+            log_warn "fortress.service failed to start - containers may need manual start"
+        }
+    fi
+
+    log_success "Services finalized"
+
     # Final message
     echo ""
     echo "════════════════════════════════════════════════════════════════"
