@@ -511,12 +511,15 @@ fingerbank_set_key() {
 
     mkdir -p "$CONFIG_DIR"
 
-    # Test API key first
+    # Test API key first using the interrogate endpoint (the actual API endpoint used)
     log_substep "Testing API key..."
     local test_result
-    # Note: Don't use -f flag as it causes curl to exit before capturing HTTP code
-    test_result=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 \
-        "${FINGERBANK_API_URL}/api/v2/devices?key=${api_key}&limit=1" 2>/dev/null) || test_result="000"
+    # Use the interrogate endpoint with a common DHCP fingerprint (Windows 10)
+    # This is the actual endpoint used for device lookups, so it validates the key properly
+    test_result=$(curl -s -o /dev/null -w "%{http_code}" -m 10 --connect-timeout 5 \
+        -H "Content-Type: application/json" \
+        -X POST -d '{"dhcp_fingerprint":"1,3,6,15,31,33,43,44,46,47,119,121,249,252"}' \
+        "${FINGERBANK_API_URL}/api/v2/combinations/interrogate?key=${api_key}" 2>/dev/null) || test_result="000"
 
     if [ "$test_result" = "200" ]; then
         log_info "API key validated successfully"
@@ -584,16 +587,18 @@ fingerbank_status() {
     echo "  Last Reset: ${last_reset}"
     echo ""
 
-    # Test API connectivity
+    # Test API connectivity using the actual interrogate endpoint
     log_substep "Testing API connectivity..."
     local test_api_key
     test_api_key=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('api_key', ''))" 2>/dev/null)
 
     if [ -n "$test_api_key" ]; then
         local test_result
-        # Note: Don't use -f flag as it causes curl to exit before capturing HTTP code
-        test_result=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 \
-            "${FINGERBANK_API_URL}/api/v2/devices?key=${test_api_key}&limit=1" 2>/dev/null) || test_result="000"
+        # Use the interrogate endpoint with a sample DHCP fingerprint (Windows 10)
+        test_result=$(curl -s -o /dev/null -w "%{http_code}" -m 10 --connect-timeout 5 \
+            -H "Content-Type: application/json" \
+            -X POST -d '{"dhcp_fingerprint":"1,3,6,15,31,33,43,44,46,47,119,121,249,252"}' \
+            "${FINGERBANK_API_URL}/api/v2/combinations/interrogate?key=${test_api_key}" 2>/dev/null) || test_result="000"
 
         case "$test_result" in
             200) echo -e "  API Test:   ${GREEN}OK${NC}" ;;

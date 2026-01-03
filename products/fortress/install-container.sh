@@ -2837,37 +2837,50 @@ start_containers() {
     # ========================================
     # PORT CONFLICT RESOLUTION
     # ========================================
-    # dnsXai requires ports 5353 (DNS) and 853 (DoT)
-    # Port 5353 is commonly used by mDNS (Avahi/systemd-resolved)
-    log_info "Resolving port conflicts for dnsXai..."
+    # dnsXai requires ports 5353/udp (DNS) and 853/tcp (DoT)
+    # Bubble manager needs mDNS multicast (224.0.0.251:5353) for ecosystem detection
+    # Avahi uses port 5353 for mDNS - configure it to allow sharing
+    log_info "Resolving port conflicts for dnsXai and mDNS..."
 
-    # Disable Avahi mDNS responder if running (uses 5353)
-    if systemctl is-active avahi-daemon &>/dev/null; then
-        log_info "  Stopping avahi-daemon (uses port 5353)..."
-        systemctl stop avahi-daemon 2>/dev/null || true
-        systemctl disable avahi-daemon 2>/dev/null || true
+    # Configure Avahi to allow other stacks (needed for bubble manager mDNS)
+    # This allows dnsXai to bind 5353/udp AND bubble manager to use mDNS multicast
+    if [ -f /etc/avahi/avahi-daemon.conf ]; then
+        if ! grep -q "disallow-other-stacks=no" /etc/avahi/avahi-daemon.conf 2>/dev/null; then
+            log_info "  Configuring avahi to allow stack sharing..."
+            cp /etc/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf.bak.fts 2>/dev/null || true
+            if grep -q "disallow-other-stacks" /etc/avahi/avahi-daemon.conf 2>/dev/null; then
+                sed -i 's/disallow-other-stacks=.*/disallow-other-stacks=no/' /etc/avahi/avahi-daemon.conf
+            else
+                sed -i '/^\[server\]/a disallow-other-stacks=no' /etc/avahi/avahi-daemon.conf
+            fi
+            systemctl restart avahi-daemon 2>/dev/null || true
+        else
+            log_info "  Avahi already configured for stack sharing"
+        fi
     fi
 
-    # Disable systemd-resolved mDNS if it's using 5353
+    # Disable systemd-resolved mDNS if it's using 5353 (conflicts with dnsXai)
     if ss -tulpn 2>/dev/null | grep -q ":5353.*systemd-resolve"; then
         log_info "  Disabling systemd-resolved mDNS..."
         mkdir -p /etc/systemd/resolved.conf.d
         cat > /etc/systemd/resolved.conf.d/no-mdns.conf << 'MDNSCONF'
 [Resolve]
-# Disable mDNS to free port 5353 for dnsXai
+# Disable mDNS in systemd-resolved to avoid port conflicts
+# mDNS is handled by avahi-daemon (if installed) or bubble manager
 MulticastDNS=no
 MDNSCONF
         systemctl restart systemd-resolved 2>/dev/null || true
     fi
 
-    # Force-kill any remaining processes on required ports
-    fuser -k 5353/udp 2>/dev/null || true
-    fuser -k 5353/tcp 2>/dev/null || true
+    # Kill only systemd-resolved on 5353 (not avahi - it can share)
+    if ss -tulpn 2>/dev/null | grep -q ":5353.*systemd-resolve"; then
+        fuser -k 5353/udp 2>/dev/null || true
+    fi
     fuser -k 853/tcp 2>/dev/null || true
     sleep 1  # Give ports time to be released
 
-    # Verify ports are free
-    if ss -tulpn 2>/dev/null | grep -q ":5353 "; then
+    # Verify ports are available for dnsXai
+    if ss -tulpn 2>/dev/null | grep -qE ":5353.*(systemd-resolve|LISTEN)"; then
         log_warn "Port 5353 still in use - dnsXai may fail to start"
         ss -tulpn 2>/dev/null | grep ":5353 " | head -3
     else
@@ -3682,6 +3695,7 @@ DBEOF
     }
 
     # Bubble manager runs in container - just verify it's running
+    # Note: avahi is configured earlier in PORT CONFLICT RESOLUTION section
     log_info "Verifying bubble-manager container..."
     systemctl start fts-bubble-manager.service 2>/dev/null || {
         log_warn "fts-bubble-manager container not running (check: podman logs fts-bubble-manager)"
