@@ -196,13 +196,14 @@
 
     <!-- Content Wrapper -->
     <div class="content-wrapper">
+        {% block content_header %}
         <!-- Content Header -->
         <div class="content-header">
             <div class="container-fluid">
                 <div class="row mb-2">
                     <div class="col-sm-6">
                         {% block page_header %}
-                        <h1 class="m-0">{% block page_title %}Dashboard{% endblock %}</h1>
+                        <h1 class="m-0">{% block page_title %}Home{% endblock %}</h1>
                         {% endblock %}
                     </div>
                     <div class="col-sm-6">
@@ -215,6 +216,7 @@
                 </div>
             </div>
         </div>
+        {% endblock %}
 
         <!-- Flash Messages -->
         {% with messages = get_flashed_messages(with_categories=true) %}
