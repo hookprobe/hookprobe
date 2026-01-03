@@ -218,7 +218,7 @@ services:
       # DoT (DNS over TLS) certificates - writable for auto-generation
       - dnsxai_certs:/etc/hookprobe/certs
     ports:
-      - "0.0.0.0:5353:5353/udp"  # Plain DNS accessible from LAN
+      - "127.0.0.1:53:5353/udp"  # DNS on localhost (dnsmasq forwards here) - frees 5353 for mDNS
       - "0.0.0.0:853:853/tcp"    # DoT (DNS over TLS) for Windows/modern clients
       - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
     healthcheck:
