@@ -325,7 +325,11 @@ def get_sdn_autopilot_summary():
 
 
 def get_dnsxai_summary():
-    """Get dnsXai summary stats."""
+    """Get dnsXai summary stats.
+
+    Fetches from dnsXai container API (/api/stats) and maps response fields.
+    Falls back to file-based stats or basic dnsmasq detection.
+    """
     cached = _get_cached('dnsxai_summary', CACHE_TIMEOUT)
     if cached is not None:
         return cached
@@ -340,48 +344,56 @@ def get_dnsxai_summary():
         'protection_level': 'N/A'
     }
 
-    # Try reading from dnsXai stats file first
-    stats_file = DATA_DIR / 'dnsxai_stats.json'
+    # Protection level names
+    PROTECTION_LEVELS = {
+        0: 'Disabled',
+        1: 'Base',
+        2: 'Enhanced',
+        3: 'Standard',
+        4: 'Strong',
+        5: 'Maximum'
+    }
+
+    # Primary: Try fetching from dnsXai container API
     try:
-        if stats_file.exists():
-            with open(stats_file, 'r') as f:
-                data = json.load(f)
-                result['enabled'] = True
-                result['blocked_today'] = data.get('blocked_today', 0)
-                result['blocked_total'] = data.get('blocked_total', 0)
-                result['queries_today'] = data.get('queries_today', 0)
-                result['top_blocked_category'] = data.get('top_category', 'Ads & Trackers')
-                result['protection_level'] = data.get('protection_level', 'Standard')
-
-                # Calculate block rate
-                if result['queries_today'] > 0:
-                    result['block_rate'] = round(
-                        (result['blocked_today'] / result['queries_today']) * 100, 1
-                    )
+        import os
+        import urllib.request
+        dnsxai_url = os.environ.get('DNSXAI_API_URL', 'http://fts-dnsxai:8080')
+        req = urllib.request.Request(f"{dnsxai_url}/api/stats")
+        with urllib.request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            # Map API response fields to dashboard format
+            result['enabled'] = data.get('protection_enabled', True)
+            result['blocked_today'] = data.get('blocked_queries', 0)
+            result['blocked_total'] = data.get('blocked_queries', 0)  # API only has current session
+            result['queries_today'] = data.get('total_queries', 0)
+            result['block_rate'] = data.get('block_rate', 0)
+            level = data.get('protection_level', 3)
+            result['protection_level'] = PROTECTION_LEVELS.get(level, 'Standard')
+            result['top_blocked_category'] = 'Ads & Trackers'  # Default category
+            logger.debug(f"dnsXai API stats: {result['blocked_today']} blocked / {result['queries_today']} queries")
     except Exception as e:
-        logger.debug(f"Could not read dnsxai_stats.json: {e}")
+        logger.debug(f"Could not fetch dnsXai API: {e}")
 
-    # Fallback: Try fetching from dnsXai container API
+    # Fallback: Try reading from stats file
     if not result['enabled']:
+        stats_file = DATA_DIR / 'dnsxai_stats.json'
         try:
-            import os
-            import urllib.request
-            dnsxai_url = os.environ.get('DNSXAI_API_URL', 'http://fts-dnsxai:8080')
-            req = urllib.request.Request(f"{dnsxai_url}/api/stats")
-            with urllib.request.urlopen(req, timeout=2) as response:
-                data = json.loads(response.read().decode())
-                result['enabled'] = True
-                result['blocked_today'] = data.get('blocked_today', 0)
-                result['blocked_total'] = data.get('blocked_total', 0)
-                result['queries_today'] = data.get('queries_today', 0)
-                result['top_blocked_category'] = data.get('top_category', 'Ads & Trackers')
-                result['protection_level'] = data.get('protection_level', 'Standard')
-                if result['queries_today'] > 0:
-                    result['block_rate'] = round(
-                        (result['blocked_today'] / result['queries_today']) * 100, 1
-                    )
+            if stats_file.exists():
+                with open(stats_file, 'r') as f:
+                    data = json.load(f)
+                    result['enabled'] = True
+                    result['blocked_today'] = data.get('blocked_today', data.get('blocked_queries', 0))
+                    result['blocked_total'] = data.get('blocked_total', 0)
+                    result['queries_today'] = data.get('queries_today', data.get('total_queries', 0))
+                    result['top_blocked_category'] = data.get('top_category', 'Ads & Trackers')
+                    result['protection_level'] = data.get('protection_level', 'Standard')
+                    if result['queries_today'] > 0:
+                        result['block_rate'] = round(
+                            (result['blocked_today'] / result['queries_today']) * 100, 1
+                        )
         except Exception as e:
-            logger.debug(f"Could not fetch dnsXai API: {e}")
+            logger.debug(f"Could not read dnsxai_stats.json: {e}")
 
     # Final fallback: Check if dnsmasq is running (basic protection active)
     if not result['enabled']:
@@ -757,11 +769,12 @@ def get_ecosystem_bubbles():
 
 
 def get_topology_data():
-    """Build network topology data for D3.js visualization."""
-    # Get interfaces
-    interfaces = get_network_interfaces()
+    """Build network topology data for D3.js visualization.
 
-    # Get devices from autopilot or ARP
+    Shows FTS Bridge with connected devices organized by policy zones.
+    WAN interfaces are excluded - focus on internal network visibility.
+    """
+    # Get devices from autopilot database (same source as SDN page)
     devices = get_all_devices()
 
     # Get ecosystem bubbles (same-user device groupings)
@@ -780,22 +793,7 @@ def get_topology_data():
     nodes = []
     links = []
 
-    # Add WAN interfaces
-    wan_nodes = []
-    for iface in interfaces:
-        if iface['type'] in ('wan', 'lte'):
-            node_id = f"wan_{iface['name']}"
-            wan_nodes.append(node_id)
-            nodes.append({
-                'id': node_id,
-                'type': 'wan',
-                'subtype': iface['type'],
-                'label': iface['name'].upper(),
-                'status': 'online' if iface['state'] == 'UP' else 'offline',
-                'icon': 'globe' if iface['type'] == 'wan' else 'signal'
-            })
-
-    # Add FTS Bridge (central hub)
+    # Add FTS Bridge (central hub) - no WAN interfaces shown
     bridge_id = 'bridge_fts'
     nodes.append({
         'id': bridge_id,
@@ -804,14 +802,6 @@ def get_topology_data():
         'status': 'online',
         'icon': 'network-wired'
     })
-
-    # Link WANs to bridge
-    for wan_id in wan_nodes:
-        links.append({
-            'source': wan_id,
-            'target': bridge_id,
-            'type': 'wan_link'
-        })
 
     # Define policies
     policies = [
@@ -840,29 +830,8 @@ def get_topology_data():
             'type': 'policy_link'
         })
 
-    # Add VLANs and link them to bridge
-    vlans = [
-        {'id': 'vlan_100', 'vlan_id': 100, 'label': 'VLAN 100 (LAN)', 'color': '#6f42c1'},
-        {'id': 'vlan_200', 'vlan_id': 200, 'label': 'VLAN 200 (MGMT)', 'color': '#fd7e14'},
-    ]
-
-    for vlan in vlans:
-        nodes.append({
-            'id': vlan['id'],
-            'type': 'vlan',
-            'vlan_id': vlan['vlan_id'],
-            'label': vlan['label'],
-            'color': vlan['color'],
-            'icon': 'layer-group'
-        })
-        # Link VLAN to bridge
-        links.append({
-            'source': bridge_id,
-            'target': vlan['id'],
-            'type': 'vlan_link'
-        })
-
     # Add devices and link them to policies
+    # (VLANs not shown separately - devices shown by policy zone)
     policy_counts = {p['name']: 0 for p in policies}
 
     for i, device in enumerate(devices):
@@ -931,7 +900,7 @@ def get_topology_data():
         'ecosystem_bubbles': ecosystem_bubbles,  # Same-user device groupings (30% opacity)
         'stats': {
             'total_devices': len(devices),
-            'wan_count': len(wan_nodes),
+            'online_devices': len([d for d in devices if d.get('state') in ['REACHABLE', 'STALE'] or d.get('is_online')]),
             'policy_counts': policy_counts,
             'bubble_count': len(ecosystem_bubbles),
         }
