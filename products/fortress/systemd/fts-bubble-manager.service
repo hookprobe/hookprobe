@@ -11,7 +11,7 @@ StartLimitIntervalSec=60
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/ecosystem_bubble.py --daemon
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/ecosystem_bubble.py --start
 WorkingDirectory=/opt/hookprobe/fortress
 User=fortress
 Group=fortress
