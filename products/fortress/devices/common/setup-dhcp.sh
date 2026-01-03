@@ -397,12 +397,17 @@ bogus-priv
 no-resolv
 no-poll
 
-# Upstream DNS (fallback if dnsXai unavailable)
+# DNS resolution order: try dnsXai first, then fallback to upstream
+# strict-order ensures servers are tried in the order listed
+strict-order
+
+# Primary: dnsXai ML protection (localhost:53)
+# Port 53 frees 5353 for mDNS/Bonjour discovery
+server=127.0.0.1
+
+# Fallback: Public DNS (used if dnsXai container is down)
 server=1.1.1.1
 server=8.8.8.8
-
-# Forward to dnsXai container first (port 5353)
-server=127.0.0.1#5353
 
 # Local domain
 local=/hookprobe.local/
