@@ -340,7 +340,7 @@ def get_dnsxai_summary():
         'protection_level': 'N/A'
     }
 
-    # Try reading from dnsXai stats file
+    # Try reading from dnsXai stats file first
     stats_file = DATA_DIR / 'dnsxai_stats.json'
     try:
         if stats_file.exists():
@@ -360,6 +360,39 @@ def get_dnsxai_summary():
                     )
     except Exception as e:
         logger.debug(f"Could not read dnsxai_stats.json: {e}")
+
+    # Fallback: Try fetching from dnsXai container API
+    if not result['enabled']:
+        try:
+            import os
+            import urllib.request
+            dnsxai_url = os.environ.get('DNSXAI_API_URL', 'http://fts-dnsxai:8080')
+            req = urllib.request.Request(f"{dnsxai_url}/api/stats")
+            with urllib.request.urlopen(req, timeout=2) as response:
+                data = json.loads(response.read().decode())
+                result['enabled'] = True
+                result['blocked_today'] = data.get('blocked_today', 0)
+                result['blocked_total'] = data.get('blocked_total', 0)
+                result['queries_today'] = data.get('queries_today', 0)
+                result['top_blocked_category'] = data.get('top_category', 'Ads & Trackers')
+                result['protection_level'] = data.get('protection_level', 'Standard')
+                if result['queries_today'] > 0:
+                    result['block_rate'] = round(
+                        (result['blocked_today'] / result['queries_today']) * 100, 1
+                    )
+        except Exception as e:
+            logger.debug(f"Could not fetch dnsXai API: {e}")
+
+    # Final fallback: Check if dnsmasq is running (basic protection active)
+    if not result['enabled']:
+        try:
+            import subprocess
+            proc = subprocess.run(['pgrep', '-x', 'dnsmasq'], capture_output=True, timeout=2)
+            if proc.returncode == 0:
+                result['enabled'] = True
+                result['protection_level'] = 'Basic (dnsmasq)'
+        except Exception:
+            pass
 
     _set_cached('dnsxai_summary', result)
     return result
