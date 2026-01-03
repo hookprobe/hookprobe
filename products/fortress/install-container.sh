@@ -3085,12 +3085,19 @@ setup_traffic_flow() {
         log_info "Setting up NAT and PBR for container traffic..."
         "$traffic_script" setup || {
             log_warn "Traffic flow setup had issues - containers may have limited internet access"
-            return 0
         }
         log_info "Traffic flow configured"
     else
         log_warn "Traffic flow script not found at: $traffic_script"
     fi
+
+    # Add iptables SNAT fallback for container replies to LAN clients
+    # This ensures dashboard is accessible even if nftables setup failed
+    # Containers replying to LAN clients must use MGMT gateway IP (10.200.100.1)
+    # so clients see responses from the IP they connected to
+    log_info "Adding iptables SNAT fallback for container traffic..."
+    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 -d 10.200.0.0/8 -j SNAT --to-source 10.200.100.1 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 -d 10.200.0.0/8 -j SNAT --to-source 10.200.100.1
 }
 
 # Wait for container to be running
