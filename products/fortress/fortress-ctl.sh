@@ -487,6 +487,206 @@ uninstall_staged() {
 # DEVICE MANAGEMENT
 # ============================================================
 AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
+FINGERBANK_CONFIG="${CONFIG_DIR}/fingerbank.json"
+FINGERBANK_API_URL="https://api.fingerbank.org"
+
+# ============================================================
+# FINGERBANK MANAGEMENT
+# ============================================================
+fingerbank_set_key() {
+    local api_key="${1:-}"
+
+    if [ -z "$api_key" ]; then
+        log_error "API key required"
+        echo ""
+        echo "Usage: fortress-ctl fingerbank set-api-key <your-api-key>"
+        echo ""
+        echo "Get your free API key (up to 600 requests/month):"
+        echo "  1. Visit https://api.fingerbank.org/email_registrations/current"
+        echo "  2. Register with your email"
+        echo "  3. Check your email for the API key"
+        echo ""
+        exit 1
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+
+    # Test API key first
+    log_substep "Testing API key..."
+    local test_result
+    test_result=$(curl -sf -o /dev/null -w "%{http_code}" \
+        "${FINGERBANK_API_URL}/api/v2/devices?key=${api_key}&limit=1" 2>/dev/null) || test_result="000"
+
+    if [ "$test_result" = "200" ]; then
+        log_info "API key validated successfully"
+    elif [ "$test_result" = "401" ]; then
+        log_error "Invalid API key"
+        exit 1
+    elif [ "$test_result" = "429" ]; then
+        log_warn "API rate limit exceeded - key stored but may be over quota"
+    else
+        log_warn "Could not verify API key (HTTP $test_result) - storing anyway"
+    fi
+
+    # Save API key
+    cat > "$FINGERBANK_CONFIG" << EOF
+{
+    "api_key": "${api_key}",
+    "enabled": true,
+    "created_at": "$(date -Iseconds)",
+    "requests_today": 0,
+    "last_reset": "$(date +%Y-%m-%d)"
+}
+EOF
+    chmod 600 "$FINGERBANK_CONFIG"
+
+    log_info "Fingerbank API key configured"
+    log_info "Config saved to: $FINGERBANK_CONFIG"
+    echo ""
+    echo "SDN Autopilot will now use Fingerbank for unknown devices."
+    echo "Free tier: 600 requests/month (~20/day)"
+}
+
+fingerbank_status() {
+    log_step "Fingerbank API Status"
+    echo ""
+
+    if [ ! -f "$FINGERBANK_CONFIG" ]; then
+        echo -e "  Status:  ${RED}Not configured${NC}"
+        echo ""
+        echo "To enable Fingerbank enrichment:"
+        echo "  fortress-ctl fingerbank set-api-key <your-api-key>"
+        echo ""
+        echo "Get a free API key at:"
+        echo "  https://api.fingerbank.org/email_registrations/current"
+        echo ""
+        return
+    fi
+
+    # Read config
+    local api_key enabled requests_today last_reset
+    api_key=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('api_key', '')[:8] + '...')" 2>/dev/null)
+    enabled=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('enabled', False))" 2>/dev/null)
+    requests_today=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('requests_today', 0))" 2>/dev/null)
+    last_reset=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('last_reset', 'unknown'))" 2>/dev/null)
+
+    if [ "$enabled" = "True" ]; then
+        echo -e "  Status:     ${GREEN}Enabled${NC}"
+    else
+        echo -e "  Status:     ${YELLOW}Disabled${NC}"
+    fi
+    echo "  API Key:    ${api_key}"
+    echo "  Requests:   ${requests_today}/20 today (free tier: ~20/day)"
+    echo "  Last Reset: ${last_reset}"
+    echo ""
+
+    # Test API connectivity
+    log_substep "Testing API connectivity..."
+    local test_api_key
+    test_api_key=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('api_key', ''))" 2>/dev/null)
+
+    if [ -n "$test_api_key" ]; then
+        local test_result
+        test_result=$(curl -sf -o /dev/null -w "%{http_code}" \
+            "${FINGERBANK_API_URL}/api/v2/devices?key=${test_api_key}&limit=1" 2>/dev/null) || test_result="000"
+
+        case "$test_result" in
+            200) echo -e "  API Test:   ${GREEN}OK${NC}" ;;
+            401) echo -e "  API Test:   ${RED}Invalid API key${NC}" ;;
+            429) echo -e "  API Test:   ${YELLOW}Rate limited${NC}" ;;
+            000) echo -e "  API Test:   ${RED}Connection failed${NC}" ;;
+            *)   echo -e "  API Test:   ${YELLOW}HTTP $test_result${NC}" ;;
+        esac
+    fi
+    echo ""
+
+    # Show learned fingerprints
+    local learned_count=0
+    if [ -f "/var/lib/hookprobe/fingerbank.db" ]; then
+        learned_count=$(sqlite3 /var/lib/hookprobe/fingerbank.db \
+            "SELECT COUNT(*) FROM learned_fingerprints WHERE source='fingerbank_api';" 2>/dev/null || echo "0")
+    fi
+    echo "  Learned from API: ${learned_count} fingerprints"
+    echo ""
+}
+
+fingerbank_test() {
+    local fingerprint="${1:-1,121,3,6,15,119,252,95,44,46}"
+
+    log_step "Testing Fingerbank API"
+    echo ""
+
+    if [ ! -f "$FINGERBANK_CONFIG" ]; then
+        log_error "Fingerbank not configured. Run: fortress-ctl fingerbank set-api-key <key>"
+        exit 1
+    fi
+
+    local api_key
+    api_key=$(python3 -c "import json; print(json.load(open('$FINGERBANK_CONFIG')).get('api_key', ''))" 2>/dev/null)
+
+    if [ -z "$api_key" ]; then
+        log_error "No API key found in configuration"
+        exit 1
+    fi
+
+    log_substep "Querying fingerprint: $fingerprint"
+
+    local response
+    response=$(curl -sf "${FINGERBANK_API_URL}/api/v2/combinations/interrogate?key=${api_key}" \
+        -H "Content-Type: application/json" \
+        -d "{\"dhcp_fingerprint\": \"${fingerprint}\"}" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "API query failed"
+        exit 1
+    fi
+
+    echo ""
+    echo "API Response:"
+    echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+    echo ""
+
+    # Parse result
+    local device_name score
+    device_name=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('device',{}).get('name','Unknown'))" 2>/dev/null)
+    score=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score',0))" 2>/dev/null)
+
+    log_info "Identified: $device_name (score: $score)"
+}
+
+fingerbank_enable() {
+    if [ ! -f "$FINGERBANK_CONFIG" ]; then
+        log_error "Fingerbank not configured. Run: fortress-ctl fingerbank set-api-key <key>"
+        exit 1
+    fi
+
+    python3 -c "
+import json
+with open('$FINGERBANK_CONFIG', 'r') as f:
+    config = json.load(f)
+config['enabled'] = True
+with open('$FINGERBANK_CONFIG', 'w') as f:
+    json.dump(config, f, indent=2)
+"
+    log_info "Fingerbank API enabled"
+}
+
+fingerbank_disable() {
+    if [ ! -f "$FINGERBANK_CONFIG" ]; then
+        log_error "Fingerbank not configured"
+        exit 1
+    fi
+
+    python3 -c "
+import json
+with open('$FINGERBANK_CONFIG', 'r') as f:
+    config = json.load(f)
+config['enabled'] = False
+with open('$FINGERBANK_CONFIG', 'w') as f:
+    json.dump(config, f, indent=2)
+"
+    log_info "Fingerbank API disabled"
+}
 
 device_list() {
     log_step "Connected Devices"
@@ -676,6 +876,13 @@ Commands:
     show <mac>                  Show device details
     set-policy <mac> <policy>   Change device network policy
 
+  fingerbank    Manage Fingerbank API for device identification
+    status                      Show Fingerbank API status
+    set-api-key <key>           Configure API key
+    test [fingerprint]          Test API with sample fingerprint
+    enable                      Enable Fingerbank enrichment
+    disable                     Disable Fingerbank enrichment
+
   backup        Create backup
     --full        Full backup (all data)
     --db          Database only
@@ -823,6 +1030,46 @@ main() {
                 *)
                     log_error "Unknown device subcommand: $subcommand"
                     echo "Usage: fortress-ctl device [list|show|set-policy]"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        fingerbank)
+            local subcommand="${1:-status}"
+            shift || true
+
+            case "$subcommand" in
+                status)
+                    fingerbank_status
+                    ;;
+                set-api-key|set-key|key)
+                    fingerbank_set_key "$1"
+                    ;;
+                test)
+                    fingerbank_test "$1"
+                    ;;
+                enable)
+                    fingerbank_enable
+                    ;;
+                disable)
+                    fingerbank_disable
+                    ;;
+                *)
+                    log_error "Unknown fingerbank subcommand: $subcommand"
+                    echo ""
+                    echo "Usage: fortress-ctl fingerbank [status|set-api-key|test|enable|disable]"
+                    echo ""
+                    echo "Commands:"
+                    echo "  status                 Show Fingerbank API status"
+                    echo "  set-api-key <key>      Configure Fingerbank API key"
+                    echo "  test [fingerprint]     Test API with a DHCP fingerprint"
+                    echo "  enable                 Enable Fingerbank enrichment"
+                    echo "  disable                Disable Fingerbank enrichment"
+                    echo ""
+                    echo "Get your free API key (600 requests/month):"
+                    echo "  https://api.fingerbank.org/email_registrations/current"
+                    echo ""
                     exit 1
                     ;;
             esac

@@ -35,6 +35,11 @@
 | **Fortress WiFi setup** | hostapd config | `products/fortress/devices/common/hostapd-generator.sh` |
 | **Fortress network setup** | OVS VLAN, DHCP, NAT | `products/fortress/devices/common/ovs-post-setup.sh` |
 | **Fortress containers** | Podman compose | `products/fortress/containers/podman-compose.yml` |
+| **Ecosystem Bubble (Same-user detection)** | Atmospheric Presence | `products/fortress/lib/ecosystem_bubble.py` |
+| **Device Fingerprinting (ML)** | 99% accuracy classifier | `products/fortress/lib/ml_fingerprint_classifier.py` |
+| **Behavioral Clustering** | DBSCAN user bubbles | `products/fortress/lib/behavior_clustering.py` |
+| **Multi-Modal Presence** | mDNS, BLE, spatial | `products/fortress/lib/presence_sensor.py` |
+| **Fingerbank API setup** | External enrichment | `products/fortress/docs/FINGERBANK-API-SETUP.md` |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
@@ -172,6 +177,10 @@ These directories contain proprietary innovations. Commercial license required f
 | **dnsXai ML Classifier** | `shared/dnsXai/` | Proprietary |
 | **DSM Consensus** | `shared/dsm/` | Proprietary |
 | **SLA AI Business Continuity** | `shared/slaai/` | Proprietary |
+| **Ecosystem Bubble (Atmospheric Presence)** | `products/fortress/lib/ecosystem_bubble.py` | Proprietary |
+| **ML Fingerprint Classifier** | `products/fortress/lib/ml_fingerprint_classifier.py` | Proprietary |
+| **Behavioral Clustering Engine** | `products/fortress/lib/behavior_clustering.py` | Proprietary |
+| **Presence Sensor (Multi-Modal)** | `products/fortress/lib/presence_sensor.py` | Proprietary |
 | **MSSP Cloud Platform** | `products/mssp/` | Proprietary |
 
 ### Usage Guidelines

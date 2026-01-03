@@ -935,8 +935,12 @@ EOF
     systemctl daemon-reload
     systemctl enable fts-wan-failover.service 2>/dev/null || true
 
+    # Read primary interface from config file we just created
+    local config_primary_iface
+    config_primary_iface=$(grep '^PRIMARY_IFACE=' /etc/hookprobe/wan-failover.conf 2>/dev/null | cut -d'"' -f2)
+
     # Run setup and start if primary interface exists
-    if [ -d "/sys/class/net/${PRIMARY_IFACE:-eth0}" ]; then
+    if [ -n "$config_primary_iface" ] && [ -d "/sys/class/net/$config_primary_iface" ]; then
         # Run initial setup
         "$pbr_script" setup 2>/dev/null || true
         systemctl start fts-wan-failover.service 2>/dev/null || true
