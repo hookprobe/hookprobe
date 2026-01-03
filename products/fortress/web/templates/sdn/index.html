@@ -2,6 +2,15 @@
 
 {% block title %}SDN AI - Intelligent Network Control{% endblock %}
 
+{% block page_header %}
+<!-- No separate title - breadcrumb is sufficient -->
+{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item active">SDN AI</li>
+{% endblock %}
+
 {% block extra_css %}
 <style>
 /* Premium Stats Cards */
@@ -670,26 +679,6 @@
                                 {% endfor %}
                             </tbody>
                         </table>
-                    </div>
-                    <!-- Policy Reference Footer - Integrated -->
-                    <div class="card-footer border-0 pt-2 pb-3" style="background: rgba(0,0,0,0.2);">
-                        <div class="d-flex justify-content-between align-items-center flex-wrap" style="gap: 0.5rem;">
-                            {% for policy in policies %}
-                            <div class="d-flex align-items-center px-2" style="flex: 1; min-width: 140px;">
-                                <span class="mr-2" style="width: 8px; height: 8px; border-radius: 50%; background: var(--{{ policy.color }}, #6c757d);
-                                    {% if policy.color == 'danger' %}background: #dc3545;{% endif %}
-                                    {% if policy.color == 'warning' %}background: #ffc107;{% endif %}
-                                    {% if policy.color == 'info' %}background: #17a2b8;{% endif %}
-                                    {% if policy.color == 'primary' %}background: #007bff;{% endif %}
-                                    {% if policy.color == 'success' %}background: #28a745;{% endif %}
-                                "></span>
-                                <span style="font-size: 0.75rem; color: #aaa;">
-                                    <strong style="color: #ddd;">{{ policy.display_name }}</strong>
-                                    <span class="ml-1">({{ stats.policy_counts.get(policy.name, 0) }})</span>
-                                </span>
-                            </div>
-                            {% endfor %}
-                        </div>
                     </div>
                 </div>
             </div>

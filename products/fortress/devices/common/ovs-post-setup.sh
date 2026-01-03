@@ -210,7 +210,10 @@ bring_up_vlan_interfaces() {
 configure_openflow() {
     log_section "Configuring OpenFlow Rules"
 
-    # Set OVS to standalone mode (normal L2 switching without controller)
+    # IMPORTANT: Keep standalone mode for now - secure mode requires careful
+    # flow management and breaks connectivity if rules aren't perfect.
+    # NAC enforcement is done via nftables instead (network-filter-manager.sh)
+    # which operates at a higher layer and doesn't have these issues.
     ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
 
     # Clear existing flows
