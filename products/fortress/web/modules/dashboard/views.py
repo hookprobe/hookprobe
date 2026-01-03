@@ -185,6 +185,106 @@ def get_vlan_count():
     return 5
 
 
+def get_sdn_autopilot_summary():
+    """Get SDN AutoPilot summary stats from autopilot database."""
+    cached = _get_cached('sdn_autopilot_summary', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    result = {
+        'total_devices': 0,
+        'online_devices': 0,
+        'policies_applied': 0,
+        'quarantined': 0,
+        'internet_only': 0,
+        'full_access': 0,
+        'autopilot_enabled': False
+    }
+
+    # Try reading from autopilot database
+    autopilot_db = Path('/var/lib/hookprobe/autopilot.db')
+    try:
+        if autopilot_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(autopilot_db), timeout=2)
+            cursor = conn.cursor()
+
+            # Total devices
+            cursor.execute("SELECT COUNT(*) FROM device_identity")
+            result['total_devices'] = cursor.fetchone()[0]
+
+            # Online devices (seen in last 5 minutes)
+            cursor.execute("""
+                SELECT COUNT(*) FROM device_identity
+                WHERE datetime(last_seen) > datetime('now', '-5 minutes')
+            """)
+            result['online_devices'] = cursor.fetchone()[0]
+
+            # Policy counts
+            cursor.execute("""
+                SELECT policy, COUNT(*) FROM device_identity
+                WHERE policy IS NOT NULL AND policy != ''
+                GROUP BY policy
+            """)
+            for policy, count in cursor.fetchall():
+                if policy in ('quarantine', 'isolated'):
+                    result['quarantined'] += count
+                elif policy == 'internet_only':
+                    result['internet_only'] += count
+                elif policy in ('full_access', 'normal', 'smart_home'):
+                    result['full_access'] += count
+                result['policies_applied'] += count
+
+            result['autopilot_enabled'] = True
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Could not read autopilot.db: {e}")
+
+    _set_cached('sdn_autopilot_summary', result)
+    return result
+
+
+def get_dnsxai_summary():
+    """Get dnsXai summary stats."""
+    cached = _get_cached('dnsxai_summary', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    result = {
+        'enabled': False,
+        'blocked_today': 0,
+        'blocked_total': 0,
+        'queries_today': 0,
+        'block_rate': 0,
+        'top_blocked_category': 'N/A',
+        'protection_level': 'N/A'
+    }
+
+    # Try reading from dnsXai stats file
+    stats_file = DATA_DIR / 'dnsxai_stats.json'
+    try:
+        if stats_file.exists():
+            with open(stats_file, 'r') as f:
+                data = json.load(f)
+                result['enabled'] = True
+                result['blocked_today'] = data.get('blocked_today', 0)
+                result['blocked_total'] = data.get('blocked_total', 0)
+                result['queries_today'] = data.get('queries_today', 0)
+                result['top_blocked_category'] = data.get('top_category', 'Ads & Trackers')
+                result['protection_level'] = data.get('protection_level', 'Standard')
+
+                # Calculate block rate
+                if result['queries_today'] > 0:
+                    result['block_rate'] = round(
+                        (result['blocked_today'] / result['queries_today']) * 100, 1
+                    )
+    except Exception as e:
+        logger.debug(f"Could not read dnsxai_stats.json: {e}")
+
+    _set_cached('dnsxai_summary', result)
+    return result
+
+
 def get_wan_stats():
     """Get WAN interface statistics from agent data."""
     cached = _get_cached('wan_stats', 10)
@@ -359,6 +459,8 @@ def index():
     device_count = get_device_count()
     wan = get_wan_stats()
     tunnel = get_tunnel_status()
+    sdn_summary = get_sdn_autopilot_summary()
+    dnsxai_summary = get_dnsxai_summary()
 
     return render_template('dashboard/index.html',
                            qsecbit_score=stats.get('score', 0),
@@ -374,6 +476,8 @@ def index():
                            wan_inbound=wan.get('inbound', '0 B/s'),
                            wan_outbound=wan.get('outbound', '0 B/s'),
                            wan_status=wan.get('status', 'unknown'),
+                           sdn_summary=sdn_summary,
+                           dnsxai_summary=dnsxai_summary,
                            system_data_available=data_available)
 
 
