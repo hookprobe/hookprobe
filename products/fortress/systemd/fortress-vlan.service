@@ -48,7 +48,9 @@ ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
 # This ensures DHCP works properly - dnsmasq may have started before
 # OpenFlow rules were in place, causing WiFi clients to get 169.254.x.x
 # The dash prefix (-) means ignore failures (dnsmasq might not be installed)
-ExecStartPost=-/bin/systemctl restart dnsmasq.service
+# IMPORTANT: Use --no-block to avoid deadlock! dnsmasq drop-in has After=fortress-vlan.service,
+# so synchronous restart would wait for fortress-vlan to complete, creating circular dependency.
+ExecStartPost=-/bin/systemctl restart --no-block dnsmasq.service
 
 # On stop, don't cleanup (keep config for debugging)
 # Use 'systemctl restart fortress-vlan' to reapply

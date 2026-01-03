@@ -2242,7 +2242,8 @@ RemainAfterExit=yes
 ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
 # CRITICAL: Restart dnsmasq after OVS flows are configured
 # This ensures DHCP works - dnsmasq may have started before OpenFlow rules
-ExecStartPost=-/bin/systemctl restart dnsmasq.service
+# Use --no-block to avoid deadlock (dnsmasq has After=fortress-vlan.service)
+ExecStartPost=-/bin/systemctl restart --no-block dnsmasq.service
 
 [Install]
 WantedBy=multi-user.target
