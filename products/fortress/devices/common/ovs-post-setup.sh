@@ -210,10 +210,11 @@ bring_up_vlan_interfaces() {
 configure_openflow() {
     log_section "Configuring OpenFlow Rules"
 
-    # Set OVS to secure mode - all traffic MUST go through OpenFlow pipeline
-    # This is required for NAC policy enforcement (internet_only, quarantine, etc.)
-    # Without secure mode, traffic bypasses OpenFlow rules via normal L2 switching
-    ovs-vsctl set-fail-mode "$OVS_BRIDGE" secure 2>/dev/null || true
+    # IMPORTANT: Keep standalone mode for now - secure mode requires careful
+    # flow management and breaks connectivity if rules aren't perfect.
+    # NAC enforcement is done via nftables instead (network-filter-manager.sh)
+    # which operates at a higher layer and doesn't have these issues.
+    ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
 
     # Clear existing flows
     ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
