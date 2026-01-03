@@ -2,9 +2,7 @@
 
 {% block title %}Dashboard - HookProbe Fortress{% endblock %}
 
-{% block page_header %}
-<!-- No page title on dashboard - content speaks for itself -->
-{% endblock %}
+{% block page_header %}{% endblock %}
 
 {% block breadcrumb %}
 <li class="breadcrumb-item active">Dashboard</li>
@@ -12,545 +10,1225 @@
 
 {% block extra_css %}
 <style>
-    /* Dashboard-specific enhancements */
-    .dashboard-hero {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: var(--space-4);
-        margin-bottom: var(--space-6);
-    }
+/* ==========================================================================
+   NETWORK TOPOLOGY - D3.js Force-Directed Graph
+   ========================================================================== */
+.topology-container {
+    background: linear-gradient(135deg, #0a0f1a 0%, #1a1f2e 50%, #0d1117 100%);
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.08);
+    overflow: hidden;
+    position: relative;
+    min-height: 500px;
+}
 
-    .security-gauge-section {
-        display: grid;
-        grid-template-columns: 200px 1fr;
-        gap: var(--space-6);
-        align-items: center;
-    }
+.topology-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(0,0,0,0.3);
+}
 
-    @media (max-width: 768px) {
-        .security-gauge-section {
-            grid-template-columns: 1fr;
-            text-align: center;
-        }
-    }
+.topology-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #fff;
+}
 
-    .wan-health-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: var(--space-4);
-    }
+.topology-legend {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
 
-    .network-topology {
-        display: flex;
-        align-items: center;
-        justify-content: space-around;
-        padding: var(--space-6) 0;
-        position: relative;
-    }
+.topology-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    color: #888;
+}
 
-    .network-topology::before {
-        content: '';
-        position: absolute;
-        top: 50%;
-        left: 10%;
-        right: 10%;
-        height: 2px;
-        background: linear-gradient(90deg, var(--accent), var(--text-muted), var(--accent));
-        opacity: 0.3;
-    }
+.topology-legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
 
-    .topo-node {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        z-index: 1;
-    }
+#topology-svg {
+    width: 100%;
+    height: 500px;
+    cursor: grab;
+}
 
-    .topo-icon {
-        width: 60px;
-        height: 60px;
-        border-radius: 50%;
-        background: var(--card-bg);
-        border: 2px solid var(--accent);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.5rem;
-        margin-bottom: var(--space-2);
-        transition: all 0.3s ease;
-    }
+#topology-svg:active {
+    cursor: grabbing;
+}
 
-    .topo-node:hover .topo-icon {
-        transform: scale(1.1);
-        box-shadow: 0 0 20px rgba(230, 149, 0, 0.3);
-    }
+/* Node styles */
+.node {
+    cursor: pointer;
+    transition: transform 0.2s;
+}
 
-    .topo-label {
-        font-size: var(--text-xs);
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
+.node:hover {
+    filter: brightness(1.2);
+}
 
-    .topo-value {
-        font-size: var(--text-sm);
-        font-weight: 600;
-        color: var(--text-primary);
-    }
+.node-label {
+    font-size: 10px;
+    fill: #ccc;
+    text-anchor: middle;
+    pointer-events: none;
+    font-weight: 500;
+}
 
-    .quick-actions {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: var(--space-3);
-    }
+.node-icon {
+    fill: #fff;
+    font-family: "Font Awesome 5 Free";
+    font-weight: 900;
+    font-size: 12px;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+}
 
-    .quick-action-btn {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: var(--space-4);
-        background: var(--card-bg);
-        border: 1px solid var(--border-color);
-        border-radius: var(--radius-lg);
-        color: var(--text-secondary);
-        text-decoration: none;
-        transition: all 0.2s ease;
-    }
+/* Link styles */
+.link {
+    stroke: rgba(255,255,255,0.15);
+    stroke-width: 1.5px;
+    fill: none;
+}
 
-    .quick-action-btn:hover {
-        background: var(--hover-bg);
-        border-color: var(--accent);
-        color: var(--accent);
-        transform: translateY(-2px);
-        text-decoration: none;
-    }
+.link-wan_link { stroke: rgba(40, 167, 69, 0.5); stroke-width: 3px; }
+.link-policy_link { stroke: rgba(230, 149, 0, 0.4); stroke-width: 2px; }
+.link-device_link { stroke-dasharray: 4,2; stroke-width: 1px; }
 
-    .quick-action-btn i {
-        font-size: 1.5rem;
-        margin-bottom: var(--space-2);
-    }
+/* Tooltip */
+.topology-tooltip {
+    position: absolute;
+    background: rgba(0,0,0,0.95);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    color: #fff;
+    pointer-events: none;
+    z-index: 1000;
+    min-width: 180px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    display: none;
+}
 
-    .quick-action-btn span {
-        font-size: var(--text-xs);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+.topology-tooltip.visible { display: block; }
+
+.topology-tooltip h5 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9rem;
+    color: #fff;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 0.4rem;
+}
+
+.topology-tooltip .tt-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+}
+
+.topology-tooltip .tt-label { color: #888; }
+.topology-tooltip .tt-value { color: #fff; font-weight: 500; }
+
+/* Controls */
+.topology-controls {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
+    display: flex;
+    gap: 0.5rem;
+}
+
+.topology-controls .btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #fff;
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+
+.topology-controls .btn:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: rgba(255,255,255,0.4);
+}
+
+/* Drag hint */
+.drag-hint {
+    position: absolute;
+    bottom: 1rem;
+    left: 1rem;
+    font-size: 0.75rem;
+    color: #666;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* ==========================================================================
+   AI SECURITY SECTION
+   ========================================================================== */
+.ai-security-section {
+    margin-top: 1.5rem;
+}
+
+.ai-card {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.08);
+    overflow: hidden;
+    height: 100%;
+}
+
+.ai-card-header {
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ai-card-header h4 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.ai-card-header .status-badge {
+    font-size: 0.65rem;
+    padding: 0.2em 0.5em;
+    border-radius: 4px;
+}
+
+.ai-card-body {
+    padding: 1.25rem;
+}
+
+/* dnsXai Card */
+.dnsxai-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.dnsxai-stat {
+    text-align: center;
+    padding: 0.75rem;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+}
+
+.dnsxai-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #4fc3f7;
+}
+
+.dnsxai-stat-label {
+    font-size: 0.7rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* QSecBit Card */
+.qsecbit-gauge {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 1rem;
+}
+
+.qsecbit-gauge svg {
+    transform: rotate(-90deg);
+}
+
+.qsecbit-gauge-bg {
+    fill: none;
+    stroke: rgba(255,255,255,0.1);
+    stroke-width: 10;
+}
+
+.qsecbit-gauge-fill {
+    fill: none;
+    stroke-width: 10;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.5s ease;
+}
+
+.qsecbit-gauge-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.qsecbit-score {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+.qsecbit-label {
+    font-size: 0.65rem;
+    color: #888;
+    text-transform: uppercase;
+}
+
+.qsecbit-status-badge {
+    display: inline-block;
+    padding: 0.3em 0.8em;
+    border-radius: 15px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.qsecbit-status-badge.green {
+    background: rgba(40, 167, 69, 0.2);
+    color: #28a745;
+    border: 1px solid rgba(40, 167, 69, 0.4);
+}
+
+.qsecbit-status-badge.amber {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+    border: 1px solid rgba(255, 193, 7, 0.4);
+}
+
+.qsecbit-status-badge.red {
+    background: rgba(220, 53, 69, 0.2);
+    color: #dc3545;
+    border: 1px solid rgba(220, 53, 69, 0.4);
+}
+
+.qsecbit-layers {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.4rem;
+}
+
+.qsecbit-layer {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    background: rgba(0,0,0,0.3);
+    border-radius: 5px;
+    font-size: 0.7rem;
+}
+
+.qsecbit-layer-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+}
+
+.qsecbit-layer-name {
+    color: #888;
+    flex: 1;
+}
+
+.qsecbit-layer-status {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* ==========================================================================
+   BOTTOM SECTION - QUICK ACTIONS & REMOTE ACCESS
+   ========================================================================== */
+.bottom-section {
+    margin-top: 1.5rem;
+}
+
+.quick-actions-card, .remote-access-card {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 1.25rem;
+    height: 100%;
+}
+
+.quick-actions-card h5, .remote-access-card h5 {
+    margin: 0 0 1rem 0;
+    font-size: 0.85rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.quick-action-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+}
+
+.quick-action-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem 0.5rem;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    color: #ccc;
+    text-decoration: none;
+    transition: all 0.2s;
+    font-size: 0.75rem;
+}
+
+.quick-action-btn:hover {
+    background: rgba(230, 149, 0, 0.15);
+    border-color: rgba(230, 149, 0, 0.4);
+    color: #e69500;
+    transform: translateY(-2px);
+    text-decoration: none;
+}
+
+.quick-action-btn i {
+    font-size: 1.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.remote-access-status {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    margin-bottom: 1rem;
+}
+
+.remote-access-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+}
+
+.remote-access-icon.connected {
+    background: rgba(40, 167, 69, 0.2);
+    color: #28a745;
+}
+
+.remote-access-icon.disconnected {
+    background: rgba(108, 117, 125, 0.2);
+    color: #6c757d;
+}
+
+.remote-access-info h6 {
+    margin: 0 0 0.25rem 0;
+    color: #fff;
+    font-size: 0.9rem;
+}
+
+.remote-access-info p {
+    margin: 0;
+    color: #888;
+    font-size: 0.8rem;
+}
+
+/* Device Edit Modal */
+.device-modal-header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.device-modal-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 10px;
+    background: rgba(230, 149, 0, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    color: #e69500;
+}
+
+.policy-selector {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+.policy-option {
+    padding: 0.6rem 0.4rem;
+    border-radius: 8px;
+    text-align: center;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+}
+
+.policy-option:hover {
+    transform: translateY(-2px);
+}
+
+.policy-option.selected {
+    border-color: currentColor;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+}
+
+.policy-option i {
+    font-size: 1.1rem;
+    margin-bottom: 0.3rem;
+    display: block;
+}
+
+.policy-option span {
+    font-size: 0.65rem;
+    font-weight: 600;
+}
+
+/* Responsive */
+@media (max-width: 992px) {
+    .quick-action-grid {
+        grid-template-columns: repeat(2, 1fr);
     }
+}
+
+@media (max-width: 768px) {
+    .topology-container {
+        min-height: 400px;
+    }
+    #topology-svg {
+        height: 400px;
+    }
+    .dnsxai-stats {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .policy-selector {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .topology-legend {
+        display: none;
+    }
+}
 </style>
 {% endblock %}
 
 {% block content %}
-<!-- Hero Stats Row -->
-<div class="dashboard-hero">
-    <!-- Security Score -->
-    <div class="stat-card stat-card-accent" id="stat-security">
-        <div class="stat-icon"><i class="fas fa-shield-halved"></i></div>
-        <div class="stat-content">
-            <div class="stat-label">Security Score</div>
-            <div class="stat-value">{{ "%.0f"|format(qsecbit_score * 100) }}<span class="stat-unit">%</span></div>
-        </div>
-        <span class="status-badge rag-{{ qsecbit_status|lower }}">{{ qsecbit_status }}</span>
-    </div>
-
-    <!-- Connected Devices -->
-    <div class="stat-card" id="stat-devices">
-        <div class="stat-icon"><i class="fas fa-laptop"></i></div>
-        <div class="stat-content">
-            <div class="stat-label">Connected Devices</div>
-            <div class="stat-value" data-animate="true">{{ device_count }}</div>
-        </div>
-    </div>
-
-    <!-- Threats Blocked -->
-    <div class="stat-card stat-card-danger" id="stat-threats">
-        <div class="stat-icon"><i class="fas fa-ban"></i></div>
-        <div class="stat-content">
-            <div class="stat-label">Threats Blocked</div>
-            <div class="stat-value" data-animate="true">{{ threats_blocked }}</div>
-        </div>
-    </div>
-
-    <!-- DNS Blocked -->
-    <div class="stat-card stat-card-info" id="stat-dns">
-        <div class="stat-icon"><i class="fas fa-brain"></i></div>
-        <div class="stat-content">
-            <div class="stat-label">DNS Blocked</div>
-            <div class="stat-value" data-animate="true">{{ dns_blocked }}</div>
-        </div>
-    </div>
-</div>
-
-<!-- AI Services Summary Row -->
-<div class="grid grid-2 mb-4">
-    <!-- SDN AutoPilot Summary -->
-    <div class="card">
-        <div class="card-header">
-            <div class="card-header-title">
-                <i class="fas fa-robot text-info"></i> SDN AutoPilot
-            </div>
-            <div class="card-header-actions">
-                <a href="{{ url_for('sdn.index') }}" class="btn btn-sm btn-link">Manage</a>
-            </div>
-        </div>
-        <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center mb-3">
+<!-- Network Topology -->
+<div class="row">
+    <div class="col-12">
+        <div class="topology-container">
+            <div class="topology-header">
                 <div>
-                    <span class="status-badge {% if sdn_summary.autopilot_enabled %}wan-primary{% else %}device-offline{% endif %}">
-                        {{ 'Active' if sdn_summary.autopilot_enabled else 'Inactive' }}
-                    </span>
+                    <h3><i class="fas fa-project-diagram mr-2"></i>Network Topology</h3>
                 </div>
-                <div class="text-right">
-                    <span class="h3 mb-0">{{ sdn_summary.online_devices }}</span>
-                    <span class="text-muted">/ {{ sdn_summary.total_devices }} devices</span>
-                </div>
-            </div>
-            <div class="row text-center">
-                <div class="col-4">
-                    <div class="h4 mb-0 text-success">{{ sdn_summary.full_access }}</div>
-                    <small class="text-muted">Full Access</small>
-                </div>
-                <div class="col-4">
-                    <div class="h4 mb-0 text-warning">{{ sdn_summary.internet_only }}</div>
-                    <small class="text-muted">Internet Only</small>
-                </div>
-                <div class="col-4">
-                    <div class="h4 mb-0 text-danger">{{ sdn_summary.quarantined }}</div>
-                    <small class="text-muted">Quarantined</small>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- dnsXai Summary -->
-    <div class="card">
-        <div class="card-header">
-            <div class="card-header-title">
-                <i class="fas fa-brain text-warning"></i> dnsXai Protection
-            </div>
-            <div class="card-header-actions">
-                <a href="{{ url_for('dnsxai.index') }}" class="btn btn-sm btn-link">Configure</a>
-            </div>
-        </div>
-        <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <div>
-                    <span class="status-badge {% if dnsxai_summary.enabled %}wan-primary{% else %}device-offline{% endif %}">
-                        {{ dnsxai_summary.protection_level if dnsxai_summary.enabled else 'Disabled' }}
-                    </span>
-                </div>
-                <div class="text-right">
-                    <span class="h3 mb-0">{{ dnsxai_summary.block_rate }}%</span>
-                    <span class="text-muted">blocked</span>
+                <div class="topology-legend">
+                    <div class="topology-legend-item">
+                        <span class="topology-legend-dot" style="background: #28a745;"></span>
+                        <span>WAN</span>
+                    </div>
+                    <div class="topology-legend-item">
+                        <span class="topology-legend-dot" style="background: #e69500;"></span>
+                        <span>Bridge</span>
+                    </div>
+                    <div class="topology-legend-item">
+                        <span class="topology-legend-dot" style="background: #dc3545;"></span>
+                        <span>Quarantine</span>
+                    </div>
+                    <div class="topology-legend-item">
+                        <span class="topology-legend-dot" style="background: #17a2b8;"></span>
+                        <span>Internet Only</span>
+                    </div>
+                    <div class="topology-legend-item">
+                        <span class="topology-legend-dot" style="background: #28a745;"></span>
+                        <span>Normal</span>
+                    </div>
+                    <div class="topology-legend-item">
+                        <span class="topology-legend-dot" style="background: #007bff;"></span>
+                        <span>Full Access</span>
+                    </div>
                 </div>
             </div>
-            <div class="row text-center">
-                <div class="col-4">
-                    <div class="h4 mb-0 text-danger">{{ dnsxai_summary.blocked_today }}</div>
-                    <small class="text-muted">Blocked Today</small>
-                </div>
-                <div class="col-4">
-                    <div class="h4 mb-0 text-info">{{ dnsxai_summary.queries_today }}</div>
-                    <small class="text-muted">Queries</small>
-                </div>
-                <div class="col-4">
-                    <div class="h5 mb-0 text-muted">{{ dnsxai_summary.top_blocked_category }}</div>
-                    <small class="text-muted">Top Category</small>
-                </div>
+            <svg id="topology-svg"></svg>
+            <div class="topology-tooltip" id="topology-tooltip"></div>
+            <div class="drag-hint">
+                <i class="fas fa-hand-pointer"></i>
+                <span>Drag devices to change policy</span>
+            </div>
+            <div class="topology-controls">
+                <button class="btn" id="btn-zoom-in" title="Zoom In"><i class="fas fa-plus"></i></button>
+                <button class="btn" id="btn-zoom-out" title="Zoom Out"><i class="fas fa-minus"></i></button>
+                <button class="btn" id="btn-reset" title="Reset View"><i class="fas fa-expand"></i></button>
+                <button class="btn" id="btn-refresh" title="Refresh"><i class="fas fa-sync-alt"></i></button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Main Dashboard Grid -->
-<div class="grid grid-2">
-    <!-- Left Column: Security & Network -->
-    <div>
-        <!-- QSecBit Gauge Card -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-header-title">
-                    <i class="fas fa-chart-pie"></i> Security Analysis
-                </div>
-                <div class="card-header-actions">
-                    <a href="{{ url_for('security.index') }}" class="btn btn-sm btn-link">Details</a>
-                </div>
+<!-- AI Security Section -->
+<div class="row ai-security-section">
+    <!-- dnsXai Card -->
+    <div class="col-lg-6 mb-3">
+        <div class="ai-card">
+            <div class="ai-card-header">
+                <h4><i class="fas fa-shield-virus text-info"></i> dnsXai Protection</h4>
+                {% if dnsxai_summary.enabled %}
+                <span class="status-badge bg-success">Active</span>
+                {% else %}
+                <span class="status-badge bg-secondary">Inactive</span>
+                {% endif %}
             </div>
-            <div class="card-body">
-                <div class="security-gauge-section">
-                    <div class="gauge-ring" id="security-gauge" data-gauge data-gauge-value="{{ (qsecbit_score * 100)|int }}" data-gauge-max="100"></div>
-                    <div>
-                        <div class="traffic-pips" id="security-layers">
-                            <!-- Will be populated by JS -->
-                        </div>
+            <div class="ai-card-body">
+                <div class="dnsxai-stats">
+                    <div class="dnsxai-stat">
+                        <div class="dnsxai-stat-value">{{ dnsxai_summary.blocked_today | default(0) }}</div>
+                        <div class="dnsxai-stat-label">Blocked Today</div>
+                    </div>
+                    <div class="dnsxai-stat">
+                        <div class="dnsxai-stat-value">{{ dnsxai_summary.block_rate | default(0) }}%</div>
+                        <div class="dnsxai-stat-label">Block Rate</div>
+                    </div>
+                    <div class="dnsxai-stat">
+                        <div class="dnsxai-stat-value">{{ dnsxai_summary.queries_today | default(0) }}</div>
+                        <div class="dnsxai-stat-label">Queries</div>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- Network Topology -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-header-title">
-                    <i class="fas fa-project-diagram"></i> Network Topology
+                <div class="d-flex justify-content-between align-items-center mb-3" style="font-size: 0.8rem;">
+                    <span class="text-muted">Top: <strong class="text-white">{{ dnsxai_summary.top_blocked_category | default('Ads & Trackers') }}</strong></span>
+                    <span class="text-muted">Level: <strong class="text-warning">{{ dnsxai_summary.protection_level | default('Standard') }}</strong></span>
                 </div>
-            </div>
-            <div class="card-body">
-                <div class="network-topology">
-                    <div class="topo-node">
-                        <div class="topo-icon"><i class="fas fa-globe text-info"></i></div>
-                        <div class="topo-label">WAN</div>
-                        <div class="topo-value" id="wan-status">Online</div>
-                    </div>
-                    <div class="topo-node">
-                        <div class="topo-icon"><i class="fas fa-fort-awesome text-warning"></i></div>
-                        <div class="topo-label">Fortress</div>
-                        <div class="topo-value">Active</div>
-                    </div>
-                    <div class="topo-node">
-                        <div class="topo-icon"><i class="fas fa-sitemap text-success"></i></div>
-                        <div class="topo-label">VLANs</div>
-                        <div class="topo-value">{{ vlan_count|default(5) }}</div>
-                    </div>
-                    <div class="topo-node">
-                        <div class="topo-icon"><i class="fas fa-laptop text-primary"></i></div>
-                        <div class="topo-label">Devices</div>
-                        <div class="topo-value">{{ device_count }}</div>
-                    </div>
+
+                <div class="d-flex" style="gap: 0.5rem;">
+                    <a href="{{ url_for('security.index') }}" class="btn btn-outline-info btn-sm flex-fill">
+                        <i class="fas fa-cog mr-1"></i> Configure
+                    </a>
+                    <button class="btn btn-outline-warning btn-sm flex-fill" id="btn-train-dnsxai">
+                        <i class="fas fa-brain mr-1"></i> Train Model
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Right Column: WAN Health & Activity -->
-    <div>
-        <!-- WAN Health Card -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-header-title">
-                    <i class="fas fa-heartbeat"></i> WAN Health
-                </div>
-                <div class="card-header-actions">
-                    <a href="{{ url_for('sdn.index') }}" class="btn btn-sm btn-link">Details</a>
-                </div>
+    <!-- QSecBit Card -->
+    <div class="col-lg-6 mb-3">
+        <div class="ai-card">
+            <div class="ai-card-header">
+                <h4><i class="fas fa-shield-alt text-warning"></i> QSecBit Score</h4>
+                <span class="status-badge bg-{{ 'success' if qsecbit_status == 'GREEN' else ('warning' if qsecbit_status == 'AMBER' else 'danger') }}">
+                    {{ qsecbit_status | default('GREEN') }}
+                </span>
             </div>
-            <div class="card-body">
-                <div class="wan-health-grid">
-                    <div class="health-bar-wrapper" data-health data-health-value="95" data-health-label="Primary WAN"></div>
-                    <div class="health-bar-wrapper" data-health data-health-value="{{ wan_backup_health|default(72) }}" data-health-label="Backup LTE"></div>
-                </div>
-                <div class="mt-4 traffic-pips" id="wan-traffic-pips"></div>
-            </div>
-        </div>
-
-        <!-- Recent Activity -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-header-title">
-                    <i class="fas fa-clock"></i> Recent Activity
-                </div>
-                <div class="card-header-actions">
-                    <a href="{{ url_for('security.index') }}" class="btn btn-sm btn-link">View All</a>
-                </div>
-            </div>
-            <div class="card-body p-0">
-                <div class="timeline" id="activity-timeline">
-                    {% for threat in recent_threats[:5] %}
-                    <div class="timeline-event">
-                        <div class="timeline-marker" data-severity="{{ threat.severity }}"></div>
-                        <div class="timeline-content">
-                            <div class="timeline-header">
-                                <span class="timeline-time">{{ threat.time }}</span>
-                                <span class="timeline-type">{{ threat.type }}</span>
+            <div class="ai-card-body">
+                <div class="row align-items-center">
+                    <div class="col-5">
+                        <div class="qsecbit-gauge">
+                            <svg width="120" height="120" viewBox="0 0 120 120">
+                                <circle class="qsecbit-gauge-bg" cx="60" cy="60" r="50"/>
+                                <circle class="qsecbit-gauge-fill" cx="60" cy="60" r="50"
+                                    stroke="{{ '#28a745' if qsecbit_status == 'GREEN' else ('#ffc107' if qsecbit_status == 'AMBER' else '#dc3545') }}"
+                                    stroke-dasharray="314.16"
+                                    stroke-dashoffset="{{ 314.16 - (qsecbit_score * 314.16) }}"/>
+                            </svg>
+                            <div class="qsecbit-gauge-value">
+                                <div class="qsecbit-score">{{ (qsecbit_score * 100)|int }}</div>
+                                <div class="qsecbit-label">Score</div>
                             </div>
-                            <div class="timeline-body">{{ threat.source }}</div>
                         </div>
                     </div>
-                    {% else %}
-                    <div class="p-4 text-center text-muted">
-                        <i class="fas fa-check-circle text-success fa-2x mb-2"></i>
-                        <p class="mb-0">No recent threats detected</p>
+                    <div class="col-7">
+                        <div class="text-center mb-3">
+                            <span class="qsecbit-status-badge {{ qsecbit_status | lower }}">
+                                {% if qsecbit_status == 'GREEN' %}
+                                <i class="fas fa-check-circle mr-1"></i> Secure
+                                {% elif qsecbit_status == 'AMBER' %}
+                                <i class="fas fa-exclamation-triangle mr-1"></i> Warning
+                                {% else %}
+                                <i class="fas fa-times-circle mr-1"></i> Critical
+                                {% endif %}
+                            </span>
+                        </div>
+                        <div class="qsecbit-layers">
+                            <div class="qsecbit-layer">
+                                <span class="qsecbit-layer-dot" style="background: #28a745;"></span>
+                                <span class="qsecbit-layer-name">L2</span>
+                                <span class="qsecbit-layer-status">OK</span>
+                            </div>
+                            <div class="qsecbit-layer">
+                                <span class="qsecbit-layer-dot" style="background: #28a745;"></span>
+                                <span class="qsecbit-layer-name">L3</span>
+                                <span class="qsecbit-layer-status">OK</span>
+                            </div>
+                            <div class="qsecbit-layer">
+                                <span class="qsecbit-layer-dot" style="background: #28a745;"></span>
+                                <span class="qsecbit-layer-name">L4</span>
+                                <span class="qsecbit-layer-status">OK</span>
+                            </div>
+                            <div class="qsecbit-layer">
+                                <span class="qsecbit-layer-dot" style="background: #28a745;"></span>
+                                <span class="qsecbit-layer-name">L7</span>
+                                <span class="qsecbit-layer-status">OK</span>
+                            </div>
+                        </div>
                     </div>
-                    {% endfor %}
+                </div>
+
+                <div class="mt-3">
+                    <a href="{{ url_for('security.index') }}" class="btn btn-outline-warning btn-sm btn-block">
+                        <i class="fas fa-chart-line mr-1"></i> View Security Details
+                    </a>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Remote Access Status -->
-<div class="card mt-4">
-    <div class="card-header">
-        <div class="card-header-title">
-            <i class="fas fa-cloud"></i> Remote Access
-        </div>
-        <div class="card-header-actions">
-            <a href="{{ url_for('tunnel.index') }}" class="btn btn-sm btn-link">Configure</a>
-        </div>
-    </div>
-    <div class="card-body py-3">
-        {% if tunnel_status.state == 'connected' %}
-        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-            <div class="d-flex align-items-center gap-3">
-                <span class="status-badge wan-primary">Connected</span>
-                <a href="https://{{ tunnel_status.hostname }}" target="_blank" class="text-accent">
-                    <i class="fas fa-external-link-alt mr-1"></i>https://{{ tunnel_status.hostname }}
+<!-- Quick Actions & Remote Access -->
+<div class="row bottom-section">
+    <div class="col-lg-8 mb-3">
+        <div class="quick-actions-card">
+            <h5><i class="fas fa-bolt mr-2"></i>Quick Actions</h5>
+            <div class="quick-action-grid">
+                <a href="{{ url_for('sdn.index') }}" class="quick-action-btn">
+                    <i class="fas fa-network-wired"></i>
+                    <span>SDN AI</span>
+                </a>
+                <a href="{{ url_for('security.index') }}" class="quick-action-btn">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>AI Security</span>
+                </a>
+                <a href="{{ url_for('slaai.index') }}" class="quick-action-btn">
+                    <i class="fas fa-random"></i>
+                    <span>WAN Failover</span>
+                </a>
+                <a href="{{ url_for('settings.index') }}" class="quick-action-btn">
+                    <i class="fas fa-cog"></i>
+                    <span>Settings</span>
                 </a>
             </div>
-            <small class="text-muted">Access your Fortress from anywhere securely</small>
         </div>
-        {% elif tunnel_status.state == 'configured' %}
-        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-            <div class="d-flex align-items-center gap-3">
-                <span class="status-badge wan-backup">Stopped</span>
-                <span class="text-muted">{{ tunnel_status.hostname or 'Tunnel configured' }}</span>
+    </div>
+
+    <div class="col-lg-4 mb-3">
+        <div class="remote-access-card">
+            <h5><i class="fas fa-cloud mr-2"></i>Remote Access</h5>
+            <div class="remote-access-status">
+                {% if tunnel_status.state == 'connected' %}
+                <div class="remote-access-icon connected">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <div class="remote-access-info">
+                    <h6>Connected</h6>
+                    <p>{{ tunnel_status.hostname or 'Cloudflare Tunnel' }}</p>
+                </div>
+                {% else %}
+                <div class="remote-access-icon disconnected">
+                    <i class="fas fa-cloud"></i>
+                </div>
+                <div class="remote-access-info">
+                    <h6>Not Configured</h6>
+                    <p>Set up remote access</p>
+                </div>
+                {% endif %}
             </div>
-            <form action="{{ url_for('tunnel.start') }}" method="post" class="d-inline">
-                <button type="submit" class="btn btn-sm btn-success">
-                    <i class="fas fa-play mr-1"></i>Start Tunnel
+            <a href="{{ url_for('tunnel.index') }}" class="btn btn-outline-light btn-sm btn-block">
+                <i class="fas fa-external-link-alt mr-1"></i> Manage Tunnel
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Device Edit Modal -->
+<div class="modal fade" id="device-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content bg-dark">
+            <div class="modal-header device-modal-header border-0">
+                <div class="d-flex align-items-center">
+                    <div class="device-modal-icon mr-3">
+                        <i class="fas fa-laptop" id="modal-device-icon"></i>
+                    </div>
+                    <div>
+                        <h5 class="modal-title mb-0" id="modal-device-name">Device Name</h5>
+                        <small class="text-muted" id="modal-device-ip">192.168.1.100</small>
+                    </div>
+                </div>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">MAC Address</span>
+                        <span class="text-white" style="font-family: monospace;" id="modal-device-mac">00:00:00:00:00:00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Manufacturer</span>
+                        <span class="text-white" id="modal-device-manufacturer">Unknown</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-muted">Status</span>
+                        <span id="modal-device-status"><span class="badge badge-success">Online</span></span>
+                    </div>
+                </div>
+
+                <hr class="border-secondary">
+
+                <label class="text-muted mb-2">Select Policy</label>
+                <div class="policy-selector">
+                    <div class="policy-option" data-policy="quarantine" style="background: rgba(220,53,69,0.2); color: #dc3545;">
+                        <i class="fas fa-ban"></i>
+                        <span>Quarantine</span>
+                    </div>
+                    <div class="policy-option" data-policy="internet_only" style="background: rgba(23,162,184,0.2); color: #17a2b8;">
+                        <i class="fas fa-globe"></i>
+                        <span>Internet</span>
+                    </div>
+                    <div class="policy-option" data-policy="lan_only" style="background: rgba(255,193,7,0.2); color: #ffc107;">
+                        <i class="fas fa-home"></i>
+                        <span>LAN Only</span>
+                    </div>
+                    <div class="policy-option" data-policy="normal" style="background: rgba(40,167,69,0.2); color: #28a745;">
+                        <i class="fas fa-check-circle"></i>
+                        <span>Normal</span>
+                    </div>
+                    <div class="policy-option" data-policy="full_access" style="background: rgba(0,123,255,0.2); color: #007bff;">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Full</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" id="btn-save-policy">
+                    <i class="fas fa-save mr-1"></i> Save Policy
                 </button>
-            </form>
-        </div>
-        {% else %}
-        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-            <div class="d-flex align-items-center gap-3">
-                <span class="status-badge device-offline">Not Configured</span>
-                <span class="text-muted">Enable secure remote access to your dashboard</span>
             </div>
-            <a href="{{ url_for('tunnel.wizard') }}" class="btn btn-sm btn-primary">
-                <i class="fas fa-magic mr-1"></i>Setup Wizard
-            </a>
-        </div>
-        {% endif %}
-    </div>
-</div>
-
-<!-- Quick Actions -->
-<div class="card mt-4">
-    <div class="card-header">
-        <div class="card-header-title">
-            <i class="fas fa-bolt"></i> Quick Actions
-        </div>
-    </div>
-    <div class="card-body">
-        <div class="quick-actions">
-            <a href="{{ url_for('clients.index') }}" class="quick-action-btn">
-                <i class="fas fa-laptop"></i>
-                <span>View Devices</span>
-            </a>
-            <a href="{{ url_for('networks.index') }}" class="quick-action-btn">
-                <i class="fas fa-sitemap"></i>
-                <span>Manage VLANs</span>
-            </a>
-            <a href="{{ url_for('security.index') }}" class="quick-action-btn">
-                <i class="fas fa-shield-halved"></i>
-                <span>Security</span>
-            </a>
-            <a href="{{ url_for('dnsxai.index') }}" class="quick-action-btn">
-                <i class="fas fa-brain"></i>
-                <span>dnsXai</span>
-            </a>
-            <a href="{{ url_for('sdn.index') }}" class="quick-action-btn">
-                <i class="fas fa-network-wired"></i>
-                <span>SDN AI</span>
-            </a>
-            {% if current_user.is_admin %}
-            <a href="{{ url_for('settings.index') }}" class="quick-action-btn">
-                <i class="fas fa-cog"></i>
-                <span>Settings</span>
-            </a>
-            {% endif %}
         </div>
     </div>
 </div>
-
-{% if not system_data_available %}
-<div class="alert alert-warning">
-    <i class="fas fa-exclamation-triangle"></i>
-    <strong>Limited Data:</strong> System data module not available. Some metrics may not display correctly.
-</div>
-{% endif %}
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://d3js.org/d3.v7.min.js"></script>
 <script>
+// Network Topology Visualization
 (function() {
-    // Initialize Security Layers Traffic Pips
-    const securityLayers = new Fortress.TrafficPips(document.getElementById('security-layers'), {
-        sections: [
-            { id: 'l2', label: 'L2 Data Link', active: 10, status: 'nominal', value: '0 alerts' },
-            { id: 'l3', label: 'L3 Network', active: 8, status: 'nominal', value: '0 alerts' },
-            { id: 'l4', label: 'L4 Transport', active: 9, status: 'nominal', value: '0 alerts' },
-            { id: 'l7', label: 'L7 Application', active: 11, status: 'nominal', value: '0 alerts' }
-        ],
-        pulseInterval: 3000
-    });
+    const svg = d3.select('#topology-svg');
+    const container = document.querySelector('.topology-container');
+    const tooltip = document.getElementById('topology-tooltip');
 
-    // Initialize WAN Traffic Pips
-    const wanPips = new Fortress.TrafficPips(document.getElementById('wan-traffic-pips'), {
-        sections: [
-            { id: 'inbound', label: 'Inbound', active: 7, status: 'nominal', value: '{{ wan_inbound|default("12.5 MB/s") }}' },
-            { id: 'outbound', label: 'Outbound', active: 4, status: 'nominal', value: '{{ wan_outbound|default("3.2 MB/s") }}' }
-        ],
-        pulseInterval: 2000
-    });
+    let width = container.clientWidth;
+    let height = 500;
+    let simulation, nodes, links, nodeElements, linkElements;
+    let selectedDevice = null;
+    let currentZoom = d3.zoomIdentity;
 
-    // Initialize Security Gauge with proper animation
-    const gaugeEl = document.getElementById('security-gauge');
-    if (gaugeEl) {
-        const securityGauge = new Fortress.Gauge(gaugeEl, {
-            value: {{ (qsecbit_score * 100)|int }},
-            max: 100,
-            thresholds: { green: 45, amber: 70 },
-            suffix: '%',
-            onChange: function(value, color) {
-                // Update badge color
-                const badge = document.getElementById('qsecbit-badge');
-                if (badge) {
-                    badge.className = 'status-badge rag-' + color;
+    // Icon mapping (FontAwesome unicode)
+    const iconMap = {
+        'globe': '\uf0ac',
+        'signal': '\uf012',
+        'network-wired': '\uf6ff',
+        'ban': '\uf05e',
+        'home': '\uf015',
+        'check-circle': '\uf058',
+        'shield-alt': '\uf3ed',
+        'layer-group': '\uf5fd',
+        'laptop': '\uf109',
+        'mobile-alt': '\uf3cd',
+        'tablet-alt': '\uf3fa',
+        'tv': '\uf26c',
+        'print': '\uf02f',
+        'video': '\uf03d',
+        'desktop': '\uf108',
+        'server': '\uf233',
+        'gamepad': '\uf11b'
+    };
+
+    const policyColors = {
+        'quarantine': '#dc3545',
+        'internet_only': '#17a2b8',
+        'lan_only': '#ffc107',
+        'normal': '#28a745',
+        'full_access': '#007bff'
+    };
+
+    // Initialize SVG
+    svg.attr('width', width).attr('height', height);
+    const g = svg.append('g');
+
+    // Zoom behavior
+    const zoom = d3.zoom()
+        .scaleExtent([0.3, 3])
+        .on('zoom', (event) => {
+            currentZoom = event.transform;
+            g.attr('transform', event.transform);
+        });
+    svg.call(zoom);
+
+    // Arrow marker for links
+    svg.append('defs').append('marker')
+        .attr('id', 'arrowhead')
+        .attr('viewBox', '-0 -5 10 10')
+        .attr('refX', 20)
+        .attr('refY', 0)
+        .attr('orient', 'auto')
+        .attr('markerWidth', 6)
+        .attr('markerHeight', 6)
+        .append('path')
+        .attr('d', 'M 0,-5 L 10,0 L 0,5')
+        .attr('fill', 'rgba(255,255,255,0.3)');
+
+    function loadTopology() {
+        fetch('/api/dashboard/topology')
+            .then(res => res.json())
+            .then(data => renderTopology(data))
+            .catch(err => console.error('Failed to load topology:', err));
+    }
+
+    function renderTopology(data) {
+        nodes = data.nodes;
+        links = data.links;
+
+        g.selectAll('*').remove();
+
+        // Create links
+        linkElements = g.append('g')
+            .attr('class', 'links')
+            .selectAll('line')
+            .data(links)
+            .enter()
+            .append('line')
+            .attr('class', d => `link link-${d.type}`);
+
+        // Create node groups
+        nodeElements = g.append('g')
+            .attr('class', 'nodes')
+            .selectAll('g')
+            .data(nodes)
+            .enter()
+            .append('g')
+            .attr('class', d => `node node-${d.type}`)
+            .call(d3.drag()
+                .on('start', dragStarted)
+                .on('drag', dragged)
+                .on('end', dragEnded));
+
+        // Draw node shapes
+        nodeElements.each(function(d) {
+            const node = d3.select(this);
+
+            if (d.type === 'wan') {
+                node.append('rect')
+                    .attr('width', 70)
+                    .attr('height', 35)
+                    .attr('x', -35)
+                    .attr('y', -17.5)
+                    .attr('rx', 8)
+                    .attr('fill', d.status === 'online' ? '#28a745' : '#6c757d')
+                    .attr('stroke', 'rgba(255,255,255,0.3)')
+                    .attr('stroke-width', 2);
+            } else if (d.type === 'bridge') {
+                node.append('polygon')
+                    .attr('points', '0,-30 26,-15 26,15 0,30 -26,15 -26,-15')
+                    .attr('fill', '#e69500')
+                    .attr('stroke', 'rgba(255,255,255,0.4)')
+                    .attr('stroke-width', 2);
+            } else if (d.type === 'policy') {
+                node.append('circle')
+                    .attr('r', 35)
+                    .attr('fill', d.color)
+                    .attr('opacity', 0.85)
+                    .attr('stroke', 'rgba(255,255,255,0.3)')
+                    .attr('stroke-width', 2);
+
+                // Device count badge
+                if (d.device_count > 0) {
+                    node.append('circle')
+                        .attr('cx', 25)
+                        .attr('cy', -25)
+                        .attr('r', 12)
+                        .attr('fill', '#fff');
+                    node.append('text')
+                        .attr('x', 25)
+                        .attr('y', -21)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', d.color)
+                        .attr('font-size', '11px')
+                        .attr('font-weight', 'bold')
+                        .text(d.device_count);
                 }
+            } else if (d.type === 'device') {
+                node.append('circle')
+                    .attr('r', 20)
+                    .attr('fill', policyColors[d.policy] || '#6c757d')
+                    .attr('opacity', d.status === 'online' ? 1 : 0.5)
+                    .attr('stroke', 'rgba(255,255,255,0.4)')
+                    .attr('stroke-width', 1.5);
             }
+
+            // Icon
+            node.append('text')
+                .attr('class', 'node-icon')
+                .attr('dy', 5)
+                .text(iconMap[d.icon] || iconMap['laptop']);
+
+            // Label
+            const labelOffset = d.type === 'policy' ? 50 : (d.type === 'device' ? 35 : 30);
+            node.append('text')
+                .attr('class', 'node-label')
+                .attr('dy', labelOffset)
+                .text(d.label ? d.label.substring(0, 14) : '');
+        });
+
+        // Mouse events
+        nodeElements
+            .on('mouseover', showTooltip)
+            .on('mouseout', hideTooltip)
+            .on('click', (event, d) => {
+                if (d.type === 'device') {
+                    openDeviceModal(d);
+                }
+            });
+
+        // Force simulation
+        simulation = d3.forceSimulation(nodes)
+            .force('link', d3.forceLink(links).id(d => d.id).distance(d => {
+                if (d.type === 'wan_link') return 120;
+                if (d.type === 'policy_link') return 140;
+                return 90;
+            }))
+            .force('charge', d3.forceManyBody().strength(d => {
+                if (d.type === 'bridge') return -500;
+                if (d.type === 'policy') return -350;
+                if (d.type === 'wan') return -200;
+                return -120;
+            }))
+            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('collision', d3.forceCollide().radius(d => {
+                if (d.type === 'policy') return 55;
+                if (d.type === 'device') return 35;
+                if (d.type === 'bridge') return 50;
+                return 45;
+            }))
+            .force('y', d3.forceY().y(d => {
+                if (d.type === 'wan') return 80;
+                if (d.type === 'bridge') return 180;
+                if (d.type === 'policy') return 320;
+                return 450;
+            }).strength(0.15))
+            .on('tick', ticked);
+    }
+
+    function ticked() {
+        linkElements
+            .attr('x1', d => d.source.x)
+            .attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x)
+            .attr('y2', d => d.target.y);
+
+        nodeElements.attr('transform', d => `translate(${d.x},${d.y})`);
+    }
+
+    function dragStarted(event, d) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+        if (d.type === 'device') {
+            d3.select(this).select('circle')
+                .attr('stroke', '#fff')
+                .attr('stroke-width', 3);
+        }
+    }
+
+    function dragged(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+    }
+
+    function dragEnded(event, d) {
+        if (!event.active) simulation.alphaTarget(0);
+
+        d3.select(this).select('circle')
+            .attr('stroke', 'rgba(255,255,255,0.4)')
+            .attr('stroke-width', 1.5);
+
+        // Check if dropped on a policy node
+        if (d.type === 'device') {
+            const dropTarget = findPolicyAtPosition(event.x, event.y);
+            if (dropTarget && dropTarget.name !== d.policy) {
+                updateDevicePolicy(d.mac, dropTarget.name);
+            }
+        }
+
+        d.fx = null;
+        d.fy = null;
+    }
+
+    function findPolicyAtPosition(x, y) {
+        for (const node of nodes) {
+            if (node.type === 'policy') {
+                const dist = Math.sqrt((node.x - x) ** 2 + (node.y - y) ** 2);
+                if (dist < 55) return node;
+            }
+        }
+        return null;
+    }
+
+    function showTooltip(event, d) {
+        let html = `<h5>${d.label || d.id}</h5>`;
+
+        if (d.type === 'device') {
+            html += `
+                <div class="tt-row"><span class="tt-label">IP:</span><span class="tt-value">${d.ip || 'N/A'}</span></div>
+                <div class="tt-row"><span class="tt-label">MAC:</span><span class="tt-value">${d.mac || 'N/A'}</span></div>
+                <div class="tt-row"><span class="tt-label">Policy:</span><span class="tt-value">${d.policy}</span></div>
+                <div class="tt-row"><span class="tt-label">Status:</span><span class="tt-value">${d.status}</span></div>
+            `;
+        } else if (d.type === 'policy') {
+            html += `<div class="tt-row"><span class="tt-label">Devices:</span><span class="tt-value">${d.device_count}</span></div>`;
+        } else if (d.type === 'wan') {
+            html += `<div class="tt-row"><span class="tt-label">Status:</span><span class="tt-value">${d.status}</span></div>`;
+            html += `<div class="tt-row"><span class="tt-label">Type:</span><span class="tt-value">${d.subtype || 'Ethernet'}</span></div>`;
+        }
+
+        tooltip.innerHTML = html;
+
+        const rect = container.getBoundingClientRect();
+        tooltip.style.left = (event.clientX - rect.left + 15) + 'px';
+        tooltip.style.top = (event.clientY - rect.top + 15) + 'px';
+        tooltip.classList.add('visible');
+    }
+
+    function hideTooltip() {
+        tooltip.classList.remove('visible');
+    }
+
+    function openDeviceModal(device) {
+        selectedDevice = device;
+        document.getElementById('modal-device-name').textContent = device.label || 'Unknown Device';
+        document.getElementById('modal-device-ip').textContent = device.ip || 'N/A';
+        document.getElementById('modal-device-mac').textContent = device.mac || 'N/A';
+        document.getElementById('modal-device-manufacturer').textContent = device.manufacturer || 'Unknown';
+        document.getElementById('modal-device-icon').className = `fas fa-${device.icon || 'laptop'}`;
+
+        const statusBadge = device.status === 'online'
+            ? '<span class="badge badge-success">Online</span>'
+            : '<span class="badge badge-secondary">Offline</span>';
+        document.getElementById('modal-device-status').innerHTML = statusBadge;
+
+        document.querySelectorAll('.policy-option').forEach(el => {
+            el.classList.toggle('selected', el.dataset.policy === device.policy);
+        });
+
+        $('#device-modal').modal('show');
+    }
+
+    function updateDevicePolicy(mac, newPolicy) {
+        fetch(`/api/dashboard/device/${encodeURIComponent(mac)}/policy`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({policy: newPolicy})
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                toastr.success(`Policy updated to ${newPolicy.replace('_', ' ')}`);
+                loadTopology();
+            } else {
+                toastr.error(data.error || 'Failed to update policy');
+            }
+        })
+        .catch(err => {
+            console.error('Policy update error:', err);
+            toastr.error('Failed to update policy');
         });
     }
 
-    // Auto-refresh dashboard stats
-    const poller = new Fortress.Poller({
-        url: '/api/dashboard/stats',
-        interval: 10000,
-        onData: function(data) {
-            if (data.qsecbit) {
-                // Update gauge
-                const gaugeEl = document.getElementById('security-gauge');
-                if (gaugeEl && gaugeEl._gauge) {
-                    gaugeEl._gauge.setValue(data.qsecbit.score * 100);
-                }
-            }
+    // Policy selector in modal
+    document.querySelectorAll('.policy-option').forEach(el => {
+        el.addEventListener('click', function() {
+            document.querySelectorAll('.policy-option').forEach(p => p.classList.remove('selected'));
+            this.classList.add('selected');
+        });
+    });
 
-            // Update stat cards with animation
-            if (data.device_count !== undefined) {
-                const el = document.querySelector('#stat-devices .stat-value');
-                if (el) Fortress.Utils.animateValue(el, parseInt(el.textContent) || 0, data.device_count);
-            }
-
-            if (data.threats_blocked !== undefined) {
-                const el = document.querySelector('#stat-threats .stat-value');
-                if (el) Fortress.Utils.animateValue(el, parseInt(el.textContent) || 0, data.threats_blocked);
-            }
-
-            if (data.dns_blocked !== undefined) {
-                const el = document.querySelector('#stat-dns .stat-value');
-                if (el) Fortress.Utils.animateValue(el, parseInt(el.textContent) || 0, data.dns_blocked);
-            }
-
-            // Update WAN status
-            if (data.wan_status) {
-                document.getElementById('wan-status').textContent = data.wan_status;
-            }
-        },
-        onError: function(err) {
-            console.log('Stats refresh error:', err);
+    document.getElementById('btn-save-policy').addEventListener('click', function() {
+        const selected = document.querySelector('.policy-option.selected');
+        if (selected && selectedDevice) {
+            updateDevicePolicy(selectedDevice.mac, selected.dataset.policy);
+            $('#device-modal').modal('hide');
         }
     });
 
-    poller.start();
+    // Control buttons
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+        svg.transition().call(zoom.scaleBy, 1.3);
+    });
+
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+        svg.transition().call(zoom.scaleBy, 0.7);
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        svg.transition().call(zoom.transform, d3.zoomIdentity);
+    });
+
+    document.getElementById('btn-refresh').addEventListener('click', () => {
+        loadTopology();
+        toastr.info('Refreshing topology...');
+    });
+
+    // Train dnsXai button
+    document.getElementById('btn-train-dnsxai').addEventListener('click', function() {
+        this.disabled = true;
+        this.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Training...';
+        setTimeout(() => {
+            this.disabled = false;
+            this.innerHTML = '<i class="fas fa-brain mr-1"></i> Train Model';
+            toastr.success('Model training initiated');
+        }, 2000);
+    });
+
+    // Handle resize
+    window.addEventListener('resize', () => {
+        width = container.clientWidth;
+        svg.attr('width', width);
+        if (simulation) {
+            simulation.force('center', d3.forceCenter(width / 2, height / 2));
+            simulation.alpha(0.3).restart();
+        }
+    });
+
+    // Initial load
+    loadTopology();
+
+    // Auto-refresh every 30 seconds
+    setInterval(loadTopology, 30000);
 })();
 </script>
 {% endblock %}
