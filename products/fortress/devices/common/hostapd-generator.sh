@@ -2164,9 +2164,10 @@ wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 wpa_passphrase=$password
 
-# Access Control - ap_isolate=1 forces traffic through OVS for policy enforcement
+# Access Control - ap_isolate=0 allows client-to-client (required for HomeKit/AirPlay)
+# OVS still sees all traffic for policy enforcement via bridge attachment
 macaddr_acl=0
-ap_isolate=1
+ap_isolate=0
 max_num_sta=64
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
@@ -2753,9 +2754,10 @@ ieee80211w=1
 # WPA2 Fallback Password
 wpa_passphrase=$password
 
-# Access Control - ap_isolate=1 forces traffic through OVS for policy enforcement
+# Access Control - ap_isolate=0 allows client-to-client (required for HomeKit/AirPlay)
+# OVS still sees all traffic for policy enforcement via bridge attachment
 macaddr_acl=0
-ap_isolate=1
+ap_isolate=0
 max_num_sta=128
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
