@@ -441,16 +441,15 @@ class PresenceSensor:
         if not ip:
             return None
         try:
-            import subprocess
-            result = subprocess.run(
-                ['ip', 'neigh', 'show', ip],
-                capture_output=True, text=True, timeout=2
-            )
-            if result.returncode == 0:
-                parts = result.stdout.strip().split()
-                for i, part in enumerate(parts):
-                    if part == 'lladdr' and i + 1 < len(parts):
-                        return parts[i + 1].upper()
+            # Read /proc/net/arp directly (works in containers without iproute2)
+            with open('/proc/net/arp', 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 4 and parts[0] == ip:
+                        mac = parts[3]
+                        # Skip incomplete entries (00:00:00:00:00:00)
+                        if mac and mac != '00:00:00:00:00:00':
+                            return mac.upper()
         except Exception:
             pass
         return None
