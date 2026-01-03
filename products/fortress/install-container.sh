@@ -2036,10 +2036,11 @@ setup_vlan_dhcp() {
 # Interface binding
 # ============================================
 # DHCP/DNS listens ONLY on vlan100 (LAN gateway)
-# Using bind-interfaces + listen-address to avoid conflict with
-# Podman's aardvark-dns which listens on 172.20.200.1:53
+# Using bind-dynamic to allow late binding to interfaces that may not
+# exist at startup time (VLAN interfaces created by OVS post-setup)
+# This avoids race conditions where dnsmasq starts before vlan100 is ready
 interface=${lan_interface}
-bind-interfaces
+bind-dynamic
 listen-address=${gateway_lan}
 # Don't listen on localhost (avoids conflict with systemd-resolved)
 except-interface=lo
@@ -2110,9 +2111,26 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Wait for vlan100 to have IP address (required for bind-interfaces)
-# Exit with failure if not ready after 60 seconds - systemd will retry
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do ip addr show vlan100 2>/dev/null | grep -q "inet 10.200" && exit 0; sleep 1; done; echo "ERROR: vlan100 not ready after 60s"; exit 1'
+# Wait for vlan100 to have IP address AND be stable (required for DHCP socket binding)
+# 1. Wait up to 60s for vlan100 to get an IP
+# 2. Sleep 3s after finding it to let OVS OpenFlow rules propagate
+# 3. Verify interface is still ready (handles transient states)
+# This fixes the race condition where dnsmasq starts before DHCP socket can bind properly
+ExecStartPre=/bin/bash -c '\
+    echo "dnsmasq: Waiting for vlan100..."; \
+    for i in $(seq 1 60); do \
+        if ip addr show vlan100 2>/dev/null | grep -q "inet 10.200"; then \
+            echo "dnsmasq: vlan100 found, waiting for OpenFlow rules..."; \
+            sleep 3; \
+            if ip addr show vlan100 2>/dev/null | grep -q "inet 10.200"; then \
+                echo "dnsmasq: vlan100 stable, starting DHCP"; \
+                exit 0; \
+            fi; \
+        fi; \
+        sleep 1; \
+    done; \
+    echo "ERROR: vlan100 not ready after 60s"; \
+    exit 1'
 
 # ALWAYS restart dnsmasq if it stops (not just on failure)
 # This ensures DHCP is always available for clients
