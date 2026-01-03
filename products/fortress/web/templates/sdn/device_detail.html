@@ -299,17 +299,20 @@
                     <div class="form-group">
                         <label for="policy">Network Policy</label>
                         <select name="policy" id="policy" class="form-control bg-dark text-white">
-                            <option value="full_access" {% if device.policy == 'full_access' %}selected{% endif %}>
-                                Full Access - LAN + Internet
-                            </option>
-                            <option value="lan_only" {% if device.policy == 'lan_only' %}selected{% endif %}>
-                                LAN Only - No Internet
+                            <option value="quarantine" {% if device.policy == 'quarantine' or device.policy == 'isolated' %}selected{% endif %}>
+                                Quarantine - No Access
                             </option>
                             <option value="internet_only" {% if device.policy == 'internet_only' %}selected{% endif %}>
                                 Internet Only - No LAN
                             </option>
-                            <option value="isolated" {% if device.policy == 'isolated' %}selected{% endif %}>
-                                Isolated - Gateway Only
+                            <option value="lan_only" {% if device.policy == 'lan_only' %}selected{% endif %}>
+                                LAN Only - No Internet
+                            </option>
+                            <option value="normal" {% if device.policy == 'normal' or device.policy == 'smart_home' %}selected{% endif %}>
+                                Normal (Smart Home) - Curated Access
+                            </option>
+                            <option value="full_access" {% if device.policy == 'full_access' %}selected{% endif %}>
+                                Full Access - Management Device
                             </option>
                         </select>
                     </div>

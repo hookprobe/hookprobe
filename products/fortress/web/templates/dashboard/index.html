@@ -99,10 +99,14 @@
     fill: #fff;
     font-family: "Font Awesome 5 Free";
     font-weight: 900;
-    font-size: 12px;
+    font-size: 16px;
     text-anchor: middle;
     dominant-baseline: central;
     pointer-events: none;
+}
+
+.node-device .node-icon {
+    font-size: 14px;
 }
 
 /* Link styles */
@@ -1030,7 +1034,7 @@
                 }
             } else if (d.type === 'device') {
                 node.append('circle')
-                    .attr('r', 20)
+                    .attr('r', 14)
                     .attr('fill', policyColors[d.policy] || '#6c757d')
                     .attr('opacity', d.status === 'online' ? 1 : 0.5)
                     .attr('stroke', 'rgba(255,255,255,0.4)')
@@ -1044,7 +1048,7 @@
                 .text(iconMap[d.icon] || iconMap['laptop']);
 
             // Label
-            const labelOffset = d.type === 'policy' ? 50 : (d.type === 'device' ? 35 : 30);
+            const labelOffset = d.type === 'policy' ? 50 : (d.type === 'device' ? 26 : 30);
             node.append('text')
                 .attr('class', 'node-label')
                 .attr('dy', labelOffset)
@@ -1077,7 +1081,7 @@
             .force('center', d3.forceCenter(width / 2, height / 2))
             .force('collision', d3.forceCollide().radius(d => {
                 if (d.type === 'policy') return 55;
-                if (d.type === 'device') return 35;
+                if (d.type === 'device') return 24;
                 if (d.type === 'bridge') return 50;
                 return 45;
             }))
