@@ -15,9 +15,9 @@
 #   3. fts-ovs-connect.sh calls this script to apply per-device rules (priority 600-750)
 #
 # Per-device policies override base rules with higher priority:
-#   - QUARANTINE: Priority 1000-1001 (drop all except DHCP/DNS)
-#   - LAN_ONLY: Priority 600-750 (allow LAN, block internet)
-#   - INTERNET_ONLY: Priority 650-750 (block LAN, allow internet)
+#   - QUARANTINE: Priority 999-1001 (drop all except DHCP/DNS/ARP)
+#   - LAN_ONLY: Priority 600-750 (allow LAN devices, block internet)
+#   - INTERNET_ONLY: Priority 650-800 (allow DHCP/DNS/ARP, block ALL LAN including gateway ping)
 #   - FULL_ACCESS/NORMAL/SMART_HOME: No rules needed (use base priority 500)
 #
 
@@ -97,7 +97,8 @@ apply_policy() {
     local mac="$1"
     local policy="$2"
 
-    mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]')
+    # Normalize MAC: uppercase and colons (OVS expects XX:XX:XX:XX:XX:XX format)
+    mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]' | tr '-' ':')
 
     # Remove existing rules first
     remove_device_rules "$mac"
@@ -147,21 +148,34 @@ apply_policy() {
 
         internet_only)
             # INTERNET_ONLY: Internet access ONLY (voice assistants, BYOD, corporate devices)
-            # NO dashboard, NO LAN devices, NO containers - just internet
+            # NO dashboard, NO LAN devices, NO containers, NO gateway ping - just internet
             #
-            # Allow gateway (required for routing to internet)
-            add_flow "priority=750,ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
-            add_flow "priority=740,ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
-            # Block containers - no access to infrastructure
-            add_flow "priority=710,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
-            add_flow "priority=710,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
-            # Block all LAN (includes MGMT VLAN with dashboard)
+            # For internet routing: packets go THROUGH gateway (L2) but IP dst is internet host
+            # So we don't need to allow IP traffic TO gateway IP - only DHCP and DNS
+            #
+            # Priority 800: Allow DHCP (essential for IP assignment)
+            add_flow "priority=800,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
+            add_flow "priority=800,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
+            # Priority 800: Allow DNS to gateway only (for name resolution)
+            add_flow "priority=800,udp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
+            add_flow "priority=800,udp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
+            add_flow "priority=800,tcp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
+            add_flow "priority=800,tcp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
+            # Priority 800: Allow ARP (needed for gateway MAC resolution)
+            add_flow "priority=800,arp,dl_src=$mac,actions=NORMAL"
+            add_flow "priority=800,arp,dl_dst=$mac,actions=NORMAL"
+            # Priority 750: Block containers - no access to infrastructure
+            add_flow "priority=750,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
+            add_flow "priority=750,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
+            # Priority 700: Block ALL LAN traffic (including gateway - no ping allowed)
+            # This blocks: other devices, dashboard, gateway ICMP/ping
             add_flow "priority=700,ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=drop"
             add_flow "priority=700,ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=drop"
-            # Allow internet (everything else)
+            # Priority 650: Allow internet (non-LAN destinations)
+            # Internet traffic has nw_dst=internet_host (e.g., 8.8.8.8), not gateway IP
             add_flow "priority=650,ip,dl_src=$mac,actions=NORMAL"
             add_flow "priority=650,ip,dl_dst=$mac,actions=NORMAL"
-            log_info "Applied INTERNET_ONLY policy for $mac (no LAN/dashboard access)"
+            log_info "Applied INTERNET_ONLY policy for $mac (no LAN/gateway/dashboard access)"
             ;;
 
         full_access|normal|smart_home|default|"")
