@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 
 {% block title %}Dashboard - HookProbe Fortress{% endblock %}
-{% block page_title %}Dashboard{% endblock %}
+
+{% block page_header %}
+<!-- No page title on dashboard - content speaks for itself -->
+{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Dashboard</li>
+{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -168,6 +175,87 @@
         <div class="stat-content">
             <div class="stat-label">DNS Blocked</div>
             <div class="stat-value" data-animate="true">{{ dns_blocked }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- AI Services Summary Row -->
+<div class="grid grid-2 mb-4">
+    <!-- SDN AutoPilot Summary -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-header-title">
+                <i class="fas fa-robot text-info"></i> SDN AutoPilot
+            </div>
+            <div class="card-header-actions">
+                <a href="{{ url_for('sdn.index') }}" class="btn btn-sm btn-link">Manage</a>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <span class="status-badge {% if sdn_summary.autopilot_enabled %}wan-primary{% else %}device-offline{% endif %}">
+                        {{ 'Active' if sdn_summary.autopilot_enabled else 'Inactive' }}
+                    </span>
+                </div>
+                <div class="text-right">
+                    <span class="h3 mb-0">{{ sdn_summary.online_devices }}</span>
+                    <span class="text-muted">/ {{ sdn_summary.total_devices }} devices</span>
+                </div>
+            </div>
+            <div class="row text-center">
+                <div class="col-4">
+                    <div class="h4 mb-0 text-success">{{ sdn_summary.full_access }}</div>
+                    <small class="text-muted">Full Access</small>
+                </div>
+                <div class="col-4">
+                    <div class="h4 mb-0 text-warning">{{ sdn_summary.internet_only }}</div>
+                    <small class="text-muted">Internet Only</small>
+                </div>
+                <div class="col-4">
+                    <div class="h4 mb-0 text-danger">{{ sdn_summary.quarantined }}</div>
+                    <small class="text-muted">Quarantined</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- dnsXai Summary -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-header-title">
+                <i class="fas fa-brain text-warning"></i> dnsXai Protection
+            </div>
+            <div class="card-header-actions">
+                <a href="{{ url_for('dnsxai.index') }}" class="btn btn-sm btn-link">Configure</a>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <span class="status-badge {% if dnsxai_summary.enabled %}wan-primary{% else %}device-offline{% endif %}">
+                        {{ dnsxai_summary.protection_level if dnsxai_summary.enabled else 'Disabled' }}
+                    </span>
+                </div>
+                <div class="text-right">
+                    <span class="h3 mb-0">{{ dnsxai_summary.block_rate }}%</span>
+                    <span class="text-muted">blocked</span>
+                </div>
+            </div>
+            <div class="row text-center">
+                <div class="col-4">
+                    <div class="h4 mb-0 text-danger">{{ dnsxai_summary.blocked_today }}</div>
+                    <small class="text-muted">Blocked Today</small>
+                </div>
+                <div class="col-4">
+                    <div class="h4 mb-0 text-info">{{ dnsxai_summary.queries_today }}</div>
+                    <small class="text-muted">Queries</small>
+                </div>
+                <div class="col-4">
+                    <div class="h5 mb-0 text-muted">{{ dnsxai_summary.top_blocked_category }}</div>
+                    <small class="text-muted">Top Category</small>
+                </div>
+            </div>
         </div>
     </div>
 </div>
