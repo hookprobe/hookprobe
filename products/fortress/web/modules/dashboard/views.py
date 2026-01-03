@@ -40,6 +40,15 @@ except ImportError as e:
     def get_all_devices_from_db():
         return []
 
+# Import ecosystem bubble manager for same-user device grouping
+ECOSYSTEM_BUBBLE_AVAILABLE = False
+try:
+    from ecosystem_bubble import get_bubble_manager
+    ECOSYSTEM_BUBBLE_AVAILABLE = True
+    logger.info("Dashboard: ecosystem_bubble module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
+
 # Data directory - shared volume from fts-qsecbit agent
 DATA_DIR = Path('/opt/hookprobe/fortress/data')
 
@@ -634,6 +643,86 @@ def _classify_interface_type(name):
     return 'other'
 
 
+def get_ecosystem_bubbles():
+    """Get active ecosystem bubbles for same-user device grouping.
+
+    Returns list of bubbles with their member devices.
+    """
+    bubbles = []
+
+    if ECOSYSTEM_BUBBLE_AVAILABLE:
+        try:
+            manager = get_bubble_manager()
+            active_bubbles = manager.get_active_bubbles()
+            for bubble in active_bubbles:
+                bubbles.append({
+                    'bubble_id': bubble.bubble_id,
+                    'ecosystem': bubble.ecosystem,
+                    'devices': list(bubble.devices),  # MAC addresses
+                    'state': bubble.state.value,
+                    'confidence': bubble.confidence,
+                    'owner_hint': bubble.owner_hint,
+                    'device_count': len(bubble.devices),
+                    # Ecosystem-specific colors (30% opacity applied in frontend)
+                    'color': {
+                        'apple': '#A2AAAD',      # Apple gray
+                        'google': '#4285F4',     # Google blue
+                        'amazon': '#FF9900',     # Amazon orange
+                        'samsung': '#1428A0',    # Samsung blue
+                        'microsoft': '#00A4EF',  # Microsoft blue
+                        'mixed': '#6c757d',      # Gray for mixed ecosystems
+                    }.get(bubble.ecosystem, '#6c757d'),
+                })
+        except Exception as e:
+            logger.warning(f"Failed to get ecosystem bubbles: {e}")
+
+    # Fallback: Try reading from clustering database directly
+    if not bubbles:
+        try:
+            import sqlite3
+            clustering_db = Path('/var/lib/hookprobe/clustering.db')
+            if clustering_db.exists():
+                conn = sqlite3.connect(str(clustering_db), timeout=2)
+                cursor = conn.cursor()
+                # Get recent clusters (last 24 hours)
+                cursor.execute('''
+                    SELECT DISTINCT bubble_id, ecosystem, devices_json, confidence
+                    FROM cluster_history
+                    WHERE datetime(created_at) > datetime('now', '-24 hours')
+                    AND bubble_id IS NOT NULL
+                    ORDER BY created_at DESC
+                ''')
+                seen_bubbles = set()
+                for row in cursor.fetchall():
+                    bubble_id, ecosystem, devices_json, confidence = row
+                    if bubble_id and bubble_id not in seen_bubbles:
+                        seen_bubbles.add(bubble_id)
+                        devices = json.loads(devices_json) if devices_json else []
+                        if len(devices) >= 2:  # Only bubbles with 2+ devices
+                            bubbles.append({
+                                'bubble_id': bubble_id,
+                                'ecosystem': ecosystem or 'mixed',
+                                'devices': devices,
+                                'state': 'active',
+                                'confidence': confidence or 0.5,
+                                'owner_hint': None,
+                                'device_count': len(devices),
+                                'color': {
+                                    'apple': '#A2AAAD',
+                                    'google': '#4285F4',
+                                    'amazon': '#FF9900',
+                                    'samsung': '#1428A0',
+                                    'microsoft': '#00A4EF',
+                                    'mixed': '#6c757d',
+                                }.get(ecosystem, '#6c757d'),
+                            })
+                conn.close()
+        except Exception as e:
+            logger.debug(f"Could not read clustering database: {e}")
+
+    return bubbles
+
+
 def get_topology_data():
     """Build network topology data for D3.js visualization."""
     # Get interfaces
@@ -641,6 +730,15 @@ def get_topology_data():
 
     # Get devices from autopilot or ARP
     devices = get_all_devices()
+
+    # Get ecosystem bubbles (same-user device groupings)
+    ecosystem_bubbles = get_ecosystem_bubbles()
+
+    # Build MAC -> bubble_id mapping
+    mac_to_bubble = {}
+    for bubble in ecosystem_bubbles:
+        for mac in bubble['devices']:
+            mac_to_bubble[mac.upper()] = bubble['bubble_id']
 
     # Get SDN summary for policy counts
     sdn = get_sdn_autopilot_summary()
@@ -760,6 +858,9 @@ def get_topology_data():
         elif device_type == 'gaming':
             icon = 'gamepad'
 
+        # Check if device belongs to an ecosystem bubble
+        bubble_id = mac_to_bubble.get(mac.upper())
+
         nodes.append({
             'id': device_id,
             'type': 'device',
@@ -772,7 +873,8 @@ def get_topology_data():
             'manufacturer': device.get('manufacturer'),
             'status': 'online' if device.get('state') in ['REACHABLE', 'STALE'] else 'offline',
             'icon': icon,
-            'is_wifi': device.get('is_wifi', False)
+            'is_wifi': device.get('is_wifi', False),
+            'bubble_id': bubble_id,  # Ecosystem bubble membership
         })
 
         # Link device to its policy
@@ -793,10 +895,12 @@ def get_topology_data():
     return {
         'nodes': nodes,
         'links': links,
+        'ecosystem_bubbles': ecosystem_bubbles,  # Same-user device groupings (30% opacity)
         'stats': {
             'total_devices': len(devices),
             'wan_count': len(wan_nodes),
-            'policy_counts': policy_counts
+            'policy_counts': policy_counts,
+            'bubble_count': len(ecosystem_bubbles),
         }
     }
 
