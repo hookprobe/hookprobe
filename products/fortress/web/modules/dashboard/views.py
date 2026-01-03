@@ -973,8 +973,8 @@ def api_update_device_policy(mac):
             mac_normalized = mac.lower().replace('-', ':')
 
             cursor.execute("""
-                UPDATE device_identity SET policy = ?, updated_at = datetime('now')
-                WHERE LOWER(mac_address) = ?
+                UPDATE device_identity SET policy = ?, manual_override = 1, updated_at = datetime('now')
+                WHERE LOWER(mac) = ?
             """, (new_policy, mac_normalized))
 
             if cursor.rowcount == 0:
