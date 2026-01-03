@@ -514,13 +514,17 @@ fingerbank_set_key() {
     # Test API key first
     log_substep "Testing API key..."
     local test_result
-    test_result=$(curl -sf -o /dev/null -w "%{http_code}" \
+    # Note: Don't use -f flag as it causes curl to exit before capturing HTTP code
+    test_result=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 \
         "${FINGERBANK_API_URL}/api/v2/devices?key=${api_key}&limit=1" 2>/dev/null) || test_result="000"
 
     if [ "$test_result" = "200" ]; then
         log_info "API key validated successfully"
     elif [ "$test_result" = "401" ]; then
         log_error "Invalid API key"
+        exit 1
+    elif [ "$test_result" = "403" ]; then
+        log_error "API key forbidden - key may be revoked"
         exit 1
     elif [ "$test_result" = "429" ]; then
         log_warn "API rate limit exceeded - key stored but may be over quota"
@@ -587,12 +591,15 @@ fingerbank_status() {
 
     if [ -n "$test_api_key" ]; then
         local test_result
-        test_result=$(curl -sf -o /dev/null -w "%{http_code}" \
+        # Note: Don't use -f flag as it causes curl to exit before capturing HTTP code
+        test_result=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 \
             "${FINGERBANK_API_URL}/api/v2/devices?key=${test_api_key}&limit=1" 2>/dev/null) || test_result="000"
 
         case "$test_result" in
             200) echo -e "  API Test:   ${GREEN}OK${NC}" ;;
             401) echo -e "  API Test:   ${RED}Invalid API key${NC}" ;;
+            403) echo -e "  API Test:   ${RED}API key forbidden${NC}" ;;
+            404) echo -e "  API Test:   ${YELLOW}Endpoint not found (API may have changed)${NC}" ;;
             429) echo -e "  API Test:   ${YELLOW}Rate limited${NC}" ;;
             000) echo -e "  API Test:   ${RED}Connection failed${NC}" ;;
             *)   echo -e "  API Test:   ${YELLOW}HTTP $test_result${NC}" ;;
