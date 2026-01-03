@@ -548,3 +548,417 @@ def get_blocked_domains():
     domains = db.get_top_blocked_domains(limit=limit)
 
     return jsonify({'domains': domains})
+
+
+# ========================================
+# AI Fingerprinting API (Proprietary)
+# ========================================
+
+# Lazy import for fingerprinting modules
+FINGERPRINT_AVAILABLE = False
+try:
+    from products.fortress.lib import (
+        get_unified_fingerprint_engine,
+        get_ml_fingerprint_classifier,
+    )
+    FINGERPRINT_AVAILABLE = True
+except ImportError:
+    pass
+
+
+def fingerprint_required(f):
+    """Decorator to check fingerprinting availability."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not FINGERPRINT_AVAILABLE:
+            return jsonify({'error': 'Fingerprinting engine not available'}), 503
+        return f(*args, **kwargs)
+    return decorated
+
+
+@api_bp.route('/fingerprint/status')
+@login_required
+def fingerprint_status():
+    """Get fingerprinting engine status."""
+    from pathlib import Path
+
+    status = {
+        'engine_available': FINGERPRINT_AVAILABLE,
+        'fingerbank_enabled': False,
+        'fingerbank_requests_today': 0,
+        'ml_model_loaded': False,
+        'total_fingerprints': 0,
+        'accuracy': 0.0
+    }
+
+    # Check Fingerbank API status
+    try:
+        fb_config = Path('/etc/hookprobe/fingerbank.json')
+        if fb_config.exists():
+            fb_data = json.loads(fb_config.read_text())
+            status['fingerbank_enabled'] = fb_data.get('enabled', False)
+            status['fingerbank_requests_today'] = fb_data.get('requests_today', 0)
+    except Exception:
+        pass
+
+    # Check ML model status
+    try:
+        model_dir = Path('/var/lib/hookprobe/ml_fingerprint_models')
+        if model_dir.exists():
+            models = list(model_dir.glob('*.joblib')) + list(model_dir.glob('*.pkl'))
+            status['ml_model_loaded'] = len(models) > 0
+    except Exception:
+        pass
+
+    # Get fingerprint count from database
+    try:
+        fp_db = Path('/var/lib/hookprobe/fingerprint.db')
+        if fp_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(fp_db))
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM fingerprints')
+            status['total_fingerprints'] = cursor.fetchone()[0]
+            cursor.execute('SELECT AVG(confidence) FROM fingerprints WHERE confidence > 0')
+            avg = cursor.fetchone()[0]
+            status['accuracy'] = round(avg * 100, 1) if avg else 0.0
+            conn.close()
+    except Exception:
+        pass
+
+    return jsonify(status)
+
+
+@api_bp.route('/fingerprint/device/<mac_address>')
+@login_required
+@fingerprint_required
+def fingerprint_device(mac_address):
+    """Get device fingerprint details."""
+    engine = get_unified_fingerprint_engine()
+    result = engine.get_device_fingerprint(mac_address)
+
+    if not result:
+        return jsonify({'error': 'Device fingerprint not found'}), 404
+
+    return jsonify(result)
+
+
+@api_bp.route('/fingerprint/device/<mac_address>/reclassify', methods=['POST'])
+@login_required
+@operator_required
+@fingerprint_required
+def reclassify_device(mac_address):
+    """Force reclassification of a device."""
+    engine = get_unified_fingerprint_engine()
+    result = engine.reclassify_device(mac_address)
+
+    if result:
+        return jsonify({
+            'success': True,
+            'device_type': result.get('device_type'),
+            'confidence': result.get('confidence'),
+            'policy': result.get('recommended_policy')
+        })
+
+    return jsonify({'error': 'Reclassification failed'}), 400
+
+
+@api_bp.route('/fingerprint/feedback', methods=['POST'])
+@login_required
+@operator_required
+@fingerprint_required
+def submit_fingerprint_feedback():
+    """Submit feedback for active learning.
+
+    Used when admin corrects a device classification.
+    """
+    data = request.get_json() or {}
+    mac_address = data.get('mac_address')
+    correct_type = data.get('correct_type')
+    correct_vendor = data.get('correct_vendor')
+
+    if not mac_address or not correct_type:
+        return jsonify({'error': 'mac_address and correct_type required'}), 400
+
+    classifier = get_ml_fingerprint_classifier()
+    success = classifier.submit_feedback(
+        mac_address=mac_address,
+        correct_type=correct_type,
+        correct_vendor=correct_vendor,
+        submitted_by=current_user.id
+    )
+
+    if success:
+        return jsonify({'success': True, 'message': 'Feedback recorded for active learning'})
+
+    return jsonify({'error': 'Failed to record feedback'}), 400
+
+
+@api_bp.route('/fingerprint/stats')
+@login_required
+def fingerprint_stats():
+    """Get fingerprinting statistics."""
+    from pathlib import Path
+
+    stats = {
+        'total_devices': 0,
+        'identified': 0,
+        'unidentified': 0,
+        'by_category': {},
+        'by_vendor': {},
+        'accuracy_trend': []
+    }
+
+    try:
+        fp_db = Path('/var/lib/hookprobe/fingerprint.db')
+        if fp_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(fp_db))
+            cursor = conn.cursor()
+
+            # Total and identification counts
+            cursor.execute('SELECT COUNT(*) FROM fingerprints')
+            stats['total_devices'] = cursor.fetchone()[0]
+
+            cursor.execute('SELECT COUNT(*) FROM fingerprints WHERE confidence >= 0.5')
+            stats['identified'] = cursor.fetchone()[0]
+
+            stats['unidentified'] = stats['total_devices'] - stats['identified']
+
+            # By category
+            cursor.execute('''
+                SELECT device_category, COUNT(*) as cnt
+                FROM fingerprints
+                WHERE device_category IS NOT NULL
+                GROUP BY device_category
+                ORDER BY cnt DESC
+            ''')
+            stats['by_category'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+            # By vendor
+            cursor.execute('''
+                SELECT vendor, COUNT(*) as cnt
+                FROM fingerprints
+                WHERE vendor IS NOT NULL
+                GROUP BY vendor
+                ORDER BY cnt DESC
+                LIMIT 10
+            ''')
+            stats['by_vendor'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+            conn.close()
+    except Exception:
+        pass
+
+    return jsonify(stats)
+
+
+# ========================================
+# Ecosystem Bubble API (Proprietary)
+# ========================================
+
+# Lazy import for bubble modules
+BUBBLE_AVAILABLE = False
+try:
+    from products.fortress.lib import (
+        get_ecosystem_bubble_manager,
+        get_presence_sensor,
+        get_behavior_clustering_engine,
+    )
+    BUBBLE_AVAILABLE = True
+except ImportError:
+    pass
+
+
+def bubble_required(f):
+    """Decorator to check bubble manager availability."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not BUBBLE_AVAILABLE:
+            return jsonify({'error': 'Ecosystem Bubble not available'}), 503
+        return f(*args, **kwargs)
+    return decorated
+
+
+@api_bp.route('/bubbles')
+@login_required
+def list_bubbles():
+    """List all detected ecosystem bubbles."""
+    from pathlib import Path
+
+    bubbles = []
+
+    try:
+        bubble_db = Path('/var/lib/hookprobe/ecosystem_bubbles.db')
+        if bubble_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(bubble_db))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT bubble_id, name, ecosystem, state, confidence,
+                       device_count, created_at, updated_at
+                FROM bubbles
+                WHERE state != 'DISSOLVED'
+                ORDER BY updated_at DESC
+            ''')
+
+            for row in cursor.fetchall():
+                bubbles.append({
+                    'bubble_id': row['bubble_id'],
+                    'name': row['name'],
+                    'ecosystem': row['ecosystem'],
+                    'state': row['state'],
+                    'confidence': row['confidence'],
+                    'device_count': row['device_count'],
+                    'created_at': row['created_at'],
+                    'updated_at': row['updated_at']
+                })
+
+            conn.close()
+    except Exception:
+        pass
+
+    return jsonify({'bubbles': bubbles, 'count': len(bubbles)})
+
+
+@api_bp.route('/bubbles/<bubble_id>')
+@login_required
+@bubble_required
+def get_bubble(bubble_id):
+    """Get bubble details including member devices."""
+    manager = get_ecosystem_bubble_manager()
+    bubble = manager.get_bubble(bubble_id)
+
+    if not bubble:
+        return jsonify({'error': 'Bubble not found'}), 404
+
+    return jsonify(bubble)
+
+
+@api_bp.route('/bubbles/<bubble_id>/devices')
+@login_required
+@bubble_required
+def get_bubble_devices(bubble_id):
+    """Get devices in a bubble."""
+    manager = get_ecosystem_bubble_manager()
+    devices = manager.get_bubble_devices(bubble_id)
+
+    return jsonify({'devices': devices, 'count': len(devices)})
+
+
+@api_bp.route('/bubbles/<bubble_id>/rules')
+@login_required
+@bubble_required
+def get_bubble_rules(bubble_id):
+    """Get SDN/OpenFlow rules for a bubble."""
+    manager = get_ecosystem_bubble_manager()
+    rules = manager.get_bubble_rules(bubble_id)
+
+    return jsonify({'rules': rules})
+
+
+@api_bp.route('/bubbles/stats')
+@login_required
+def bubble_stats():
+    """Get ecosystem bubble statistics."""
+    from pathlib import Path
+
+    stats = {
+        'total_bubbles': 0,
+        'active_bubbles': 0,
+        'dormant_bubbles': 0,
+        'by_ecosystem': {},
+        'devices_in_bubbles': 0,
+        'sdn_rules_active': 0
+    }
+
+    try:
+        bubble_db = Path('/var/lib/hookprobe/ecosystem_bubbles.db')
+        if bubble_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(bubble_db))
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT COUNT(*) FROM bubbles')
+            stats['total_bubbles'] = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM bubbles WHERE state = 'ACTIVE'")
+            stats['active_bubbles'] = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM bubbles WHERE state = 'DORMANT'")
+            stats['dormant_bubbles'] = cursor.fetchone()[0]
+
+            cursor.execute('''
+                SELECT ecosystem, COUNT(*) as cnt
+                FROM bubbles
+                WHERE state != 'DISSOLVED'
+                GROUP BY ecosystem
+            ''')
+            stats['by_ecosystem'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+            cursor.execute('SELECT SUM(device_count) FROM bubbles WHERE state = \'ACTIVE\'')
+            result = cursor.fetchone()[0]
+            stats['devices_in_bubbles'] = result if result else 0
+
+            # Count active SDN rules
+            cursor.execute('SELECT COUNT(*) FROM bubble_sdn_rules WHERE active = 1')
+            stats['sdn_rules_active'] = cursor.fetchone()[0]
+
+            conn.close()
+    except Exception:
+        pass
+
+    return jsonify(stats)
+
+
+@api_bp.route('/presence/status')
+@login_required
+def presence_status():
+    """Get presence sensor status."""
+    from pathlib import Path
+
+    status = {
+        'mdns_enabled': False,
+        'ble_enabled': False,
+        'spatial_enabled': True,
+        'devices_detected': 0,
+        'ecosystems_detected': {}
+    }
+
+    try:
+        presence_db = Path('/var/lib/hookprobe/presence.db')
+        if presence_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(presence_db))
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT COUNT(DISTINCT mac_address) FROM presence_events')
+            status['devices_detected'] = cursor.fetchone()[0]
+
+            cursor.execute('''
+                SELECT ecosystem, COUNT(DISTINCT mac_address) as cnt
+                FROM presence_events
+                WHERE ecosystem IS NOT NULL
+                GROUP BY ecosystem
+            ''')
+            status['ecosystems_detected'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+            conn.close()
+
+        # Check service status
+        import subprocess
+        result = subprocess.run(
+            ['systemctl', 'is-active', 'fts-presence-sensor'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            status['mdns_enabled'] = True
+            status['ble_enabled'] = True
+    except Exception:
+        pass
+
+    return jsonify(status)
