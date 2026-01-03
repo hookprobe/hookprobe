@@ -2164,9 +2164,9 @@ wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 wpa_passphrase=$password
 
-# Access Control
+# Access Control - ap_isolate=1 forces traffic through OVS for policy enforcement
 macaddr_acl=0
-ap_isolate=0
+ap_isolate=1
 max_num_sta=64
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
@@ -2753,9 +2753,9 @@ ieee80211w=1
 # WPA2 Fallback Password
 wpa_passphrase=$password
 
-# Access Control
+# Access Control - ap_isolate=1 forces traffic through OVS for policy enforcement
 macaddr_acl=0
-ap_isolate=0
+ap_isolate=1
 max_num_sta=128
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
