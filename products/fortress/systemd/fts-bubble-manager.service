@@ -5,6 +5,9 @@ After=network.target openvswitch-switch.service fortress.service fts-presence-se
 Wants=fts-presence-sensor.service fts-fingerprint-engine.service
 # Only run if the Python module exists
 ConditionPathExists=/opt/hookprobe/fortress/lib/ecosystem_bubble.py
+# Start rate limiting (must be in [Unit] section)
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -20,8 +23,6 @@ Environment=FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
 # Restart policy
 Restart=on-failure
 RestartSec=10
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 # Logging
 StandardOutput=journal
