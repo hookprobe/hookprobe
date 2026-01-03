@@ -778,11 +778,17 @@ create_directories() {
     # Pre-create databases with correct permissions (critical for fresh install!)
     # If we don't do this, the first process to create them might be root
     # and then the web container (uid 1000) can't write to them
-    local autopilot_db="/var/lib/hookprobe/autopilot.db"
-    local dfs_db="/var/lib/hookprobe/dfs_intelligence.db"
-    local devices_db="/var/lib/hookprobe/devices.db"
+    local core_databases=(
+        "/var/lib/hookprobe/autopilot.db"
+        "/var/lib/hookprobe/dfs_intelligence.db"
+        "/var/lib/hookprobe/devices.db"
+        # AI Fingerprinting databases (used by host services, read by web container)
+        "/var/lib/hookprobe/fingerprint.db"
+        "/var/lib/hookprobe/presence.db"
+        "/var/lib/hookprobe/ecosystem_bubbles.db"
+    )
 
-    for db_file in "$autopilot_db" "$dfs_db" "$devices_db"; do
+    for db_file in "${core_databases[@]}"; do
         if [ ! -f "$db_file" ]; then
             # Create empty SQLite database with correct ownership
             touch "$db_file"
@@ -3628,14 +3634,25 @@ DBEOF
         log_warn "Database initialization skipped (Python not available)"
     }
 
-    # Enable services (but don't start until containers are running)
+    # Enable and start services (containers should be running at this point)
     systemctl daemon-reload
     systemctl enable fts-fingerprint-engine.service 2>/dev/null || true
     systemctl enable fts-presence-sensor.service 2>/dev/null || true
     systemctl enable fts-bubble-manager.service 2>/dev/null || true
 
-    log_info "AI Fingerprinting services installed"
-    log_info "  Services will start after container startup"
+    # Start services now (containers are already running)
+    log_info "Starting AI Fingerprinting services..."
+    systemctl start fts-fingerprint-engine.service 2>/dev/null || {
+        log_warn "fts-fingerprint-engine failed to start (may need dependencies)"
+    }
+    systemctl start fts-presence-sensor.service 2>/dev/null || {
+        log_warn "fts-presence-sensor failed to start (may need bluetooth)"
+    }
+    systemctl start fts-bubble-manager.service 2>/dev/null || {
+        log_warn "fts-bubble-manager failed to start (may need presence-sensor)"
+    }
+
+    log_info "AI Fingerprinting services installed and started"
 }
 
 # ============================================================

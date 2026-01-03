@@ -8,13 +8,13 @@ ConditionPathExists=/opt/hookprobe/fortress/lib/ecosystem_bubble.py
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m products.fortress.lib.ecosystem_bubble --daemon
-WorkingDirectory=/opt/hookprobe
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/ecosystem_bubble.py --daemon
+WorkingDirectory=/opt/hookprobe/fortress
 User=fortress
 Group=fortress
 
-# Environment
-Environment=PYTHONPATH=/opt/hookprobe
+# Environment - include lib directory in Python path for imports
+Environment=PYTHONPATH=/opt/hookprobe/fortress/lib:/opt/hookprobe/fortress:/opt/hookprobe
 Environment=FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
 
 # Restart policy
