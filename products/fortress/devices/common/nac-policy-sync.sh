@@ -149,10 +149,18 @@ apply_policy() {
         internet_only)
             # INTERNET_ONLY: Internet access ONLY (voice assistants, BYOD, corporate devices)
             # NO dashboard, NO LAN devices, NO containers, NO gateway ping - just internet
+            # NO mDNS/Bonjour - cannot discover or be discovered by HomeKit/AirPlay devices
             #
             # For internet routing: packets go THROUGH gateway (L2) but IP dst is internet host
             # So we don't need to allow IP traffic TO gateway IP - only DHCP and DNS
             #
+            # Priority 850: Block mDNS/Bonjour (no HomeKit/AirPlay discovery)
+            # This prevents internet_only devices from seeing or being seen by smart home devices
+            add_flow "priority=850,udp,dl_src=$mac,tp_dst=5353,actions=drop"
+            add_flow "priority=850,udp,dl_dst=$mac,tp_src=5353,actions=drop"
+            # Also block IPv6 mDNS (HomeKit uses IPv6 heavily)
+            add_flow "priority=850,udp6,dl_src=$mac,tp_dst=5353,actions=drop"
+            add_flow "priority=850,udp6,dl_dst=$mac,tp_src=5353,actions=drop"
             # Priority 800: Allow DHCP (essential for IP assignment)
             add_flow "priority=800,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
             add_flow "priority=800,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
@@ -175,7 +183,7 @@ apply_policy() {
             # Internet traffic has nw_dst=internet_host (e.g., 8.8.8.8), not gateway IP
             add_flow "priority=650,ip,dl_src=$mac,actions=NORMAL"
             add_flow "priority=650,ip,dl_dst=$mac,actions=NORMAL"
-            log_info "Applied INTERNET_ONLY policy for $mac (no LAN/gateway/dashboard access)"
+            log_info "Applied INTERNET_ONLY policy for $mac (no LAN/mDNS/HomeKit access)"
             ;;
 
         full_access|normal|smart_home|default|"")
