@@ -2,13 +2,8 @@
 
 {% block title %}SDN AI - Intelligent Network Control{% endblock %}
 
-{% block page_header %}
-<!-- No separate title - breadcrumb is sufficient -->
-{% endblock %}
-
-{% block breadcrumb %}
-<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
-<li class="breadcrumb-item active">SDN AI</li>
+{% block content_header %}
+<!-- Content header hidden for SDN page - cards serve as header -->
 {% endblock %}
 
 {% block extra_css %}
