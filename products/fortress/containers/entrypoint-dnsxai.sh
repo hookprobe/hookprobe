@@ -1,6 +1,8 @@
 #!/bin/bash
 # dnsXai Container Entrypoint
-# Runs both DNS server (5353/udp) and HTTP API server (8080/tcp)
+# DNS server: container:5353/udp → host:127.0.0.1:53 (dnsmasq forwards here)
+# HTTP API: container:8080/tcp → host:127.0.0.1:8053
+# Port 5353 on host is FREE for mDNS (Avahi, bubble manager ecosystem detection)
 
 set -e
 
