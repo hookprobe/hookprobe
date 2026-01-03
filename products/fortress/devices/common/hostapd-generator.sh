@@ -2089,14 +2089,21 @@ generate_hostapd_24ghz() {
 
     mkdir -p "$HOSTAPD_DIR"
 
-    # Check if bridge is OVS - don't use nl80211 bridge mode for OVS
-    # OVS doesn't support nl80211 bridge integration - we'll add interface to OVS post-start
+    # WiFi bridge configuration for SDN Autopilot
+    # OVS doesn't support nl80211 bridge integration directly.
+    # Solution: Use Linux bridge (br-wifi) connected to OVS via veth pair.
+    # This allows ap_isolate=1 to force all traffic through OVS for policy enforcement.
+    # mDNS reflection is handled by hairpin mode on br-wifi + OVS rules.
     local use_bridge=""
-    if ! is_ovs_bridge "$bridge"; then
-        use_bridge="bridge=$bridge"
-        log_info "  Using Linux bridge mode"
+    if is_ovs_bridge "$bridge"; then
+        # OVS detected - use intermediate br-wifi bridge
+        # br-wifi is created by ovs-post-setup.sh and connected to OVS via veth
+        use_bridge="bridge=br-wifi"
+        log_info "  OVS bridge detected - using br-wifi intermediate bridge"
+        log_info "  Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement"
     else
-        log_info "  OVS bridge detected - will add WiFi to OVS after hostapd starts"
+        use_bridge="bridge=$bridge"
+        log_info "  Using Linux bridge mode: $bridge"
     fi
 
     cat > "$HOSTAPD_24GHZ_CONF" << EOF
@@ -2164,10 +2171,17 @@ wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 wpa_passphrase=$password
 
-# Access Control - ap_isolate=0 allows client-to-client (required for HomeKit/AirPlay)
-# OVS still sees all traffic for policy enforcement via bridge attachment
+# Access Control - SDN Autopilot Mode
+# ap_isolate=1 forces ALL WiFi traffic through OVS bridge for policy enforcement.
+# Without this, same-radio (intra-BSS) traffic is forwarded by hostapd internally
+# and never reaches OVS for NAC policy enforcement.
+#
+# HomeKit/AirPlay/mDNS Discovery:
+# OVS handles mDNS reflection (hairpin) via OpenFlow rules in ovs-post-setup.sh.
+# This gives SDN visibility into device discovery while maintaining isolation control.
+# Devices with policy=normal/smart_home get mDNS reflected; internet_only does not.
 macaddr_acl=0
-ap_isolate=0
+ap_isolate=1
 max_num_sta=64
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
@@ -2565,14 +2579,21 @@ generate_hostapd_5ghz() {
 
     mkdir -p "$HOSTAPD_DIR"
 
-    # Check if bridge is OVS - don't use nl80211 bridge mode for OVS
-    # OVS doesn't support nl80211 bridge integration - we'll add interface to OVS post-start
+    # WiFi bridge configuration for SDN Autopilot
+    # OVS doesn't support nl80211 bridge integration directly.
+    # Solution: Use Linux bridge (br-wifi) connected to OVS via veth pair.
+    # This allows ap_isolate=1 to force all traffic through OVS for policy enforcement.
+    # mDNS reflection is handled by hairpin mode on br-wifi + OVS rules.
     local use_bridge=""
-    if ! is_ovs_bridge "$bridge"; then
-        use_bridge="bridge=$bridge"
-        log_info "  Using Linux bridge mode"
+    if is_ovs_bridge "$bridge"; then
+        # OVS detected - use intermediate br-wifi bridge
+        # br-wifi is created by ovs-post-setup.sh and connected to OVS via veth
+        use_bridge="bridge=br-wifi"
+        log_info "  OVS bridge detected - using br-wifi intermediate bridge"
+        log_info "  Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement"
     else
-        log_info "  OVS bridge detected - will add WiFi to OVS after hostapd starts"
+        use_bridge="bridge=$bridge"
+        log_info "  Using Linux bridge mode: $bridge"
     fi
 
     cat > "$HOSTAPD_5GHZ_CONF" << EOF
@@ -2754,10 +2775,17 @@ ieee80211w=1
 # WPA2 Fallback Password
 wpa_passphrase=$password
 
-# Access Control - ap_isolate=0 allows client-to-client (required for HomeKit/AirPlay)
-# OVS still sees all traffic for policy enforcement via bridge attachment
+# Access Control - SDN Autopilot Mode
+# ap_isolate=1 forces ALL WiFi traffic through OVS bridge for policy enforcement.
+# Without this, same-radio (intra-BSS) traffic is forwarded by hostapd internally
+# and never reaches OVS for NAC policy enforcement.
+#
+# HomeKit/AirPlay/mDNS Discovery:
+# OVS handles mDNS reflection (hairpin) via OpenFlow rules in ovs-post-setup.sh.
+# This gives SDN visibility into device discovery while maintaining isolation control.
+# Devices with policy=normal/smart_home get mDNS reflected; internet_only does not.
 macaddr_acl=0
-ap_isolate=0
+ap_isolate=1
 max_num_sta=128
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
