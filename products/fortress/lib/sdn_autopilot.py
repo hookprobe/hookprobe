@@ -960,15 +960,16 @@ class SDNAutoPilot:
         mac = mac.upper()
 
         # Normalize policy names
-        # smart_home is an alias for 'normal' (LAN + Internet, no container access)
+        # 'isolated' and 'smart_home' are legacy aliases
+        # NOTE: full_access is a DISTINCT policy (includes management network access)
+        #       and should NOT be aliased to 'normal'
         policy_aliases = {
             'isolated': 'quarantine',
-            'full_access': 'normal',
             'smart_home': 'normal',
         }
         policy = policy_aliases.get(policy, policy)
 
-        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access', 'smart_home']
+        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
         if policy not in valid_policies:
             logger.warning(f"Invalid policy: {policy}")
             return False
