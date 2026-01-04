@@ -83,6 +83,15 @@ try:
     HAS_PRESENCE = True
 except ImportError:
     HAS_PRESENCE = False
+    # Stub classes for type hints when import fails
+    class DevicePresence:
+        pass
+    class EcosystemType:
+        APPLE = 'apple'
+        GOOGLE = 'google'
+        UNKNOWN = 'unknown'
+    class PresenceState:
+        ACTIVE = 'active'
 
 try:
     from behavior_clustering import (
@@ -92,6 +101,15 @@ try:
     HAS_CLUSTERING = True
 except ImportError:
     HAS_CLUSTERING = False
+    # Stub classes for type hints when import fails
+    class BehavioralClusteringEngine:
+        pass
+    class DeviceBehavior:
+        pass
+    class ClusterResult:
+        pass
+    def get_clustering_engine():
+        return None
 
 # Database
 BUBBLE_DB = Path('/var/lib/hookprobe/bubbles.db')
