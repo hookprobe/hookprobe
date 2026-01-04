@@ -402,6 +402,74 @@ setup_container_veth() {
 }
 
 # ============================================================
+# AVAHI CONFIGURATION (FOR ECOSYSTEM BUBBLE MDNS)
+# ============================================================
+#
+# The PresenceSensor uses Python's zeroconf library to detect Apple/Google
+# ecosystem devices via mDNS announcements. However, avahi-daemon by default
+# has exclusive bind on port 5353, blocking zeroconf.
+#
+# Solution: Configure avahi-daemon to allow other mDNS stacks to coexist.
+# This enables Ecosystem Bubble detection for HomeKit/AirPlay device grouping.
+#
+# ============================================================
+
+setup_avahi_coexistence() {
+    log_section "Avahi mDNS Coexistence"
+
+    local avahi_conf="/etc/avahi/avahi-daemon.conf"
+
+    if [ ! -f "$avahi_conf" ]; then
+        log_warn "Avahi not installed - mDNS ecosystem detection may not work"
+        return 0
+    fi
+
+    # Check if already configured
+    if grep -q "^disallow-other-stacks=no" "$avahi_conf" 2>/dev/null; then
+        log_info "Avahi already configured for coexistence"
+        return 0
+    fi
+
+    log_info "Configuring Avahi for mDNS coexistence..."
+
+    # Backup original
+    cp "$avahi_conf" "${avahi_conf}.backup-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+
+    # Update configuration
+    if grep -q "^disallow-other-stacks=" "$avahi_conf" 2>/dev/null; then
+        # Replace existing setting
+        sed -i 's/^disallow-other-stacks=.*/disallow-other-stacks=no/' "$avahi_conf"
+    elif grep -q "^\[server\]" "$avahi_conf" 2>/dev/null; then
+        # Add after [server] section
+        sed -i '/^\[server\]/a disallow-other-stacks=no' "$avahi_conf"
+    else
+        # Append to end
+        echo "" >> "$avahi_conf"
+        echo "[server]" >> "$avahi_conf"
+        echo "disallow-other-stacks=no" >> "$avahi_conf"
+    fi
+
+    # Also enable reflector for cross-interface mDNS (br-wifi ↔ vlan100)
+    if grep -q "^enable-reflector=" "$avahi_conf" 2>/dev/null; then
+        sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$avahi_conf"
+    elif grep -q "^\[reflector\]" "$avahi_conf" 2>/dev/null; then
+        sed -i '/^\[reflector\]/a enable-reflector=yes' "$avahi_conf"
+    else
+        echo "" >> "$avahi_conf"
+        echo "[reflector]" >> "$avahi_conf"
+        echo "enable-reflector=yes" >> "$avahi_conf"
+    fi
+
+    # Restart avahi-daemon to apply changes
+    if systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+        systemctl restart avahi-daemon 2>/dev/null || true
+        log_info "Restarted avahi-daemon with new configuration"
+    fi
+
+    log_success "Avahi configured for mDNS coexistence"
+}
+
+# ============================================================
 # WIFI BRIDGE (FOR SDN AUTOPILOT WITH AP_ISOLATE=1)
 # ============================================================
 #
@@ -561,6 +629,10 @@ main() {
             # Container veth is optional - don't fail if it doesn't work
             # Containers use podman's internal network as primary
             setup_container_veth || log_warn "Container veth setup had issues (non-fatal)"
+
+            # Avahi mDNS coexistence for Ecosystem Bubble detection
+            # Enables HomeKit/AirPlay device grouping via PresenceSensor
+            setup_avahi_coexistence || log_warn "Avahi setup had issues (non-fatal)"
 
             # WiFi bridge for SDN Autopilot (ap_isolate=1 + hairpin mDNS)
             # Allows full OVS control over WiFi traffic including device-to-device
