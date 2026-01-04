@@ -604,6 +604,235 @@ shared/aiochi/
 
 ---
 
+## Agentic AI Security System
+
+**Version**: 1.1.0
+**Added**: 2025-01
+
+AIOCHI now includes an **Agentic AI** system that autonomously makes network security decisions. This transforms AIOCHI from a passive observer to an active protector.
+
+### The Black Box Problem - Solved
+
+Traditional security systems are black boxes:
+- User sees: "Threat blocked"
+- User wonders: "What threat? Why? What did you do?"
+
+AIOCHI's Agentic AI solves this by:
+1. **Explaining every decision** in plain English
+2. **Asking for feedback** on important actions
+3. **Learning from user responses**
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         AGENTIC AI ARCHITECTURE                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                   │
+│  │  SECURITY   │────▶│   AIOCHI    │────▶│    TOOLS    │                   │
+│  │   EVENT     │     │  AI AGENT   │     │  (Actions)  │                   │
+│  │  (Trigger)  │     │  (Ollama)   │     │             │                   │
+│  └─────────────┘     └─────────────┘     └─────────────┘                   │
+│                             │                   │                           │
+│                             ▼                   ▼                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    DECISION LOGIC                                    │   │
+│  │                                                                      │   │
+│  │   ┌─────────────────────┐      ┌─────────────────────┐              │   │
+│  │   │  DETERMINISTIC      │      │      AI-DRIVEN      │              │   │
+│  │   │  (Short-Circuit)    │      │    (LLM Reasoning)  │              │   │
+│  │   │                     │      │                     │              │   │
+│  │   │  - Known C2 IP?     │      │  - Unknown pattern? │              │   │
+│  │   │  - Malware sig?     │      │  - Context needed?  │              │   │
+│  │   │  - Blocklist match? │      │  - Nuanced decision?│              │   │
+│  │   │                     │      │                     │              │   │
+│  │   │  ⚡ Instant action  │      │  🤔 1-3s reasoning  │              │   │
+│  │   └─────────────────────┘      └─────────────────────┘              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                             │                                               │
+│                             ▼                                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    HUMAN FEEDBACK LOOP                               │   │
+│  │                                                                      │   │
+│  │   Action taken ──▶ Notify user ──▶ Yes/No? ──▶ Learn from feedback  │   │
+│  │                                                                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+#### 1. Ollama (Local LLM)
+
+```yaml
+# Container: aiochi-ollama
+image: ollama/ollama:latest
+model: llama3.2:3b
+network: 172.20.210.50:11434
+memory: 4-8GB
+```
+
+The LLM runs **locally** - no cloud API calls, no data leaving your network.
+
+#### 2. AI Agent (n8n + LangChain)
+
+The AI Agent has:
+- **Memory**: Window Buffer Memory (last 10 events) to prevent "flapping"
+- **Tools**: BLOCK, MIGRATE, THROTTLE, MONITOR, TRUST
+- **Rules**: Hardcoded safety rules (never block trust > 80)
+
+```json
+{
+  "systemMessage": "You are AIOCHI, an AI network security agent...
+
+    You have access to these TOOLS:
+    1. BLOCK - Immediately block a device (OpenFlow DROP rule)
+    2. MIGRATE - Apply network policy (quarantine, internet_only, etc.)
+    3. THROTTLE - Rate-limit a device to 1Mbps
+    4. MONITOR - Just log and watch, no action
+    5. TRUST - Mark device as trusted, remove restrictions
+
+    Rules:
+    1. Never block devices with trust_score > 80
+    2. Critical threats (malware, C2) = immediate BLOCK
+    3. New unknown devices = MIGRATE to internet_only first"
+}
+```
+
+#### 3. OpenFlow Policy Tools
+
+```bash
+# Tool scripts at /opt/hookprobe/shared/aiochi/tools/
+
+block-device.sh <mac> <reason>       # OVS DROP rule (priority 65535)
+migrate-device.sh <mac> <policy>     # Apply OpenFlow policy
+throttle-device.sh <mac> <rate>      # Rate limiting via tc/OVS meter
+trust-device.sh <mac> <ecosystem>    # Remove restrictions
+unblock-device.sh <mac>              # Remove block (user feedback)
+```
+
+#### 4. OpenFlow Policies
+
+| Policy | Priority | Description | Use Case |
+|--------|----------|-------------|----------|
+| `quarantine` | 60000 | DROP all traffic | Malware, C2, threats |
+| `internet_only` | 57000 | Block LAN, allow internet | Guests, voice assistants |
+| `lan_only` | 55000 | Block internet, allow LAN | IoT sensors, cameras |
+| `smart_home` | 55000 | LAN + mDNS/Bonjour | HomeKit, AirPlay devices |
+| `full_access` | 0 | Normal switching | Trusted devices |
+
+### Decision Flow
+
+```
+Security Event Received
+        │
+        ▼
+┌───────────────────┐
+│ Check Blocklist   │──── Match? ──▶ DETERMINISTIC BLOCK (instant)
+└───────────────────┘                       │
+        │                                   │
+        ▼ No match                          │
+┌───────────────────┐                       │
+│ Lookup Trust Score│                       │
+└───────────────────┘                       │
+        │                                   │
+        ▼                                   │
+┌───────────────────┐                       │
+│ Trust < 30?       │──── Yes ──▶ Is Critical? ──▶ Yes ──▶ BLOCK
+└───────────────────┘                    │
+        │                                │
+        ▼ No (trusted)                   ▼ No
+┌───────────────────┐          ┌───────────────────┐
+│    AI REASONING   │◀─────────│  Query AI Agent   │
+│   (Ollama LLM)    │          │  with context     │
+└───────────────────┘          └───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│  AI Decision:     │
+│  - action: MIGRATE│
+│  - target: "internet_only"
+│  - reason: "..."  │
+│  - narrative: "I moved this device..."
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│ Execute Tool      │
+│ + Log to ClickHouse
+│ + Update Feed     │
+│ + Request Feedback│
+└───────────────────┘
+```
+
+### ClickHouse Tables for Agentic AI
+
+```sql
+-- Device trust scores (AI memory)
+CREATE TABLE device_trust (
+    mac_address String,
+    trust_score UInt8 DEFAULT 50,    -- 0-100
+    ecosystem String,                 -- "apple", "google", etc.
+    last_action String,
+    action_count UInt32 DEFAULT 0,
+    is_blocked Bool DEFAULT false,
+    ...
+) ENGINE = ReplacingMergeTree(last_seen)
+ORDER BY (mac_address);
+
+-- Agent action audit log
+CREATE TABLE agent_actions (
+    id UUID DEFAULT generateUUIDv4(),
+    timestamp DateTime DEFAULT now(),
+    mac_address String,
+    action Enum8('BLOCK', 'MIGRATE', 'THROTTLE', 'MONITOR', 'TRUST'),
+    reason String,
+    narrative String,
+    deterministic Bool,              -- Short-circuit or AI?
+    human_feedback Enum8('pending', 'approved', 'rejected', 'undo'),
+    ...
+) ENGINE = MergeTree()
+ORDER BY (timestamp, action);
+
+-- Threat blocklist (for deterministic blocking)
+CREATE TABLE threat_blocklist (
+    indicator_type Enum8('mac', 'ip', 'domain', 'ja3'),
+    indicator_value String,
+    severity Enum8('low', 'medium', 'high', 'critical'),
+    auto_block Bool DEFAULT true,
+    ...
+) ENGINE = ReplacingMergeTree();
+```
+
+### Human Feedback API
+
+```
+GET  /aiochi/api/feedback/pending        # Pending feedback requests
+POST /aiochi/api/feedback/<action_id>    # Submit feedback
+     Body: {"response": "approve|reject|trust|block_permanent"}
+
+GET  /aiochi/api/agent/status            # AI agent status
+GET  /aiochi/api/agent/actions           # Recent AI actions
+PUT  /aiochi/api/agent/trust/<mac>       # Manually set trust score
+```
+
+### Example Narratives
+
+**AI-Generated (via Ollama)**:
+> "I noticed an unknown device trying to connect to a server in Russia that's associated with malware. I blocked it immediately to protect your network. If you recognize this device, let me know and I'll unblock it."
+
+**Deterministic (instant)**:
+> "🚨 CRITICAL: I detected a known C2 (command & control) server connection from an unknown device. I've immediately blocked it to protect your network."
+
+**Asking for Feedback**:
+> "I moved 'New Smart Bulb' to the IoT network because it looks like a smart home device. Is this correct?
+>
+> [✅ Trust Device] [❌ Block Forever]"
+
+---
+
 ## Security Considerations
 
 1. **AIOCHI is read-heavy, write-light** - primarily observes, rarely modifies
@@ -611,6 +840,9 @@ shared/aiochi/
 3. **LLM calls are optional** - templates work offline
 4. **No PII in narratives** - device labels, not user data
 5. **ClickHouse access is internal only** - no external exposure
+6. **Local LLM (Ollama)** - no data sent to cloud
+7. **Human-in-the-loop** - important decisions request confirmation
+8. **Safety rules hardcoded** - never block high-trust devices
 
 ---
 
