@@ -1,0 +1,136 @@
+{
+  "name": "AIOCHI: Threat Narrative Generator",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook - Security Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "aiochi-threat-alert"
+    },
+    {
+      "parameters": {
+        "functionCode": "// AIOCHI Threat Narrative Generator\n// Transforms raw security events into human-readable stories\n\nconst event = items[0].json;\n\n// Threat type to friendly name mapping\nconst threatNames = {\n  'malware': 'malicious software',\n  'phishing': 'phishing attempt',\n  'port_scan': 'port scanning activity',\n  'brute_force': 'password attack',\n  'dns_tunneling': 'suspicious DNS activity',\n  'c2_beacon': 'command & control communication',\n  'data_exfil': 'data exfiltration attempt',\n  'ddos': 'denial of service attack',\n  'sql_injection': 'database attack',\n  'xss': 'script injection attempt'\n};\n\n// Severity to icon/color mapping\nconst severityStyles = {\n  'critical': { icon: 'fa-skull-crossbones', color: 'danger', emoji: '🚨' },\n  'high': { icon: 'fa-exclamation-triangle', color: 'warning', emoji: '⚠️' },\n  'medium': { icon: 'fa-info-circle', color: 'info', emoji: '📢' },\n  'low': { icon: 'fa-check-circle', color: 'success', emoji: '✅' }\n};\n\n// Get readable threat name\nconst threatType = event.threat_type || event.event_type || 'unknown threat';\nconst friendlyThreat = threatNames[threatType] || threatType.replace(/_/g, ' ');\n\n// Get severity styling\nconst severity = (event.severity || 'medium').toLowerCase();\nconst style = severityStyles[severity] || severityStyles.medium;\n\n// Get device info if available\nconst deviceName = event.device_name || event.device_label || 'a device';\nconst sourceIp = event.source_ip || 'unknown source';\n\n// Build narrative based on action taken\nlet narrative = '';\nlet title = '';\n\nif (event.action === 'blocked' || event.blocked) {\n  title = 'Threat Blocked';\n  narrative = `I detected and blocked ${friendlyThreat} targeting ${deviceName}. `;\n  narrative += `The attack came from ${sourceIp}. Your network is safe!`;\n} else if (event.action === 'allowed' || event.action === 'monitored') {\n  title = 'Activity Monitored';\n  narrative = `I noticed ${friendlyThreat} activity involving ${deviceName}. `;\n  narrative += `I'm keeping an eye on it. The traffic pattern seemed unusual.`;\n} else {\n  title = 'Security Event';\n  narrative = `I detected ${friendlyThreat} related to ${deviceName}. `;\n  narrative += `I've logged this event for analysis.`;\n}\n\n// Build the narrative event\nconst narrativeEvent = {\n  id: `threat-${Date.now()}`,\n  timestamp: event.timestamp || new Date().toISOString(),\n  category: 'security',\n  severity: severity,\n  icon: style.icon,\n  color: style.color,\n  emoji: style.emoji,\n  title: title,\n  narrative: narrative,\n  device: deviceName,\n  source_ip: sourceIp,\n  threat_type: threatType,\n  raw_event_id: event.id || event.event_id\n};\n\nreturn [{ json: narrativeEvent }];"
+      },
+      "id": "generate-narrative",
+      "name": "Generate Human Narrative",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.10:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO aiochi.narrative_events FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{JSON.stringify($json)}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "store-narrative",
+      "name": "Store in ClickHouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.severity}}",
+              "operation": "equals",
+              "value2": "critical"
+            }
+          ]
+        }
+      },
+      "id": "check-critical",
+      "name": "Is Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/alert",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "narrative",
+              "value": "={{$json}}"
+            },
+            {
+              "name": "push_notification",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "id": "push-alert",
+      "name": "Push Critical Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/feed",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "narrative",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "update-feed",
+      "name": "Update Privacy Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 400]
+    }
+  ],
+  "connections": {
+    "Webhook - Security Alert": {
+      "main": [[{ "node": "Generate Human Narrative", "type": "main", "index": 0 }]]
+    },
+    "Generate Human Narrative": {
+      "main": [[{ "node": "Store in ClickHouse", "type": "main", "index": 0 }]]
+    },
+    "Store in ClickHouse": {
+      "main": [[{ "node": "Is Critical?", "type": "main", "index": 0 }]]
+    },
+    "Is Critical?": {
+      "main": [
+        [{ "node": "Push Critical Alert", "type": "main", "index": 0 }],
+        [{ "node": "Update Privacy Feed", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [
+    { "name": "AIOCHI", "id": "aiochi" },
+    { "name": "Narrative", "id": "narrative" },
+    { "name": "Security", "id": "security" }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}
