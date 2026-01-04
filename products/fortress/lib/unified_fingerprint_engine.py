@@ -1091,6 +1091,10 @@ def main():
     if args.daemon:
         # Run as daemon
         try:
+            logging.info("Unified Fingerprint Engine started in daemon mode")
+            logging.info(f"  ML classifier: {'loaded' if engine.ml_classifier else 'not available'}")
+            logging.info(f"  Fingerbank API: {'configured' if engine.fingerbank_api else 'not configured'}")
+            logging.info(f"  OUI database: {len(engine.oui_db)} entries")
             daemon = FingerprintDaemon(engine)
             daemon.start()
         except Exception as e:
