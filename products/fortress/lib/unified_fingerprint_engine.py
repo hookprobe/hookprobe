@@ -1043,8 +1043,8 @@ def main():
 
         engine = get_fingerprint_engine()
         logging.info("Unified Fingerprint Engine started in daemon mode")
-        logging.info(f"Engine ready - ML model: {'loaded' if engine.ml_model else 'not available'}")
-        logging.info(f"Fingerbank API: {'configured' if engine.fingerbank_api_key else 'not configured'}")
+        logging.info(f"Engine ready - ML classifier: {'loaded' if engine.ml_classifier else 'not available'}")
+        logging.info(f"Fingerbank API: {'configured' if engine.fingerbank_api else 'not configured'}")
 
         # Signal handler for graceful shutdown
         running = True
