@@ -1136,6 +1136,11 @@ WEB_SSL=true
 # Logging
 LOG_LEVEL=info
 LOG_DIR=${LOG_DIR}
+
+# Optional features
+INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
+INSTALL_LTE=${INSTALL_LTE:-false}
+INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
 EOF
 
     # Set ownership so container (fortress user) can read
@@ -3133,6 +3138,35 @@ MDNSCONF
     log_info "Web UI will be available on port ${WEB_PORT}"
     podman-compose up -d --no-build
 
+    # ========================================
+    # WORKAROUND: podman-compose 1.x ignores profiles
+    # ========================================
+    # podman-compose 1.x doesn't support --profile flag, so ALL containers
+    # start regardless of profiles. When AIOCHI is enabled, we need to stop
+    # the individual fts-* optional containers since AIOCHI provides bundled
+    # aiochi-* containers for all monitoring/analytics/IDS.
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        log_info "AIOCHI enabled - stopping fts-* optional containers (AIOCHI provides these)..."
+        # Stop and remove optional containers that AIOCHI replaces
+        local aiochi_replaces=(
+            "fts-grafana"
+            "fts-victoria"
+            "fts-n8n"
+            "fts-clickhouse"
+            "fts-suricata"
+            "fts-zeek"
+            "fts-xdp"
+            "fts-lstm-trainer"
+        )
+        for container in "${aiochi_replaces[@]}"; do
+            if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+                log_info "  Stopping ${container} (replaced by AIOCHI)..."
+                podman stop -t 5 "$container" 2>/dev/null || true
+                podman rm -f "$container" 2>/dev/null || true
+            fi
+        done
+    fi
+
     # Wait for services in dependency order
     log_info "Waiting for services to be ready..."
 
@@ -3950,6 +3984,10 @@ ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1
 
 # Start containers (--no-build prevents rebuild attempts - images built during install)
 ExecStart=${podman_compose_bin} -f podman-compose.yml up -d --no-build
+
+# WORKAROUND: podman-compose 1.x ignores profiles, so we stop AIOCHI-replaced containers
+# Only runs if INSTALL_AIOCHI=true in fortress.conf
+ExecStartPost=/bin/bash -c '[ "\${INSTALL_AIOCHI:-}" = "true" ] && for c in fts-grafana fts-victoria fts-n8n fts-clickhouse fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do podman stop -t 2 \$c 2>/dev/null; podman rm -f \$c 2>/dev/null; done || true'
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
