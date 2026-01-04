@@ -863,7 +863,8 @@ datasources:
   - name: VictoriaMetrics
     type: prometheus
     access: proxy
-    url: http://172.20.203.11:8428
+    # VictoriaMetrics is on fts-internal network at 172.20.200.31
+    url: http://172.20.200.31:8428
     isDefault: true
     editable: false
 EOF
@@ -3430,11 +3431,13 @@ connect_containers_to_ovs() {
     # It captures traffic on host interfaces directly
 
     # ML tier (optional - only with --profile training)
-    attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.202.10 ml true
+    attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.200.40 ml true
 
     # Mgmt tier (optional - only with --profile monitoring)
-    attach_container_if_running "$ovs_script" fts-grafana 172.20.203.10 mgmt true
-    attach_container_if_running "$ovs_script" fts-victoria 172.20.203.11 mgmt true
+    # Note: All containers are on fts-internal (172.20.200.0/24) but we still use
+    # tier labels for OpenFlow policy decisions (mgmt tier = no internet)
+    attach_container_if_running "$ovs_script" fts-grafana 172.20.200.30 mgmt true
+    attach_container_if_running "$ovs_script" fts-victoria 172.20.200.31 mgmt true
 
     log_info "OVS container integration complete"
     log_info "  Note: web and qsecbit use host network (no OVS attachment needed)"
@@ -3619,14 +3622,16 @@ log_info "Attaching containers to OVS..."
 attach_if_ready fts-postgres 172.20.200.10 data
 attach_if_ready fts-redis 172.20.200.11 data
 
-# Services tier (dnsxai and dfs use bridge network)
-attach_if_ready fts-dnsxai 172.20.201.11 services
-attach_if_ready fts-dfs 172.20.201.12 services
+# Services tier (dnsxai and dfs use fts-internal network)
+# Note: All containers are on fts-internal (172.20.200.0/24) but we still use
+# tier labels for OpenFlow policy decisions (services tier = internet allowed)
+attach_if_ready fts-dnsxai 172.20.200.21 services
+attach_if_ready fts-dfs 172.20.200.22 services
 
-# Optional tiers
-attach_if_ready fts-lstm-trainer 172.20.202.10 ml true
-attach_if_ready fts-grafana 172.20.203.10 mgmt true
-attach_if_ready fts-victoria 172.20.203.11 mgmt true
+# Optional tiers (mgmt tier = no internet, ml tier = no internet)
+attach_if_ready fts-lstm-trainer 172.20.200.40 ml true
+attach_if_ready fts-grafana 172.20.200.30 mgmt true
+attach_if_ready fts-victoria 172.20.200.31 mgmt true
 
 log_info "OVS container integration complete"
 OVSEOF
