@@ -1,0 +1,226 @@
+{
+  "name": "AIOCHI: Performance Narrative Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 5 }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.11:8428/api/v1/query_range",
+        "method": "GET",
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "rate(hookprobe_bytes_total[5m])" },
+            { "name": "start", "value": "={{Date.now() - 300000}}" },
+            { "name": "end", "value": "={{Date.now()}}" },
+            { "name": "step", "value": "60" }
+          ]
+        }
+      },
+      "id": "fetch-bandwidth",
+      "name": "Fetch Bandwidth Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.11:8428/api/v1/query",
+        "method": "GET",
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "avg(hookprobe_latency_ms)" }
+          ]
+        }
+      },
+      "id": "fetch-latency",
+      "name": "Fetch Latency Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 350]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.10:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "query", "value": "SELECT count() as blocked_count FROM aiochi.suricata_alerts WHERE timestamp > now() - INTERVAL 1 HOUR" }
+          ]
+        }
+      },
+      "id": "fetch-blocked",
+      "name": "Fetch Blocked Count",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-metrics",
+      "name": "Merge All Metrics",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [650, 350]
+    },
+    {
+      "parameters": {
+        "functionCode": "// AIOCHI Performance Narrative Generator\n// Creates human-readable performance insights\n\nconst metrics = items[0].json;\n\n// Extract metrics (with fallbacks)\nconst latencyMs = metrics.latency || metrics.latency_ms || 15;\nconst bandwidthUsedPct = metrics.bandwidth_pct || 30;\nconst blockedCount = metrics.blocked_count || 0;\nconst uptimePct = metrics.uptime_pct || 99.9;\nconst activeDevices = metrics.active_devices || 10;\nconst totalDevices = metrics.total_devices || 12;\n\n// Calculate health score (0-100)\nlet healthScore = 100;\n\n// Latency penalty (>50ms is bad)\nif (latencyMs > 100) healthScore -= 30;\nelse if (latencyMs > 50) healthScore -= 15;\nelse if (latencyMs > 30) healthScore -= 5;\n\n// Bandwidth penalty (>80% is congested)\nif (bandwidthUsedPct > 90) healthScore -= 25;\nelse if (bandwidthUsedPct > 80) healthScore -= 15;\nelse if (bandwidthUsedPct > 70) healthScore -= 5;\n\n// Uptime penalty\nif (uptimePct < 99) healthScore -= 20;\nelse if (uptimePct < 99.5) healthScore -= 10;\nelse if (uptimePct < 99.9) healthScore -= 5;\n\n// Threats add concern (but blocking them is good!)\nif (blockedCount > 100) healthScore -= 5;  // High activity\n\n// Clamp to 0-100\nhealthScore = Math.max(0, Math.min(100, healthScore));\n\n// Determine trend\nconst previousScore = metrics.previous_score || healthScore;\nlet trend = 'stable';\nif (healthScore > previousScore + 5) trend = 'improving';\nelse if (healthScore < previousScore - 5) trend = 'degrading';\n\n// Generate insight narrative\nlet insight = '';\nconst issues = [];\n\nif (latencyMs > 50) {\n  issues.push(`network latency is ${latencyMs}ms (higher than ideal)`);\n}\n\nif (bandwidthUsedPct > 70) {\n  issues.push(`bandwidth usage is at ${bandwidthUsedPct}%`);\n}\n\nif (blockedCount > 50) {\n  issues.push(`I blocked ${blockedCount} threats in the last hour`);\n}\n\nif (issues.length === 0) {\n  insight = 'Your network is performing excellently. All systems are running smoothly!';\n} else if (issues.length === 1) {\n  insight = `Your network is mostly healthy. Note: ${issues[0]}.`;\n} else {\n  insight = `Your network needs attention. Issues: ${issues.join('; ')}.`;\n}\n\n// Add device context\nif (activeDevices < totalDevices) {\n  insight += ` Currently ${activeDevices} of ${totalDevices} devices are online.`;\n}\n\n// Generate recommendations\nconst recommendations = [];\n\nif (latencyMs > 50) {\n  recommendations.push({\n    priority: latencyMs > 100 ? 'high' : 'medium',\n    icon: 'fa-tachometer-alt',\n    text: 'Network latency is elevated. Consider checking for bandwidth-heavy applications.'\n  });\n}\n\nif (bandwidthUsedPct > 80) {\n  recommendations.push({\n    priority: 'medium',\n    icon: 'fa-chart-line',\n    text: 'Bandwidth usage is high. Some devices may experience slowdowns.'\n  });\n}\n\n// Build the performance narrative event\nconst performanceEvent = {\n  id: `perf-${Date.now()}`,\n  timestamp: new Date().toISOString(),\n  category: 'performance',\n  health_score: Math.round(healthScore),\n  health_trend: trend,\n  insight: insight,\n  metrics: {\n    latency_ms: Math.round(latencyMs),\n    latency_trend: latencyMs < 30 ? 'good' : (latencyMs < 50 ? 'normal' : 'high'),\n    bandwidth_used_pct: Math.round(bandwidthUsedPct),\n    bandwidth_trend: bandwidthUsedPct < 50 ? 'normal' : (bandwidthUsedPct < 80 ? 'elevated' : 'high'),\n    devices_active: activeDevices,\n    devices_total: totalDevices,\n    uptime_pct: uptimePct,\n    threats_blocked_24h: blockedCount\n  },\n  recommendations: recommendations\n};\n\nreturn [{ json: performanceEvent }];"
+      },
+      "id": "generate-narrative",
+      "name": "Generate Performance Narrative",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [850, 350]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.10:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO aiochi.performance_snapshots FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{JSON.stringify($json)}}"
+            }
+          ]
+        }
+      },
+      "id": "store-snapshot",
+      "name": "Store Performance Snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 250]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/performance",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "performance",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "update-dashboard",
+      "name": "Update Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 450]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.health_score}}",
+              "operation": "smaller",
+              "value2": 50
+            }
+          ]
+        }
+      },
+      "id": "check-degraded",
+      "name": "Health Below 50?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 350]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/alert",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "performance_degraded"
+            },
+            {
+              "name": "health_score",
+              "value": "={{$json.health_score}}"
+            },
+            {
+              "name": "narrative",
+              "value": "={{$json.insight}}"
+            }
+          ]
+        }
+      },
+      "id": "alert-degraded",
+      "name": "Send Performance Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1450, 250]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          { "node": "Fetch Bandwidth Metrics", "type": "main", "index": 0 },
+          { "node": "Fetch Latency Metrics", "type": "main", "index": 0 },
+          { "node": "Fetch Blocked Count", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Bandwidth Metrics": {
+      "main": [[{ "node": "Merge All Metrics", "type": "main", "index": 0 }]]
+    },
+    "Fetch Latency Metrics": {
+      "main": [[{ "node": "Merge All Metrics", "type": "main", "index": 1 }]]
+    },
+    "Fetch Blocked Count": {
+      "main": [[{ "node": "Merge All Metrics", "type": "main", "index": 2 }]]
+    },
+    "Merge All Metrics": {
+      "main": [[{ "node": "Generate Performance Narrative", "type": "main", "index": 0 }]]
+    },
+    "Generate Performance Narrative": {
+      "main": [
+        [
+          { "node": "Store Performance Snapshot", "type": "main", "index": 0 },
+          { "node": "Update Dashboard", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Store Performance Snapshot": {
+      "main": [[{ "node": "Health Below 50?", "type": "main", "index": 0 }]]
+    },
+    "Health Below 50?": {
+      "main": [
+        [{ "node": "Send Performance Alert", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [
+    { "name": "AIOCHI", "id": "aiochi" },
+    { "name": "Narrative", "id": "narrative" },
+    { "name": "Performance", "id": "performance" }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}

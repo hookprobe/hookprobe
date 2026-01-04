@@ -2,7 +2,7 @@
 
 **Version**: 1.0.0
 **Status**: Core Product - Proprietary
-**Philosophy**: *Less is more for noobs, but powerful monitoring underneath*
+**Philosophy**: *Less is more for everyone, but powerful monitoring underneath*
 
 ---
 

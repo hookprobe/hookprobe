@@ -22,6 +22,14 @@
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{% filter urlencode %}<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23002742'/><path d='M50 15L20 30v40l30 15 30-15V30L50 15z' fill='%23e69500'/><path d='M50 25L30 35v30l20 10 20-10V35L50 25z' fill='%23002742'/></svg>{% endfilter %}">
 
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <meta name="theme-color" content="#002742">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AI Eyes">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/aiochi-icon-192.png') }}">
+
     {% block extra_css %}{% endblock %}
 </head>
 <body class="hold-transition sidebar-mini sidebar-collapse layout-fixed dark-mode">
@@ -161,7 +169,26 @@
                         </a>
                     </li>
 
-                    <!-- 5. SETTINGS (Admin only) -->
+                    <!-- 5. AI EYES (AIOCHI - Cognitive Network Layer) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('aiochi.index') }}" class="nav-link {% if 'aiochi' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-eye"></i>
+                            <p>
+                                AI Eyes
+                                <span class="badge badge-primary right">NEW</span>
+                            </p>
+                        </a>
+                    </li>
+
+                    <!-- 6. SLA AI (Business Continuity) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('slaai.index') }}" class="nav-link {% if 'slaai' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-chart-line"></i>
+                            <p>SLA AI</p>
+                        </a>
+                    </li>
+
+                    <!-- 7. SETTINGS (Admin only) -->
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
                     <li class="nav-item {% if 'settings' in request.endpoint %}menu-open{% endif %}">
@@ -335,6 +362,9 @@
     pollStatus();
 })();
 </script>
+
+<!-- AIOCHI Push Notifications -->
+<script src="{{ url_for('static', filename='js/push-notifications.js') }}"></script>
 
 {% block extra_js %}{% endblock %}
 </body>
