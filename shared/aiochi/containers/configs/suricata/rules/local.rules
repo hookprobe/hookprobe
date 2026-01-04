@@ -1,0 +1,56 @@
+# AIOCHI Local Suricata Rules
+# Custom rules for network monitoring
+
+# SSH Brute Force Detection
+alert ssh any any -> $HOME_NET 22 (msg:"AIOCHI SSH Brute Force Attempt"; \
+    flow:to_server,established; \
+    threshold:type both, track by_src, count 5, seconds 60; \
+    classtype:attempted-admin; sid:1000001; rev:1;)
+
+# DNS Tunneling Detection
+alert dns any any -> any any (msg:"AIOCHI Potential DNS Tunneling - Long Query"; \
+    dns.query; content:"."; pcre:"/^.{60,}/"; \
+    classtype:policy-violation; sid:1000002; rev:1;)
+
+# Internal Port Scan
+alert tcp any any -> $HOME_NET any (msg:"AIOCHI Internal Port Scan"; \
+    flags:S; flow:stateless; \
+    threshold:type threshold, track by_src, count 20, seconds 60; \
+    classtype:attempted-recon; sid:1000003; rev:1;)
+
+# Suspicious Outbound DNS to Non-Standard Port
+alert udp $HOME_NET any -> $EXTERNAL_NET !53 (msg:"AIOCHI DNS to Non-Standard Port"; \
+    content:"|00 01 00 00 00 00 00|"; depth:10; \
+    classtype:policy-violation; sid:1000004; rev:1;)
+
+# IoT Device Beaconing
+alert udp $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI IoT Beaconing Pattern"; \
+    dsize:10<>50; \
+    threshold:type threshold, track by_src, count 100, seconds 300; \
+    classtype:trojan-activity; sid:1000005; rev:1;)
+
+# Crypto Mining Detection
+alert tls any any -> any any (msg:"AIOCHI Potential Cryptomining Traffic"; \
+    tls.sni; content:"pool."; nocase; \
+    classtype:policy-violation; sid:1000006; rev:1;)
+
+# C2 Beaconing (Regular Interval)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Potential C2 Beaconing"; \
+    flow:to_server,established; \
+    threshold:type both, track by_src, count 10, seconds 600; \
+    classtype:trojan-activity; sid:1000007; rev:1;)
+
+# New Device on Network
+alert dhcp any any -> any any (msg:"AIOCHI New DHCP Request"; \
+    dhcp.type:1; \
+    classtype:not-suspicious; sid:1000008; rev:1;)
+
+# Rogue DHCP Server Detection
+alert dhcp any any -> any any (msg:"AIOCHI DHCP Offer from Unknown Server"; \
+    dhcp.type:2; \
+    classtype:bad-unknown; sid:1000009; rev:1;)
+
+# TLS Certificate Errors
+alert tls any any -> any any (msg:"AIOCHI Self-Signed Certificate"; \
+    tls.cert_issuer; content:"self"; nocase; \
+    classtype:policy-violation; sid:1000010; rev:1;)

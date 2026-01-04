@@ -671,15 +671,54 @@ collect_configuration() {
     fi
 
     # ============================================================
+    # AIOCHI - AI Eyes (Cognitive Network Layer)
+    # ============================================================
+    echo ""
+    echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   🔭 Do you want EYES on your network?                      ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   AIOCHI (AI Eyes) transforms your network into a           ║${NC}"
+    echo -e "${CYAN}${BOLD}║   living story that anyone can understand:                  ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • Visual presence map (who's home)                        ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • Human-readable network feed (not tech jargon)           ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • One-touch actions (pause kids' internet, game mode)     ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • Performance health score with insights                  ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   Adds ~2GB RAM usage. Includes: ClickHouse, Grafana,       ║${NC}"
+    echo -e "${CYAN}${BOLD}║   Suricata, Zeek, n8n, VictoriaMetrics                      ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [ -z "${INSTALL_AIOCHI:-}" ]; then
+        read -p "Install AIOCHI (AI Eyes)? [Y/n]: " aiochi_choice
+        if [[ ! "${aiochi_choice:-Y}" =~ ^[Nn]$ ]]; then
+            export INSTALL_AIOCHI=true
+            # AIOCHI bundles all monitoring components with cognitive layer
+            export INSTALL_MONITORING=true
+            export INSTALL_CLICKHOUSE=true
+            export INSTALL_N8N=true
+            export INSTALL_IDS=true
+            log_info "AIOCHI: enabled (includes Monitoring, ClickHouse, n8n, IDS/IPS)"
+        fi
+    fi
+
+    # ============================================================
     # INSTALLATION SUMMARY
     # ============================================================
 
     # Build optional services list
     local optional_services=""
-    [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
-    [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
-    [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
-    [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        optional_services="AIOCHI (AI Eyes)"
+    else
+        [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
+        [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
+        [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
+        [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+    fi
     [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
     [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
     optional_services="${optional_services%%, }"  # Remove trailing comma
@@ -889,6 +928,36 @@ EOF
         cp "${CONTAINERS_DIR}/logrotate-dnsxai.conf" /etc/logrotate.d/hookprobe-dnsxai
         chmod 644 /etc/logrotate.d/hookprobe-dnsxai
         log_info "Log rotation configured (30-day retention for dnsXai logs)"
+    fi
+
+    # Copy AIOCHI shared module (if AIOCHI installation requested)
+    # AIOCHI location: shared/aiochi relative to repository root
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        local aiochi_src="${FORTRESS_ROOT}/../../shared/aiochi"
+        local aiochi_dst="/opt/hookprobe/shared/aiochi"
+
+        if [ -d "$aiochi_src" ]; then
+            log_info "Copying AIOCHI module..."
+            mkdir -p "$aiochi_dst"
+            cp -r "$aiochi_src/"* "$aiochi_dst/" 2>/dev/null || true
+
+            # Ensure scripts are executable
+            find "$aiochi_dst" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+            find "$aiochi_dst" -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
+
+            # Create configs directory if it doesn't exist
+            mkdir -p "$aiochi_dst/containers/configs/suricata/rules"
+            mkdir -p "$aiochi_dst/containers/configs/zeek"
+            mkdir -p "$aiochi_dst/containers/configs/grafana/provisioning"/{dashboards,datasources}
+            mkdir -p "$aiochi_dst/containers/configs/grafana/dashboards"
+            mkdir -p "$aiochi_dst/containers/n8n-workflows"
+
+            log_info "  Installed: AIOCHI module to $aiochi_dst"
+        else
+            log_warn "AIOCHI source directory not found: $aiochi_src"
+            log_warn "AIOCHI will not be available"
+            export INSTALL_AIOCHI=false
+        fi
     fi
 
     log_info "Application files copied to ${INSTALL_DIR}"
@@ -3304,6 +3373,175 @@ start_optional_services() {
         fi
     fi
 
+    # ============================================================
+    # AIOCHI - AI Eyes (Cognitive Network Layer)
+    # ============================================================
+    # AIOCHI provides:
+    #   - ClickHouse: Event storage and analytics
+    #   - VictoriaMetrics: Time-series metrics
+    #   - Suricata + Zeek: Network traffic capture
+    #   - Identity Engine: Device fingerprinting and labeling
+    #   - Narrative Engine (n8n): Human-readable event stories
+    #   - Grafana: Visual dashboards
+    #   - Log Shipper: Event pipeline
+    #
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        log_info "Starting AIOCHI (AI Eyes) - Cognitive Network Layer..."
+
+        local aiochi_compose="/opt/hookprobe/shared/aiochi/containers/podman-compose.aiochi.yml"
+        local aiochi_dir="/opt/hookprobe/shared/aiochi/containers"
+
+        if [ -f "$aiochi_compose" ]; then
+            # Create AIOCHI environment file
+            cat > "${aiochi_dir}/.env" << AIOCHIENV
+# AIOCHI Environment Configuration
+# Generated: $(date -Iseconds)
+
+# ClickHouse credentials (analytics database)
+CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-aiochi_secure_password}
+
+# Grafana credentials
+GRAFANA_USER=admin
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-fortress_grafana_admin}
+GRAFANA_PORT=3000
+
+# n8n credentials (narrative engine)
+N8N_USER=admin
+N8N_PASSWORD=${N8N_PASSWORD:-fortress_n8n_admin}
+
+# Capture interface (OVS bridge)
+CAPTURE_INTERFACE=FTS
+
+# Log level
+LOG_LEVEL=INFO
+
+# Timezone
+TZ=${TZ:-UTC}
+AIOCHIENV
+            chmod 600 "${aiochi_dir}/.env"
+
+            # Build AIOCHI containers (identity-engine, log-shipper)
+            log_info "  Building AIOCHI containers..."
+            cd "$aiochi_dir"
+
+            # Build custom containers
+            if [ -f "Containerfile.identity" ]; then
+                podman build -t localhost/aiochi-identity:latest -f Containerfile.identity . 2>/dev/null || \
+                    log_warn "Failed to build identity-engine (will use fallback)"
+            fi
+            if [ -f "Containerfile.logshipper" ]; then
+                podman build -t localhost/aiochi-logshipper:latest -f Containerfile.logshipper . 2>/dev/null || \
+                    log_warn "Failed to build log-shipper (will use fallback)"
+            fi
+
+            # Pull required images
+            log_info "  Pulling AIOCHI container images..."
+            podman pull docker.io/clickhouse/clickhouse-server:24.8 2>/dev/null || true
+            podman pull docker.io/victoriametrics/victoria-metrics:v1.106.1 2>/dev/null || true
+            podman pull docker.io/jasonish/suricata:7.0.8 2>/dev/null || true
+            podman pull docker.io/zeek/zeek:7.0.3 2>/dev/null || true
+            podman pull docker.io/n8nio/n8n:1.70.3 2>/dev/null || true
+            podman pull docker.io/grafana/grafana:11.4.0 2>/dev/null || true
+
+            # Start AIOCHI stack
+            log_info "  Starting AIOCHI containers..."
+            podman-compose -f podman-compose.aiochi.yml up -d --no-build 2>/dev/null || {
+                log_warn "podman-compose failed, starting containers individually..."
+
+                # Create AIOCHI network
+                podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal 2>/dev/null || true
+
+                # Start ClickHouse
+                podman run -d --name aiochi-clickhouse \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.10 \
+                    -p 127.0.0.1:8123:8123 \
+                    -p 127.0.0.1:9000:9000 \
+                    -v aiochi-clickhouse-data:/var/lib/clickhouse \
+                    -v aiochi-clickhouse-logs:/var/log/clickhouse-server \
+                    -e CLICKHOUSE_DB=aiochi \
+                    -e CLICKHOUSE_USER=aiochi \
+                    -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                    docker.io/clickhouse/clickhouse-server:24.8 \
+                    2>/dev/null || log_warn "ClickHouse may already be running"
+
+                # Start VictoriaMetrics
+                podman run -d --name aiochi-victoria \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.11 \
+                    -p 127.0.0.1:8428:8428 \
+                    -v aiochi-victoria-data:/victoria-metrics-data \
+                    docker.io/victoriametrics/victoria-metrics:v1.106.1 \
+                    --retentionPeriod=30d --httpListenAddr=:8428 --storageDataPath=/victoria-metrics-data \
+                    2>/dev/null || log_warn "VictoriaMetrics may already be running"
+
+                # Start Grafana
+                podman run -d --name aiochi-grafana \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.30 \
+                    -p 0.0.0.0:3000:3000 \
+                    -v aiochi-grafana-data:/var/lib/grafana \
+                    -e GF_SECURITY_ADMIN_USER=admin \
+                    -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
+                    -e GF_USERS_DEFAULT_THEME=dark \
+                    -e GF_INSTALL_PLUGINS=grafana-clickhouse-datasource \
+                    docker.io/grafana/grafana:11.4.0 \
+                    2>/dev/null || log_warn "Grafana may already be running"
+
+                # Start n8n (narrative engine)
+                podman run -d --name aiochi-narrative \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.21 \
+                    -p 127.0.0.1:5678:5678 \
+                    -v aiochi-n8n-data:/home/node/.n8n \
+                    -e N8N_BASIC_AUTH_ACTIVE=true \
+                    -e N8N_BASIC_AUTH_USER=admin \
+                    -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
+                    -e N8N_HOST=0.0.0.0 \
+                    -e N8N_PORT=5678 \
+                    docker.io/n8nio/n8n:1.70.3 \
+                    2>/dev/null || log_warn "n8n may already be running"
+
+                # Start Suricata (network mode: host for traffic capture)
+                podman run -d --name aiochi-suricata \
+                    --restart unless-stopped \
+                    --network host \
+                    --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
+                    -v aiochi-suricata-logs:/var/log/suricata \
+                    docker.io/jasonish/suricata:7.0.8 \
+                    -i FTS --af-packet \
+                    2>/dev/null || log_warn "Suricata may already be running"
+
+                # Start Zeek (network mode: host for traffic capture)
+                podman run -d --name aiochi-zeek \
+                    --restart unless-stopped \
+                    --network host \
+                    --cap-add NET_ADMIN --cap-add NET_RAW \
+                    -v aiochi-zeek-logs:/opt/zeek/logs \
+                    docker.io/zeek/zeek:7.0.3 \
+                    zeek -i FTS local LogAscii::use_json=T \
+                    2>/dev/null || log_warn "Zeek may already be running"
+            }
+
+            log_info "AIOCHI started:"
+            log_info "  - ClickHouse: http://localhost:8123 (HTTP API)"
+            log_info "  - VictoriaMetrics: http://localhost:8428"
+            log_info "  - Grafana: http://localhost:3000 (admin/${GRAFANA_PASSWORD:-fortress_grafana_admin})"
+            log_info "  - n8n: http://localhost:5678 (admin/${N8N_PASSWORD:-fortress_n8n_admin})"
+            log_info "  - Suricata + Zeek: Capturing on FTS bridge"
+
+            cd "${INSTALL_DIR}/containers"
+        else
+            log_warn "AIOCHI compose file not found: $aiochi_compose"
+            log_warn "AIOCHI will not be available"
+            export INSTALL_AIOCHI=false
+        fi
+    fi
+
     # Save configuration for optional services
     save_optional_services_config
 }
@@ -3326,6 +3564,11 @@ CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
 CLOUDFLARE_HOSTNAME="${CLOUDFLARE_HOSTNAME:-}"
 LTE_APN="${LTE_APN:-}"
 LTE_AUTH="${LTE_AUTH:-none}"
+
+# AIOCHI - AI Eyes (Cognitive Network Layer)
+# When true, includes: ClickHouse, VictoriaMetrics, Suricata, Zeek,
+# Identity Engine, Narrative Engine (n8n), Grafana, Log Shipper
+INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
 EOF
 
     chmod 600 "$config_file"
