@@ -746,8 +746,8 @@ def index():
                         'is_offline': is_offline,
                         'neighbor_state': neighbor_state,
                         'is_blocked': policy == 'quarantine',
-                        'internet_access': policy in ('internet_only', 'full_access', 'normal'),
-                        'lan_access': policy in ('lan_only', 'full_access', 'normal'),
+                        'internet_access': policy in ('internet_only', 'full_access', 'smart_home'),
+                        'lan_access': policy in ('lan_only', 'full_access', 'smart_home'),
                         'first_seen': d.get('first_seen', ''),
                         'last_seen': d.get('last_seen', ''),
                         # WiFi signal data (from host wifi-signal-collector.sh)
@@ -909,7 +909,7 @@ def set_policy():
     """Set network policy for a device (MAC from form data).
 
     Uses new simple device_policies module with SQLite storage.
-    Valid policies: quarantine, internet_only, lan_only, normal, full_access
+    Valid policies: quarantine, internet_only, lan_only, smart_home, full_access
     """
     mac_address = request.form.get('mac')
     policy = request.form.get('policy')
@@ -918,7 +918,7 @@ def set_policy():
         return jsonify({'success': False, 'error': 'MAC address and policy required'}), 400
 
     # Valid policies from new system
-    valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+    valid_policies = ['quarantine', 'internet_only', 'lan_only', 'smart_home', 'full_access']
     if policy not in valid_policies:
         return jsonify({'success': False, 'error': f'Invalid policy: {policy}. Valid: {valid_policies}'}), 400
 
@@ -2911,19 +2911,19 @@ def api_device_set_policy(mac_address):
     data = request.get_json() or {}
     policy = data.get('policy', 'default')
 
-    # Policy name normalization (device_policies uses quarantine/normal,
-    # device_data_manager uses isolated/full_access)
+    # Policy name normalization (device_policies uses quarantine/smart_home,
+    # device_data_manager uses isolated/smart_home)
     policy_aliases = {
         'quarantine': 'isolated',    # Both mean "block all"
-        'normal': 'full_access',     # Both mean "allow all"
+        'normal': 'smart_home',      # Legacy alias
     }
     policy = policy_aliases.get(policy, policy)
 
-    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'normal', 'default']
+    valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'smart_home', 'default']
     if policy not in valid_policies:
         return jsonify({
             'success': False,
-            'error': f'Invalid policy. Must be one of: quarantine, internet_only, lan_only, normal, full_access, default'
+            'error': f'Invalid policy. Must be one of: quarantine, internet_only, lan_only, smart_home, full_access, default'
         }), 400
 
     # Try SDN Autopilot first (primary method)
