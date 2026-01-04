@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <!-- Background -->
+  <rect width="192" height="192" rx="32" fill="#1a1a2e"/>
+
+  <!-- Eye outline -->
+  <ellipse cx="96" cy="96" rx="60" ry="40" fill="none" stroke="#4fc3f7" stroke-width="4"/>
+
+  <!-- Iris -->
+  <circle cx="96" cy="96" r="28" fill="#16213e" stroke="#4fc3f7" stroke-width="2"/>
+
+  <!-- Pupil -->
+  <circle cx="96" cy="96" r="14" fill="#4fc3f7"/>
+
+  <!-- Highlight -->
+  <circle cx="102" cy="90" r="5" fill="#ffffff" opacity="0.8"/>
+
+  <!-- Shield icon in center of pupil -->
+  <path d="M96 82 L84 88 L84 98 C84 105 89 111 96 114 C103 111 108 105 108 98 L108 88 Z"
+        fill="none" stroke="#1a1a2e" stroke-width="2"/>
+
+  <!-- AI text -->
+  <text x="96" y="160" text-anchor="middle" font-family="Inter, sans-serif" font-size="16" font-weight="600" fill="#4fc3f7">AI EYES</text>
+</svg>
